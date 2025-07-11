@@ -1,5 +1,6 @@
 use std::fs::File;
 use std::io::{BufReader, Read};
+use crate::specifications::lexer_errors::LexerError;
 use crate::tokens::{CommentKind, StringKind, Token, TokenKind};
 use crate::utils::utf8_cursor::Utf8Cursor;
 
@@ -14,6 +15,15 @@ impl Lexer {
     /*pub fn parse_template_string(tokens: &mut Peekable<Token>, level: u16) {
 
     }*/
+    
+    pub fn new() -> Lexer {
+        Lexer {
+            tokens: Vec::new(),
+            original_file_name: String::new(),
+            current_line: 0,
+            current_column: 0,
+        }
+    }
 
     /// Funkce spustí parsování souboru
     ///
@@ -113,7 +123,7 @@ impl Lexer {
         tokens
     }
 
-    pub fn read_expression(&mut self, reader: &mut Utf8Cursor, buffer: &mut String, string_byte_start_r: &mut usize) -> Vec<Token> {
+    pub fn read_expression(&mut self, reader: &mut Utf8Cursor, buffer: &mut String, string_byte_start_r: &mut usize) -> Result<Vec<Token>, LexerError> {
         let ch = reader.advance().unwrap();
         let ch_next = reader.peek().unwrap();
         let mut tokens: Vec<Token> = Vec::new();
@@ -155,17 +165,17 @@ impl Lexer {
         let is_string = Token::is_string_start(ch);
         if is_string != StringKind::None {
             if is_string == StringKind::TemplateString {
-                tokens.extend(self.read_string(reader, ch));
+                tokens.extend(self.read_string(reader, ch)?);
             }
             else {
-                tokens.extend(self.read_string(reader, ch));
+                tokens.extend(self.read_string(reader, ch)?);
             }
         }
 
 
 
         *string_byte_start_r = string_byte_start;
-        tokens
+        Ok(tokens)
 
     }
 

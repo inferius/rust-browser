@@ -1,6 +1,6 @@
 use crate::tokens::NumericBase;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum LexerErrorKind {
     InvalidDigit {
         base: NumericBase,
@@ -18,6 +18,7 @@ pub enum LexerErrorKind {
         reason: String,
     },
     LegacyOctalInStrictMode,
+    UnexpectedNumber,
 }
 
 #[derive(Debug, Clone)]
@@ -38,6 +39,7 @@ impl std::fmt::Display for LexerErrorKind {
         use LexerErrorKind::*;
         match self {
             InvalidDigit { base, found } => write!(f, "invalid digit '{}' for base {:?}", found, base),
+            UnexpectedNumber { } => write!(f, "unexpected number"),
             UnexpectedCharacter { found } => write!(f, "unexpected character '{}'", found),
             UnterminatedString => write!(f, "unterminated string literal"),
             UnterminatedTemplate => write!(f, "unterminated template literal"),

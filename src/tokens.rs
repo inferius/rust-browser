@@ -1,3 +1,5 @@
+use std::fmt;
+use num_bigint::BigInt;
 use crate::string_enum;
 use unicode_ident::is_xid_start;
 use unicode_ident::is_xid_continue;
@@ -11,12 +13,18 @@ pub enum TokenKind {
     NumericLiteral {
         raw: String,
         value: f64,
+        bigint_value: Option<BigInt>,
         base: NumericBase,
         legacy_octal: bool, // pokud je definovany jako 0123 mist 0o123
         is_bigint: bool,
+        has_exponent: bool,
         is_valid: bool,
     },       // např. `123`, `3.14`, `0xFF`, `0b1010`
-    StringLiteral(String),       // např. `"text"` nebo `'text'`
+    StringLiteral {
+        value: String,
+        raw: String,
+        escapes: Vec<EscapeInfo>,
+    },       // např. `"text"` nebo `'text'`
     TemplateLiteral(String),     // např. `` `template` ``
     RegexLiteral(String),        // např. `/abc/i`
 
@@ -111,6 +119,39 @@ pub enum TokenKind {
     Newline,                 // "\n" nebo "\r\n"
     Eof,                     // konec souboru
     Error(String),           // chybová zpráva (neplatný token)
+}
+
+// Implementace pro `TokenKind` (aby byl použitelný ve `Token`)
+impl fmt::Display for TokenKind {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            TokenKind::Identifier(name) => write!(f, "Identifier({})", name),
+            TokenKind::StringLiteral { value, .. } => write!(f, "StringLiteral({})", value),
+            TokenKind::NumericLiteral { value, is_bigint, bigint_value, .. } => {
+                let bigint_suffix = if *is_bigint { "n" } else { "" };
+                let value = if *is_bigint { bigint_value.clone().unwrap().to_str_radix(10) } else { value.to_string() };
+
+                write!(f, "NumericLiteral({}{})", value, bigint_suffix)
+            },
+            _ => write!(f, "{:?}", self) // Ladicí výpis pro ostatní typy
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum EscapeKind {
+    Octal,
+    Hex,
+    Unicode,
+    Simple
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EscapeInfo {
+    pub kind: EscapeKind,
+    pub raw: String,
+    pub resolved_char: char,
+    pub position_in_raw: usize,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -224,12 +265,20 @@ impl Token {
         }
         false
     }
+
+    pub fn is_single_escape_char(ch: char) -> bool {
+        if SINGLE_ESCAPE_CHARS.contains(&ch) {
+            return true;
+        }
+        false
+    }
 }
 
 const LINE_BREAKS_CHARS: &[char] = &['\u{000A}', '\u{000D}', '\u{2028}', '\u{2029}'];
 const NUMBER_START_CHARS: &[char] = &['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '.'];
 const NUMBER_CHARS: &[char] = &['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '.', 'e', 'E'];
 const WHITESPACE_CHARS: &[char] = &['\u{0009}', '\u{000B}', '\u{000C}', '\u{FEFF}'];
+const SINGLE_ESCAPE_CHARS: &[char] = &['\'', '"', '\\', 'b', 'f', 'n', 'r', 't', 'v'];
 
 
 string_enum! {

@@ -32,7 +32,7 @@ impl NumberLiteral {
         HEX_DIGITS.contains(&c)
     }
 
-    pub fn is_sign(c: char) -> bool {
+    pub fn is_exponent_sign(c: char) -> bool {
         c == '+' || c == '-'
     }
 
