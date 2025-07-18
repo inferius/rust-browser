@@ -1,4 +1,6 @@
 pub mod numeric;
 pub mod string;
 pub mod base;
-mod regex;
+pub mod regex;
+pub(crate) mod debug;
+pub mod identifier;

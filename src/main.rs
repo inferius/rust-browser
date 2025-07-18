@@ -22,5 +22,6 @@ fn main() {
     println!("Klíčové slovo jako string: {}", keyword.as_str());
 
     let lexer = Lexer::parse_file("F:\\Develop\\_Projects\\RustWebEngine\\static\\basic_test.js");
+    Lexer::debug_print_tokens(lexer.tokens, "C:\\Temp\\rust-browser\\tokens.html");
 
 }

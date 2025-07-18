@@ -1,5 +1,4 @@
 use crate::lexer::base::Lexer;
-use crate::lexer::regex::Regex;
 use crate::utils::utf8_cursor::Utf8Cursor;
 
 #[test]

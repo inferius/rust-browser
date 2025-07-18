@@ -4,7 +4,7 @@ use crate::string_enum;
 use unicode_ident::is_xid_start;
 use unicode_ident::is_xid_continue;
 use unicode_general_category::{get_general_category, GeneralCategory};
-
+use crate::tokens::TokenKind::Operator;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
@@ -26,81 +26,10 @@ pub enum TokenKind {
         escapes: Vec<EscapeInfo>,
     },       // např. `"text"` nebo `'text'`
     TemplateLiteral(String),     // např. `` `template` ``
-    RegexLiteral(String),        // např. `/abc/i`
+    RegexLiteral(String),        // např. `/abc/i`,
+    Keyword(KeywordEnum),
+    Operator(OperatorEnum),
 
-    // === Klíčová slova ===
-    Let,         // "let"
-    Const,       // "const"
-    Var,         // "var"
-    Function,    // "function"
-    If, Else, While, For, Return, Switch, Case, Break, Continue, Default,
-    Try, Catch, Finally, Throw,
-    True, False, Null, Undefined, This,
-    New, Delete, Typeof, Instanceof, In, Void,
-    Await, Async, Yield, Import, Export, From,
-
-    // === Operátory a symboly ===
-
-    // Jednoznakové operátory
-    Plus,             // "+"
-    Minus,            // "-"
-    Star,             // "*"
-    Slash,            // "/"
-    Percent,          // "%"
-    Punctuator,       // "."
-    Comma,            // ","
-    Colon,            // ":"
-    Semicolon,        // ";"
-    Question,         // "?"
-    Tilde,            // "~"
-    Exclamation,      // "!"
-    Equal,            // "="
-    Ampersand,        // "&"
-    Pipe,             // "|"
-    Caret,            // "^"
-    LessThan,         // "<"
-    GreaterThan,      // ">"
-    LeftParen,        // "("
-    RightParen,       // ")"
-    LeftBrace,        // "{"
-    RightBrace,       // "}"
-    LeftBracket,      // "["
-    RightBracket,     // "]"
-    Backtick,         // "`"
-    Dollar,           // "$"
-    Sharp,            // "#"
-
-    // Dvouzankové operátory
-    EqualEqual,              // "=="
-    NotEqual,                // "!="
-    LessThanEqual,           // "<="
-    GreaterThanEqual,        // ">="
-    LogicalAnd,              // "&&"
-    LogicalOr,               // "||"
-    PlusPlus,                // "++"
-    MinusMinus,              // "--"
-    ShiftLeft,               // "<<"
-    ShiftRight,              // ">>"
-    AssignAdd,               // "+="
-    AssignSub,               // "-="
-    AssignMul,               // "*="
-    AssignDiv,               // "/="
-    AssignMod,               // "%="
-    AssignAnd,               // "&="
-    AssignOr,                // "|="
-    AssignXor,               // "^="
-    AssignShiftLeft,         // "<<="
-    AssignShiftRight,        // ">>="
-
-    // Tříznakové operátory
-    StrictEqual,             // "==="
-    StrictNotEqual,          // "!=="
-    ShiftRightUnsigned,      // ">>>"
-    AssignShiftRightUnsigned,// ">>>="
-    Exponent,                // "**"
-    AssignExponent,          // "**="
-    Arrow,                   // "=>"
-    Ellipsis,                // "..."
 
     // === Template parsing specifika ===
     TemplateStart,           // "`" – začátek template literal
@@ -195,6 +124,24 @@ impl Token {
          false
      }
 
+    const LB_LF: char = '\u{000A}'; /* \n <LF> */
+    const LB_CR: char = '\u{000D}'; /* \r <CR> */
+    const LB_LS: char = '\u{2028}'; /* <LS> */
+    const LB_PS: char = '\u{2029}'; /* <PS> */
+
+    pub fn is_multichar_line_break_sequence(ch: char, next_ch: Option<char>) -> bool {
+        if ch == LB_CR {
+            if next_ch.is_none() {
+                return false;
+            }
+            if next_ch.unwrap() == LB_LF {
+                return true;
+            }
+        }
+
+        false
+    }
+
     pub fn is_string_start(ch: char) -> StringKind {
         if ch == '"' {
             return StringKind::DoubleQuote;
@@ -209,8 +156,11 @@ impl Token {
         StringKind::None
     }
 
-    pub fn is_number_start(ch: char) -> bool {
+    pub fn is_number_start(ch: char, next_ch: Option<char>) -> bool {
         if NUMBER_START_CHARS.contains(&ch) {
+            if ch == '.' && (next_ch.is_none() || !ONLY_NUMBER_CHARS.contains(&next_ch.unwrap())) {
+                return false;
+            }
             return true;
         }
         false
@@ -230,18 +180,31 @@ impl Token {
         false
     }
 
-    pub fn is_comment_start(ch: char, next_char: char) -> CommentKind {
-        if ch == '/' && next_char == '/' {
+    pub fn is_comment_start(ch: char, next_char: Option<char>) -> CommentKind {
+        if next_char.is_none() {
+            return CommentKind::None;
+        }
+        if ch == '/' && next_char.unwrap() == '/' {
             return CommentKind::SingleLine;
         }
-        else if ch == '/' && next_char == '*' {
+        else if ch == '/' && next_char.unwrap() == '*' {
             return CommentKind::MultiLine;
         }
         CommentKind::None
     }
 
-    pub fn is_comment_end(ch: char, next_char: char) -> CommentKind {
-        if ch == '*' && next_char == '/' {
+    pub fn is_hashbang(ch: char, next_char: Option<char>) -> bool {
+        if ch == '#' && next_char.is_some() && next_char.unwrap() == '!' {
+            return true;
+        }
+        false
+    }
+
+    pub fn is_comment_end(ch: char, next_char: Option<char>) -> CommentKind {
+        if next_char.is_none() {
+            return CommentKind::None;
+        }
+        if ch == '*' && next_char.unwrap() == '/' {
             CommentKind::MultiLine
         }
         else if LINE_BREAKS_CHARS.contains(&ch) {
@@ -272,17 +235,47 @@ impl Token {
         }
         false
     }
+
+    pub fn is_keyword(buffer: &String) -> bool {
+        KeywordEnum::from_str(buffer).is_some()
+    }
+
+    pub fn get_keyword(buffer: &String) -> Option<KeywordEnum> {
+        KeywordEnum::from_str(buffer)
+    }
+
+    pub fn is_operator_start(ch: char) -> bool {
+        let str = ch.to_string();
+        if OperatorEnum::from_str(&str).is_some() {
+            return true;
+        }
+        false
+    }
+
+    pub fn is_operator(buffer: &String) -> bool {
+        OperatorEnum::from_str(buffer).is_some()
+    }
+
+    pub fn get_operator(buffer: &String) -> Option<OperatorEnum> {
+        OperatorEnum::from_str(buffer)
+    }
 }
 
-const LINE_BREAKS_CHARS: &[char] = &['\u{000A}', '\u{000D}', '\u{2028}', '\u{2029}'];
+const LB_LF: char = '\u{000A}'; /* \n <LF> */
+const LB_CR: char = '\u{000D}'; /* \r <CR> */
+const LB_LS: char = '\u{2028}'; /* <LS> */
+const LB_PS: char = '\u{2029}'; /* <PS> */
+
+const LINE_BREAKS_CHARS: &[char] = &[LB_LF, LB_CR, LB_LS, LB_PS];
 const NUMBER_START_CHARS: &[char] = &['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '.'];
 const NUMBER_CHARS: &[char] = &['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '.', 'e', 'E'];
+const ONLY_NUMBER_CHARS: &[char] = &['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
 const WHITESPACE_CHARS: &[char] = &['\u{0009}', '\u{000B}', '\u{000C}', '\u{FEFF}'];
 const SINGLE_ESCAPE_CHARS: &[char] = &['\'', '"', '\\', 'b', 'f', 'n', 'r', 't', 'v'];
 
 
 string_enum! {
-    Keyword,
+    KeywordEnum,
     Break,
     Case,
     Catch,
@@ -331,4 +324,72 @@ string_enum! {
     True,
     False,
     Null
+}
+
+string_enum! {
+    OperatorEnum,
+
+    // Jednoznakové operátory
+    Plus             => "+",
+    Minus            => "-",
+    Star             => "*",
+    Slash            => "/",
+    Percent          => "%",
+    Punctuator       => ".",
+    Comma            => ",",
+    Colon            => ":",
+    Semicolon        => ";",
+    Question         => "?",
+    Tilde            => "~",
+    Exclamation      => "!",
+    Equal            => "=",
+    Ampersand        => "&",
+    Pipe             => "|",
+    Caret            => "^",
+    LessThan         => "<",
+    GreaterThan      => ">",
+    LeftParen        => "(",
+    RightParen       => ")",
+    LeftBrace        => "{",
+    RightBrace       => "}",
+    LeftBracket      => "[",
+    RightBracket     => "]",
+    Backtick         => "`",
+    Dollar           => "$",
+    Sharp            => "#",
+
+    // Dvouzankové operátory
+    EqualEqual              => "==",
+    NotEqual                => "!=",
+    LessThanEqual           => "<=",
+    GreaterThanEqual        => ">=",
+    LogicalAnd              => "&&",
+    LogicalOr               => "||",
+    PlusPlus                => "++",
+    MinusMinus              => "--",
+    ShiftLeft               => "<<",
+    ShiftRight              => ">>",
+    AssignAdd               => "+=",
+    AssignSub               => "-=",
+    AssignMul               => "*=",
+    AssignDiv               => "/=",
+    AssignMod               => "%=",
+    AssignAnd               => "&=",
+    AssignOr                => "|=",
+    AssignXor               => "^=",
+    AssignShiftLeft         => "<<=",
+    AssignShiftRight        => ">>=",
+
+    // Tříznakové operátory
+    StrictEqual              => "===",
+    StrictNotEqual           => "!==",
+    ShiftRightUnsigned       => ">>>",
+    Exponent                 => "**",
+    AssignExponent           => "**=",
+    Arrow                    => "=>",
+    Ellipsis                 => "...",
+
+    // Čtyřznakové operátory
+    AssignShiftRightUnsigned => ">>>="
+
 }

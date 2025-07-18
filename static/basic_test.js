@@ -1,3 +1,4 @@
+#! /usr/bin/env node
 // 1. Prohlášení proměnné
 let x = 42;
 

@@ -173,25 +173,36 @@ impl Utf8Cursor {
 
         let (ch, len) = if b0 < 128 {
             (b0 as char, 1)
-        } else if b0 & 0xE0 == 0xC0 {
+        } else if b0 & 0b1110_0000 == 0b1100_0000 {
+            // 2 bajty, 110xxxxx 10xxxxxx
             let b1 = *self.input.get(pos + 1)?;
-            let code = (((b0 & 0x1F) as u32) << 6) | ((b1 & 0x3F) as u32);
+            
+            let code = (((b0 & 0b0001_1111) as u32) << 6) 
+                | ((b1 & 0b0011_1111) as u32);
+            
             (char::from_u32(code)?, 2)
-        } else if b0 & 0xF0 == 0xE0 {
+            
+        } else if b0 & 0b1111_0000 == 0b1110_0000 {
+            // 3 bajty, 1110xxxx 10xxxxxx 10xxxxxx
             let b1 = *self.input.get(pos + 1)?;
             let b2 = *self.input.get(pos + 2)?;
-            let code = (((b0 & 0x0F) as u32) << 12)
-                | (((b1 & 0x3F) as u32) << 6)
-                | ((b2 & 0x3F) as u32);
+            
+            let code = (((b0 & 0b0000_1111) as u32) << 12)
+                | (((b1 & 0b0011_1111) as u32) << 6)
+                | ((b2 & 0b0011_1111) as u32);
+            
             (char::from_u32(code)?, 3)
-        } else if b0 & 0xF8 == 0xF0 {
+        } else if b0 & 0b1111_1000 == 0b1111_0000 {
+            // 4 bajty, 11110xxx 10xxxxxx 10xxxxxx 10xxxxxx
             let b1 = *self.input.get(pos + 1)?;
             let b2 = *self.input.get(pos + 2)?;
             let b3 = *self.input.get(pos + 3)?;
-            let code = (((b0 & 0x07) as u32) << 18)
-                | (((b1 & 0x3F) as u32) << 12)
-                | (((b2 & 0x3F) as u32) << 6)
-                | ((b3 & 0x3F) as u32);
+            
+            let code = (((b0 & 0b0000_0111) as u32) << 18)
+                | (((b1 & 0b0011_1111) as u32) << 12)
+                | (((b2 & 0b0011_1111) as u32) << 6)
+                | ((b3 & 0b0011_1111) as u32);
+            
             (char::from_u32(code)?, 4)
         } else {
             return None;

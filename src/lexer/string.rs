@@ -3,7 +3,6 @@ use crate::lexer::base::Lexer;
 use crate::specifications::lexer_errors::{LexerError, LexerErrorKind, Span};
 use crate::specifications::number_literal::NumberLiteral;
 use crate::tokens::{EscapeInfo, EscapeKind, Token, TokenKind};
-use crate::tokens::TokenKind::NumericLiteral;
 use crate::utils::string_utils::AdvancedStringMethods;
 use crate::utils::utf8_cursor::Utf8Cursor;
 
@@ -234,7 +233,7 @@ impl Lexer {
         let mut string_byte_start = reader.pos();
         let mut tokens: Vec<Token> = Vec::new();
         let mut escaped: Vec<EscapeInfo> = Vec::new();
-        
+
 
         buffer.push(start_ch);
         buffer_raw.push(start_ch);

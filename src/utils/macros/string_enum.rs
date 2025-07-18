@@ -1,7 +1,7 @@
 #[macro_export]
 macro_rules! string_enum {
-    ( $enum_name:ident, $( $variant:ident ),* ) => {
-        #[derive(Debug)]
+    ( $enum_name:ident, $( $variant:ident $( => $value:expr)? ),* ) => {
+        #[derive(Debug, PartialOrd, PartialEq, Clone)]
         pub enum $enum_name {
             $( $variant ),*   // Generování enum variant
         }
