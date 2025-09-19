@@ -4,7 +4,6 @@ use crate::string_enum;
 use unicode_ident::is_xid_start;
 use unicode_ident::is_xid_continue;
 use unicode_general_category::{get_general_category, GeneralCategory};
-use crate::tokens::TokenKind::Operator;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {

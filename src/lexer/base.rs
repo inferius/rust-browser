@@ -1,7 +1,7 @@
 use std::fs::File;
 use std::io::{BufReader, Read};
-use crate::specifications::lexer_errors::LexerError;
-use crate::tokens::{CommentKind, StringKind, Token, TokenKind};
+use crate::specifications::lexer_errors::{LexerError, LexerErrorKind, Span};
+use crate::tokens::{CommentKind, OperatorEnum, StringKind, Token, TokenKind};
 use crate::utils::utf8_cursor::Utf8Cursor;
 
 pub struct Lexer {
@@ -45,7 +45,7 @@ impl Lexer {
     ///
     /// `Lexer`
     /// Vrací lexer
-    pub fn parse_file(file_path: &str) -> Lexer {
+    pub fn parse_file(file_path: &str) -> Result<Lexer, LexerError> {
         let mut instance = Lexer {
             tokens: Vec::new(),
             original_file_name: String::from(file_path),
@@ -65,24 +65,24 @@ impl Lexer {
         // Iterace znak po znaku
         let mut reader = Utf8Cursor::new(buffer.as_str());
 
-        instance.tokens = instance.lex_string(&mut reader, true);
+        instance.tokens = instance.lex_string(&mut reader, true)?;
 
-        instance
+        Ok(instance)
     }
 
-    fn lex_string(&mut self, reader: &mut Utf8Cursor, is_file: bool) -> Vec<Token> {
+    fn lex_string(&mut self, reader: &mut Utf8Cursor, is_file: bool) -> Result<Vec<Token>, LexerError> {
         let mut tokens: Vec<Token> = Vec::new();
         let mut string_buffer = String::with_capacity(1000);
         let mut string_buffer_start_line = 0;
         let mut string_buffer_start_column = 0;
         let mut string_byte_start = reader.pos();
 
-        let mut process_context = ProcessContext {
+        /*let mut context = ProcessContext {
             reader,
             buffer: &mut string_buffer,
             tokens: &mut tokens,
             string_byte_start,
-        };
+        };*/
 
         while !reader.eof() {
             /*let ch = reader.advance().unwrap();
@@ -140,11 +140,11 @@ impl Lexer {
                 }
             }
 
-            self.read_expression(reader, &mut string_buffer, &mut string_byte_start);
+            tokens.extend(self.read_expression(reader, &mut string_buffer, &mut string_byte_start)?);
 
         }
 
-        tokens
+        Ok(tokens)
     }
 
     pub fn read_expression(&mut self, reader: &mut Utf8Cursor, buffer: &mut String, string_byte_start_r: &mut usize) -> Result<Vec<Token>, LexerError> {
@@ -249,11 +249,37 @@ impl Lexer {
 
         if Token::is_white_space(ch) {
             process_buffer(reader, buffer, self.current_line, self.current_column);
+            let white = self.read_while(reader, |&c, &c_next| !Token::is_white_space(c));
+            tokens.push(Token {
+                kind: TokenKind::Whitespace,
+                lexeme: white,
+                line: self.current_line,
+                column:  self.current_column,
+                start: string_byte_start,
+                end: reader.pos(),
+            });
+            return Ok(tokens);
         }
 
         if Token::is_operator_start(ch) {
             process_buffer(reader, buffer, self.current_line, self.current_column);
-            // read operator
+
+            let operator = self.read_while(reader, |&c, &c_next| Token::is_operator_start(c));
+            let operator_kind = OperatorEnum::from_str(&operator);
+            if operator_kind.is_none() {
+                return Err(LexerError {
+                    kind: LexerErrorKind::UnexpectedToken,
+                    span: Span { start: string_byte_start, end: reader.pos() },
+                });
+            }
+            tokens.push(Token {
+                kind: TokenKind::Operator(operator_kind.unwrap()),
+                lexeme: operator,
+                line: self.current_line,
+                column:  self.current_column,
+                start: string_byte_start,
+                end: reader.pos(),
+            });
         }
 
         if buffer.len() == 0 && Token::is_valid_identifier_start(ch) || buffer.len() > 0 && Token::is_valid_identifier_continue(ch) {

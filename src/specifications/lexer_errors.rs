@@ -19,6 +19,7 @@ pub enum LexerErrorKind {
     },
     LegacyOctalInStrictMode,
     UnexpectedNumber,
+    UnexpectedToken,
 }
 
 #[derive(Debug, Clone)]
@@ -48,6 +49,7 @@ impl std::fmt::Display for LexerErrorKind {
             UnexpectedEOF => write!(f, "unexpected end of input"),
             InvalidBigInt { reason } => write!(f, "invalid BigInt literal: {}", reason),
             LegacyOctalInStrictMode => write!(f, "legacy octal literal not allowed in strict mode"),
+            UnexpectedToken => write!(f, "unexpected token"),
         }
     }
 }

@@ -2,7 +2,7 @@ use std::num::ParseIntError;
 use crate::lexer::base::Lexer;
 use crate::specifications::lexer_errors::{LexerError, LexerErrorKind, Span};
 use crate::specifications::number_literal::NumberLiteral;
-use crate::tokens::{EscapeInfo, EscapeKind, Token, TokenKind};
+use crate::tokens::{EscapeInfo, EscapeKind, OperatorEnum, Token, TokenKind};
 use crate::utils::string_utils::AdvancedStringMethods;
 use crate::utils::utf8_cursor::Utf8Cursor;
 
@@ -34,7 +34,7 @@ impl Lexer {
             let ch = reader.peek().unwrap();
             if ch == '}' && brace_count == 0 {
                 tokens.push(Token {
-                    kind: TokenKind::RightBrace,
+                    kind: TokenKind::Operator(OperatorEnum::RightBrace),
                     lexeme: String::from("}"),
                     line: self.current_line,
                     column:  self.current_column,
