@@ -11,6 +11,8 @@ pub enum LexerErrorKind {
     UnexpectedEOF,
     InvalidBigInt { reason: String },
     UnexpectedNumber,
+    /// Regularni vyraz neni uzavren pred koncem radku nebo souboru
+    UnterminatedRegex,
 }
 
 #[derive(Debug, Clone)]
@@ -41,6 +43,7 @@ impl std::fmt::Display for LexerErrorKind {
             UnexpectedEOF                   => write!(f, "neočekávaný konec souboru"),
             InvalidBigInt { reason }        => write!(f, "neplatný BigInt: {}", reason),
             UnexpectedNumber                => write!(f, "neočekávané číslo"),
+            UnterminatedRegex               => write!(f, "neukončený regulární výraz"),
         }
     }
 }

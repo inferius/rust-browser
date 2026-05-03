@@ -64,18 +64,21 @@ impl Lexer {
     fn lex(&mut self, r: &mut Utf8Cursor) -> Result<Vec<Token>, LexerError> {
         let mut tokens: Vec<Token> = Vec::new();
 
-        // Hashbang (#! ...) – přeskočit celý první řádek
+        // Hashbang (#! ...) - preskocit cely prvni radek
         if r.peek() == Some('#') && r.peek_n(1) == Some('!') {
             while r.peek().map(|c| !Token::is_line_break(c)).unwrap_or(false) {
                 r.advance();
             }
         }
 
-        // Stack pro template literály:
-        // Při vstupu do ${ uložíme aktuální hloubku závorek.
-        // Při výskytu } s hloubkou == uložené → zavíráme template výraz.
+        // Stack pro template literaly:
+        // Pri vstupu do ${ ulozime aktualni hloubku zavorek.
+        // Pri vyskytu } s hloubkou == ulozene -> zavirame template vyraz.
         let mut tmpl_stack: Vec<i32> = Vec::new();
         let mut brace_depth: i32 = 0;
+
+        // Posledni vyznamny token (bez trivia) - pro rozhodovani regex vs. deleni.
+        let mut last_significant: Option<TokenKind> = None;
 
         while !r.eof() {
             let start = r.pos();
@@ -95,18 +98,19 @@ impl Lexer {
                 continue;
             }
 
-            // ── Template: } zavírá výraz v šabloně ──────────────────────────
+            // ── Template: } zavre vyraz v sablone ────────────────────────────
             if ch == '}' && !tmpl_stack.is_empty() && brace_depth == *tmpl_stack.last().unwrap() {
                 tmpl_stack.pop();
                 r.advance(); self.bump('}');
-                // Dočteme zbytek šablony
                 let (text, is_tail) = self.lex_template_text(r, start)?;
-                if is_tail {
-                    tokens.push(self.tok(TokenKind::TemplateTail(text.clone()), text, start));
+                let kind = if is_tail {
+                    TokenKind::TemplateTail(text.clone())
                 } else {
-                    tokens.push(self.tok(TokenKind::TemplateMiddle(text.clone()), text, start));
                     tmpl_stack.push(brace_depth);
-                }
+                    TokenKind::TemplateMiddle(text.clone())
+                };
+                last_significant = Some(kind.clone());
+                tokens.push(self.tok(kind, text, start));
                 continue;
             }
 
@@ -141,34 +145,43 @@ impl Lexer {
                 continue;
             }
 
-            // ── Template literál ─────────────────────────────────────────────
+            // ── Template literal ─────────────────────────────────────────────
             if ch == '`' {
                 r.advance(); self.bump('`');
                 let (text, is_tail) = self.lex_template_text(r, start)?;
-                if is_tail {
-                    tokens.push(self.tok(TokenKind::NoSubstitutionTemplate(text.clone()), text, start));
+                let kind = if is_tail {
+                    TokenKind::NoSubstitutionTemplate(text.clone())
                 } else {
-                    tokens.push(self.tok(TokenKind::TemplateHead(text.clone()), text, start));
                     tmpl_stack.push(brace_depth);
-                }
+                    TokenKind::TemplateHead(text.clone())
+                };
+                last_significant = Some(kind.clone());
+                tokens.push(self.tok(kind, text, start));
                 continue;
             }
 
-            // ── Řetězce ──────────────────────────────────────────────────────
+            // ── Template: } konci vyraz -> TemplateMiddle nebo TemplateTail ──
+            // (tento blok je vyse, ale last_significant update chybi - opraveno zde)
+
+            // ── Retezce ──────────────────────────────────────────────────────
             let sk = Token::is_string_start(ch);
             if sk != StringKind::None && sk != StringKind::TemplateString {
                 r.advance(); self.bump(ch);
-                tokens.push(self.read_string(r, ch, start)?);
+                let tok = self.read_string(r, ch, start)?;
+                last_significant = Some(tok.kind.clone());
+                tokens.push(tok);
                 continue;
             }
 
-            // ── Čísla ────────────────────────────────────────────────────────
+            // ── Cisla ────────────────────────────────────────────────────────
             if Token::is_number_start(ch, r.peek_n(1)) {
-                tokens.push(self.read_numeric_literal(r)?);
+                let tok = self.read_numeric_literal(r)?;
+                last_significant = Some(tok.kind.clone());
+                tokens.push(tok);
                 continue;
             }
 
-            // ── Identifikátory / klíčová slova ───────────────────────────────
+            // ── Identifikatory / klicova slova ───────────────────────────────
             if Token::is_valid_identifier_start(ch) {
                 let ident = self.read_identifier(r);
                 let kind = if let Some(kw) = Token::get_keyword(&ident) {
@@ -176,17 +189,32 @@ impl Lexer {
                 } else {
                     TokenKind::Identifier(ident.clone())
                 };
+                last_significant = Some(kind.clone());
                 tokens.push(self.tok(kind, ident, start));
                 continue;
             }
 
-            // ── Operátory (greedy, nejdelší shoda) ───────────────────────────
+            // ── Regularni vyraz nebo operator / ──────────────────────────────
+            // Musi byt PRED obecnym read_operator, ktery by / zpracoval jako deleni.
+            if ch == '/' && !matches!(r.peek_n(1), Some('/') | Some('*')) {
+                if Self::slash_is_regex_start(last_significant.as_ref()) {
+                    let tok = self.read_regex_literal(r, start)?;
+                    last_significant = Some(tok.kind.clone());
+                    tokens.push(tok);
+                    continue;
+                }
+                // Jinak prochazi do read_operator nize (/, /=)
+            }
+
+            // ── Operatory (greedy, nejdelsi shoda) ────────────────────────────
             if Token::is_operator_start(ch) {
-                tokens.push(self.read_operator(r, start)?);
+                let tok = self.read_operator(r, start)?;
+                last_significant = Some(tok.kind.clone());
+                tokens.push(tok);
                 continue;
             }
 
-            // ── Neznámý znak ─────────────────────────────────────────────────
+            // ── Neznamy znak ─────────────────────────────────────────────────
             r.advance();
             return Err(LexerError {
                 kind: LexerErrorKind::UnexpectedCharacter { found: ch },
