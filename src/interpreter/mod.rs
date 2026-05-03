@@ -58,6 +58,89 @@ pub enum JsValue {
     Array(Rc<RefCell<Vec<JsValue>>>),
     /// Funkce (uzivatelska nebo nativni)
     Function(JsFunc),
+    /// ES2015 Map - klicovana kolekce (klic muze byt libovolny JsValue)
+    Map(Rc<RefCell<JsMap>>),
+    /// ES2015 Set - kolekce unikatnich hodnot
+    Set(Rc<RefCell<JsSet>>),
+}
+
+// ─── Map / Set datove struktury ──────────────────────────────────────────────
+
+/// JS `Map` - kolekce klicovanych hodnot (klic muze byt libovolny JsValue).
+///
+/// Pouziva Vec<(key, value)> pro spravnou sematiku vsech klicu (vcetne NaN,
+/// objektu - porovnavane pres SameValueZero / referencni rovnost).
+#[derive(Debug, Clone)]
+pub struct JsMap {
+    /// Polozky v poradi vlozeni
+    pub entries: Vec<(JsValue, JsValue)>,
+}
+
+impl JsMap {
+    fn new() -> Self { JsMap { entries: Vec::new() } }
+
+    /// Porovnani klicu: SameValueZero (NaN === NaN, objekty pres ptr_eq)
+    fn key_eq(a: &JsValue, b: &JsValue) -> bool {
+        match (a, b) {
+            (JsValue::Number(x), JsValue::Number(y)) => {
+                if x.is_nan() && y.is_nan() { return true; }
+                x.to_bits() == y.to_bits()
+            }
+            (JsValue::Object(x), JsValue::Object(y))   => Rc::ptr_eq(x, y),
+            (JsValue::Array(x),  JsValue::Array(y))    => Rc::ptr_eq(x, y),
+            (JsValue::Map(x),    JsValue::Map(y))       => Rc::ptr_eq(x, y),
+            (JsValue::Set(x),    JsValue::Set(y))       => Rc::ptr_eq(x, y),
+            _ => a.strict_eq(b),
+        }
+    }
+
+    fn set(&mut self, key: JsValue, val: JsValue) {
+        for entry in &mut self.entries {
+            if Self::key_eq(&entry.0, &key) { entry.1 = val; return; }
+        }
+        self.entries.push((key, val));
+    }
+
+    fn get(&self, key: &JsValue) -> JsValue {
+        self.entries.iter()
+            .find(|(k, _)| Self::key_eq(k, key))
+            .map(|(_, v)| v.clone())
+            .unwrap_or(JsValue::Undefined)
+    }
+
+    fn has(&self, key: &JsValue) -> bool {
+        self.entries.iter().any(|(k, _)| Self::key_eq(k, key))
+    }
+
+    fn delete(&mut self, key: &JsValue) -> bool {
+        let before = self.entries.len();
+        self.entries.retain(|(k, _)| !Self::key_eq(k, key));
+        self.entries.len() < before
+    }
+}
+
+/// JS `Set` - kolekce unikatnich hodnot.
+#[derive(Debug, Clone)]
+pub struct JsSet {
+    pub values: Vec<JsValue>,
+}
+
+impl JsSet {
+    fn new() -> Self { JsSet { values: Vec::new() } }
+
+    fn has(&self, val: &JsValue) -> bool {
+        self.values.iter().any(|v| JsMap::key_eq(v, val))
+    }
+
+    fn add(&mut self, val: JsValue) {
+        if !self.has(&val) { self.values.push(val); }
+    }
+
+    fn delete(&mut self, val: &JsValue) -> bool {
+        let before = self.values.len();
+        self.values.retain(|v| !JsMap::key_eq(v, val));
+        self.values.len() < before
+    }
 }
 
 /// JS objekt - mapa retezec -> hodnota + prototypovy retezec.
@@ -220,6 +303,15 @@ impl std::fmt::Display for JsValue {
                 write!(f, "[{}]", items.join(", "))
             }
             JsValue::Function(fn_) => write!(f, "{fn_:?}"),
+            JsValue::Map(m) => {
+                let pairs: Vec<String> = m.borrow().entries.iter()
+                    .map(|(k, v)| format!("{k} => {v}")).collect();
+                write!(f, "Map {{ {} }}", pairs.join(", "))
+            }
+            JsValue::Set(s) => {
+                let items: Vec<String> = s.borrow().values.iter().map(|v| v.to_string()).collect();
+                write!(f, "Set {{ {} }}", items.join(", "))
+            }
         }
     }
 }
@@ -257,6 +349,8 @@ impl JsValue {
             JsValue::Object(_)   => "object",
             JsValue::Array(_)    => "object",
             JsValue::Function(_) => "function",
+            JsValue::Map(_)      => "object",
+            JsValue::Set(_)      => "object",
         }
     }
 
@@ -280,7 +374,9 @@ impl JsValue {
             (JsValue::Number(a), JsValue::Number(b)) => a == b,
             (JsValue::Str(a), JsValue::Str(b))       => a == b,
             (JsValue::Object(a), JsValue::Object(b)) => Rc::ptr_eq(a, b),
-            (JsValue::Array(a), JsValue::Array(b))   => Rc::ptr_eq(a, b),
+            (JsValue::Array(a),  JsValue::Array(b))  => Rc::ptr_eq(a, b),
+            (JsValue::Map(a),    JsValue::Map(b))    => Rc::ptr_eq(a, b),
+            (JsValue::Set(a),    JsValue::Set(b))    => Rc::ptr_eq(a, b),
             _ => false,
         }
     }
@@ -410,7 +506,7 @@ pub struct Interpreter {
     yield_buffer: Option<Vec<JsValue>>,
 }
 
-// ─── Pomocne funkce pro prototypovy retezec ──────────────────────────────────
+// ─── Pomocne funkce ──────────────────────────────────────────────────────────
 
 /// Vrati true kdyz klic je interni (`__key__` format - napr. `__class_chain__`).
 fn is_internal_key(k: &str) -> bool {
@@ -432,6 +528,49 @@ fn is_in_proto_chain(proto: &Rc<RefCell<JsObject>>, target: &JsValue) -> bool {
         depth += 1;
     }
     false
+}
+
+/// Vytvori iterator objekt (s `next()` a `Symbol.iterator`) z pole hodnot.
+///
+/// Pouziva se pro Map.keys(), Set.values(), atd. - vraci lazy-looking objekt
+/// ktery lze pouzit v `for...of` nebo primo s `.next()`.
+fn make_array_iterator(values: Vec<JsValue>) -> JsValue {
+    let values = Rc::new(values);
+    let index  = Rc::new(RefCell::new(0usize));
+
+    let v1 = Rc::clone(&values);
+    let i1 = Rc::clone(&index);
+    let next_fn = native("(iterator).next", move |_| {
+        let i = *i1.borrow();
+        if i < v1.len() {
+            *i1.borrow_mut() = i + 1;
+            let mut r = JsObject::new();
+            r.set("value".into(), v1[i].clone());
+            r.set("done".into(),  JsValue::Bool(false));
+            Ok(JsValue::Object(Rc::new(RefCell::new(r))))
+        } else {
+            let mut r = JsObject::new();
+            r.set("value".into(), JsValue::Undefined);
+            r.set("done".into(),  JsValue::Bool(true));
+            Ok(JsValue::Object(Rc::new(RefCell::new(r))))
+        }
+    });
+
+    // Symbol.iterator vraci sebe sama (iterator je zaroven iterable)
+    let values2 = Rc::clone(&values);
+    let index2  = Rc::new(RefCell::new(0usize));
+    let self_iter = native("(iterator)[Symbol.iterator]", move |_| {
+        let v = Rc::clone(&values2);
+        let i = Rc::clone(&index2);
+        Ok(make_array_iterator(v.as_ref().clone()))
+        // Pro zjednoduseni vratime novy iterator od zacatku
+        // (spravnejsi by bylo vratit `this`, ale bez this kontextu)
+    });
+
+    let mut obj = JsObject::new();
+    obj.set("next".into(), next_fn);
+    obj.set("Symbol.iterator".into(), self_iter);
+    JsValue::Object(Rc::new(RefCell::new(obj)))
 }
 
 impl Interpreter {
@@ -1591,6 +1730,16 @@ impl Interpreter {
                 }
                 Ok(JsValue::Undefined)
             }
+            // Map vlastnosti: size (read-only)
+            JsValue::Map(m) => {
+                if key == "size" { return Ok(JsValue::Number(m.borrow().entries.len() as f64)); }
+                Ok(JsValue::Undefined)
+            }
+            // Set vlastnosti: size (read-only)
+            JsValue::Set(s) => {
+                if key == "size" { return Ok(JsValue::Number(s.borrow().values.len() as f64)); }
+                Ok(JsValue::Undefined)
+            }
             _ => Ok(JsValue::Undefined),
         }
     }
@@ -1651,8 +1800,98 @@ impl Interpreter {
             }
             let key = self.resolve_prop_key(prop, env)?;
 
-            // Built-in Array/String/Object instance metody -- dispatch pred call_function
+            // Built-in Array/String/Object/Map/Set instance metody -- dispatch pred call_function
             match &this {
+                // ─── Map metody ────────────────────────────────────────────
+                JsValue::Map(map_rc) => {
+                    let map_rc2 = Rc::clone(map_rc);
+                    let arg_vals = self.eval_args(args, env)?;
+                    match key.as_str() {
+                        "set" => {
+                            let mut iter = arg_vals.into_iter();
+                            let k = iter.next().unwrap_or(JsValue::Undefined);
+                            let v = iter.next().unwrap_or(JsValue::Undefined);
+                            map_rc2.borrow_mut().set(k, v);
+                            return Ok(JsValue::Map(map_rc2));
+                        }
+                        "get" => {
+                            let k = arg_vals.into_iter().next().unwrap_or(JsValue::Undefined);
+                            return Ok(map_rc2.borrow().get(&k));
+                        }
+                        "has" => {
+                            let k = arg_vals.into_iter().next().unwrap_or(JsValue::Undefined);
+                            return Ok(JsValue::Bool(map_rc2.borrow().has(&k)));
+                        }
+                        "delete" => {
+                            let k = arg_vals.into_iter().next().unwrap_or(JsValue::Undefined);
+                            return Ok(JsValue::Bool(map_rc2.borrow_mut().delete(&k)));
+                        }
+                        "clear" => { map_rc2.borrow_mut().entries.clear(); return Ok(JsValue::Undefined); }
+                        "keys" => {
+                            let keys: Vec<JsValue> = map_rc2.borrow().entries.iter().map(|(k,_)| k.clone()).collect();
+                            return Ok(make_array_iterator(keys));
+                        }
+                        "values" => {
+                            let vals: Vec<JsValue> = map_rc2.borrow().entries.iter().map(|(_,v)| v.clone()).collect();
+                            return Ok(make_array_iterator(vals));
+                        }
+                        "entries" => {
+                            let entries: Vec<JsValue> = map_rc2.borrow().entries.iter()
+                                .map(|(k,v)| JsValue::Array(Rc::new(RefCell::new(vec![k.clone(), v.clone()]))))
+                                .collect();
+                            return Ok(make_array_iterator(entries));
+                        }
+                        "forEach" => {
+                            let cb = arg_vals.into_iter().next().unwrap_or(JsValue::Undefined);
+                            let entries: Vec<(JsValue,JsValue)> = map_rc2.borrow().entries.clone();
+                            for (k, v) in entries {
+                                self.call_function(cb.clone(), vec![v, k, JsValue::Map(Rc::clone(&map_rc2))], None)?;
+                            }
+                            return Ok(JsValue::Undefined);
+                        }
+                        _ => return Ok(JsValue::Undefined),
+                    }
+                }
+                // ─── Set metody ────────────────────────────────────────────
+                JsValue::Set(set_rc) => {
+                    let set_rc2 = Rc::clone(set_rc);
+                    let arg_vals = self.eval_args(args, env)?;
+                    match key.as_str() {
+                        "add" => {
+                            let v = arg_vals.into_iter().next().unwrap_or(JsValue::Undefined);
+                            set_rc2.borrow_mut().add(v);
+                            return Ok(JsValue::Set(set_rc2));
+                        }
+                        "has" => {
+                            let v = arg_vals.into_iter().next().unwrap_or(JsValue::Undefined);
+                            return Ok(JsValue::Bool(set_rc2.borrow().has(&v)));
+                        }
+                        "delete" => {
+                            let v = arg_vals.into_iter().next().unwrap_or(JsValue::Undefined);
+                            return Ok(JsValue::Bool(set_rc2.borrow_mut().delete(&v)));
+                        }
+                        "clear" => { set_rc2.borrow_mut().values.clear(); return Ok(JsValue::Undefined); }
+                        "keys" | "values" => {
+                            let vals: Vec<JsValue> = set_rc2.borrow().values.clone();
+                            return Ok(make_array_iterator(vals));
+                        }
+                        "entries" => {
+                            let entries: Vec<JsValue> = set_rc2.borrow().values.iter()
+                                .map(|v| JsValue::Array(Rc::new(RefCell::new(vec![v.clone(), v.clone()]))))
+                                .collect();
+                            return Ok(make_array_iterator(entries));
+                        }
+                        "forEach" => {
+                            let cb = arg_vals.into_iter().next().unwrap_or(JsValue::Undefined);
+                            let vals: Vec<JsValue> = set_rc2.borrow().values.clone();
+                            for v in vals {
+                                self.call_function(cb.clone(), vec![v.clone(), v, JsValue::Set(Rc::clone(&set_rc2))], None)?;
+                            }
+                            return Ok(JsValue::Undefined);
+                        }
+                        _ => return Ok(JsValue::Undefined),
+                    }
+                }
                 JsValue::Object(obj_rc) => {
                     let obj_rc2 = Rc::clone(obj_rc);
                     let arg_vals = self.eval_args(args, env)?;
@@ -1788,10 +2027,44 @@ impl Interpreter {
         if matches!(&func, JsValue::Function(JsFunc::Class { .. })) {
             return self.construct_class(func, args);
         }
+        // Vestavene konstruktory: Map, Set, ...
+        if let JsValue::Function(JsFunc::Native(name, _)) = &func {
+            match name.as_str() {
+                "Map" | "WeakMap" => return self.construct_map(args),
+                "Set" | "WeakSet" => return self.construct_set(args),
+                _     => {}
+            }
+        }
         // `new FunctionConstructor()` - stary styl
         let obj = JsValue::Object(Rc::new(RefCell::new(JsObject::new())));
         self.call_function(func, args, Some(obj.clone()))?;
         Ok(obj)
+    }
+
+    /// Konstruktor `new Map([[k,v], ...])` nebo `new Map()`.
+    fn construct_map(&mut self, args: Vec<JsValue>) -> EvalResult {
+        let mut m = JsMap::new();
+        if let Some(JsValue::Array(entries)) = args.into_iter().next() {
+            for entry in entries.borrow().clone() {
+                if let JsValue::Array(pair) = entry {
+                    let pair = pair.borrow();
+                    let k = pair.get(0).cloned().unwrap_or(JsValue::Undefined);
+                    let v = pair.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    m.set(k, v);
+                }
+            }
+        }
+        Ok(JsValue::Map(Rc::new(RefCell::new(m))))
+    }
+
+    /// Konstruktor `new Set([val, ...])` nebo `new Set()`.
+    fn construct_set(&mut self, args: Vec<JsValue>) -> EvalResult {
+        let mut s = JsSet::new();
+        if let Some(iterable) = args.into_iter().next() {
+            let items = self.collect_iterable(iterable).unwrap_or_default();
+            for v in items { s.add(v); }
+        }
+        Ok(JsValue::Set(Rc::new(RefCell::new(s))))
     }
 
     // ─── Generator + iterator protokol ───────────────────────────────────────
@@ -1888,6 +2161,14 @@ impl Interpreter {
         match &val {
             JsValue::Array(a) => return Ok(a.borrow().clone()),
             JsValue::Str(s)   => return Ok(s.chars().map(|c| JsValue::Str(c.to_string())).collect()),
+            // for...of Map -> [key, value] pary
+            JsValue::Map(m) => {
+                return Ok(m.borrow().entries.iter()
+                    .map(|(k, v)| JsValue::Array(Rc::new(RefCell::new(vec![k.clone(), v.clone()]))))
+                    .collect());
+            }
+            // for...of Set -> hodnoty
+            JsValue::Set(s) => return Ok(s.borrow().values.clone()),
             _ => {}
         }
         // Zkus Symbol.iterator protocol
@@ -2560,6 +2841,16 @@ fn setup_builtins(env: &Rc<RefCell<Environment>>) {
     sym_obj.set("hasInstance".into(), JsValue::Str("Symbol.hasInstance".into()));
     sym_obj.set("asyncIterator".into(), JsValue::Str("Symbol.asyncIterator".into()));
     e.define("Symbol", JsValue::Object(Rc::new(RefCell::new(sym_obj))));
+
+    // Map konstruktor (new Map() / new Map([[k,v], ...]))
+    e.define("Map", native("Map", |_| Ok(JsValue::Undefined))); // skutecna logika v call_new
+
+    // Set konstruktor (new Set() / new Set([1,2,3]))
+    e.define("Set", native("Set", |_| Ok(JsValue::Undefined))); // skutecna logika v call_new
+
+    // WeakMap / WeakSet - stub (bez GC semantiky, chovaji se jako Map/Set)
+    e.define("WeakMap", native("WeakMap", |_| Ok(JsValue::Undefined)));
+    e.define("WeakSet", native("WeakSet", |_| Ok(JsValue::Undefined)));
 
     e.define("Infinity",  JsValue::Number(f64::INFINITY));
     e.define("NaN",       JsValue::Number(f64::NAN));
@@ -4198,5 +4489,178 @@ mod tests {
             for (const x of take([10, 20, 30, 40], 3)) { sum += x; }
             return sum;
         "#)), 60.0);
+    }
+
+    // ─── Batch A: Map ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn map_basic_set_get() {
+        assert_eq!(as_num(run(r#"
+            const m = new Map();
+            m.set("a", 1);
+            m.set("b", 2);
+            return m.get("a") + m.get("b");
+        "#)), 3.0);
+    }
+
+    #[test]
+    fn map_has_delete() {
+        assert_eq!(as_bool(run(r#"
+            const m = new Map();
+            m.set("x", 10);
+            const had = m.has("x");
+            m.delete("x");
+            return had && !m.has("x");
+        "#)), true);
+    }
+
+    #[test]
+    fn map_size() {
+        assert_eq!(as_num(run(r#"
+            const m = new Map();
+            m.set(1, "a");
+            m.set(2, "b");
+            m.set(3, "c");
+            return m.size;
+        "#)), 3.0);
+    }
+
+    #[test]
+    fn map_constructor_with_entries() {
+        assert_eq!(as_num(run(r#"
+            const m = new Map([["a", 1], ["b", 2], ["c", 3]]);
+            return m.size;
+        "#)), 3.0);
+    }
+
+    #[test]
+    fn map_for_of() {
+        assert_eq!(as_num(run(r#"
+            const m = new Map([["x", 10], ["y", 20]]);
+            let sum = 0;
+            for (const [k, v] of m) { sum += v; }
+            return sum;
+        "#)), 30.0);
+    }
+
+    #[test]
+    fn map_object_key() {
+        // Objekt jako klic - referencni rovnost
+        assert_eq!(as_num(run(r#"
+            const m = new Map();
+            const key = {};
+            m.set(key, 99);
+            return m.get(key);
+        "#)), 99.0);
+    }
+
+    #[test]
+    fn map_clear() {
+        assert_eq!(as_num(run(r#"
+            const m = new Map([["a", 1], ["b", 2]]);
+            m.clear();
+            return m.size;
+        "#)), 0.0);
+    }
+
+    #[test]
+    fn map_keys_values() {
+        assert_eq!(as_num(run(r#"
+            const m = new Map([["a", 1], ["b", 2]]);
+            let keySum = 0;
+            for (const k of m.keys()) { keySum++; }
+            let valSum = 0;
+            for (const v of m.values()) { valSum += v; }
+            return keySum + valSum;
+        "#)), 5.0);
+    }
+
+    #[test]
+    fn map_foreach() {
+        assert_eq!(as_num(run(r#"
+            const m = new Map([["a", 1], ["b", 2], ["c", 3]]);
+            let sum = 0;
+            m.forEach((v, k) => { sum += v; });
+            return sum;
+        "#)), 6.0);
+    }
+
+    #[test]
+    fn map_update_existing_key() {
+        assert_eq!(as_num(run(r#"
+            const m = new Map();
+            m.set("k", 1);
+            m.set("k", 2);
+            return m.get("k");
+        "#)), 2.0);
+    }
+
+    // ─── Batch A: Set ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn set_basic_add_has() {
+        assert_eq!(as_bool(run(r#"
+            const s = new Set();
+            s.add(1);
+            s.add(2);
+            s.add(2); // duplikat
+            return s.has(1) && s.has(2) && s.size === 2;
+        "#)), true);
+    }
+
+    #[test]
+    fn set_delete() {
+        assert_eq!(as_bool(run(r#"
+            const s = new Set([1, 2, 3]);
+            s.delete(2);
+            return !s.has(2) && s.size === 2;
+        "#)), true);
+    }
+
+    #[test]
+    fn set_for_of() {
+        assert_eq!(as_num(run(r#"
+            const s = new Set([1, 2, 3, 4, 5]);
+            let sum = 0;
+            for (const v of s) { sum += v; }
+            return sum;
+        "#)), 15.0);
+    }
+
+    #[test]
+    fn set_constructor_with_array() {
+        assert_eq!(as_num(run(r#"
+            const s = new Set([1, 2, 2, 3, 3, 3]);
+            return s.size;
+        "#)), 3.0);
+    }
+
+    #[test]
+    fn set_clear() {
+        assert_eq!(as_num(run(r#"
+            const s = new Set([1, 2, 3]);
+            s.clear();
+            return s.size;
+        "#)), 0.0);
+    }
+
+    #[test]
+    fn set_foreach() {
+        assert_eq!(as_num(run(r#"
+            const s = new Set([10, 20, 30]);
+            let sum = 0;
+            s.forEach(v => { sum += v; });
+            return sum;
+        "#)), 60.0);
+    }
+
+    #[test]
+    fn set_values_iterator() {
+        assert_eq!(as_num(run(r#"
+            const s = new Set([5, 10, 15]);
+            let sum = 0;
+            for (const v of s.values()) { sum += v; }
+            return sum;
+        "#)), 30.0);
     }
 }
