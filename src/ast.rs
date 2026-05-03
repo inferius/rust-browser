@@ -1,5 +1,5 @@
-/// AST pro podmnožinu JavaScriptu.
-/// Pokrývá vše potřebné pro basic_test.js a běžný JS kód.
+/// AST pro podmnoZinu JavaScriptu.
+/// Pokryva vse potrebne pro ESNext podmnozinu.
 
 // ─── Výrazy ───────────────────────────────────────────────────────────────────
 
@@ -31,14 +31,15 @@ pub enum Expr {
     Ternary { test: Box<Expr>, yes: Box<Expr>, no: Box<Expr> },
     Assign  { op: AssignOp, target: Box<Expr>, value: Box<Expr> },
 
-    // Volání a přístup k vlastnostem
-    Call   { callee: Box<Expr>, args: Vec<Expr> },
+    // Volani a pristup k vlastnostem
+    // optional=true -> ?. (vrati Undefined misto chyby kdyz object je null/undefined)
+    Call   { callee: Box<Expr>, args: Vec<Expr>, optional: bool },
     New    { callee: Box<Expr>, args: Vec<Expr> },
-    Member { object: Box<Expr>, prop: MemberProp },
+    Member { object: Box<Expr>, prop: MemberProp, optional: bool },
 
     // Funkce
-    Function { name: Option<String>, params: Vec<String>, body: Vec<Stmt> },
-    Arrow    { params: Vec<String>, body: ArrowBody },
+    Function { name: Option<String>, params: Vec<Param>, body: Vec<Stmt> },
+    Arrow    { params: Vec<Param>, body: ArrowBody },
 
     // Pomocné
     Spread(Box<Expr>),
@@ -96,9 +97,28 @@ pub enum AssignOp {
     Assign,
     Add, Sub, Mul, Div, Mod, Exp,
     BitAnd, BitOr, BitXor, Shl, Shr, Ushr,
+    LogicalAnd,   // &&=
+    LogicalOr,    // ||=
+    NullCoal,     // ??=
 }
 
-// ─── Příkazy ──────────────────────────────────────────────────────────────────
+// ─── Parametry funkci ─────────────────────────────────────────────────────────
+
+/// Jeden parametr funkce / arrow funkce.
+#[derive(Debug, Clone)]
+pub struct Param {
+    pub name: String,
+    pub default: Option<Box<Expr>>,   // (x = 42) - vyhodnoceno pri volani
+    pub rest: bool,                    // ...args   - sbira zbyvajici args do pole
+}
+
+impl Param {
+    pub fn simple(name: String) -> Self {
+        Param { name, default: None, rest: false }
+    }
+}
+
+// ─── Prikazy ──────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
 pub enum Stmt {
@@ -114,7 +134,7 @@ pub enum Stmt {
     Var { kind: VarKind, decls: Vec<VarDecl> },
 
     // Deklarace funkce
-    Function { name: String, params: Vec<String>, body: Vec<Stmt> },
+    Function { name: String, params: Vec<Param>, body: Vec<Stmt> },
 
     // Větvení a cykly
     If     { test: Expr, yes: Box<Stmt>, no: Option<Box<Stmt>> },

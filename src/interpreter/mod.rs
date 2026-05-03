@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
-use crate::ast::*;
+use crate::ast::{self, *};
 
 // ─── JS hodnoty ───────────────────────────────────────────────────────────────
 
@@ -33,7 +33,7 @@ type NativeFn = Rc<dyn Fn(Vec<JsValue>) -> Result<JsValue, String>>;
 
 #[derive(Clone)]
 pub enum JsFunc {
-    User { name: Option<String>, params: Vec<String>, body: FuncBody, env: Rc<RefCell<Env>> },
+    User { name: Option<String>, params: Vec<Param>, body: FuncBody, env: Rc<RefCell<Env>> },
     Native(String, NativeFn),
 }
 
@@ -485,7 +485,7 @@ impl Interpreter {
 
             Expr::Assign { op, target, value } => self.eval_assign(op, target, value, env),
 
-            Expr::Call   { callee, args }     => self.eval_call(callee, args, env),
+            Expr::Call   { callee, args, optional }     => self.eval_call(callee, args, *optional, env),
 
             Expr::New { callee, args } => {
                 let func = self.eval(callee, env)?;
@@ -494,7 +494,7 @@ impl Interpreter {
                 self.call_new(func, arg_vals)
             }
 
-            Expr::Member { object, prop }     => self.eval_member(object, prop, env),
+            Expr::Member { object, prop, optional }     => self.eval_member(object, prop, *optional, env),
 
             Expr::Spread(e)   => self.eval(e, env),
 
@@ -522,7 +522,7 @@ impl Interpreter {
             UnaryOp::Plus   => Ok(JsValue::Number(self.eval(arg, env)?.to_number())),
             UnaryOp::BitNot => Ok(JsValue::Number(!(self.eval(arg, env)?.to_number() as i32) as f64)),
             UnaryOp::Delete => {
-                if let Expr::Member { object, prop } = arg {
+                if let Expr::Member { object, prop, .. } = arg {
                     let obj = self.eval(object, env)?;
                     let key = self.resolve_prop_key(prop, env)?;
                     if let JsValue::Object(o) = &obj { o.borrow_mut().props.remove(&key); }
@@ -602,6 +602,32 @@ impl Interpreter {
     }
 
     fn eval_assign(&mut self, op: &AssignOp, target: &Expr, value: &Expr, env: &Rc<RefCell<Environment>>) -> EvalResult {
+        // Logical assignment: short-circuit pred eval rhs
+        match op {
+            AssignOp::LogicalAnd => {
+                let cur = self.eval(target, env)?;
+                if !cur.is_truthy() { return Ok(cur); }
+                let rhs = self.eval(value, env)?;
+                self.assign_to(target, rhs.clone(), env)?;
+                return Ok(rhs);
+            }
+            AssignOp::LogicalOr => {
+                let cur = self.eval(target, env)?;
+                if cur.is_truthy() { return Ok(cur); }
+                let rhs = self.eval(value, env)?;
+                self.assign_to(target, rhs.clone(), env)?;
+                return Ok(rhs);
+            }
+            AssignOp::NullCoal => {
+                let cur = self.eval(target, env)?;
+                if !matches!(cur, JsValue::Null | JsValue::Undefined) { return Ok(cur); }
+                let rhs = self.eval(value, env)?;
+                self.assign_to(target, rhs.clone(), env)?;
+                return Ok(rhs);
+            }
+            _ => {}
+        }
+
         let new_val = if *op == AssignOp::Assign {
             self.eval(value, env)?
         } else {
@@ -623,7 +649,7 @@ impl Interpreter {
                 AssignOp::Shl    => JsValue::Number(((old.to_number() as i32) << (rhs.to_number() as u32 & 31)) as f64),
                 AssignOp::Shr    => JsValue::Number(((old.to_number() as i32) >> (rhs.to_number() as u32 & 31)) as f64),
                 AssignOp::Ushr   => JsValue::Number(((old.to_number() as u32) >> (rhs.to_number() as u32 & 31)) as f64),
-                AssignOp::Assign => unreachable!(),
+                AssignOp::Assign | AssignOp::LogicalAnd | AssignOp::LogicalOr | AssignOp::NullCoal => unreachable!(),
             }
         };
         self.assign_to(target, new_val.clone(), env)?;
@@ -638,7 +664,7 @@ impl Interpreter {
                 }
                 Ok(())
             }
-            Expr::Member { object, prop } => {
+            Expr::Member { object, prop, .. } => {
                 let obj = self.eval(object, env)?;
                 let key = self.resolve_prop_key(prop, env)?;
                 match &obj {
@@ -651,15 +677,18 @@ impl Interpreter {
                         }
                         Ok(())
                     }
-                    _ => Err(JsError::Runtime(format!("Nelze přiřadit do vlastnosti '{key}'")))
+                    _ => Err(JsError::Runtime(format!("Nelze priradit do vlastnosti '{key}'")))
                 }
             }
-            _ => Err(JsError::Runtime("Neplatný cíl přiřazení".into())),
+            _ => Err(JsError::Runtime("Neplatny cil prirazeni".into())),
         }
     }
 
-    fn eval_member(&mut self, object: &Expr, prop: &MemberProp, env: &Rc<RefCell<Environment>>) -> EvalResult {
+    fn eval_member(&mut self, object: &Expr, prop: &MemberProp, optional: bool, env: &Rc<RefCell<Environment>>) -> EvalResult {
         let obj = self.eval(object, env)?;
+        if optional && matches!(obj, JsValue::Null | JsValue::Undefined) {
+            return Ok(JsValue::Undefined);
+        }
         let key = self.resolve_prop_key(prop, env)?;
         self.get_prop(&obj, &key)
     }
@@ -692,29 +721,84 @@ impl Interpreter {
         }
     }
 
-    fn eval_call(&mut self, callee: &Expr, args: &[Expr], env: &Rc<RefCell<Environment>>) -> EvalResult {
-        let (func_val, this_val) = match callee {
-            Expr::Member { object, prop } => {
-                let this = self.eval(object, env)?;
-                let key = self.resolve_prop_key(prop, env)?;
-                let func = self.get_prop(&this, &key)?;
-                (func, Some(this))
-            }
-            _ => (self.eval(callee, env)?, None),
-        };
-
-        let mut arg_vals: Vec<JsValue> = Vec::new();
+    fn eval_args(&mut self, args: &[Expr], env: &Rc<RefCell<Environment>>) -> Result<Vec<JsValue>, JsError> {
+        let mut vals = Vec::new();
         for a in args {
             if let Expr::Spread(e) = a {
                 if let JsValue::Array(arr) = self.eval(e, env)? {
-                    arg_vals.extend(arr.borrow().clone());
+                    vals.extend(arr.borrow().clone());
                 }
             } else {
-                arg_vals.push(self.eval(a, env)?);
+                vals.push(self.eval(a, env)?);
             }
         }
+        Ok(vals)
+    }
 
-        self.call_function(func_val, arg_vals, this_val)
+    fn eval_call(&mut self, callee: &Expr, args: &[Expr], optional: bool, env: &Rc<RefCell<Environment>>) -> EvalResult {
+        if let Expr::Member { object, prop, optional: member_opt } = callee {
+            let this = self.eval(object, env)?;
+            // optional chaining: obj?.method() -> Undefined kdyz obj je null/undefined
+            if (optional || *member_opt) && matches!(this, JsValue::Null | JsValue::Undefined) {
+                return Ok(JsValue::Undefined);
+            }
+            let key = self.resolve_prop_key(prop, env)?;
+
+            // Built-in Array/String metody -- dispatch pred call_function
+            match &this {
+                JsValue::Array(arr_rc) => {
+                    let arr_rc = Rc::clone(arr_rc);
+                    let arg_vals = self.eval_args(args, env)?;
+                    if let Some(result) = self.call_array_method(arr_rc, &key, arg_vals)? {
+                        return Ok(result);
+                    }
+                }
+                JsValue::Str(s) => {
+                    let s = s.clone();
+                    let arg_vals = self.eval_args(args, env)?;
+                    if let Some(result) = call_string_method(&s, &key, arg_vals)? {
+                        return Ok(result);
+                    }
+                }
+                // Array staticke metody: Array.isArray(), Array.from()
+                JsValue::Function(JsFunc::Native(fname, _)) => {
+                    let fname = fname.clone();
+                    let arg_vals = self.eval_args(args, env)?;
+                    match (fname.as_str(), key.as_str()) {
+                        ("Array", "isArray") => {
+                            return Ok(JsValue::Bool(matches!(arg_vals.first(), Some(JsValue::Array(_)))));
+                        }
+                        ("Array", "from") => {
+                            let result = match arg_vals.into_iter().next().unwrap_or(JsValue::Undefined) {
+                                JsValue::Array(a) => JsValue::Array(Rc::new(RefCell::new(a.borrow().clone()))),
+                                JsValue::Str(s) => JsValue::Array(Rc::new(RefCell::new(
+                                    s.chars().map(|c| JsValue::Str(c.to_string())).collect()
+                                ))),
+                                _ => JsValue::Array(Rc::new(RefCell::new(vec![]))),
+                            };
+                            return Ok(result);
+                        }
+                        _ => {}
+                    }
+                    // Neznama staticka metoda - zkusit get_prop + call_function
+                    let func = self.get_prop(&this, &key)?;
+                    return self.call_function(func, arg_vals, Some(this));
+                }
+                _ => {}
+            }
+
+            let func = self.get_prop(&this, &key)?;
+            let arg_vals = self.eval_args(args, env)?;
+            return self.call_function(func, arg_vals, Some(this));
+        }
+
+        // Bezny call: optional chaining foo?.()
+        let func_val = self.eval(callee, env)?;
+        if optional && matches!(func_val, JsValue::Null | JsValue::Undefined) {
+            return Ok(JsValue::Undefined);
+        }
+        let arg_vals = self.eval_args(args, env)?;
+        self.call_function(func_val, arg_vals, None)
     }
 
     pub fn call_function(&mut self, func: JsValue, args: Vec<JsValue>, this: Option<JsValue>) -> EvalResult {
@@ -724,12 +808,29 @@ impl Interpreter {
             }
             JsValue::Function(JsFunc::User { params, body, env, .. }) => {
                 let call_env = Environment::new_child(&env);
-                for (i, p) in params.iter().enumerate() {
-                    call_env.borrow_mut().define(p, args.get(i).cloned().unwrap_or(JsValue::Undefined));
+                let params = params.clone();
+                let body = body.clone();
+                let mut arg_idx = 0usize;
+                for p in &params {
+                    if p.rest {
+                        let rest: Vec<JsValue> = args.get(arg_idx..).unwrap_or(&[]).to_vec();
+                        call_env.borrow_mut().define(&p.name, JsValue::Array(Rc::new(RefCell::new(rest))));
+                        break;
+                    }
+                    let val = args.get(arg_idx).cloned().unwrap_or(JsValue::Undefined);
+                    let val = if matches!(val, JsValue::Undefined) {
+                        if let Some(default_expr) = &p.default {
+                            let de = *default_expr.clone();
+                            self.eval(&de, &call_env)?
+                        } else { val }
+                    } else { val };
+                    call_env.borrow_mut().define(&p.name, val);
+                    arg_idx += 1;
                 }
                 if let Some(t) = this { call_env.borrow_mut().define("this", t); }
                 let args_arr = JsValue::Array(Rc::new(RefCell::new(args)));
                 call_env.borrow_mut().define("arguments", args_arr);
+                let body = body;
 
                 match &body {
                     FuncBody::Stmts(stmts) => {
@@ -753,6 +854,354 @@ impl Interpreter {
         let obj = JsValue::Object(Rc::new(RefCell::new(JsObject::new())));
         self.call_function(func, args, Some(obj.clone()))?;
         Ok(obj)
+    }
+
+    // ─── Array built-in metody ────────────────────────────────────────────────
+
+    fn call_array_method(&mut self, arr: Rc<RefCell<Vec<JsValue>>>, method: &str, args: Vec<JsValue>) -> Result<Option<JsValue>, JsError> {
+        match method {
+            "push" => {
+                let new_len = { let mut a = arr.borrow_mut(); for v in args { a.push(v); } a.len() as f64 };
+                Ok(Some(JsValue::Number(new_len)))
+            }
+            "pop" => Ok(Some(arr.borrow_mut().pop().unwrap_or(JsValue::Undefined))),
+            "shift" => {
+                let v = if arr.borrow().is_empty() { JsValue::Undefined } else { arr.borrow_mut().remove(0) };
+                Ok(Some(v))
+            }
+            "unshift" => {
+                let mut a = arr.borrow_mut();
+                for (i, v) in args.into_iter().enumerate() { a.insert(i, v); }
+                Ok(Some(JsValue::Number(a.len() as f64)))
+            }
+            "reverse" => {
+                arr.borrow_mut().reverse();
+                Ok(Some(JsValue::Array(arr)))
+            }
+            "join" => {
+                let sep = args.into_iter().next().map(|v| v.to_string()).unwrap_or_else(|| ",".into());
+                let s = arr.borrow().iter().map(|v| v.to_string()).collect::<Vec<_>>().join(&sep);
+                Ok(Some(JsValue::Str(s)))
+            }
+            "includes" => {
+                let needle = args.into_iter().next().unwrap_or(JsValue::Undefined);
+                Ok(Some(JsValue::Bool(arr.borrow().iter().any(|v| v.strict_eq(&needle)))))
+            }
+            "indexOf" => {
+                let needle = args.into_iter().next().unwrap_or(JsValue::Undefined);
+                let idx = arr.borrow().iter().position(|v| v.strict_eq(&needle));
+                Ok(Some(JsValue::Number(idx.map(|i| i as f64).unwrap_or(-1.0))))
+            }
+            "lastIndexOf" => {
+                let needle = args.into_iter().next().unwrap_or(JsValue::Undefined);
+                let a = arr.borrow();
+                let idx = a.iter().rposition(|v| v.strict_eq(&needle));
+                Ok(Some(JsValue::Number(idx.map(|i| i as f64).unwrap_or(-1.0))))
+            }
+            "slice" => {
+                let a = arr.borrow();
+                let len = a.len() as i64;
+                let start = args.get(0).map(|v| v.to_number() as i64).unwrap_or(0);
+                let end   = args.get(1).map(|v| v.to_number() as i64).unwrap_or(len);
+                let s = if start < 0 { (len + start).max(0) } else { start.min(len) } as usize;
+                let e = if end   < 0 { (len + end  ).max(0) } else { end  .min(len) } as usize;
+                Ok(Some(JsValue::Array(Rc::new(RefCell::new(a.get(s..e).unwrap_or(&[]).to_vec())))))
+            }
+            "concat" => {
+                let mut result = arr.borrow().clone();
+                for v in args {
+                    match v { JsValue::Array(o) => result.extend(o.borrow().clone()), other => result.push(other) }
+                }
+                Ok(Some(JsValue::Array(Rc::new(RefCell::new(result)))))
+            }
+            "flat" => {
+                let depth = args.into_iter().next().map(|v| v.to_number() as usize).unwrap_or(1);
+                fn flatten(items: &[JsValue], d: usize) -> Vec<JsValue> {
+                    if d == 0 { return items.to_vec(); }
+                    let mut r = Vec::new();
+                    for v in items { match v { JsValue::Array(a) => r.extend(flatten(&a.borrow(), d-1)), other => r.push(other.clone()) } }
+                    r
+                }
+                Ok(Some(JsValue::Array(Rc::new(RefCell::new(flatten(&arr.borrow(), depth))))))
+            }
+            "sort" => {
+                if args.is_empty() {
+                    arr.borrow_mut().sort_by(|a, b| a.to_string().cmp(&b.to_string()));
+                    Ok(Some(JsValue::Array(arr)))
+                } else {
+                    // Callback sort -- potrebujeme self ale mame &mut self; pouzijeme simple String sort jako fallback
+                    let cb = args.into_iter().next().unwrap();
+                    let items: Vec<JsValue> = arr.borrow().clone();
+                    let mut indexed: Vec<(usize, JsValue)> = items.into_iter().enumerate().collect();
+                    let mut err: Option<JsError> = None;
+                    // bubble sort kvuli borrow checker omezeniam (nelze sort_by s Result)
+                    let n = indexed.len();
+                    for i in 0..n {
+                        for j in 0..n-1-i {
+                            if err.is_some() { break; }
+                            match self.call_function(cb.clone(), vec![indexed[j].1.clone(), indexed[j+1].1.clone()], None) {
+                                Ok(v) if v.to_number() > 0.0 => indexed.swap(j, j+1),
+                                Err(e) => { err = Some(e); }
+                                _ => {}
+                            }
+                        }
+                    }
+                    if let Some(e) = err { return Err(e); }
+                    *arr.borrow_mut() = indexed.into_iter().map(|(_, v)| v).collect();
+                    Ok(Some(JsValue::Array(arr)))
+                }
+            }
+            "forEach" => {
+                let cb = args.into_iter().next().unwrap_or(JsValue::Undefined);
+                let items: Vec<JsValue> = arr.borrow().clone();
+                for (i, v) in items.into_iter().enumerate() {
+                    self.call_function(cb.clone(), vec![v, JsValue::Number(i as f64)], None)?;
+                }
+                Ok(Some(JsValue::Undefined))
+            }
+            "map" => {
+                let cb = args.into_iter().next().unwrap_or(JsValue::Undefined);
+                let items: Vec<JsValue> = arr.borrow().clone();
+                let mut result = Vec::new();
+                for (i, v) in items.into_iter().enumerate() {
+                    result.push(self.call_function(cb.clone(), vec![v, JsValue::Number(i as f64)], None)?);
+                }
+                Ok(Some(JsValue::Array(Rc::new(RefCell::new(result)))))
+            }
+            "filter" => {
+                let cb = args.into_iter().next().unwrap_or(JsValue::Undefined);
+                let items: Vec<JsValue> = arr.borrow().clone();
+                let mut result = Vec::new();
+                for (i, v) in items.into_iter().enumerate() {
+                    if self.call_function(cb.clone(), vec![v.clone(), JsValue::Number(i as f64)], None)?.is_truthy() {
+                        result.push(v);
+                    }
+                }
+                Ok(Some(JsValue::Array(Rc::new(RefCell::new(result)))))
+            }
+            "reduce" => {
+                let mut args_iter = args.into_iter();
+                let cb = args_iter.next().unwrap_or(JsValue::Undefined);
+                let items: Vec<JsValue> = arr.borrow().clone();
+                let (mut acc, start) = if let Some(init) = args_iter.next() {
+                    (init, 0usize)
+                } else {
+                    if items.is_empty() { return Err(JsError::Runtime("reduce na prazdnem poli bez initialValue".into())); }
+                    (items[0].clone(), 1usize)
+                };
+                for (i, v) in items[start..].iter().enumerate() {
+                    acc = self.call_function(cb.clone(), vec![acc, v.clone(), JsValue::Number((start + i) as f64)], None)?;
+                }
+                Ok(Some(acc))
+            }
+            "reduceRight" => {
+                let mut args_iter = args.into_iter();
+                let cb = args_iter.next().unwrap_or(JsValue::Undefined);
+                let items: Vec<JsValue> = arr.borrow().clone();
+                let (mut acc, end) = if let Some(init) = args_iter.next() {
+                    (init, items.len())
+                } else {
+                    if items.is_empty() { return Err(JsError::Runtime("reduceRight na prazdnem poli bez initialValue".into())); }
+                    let last = items.len() - 1;
+                    (items[last].clone(), last)
+                };
+                for i in (0..end).rev() {
+                    acc = self.call_function(cb.clone(), vec![acc, items[i].clone(), JsValue::Number(i as f64)], None)?;
+                }
+                Ok(Some(acc))
+            }
+            "find" => {
+                let cb = args.into_iter().next().unwrap_or(JsValue::Undefined);
+                let items: Vec<JsValue> = arr.borrow().clone();
+                for (i, v) in items.into_iter().enumerate() {
+                    if self.call_function(cb.clone(), vec![v.clone(), JsValue::Number(i as f64)], None)?.is_truthy() {
+                        return Ok(Some(v));
+                    }
+                }
+                Ok(Some(JsValue::Undefined))
+            }
+            "findIndex" => {
+                let cb = args.into_iter().next().unwrap_or(JsValue::Undefined);
+                let items: Vec<JsValue> = arr.borrow().clone();
+                for (i, v) in items.into_iter().enumerate() {
+                    if self.call_function(cb.clone(), vec![v, JsValue::Number(i as f64)], None)?.is_truthy() {
+                        return Ok(Some(JsValue::Number(i as f64)));
+                    }
+                }
+                Ok(Some(JsValue::Number(-1.0)))
+            }
+            "every" => {
+                let cb = args.into_iter().next().unwrap_or(JsValue::Undefined);
+                let items: Vec<JsValue> = arr.borrow().clone();
+                for (i, v) in items.into_iter().enumerate() {
+                    if !self.call_function(cb.clone(), vec![v, JsValue::Number(i as f64)], None)?.is_truthy() {
+                        return Ok(Some(JsValue::Bool(false)));
+                    }
+                }
+                Ok(Some(JsValue::Bool(true)))
+            }
+            "some" => {
+                let cb = args.into_iter().next().unwrap_or(JsValue::Undefined);
+                let items: Vec<JsValue> = arr.borrow().clone();
+                for (i, v) in items.into_iter().enumerate() {
+                    if self.call_function(cb.clone(), vec![v, JsValue::Number(i as f64)], None)?.is_truthy() {
+                        return Ok(Some(JsValue::Bool(true)));
+                    }
+                }
+                Ok(Some(JsValue::Bool(false)))
+            }
+            "flatMap" => {
+                let cb = args.into_iter().next().unwrap_or(JsValue::Undefined);
+                let items: Vec<JsValue> = arr.borrow().clone();
+                let mut result = Vec::new();
+                for (i, v) in items.into_iter().enumerate() {
+                    match self.call_function(cb.clone(), vec![v, JsValue::Number(i as f64)], None)? {
+                        JsValue::Array(a) => result.extend(a.borrow().clone()),
+                        other => result.push(other),
+                    }
+                }
+                Ok(Some(JsValue::Array(Rc::new(RefCell::new(result)))))
+            }
+            "fill" => {
+                let val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let len = arr.borrow().len() as i64;
+                let start = args.get(1).map(|v| v.to_number() as i64).unwrap_or(0);
+                let end   = args.get(2).map(|v| v.to_number() as i64).unwrap_or(len);
+                let s = if start < 0 { (len + start).max(0) } else { start.min(len) } as usize;
+                let e = if end   < 0 { (len + end  ).max(0) } else { end  .min(len) } as usize;
+                for i in s..e { arr.borrow_mut()[i] = val.clone(); }
+                Ok(Some(JsValue::Array(arr)))
+            }
+            "splice" => {
+                let start = args.first().map(|v| v.to_number() as i64).unwrap_or(0);
+                let mut a = arr.borrow_mut();
+                let len = a.len() as i64;
+                let s = if start < 0 { (len + start).max(0) } else { start.min(len) } as usize;
+                let delete_count = args.get(1).map(|v| v.to_number() as usize).unwrap_or(a.len() - s);
+                let end = (s + delete_count).min(a.len());
+                let removed: Vec<JsValue> = a.drain(s..end).collect();
+                let inserts = if args.len() > 2 { args[2..].to_vec() } else { vec![] };
+                for (i, v) in inserts.into_iter().enumerate() { a.insert(s + i, v); }
+                Ok(Some(JsValue::Array(Rc::new(RefCell::new(removed)))))
+            }
+            "at" => {
+                let a = arr.borrow();
+                let len = a.len() as i64;
+                let idx = args.first().map(|v| v.to_number() as i64).unwrap_or(0);
+                let real = if idx < 0 { len + idx } else { idx };
+                Ok(Some(a.get(real as usize).cloned().unwrap_or(JsValue::Undefined)))
+            }
+            "toString" => {
+                let s = arr.borrow().iter().map(|v| v.to_string()).collect::<Vec<_>>().join(",");
+                Ok(Some(JsValue::Str(s)))
+            }
+            _ => Ok(None), // neni znama array metoda -> zkus get_prop
+        }
+    }
+}
+
+// ─── String built-in metody (bez &mut self) ───────────────────────────────────
+
+fn call_string_method(s: &str, method: &str, args: Vec<JsValue>) -> Result<Option<JsValue>, JsError> {
+    let chars: Vec<char> = s.chars().collect();
+    match method {
+        "split" => {
+            let sep = args.first().map(|v| v.to_string());
+            let parts: Vec<JsValue> = match sep.as_deref() {
+                None | Some("undefined") => vec![JsValue::Str(s.to_string())],
+                Some("") => chars.iter().map(|c| JsValue::Str(c.to_string())).collect(),
+                Some(d) => s.split(d).map(|p| JsValue::Str(p.to_string())).collect(),
+            };
+            Ok(Some(JsValue::Array(Rc::new(RefCell::new(parts)))))
+        }
+        "slice" => {
+            let len = chars.len() as i64;
+            let start = args.get(0).map(|v| v.to_number() as i64).unwrap_or(0);
+            let end   = args.get(1).map(|v| v.to_number() as i64).unwrap_or(len);
+            let s2 = if start < 0 { (len + start).max(0) } else { start.min(len) } as usize;
+            let e2 = if end   < 0 { (len + end  ).max(0) } else { end  .min(len) } as usize;
+            Ok(Some(JsValue::Str(chars[s2..e2.max(s2)].iter().collect())))
+        }
+        "substring" => {
+            let len = chars.len();
+            let a = args.get(0).map(|v| (v.to_number() as usize).min(len)).unwrap_or(0);
+            let b = args.get(1).map(|v| (v.to_number() as usize).min(len)).unwrap_or(len);
+            let (s2, e2) = if a <= b { (a, b) } else { (b, a) };
+            Ok(Some(JsValue::Str(chars[s2..e2].iter().collect())))
+        }
+        "indexOf" => {
+            let needle = args.first().map(|v| v.to_string()).unwrap_or_default();
+            Ok(Some(JsValue::Number(s.find(&*needle).map(|i| s[..i].chars().count() as f64).unwrap_or(-1.0))))
+        }
+        "lastIndexOf" => {
+            let needle = args.first().map(|v| v.to_string()).unwrap_or_default();
+            Ok(Some(JsValue::Number(s.rfind(&*needle).map(|i| s[..i].chars().count() as f64).unwrap_or(-1.0))))
+        }
+        "includes"    => {
+            let needle = args.first().map(|v| v.to_string()).unwrap_or_default();
+            Ok(Some(JsValue::Bool(s.contains(&*needle))))
+        }
+        "startsWith"  => {
+            let needle = args.first().map(|v| v.to_string()).unwrap_or_default();
+            Ok(Some(JsValue::Bool(s.starts_with(&*needle))))
+        }
+        "endsWith"    => {
+            let needle = args.first().map(|v| v.to_string()).unwrap_or_default();
+            Ok(Some(JsValue::Bool(s.ends_with(&*needle))))
+        }
+        "toLowerCase"  => Ok(Some(JsValue::Str(s.to_lowercase()))),
+        "toUpperCase"  => Ok(Some(JsValue::Str(s.to_uppercase()))),
+        "trim"         => Ok(Some(JsValue::Str(s.trim().to_string()))),
+        "trimStart"    => Ok(Some(JsValue::Str(s.trim_start().to_string()))),
+        "trimEnd"      => Ok(Some(JsValue::Str(s.trim_end().to_string()))),
+        "charAt"       => {
+            let i = args.first().map(|v| v.to_number() as usize).unwrap_or(0);
+            Ok(Some(JsValue::Str(chars.get(i).map(|c| c.to_string()).unwrap_or_default())))
+        }
+        "charCodeAt"   => {
+            let i = args.first().map(|v| v.to_number() as usize).unwrap_or(0);
+            Ok(Some(JsValue::Number(chars.get(i).map(|c| *c as u32 as f64).unwrap_or(f64::NAN))))
+        }
+        "at"           => {
+            let len = chars.len() as i64;
+            let idx = args.first().map(|v| v.to_number() as i64).unwrap_or(0);
+            let real = if idx < 0 { len + idx } else { idx };
+            Ok(Some(chars.get(real as usize).map(|c| JsValue::Str(c.to_string())).unwrap_or(JsValue::Undefined)))
+        }
+        "padStart"     => {
+            let target = args.first().map(|v| v.to_number() as usize).unwrap_or(0);
+            let pad = args.get(1).map(|v| v.to_string()).unwrap_or_else(|| " ".into());
+            if chars.len() >= target { return Ok(Some(JsValue::Str(s.to_string()))); }
+            let needed = target - chars.len();
+            let pad_chars: Vec<char> = pad.chars().collect();
+            let padding: String = (0..needed).map(|i| pad_chars[i % pad_chars.len()]).collect();
+            Ok(Some(JsValue::Str(format!("{padding}{s}"))))
+        }
+        "padEnd"       => {
+            let target = args.first().map(|v| v.to_number() as usize).unwrap_or(0);
+            let pad = args.get(1).map(|v| v.to_string()).unwrap_or_else(|| " ".into());
+            if chars.len() >= target { return Ok(Some(JsValue::Str(s.to_string()))); }
+            let needed = target - chars.len();
+            let pad_chars: Vec<char> = pad.chars().collect();
+            let padding: String = (0..needed).map(|i| pad_chars[i % pad_chars.len()]).collect();
+            Ok(Some(JsValue::Str(format!("{s}{padding}"))))
+        }
+        "repeat"       => {
+            let n = args.first().map(|v| v.to_number() as usize).unwrap_or(0);
+            Ok(Some(JsValue::Str(s.repeat(n))))
+        }
+        "replace"      => {
+            let from = args.first().map(|v| v.to_string()).unwrap_or_default();
+            let to   = args.get(1).map(|v| v.to_string()).unwrap_or_default();
+            Ok(Some(JsValue::Str(s.replacen(&*from, &to, 1))))
+        }
+        "replaceAll"   => {
+            let from = args.first().map(|v| v.to_string()).unwrap_or_default();
+            let to   = args.get(1).map(|v| v.to_string()).unwrap_or_default();
+            Ok(Some(JsValue::Str(s.replace(&*from, &to))))
+        }
+        "toString" | "valueOf" => Ok(Some(JsValue::Str(s.to_string()))),
+        _ => Ok(None), // neni znama string metoda
     }
 }
 
@@ -838,6 +1287,81 @@ fn setup_builtins(env: &Rc<RefCell<Environment>>) {
         }
         Ok(JsValue::Array(Rc::new(RefCell::new(a))))
     }));
+
+    // Object staticke metody
+    let mut obj_ctor = JsObject::new();
+    obj_ctor.set("keys".into(), native("Object.keys", |a| {
+        match a.into_iter().next() {
+            Some(JsValue::Object(o)) => {
+                let mut keys: Vec<JsValue> = o.borrow().props.keys().map(|k| JsValue::Str(k.clone())).collect();
+                keys.sort_by(|a, b| a.to_string().cmp(&b.to_string()));
+                Ok(JsValue::Array(Rc::new(RefCell::new(keys))))
+            }
+            _ => Ok(JsValue::Array(Rc::new(RefCell::new(vec![]))))
+        }
+    }));
+    obj_ctor.set("values".into(), native("Object.values", |a| {
+        match a.into_iter().next() {
+            Some(JsValue::Object(o)) => {
+                let mut pairs: Vec<(String, JsValue)> = o.borrow().props.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                pairs.sort_by(|a, b| a.0.cmp(&b.0));
+                let vals: Vec<JsValue> = pairs.into_iter().map(|(_, v)| v).collect();
+                Ok(JsValue::Array(Rc::new(RefCell::new(vals))))
+            }
+            _ => Ok(JsValue::Array(Rc::new(RefCell::new(vec![]))))
+        }
+    }));
+    obj_ctor.set("entries".into(), native("Object.entries", |a| {
+        match a.into_iter().next() {
+            Some(JsValue::Object(o)) => {
+                let mut pairs: Vec<(String, JsValue)> = o.borrow().props.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                pairs.sort_by(|a, b| a.0.cmp(&b.0));
+                let entries: Vec<JsValue> = pairs.into_iter().map(|(k, v)| {
+                    JsValue::Array(Rc::new(RefCell::new(vec![JsValue::Str(k), v])))
+                }).collect();
+                Ok(JsValue::Array(Rc::new(RefCell::new(entries))))
+            }
+            _ => Ok(JsValue::Array(Rc::new(RefCell::new(vec![]))))
+        }
+    }));
+    obj_ctor.set("assign".into(), native("Object.assign", |a| {
+        let mut iter = a.into_iter();
+        let target = iter.next().unwrap_or(JsValue::Undefined);
+        if let JsValue::Object(target_rc) = &target {
+            for src in iter {
+                if let JsValue::Object(src_rc) = src {
+                    for (k, v) in src_rc.borrow().props.clone() {
+                        target_rc.borrow_mut().set(k, v);
+                    }
+                }
+            }
+        }
+        Ok(target)
+    }));
+    obj_ctor.set("freeze".into(), native("Object.freeze", |a| {
+        // Implementace bez skutecneho freeze (immutability neresime)
+        Ok(a.into_iter().next().unwrap_or(JsValue::Undefined))
+    }));
+    obj_ctor.set("create".into(), native("Object.create", |a| {
+        // Object.create(proto) - ignorujeme proto, vratime prazdny objekt
+        let _ = a;
+        Ok(JsValue::Object(Rc::new(RefCell::new(JsObject::new()))))
+    }));
+    obj_ctor.set("fromEntries".into(), native("Object.fromEntries", |a| {
+        let mut obj = JsObject::new();
+        if let Some(JsValue::Array(entries)) = a.into_iter().next() {
+            for entry in entries.borrow().iter() {
+                if let JsValue::Array(pair) = entry {
+                    let pair = pair.borrow();
+                    let key = pair.get(0).map(|v| v.to_string()).unwrap_or_default();
+                    let val = pair.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    obj.set(key, val);
+                }
+            }
+        }
+        Ok(JsValue::Object(Rc::new(RefCell::new(obj))))
+    }));
+    e.define("Object", JsValue::Object(Rc::new(RefCell::new(obj_ctor))));
 
     e.define("Infinity",  JsValue::Number(f64::INFINITY));
     e.define("NaN",       JsValue::Number(f64::NAN));
@@ -1201,5 +1725,393 @@ mod tests {
         assert_eq!(as_str(eval("typeof true")), "boolean");
         assert_eq!(as_str(eval("typeof undefined")), "undefined");
         assert_eq!(as_str(eval("typeof null")), "object");
+    }
+
+    // --- ESNext: default params ---
+
+    #[test]
+    fn default_params_basic() {
+        assert_eq!(as_num(run(r#"
+            function greet(x, y = 10) { return x + y; }
+            return greet(5);
+        "#)), 15.0);
+    }
+
+    #[test]
+    fn default_params_override() {
+        assert_eq!(as_num(run(r#"
+            function greet(x, y = 10) { return x + y; }
+            return greet(5, 3);
+        "#)), 8.0);
+    }
+
+    #[test]
+    fn default_params_undefined_triggers_default() {
+        assert_eq!(as_num(run(r#"
+            function f(a = 42) { return a; }
+            return f(undefined);
+        "#)), 42.0);
+    }
+
+    // --- ESNext: rest params ---
+
+    #[test]
+    fn rest_params_collect() {
+        assert_eq!(as_num(run(r#"
+            function sum(...nums) {
+                let total = 0;
+                for (let n of nums) total += n;
+                return total;
+            }
+            return sum(1, 2, 3, 4);
+        "#)), 10.0);
+    }
+
+    #[test]
+    fn rest_params_after_fixed() {
+        assert_eq!(as_num(run(r#"
+            function f(first, ...rest) { return rest.length; }
+            return f(1, 2, 3, 4);
+        "#)), 3.0);
+    }
+
+    // --- ESNext: spread operator ---
+
+    #[test]
+    fn spread_in_call() {
+        assert_eq!(as_num(run(r#"
+            function add(a, b, c) { return a + b + c; }
+            const args = [1, 2, 3];
+            return add(...args);
+        "#)), 6.0);
+    }
+
+    // --- ESNext: optional chaining ---
+
+    #[test]
+    fn optional_chaining_null_prop() {
+        assert!(matches!(run(r#"
+            const obj = null;
+            return obj?.foo;
+        "#), JsValue::Undefined));
+    }
+
+    #[test]
+    fn optional_chaining_null_call() {
+        assert!(matches!(run(r#"
+            const obj = null;
+            return obj?.foo();
+        "#), JsValue::Undefined));
+    }
+
+    #[test]
+    fn optional_chaining_valid_prop() {
+        assert_eq!(as_num(run(r#"
+            const obj = { x: 42 };
+            return obj?.x;
+        "#)), 42.0);
+    }
+
+    #[test]
+    fn optional_chaining_nested() {
+        assert!(matches!(run(r#"
+            const obj = { a: null };
+            return obj?.a?.b;
+        "#), JsValue::Undefined));
+    }
+
+    // --- ESNext: logical assignment ---
+
+    #[test]
+    fn logical_and_assign() {
+        assert_eq!(as_num(run(r#"
+            let x = 5;
+            x &&= 10;
+            return x;
+        "#)), 10.0);
+    }
+
+    #[test]
+    fn logical_and_assign_falsy() {
+        assert_eq!(as_num(run(r#"
+            let x = 0;
+            x &&= 10;
+            return x;
+        "#)), 0.0);
+    }
+
+    #[test]
+    fn logical_or_assign() {
+        assert_eq!(as_num(run(r#"
+            let x = 0;
+            x ||= 42;
+            return x;
+        "#)), 42.0);
+    }
+
+    #[test]
+    fn logical_or_assign_truthy() {
+        assert_eq!(as_num(run(r#"
+            let x = 5;
+            x ||= 42;
+            return x;
+        "#)), 5.0);
+    }
+
+    #[test]
+    fn nullish_assign() {
+        assert_eq!(as_num(run(r#"
+            let x = null;
+            x ??= 99;
+            return x;
+        "#)), 99.0);
+    }
+
+    #[test]
+    fn nullish_assign_non_null() {
+        assert_eq!(as_num(run(r#"
+            let x = 5;
+            x ??= 99;
+            return x;
+        "#)), 5.0);
+    }
+
+    // --- ESNext: Array metody ---
+
+    #[test]
+    fn array_push_pop() {
+        assert_eq!(as_num(run(r#"
+            const a = [1, 2, 3];
+            a.push(4);
+            return a.pop();
+        "#)), 4.0);
+    }
+
+    #[test]
+    fn array_map() {
+        assert_eq!(as_num(run(r#"
+            const a = [1, 2, 3];
+            const b = a.map(x => x * 2);
+            return b[2];
+        "#)), 6.0);
+    }
+
+    #[test]
+    fn array_filter() {
+        assert_eq!(as_num(run(r#"
+            const a = [1, 2, 3, 4, 5];
+            const b = a.filter(x => x % 2 === 0);
+            return b.length;
+        "#)), 2.0);
+    }
+
+    #[test]
+    fn array_reduce() {
+        assert_eq!(as_num(run(r#"
+            const a = [1, 2, 3, 4];
+            return a.reduce((acc, x) => acc + x, 0);
+        "#)), 10.0);
+    }
+
+    #[test]
+    fn array_find() {
+        assert_eq!(as_num(run(r#"
+            const a = [1, 2, 3, 4];
+            return a.find(x => x > 2);
+        "#)), 3.0);
+    }
+
+    #[test]
+    fn array_includes() {
+        assert!(as_bool(run(r#"
+            return [1, 2, 3].includes(2);
+        "#)));
+        assert!(!as_bool(run(r#"
+            return [1, 2, 3].includes(5);
+        "#)));
+    }
+
+    #[test]
+    fn array_join() {
+        assert_eq!(as_str(run(r#"
+            return [1, 2, 3].join("-");
+        "#)), "1-2-3");
+    }
+
+    #[test]
+    fn array_slice() {
+        assert_eq!(as_num(run(r#"
+            const a = [1, 2, 3, 4, 5];
+            return a.slice(1, 3).length;
+        "#)), 2.0);
+    }
+
+    #[test]
+    fn array_every_some() {
+        assert!(as_bool(run(r#"return [2, 4, 6].every(x => x % 2 === 0);"#)));
+        assert!(!as_bool(run(r#"return [1, 2, 3].every(x => x % 2 === 0);"#)));
+        assert!(as_bool(run(r#"return [1, 2, 3].some(x => x % 2 === 0);"#)));
+        assert!(!as_bool(run(r#"return [1, 3, 5].some(x => x % 2 === 0);"#)));
+    }
+
+    #[test]
+    fn array_flat() {
+        assert_eq!(as_num(run(r#"
+            return [[1, 2], [3, 4]].flat().length;
+        "#)), 4.0);
+    }
+
+    #[test]
+    fn array_isarray() {
+        assert!(as_bool(run(r#"return Array.isArray([1, 2, 3]);"#)));
+        assert!(!as_bool(run(r#"return Array.isArray("hello");"#)));
+    }
+
+    #[test]
+    fn array_foreach() {
+        assert_eq!(as_num(run(r#"
+            let sum = 0;
+            [1, 2, 3].forEach(x => { sum += x; });
+            return sum;
+        "#)), 6.0);
+    }
+
+    // --- ESNext: String metody ---
+
+    #[test]
+    fn string_includes() {
+        assert!(as_bool(run(r#"return "hello world".includes("world");"#)));
+        assert!(!as_bool(run(r#"return "hello world".includes("xyz");"#)));
+    }
+
+    #[test]
+    fn string_starts_ends_with() {
+        assert!(as_bool(run(r#"return "hello".startsWith("he");"#)));
+        assert!(as_bool(run(r#"return "hello".endsWith("lo");"#)));
+        assert!(!as_bool(run(r#"return "hello".startsWith("lo");"#)));
+    }
+
+    #[test]
+    fn string_slice() {
+        assert_eq!(as_str(run(r#"return "hello world".slice(6);"#)), "world");
+        assert_eq!(as_str(run(r#"return "hello world".slice(0, 5);"#)), "hello");
+    }
+
+    #[test]
+    fn string_split() {
+        assert_eq!(as_num(run(r#"return "a,b,c".split(",").length;"#)), 3.0);
+        assert_eq!(as_str(run(r#"return "a,b,c".split(",")[1];"#)), "b");
+    }
+
+    #[test]
+    fn string_trim() {
+        assert_eq!(as_str(run(r#"return "  hello  ".trim();"#)), "hello");
+        assert_eq!(as_str(run(r#"return "  hello  ".trimStart();"#)), "hello  ");
+        assert_eq!(as_str(run(r#"return "  hello  ".trimEnd();"#)), "  hello");
+    }
+
+    #[test]
+    fn string_to_upper_lower() {
+        assert_eq!(as_str(run(r#"return "Hello".toUpperCase();"#)), "HELLO");
+        assert_eq!(as_str(run(r#"return "Hello".toLowerCase();"#)), "hello");
+    }
+
+    #[test]
+    fn string_pad() {
+        assert_eq!(as_str(run(r#"return "5".padStart(3, "0");"#)), "005");
+        assert_eq!(as_str(run(r#"return "5".padEnd(3, "0");"#)), "500");
+    }
+
+    #[test]
+    fn string_repeat() {
+        assert_eq!(as_str(run(r#"return "ab".repeat(3);"#)), "ababab");
+    }
+
+    #[test]
+    fn string_replace() {
+        assert_eq!(as_str(run(r#"return "hello world".replace("world", "JS");"#)), "hello JS");
+    }
+
+    #[test]
+    fn string_index_of() {
+        assert_eq!(as_num(run(r#"return "hello".indexOf("l");"#)), 2.0);
+        assert_eq!(as_num(run(r#"return "hello".indexOf("x");"#)), -1.0);
+    }
+
+    // --- ESNext: Object staticke metody ---
+
+    #[test]
+    fn object_keys() {
+        assert_eq!(as_num(run(r#"
+            return Object.keys({ a: 1, b: 2, c: 3 }).length;
+        "#)), 3.0);
+    }
+
+    #[test]
+    fn object_values() {
+        assert_eq!(as_num(run(r#"
+            const vals = Object.values({ a: 1, b: 2 });
+            return vals[0] + vals[1];
+        "#)), 3.0);
+    }
+
+    #[test]
+    fn object_entries() {
+        assert_eq!(as_num(run(r#"
+            return Object.entries({ x: 10, y: 20 }).length;
+        "#)), 2.0);
+    }
+
+    #[test]
+    fn object_assign() {
+        assert_eq!(as_num(run(r#"
+            const target = { a: 1 };
+            Object.assign(target, { b: 2, c: 3 });
+            return target.b + target.c;
+        "#)), 5.0);
+    }
+
+    #[test]
+    fn object_from_entries() {
+        assert_eq!(as_num(run(r#"
+            const obj = Object.fromEntries([["a", 1], ["b", 2]]);
+            return obj.a + obj.b;
+        "#)), 3.0);
+    }
+
+    // --- ESNext: for...of pole ---
+
+    #[test]
+    fn for_of_array() {
+        assert_eq!(as_num(run(r#"
+            let sum = 0;
+            for (const x of [1, 2, 3, 4]) { sum += x; }
+            return sum;
+        "#)), 10.0);
+    }
+
+    // --- ESNext: for...in objekt ---
+
+    #[test]
+    fn for_in_object() {
+        assert_eq!(as_num(run(r#"
+            const obj = { a: 1, b: 2, c: 3 };
+            let count = 0;
+            for (const k in obj) { count++; }
+            return count;
+        "#)), 3.0);
+    }
+
+    // --- ESNext: method shorthand v objektu ---
+
+    #[test]
+    fn object_method_shorthand() {
+        assert_eq!(as_num(run(r#"
+            const obj = {
+                x: 10,
+                getX() { return this.x; }
+            };
+            return obj.getX();
+        "#)), 10.0);
     }
 }

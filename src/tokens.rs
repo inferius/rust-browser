@@ -243,6 +243,9 @@ string_enum! {
     AssignShl       => "<<=",
     AssignShr       => ">>=",
     Ellipsis        => "...",
+    LogAndAssign    => "&&=",
+    LogOrAssign     => "||=",
+    NullCoalAssign  => "??=",
     // 2 znaky
     EqEq            => "==",
     NotEq           => "!=",

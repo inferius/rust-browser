@@ -222,15 +222,22 @@ impl Parser {
         Ok(Stmt::Function { name, params, body })
     }
 
-    fn parse_params(&mut self) -> Result<Vec<String>, ParseError> {
+    fn parse_params(&mut self) -> Result<Vec<Param>, ParseError> {
         self.expect_op(OperatorEnum::LParen)?;
         let mut params = Vec::new();
         loop {
             self.skip_trivia();
             if matches!(self.kind(), TokenKind::Operator(OperatorEnum::RParen)) { break; }
-            if matches!(self.kind(), TokenKind::Operator(OperatorEnum::Ellipsis)) { self.advance(); }
-            params.push(self.parse_ident()?);
+            let rest = self.eat_op(OperatorEnum::Ellipsis);
+            let name = self.parse_ident()?;
             self.skip_trivia();
+            let default = if !rest && matches!(self.kind(), TokenKind::Operator(OperatorEnum::Assign)) {
+                self.advance();
+                Some(Box::new(self.parse_assign_expr()?))
+            } else { None };
+            params.push(Param { name, default, rest });
+            self.skip_trivia();
+            if rest { break; }  // rest musi byt posledni
             if !self.eat_op(OperatorEnum::Comma) { break; }
         }
         self.expect_op(OperatorEnum::RParen)?;
@@ -401,18 +408,21 @@ impl Parser {
         self.skip_trivia();
 
         let op = match self.kind() {
-            TokenKind::Operator(OperatorEnum::Assign)    => Some(AssignOp::Assign),
-            TokenKind::Operator(OperatorEnum::AddAssign) => Some(AssignOp::Add),
-            TokenKind::Operator(OperatorEnum::SubAssign) => Some(AssignOp::Sub),
-            TokenKind::Operator(OperatorEnum::MulAssign) => Some(AssignOp::Mul),
-            TokenKind::Operator(OperatorEnum::DivAssign) => Some(AssignOp::Div),
-            TokenKind::Operator(OperatorEnum::ModAssign) => Some(AssignOp::Mod),
-            TokenKind::Operator(OperatorEnum::AssignExp) => Some(AssignOp::Exp),
-            TokenKind::Operator(OperatorEnum::AndAssign) => Some(AssignOp::BitAnd),
-            TokenKind::Operator(OperatorEnum::OrAssign)  => Some(AssignOp::BitOr),
-            TokenKind::Operator(OperatorEnum::XorAssign) => Some(AssignOp::BitXor),
-            TokenKind::Operator(OperatorEnum::AssignShl) => Some(AssignOp::Shl),
-            TokenKind::Operator(OperatorEnum::AssignShr) => Some(AssignOp::Shr),
+            TokenKind::Operator(OperatorEnum::Assign)         => Some(AssignOp::Assign),
+            TokenKind::Operator(OperatorEnum::AddAssign)      => Some(AssignOp::Add),
+            TokenKind::Operator(OperatorEnum::SubAssign)      => Some(AssignOp::Sub),
+            TokenKind::Operator(OperatorEnum::MulAssign)      => Some(AssignOp::Mul),
+            TokenKind::Operator(OperatorEnum::DivAssign)      => Some(AssignOp::Div),
+            TokenKind::Operator(OperatorEnum::ModAssign)      => Some(AssignOp::Mod),
+            TokenKind::Operator(OperatorEnum::AssignExp)      => Some(AssignOp::Exp),
+            TokenKind::Operator(OperatorEnum::AndAssign)      => Some(AssignOp::BitAnd),
+            TokenKind::Operator(OperatorEnum::OrAssign)       => Some(AssignOp::BitOr),
+            TokenKind::Operator(OperatorEnum::XorAssign)      => Some(AssignOp::BitXor),
+            TokenKind::Operator(OperatorEnum::AssignShl)      => Some(AssignOp::Shl),
+            TokenKind::Operator(OperatorEnum::AssignShr)      => Some(AssignOp::Shr),
+            TokenKind::Operator(OperatorEnum::LogAndAssign)   => Some(AssignOp::LogicalAnd),
+            TokenKind::Operator(OperatorEnum::LogOrAssign)    => Some(AssignOp::LogicalOr),
+            TokenKind::Operator(OperatorEnum::NullCoalAssign) => Some(AssignOp::NullCoal),
             _ => None,
         };
         if let Some(aop) = op {
@@ -540,21 +550,47 @@ impl Parser {
                     let name = match self.kind().clone() {
                         TokenKind::Identifier(s) => { self.advance(); s }
                         TokenKind::Keyword(kw)   => { let s = kw.as_str().to_string(); self.advance(); s }
-                        _ => return Err(self.err("Očekáváno jméno vlastnosti za tečkou")),
+                        _ => return Err(self.err("Ocekavano jmeno vlastnosti za teckou")),
                     };
-                    expr = Expr::Member { object: Box::new(expr), prop: MemberProp::Ident(name) };
+                    expr = Expr::Member { object: Box::new(expr), prop: MemberProp::Ident(name), optional: false };
                 }
                 TokenKind::Operator(OperatorEnum::LBracket) => {
                     self.advance();
                     let idx = self.parse_expr()?;
                     self.expect_op(OperatorEnum::RBracket)?;
-                    expr = Expr::Member { object: Box::new(expr), prop: MemberProp::Computed(Box::new(idx)) };
+                    expr = Expr::Member { object: Box::new(expr), prop: MemberProp::Computed(Box::new(idx)), optional: false };
                 }
                 TokenKind::Operator(OperatorEnum::LParen) => {
                     self.advance();
                     let args = self.parse_call_args()?;
                     self.expect_op(OperatorEnum::RParen)?;
-                    expr = Expr::Call { callee: Box::new(expr), args };
+                    expr = Expr::Call { callee: Box::new(expr), args, optional: false };
+                }
+                // Optional chaining: obj?.prop  obj?.[expr]  obj?.()
+                TokenKind::Operator(OperatorEnum::OptChain) => {
+                    self.advance(); self.skip_trivia();
+                    expr = match self.kind().clone() {
+                        TokenKind::Operator(OperatorEnum::LBracket) => {
+                            self.advance();
+                            let idx = self.parse_expr()?;
+                            self.expect_op(OperatorEnum::RBracket)?;
+                            Expr::Member { object: Box::new(expr), prop: MemberProp::Computed(Box::new(idx)), optional: true }
+                        }
+                        TokenKind::Operator(OperatorEnum::LParen) => {
+                            self.advance();
+                            let args = self.parse_call_args()?;
+                            self.expect_op(OperatorEnum::RParen)?;
+                            Expr::Call { callee: Box::new(expr), args, optional: true }
+                        }
+                        _ => {
+                            let name = match self.kind().clone() {
+                                TokenKind::Identifier(s) => { self.advance(); s }
+                                TokenKind::Keyword(kw)   => { let s = kw.as_str().to_string(); self.advance(); s }
+                                _ => return Err(self.err("Ocekavano jmeno vlastnosti za ?.")),
+                            };
+                            Expr::Member { object: Box::new(expr), prop: MemberProp::Ident(name), optional: true }
+                        }
+                    };
                 }
                 TokenKind::Operator(OperatorEnum::PlusPlus) => {
                     self.advance();
@@ -600,7 +636,7 @@ impl Parser {
                 if matches!(self.kind(), TokenKind::Operator(OperatorEnum::RParen)) {
                     self.advance(); self.skip_trivia();
                     self.expect_op(OperatorEnum::Arrow)?;
-                    return self.parse_arrow_body(vec![]);
+                    return self.parse_arrow_body(vec![]); // Vec<Param>
                 }
                 let expr = self.parse_expr()?;
                 self.expect_op(OperatorEnum::RParen)?;
@@ -639,7 +675,7 @@ impl Parser {
             }
 
             TokenKind::Keyword(KeywordEnum::New) => {
-                self.advance();
+                self.advance(); self.skip_trivia();
                 let callee = self.parse_postfix()?;
                 let args = if matches!(self.kind(), TokenKind::Operator(OperatorEnum::LParen)) {
                     self.advance();
@@ -652,7 +688,7 @@ impl Parser {
 
             TokenKind::Keyword(KeywordEnum::Function) => {
                 self.advance(); self.skip_trivia();
-                let name = if matches!(self.kind(), TokenKind::Identifier(_)) {
+                let name = if matches!(self.kind(), TokenKind::Identifier(_) | TokenKind::Keyword(_)) {
                     Some(self.parse_ident()?)
                 } else { None };
                 let params = self.parse_params()?;
@@ -711,9 +747,17 @@ impl Parser {
         };
 
         self.skip_trivia();
+        // method shorthand: { foo(a, b) { ... } }
+        if matches!(self.kind(), TokenKind::Operator(OperatorEnum::LParen)) {
+            let fn_name = match &key { PropKey::Ident(s) | PropKey::Str(s) => Some(s.clone()), _ => None };
+            let params = self.parse_params()?;
+            let body = self.parse_fn_body()?;
+            let func = Expr::Function { name: fn_name, params, body };
+            return Ok(ObjectProp { key, value: Box::new(func), shorthand: false, computed: false });
+        }
         // shorthand: { x }
         if !matches!(self.kind(), TokenKind::Operator(OperatorEnum::Colon)) {
-            let name = match &key { PropKey::Ident(s) => s.clone(), _ => return Err(self.err("Shorthand klíč musí být identifikátor")) };
+            let name = match &key { PropKey::Ident(s) => s.clone(), _ => return Err(self.err("Shorthand klic musi byt identifikator")) };
             return Ok(ObjectProp { key, value: Box::new(Expr::Ident(name)), shorthand: true, computed: false });
         }
         self.expect_op(OperatorEnum::Colon)?;
@@ -784,14 +828,14 @@ impl Parser {
         let params = if matches!(self.kind(), TokenKind::Operator(OperatorEnum::LParen)) {
             self.parse_params()?
         } else {
-            vec![self.parse_ident()?]
+            vec![Param::simple(self.parse_ident()?)]
         };
         self.skip_trivia();
         self.expect_op(OperatorEnum::Arrow)?;
         self.parse_arrow_body(params)
     }
 
-    fn parse_arrow_body(&mut self, params: Vec<String>) -> Result<Expr, ParseError> {
+    fn parse_arrow_body(&mut self, params: Vec<Param>) -> Result<Expr, ParseError> {
         self.skip_trivia();
         if matches!(self.kind(), TokenKind::Operator(OperatorEnum::LBrace)) {
             let body = self.parse_fn_body()?;
@@ -999,7 +1043,7 @@ mod tests {
         match parse_stmt("function add(a, b) { return a + b; }") {
             Stmt::Function { name, params, .. } => {
                 assert_eq!(name, "add");
-                assert_eq!(params, vec!["a", "b"]);
+                assert_eq!(params.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), vec!["a", "b"]);
             }
             other => panic!("Ocekavan Function, nalezeno {other:?}"),
         }
@@ -1009,7 +1053,7 @@ mod tests {
     fn arrow_simple_param() {
         match parse_expr("x => x * 2") {
             Expr::Arrow { params, body: ArrowBody::Expr(_) } => {
-                assert_eq!(params, vec!["x"]);
+                assert_eq!(params.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), vec!["x"]);
             }
             other => panic!("Ocekavan Arrow, nalezeno {other:?}"),
         }
@@ -1019,7 +1063,7 @@ mod tests {
     fn arrow_paren_params() {
         match parse_expr("(a, b) => a + b") {
             Expr::Arrow { params, body: ArrowBody::Expr(_) } => {
-                assert_eq!(params, vec!["a", "b"]);
+                assert_eq!(params.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), vec!["a", "b"]);
             }
             other => panic!("Ocekavan Arrow, nalezeno {other:?}"),
         }
@@ -1048,7 +1092,7 @@ mod tests {
     #[test]
     fn function_call() {
         match parse_expr("foo(1, 2)") {
-            Expr::Call { callee, args } => {
+            Expr::Call { callee, args, .. } => {
                 assert!(matches!(*callee, Expr::Ident(s) if s == "foo"));
                 assert_eq!(args.len(), 2);
             }
@@ -1059,7 +1103,7 @@ mod tests {
     #[test]
     fn member_dot() {
         match parse_expr("obj.prop") {
-            Expr::Member { object, prop: MemberProp::Ident(name) } => {
+            Expr::Member { object, prop: MemberProp::Ident(name), .. } => {
                 assert!(matches!(*object, Expr::Ident(s) if s == "obj"));
                 assert_eq!(name, "prop");
             }
@@ -1070,7 +1114,7 @@ mod tests {
     #[test]
     fn member_computed() {
         match parse_expr("arr[0]") {
-            Expr::Member { object, prop: MemberProp::Computed(idx) } => {
+            Expr::Member { object, prop: MemberProp::Computed(idx), .. } => {
                 assert!(matches!(*object, Expr::Ident(s) if s == "arr"));
                 assert!(matches!(*idx, Expr::Number(n) if n == 0.0));
             }
