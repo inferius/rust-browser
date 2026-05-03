@@ -30,6 +30,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use crate::ast::{self, *};
+use regex::Regex;
 
 // ─── JS hodnoty ───────────────────────────────────────────────────────────────
 
@@ -878,7 +879,7 @@ impl Interpreter {
             Expr::Bool(b)      => Ok(JsValue::Bool(*b)),
             Expr::Null         => Ok(JsValue::Null),
             Expr::Undefined    => Ok(JsValue::Undefined),
-            Expr::Regex(p, f)  => Ok(JsValue::Str(format!("/{p}/{f}"))),
+            Expr::Regex(p, f)  => Ok(make_regex_object(p, f)),
 
             Expr::Ident(name)  => {
                 env.borrow().get(name)
@@ -1982,6 +1983,37 @@ impl Interpreter {
                             _ => {}
                         }
                     }
+                    // ─── RegExp instance metody ───────────────────────────
+                    if let Some((pat, flags)) = get_regex_parts(&JsValue::Object(Rc::clone(&obj_rc2))) {
+                        match key.as_str() {
+                            "test" => {
+                                let arg_vals = self.eval_args(args, env)?;
+                                let text = arg_vals.into_iter().next()
+                                    .map(|v| v.to_string())
+                                    .unwrap_or_default();
+                                return Ok(JsValue::Bool(regex_test(&pat, &flags, &text)));
+                            }
+                            "exec" => {
+                                let arg_vals = self.eval_args(args, env)?;
+                                let text = arg_vals.into_iter().next()
+                                    .map(|v| v.to_string())
+                                    .unwrap_or_default();
+                                match regex_exec(&pat, &flags, &text) {
+                                    None => return Ok(JsValue::Null),
+                                    Some(groups) => {
+                                        let arr: Vec<JsValue> = groups.into_iter()
+                                            .map(|g| g.map(JsValue::Str).unwrap_or(JsValue::Undefined))
+                                            .collect();
+                                        return Ok(JsValue::Array(Rc::new(RefCell::new(arr))));
+                                    }
+                                }
+                            }
+                            "toString" => {
+                                return Ok(JsValue::Str(format!("/{pat}/{flags}")));
+                            }
+                            _ => {} // Pust dal
+                        }
+                    }
                     // ─── Promise instance metody ───────────────────────────
                     if let Some((state, pval)) = {
                         let b = obj_rc2.borrow();
@@ -2317,6 +2349,11 @@ impl Interpreter {
                 "Set" | "WeakSet" => return self.construct_set(args),
                 "Date"            => return self.construct_date(args),
                 "Promise"         => return self.construct_promise(args),
+                "RegExp"          => {
+                    let pat = args.get(0).map(|v| v.to_string()).unwrap_or_default();
+                    let flags = args.get(1).map(|v| v.to_string()).unwrap_or_default();
+                    return Ok(make_regex_object(&pat, &flags));
+                }
                 "Error" | "TypeError" | "RangeError" | "SyntaxError"
                 | "ReferenceError" | "URIError" | "EvalError" => {
                     return self.construct_error(name.clone(), args);
@@ -2816,15 +2853,6 @@ impl Interpreter {
 fn call_string_method(s: &str, method: &str, args: Vec<JsValue>) -> Result<Option<JsValue>, JsError> {
     let chars: Vec<char> = s.chars().collect();
     match method {
-        "split" => {
-            let sep = args.first().map(|v| v.to_string());
-            let parts: Vec<JsValue> = match sep.as_deref() {
-                None | Some("undefined") => vec![JsValue::Str(s.to_string())],
-                Some("") => chars.iter().map(|c| JsValue::Str(c.to_string())).collect(),
-                Some(d) => s.split(d).map(|p| JsValue::Str(p.to_string())).collect(),
-            };
-            Ok(Some(JsValue::Array(Rc::new(RefCell::new(parts)))))
-        }
         "slice" => {
             let len = chars.len() as i64;
             let start = args.get(0).map(|v| v.to_number() as i64).unwrap_or(0);
@@ -2902,14 +2930,139 @@ fn call_string_method(s: &str, method: &str, args: Vec<JsValue>) -> Result<Optio
             Ok(Some(JsValue::Str(s.repeat(n))))
         }
         "replace"      => {
-            let from = args.first().map(|v| v.to_string()).unwrap_or_default();
-            let to   = args.get(1).map(|v| v.to_string()).unwrap_or_default();
-            Ok(Some(JsValue::Str(s.replacen(&*from, &to, 1))))
+            let repl = args.get(1).map(|v| v.to_string()).unwrap_or_default();
+            match args.first() {
+                Some(re) if get_regex_parts(re).is_some() => {
+                    let (pat, flags) = get_regex_parts(re).unwrap();
+                    match js_regex_to_rust(&pat, &flags) {
+                        Ok(regex) => {
+                            // Jen prvni shoda (bez flagu g)
+                            let result = regex.replacen(s, 1, repl.as_str());
+                            Ok(Some(JsValue::Str(result.into_owned())))
+                        }
+                        Err(e) => Err(JsError::Runtime(e)),
+                    }
+                }
+                Some(from) => {
+                    Ok(Some(JsValue::Str(s.replacen(&*from.to_string(), &repl, 1))))
+                }
+                None => Ok(Some(JsValue::Str(s.to_string()))),
+            }
         }
         "replaceAll"   => {
-            let from = args.first().map(|v| v.to_string()).unwrap_or_default();
-            let to   = args.get(1).map(|v| v.to_string()).unwrap_or_default();
-            Ok(Some(JsValue::Str(s.replace(&*from, &to))))
+            let repl = args.get(1).map(|v| v.to_string()).unwrap_or_default();
+            match args.first() {
+                Some(re) if get_regex_parts(re).is_some() => {
+                    let (pat, flags) = get_regex_parts(re).unwrap();
+                    match js_regex_to_rust(&pat, &flags) {
+                        Ok(regex) => {
+                            let result = regex.replace_all(s, repl.as_str());
+                            Ok(Some(JsValue::Str(result.into_owned())))
+                        }
+                        Err(e) => Err(JsError::Runtime(e)),
+                    }
+                }
+                Some(from) => {
+                    Ok(Some(JsValue::Str(s.replace(&*from.to_string(), &repl))))
+                }
+                None => Ok(Some(JsValue::Str(s.to_string()))),
+            }
+        }
+        // str.match(regex|str) - vraci shody nebo null
+        "match" => {
+            match args.into_iter().next() {
+                Some(re) if get_regex_parts(&re).is_some() => {
+                    let (pat, flags) = get_regex_parts(&re).unwrap();
+                    let global = flags.contains('g');
+                    if global {
+                        // Global match: vraci Vec vsech shod nebo null
+                        let matches = regex_match_all(&pat, &flags, s);
+                        if matches.is_empty() {
+                            Ok(Some(JsValue::Null))
+                        } else {
+                            let arr: Vec<JsValue> = matches.into_iter().map(JsValue::Str).collect();
+                            Ok(Some(JsValue::Array(Rc::new(RefCell::new(arr)))))
+                        }
+                    } else {
+                        // Non-global: vraci exec result (groups)
+                        match regex_exec(&pat, &flags, s) {
+                            None => Ok(Some(JsValue::Null)),
+                            Some(groups) => {
+                                let arr: Vec<JsValue> = groups.into_iter()
+                                    .map(|g| g.map(JsValue::Str).unwrap_or(JsValue::Undefined))
+                                    .collect();
+                                Ok(Some(JsValue::Array(Rc::new(RefCell::new(arr)))))
+                            }
+                        }
+                    }
+                }
+                Some(pattern) => {
+                    // String argument - jednoduche hledani
+                    let p = pattern.to_string();
+                    if s.contains(&*p) {
+                        let arr = vec![JsValue::Str(p)];
+                        Ok(Some(JsValue::Array(Rc::new(RefCell::new(arr)))))
+                    } else {
+                        Ok(Some(JsValue::Null))
+                    }
+                }
+                None => Ok(Some(JsValue::Null)),
+            }
+        }
+        // str.search(regex|str) - vraci index prvni shody nebo -1
+        "search" => {
+            match args.into_iter().next() {
+                Some(re) if get_regex_parts(&re).is_some() => {
+                    let (pat, flags) = get_regex_parts(&re).unwrap();
+                    match js_regex_to_rust(&pat, &flags) {
+                        Ok(regex) => {
+                            let idx = regex.find(s).map(|m| m.start() as f64).unwrap_or(-1.0);
+                            Ok(Some(JsValue::Number(idx)))
+                        }
+                        Err(e) => Err(JsError::Runtime(e)),
+                    }
+                }
+                Some(pattern) => {
+                    let p = pattern.to_string();
+                    let idx = s.find(&*p).map(|i| i as f64).unwrap_or(-1.0);
+                    Ok(Some(JsValue::Number(idx)))
+                }
+                None => Ok(Some(JsValue::Number(-1.0))),
+            }
+        }
+        // str.split(regex|str, limit?)
+        "split" => {
+            let sep = args.first().cloned();
+            let limit = args.get(1).map(|v| v.to_number() as usize);
+            let parts: Vec<JsValue> = match &sep {
+                None => vec![JsValue::Str(s.to_string())],
+                Some(re) if get_regex_parts(re).is_some() => {
+                    let (pat, flags) = get_regex_parts(re).unwrap();
+                    match js_regex_to_rust(&pat, &flags) {
+                        Ok(regex) => {
+                            let mut result: Vec<JsValue> = regex.split(s)
+                                .map(|p| JsValue::Str(p.to_string()))
+                                .collect();
+                            if let Some(lim) = limit { result.truncate(lim); }
+                            result
+                        }
+                        Err(_) => vec![JsValue::Str(s.to_string())],
+                    }
+                }
+                Some(v) => {
+                    let d = v.to_string();
+                    let mut result: Vec<JsValue> = if d == "undefined" {
+                        vec![JsValue::Str(s.to_string())]
+                    } else if d.is_empty() {
+                        chars.iter().map(|c| JsValue::Str(c.to_string())).collect()
+                    } else {
+                        s.split(&*d).map(|p| JsValue::Str(p.to_string())).collect()
+                    };
+                    if let Some(lim) = limit { result.truncate(lim); }
+                    result
+                }
+            };
+            Ok(Some(JsValue::Array(Rc::new(RefCell::new(parts)))))
         }
         "toString" | "valueOf" => Ok(Some(JsValue::Str(s.to_string()))),
         _ => Ok(None), // neni znama string metoda
@@ -3242,6 +3395,82 @@ fn is_leap(y: i64) -> bool {
     (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
 }
 
+// ─── RegExp pomucky ───────────────────────────────────────────────────────────
+
+/// Prevede JS regex pattern na Rust regex pattern (zakladni konverze flagy).
+/// JS flags: g=global, i=ignoreCase, m=multiline, s=dotAll, u=unicode, y=sticky
+fn js_regex_to_rust(pattern: &str, flags: &str) -> Result<Regex, String> {
+    let ignore_case = flags.contains('i');
+    let multiline = flags.contains('m');
+    let dot_all = flags.contains('s');
+    // Rust regex prefix pro flagy
+    let prefix = format!(
+        "(?{}{}{})",
+        if ignore_case { "i" } else { "" },
+        if multiline  { "m" } else { "" },
+        if dot_all    { "s" } else { "" },
+    );
+    let full = if prefix == "(?)" {
+        pattern.to_string()
+    } else {
+        format!("{prefix}{pattern}")
+    };
+    Regex::new(&full).map_err(|e| format!("SyntaxError: Neplatny regex /{pattern}/{flags}: {e}"))
+}
+
+/// Vytvori JsObject reprezentujici RegExp objekt.
+fn make_regex_object(pattern: &str, flags: &str) -> JsValue {
+    let mut obj = JsObject::new();
+    obj.set("__regex_pattern__".into(), JsValue::Str(pattern.to_string()));
+    obj.set("__regex_flags__".into(),   JsValue::Str(flags.to_string()));
+    obj.set("source".into(),            JsValue::Str(pattern.to_string()));
+    obj.set("flags".into(),             JsValue::Str(flags.to_string()));
+    obj.set("global".into(),            JsValue::Bool(flags.contains('g')));
+    obj.set("ignoreCase".into(),        JsValue::Bool(flags.contains('i')));
+    obj.set("multiline".into(),         JsValue::Bool(flags.contains('m')));
+    obj.set("lastIndex".into(),         JsValue::Number(0.0));
+    JsValue::Object(Rc::new(RefCell::new(obj)))
+}
+
+/// Extrahuje pattern a flags z RegExp objektu.
+fn get_regex_parts(val: &JsValue) -> Option<(String, String)> {
+    if let JsValue::Object(o) = val {
+        let b = o.borrow();
+        let pat = b.props.get("__regex_pattern__")?.clone();
+        let flags = b.props.get("__regex_flags__")?.clone();
+        if let (JsValue::Str(p), JsValue::Str(f)) = (pat, flags) {
+            return Some((p, f));
+        }
+    }
+    None
+}
+
+/// Provede regex test na retezci. Vraci true/false.
+fn regex_test(pattern: &str, flags: &str, text: &str) -> bool {
+    js_regex_to_rust(pattern, flags)
+        .map(|re| re.is_match(text))
+        .unwrap_or(false)
+}
+
+/// Provede regex exec na retezci. Vraci Some(vec![full_match, groups...]) nebo None.
+fn regex_exec(pattern: &str, flags: &str, text: &str) -> Option<Vec<Option<String>>> {
+    let re = js_regex_to_rust(pattern, flags).ok()?;
+    let caps = re.captures(text)?;
+    let mut result = Vec::new();
+    for i in 0..caps.len() {
+        result.push(caps.get(i).map(|m| m.as_str().to_string()));
+    }
+    Some(result)
+}
+
+/// Provede global regex match na retezci. Vraci Vec vsech shod.
+fn regex_match_all(pattern: &str, flags: &str, text: &str) -> Vec<String> {
+    match js_regex_to_rust(pattern, flags) {
+        Ok(re) => re.find_iter(text).map(|m| m.as_str().to_string()).collect(),
+        Err(_) => vec![],
+    }
+}
+
 fn setup_builtins(env: &Rc<RefCell<Environment>>) {
     let mut e = env.borrow_mut();
 
@@ -3567,6 +3796,16 @@ fn setup_builtins(env: &Rc<RefCell<Environment>>) {
     // ─── Promise ──────────────────────────────────────────────────────────────
     // Konstruktor registrujeme jako native - skutecna logika je v call_new a eval_call
     e.define("Promise", native("Promise", |_| Ok(JsValue::Undefined)));
+
+    // ─── RegExp ───────────────────────────────────────────────────────────────
+    // new RegExp(pattern, flags?) - alternativni zpusob vytvoreni regexu
+    e.define("RegExp", native("RegExp", |args| {
+        let pat = args.get(0).map(|v| v.to_string()).unwrap_or_default();
+        let flags = args.get(1).map(|v| v.to_string()).unwrap_or_default();
+        // Validuj regex pri konstrukci
+        js_regex_to_rust(&pat, &flags).map_err(|e| e)?;
+        Ok(make_regex_object(&pat, &flags))
+    }));
 
     e.define("Infinity",  JsValue::Number(f64::INFINITY));
     e.define("NaN",       JsValue::Number(f64::NAN));
@@ -5821,5 +6060,136 @@ mod tests {
             compute(10).then(v => { result = v; });
             return result;
         "#)), 21.0);
+    }
+
+    // ─── Batch F: delete / void operatory ────────────────────────────────────
+
+    #[test]
+    fn delete_object_property() {
+        assert_eq!(as_bool(run(r#"
+            const o = { a: 1, b: 2 };
+            delete o.a;
+            return !("a" in o) && o.b === 2;
+        "#)), true);
+    }
+
+    #[test]
+    fn delete_returns_true() {
+        assert_eq!(as_bool(run(r#"
+            const o = { x: 1 };
+            return delete o.x;
+        "#)), true);
+    }
+
+    #[test]
+    fn void_returns_undefined() {
+        assert!(matches!(run(r#"return void 42;"#), JsValue::Undefined));
+        assert!(matches!(run(r#"return void "hello";"#), JsValue::Undefined));
+    }
+
+    #[test]
+    fn void_evaluates_expr() {
+        // void evaluuje vedlejsi efekty, pak vraci undefined
+        assert_eq!(as_num(run(r#"
+            let x = 0;
+            void (x = 5);
+            return x;
+        "#)), 5.0);
+    }
+
+    // ─── Batch F: RegExp ─────────────────────────────────────────────────────
+
+    #[test]
+    fn regex_literal_test() {
+        assert_eq!(as_bool(run(r#"return /hello/.test("say hello world");"#)), true);
+        assert_eq!(as_bool(run(r#"return /hello/.test("goodbye");"#)), false);
+    }
+
+    #[test]
+    fn regex_flags_ignore_case() {
+        assert_eq!(as_bool(run(r#"return /HELLO/i.test("hello world");"#)), true);
+    }
+
+    #[test]
+    fn regex_exec_returns_match() {
+        assert_eq!(as_str(run(r#"
+            const m = /(\d+)/.exec("abc 123 def");
+            return m[1];
+        "#)), "123");
+    }
+
+    #[test]
+    fn regex_exec_no_match() {
+        assert!(matches!(run(r#"return /xyz/.exec("hello");"#), JsValue::Null));
+    }
+
+    #[test]
+    fn regex_source_flags() {
+        assert_eq!(as_str(run(r#"
+            const re = /foo/gi;
+            return re.source + "/" + re.flags;
+        "#)), "foo/gi");
+    }
+
+    #[test]
+    fn string_match_global() {
+        assert_eq!(as_num(run(r#"
+            const matches = "one1two2three3".match(/\d/g);
+            return matches.length;
+        "#)), 3.0);
+    }
+
+    #[test]
+    fn string_match_no_g() {
+        // Bez /g vraci pole skupin (jako exec)
+        assert_eq!(as_str(run(r#"
+            const m = "price: 42".match(/(\d+)/);
+            return m[1];
+        "#)), "42");
+    }
+
+    #[test]
+    fn string_match_null() {
+        assert!(matches!(run(r#"return "hello".match(/\d/);"#), JsValue::Null));
+    }
+
+    #[test]
+    fn string_replace_regex() {
+        assert_eq!(as_str(run(r#"return "hello world".replace(/o/, "0");"#)), "hell0 world");
+    }
+
+    #[test]
+    fn string_replace_all_regex() {
+        assert_eq!(as_str(run(r#"return "hello world".replaceAll(/o/g, "0");"#)), "hell0 w0rld");
+    }
+
+    #[test]
+    fn string_search_regex() {
+        assert_eq!(as_num(run(r#"return "abc 123".search(/\d+/);"#)), 4.0);
+        assert_eq!(as_num(run(r#"return "abc".search(/\d+/);"#)), -1.0);
+    }
+
+    #[test]
+    fn string_split_regex() {
+        assert_eq!(as_num(run(r#"
+            const parts = "one1two2three".split(/\d/);
+            return parts.length;
+        "#)), 3.0);
+    }
+
+    #[test]
+    fn new_regexp_constructor() {
+        assert_eq!(as_bool(run(r#"
+            const re = new RegExp("\\d+", "g");
+            return re.test("abc 123");
+        "#)), true);
+    }
+
+    #[test]
+    fn regex_to_string() {
+        assert_eq!(as_str(run(r#"
+            const re = /foo/gi;
+            return re.toString();
+        "#)), "/foo/gi");
     }
 }

@@ -12,3 +12,4 @@ opt-level = 0 # Bez optimalizací
 unicode-general-category = "1.0.0"
 unicode-ident = "1.0.18"
 num-bigint = "0.4.6"
+regex = "1"
