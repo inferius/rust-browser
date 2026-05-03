@@ -554,6 +554,29 @@ function* range(n) {
 for (const x of range(5)) console.log(x);
 ```
 
+### Batch 6: TypeScript (transpile + full type checker)
+
+Planovana implementace ve dvou krocich:
+
+**Krok 1 - Transpile-only** (jako esbuild/Babel):
+- Parser precte TS syntaxi a zahodi type anotace
+- `:` za identifikatorem = parsuj a zahod typ
+- `interface`, `type` deklarace = ignorovany
+- `x as string` = eval pouze `x`
+- `<T>` generics = zahozeny
+- `enum Direction { Up, Down }` = prevedeno na JS objekt (jedine s runtime vyznamem)
+- `readonly`, `public`, `private`, `protected` = zahozeny modifier
+
+**Krok 2 - Full type checker** (jako tsc):
+- Typova inference pro vsechny vyrazy
+- Kontrola prirazeni (structural typing)
+- Genericke typy s omezenim (`T extends Foo`)
+- Conditional types, mapped types, template literal types
+- Chybove hlasky s pozici (jako `tsc --noEmit`)
+
+Poznamka: TypeScript typovy system je jeden z nejslozitejsich existujicich.
+Krok 2 je mesice/roky prace - bude implementovan az bude interpreter kompletni.
+
 ### Mozne vylepseni interpretu
 
 - **Garbage collector** misto Rc (pro cyklicke reference)
