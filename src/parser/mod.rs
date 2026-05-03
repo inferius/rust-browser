@@ -809,7 +809,337 @@ impl Parser {
         match self.kind().clone() {
             TokenKind::Identifier(s) => { self.advance(); Ok(s) }
             TokenKind::Keyword(kw)   => { let s = kw.as_str().to_string(); self.advance(); Ok(s) }
-            _ => Err(self.err(format!("Očekáván identifikátor, nalezeno {:?}", self.kind()))),
+            _ => Err(self.err(format!("Ocekavan identifikator, nalezeno {:?}", self.kind()))),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast::*;
+    use crate::lexer::base::Lexer;
+    use crate::tokens::TokenKind;
+
+    fn parse(src: &str) -> Program {
+        let lexer = Lexer::parse_str(src, "<test>").unwrap();
+        let tokens: Vec<_> = lexer.tokens.into_iter()
+            .filter(|t| !matches!(t.kind, TokenKind::Whitespace | TokenKind::Newline
+                | TokenKind::CommentLine(_) | TokenKind::CommentBlock(_)))
+            .collect();
+        Parser::new(tokens).parse().unwrap()
+    }
+
+    fn parse_expr(src: &str) -> Expr {
+        let prog = parse(src);
+        match prog.body.into_iter().next().unwrap() {
+            Stmt::Expr(e) => e,
+            other => panic!("Ocekavan ExprStmt, nalezeno {other:?}"),
+        }
+    }
+
+    fn parse_stmt(src: &str) -> Stmt {
+        parse(src).body.into_iter().next().unwrap()
+    }
+
+    // --- cisla a stringy ---
+
+    #[test]
+    fn number_literal() {
+        assert!(matches!(parse_expr("42"), Expr::Number(n) if n == 42.0));
+        assert!(matches!(parse_expr("3.14"), Expr::Number(n) if (n - 3.14).abs() < 1e-10));
+        assert!(matches!(parse_expr("1e3"), Expr::Number(n) if n == 1000.0));
+    }
+
+    #[test]
+    fn string_literal() {
+        assert!(matches!(parse_expr(r#""hello""#), Expr::Str(s) if s == "hello"));
+        assert!(matches!(parse_expr("'world'"), Expr::Str(s) if s == "world"));
+    }
+
+    #[test]
+    fn bool_null_undefined() {
+        assert!(matches!(parse_expr("true"), Expr::Bool(true)));
+        assert!(matches!(parse_expr("false"), Expr::Bool(false)));
+        assert!(matches!(parse_expr("null"), Expr::Null));
+    }
+
+    // --- binarne vyrazy a priorita ---
+
+    #[test]
+    fn binary_add() {
+        match parse_expr("1 + 2") {
+            Expr::Binary { op: BinaryOp::Add, .. } => {}
+            other => panic!("Ocekavan Add, nalezeno {other:?}"),
+        }
+    }
+
+    #[test]
+    fn operator_precedence_mul_before_add() {
+        // 1 + 2 * 3  =>  Add(1, Mul(2, 3))
+        match parse_expr("1 + 2 * 3") {
+            Expr::Binary { op: BinaryOp::Add, left, right } => {
+                assert!(matches!(*left, Expr::Number(n) if n == 1.0));
+                assert!(matches!(*right, Expr::Binary { op: BinaryOp::Mul, .. }));
+            }
+            other => panic!("Spatna struktura: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn operator_precedence_grouping() {
+        // (1 + 2) * 3  =>  Mul(Add(1,2), 3)
+        match parse_expr("(1 + 2) * 3") {
+            Expr::Binary { op: BinaryOp::Mul, left, .. } => {
+                assert!(matches!(*left, Expr::Binary { op: BinaryOp::Add, .. }));
+            }
+            other => panic!("Spatna struktura: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn exponentiation_right_assoc() {
+        // 2 ** 3 ** 2  =>  2 ** (3 ** 2)  =>  Exp(2, Exp(3, 2))
+        match parse_expr("2 ** 3 ** 2") {
+            Expr::Binary { op: BinaryOp::Exp, right, .. } => {
+                assert!(matches!(*right, Expr::Binary { op: BinaryOp::Exp, .. }));
+            }
+            other => panic!("Spatna struktura: {other:?}"),
+        }
+    }
+
+    // --- unarne vyrazy ---
+
+    #[test]
+    fn unary_minus() {
+        assert!(matches!(parse_expr("-1"), Expr::Unary { op: UnaryOp::Minus, .. }));
+    }
+
+    #[test]
+    fn unary_not() {
+        assert!(matches!(parse_expr("!true"), Expr::Unary { op: UnaryOp::Not, .. }));
+    }
+
+    #[test]
+    fn unary_typeof() {
+        assert!(matches!(parse_expr("typeof x"), Expr::Unary { op: UnaryOp::Typeof, .. }));
+    }
+
+    // --- ternary ---
+
+    #[test]
+    fn ternary_expr() {
+        match parse_expr("a ? 1 : 2") {
+            Expr::Ternary { test, yes, no } => {
+                assert!(matches!(*test, Expr::Ident(s) if s == "a"));
+                assert!(matches!(*yes, Expr::Number(n) if n == 1.0));
+                assert!(matches!(*no, Expr::Number(n) if n == 2.0));
+            }
+            other => panic!("Ocekavan Ternary, nalezeno {other:?}"),
+        }
+    }
+
+    // --- prirazeni ---
+
+    #[test]
+    fn assignment() {
+        match parse_expr("x = 5") {
+            Expr::Assign { op: AssignOp::Assign, target, value } => {
+                assert!(matches!(*target, Expr::Ident(s) if s == "x"));
+                assert!(matches!(*value, Expr::Number(n) if n == 5.0));
+            }
+            other => panic!("Ocekavano prirazeni, nalezeno {other:?}"),
+        }
+    }
+
+    #[test]
+    fn compound_assignment() {
+        assert!(matches!(parse_expr("x += 1"), Expr::Assign { op: AssignOp::Add, .. }));
+        assert!(matches!(parse_expr("x *= 2"), Expr::Assign { op: AssignOp::Mul, .. }));
+    }
+
+    // --- deklarace promennych ---
+
+    #[test]
+    fn var_decl_let() {
+        match parse_stmt("let x = 42;") {
+            Stmt::Var { kind: VarKind::Let, decls } => {
+                assert_eq!(decls.len(), 1);
+                assert_eq!(decls[0].name, "x");
+                assert!(matches!(decls[0].init, Some(Expr::Number(n)) if n == 42.0));
+            }
+            other => panic!("Ocekavan VarDecl(Let), nalezeno {other:?}"),
+        }
+    }
+
+    #[test]
+    fn var_decl_const() {
+        match parse_stmt("const PI = 3.14;") {
+            Stmt::Var { kind: VarKind::Const, decls } => {
+                assert_eq!(decls[0].name, "PI");
+            }
+            other => panic!("Ocekavan VarDecl(Const), nalezeno {other:?}"),
+        }
+    }
+
+    #[test]
+    fn var_decl_without_init() {
+        match parse_stmt("let x;") {
+            Stmt::Var { kind: VarKind::Let, decls } => {
+                assert!(decls[0].init.is_none());
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    // --- funkce ---
+
+    #[test]
+    fn function_declaration() {
+        match parse_stmt("function add(a, b) { return a + b; }") {
+            Stmt::Function { name, params, .. } => {
+                assert_eq!(name, "add");
+                assert_eq!(params, vec!["a", "b"]);
+            }
+            other => panic!("Ocekavan Function, nalezeno {other:?}"),
+        }
+    }
+
+    #[test]
+    fn arrow_simple_param() {
+        match parse_expr("x => x * 2") {
+            Expr::Arrow { params, body: ArrowBody::Expr(_) } => {
+                assert_eq!(params, vec!["x"]);
+            }
+            other => panic!("Ocekavan Arrow, nalezeno {other:?}"),
+        }
+    }
+
+    #[test]
+    fn arrow_paren_params() {
+        match parse_expr("(a, b) => a + b") {
+            Expr::Arrow { params, body: ArrowBody::Expr(_) } => {
+                assert_eq!(params, vec!["a", "b"]);
+            }
+            other => panic!("Ocekavan Arrow, nalezeno {other:?}"),
+        }
+    }
+
+    #[test]
+    fn arrow_no_params() {
+        match parse_expr("() => 42") {
+            Expr::Arrow { params, body: ArrowBody::Expr(_) } => {
+                assert!(params.is_empty());
+            }
+            other => panic!("Ocekavan Arrow, nalezeno {other:?}"),
+        }
+    }
+
+    #[test]
+    fn arrow_block_body() {
+        match parse_expr("(x) => { return x; }") {
+            Expr::Arrow { body: ArrowBody::Block(_), .. } => {}
+            other => panic!("Ocekavan Arrow s blokem, nalezeno {other:?}"),
+        }
+    }
+
+    // --- volani funkci a member access ---
+
+    #[test]
+    fn function_call() {
+        match parse_expr("foo(1, 2)") {
+            Expr::Call { callee, args } => {
+                assert!(matches!(*callee, Expr::Ident(s) if s == "foo"));
+                assert_eq!(args.len(), 2);
+            }
+            other => panic!("Ocekavan Call, nalezeno {other:?}"),
+        }
+    }
+
+    #[test]
+    fn member_dot() {
+        match parse_expr("obj.prop") {
+            Expr::Member { object, prop: MemberProp::Ident(name) } => {
+                assert!(matches!(*object, Expr::Ident(s) if s == "obj"));
+                assert_eq!(name, "prop");
+            }
+            other => panic!("Ocekavan Member, nalezeno {other:?}"),
+        }
+    }
+
+    #[test]
+    fn member_computed() {
+        match parse_expr("arr[0]") {
+            Expr::Member { object, prop: MemberProp::Computed(idx) } => {
+                assert!(matches!(*object, Expr::Ident(s) if s == "arr"));
+                assert!(matches!(*idx, Expr::Number(n) if n == 0.0));
+            }
+            other => panic!("Ocekavan Member(Computed), nalezeno {other:?}"),
+        }
+    }
+
+    // --- objekty a pole ---
+
+    #[test]
+    fn array_literal() {
+        match parse_expr("[1, 2, 3]") {
+            Expr::Array(items) => {
+                assert_eq!(items.len(), 3);
+                match &items[0] {
+                    Some(e) => assert!(matches!(**e, Expr::Number(n) if n == 1.0)),
+                    None => panic!("Ocekavan prvni prvek"),
+                }
+            }
+            other => panic!("Ocekavano Array, nalezeno {other:?}"),
+        }
+    }
+
+    #[test]
+    fn object_literal() {
+        // { ... } jako expression statement je block - treba obalit do ()
+        match parse_expr("({ a: 1, b: 2 })") {
+            Expr::Object(props) => {
+                assert_eq!(props.len(), 2);
+            }
+            other => panic!("Ocekavan Object, nalezeno {other:?}"),
+        }
+    }
+
+    // --- ridici struktury ---
+
+    #[test]
+    fn if_else() {
+        match parse_stmt("if (x) { 1; } else { 2; }") {
+            Stmt::If { test, no: Some(_), .. } => {
+                assert!(matches!(test, Expr::Ident(s) if s == "x"));
+            }
+            other => panic!("Ocekavan If, nalezeno {other:?}"),
+        }
+    }
+
+    #[test]
+    fn while_loop() {
+        match parse_stmt("while (true) {}") {
+            Stmt::While { test, .. } => {
+                assert!(matches!(test, Expr::Bool(true)));
+            }
+            other => panic!("Ocekavan While, nalezeno {other:?}"),
+        }
+    }
+
+    #[test]
+    fn for_loop() {
+        match parse_stmt("for (let i = 0; i < 10; i++) {}") {
+            Stmt::For { init: Some(_), test: Some(_), update: Some(_), .. } => {}
+            other => panic!("Ocekavan For, nalezeno {other:?}"),
+        }
+    }
+
+    #[test]
+    fn return_stmt() {
+        match parse_stmt("return 42;") {
+            Stmt::Return(Some(Expr::Number(n))) => assert_eq!(n, 42.0),
+            other => panic!("Ocekavan Return(42), nalezeno {other:?}"),
         }
     }
 }

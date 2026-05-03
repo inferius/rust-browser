@@ -4,6 +4,7 @@ use crate::specifications::number_literal::NumberLiteral;
 use crate::tokens::{EscapeInfo, EscapeKind, Token, TokenKind};
 use crate::utils::utf8_cursor::Utf8Cursor;
 
+#[derive(Debug)]
 pub(crate) struct EscapeResult {
     pub kind: EscapeKind,
     pub character: char,
@@ -123,3 +124,7 @@ impl Lexer {
         Ok(s)
     }
 }
+
+#[cfg(test)]
+#[path = "tests/string.rs"]
+mod tests;

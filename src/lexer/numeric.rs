@@ -133,3 +133,7 @@ impl Lexer {
         Ok(NumResult { raw, digits, is_bigint, has_exponent: has_exp })
     }
 }
+
+#[cfg(test)]
+#[path = "tests/numeric.rs"]
+mod tests;

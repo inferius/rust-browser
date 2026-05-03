@@ -843,3 +843,363 @@ fn setup_builtins(env: &Rc<RefCell<Environment>>) {
     e.define("NaN",       JsValue::Number(f64::NAN));
     e.define("undefined", JsValue::Undefined);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lexer::base::Lexer;
+    use crate::parser::Parser;
+    use crate::tokens::TokenKind;
+
+    // Spusti JS kod a vrati posledni return hodnotu (nebo Undefined).
+    fn run(src: &str) -> JsValue {
+        let lexer = Lexer::parse_str(src, "<test>").unwrap();
+        let tokens: Vec<_> = lexer.tokens.into_iter()
+            .filter(|t| !matches!(t.kind,
+                TokenKind::Whitespace | TokenKind::Newline
+                | TokenKind::CommentLine(_) | TokenKind::CommentBlock(_)))
+            .collect();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse().unwrap();
+        let mut interp = Interpreter::new();
+        interp.run(&program).unwrap()
+    }
+
+    // Spusti JS vyraz a vrati vysledek.
+    fn eval(expr: &str) -> JsValue {
+        run(&format!("return {expr};"))
+    }
+
+    fn as_num(v: JsValue) -> f64 {
+        match v { JsValue::Number(n) => n, other => panic!("Ocekavano Number, nalezeno {other:?}") }
+    }
+
+    fn as_str(v: JsValue) -> String {
+        match v { JsValue::Str(s) => s, other => panic!("Ocekavan Str, nalezeno {other:?}") }
+    }
+
+    fn as_bool(v: JsValue) -> bool {
+        match v { JsValue::Bool(b) => b, other => panic!("Ocekavan Bool, nalezeno {other:?}") }
+    }
+
+    // --- aritmetika ---
+
+    #[test]
+    fn arithmetic_basic() {
+        assert_eq!(as_num(eval("1 + 2")), 3.0);
+        assert_eq!(as_num(eval("10 - 3")), 7.0);
+        assert_eq!(as_num(eval("3 * 4")), 12.0);
+        assert_eq!(as_num(eval("10 / 4")), 2.5);
+        assert_eq!(as_num(eval("10 % 3")), 1.0);
+        assert_eq!(as_num(eval("2 ** 10")), 1024.0);
+    }
+
+    #[test]
+    fn arithmetic_precedence() {
+        assert_eq!(as_num(eval("2 + 3 * 4")), 14.0);
+        assert_eq!(as_num(eval("(2 + 3) * 4")), 20.0);
+    }
+
+    #[test]
+    fn unary_minus() {
+        assert_eq!(as_num(eval("-5")), -5.0);
+        assert_eq!(as_num(eval("-(3 + 2)")), -5.0);
+    }
+
+    // --- stringy ---
+
+    #[test]
+    fn string_concat() {
+        assert_eq!(as_str(eval(r#""hello" + " " + "world""#)), "hello world");
+    }
+
+    #[test]
+    fn string_coercion() {
+        assert_eq!(as_str(eval(r#""val: " + 42"#)), "val: 42");
+    }
+
+    // --- porovnani ---
+
+    #[test]
+    fn comparisons() {
+        assert!(as_bool(eval("1 < 2")));
+        assert!(!as_bool(eval("2 < 1")));
+        assert!(as_bool(eval("2 <= 2")));
+        assert!(as_bool(eval("3 > 2")));
+        assert!(as_bool(eval("1 === 1")));
+        assert!(!as_bool(eval("1 === 2")));
+        assert!(as_bool(eval("1 !== 2")));
+    }
+
+    #[test]
+    fn loose_equality() {
+        assert!(as_bool(eval("1 == 1")));
+        assert!(as_bool(eval(r#"1 == "1""#)));
+        assert!(!as_bool(eval("1 === \"1\"")));
+    }
+
+    // --- logicke operatory ---
+
+    #[test]
+    fn logical_and_or() {
+        assert!(as_bool(eval("true && true")));
+        assert!(!as_bool(eval("true && false")));
+        assert!(as_bool(eval("false || true")));
+        assert!(!as_bool(eval("false || false")));
+    }
+
+    #[test]
+    fn nullish_coalescing() {
+        assert_eq!(as_num(eval("null ?? 42")), 42.0);
+        assert_eq!(as_num(eval("undefined ?? 7")), 7.0);
+        assert_eq!(as_num(eval("5 ?? 42")), 5.0);
+    }
+
+    // --- promenne a scope ---
+
+    #[test]
+    fn let_declaration() {
+        assert_eq!(as_num(run("let x = 10; return x;")), 10.0);
+    }
+
+    #[test]
+    fn const_declaration() {
+        assert_eq!(as_num(run("const PI = 3.14; return PI;")), 3.14);
+    }
+
+    #[test]
+    fn var_hoisting() {
+        assert_eq!(as_num(run("var x = 5; return x;")), 5.0);
+    }
+
+    #[test]
+    fn block_scope() {
+        assert_eq!(as_num(run(r#"
+            let x = 1;
+            { let x = 2; }
+            return x;
+        "#)), 1.0);
+    }
+
+    // --- ridici tok ---
+
+    #[test]
+    fn if_true_branch() {
+        assert_eq!(as_num(run("if (true) { return 1; } return 2;")), 1.0);
+    }
+
+    #[test]
+    fn if_false_branch() {
+        assert_eq!(as_num(run("if (false) { return 1; } return 2;")), 2.0);
+    }
+
+    #[test]
+    fn if_else_stmt() {
+        assert_eq!(as_num(run("let x = 5; if (x > 3) { return 1; } else { return 0; }")), 1.0);
+    }
+
+    #[test]
+    fn ternary_operator() {
+        assert_eq!(as_num(eval("true ? 1 : 2")), 1.0);
+        assert_eq!(as_num(eval("false ? 1 : 2")), 2.0);
+    }
+
+    #[test]
+    fn while_loop() {
+        assert_eq!(as_num(run(r#"
+            let sum = 0;
+            let i = 0;
+            while (i < 5) { sum += i; i++; }
+            return sum;
+        "#)), 10.0);
+    }
+
+    #[test]
+    fn for_loop() {
+        assert_eq!(as_num(run(r#"
+            let sum = 0;
+            for (let i = 0; i < 5; i++) { sum += i; }
+            return sum;
+        "#)), 10.0);
+    }
+
+    #[test]
+    fn for_break() {
+        assert_eq!(as_num(run(r#"
+            let x = 0;
+            for (let i = 0; i < 10; i++) {
+                if (i === 3) break;
+                x = i;
+            }
+            return x;
+        "#)), 2.0);
+    }
+
+    #[test]
+    fn for_continue() {
+        assert_eq!(as_num(run(r#"
+            let sum = 0;
+            for (let i = 0; i < 5; i++) {
+                if (i === 2) continue;
+                sum += i;
+            }
+            return sum;
+        "#)), 8.0);  // 0+1+3+4
+    }
+
+    // --- funkce ---
+
+    #[test]
+    fn function_declaration_and_call() {
+        assert_eq!(as_num(run(r#"
+            function add(a, b) { return a + b; }
+            return add(3, 4);
+        "#)), 7.0);
+    }
+
+    #[test]
+    fn function_recursion() {
+        assert_eq!(as_num(run(r#"
+            function fact(n) {
+                if (n <= 1) return 1;
+                return n * fact(n - 1);
+            }
+            return fact(5);
+        "#)), 120.0);
+    }
+
+    #[test]
+    fn arrow_function() {
+        assert_eq!(as_num(run(r#"
+            const square = x => x * x;
+            return square(5);
+        "#)), 25.0);
+    }
+
+    #[test]
+    fn arrow_paren_params() {
+        assert_eq!(as_num(run(r#"
+            const add = (a, b) => a + b;
+            return add(3, 4);
+        "#)), 7.0);
+    }
+
+    #[test]
+    fn closure() {
+        assert_eq!(as_num(run(r#"
+            function makeAdder(x) {
+                return (y) => x + y;
+            }
+            const add5 = makeAdder(5);
+            return add5(3);
+        "#)), 8.0);
+    }
+
+    // --- pole ---
+
+    #[test]
+    fn array_literal_access() {
+        assert_eq!(as_num(run(r#"
+            let arr = [10, 20, 30];
+            return arr[1];
+        "#)), 20.0);
+    }
+
+    #[test]
+    fn array_mutation() {
+        assert_eq!(as_num(run(r#"
+            let arr = [1, 2, 3];
+            arr[0] = 99;
+            return arr[0];
+        "#)), 99.0);
+    }
+
+    #[test]
+    fn array_length() {
+        assert_eq!(as_num(run(r#"
+            let arr = [1, 2, 3];
+            return arr.length;
+        "#)), 3.0);
+    }
+
+    // --- objekty ---
+
+    #[test]
+    fn object_property_access() {
+        assert_eq!(as_num(run(r#"
+            const obj = { x: 42 };
+            return obj.x;
+        "#)), 42.0);
+    }
+
+    #[test]
+    fn object_computed_access() {
+        assert_eq!(as_num(run(r#"
+            const obj = { x: 99 };
+            const key = "x";
+            return obj[key];
+        "#)), 99.0);
+    }
+
+    #[test]
+    fn object_mutation() {
+        assert_eq!(as_num(run(r#"
+            let obj = { a: 1 };
+            obj.a = 42;
+            return obj.a;
+        "#)), 42.0);
+    }
+
+    // --- template literaly ---
+
+    #[test]
+    fn template_no_substitution() {
+        assert_eq!(as_str(run(r#"return `hello world`;"#)), "hello world");
+    }
+
+    #[test]
+    fn template_with_expr() {
+        assert_eq!(as_str(run(r#"
+            let name = "World";
+            return `Hello ${name}!`;
+        "#)), "Hello World!");
+    }
+
+    #[test]
+    fn template_arithmetic() {
+        assert_eq!(as_str(run(r#"return `result: ${1 + 2}`;"#)), "result: 3");
+    }
+
+    // --- try-catch ---
+
+    #[test]
+    fn try_catch_basic() {
+        assert_eq!(as_str(run(r#"
+            try {
+                throw "oops";
+            } catch (e) {
+                return e;
+            }
+        "#)), "oops");
+    }
+
+    #[test]
+    fn try_catch_no_throw() {
+        assert_eq!(as_num(run(r#"
+            let x = 0;
+            try { x = 5; } catch (e) { x = 99; }
+            return x;
+        "#)), 5.0);
+    }
+
+    // --- typeof ---
+
+    #[test]
+    fn typeof_values() {
+        assert_eq!(as_str(eval("typeof 42")), "number");
+        assert_eq!(as_str(eval(r#"typeof "hello""#)), "string");
+        assert_eq!(as_str(eval("typeof true")), "boolean");
+        assert_eq!(as_str(eval("typeof undefined")), "undefined");
+        assert_eq!(as_str(eval("typeof null")), "object");
+    }
+}
