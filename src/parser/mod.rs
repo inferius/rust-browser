@@ -1,12 +1,36 @@
+/// Parser JS/ESNext - prevadi token stream na AST.
+///
+/// # Algoritmus
+///
+/// Parser pouziva **Pratt parsing** (top-down operator precedence) pro vyrazy.
+/// Kazdy operator ma prirazenu `binding_power` (levou a pravou vazebnou silu),
+/// ktera urcuje prioritu a asociativitu.
+///
+/// Pro prikazy pouziva rekurzivni sestup (recursive descent).
+///
+/// # Pouziti
+/// ```rust
+/// let mut parser = Parser::new(tokens);
+/// let program = parser.parse()?;
+/// ```
+///
+/// # Pred parsovanim je potreba odstranit trivia
+/// Parser ocekava ze token stream neobsahuje `Whitespace`, `Newline`
+/// ani komentare - ty je nutne odfiltrovat pred predanim.
+
 use crate::ast::*;
 use crate::tokens::{KeywordEnum, OperatorEnum, Token, TokenKind};
 
 // ─── Chyby parseru ────────────────────────────────────────────────────────────
 
+/// Chyba parsovani s pozici ve zdrojovem kodu.
 #[derive(Debug, Clone)]
 pub struct ParseError {
+    /// Popis chyby
     pub msg: String,
+    /// Radek kde chyba nastala (od 1)
     pub line: usize,
+    /// Sloupec kde chyba nastala (od 0)
     pub column: usize,
 }
 
@@ -18,16 +42,28 @@ impl std::fmt::Display for ParseError {
 
 // ─── Parser ───────────────────────────────────────────────────────────────────
 
+/// Rekurzivne sestupny parser s Pratt parsovanim pro vyrazy.
+///
+/// Drzi token stream a aktualni pozici. Metody `parse_*` konzumují
+/// tokeny a vracejí AST uzly nebo `ParseError`.
 pub struct Parser {
+    /// Filtrovany token stream (bez whitespace a komentaru)
     tokens: Vec<Token>,
+    /// Aktualni pozice v token streamu
     pos: usize,
 }
 
 impl Parser {
+    /// Vytvori parser pro dany token stream.
+    ///
+    /// Token stream by mel byt jiz filtrovan - bez `Whitespace`,
+    /// `Newline` a komentaru. Parser si trivia sam preskakuje,
+    /// ale efektivnejsi je prefiltrovat predem.
     pub fn new(tokens: Vec<Token>) -> Self {
         Parser { tokens, pos: 0 }
     }
 
+    /// Parsuje cely program a vraci koren AST.
     pub fn parse(&mut self) -> Result<Program, ParseError> {
         let body = self.parse_stmts_until_eof()?;
         Ok(Program { body, strict: false })

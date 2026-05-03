@@ -1,20 +1,46 @@
+/// Lexer (tokenizer) pro JavaScript/ESNext.
+///
+/// Prevadi zdrojovy text na sekvenci `Token` hodnot.
+/// Implementuje ECMAScript specifikaci pro tokenizaci vcetne:
+/// - Unicode identifikatoru (XID_Start / XID_Continue)
+/// - Template literalu s vnorenym parsovanim `${}` vyrazu
+/// - Greedy matching operatoru (delsi varianty maji prednost)
+/// - Vsechny ciselne soustavy (decimal, hex, binary, octal, legacy octal)
+/// - Escape sekvence v retezdich (jednoduche, hex, unicode, octal)
+/// - Hashbang (`#!/usr/bin/env node`)
+///
+/// # Pouziti
+/// ```rust
+/// let result = Lexer::parse_str("let x = 42;", "script.js")?;
+/// for token in &result.tokens {
+///     println!("{:?}", token.kind);
+/// }
+/// ```
+
 use std::fs;
 use crate::specifications::lexer_errors::{LexerError, LexerErrorKind, Span};
 use crate::tokens::{CommentKind, OperatorEnum, StringKind, Token, TokenKind};
 use crate::utils::utf8_cursor::Utf8Cursor;
 
+/// Lexer pro JavaScript - drzi tokeny a polohu v souboru.
 pub struct Lexer {
+    /// Vygenerovane tokeny (vcetne whitespace a komentaru)
     pub tokens: Vec<Token>,
+    /// Jmeno souboru / zdroje (pro chybove hlasky)
     pub source_name: String,
+    /// Aktualni radek pri tokenizaci (od 1)
     pub current_line: usize,
+    /// Aktualni sloupec pri tokenizaci (od 0)
     pub current_column: usize,
 }
 
 impl Lexer {
+    /// Vytvori prazdny lexer.
     pub fn new() -> Self {
         Lexer { tokens: Vec::new(), source_name: String::new(), current_line: 1, current_column: 0 }
     }
 
+    /// Tokenizuje soubor ze zadane cesty.
     pub fn parse_file(path: &str) -> Result<Self, LexerError> {
         let src = fs::read_to_string(path).map_err(|_| LexerError {
             kind: LexerErrorKind::UnexpectedEOF,
@@ -23,6 +49,9 @@ impl Lexer {
         Self::parse_str(&src, path)
     }
 
+    /// Tokenizuje zdrojovy text.
+    ///
+    /// `name` je jmeno souboru nebo identifikator zdroje pro chybove hlasky.
     pub fn parse_str(source: &str, name: &str) -> Result<Self, LexerError> {
         let mut lex = Lexer { tokens: Vec::new(), source_name: name.to_string(), current_line: 1, current_column: 0 };
         let mut cursor = Utf8Cursor::new(source);

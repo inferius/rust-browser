@@ -1,3 +1,31 @@
+/// Interpreter JavaScriptu pro podmnozinu ESNext.
+///
+/// # Architektura
+///
+/// Interpreter prochazi AST (Abstract Syntax Tree) a vyhodnocuje jednotlive uzly.
+/// Stav programu je udrzovan v retezci `Environment` scopes.
+///
+/// ## Pipeline
+/// ```
+/// Zdrojovy text
+///   -> Lexer (src/lexer/) -> Vec<Token>
+///   -> Parser (src/parser/) -> Program (AST)
+///   -> Interpreter (tento soubor) -> JsValue
+/// ```
+///
+/// ## Implementovane vlastnosti ESNext
+/// - Datove typy: number, string, bool, null, undefined, object, array, function
+/// - Operatory: vsechny aritmeticke, porovnavaci, logicke, bitove, assignment vcetne `&&=`, `||=`, `??=`
+/// - Rizeni toku: if/else, while, do-while, for, for-in, for-of, break, continue, return, throw, try-catch-finally
+/// - Funkce: declaration, expression, arrow, closures, rekurze
+/// - Parametry: simple, default (`x = 42`), rest (`...args`)
+/// - Optional chaining: `obj?.prop`, `obj?.method()`
+/// - Template literaly: `` `Hello ${name}!` ``
+/// - Vestavene objekty: Math, console, parseInt, String, Number, Boolean, Array, Object
+/// - Array metody: ~30 (push, map, filter, reduce, ...)
+/// - String metody: ~20 (split, slice, includes, ...)
+/// - Object staticke metody: keys, values, entries, assign, freeze, create, fromEntries
+
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -5,18 +33,34 @@ use crate::ast::{self, *};
 
 // ─── JS hodnoty ───────────────────────────────────────────────────────────────
 
+/// Runtime hodnota JavaScriptu.
+///
+/// Odpovida dynamickym typum JS - jedna hodnota muze byt behem
+/// zivota programu libovolnym typem.
+///
+/// `Object` a `Array` jsou ulozeny za `Rc<RefCell<>>` pro sdilene
+/// vlastnictvi (closure, vicenasobne reference na stejny objekt).
 #[derive(Debug, Clone)]
 pub enum JsValue {
+    /// `undefined` - neinicializovana nebo chybejici hodnota
     Undefined,
+    /// `null` - explicitni absence hodnoty
     Null,
+    /// Boolean: `true` nebo `false`
     Bool(bool),
+    /// Cislo: IEEE 754 double-precision float (jako v JS)
     Number(f64),
+    /// Retezec
     Str(String),
+    /// Objekt: mapa klic->hodnota sdilena pres Rc
     Object(Rc<RefCell<JsObject>>),
+    /// Pole: sekvence hodnot sdilena pres Rc
     Array(Rc<RefCell<Vec<JsValue>>>),
+    /// Funkce (uzivatelska nebo nativni)
     Function(JsFunc),
 }
 
+/// JS objekt - mapa retezec -> hodnota.
 #[derive(Debug, Clone)]
 pub struct JsObject {
     pub props: HashMap<String, JsValue>,
@@ -28,12 +72,18 @@ impl JsObject {
     fn set(&mut self, k: String, v: JsValue) { self.props.insert(k, v); }
 }
 
-/// Nativní funkce vrací Result<JsValue, String> (chybová zpráva jako String).
+/// Typ nativni (Rust) funkce: prijima Vec<JsValue>, vraci Result<JsValue, String>.
 type NativeFn = Rc<dyn Fn(Vec<JsValue>) -> Result<JsValue, String>>;
 
+/// Reprezentace funkce v runtime.
+///
+/// - `User` - funkce definovana v JS kodu, ulozena jako AST + uzavreny scope
+/// - `Native` - funkce implementovana v Rustu (Math.sqrt, console.log, atd.)
 #[derive(Clone)]
 pub enum JsFunc {
+    /// Uzivatelska JS funkce. Uchovava si uzavreny `env` (closure).
     User { name: Option<String>, params: Vec<Param>, body: FuncBody, env: Rc<RefCell<Env>> },
+    /// Nativni Rust funkce. Prvni parametr je jmeno pro debugovani.
     Native(String, NativeFn),
 }
 
@@ -144,30 +194,54 @@ impl JsValue {
 
 type Env = Environment;
 
+/// Lexikalni scope (prostredi promennych).
+///
+/// Implementuje retezec scopes: kazdy scope ma volitelny `parent`.
+/// Vyhledavani promenne jde od nejhlubsiho scope ke globalnimu.
+///
+/// # Priklad retezce
+/// ```
+/// global: { console, Math, ... }
+///   function scope: { x: 5 }
+///     block scope: { y: 10 }  <- aktualni
+/// ```
+///
+/// `Rc<RefCell<>>` umoznuje sdilet environment mezi closurami.
 #[derive(Debug, Clone)]
 pub struct Environment {
+    /// Promenne deklarovane v tomto scopu
     vars: HashMap<String, JsValue>,
+    /// Rodicovsky scope (None pouze pro globalni scope)
     parent: Option<Rc<RefCell<Environment>>>,
 }
 
 impl Environment {
+    /// Vytvori novy globalni scope (bez rodice).
     pub fn new_global() -> Rc<RefCell<Self>> {
         Rc::new(RefCell::new(Environment { vars: HashMap::new(), parent: None }))
     }
 
+    /// Vytvori novy child scope (blok, funkce, ...).
     pub fn new_child(parent: &Rc<RefCell<Environment>>) -> Rc<RefCell<Self>> {
         Rc::new(RefCell::new(Environment { vars: HashMap::new(), parent: Some(Rc::clone(parent)) }))
     }
 
+    /// Deklaruje novou promennou v tomto scopu (let/const/var).
     pub fn define(&mut self, name: &str, val: JsValue) {
         self.vars.insert(name.to_string(), val);
     }
 
+    /// Cte promennou - hleda od tohoto scopu az ke globalnimu.
+    /// Vraci `None` kdyz promenna neexistuje (nikde v retezci).
     pub fn get(&self, name: &str) -> Option<JsValue> {
         self.vars.get(name).cloned()
             .or_else(|| self.parent.as_ref()?.borrow().get(name))
     }
 
+    /// Prirazuje hodnotu existujici promenne (hleda ji v retezci scopu).
+    ///
+    /// Vraci `true` kdyz promennou nasla a zmenila,
+    /// `false` kdyz promenna neexistuje (volajici pak muze rozhodnout co delat).
     pub fn set(&mut self, name: &str, val: JsValue) -> bool {
         if self.vars.contains_key(name) {
             self.vars.insert(name.to_string(), val);
@@ -178,11 +252,14 @@ impl Environment {
     }
 }
 
-// ─── Chyby a signály ─────────────────────────────────────────────────────────
+// ─── Chyby a signaly ─────────────────────────────────────────────────────────
 
+/// Chyby ktere mohou nastat pri behu JS programu.
 #[derive(Debug)]
 pub enum JsError {
+    /// Interna chyba interpretu (nezachytitelna v JS `catch`)
     Runtime(String),
+    /// Hodnota vyhozena pomoci `throw` (zachytitelna v JS `catch`)
     Thrown(JsValue),
 }
 
@@ -195,29 +272,56 @@ impl std::fmt::Display for JsError {
     }
 }
 
+/// Interni signal pro rizeni toku programu (ne chyba).
+///
+/// Pouziva se pro `return`, `break`, `continue` - tyto prikazy
+/// prerusuji normalni vykonani a musime je propagovat nahoru v AST.
 #[derive(Debug)]
 enum Signal {
+    /// `return [value]` - navrat z funkce
     Return(JsValue),
+    /// `break [label]` - preruseni cyklu
     Break(Option<String>),
+    /// `continue [label]` - preskoceni iterace
     Continue(Option<String>),
 }
 
+/// Zkratka pro vysledek vyhodnoceni vyrazu.
 type EvalResult = Result<JsValue, JsError>;
+/// Zkratka pro vysledek vykonani prikazu (muze emit signal).
 type StmtResult = Result<Option<Signal>, JsError>;
 
 // ─── Interpreter ─────────────────────────────────────────────────────────────
 
+/// Hlavni struktura interpretu.
+///
+/// Uchovava globalni scope se vsemi vestavennymi funkcemi a objekty.
+/// Pro spusteni programu zavolej `Interpreter::new()` a pak `run(&program)`.
+///
+/// # Priklad
+/// ```rust
+/// let lexer = Lexer::parse_str("return 1 + 2;", "<script>").unwrap();
+/// let tokens = /* filtrovat trivia */;
+/// let program = Parser::new(tokens).parse().unwrap();
+/// let mut interp = Interpreter::new();
+/// let result = interp.run(&program).unwrap();
+/// ```
 pub struct Interpreter {
+    /// Globalni scope - obsahuje vestavene funkce (Math, console, atd.)
     pub global: Rc<RefCell<Environment>>,
 }
 
 impl Interpreter {
+    /// Vytvori novy interpreter s inicializovanymi vestavenymi objekty.
     pub fn new() -> Self {
         let global = Environment::new_global();
         setup_builtins(&global);
         Interpreter { global }
     }
 
+    /// Spusti cely program (AST) a vrati posledni `return` hodnotu.
+    ///
+    /// Kdyz program neobsahuje `return`, vraci `JsValue::Undefined`.
     pub fn run(&mut self, program: &Program) -> EvalResult {
         let env = Rc::clone(&self.global);
         match self.exec_stmts(&program.body, &env)? {
