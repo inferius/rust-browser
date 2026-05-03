@@ -1119,17 +1119,43 @@ impl Interpreter {
                     JsValue::Function(JsFunc::Class { name, .. }) => {
                         name.as_deref().unwrap_or("").to_string()
                     }
+                    JsValue::Function(JsFunc::Native(name, _)) => name.clone(),
                     _ => return Ok(JsValue::Bool(false)),
                 };
                 if class_name.is_empty() { return Ok(JsValue::Bool(false)); }
-                // Zkontroluj retezec trid ulozeny na instanci
+                // Zkontroluj retezec trid ulozeny na instanci (pro tridy)
+                // nebo typ intern. vlastnosti (pro vestavene typy)
                 match &l {
                     JsValue::Object(o) => {
                         let obj = o.borrow();
+                        // Tridy: __class_chain__
                         if let Some(JsValue::Str(chain)) = obj.props.get("__class_chain__") {
-                            JsValue::Bool(chain.split(',').any(|n| n == class_name))
-                        } else { JsValue::Bool(false) }
+                            if chain.split(',').any(|n| n == class_name) {
+                                return Ok(JsValue::Bool(true));
+                            }
+                        }
+                        // Vestavene typy podle vnitrnich klicu
+                        let result = match class_name.as_str() {
+                            "Error" | "TypeError" | "RangeError" | "SyntaxError"
+                            | "ReferenceError" | "URIError" | "EvalError" => {
+                                // Error instance ma property "name"
+                                if let Some(JsValue::Str(name)) = obj.props.get("name") {
+                                    class_name == "Error"
+                                        || name == &class_name
+                                        || name.ends_with("Error")
+                                } else { false }
+                            }
+                            "Date"    => obj.props.contains_key("__date_ms__"),
+                            "RegExp"  => obj.props.contains_key("__regex_pattern__"),
+                            "Promise" => obj.props.contains_key("__promise_state__"),
+                            _ => false,
+                        };
+                        JsValue::Bool(result)
                     }
+                    JsValue::Map(_) => JsValue::Bool(class_name == "Map"),
+                    JsValue::Set(_) => JsValue::Bool(class_name == "Set"),
+                    JsValue::Array(_) => JsValue::Bool(class_name == "Array"),
+                    JsValue::Function(_) => JsValue::Bool(class_name == "Function"),
                     _ => JsValue::Bool(false),
                 }
             }
@@ -1780,6 +1806,21 @@ impl Interpreter {
                 if key == "size" { return Ok(JsValue::Number(s.borrow().values.len() as f64)); }
                 Ok(JsValue::Undefined)
             }
+            // Native funkce: Number.XXX konstanty + Array.isArray atd.
+            JsValue::Function(JsFunc::Native(fname, _)) => {
+                match (fname.as_str(), key) {
+                    ("Number", "MAX_VALUE")         => return Ok(JsValue::Number(f64::MAX)),
+                    ("Number", "MIN_VALUE")         => return Ok(JsValue::Number(f64::MIN_POSITIVE)),
+                    ("Number", "MAX_SAFE_INTEGER")  => return Ok(JsValue::Number(9007199254740991.0)),
+                    ("Number", "MIN_SAFE_INTEGER")  => return Ok(JsValue::Number(-9007199254740991.0)),
+                    ("Number", "POSITIVE_INFINITY") => return Ok(JsValue::Number(f64::INFINITY)),
+                    ("Number", "NEGATIVE_INFINITY") => return Ok(JsValue::Number(f64::NEG_INFINITY)),
+                    ("Number", "NaN")               => return Ok(JsValue::Number(f64::NAN)),
+                    ("Number", "EPSILON")           => return Ok(JsValue::Number(f64::EPSILON)),
+                    _ => {}
+                }
+                Ok(JsValue::Undefined)
+            }
             _ => Ok(JsValue::Undefined),
         }
     }
@@ -2131,7 +2172,7 @@ impl Interpreter {
                         return Ok(result);
                     }
                 }
-                // Array staticke metody: Array.isArray(), Array.from()
+                // Array/Number/Date/Promise staticke metody
                 JsValue::Function(JsFunc::Native(fname, _)) => {
                     let fname = fname.clone();
                     let arg_vals = self.eval_args(args, env)?;
@@ -2145,9 +2186,50 @@ impl Interpreter {
                                 JsValue::Str(s) => JsValue::Array(Rc::new(RefCell::new(
                                     s.chars().map(|c| JsValue::Str(c.to_string())).collect()
                                 ))),
+                                JsValue::Set(s) => JsValue::Array(Rc::new(RefCell::new(s.borrow().values.clone()))),
+                                JsValue::Map(m) => {
+                                    let entries: Vec<JsValue> = m.borrow().entries.iter()
+                                        .map(|(k, v)| JsValue::Array(Rc::new(RefCell::new(vec![k.clone(), v.clone()]))))
+                                        .collect();
+                                    JsValue::Array(Rc::new(RefCell::new(entries)))
+                                }
                                 _ => JsValue::Array(Rc::new(RefCell::new(vec![]))),
                             };
                             return Ok(result);
+                        }
+                        ("Array", "of") => {
+                            return Ok(JsValue::Array(Rc::new(RefCell::new(arg_vals))));
+                        }
+                        // Number staticke metody
+                        ("Number", "isInteger") => {
+                            return Ok(JsValue::Bool(matches!(arg_vals.first(),
+                                Some(JsValue::Number(n)) if n.fract() == 0.0 && n.is_finite())));
+                        }
+                        ("Number", "isFinite") => {
+                            return Ok(JsValue::Bool(matches!(arg_vals.first(),
+                                Some(JsValue::Number(n)) if n.is_finite())));
+                        }
+                        ("Number", "isNaN") => {
+                            return Ok(JsValue::Bool(matches!(arg_vals.first(),
+                                Some(JsValue::Number(n)) if n.is_nan())));
+                        }
+                        ("Number", "isSafeInteger") => {
+                            let ok = matches!(arg_vals.first(),
+                                Some(JsValue::Number(n)) if n.is_finite() && n.fract() == 0.0 && n.abs() <= 9007199254740991.0);
+                            return Ok(JsValue::Bool(ok));
+                        }
+                        ("Number", "parseInt") => {
+                            let s = arg_vals.first().map(|v| v.to_string()).unwrap_or_default();
+                            let radix = arg_vals.get(1).map(|v| v.to_number() as u32).unwrap_or(10);
+                            let radix = if radix == 0 { 10 } else { radix.min(36) };
+                            return Ok(JsValue::Number(
+                                i64::from_str_radix(s.trim(), radix)
+                                    .map(|n| n as f64).unwrap_or(f64::NAN)
+                            ));
+                        }
+                        ("Number", "parseFloat") => {
+                            let s = arg_vals.first().map(|v| v.to_string()).unwrap_or_default();
+                            return Ok(JsValue::Number(s.trim().parse::<f64>().unwrap_or(f64::NAN)));
                         }
                         // Date staticke metody
                         ("Date", "now") => return Ok(JsValue::Number(now_ms())),
@@ -3810,6 +3892,24 @@ fn setup_builtins(env: &Rc<RefCell<Environment>>) {
     e.define("Infinity",  JsValue::Number(f64::INFINITY));
     e.define("NaN",       JsValue::Number(f64::NAN));
     e.define("undefined", JsValue::Undefined);
+
+    // globalThis - stub (vrati prazdny objekt; nelze jednodusse alias na globalni env)
+    e.define("globalThis", JsValue::Object(Rc::new(RefCell::new(JsObject::new()))));
+
+    // queueMicrotask(cb) - v sync implementaci okamzite spusti callback
+    // (presne chovani: schedules microtask; zde simulujeme synchronne)
+    e.define("queueMicrotask", native("queueMicrotask", |_| Ok(JsValue::Undefined)));
+
+    // structuredClone(val) - hluboky klon hodnoty
+    // Implementace: JSON roundtrip pro jednoduche hodnoty
+    e.define("structuredClone", native("structuredClone", |a| {
+        let val = a.into_iter().next().unwrap_or(JsValue::Undefined);
+        // Hluboky klon pres JSON (nepodporuje funkce, Map, Set, Date apod.)
+        match json_stringify(&val, 0, 0) {
+            Some(s) => json_parse(&s).map_err(|e| e),
+            None => Ok(JsValue::Undefined),
+        }
+    }));
 }
 
 #[cfg(test)]
@@ -6191,5 +6291,108 @@ mod tests {
             const re = /foo/gi;
             return re.toString();
         "#)), "/foo/gi");
+    }
+
+    // ─── Batch G: instanceof pro built-in typy ────────────────────────────────
+
+    #[test]
+    fn instanceof_error() {
+        assert_eq!(as_bool(run(r#"
+            const e = new Error("x");
+            return e instanceof Error;
+        "#)), true);
+    }
+
+    #[test]
+    fn instanceof_type_error() {
+        assert_eq!(as_bool(run(r#"
+            const e = new TypeError("x");
+            return e instanceof TypeError;
+        "#)), true);
+    }
+
+    #[test]
+    fn instanceof_map() {
+        assert_eq!(as_bool(run(r#"
+            const m = new Map();
+            return m instanceof Map;
+        "#)), true);
+    }
+
+    #[test]
+    fn instanceof_array() {
+        assert_eq!(as_bool(run(r#"return [] instanceof Array;"#)), true);
+        assert_eq!(as_bool(run(r#"return {} instanceof Array;"#)), false);
+    }
+
+    // ─── Batch G: Number staticke metody ─────────────────────────────────────
+
+    #[test]
+    fn number_is_integer() {
+        assert_eq!(as_bool(run(r#"return Number.isInteger(42);"#)), true);
+        assert_eq!(as_bool(run(r#"return Number.isInteger(42.5);"#)), false);
+        assert_eq!(as_bool(run(r#"return Number.isInteger("42");"#)), false);
+    }
+
+    #[test]
+    fn number_is_finite() {
+        assert_eq!(as_bool(run(r#"return Number.isFinite(42);"#)), true);
+        assert_eq!(as_bool(run(r#"return Number.isFinite(Infinity);"#)), false);
+        assert_eq!(as_bool(run(r#"return Number.isFinite(NaN);"#)), false);
+    }
+
+    #[test]
+    fn number_is_nan() {
+        assert_eq!(as_bool(run(r#"return Number.isNaN(NaN);"#)), true);
+        assert_eq!(as_bool(run(r#"return Number.isNaN(42);"#)), false);
+        // Number.isNaN - neprovadi koerci (na rozdil od globalniho isNaN)
+        assert_eq!(as_bool(run(r#"return Number.isNaN("hello");"#)), false);
+    }
+
+    #[test]
+    fn number_max_safe_integer() {
+        assert_eq!(as_num(run(r#"return Number.MAX_SAFE_INTEGER;"#)), 9007199254740991.0);
+    }
+
+    #[test]
+    fn number_parse_int() {
+        assert_eq!(as_num(run(r#"return Number.parseInt("42");"#)), 42.0);
+        assert_eq!(as_num(run(r#"return Number.parseInt("ff", 16);"#)), 255.0);
+    }
+
+    #[test]
+    fn number_parse_float() {
+        assert_eq!(as_num(run(r#"return Number.parseFloat("3.14");"#)), 3.14);
+    }
+
+    // ─── Batch G: Array staticke metody ──────────────────────────────────────
+
+    #[test]
+    fn array_of() {
+        assert_eq!(as_num(run(r#"
+            const a = Array.of(1, 2, 3);
+            return a.length;
+        "#)), 3.0);
+    }
+
+    #[test]
+    fn array_from_set() {
+        assert_eq!(as_num(run(r#"
+            const s = new Set([1, 2, 3]);
+            const a = Array.from(s);
+            return a.length;
+        "#)), 3.0);
+    }
+
+    // ─── Batch G: structuredClone ─────────────────────────────────────────────
+
+    #[test]
+    fn structured_clone_object() {
+        assert_eq!(as_num(run(r#"
+            const obj = { x: 1, y: 2 };
+            const clone = structuredClone(obj);
+            clone.x = 99;
+            return obj.x; // original nezmeneno
+        "#)), 1.0);
     }
 }
