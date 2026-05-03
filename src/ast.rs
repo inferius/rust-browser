@@ -119,6 +119,21 @@ pub enum Expr {
         value: Option<Box<Expr>>,
         delegate: bool,
     },
+
+    /// Async funkce jako vyraz: `async function name?(params) { body }`
+    /// nebo `async (params) => body`
+    AsyncFunc {
+        name: Option<String>,
+        params: Vec<Param>,
+        body: Vec<Stmt>,
+    },
+
+    /// Await vyraz: `await expr`
+    ///
+    /// Synchronni implementace: okamzite rozbaluje Promise.
+    Await {
+        value: Box<Expr>,
+    },
 }
 
 /// Jedna vlastnost v objektovem literalu.
@@ -393,6 +408,9 @@ pub enum Stmt {
 
     /// Deklarace generator funkce: `function* name(params) { body }`
     GeneratorFunc { name: String, params: Vec<Param>, body: Vec<Stmt> },
+
+    /// Deklarace async funkce: `async function name(params) { body }`
+    AsyncFunc { name: String, params: Vec<Param>, body: Vec<Stmt> },
 }
 
 /// Jedna vetev switch prikazu.

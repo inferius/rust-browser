@@ -222,6 +222,22 @@ impl Parser {
 
             TokenKind::Keyword(KeywordEnum::Function) => self.parse_fn_decl(),
 
+            // `async function name(...) { }` - async funkce v statement pozici
+            TokenKind::Keyword(KeywordEnum::Async) => {
+                // Peek: je to `async function`?
+                let next_is_fn = matches!(self.tokens.get(self.pos + 1).map(|t| &t.kind),
+                    Some(TokenKind::Keyword(KeywordEnum::Function)));
+                if next_is_fn {
+                    self.advance(); // spotreba `async`
+                    self.parse_async_fn_decl()
+                } else {
+                    // async arrow nebo async identifier - jako expression statement
+                    let expr = self.parse_expr()?;
+                    self.eat_semi();
+                    Ok(Stmt::Expr(expr))
+                }
+            }
+
             TokenKind::Keyword(KeywordEnum::Return) => {
                 self.advance();
                 self.skip_trivia();
@@ -318,6 +334,16 @@ impl Parser {
         } else {
             Ok(Stmt::Function { name, params, body })
         }
+    }
+
+    /// Parsuje `async function name(params) { body }` (token `async` jiz spotrebovan).
+    fn parse_async_fn_decl(&mut self) -> Result<Stmt, ParseError> {
+        self.expect_kw(KeywordEnum::Function)?;
+        self.skip_trivia();
+        let name = self.parse_ident()?;
+        let params = self.parse_params()?;
+        let body = self.parse_fn_body()?;
+        Ok(Stmt::AsyncFunc { name, params, body })
     }
 
     fn parse_params(&mut self) -> Result<Vec<Param>, ParseError> {
@@ -1069,6 +1095,45 @@ impl Parser {
                 } else {
                     Ok(Expr::Function { name, params, body })
                 }
+            }
+
+            // await vyraz: `await expr` - pouze uvnitr async funkce
+            TokenKind::Keyword(KeywordEnum::Await) => {
+                self.advance(); self.skip_trivia();
+                let value = Box::new(self.parse_unary()?);
+                Ok(Expr::Await { value })
+            }
+
+            // async function nebo async arrow: `async function(...) {}` nebo `async (...) => ...`
+            TokenKind::Keyword(KeywordEnum::Async) => {
+                self.advance(); self.skip_trivia();
+                // `async function`
+                if matches!(self.kind(), TokenKind::Keyword(KeywordEnum::Function)) {
+                    self.advance(); self.skip_trivia();
+                    let name = if matches!(self.kind(), TokenKind::Identifier(_) | TokenKind::Keyword(_)) {
+                        Some(self.parse_ident()?)
+                    } else { None };
+                    let params = self.parse_params()?;
+                    let body = self.parse_fn_body()?;
+                    return Ok(Expr::AsyncFunc { name, params, body });
+                }
+                // `async (params) => body` nebo `async param => body`
+                let params = if matches!(self.kind(), TokenKind::Operator(OperatorEnum::LParen)) {
+                    self.parse_params()?
+                } else {
+                    // jednoparametrova async arrow: `async x => expr`
+                    let name = self.parse_ident()?;
+                    vec![Param::simple(name)]
+                };
+                self.skip_trivia();
+                self.expect_op(OperatorEnum::Arrow)?;
+                self.skip_trivia();
+                let body = if matches!(self.kind(), TokenKind::Operator(OperatorEnum::LBrace)) {
+                    self.parse_fn_body()?
+                } else {
+                    vec![Stmt::Return(Some(self.parse_assign_expr()?))]
+                };
+                Ok(Expr::AsyncFunc { name: None, params, body })
             }
 
             // yield vyraz: `yield value?` nebo `yield* iterable`

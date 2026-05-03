@@ -236,6 +236,14 @@ pub enum JsFunc {
         body: Vec<Stmt>,
         env: Rc<RefCell<Env>>,
     },
+    /// Async funkce (`async function`). Vraci vzdycky Promise.
+    /// Vyjimka uvnitr = rejected Promise, return value = fulfilled Promise.
+    Async {
+        name: Option<String>,
+        params: Vec<Param>,
+        body: FuncBody,
+        env: Rc<RefCell<Env>>,
+    },
     /// JS trida. `super_val` = vyhodnocena rodicovska trida.
     ///
     /// Konstruktor je ulozeny oddelene od ostatnich metod.
@@ -271,6 +279,7 @@ impl std::fmt::Debug for JsFunc {
             JsFunc::Native(name, _)        => write!(f, "[NativeFunction: {name}]"),
             JsFunc::Class { name, .. }     => write!(f, "[class {}]", name.as_deref().unwrap_or("(anonymous)")),
             JsFunc::Generator { name, .. } => write!(f, "[GeneratorFunction: {}]", name.as_deref().unwrap_or("anonymous")),
+            JsFunc::Async { name, .. }     => write!(f, "[AsyncFunction: {}]", name.as_deref().unwrap_or("anonymous")),
         }
     }
 }
@@ -649,6 +658,18 @@ impl Interpreter {
                 Ok(None)
             }
 
+            // Async funkce: `async function name(params) { body }`
+            Stmt::AsyncFunc { name, params, body } => {
+                let func = JsValue::Function(JsFunc::Async {
+                    name: Some(name.clone()),
+                    params: params.clone(),
+                    body: FuncBody::Stmts(body.clone()),
+                    env: Rc::clone(env),
+                });
+                env.borrow_mut().define(name, func);
+                Ok(None)
+            }
+
             Stmt::Return(val) => {
                 let v = match val { Some(e) => self.eval(e, env)?, None => JsValue::Undefined };
                 Ok(Some(Signal::Return(v)))
@@ -907,6 +928,24 @@ impl Interpreter {
                 body: body.clone(),
                 env: Rc::clone(env),
             })),
+
+            // Async funkcni vyraz: `const f = async function() {}` nebo `async () => {}`
+            Expr::AsyncFunc { name, params, body } => Ok(JsValue::Function(JsFunc::Async {
+                name: name.clone(),
+                params: params.clone(),
+                body: FuncBody::Stmts(body.clone()),
+                env: Rc::clone(env),
+            })),
+
+            // Await vyraz: `await promise` - synchronne rozbaluje Promise
+            Expr::Await { value } => {
+                let val = self.eval(value, env)?;
+                // Rozbal promise pokud to je Promise
+                match unwrap_promise_result(val) {
+                    Ok(v) => Ok(v),
+                    Err(reason) => Err(JsError::Thrown(reason)),
+                }
+            }
 
             // Yield vyraz: `yield value`
             Expr::Yield { value, delegate } => {
@@ -2231,6 +2270,36 @@ impl Interpreter {
             // Volani generator funkce vraci iterator objekt
             JsValue::Function(JsFunc::Generator { params, body, env, .. }) => {
                 self.call_generator(params, body, args, env)
+            }
+            // Async funkce: spust synchronne, zabal vysledek do Promise
+            JsValue::Function(JsFunc::Async { params, body, env, .. }) => {
+                let call_env = Environment::new_child(&env);
+                self.bind_params(&params, args.clone(), &call_env)?;
+                if let Some(t) = this { call_env.borrow_mut().define("this", t); }
+                let args_arr = JsValue::Array(Rc::new(RefCell::new(args)));
+                call_env.borrow_mut().define("arguments", args_arr);
+                match match &body {
+                    FuncBody::Stmts(stmts) => {
+                        let stmts = stmts.clone();
+                        self.exec_stmts(&stmts, &call_env)
+                            .map(|s| match s { Some(Signal::Return(v)) => v, _ => JsValue::Undefined })
+                    }
+                    FuncBody::Expr(e) => {
+                        let e = e.clone();
+                        self.eval(&e, &call_env)
+                    }
+                } {
+                    Ok(v) => {
+                        // Pokud return value je uz Promise, vrat ho primo
+                        if get_promise_state(&v).is_some() {
+                            Ok(v)
+                        } else {
+                            Ok(make_settled_promise("fulfilled", v))
+                        }
+                    }
+                    Err(JsError::Thrown(v)) => Ok(make_settled_promise("rejected", v)),
+                    Err(e) => Err(e),
+                }
             }
             _ => Err(JsError::Runtime(format!("{func} není funkce"))),
         }
@@ -5640,5 +5709,117 @@ mod tests {
             p.catch(e => { caught = e.message; });
             return caught;
         "#)), "executor threw");
+    }
+
+    // ─── Batch E: async/await ─────────────────────────────────────────────────
+
+    #[test]
+    fn async_fn_returns_promise() {
+        // async function vzdy vraci Promise
+        assert!(matches!(
+            run(r#"
+                async function f() { return 42; }
+                return f();
+            "#),
+            JsValue::Object(_)
+        ));
+    }
+
+    #[test]
+    fn await_unwraps_promise() {
+        assert_eq!(as_num(run(r#"
+            async function f() { return 42; }
+            const p = f();
+            let result = 0;
+            p.then(v => { result = v; });
+            return result;
+        "#)), 42.0);
+    }
+
+    #[test]
+    fn await_resolved_promise() {
+        // await rozbali fulfilled promise synchronne
+        assert_eq!(as_num(run(r#"
+            async function f() {
+                const v = await Promise.resolve(99);
+                return v;
+            }
+            let result = 0;
+            f().then(v => { result = v; });
+            return result;
+        "#)), 99.0);
+    }
+
+    #[test]
+    fn await_chained() {
+        assert_eq!(as_num(run(r#"
+            async function double(x) {
+                return x * 2;
+            }
+            async function main() {
+                const a = await double(5);
+                const b = await double(a);
+                return b;
+            }
+            let result = 0;
+            main().then(v => { result = v; });
+            return result;
+        "#)), 20.0);
+    }
+
+    #[test]
+    fn await_rejected_becomes_catch() {
+        // await rejected = thrown exception uvnitr async fn
+        assert_eq!(as_str(run(r#"
+            async function f() {
+                try {
+                    await Promise.reject("bad");
+                } catch (e) {
+                    return "caught: " + e;
+                }
+                return "ok";
+            }
+            let result = "";
+            f().then(v => { result = v; });
+            return result;
+        "#)), "caught: bad");
+    }
+
+    #[test]
+    fn async_arrow() {
+        // async arrow function
+        assert_eq!(as_num(run(r#"
+            const add = async (a, b) => a + b;
+            let result = 0;
+            add(3, 4).then(v => { result = v; });
+            return result;
+        "#)), 7.0);
+    }
+
+    #[test]
+    fn async_fn_throw_rejects_promise() {
+        // Vyjimka uvnitr async fn = rejected promise
+        assert_eq!(as_str(run(r#"
+            async function f() {
+                throw new Error("async error");
+            }
+            let msg = "";
+            f().catch(e => { msg = e.message; });
+            return msg;
+        "#)), "async error");
+    }
+
+    #[test]
+    fn async_fn_decl_stmt() {
+        // async function jako statement
+        assert_eq!(as_num(run(r#"
+            async function compute(n) {
+                const doubled = await Promise.resolve(n * 2);
+                return doubled + 1;
+            }
+            let result = 0;
+            compute(10).then(v => { result = v; });
+            return result;
+        "#)), 21.0);
     }
 }
