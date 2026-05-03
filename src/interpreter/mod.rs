@@ -383,6 +383,48 @@ impl Interpreter {
             Stmt::Break(label)    => Ok(Some(Signal::Break(label.clone()))),
             Stmt::Continue(label) => Ok(Some(Signal::Continue(label.clone()))),
 
+            Stmt::Switch { discriminant, cases } => {
+                let value = self.eval(discriminant, env)?;
+
+                // Najdi odpovidajici case (strict ===) a pozici default
+                let mut match_idx: Option<usize> = None;
+                let mut default_idx: Option<usize> = None;
+
+                for (i, case) in cases.iter().enumerate() {
+                    match &case.test {
+                        None => { default_idx = Some(i); }
+                        Some(test_expr) => {
+                            if match_idx.is_none() {
+                                let test_val = self.eval(test_expr, env)?;
+                                if value.strict_eq(&test_val) {
+                                    match_idx = Some(i);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Spust od prvniho odpovidajiciho case, nebo od default
+                let start = match_idx.or(default_idx);
+
+                if let Some(start_idx) = start {
+                    let switch_env = Environment::new_child(env);
+                    for case in &cases[start_idx..] {
+                        for stmt in &case.body {
+                            match self.exec_stmt(stmt, &switch_env)? {
+                                // break (bez labelu) ukonci switch
+                                Some(Signal::Break(None)) => return Ok(None),
+                                // break s labelem - propaguj nahoru (zpracuje Labeled)
+                                Some(s) => return Ok(Some(s)),
+                                None => {}
+                            }
+                        }
+                    }
+                }
+
+                Ok(None)
+            }
+
             Stmt::If { test, yes, no } => {
                 if self.eval(test, env)?.is_truthy() {
                     self.exec_stmt(yes, env)
@@ -395,9 +437,9 @@ impl Interpreter {
                 loop {
                     if !self.eval(test, env)?.is_truthy() { break; }
                     match self.exec_stmt(body, env)? {
-                        Some(Signal::Break(_))    => break,
-                        Some(Signal::Continue(_)) => continue,
-                        Some(s) => return Ok(Some(s)),
+                        Some(Signal::Break(None))    => break,
+                        Some(Signal::Continue(None)) => continue,
+                        Some(s) => return Ok(Some(s)),  // labeled/Return propaguj nahoru
                         None => {}
                     }
                 }
@@ -407,8 +449,8 @@ impl Interpreter {
             Stmt::DoWhile { body, test } => {
                 loop {
                     match self.exec_stmt(body, env)? {
-                        Some(Signal::Break(_))    => break,
-                        Some(Signal::Continue(_)) => {}
+                        Some(Signal::Break(None))    => break,
+                        Some(Signal::Continue(None)) => {}
                         Some(s) => return Ok(Some(s)),
                         None => {}
                     }
@@ -435,8 +477,8 @@ impl Interpreter {
                         if !self.eval(cond, &for_env)?.is_truthy() { break; }
                     }
                     match self.exec_stmt(body, &for_env)? {
-                        Some(Signal::Break(_))    => break,
-                        Some(Signal::Continue(_)) => {}
+                        Some(Signal::Break(None))    => break,
+                        Some(Signal::Continue(None)) => {}
                         Some(s) => return Ok(Some(s)),
                         None => {}
                     }
@@ -450,7 +492,7 @@ impl Interpreter {
                 let items = match arr_val {
                     JsValue::Array(ref a) => a.borrow().clone(),
                     JsValue::Str(ref s) => s.chars().map(|c| JsValue::Str(c.to_string())).collect(),
-                    _ => return Err(JsError::Runtime("for...of: nenaiterabilní hodnota".into())),
+                    _ => return Err(JsError::Runtime("for...of: nenaiterabilni hodnota".into())),
                 };
                 for item in items {
                     let loop_env = Environment::new_child(env);
@@ -458,8 +500,8 @@ impl Interpreter {
                         loop_env.borrow_mut().define(name, item);
                     }
                     match self.exec_stmt(body, &loop_env)? {
-                        Some(Signal::Break(_))    => break,
-                        Some(Signal::Continue(_)) => continue,
+                        Some(Signal::Break(None))    => break,
+                        Some(Signal::Continue(None)) => continue,
                         Some(s) => return Ok(Some(s)),
                         None => {}
                     }
@@ -479,8 +521,8 @@ impl Interpreter {
                         loop_env.borrow_mut().define(name, JsValue::Str(key));
                     }
                     match self.exec_stmt(body, &loop_env)? {
-                        Some(Signal::Break(_))    => break,
-                        Some(Signal::Continue(_)) => continue,
+                        Some(Signal::Break(None))    => break,
+                        Some(Signal::Continue(None)) => continue,
                         Some(s) => return Ok(Some(s)),
                         None => {}
                     }
@@ -514,7 +556,15 @@ impl Interpreter {
                 Ok(sig)
             }
 
-            Stmt::Labeled { label: _, body } => self.exec_stmt(body, env),
+            Stmt::Labeled { label, body } => {
+                match self.exec_stmt(body, env)? {
+                    // break label / continue label odpovidajici tomuto labelu -> konzumuj signal
+                    Some(Signal::Break(Some(l)))    if l == *label => Ok(None),
+                    Some(Signal::Continue(Some(l))) if l == *label => Ok(None),
+                    // vsechno ostatni propaguj (Return, Break(None), Break(jiny_label), ...)
+                    other => Ok(other),
+                }
+            }
         }
     }
 
@@ -2217,5 +2267,167 @@ mod tests {
             };
             return obj.getX();
         "#)), 10.0);
+    }
+
+    // --- switch/case ---
+
+    #[test]
+    fn switch_basic_match() {
+        assert_eq!(as_num(run(r#"
+            let x = 2;
+            switch (x) {
+                case 1: return 10;
+                case 2: return 20;
+                case 3: return 30;
+            }
+            return 0;
+        "#)), 20.0);
+    }
+
+    #[test]
+    fn switch_default_only() {
+        assert_eq!(as_num(run(r#"
+            switch (99) {
+                case 1: return 1;
+                default: return 42;
+            }
+        "#)), 42.0);
+    }
+
+    #[test]
+    fn switch_default_in_middle() {
+        assert_eq!(as_num(run(r#"
+            switch (5) {
+                case 1: return 1;
+                default: return 99;
+                case 2: return 2;
+            }
+        "#)), 99.0);
+    }
+
+    #[test]
+    fn switch_no_match_no_default() {
+        assert_eq!(as_num(run(r#"
+            switch (7) {
+                case 1: return 1;
+                case 2: return 2;
+            }
+            return 0;
+        "#)), 0.0);
+    }
+
+    #[test]
+    fn switch_fallthrough() {
+        // bez break - probehne case 1 i case 2
+        assert_eq!(as_num(run(r#"
+            let result = 0;
+            switch (1) {
+                case 1: result += 10;
+                case 2: result += 20;
+                case 3: result += 30; break;
+                case 4: result += 40;
+            }
+            return result;
+        "#)), 60.0);  // 10 + 20 + 30, case 4 uz ne
+    }
+
+    #[test]
+    fn switch_break_stops() {
+        assert_eq!(as_num(run(r#"
+            let result = 0;
+            switch (2) {
+                case 1: result = 1; break;
+                case 2: result = 2; break;
+                case 3: result = 3; break;
+            }
+            return result;
+        "#)), 2.0);
+    }
+
+    #[test]
+    fn switch_multiple_cases_same_body() {
+        // case 1: case 2: - oba provedou stejne telo
+        assert_eq!(as_str(run(r#"
+            function grade(n) {
+                switch (n) {
+                    case 1:
+                    case 2: return "low";
+                    case 3: return "mid";
+                    case 4:
+                    case 5: return "high";
+                    default: return "unknown";
+                }
+            }
+            return grade(2);
+        "#)), "low");
+    }
+
+    #[test]
+    fn switch_strict_equality() {
+        // switch pouziva === (strict) - "1" != 1
+        assert_eq!(as_num(run(r#"
+            switch ("1") {
+                case 1:  return 10;  // cislo 1, neshoduje se
+                case "1": return 20; // retezec "1", shoduje se
+            }
+            return 0;
+        "#)), 20.0);
+    }
+
+    #[test]
+    fn switch_string_discriminant() {
+        assert_eq!(as_num(run(r#"
+            const day = "mon";
+            switch (day) {
+                case "sat":
+                case "sun": return 0;
+                case "mon": return 1;
+                default: return -1;
+            }
+        "#)), 1.0);
+    }
+
+    #[test]
+    fn switch_with_block_scope() {
+        assert_eq!(as_num(run(r#"
+            switch (1) {
+                case 1: {
+                    let x = 42;
+                    return x;
+                }
+            }
+            return 0;
+        "#)), 42.0);
+    }
+
+    // --- labeled break ---
+
+    #[test]
+    fn labeled_break_outer_loop() {
+        assert_eq!(as_num(run(r#"
+            let result = 0;
+            outer: for (let i = 0; i < 3; i++) {
+                for (let j = 0; j < 3; j++) {
+                    if (i === 1 && j === 1) break outer;
+                    result++;
+                }
+            }
+            return result;
+        "#)), 4.0);  // (0,0),(0,1),(0,2),(1,0) = 4 iterace
+    }
+
+    #[test]
+    fn labeled_break_switch_in_loop() {
+        // break v switch nema prerusit obalujici cyklus
+        assert_eq!(as_num(run(r#"
+            let sum = 0;
+            for (let i = 0; i < 3; i++) {
+                switch (i) {
+                    case 1: sum += 10; break; // break ukonci switch, ne for
+                    default: sum += 1;
+                }
+            }
+            return sum;
+        "#)), 12.0);  // i=0: +1, i=1: +10, i=2: +1
     }
 }

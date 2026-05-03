@@ -276,6 +276,21 @@ pub enum Stmt {
 
     /// Oznaceny prikaz: `label: stmt` (pro break/continue s labelem)
     Labeled { label: String, body: Box<Stmt> },
+
+    /// Switch: `switch (discriminant) { case x: ... default: ... }`
+    Switch { discriminant: Expr, cases: Vec<SwitchCase> },
+}
+
+/// Jedna vetev switch prikazu.
+///
+/// `test = None` -> `default:` vetev (muze byt jen jedna)
+/// `test = Some(expr)` -> `case expr:` vetev
+#[derive(Debug, Clone)]
+pub struct SwitchCase {
+    /// Testovaci vyraz (`case expr:`), nebo `None` pro `default:`
+    pub test: Option<Expr>,
+    /// Prikazy v tele teto vetve (prazdne = fall-through na dalsi vetev)
+    pub body: Vec<Stmt>,
 }
 
 /// Jedna polozka v deklaraci promennych.

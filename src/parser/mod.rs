@@ -126,6 +126,21 @@ impl Parser {
         if matches!(self.kind(), TokenKind::Operator(OperatorEnum::Semi)) { self.advance(); }
     }
 
+    /// Precte nepovinny label za `break`/`continue` (identifikator).
+    /// ECMAScript: label musi byt na stejnem radku - ale protoze trivia
+    /// uz jsou odfiltrována, jen zkontrolujeme jestli nasleduje identifikator.
+    fn eat_label(&mut self) -> Option<String> {
+        // Preskocime pouze whitespace (ne newlines), ale protoze mame prefiltrovany
+        // stream bez trivia, zkusime jednoduchy heuristiku: identifikator hned za.
+        // V praxi to funguje pro vsechny bezne pripady.
+        if let TokenKind::Identifier(name) = self.kind().clone() {
+            self.advance();
+            Some(name)
+        } else {
+            None
+        }
+    }
+
     fn err(&self, msg: impl Into<String>) -> ParseError {
         ParseError { msg: msg.into(), line: self.cur().line, column: self.cur().column }
     }
@@ -195,20 +210,26 @@ impl Parser {
             }
 
             TokenKind::Keyword(KeywordEnum::Break) => {
-                self.advance(); self.eat_semi();
-                Ok(Stmt::Break(None))
+                self.advance();
+                // `break label;` - nepovinny identifikator na stejnem radku
+                let label = self.eat_label();
+                self.eat_semi();
+                Ok(Stmt::Break(label))
             }
 
             TokenKind::Keyword(KeywordEnum::Continue) => {
-                self.advance(); self.eat_semi();
-                Ok(Stmt::Continue(None))
+                self.advance();
+                let label = self.eat_label();
+                self.eat_semi();
+                Ok(Stmt::Continue(label))
             }
 
-            TokenKind::Keyword(KeywordEnum::If)    => self.parse_if(),
+            TokenKind::Keyword(KeywordEnum::If)     => self.parse_if(),
             TokenKind::Keyword(KeywordEnum::While)  => self.parse_while(),
             TokenKind::Keyword(KeywordEnum::Do)     => self.parse_do_while(),
             TokenKind::Keyword(KeywordEnum::For)    => self.parse_for(),
             TokenKind::Keyword(KeywordEnum::Try)    => self.parse_try(),
+            TokenKind::Keyword(KeywordEnum::Switch) => self.parse_switch(),
 
             _ => {
                 let expr = self.parse_expr()?;
@@ -419,6 +440,62 @@ impl Parser {
         } else { None };
 
         Ok(Stmt::Try { body, catch, finally })
+    }
+
+    fn parse_switch(&mut self) -> Result<Stmt, ParseError> {
+        self.advance(); // 'switch'
+        self.skip_trivia();
+        self.expect_op(OperatorEnum::LParen)?;
+        let discriminant = self.parse_expr()?;
+        self.expect_op(OperatorEnum::RParen)?;
+        self.skip_trivia();
+        self.expect_op(OperatorEnum::LBrace)?;
+
+        let mut cases = Vec::new();
+        loop {
+            self.skip_trivia();
+            match self.kind().clone() {
+                TokenKind::Operator(OperatorEnum::RBrace) | TokenKind::Eof => break,
+
+                TokenKind::Keyword(KeywordEnum::Case) => {
+                    self.advance();
+                    // parse_assign_expr misto parse_expr: vyhneme se chyceni carky
+                    let test = self.parse_assign_expr()?;
+                    self.expect_op(OperatorEnum::Colon)?;
+                    let body = self.parse_case_body()?;
+                    cases.push(SwitchCase { test: Some(test), body });
+                }
+
+                TokenKind::Keyword(KeywordEnum::Default) => {
+                    self.advance();
+                    self.expect_op(OperatorEnum::Colon)?;
+                    let body = self.parse_case_body()?;
+                    cases.push(SwitchCase { test: None, body });
+                }
+
+                _ => return Err(self.err("Ocekavano 'case' nebo 'default'")),
+            }
+        }
+
+        self.expect_op(OperatorEnum::RBrace)?;
+        Ok(Stmt::Switch { discriminant, cases })
+    }
+
+    /// Parsuje prikazy tela jedne case/default vetve.
+    /// Zastavi se pred dalsim `case`, `default`, `}` nebo EOF.
+    fn parse_case_body(&mut self) -> Result<Vec<Stmt>, ParseError> {
+        let mut stmts = Vec::new();
+        loop {
+            self.skip_trivia();
+            match self.kind() {
+                TokenKind::Keyword(KeywordEnum::Case)
+                | TokenKind::Keyword(KeywordEnum::Default)
+                | TokenKind::Operator(OperatorEnum::RBrace)
+                | TokenKind::Eof => break,
+                _ => stmts.push(self.parse_stmt()?),
+            }
+        }
+        Ok(stmts)
     }
 
     // ─── Výrazy ───────────────────────────────────────────────────────────────
