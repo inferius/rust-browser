@@ -1894,6 +1894,55 @@ impl Interpreter {
                 }
                 JsValue::Object(obj_rc) => {
                     let obj_rc2 = Rc::clone(obj_rc);
+                    // ─── Date instance metody ──────────────────────────────
+                    if let JsValue::Number(ms) = obj_rc2.borrow().props.get("__date_ms__").cloned().unwrap_or(JsValue::Undefined) {
+                        let arg_vals = self.eval_args(args, env)?;
+                        let (yr, mo, day, hr, min, sec, ms_part) = ms_to_parts(ms);
+                        match key.as_str() {
+                            "getTime"           => return Ok(JsValue::Number(ms)),
+                            "getFullYear"       => return Ok(JsValue::Number(yr as f64)),
+                            "getMonth"          => return Ok(JsValue::Number(mo as f64)),
+                            "getDate"           => return Ok(JsValue::Number(day as f64)),
+                            "getHours"          => return Ok(JsValue::Number(hr as f64)),
+                            "getMinutes"        => return Ok(JsValue::Number(min as f64)),
+                            "getSeconds"        => return Ok(JsValue::Number(sec as f64)),
+                            "getMilliseconds"   => return Ok(JsValue::Number(ms_part as f64)),
+                            "getDay"            => {
+                                // Den tydne: 0=Sun,...,6=Sat
+                                let days = (ms / 86_400_000.0) as i64;
+                                return Ok(JsValue::Number(((days + 4) % 7).rem_euclid(7) as f64));
+                            }
+                            "valueOf" | "getTimezoneOffset" => return Ok(JsValue::Number(ms)),
+                            "toISOString" => {
+                                return Ok(JsValue::Str(format!(
+                                    "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
+                                    yr, mo+1, day, hr, min, sec, ms_part
+                                )));
+                            }
+                            "toLocaleDateString" => {
+                                return Ok(JsValue::Str(format!("{}/{}/{}", mo+1, day, yr)));
+                            }
+                            "toLocaleTimeString" => {
+                                return Ok(JsValue::Str(format!("{:02}:{:02}:{:02}", hr, min, sec)));
+                            }
+                            "toLocaleString" | "toString" => {
+                                return Ok(JsValue::Str(format!(
+                                    "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+                                    yr, mo+1, day, hr, min, sec
+                                )));
+                            }
+                            "toDateString" => {
+                                return Ok(JsValue::Str(format!("{:04}-{:02}-{:02}", yr, mo+1, day)));
+                            }
+                            "setTime" => {
+                                let new_ms = arg_vals.into_iter().next()
+                                    .map(|v| v.to_number()).unwrap_or(f64::NAN);
+                                obj_rc2.borrow_mut().props.insert("__date_ms__".into(), JsValue::Number(new_ms));
+                                return Ok(JsValue::Number(new_ms));
+                            }
+                            _ => {}
+                        }
+                    }
                     let arg_vals = self.eval_args(args, env)?;
                     match key.as_str() {
                         // obj.hasOwnProperty("key") - kontrola vlastni vlastnosti
@@ -1954,6 +2003,12 @@ impl Interpreter {
                                 _ => JsValue::Array(Rc::new(RefCell::new(vec![]))),
                             };
                             return Ok(result);
+                        }
+                        // Date staticke metody
+                        ("Date", "now") => return Ok(JsValue::Number(now_ms())),
+                        ("Date", "parse") => {
+                            // Stub - vratime NaN pro neznamy format
+                            return Ok(JsValue::Number(f64::NAN));
                         }
                         _ => {}
                     }
@@ -2032,6 +2087,11 @@ impl Interpreter {
             match name.as_str() {
                 "Map" | "WeakMap" => return self.construct_map(args),
                 "Set" | "WeakSet" => return self.construct_set(args),
+                "Date"            => return self.construct_date(args),
+                "Error" | "TypeError" | "RangeError" | "SyntaxError"
+                | "ReferenceError" | "URIError" | "EvalError" => {
+                    return self.construct_error(name.clone(), args);
+                }
                 _     => {}
             }
         }
@@ -2065,6 +2125,30 @@ impl Interpreter {
             for v in items { s.add(v); }
         }
         Ok(JsValue::Set(Rc::new(RefCell::new(s))))
+    }
+
+    /// Konstruktor `new Date()`, `new Date(ms)`, `new Date("iso-string")`.
+    fn construct_date(&mut self, args: Vec<JsValue>) -> EvalResult {
+        let ms = match args.into_iter().next() {
+            None                       => now_ms(),
+            Some(JsValue::Number(n))   => n,
+            Some(JsValue::Str(_s))     => now_ms(), // TODO: parse date string
+            Some(JsValue::Undefined)   => now_ms(),
+            _                          => f64::NAN,
+        };
+        Ok(make_date_object(ms))
+    }
+
+    /// Konstruktor `new Error("msg")`, `new TypeError("msg")`, atd.
+    fn construct_error(&mut self, name: String, args: Vec<JsValue>) -> EvalResult {
+        let msg = args.into_iter().next()
+            .map(|v| v.to_string())
+            .unwrap_or_default();
+        let mut obj = JsObject::new();
+        obj.set("name".into(),    JsValue::Str(name.clone()));
+        obj.set("message".into(), JsValue::Str(msg.clone()));
+        obj.set("stack".into(),   JsValue::Str(format!("{name}: {msg}")));
+        Ok(JsValue::Object(Rc::new(RefCell::new(obj))))
     }
 
     // ─── Generator + iterator protokol ───────────────────────────────────────
@@ -2577,6 +2661,274 @@ fn build_class_chain(class_name: &str, super_val: Option<&JsValue>) -> String {
     chain
 }
 
+// ─── JSON serialization / deserialization ────────────────────────────────────
+
+/// Serializuje JsValue do JSON retezce.
+fn json_stringify(val: &JsValue, indent: usize, depth: usize) -> Option<String> {
+    match val {
+        JsValue::Null             => Some("null".into()),
+        JsValue::Bool(b)          => Some(b.to_string()),
+        JsValue::Number(n) if n.is_nan() || n.is_infinite() => Some("null".into()),
+        JsValue::Number(n) => {
+            if *n == n.trunc() && n.abs() < 1e15 { Some(format!("{}", *n as i64)) }
+            else { Some(format!("{n}")) }
+        }
+        JsValue::Str(s) => Some(json_escape_str(s)),
+        JsValue::Array(a) => {
+            let items: Vec<String> = a.borrow().iter()
+                .map(|v| json_stringify(v, indent, depth + 1).unwrap_or_else(|| "null".into()))
+                .collect();
+            if indent == 0 || items.is_empty() {
+                Some(format!("[{}]", items.join(",")))
+            } else {
+                let pad = " ".repeat(indent * (depth + 1));
+                let close_pad = " ".repeat(indent * depth);
+                Some(format!("[\n{}{}\n{}]",
+                    pad, items.join(&format!(",\n{pad}")), close_pad))
+            }
+        }
+        JsValue::Object(o) => {
+            let mut pairs: Vec<String> = Vec::new();
+            let borrowed = o.borrow();
+            let mut keys: Vec<&String> = borrowed.props.keys()
+                .filter(|k| !is_internal_key(k)).collect();
+            keys.sort();
+            for k in keys {
+                let v = borrowed.props.get(k).unwrap();
+                if let Some(serialized) = json_stringify(v, indent, depth + 1) {
+                    pairs.push(format!("{}:{}", json_escape_str(k), serialized));
+                }
+            }
+            if indent == 0 || pairs.is_empty() {
+                Some(format!("{{{}}}", pairs.join(",")))
+            } else {
+                let pad = " ".repeat(indent * (depth + 1));
+                let close_pad = " ".repeat(indent * depth);
+                Some(format!("{{\n{}{}\n{}}}", pad,
+                    pairs.join(&format!(",\n{pad}")), close_pad))
+            }
+        }
+        // undefined, funkce, symboly -> None (vynechano z JSON)
+        _ => None,
+    }
+}
+
+/// Escapuje retezec pro JSON (prida uvozovky, escapuje spec. znaky).
+fn json_escape_str(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for ch in s.chars() {
+        match ch {
+            '"'  => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => { out.push_str(&format!("\\u{:04x}", c as u32)); }
+            c    => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// Parsuje JSON retezec na JsValue. Jednoduchy rekurzivni descend parser.
+fn json_parse(s: &str) -> Result<JsValue, String> {
+    let chars: Vec<char> = s.chars().collect();
+    let (val, _) = json_parse_value(&chars, 0)?;
+    Ok(val)
+}
+
+fn json_skip_ws(chars: &[char], mut i: usize) -> usize {
+    while i < chars.len() && matches!(chars[i], ' ' | '\t' | '\n' | '\r') { i += 1; }
+    i
+}
+
+fn json_parse_value(chars: &[char], pos: usize) -> Result<(JsValue, usize), String> {
+    let i = json_skip_ws(chars, pos);
+    if i >= chars.len() { return Err("Neocekavany konec JSON".into()); }
+    match chars[i] {
+        '"' => {
+            let (s, end) = json_parse_string(chars, i)?;
+            Ok((JsValue::Str(s), end))
+        }
+        '[' => json_parse_array(chars, i),
+        '{' => json_parse_object(chars, i),
+        't' => {
+            if chars.get(i..i+4) == Some(&['t','r','u','e']) { Ok((JsValue::Bool(true), i+4)) }
+            else { Err(format!("Neplatny JSON token na pozici {i}")) }
+        }
+        'f' => {
+            if chars.get(i..i+5) == Some(&['f','a','l','s','e']) { Ok((JsValue::Bool(false), i+5)) }
+            else { Err(format!("Neplatny JSON token na pozici {i}")) }
+        }
+        'n' => {
+            if chars.get(i..i+4) == Some(&['n','u','l','l']) { Ok((JsValue::Null, i+4)) }
+            else { Err(format!("Neplatny JSON token na pozici {i}")) }
+        }
+        '-' | '0'..='9' => json_parse_number(chars, i),
+        c => Err(format!("Neocekavany znak '{c}' na pozici {i}")),
+    }
+}
+
+fn json_parse_string(chars: &[char], start: usize) -> Result<(String, usize), String> {
+    let mut s = String::new();
+    let mut i = start + 1; // preskoc uvodni "
+    while i < chars.len() {
+        match chars[i] {
+            '"' => return Ok((s, i + 1)),
+            '\\' => {
+                i += 1;
+                if i >= chars.len() { break; }
+                match chars[i] {
+                    '"'  => s.push('"'),
+                    '\\' => s.push('\\'),
+                    '/'  => s.push('/'),
+                    'n'  => s.push('\n'),
+                    'r'  => s.push('\r'),
+                    't'  => s.push('\t'),
+                    'b'  => s.push('\x08'),
+                    'f'  => s.push('\x0C'),
+                    'u' if i + 4 < chars.len() => {
+                        let hex: String = chars[i+1..=i+4].iter().collect();
+                        if let Ok(n) = u32::from_str_radix(&hex, 16) {
+                            if let Some(c) = char::from_u32(n) { s.push(c); }
+                        }
+                        i += 4;
+                    }
+                    c => s.push(c),
+                }
+                i += 1;
+            }
+            c => { s.push(c); i += 1; }
+        }
+    }
+    Err("Neuzavreny JSON retezec".into())
+}
+
+fn json_parse_number(chars: &[char], start: usize) -> Result<(JsValue, usize), String> {
+    let mut i = start;
+    if i < chars.len() && chars[i] == '-' { i += 1; }
+    while i < chars.len() && chars[i].is_ascii_digit() { i += 1; }
+    if i < chars.len() && chars[i] == '.' {
+        i += 1;
+        while i < chars.len() && chars[i].is_ascii_digit() { i += 1; }
+    }
+    if i < chars.len() && matches!(chars[i], 'e' | 'E') {
+        i += 1;
+        if i < chars.len() && matches!(chars[i], '+' | '-') { i += 1; }
+        while i < chars.len() && chars[i].is_ascii_digit() { i += 1; }
+    }
+    let num_str: String = chars[start..i].iter().collect();
+    let n: f64 = num_str.parse().map_err(|_| format!("Neplatne cislo: {num_str}"))?;
+    Ok((JsValue::Number(n), i))
+}
+
+fn json_parse_array(chars: &[char], start: usize) -> Result<(JsValue, usize), String> {
+    let mut items = Vec::new();
+    let mut i = json_skip_ws(chars, start + 1);
+    if i < chars.len() && chars[i] == ']' { return Ok((JsValue::Array(Rc::new(RefCell::new(items))), i + 1)); }
+    loop {
+        let (val, end) = json_parse_value(chars, i)?;
+        items.push(val);
+        i = json_skip_ws(chars, end);
+        match chars.get(i) {
+            Some(',') => i += 1,
+            Some(']') => return Ok((JsValue::Array(Rc::new(RefCell::new(items))), i + 1)),
+            _         => return Err(format!("Ocekavano ',' nebo ']' na pozici {i}")),
+        }
+    }
+}
+
+fn json_parse_object(chars: &[char], start: usize) -> Result<(JsValue, usize), String> {
+    let mut obj = JsObject::new();
+    let mut i = json_skip_ws(chars, start + 1);
+    if i < chars.len() && chars[i] == '}' { return Ok((JsValue::Object(Rc::new(RefCell::new(obj))), i + 1)); }
+    loop {
+        i = json_skip_ws(chars, i);
+        if chars.get(i) != Some(&'"') { return Err(format!("Ocekavan klic na pozici {i}")); }
+        let (key, end) = json_parse_string(chars, i)?;
+        i = json_skip_ws(chars, end);
+        if chars.get(i) != Some(&':') { return Err(format!("Ocekavano ':' na pozici {i}")); }
+        i += 1;
+        let (val, end2) = json_parse_value(chars, i)?;
+        obj.set(key, val);
+        i = json_skip_ws(chars, end2);
+        match chars.get(i) {
+            Some(',') => i += 1,
+            Some('}') => return Ok((JsValue::Object(Rc::new(RefCell::new(obj))), i + 1)),
+            _         => return Err(format!("Ocekavano ',' nebo '}}' na pozici {i}")),
+        }
+    }
+}
+
+// ─── Date pomocne funkce ──────────────────────────────────────────────────────
+
+/// Aktualni cas v milisekundach od Unix epoch.
+fn now_ms() -> f64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as f64)
+        .unwrap_or(0.0)
+}
+
+/// Vytvori Date objekt z ms timestamp.
+fn make_date_object(ms: f64) -> JsValue {
+    let mut obj = JsObject::new();
+    obj.set("__date_ms__".into(), JsValue::Number(ms));
+    JsValue::Object(Rc::new(RefCell::new(obj)))
+}
+
+/// Extrahuje ms timestamp z Date objektu.
+fn get_date_ms(val: &JsValue) -> Option<f64> {
+    if let JsValue::Object(o) = val {
+        if let JsValue::Number(ms) = o.borrow().props.get("__date_ms__")? {
+            return Some(*ms);
+        }
+    }
+    None
+}
+
+/// Rozlozi ms na (year, month[0-11], day[1-31], hour, min, sec, ms).
+fn ms_to_parts(ms: f64) -> (i64, u32, u32, u32, u32, u32, u32) {
+    // Jednoducha implementace bez casovych zon (UTC)
+    let total_secs = (ms / 1000.0) as i64;
+    let ms_part = (ms as i64 % 1000).unsigned_abs() as u32;
+    let sec = (total_secs % 60).unsigned_abs() as u32;
+    let total_min = total_secs / 60;
+    let min = (total_min % 60).unsigned_abs() as u32;
+    let total_hour = total_min / 60;
+    let hour = (total_hour % 24).unsigned_abs() as u32;
+    let total_days = total_hour / 24;
+    // Datum z poctu dni od 1970-01-01
+    let (year, month, day) = days_to_date(total_days);
+    (year, month, day, hour, min, sec, ms_part)
+}
+
+fn days_to_date(mut days: i64) -> (i64, u32, u32) {
+    // Zjednoduseny algoritmus (Julian day number style)
+    let mut year = 1970i64;
+    loop {
+        let days_in_year = if is_leap(year) { 366 } else { 365 };
+        if days < days_in_year { break; }
+        days -= days_in_year;
+        year += 1;
+    }
+    let months = [31u32, if is_leap(year) { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let mut month = 0u32;
+    for &m in &months {
+        if days < m as i64 { break; }
+        days -= m as i64;
+        month += 1;
+    }
+    (year, month, (days + 1) as u32)
+}
+
+fn is_leap(y: i64) -> bool {
+    (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
+}
+
 fn setup_builtins(env: &Rc<RefCell<Environment>>) {
     let mut e = env.borrow_mut();
 
@@ -2851,6 +3203,53 @@ fn setup_builtins(env: &Rc<RefCell<Environment>>) {
     // WeakMap / WeakSet - stub (bez GC semantiky, chovaji se jako Map/Set)
     e.define("WeakMap", native("WeakMap", |_| Ok(JsValue::Undefined)));
     e.define("WeakSet", native("WeakSet", |_| Ok(JsValue::Undefined)));
+
+    // ─── JSON ─────────────────────────────────────────────────────────────────
+    let mut json_obj = JsObject::new();
+
+    json_obj.set("stringify".into(), native("JSON.stringify", |a| {
+        let mut iter = a.into_iter();
+        let val   = iter.next().unwrap_or(JsValue::Undefined);
+        let _repl = iter.next(); // replacer - ignorujeme
+        let space = iter.next().unwrap_or(JsValue::Undefined);
+        let indent = match space {
+            JsValue::Number(n) if n > 0.0 => n as usize,
+            JsValue::Str(s) if !s.is_empty() => s.len(), // " " -> 1
+            _ => 0,
+        };
+        match json_stringify(&val, indent, 0) {
+            Some(s) => Ok(JsValue::Str(s)),
+            None    => Ok(JsValue::Undefined),
+        }
+    }));
+
+    json_obj.set("parse".into(), native("JSON.parse", |a| {
+        match a.into_iter().next() {
+            Some(JsValue::Str(s)) => json_parse(&s).map_err(|e| e),
+            _ => Err("JSON.parse: argument musi byt retezec".into()),
+        }
+    }));
+
+    e.define("JSON", JsValue::Object(Rc::new(RefCell::new(json_obj))));
+
+    // ─── Date ─────────────────────────────────────────────────────────────────
+    // Date konstruktor registrujeme jako native - skutecna logika je v call_new
+    e.define("Date", native("Date", |_| Ok(JsValue::Undefined)));
+
+    // ─── Error typy ───────────────────────────────────────────────────────────
+    // Vsechny Error konstruktory jsou zaregistrovany; skutecna logika je v call_new
+    for name in &["Error", "TypeError", "RangeError", "SyntaxError",
+                   "ReferenceError", "URIError", "EvalError"] {
+        let n = name.to_string();
+        e.define(name, native(name, move |_| {
+            // Pri volani bez `new` stale vytvor Error objekt (jako v JS)
+            let mut obj = JsObject::new();
+            obj.set("name".into(), JsValue::Str(n.clone()));
+            obj.set("message".into(), JsValue::Str(String::new()));
+            obj.set("stack".into(), JsValue::Str(n.clone()));
+            Ok(JsValue::Object(Rc::new(RefCell::new(obj))))
+        }));
+    }
 
     e.define("Infinity",  JsValue::Number(f64::INFINITY));
     e.define("NaN",       JsValue::Number(f64::NAN));
@@ -4662,5 +5061,199 @@ mod tests {
             for (const v of s.values()) { sum += v; }
             return sum;
         "#)), 30.0);
+    }
+
+    // ─── Batch B: JSON ────────────────────────────────────────────────────────
+
+    #[test]
+    fn json_stringify_number() {
+        assert_eq!(as_str(run(r#"return JSON.stringify(42);"#)), "42");
+    }
+
+    #[test]
+    fn json_stringify_string() {
+        assert_eq!(as_str(run(r#"return JSON.stringify("hello");"#)), "\"hello\"");
+    }
+
+    #[test]
+    fn json_stringify_bool_null() {
+        assert_eq!(as_str(run(r#"return JSON.stringify(true);"#)), "true");
+        assert_eq!(as_str(run(r#"return JSON.stringify(null);"#)), "null");
+    }
+
+    #[test]
+    fn json_stringify_array() {
+        assert_eq!(as_str(run(r#"return JSON.stringify([1,2,3]);"#)), "[1,2,3]");
+    }
+
+    #[test]
+    fn json_stringify_object() {
+        assert_eq!(as_str(run(r#"return JSON.stringify({a:1,b:"x"});"#)), r#"{"a":1,"b":"x"}"#);
+    }
+
+    #[test]
+    fn json_stringify_nested() {
+        assert_eq!(as_str(run(r#"return JSON.stringify({a:[1,2],b:{c:3}});"#)),
+            r#"{"a":[1,2],"b":{"c":3}}"#);
+    }
+
+    #[test]
+    fn json_stringify_undefined_omitted() {
+        // undefined a funkce se vynechavaji z objektu
+        assert_eq!(as_str(run(r#"return JSON.stringify({a:1,b:undefined,c:2});"#)),
+            r#"{"a":1,"c":2}"#);
+    }
+
+    #[test]
+    fn json_parse_number() {
+        assert_eq!(as_num(run(r#"return JSON.parse("42");"#)), 42.0);
+    }
+
+    #[test]
+    fn json_parse_string() {
+        assert_eq!(as_str(run(r#"return JSON.parse('"hello"');"#)), "hello");
+    }
+
+    #[test]
+    fn json_parse_array() {
+        assert_eq!(as_num(run(r#"
+            const a = JSON.parse('[1,2,3]');
+            return a[1];
+        "#)), 2.0);
+    }
+
+    #[test]
+    fn json_parse_object() {
+        assert_eq!(as_num(run(r#"
+            const o = JSON.parse('{"x":10,"y":20}');
+            return o.x + o.y;
+        "#)), 30.0);
+    }
+
+    #[test]
+    fn json_roundtrip() {
+        // Testujeme ze parse(stringify(x)) zachova hodnoty (ne nutne poradi klicu)
+        assert_eq!(as_num(run(r#"
+            const obj = {x:42, y:99};
+            const s = JSON.stringify(obj);
+            const o2 = JSON.parse(s);
+            return o2.x + o2.y;
+        "#)), 141.0);
+        assert_eq!(as_num(run(r#"
+            const arr = [1, 2, 3, 4, 5];
+            const s = JSON.stringify(arr);
+            const a2 = JSON.parse(s);
+            return a2[0] + a2[4];
+        "#)), 6.0);
+    }
+
+    // ─── Batch B: Date ────────────────────────────────────────────────────────
+
+    #[test]
+    fn date_now_is_number() {
+        assert!(matches!(run(r#"return Date.now();"#), JsValue::Number(_)));
+    }
+
+    #[test]
+    fn date_constructor_epoch() {
+        // new Date(0) -> 1970-01-01T00:00:00.000Z
+        assert_eq!(as_str(run(r#"return new Date(0).toISOString();"#)),
+            "1970-01-01T00:00:00.000Z");
+    }
+
+    #[test]
+    fn date_get_time() {
+        assert_eq!(as_num(run(r#"return new Date(1000).getTime();"#)), 1000.0);
+    }
+
+    #[test]
+    fn date_get_full_year() {
+        // 2000-01-01 = 946684800000 ms
+        assert_eq!(as_num(run(r#"return new Date(946684800000).getFullYear();"#)), 2000.0);
+    }
+
+    #[test]
+    fn date_get_month() {
+        // 2000-03-15 = mesic je 2 (0-indexed)
+        assert_eq!(as_num(run(r#"return new Date(946684800000).getMonth();"#)), 0.0);
+    }
+
+    #[test]
+    fn date_get_date() {
+        assert_eq!(as_num(run(r#"return new Date(946684800000).getDate();"#)), 1.0);
+    }
+
+    #[test]
+    fn date_to_iso_string_known() {
+        // 2024-06-15T12:30:45.500Z = 1718454645500 ms
+        assert_eq!(as_str(run(r#"return new Date(1718454645500).toISOString();"#)),
+            "2024-06-15T12:30:45.500Z");
+    }
+
+    // ─── Batch B: Error types ─────────────────────────────────────────────────
+
+    #[test]
+    fn error_basic() {
+        assert_eq!(as_str(run(r#"
+            const e = new Error("oops");
+            return e.message;
+        "#)), "oops");
+    }
+
+    #[test]
+    fn error_name() {
+        assert_eq!(as_str(run(r#"
+            const e = new Error("x");
+            return e.name;
+        "#)), "Error");
+    }
+
+    #[test]
+    fn error_type_error() {
+        assert_eq!(as_str(run(r#"
+            const e = new TypeError("bad type");
+            return e.name + ": " + e.message;
+        "#)), "TypeError: bad type");
+    }
+
+    #[test]
+    fn error_range_error() {
+        assert_eq!(as_str(run(r#"
+            const e = new RangeError("out of range");
+            return e.name;
+        "#)), "RangeError");
+    }
+
+    #[test]
+    fn error_throw_catch() {
+        assert_eq!(as_str(run(r#"
+            let msg = "";
+            try {
+                throw new TypeError("caught me");
+            } catch (e) {
+                msg = e.message;
+            }
+            return msg;
+        "#)), "caught me");
+    }
+
+    #[test]
+    fn error_instanceof_check() {
+        // instanceof neni implementovano, ale muzes overit name property
+        assert_eq!(as_str(run(r#"
+            try {
+                throw new RangeError("r");
+            } catch (e) {
+                return e.name;
+            }
+        "#)), "RangeError");
+    }
+
+    #[test]
+    fn error_no_message() {
+        assert_eq!(as_str(run(r#"
+            const e = new Error();
+            return e.message;
+        "#)), "");
     }
 }
