@@ -60,16 +60,62 @@ pub enum JsValue {
     Function(JsFunc),
 }
 
-/// JS objekt - mapa retezec -> hodnota.
+/// JS objekt - mapa retezec -> hodnota + prototypovy retezec.
 #[derive(Debug, Clone)]
 pub struct JsObject {
     pub props: HashMap<String, JsValue>,
+    /// Prototypovy objekt (`obj.__proto__`). None = zadny prototype (Object.create(null)).
+    pub proto: Option<Rc<RefCell<JsObject>>>,
+    /// Object.freeze - po zavolani nelze menit/pridat vlastnosti.
+    pub frozen: bool,
 }
 
 impl JsObject {
-    fn new() -> Self { JsObject { props: HashMap::new() } }
-    fn get(&self, k: &str) -> JsValue { self.props.get(k).cloned().unwrap_or(JsValue::Undefined) }
-    fn set(&mut self, k: String, v: JsValue) { self.props.insert(k, v); }
+    fn new() -> Self {
+        JsObject { props: HashMap::new(), proto: None, frozen: false }
+    }
+
+    /// Vytvori objekt s danym prototypem (Object.create(proto)).
+    fn new_with_proto(proto: Rc<RefCell<JsObject>>) -> Self {
+        JsObject { props: HashMap::new(), proto: Some(proto), frozen: false }
+    }
+
+    /// Cte vlastnost - prochazi prototypovym retezcem (max 100 uroven).
+    fn get(&self, k: &str) -> JsValue {
+        self.get_depth(k, 0)
+    }
+
+    fn get_depth(&self, k: &str, depth: usize) -> JsValue {
+        if depth > 100 { return JsValue::Undefined; }
+        if let Some(v) = self.props.get(k) {
+            return v.clone();
+        }
+        if let Some(proto) = &self.proto {
+            return proto.borrow().get_depth(k, depth + 1);
+        }
+        JsValue::Undefined
+    }
+
+    /// Kontroluje vlastni vlastnost (bez prochazeni prototypoveho retezce).
+    fn has_own(&self, k: &str) -> bool {
+        self.props.contains_key(k)
+    }
+
+    /// Nastavi vlastnost. Frozen objekt zmeny ignoruje.
+    fn set(&mut self, k: String, v: JsValue) {
+        if self.frozen { return; }
+        self.props.insert(k, v);
+    }
+
+    /// Vrati serazeny seznam vlastnich klicu (bez internich `__key__` klicu).
+    fn own_keys(&self) -> Vec<String> {
+        let mut keys: Vec<String> = self.props.keys()
+            .filter(|k| !is_internal_key(k))
+            .cloned()
+            .collect();
+        keys.sort();
+        keys
+    }
 }
 
 /// Typ nativni (Rust) funkce: prijima Vec<JsValue>, vraci Result<JsValue, String>.
@@ -350,6 +396,30 @@ type StmtResult = Result<Option<Signal>, JsError>;
 pub struct Interpreter {
     /// Globalni scope - obsahuje vestavene funkce (Math, console, atd.)
     pub global: Rc<RefCell<Environment>>,
+}
+
+// ─── Pomocne funkce pro prototypovy retezec ──────────────────────────────────
+
+/// Vrati true kdyz klic je interni (`__key__` format - napr. `__class_chain__`).
+fn is_internal_key(k: &str) -> bool {
+    k.len() >= 4 && k.starts_with("__") && k.ends_with("__")
+}
+
+/// Zkontroluje jestli `proto` je v prototypovem retezci `target`.
+/// Implementuje semantiku `proto.isPrototypeOf(target)`.
+fn is_in_proto_chain(proto: &Rc<RefCell<JsObject>>, target: &JsValue) -> bool {
+    let mut current = match target {
+        JsValue::Object(o) => o.borrow().proto.clone(),
+        _ => return false,
+    };
+    let mut depth = 0;
+    while let Some(p) = current {
+        if depth > 100 { break; }
+        if Rc::ptr_eq(&p, proto) { return true; }
+        current = p.borrow().proto.clone();
+        depth += 1;
+    }
+    false
 }
 
 impl Interpreter {
@@ -795,7 +865,22 @@ impl Interpreter {
             BinaryOp::Ushr   => JsValue::Number(((l.to_number() as u32) >> (r.to_number() as u32 & 31)) as f64),
             BinaryOp::In => {
                 let key = l.to_string();
-                let found = matches!(&r, JsValue::Object(o) if o.borrow().props.contains_key(&key));
+                let found = match &r {
+                    JsValue::Object(o) => {
+                        // Prochazi prototypovym retezcem (max 100 uroven)
+                        let mut current: Option<Rc<RefCell<JsObject>>> = Some(Rc::clone(o));
+                        let mut found = false;
+                        let mut depth = 0;
+                        while let Some(obj) = current {
+                            if depth > 100 { break; }
+                            if obj.borrow().props.contains_key(&key) { found = true; break; }
+                            current = obj.borrow().proto.clone();
+                            depth += 1;
+                        }
+                        found
+                    }
+                    _ => false,
+                };
                 JsValue::Bool(found)
             }
             BinaryOp::Instanceof => {
@@ -899,6 +984,15 @@ impl Interpreter {
                 let key = self.resolve_prop_key(prop, env)?;
                 match &obj {
                     JsValue::Object(o) => {
+                        // Specialni klic __proto__: prirazeni meni prototyp
+                        if key == "__proto__" {
+                            match &val {
+                                JsValue::Object(p) => { o.borrow_mut().proto = Some(Rc::clone(p)); }
+                                JsValue::Null       => { o.borrow_mut().proto = None; }
+                                _ => {}
+                            }
+                            return Ok(());
+                        }
                         // Setter podpora: kdyz objekt ma `__set_key__`, zavolej setter
                         let setter_key = format!("__set_{key}__");
                         let setter_fn = o.borrow().props.get(&setter_key).cloned();
@@ -906,7 +1000,9 @@ impl Interpreter {
                             self.call_function(setter, vec![val], Some(obj.clone()))?;
                             return Ok(());
                         }
-                        o.borrow_mut().set(key, val);
+                        // Frozen objekt: zmeny se tisnich ignoruji (soulad s JS non-strict)
+                        if o.borrow().frozen { return Ok(()); }
+                        o.borrow_mut().props.insert(key, val);
                         Ok(())
                     }
                     JsValue::Array(a) => {
@@ -1420,7 +1516,16 @@ impl Interpreter {
                 }
                 Ok(JsValue::Undefined)
             }
-            JsValue::Object(o) => Ok(o.borrow().get(key)),
+            JsValue::Object(o) => {
+                // Specialni klic __proto__ vraci prototyp objektu
+                if key == "__proto__" {
+                    return Ok(match o.borrow().proto.clone() {
+                        Some(p) => JsValue::Object(p),
+                        None    => JsValue::Null,
+                    });
+                }
+                Ok(o.borrow().get(key))
+            }
             JsValue::Array(a)  => {
                 if key == "length" { return Ok(JsValue::Number(a.borrow().len() as f64)); }
                 if let Ok(i) = key.parse::<usize>() {
@@ -1495,8 +1600,39 @@ impl Interpreter {
             }
             let key = self.resolve_prop_key(prop, env)?;
 
-            // Built-in Array/String metody -- dispatch pred call_function
+            // Built-in Array/String/Object instance metody -- dispatch pred call_function
             match &this {
+                JsValue::Object(obj_rc) => {
+                    let obj_rc2 = Rc::clone(obj_rc);
+                    let arg_vals = self.eval_args(args, env)?;
+                    match key.as_str() {
+                        // obj.hasOwnProperty("key") - kontrola vlastni vlastnosti
+                        "hasOwnProperty" => {
+                            let k = arg_vals.into_iter().next()
+                                .map(|v| v.to_string()).unwrap_or_default();
+                            return Ok(JsValue::Bool(obj_rc2.borrow().has_own(&k)));
+                        }
+                        // obj.isPrototypeOf(other) - je this v proto retezci other?
+                        "isPrototypeOf" => {
+                            let target = arg_vals.into_iter().next().unwrap_or(JsValue::Undefined);
+                            return Ok(JsValue::Bool(is_in_proto_chain(&obj_rc2, &target)));
+                        }
+                        // obj.propertyIsEnumerable("key") - vlastni + ne-interni
+                        "propertyIsEnumerable" => {
+                            let k = arg_vals.into_iter().next()
+                                .map(|v| v.to_string()).unwrap_or_default();
+                            let is_enum = obj_rc2.borrow().has_own(&k) && !is_internal_key(&k);
+                            return Ok(JsValue::Bool(is_enum));
+                        }
+                        "toString" => return Ok(JsValue::Str("[object Object]".into())),
+                        "valueOf"  => return Ok(JsValue::Object(Rc::clone(&obj_rc2))),
+                        _ => {
+                            // Normalni method call
+                            let func = self.get_prop(&this, &key)?;
+                            return self.call_function(func, arg_vals, Some(this));
+                        }
+                    }
+                }
                 JsValue::Array(arr_rc) => {
                     let arr_rc = Rc::clone(arr_rc);
                     let arg_vals = self.eval_args(args, env)?;
@@ -2056,33 +2192,39 @@ fn setup_builtins(env: &Rc<RefCell<Environment>>) {
 
     // Object staticke metody
     let mut obj_ctor = JsObject::new();
+
+    // Object.keys(obj) - vlastni neinterne klic
     obj_ctor.set("keys".into(), native("Object.keys", |a| {
         match a.into_iter().next() {
             Some(JsValue::Object(o)) => {
-                let mut keys: Vec<JsValue> = o.borrow().props.keys().map(|k| JsValue::Str(k.clone())).collect();
-                keys.sort_by(|a, b| a.to_string().cmp(&b.to_string()));
+                let keys: Vec<JsValue> = o.borrow().own_keys()
+                    .into_iter().map(JsValue::Str).collect();
                 Ok(JsValue::Array(Rc::new(RefCell::new(keys))))
             }
             _ => Ok(JsValue::Array(Rc::new(RefCell::new(vec![]))))
         }
     }));
+
+    // Object.values(obj) - hodnoty vlastnich neinternich klicu
     obj_ctor.set("values".into(), native("Object.values", |a| {
         match a.into_iter().next() {
             Some(JsValue::Object(o)) => {
-                let mut pairs: Vec<(String, JsValue)> = o.borrow().props.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-                pairs.sort_by(|a, b| a.0.cmp(&b.0));
-                let vals: Vec<JsValue> = pairs.into_iter().map(|(_, v)| v).collect();
+                let obj = o.borrow();
+                let vals: Vec<JsValue> = obj.own_keys()
+                    .into_iter().map(|k| obj.props.get(&k).cloned().unwrap_or(JsValue::Undefined)).collect();
                 Ok(JsValue::Array(Rc::new(RefCell::new(vals))))
             }
             _ => Ok(JsValue::Array(Rc::new(RefCell::new(vec![]))))
         }
     }));
+
+    // Object.entries(obj) - [klic, hodnota] pary vlastnich neinternich klicu
     obj_ctor.set("entries".into(), native("Object.entries", |a| {
         match a.into_iter().next() {
             Some(JsValue::Object(o)) => {
-                let mut pairs: Vec<(String, JsValue)> = o.borrow().props.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-                pairs.sort_by(|a, b| a.0.cmp(&b.0));
-                let entries: Vec<JsValue> = pairs.into_iter().map(|(k, v)| {
+                let obj = o.borrow();
+                let entries: Vec<JsValue> = obj.own_keys().into_iter().map(|k| {
+                    let v = obj.props.get(&k).cloned().unwrap_or(JsValue::Undefined);
                     JsValue::Array(Rc::new(RefCell::new(vec![JsValue::Str(k), v])))
                 }).collect();
                 Ok(JsValue::Array(Rc::new(RefCell::new(entries))))
@@ -2090,28 +2232,126 @@ fn setup_builtins(env: &Rc<RefCell<Environment>>) {
             _ => Ok(JsValue::Array(Rc::new(RefCell::new(vec![]))))
         }
     }));
+
+    // Object.assign(target, ...sources) - kopiruje vlastnosti
     obj_ctor.set("assign".into(), native("Object.assign", |a| {
         let mut iter = a.into_iter();
         let target = iter.next().unwrap_or(JsValue::Undefined);
         if let JsValue::Object(target_rc) = &target {
             for src in iter {
                 if let JsValue::Object(src_rc) = src {
-                    for (k, v) in src_rc.borrow().props.clone() {
-                        target_rc.borrow_mut().set(k, v);
+                    for k in src_rc.borrow().own_keys() {
+                        let v = src_rc.borrow().props.get(&k).cloned().unwrap_or(JsValue::Undefined);
+                        target_rc.borrow_mut().props.insert(k, v);
                     }
                 }
             }
         }
         Ok(target)
     }));
+
+    // Object.freeze(obj) - zakazuje dalsi zmeny vlastnosti
     obj_ctor.set("freeze".into(), native("Object.freeze", |a| {
-        // Implementace bez skutecneho freeze (immutability neresime)
-        Ok(a.into_iter().next().unwrap_or(JsValue::Undefined))
+        let obj = a.into_iter().next().unwrap_or(JsValue::Undefined);
+        if let JsValue::Object(o) = &obj {
+            o.borrow_mut().frozen = true;
+        }
+        Ok(obj)
     }));
+
+    // Object.isFrozen(obj)
+    obj_ctor.set("isFrozen".into(), native("Object.isFrozen", |a| {
+        match a.into_iter().next() {
+            Some(JsValue::Object(o)) => Ok(JsValue::Bool(o.borrow().frozen)),
+            _                        => Ok(JsValue::Bool(false)),
+        }
+    }));
+
+    // Object.create(proto) - vytvori objekt s danym prototypem
     obj_ctor.set("create".into(), native("Object.create", |a| {
-        // Object.create(proto) - ignorujeme proto, vratime prazdny objekt
-        let _ = a;
-        Ok(JsValue::Object(Rc::new(RefCell::new(JsObject::new()))))
+        let proto = a.into_iter().next().unwrap_or(JsValue::Null);
+        let obj = match proto {
+            JsValue::Object(p) => JsObject::new_with_proto(p),
+            JsValue::Null      => JsObject::new(),
+            _                  => return Err("Object.create: proto musi byt Object nebo null".into()),
+        };
+        Ok(JsValue::Object(Rc::new(RefCell::new(obj))))
+    }));
+
+    // Object.getPrototypeOf(obj) - vrati prototyp
+    obj_ctor.set("getPrototypeOf".into(), native("Object.getPrototypeOf", |a| {
+        match a.into_iter().next() {
+            Some(JsValue::Object(o)) => Ok(match o.borrow().proto.clone() {
+                Some(p) => JsValue::Object(p),
+                None    => JsValue::Null,
+            }),
+            _ => Err("Object.getPrototypeOf: argument musi byt objekt".into()),
+        }
+    }));
+
+    // Object.setPrototypeOf(obj, proto) - nastavi prototyp
+    obj_ctor.set("setPrototypeOf".into(), native("Object.setPrototypeOf", |a| {
+        let mut iter = a.into_iter();
+        let obj   = iter.next().unwrap_or(JsValue::Undefined);
+        let proto = iter.next().unwrap_or(JsValue::Null);
+        if let JsValue::Object(obj_rc) = &obj {
+            match &proto {
+                JsValue::Object(p) => { obj_rc.borrow_mut().proto = Some(Rc::clone(p)); }
+                JsValue::Null      => { obj_rc.borrow_mut().proto = None; }
+                _ => return Err("Object.setPrototypeOf: proto musi byt Object nebo null".into()),
+            }
+        }
+        Ok(obj)
+    }));
+
+    // Object.hasOwn(obj, key) - ES2022, kontroluje vlastni vlastnost
+    obj_ctor.set("hasOwn".into(), native("Object.hasOwn", |a| {
+        let mut iter = a.into_iter();
+        let obj = iter.next().unwrap_or(JsValue::Undefined);
+        let key = iter.next().map(|v| v.to_string()).unwrap_or_default();
+        match obj {
+            JsValue::Object(o) => Ok(JsValue::Bool(o.borrow().has_own(&key))),
+            _ => Ok(JsValue::Bool(false)),
+        }
+    }));
+
+    // Object.is(a, b) - SameValue porovnani (NaN === NaN)
+    obj_ctor.set("is".into(), native("Object.is", |a| {
+        let mut iter = a.into_iter();
+        let a = iter.next().unwrap_or(JsValue::Undefined);
+        let b = iter.next().unwrap_or(JsValue::Undefined);
+        let eq = match (&a, &b) {
+            (JsValue::Number(x), JsValue::Number(y)) => {
+                if x.is_nan() && y.is_nan() { true } else { x.to_bits() == y.to_bits() }
+            }
+            _ => a.strict_eq(&b),
+        };
+        Ok(JsValue::Bool(eq))
+    }));
+
+    // Object.defineProperty(obj, key, descriptor) - zakladni podpora
+    obj_ctor.set("defineProperty".into(), native("Object.defineProperty", |a| {
+        let mut iter = a.into_iter();
+        let obj  = iter.next().unwrap_or(JsValue::Undefined);
+        let key  = iter.next().map(|v| v.to_string()).unwrap_or_default();
+        let desc = iter.next().unwrap_or(JsValue::Undefined);
+        if let (JsValue::Object(obj_rc), JsValue::Object(desc_rc)) = (&obj, &desc) {
+            // Setter funkce z descriptoru
+            let get_fn = desc_rc.borrow().props.get("get").cloned();
+            let set_fn = desc_rc.borrow().props.get("set").cloned();
+            if let Some(getter) = get_fn {
+                obj_rc.borrow_mut().props.insert(format!("__get_{key}__"), getter);
+            }
+            if let Some(setter) = set_fn {
+                obj_rc.borrow_mut().props.insert(format!("__set_{key}__"), setter);
+            }
+            // Hodnota z descriptoru
+            let val = desc_rc.borrow().get("value");
+            if !matches!(val, JsValue::Undefined) {
+                obj_rc.borrow_mut().props.insert(key, val);
+            }
+        }
+        Ok(obj)
     }));
     obj_ctor.set("fromEntries".into(), native("Object.fromEntries", |a| {
         let mut obj = JsObject::new();
@@ -3375,5 +3615,215 @@ mod tests {
             const [a, b] = "hi";
             return a + b;
         "#)), "hi");
+    }
+
+    // ─── Batch 4: Prototype chain ─────────────────────────────────────────────
+
+    #[test]
+    fn proto_chain_property_lookup() {
+        // Vlastnost na proto je videt pres obj.prop
+        assert_eq!(as_num(run(r#"
+            const proto = { x: 42 };
+            const obj = Object.create(proto);
+            return obj.x;
+        "#)), 42.0);
+    }
+
+    #[test]
+    fn proto_own_overrides_inherited() {
+        // Vlastni vlastnost ma prednost pred proto
+        assert_eq!(as_num(run(r#"
+            const proto = { x: 1 };
+            const obj = Object.create(proto);
+            obj.x = 99;
+            return obj.x;
+        "#)), 99.0);
+    }
+
+    #[test]
+    fn object_create_null() {
+        // Object.create(null) - zadny prototyp
+        assert!(matches!(run(r#"
+            const obj = Object.create(null);
+            return obj.x;
+        "#), JsValue::Undefined));
+    }
+
+    #[test]
+    fn object_get_prototype_of() {
+        // Object.getPrototypeOf vrati prototyp
+        assert_eq!(as_bool(run(r#"
+            const proto = { x: 1 };
+            const obj = Object.create(proto);
+            return Object.getPrototypeOf(obj) === proto;
+        "#)), true);
+    }
+
+    #[test]
+    fn object_set_prototype_of() {
+        // Object.setPrototypeOf meni prototyp
+        assert_eq!(as_num(run(r#"
+            const proto = { y: 77 };
+            const obj = {};
+            Object.setPrototypeOf(obj, proto);
+            return obj.y;
+        "#)), 77.0);
+    }
+
+    #[test]
+    fn has_own_property() {
+        // hasOwnProperty vrati true jen pro vlastni vlastnosti
+        assert_eq!(as_bool(run(r#"
+            const proto = { inherited: 1 };
+            const obj = Object.create(proto);
+            obj.own = 2;
+            return obj.hasOwnProperty("own");
+        "#)), true);
+        assert_eq!(as_bool(run(r#"
+            const proto = { inherited: 1 };
+            const obj = Object.create(proto);
+            return obj.hasOwnProperty("inherited");
+        "#)), false);
+    }
+
+    #[test]
+    fn is_prototype_of() {
+        // isPrototypeOf kontroluje proto retezec
+        assert_eq!(as_bool(run(r#"
+            const proto = {};
+            const obj = Object.create(proto);
+            return proto.isPrototypeOf(obj);
+        "#)), true);
+    }
+
+    #[test]
+    fn is_prototype_of_false() {
+        assert_eq!(as_bool(run(r#"
+            const a = {};
+            const b = {};
+            return a.isPrototypeOf(b);
+        "#)), false);
+    }
+
+    #[test]
+    fn property_is_enumerable() {
+        // propertyIsEnumerable: vlastni ne-interni vlastnost = true
+        assert_eq!(as_bool(run(r#"
+            const obj = { x: 1 };
+            return obj.propertyIsEnumerable("x");
+        "#)), true);
+        assert_eq!(as_bool(run(r#"
+            const proto = { y: 2 };
+            const obj = Object.create(proto);
+            return obj.propertyIsEnumerable("y");
+        "#)), false);
+    }
+
+    #[test]
+    fn object_freeze_prevents_mutation() {
+        // Object.freeze: zmeny se ignoruji
+        assert_eq!(as_num(run(r#"
+            const obj = { x: 5 };
+            Object.freeze(obj);
+            obj.x = 99;
+            return obj.x;
+        "#)), 5.0);
+    }
+
+    #[test]
+    fn object_is_frozen() {
+        assert_eq!(as_bool(run(r#"
+            const obj = { x: 1 };
+            Object.freeze(obj);
+            return Object.isFrozen(obj);
+        "#)), true);
+        assert_eq!(as_bool(run(r#"
+            const obj = { x: 1 };
+            return Object.isFrozen(obj);
+        "#)), false);
+    }
+
+    #[test]
+    fn object_keys_skip_internal() {
+        // Object.keys nevrati interni __key__ vlastnosti
+        assert_eq!(as_num(run(r#"
+            class Foo { constructor() { this.x = 1; this.y = 2; } }
+            const obj = new Foo();
+            return Object.keys(obj).length;
+        "#)), 2.0);
+    }
+
+    #[test]
+    fn object_has_own() {
+        // Object.hasOwn (ES2022) - staticka verze hasOwnProperty
+        assert_eq!(as_bool(run(r#"
+            const obj = { a: 1 };
+            return Object.hasOwn(obj, "a");
+        "#)), true);
+        assert_eq!(as_bool(run(r#"
+            const obj = { a: 1 };
+            return Object.hasOwn(obj, "b");
+        "#)), false);
+    }
+
+    #[test]
+    fn object_is_same_value() {
+        // Object.is: NaN === NaN, +0 !== -0
+        assert_eq!(as_bool(run(r#"return Object.is(NaN, NaN);"#)), true);
+        assert_eq!(as_bool(run(r#"return Object.is(1, 1);"#)), true);
+        assert_eq!(as_bool(run(r#"return Object.is(1, 2);"#)), false);
+    }
+
+    #[test]
+    fn object_define_property_getter() {
+        // Object.defineProperty s get/set
+        assert_eq!(as_num(run(r#"
+            const obj = { _x: 10 };
+            Object.defineProperty(obj, "x", {
+                get: function() { return this._x * 2; }
+            });
+            return obj.x;
+        "#)), 20.0);
+    }
+
+    #[test]
+    fn proto_chain_set_prototype_of_null() {
+        // Object.setPrototypeOf(obj, null) odstrani prototyp
+        assert!(matches!(run(r#"
+            const proto = { y: 5 };
+            const obj = Object.create(proto);
+            Object.setPrototypeOf(obj, null);
+            return obj.y;
+        "#), JsValue::Undefined));
+    }
+
+    #[test]
+    fn proto_chain_proto_assignment() {
+        // obj.__proto__ = proto
+        assert_eq!(as_num(run(r#"
+            const proto = { z: 77 };
+            const obj = {};
+            obj.__proto__ = proto;
+            return obj.z;
+        "#)), 77.0);
+    }
+
+    #[test]
+    fn in_operator_walks_proto_chain() {
+        // `in` operator hleda i v proto retezci
+        assert_eq!(as_bool(run(r#"
+            const proto = { inherited: 1 };
+            const obj = Object.create(proto);
+            return "inherited" in obj;
+        "#)), true);
+    }
+
+    #[test]
+    fn object_values_skip_internal() {
+        // Object.values nevrati interni vlastnosti
+        assert_eq!(as_num(run(r#"
+            const obj = { a: 1, b: 2, c: 3 };
+            return Object.values(obj).length;
+        "#)), 3.0);
     }
 }
