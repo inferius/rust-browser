@@ -75,23 +75,64 @@ impl JsObject {
 /// Typ nativni (Rust) funkce: prijima Vec<JsValue>, vraci Result<JsValue, String>.
 type NativeFn = Rc<dyn Fn(Vec<JsValue>) -> Result<JsValue, String>>;
 
+/// Definice metody tridy ulozena v `JsFunc::Class`.
+///
+/// Sdilena pro instance metody i staticke metody.
+#[derive(Debug, Clone)]
+pub struct ClassMethodDef {
+    /// Jmeno metody
+    pub name: String,
+    /// Parametry
+    pub params: Vec<Param>,
+    /// Telo
+    pub body: Vec<Stmt>,
+}
+
 /// Reprezentace funkce v runtime.
 ///
-/// - `User` - funkce definovana v JS kodu, ulozena jako AST + uzavreny scope
+/// - `User`   - funkce definovana v JS kodu, ulozena jako AST + uzavreny scope
 /// - `Native` - funkce implementovana v Rustu (Math.sqrt, console.log, atd.)
+/// - `Class`  - JS trida: obsahuje konstruktor, instance metody, staticke metody
 #[derive(Clone)]
 pub enum JsFunc {
     /// Uzivatelska JS funkce. Uchovava si uzavreny `env` (closure).
     User { name: Option<String>, params: Vec<Param>, body: FuncBody, env: Rc<RefCell<Env>> },
     /// Nativni Rust funkce. Prvni parametr je jmeno pro debugovani.
     Native(String, NativeFn),
+    /// JS trida. `super_val` = vyhodnocena rodicovska trida.
+    ///
+    /// Konstruktor je ulozeny oddelene od ostatnich metod.
+    /// Staticke metody jsou pristupne pres `get_prop` bez `new`.
+    Class {
+        /// Jmeno tridy (pro `instanceof` a debugovani)
+        name: Option<String>,
+        /// Vyhodnocena rodicovska trida nebo `None`
+        super_val: Option<Box<JsValue>>,
+        /// `true` kdyz trida obsahuje explicitni `constructor()`
+        has_ctor: bool,
+        /// Parametry konstruktoru
+        ctor_params: Vec<Param>,
+        /// Telo konstruktoru
+        ctor_body: Vec<Stmt>,
+        /// Instance metody (prideleny kazdemu novemu objektu pri `new`)
+        methods: Vec<ClassMethodDef>,
+        /// Staticke metody (pristupne pres jmeno tridy)
+        statics: Vec<ClassMethodDef>,
+        /// Getters (pri pristup k vlastnosti zavolat funkci)
+        getters: Vec<ClassMethodDef>,
+        /// Setters (pri prirazeni vlastnosti zavolat funkci)
+        setters: Vec<ClassMethodDef>,
+        /// Uzavreny scope kde byla trida definovana
+        env: Rc<RefCell<Env>>,
+    }
 }
 
 impl std::fmt::Debug for JsFunc {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            JsFunc::User { name, .. } => write!(f, "[Function: {}]", name.as_deref().unwrap_or("anonymous")),
-            JsFunc::Native(name, _)   => write!(f, "[NativeFunction: {name}]"),
+            JsFunc::User { name, .. }  => write!(f, "[Function: {}]", name.as_deref().unwrap_or("anonymous")),
+            JsFunc::Native(name, _)    => write!(f, "[NativeFunction: {name}]"),
+            JsFunc::Class { name, .. } => write!(f, "[class {}]", name.as_deref().unwrap_or("(anonymous)")),
         }
     }
 }
@@ -353,11 +394,13 @@ impl Interpreter {
             Stmt::Var { kind, decls } => {
                 for d in decls {
                     let val = match &d.init { Some(e) => self.eval(e, env)?, None => JsValue::Undefined };
-                    if *kind == VarKind::Var {
-                        self.global.borrow_mut().define(&d.name, val);
+                    // var = function-scoped (global), let/const = block-scoped
+                    let target_env = if *kind == VarKind::Var {
+                        Rc::clone(&self.global)
                     } else {
-                        env.borrow_mut().define(&d.name, val);
-                    }
+                        Rc::clone(env)
+                    };
+                    self.destructure_bind(&d.pattern, val, &target_env)?;
                 }
                 Ok(None)
             }
@@ -463,10 +506,12 @@ impl Interpreter {
                 let for_env = Environment::new_child(env);
                 if let Some(init) = init {
                     match init {
-                        ForInit::Var { kind, decls } => {
+                        ForInit::Var { kind: _, decls } => {
                             for d in decls {
                                 let v = match &d.init { Some(e) => self.eval(e, &for_env)?, None => JsValue::Undefined };
-                                for_env.borrow_mut().define(&d.name, v);
+                                // for init vzdy bindu do for_env (let/const scoped)
+                                let target_env = Rc::clone(&for_env);
+                                self.destructure_bind(&d.pattern, v, &target_env)?;
                             }
                         }
                         ForInit::Expr(e) => { self.eval(e, &for_env)?; }
@@ -496,9 +541,7 @@ impl Interpreter {
                 };
                 for item in items {
                     let loop_env = Environment::new_child(env);
-                    if let Expr::Ident(name) = target.as_ref() {
-                        loop_env.borrow_mut().define(name, item);
-                    }
+                    self.bind_target_expr(target, item, &loop_env)?;
                     match self.exec_stmt(body, &loop_env)? {
                         Some(Signal::Break(None))    => break,
                         Some(Signal::Continue(None)) => continue,
@@ -517,9 +560,7 @@ impl Interpreter {
                 };
                 for key in keys {
                     let loop_env = Environment::new_child(env);
-                    if let Expr::Ident(name) = target.as_ref() {
-                        loop_env.borrow_mut().define(name, JsValue::Str(key));
-                    }
+                    self.bind_target_expr(target, JsValue::Str(key), &loop_env)?;
                     match self.exec_stmt(body, &loop_env)? {
                         Some(Signal::Break(None))    => break,
                         Some(Signal::Continue(None)) => continue,
@@ -564,6 +605,15 @@ impl Interpreter {
                     // vsechno ostatni propaguj (Return, Break(None), Break(jiny_label), ...)
                     other => Ok(other),
                 }
+            }
+
+            Stmt::Class { name, super_class, body } => {
+                let super_val = if let Some(sc) = super_class {
+                    Some(Box::new(self.eval(sc, env)?))
+                } else { None };
+                let cls = self.make_class_func(Some(name.clone()), super_val, body, env);
+                env.borrow_mut().define(name, cls);
+                Ok(None)
             }
         }
     }
@@ -657,6 +707,13 @@ impl Interpreter {
                 for e in exprs { last = self.eval(e, env)?; }
                 Ok(last)
             }
+
+            Expr::ClassExpr { name, super_class, body } => {
+                let super_val = if let Some(sc) = super_class {
+                    Some(Box::new(self.eval(sc, env)?))
+                } else { None };
+                Ok(self.make_class_func(name.clone(), super_val, body, env))
+            }
         }
     }
 
@@ -741,7 +798,26 @@ impl Interpreter {
                 let found = matches!(&r, JsValue::Object(o) if o.borrow().props.contains_key(&key));
                 JsValue::Bool(found)
             }
-            BinaryOp::Instanceof => JsValue::Bool(false),
+            BinaryOp::Instanceof => {
+                // Ziskej jmeno tridy z praveho operandu
+                let class_name = match &r {
+                    JsValue::Function(JsFunc::Class { name, .. }) => {
+                        name.as_deref().unwrap_or("").to_string()
+                    }
+                    _ => return Ok(JsValue::Bool(false)),
+                };
+                if class_name.is_empty() { return Ok(JsValue::Bool(false)); }
+                // Zkontroluj retezec trid ulozeny na instanci
+                match &l {
+                    JsValue::Object(o) => {
+                        let obj = o.borrow();
+                        if let Some(JsValue::Str(chain)) = obj.props.get("__class_chain__") {
+                            JsValue::Bool(chain.split(',').any(|n| n == class_name))
+                        } else { JsValue::Bool(false) }
+                    }
+                    _ => JsValue::Bool(false),
+                }
+            }
             BinaryOp::PostInc | BinaryOp::PostDec => unreachable!(),
         })
     }
@@ -822,7 +898,17 @@ impl Interpreter {
                 let obj = self.eval(object, env)?;
                 let key = self.resolve_prop_key(prop, env)?;
                 match &obj {
-                    JsValue::Object(o) => { o.borrow_mut().set(key, val); Ok(()) }
+                    JsValue::Object(o) => {
+                        // Setter podpora: kdyz objekt ma `__set_key__`, zavolej setter
+                        let setter_key = format!("__set_{key}__");
+                        let setter_fn = o.borrow().props.get(&setter_key).cloned();
+                        if let Some(setter) = setter_fn {
+                            self.call_function(setter, vec![val], Some(obj.clone()))?;
+                            return Ok(());
+                        }
+                        o.borrow_mut().set(key, val);
+                        Ok(())
+                    }
                     JsValue::Array(a) => {
                         if let Ok(idx) = key.parse::<usize>() {
                             let mut arr = a.borrow_mut();
@@ -838,17 +924,502 @@ impl Interpreter {
         }
     }
 
+    // ─── Destrukturovani ──────────────────────────────────────────────────────
+
+    /// Binduje hodnotu `val` do promenne/promennych definovanych vzorem `pattern`.
+    ///
+    /// Pouziva se pri:
+    /// - `const [a, b] = arr` (Stmt::Var s Array/Object pattern)
+    /// - `function f({ x, y }) {}` (parametry funkci)
+    /// - `for (const [k, v] of ...)` (ForOf/ForIn pres bind_target_expr)
+    ///
+    /// Vsechny deklarovane promenne jsou definovany v `env`.
+    fn destructure_bind(&mut self, pattern: &Pattern, val: JsValue, env: &Rc<RefCell<Environment>>) -> Result<(), JsError> {
+        match pattern {
+            Pattern::Ident(name) => {
+                env.borrow_mut().define(name, val);
+                Ok(())
+            }
+
+            Pattern::Array(elems) => {
+                let items: Vec<JsValue> = match &val {
+                    JsValue::Array(a) => a.borrow().clone(),
+                    // retezec lze destrukturovat jako pole znaku
+                    JsValue::Str(s) => s.chars().map(|c| JsValue::Str(c.to_string())).collect(),
+                    _ => vec![],
+                };
+                let mut i = 0usize;
+                for elem in elems {
+                    let Some(pat) = &elem.pattern else {
+                        // hole: preskoc pozici
+                        i += 1;
+                        continue;
+                    };
+                    if elem.rest {
+                        // ...rest = vsechny zbyvajici prvky
+                        let rest = JsValue::Array(Rc::new(RefCell::new(
+                            items.get(i..).unwrap_or(&[]).to_vec()
+                        )));
+                        self.destructure_bind(pat, rest, env)?;
+                        break;
+                    }
+                    let item = items.get(i).cloned().unwrap_or(JsValue::Undefined);
+                    let item = if matches!(item, JsValue::Undefined) {
+                        if let Some(def) = &elem.default {
+                            self.eval(def, env)?
+                        } else { item }
+                    } else { item };
+                    self.destructure_bind(pat, item, env)?;
+                    i += 1;
+                }
+                Ok(())
+            }
+
+            Pattern::Object(props) => {
+                // Klice ktere uz byly spotrebovany (pro ...rest - zatim neni implementovan)
+                for prop in props {
+                    let key = match &prop.key {
+                        PropKey::Ident(s) | PropKey::Str(s) => s.clone(),
+                        PropKey::Num(n) => format!("{}", *n as i64),
+                        PropKey::Computed(e) => self.eval(e, env)?.to_string(),
+                    };
+                    let item = match &val {
+                        JsValue::Object(o) => o.borrow().get(&key),
+                        _ => JsValue::Undefined,
+                    };
+                    let item = if matches!(item, JsValue::Undefined) {
+                        if let Some(def) = &prop.default {
+                            self.eval(def, env)?
+                        } else { item }
+                    } else { item };
+                    self.destructure_bind(&prop.pattern, item, env)?;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// Binduje hodnotu `val` do cile ulozeného jako Expr.
+    ///
+    /// Pouziva se pro ForOf/ForIn target, kde AST uklada target jako `Expr`
+    /// (preveden z Pattern pres `pattern_to_expr` v parseru).
+    ///
+    /// Podporuje:
+    /// - `Expr::Ident` - jednoducha promenna
+    /// - `Expr::Array` - array destrukturovani `[a, b]`
+    /// - `Expr::Object` - object destrukturovani `{ x, y }`
+    fn bind_target_expr(&mut self, target: &Expr, val: JsValue, env: &Rc<RefCell<Environment>>) -> Result<(), JsError> {
+        match target {
+            Expr::Ident(name) => {
+                env.borrow_mut().define(name, val);
+                Ok(())
+            }
+            Expr::Array(items) => {
+                let vals: Vec<JsValue> = match &val {
+                    JsValue::Array(a) => a.borrow().clone(),
+                    JsValue::Str(s) => s.chars().map(|c| JsValue::Str(c.to_string())).collect(),
+                    _ => vec![],
+                };
+                let mut i = 0usize;
+                for item in items {
+                    let Some(expr) = item else {
+                        // hole
+                        i += 1;
+                        continue;
+                    };
+                    // rest element je ulozen jako Spread(inner)
+                    if let Expr::Spread(inner) = expr.as_ref() {
+                        let rest = JsValue::Array(Rc::new(RefCell::new(
+                            vals.get(i..).unwrap_or(&[]).to_vec()
+                        )));
+                        self.bind_target_expr(inner, rest, env)?;
+                        break;
+                    }
+                    let v = vals.get(i).cloned().unwrap_or(JsValue::Undefined);
+                    self.bind_target_expr(expr, v, env)?;
+                    i += 1;
+                }
+                Ok(())
+            }
+            Expr::Object(props) => {
+                for prop in props {
+                    let key = match &prop.key {
+                        PropKey::Ident(s) | PropKey::Str(s) => s.clone(),
+                        PropKey::Num(n) => format!("{}", *n as i64),
+                        PropKey::Computed(e) => {
+                            let e = e.as_ref().clone();
+                            self.eval(&e, env)?.to_string()
+                        }
+                    };
+                    let v = match &val {
+                        JsValue::Object(o) => o.borrow().get(&key),
+                        _ => JsValue::Undefined,
+                    };
+                    self.bind_target_expr(&prop.value, v, env)?;
+                }
+                Ok(())
+            }
+            // Pro prirazeni (x = ...) pouzij assign_to
+            other => {
+                self.assign_to(other, val, env)
+            }
+        }
+    }
+
+    // ─── Třídy ────────────────────────────────────────────────────────────────
+
+    /// Vytvori JsValue::Function(JsFunc::Class) z AST ClassMember listu.
+    ///
+    /// Rozdeli cleny na: konstruktor, instance metody, staticke metody, gettery, settery.
+    fn make_class_func(
+        &self,
+        name: Option<String>,
+        super_val: Option<Box<JsValue>>,
+        body: &[ClassMember],
+        env: &Rc<RefCell<Env>>,
+    ) -> JsValue {
+        let mut has_ctor = false;
+        let mut ctor_params = Vec::new();
+        let mut ctor_body   = Vec::new();
+        let mut methods  = Vec::new();
+        let mut statics  = Vec::new();
+        let mut getters  = Vec::new();
+        let mut setters  = Vec::new();
+
+        for m in body {
+            let def = ClassMethodDef {
+                name: m.name.clone(),
+                params: m.params.clone(),
+                body: m.body.clone(),
+            };
+            if m.name == "constructor" && !m.is_static {
+                has_ctor = true;
+                ctor_params = m.params.clone();
+                ctor_body   = m.body.clone();
+            } else if m.is_static {
+                statics.push(def);
+            } else if m.is_getter {
+                getters.push(def);
+            } else if m.is_setter {
+                setters.push(def);
+            } else {
+                methods.push(def);
+            }
+        }
+
+        JsValue::Function(JsFunc::Class {
+            name,
+            super_val,
+            has_ctor,
+            ctor_params,
+            ctor_body,
+            methods,
+            statics,
+            getters,
+            setters,
+            env: Rc::clone(env),
+        })
+    }
+
+    /// Konstruuje novou instanci tridy (`new Foo(args)`).
+    fn construct_class(&mut self, class_val: JsValue, args: Vec<JsValue>) -> EvalResult {
+        let JsValue::Function(JsFunc::Class {
+            name,
+            super_val,
+            has_ctor,
+            ctor_params,
+            ctor_body,
+            methods,
+            statics: _,
+            getters,
+            setters,
+            env,
+        }) = class_val else {
+            return Err(JsError::Runtime("construct_class: ocekavana trida".into()));
+        };
+
+        let this_obj = Rc::new(RefCell::new(JsObject::new()));
+        let this_val = JsValue::Object(Rc::clone(&this_obj));
+
+        // Uloz retezec trid pro `instanceof`
+        {
+            let chain = build_class_chain(name.as_deref().unwrap_or(""), super_val.as_deref());
+            if !chain.is_empty() {
+                this_obj.borrow_mut().set("__class_chain__".to_string(), JsValue::Str(chain));
+            }
+        }
+
+        // Env pro metody obsahuje __super_class__ (pro super.method() uvnitr metod)
+        let method_env = Environment::new_child(&env);
+        if let Some(sv) = &super_val {
+            method_env.borrow_mut().define("__super_class__", (**sv).clone());
+        }
+
+        // Prirad instance metody objektu
+        for mdef in &methods {
+            let mfunc = JsValue::Function(JsFunc::User {
+                name: Some(mdef.name.clone()),
+                params: mdef.params.clone(),
+                body: FuncBody::Stmts(mdef.body.clone()),
+                env: Rc::clone(&method_env),
+            });
+            this_obj.borrow_mut().set(mdef.name.clone(), mfunc);
+        }
+
+        // Prirad gettery (ulozeny jako __get_name__ pro speciální eval_member handling)
+        for gdef in &getters {
+            let gfunc = JsValue::Function(JsFunc::User {
+                name: Some(gdef.name.clone()),
+                params: gdef.params.clone(),
+                body: FuncBody::Stmts(gdef.body.clone()),
+                env: Rc::clone(&method_env),
+            });
+            this_obj.borrow_mut().set(format!("__get_{}__", gdef.name), gfunc);
+        }
+
+        // Prirad settery
+        for sdef in &setters {
+            let sfunc = JsValue::Function(JsFunc::User {
+                name: Some(sdef.name.clone()),
+                params: sdef.params.clone(),
+                body: FuncBody::Stmts(sdef.body.clone()),
+                env: Rc::clone(&method_env),
+            });
+            this_obj.borrow_mut().set(format!("__set_{}__", sdef.name), sfunc);
+        }
+
+        // Konstruktor env: this + __super_class__
+        let ctor_env = Environment::new_child(&env);
+        ctor_env.borrow_mut().define("this", this_val.clone());
+        if let Some(sv) = &super_val {
+            ctor_env.borrow_mut().define("__super_class__", (**sv).clone());
+        }
+
+        if has_ctor {
+            // Explicitni konstruktor - svaz parametry a spust telo
+            let ctor_params = ctor_params.clone();
+            self.bind_params(&ctor_params, args, &ctor_env)?;
+            self.exec_stmts(&ctor_body, &ctor_env)?;
+        } else if let Some(sv) = super_val {
+            // Zadny konstruktor + ma super -> auto-deleguj super(args)
+            self.run_super_constructor(*sv, args, &this_obj, &ctor_env)?;
+        }
+        // Else: zadny konstruktor, zadny super -> objekt je prazdny (vlastnosti se priradi rucne)
+
+        Ok(this_val)
+    }
+
+    /// Spusti konstruktor rodicovske tridy na existujicim `this` objektu.
+    ///
+    /// Pouziva se pri `super(args)` uvnitr konstruktoru podtridy.
+    /// Mutuje `this_obj` - priradi vlastnosti a metody parenta.
+    fn run_super_constructor(
+        &mut self,
+        super_class: JsValue,
+        args: Vec<JsValue>,
+        this_obj: &Rc<RefCell<JsObject>>,
+        parent_env: &Rc<RefCell<Env>>,
+    ) -> Result<(), JsError> {
+        match super_class {
+            JsValue::Function(JsFunc::Class {
+                super_val,
+                has_ctor,
+                ctor_params,
+                ctor_body,
+                methods,
+                getters,
+                setters,
+                env,
+                ..
+            }) => {
+                // Env pro metody parenta: super_val jako __super_class__ (pro super.method() uvnitr parenta)
+                let method_env = Environment::new_child(&env);
+                if let Some(sv) = &super_val {
+                    method_env.borrow_mut().define("__super_class__", (**sv).clone());
+                }
+
+                // Prirad metody parenta - jen pokud uz nejsou defibovany podtridou
+                for mdef in &methods {
+                    if !this_obj.borrow().props.contains_key(&mdef.name) {
+                        let mfunc = JsValue::Function(JsFunc::User {
+                            name: Some(mdef.name.clone()),
+                            params: mdef.params.clone(),
+                            body: FuncBody::Stmts(mdef.body.clone()),
+                            env: Rc::clone(&method_env),
+                        });
+                        this_obj.borrow_mut().set(mdef.name.clone(), mfunc);
+                    }
+                }
+                for gdef in &getters {
+                    let key = format!("__get_{}__", gdef.name);
+                    if !this_obj.borrow().props.contains_key(&key) {
+                        let gfunc = JsValue::Function(JsFunc::User {
+                            name: Some(gdef.name.clone()),
+                            params: gdef.params.clone(),
+                            body: FuncBody::Stmts(gdef.body.clone()),
+                            env: Rc::clone(&method_env),
+                        });
+                        this_obj.borrow_mut().set(key, gfunc);
+                    }
+                }
+                for sdef in &setters {
+                    let key = format!("__set_{}__", sdef.name);
+                    if !this_obj.borrow().props.contains_key(&key) {
+                        let sfunc = JsValue::Function(JsFunc::User {
+                            name: Some(sdef.name.clone()),
+                            params: sdef.params.clone(),
+                            body: FuncBody::Stmts(sdef.body.clone()),
+                            env: Rc::clone(&method_env),
+                        });
+                        this_obj.borrow_mut().set(key, sfunc);
+                    }
+                }
+
+                // Spust konstruktor parenta
+                let ctor_env = Environment::new_child(&env);
+                ctor_env.borrow_mut().define("this", JsValue::Object(Rc::clone(this_obj)));
+                if let Some(sv) = &super_val {
+                    ctor_env.borrow_mut().define("__super_class__", (**sv).clone());
+                }
+
+                if has_ctor {
+                    self.bind_params(&ctor_params, args, &ctor_env)?;
+                    self.exec_stmts(&ctor_body, &ctor_env)?;
+                } else if let Some(sv) = super_val {
+                    // Auto-deleguj na praprarodice
+                    self.run_super_constructor(*sv, args, this_obj, &ctor_env)?;
+                }
+
+                Ok(())
+            }
+            // Parent je stara-style function constructor (ne class)
+            JsValue::Function(JsFunc::User { params, body, env, .. }) => {
+                let ctor_env = Environment::new_child(&env);
+                ctor_env.borrow_mut().define("this", JsValue::Object(Rc::clone(this_obj)));
+                self.bind_params(&params, args, &ctor_env)?;
+                if let FuncBody::Stmts(stmts) = body {
+                    self.exec_stmts(&stmts, &ctor_env)?;
+                }
+                Ok(())
+            }
+            _ => Err(JsError::Runtime("super(): rodicovska hodnota neni trida".into()))
+        }
+    }
+
+    /// Ziska metodu z tridy pro `super.method()` volani.
+    ///
+    /// Prochazi hierarchii trid (super_val retezec) pokud metoda neni nalezena.
+    /// Vraci `JsValue::Function` nebo `JsValue::Undefined`.
+    fn get_class_method_func(&self, class_val: &JsValue, name: &str) -> EvalResult {
+        match class_val {
+            JsValue::Function(JsFunc::Class { super_val, methods, env, .. }) => {
+                for mdef in methods {
+                    if mdef.name == name {
+                        // Env metody: obsahuje __super_class__ pro dalsi super.method() volani
+                        let method_env = Environment::new_child(env);
+                        if let Some(sv) = super_val {
+                            method_env.borrow_mut().define("__super_class__", (**sv).clone());
+                        }
+                        return Ok(JsValue::Function(JsFunc::User {
+                            name: Some(mdef.name.clone()),
+                            params: mdef.params.clone(),
+                            body: FuncBody::Stmts(mdef.body.clone()),
+                            env: Rc::clone(&method_env),
+                        }));
+                    }
+                }
+                // Metoda nenalezena - zkus v super (pro vicenasobnou dedicnost)
+                if let Some(sv) = super_val {
+                    return self.get_class_method_func(sv, name);
+                }
+                Ok(JsValue::Undefined)
+            }
+            _ => Ok(JsValue::Undefined),
+        }
+    }
+
+    /// Svaze parametry funkce s argumenty do `env`.
+    ///
+    /// Refaktorovana spolecna logika pouzivana v `call_function`,
+    /// `construct_class` i `run_super_constructor`.
+    fn bind_params(
+        &mut self,
+        params: &[Param],
+        args: Vec<JsValue>,
+        env: &Rc<RefCell<Env>>,
+    ) -> Result<(), JsError> {
+        let mut arg_idx = 0usize;
+        for p in params {
+            if p.rest {
+                let rest = JsValue::Array(Rc::new(RefCell::new(
+                    args.get(arg_idx..).unwrap_or(&[]).to_vec()
+                )));
+                self.destructure_bind(&p.pattern, rest, env)?;
+                break;
+            }
+            let val = args.get(arg_idx).cloned().unwrap_or(JsValue::Undefined);
+            let val = if matches!(val, JsValue::Undefined) {
+                if let Some(def) = &p.default {
+                    let de = *def.clone();
+                    self.eval(&de, env)?
+                } else { val }
+            } else { val };
+            self.destructure_bind(&p.pattern, val, env)?;
+            arg_idx += 1;
+        }
+        Ok(())
+    }
+
     fn eval_member(&mut self, object: &Expr, prop: &MemberProp, optional: bool, env: &Rc<RefCell<Environment>>) -> EvalResult {
         let obj = self.eval(object, env)?;
         if optional && matches!(obj, JsValue::Null | JsValue::Undefined) {
             return Ok(JsValue::Undefined);
         }
         let key = self.resolve_prop_key(prop, env)?;
+
+        // Getter podpora: kdyz objekt ma `__get_key__` vlastnost (funkci), zavolej ji
+        if let JsValue::Object(ref o) = obj {
+            let getter_key = format!("__get_{key}__");
+            let getter_fn = o.borrow().props.get(&getter_key).cloned();
+            if let Some(getter) = getter_fn {
+                return self.call_function(getter, vec![], Some(obj.clone()));
+            }
+        }
+
         self.get_prop(&obj, &key)
     }
 
     fn get_prop(&self, obj: &JsValue, key: &str) -> EvalResult {
         match obj {
+            // Staticke metody tridy: ClassName.staticMethod()
+            JsValue::Function(JsFunc::Class { statics, getters, env, super_val, .. }) => {
+                for s in statics {
+                    if s.name == key {
+                        let senv = Environment::new_child(env);
+                        if let Some(sv) = super_val {
+                            senv.borrow_mut().define("__super_class__", (**sv).clone());
+                        }
+                        return Ok(JsValue::Function(JsFunc::User {
+                            name: Some(s.name.clone()),
+                            params: s.params.clone(),
+                            body: FuncBody::Stmts(s.body.clone()),
+                            env: Rc::clone(&senv),
+                        }));
+                    }
+                }
+                // Getters jako vlastnosti tridy (ne bezne)
+                for g in getters {
+                    if g.name == key {
+                        return Ok(JsValue::Function(JsFunc::User {
+                            name: Some(g.name.clone()),
+                            params: g.params.clone(),
+                            body: FuncBody::Stmts(g.body.clone()),
+                            env: Rc::clone(env),
+                        }));
+                    }
+                }
+                Ok(JsValue::Undefined)
+            }
             JsValue::Object(o) => Ok(o.borrow().get(key)),
             JsValue::Array(a)  => {
                 if key == "length" { return Ok(JsValue::Number(a.borrow().len() as f64)); }
@@ -890,6 +1461,32 @@ impl Interpreter {
     }
 
     fn eval_call(&mut self, callee: &Expr, args: &[Expr], optional: bool, env: &Rc<RefCell<Environment>>) -> EvalResult {
+        // super(args) - volani konstruktoru rodicovske tridy
+        if matches!(callee, Expr::Ident(n) if n == "super") {
+            let super_class = env.borrow().get("__super_class__")
+                .ok_or_else(|| JsError::Runtime("super() lze volat jen uvnitr konstruktoru tridy".into()))?;
+            let arg_vals = self.eval_args(args, env)?;
+            let this_val = env.borrow().get("this").unwrap_or(JsValue::Undefined);
+            if let JsValue::Object(ref this_obj) = this_val {
+                let this_obj = Rc::clone(this_obj);
+                self.run_super_constructor(super_class, arg_vals, &this_obj, env)?;
+            }
+            return Ok(this_val);
+        }
+
+        // super.method(args) - volani metody rodicovske tridy
+        if let Expr::Member { object, prop, .. } = callee {
+            if matches!(object.as_ref(), Expr::Ident(n) if n == "super") {
+                let super_class = env.borrow().get("__super_class__")
+                    .ok_or_else(|| JsError::Runtime("super.method() lze volat jen uvnitr tridy".into()))?;
+                let key = self.resolve_prop_key(prop, env)?;
+                let method = self.get_class_method_func(&super_class, &key)?;
+                let this_val = env.borrow().get("this").unwrap_or(JsValue::Undefined);
+                let arg_vals = self.eval_args(args, env)?;
+                return self.call_function(method, arg_vals, Some(this_val));
+            }
+        }
+
         if let Expr::Member { object, prop, optional: member_opt } = callee {
             let this = self.eval(object, env)?;
             // optional chaining: obj?.method() -> Undefined kdyz obj je null/undefined
@@ -957,6 +1554,13 @@ impl Interpreter {
 
     pub fn call_function(&mut self, func: JsValue, args: Vec<JsValue>, this: Option<JsValue>) -> EvalResult {
         match func {
+            // Tridu nelze zavolat bez `new`
+            JsValue::Function(JsFunc::Class { name, .. }) => {
+                Err(JsError::Runtime(format!(
+                    "TypeError: trida '{}' musi byt volana s 'new'",
+                    name.as_deref().unwrap_or("(anonymous)")
+                )))
+            }
             JsValue::Function(JsFunc::Native(_, f)) => {
                 f(args).map_err(JsError::Runtime)
             }
@@ -964,23 +1568,7 @@ impl Interpreter {
                 let call_env = Environment::new_child(&env);
                 let params = params.clone();
                 let body = body.clone();
-                let mut arg_idx = 0usize;
-                for p in &params {
-                    if p.rest {
-                        let rest: Vec<JsValue> = args.get(arg_idx..).unwrap_or(&[]).to_vec();
-                        call_env.borrow_mut().define(&p.name, JsValue::Array(Rc::new(RefCell::new(rest))));
-                        break;
-                    }
-                    let val = args.get(arg_idx).cloned().unwrap_or(JsValue::Undefined);
-                    let val = if matches!(val, JsValue::Undefined) {
-                        if let Some(default_expr) = &p.default {
-                            let de = *default_expr.clone();
-                            self.eval(&de, &call_env)?
-                        } else { val }
-                    } else { val };
-                    call_env.borrow_mut().define(&p.name, val);
-                    arg_idx += 1;
-                }
+                self.bind_params(&params, args.clone(), &call_env)?;
                 if let Some(t) = this { call_env.borrow_mut().define("this", t); }
                 let args_arr = JsValue::Array(Rc::new(RefCell::new(args)));
                 call_env.borrow_mut().define("arguments", args_arr);
@@ -1005,6 +1593,11 @@ impl Interpreter {
     }
 
     fn call_new(&mut self, func: JsValue, args: Vec<JsValue>) -> EvalResult {
+        // `new ClassName()` pro tridy - speciálni logika
+        if matches!(&func, JsValue::Function(JsFunc::Class { .. })) {
+            return self.construct_class(func, args);
+        }
+        // `new FunctionConstructor()` - stary styl
         let obj = JsValue::Object(Rc::new(RefCell::new(JsObject::new())));
         self.call_function(func, args, Some(obj.clone()))?;
         Ok(obj)
@@ -1363,6 +1956,25 @@ fn call_string_method(s: &str, method: &str, args: Vec<JsValue>) -> Result<Optio
 
 fn native(name: &str, f: impl Fn(Vec<JsValue>) -> Result<JsValue, String> + 'static) -> JsValue {
     JsValue::Function(JsFunc::Native(name.to_string(), Rc::new(f)))
+}
+
+/// Vybuduje retezec jmen trid pro `instanceof` kontrolu.
+///
+/// Prochazi hierarchii pres `super_val` a vraci jmena oddelena carkou:
+/// `"Dog,Animal,Creature"` - od podtridy ke korenove tride.
+fn build_class_chain(class_name: &str, super_val: Option<&JsValue>) -> String {
+    let mut chain = class_name.to_string();
+    let mut current = super_val;
+    while let Some(JsValue::Function(JsFunc::Class { name, super_val: sv, .. })) = current {
+        if let Some(n) = name {
+            if !n.is_empty() {
+                chain.push(',');
+                chain.push_str(n);
+            }
+        }
+        current = sv.as_deref();
+    }
+    chain
 }
 
 fn setup_builtins(env: &Rc<RefCell<Environment>>) {
@@ -2417,6 +3029,224 @@ mod tests {
     }
 
     #[test]
+    // ─── Třídy ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn class_basic_constructor_and_method() {
+        assert_eq!(as_str(run(r#"
+            class Animal {
+                constructor(name) { this.name = name; }
+                speak() { return this.name + " makes a noise."; }
+            }
+            const a = new Animal("Dog");
+            return a.speak();
+        "#)), "Dog makes a noise.");
+    }
+
+    #[test]
+    fn class_properties_set_in_constructor() {
+        assert_eq!(as_str(run(r#"
+            class Person {
+                constructor(name, age) {
+                    this.name = name;
+                    this.age = age;
+                }
+            }
+            const p = new Person("Alice", 30);
+            return p.name + " " + p.age;
+        "#)), "Alice 30");
+    }
+
+    #[test]
+    fn class_multiple_methods() {
+        assert_eq!(as_num(run(r#"
+            class Counter {
+                constructor() { this.count = 0; }
+                inc() { this.count += 1; }
+                get_count() { return this.count; }
+            }
+            const c = new Counter();
+            c.inc(); c.inc(); c.inc();
+            return c.get_count();
+        "#)), 3.0);
+    }
+
+    #[test]
+    fn class_static_method() {
+        assert_eq!(as_num(run(r#"
+            class MathHelper {
+                static add(a, b) { return a + b; }
+                static multiply(a, b) { return a * b; }
+            }
+            return MathHelper.add(3, 4) + MathHelper.multiply(2, 5);
+        "#)), 17.0);
+    }
+
+    #[test]
+    fn class_inheritance_basic() {
+        assert_eq!(as_str(run(r#"
+            class Animal {
+                constructor(name) { this.name = name; }
+                speak() { return this.name + " makes a noise."; }
+            }
+            class Dog extends Animal {
+                constructor(name, breed) {
+                    super(name);
+                    this.breed = breed;
+                }
+            }
+            const d = new Dog("Rex", "Labrador");
+            return d.name + "/" + d.breed + "/" + d.speak();
+        "#)), "Rex/Labrador/Rex makes a noise.");
+    }
+
+    #[test]
+    fn class_method_override() {
+        assert_eq!(as_str(run(r#"
+            class Animal {
+                constructor(name) { this.name = name; }
+                speak() { return this.name + " makes a noise."; }
+            }
+            class Dog extends Animal {
+                constructor(name) { super(name); }
+                speak() { return this.name + " barks."; }
+            }
+            const d = new Dog("Rex");
+            return d.speak();
+        "#)), "Rex barks.");
+    }
+
+    #[test]
+    fn class_super_method_call() {
+        assert_eq!(as_str(run(r#"
+            class Animal {
+                constructor(name) { this.name = name; }
+                speak() { return this.name + " makes a noise."; }
+            }
+            class Dog extends Animal {
+                constructor(name) { super(name); }
+                speak() { return super.speak() + " Woof!"; }
+            }
+            const d = new Dog("Rex");
+            return d.speak();
+        "#)), "Rex makes a noise. Woof!");
+    }
+
+    #[test]
+    fn class_no_constructor_auto_super() {
+        assert_eq!(as_str(run(r#"
+            class Animal {
+                constructor(name) { this.name = name; }
+                speak() { return this.name; }
+            }
+            class Cat extends Animal {
+                // bez konstruktoru -> auto super(args)
+                purr() { return this.name + " purrs."; }
+            }
+            const c = new Cat("Whiskers");
+            return c.speak() + " / " + c.purr();
+        "#)), "Whiskers / Whiskers purrs.");
+    }
+
+    #[test]
+    fn class_instanceof() {
+        assert!(as_bool(run(r#"
+            class Animal {}
+            class Dog extends Animal {}
+            const d = new Dog();
+            return d instanceof Dog;
+        "#)));
+    }
+
+    #[test]
+    fn class_instanceof_parent() {
+        assert!(as_bool(run(r#"
+            class Animal {}
+            class Dog extends Animal {}
+            const d = new Dog();
+            return d instanceof Animal;
+        "#)));
+    }
+
+    #[test]
+    fn class_instanceof_false() {
+        assert!(!as_bool(run(r#"
+            class Animal {}
+            class Dog extends Animal {}
+            const a = new Animal();
+            return a instanceof Dog;
+        "#)));
+    }
+
+    #[test]
+    fn class_expression() {
+        assert_eq!(as_str(run(r#"
+            const Cat = class {
+                constructor(name) { this.name = name; }
+            };
+            return new Cat("Kitty").name;
+        "#)), "Kitty");
+    }
+
+    #[test]
+    fn class_getter_basic() {
+        assert_eq!(as_num(run(r#"
+            class Circle {
+                constructor(r) { this.r = r; }
+                get area() { return 3.14159 * this.r * this.r; }
+            }
+            const c = new Circle(5);
+            return c.area;
+        "#)), 3.14159 * 25.0);
+    }
+
+    #[test]
+    fn class_setter_basic() {
+        assert_eq!(as_str(run(r#"
+            class Person {
+                constructor(name) { this._name = name; }
+                get name() { return this._name; }
+                set name(v) { this._name = v.trim(); }
+            }
+            const p = new Person("Alice");
+            p.name = "  Bob  ";
+            return p.name;
+        "#)), "Bob");
+    }
+
+    #[test]
+    fn class_three_level_inheritance() {
+        assert_eq!(as_str(run(r#"
+            class A {
+                constructor() { this.val = "A"; }
+                who() { return "A"; }
+            }
+            class B extends A {
+                constructor() { super(); this.val += "B"; }
+                who() { return super.who() + "B"; }
+            }
+            class C extends B {
+                constructor() { super(); this.val += "C"; }
+                who() { return super.who() + "C"; }
+            }
+            const c = new C();
+            return c.val + "/" + c.who();
+        "#)), "ABC/ABC");
+    }
+
+    #[test]
+    fn class_method_uses_this() {
+        assert_eq!(as_num(run(r#"
+            class Rect {
+                constructor(w, h) { this.w = w; this.h = h; }
+                area() { return this.w * this.h; }
+                perimeter() { return 2 * (this.w + this.h); }
+            }
+            const r = new Rect(3, 4);
+            return r.area() + r.perimeter();
+        "#)), 26.0);  // 12 + 14
+    }
+
     fn labeled_break_switch_in_loop() {
         // break v switch nema prerusit obalujici cyklus
         assert_eq!(as_num(run(r#"
@@ -2429,5 +3259,121 @@ mod tests {
             }
             return sum;
         "#)), 12.0);  // i=0: +1, i=1: +10, i=2: +1
+    }
+
+    // ─── Destructuring ────────────────────────────────────────────────────────
+
+    #[test]
+    fn array_destructuring_basic() {
+        assert_eq!(as_num(run("const [a, b] = [1, 2]; return a + b;")), 3.0);
+    }
+
+    #[test]
+    fn array_destructuring_skip() {
+        // hole preskoci prvek
+        assert_eq!(as_num(run("const [a, , c] = [1, 2, 3]; return a + c;")), 4.0);
+    }
+
+    #[test]
+    fn array_destructuring_default() {
+        // default kdyz prvek je undefined
+        assert_eq!(as_num(run("const [a, b = 99] = [1]; return b;")), 99.0);
+        assert_eq!(as_num(run("const [a, b = 99] = [1, 5]; return b;")), 5.0);
+    }
+
+    #[test]
+    fn array_destructuring_rest() {
+        assert_eq!(as_num(run("const [a, ...rest] = [1, 2, 3]; return rest.length;")), 2.0);
+        assert_eq!(as_num(run("const [a, ...rest] = [1, 2, 3]; return rest[0];")), 2.0);
+    }
+
+    #[test]
+    fn object_destructuring_basic() {
+        assert_eq!(as_num(run("const { x, y } = { x: 10, y: 20 }; return x + y;")), 30.0);
+    }
+
+    #[test]
+    fn object_destructuring_rename() {
+        // { key: newName } - prejmenovani
+        assert_eq!(as_num(run("const { x: a, y: b } = { x: 3, y: 4 }; return a + b;")), 7.0);
+    }
+
+    #[test]
+    fn object_destructuring_default() {
+        assert_eq!(as_num(run("const { x = 42 } = {}; return x;")), 42.0);
+        assert_eq!(as_num(run("const { x = 42 } = { x: 5 }; return x;")), 5.0);
+    }
+
+    #[test]
+    fn nested_array_destructuring() {
+        assert_eq!(as_num(run("const [[a, b], c] = [[1, 2], 3]; return a + b + c;")), 6.0);
+    }
+
+    #[test]
+    fn nested_object_destructuring() {
+        assert_eq!(as_num(run("const { a: { b } } = { a: { b: 99 } }; return b;")), 99.0);
+    }
+
+    #[test]
+    fn function_param_array_destructuring() {
+        assert_eq!(as_num(run(r#"
+            function sum([a, b]) { return a + b; }
+            return sum([10, 20]);
+        "#)), 30.0);
+    }
+
+    #[test]
+    fn function_param_object_destructuring() {
+        assert_eq!(as_num(run(r#"
+            function greet({ name, age = 0 }) { return age; }
+            return greet({ name: "Alice", age: 25 });
+        "#)), 25.0);
+    }
+
+    #[test]
+    fn function_param_object_default() {
+        assert_eq!(as_num(run(r#"
+            function f({ x = 10 }) { return x; }
+            return f({});
+        "#)), 10.0);
+    }
+
+    #[test]
+    fn for_of_array_destructuring() {
+        assert_eq!(as_num(run(r#"
+            let sum = 0;
+            for (const [k, v] of [[1, 10], [2, 20]]) {
+                sum += k + v;
+            }
+            return sum;
+        "#)), 33.0);  // (1+10) + (2+20) = 33
+    }
+
+    #[test]
+    fn for_of_object_destructuring() {
+        assert_eq!(as_num(run(r#"
+            let sum = 0;
+            for (const { x, y } of [{ x: 1, y: 2 }, { x: 3, y: 4 }]) {
+                sum += x + y;
+            }
+            return sum;
+        "#)), 10.0);  // (1+2) + (3+4) = 10
+    }
+
+    #[test]
+    fn destructuring_in_arrow_params() {
+        assert_eq!(as_num(run(r#"
+            const fn = ([a, b]) => a + b;
+            return fn([5, 6]);
+        "#)), 11.0);
+    }
+
+    #[test]
+    fn array_destructuring_from_string() {
+        // retezec lze destrukturovat jako pole znaku
+        assert_eq!(as_str(run(r#"
+            const [a, b] = "hi";
+            return a + b;
+        "#)), "hi");
     }
 }

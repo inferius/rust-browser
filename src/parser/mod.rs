@@ -40,6 +40,39 @@ impl std::fmt::Display for ParseError {
     }
 }
 
+// ─── Pomocne funkce ───────────────────────────────────────────────────────────
+
+/// Konvertuje destrukturovaci Pattern na odpovidajici Expr.
+///
+/// Pouziva se v `for...of` / `for...in` kde AST uklada target jako `Expr`,
+/// ale parser parsuje leve-strana jako Pattern.
+///
+/// Mapovani:
+/// - `Pattern::Ident(x)`   -> `Expr::Ident(x)`
+/// - `Pattern::Array(...)` -> `Expr::Array(...)` (holes zachovany)
+/// - `Pattern::Object(...)`-> `Expr::Object(...)` (shorthand zachovan)
+fn pattern_to_expr(pattern: Pattern) -> Expr {
+    match pattern {
+        Pattern::Ident(name) => Expr::Ident(name),
+        Pattern::Array(elems) => Expr::Array(
+            elems.into_iter().map(|e| {
+                e.pattern.map(|p| {
+                    let inner = pattern_to_expr(p);
+                    Box::new(inner)
+                })
+            }).collect()
+        ),
+        Pattern::Object(props) => Expr::Object(
+            props.into_iter().map(|p| ObjectProp {
+                key: p.key,
+                value: Box::new(pattern_to_expr(p.pattern)),
+                shorthand: p.shorthand,
+                computed: false,
+            }).collect()
+        ),
+    }
+}
+
 // ─── Parser ───────────────────────────────────────────────────────────────────
 
 /// Rekurzivne sestupny parser s Pratt parsovanim pro vyrazy.
@@ -230,6 +263,7 @@ impl Parser {
             TokenKind::Keyword(KeywordEnum::For)    => self.parse_for(),
             TokenKind::Keyword(KeywordEnum::Try)    => self.parse_try(),
             TokenKind::Keyword(KeywordEnum::Switch) => self.parse_switch(),
+            TokenKind::Keyword(KeywordEnum::Class)  => self.parse_class_decl(),
 
             _ => {
                 let expr = self.parse_expr()?;
@@ -257,12 +291,12 @@ impl Parser {
         let mut decls = Vec::new();
         loop {
             self.skip_trivia();
-            let name = self.parse_ident()?;
+            let pattern = self.parse_pattern()?;
             self.skip_trivia();
             let init = if self.eat_op(OperatorEnum::Assign) {
                 Some(self.parse_assign_expr()?)
             } else { None };
-            decls.push(VarDecl { name, init });
+            decls.push(VarDecl { pattern, init });
             self.skip_trivia();
             if !self.eat_op(OperatorEnum::Comma) { break; }
         }
@@ -286,19 +320,202 @@ impl Parser {
             self.skip_trivia();
             if matches!(self.kind(), TokenKind::Operator(OperatorEnum::RParen)) { break; }
             let rest = self.eat_op(OperatorEnum::Ellipsis);
-            let name = self.parse_ident()?;
+            let pattern = self.parse_pattern()?;
             self.skip_trivia();
             let default = if !rest && matches!(self.kind(), TokenKind::Operator(OperatorEnum::Assign)) {
                 self.advance();
                 Some(Box::new(self.parse_assign_expr()?))
             } else { None };
-            params.push(Param { name, default, rest });
+            params.push(Param { pattern, default, rest });
             self.skip_trivia();
             if rest { break; }  // rest musi byt posledni
             if !self.eat_op(OperatorEnum::Comma) { break; }
         }
         self.expect_op(OperatorEnum::RParen)?;
         Ok(params)
+    }
+
+    // ─── Třídy ───────────────────────────────────────────────────────────────
+
+    /// Parsuje `class` deklaraci na urovni prikazu.
+    fn parse_class_decl(&mut self) -> Result<Stmt, ParseError> {
+        self.advance(); // 'class'
+        self.skip_trivia();
+        let name = self.parse_ident()?;
+        self.skip_trivia();
+        let super_class = self.parse_class_extends()?;
+        self.expect_op(OperatorEnum::LBrace)?;
+        let body = self.parse_class_body()?;
+        self.expect_op(OperatorEnum::RBrace)?;
+        Ok(Stmt::Class { name, super_class, body })
+    }
+
+    /// Parsuje `(extends Expr)?` - volitelny rodic tridy.
+    fn parse_class_extends(&mut self) -> Result<Option<Box<Expr>>, ParseError> {
+        self.skip_trivia();
+        if !matches!(self.kind(), TokenKind::Keyword(KeywordEnum::Extends)) {
+            return Ok(None);
+        }
+        self.advance();
+        Ok(Some(Box::new(self.parse_assign_expr()?)))
+    }
+
+    /// Parsuje telo tridy `{ member* }` (bez svorek).
+    ///
+    /// Kazdy clen je: `static? (get|set)? name(params) { body }`
+    fn parse_class_body(&mut self) -> Result<Vec<ClassMember>, ParseError> {
+        let mut members = Vec::new();
+        loop {
+            self.skip_trivia();
+            // Preskoc prazdne prikazy v tele tridy
+            while self.eat_op(OperatorEnum::Semi) { self.skip_trivia(); }
+            if matches!(self.kind(), TokenKind::Operator(OperatorEnum::RBrace) | TokenKind::Eof) {
+                break;
+            }
+
+            // static keyword - pouze kdyz nasledujici token neni `(`
+            // (jinak je to metoda pojmenovana "static")
+            let is_static = if matches!(self.kind(), TokenKind::Keyword(KeywordEnum::Static))
+                && !matches!(self.peek_kind_ahead(1), TokenKind::Operator(OperatorEnum::LParen))
+            {
+                self.advance(); self.skip_trivia(); true
+            } else { false };
+
+            // getter / setter - get/set keyword kde nasleduje jmeno (ne "(")
+            let (is_getter, is_setter) = match self.kind() {
+                TokenKind::Keyword(KeywordEnum::Get)
+                    if !matches!(self.peek_kind_ahead(1), TokenKind::Operator(OperatorEnum::LParen)) =>
+                {
+                    self.advance(); self.skip_trivia(); (true, false)
+                }
+                TokenKind::Keyword(KeywordEnum::Set)
+                    if !matches!(self.peek_kind_ahead(1), TokenKind::Operator(OperatorEnum::LParen)) =>
+                {
+                    self.advance(); self.skip_trivia(); (false, true)
+                }
+                _ => (false, false),
+            };
+
+            // Jmeno metody
+            let name = match self.kind().clone() {
+                TokenKind::Identifier(s) => { self.advance(); s }
+                TokenKind::Keyword(kw)   => { let s = kw.as_str().to_string(); self.advance(); s }
+                TokenKind::StringLiteral { value, .. } => { self.advance(); value }
+                TokenKind::NumericLiteral { value, .. } => {
+                    let n = value; self.advance();
+                    format!("{}", n as i64)
+                }
+                _ => return Err(self.err("Ocekavano jmeno metody v tele tridy")),
+            };
+
+            let params = self.parse_params()?;
+            let body   = self.parse_fn_body()?;
+            members.push(ClassMember { name, params, body, is_static, is_getter, is_setter });
+        }
+        Ok(members)
+    }
+
+    /// Parsuje destrukturovaci vzor (pattern).
+    ///
+    /// Pouziva se v deklaracich promennych (`const [a, b] = ...`),
+    /// parametrech funkci (`function f({ x, y }) {}`),
+    /// a for-of/for-in (`for (const [k, v] of ...)`).
+    fn parse_pattern(&mut self) -> Result<Pattern, ParseError> {
+        self.skip_trivia();
+        match self.kind().clone() {
+
+            // Array pattern: [a, b, ...rest]
+            TokenKind::Operator(OperatorEnum::LBracket) => {
+                self.advance();
+                let mut elems = Vec::new();
+                loop {
+                    self.skip_trivia();
+                    if self.eat_op(OperatorEnum::RBracket) { break; }
+                    // Hole: [a, , b]
+                    if matches!(self.kind(), TokenKind::Operator(OperatorEnum::Comma)) {
+                        elems.push(ArrayPatternElem { pattern: None, default: None, rest: false });
+                        self.advance();
+                        continue;
+                    }
+                    let rest = self.eat_op(OperatorEnum::Ellipsis);
+                    let pat = self.parse_pattern()?;
+                    self.skip_trivia();
+                    let default = if !rest && self.eat_op(OperatorEnum::Assign) {
+                        Some(Box::new(self.parse_assign_expr()?))
+                    } else { None };
+                    elems.push(ArrayPatternElem { pattern: Some(pat), default, rest });
+                    self.skip_trivia();
+                    if rest { self.eat_op(OperatorEnum::RBracket); break; }
+                    if !self.eat_op(OperatorEnum::Comma) {
+                        self.expect_op(OperatorEnum::RBracket)?; break;
+                    }
+                }
+                Ok(Pattern::Array(elems))
+            }
+
+            // Object pattern: { x, y: renamed, z = 10, ...rest }
+            TokenKind::Operator(OperatorEnum::LBrace) => {
+                self.advance();
+                let mut props = Vec::new();
+                loop {
+                    self.skip_trivia();
+                    if self.eat_op(OperatorEnum::RBrace) { break; }
+                    // Rest prop: ...rest
+                    if self.eat_op(OperatorEnum::Ellipsis) {
+                        let name = self.parse_ident()?;
+                        props.push(ObjectPatternProp {
+                            key: PropKey::Ident(name.clone()),
+                            pattern: Pattern::Ident(name),
+                            default: None,
+                            shorthand: false,
+                        });
+                        self.eat_op(OperatorEnum::Comma);
+                        self.expect_op(OperatorEnum::RBrace)?;
+                        break;
+                    }
+                    // Klic: muze byt ident nebo retezec nebo cislo
+                    let key = self.parse_prop_key_pattern()?;
+                    self.skip_trivia();
+                    let (final_key, pattern, shorthand) = if self.eat_op(OperatorEnum::Colon) {
+                        // { key: pattern }
+                        let pat = self.parse_pattern()?;
+                        (key, pat, false)
+                    } else {
+                        // { x } nebo { x = default } - klic == nazev promenne
+                        let name = match &key {
+                            PropKey::Ident(s) => s.clone(),
+                            _ => return Err(self.err("Zkracena forma vyzaduje identifikator")),
+                        };
+                        (key, Pattern::Ident(name), true)
+                    };
+                    self.skip_trivia();
+                    let default = if self.eat_op(OperatorEnum::Assign) {
+                        Some(Box::new(self.parse_assign_expr()?))
+                    } else { None };
+                    props.push(ObjectPatternProp { key: final_key, pattern, default, shorthand });
+                    self.skip_trivia();
+                    if !self.eat_op(OperatorEnum::Comma) {
+                        self.expect_op(OperatorEnum::RBrace)?; break;
+                    }
+                }
+                Ok(Pattern::Object(props))
+            }
+
+            // Jednoduchy identifikator
+            _ => Ok(Pattern::Ident(self.parse_ident()?)),
+        }
+    }
+
+    /// Parsuje klic vlastnosti v object patternu.
+    fn parse_prop_key_pattern(&mut self) -> Result<PropKey, ParseError> {
+        self.skip_trivia();
+        match self.kind().clone() {
+            TokenKind::Identifier(s) => { self.advance(); Ok(PropKey::Ident(s)) }
+            TokenKind::Keyword(kw)   => { let s = kw.as_str().to_string(); self.advance(); Ok(PropKey::Ident(s)) }
+            TokenKind::StringLiteral { value, .. } => { self.advance(); Ok(PropKey::Str(value)) }
+            TokenKind::NumericLiteral { value, .. } => { self.advance(); Ok(PropKey::Num(value)) }
+            _ => Err(self.err("Ocekavan klic vlastnosti v object patternu")),
+        }
     }
 
     fn parse_fn_body(&mut self) -> Result<Vec<Stmt>, ParseError> {
@@ -359,17 +576,18 @@ impl Parser {
                 _                                       => { self.advance(); VarKind::Var }
             };
             self.skip_trivia();
-            let name = self.parse_ident()?;
+            let pattern = self.parse_pattern()?;
             self.skip_trivia();
 
-            // for...of
+            // for...of (vcetne destrukturovani: for (const [k, v] of ...))
             if matches!(self.kind(), TokenKind::Keyword(KeywordEnum::Of)) {
                 self.advance();
                 let iter = self.parse_assign_expr()?;
                 self.expect_op(OperatorEnum::RParen)?;
+                let target = pattern_to_expr(pattern);
                 return Ok(Stmt::ForOf {
                     kind: Some(kind),
-                    target: Box::new(Expr::Ident(name)),
+                    target: Box::new(target),
                     iter, body: Box::new(self.parse_stmt()?),
                 });
             }
@@ -378,15 +596,20 @@ impl Parser {
                 self.advance();
                 let iter = self.parse_expr()?;
                 self.expect_op(OperatorEnum::RParen)?;
+                let target = pattern_to_expr(pattern);
                 return Ok(Stmt::ForIn {
                     kind: Some(kind),
-                    target: Box::new(Expr::Ident(name)),
+                    target: Box::new(target),
                     iter, body: Box::new(self.parse_stmt()?),
                 });
             }
-            // for (let i = 0; i < n; i++)
+            // for (let i = 0; i < n; i++) - pattern musi byt jednoduchy ident
+            let name = match pattern {
+                Pattern::Ident(n) => n,
+                _ => return Err(self.err("Destrukturovani neni podporovano v klasickem for")),
+            };
             let init_val = if self.eat_op(OperatorEnum::Assign) { Some(self.parse_assign_expr()?) } else { None };
-            let init = Some(ForInit::Var { kind, decls: vec![VarDecl { name, init: init_val }] });
+            let init = Some(ForInit::Var { kind, decls: vec![VarDecl { pattern: Pattern::Ident(name), init: init_val }] });
             self.expect_op(OperatorEnum::Semi)?;
             let test = if matches!(self.kind(), TokenKind::Operator(OperatorEnum::Semi)) { None }
             else { Some(self.parse_expr()?) };
@@ -740,6 +963,8 @@ impl Parser {
             TokenKind::Keyword(KeywordEnum::False) => { self.advance(); Ok(Expr::Bool(false)) }
             TokenKind::Keyword(KeywordEnum::Null)  => { self.advance(); Ok(Expr::Null) }
             TokenKind::Keyword(KeywordEnum::This)  => { self.advance(); Ok(Expr::Ident("this".to_string())) }
+            // `super` - jako identifikator, interpreter ho zpracuje specialne
+            TokenKind::Keyword(KeywordEnum::Super) => { self.advance(); Ok(Expr::Ident("super".to_string())) }
 
             TokenKind::Identifier(s) => { let name = s.clone(); self.advance(); Ok(Expr::Ident(name)) }
 
@@ -789,7 +1014,30 @@ impl Parser {
 
             TokenKind::Keyword(KeywordEnum::New) => {
                 self.advance(); self.skip_trivia();
-                let callee = self.parse_postfix()?;
+                // Pro new: parsuj jen member access (tecka, [expr]), NE volani funkce.
+                // "new Foo(args)" musi byt new(Foo)(args), ne new(Foo(args)).
+                let mut callee = self.parse_primary()?;
+                loop {
+                    self.skip_trivia();
+                    match self.kind().clone() {
+                        TokenKind::Operator(OperatorEnum::Dot) => {
+                            self.advance(); self.skip_trivia();
+                            let name = match self.kind().clone() {
+                                TokenKind::Identifier(s) => { self.advance(); s }
+                                TokenKind::Keyword(kw)   => { let s = kw.as_str().to_string(); self.advance(); s }
+                                _ => return Err(self.err("Ocekavano jmeno vlastnosti za teckou v new expr")),
+                            };
+                            callee = Expr::Member { object: Box::new(callee), prop: MemberProp::Ident(name), optional: false };
+                        }
+                        TokenKind::Operator(OperatorEnum::LBracket) => {
+                            self.advance();
+                            let idx = self.parse_expr()?;
+                            self.expect_op(OperatorEnum::RBracket)?;
+                            callee = Expr::Member { object: Box::new(callee), prop: MemberProp::Computed(Box::new(idx)), optional: false };
+                        }
+                        _ => break,
+                    }
+                }
                 let args = if matches!(self.kind(), TokenKind::Operator(OperatorEnum::LParen)) {
                     self.advance();
                     let a = self.parse_call_args()?;
@@ -813,6 +1061,20 @@ impl Parser {
                 let (p, f) = (pattern.clone(), flags.clone());
                 self.advance();
                 Ok(Expr::Regex(p, f))
+            }
+
+            // Vyrazova trida: `const Foo = class { ... }`
+            TokenKind::Keyword(KeywordEnum::Class) => {
+                self.advance(); self.skip_trivia();
+                // Volitelne jmeno tridy v expressionu
+                let name = if matches!(self.kind(), TokenKind::Identifier(_)) {
+                    Some(self.parse_ident()?)
+                } else { None };
+                let super_class = self.parse_class_extends()?;
+                self.expect_op(OperatorEnum::LBrace)?;
+                let body = self.parse_class_body()?;
+                self.expect_op(OperatorEnum::RBrace)?;
+                Ok(Expr::ClassExpr { name, super_class, body })
             }
 
             _ => Err(self.err(format!("Neočekávaný token: {:?}", self.kind()))),
@@ -1122,7 +1384,7 @@ mod tests {
         match parse_stmt("let x = 42;") {
             Stmt::Var { kind: VarKind::Let, decls } => {
                 assert_eq!(decls.len(), 1);
-                assert_eq!(decls[0].name, "x");
+                assert!(matches!(&decls[0].pattern, Pattern::Ident(n) if n == "x"));
                 assert!(matches!(decls[0].init, Some(Expr::Number(n)) if n == 42.0));
             }
             other => panic!("Ocekavan VarDecl(Let), nalezeno {other:?}"),
@@ -1133,7 +1395,7 @@ mod tests {
     fn var_decl_const() {
         match parse_stmt("const PI = 3.14;") {
             Stmt::Var { kind: VarKind::Const, decls } => {
-                assert_eq!(decls[0].name, "PI");
+                assert!(matches!(&decls[0].pattern, Pattern::Ident(n) if n == "PI"));
             }
             other => panic!("Ocekavan VarDecl(Const), nalezeno {other:?}"),
         }
@@ -1156,7 +1418,7 @@ mod tests {
         match parse_stmt("function add(a, b) { return a + b; }") {
             Stmt::Function { name, params, .. } => {
                 assert_eq!(name, "add");
-                assert_eq!(params.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), vec!["a", "b"]);
+                assert_eq!(params.iter().map(|p| p.name_str()).collect::<Vec<_>>(), vec!["a", "b"]);
             }
             other => panic!("Ocekavan Function, nalezeno {other:?}"),
         }
@@ -1166,7 +1428,7 @@ mod tests {
     fn arrow_simple_param() {
         match parse_expr("x => x * 2") {
             Expr::Arrow { params, body: ArrowBody::Expr(_) } => {
-                assert_eq!(params.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), vec!["x"]);
+                assert_eq!(params.iter().map(|p| p.name_str()).collect::<Vec<_>>(), vec!["x"]);
             }
             other => panic!("Ocekavan Arrow, nalezeno {other:?}"),
         }
@@ -1176,7 +1438,7 @@ mod tests {
     fn arrow_paren_params() {
         match parse_expr("(a, b) => a + b") {
             Expr::Arrow { params, body: ArrowBody::Expr(_) } => {
-                assert_eq!(params.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), vec!["a", "b"]);
+                assert_eq!(params.iter().map(|p| p.name_str()).collect::<Vec<_>>(), vec!["a", "b"]);
             }
             other => panic!("Ocekavan Arrow, nalezeno {other:?}"),
         }
@@ -1297,6 +1559,192 @@ mod tests {
         match parse_stmt("return 42;") {
             Stmt::Return(Some(Expr::Number(n))) => assert_eq!(n, 42.0),
             other => panic!("Ocekavan Return(42), nalezeno {other:?}"),
+        }
+    }
+
+    // --- destrukturovani ---
+
+    #[test]
+    fn array_destructuring_decl() {
+        match parse_stmt("const [a, b] = arr;") {
+            Stmt::Var { kind: VarKind::Const, decls } => {
+                assert_eq!(decls.len(), 1);
+                match &decls[0].pattern {
+                    Pattern::Array(elems) => {
+                        assert_eq!(elems.len(), 2);
+                        assert!(matches!(&elems[0].pattern, Some(Pattern::Ident(n)) if n == "a"));
+                        assert!(matches!(&elems[1].pattern, Some(Pattern::Ident(n)) if n == "b"));
+                    }
+                    other => panic!("Ocekavan Array pattern, nalezeno {other:?}"),
+                }
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn object_destructuring_decl() {
+        match parse_stmt("const { x, y } = obj;") {
+            Stmt::Var { kind: VarKind::Const, decls } => {
+                match &decls[0].pattern {
+                    Pattern::Object(props) => {
+                        assert_eq!(props.len(), 2);
+                        assert!(props[0].shorthand);
+                        assert!(props[1].shorthand);
+                    }
+                    other => panic!("Ocekavan Object pattern, nalezeno {other:?}"),
+                }
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn array_destructuring_with_default() {
+        match parse_stmt("const [a = 10] = arr;") {
+            Stmt::Var { decls, .. } => {
+                match &decls[0].pattern {
+                    Pattern::Array(elems) => {
+                        assert!(elems[0].default.is_some());
+                    }
+                    other => panic!("{other:?}"),
+                }
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn array_destructuring_rest() {
+        match parse_stmt("const [a, ...rest] = arr;") {
+            Stmt::Var { decls, .. } => {
+                match &decls[0].pattern {
+                    Pattern::Array(elems) => {
+                        assert!(!elems[0].rest);
+                        assert!(elems[1].rest);
+                    }
+                    other => panic!("{other:?}"),
+                }
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn object_destructuring_renamed() {
+        // { x: a } - klic x, pattern Ident("a"), shorthand = false
+        match parse_stmt("const { x: a } = obj;") {
+            Stmt::Var { decls, .. } => {
+                match &decls[0].pattern {
+                    Pattern::Object(props) => {
+                        assert!(!props[0].shorthand);
+                        assert!(matches!(&props[0].key, PropKey::Ident(k) if k == "x"));
+                        assert!(matches!(&props[0].pattern, Pattern::Ident(n) if n == "a"));
+                    }
+                    other => panic!("{other:?}"),
+                }
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn function_params_destructuring() {
+        match parse_stmt("function f([a, b], { x }) {}") {
+            Stmt::Function { params, .. } => {
+                assert!(matches!(&params[0].pattern, Pattern::Array(_)));
+                assert!(matches!(&params[1].pattern, Pattern::Object(_)));
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    // --- tridy ---
+
+    #[test]
+    fn class_basic() {
+        match parse_stmt("class Foo { constructor(x) { this.x = x; } greet() { return this.x; } }") {
+            Stmt::Class { name, super_class, body } => {
+                assert_eq!(name, "Foo");
+                assert!(super_class.is_none());
+                assert_eq!(body.len(), 2);
+                assert_eq!(body[0].name, "constructor");
+                assert_eq!(body[1].name, "greet");
+                assert!(!body[1].is_static);
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn class_extends() {
+        match parse_stmt("class Dog extends Animal { }") {
+            Stmt::Class { name, super_class, .. } => {
+                assert_eq!(name, "Dog");
+                assert!(super_class.is_some());
+                // super_class je Expr::Ident("Animal")
+                assert!(matches!(super_class.as_deref(), Some(Expr::Ident(n)) if n == "Animal"));
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn class_static_method() {
+        match parse_stmt("class Foo { static create() {} }") {
+            Stmt::Class { body, .. } => {
+                assert!(body[0].is_static);
+                assert_eq!(body[0].name, "create");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn class_getter_setter() {
+        match parse_stmt("class Foo { get value() {} set value(v) {} }") {
+            Stmt::Class { body, .. } => {
+                assert!(body[0].is_getter);
+                assert!(body[1].is_setter);
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn class_expression() {
+        // V expressionu (const X = class { ... }) class nema jmeno
+        let prog = parse("const X = class { constructor() {} }");
+        match prog.body.into_iter().next().unwrap() {
+            Stmt::Var { decls, .. } => {
+                let init = decls[0].init.as_ref().unwrap();
+                match init {
+                    Expr::ClassExpr { name: None, body, .. } => {
+                        assert_eq!(body.len(), 1);
+                        assert_eq!(body[0].name, "constructor");
+                    }
+                    other => panic!("{other:?}"),
+                }
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn class_expression_named() {
+        // Pojmenovana class expression: const X = class Foo { }
+        let prog = parse("const X = class Foo { }");
+        match prog.body.into_iter().next().unwrap() {
+            Stmt::Var { decls, .. } => {
+                let init = decls[0].init.as_ref().unwrap();
+                match init {
+                    Expr::ClassExpr { name: Some(n), .. } => {
+                        assert_eq!(n, "Foo");
+                    }
+                    other => panic!("{other:?}"),
+                }
+            }
+            other => panic!("{other:?}"),
         }
     }
 }
