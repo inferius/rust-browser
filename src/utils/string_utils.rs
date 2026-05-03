@@ -11,8 +11,8 @@ impl AdvancedStringMethods for str {
         self.chars().skip(start).take(end - start).collect()
     }
 
-    fn substring_start(&self, count: usize) -> String {
-        self.chars().skip(count).collect()
+    fn substring_start(&self, char_offset: usize) -> String {
+        self.chars().skip(char_offset).collect()
     }
 
     fn substring_end(&self, count: usize) -> String {

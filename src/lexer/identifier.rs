@@ -1,6 +1,1 @@
-use crate::lexer::base::Lexer;
-
-impl Lexer {
-
-    fn read_identifier() {}
-}
+// Metody pro ctenicidentifikatoru jsou v base.rs (read_identifier, read_identifier_continue).
