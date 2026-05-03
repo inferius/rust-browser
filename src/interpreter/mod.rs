@@ -1943,6 +1943,80 @@ impl Interpreter {
                             _ => {}
                         }
                     }
+                    // ─── Promise instance metody ───────────────────────────
+                    if let Some((state, pval)) = {
+                        let b = obj_rc2.borrow();
+                        b.props.get("__promise_state__").and_then(|s| {
+                            if let JsValue::Str(st) = s {
+                                let v = b.props.get("__promise_value__").cloned().unwrap_or(JsValue::Undefined);
+                                Some((st.clone(), v))
+                            } else { None }
+                        })
+                    } {
+                        match key.as_str() {
+                            "then" => {
+                                let arg_vals = self.eval_args(args, env)?;
+                                let on_fulfilled = arg_vals.get(0).cloned().unwrap_or(JsValue::Undefined);
+                                let on_rejected  = arg_vals.get(1).cloned().unwrap_or(JsValue::Undefined);
+                                return match state.as_str() {
+                                    "fulfilled" => {
+                                        if matches!(on_fulfilled, JsValue::Function(_)) {
+                                            match self.call_function(on_fulfilled, vec![pval], None) {
+                                                Ok(r) => Ok(make_settled_promise("fulfilled",
+                                                    unwrap_promise_result(r).unwrap_or_else(|v| v))),
+                                                Err(JsError::Thrown(v)) => Ok(make_settled_promise("rejected", v)),
+                                                Err(e) => Err(e),
+                                            }
+                                        } else {
+                                            Ok(JsValue::Object(Rc::clone(&obj_rc2)))
+                                        }
+                                    }
+                                    "rejected" => {
+                                        if matches!(on_rejected, JsValue::Function(_)) {
+                                            match self.call_function(on_rejected, vec![pval], None) {
+                                                Ok(r) => Ok(make_settled_promise("fulfilled",
+                                                    unwrap_promise_result(r).unwrap_or_else(|v| v))),
+                                                Err(JsError::Thrown(v)) => Ok(make_settled_promise("rejected", v)),
+                                                Err(e) => Err(e),
+                                            }
+                                        } else {
+                                            Ok(JsValue::Object(Rc::clone(&obj_rc2)))
+                                        }
+                                    }
+                                    _ => Ok(JsValue::Object(Rc::clone(&obj_rc2))),
+                                };
+                            }
+                            "catch" => {
+                                let arg_vals = self.eval_args(args, env)?;
+                                let on_rejected = arg_vals.into_iter().next().unwrap_or(JsValue::Undefined);
+                                return if state == "rejected" && matches!(on_rejected, JsValue::Function(_)) {
+                                    match self.call_function(on_rejected, vec![pval], None) {
+                                        Ok(r) => Ok(make_settled_promise("fulfilled",
+                                            unwrap_promise_result(r).unwrap_or_else(|v| v))),
+                                        Err(JsError::Thrown(v)) => Ok(make_settled_promise("rejected", v)),
+                                        Err(e) => Err(e),
+                                    }
+                                } else {
+                                    Ok(JsValue::Object(Rc::clone(&obj_rc2)))
+                                };
+                            }
+                            "finally" => {
+                                let arg_vals = self.eval_args(args, env)?;
+                                let cb = arg_vals.into_iter().next().unwrap_or(JsValue::Undefined);
+                                if matches!(cb, JsValue::Function(_)) {
+                                    match self.call_function(cb, vec![], None) {
+                                        Err(JsError::Thrown(v)) => return Ok(make_settled_promise("rejected", v)),
+                                        Err(e) => return Err(e),
+                                        Ok(_) => {}
+                                    }
+                                }
+                                return Ok(JsValue::Object(Rc::clone(&obj_rc2)));
+                            }
+                            _ => {} // Pust dal na normalni object dispatch
+                        }
+                        let _ = pval; // suppress unused warning
+                        let _ = state;
+                    }
                     let arg_vals = self.eval_args(args, env)?;
                     match key.as_str() {
                         // obj.hasOwnProperty("key") - kontrola vlastni vlastnosti
@@ -2009,6 +2083,91 @@ impl Interpreter {
                         ("Date", "parse") => {
                             // Stub - vratime NaN pro neznamy format
                             return Ok(JsValue::Number(f64::NAN));
+                        }
+                        // Promise staticke metody
+                        ("Promise", "resolve") => {
+                            let v = arg_vals.into_iter().next().unwrap_or(JsValue::Undefined);
+                            return Ok(make_settled_promise("fulfilled", v));
+                        }
+                        ("Promise", "reject") => {
+                            let v = arg_vals.into_iter().next().unwrap_or(JsValue::Undefined);
+                            return Ok(make_settled_promise("rejected", v));
+                        }
+                        ("Promise", "all") => {
+                            let arr = match arg_vals.into_iter().next() {
+                                Some(JsValue::Array(a)) => a.borrow().clone(),
+                                _ => vec![],
+                            };
+                            let mut results = Vec::new();
+                            for item in arr {
+                                match get_promise_state(&item) {
+                                    Some((s, v)) if s == "rejected" => {
+                                        return Ok(make_settled_promise("rejected", v));
+                                    }
+                                    Some((_, v)) => results.push(v),
+                                    None => results.push(item),
+                                }
+                            }
+                            return Ok(make_settled_promise("fulfilled",
+                                JsValue::Array(Rc::new(RefCell::new(results)))));
+                        }
+                        ("Promise", "allSettled") => {
+                            let arr = match arg_vals.into_iter().next() {
+                                Some(JsValue::Array(a)) => a.borrow().clone(),
+                                _ => vec![],
+                            };
+                            let results: Vec<JsValue> = arr.into_iter().map(|item| {
+                                let (status, value) = match get_promise_state(&item) {
+                                    Some((s, v)) => (s, v),
+                                    None => ("fulfilled".into(), item),
+                                };
+                                let mut o = JsObject::new();
+                                o.set("status".into(), JsValue::Str(status.clone()));
+                                if status == "fulfilled" {
+                                    o.set("value".into(), value);
+                                } else {
+                                    o.set("reason".into(), value);
+                                }
+                                JsValue::Object(Rc::new(RefCell::new(o)))
+                            }).collect();
+                            return Ok(make_settled_promise("fulfilled",
+                                JsValue::Array(Rc::new(RefCell::new(results)))));
+                        }
+                        ("Promise", "race") => {
+                            let arr = match arg_vals.into_iter().next() {
+                                Some(JsValue::Array(a)) => a.borrow().clone(),
+                                _ => vec![],
+                            };
+                            for item in arr {
+                                match get_promise_state(&item) {
+                                    Some((s, v)) if s == "fulfilled" || s == "rejected" => {
+                                        return Ok(make_settled_promise(&s, v));
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            return Ok(make_settled_promise("pending", JsValue::Undefined));
+                        }
+                        ("Promise", "any") => {
+                            let arr = match arg_vals.into_iter().next() {
+                                Some(JsValue::Array(a)) => a.borrow().clone(),
+                                _ => vec![],
+                            };
+                            let mut errors = Vec::new();
+                            for item in arr {
+                                match get_promise_state(&item) {
+                                    Some((s, v)) if s == "fulfilled" => {
+                                        return Ok(make_settled_promise("fulfilled", v));
+                                    }
+                                    Some((_, v)) => errors.push(v),
+                                    None => return Ok(make_settled_promise("fulfilled", item)),
+                                }
+                            }
+                            let mut agg = JsObject::new();
+                            agg.set("name".into(), JsValue::Str("AggregateError".into()));
+                            agg.set("message".into(), JsValue::Str("All promises were rejected".into()));
+                            agg.set("errors".into(), JsValue::Array(Rc::new(RefCell::new(errors))));
+                            return Ok(make_settled_promise("rejected", JsValue::Object(Rc::new(RefCell::new(agg)))));
                         }
                         _ => {}
                     }
@@ -2088,6 +2247,7 @@ impl Interpreter {
                 "Map" | "WeakMap" => return self.construct_map(args),
                 "Set" | "WeakSet" => return self.construct_set(args),
                 "Date"            => return self.construct_date(args),
+                "Promise"         => return self.construct_promise(args),
                 "Error" | "TypeError" | "RangeError" | "SyntaxError"
                 | "ReferenceError" | "URIError" | "EvalError" => {
                     return self.construct_error(name.clone(), args);
@@ -2149,6 +2309,57 @@ impl Interpreter {
         obj.set("message".into(), JsValue::Str(msg.clone()));
         obj.set("stack".into(),   JsValue::Str(format!("{name}: {msg}")));
         Ok(JsValue::Object(Rc::new(RefCell::new(obj))))
+    }
+
+    /// Konstruktor `new Promise(executor)` - synchronni rozliseni.
+    ///
+    /// Executor je volan okamzite se dvema argumenty:
+    /// - `resolve(value)` - splni promise
+    /// - `reject(reason)` - odmitne promise
+    fn construct_promise(&mut self, args: Vec<JsValue>) -> EvalResult {
+        let mut obj = JsObject::new();
+        obj.set("__promise_state__".into(), JsValue::Str("pending".into()));
+        obj.set("__promise_value__".into(), JsValue::Undefined);
+        let obj_rc = Rc::new(RefCell::new(obj));
+
+        let executor = args.into_iter().next().unwrap_or(JsValue::Undefined);
+        if matches!(executor, JsValue::Function(_)) {
+            // Vytvor resolve/reject closures ktere zachyti Rc<RefCell<JsObject>>
+            let obj_rc_r = Rc::clone(&obj_rc);
+            let resolve = native("resolve", move |a| {
+                let val = a.into_iter().next().unwrap_or(JsValue::Undefined);
+                let mut o = obj_rc_r.borrow_mut();
+                if matches!(o.props.get("__promise_state__"), Some(JsValue::Str(s)) if s == "pending") {
+                    o.set("__promise_state__".into(), JsValue::Str("fulfilled".into()));
+                    o.set("__promise_value__".into(), val);
+                }
+                Ok(JsValue::Undefined)
+            });
+            let obj_rc_j = Rc::clone(&obj_rc);
+            let reject = native("reject", move |a| {
+                let val = a.into_iter().next().unwrap_or(JsValue::Undefined);
+                let mut o = obj_rc_j.borrow_mut();
+                if matches!(o.props.get("__promise_state__"), Some(JsValue::Str(s)) if s == "pending") {
+                    o.set("__promise_state__".into(), JsValue::Str("rejected".into()));
+                    o.set("__promise_value__".into(), val);
+                }
+                Ok(JsValue::Undefined)
+            });
+
+            // Spust executor - chyba = reject
+            match self.call_function(executor, vec![resolve, reject], None) {
+                Ok(_) => {}
+                Err(JsError::Thrown(v)) => {
+                    let mut o = obj_rc.borrow_mut();
+                    if matches!(o.props.get("__promise_state__"), Some(JsValue::Str(s)) if s == "pending") {
+                        o.set("__promise_state__".into(), JsValue::Str("rejected".into()));
+                        o.set("__promise_value__".into(), v);
+                    }
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(JsValue::Object(obj_rc))
     }
 
     // ─── Generator + iterator protokol ───────────────────────────────────────
@@ -2880,6 +3091,39 @@ fn make_date_object(ms: f64) -> JsValue {
     JsValue::Object(Rc::new(RefCell::new(obj)))
 }
 
+// ─── Promise pomucky ──────────────────────────────────────────────────────────
+
+/// Vytvori uz-vyreseny (settled) Promise objekt.
+fn make_settled_promise(state: &str, value: JsValue) -> JsValue {
+    let mut obj = JsObject::new();
+    obj.set("__promise_state__".into(), JsValue::Str(state.into()));
+    obj.set("__promise_value__".into(), value);
+    JsValue::Object(Rc::new(RefCell::new(obj)))
+}
+
+/// Vrati stav a hodnotu Promise objektu, pokud je to Promise.
+fn get_promise_state(val: &JsValue) -> Option<(String, JsValue)> {
+    if let JsValue::Object(o) = val {
+        let b = o.borrow();
+        if let Some(JsValue::Str(state)) = b.props.get("__promise_state__") {
+            let value = b.props.get("__promise_value__").cloned().unwrap_or(JsValue::Undefined);
+            return Some((state.clone(), value));
+        }
+    }
+    None
+}
+
+/// Pokud je hodnota Promise, "rozbaleni" - vrati jeho hodnotu (fulfilled) nebo error (rejected).
+/// Pouziva se pro zretezeni .then().
+fn unwrap_promise_result(val: JsValue) -> Result<JsValue, JsValue> {
+    match get_promise_state(&val) {
+        Some((state, v)) if state == "fulfilled" => Ok(v),
+        Some((state, v)) if state == "rejected"  => Err(v),
+        Some(_) => Ok(val), // pending - vrat tak jak je
+        None => Ok(val),    // neni promise - vrat tak jak je
+    }
+}
+
 /// Extrahuje ms timestamp z Date objektu.
 fn get_date_ms(val: &JsValue) -> Option<f64> {
     if let JsValue::Object(o) = val {
@@ -3250,6 +3494,10 @@ fn setup_builtins(env: &Rc<RefCell<Environment>>) {
             Ok(JsValue::Object(Rc::new(RefCell::new(obj))))
         }));
     }
+
+    // ─── Promise ──────────────────────────────────────────────────────────────
+    // Konstruktor registrujeme jako native - skutecna logika je v call_new a eval_call
+    e.define("Promise", native("Promise", |_| Ok(JsValue::Undefined)));
 
     e.define("Infinity",  JsValue::Number(f64::INFINITY));
     e.define("NaN",       JsValue::Number(f64::NAN));
@@ -5255,5 +5503,142 @@ mod tests {
             const e = new Error();
             return e.message;
         "#)), "");
+    }
+
+    // ─── Batch D: Promise ─────────────────────────────────────────────────────
+
+    #[test]
+    fn promise_resolve_static() {
+        // Promise.resolve vraci fulfilled promise
+        assert_eq!(as_num(run(r#"
+            const p = Promise.resolve(42);
+            let result = 0;
+            p.then(v => { result = v; });
+            return result;
+        "#)), 42.0);
+    }
+
+    #[test]
+    fn promise_reject_static() {
+        // Promise.reject vraci rejected promise
+        assert_eq!(as_str(run(r#"
+            const p = Promise.reject("error");
+            let msg = "";
+            p.catch(r => { msg = r; });
+            return msg;
+        "#)), "error");
+    }
+
+    #[test]
+    fn promise_constructor_resolve() {
+        assert_eq!(as_num(run(r#"
+            const p = new Promise((resolve, reject) => {
+                resolve(100);
+            });
+            let result = 0;
+            p.then(v => { result = v; });
+            return result;
+        "#)), 100.0);
+    }
+
+    #[test]
+    fn promise_constructor_reject() {
+        assert_eq!(as_str(run(r#"
+            const p = new Promise((resolve, reject) => {
+                reject("fail");
+            });
+            let msg = "";
+            p.catch(r => { msg = r; });
+            return msg;
+        "#)), "fail");
+    }
+
+    #[test]
+    fn promise_then_chain() {
+        // .then() vraci novy promise s vysledkem callbacku
+        assert_eq!(as_num(run(r#"
+            let result = 0;
+            Promise.resolve(10)
+                .then(v => v * 2)
+                .then(v => { result = v; });
+            return result;
+        "#)), 20.0);
+    }
+
+    #[test]
+    fn promise_catch_after_then() {
+        // .then() na rejected propaguje rejected dale
+        assert_eq!(as_str(run(r#"
+            let caught = "";
+            Promise.reject("boom")
+                .then(v => v + "!")
+                .catch(e => { caught = e; });
+            return caught;
+        "#)), "boom");
+    }
+
+    #[test]
+    fn promise_finally_runs() {
+        assert_eq!(as_bool(run(r#"
+            let ran = false;
+            Promise.resolve(1).finally(() => { ran = true; });
+            return ran;
+        "#)), true);
+    }
+
+    #[test]
+    fn promise_all_fulfilled() {
+        assert_eq!(as_num(run(r#"
+            const results = [];
+            Promise.all([
+                Promise.resolve(1),
+                Promise.resolve(2),
+                Promise.resolve(3),
+            ]).then(arr => {
+                results.push(arr[0]);
+                results.push(arr[1]);
+                results.push(arr[2]);
+            });
+            return results[0] + results[1] + results[2];
+        "#)), 6.0);
+    }
+
+    #[test]
+    fn promise_all_rejected() {
+        assert_eq!(as_str(run(r#"
+            let reason = "";
+            Promise.all([
+                Promise.resolve(1),
+                Promise.reject("error"),
+                Promise.resolve(3),
+            ]).catch(r => { reason = r; });
+            return reason;
+        "#)), "error");
+    }
+
+    #[test]
+    fn promise_all_settled() {
+        assert_eq!(as_num(run(r#"
+            let count = 0;
+            Promise.allSettled([
+                Promise.resolve(1),
+                Promise.reject("x"),
+                Promise.resolve(3),
+            ]).then(results => { count = results.length; });
+            return count;
+        "#)), 3.0);
+    }
+
+    #[test]
+    fn promise_constructor_throw_rejects() {
+        // Vyjimka v executoru = rejected promise
+        assert_eq!(as_str(run(r#"
+            let caught = "";
+            const p = new Promise((resolve, reject) => {
+                throw new Error("executor threw");
+            });
+            p.catch(e => { caught = e.message; });
+            return caught;
+        "#)), "executor threw");
     }
 }
