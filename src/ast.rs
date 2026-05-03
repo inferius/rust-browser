@@ -104,6 +104,21 @@ pub enum Expr {
         super_class: Option<Box<Expr>>,
         body: Vec<ClassMember>,
     },
+
+    /// Generator funkce jako vyraz: `function* name?(params) { body }`
+    GeneratorFunc {
+        name: Option<String>,
+        params: Vec<Param>,
+        body: Vec<Stmt>,
+    },
+
+    /// Yield vyraz: `yield expr` nebo `yield* iterable`
+    ///
+    /// `delegate = true` znamena `yield*` (delegace na jiny iterable).
+    Yield {
+        value: Option<Box<Expr>>,
+        delegate: bool,
+    },
 }
 
 /// Jedna vlastnost v objektovem literalu.
@@ -375,6 +390,9 @@ pub enum Stmt {
         /// Telo tridy - seznam clenu
         body: Vec<ClassMember>,
     },
+
+    /// Deklarace generator funkce: `function* name(params) { body }`
+    GeneratorFunc { name: String, params: Vec<Param>, body: Vec<Stmt> },
 }
 
 /// Jedna vetev switch prikazu.

@@ -136,15 +136,23 @@ pub struct ClassMethodDef {
 
 /// Reprezentace funkce v runtime.
 ///
-/// - `User`   - funkce definovana v JS kodu, ulozena jako AST + uzavreny scope
-/// - `Native` - funkce implementovana v Rustu (Math.sqrt, console.log, atd.)
-/// - `Class`  - JS trida: obsahuje konstruktor, instance metody, staticke metody
+/// - `User`      - funkce definovana v JS kodu, ulozena jako AST + uzavreny scope
+/// - `Native`    - funkce implementovana v Rustu (Math.sqrt, console.log, atd.)
+/// - `Class`     - JS trida: obsahuje konstruktor, instance metody, staticke metody
+/// - `Generator` - generator funkce (`function*`): vraci iterator pres yielded hodnoty
 #[derive(Clone)]
 pub enum JsFunc {
     /// Uzivatelska JS funkce. Uchovava si uzavreny `env` (closure).
     User { name: Option<String>, params: Vec<Param>, body: FuncBody, env: Rc<RefCell<Env>> },
     /// Nativni Rust funkce. Prvni parametr je jmeno pro debugovani.
     Native(String, NativeFn),
+    /// Generator funkce (`function*`). Pri zavolani vraci iterator objekt.
+    Generator {
+        name: Option<String>,
+        params: Vec<Param>,
+        body: Vec<Stmt>,
+        env: Rc<RefCell<Env>>,
+    },
     /// JS trida. `super_val` = vyhodnocena rodicovska trida.
     ///
     /// Konstruktor je ulozeny oddelene od ostatnich metod.
@@ -176,9 +184,10 @@ pub enum JsFunc {
 impl std::fmt::Debug for JsFunc {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            JsFunc::User { name, .. }  => write!(f, "[Function: {}]", name.as_deref().unwrap_or("anonymous")),
-            JsFunc::Native(name, _)    => write!(f, "[NativeFunction: {name}]"),
-            JsFunc::Class { name, .. } => write!(f, "[class {}]", name.as_deref().unwrap_or("(anonymous)")),
+            JsFunc::User { name, .. }      => write!(f, "[Function: {}]", name.as_deref().unwrap_or("anonymous")),
+            JsFunc::Native(name, _)        => write!(f, "[NativeFunction: {name}]"),
+            JsFunc::Class { name, .. }     => write!(f, "[class {}]", name.as_deref().unwrap_or("(anonymous)")),
+            JsFunc::Generator { name, .. } => write!(f, "[GeneratorFunction: {}]", name.as_deref().unwrap_or("anonymous")),
         }
     }
 }
@@ -396,6 +405,9 @@ type StmtResult = Result<Option<Signal>, JsError>;
 pub struct Interpreter {
     /// Globalni scope - obsahuje vestavene funkce (Math, console, atd.)
     pub global: Rc<RefCell<Environment>>,
+    /// Generator mode: Some = shromazduji yield hodnoty misto preruseni
+    /// None = normalni rezim
+    yield_buffer: Option<Vec<JsValue>>,
 }
 
 // ─── Pomocne funkce pro prototypovy retezec ──────────────────────────────────
@@ -427,7 +439,7 @@ impl Interpreter {
     pub fn new() -> Self {
         let global = Environment::new_global();
         setup_builtins(&global);
-        Interpreter { global }
+        Interpreter { global, yield_buffer: None }
     }
 
     /// Spusti cely program (AST) a vrati posledni `return` hodnotu.
@@ -480,6 +492,18 @@ impl Interpreter {
                     name: Some(name.clone()),
                     params: params.clone(),
                     body: FuncBody::Stmts(body.clone()),
+                    env: Rc::clone(env),
+                });
+                env.borrow_mut().define(name, func);
+                Ok(None)
+            }
+
+            // Generator funkce: `function* name(params) { body }`
+            Stmt::GeneratorFunc { name, params, body } => {
+                let func = JsValue::Function(JsFunc::Generator {
+                    name: Some(name.clone()),
+                    params: params.clone(),
+                    body: body.clone(),
                     env: Rc::clone(env),
                 });
                 env.borrow_mut().define(name, func);
@@ -604,11 +628,8 @@ impl Interpreter {
 
             Stmt::ForOf { kind: _, target, iter, body } => {
                 let arr_val = self.eval(iter, env)?;
-                let items = match arr_val {
-                    JsValue::Array(ref a) => a.borrow().clone(),
-                    JsValue::Str(ref s) => s.chars().map(|c| JsValue::Str(c.to_string())).collect(),
-                    _ => return Err(JsError::Runtime("for...of: nenaiterabilni hodnota".into())),
-                };
+                // Podpora pro custom iterables pres Symbol.iterator
+                let items = self.collect_iterable(arr_val)?;
                 for item in items {
                     let loop_env = Environment::new_child(env);
                     self.bind_target_expr(target, item, &loop_env)?;
@@ -739,6 +760,36 @@ impl Interpreter {
                 name: name.clone(), params: params.clone(),
                 body: FuncBody::Stmts(body.clone()), env: Rc::clone(env),
             })),
+
+            // Generator funkcni vyraz: `const gen = function*() { yield 1; }`
+            Expr::GeneratorFunc { name, params, body } => Ok(JsValue::Function(JsFunc::Generator {
+                name: name.clone(),
+                params: params.clone(),
+                body: body.clone(),
+                env: Rc::clone(env),
+            })),
+
+            // Yield vyraz: `yield value`
+            Expr::Yield { value, delegate } => {
+                let val = if let Some(e) = value {
+                    self.eval(e, env)?
+                } else {
+                    JsValue::Undefined
+                };
+                if *delegate {
+                    // yield* - delegace na iterable (rozlozi do yield_buffer)
+                    let items = self.collect_iterable(val.clone())?;
+                    if let Some(buf) = &mut self.yield_buffer {
+                        buf.extend(items);
+                    }
+                    Ok(JsValue::Undefined)
+                } else if let Some(buf) = &mut self.yield_buffer {
+                    buf.push(val);
+                    Ok(JsValue::Undefined)
+                } else {
+                    Err(JsError::Runtime("yield lze pouzit jen v generator funkci".into()))
+                }
+            }
 
             Expr::Arrow { params, body } => Ok(JsValue::Function(JsFunc::User {
                 name: None, params: params.clone(),
@@ -1724,6 +1775,10 @@ impl Interpreter {
                     }
                 }
             }
+            // Volani generator funkce vraci iterator objekt
+            JsValue::Function(JsFunc::Generator { params, body, env, .. }) => {
+                self.call_generator(params, body, args, env)
+            }
             _ => Err(JsError::Runtime(format!("{func} není funkce"))),
         }
     }
@@ -1737,6 +1792,134 @@ impl Interpreter {
         let obj = JsValue::Object(Rc::new(RefCell::new(JsObject::new())));
         self.call_function(func, args, Some(obj.clone()))?;
         Ok(obj)
+    }
+
+    // ─── Generator + iterator protokol ───────────────────────────────────────
+
+    /// Zavola generator funkci a vrati iterator objekt.
+    ///
+    /// Implementace: spusti cely body v generator rezimu (yield_buffer = Some(vec![])),
+    /// sbira yield hodnoty, pak vrati iterator objekt s metodou `next()`.
+    fn call_generator(
+        &mut self,
+        params: Vec<Param>,
+        body: Vec<Stmt>,
+        args: Vec<JsValue>,
+        closure_env: Rc<RefCell<Env>>,
+    ) -> EvalResult {
+        // Nastav generator rezim
+        let prev_buf = self.yield_buffer.take();
+        self.yield_buffer = Some(Vec::new());
+
+        // Spust telo generator funkce
+        let gen_env = Environment::new_child(&closure_env);
+        let params = params.clone();
+        let body = body.clone();
+        self.bind_params(&params, args, &gen_env)?;
+        let _ = self.exec_stmts(&body, &gen_env);
+
+        // Vezmi nahromadene hodnoty
+        let yielded = self.yield_buffer.take().unwrap_or_default();
+        self.yield_buffer = prev_buf;
+
+        // Vytvor iterator objekt (sdileny refcell pro index)
+        let values = Rc::new(yielded);
+        let index  = Rc::new(RefCell::new(0usize));
+
+        let values2 = Rc::clone(&values);
+        let index2  = Rc::clone(&index);
+
+        let mut iter_obj = JsObject::new();
+
+        // next() metoda
+        let next_fn = native("(generator).next", move |_args| {
+            let i = *index2.borrow();
+            if i < values2.len() {
+                *index2.borrow_mut() = i + 1;
+                let mut result = JsObject::new();
+                result.set("value".into(), values2[i].clone());
+                result.set("done".into(),  JsValue::Bool(false));
+                Ok(JsValue::Object(Rc::new(RefCell::new(result))))
+            } else {
+                let mut result = JsObject::new();
+                result.set("value".into(), JsValue::Undefined);
+                result.set("done".into(),  JsValue::Bool(true));
+                Ok(JsValue::Object(Rc::new(RefCell::new(result))))
+            }
+        });
+        iter_obj.set("next".into(), next_fn);
+
+        // [Symbol.iterator]() - vraci this (iterator je zaroven iterable)
+        let values3 = Rc::clone(&values);
+        let index3  = Rc::new(RefCell::new(0usize));
+        let sym_iter_fn = native("(generator)[Symbol.iterator]", move |_| {
+            // Vrat novy iterator od zacatku
+            let values4 = Rc::clone(&values3);
+            let index4  = Rc::clone(&index3);
+            let mut obj = JsObject::new();
+            let v4 = Rc::clone(&values4);
+            let i4 = Rc::clone(&index4);
+            obj.set("next".into(), native("(gen.iter).next", move |_| {
+                let i = *i4.borrow();
+                if i < v4.len() {
+                    *i4.borrow_mut() = i + 1;
+                    let mut r = JsObject::new();
+                    r.set("value".into(), v4[i].clone());
+                    r.set("done".into(),  JsValue::Bool(false));
+                    Ok(JsValue::Object(Rc::new(RefCell::new(r))))
+                } else {
+                    let mut r = JsObject::new();
+                    r.set("value".into(), JsValue::Undefined);
+                    r.set("done".into(),  JsValue::Bool(true));
+                    Ok(JsValue::Object(Rc::new(RefCell::new(r))))
+                }
+            }));
+            Ok(JsValue::Object(Rc::new(RefCell::new(obj))))
+        });
+        iter_obj.set("Symbol.iterator".into(), sym_iter_fn);
+
+        Ok(JsValue::Object(Rc::new(RefCell::new(iter_obj))))
+    }
+
+    /// Sbira vsechny hodnoty z iteratoru nebo iterovatelneho objektu.
+    ///
+    /// Pouzivane v `for...of` pro custom iterables a `yield*`.
+    fn collect_iterable(&mut self, val: JsValue) -> Result<Vec<JsValue>, JsError> {
+        match &val {
+            JsValue::Array(a) => return Ok(a.borrow().clone()),
+            JsValue::Str(s)   => return Ok(s.chars().map(|c| JsValue::Str(c.to_string())).collect()),
+            _ => {}
+        }
+        // Zkus Symbol.iterator protocol
+        if let JsValue::Object(o) = &val {
+            let sym_iter_fn = o.borrow().get("Symbol.iterator");
+            if !matches!(sym_iter_fn, JsValue::Undefined) {
+                let iterator = self.call_function(sym_iter_fn, vec![], Some(val.clone()))?;
+                return self.drain_iterator(iterator);
+            }
+        }
+        Err(JsError::Runtime("for...of: hodnota neni iterovatelna".into()))
+    }
+
+    /// Opakuje volani .next() na iterator dokud done == true.
+    fn drain_iterator(&mut self, iterator: JsValue) -> Result<Vec<JsValue>, JsError> {
+        let mut result = Vec::new();
+        loop {
+            let next_fn = self.get_prop(&iterator, "next")?;
+            if matches!(next_fn, JsValue::Undefined) {
+                break;
+            }
+            let step = self.call_function(next_fn, vec![], Some(iterator.clone()))?;
+            // step = { value: x, done: bool }
+            let done  = self.get_prop(&step, "done")?.is_truthy();
+            let value = self.get_prop(&step, "value")?;
+            if done { break; }
+            result.push(value);
+            if result.len() > 100_000 { // ochrana pred nekonecnou smyckou
+                break;
+            }
+        }
+        Ok(result)
     }
 
     // ─── Array built-in metody ────────────────────────────────────────────────
@@ -2368,6 +2551,15 @@ fn setup_builtins(env: &Rc<RefCell<Environment>>) {
         Ok(JsValue::Object(Rc::new(RefCell::new(obj))))
     }));
     e.define("Object", JsValue::Object(Rc::new(RefCell::new(obj_ctor))));
+
+    // Symbol - reprezentujeme jako objekt s "well-known symbols" jako string klice
+    // Symbol.iterator = "Symbol.iterator" (pouziva se jako klic vlastnosti)
+    let mut sym_obj = JsObject::new();
+    sym_obj.set("iterator".into(), JsValue::Str("Symbol.iterator".into()));
+    sym_obj.set("toPrimitive".into(), JsValue::Str("Symbol.toPrimitive".into()));
+    sym_obj.set("hasInstance".into(), JsValue::Str("Symbol.hasInstance".into()));
+    sym_obj.set("asyncIterator".into(), JsValue::Str("Symbol.asyncIterator".into()));
+    e.define("Symbol", JsValue::Object(Rc::new(RefCell::new(sym_obj))));
 
     e.define("Infinity",  JsValue::Number(f64::INFINITY));
     e.define("NaN",       JsValue::Number(f64::NAN));
@@ -3825,5 +4017,186 @@ mod tests {
             const obj = { a: 1, b: 2, c: 3 };
             return Object.values(obj).length;
         "#)), 3.0);
+    }
+
+    // ─── Batch 5: Generatory + iterator protokol ──────────────────────────────
+
+    #[test]
+    fn generator_basic_yield() {
+        // Zakladni generator: yield 1, yield 2, yield 3
+        assert_eq!(as_num(run(r#"
+            function* gen() {
+                yield 1;
+                yield 2;
+                yield 3;
+            }
+            const it = gen();
+            const a = it.next().value;
+            const b = it.next().value;
+            const c = it.next().value;
+            return a + b + c;
+        "#)), 6.0);
+    }
+
+    #[test]
+    fn generator_done_flag() {
+        // done = true po dokonceni
+        assert_eq!(as_bool(run(r#"
+            function* gen() { yield 1; }
+            const it = gen();
+            it.next();
+            return it.next().done;
+        "#)), true);
+    }
+
+    #[test]
+    fn generator_for_of() {
+        // Generator pouzity v for...of
+        assert_eq!(as_num(run(r#"
+            function* range(n) {
+                for (let i = 0; i < n; i++) {
+                    yield i;
+                }
+            }
+            let sum = 0;
+            for (const x of range(5)) {
+                sum += x;
+            }
+            return sum;
+        "#)), 10.0);
+    }
+
+    #[test]
+    fn generator_expression() {
+        // Generator funkcni vyraz
+        assert_eq!(as_num(run(r#"
+            const gen = function*() {
+                yield 10;
+                yield 20;
+            };
+            let sum = 0;
+            for (const x of gen()) { sum += x; }
+            return sum;
+        "#)), 30.0);
+    }
+
+    #[test]
+    fn generator_yield_star_array() {
+        // yield* deleguje na pole
+        assert_eq!(as_num(run(r#"
+            function* gen() {
+                yield* [1, 2, 3];
+                yield 4;
+            }
+            let sum = 0;
+            for (const x of gen()) { sum += x; }
+            return sum;
+        "#)), 10.0);
+    }
+
+    #[test]
+    fn generator_yield_star_other_gen() {
+        // yield* deleguje na jiny generator
+        assert_eq!(as_num(run(r#"
+            function* inner() { yield 1; yield 2; }
+            function* outer() { yield* inner(); yield 3; }
+            let sum = 0;
+            for (const x of outer()) { sum += x; }
+            return sum;
+        "#)), 6.0);
+    }
+
+    #[test]
+    fn symbol_iterator_custom_iterable() {
+        // Custom iterable s Symbol.iterator
+        assert_eq!(as_num(run(r#"
+            const range = {
+                from: 1,
+                to: 5,
+                [Symbol.iterator]() {
+                    let i = this.from;
+                    const to = this.to;
+                    return {
+                        next() {
+                            if (i <= to) {
+                                return { value: i++, done: false };
+                            }
+                            return { value: undefined, done: true };
+                        }
+                    };
+                }
+            };
+            let sum = 0;
+            for (const x of range) { sum += x; }
+            return sum;
+        "#)), 15.0);
+    }
+
+    #[test]
+    fn symbol_iterator_string_concat_key() {
+        // Symbol.iterator je dostupny jako Symbol.iterator property
+        assert_eq!(as_str(run(r#"
+            return Symbol.iterator;
+        "#)), "Symbol.iterator");
+    }
+
+    #[test]
+    fn generator_parser_function_star_decl() {
+        // Parser test: function* decl
+        assert_eq!(as_num(run(r#"
+            function* nums() { yield 1; yield 2; yield 3; }
+            const arr = [];
+            for (const n of nums()) { arr.push(n); }
+            return arr.length;
+        "#)), 3.0);
+    }
+
+    #[test]
+    fn generator_next_returns_object_with_value_and_done() {
+        // next() vraci { value, done }
+        assert_eq!(as_bool(run(r#"
+            function* g() { yield 42; }
+            const it = g();
+            const step = it.next();
+            return step.value === 42 && step.done === false;
+        "#)), true);
+    }
+
+    #[test]
+    fn generator_multiple_calls() {
+        // Kazde volani gen() vraci novy iterator
+        assert_eq!(as_num(run(r#"
+            function* gen() { yield 1; yield 2; }
+            const it1 = gen();
+            const it2 = gen();
+            it1.next();
+            // it2 zacina znovu od zacatku
+            return it2.next().value;
+        "#)), 1.0);
+    }
+
+    #[test]
+    fn for_of_with_string() {
+        // for...of na retezci (string je iterable)
+        assert_eq!(as_num(run(r#"
+            let count = 0;
+            for (const ch of "abc") { count++; }
+            return count;
+        "#)), 3.0);
+    }
+
+    #[test]
+    fn generator_with_params() {
+        // Generator prijima parametry
+        assert_eq!(as_num(run(r#"
+            function* take(arr, n) {
+                for (let i = 0; i < n && i < arr.length; i++) {
+                    yield arr[i];
+                }
+            }
+            let sum = 0;
+            for (const x of take([10, 20, 30, 40], 3)) { sum += x; }
+            return sum;
+        "#)), 60.0);
     }
 }

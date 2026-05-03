@@ -307,10 +307,17 @@ impl Parser {
     fn parse_fn_decl(&mut self) -> Result<Stmt, ParseError> {
         self.expect_kw(KeywordEnum::Function)?;
         self.skip_trivia();
+        // Zkontroluj generator: `function*`
+        let is_gen = self.eat_op(OperatorEnum::Star);
+        self.skip_trivia();
         let name = self.parse_ident()?;
         let params = self.parse_params()?;
         let body = self.parse_fn_body()?;
-        Ok(Stmt::Function { name, params, body })
+        if is_gen {
+            Ok(Stmt::GeneratorFunc { name, params, body })
+        } else {
+            Ok(Stmt::Function { name, params, body })
+        }
     }
 
     fn parse_params(&mut self) -> Result<Vec<Param>, ParseError> {
@@ -1049,12 +1056,37 @@ impl Parser {
 
             TokenKind::Keyword(KeywordEnum::Function) => {
                 self.advance(); self.skip_trivia();
+                // Generator: `function*`
+                let is_gen = self.eat_op(OperatorEnum::Star);
+                self.skip_trivia();
                 let name = if matches!(self.kind(), TokenKind::Identifier(_) | TokenKind::Keyword(_)) {
                     Some(self.parse_ident()?)
                 } else { None };
                 let params = self.parse_params()?;
                 let body = self.parse_fn_body()?;
-                Ok(Expr::Function { name, params, body })
+                if is_gen {
+                    Ok(Expr::GeneratorFunc { name, params, body })
+                } else {
+                    Ok(Expr::Function { name, params, body })
+                }
+            }
+
+            // yield vyraz: `yield value?` nebo `yield* iterable`
+            TokenKind::Keyword(KeywordEnum::Yield) => {
+                self.advance(); self.skip_trivia();
+                // yield* delegate
+                let delegate = self.eat_op(OperatorEnum::Star);
+                // Volitelna hodnota (pokud dalsi token je pokracovani vyrazu)
+                let value = match self.kind() {
+                    TokenKind::Operator(OperatorEnum::RBrace)
+                    | TokenKind::Operator(OperatorEnum::RParen)
+                    | TokenKind::Operator(OperatorEnum::RBracket)
+                    | TokenKind::Operator(OperatorEnum::Semi)
+                    | TokenKind::Newline
+                    | TokenKind::Eof => None,
+                    _ => Some(Box::new(self.parse_assign_expr()?)),
+                };
+                Ok(Expr::Yield { value, delegate })
             }
 
             TokenKind::RegexLiteral { pattern, flags } => {
@@ -1103,11 +1135,20 @@ impl Parser {
     fn parse_object_prop(&mut self) -> Result<ObjectProp, ParseError> {
         self.skip_trivia();
 
-        // [computed]:
+        // [computed]: nebo [computed]() {} (method shorthand s computed klicem)
         if matches!(self.kind(), TokenKind::Operator(OperatorEnum::LBracket)) {
             self.advance();
             let key_expr = self.parse_assign_expr()?;
             self.expect_op(OperatorEnum::RBracket)?;
+            self.skip_trivia();
+            // [key](params) { body } - computed method shorthand
+            if matches!(self.kind(), TokenKind::Operator(OperatorEnum::LParen)) {
+                let params = self.parse_params()?;
+                let body = self.parse_fn_body()?;
+                let func = Expr::Function { name: None, params, body };
+                return Ok(ObjectProp { key: PropKey::Computed(Box::new(key_expr)), value: Box::new(func), shorthand: false, computed: true });
+            }
+            // [key]: value
             self.expect_op(OperatorEnum::Colon)?;
             let value = self.parse_assign_expr()?;
             return Ok(ObjectProp { key: PropKey::Computed(Box::new(key_expr)), value: Box::new(value), shorthand: false, computed: true });
@@ -1740,6 +1781,82 @@ mod tests {
                 match init {
                     Expr::ClassExpr { name: Some(n), .. } => {
                         assert_eq!(n, "Foo");
+                    }
+                    other => panic!("{other:?}"),
+                }
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    // ─── Generatory + iteratory ───────────────────────────────────────────────
+
+    #[test]
+    fn generator_decl_parse() {
+        // function* name() {}
+        match parse_stmt("function* gen() { yield 1; yield 2; }") {
+            Stmt::GeneratorFunc { name, body, .. } => {
+                assert_eq!(name, "gen");
+                assert_eq!(body.len(), 2);
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn generator_expr_parse() {
+        // const g = function*() { yield 1; }
+        let prog = parse("const g = function*() { yield 1; }");
+        match prog.body.into_iter().next().unwrap() {
+            Stmt::Var { decls, .. } => {
+                match decls[0].init.as_ref().unwrap() {
+                    Expr::GeneratorFunc { name: None, body, .. } => {
+                        assert_eq!(body.len(), 1);
+                    }
+                    other => panic!("{other:?}"),
+                }
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn yield_expr_parse() {
+        let prog = parse("function* g() { yield 42; }");
+        match prog.body.into_iter().next().unwrap() {
+            Stmt::GeneratorFunc { body, .. } => {
+                match &body[0] {
+                    Stmt::Expr(Expr::Yield { value: Some(_), delegate: false }) => {}
+                    other => panic!("{other:?}"),
+                }
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn yield_star_parse() {
+        let prog = parse("function* g() { yield* [1, 2, 3]; }");
+        match prog.body.into_iter().next().unwrap() {
+            Stmt::GeneratorFunc { body, .. } => {
+                match &body[0] {
+                    Stmt::Expr(Expr::Yield { delegate: true, .. }) => {}
+                    other => panic!("{other:?}"),
+                }
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn computed_method_shorthand_parse() {
+        let prog = parse("const o = { [Symbol.iterator]() { return 1; } }");
+        match prog.body.into_iter().next().unwrap() {
+            Stmt::Var { decls, .. } => {
+                match decls[0].init.as_ref().unwrap() {
+                    Expr::Object(props) => {
+                        assert_eq!(props.len(), 1);
+                        assert!(props[0].computed);
                     }
                     other => panic!("{other:?}"),
                 }
