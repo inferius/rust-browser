@@ -361,6 +361,60 @@ pub struct LayoutBox {
     pub widows: i32,
     /// counter-set (CSS L3)
     pub counter_set: Vec<(String, i32)>,
+    /// print-color-adjust / forced-color-adjust
+    pub print_color_adjust: String,
+    pub forced_color_adjust: String,
+    /// font-synthesis variants
+    pub font_synthesis: String,
+    pub font_kerning: String,
+    pub font_language_override: String,
+    pub font_optical_sizing: String,
+    pub font_smooth: String,
+    /// CSS Text L4
+    pub white_space_collapse: String,
+    pub text_spacing_trim: String,
+    pub text_size_adjust: String,
+    pub line_height_step: f32,
+    /// math-style / math-depth (CSS MathML / Math L1)
+    pub math_style: String,
+    pub math_depth: String,
+    /// CSS speech (aural)
+    pub speak: String,
+    pub speak_as: String,
+    /// CSS Generated content L3
+    pub bookmark_label: String,
+    pub bookmark_level: String,
+    pub bookmark_state: String,
+    pub string_set: String,
+    /// CSS Logical Properties: float-block, clear-block (rare)
+    pub float_value: String,
+    pub clear_value: String,
+    /// Image fitting (object-fit / object-position)
+    pub object_fit: String,
+    pub object_position: String,
+    /// Mix blend / background blend
+    pub background_blend_mode: String,
+    /// Image rendering hints
+    pub image_rendering: String,
+    /// CSS Sizing L4 - aspect-ratio uz mam
+    pub min_width_v: String,
+    pub max_width_v: String,
+    pub min_height_v: String,
+    pub max_height_v: String,
+    /// CSS Logical Properties continued
+    pub block_size_v: String,
+    pub inline_size_v: String,
+    /// table-layout, border-collapse, border-spacing, caption-side, empty-cells
+    pub table_layout: String,
+    pub border_collapse: String,
+    pub border_spacing: String,
+    pub caption_side: String,
+    pub empty_cells: String,
+    /// vertical-align
+    pub vertical_align: String,
+    /// CSS Backgrounds L4
+    pub background_origin_v: String,
+    pub background_clip_v: String,
     /// Box shadow: (offset_x, offset_y, blur, spread, color)
     /// (offset_x, offset_y, blur, spread, color, inset)
     pub box_shadow: Option<(f32, f32, f32, f32, [u8; 4], bool)>,
@@ -502,6 +556,45 @@ impl LayoutBox {
             orphans: 2,
             widows: 2,
             counter_set: Vec::new(),
+            print_color_adjust: String::new(),
+            forced_color_adjust: String::new(),
+            font_synthesis: String::new(),
+            font_kerning: String::new(),
+            font_language_override: String::new(),
+            font_optical_sizing: String::new(),
+            font_smooth: String::new(),
+            white_space_collapse: String::new(),
+            text_spacing_trim: String::new(),
+            text_size_adjust: String::new(),
+            line_height_step: 0.0,
+            math_style: String::new(),
+            math_depth: String::new(),
+            speak: String::new(),
+            speak_as: String::new(),
+            bookmark_label: String::new(),
+            bookmark_level: String::new(),
+            bookmark_state: String::new(),
+            string_set: String::new(),
+            float_value: String::new(),
+            clear_value: String::new(),
+            object_fit: String::new(),
+            object_position: String::new(),
+            background_blend_mode: String::new(),
+            image_rendering: String::new(),
+            min_width_v: String::new(),
+            max_width_v: String::new(),
+            min_height_v: String::new(),
+            max_height_v: String::new(),
+            block_size_v: String::new(),
+            inline_size_v: String::new(),
+            table_layout: String::new(),
+            border_collapse: String::new(),
+            border_spacing: String::new(),
+            caption_side: String::new(),
+            empty_cells: String::new(),
+            vertical_align: String::new(),
+            background_origin_v: String::new(),
+            background_clip_v: String::new(),
             box_shadow: None,
             transform: None,
             transforms: Vec::new(),
@@ -987,6 +1080,37 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(v) = s.get("orphans") { bx.orphans = v.trim().parse().unwrap_or(2); }
     if let Some(v) = s.get("widows") { bx.widows = v.trim().parse().unwrap_or(2); }
     if let Some(v) = s.get("counter-set") { bx.counter_set = parse_counter(v); }
+    if let Some(v) = s.get("print-color-adjust") { bx.print_color_adjust = v.trim().to_string(); }
+    if let Some(v) = s.get("forced-color-adjust") { bx.forced_color_adjust = v.trim().to_string(); }
+    if let Some(v) = s.get("font-synthesis") { bx.font_synthesis = v.trim().to_string(); }
+    if let Some(v) = s.get("font-kerning") { bx.font_kerning = v.trim().to_string(); }
+    if let Some(v) = s.get("font-language-override") { bx.font_language_override = v.trim().to_string(); }
+    if let Some(v) = s.get("font-optical-sizing") { bx.font_optical_sizing = v.trim().to_string(); }
+    if let Some(v) = s.get("font-smooth").or(s.get("-webkit-font-smoothing")) { bx.font_smooth = v.trim().to_string(); }
+    if let Some(v) = s.get("white-space-collapse") { bx.white_space_collapse = v.trim().to_string(); }
+    if let Some(v) = s.get("text-spacing-trim") { bx.text_spacing_trim = v.trim().to_string(); }
+    if let Some(v) = s.get("text-size-adjust").or(s.get("-webkit-text-size-adjust")) { bx.text_size_adjust = v.trim().to_string(); }
+    if let Some(v) = s.get("line-height-step") { bx.line_height_step = parse_length(v); }
+    if let Some(v) = s.get("math-style") { bx.math_style = v.trim().to_string(); }
+    if let Some(v) = s.get("math-depth") { bx.math_depth = v.trim().to_string(); }
+    if let Some(v) = s.get("speak") { bx.speak = v.trim().to_string(); }
+    if let Some(v) = s.get("speak-as") { bx.speak_as = v.trim().to_string(); }
+    if let Some(v) = s.get("bookmark-label") { bx.bookmark_label = v.trim().to_string(); }
+    if let Some(v) = s.get("bookmark-level") { bx.bookmark_level = v.trim().to_string(); }
+    if let Some(v) = s.get("bookmark-state") { bx.bookmark_state = v.trim().to_string(); }
+    if let Some(v) = s.get("string-set") { bx.string_set = v.trim().to_string(); }
+    if let Some(v) = s.get("float") { bx.float_value = v.trim().to_string(); }
+    if let Some(v) = s.get("clear") { bx.clear_value = v.trim().to_string(); }
+    if let Some(v) = s.get("object-fit") { bx.object_fit = v.trim().to_string(); }
+    if let Some(v) = s.get("object-position") { bx.object_position = v.trim().to_string(); }
+    if let Some(v) = s.get("background-blend-mode") { bx.background_blend_mode = v.trim().to_string(); }
+    if let Some(v) = s.get("image-rendering") { bx.image_rendering = v.trim().to_string(); }
+    if let Some(v) = s.get("table-layout") { bx.table_layout = v.trim().to_string(); }
+    if let Some(v) = s.get("border-collapse") { bx.border_collapse = v.trim().to_string(); }
+    if let Some(v) = s.get("border-spacing") { bx.border_spacing = v.trim().to_string(); }
+    if let Some(v) = s.get("caption-side") { bx.caption_side = v.trim().to_string(); }
+    if let Some(v) = s.get("empty-cells") { bx.empty_cells = v.trim().to_string(); }
+    if let Some(v) = s.get("vertical-align") { bx.vertical_align = v.trim().to_string(); }
     // contain - CSS Containment L3
     if let Some(c) = s.get("contain") {
         let mut bits = 0u8;
