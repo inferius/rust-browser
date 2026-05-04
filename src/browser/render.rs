@@ -972,6 +972,8 @@ pub fn run_window_with_html(html: String, css: String) -> Result<(), String> {
         prev_style_map: Option<super::cascade::StyleMap>,
         /// Track running animations per (node_id, anim_name) - pro dispatch animationstart/end
         active_animations: std::collections::HashSet<(usize, String)>,
+        /// Iteration counter per animation pro animationiteration event.
+        animation_iterations: std::collections::HashMap<(usize, String), i32>,
         /// Aktivni CSS transitions.
         active_transitions: Vec<super::cascade::ActiveTransition>,
     }
@@ -1162,13 +1164,22 @@ pub fn run_window_with_html(html: String, css: String) -> Result<(), String> {
             // Runtime CSS animation: aplikuj @keyframes na elementy s `animation: ...`
             let _animating = cascade::apply_animations(&mut style_map, &stylesheets, elapsed);
 
-            // Detect animation start/end events
+            // Detect animation start/end + iteration events
             let mut current_anims: std::collections::HashSet<(usize, String)> = std::collections::HashSet::new();
+            let mut iter_events: Vec<(usize, String, i32)> = Vec::new();
             for (node_id, styles) in &style_map {
                 if let Some(spec) = cascade::AnimationSpec::from_styles(styles) {
                     let t = elapsed - spec.delay_secs;
                     if t >= 0.0 && (spec.iteration_count.is_infinite() || t / spec.duration_secs < spec.iteration_count) {
-                        current_anims.insert((*node_id, spec.name));
+                        let key = (*node_id, spec.name.clone());
+                        current_anims.insert(key.clone());
+                        // Iteration count
+                        let cur_iter = (t / spec.duration_secs).floor() as i32;
+                        let prev_iter = self.animation_iterations.get(&key).copied().unwrap_or(-1);
+                        if cur_iter > prev_iter && cur_iter > 0 {
+                            iter_events.push((*node_id, spec.name.clone(), cur_iter));
+                        }
+                        self.animation_iterations.insert(key, cur_iter);
                     }
                 }
             }
@@ -1190,6 +1201,22 @@ pub fn run_window_with_html(html: String, css: String) -> Result<(), String> {
                                 std::rc::Rc::new(std::cell::RefCell::new(event)));
                             let _ = interp.dispatch_event(&target, event_type, event_val);
                         }
+                    }
+                }
+            }
+
+            // Dispatch animationiteration
+            for (node_id, name, _iter) in iter_events {
+                if let Some(interp) = &mut self.interpreter {
+                    let doc_root = Rc::clone(&interp.document.borrow().root);
+                    if let Some(target) = find_node_by_ptr(&doc_root, node_id) {
+                        let mut event = crate::interpreter::JsObject::new();
+                        event.set("type".into(), crate::interpreter::JsValue::Str("animationiteration".into()));
+                        event.set("animationName".into(), crate::interpreter::JsValue::Str(name));
+                        event.set("target".into(), crate::interpreter::JsValue::DomNode(Rc::clone(&target)));
+                        let event_val = crate::interpreter::JsValue::Object(
+                            std::rc::Rc::new(std::cell::RefCell::new(event)));
+                        let _ = interp.dispatch_event(&target, "animationiteration", event_val);
                     }
                 }
             }
@@ -1252,6 +1279,7 @@ pub fn run_window_with_html(html: String, css: String) -> Result<(), String> {
         prev_style_map: None,
         active_transitions: Vec::new(),
         active_animations: std::collections::HashSet::new(),
+        animation_iterations: std::collections::HashMap::new(),
     };
     event_loop.run_app(&mut app).map_err(|e| e.to_string())?;
     Ok(())
