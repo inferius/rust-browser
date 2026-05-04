@@ -4,11 +4,11 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 
 ## Stav
 
-- Build: **OK**, 0 errors.
-- Tests: **805 passed, 0 failed, 3 ignored**.
-- Posledni commit: `eea6aa9 FontFace API + document.fonts`.
+- Build: **OK**, 0 errors, par non-fatal warnings (duplicate match arms).
+- Tests: **805 passed, 0 failed, 3 ignored** (z 639 puv, +166 v session).
+- Posledni commit: `8d2350f Hlavni test.html rozsireni - rotation/text-deco/lists/outline demo`.
 - Tree: ciste.
-- Branch master, ~210 commitu pred origin/master.
+- Branch master, ~220 commitu pred origin/master (NEPUSHOVAT bez vyzvy).
 
 ## Test runner
 
@@ -17,78 +17,100 @@ powershell -ExecutionPolicy Bypass -File run_tests.ps1   # Win
 ./run_tests.sh                                            # Linux/Mac
 ```
 
-## Kompletni stav: rendering / runtime / JS API
+Vystup `test_logs/test-<ts>.log` + `failures-<ts>.log`. Exit 0 OK, 1 fail.
 
-**Realne implementovane render/runtime** (ne jen parser):
-- WGSL shader 9 modu: solid (0), text (1), linear gradient (2), shadow (3),
-  image (4), inset shadow (5), radial grad (6), conic grad (7), blurred (8)
-- Filter drop-shadow, filter blur (mode 8 smoothstep edge)
-- 2D rotation (cos/sin matrix kolem centroid)
-- 3D rotate aproximace (axis Z = 2D, X/Y = scale-based)
+## Spusteni prohlizece (testovaci browser)
+
+```bash
+cargo run -- browser                                # default static/test.html
+cargo run -- browser stranka.html                   # vlastni HTML
+cargo run -- window stranka.html                    # alias
+cargo run -- devtools stranka.html out.html         # DevTools panel HTML
+cargo run -- debug skript.js out.html               # Token+AST viewer
+
+# Test stranky per modul:
+cargo run -- browser static/css_modules/filter_effects/index.html
+cargo run -- browser static/css_modules/animations_l1/index.html
+cargo run -- browser static/css_modules/svg_basic/index.html
+cargo run -- browser static/css_modules/gradients/index.html
+```
+
+## Hlavni stav prohlizece
+
+**Real implementovane render/runtime** (NE jen parser):
+- WGSL shader 9 modu: solid, text, linear gradient, shadow, image, inset shadow,
+  radial grad, conic grad, blurred (mode 8 smoothstep edge)
+- Filter drop-shadow render
+- Filter blur shader-side mode 8 (single element edge blur)
+- **Filter blur 2-pass gauss pipeline** - 9-tap separable, 2 offscreen RTs
+  ping-pong, blur shader vs_main fullscreen triangle + fs_main 9-tap.
+  `run_blur_passes(radius)` hotova. Orchestrace s filter element TODO.
+- Real 2D rotation post-process (cos/sin matrix kolem centroid)
+- 3D rotate aproximace (axis Z = 2D, X/Y = scale-based squeeze)
 - Translate/Scale single + chain
-- Counter API runtime (counter() v ::before/::after content)
+- Counter API runtime (counter() resolve)
 - ::before/::after pseudo (s content/attr/counter)
 - ::first-letter + ::first-line text split
-- list-style-type marker (disc/circle/square/decimal/roman/alpha)
+- list-style-type marker (8 stylu: disc/circle/square/decimal/decimal-leading-zero/
+  upper-roman/lower-roman/upper-alpha/lower-alpha)
+- list-style-image (url marker)
 - text-decoration solid/double/dotted/dashed/wavy
 - outline render (mimo border)
-- Position: sticky (clamp dle parent)
-- Anchor positioning (anchor-name -> rect, position-anchor lookup)
-- Scroll-driven animations (animation-timeline: scroll())
+- Position: sticky runtime
+- Anchor positioning runtime
+- Scroll-driven animations runtime
 - pointer-events: none hit-test skip
+- direction: rtl text-align default = right
 - Per-text font lookup (GlyphAtlas (family, char, size))
-- Glyph + Image atlas rendering
 - @font-face FS load + Font registry
+- Glyph + Image atlas rendering
 - transition events dispatch (transitionend)
 - animation events (animationstart/-end/-iteration)
 - Form submit real POST (ureq)
 - Multiple backgrounds tiling
-- Multi-layer cascade (Layers / Pseudo / Containers)
+- Multi-layer cascade (Layers / Pseudo / Container Queries)
 
-**Parser-only** (nelze plne render bez wgpu RT pipeline):
-- Filter blur 2-pass gaussian (RT setup hotov, pipeline+shader chybi)
-- 3D perspective shader (matrix uniform per-vertex)
-- Filter na cely subtree (RT capture)
-- Polygon clip-path (stencil/SDF)
-- Hue-rotate / saturate / contrast filtry (CPU u single-element OK,
-  cely subtree TODO)
-- WebGL real render (jen stub)
+**Parser-only** (vyzaduji wgpu RT pipeline orchestration):
+- Filter blur na cely subtree - **RT setup + blur shader + run_blur_passes hotov**,
+  zbyva: capture scene region do RT pri filter blur element, run blur, composit
+- Filter na cely subtree obecne (RT capture)
+- 3D perspective shader - matrix uniform per-vertex
+- Polygon clip-path - shader stencil/SDF
+- Hue-rotate / saturate / contrast filtry na cely subtree
+- WebGL real render (jen stub - velky modul, cele OpenGL ES 2.0 mapping)
 
-**JS API:**
-- DOM kompletni (element/document/append/prepend/before/after/replaceWith/
-  remove/insertAdjacentHTML/cloneNode/contains/getBoundingClientRect/...)
-- Element.classList (add/remove/toggle/contains)
-- Element.dataset
-- Element.matches/closest
-- HTMLAnchorElement url parts
+**JS API kompletni:**
+
+DOM (130+ properties + methods):
+- element/document append/prepend/before/after/replaceWith/remove/insertAdjacentHTML
+- cloneNode, contains, getBoundingClientRect, hasAttribute/removeAttribute/toggleAttribute
+- classList (add/remove/toggle/contains), dataset (kebab->camel)
+- matches/closest, namespaceURI/localName/prefix
+- previousElementSibling/nextElementSibling, firstElementChild/lastElementChild
+- childElementCount, isConnected, ownerDocument
+- HTMLAnchorElement url parts (protocol/host/port/origin/...)
 - HTMLLabelElement.control + htmlFor
 - HTMLOptionElement.text/label/defaultSelected
 - HTMLSelectElement.options/selectedIndex/selectedOptions
 - HTMLTableElement.rows + tr.cells
-- HTMLDialogElement (show/showModal/close)
-- HTMLDetailsElement.open
-- HTMLMediaElement (play/pause/load/currentTime/...)
+- HTMLDialogElement (show/showModal/close), HTMLDetailsElement.open
+- HTMLMediaElement (play/pause/load/currentTime/duration/paused/muted/volume)
 - HTMLInputElement (validity/select/setSelectionRange/...)
 - HTMLTemplateElement.content
 - HTMLElement.style (setProperty/getPropertyValue/removeProperty)
-- form-controls.form / .labels / .form_data + submit() real POST
 - innerHTML/outerHTML getter+setter
-- namespaceURI/localName/prefix
-- previousElement/Sibling, nextElement/Sibling
-- childElementCount, firstElementChild, lastElementChild
-- isConnected, ownerDocument
+- form-controls.form / .labels / submit() real POST
 
+Modern Web APIs:
 - Canvas 2D (getContext + fillRect/strokeRect/clearRect/fillText +
   beginPath/moveTo/lineTo/arc/closePath/stroke/fill)
-- WebGL stub (constants + 40+ no-op methods)
-- ResizeObserver/IntersectionObserver/MutationObserver/PerformanceObserver
+- WebGL stub (canvas.getContext('webgl') - constants + 40+ no-op methods)
+- ResizeObserver/IntersectionObserver/MutationObserver/PerformanceObserver stuby
 - requestAnimationFrame/cancelAnimationFrame/queueMicrotask
 - customElements (define/get/whenDefined/upgrade)
-- new CSSStyleSheet()
-- new URL() + new URLSearchParams()
-- new Headers()
-- new FormData() + new Blob()
-- localStorage/sessionStorage
+- new CSSStyleSheet(), new URL(), new URLSearchParams()
+- new Headers(), new FormData(), new Blob()
+- localStorage / sessionStorage (in-memory + length)
 - navigator (userAgent/language/platform/clipboard/geolocation/...)
 - TextEncoder/TextDecoder
 - crypto (randomUUID/getRandomValues/subtle stubs)
@@ -97,13 +119,14 @@ powershell -ExecutionPolicy Bypass -File run_tests.ps1   # Win
 - history (pushState/replaceState/back/forward/state/length)
 - WebSocket / EventSource / BroadcastChannel stuby
 - IndexedDB (open/deleteDatabase/databases stubs)
-- new FontFace(family, src) + document.fonts
-- document.startViewTransition + 16+ document props
+- new FontFace(family, src) + document.fonts (FontFaceSet)
+- document.startViewTransition + 16+ document props (readyState/visibilityState/
+  hidden/title/URL/dir/...)
 
-**CSS:**
-- Selectors L4 vc :is/:where/:not/:has/~/nth-*/of-type/empty
-- Form pseudo-classes (:required/:optional/:disabled/:enabled/:checked/
-  :read-only/:read-write/:placeholder-shown/:valid/:invalid/:default)
+CSS:
+- Selectors L4 (:is/:where/:not/:has/~/nth-*/of-type/empty)
+- Form pseudo (:required/:optional/:disabled/:enabled/:checked/:read-only/
+  :read-write/:placeholder-shown/:valid/:invalid/:default)
 - Color L4 (oklch/oklab/lab/lch/hsl/hwb/color-mix/modern syntax)
 - Values L4 (min/max/clamp/env + math fci L4)
 - Logical Properties L1
@@ -115,7 +138,7 @@ powershell -ExecutionPolicy Bypass -File run_tests.ps1   # Win
 - Radial+conic gradients
 - Transitions L1 (parser + state diff + interpolace)
 - Filter Effects parser + drop-shadow + CPU color matrix + blur shader
-- Pseudo-Elements ::before/::after (s content + attr + counter)
+- Pseudo-Elements ::before/::after/::first-letter/::first-line
 - Backgrounds L3 (multi-layer + position/size/repeat/clip/origin)
 - @font-face (FS runtime)
 - SVG basic shapes (rect/circle/ellipse/line/text)
@@ -147,29 +170,124 @@ powershell -ExecutionPolicy Bypass -File run_tests.ps1   # Win
 
 ## TODO zbyle
 
-### Velke (RT/shader heavy)
-1. Filter blur 2-pass gauss s offscreen RT (RT je vytvoren, jen pipeline+
-   shader pass orchestration chybi)
-2. Filter na cely subtree (RT capture)
-3. 3D perspective shader (matrix uniform per-vertex)
-4. Polygon clip-path (shader stencil)
-5. WebGL real render
-6. Hue-rotate/saturate/contrast filtry na cely subtree
+### Velke (vyzaduji wgpu pipeline orchestration)
+
+1. **Filter blur orchestration** - integrace s filter blur element:
+   - RT pipeline + shader + run_blur_passes ALREADY HOTOVA v render.rs
+   - Zbyva:
+     - V paint emit specialni FilteredGroup marker pri filter blur element
+     - V render: mezi normal pass scoutat marker, switch encoder na RT_a
+     - Po vykresleni elementu skupiny, zavolat run_blur_passes(radius)
+     - Composit RT_a do hlavni swap chain (jen v regionu)
+   - Slozite kvuli per-element render encoder switching
+
+2. **Filter na cely subtree** (general) - same RT pipeline (blur, brightness,
+   contrast, hue-rotate, saturate). Color matrix na RT_a sample.
+
+3. **3D perspective shader** - matrix uniform per-vertex:
+   - Pridat shader uniform 4x4 matrix
+   - Vertex shader aplikuje pred clip-space transform
+   - LayoutBox ulozi matrix per element
+   - Per-element render with matrix uniform
+
+4. **Polygon clip-path** - shader stencil:
+   - Vyzaduje stencil buffer setup
+   - Render polygon do stencil bufferu
+   - Render element s stencil test enabled
+
+5. **WebGL real render** - VELMI VELKE:
+   - Track GL state (programs/buffers/textures/uniforms)
+   - drawArrays/drawElements -> emit Vertex commands?
+   - Compile WebGL shaders na WGSL? (HARD - WGSL syntax different)
+   - Stack multiple GL contexts per canvas
+   - Reasonable scope: jen stub pro JS code compatibility (uz mam)
 
 ### Mensi runtime
-- direction: rtl runtime (text flow, text-align default)
+- Filter subtree (blur + color matrix) - vyzaduje #1 hotov
 - text-emphasis render
-- ruby layout
+- ruby layout (CJK)
 - Subgrid real layout (taffy support)
 - shape-outside real layout (text wrap)
 - mask-image render
+- backdrop-filter render (vyzaduje filter pipeline)
 - Real custom elements upgrade callback
+- transition events s detail (computed start/end values)
 
 ### TypeScript kompilator
-**User pozadoval**: po kompletu prokonzultujeme.
+**User pozadoval**: po dokoncenem prohlizeci prokonzultujeme.
+
+Otazky:
+- Scope: full TSC superset vs subset (jen parser + strip types)
+- Type checking vs jen strip types -> JS
+- Integrace s lexer/parser nebo vlastni front-end
+- Vystup: JS string vs primy AST do interpreteru
 
 ## Pracovni flow
 
 - Po fici: build + test (run_tests.ps1) + commit
-- Commit cesky, ASCII
+- Commit cesky, ASCII, "co + proc"
+- Pri nejasnosti: zeptat se A/B/C
 - Komunikace cesky CAVEMAN MODE
+- CSS modul: testy + static/css_modules/<name>/
+- Aktualizovat TODO_CSS.md
+
+## Klicove soubory
+
+- `src/main.rs` - CLI rezimy
+- `src/browser/cascade.rs` (~2200 lines) - cascade + animations + transitions
+  + Math L4 + cascade_pseudo + form pseudo + apply_scroll_animations
+- `src/browser/css_parser.rs` - Stylesheet (vsechny at-rules + range queries +
+  parse_selectors pub)
+- `src/browser/layout.rs` (~3500 lines) - LayoutBox (140+ fields) +
+  build_box_inner (counter state) + pseudo virtuals (before/after/first-letter/
+  first-line/marker) + apply_anchor_positioning + apply_sticky + parsers
+  vsech CSS properties + parse_color (Color L4) + parse_*_gradient +
+  parse_filter_chain + apply_filter_chain + parse_clip_path + parse_box_shadow +
+  parse_text_shadow + transform chain (3D ops) + Display L3 enum
+- `src/browser/render.rs` (~2000 lines) - winit + wgpu, GlyphAtlas family lookup,
+  ImageAtlas, font_registry, canvas paint_canvas_ops, **2 offscreen RTs +
+  BLUR_SHADER WGSL + blur_pipeline + run_blur_passes**, transition events
+  dispatch, animation events + iteration, find_node_by_ptr
+- `src/browser/paint.rs` - DisplayList (vc CanvasOp + 3D transform aplikace +
+  rotate_cmd/scale_cmd/shift_cmd) + emit_svg_children + filter chain + clip
+  rect compute + drop-shadow emit + outline emit
+- `src/interpreter/mod.rs` (~4400 lines) - Interpreter, JsValue, DomNode dispatch
+  (130+ properties + methods), style/classList/dataset/canvas/form helpers,
+  parse_url_parts, dispatch_event pub method
+- `src/interpreter/builtins.rs` (~2700 lines) - globals (Math/JSON/Date/Intl/
+  fetch/Worker/setTimeout/setInterval/raf/queueMicrotask/localStorage/
+  sessionStorage/customElements/URL/URLSearchParams/Headers/navigator/
+  observers/TextEncoder/TextDecoder/crypto/performance/FormData/Blob/
+  AbortController/history/WebSocket/EventSource/BroadcastChannel/IndexedDB/
+  FontFace/document.fonts/document.startViewTransition + 16 doc props)
+
+## Co necist hned (velke soubory)
+
+- `src/interpreter/builtins.rs` (~2700)
+- `src/browser/cascade.rs` (~2200)
+- `src/browser/layout.rs` (~3500)
+- `src/browser/render.rs` (~2000)
+- `src/interpreter/mod.rs` (~4400)
+- `src/debug_view/devtools.rs` (>500)
+
+## Test stranky
+
+- `static/test.html` + `test.css` - hlavni univerzalni demo (13+ sekci:
+  typografie/barvy/animace/pseudo/filter/color L4/gradients/SVG/rotation/
+  text-decoration styles/lists/outline)
+- `static/css_modules/<modul>/index.html` - 19+ per-feature stranek
+
+## Dalsi krok pri pokracovani
+
+User: "vsechno krome TS, pak prokonzultujeme TS".
+
+Doporucene volby pro velke zbyle:
+- **A)** Filter blur orchestration (capture scene -> RT, blur, composit zpet)
+  RT pipeline UZ HOTOVA v render.rs
+- **B)** Filter na cely subtree (general) - po A, color matrix na RT
+- **C)** 3D perspective shader (matrix uniform per-vertex)
+- **D)** Polygon clip-path stencil
+- **E)** WebGL real render (velmi velke - cely GL state mapping)
+- **F)** TypeScript kompilator design konzultace (po prohlizeci hotov)
+
+Po dokonceni RT-heavy zbylych = prohlizec **kompletni**. Pak TS.
