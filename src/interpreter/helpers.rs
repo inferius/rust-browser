@@ -578,6 +578,69 @@ pub fn generate_uuid_v4() -> String {
     )
 }
 
+/// Real HTTP request pres ureq (blocking).
+/// Vraci (status, status_text, body, headers).
+pub fn perform_http_request(
+    url: &str,
+    method: &str,
+    headers: &[(String, String)],
+    body: Option<&str>,
+) -> Result<(u16, String, String, Vec<(String, String)>), String> {
+    let agent = ureq::AgentBuilder::new()
+        .timeout(std::time::Duration::from_secs(30))
+        .build();
+
+    let mut req = match method {
+        "GET"     => agent.get(url),
+        "POST"    => agent.post(url),
+        "PUT"     => agent.put(url),
+        "DELETE"  => agent.delete(url),
+        "PATCH"   => agent.request("PATCH", url),
+        "HEAD"    => agent.head(url),
+        "OPTIONS" => agent.request("OPTIONS", url),
+        m         => agent.request(m, url),
+    };
+
+    for (k, v) in headers {
+        req = req.set(k, v);
+    }
+
+    let resp_result = match body {
+        Some(b) => req.send_string(b),
+        None    => req.call(),
+    };
+
+    match resp_result {
+        Ok(resp) => {
+            let status = resp.status();
+            let status_text = resp.status_text().to_string();
+            let header_names: Vec<String> = resp.headers_names();
+            let mut resp_headers: Vec<(String, String)> = Vec::new();
+            for h in &header_names {
+                if let Some(v) = resp.header(h) {
+                    resp_headers.push((h.clone(), v.to_string()));
+                }
+            }
+            let resp_body = resp.into_string().unwrap_or_default();
+            Ok((status, status_text, resp_body, resp_headers))
+        }
+        Err(ureq::Error::Status(code, resp)) => {
+            // HTTP error response (4xx/5xx) - vratime jako successful s daným status
+            let status_text = resp.status_text().to_string();
+            let header_names: Vec<String> = resp.headers_names();
+            let mut resp_headers: Vec<(String, String)> = Vec::new();
+            for h in &header_names {
+                if let Some(v) = resp.header(h) {
+                    resp_headers.push((h.clone(), v.to_string()));
+                }
+            }
+            let resp_body = resp.into_string().unwrap_or_default();
+            Ok((code, status_text, resp_body, resp_headers))
+        }
+        Err(e) => Err(format!("{e}")),
+    }
+}
+
 /// Pseudo-random u32 (LCG, deterministicky pro testy).
 pub fn random_u32() -> u32 {
     use std::sync::atomic::{AtomicU64, Ordering};

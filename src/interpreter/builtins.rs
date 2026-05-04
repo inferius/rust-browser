@@ -838,19 +838,58 @@ pub fn setup_builtins(
     // Toto by chtelo lepsi integraci - zatim pouzivame skriptovou registraci
     let _ = element_registry;
 
-    // ─── fetch - stub vraci rejected Promise (bez backend) ───────────────────
-    // Realna implementace by potrebovala HTTP client (reqwest). Zde stub.
+    // ─── fetch - real HTTP client (ureq, blocking) ──────────────────────────
+    // V sync runtime blokuje na request a vraci settled Promise.
+    // Druhy argument je init objekt: { method, headers, body }
     e.define("fetch", native("fetch", |a| {
-        let url = a.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
-        // Vratime fulfilled Promise s mock Response
-        let mut response = JsObject::new();
-        response.set("__response__".into(), JsValue::Bool(true));
-        response.set("url".into(),    JsValue::Str(url));
-        response.set("status".into(), JsValue::Number(200.0));
-        response.set("ok".into(),     JsValue::Bool(true));
-        response.set("statusText".into(), JsValue::Str("OK".into()));
-        let response_val = JsValue::Object(Rc::new(RefCell::new(response)));
-        Ok(make_settled_promise("fulfilled", response_val))
+        let mut iter = a.into_iter();
+        let url = iter.next().map(|v| v.to_string()).unwrap_or_default();
+        let init = iter.next().unwrap_or(JsValue::Undefined);
+
+        // Parse init
+        let mut method = "GET".to_string();
+        let mut body: Option<String> = None;
+        let mut headers: Vec<(String, String)> = Vec::new();
+        if let JsValue::Object(o) = &init {
+            let b = o.borrow();
+            if let JsValue::Str(m) = b.get("method") { method = m.to_uppercase(); }
+            if let JsValue::Str(s) = b.get("body")   { body = Some(s); }
+            if let JsValue::Object(h) = b.get("headers") {
+                for k in h.borrow().own_keys() {
+                    if let JsValue::Str(v) = h.borrow().get(&k) {
+                        headers.push((k, v));
+                    }
+                }
+            }
+        }
+
+        // Dispatch request
+        let req_result = perform_http_request(&url, &method, &headers, body.as_deref());
+        match req_result {
+            Ok((status, status_text, resp_body, resp_headers)) => {
+                let mut response = JsObject::new();
+                response.set("__response__".into(), JsValue::Bool(true));
+                response.set("__body__".into(),    JsValue::Str(resp_body));
+                response.set("url".into(),         JsValue::Str(url));
+                response.set("status".into(),      JsValue::Number(status as f64));
+                response.set("ok".into(),          JsValue::Bool(status >= 200 && status < 300));
+                response.set("statusText".into(),  JsValue::Str(status_text));
+                let mut hdr_obj = JsObject::new();
+                for (k, v) in resp_headers {
+                    hdr_obj.set(k.to_lowercase(), JsValue::Str(v));
+                }
+                hdr_obj.set("__headers__".into(), JsValue::Bool(true));
+                response.set("headers".into(), JsValue::Object(Rc::new(RefCell::new(hdr_obj))));
+                let response_val = JsValue::Object(Rc::new(RefCell::new(response)));
+                Ok(make_settled_promise("fulfilled", response_val))
+            }
+            Err(msg) => {
+                let mut err = JsObject::new();
+                err.set("name".into(),    JsValue::Str("TypeError".into()));
+                err.set("message".into(), JsValue::Str(format!("Failed to fetch: {msg}")));
+                Ok(make_settled_promise("rejected", JsValue::Object(Rc::new(RefCell::new(err)))))
+            }
+        }
     }));
 
     // Konstruktory bez vlastni logiky (logika je v call_new)

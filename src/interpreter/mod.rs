@@ -2661,6 +2661,55 @@ impl Interpreter {
                             _ => {}
                         }
                     }
+                    // ─── Response (fetch) - text/json/ok/headers.get ──────
+                    if matches!(obj_rc2.borrow().props.get("__response__"), Some(JsValue::Bool(true))) {
+                        let body = match obj_rc2.borrow().props.get("__body__").cloned() {
+                            Some(JsValue::Str(s)) => s,
+                            _ => String::new(),
+                        };
+                        match key.as_str() {
+                            "text" => {
+                                return Ok(make_settled_promise("fulfilled", JsValue::Str(body)));
+                            }
+                            "json" => {
+                                match json_parse(&body) {
+                                    Ok(v) => return Ok(make_settled_promise("fulfilled", v)),
+                                    Err(e) => {
+                                        let mut err = JsObject::new();
+                                        err.set("name".into(),    JsValue::Str("SyntaxError".into()));
+                                        err.set("message".into(), JsValue::Str(e));
+                                        return Ok(make_settled_promise("rejected",
+                                            JsValue::Object(Rc::new(RefCell::new(err)))));
+                                    }
+                                }
+                            }
+                            "blob" | "arrayBuffer" => {
+                                // Stub - vratime body jako string Promise
+                                return Ok(make_settled_promise("fulfilled", JsValue::Str(body)));
+                            }
+                            _ => {}
+                        }
+                    }
+                    // Headers.get(name) - case-insensitive
+                    if matches!(obj_rc2.borrow().props.get("__headers__"), Some(JsValue::Bool(true))) {
+                        let arg_vals = self.eval_args(args, env)?;
+                        match key.as_str() {
+                            "get" => {
+                                let name = arg_vals.into_iter().next()
+                                    .map(|v| v.to_string().to_lowercase())
+                                    .unwrap_or_default();
+                                let v = obj_rc2.borrow().get(&name);
+                                return Ok(if matches!(v, JsValue::Undefined) { JsValue::Null } else { v });
+                            }
+                            "has" => {
+                                let name = arg_vals.into_iter().next()
+                                    .map(|v| v.to_string().to_lowercase())
+                                    .unwrap_or_default();
+                                return Ok(JsValue::Bool(obj_rc2.borrow().has_own(&name)));
+                            }
+                            _ => {}
+                        }
+                    }
                     // ─── Worker stub - postMessage/terminate ────────────
                     if matches!(obj_rc2.borrow().props.get("__worker__"), Some(JsValue::Bool(true))) {
                         let _arg_vals = self.eval_args(args, env)?;

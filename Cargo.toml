@@ -20,3 +20,6 @@ bigdecimal = "0.4"
 icu = { version = "1.5", features = ["compiled_data"] }
 fixed_decimal = "0.5"
 writeable = "0.5"
+
+# Real HTTP client pro fetch() - blocking varianta (sync runtime)
+ureq = { version = "2.10", features = ["json"] }
