@@ -11,6 +11,23 @@ pub enum DisplayCommand {
     Border { x: f32, y: f32, w: f32, h: f32, width: f32, color: [u8; 4] },
     /// Text rendering.
     Text { x: f32, y: f32, content: String, color: [u8; 4], font_size: f32, bold: bool },
+    /// Linear gradient rect: barva interpolovana podle smeru.
+    /// angle_deg: 0 = nahoru (z dola), 90 = doprava, 180 = dolu, 270 = doleva
+    Gradient {
+        x: f32, y: f32, w: f32, h: f32,
+        angle_deg: f32,
+        stops: Vec<(f32, [u8; 4])>,  // (offset 0..1, color)
+        radius: f32,
+    },
+    /// Box shadow rect: smeruje s blur.
+    Shadow {
+        x: f32, y: f32, w: f32, h: f32,
+        offset_x: f32, offset_y: f32,
+        blur: f32,
+        spread: f32,
+        color: [u8; 4],
+        radius: f32,
+    },
 }
 
 /// Vrati display list - sekvence primitiv pro renderer.
@@ -28,8 +45,34 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>) {
         [c[0], c[1], c[2], a]
     };
 
-    // Background
-    if let Some(bg) = bx.bg_color {
+    // Box shadow - emit pred bg
+    if let Some((ox, oy, blur, spread, color)) = bx.box_shadow {
+        cmds.push(DisplayCommand::Shadow {
+            x: bx.rect.x + ox - spread,
+            y: bx.rect.y + oy - spread,
+            w: bx.rect.width + 2.0 * spread,
+            h: bx.rect.height + 2.0 * spread,
+            offset_x: ox,
+            offset_y: oy,
+            blur,
+            spread,
+            color: with_alpha(color),
+            radius: bx.border_radius,
+        });
+    }
+
+    // Background gradient ma prioritu pred solid color
+    if let Some((angle, ref stops)) = bx.bg_gradient {
+        cmds.push(DisplayCommand::Gradient {
+            x: bx.rect.x,
+            y: bx.rect.y,
+            w: bx.rect.width,
+            h: bx.rect.height,
+            angle_deg: angle,
+            stops: stops.iter().map(|(o, c)| (*o, with_alpha(*c))).collect(),
+            radius: bx.border_radius,
+        });
+    } else if let Some(bg) = bx.bg_color {
         cmds.push(DisplayCommand::Rect {
             x: bx.rect.x,
             y: bx.rect.y,

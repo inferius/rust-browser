@@ -12,13 +12,18 @@ use std::rc::Rc;
 struct Vertex {
     pos: [f32; 2],     // pixel coords
     color: [f32; 4],   // RGBA 0..1
-    uv: [f32; 2],      // texture coords (pro text)
-    is_text: f32,      // 0.0 = solid color, 1.0 = sample texture
-    /// Local coords v ramci rectanglu (-1..1) - pro SDF rounded
+    uv: [f32; 2],      // texture coords (pro text) nebo gradient pos (pro gradient)
+    /// Mode: 0=solid, 1=text, 2=gradient, 3=shadow blur
+    mode: f32,
+    /// Local coords v ramci rectanglu (centered)
     local: [f32; 2],
-    /// Half size + radius (pro SDF rounded box)
+    /// Half size pro SDF
     half_size: [f32; 2],
     radius: f32,
+    /// Druha barva pro gradient (interpolovana z color->color2 podle uv.x)
+    color2: [f32; 4],
+    /// Blur radius pro shadow
+    blur: f32,
 }
 
 const RECT_SHADER: &str = r#"
@@ -33,20 +38,24 @@ struct VertexIn {
     @location(0) pos: vec2<f32>,
     @location(1) color: vec4<f32>,
     @location(2) uv: vec2<f32>,
-    @location(3) is_text: f32,
+    @location(3) mode: f32,
     @location(4) local: vec2<f32>,
     @location(5) half_size: vec2<f32>,
     @location(6) radius: f32,
+    @location(7) color2: vec4<f32>,
+    @location(8) blur: f32,
 };
 
 struct VertexOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) color: vec4<f32>,
     @location(1) uv: vec2<f32>,
-    @location(2) is_text: f32,
+    @location(2) mode: f32,
     @location(3) local: vec2<f32>,
     @location(4) half_size: vec2<f32>,
     @location(5) radius: f32,
+    @location(6) color2: vec4<f32>,
+    @location(7) blur: f32,
 };
 
 @vertex
@@ -57,10 +66,12 @@ fn vs_main(in: VertexIn) -> VertexOut {
     out.clip = vec4<f32>(x, y, 0.0, 1.0);
     out.color = in.color;
     out.uv = in.uv;
-    out.is_text = in.is_text;
+    out.mode = in.mode;
     out.local = in.local;
     out.half_size = in.half_size;
     out.radius = in.radius;
+    out.color2 = in.color2;
+    out.blur = in.blur;
     return out;
 }
 
@@ -72,11 +83,30 @@ fn sdf_rounded_box(p: vec2<f32>, half_size: vec2<f32>, r: f32) -> f32 {
 
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
-    if (in.is_text > 0.5) {
+    // Mode 1: text - sample atlas
+    if (in.mode > 0.5 && in.mode < 1.5) {
         let alpha = textureSample(atlas_tex, atlas_smp, in.uv).r;
         return vec4<f32>(in.color.rgb, in.color.a * alpha);
     }
-    // Solid rect with optional rounded corners (SDF anti-aliasing)
+    // Mode 2: linear gradient - lerp color->color2 podle uv.x (pre-rotated)
+    if (in.mode > 1.5 && in.mode < 2.5) {
+        let t = clamp(in.uv.x, 0.0, 1.0);
+        var rgba = mix(in.color, in.color2, t);
+        if (in.radius > 0.5) {
+            let d = sdf_rounded_box(in.local, in.half_size, in.radius);
+            let aa = 1.0 - smoothstep(-1.0, 1.0, d);
+            rgba = vec4<f32>(rgba.rgb, rgba.a * aa);
+        }
+        return rgba;
+    }
+    // Mode 3: shadow with blur (Gaussian-like fade)
+    if (in.mode > 2.5) {
+        let blur = max(in.blur, 1.0);
+        let d = sdf_rounded_box(in.local, in.half_size, in.radius);
+        let alpha = 1.0 - smoothstep(-blur, blur, d);
+        return vec4<f32>(in.color.rgb, in.color.a * alpha);
+    }
+    // Mode 0: solid s rounded corners
     if (in.radius > 0.5) {
         let d = sdf_rounded_box(in.local, in.half_size, in.radius);
         let aa = 1.0 - smoothstep(-1.0, 1.0, d);
@@ -118,6 +148,16 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas) -> Vec<Vertex
                     }
                 }
             }
+            DisplayCommand::Gradient { x, y, w, h, angle_deg, stops, radius } => {
+                if stops.len() >= 2 {
+                    let c0 = normalize_color(&stops[0].1);
+                    let c1 = normalize_color(&stops.last().unwrap().1);
+                    push_gradient(&mut verts, *x, *y, *w, *h, *angle_deg, c0, c1, *radius);
+                }
+            }
+            DisplayCommand::Shadow { x, y, w, h, color, blur, radius, .. } => {
+                push_shadow(&mut verts, *x, *y, *w, *h, normalize_color(color), *blur, *radius);
+            }
         }
     }
     verts
@@ -128,7 +168,9 @@ fn shift_command_y(cmd: &mut DisplayCommand, dy: f32) {
     match cmd {
         DisplayCommand::Rect { y, .. }
         | DisplayCommand::Border { y, .. }
-        | DisplayCommand::Text { y, .. } => *y += dy,
+        | DisplayCommand::Text { y, .. }
+        | DisplayCommand::Gradient { y, .. }
+        | DisplayCommand::Shadow { y, .. } => *y += dy,
     }
 }
 
@@ -139,16 +181,17 @@ fn push_rect_rounded(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f32, h: f32,
     let hh = h * 0.5;
     let cx = x + hw;
     let cy = y + hh;
-    // 4 vertices kazdy ma local coords centered (-hw..hw, -hh..hh)
     let make = |px: f32, py: f32| -> Vertex {
         Vertex {
             pos: [px, py],
             color,
             uv: [0.0, 0.0],
-            is_text: 0.0,
+            mode: 0.0,
             local: [px - cx, py - cy],
             half_size: [hw, hh],
             radius,
+            color2: [0.0; 4],
+            blur: 0.0,
         }
     };
     let tl = make(x,     y);
@@ -160,27 +203,95 @@ fn push_rect_rounded(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f32, h: f32,
 }
 
 fn push_rect(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f32, h: f32,
-             color: [f32; 4], uv: [f32; 2], is_text: f32) {
-    push_rect_uv(verts, x, y, w, h, color, uv, [uv[0], uv[1]], is_text);
+             color: [f32; 4], uv: [f32; 2], mode: f32) {
+    push_rect_uv(verts, x, y, w, h, color, uv, [uv[0], uv[1]], mode);
 }
 
 fn push_rect_uv(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f32, h: f32,
-                color: [f32; 4], uv0: [f32; 2], uv1: [f32; 2], is_text: f32) {
+                color: [f32; 4], uv0: [f32; 2], uv1: [f32; 2], mode: f32) {
     let mk = |px: f32, py: f32, u: f32, v: f32| -> Vertex {
         Vertex {
             pos: [px, py],
             color,
             uv: [u, v],
-            is_text,
+            mode,
             local: [0.0, 0.0],
             half_size: [0.0, 0.0],
             radius: 0.0,
+            color2: [0.0; 4],
+            blur: 0.0,
         }
     };
     let tl = mk(x,     y,     uv0[0], uv0[1]);
     let tr = mk(x + w, y,     uv1[0], uv0[1]);
     let bl = mk(x,     y + h, uv0[0], uv1[1]);
     let br = mk(x + w, y + h, uv1[0], uv1[1]);
+    verts.push(tl); verts.push(tr); verts.push(bl);
+    verts.push(bl); verts.push(tr); verts.push(br);
+}
+
+/// Gradient quad: kazdy vertex ma uv.x = projekce na gradient axis (0..1).
+fn push_gradient(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f32, h: f32,
+                 angle_deg: f32, c0: [f32; 4], c1: [f32; 4], radius: f32) {
+    let hw = w * 0.5;
+    let hh = h * 0.5;
+    let cx = x + hw;
+    let cy = y + hh;
+    let rad = (angle_deg - 90.0).to_radians();
+    let dir_x = rad.cos();
+    let dir_y = rad.sin();
+    let project = |px: f32, py: f32| -> f32 {
+        let lx = (px - cx) / w + 0.5;
+        let ly = (py - cy) / h + 0.5;
+        let proj = (lx - 0.5) * dir_x + (ly - 0.5) * dir_y;
+        (proj + 0.5).clamp(0.0, 1.0)
+    };
+    let mk = |px: f32, py: f32| -> Vertex {
+        Vertex {
+            pos: [px, py],
+            color: c0,
+            uv: [project(px, py), 0.0],
+            mode: 2.0,
+            local: [px - cx, py - cy],
+            half_size: [hw, hh],
+            radius,
+            color2: c1,
+            blur: 0.0,
+        }
+    };
+    let tl = mk(x,     y);
+    let tr = mk(x + w, y);
+    let bl = mk(x,     y + h);
+    let br = mk(x + w, y + h);
+    verts.push(tl); verts.push(tr); verts.push(bl);
+    verts.push(bl); verts.push(tr); verts.push(br);
+}
+
+fn push_shadow(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f32, h: f32,
+               color: [f32; 4], blur: f32, radius: f32) {
+    let hw = w * 0.5;
+    let hh = h * 0.5;
+    let cx = x + hw;
+    let cy = y + hh;
+    // Rozsirit quad o blur aby fade nepretekal
+    let extra = blur + 4.0;
+    let mk = |px: f32, py: f32| -> Vertex {
+        Vertex {
+            pos: [px, py],
+            color,
+            uv: [0.0, 0.0],
+            mode: 3.0,
+            local: [px - cx, py - cy],
+            half_size: [hw, hh],
+            radius,
+            color2: [0.0; 4],
+            blur,
+        }
+    };
+    let tl = mk(x - extra,     y - extra);
+    let tr = mk(x + w + extra, y - extra);
+    let bl = mk(x - extra,     y + h + extra);
+    let br = mk(x + w + extra, y + h + extra);
     verts.push(tl); verts.push(tr); verts.push(bl);
     verts.push(bl); verts.push(tr); verts.push(br);
 }
@@ -674,10 +785,12 @@ impl Renderer {
                         0 => Float32x2, // pos
                         1 => Float32x4, // color
                         2 => Float32x2, // uv
-                        3 => Float32,   // is_text
+                        3 => Float32,   // mode
                         4 => Float32x2, // local
                         5 => Float32x2, // half_size
                         6 => Float32,   // radius
+                        7 => Float32x4, // color2
+                        8 => Float32,   // blur
                     ],
                 }],
             },

@@ -35,6 +35,14 @@ pub enum Position {
     Sticky,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TransformOp {
+    Translate(f32, f32),
+    Rotate(f32),  // radians
+    Scale(f32, f32),
+    None,
+}
+
 impl Display {
     pub fn from_str(s: &str) -> Self {
         match s.trim() {
@@ -123,6 +131,12 @@ pub struct LayoutBox {
     /// Underline / strikethrough flagy
     pub text_underline: bool,
     pub text_strikethrough: bool,
+    /// Linear gradient pozadi: (angle_deg, Vec<(offset, color)>)
+    pub bg_gradient: Option<(f32, Vec<(f32, [u8; 4])>)>,
+    /// Box shadow: (offset_x, offset_y, blur, spread, color)
+    pub box_shadow: Option<(f32, f32, f32, f32, [u8; 4])>,
+    /// Transform: simple translate/rotate/scale
+    pub transform: Option<TransformOp>,
     /// Overflow: hidden/scroll/visible/auto
     pub overflow_hidden: bool,
     /// White-space: nowrap zachazi text jako jeden radek
@@ -163,6 +177,9 @@ impl LayoutBox {
             overflow_hidden: false,
             white_space_nowrap: false,
             cursor: None,
+            bg_gradient: None,
+            box_shadow: None,
+            transform: None,
             node: None,
         }
     }
@@ -240,9 +257,22 @@ fn build_box(node: &Rc<Node>, style_map: &StyleMap) -> LayoutBox {
         }
     }
 
-    // Color parsing
-    if let Some(c) = s.get("background-color").or(s.get("background")) {
-        bx.bg_color = parse_color(c);
+    // Color parsing - if linear-gradient, parse jako gradient, jinak solid color
+    let bg_value = s.get("background-color").or(s.get("background"));
+    if let Some(c) = bg_value {
+        if c.contains("linear-gradient(") {
+            bx.bg_gradient = parse_linear_gradient(c);
+        } else {
+            bx.bg_color = parse_color(c);
+        }
+    }
+    // Box shadow
+    if let Some(sh) = s.get("box-shadow") {
+        bx.box_shadow = parse_box_shadow(sh);
+    }
+    // Transform
+    if let Some(tr) = s.get("transform") {
+        bx.transform = parse_transform(tr);
     }
     if let Some(c) = s.get("color") {
         bx.text_color = parse_color(c);
@@ -652,6 +682,145 @@ pub fn parse_color(s: &str) -> Option<[u8; 4]> {
         "transparent" => Some([0, 0, 0, 0]),
         _ => None,
     }
+}
+
+/// Parse linear-gradient(angle, color, color, ...) -> (angle_deg, stops).
+pub fn parse_linear_gradient(s: &str) -> Option<(f32, Vec<(f32, [u8; 4])>)> {
+    let s = s.trim();
+    let inner = s.strip_prefix("linear-gradient(")?.strip_suffix(')')?;
+    // Split na comma respektujici parentheses
+    let parts = split_top_level_commas(inner);
+    if parts.len() < 2 { return None; }
+
+    let mut angle = 180.0; // default top->bottom
+    let mut start_idx = 0;
+    let first = parts[0].trim();
+    if let Some(deg_str) = first.strip_suffix("deg") {
+        if let Ok(a) = deg_str.trim().parse::<f32>() {
+            angle = a;
+            start_idx = 1;
+        }
+    } else if first.starts_with("to ") {
+        angle = match first.trim_start_matches("to ").trim() {
+            "top"    => 0.0,
+            "right"  => 90.0,
+            "bottom" => 180.0,
+            "left"   => 270.0,
+            "top right" | "right top" => 45.0,
+            "bottom right" | "right bottom" => 135.0,
+            "bottom left" | "left bottom" => 225.0,
+            "top left" | "left top" => 315.0,
+            _ => 180.0,
+        };
+        start_idx = 1;
+    }
+
+    let mut stops: Vec<(f32, [u8; 4])> = Vec::new();
+    let n = parts.len() - start_idx;
+    for (i, p) in parts[start_idx..].iter().enumerate() {
+        // "red 50%" nebo jen "red"
+        let trimmed = p.trim();
+        let (color_str, offset) = if let Some(percent_idx) = trimmed.rfind('%') {
+            // Najdi mezeru pred %
+            let space_idx = trimmed[..percent_idx].rfind(' ').unwrap_or(0);
+            let pct: f32 = trimmed[space_idx..percent_idx].trim().parse().unwrap_or(0.0);
+            (trimmed[..space_idx].trim().to_string(), pct / 100.0)
+        } else {
+            let default_offset = if n <= 1 { 0.0 } else { i as f32 / (n - 1) as f32 };
+            (trimmed.to_string(), default_offset)
+        };
+        if let Some(c) = parse_color(&color_str) {
+            stops.push((offset, c));
+        }
+    }
+    if stops.is_empty() { return None; }
+    Some((angle, stops))
+}
+
+/// Parse box-shadow: "offset_x offset_y blur spread color".
+pub fn parse_box_shadow(s: &str) -> Option<(f32, f32, f32, f32, [u8; 4])> {
+    let s = s.trim();
+    if s == "none" { return None; }
+    let parts: Vec<&str> = s.split_whitespace().collect();
+    if parts.len() < 3 { return None; }
+    let ox = parse_length(parts[0]);
+    let oy = parse_length(parts[1]);
+    let mut blur = 0.0f32;
+    let mut spread = 0.0f32;
+    let mut color = [0u8, 0, 0, 128];
+    let mut i = 2;
+    if i < parts.len() && (parts[i].ends_with("px") || parts[i].ends_with("em") || parts[i].chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false)) {
+        blur = parse_length(parts[i]);
+        i += 1;
+    }
+    if i < parts.len() && (parts[i].ends_with("px") || parts[i].ends_with("em") || parts[i].chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false)) {
+        spread = parse_length(parts[i]);
+        i += 1;
+    }
+    if i < parts.len() {
+        // Zbyle parts spojeny - barva (mohla obsahovat "rgb(...)")
+        let rest: String = parts[i..].join(" ");
+        if let Some(c) = parse_color(&rest) {
+            color = c;
+        }
+    }
+    Some((ox, oy, blur, spread, color))
+}
+
+/// Parse transform: "translate(10px, 20px)" / "rotate(45deg)" / "scale(1.5)".
+pub fn parse_transform(s: &str) -> Option<TransformOp> {
+    let s = s.trim();
+    if s == "none" { return Some(TransformOp::None); }
+    if let Some(inner) = s.strip_prefix("translate(").and_then(|x| x.strip_suffix(')')) {
+        let parts: Vec<&str> = inner.split(',').map(str::trim).collect();
+        let tx = parts.first().map(|p| parse_length(p)).unwrap_or(0.0);
+        let ty = parts.get(1).map(|p| parse_length(p)).unwrap_or(0.0);
+        return Some(TransformOp::Translate(tx, ty));
+    }
+    if let Some(inner) = s.strip_prefix("translateX(").and_then(|x| x.strip_suffix(')')) {
+        return Some(TransformOp::Translate(parse_length(inner), 0.0));
+    }
+    if let Some(inner) = s.strip_prefix("translateY(").and_then(|x| x.strip_suffix(')')) {
+        return Some(TransformOp::Translate(0.0, parse_length(inner)));
+    }
+    if let Some(inner) = s.strip_prefix("rotate(").and_then(|x| x.strip_suffix(')')) {
+        let trimmed = inner.trim();
+        let deg: f32 = if let Some(d) = trimmed.strip_suffix("deg") {
+            d.trim().parse().unwrap_or(0.0)
+        } else if let Some(r) = trimmed.strip_suffix("rad") {
+            return Some(TransformOp::Rotate(r.trim().parse().unwrap_or(0.0)));
+        } else { 0.0 };
+        return Some(TransformOp::Rotate(deg.to_radians()));
+    }
+    if let Some(inner) = s.strip_prefix("scale(").and_then(|x| x.strip_suffix(')')) {
+        let parts: Vec<&str> = inner.split(',').map(str::trim).collect();
+        let sx = parts.first().and_then(|p| p.parse::<f32>().ok()).unwrap_or(1.0);
+        let sy = parts.get(1).and_then(|p| p.parse::<f32>().ok()).unwrap_or(sx);
+        return Some(TransformOp::Scale(sx, sy));
+    }
+    None
+}
+
+fn split_top_level_commas(s: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut depth = 0;
+    let mut start = 0;
+    let bytes = s.as_bytes();
+    for (i, &b) in bytes.iter().enumerate() {
+        match b {
+            b'(' => depth += 1,
+            b')' => depth -= 1,
+            b',' if depth == 0 => {
+                parts.push(&s[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    if start < s.len() {
+        parts.push(&s[start..]);
+    }
+    parts
 }
 
 /// Parse delku v px nebo em. Vraci pixely.
