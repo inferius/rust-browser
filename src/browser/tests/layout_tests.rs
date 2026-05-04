@@ -322,6 +322,59 @@ fn animation_spec_shorthand_parsing() {
 }
 
 #[test]
+fn animation_spec_fill_mode_play_state() {
+    use std::collections::HashMap;
+    let mut s: HashMap<String, String> = HashMap::new();
+    s.insert("animation".into(), "slide 2s ease-in forwards paused".into());
+    let spec = cascade::AnimationSpec::from_styles(&s).unwrap();
+    assert_eq!(spec.fill_mode, "forwards");
+    assert_eq!(spec.play_state, "paused");
+    assert_eq!(spec.timing_function, "ease-in");
+}
+
+#[test]
+fn animation_spec_cubic_bezier_in_shorthand() {
+    use std::collections::HashMap;
+    let mut s: HashMap<String, String> = HashMap::new();
+    s.insert("animation".into(), "fade 1s cubic-bezier(0.25,0.1,0.25,1) infinite".into());
+    let spec = cascade::AnimationSpec::from_styles(&s).unwrap();
+    assert!(spec.timing_function.starts_with("cubic-bezier("),
+        "got: {}", spec.timing_function);
+    assert!(spec.iteration_count.is_infinite());
+}
+
+#[test]
+fn animation_fill_mode_forwards_holds_last_frame() {
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet};
+    let doc = parse_html(r#"<html><body><div id="x"></div></body></html>"#, "");
+    let css = parse_stylesheet(r#"
+        #x { animation: slide 1s linear forwards; left: 0px; position: relative; }
+        @keyframes slide { 0% { left: 0px; } 100% { left: 100px; } }
+    "#);
+    let mut map = cascade::cascade(&doc.root, &[css.clone()]);
+    // Po skonceni (5s > 1s) s forwards drzi 100px
+    cascade::apply_animations(&mut map, &[css], 5.0);
+    let div = doc.root.get_elements_by_tag("div");
+    let s = cascade::get_styles(&map, &div[0]).unwrap();
+    assert_eq!(s.get("left").map(|v| v.as_str()), Some("100px"));
+}
+
+#[test]
+fn animation_paused_freezes_at_zero() {
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet};
+    let doc = parse_html(r#"<html><body><div id="x"></div></body></html>"#, "");
+    let css = parse_stylesheet(r#"
+        #x { animation: slide 1s linear; animation-play-state: paused; left: 0px; }
+        @keyframes slide { 0% { left: 0px; } 100% { left: 100px; } }
+    "#);
+    let mut map = cascade::cascade(&doc.root, &[css.clone()]);
+    cascade::apply_animations(&mut map, &[css], 0.5);
+    let div = doc.root.get_elements_by_tag("div");
+    let s = cascade::get_styles(&map, &div[0]).unwrap();
+    assert_eq!(s.get("left").map(|v| v.as_str()), Some("0px"));
+}
+
+#[test]
 fn animation_spec_longhand_overrides() {
     use std::collections::HashMap;
     let mut s: HashMap<String, String> = HashMap::new();

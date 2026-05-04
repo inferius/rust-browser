@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="UTF-8">
+    <title>CSS Animations L1 - fill-mode + play-state</title>
+    <link rel="stylesheet" href="index.css">
+</head>
+<body>
+    <header>
+        <h1>CSS Animations Level 1 - rozsireni</h1>
+        <p>animation-fill-mode (none/forwards/backwards/both), animation-play-state (running/paused), cubic-bezier(), steps()</p>
+    </header>
+
+    <main>
+        <section>
+            <h2>fill-mode: forwards (drzi posledni snimek)</h2>
+            <div class="track"><div class="b1">slide 2s forwards (jen jednou)</div></div>
+        </section>
+
+        <section>
+            <h2>fill-mode: backwards (drzi prvni snimek pri delay)</h2>
+            <div class="track"><div class="b2">delay 1s backwards</div></div>
+        </section>
+
+        <section>
+            <h2>play-state: paused (animace zmrznuta)</h2>
+            <div class="track"><div class="b3">paused na 50%</div></div>
+        </section>
+
+        <section>
+            <h2>cubic-bezier(0.68, -0.55, 0.27, 1.55) - bouncy</h2>
+            <div class="track"><div class="b4">overshoot easing</div></div>
+        </section>
+
+        <section>
+            <h2>steps(5, end) - 5 diskretnich kroku</h2>
+            <div class="track"><div class="b5">stepper</div></div>
+        </section>
+
+        <section>
+            <h2>steps(4, jump-start)</h2>
+            <div class="track"><div class="b6">jump-start</div></div>
+        </section>
+    </main>
+</body>
+</html>

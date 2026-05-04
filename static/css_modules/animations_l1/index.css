@@ -1,0 +1,60 @@
+body {
+    font-family: Arial, sans-serif;
+    background: #f5f5f7;
+    color: #1d1d1f;
+    margin: 0;
+    padding: 24px;
+}
+header {
+    background: #1d1d1f;
+    color: white;
+    padding: 16px 24px;
+    border-radius: 8px;
+    margin-bottom: 24px;
+}
+header h1 { margin: 0; }
+header p { margin: 8px 0 0 0; color: #a1a1a6; }
+section {
+    background: white;
+    padding: 16px 24px;
+    margin-bottom: 12px;
+    border-radius: 8px;
+    border: 1px solid #d2d2d7;
+}
+section h2 {
+    margin: 0 0 8px 0;
+    font-size: 14px;
+    color: #424245;
+    font-family: monospace;
+}
+.track {
+    position: relative;
+    height: 60px;
+    background: #f5f5f7;
+    border-radius: 6px;
+    overflow: hidden;
+}
+.b1, .b2, .b3, .b4, .b5, .b6 {
+    position: relative;
+    width: 120px;
+    height: 40px;
+    margin: 10px 0 0 10px;
+    background: #2997ff;
+    color: white;
+    text-align: center;
+    line-height: 40px;
+    border-radius: 4px;
+    font-size: 12px;
+}
+
+.b1 { animation: slide-anim 2s linear 1 forwards; }
+.b2 { animation: slide-anim 2s linear 1s 1 backwards; background: #34c759; }
+.b3 { animation: slide-anim 2s linear infinite; animation-play-state: paused; background: #ff3b30; }
+.b4 { animation: slide-anim 2s cubic-bezier(0.68,-0.55,0.27,1.55) infinite alternate; background: #af52de; }
+.b5 { animation: slide-anim 2s steps(5,end) infinite; background: #ff9500; }
+.b6 { animation: slide-anim 2s steps(4,jump-start) infinite; background: #5ac8fa; }
+
+@keyframes slide-anim {
+    0%   { left: 0px; }
+    100% { left: 400px; }
+}

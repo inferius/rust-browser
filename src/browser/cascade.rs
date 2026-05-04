@@ -823,10 +823,12 @@ pub fn get_styles<'a>(map: &'a StyleMap, node: &Rc<Node>) -> Option<&'a HashMap<
 pub struct AnimationSpec {
     pub name: String,
     pub duration_secs: f32,
-    pub timing_function: String, // "linear" / "ease" / "ease-in" / "ease-out" / "ease-in-out"
+    pub timing_function: String, // "linear" / "ease" / "ease-in" / "ease-out" / "ease-in-out" / "cubic-bezier(...)" / "steps(...)"
     pub iteration_count: f32,    // f32::INFINITY pro "infinite"
     pub direction: String,        // "normal" / "reverse" / "alternate" / "alternate-reverse"
     pub delay_secs: f32,
+    pub fill_mode: String,        // "none" / "forwards" / "backwards" / "both"
+    pub play_state: String,       // "running" / "paused"
 }
 
 impl AnimationSpec {
@@ -839,19 +841,29 @@ impl AnimationSpec {
         let mut direction: String = "normal".into();
         let mut delay: f32 = 0.0;
 
-        // Shorthand parsing
+        let mut fill_mode: String = "none".into();
+        let mut play_state: String = "running".into();
+
+        // Shorthand parsing - tokenizace respektuje zavorky (cubic-bezier(...), steps(...))
         if let Some(short) = styles.get("animation") {
-            for tok in short.split_whitespace() {
+            for tok in tokenize_balanced(short) {
+                let tok = tok.as_str();
                 if let Some(s) = parse_time(tok) {
                     if duration == 0.0 { duration = s; } else { delay = s; }
                 } else if tok == "infinite" {
                     iter = f32::INFINITY;
                 } else if let Ok(n) = tok.parse::<f32>() {
                     iter = n;
-                } else if matches!(tok, "linear" | "ease" | "ease-in" | "ease-out" | "ease-in-out" | "step-start" | "step-end") {
+                } else if matches!(tok, "linear" | "ease" | "ease-in" | "ease-out" | "ease-in-out" | "step-start" | "step-end")
+                    || tok.starts_with("cubic-bezier(") || tok.starts_with("steps(")
+                {
                     timing = tok.to_string();
                 } else if matches!(tok, "normal" | "reverse" | "alternate" | "alternate-reverse") {
                     direction = tok.to_string();
+                } else if matches!(tok, "none" | "forwards" | "backwards" | "both") {
+                    fill_mode = tok.to_string();
+                } else if matches!(tok, "running" | "paused") {
+                    play_state = tok.to_string();
                 } else {
                     // Predpokladej name
                     if name.is_none() { name = Some(tok.to_string()); }
@@ -868,14 +880,36 @@ impl AnimationSpec {
         }
         if let Some(v) = styles.get("animation-direction") { direction = v.trim().to_string(); }
         if let Some(v) = styles.get("animation-delay").and_then(|s| parse_time(s.trim())) { delay = v; }
+        if let Some(v) = styles.get("animation-fill-mode") { fill_mode = v.trim().to_string(); }
+        if let Some(v) = styles.get("animation-play-state") { play_state = v.trim().to_string(); }
 
         let name = name?;
         if name == "none" || duration <= 0.0 { return None; }
         Some(AnimationSpec {
             name, duration_secs: duration, timing_function: timing,
             iteration_count: iter, direction, delay_secs: delay,
+            fill_mode, play_state,
         })
     }
+}
+
+/// Tokenize string respektujici vyvazene zavorky (pro cubic-bezier/steps).
+fn tokenize_balanced(s: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut cur = String::new();
+    let mut depth = 0i32;
+    for ch in s.chars() {
+        match ch {
+            '(' => { depth += 1; cur.push(ch); }
+            ')' => { depth -= 1; cur.push(ch); }
+            c if c.is_whitespace() && depth == 0 => {
+                if !cur.is_empty() { tokens.push(std::mem::take(&mut cur)); }
+            }
+            _ => cur.push(ch),
+        }
+    }
+    if !cur.is_empty() { tokens.push(cur); }
+    tokens
 }
 
 /// Parsuje "2s" / "500ms" / "0.3s". Vrati sekundy.
@@ -893,16 +927,47 @@ fn parse_time(s: &str) -> Option<f32> {
 /// Aplikuje easing na linearni progress (0..1).
 fn apply_easing(t: f32, easing: &str) -> f32 {
     let t = t.clamp(0.0, 1.0);
+    let easing = easing.trim();
     match easing {
-        "linear" => t,
-        "ease"        => cubic_bezier(t, 0.25, 0.1, 0.25, 1.0),
-        "ease-in"     => cubic_bezier(t, 0.42, 0.0, 1.0, 1.0),
-        "ease-out"    => cubic_bezier(t, 0.0, 0.0, 0.58, 1.0),
-        "ease-in-out" => cubic_bezier(t, 0.42, 0.0, 0.58, 1.0),
-        "step-start"  => 1.0,
-        "step-end"    => if t >= 1.0 { 1.0 } else { 0.0 },
-        _ => t,
+        "linear" => return t,
+        "ease"        => return cubic_bezier(t, 0.25, 0.1, 0.25, 1.0),
+        "ease-in"     => return cubic_bezier(t, 0.42, 0.0, 1.0, 1.0),
+        "ease-out"    => return cubic_bezier(t, 0.0, 0.0, 0.58, 1.0),
+        "ease-in-out" => return cubic_bezier(t, 0.42, 0.0, 0.58, 1.0),
+        "step-start"  => return 1.0,
+        "step-end"    => return if t >= 1.0 { 1.0 } else { 0.0 },
+        _ => {}
     }
+    // cubic-bezier(x1, y1, x2, y2)
+    if let Some(args) = easing.strip_prefix("cubic-bezier(").and_then(|s| s.strip_suffix(')')) {
+        let nums: Vec<f32> = args.split(',').filter_map(|p| p.trim().parse().ok()).collect();
+        if nums.len() == 4 {
+            return cubic_bezier(t, nums[0], nums[1], nums[2], nums[3]);
+        }
+    }
+    // steps(n, jump-start|jump-end|jump-both|jump-none|start|end)
+    if let Some(args) = easing.strip_prefix("steps(").and_then(|s| s.strip_suffix(')')) {
+        let parts: Vec<&str> = args.split(',').map(|s| s.trim()).collect();
+        let n: i32 = parts.first().and_then(|p| p.parse().ok()).unwrap_or(1).max(1);
+        let kind = parts.get(1).copied().unwrap_or("end");
+        return apply_steps(t, n, kind);
+    }
+    t
+}
+
+/// CSS steps() - kvantizuje progress na n diskretnich kroku.
+/// kind: "jump-start"/"start", "jump-end"/"end" (default), "jump-both", "jump-none"
+fn apply_steps(t: f32, n: i32, kind: &str) -> f32 {
+    let n = n as f32;
+    match kind {
+        "jump-start" | "start" => ((t * n).floor() + 1.0) / n,
+        "jump-both"            => ((t * n).floor() + 1.0) / (n + 1.0),
+        "jump-none" => {
+            if n <= 1.0 { return 0.0; }
+            (t * n).floor() / (n - 1.0)
+        }
+        _ /* jump-end / end */ => (t * n).floor() / n,
+    }.clamp(0.0, 1.0)
 }
 
 /// Newton-iterace pro cubic-bezier easing kompletne na sjednoceni s CSS spec.
@@ -958,20 +1023,46 @@ pub fn apply_animations(
 
         // Cas po zaciatku animace (bez delay)
         let t = elapsed_secs - spec.delay_secs;
-        if t < 0.0 { continue; }
 
-        // Iter count check
-        let total_progress = t / spec.duration_secs; // pocet kompletnich + zlomek iteraci
-        if total_progress >= spec.iteration_count {
-            // Animace dokoncena - aplikuj posledni snimek
-            let final_progress = match spec.direction.as_str() {
-                "reverse" => 0.0,
-                "alternate" if (spec.iteration_count as i32) % 2 == 0 => 0.0,
-                "alternate-reverse" if (spec.iteration_count as i32) % 2 == 0 => 1.0,
-                _ => 1.0,
-            };
-            let interp_vals = interpolate_keyframes(frames, final_progress);
+        // Pred zacatkem (delay zatim probiha)
+        if t < 0.0 {
+            // animation-fill-mode: backwards / both -> aplikuj prvni snimek pred zacatkem
+            if spec.fill_mode == "backwards" || spec.fill_mode == "both" {
+                let initial = match spec.direction.as_str() {
+                    "reverse" | "alternate-reverse" => 1.0,
+                    _ => 0.0,
+                };
+                let interp_vals = interpolate_keyframes(frames, initial);
+                for (k, v) in interp_vals { styles.insert(k, v); }
+                any_active = true;
+            }
+            continue;
+        }
+
+        // Paused: pouzij fixed progress 0 (nebo posledni - zatim 0 pro jednoduchost)
+        if spec.play_state == "paused" {
+            // Pouzij prvni snimek
+            let interp_vals = interpolate_keyframes(frames, 0.0);
             for (k, v) in interp_vals { styles.insert(k, v); }
+            continue;
+        }
+
+        // Iter count check - dokonceni
+        let total_progress = t / spec.duration_secs;
+        if total_progress >= spec.iteration_count {
+            // Animace dokoncena
+            // animation-fill-mode: forwards / both -> drz posledni snimek
+            // jinak (none / backwards) -> nepouzivat keyframes (vrati se na puvodni styl)
+            if spec.fill_mode == "forwards" || spec.fill_mode == "both" {
+                let final_progress = match spec.direction.as_str() {
+                    "reverse" => 0.0,
+                    "alternate" if (spec.iteration_count as i32) % 2 == 0 => 0.0,
+                    "alternate-reverse" if (spec.iteration_count as i32) % 2 == 0 => 1.0,
+                    _ => 1.0,
+                };
+                let interp_vals = interpolate_keyframes(frames, final_progress);
+                for (k, v) in interp_vals { styles.insert(k, v); }
+            }
             continue;
         }
 

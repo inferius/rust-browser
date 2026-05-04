@@ -18,7 +18,7 @@ Konvence stavu:
 - [/] Values L4: `min()`, `max()`, `clamp()`, `env()` hotovo, `attr()` chybi, math funkce (round/sin/cos/...) chybi
 - [/] Color L4: `oklch`, `oklab`, `lab`, `lch`, `hsl`, `hwb`, `color-mix(in srgb|oklab|oklch)`, modern rgb syntax, hex 4/8 hotovo. Relative color syntax + `color()` namespace + system colors zatim chybi.
 - [ ] Backgrounds L3: multiple backgrounds, `background-clip`, `background-origin`, `background-attachment`
-- [ ] Animations L1: `animation-fill-mode`, `animation-play-state`
+- [x] Animations L1: `animation-fill-mode` (none/forwards/backwards/both), `animation-play-state` (running/paused), arbitrary `cubic-bezier(...)`, `steps(n, jump-*)`
 
 ### Batch 2 - chybejici "must-have" moduly
 - [ ] CSS Transitions L1 (cely modul)
@@ -196,13 +196,13 @@ Konvence stavu:
 
 ### CSS Animations L1/L2
 - [x] `@keyframes name { 0% {} 100% {} }`
-- [x] `animation` shorthand (name, duration, timing-function, iteration-count, direction, delay)
+- [x] `animation` shorthand (name, duration, timing-function, iteration-count, direction, delay, fill-mode, play-state)
 - [x] Easing: linear, ease, ease-in, ease-out, ease-in-out (cubic-bezier)
 - [x] `step-start`, `step-end`
-- [ ] `animation-fill-mode: none|forwards|backwards|both`
-- [ ] `animation-play-state: running|paused`
-- [ ] `cubic-bezier(x1, y1, x2, y2)` arbitrary
-- [ ] `steps(n, jump-start|jump-end|...)`
+- [x] `animation-fill-mode: none|forwards|backwards|both`
+- [x] `animation-play-state: running|paused`
+- [x] `cubic-bezier(x1, y1, x2, y2)` arbitrary
+- [x] `steps(n, jump-start|jump-end|jump-both|jump-none|start|end)`
 - [ ] `animation-composition` (L2)
 - [ ] `animation-timeline` (scroll-driven, L2 draft)
 
