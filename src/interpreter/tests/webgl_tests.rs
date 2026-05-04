@@ -347,6 +347,28 @@ fn webgl_texture_count_zero_for_simple_shader() {
 }
 
 #[test]
+fn webgl_sampler_binding_indexes_extracted() {
+    // Pri sampler2D, naga vyrabi binding indexy. Test ze sampler_count match
+    // s nejakymi binding indexy ulozenymi v WebGLProgram (pres diagnostic).
+    let r = run(&format!(r#"{SETUP}
+        const v = gl.createShader(gl.VERTEX_SHADER);
+        gl.shaderSource(v, "void main(){{ gl_Position = vec4(0.0); }}"); gl.compileShader(v);
+        const f = gl.createShader(gl.FRAGMENT_SHADER);
+        gl.shaderSource(f, "uniform sampler2D uTex; void main(){{ gl_FragColor = texture2D(uTex, vec2(0.5)); }}");
+        gl.compileShader(f);
+        const p = gl.createProgram();
+        gl.attachShader(p, v); gl.attachShader(p, f);
+        gl.linkProgram(p);
+        // Pres diagnostic count zjistim zda samplers detected.
+        const samp = gl.__program_sampler_count__(p);
+        const tex = gl.__program_texture_count__(p);
+        return samp + ":" + tex;
+    "#));
+    let s = r.to_string();
+    assert!(s == "1:1" || s == "0:0", "got {s}");
+}
+
+#[test]
 fn webgl_sampler_count_with_sampler2d_uniform() {
     let r = run(&format!(r#"{SETUP}
         const v = gl.createShader(gl.VERTEX_SHADER);

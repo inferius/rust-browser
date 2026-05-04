@@ -2818,8 +2818,8 @@ impl Renderer {
 
     /// Encode wgpu draw call do canvas RT.
     /// Pipeline + buffer musi byt cached. Vraci true pokud emit success.
-    /// Pokud uniform_bytes neni prazdny + uniform buffer exists, write +
-    /// bind group set.
+    /// Pokud bindings neprazdne, build full bind group s uniform+textures+samplers.
+    #[allow(clippy::too_many_arguments)]
     pub fn webgl_encode_draw_arrays(
         &self,
         canvas_ptr: usize,
@@ -2829,6 +2829,10 @@ impl Renderer {
         attribs: &[(u32, crate::interpreter::WebGLAttribSlot)],
         clear_color: Option<[f32; 4]>,
         uniform_bytes: &[u8],
+        uniform_binding: Option<u32>,
+        texture_bindings: &[(String, u32)],
+        sampler_bindings: &[(String, u32)],
+        texture_units: &std::collections::HashMap<u32, u32>,
     ) -> bool {
         let view = match self.webgl_canvas_rts.get(&canvas_ptr) {
             Some((_, v, _, _)) => v,
@@ -2838,20 +2842,10 @@ impl Renderer {
             Some(p) => p,
             None => return false,
         };
-        // Pre-write uniform buffer + bind group create (pokud uniformy)
-        let bind_group = if !uniform_bytes.is_empty() {
-            if let (Some(buf), Some(bgl)) = (self.webgl_uniform_buffers.get(&program_id),
-                                              self.webgl_uniform_bgls.get(&program_id)) {
-                self.queue.write_buffer(buf, 0, uniform_bytes);
-                Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some(&format!("webgl_uniform_bg_{program_id}")),
-                    layout: bgl,
-                    entries: &[
-                        wgpu::BindGroupEntry { binding: 0, resource: buf.as_entire_binding() },
-                    ],
-                }))
-            } else { None }
-        } else { None };
+        let bind_group = self.build_webgl_bind_group(
+            program_id, uniform_bytes, uniform_binding,
+            texture_bindings, sampler_bindings, texture_units,
+        );
         let mut encoder = self.device.create_command_encoder(&Default::default());
         let load = match clear_color {
             Some(c) => wgpu::LoadOp::Clear(wgpu::Color {
@@ -3005,15 +2999,16 @@ impl Renderer {
                 }
                 WebGLDrawCmd::DrawArrays { program_id, first, count, attribs, uniforms, .. } => {
                     if let Some(pid) = program_id {
-                        // Serialize uniformy dle program layout
-                        let bytes = if let Some((_, _, layout, size, _, _, _)) = programs_data.get(&pid) {
-                            if *size > 0 {
+                        let prog_info = programs_data.get(&pid);
+                        let (bytes, ub, tb, sb): (Vec<u8>, Option<u32>, Vec<(String, u32)>, Vec<(String, u32)>) = if let Some((_, _, layout, size, ub, tb, sb)) = prog_info {
+                            let bytes = if *size > 0 {
                                 webgl_serialize_uniforms(layout, &uniforms, *size)
-                            } else { Vec::new() }
-                        } else { Vec::new() };
+                            } else { Vec::new() };
+                            (bytes, *ub, tb.clone(), sb.clone())
+                        } else { (Vec::new(), None, Vec::new(), Vec::new()) };
                         if self.ensure_webgl_pipeline(pid, &attribs) {
                             let cc = pending_clear.take();
-                            self.webgl_encode_draw_arrays(canvas_ptr, pid, first, count, &attribs, cc, &bytes);
+                            self.webgl_encode_draw_arrays(canvas_ptr, pid, first, count, &attribs, cc, &bytes, ub, &tb, &sb, &texture_units_map);
                             had_render = true;
                         }
                     }
@@ -3021,14 +3016,16 @@ impl Renderer {
                 WebGLDrawCmd::DrawElements { program_id, mode, count, index_type, offset, index_buffer_id, attribs, uniforms, viewport: _ } => {
                     let _ = mode;
                     if let (Some(pid), Some(ibo)) = (program_id, index_buffer_id) {
-                        let bytes = if let Some((_, _, layout, size, _, _, _)) = programs_data.get(&pid) {
-                            if *size > 0 {
+                        let prog_info = programs_data.get(&pid);
+                        let (bytes, ub, tb, sb): (Vec<u8>, Option<u32>, Vec<(String, u32)>, Vec<(String, u32)>) = if let Some((_, _, layout, size, ub, tb, sb)) = prog_info {
+                            let bytes = if *size > 0 {
                                 webgl_serialize_uniforms(layout, &uniforms, *size)
-                            } else { Vec::new() }
-                        } else { Vec::new() };
+                            } else { Vec::new() };
+                            (bytes, *ub, tb.clone(), sb.clone())
+                        } else { (Vec::new(), None, Vec::new(), Vec::new()) };
                         if self.ensure_webgl_pipeline(pid, &attribs) {
                             let cc = pending_clear.take();
-                            self.webgl_encode_draw_elements(canvas_ptr, pid, count, index_type, offset, ibo, &attribs, cc, &bytes);
+                            self.webgl_encode_draw_elements(canvas_ptr, pid, count, index_type, offset, ibo, &attribs, cc, &bytes, ub, &tb, &sb, &texture_units_map);
                             had_render = true;
                         }
                     }
@@ -3051,6 +3048,7 @@ impl Renderer {
 
     /// Encode drawElements (indexed draw) do canvas RT.
     /// Pipeline + vertex buffer + index buffer musi byt cached.
+    #[allow(clippy::too_many_arguments)]
     pub fn webgl_encode_draw_elements(
         &self,
         canvas_ptr: usize,
@@ -3062,6 +3060,10 @@ impl Renderer {
         attribs: &[(u32, crate::interpreter::WebGLAttribSlot)],
         clear_color: Option<[f32; 4]>,
         uniform_bytes: &[u8],
+        uniform_binding: Option<u32>,
+        texture_bindings: &[(String, u32)],
+        sampler_bindings: &[(String, u32)],
+        texture_units: &std::collections::HashMap<u32, u32>,
     ) -> bool {
         let view = match self.webgl_canvas_rts.get(&canvas_ptr) {
             Some((_, v, _, _)) => v,
@@ -3082,19 +3084,10 @@ impl Renderer {
             _ => wgpu::IndexFormat::Uint16,
         };
         let idx_size_bytes: u64 = if matches!(idx_format, wgpu::IndexFormat::Uint16) { 2 } else { 4 };
-        let bind_group = if !uniform_bytes.is_empty() {
-            if let (Some(buf), Some(bgl)) = (self.webgl_uniform_buffers.get(&program_id),
-                                              self.webgl_uniform_bgls.get(&program_id)) {
-                self.queue.write_buffer(buf, 0, uniform_bytes);
-                Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some(&format!("webgl_uniform_bg_{program_id}_idx")),
-                    layout: bgl,
-                    entries: &[
-                        wgpu::BindGroupEntry { binding: 0, resource: buf.as_entire_binding() },
-                    ],
-                }))
-            } else { None }
-        } else { None };
+        let bind_group = self.build_webgl_bind_group(
+            program_id, uniform_bytes, uniform_binding,
+            texture_bindings, sampler_bindings, texture_units,
+        );
         let mut encoder = self.device.create_command_encoder(&Default::default());
         let load = match clear_color {
             Some(c) => wgpu::LoadOp::Clear(wgpu::Color {
