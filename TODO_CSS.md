@@ -317,10 +317,12 @@ Konvence stavu:
 ### CSS Overflow L3
 - [x] `overflow`, `overflow-x`, `overflow-y` (clip, scroll - parsing)
 - [ ] `overflow-clip-margin`
-- [ ] `overscroll-behavior`
-- [ ] `scroll-behavior: smooth`
+- [x] `overscroll-behavior` (parser, runtime TODO)
+- [x] `scroll-behavior: auto | smooth` (parser, runtime TODO)
 - [ ] `scroll-snap-type`, `scroll-snap-align`, `scroll-padding`, `scroll-margin`
-- [ ] `scrollbar-width`, `scrollbar-color`, `scrollbar-gutter`
+- [x] `scrollbar-width: auto | thin | none` (parser)
+- [x] `scrollbar-color: <thumb> <track>` (parser)
+- [ ] `scrollbar-gutter`
 
 ### CSS Pseudo-Elements L4
 - [x] `::before`, `::after` + `content` property (string + attr() + counter()-stub)

@@ -277,6 +277,28 @@ fn find_box_by_tag<'a>(bx: &'a layout::LayoutBox, tag: &str) -> Option<&'a layou
 }
 
 #[test]
+fn scroll_behavior_smooth() {
+    let doc = parse_html(r#"<html><body><div></div></body></html>"#, "");
+    let css = parse_stylesheet("div { scroll-behavior: smooth; overscroll-behavior: contain; }");
+    let style_map = crate::browser::cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &style_map, 1024.0, 768.0);
+    let d = find_box_by_tag(&root, "div").unwrap();
+    assert_eq!(d.scroll_behavior, "smooth");
+    assert_eq!(d.overscroll_behavior, "contain");
+}
+
+#[test]
+fn scrollbar_color_parsed() {
+    let doc = parse_html(r#"<html><body><div></div></body></html>"#, "");
+    let css = parse_stylesheet("div { scrollbar-color: red blue; scrollbar-width: thin; }");
+    let style_map = crate::browser::cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &style_map, 1024.0, 768.0);
+    let d = find_box_by_tag(&root, "div").unwrap();
+    assert_eq!(d.scrollbar_color, Some(([255, 0, 0, 255], [0, 0, 255, 255])));
+    assert_eq!(d.scrollbar_width, "thin");
+}
+
+#[test]
 fn color_scheme_parsed() {
     let doc = parse_html(r#"<html><body><div></div></body></html>"#, "");
     let css = parse_stylesheet("div { color-scheme: light dark; }");

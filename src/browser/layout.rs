@@ -178,6 +178,14 @@ pub struct LayoutBox {
     /// CSS Containment - bitfield: layout / paint / size / style.
     /// 1 = layout, 2 = paint, 4 = size, 8 = style.
     pub contain: u8,
+    /// scroll-behavior: "auto" (default) | "smooth"
+    pub scroll_behavior: String,
+    /// scrollbar-width: "auto" | "thin" | "none"
+    pub scrollbar_width: String,
+    /// scrollbar-color: (thumb_color, track_color)
+    pub scrollbar_color: Option<([u8; 4], [u8; 4])>,
+    /// overscroll-behavior: "auto" | "contain" | "none"
+    pub overscroll_behavior: String,
     /// Box shadow: (offset_x, offset_y, blur, spread, color)
     /// (offset_x, offset_y, blur, spread, color, inset)
     pub box_shadow: Option<(f32, f32, f32, f32, [u8; 4], bool)>,
@@ -237,6 +245,10 @@ impl LayoutBox {
             color_scheme: String::new(),
             accent_color: None,
             contain: 0,
+            scroll_behavior: String::new(),
+            scrollbar_width: String::new(),
+            scrollbar_color: None,
+            overscroll_behavior: String::new(),
             box_shadow: None,
             transform: None,
             image_src: None,
@@ -534,6 +546,27 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         if ac.trim() != "auto" {
             bx.accent_color = parse_color(ac);
         }
+    }
+    // scroll-behavior
+    if let Some(sb) = s.get("scroll-behavior") {
+        bx.scroll_behavior = sb.trim().to_string();
+    }
+    // scrollbar-width
+    if let Some(sw) = s.get("scrollbar-width") {
+        bx.scrollbar_width = sw.trim().to_string();
+    }
+    // scrollbar-color: thumb track
+    if let Some(sc) = s.get("scrollbar-color") {
+        let parts: Vec<&str> = sc.split_whitespace().collect();
+        if parts.len() >= 2 {
+            if let (Some(thumb), Some(track)) = (parse_color(parts[0]), parse_color(parts[1])) {
+                bx.scrollbar_color = Some((thumb, track));
+            }
+        }
+    }
+    // overscroll-behavior
+    if let Some(ob) = s.get("overscroll-behavior") {
+        bx.overscroll_behavior = ob.trim().to_string();
     }
     // contain - CSS Containment L3
     if let Some(c) = s.get("contain") {
