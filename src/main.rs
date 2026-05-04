@@ -54,6 +54,40 @@ console.log(greeting, result);
         return;
     }
 
+    // DevTools: cargo run -- devtools [file.html] [output.html]
+    if args.len() > 1 && args[1] == "devtools" {
+        let html_path = args.get(2).cloned().unwrap_or_else(|| "static/test.html".to_string());
+        let html = match std::fs::read_to_string(&html_path) {
+            Ok(s) => s,
+            Err(e) => { eprintln!("Nelze nacist {html_path}: {e}"); return; }
+        };
+        let css_path = html_path.replace(".html", ".css");
+        let css = std::fs::read_to_string(&css_path).unwrap_or_default();
+
+        let document = browser::html_parser::parse_html(&html, &html_path);
+        let stylesheets = vec![browser::css_parser::parse_stylesheet(&css)];
+
+        // Extract <script> obsah pro Sources panel
+        let script_src: Option<String> = document.root.get_elements_by_tag("script")
+            .iter().map(|s| s.text_content()).find(|s| !s.trim().is_empty());
+
+        let html_out = debug_view::devtools::generate_devtools_html(
+            &document,
+            &stylesheets,
+            script_src.as_deref(),
+            &[],
+            &[],
+        );
+
+        let out_path = args.get(3).cloned().unwrap_or_else(|| "devtools.html".to_string());
+        if let Err(e) = std::fs::write(&out_path, &html_out) {
+            eprintln!("Nelze zapsat {out_path}: {e}");
+            return;
+        }
+        println!("DevTools HTML zapsan: {out_path}");
+        return;
+    }
+
     // Browser mode: cargo run -- browser nebo cargo run -- window [path/to/file.html]
     if args.len() > 1 && (args[1] == "browser" || args[1] == "window") {
         // Default: static/test.html

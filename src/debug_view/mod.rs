@@ -9,6 +9,7 @@
 pub mod tokens_view;
 pub mod ast_view;
 pub mod page;
+pub mod devtools;
 
 #[cfg(test)]
 mod tests;
