@@ -22,7 +22,7 @@ Konvence stavu:
 
 ### Batch 2 - chybejici "must-have" moduly
 - [ ] CSS Transitions L1 (cely modul)
-- [ ] CSS Logical Properties L1 (`margin-inline-*`, `padding-block-*`, `inset-*`)
+- [x] CSS Logical Properties L1 (`margin/padding-block/-inline`, `border-*-block/-inline-*`, `inset-*`, `block-size/inline-size`, `border-start-end-radius` rohy) - mapovani LTR + horizontal-tb
 - [ ] CSS Nesting L1 (`&` selector)
 - [ ] CSS Container Queries L1 (`@container`, `cqw`, `cqh`)
 - [ ] CSS Filter Effects L1 (`filter: blur/brightness/...`)
@@ -232,15 +232,19 @@ Konvence stavu:
 - [ ] Origin importance (user vs author)
 
 ### CSS Logical Properties L1
-- [ ] `margin-block-start/end`, `margin-inline-start/end`
-- [ ] `padding-block-*`, `padding-inline-*`
-- [ ] `border-block-*`, `border-inline-*`
-- [ ] `inset-block-*`, `inset-inline-*`
-- [ ] `block-size`, `inline-size`
-- [ ] `min-block-size`, `min-inline-size`, `max-*`
-- [ ] `text-align: start | end`
+- [x] `margin-block-start/end`, `margin-inline-start/end`
+- [x] `margin-block`, `margin-inline` shorthandy
+- [x] `padding-block-*`, `padding-inline-*` + shorthandy
+- [x] `border-block-*-width/-style/-color`, `border-inline-*-width/-style/-color`
+- [x] `border-start-start-radius` ... `border-end-end-radius` (4 logicke rohy)
+- [x] `inset-block-*`, `inset-inline-*` + shorthandy
+- [x] `inset` shorthand (top right bottom left)
+- [x] `block-size`, `inline-size`
+- [x] `min-block-size`, `min-inline-size`, `max-block-size`, `max-inline-size`
+- [ ] `text-align: start | end` (mapping na left/right v LTR)
 - [ ] `float: inline-start | inline-end`
-- [ ] `direction`, `writing-mode`
+- [ ] `direction: ltr | rtl` - aktualne predpoklad LTR
+- [ ] `writing-mode: horizontal-tb | vertical-rl | vertical-lr` - aktualne predpoklad horizontal-tb
 
 ### CSS Containment L3
 - [ ] `contain: layout | paint | size | style | content | strict`

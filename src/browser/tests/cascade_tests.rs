@@ -214,6 +214,63 @@ fn selector_first_of_type() {
     assert!(cascade::get_styles(&map, &ps[1]).unwrap().get("color").is_none());
 }
 
+// ─── Logical Properties L1 ─────────────────────────────────────────────
+
+#[test]
+fn logical_margin_block_start_to_top() {
+    let doc = parse_html("<html><body><div>x</div></body></html>", "");
+    let css = parse_stylesheet("div { margin-block-start: 20px; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let s = cascade::get_styles(&map, &div).unwrap();
+    assert_eq!(s.get("margin-top").map(|v| v.as_str()), Some("20px"));
+}
+
+#[test]
+fn logical_padding_inline_pair() {
+    let doc = parse_html("<html><body><div>x</div></body></html>", "");
+    let css = parse_stylesheet("div { padding-inline: 8px 16px; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let s = cascade::get_styles(&map, &div).unwrap();
+    assert_eq!(s.get("padding-left").map(|v| v.as_str()), Some("8px"));
+    assert_eq!(s.get("padding-right").map(|v| v.as_str()), Some("16px"));
+}
+
+#[test]
+fn logical_inline_size_to_width() {
+    let doc = parse_html("<html><body><div>x</div></body></html>", "");
+    let css = parse_stylesheet("div { inline-size: 200px; block-size: 100px; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let s = cascade::get_styles(&map, &div).unwrap();
+    assert_eq!(s.get("width").map(|v| v.as_str()), Some("200px"));
+    assert_eq!(s.get("height").map(|v| v.as_str()), Some("100px"));
+}
+
+#[test]
+fn logical_inset_shorthand_to_top_right_bottom_left() {
+    let doc = parse_html("<html><body><div>x</div></body></html>", "");
+    let css = parse_stylesheet("div { inset: 10px 20px 30px 40px; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let s = cascade::get_styles(&map, &div).unwrap();
+    assert_eq!(s.get("top").map(|v| v.as_str()), Some("10px"));
+    assert_eq!(s.get("right").map(|v| v.as_str()), Some("20px"));
+    assert_eq!(s.get("bottom").map(|v| v.as_str()), Some("30px"));
+    assert_eq!(s.get("left").map(|v| v.as_str()), Some("40px"));
+}
+
+#[test]
+fn logical_border_radius_corners() {
+    let doc = parse_html("<html><body><div>x</div></body></html>", "");
+    let css = parse_stylesheet("div { border-start-end-radius: 8px; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let s = cascade::get_styles(&map, &div).unwrap();
+    assert_eq!(s.get("border-top-right-radius").map(|v| v.as_str()), Some("8px"));
+}
+
 // ─── Values L4: min/max/clamp/env ──────────────────────────────────────
 
 #[test]

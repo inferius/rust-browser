@@ -12,6 +12,42 @@ use super::css_parser::{Stylesheet, Selector, SimpleSelector, Combinator, specif
 /// Napr. "margin: 10px 20px;" -> margin-top:10, margin-right:20, margin-bottom:10, margin-left:20.
 /// "border: 1px solid red;" -> border-width:1, border-style:solid, border-color:red.
 pub fn expand_shorthand(prop: &str, value: &str, out: &mut HashMap<String, String>) {
+    // CSS Logical Properties L1 - mapping na fyzicke (predpokladam LTR + horizontal-tb)
+    if let Some(physical) = logical_to_physical(prop) {
+        out.insert(physical.into(), value.into());
+        out.insert(prop.into(), value.into()); // zachovat puvodni jmeno
+        return;
+    }
+    // Logical shorthand (margin-block, margin-inline, inset)
+    if let Some((p1, p2)) = logical_shorthand_pair(prop) {
+        let parts: Vec<&str> = value.split_whitespace().collect();
+        let (a, b) = match parts.len() {
+            1 => (parts[0], parts[0]),
+            2 => (parts[0], parts[1]),
+            _ => (parts[0], parts.get(1).copied().unwrap_or(parts[0])),
+        };
+        out.insert(p1.into(), a.into());
+        out.insert(p2.into(), b.into());
+        out.insert(prop.into(), value.into());
+        return;
+    }
+    if prop == "inset" {
+        // inset = top right bottom left (analog margin)
+        let parts: Vec<&str> = value.split_whitespace().collect();
+        let (t, r, b, l) = match parts.len() {
+            1 => (parts[0], parts[0], parts[0], parts[0]),
+            2 => (parts[0], parts[1], parts[0], parts[1]),
+            3 => (parts[0], parts[1], parts[2], parts[1]),
+            4 => (parts[0], parts[1], parts[2], parts[3]),
+            _ => return,
+        };
+        out.insert("top".into(), t.into());
+        out.insert("right".into(), r.into());
+        out.insert("bottom".into(), b.into());
+        out.insert("left".into(), l.into());
+        out.insert("inset".into(), value.into());
+        return;
+    }
     match prop {
         "margin" | "padding" => {
             let parts: Vec<&str> = value.split_whitespace().collect();
@@ -66,6 +102,69 @@ pub fn expand_shorthand(prop: &str, value: &str, out: &mut HashMap<String, Strin
             out.insert(prop.into(), value.into());
         }
     }
+}
+
+/// Mapuje CSS Logical Property na fyzickou (LTR + horizontal-tb).
+/// Vrati None kdyz prop neni logicka.
+pub fn logical_to_physical(prop: &str) -> Option<&'static str> {
+    Some(match prop {
+        // Margin
+        "margin-block-start"  => "margin-top",
+        "margin-block-end"    => "margin-bottom",
+        "margin-inline-start" => "margin-left",
+        "margin-inline-end"   => "margin-right",
+        // Padding
+        "padding-block-start"  => "padding-top",
+        "padding-block-end"    => "padding-bottom",
+        "padding-inline-start" => "padding-left",
+        "padding-inline-end"   => "padding-right",
+        // Border width
+        "border-block-start-width"  => "border-top-width",
+        "border-block-end-width"    => "border-bottom-width",
+        "border-inline-start-width" => "border-left-width",
+        "border-inline-end-width"   => "border-right-width",
+        // Border style
+        "border-block-start-style"  => "border-top-style",
+        "border-block-end-style"    => "border-bottom-style",
+        "border-inline-start-style" => "border-left-style",
+        "border-inline-end-style"   => "border-right-style",
+        // Border color
+        "border-block-start-color"  => "border-top-color",
+        "border-block-end-color"    => "border-bottom-color",
+        "border-inline-start-color" => "border-left-color",
+        "border-inline-end-color"   => "border-right-color",
+        // Border radius (logicke rohy)
+        "border-start-start-radius" => "border-top-left-radius",
+        "border-start-end-radius"   => "border-top-right-radius",
+        "border-end-start-radius"   => "border-bottom-left-radius",
+        "border-end-end-radius"     => "border-bottom-right-radius",
+        // Inset
+        "inset-block-start"  => "top",
+        "inset-block-end"    => "bottom",
+        "inset-inline-start" => "left",
+        "inset-inline-end"   => "right",
+        // Size
+        "block-size"      => "height",
+        "inline-size"     => "width",
+        "min-block-size"  => "min-height",
+        "min-inline-size" => "min-width",
+        "max-block-size"  => "max-height",
+        "max-inline-size" => "max-width",
+        _ => return None,
+    })
+}
+
+/// Logicka shorthand -> par fyzickych properties.
+fn logical_shorthand_pair(prop: &str) -> Option<(&'static str, &'static str)> {
+    Some(match prop {
+        "margin-block"   => ("margin-top", "margin-bottom"),
+        "margin-inline"  => ("margin-left", "margin-right"),
+        "padding-block"  => ("padding-top", "padding-bottom"),
+        "padding-inline" => ("padding-left", "padding-right"),
+        "inset-block"    => ("top", "bottom"),
+        "inset-inline"   => ("left", "right"),
+        _ => return None,
+    })
 }
 
 /// Mapa: pointer na Node -> computed styles.
