@@ -220,6 +220,58 @@ fn find_box_by_tag<'a>(bx: &'a layout::LayoutBox, tag: &str) -> Option<&'a layou
 }
 
 #[test]
+fn apply_filter_grayscale_full_makes_gray() {
+    use crate::browser::layout::{apply_filter_chain, FilterOp};
+    let red = [255, 0, 0, 255];
+    let result = apply_filter_chain(red, &[FilterOp::Grayscale(1.0)]);
+    // Lum z red je ~76 (0.299*255). R=G=B=76 ish.
+    assert!((result[0] as i16 - result[1] as i16).abs() <= 2);
+    assert!((result[1] as i16 - result[2] as i16).abs() <= 2);
+    assert!(result[0] >= 70 && result[0] <= 80, "expected ~76, got {}", result[0]);
+}
+
+#[test]
+fn apply_filter_invert_full_inverts() {
+    use crate::browser::layout::{apply_filter_chain, FilterOp};
+    let r = apply_filter_chain([0, 0, 0, 255], &[FilterOp::Invert(1.0)]);
+    assert_eq!(r, [255, 255, 255, 255]);
+    let r2 = apply_filter_chain([100, 200, 50, 255], &[FilterOp::Invert(1.0)]);
+    // 255-100=155, 255-200=55, 255-50=205 (mozna o 1 nizsi kvuli f32 rounding)
+    assert!((r2[0] as i16 - 155).abs() <= 1);
+    assert!((r2[1] as i16 - 55).abs() <= 1);
+    assert!((r2[2] as i16 - 205).abs() <= 1);
+}
+
+#[test]
+fn apply_filter_brightness_doubles() {
+    use crate::browser::layout::{apply_filter_chain, FilterOp};
+    let r = apply_filter_chain([100, 100, 100, 255], &[FilterOp::Brightness(2.0)]);
+    assert_eq!(r, [200, 200, 200, 255]);
+    // Clamp pri overflow
+    let r2 = apply_filter_chain([200, 200, 200, 255], &[FilterOp::Brightness(2.0)]);
+    assert_eq!(r2, [255, 255, 255, 255]);
+}
+
+#[test]
+fn apply_filter_opacity_lowers_alpha() {
+    use crate::browser::layout::{apply_filter_chain, FilterOp};
+    let r = apply_filter_chain([255, 0, 0, 255], &[FilterOp::Opacity(0.5)]);
+    assert_eq!(r[3], 127);
+    assert_eq!(r[0], 255);
+}
+
+#[test]
+fn apply_filter_chained_brightness_then_invert() {
+    use crate::browser::layout::{apply_filter_chain, FilterOp};
+    // 50% gray -> brightness 0.5 -> 25% gray (~64) -> invert -> ~191
+    let r = apply_filter_chain([128, 128, 128, 255], &[
+        FilterOp::Brightness(0.5),
+        FilterOp::Invert(1.0),
+    ]);
+    assert!(r[0] >= 188 && r[0] <= 195, "got {}", r[0]);
+}
+
+#[test]
 fn parse_filter_chain_blur() {
     use crate::browser::layout::{parse_filter_chain, FilterOp};
     let chain = parse_filter_chain("blur(4px)");

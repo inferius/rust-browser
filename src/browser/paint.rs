@@ -57,11 +57,17 @@ pub fn build_display_list(root: &LayoutBox) -> Vec<DisplayCommand> {
 }
 
 fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>) {
-    // Apply opacity multiply na vsechny barvy
+    // Apply opacity multiply + filter chain na vsechny barvy
     let alpha_mul = (bx.opacity * 255.0) as u8;
+    let filter = bx.filter.clone();
     let with_alpha = |c: [u8; 4]| -> [u8; 4] {
         let a = ((c[3] as u16 * alpha_mul as u16) / 255) as u8;
-        [c[0], c[1], c[2], a]
+        let after_alpha = [c[0], c[1], c[2], a];
+        if filter.is_empty() {
+            after_alpha
+        } else {
+            crate::browser::layout::apply_filter_chain(after_alpha, &filter)
+        }
     };
 
     // Box shadow - emit pred bg.

@@ -133,6 +133,8 @@ pub struct LayoutBox {
     pub text_strikethrough: bool,
     /// Gradient pozadi (linear/radial/conic) + barevne stops.
     pub bg_gradient: Option<BgGradient>,
+    /// CSS Filter Effects - chain of color matrix operations + opacity + drop-shadow.
+    pub filter: Vec<FilterOp>,
     /// Box shadow: (offset_x, offset_y, blur, spread, color)
     /// (offset_x, offset_y, blur, spread, color, inset)
     pub box_shadow: Option<(f32, f32, f32, f32, [u8; 4], bool)>,
@@ -181,6 +183,7 @@ impl LayoutBox {
             white_space_nowrap: false,
             cursor: None,
             bg_gradient: None,
+            filter: Vec::new(),
             box_shadow: None,
             transform: None,
             image_src: None,
@@ -360,6 +363,10 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     // Box shadow
     if let Some(sh) = s.get("box-shadow") {
         bx.box_shadow = parse_box_shadow(sh);
+    }
+    // Filter chain
+    if let Some(f) = s.get("filter") {
+        bx.filter = parse_filter_chain(f);
     }
     // Transform
     if let Some(tr) = s.get("transform") {
@@ -1316,6 +1323,86 @@ fn parse_filter_one(name: &str, args: &str) -> Option<FilterOp> {
         }
         _ => return None,
     })
+}
+
+/// Aplikuje filter chain na barvu (CPU). Kazdy filter modifikuje RGBA postupne.
+/// Implementace: brightness/contrast/grayscale/sepia/invert/saturate/hue-rotate/opacity.
+/// Blur a drop-shadow vyzaduji multi-pass - tady ignorovany (ne-color manipulation).
+pub fn apply_filter_chain(rgba: [u8; 4], chain: &[FilterOp]) -> [u8; 4] {
+    if chain.is_empty() { return rgba; }
+    let mut r = rgba[0] as f32 / 255.0;
+    let mut g = rgba[1] as f32 / 255.0;
+    let mut b = rgba[2] as f32 / 255.0;
+    let mut a = rgba[3] as f32 / 255.0;
+
+    for op in chain {
+        match *op {
+            FilterOp::Brightness(v) => {
+                r *= v; g *= v; b *= v;
+            }
+            FilterOp::Contrast(c) => {
+                r = (r - 0.5) * c + 0.5;
+                g = (g - 0.5) * c + 0.5;
+                b = (b - 0.5) * c + 0.5;
+            }
+            FilterOp::Grayscale(amount) => {
+                let amt = amount.clamp(0.0, 1.0);
+                let lum = 0.299 * r + 0.587 * g + 0.114 * b;
+                r = r * (1.0 - amt) + lum * amt;
+                g = g * (1.0 - amt) + lum * amt;
+                b = b * (1.0 - amt) + lum * amt;
+            }
+            FilterOp::Sepia(amount) => {
+                let amt = amount.clamp(0.0, 1.0);
+                let nr = 0.393 * r + 0.769 * g + 0.189 * b;
+                let ng = 0.349 * r + 0.686 * g + 0.168 * b;
+                let nb = 0.272 * r + 0.534 * g + 0.131 * b;
+                r = r * (1.0 - amt) + nr * amt;
+                g = g * (1.0 - amt) + ng * amt;
+                b = b * (1.0 - amt) + nb * amt;
+            }
+            FilterOp::Invert(amount) => {
+                let amt = amount.clamp(0.0, 1.0);
+                r = r * (1.0 - amt) + (1.0 - r) * amt;
+                g = g * (1.0 - amt) + (1.0 - g) * amt;
+                b = b * (1.0 - amt) + (1.0 - b) * amt;
+            }
+            FilterOp::Saturate(s) => {
+                let lum = 0.299 * r + 0.587 * g + 0.114 * b;
+                r = lum + (r - lum) * s;
+                g = lum + (g - lum) * s;
+                b = lum + (b - lum) * s;
+            }
+            FilterOp::HueRotate(deg) => {
+                let rad = deg.to_radians();
+                let cos = rad.cos();
+                let sin = rad.sin();
+                // Standardni hue rotation matrix (NTSC luminance basis)
+                let lr = 0.213; let lg = 0.715; let lb = 0.072;
+                let m = [
+                    lr + cos*(1.0-lr) + sin*(-lr),     lg + cos*(-lg) + sin*(-lg),       lb + cos*(-lb) + sin*(1.0-lb),
+                    lr + cos*(-lr) + sin*(0.143),      lg + cos*(1.0-lg) + sin*(0.140),  lb + cos*(-lb) + sin*(-0.283),
+                    lr + cos*(-lr) + sin*(-(1.0-lr)),  lg + cos*(-lg) + sin*(lg),        lb + cos*(1.0-lb) + sin*(lb),
+                ];
+                let nr = m[0]*r + m[1]*g + m[2]*b;
+                let ng = m[3]*r + m[4]*g + m[5]*b;
+                let nb = m[6]*r + m[7]*g + m[8]*b;
+                r = nr; g = ng; b = nb;
+            }
+            FilterOp::Opacity(o) => {
+                a *= o.clamp(0.0, 1.0);
+            }
+            FilterOp::Blur(_) | FilterOp::DropShadow { .. } => {
+                // Multi-pass / shape effects - aktualne ignorujem (TODO render-to-texture)
+            }
+        }
+    }
+    [
+        (r.clamp(0.0, 1.0) * 255.0) as u8,
+        (g.clamp(0.0, 1.0) * 255.0) as u8,
+        (b.clamp(0.0, 1.0) * 255.0) as u8,
+        (a.clamp(0.0, 1.0) * 255.0) as u8,
+    ]
 }
 
 fn split_top_level_whitespace_str(s: &str) -> Vec<&str> {

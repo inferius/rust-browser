@@ -277,21 +277,21 @@ Konvence stavu:
 - [ ] `@media (forced-colors: active)`
 
 ### CSS Filter Effects L1
-- [/] `filter: blur(<r>)` - parser, render TODO (vyzaduje 2-pass gauss)
-- [/] `filter: brightness(<n>)` - parser, render TODO (color matrix)
-- [/] `filter: contrast(<n>)` - parser, render TODO
-- [/] `filter: grayscale(<%>)` - parser, render TODO
-- [/] `filter: hue-rotate(<deg>)` - parser, render TODO
-- [/] `filter: invert(<n>)` - parser, render TODO
-- [/] `filter: opacity(<%>)` - parser
-- [/] `filter: saturate(<n>)` - parser, render TODO
-- [/] `filter: sepia(<%>)` - parser, render TODO
-- [/] `filter: drop-shadow(...)` - parser
-- [x] Vice filtru chained: `filter: blur(2px) brightness(1.2)` - parser
+- [ ] `filter: blur(<r>)` - vyzaduje 2-pass gauss + RT, ne implementovano
+- [x] `filter: brightness(<n>)` - CPU color matrix
+- [x] `filter: contrast(<n>)` - CPU color matrix
+- [x] `filter: grayscale(<%>)` - CPU color matrix
+- [x] `filter: hue-rotate(<deg>)` - CPU color matrix (NTSC luminance basis)
+- [x] `filter: invert(<n>)` - CPU color matrix
+- [x] `filter: opacity(<%>)` - CPU alpha multiplier
+- [x] `filter: saturate(<n>)` - CPU color matrix
+- [x] `filter: sepia(<%>)` - CPU color matrix
+- [ ] `filter: drop-shadow(...)` - vyzaduje shape effects + RT
+- [x] Vice filtru chained: `filter: blur(2px) brightness(1.2)` - parser + chain apply
 - [ ] `backdrop-filter`
-- [ ] **Render**: vyzaduje render-to-texture (offscreen RT) pro presnu CSS spec
-  implementaci na cely subtree. Single-element filter mozno pres color matrix
-  v shader fragment. TODO: postup viz Filter Effects implementacni plan.
+- **Pristup**: filter aplikuje per-element CPU na vsechny emitted colors (bg, text,
+  border, shadow). Nebozavi cely subtree per CSS spec - to by chtelo offscreen RT.
+  Pro vetsinu use cases (single-element styling) ale staci.
 
 ### CSS Masking L1
 - [ ] `clip-path: inset()|circle()|ellipse()|polygon()|path()|url()`
