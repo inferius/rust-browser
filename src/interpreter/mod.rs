@@ -5279,6 +5279,10 @@ pub(crate) struct WebGLProgram {
     pub uniform_layout: Vec<UniformSlot>,
     /// Total uniform buffer size (zaokrouhleno na 16-byte multiple pro WGSL).
     pub uniform_buffer_size: u64,
+    /// Pocet sampler2D / texture2D bindings v shaderech.
+    pub sampler_count: u32,
+    /// Pocet texture image bindings (separate od samplers).
+    pub texture_count: u32,
 }
 
 /// Layout slot pro 1 uniform v GPU buffer.
@@ -5387,6 +5391,23 @@ pub(crate) fn extract_uniform_layout(module: &naga::Module) -> (Vec<UniformSlot>
         let total = ((max_end as u64 + 15) / 16) * 16;
         (slots, total.max(16))
     }
+}
+
+/// Spocita pocet sampler + texture bindings v naga Module.
+/// Vraci (sampler_count, texture_count). WebGL sampler2D = 1 sampler + 1 texture.
+pub(crate) fn extract_texture_sampler_counts(module: &naga::Module) -> (u32, u32) {
+    use naga::TypeInner;
+    let mut samplers = 0u32;
+    let mut textures = 0u32;
+    for (_, gv) in module.global_variables.iter() {
+        let ty = &module.types[gv.ty];
+        match &ty.inner {
+            TypeInner::Sampler { .. } => samplers += 1,
+            TypeInner::Image { .. } => textures += 1,
+            _ => {}
+        }
+    }
+    (samplers, textures)
 }
 
 pub(crate) struct WebGLTexture {
@@ -5760,6 +5781,7 @@ fn create_webgl_context(state: Rc<RefCell<WebGLState>>) -> JsValue {
                 vertex_shader: None, fragment_shader: None, linked: false,
                 info_log: String::new(), vertex_wgsl: None, fragment_wgsl: None,
                 uniform_layout: Vec::new(), uniform_buffer_size: 0,
+                sampler_count: 0, texture_count: 0,
             });
             Ok(make_webgl_handle(id, "program"))
         }));
@@ -5790,7 +5812,7 @@ fn create_webgl_context(state: Rc<RefCell<WebGLState>>) -> JsValue {
             if let Some(id) = id {
                 let mut s = st.borrow_mut();
                 // Pre-fetch shader WGSL pred mut borrow programs
-                let (vs_wgsl, fs_wgsl, error_log, layout, layout_size) = {
+                let (vs_wgsl, fs_wgsl, error_log, layout, layout_size, sampler_cnt, texture_cnt) = {
                     let prog = match s.programs.get(&id) { Some(p) => p, None => return Ok(JsValue::Undefined) };
                     let vs_id = prog.vertex_shader;
                     let fs_id = prog.fragment_shader;
@@ -5799,8 +5821,9 @@ fn create_webgl_context(state: Rc<RefCell<WebGLState>>) -> JsValue {
                     let mut fw: Option<String> = None;
                     let mut combined_layout: Vec<UniformSlot> = Vec::new();
                     let mut combined_size: u64 = 0;
+                    let mut samplers = 0u32;
+                    let mut textures = 0u32;
                     if let (Some(vid), Some(fid)) = (vs_id, fs_id) {
-                        // Vertex shader: musi byt compiled + naga module
                         if let Some(vsh) = s.shaders.get(&vid) {
                             if !vsh.compiled {
                                 log.push_str("vertex shader nezkompilovan\n");
@@ -5816,6 +5839,9 @@ fn create_webgl_context(state: Rc<RefCell<WebGLState>>) -> JsValue {
                                     }
                                 }
                                 if sz > combined_size { combined_size = sz; }
+                                let (vs_samp, vs_tex) = extract_texture_sampler_counts(m);
+                                samplers = samplers.max(vs_samp);
+                                textures = textures.max(vs_tex);
                             }
                         }
                         if let Some(fsh) = s.shaders.get(&fid) {
@@ -5833,12 +5859,15 @@ fn create_webgl_context(state: Rc<RefCell<WebGLState>>) -> JsValue {
                                     }
                                 }
                                 if sz > combined_size { combined_size = sz; }
+                                let (fs_samp, fs_tex) = extract_texture_sampler_counts(m);
+                                samplers = samplers.max(fs_samp);
+                                textures = textures.max(fs_tex);
                             }
                         }
                     } else {
                         log.push_str("program postrada vertex nebo fragment shader\n");
                     }
-                    (vw, fw, log, combined_layout, combined_size)
+                    (vw, fw, log, combined_layout, combined_size, samplers, textures)
                 };
                 // Apply
                 if let Some(prog) = s.programs.get_mut(&id) {
@@ -5848,6 +5877,8 @@ fn create_webgl_context(state: Rc<RefCell<WebGLState>>) -> JsValue {
                     prog.info_log = error_log;
                     prog.uniform_layout = layout;
                     prog.uniform_buffer_size = layout_size;
+                    prog.sampler_count = sampler_cnt;
+                    prog.texture_count = texture_cnt;
                 }
             }
             Ok(JsValue::Undefined)
@@ -5933,6 +5964,30 @@ fn create_webgl_context(state: Rc<RefCell<WebGLState>>) -> JsValue {
             if let Some(id) = id {
                 if let Some(prog) = st.borrow().programs.get(&id) {
                     return Ok(JsValue::Number(prog.uniform_buffer_size as f64));
+                }
+            }
+            Ok(JsValue::Number(0.0))
+        }));
+    }
+    {
+        let st = Rc::clone(&state);
+        obj_rc.borrow_mut().set("__program_sampler_count__".into(), native("gl.__program_sampler_count__", move |args| {
+            let id = args.into_iter().next().and_then(|v| webgl_id_from(&v));
+            if let Some(id) = id {
+                if let Some(prog) = st.borrow().programs.get(&id) {
+                    return Ok(JsValue::Number(prog.sampler_count as f64));
+                }
+            }
+            Ok(JsValue::Number(0.0))
+        }));
+    }
+    {
+        let st = Rc::clone(&state);
+        obj_rc.borrow_mut().set("__program_texture_count__".into(), native("gl.__program_texture_count__", move |args| {
+            let id = args.into_iter().next().and_then(|v| webgl_id_from(&v));
+            if let Some(id) = id {
+                if let Some(prog) = st.borrow().programs.get(&id) {
+                    return Ok(JsValue::Number(prog.texture_count as f64));
                 }
             }
             Ok(JsValue::Number(0.0))

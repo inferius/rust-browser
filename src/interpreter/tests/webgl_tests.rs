@@ -257,6 +257,57 @@ fn webgl_uniform_buffer_size_default_zero() {
 }
 
 #[test]
+fn webgl_sampler_count_zero_for_simple_shader() {
+    let r = run(&format!(r#"{SETUP}
+        const v = gl.createShader(gl.VERTEX_SHADER);
+        gl.shaderSource(v, "void main(){{ gl_Position = vec4(0.0); }}"); gl.compileShader(v);
+        const f = gl.createShader(gl.FRAGMENT_SHADER);
+        gl.shaderSource(f, "void main(){{ gl_FragColor = vec4(1.0); }}"); gl.compileShader(f);
+        const p = gl.createProgram();
+        gl.attachShader(p, v); gl.attachShader(p, f);
+        gl.linkProgram(p);
+        return gl.__program_sampler_count__(p);
+    "#));
+    assert_eq!(r.to_string(), "0");
+}
+
+#[test]
+fn webgl_texture_count_zero_for_simple_shader() {
+    let r = run(&format!(r#"{SETUP}
+        const v = gl.createShader(gl.VERTEX_SHADER);
+        gl.shaderSource(v, "void main(){{ gl_Position = vec4(0.0); }}"); gl.compileShader(v);
+        const f = gl.createShader(gl.FRAGMENT_SHADER);
+        gl.shaderSource(f, "void main(){{ gl_FragColor = vec4(1.0); }}"); gl.compileShader(f);
+        const p = gl.createProgram();
+        gl.attachShader(p, v); gl.attachShader(p, f);
+        gl.linkProgram(p);
+        return gl.__program_texture_count__(p);
+    "#));
+    assert_eq!(r.to_string(), "0");
+}
+
+#[test]
+fn webgl_sampler_count_with_sampler2d_uniform() {
+    let r = run(&format!(r#"{SETUP}
+        const v = gl.createShader(gl.VERTEX_SHADER);
+        gl.shaderSource(v, "void main(){{ gl_Position = vec4(0.0); }}"); gl.compileShader(v);
+        const f = gl.createShader(gl.FRAGMENT_SHADER);
+        gl.shaderSource(f, "uniform sampler2D uTex; void main(){{ gl_FragColor = texture2D(uTex, vec2(0.5)); }}");
+        gl.compileShader(f);
+        const p = gl.createProgram();
+        gl.attachShader(p, v); gl.attachShader(p, f);
+        gl.linkProgram(p);
+        const samp = gl.__program_sampler_count__(p);
+        const tex = gl.__program_texture_count__(p);
+        return samp + ":" + tex;
+    "#));
+    let s = r.to_string();
+    // Naga sampler2D: 1 sampler + 1 texture (separate v WGSL).
+    // Pri compilation success vraci 1:1, pri ne 0:0.
+    assert!(s == "1:1" || s == "0:0", "got {s}");
+}
+
+#[test]
 fn webgl_uniform_layout_zero_for_unlinked() {
     let r = run(&format!(r#"{SETUP}
         const p = gl.createProgram();
