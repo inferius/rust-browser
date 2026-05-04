@@ -6,3 +6,4 @@ mod cascade_tests;
 mod layout_tests;
 mod paint_tests;
 mod render_tests;
+mod dom_tests;

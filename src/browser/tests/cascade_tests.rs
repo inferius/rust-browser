@@ -763,3 +763,215 @@ fn selector_empty() {
     assert_eq!(cascade::get_styles(&map, &divs[0]).unwrap().get("color").map(|s| s.as_str()), Some("red"));
     assert!(cascade::get_styles(&map, &divs[1]).unwrap().get("color").is_none());
 }
+
+// ─── Doplnujici cascade testy ──────────────────────────────────────────
+
+#[test]
+fn cascade_first_child_pseudo() {
+    let doc = parse_html("<html><body><ul><li>A</li><li>B</li><li>C</li></ul></body></html>", "");
+    let css = parse_stylesheet("li:first-child { color: red; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let lis = doc.root.get_elements_by_tag("li");
+    let first_color = cascade::get_styles(&map, &lis[0]).and_then(|s| s.get("color").cloned());
+    assert_eq!(first_color.as_deref(), Some("red"));
+    let third_color = cascade::get_styles(&map, &lis[2]).and_then(|s| s.get("color").cloned());
+    assert!(third_color.is_none(), "non-first nezaujme");
+}
+
+#[test]
+fn cascade_last_child_pseudo() {
+    let doc = parse_html("<html><body><ul><li>A</li><li>B</li><li>C</li></ul></body></html>", "");
+    let css = parse_stylesheet("li:last-child { color: blue; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let lis = doc.root.get_elements_by_tag("li");
+    let last_color = cascade::get_styles(&map, &lis[2]).and_then(|s| s.get("color").cloned());
+    assert_eq!(last_color.as_deref(), Some("blue"));
+}
+
+#[test]
+fn cascade_nth_child_even() {
+    let doc = parse_html("<html><body><ul><li>1</li><li>2</li><li>3</li><li>4</li></ul></body></html>", "");
+    let css = parse_stylesheet("li:nth-child(even) { color: green; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let lis = doc.root.get_elements_by_tag("li");
+    // Even = 2, 4 (1-indexed)
+    let c2 = cascade::get_styles(&map, &lis[1]).and_then(|s| s.get("color").cloned());
+    let c4 = cascade::get_styles(&map, &lis[3]).and_then(|s| s.get("color").cloned());
+    assert_eq!(c2.as_deref(), Some("green"));
+    assert_eq!(c4.as_deref(), Some("green"));
+}
+
+#[test]
+fn cascade_nth_child_odd_skips_even() {
+    let doc = parse_html("<html><body><ul><li>1</li><li>2</li><li>3</li></ul></body></html>", "");
+    let css = parse_stylesheet("li:nth-child(odd) { color: red; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let lis = doc.root.get_elements_by_tag("li");
+    let c1 = cascade::get_styles(&map, &lis[0]).and_then(|s| s.get("color").cloned());
+    let c2 = cascade::get_styles(&map, &lis[1]).and_then(|s| s.get("color").cloned());
+    assert_eq!(c1.as_deref(), Some("red"));
+    assert!(c2.is_none(), "even skipnut");
+}
+
+#[test]
+fn cascade_attribute_selector_exact() {
+    let doc = parse_html(r#"<html><body><input type="text"><input type="email"></body></html>"#, "");
+    let css = parse_stylesheet(r#"input[type="text"] { padding: 10px; }"#);
+    let map = cascade::cascade(&doc.root, &[css]);
+    let inputs = doc.root.get_elements_by_tag("input");
+    let p1 = cascade::get_styles(&map, &inputs[0]).and_then(|s| s.get("padding").cloned());
+    let p2 = cascade::get_styles(&map, &inputs[1]).and_then(|s| s.get("padding").cloned());
+    assert_eq!(p1.as_deref(), Some("10px"));
+    assert!(p2.is_none());
+}
+
+#[test]
+fn cascade_attribute_selector_contains_word() {
+    let doc = parse_html(r#"<html><body><div class="alpha beta gamma">x</div><div class="alpha">y</div></body></html>"#, "");
+    let css = parse_stylesheet(r#"div[class~="beta"] { color: pink; }"#);
+    let map = cascade::cascade(&doc.root, &[css]);
+    let divs = doc.root.get_elements_by_tag("div");
+    let c1 = cascade::get_styles(&map, &divs[0]).and_then(|s| s.get("color").cloned());
+    let c2 = cascade::get_styles(&map, &divs[1]).and_then(|s| s.get("color").cloned());
+    assert_eq!(c1.as_deref(), Some("pink"));
+    assert!(c2.is_none());
+}
+
+#[test]
+fn cascade_class_combo_with_class() {
+    let doc = parse_html(r#"<html><body><div class="a b">x</div><div class="a">y</div></body></html>"#, "");
+    let css = parse_stylesheet(".a.b { color: violet; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let divs = doc.root.get_elements_by_tag("div");
+    assert_eq!(cascade::get_styles(&map, &divs[0]).and_then(|s| s.get("color").cloned()).as_deref(), Some("violet"));
+    assert!(cascade::get_styles(&map, &divs[1]).and_then(|s| s.get("color").cloned()).is_none());
+}
+
+#[test]
+fn cascade_important_overrides_specificity() {
+    let doc = parse_html(r#"<html><body><div id="x" class="y">z</div></body></html>"#, "");
+    let css = parse_stylesheet(r#"
+        #x { color: red; }
+        .y { color: green !important; }
+    "#);
+    let map = cascade::cascade(&doc.root, &[css]);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let c = cascade::get_styles(&map, &div).and_then(|s| s.get("color").cloned());
+    assert_eq!(c.as_deref(), Some("green"));
+}
+
+#[test]
+fn cascade_later_rule_same_specificity_wins() {
+    let doc = parse_html("<html><body><p>x</p></body></html>", "");
+    let css = parse_stylesheet(r#"
+        p { color: red; }
+        p { color: blue; }
+    "#);
+    let map = cascade::cascade(&doc.root, &[css]);
+    let p = doc.root.find(|n| n.tag_name().as_deref() == Some("p")).unwrap();
+    let c = cascade::get_styles(&map, &p).and_then(|s| s.get("color").cloned());
+    assert_eq!(c.as_deref(), Some("blue"));
+}
+
+#[test]
+fn cascade_inheritance_does_not_blow_up() {
+    // color je technicky inherited per CSS spec, ale cascade muze ukladat
+    // je jen na ancestor. Test jen zarucuje ze cascade neprerusi.
+    let doc = parse_html("<html><body><div><span>x</span></div></body></html>", "");
+    let css = parse_stylesheet("div { color: orange; }");
+    let _map = cascade::cascade(&doc.root, &[css]);
+    // Neni assert na value - jen test ze nepada
+}
+
+#[test]
+fn cascade_no_inheritance_for_padding() {
+    // padding NENI inherited
+    let doc = parse_html("<html><body><div><span>x</span></div></body></html>", "");
+    let css = parse_stylesheet("div { padding: 10px; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let span = doc.root.find(|n| n.tag_name().as_deref() == Some("span")).unwrap();
+    let p = cascade::get_styles(&map, &span).and_then(|s| s.get("padding").cloned());
+    assert!(p.is_none());
+}
+
+#[test]
+fn cascade_pseudo_after_content() {
+    // Test ::after pseudo via PseudoStyleMap
+    let doc = parse_html("<html><body><p>txt</p></body></html>", "");
+    let css = parse_stylesheet(r#"p::after { content: "!"; color: red; }"#);
+    let _map = cascade::cascade(&doc.root, &[css]);
+    // ::after by mel byt v PseudoStyleMap - ujistime se ze cascade nepada
+    // (assert je prazdny - jen kompilace + run)
+}
+
+#[test]
+fn cascade_var_resolution() {
+    let doc = parse_html("<html><body><div>x</div></body></html>", "");
+    let css = parse_stylesheet(r#"
+        :root { --main-color: purple; }
+        div { color: var(--main-color); }
+    "#);
+    let map = cascade::cascade(&doc.root, &[css]);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let c = cascade::get_styles(&map, &div).and_then(|s| s.get("color").cloned());
+    assert_eq!(c.as_deref(), Some("purple"));
+}
+
+#[test]
+fn cascade_var_with_fallback() {
+    let doc = parse_html("<html><body><div>x</div></body></html>", "");
+    let css = parse_stylesheet(r#"div { color: var(--undefined, teal); }"#);
+    let map = cascade::cascade(&doc.root, &[css]);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let c = cascade::get_styles(&map, &div).and_then(|s| s.get("color").cloned());
+    assert_eq!(c.as_deref(), Some("teal"));
+}
+
+#[test]
+fn cascade_calc_simple_addition() {
+    let vars = std::collections::HashMap::new();
+    let r = cascade::resolve_value("calc(10px + 5px)", &vars);
+    assert_eq!(r, "15px");
+}
+
+#[test]
+fn cascade_calc_subtraction() {
+    let vars = std::collections::HashMap::new();
+    let r = cascade::resolve_value("calc(20px - 5px)", &vars);
+    assert_eq!(r, "15px");
+}
+
+#[test]
+fn cascade_clamp_within_range() {
+    let vars = std::collections::HashMap::new();
+    let r = cascade::resolve_value("clamp(0px, 10px, 20px)", &vars);
+    assert_eq!(r, "10px");
+}
+
+#[test]
+fn cascade_clamp_below_min() {
+    let vars = std::collections::HashMap::new();
+    let r = cascade::resolve_value("clamp(5px, 1px, 20px)", &vars);
+    assert_eq!(r, "5px");
+}
+
+#[test]
+fn cascade_clamp_above_max() {
+    let vars = std::collections::HashMap::new();
+    let r = cascade::resolve_value("clamp(0px, 100px, 50px)", &vars);
+    assert_eq!(r, "50px");
+}
+
+#[test]
+fn cascade_min_function() {
+    let vars = std::collections::HashMap::new();
+    let r = cascade::resolve_value("min(10px, 5px, 20px)", &vars);
+    assert_eq!(r, "5px");
+}
+
+#[test]
+fn cascade_max_function() {
+    let vars = std::collections::HashMap::new();
+    let r = cascade::resolve_value("max(10px, 5px, 20px)", &vars);
+    assert_eq!(r, "20px");
+}
