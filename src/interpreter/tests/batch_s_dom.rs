@@ -288,3 +288,30 @@ fn document_html_exists() {
     let v = run(r#"return document.documentElement.tagName;"#);
     assert_eq!(as_str(v), "HTML");
 }
+
+// ─── Form properties ─────────────────────────────────────────────────────
+
+#[test]
+fn form_action_method_default() {
+    let v = run(r#"
+        const f = document.createElement("form");
+        f.setAttribute("action", "/api/submit");
+        return f.action + ":" + f.method;
+    "#);
+    assert_eq!(as_str(v), "/api/submit:GET");
+}
+
+#[test]
+fn form_elements_returns_inputs() {
+    let v = run(r#"
+        const f = document.createElement("form");
+        const i1 = document.createElement("input");
+        const i2 = document.createElement("input");
+        const div = document.createElement("div");
+        f.appendChild(i1);
+        f.appendChild(div);
+        f.appendChild(i2);
+        return f.elements.length;
+    "#);
+    assert_eq!(as_num(v), 2.0);
+}

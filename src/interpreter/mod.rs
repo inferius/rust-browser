@@ -2425,6 +2425,27 @@ impl Interpreter {
                     "type" | "name" | "href" | "src" | "alt" | "title" => {
                         return Ok(JsValue::Str(n.attr(key).unwrap_or_default()));
                     }
+                    // HTMLFormElement properties
+                    "action" if n.tag_name().as_deref() == Some("form") => {
+                        return Ok(JsValue::Str(n.attr("action").unwrap_or_default()));
+                    }
+                    "method" if n.tag_name().as_deref() == Some("form") => {
+                        return Ok(JsValue::Str(n.attr("method").unwrap_or_else(|| "GET".to_string())));
+                    }
+                    // form.elements - vsechny input/select/textarea uvnitr formu
+                    "elements" if n.tag_name().as_deref() == Some("form") => {
+                        let mut elems: Vec<Rc<crate::browser::dom::NodeData>> = Vec::new();
+                        n.walk(&mut |node| {
+                            if Rc::ptr_eq(node, n) { return; } // skip self
+                            if let Some(t) = node.tag_name() {
+                                if matches!(t.as_str(), "input" | "select" | "textarea" | "button") {
+                                    elems.push(Rc::clone(node));
+                                }
+                            }
+                        });
+                        let arr: Vec<JsValue> = elems.into_iter().map(JsValue::DomNode).collect();
+                        return Ok(JsValue::Array(Rc::new(RefCell::new(arr))));
+                    }
                     "children" | "childNodes" => {
                         let arr: Vec<JsValue> = n.children.borrow().iter()
                             .map(|c| JsValue::DomNode(Rc::clone(c))).collect();
