@@ -5,10 +5,10 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 ## Stav
 
 - Build: **OK**, 0 errors.
-- Tests: **1491 passed, 0 failed, 3 ignored** (+686 v teto session, +85.2%).
-- Posledni commit: `8e48baa Number/Math/Date/BigInt + Paint primitive tests +56`.
+- Tests: **1543 passed, 0 failed, 3 ignored** (+738 v teto session, +91.7%).
+- Posledni commit: `e1188fd TODO_CSS aktualizace + tests +52`.
 - Tree: ciste.
-- Branch master, ~254 commitu pred origin/master (NEPUSHOVAT bez vyzvy).
+- Branch master, ~256 commitu pred origin/master (NEPUSHOVAT bez vyzvy).
 
 ## Recent session highlights
 
