@@ -3688,15 +3688,6 @@ impl Interpreter {
                             }
                             return Ok(JsValue::Object(r));
                         }
-                        "hasAttribute" => {
-                            let name = arg_vals.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
-                            return Ok(JsValue::Bool(n.attr(&name).is_some()));
-                        }
-                        "removeAttribute" => {
-                            let name = arg_vals.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
-                            n.remove_attr(&name);
-                            return Ok(JsValue::Undefined);
-                        }
                         "toggleAttribute" => {
                             let name = arg_vals.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
                             if n.attr(&name).is_some() {

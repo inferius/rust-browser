@@ -270,6 +270,36 @@ pub struct LayoutBox {
     pub list_style_type: String,
     /// list-style-position: outside | inside
     pub list_style_position: String,
+    /// list-style-image: url(...) | none
+    pub list_style_image: Option<String>,
+    /// font-stretch
+    pub font_stretch: String,
+    /// font-variant
+    pub font_variant: String,
+    /// font-size-adjust
+    pub font_size_adjust: String,
+    /// font-feature-settings
+    pub font_feature_settings: String,
+    /// font-variation-settings
+    pub font_variation_settings: String,
+    /// font-display (z @font-face, ale lze ulozit i na element)
+    pub font_display: String,
+    /// text-orientation: mixed | upright | sideways
+    pub text_orientation: String,
+    /// text-combine-upright
+    pub text_combine_upright: String,
+    /// ruby-position / ruby-align
+    pub ruby_position: String,
+    pub ruby_align: String,
+    /// quotes
+    pub quotes: String,
+    /// outline (= border outside box)
+    pub outline_width: f32,
+    pub outline_style: String,
+    pub outline_color: Option<[u8; 4]>,
+    pub outline_offset: f32,
+    /// margin-trim
+    pub margin_trim: String,
     /// Box shadow: (offset_x, offset_y, blur, spread, color)
     /// (offset_x, offset_y, blur, spread, color, inset)
     pub box_shadow: Option<(f32, f32, f32, f32, [u8; 4], bool)>,
@@ -373,6 +403,23 @@ impl LayoutBox {
             text_align_last: String::new(),
             list_style_type: String::new(),
             list_style_position: String::new(),
+            list_style_image: None,
+            font_stretch: String::new(),
+            font_variant: String::new(),
+            font_size_adjust: String::new(),
+            font_feature_settings: String::new(),
+            font_variation_settings: String::new(),
+            font_display: String::new(),
+            text_orientation: String::new(),
+            text_combine_upright: String::new(),
+            ruby_position: String::new(),
+            ruby_align: String::new(),
+            quotes: String::new(),
+            outline_width: 0.0,
+            outline_style: String::new(),
+            outline_color: None,
+            outline_offset: 0.0,
+            margin_trim: String::new(),
             box_shadow: None,
             transform: None,
             transforms: Vec::new(),
@@ -793,6 +840,27 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(v) = s.get("text-align-last") { bx.text_align_last = v.trim().to_string(); }
     if let Some(v) = s.get("list-style-type") { bx.list_style_type = v.trim().to_string(); }
     if let Some(v) = s.get("list-style-position") { bx.list_style_position = v.trim().to_string(); }
+    if let Some(v) = s.get("list-style-image") {
+        if v.trim() != "none" { bx.list_style_image = Some(v.trim().to_string()); }
+    }
+    if let Some(v) = s.get("font-stretch") { bx.font_stretch = v.trim().to_string(); }
+    if let Some(v) = s.get("font-variant") { bx.font_variant = v.trim().to_string(); }
+    if let Some(v) = s.get("font-size-adjust") { bx.font_size_adjust = v.trim().to_string(); }
+    if let Some(v) = s.get("font-feature-settings") { bx.font_feature_settings = v.trim().to_string(); }
+    if let Some(v) = s.get("font-variation-settings") { bx.font_variation_settings = v.trim().to_string(); }
+    if let Some(v) = s.get("font-display") { bx.font_display = v.trim().to_string(); }
+    if let Some(v) = s.get("text-orientation") { bx.text_orientation = v.trim().to_string(); }
+    if let Some(v) = s.get("text-combine-upright") { bx.text_combine_upright = v.trim().to_string(); }
+    if let Some(v) = s.get("ruby-position") { bx.ruby_position = v.trim().to_string(); }
+    if let Some(v) = s.get("ruby-align") { bx.ruby_align = v.trim().to_string(); }
+    if let Some(v) = s.get("quotes") { bx.quotes = v.trim().to_string(); }
+    if let Some(v) = s.get("outline-width") { bx.outline_width = parse_length(v); }
+    if let Some(v) = s.get("outline-style") { bx.outline_style = v.trim().to_string(); }
+    if let Some(v) = s.get("outline-color") {
+        if v.trim() != "currentColor" { bx.outline_color = parse_color(v); }
+    }
+    if let Some(v) = s.get("outline-offset") { bx.outline_offset = parse_length(v); }
+    if let Some(v) = s.get("margin-trim") { bx.margin_trim = v.trim().to_string(); }
     // contain - CSS Containment L3
     if let Some(c) = s.get("contain") {
         let mut bits = 0u8;

@@ -94,19 +94,20 @@ pub fn expand_shorthand(prop: &str, value: &str, out: &mut HashMap<String, Strin
             out.insert(format!("{prop}-left"),   l.into());
             out.insert(prop.into(), value.into()); // shorthand zachovan pro existing read
         }
-        "border" => {
+        "border" | "outline" => {
             // "1px solid red" - parse postupne
             let parts: Vec<&str> = value.split_whitespace().collect();
+            let prefix = prop;
             for p in &parts {
                 if p.ends_with("px") || p.ends_with("em") || p.ends_with("rem") {
-                    out.insert("border-width".into(), p.to_string());
-                } else if matches!(*p, "solid" | "dashed" | "dotted" | "double" | "none") {
-                    out.insert("border-style".into(), p.to_string());
+                    out.insert(format!("{prefix}-width"), p.to_string());
+                } else if matches!(*p, "solid" | "dashed" | "dotted" | "double" | "none" | "groove" | "ridge" | "inset" | "outset") {
+                    out.insert(format!("{prefix}-style"), p.to_string());
                 } else if super::layout::parse_color(p).is_some() {
-                    out.insert("border-color".into(), p.to_string());
+                    out.insert(format!("{prefix}-color"), p.to_string());
                 }
             }
-            out.insert("border".into(), value.into());
+            out.insert(prop.into(), value.into());
         }
         "background" => {
             // Zjednoduseno: pokud je color, ulozit jako background-color
