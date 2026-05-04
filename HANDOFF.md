@@ -5,10 +5,10 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 ## Stav
 
 - Build: **OK**, 0 errors.
-- Tests: **1003 passed, 0 failed, 3 ignored** (+198 v teto session).
-- Posledni commit: `c6a3b6d Cascade + DOM testy +20`.
+- Tests: **1065 passed, 0 failed, 3 ignored** (+260 v teto session, +32%).
+- Posledni commit: `514d0c1 WebGL phase 1 - state machine + handles`.
 - Tree: ciste.
-- Branch master, ~225 commitu pred origin/master (NEPUSHOVAT bez vyzvy).
+- Branch master, ~228 commitu pred origin/master (NEPUSHOVAT bez vyzvy).
 
 ## Recent session highlights
 
@@ -17,10 +17,26 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
    run_blur_passes + compose_offscreen.
 2. **Filter color matrix subtree** (commit 3ac8ea6) - rozsireni z blur-only na
    obecne color matrix filtry (hue/saturate/grayscale/sepia/invert/contrast/
-   brightness/opacity). Compose shader s 4x5 row-major matrix. partition_filter_segments
-   pub fn (testovatelna). +159 testu.
-3. **Cascade + DOM testy** (commit c6a3b6d) - 38 dalsich testu pro cascade
-   pseudo selectors + DOM API.
+   brightness/opacity). Compose shader s 4x5 row-major matrix. +159 testu.
+3. **Cascade + DOM testy** (commit c6a3b6d) - +20 testu cascade + DOM.
+4. **3D perspective shader pipeline** (commit 2602957) - real 4x4 matrix
+   transform pres TRANSFORM_SHADER WGSL. compute_transform_matrix v layout,
+   TransformBegin/End markery v paint, transform_pipeline + compose_transform
+   v render. +31 testu pro matrix compose + paint markery + partition.
+5. **Polygon clip-path** (commit b3f5c37) - fan triangulace pro convex
+   polygons. ClippedRect display command. +5 testu.
+6. **WebGL phase 1** (commit 514d0c1) - state machine + handle objects +
+   clear color + buffer/shader/texture/program management. +26 testu.
+
+## Velke remaining work
+
+- **WebGL phase 2**: GLSL -> WGSL pres naga crate. shader compile.
+- **WebGL phase 3**: real wgpu pipeline + draw call emission, canvas RT
+  composite do main swap chain.
+- **Concave polygon clip-path**: aktualni fan triangulation pro convex,
+  ear-clipping + earcut algoritm pro general polygon.
+- **Filter v Transform RT (nested)**: aktualne filter inside transform
+  je inner cmds bez efektu - lepsi pristup vyzaduje rekursi v draw_segments.
 
 ## Test runner
 
