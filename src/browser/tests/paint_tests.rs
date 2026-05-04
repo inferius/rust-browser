@@ -408,6 +408,84 @@ fn paint_img_tag_emits_image_command() {
     assert!(has_img);
 }
 
+// ─── 3D Transform markers ───────────────────────────────────────────────
+
+fn count_transform_begins(cmds: &[DisplayCommand]) -> usize {
+    cmds.iter().filter(|c| matches!(c, DisplayCommand::TransformBegin { .. })).count()
+}
+
+fn count_transform_ends(cmds: &[DisplayCommand]) -> usize {
+    cmds.iter().filter(|c| matches!(c, DisplayCommand::TransformEnd)).count()
+}
+
+#[test]
+fn paint_no_transform_emits_no_markers() {
+    let cmds = build_dl(
+        r#"<html><body><div></div></body></html>"#,
+        r#"div { background: red; width: 100px; height: 100px; }"#,
+    );
+    assert_eq!(count_transform_begins(&cmds), 0);
+    assert_eq!(count_transform_ends(&cmds), 0);
+}
+
+#[test]
+fn paint_2d_rotate_no_marker() {
+    // 2D rotate Z se zpracovava CPU post-process, nepotrebuje TransformBegin.
+    let cmds = build_dl(
+        r#"<html><body><div></div></body></html>"#,
+        r#"div { background: red; width: 100px; height: 100px; transform: rotate(45deg); }"#,
+    );
+    assert_eq!(count_transform_begins(&cmds), 0);
+}
+
+#[test]
+fn paint_rotate_x_emits_transform_marker() {
+    let cmds = build_dl(
+        r#"<html><body><div></div></body></html>"#,
+        r#"div { background: red; width: 100px; height: 100px; transform: rotateX(45deg); }"#,
+    );
+    let begins = count_transform_begins(&cmds);
+    let ends = count_transform_ends(&cmds);
+    assert!(begins >= 1, "rotateX musi emit TransformBegin");
+    assert_eq!(begins, ends, "Begin/End balanced");
+}
+
+#[test]
+fn paint_rotate_y_emits_transform_marker() {
+    let cmds = build_dl(
+        r#"<html><body><div></div></body></html>"#,
+        r#"div { background: red; width: 100px; height: 100px; transform: rotateY(60deg); }"#,
+    );
+    assert!(count_transform_begins(&cmds) >= 1);
+}
+
+#[test]
+fn paint_perspective_emits_transform_marker() {
+    let cmds = build_dl(
+        r#"<html><body><div></div></body></html>"#,
+        r#"div { background: red; width: 100px; height: 100px; transform: perspective(800px); }"#,
+    );
+    assert!(count_transform_begins(&cmds) >= 1);
+}
+
+#[test]
+fn paint_transform_marker_includes_matrix() {
+    let cmds = build_dl(
+        r#"<html><body><div></div></body></html>"#,
+        r#"div { background: red; width: 100px; height: 100px; transform: rotateX(45deg); }"#,
+    );
+    for cmd in &cmds {
+        if let DisplayCommand::TransformBegin { matrix, .. } = cmd {
+            // identity m[15] = 1
+            assert!((matrix[15] - 1.0).abs() < 1e-3, "m[15] = w col");
+            // rotate X kolem osa: m[0] = 1 (X osa zachovana), m[5] = cos(45)
+            assert!((matrix[0] - 1.0).abs() < 1e-3);
+            return;
+        }
+    }
+    panic!("TransformBegin nenalezen");
+}
+
 #[test]
 fn paint_bg_image_emits_image_command() {
     let cmds = build_dl(

@@ -187,6 +187,110 @@ fn partition_filter_with_zero_blur_still_emits() {
     }
 }
 
+fn transform_begin(matrix_marker: f32) -> DisplayCommand {
+    let mut m = [0.0_f32; 16];
+    // Identity + marker pro identifikaci
+    m[0] = 1.0; m[5] = 1.0; m[10] = 1.0; m[15] = 1.0;
+    m[3] = matrix_marker;  // tx jako marker
+    DisplayCommand::TransformBegin {
+        x: 0.0, y: 0.0, w: 100.0, h: 100.0,
+        matrix: m,
+    }
+}
+
+#[test]
+fn partition_transform_only_returns_transform3d_seg() {
+    let cmds = vec![transform_begin(7.0), rect(0.0, 0.0), DisplayCommand::TransformEnd];
+    let segs = partition_filter_segments(&cmds);
+    assert_eq!(segs.len(), 1);
+    match &segs[0] {
+        Seg::Transform3D { inner, matrix, .. } => {
+            assert_eq!(inner.len(), 1);
+            assert!((matrix[3] - 7.0).abs() < 1e-5);
+        }
+        _ => panic!("expected Transform3D"),
+    }
+}
+
+#[test]
+fn partition_main_transform_main() {
+    let cmds = vec![
+        rect(0.0, 0.0),
+        transform_begin(1.0),
+        rect(10.0, 10.0),
+        DisplayCommand::TransformEnd,
+        rect(20.0, 20.0),
+    ];
+    let segs = partition_filter_segments(&cmds);
+    assert_eq!(segs.len(), 3);
+    matches!(&segs[0], Seg::Main(_));
+    matches!(&segs[1], Seg::Transform3D { .. });
+    matches!(&segs[2], Seg::Main(_));
+}
+
+#[test]
+fn partition_filter_inside_transform_treated_as_inner() {
+    // Top-level Transform pohlti Filter inside (kvuli first-cut implementaci).
+    let cmds = vec![
+        transform_begin(2.0),
+        filter_begin(5.0),
+        rect(0.0, 0.0),
+        DisplayCommand::FilterEnd,
+        DisplayCommand::TransformEnd,
+    ];
+    let segs = partition_filter_segments(&cmds);
+    assert_eq!(segs.len(), 1);
+    match &segs[0] {
+        Seg::Transform3D { inner, .. } => {
+            // inner obsahuje FilterBegin/Rect/FilterEnd
+            assert_eq!(inner.len(), 3);
+        }
+        _ => panic!("expected Transform3D"),
+    }
+}
+
+#[test]
+fn partition_transform_inside_filter_treated_as_inner() {
+    let cmds = vec![
+        filter_begin(5.0),
+        transform_begin(2.0),
+        rect(0.0, 0.0),
+        DisplayCommand::TransformEnd,
+        DisplayCommand::FilterEnd,
+    ];
+    let segs = partition_filter_segments(&cmds);
+    assert_eq!(segs.len(), 1);
+    match &segs[0] {
+        Seg::Filter { inner, .. } => {
+            assert_eq!(inner.len(), 3);
+        }
+        _ => panic!("expected Filter"),
+    }
+}
+
+#[test]
+fn partition_two_consecutive_transforms() {
+    let cmds = vec![
+        transform_begin(1.0),
+        rect(0.0, 0.0),
+        DisplayCommand::TransformEnd,
+        transform_begin(2.0),
+        rect(10.0, 10.0),
+        DisplayCommand::TransformEnd,
+    ];
+    let segs = partition_filter_segments(&cmds);
+    assert_eq!(segs.len(), 2);
+    let mut markers = Vec::new();
+    for s in &segs {
+        if let Seg::Transform3D { matrix, .. } = s {
+            markers.push(matrix[3]);
+        }
+    }
+    assert_eq!(markers.len(), 2);
+    assert!((markers[0] - 1.0).abs() < 1e-5);
+    assert!((markers[1] - 2.0).abs() < 1e-5);
+}
+
 #[test]
 fn partition_preserves_command_count() {
     let cmds = vec![
@@ -204,6 +308,7 @@ fn partition_preserves_command_count() {
         match s {
             Seg::Main(s) => total += s.len(),
             Seg::Filter { inner, .. } => total += inner.len(),
+            Seg::Transform3D { inner, .. } => total += inner.len(),
         }
     }
     // 5 ne-marker cmds (3 mimo + 2 uvnitr filtru); markery se neztraceji v inner

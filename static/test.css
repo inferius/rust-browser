@@ -382,6 +382,12 @@ p[data-info]::before {
 .r-45 { transform: rotate(45deg); }
 .r-scale { transform: scale(1.5); }
 
+/* 3D Transformations - RT pipeline test */
+.t-rx    { transform: rotateX(45deg); background: #ff9500; }
+.t-ry    { transform: rotateY(45deg); background: #34c759; }
+.t-rxy   { transform: rotateX(30deg) rotateY(30deg); background: #5856d6; }
+.t-persp { transform: perspective(600px) rotateY(35deg); background: #af52de; }
+
 /* text-decoration styles */
 .td-solid  { text-decoration: underline; text-decoration-style: solid; }
 .td-double { text-decoration: underline; text-decoration-style: double; }

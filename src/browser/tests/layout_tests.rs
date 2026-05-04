@@ -1526,6 +1526,211 @@ fn apply_filter_chain_invert_full() {
     assert_eq!(result[2], 155);
 }
 
+// ─── 3D transform matrix compose ────────────────────────────────────────
+
+fn approx_eq(a: f32, b: f32, eps: f32) -> bool {
+    (a - b).abs() < eps
+}
+
+#[test]
+fn transform_matrix_empty_is_identity() {
+    let m = layout::compute_transform_matrix(&[], None);
+    let id = [
+        1.0, 0.0, 0.0, 0.0,
+        0.0, 1.0, 0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0,
+        0.0, 0.0, 0.0, 1.0,
+    ];
+    for i in 0..16 { assert!(approx_eq(m[i], id[i], 1e-5), "[{i}] {} != {}", m[i], id[i]); }
+}
+
+#[test]
+fn transform_matrix_translate_2d() {
+    let m = layout::compute_transform_matrix(&[
+        layout::TransformOp::Translate(50.0, 30.0),
+    ], None);
+    assert!(approx_eq(m[3], 50.0, 1e-5));
+    assert!(approx_eq(m[7], 30.0, 1e-5));
+    assert!(approx_eq(m[15], 1.0, 1e-5));
+}
+
+#[test]
+fn transform_matrix_translate_3d() {
+    let m = layout::compute_transform_matrix(&[
+        layout::TransformOp::Translate3D { x: 10.0, y: 20.0, z: 30.0 },
+    ], None);
+    assert!(approx_eq(m[3], 10.0, 1e-5));
+    assert!(approx_eq(m[7], 20.0, 1e-5));
+    assert!(approx_eq(m[11], 30.0, 1e-5));
+}
+
+#[test]
+fn transform_matrix_scale_diagonal() {
+    let m = layout::compute_transform_matrix(&[
+        layout::TransformOp::Scale(2.0, 3.0),
+    ], None);
+    assert!(approx_eq(m[0], 2.0, 1e-5));
+    assert!(approx_eq(m[5], 3.0, 1e-5));
+    assert!(approx_eq(m[10], 1.0, 1e-5));
+}
+
+#[test]
+fn transform_matrix_scale3d_diagonal() {
+    let m = layout::compute_transform_matrix(&[
+        layout::TransformOp::Scale3D { x: 2.0, y: 3.0, z: 4.0 },
+    ], None);
+    assert!(approx_eq(m[0], 2.0, 1e-5));
+    assert!(approx_eq(m[5], 3.0, 1e-5));
+    assert!(approx_eq(m[10], 4.0, 1e-5));
+}
+
+#[test]
+fn transform_matrix_rotate_z_90() {
+    let rad = std::f32::consts::FRAC_PI_2;
+    let m = layout::compute_transform_matrix(&[
+        layout::TransformOp::Rotate(rad),
+    ], None);
+    // rotate Z 90deg: [0, -1, 0, 0; 1, 0, 0, 0; ...]
+    assert!(approx_eq(m[0], 0.0, 1e-5));
+    assert!(approx_eq(m[1], -1.0, 1e-5));
+    assert!(approx_eq(m[4], 1.0, 1e-5));
+    assert!(approx_eq(m[5], 0.0, 1e-5));
+}
+
+#[test]
+fn transform_matrix_rotate3d_z_axis_matches_rotate() {
+    let rad = std::f32::consts::FRAC_PI_2;
+    let m_rotz = layout::compute_transform_matrix(&[
+        layout::TransformOp::Rotate3D { x: 0.0, y: 0.0, z: 1.0, angle_rad: rad },
+    ], None);
+    let m_2d = layout::compute_transform_matrix(&[
+        layout::TransformOp::Rotate(rad),
+    ], None);
+    // Top-left 2x2 by mel byt stejny (Z rotation rotuje XY plane)
+    for i in [0, 1, 4, 5] {
+        assert!((m_rotz[i] - m_2d[i]).abs() < 1e-4, "{i}: {} vs {}", m_rotz[i], m_2d[i]);
+    }
+}
+
+#[test]
+fn transform_matrix_compose_translate_then_scale() {
+    let m = layout::compute_transform_matrix(&[
+        layout::TransformOp::Translate(10.0, 20.0),
+        layout::TransformOp::Scale(2.0, 2.0),
+    ], None);
+    // m = T * S. Pri P=(0,0,0,1): T*S*P = T*(0,0,0,1) = (10, 20, 0, 1).
+    // Pri P=(1,0,0,1): T*S*P = T*(2,0,0,1) = (12, 20, 0, 1).
+    // Test transform applied to point:
+    let px = m[0]*1.0 + m[3]; // (1,0) maps to: 2*1 + 10 = 12
+    assert!(approx_eq(px, 12.0, 1e-5));
+}
+
+#[test]
+fn transform_matrix_perspective_w_factor() {
+    let m = layout::compute_transform_matrix(&[
+        layout::TransformOp::Perspective(800.0),
+    ], None);
+    // Perspective(d): m[14] = -1/d
+    assert!(approx_eq(m[14], -1.0 / 800.0, 1e-5));
+}
+
+#[test]
+fn transform_matrix_parent_perspective_wraps() {
+    // Pri parent_perspective = 800, transform = Translate
+    let m_with = layout::compute_transform_matrix(&[
+        layout::TransformOp::Translate(10.0, 0.0),
+    ], Some(800.0));
+    // m[14] musi byt -1/800 (z perspective wrapper)
+    assert!(approx_eq(m_with[14], -1.0 / 800.0, 1e-5));
+    // m[3] = 10 (translate) prezit
+    assert!(approx_eq(m_with[3], 10.0, 1e-5));
+}
+
+#[test]
+fn transform_matrix_matrix3d_passthrough() {
+    let custom = [
+        2.0, 0.0, 0.0, 5.0,
+        0.0, 3.0, 0.0, 7.0,
+        0.0, 0.0, 4.0, 0.0,
+        0.0, 0.0, 0.0, 1.0,
+    ];
+    let m = layout::compute_transform_matrix(&[
+        layout::TransformOp::Matrix3D(custom),
+    ], None);
+    for i in 0..16 {
+        assert!(approx_eq(m[i], custom[i], 1e-5));
+    }
+}
+
+// ─── needs_3d_pipeline ──────────────────────────────────────────────────
+
+#[test]
+fn needs_3d_empty_no() {
+    assert!(!layout::needs_3d_pipeline(&[], None));
+}
+
+#[test]
+fn needs_3d_translate_2d_no() {
+    assert!(!layout::needs_3d_pipeline(&[
+        layout::TransformOp::Translate(10.0, 20.0),
+    ], None));
+}
+
+#[test]
+fn needs_3d_rotate_z_no() {
+    assert!(!layout::needs_3d_pipeline(&[
+        layout::TransformOp::Rotate(1.0),
+    ], None));
+}
+
+#[test]
+fn needs_3d_rotate_x_axis_yes() {
+    assert!(layout::needs_3d_pipeline(&[
+        layout::TransformOp::Rotate3D { x: 1.0, y: 0.0, z: 0.0, angle_rad: 0.5 },
+    ], None));
+}
+
+#[test]
+fn needs_3d_rotate_y_axis_yes() {
+    assert!(layout::needs_3d_pipeline(&[
+        layout::TransformOp::Rotate3D { x: 0.0, y: 1.0, z: 0.0, angle_rad: 0.5 },
+    ], None));
+}
+
+#[test]
+fn needs_3d_perspective_yes() {
+    assert!(layout::needs_3d_pipeline(&[
+        layout::TransformOp::Perspective(800.0),
+    ], None));
+}
+
+#[test]
+fn needs_3d_parent_perspective_with_translate3d_z_yes() {
+    assert!(layout::needs_3d_pipeline(&[
+        layout::TransformOp::Translate3D { x: 0.0, y: 0.0, z: 50.0 },
+    ], Some(800.0)));
+}
+
+#[test]
+fn needs_3d_parent_perspective_only_2d_translate_no() {
+    // Pure 2D transform pod parent perspective - nepotrebuje 3D
+    // (perspective bez Z neni viditelny rozdil)
+    assert!(!layout::needs_3d_pipeline(&[
+        layout::TransformOp::Translate(10.0, 20.0),
+    ], Some(800.0)));
+}
+
+#[test]
+fn needs_3d_matrix3d_with_z_yes() {
+    let m = [
+        1.0, 0.0, 0.0, 0.0,
+        0.0, 1.0, 0.0, 0.0,
+        0.0, 0.0, 1.0, 50.0,  // m[11] = z translate
+        0.0, 0.0, 0.0, 1.0,
+    ];
+    assert!(layout::needs_3d_pipeline(&[layout::TransformOp::Matrix3D(m)], None));
+}
+
 // ─── parse_length / parse_length_ctx ────────────────────────────────────
 
 #[test]

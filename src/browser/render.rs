@@ -80,6 +80,78 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 }
 "#;
 
+/// 3D Transform compose shader. Renderuje 4-vertex quad transformovany 4x4
+/// matici (vc perspective) v px space, sample z offscreen_tex pres uv region.
+const TRANSFORM_SHADER: &str = r#"
+struct TransformParams {
+    /// 4x4 row-major matrix (CSS transform incl. parent perspective).
+    /// V WGSL ulozeno jako 4 vec4 (po radkach).
+    row0: vec4<f32>,
+    row1: vec4<f32>,
+    row2: vec4<f32>,
+    row3: vec4<f32>,
+    /// (cx, cy, hw, hh) - center bbox v px + half-size.
+    center: vec4<f32>,
+    /// (viewport_w, viewport_h, _, _)
+    viewport: vec4<f32>,
+    /// (u0, v0, u1, v1) - region z offscreen RT k samplovani.
+    uv_box: vec4<f32>,
+};
+@group(0) @binding(0) var src_tex: texture_2d<f32>;
+@group(0) @binding(1) var src_smp: sampler;
+@group(0) @binding(2) var<uniform> tp: TransformParams;
+
+struct VOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+
+@vertex
+fn vs_main(@builtin(vertex_index) idx: u32) -> VOut {
+    // 6 vrcholu pro dva trianlges (0,1,2 + 0,2,3)
+    var corners = array<vec2<f32>, 4>(
+        vec2<f32>(-1.0, -1.0),
+        vec2<f32>( 1.0, -1.0),
+        vec2<f32>( 1.0,  1.0),
+        vec2<f32>(-1.0,  1.0),
+    );
+    var uvs = array<vec2<f32>, 4>(
+        vec2<f32>(tp.uv_box.x, tp.uv_box.y),
+        vec2<f32>(tp.uv_box.z, tp.uv_box.y),
+        vec2<f32>(tp.uv_box.z, tp.uv_box.w),
+        vec2<f32>(tp.uv_box.x, tp.uv_box.w),
+    );
+    var ix = array<u32, 6>(0u, 1u, 2u, 0u, 2u, 3u);
+    let i = ix[idx];
+    let c = corners[i];
+    // Local px space (centered)
+    let lx = c.x * tp.center.z;
+    let ly = c.y * tp.center.w;
+    let p = vec4<f32>(lx, ly, 0.0, 1.0);
+    // Apply matrix (row-major: dot s row vec4)
+    let tx = dot(tp.row0, p);
+    let ty = dot(tp.row1, p);
+    let tz = dot(tp.row2, p);
+    let tw = dot(tp.row3, p);
+    // Perspective divide
+    let inv_w = 1.0 / max(tw, 0.0001);
+    let px = tx * inv_w + tp.center.x;
+    let py = ty * inv_w + tp.center.y;
+    let nx = (px / tp.viewport.x) * 2.0 - 1.0;
+    let ny = 1.0 - (py / tp.viewport.y) * 2.0;
+    let nz = clamp(tz * inv_w, -1.0, 1.0);
+    var out: VOut;
+    out.clip = vec4<f32>(nx, ny, nz, 1.0);
+    out.uv = uvs[i];
+    return out;
+}
+
+@fragment
+fn fs_main(in: VOut) -> @location(0) vec4<f32> {
+    return textureSample(src_tex, src_smp, in.uv);
+}
+"#;
+
 /// Compose shader - samples offscreen_tex (mid-blur result) a kresli do swap chain.
 /// Aplikuje 4x5 color matrix (vetsina filter operaci) - identity = passthrough.
 const COMPOSE_SHADER: &str = r#"
@@ -353,7 +425,8 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: 
             DisplayCommand::BlurredRect { x, y, w, h, color, radius, blur } => {
                 push_blurred_rect(&mut verts, *x, *y, *w, *h, normalize_color(color), *radius, *blur);
             }
-            DisplayCommand::FilterBegin { .. } | DisplayCommand::FilterEnd => {
+            DisplayCommand::FilterBegin { .. } | DisplayCommand::FilterEnd
+            | DisplayCommand::TransformBegin { .. } | DisplayCommand::TransformEnd => {
                 // Markers - zpracovava se v render flow, ne ve vertex builderu.
             }
         }
@@ -529,40 +602,76 @@ pub enum Seg<'a> {
         radius: f32,
         color_matrix: [f32; 20],
     },
+    Transform3D {
+        inner: &'a [DisplayCommand],
+        x: f32, y: f32, w: f32, h: f32,
+        matrix: [f32; 16],
+    },
 }
 
-/// Rozdeli display list na Main + Filter segmenty pres FilterBegin/FilterEnd
-/// markery. Vnorene FilterBegin v ramci jednoho top-level filter spans
-/// se nezpracovavaji (renderuji se jako soucast inner cmds bez recursion).
-/// Symetricnost markeru je predpokladana (paint je emituje paroved).
+/// Rozdeli display list na Main + Filter + Transform3D segmenty pres
+/// FilterBegin/End a TransformBegin/End markery. Pri vnoreni: prvni Begin
+/// marker urci typ top-level segmentu, vnorene Begin/End jineho typu
+/// jsou soucasti inner cmds (ne novy segment).
+/// Symetricnost markeru je predpokladana.
 pub fn partition_filter_segments(cmds: &[DisplayCommand]) -> Vec<Seg<'_>> {
+    #[derive(Clone, Copy, PartialEq)]
+    enum Kind { Filter, Transform }
     let mut segments: Vec<Seg> = Vec::new();
     let mut depth: i32 = 0;
+    let mut active_kind: Option<Kind> = None;
     let mut cursor: usize = 0;
-    let mut filter_start: usize = 0;
+    let mut seg_start: usize = 0;
     let mut filter_params: (f32, f32, f32, f32, f32, [f32; 20]) =
         (0.0, 0.0, 0.0, 0.0, 0.0, [0.0; 20]);
+    let mut tx_params: (f32, f32, f32, f32, [f32; 16]) =
+        (0.0, 0.0, 0.0, 0.0, [0.0; 16]);
     for i in 0..cmds.len() {
         match &cmds[i] {
             DisplayCommand::FilterBegin { x, y, w, h, blur_radius, color_matrix } => {
                 if depth == 0 {
-                    if cursor < i {
-                        segments.push(Seg::Main(&cmds[cursor..i]));
-                    }
-                    filter_start = i + 1;
+                    if cursor < i { segments.push(Seg::Main(&cmds[cursor..i])); }
+                    seg_start = i + 1;
                     filter_params = (*x, *y, *w, *h, *blur_radius, *color_matrix);
+                    active_kind = Some(Kind::Filter);
                 }
-                depth += 1;
+                if active_kind == Some(Kind::Filter) { depth += 1; }
             }
             DisplayCommand::FilterEnd => {
-                depth -= 1;
+                if active_kind == Some(Kind::Filter) {
+                    depth -= 1;
+                    if depth == 0 {
+                        let (x, y, w, h, r, m) = filter_params;
+                        segments.push(Seg::Filter {
+                            inner: &cmds[seg_start..i],
+                            x, y, w, h, radius: r, color_matrix: m,
+                        });
+                        cursor = i + 1;
+                        active_kind = None;
+                    }
+                }
+            }
+            DisplayCommand::TransformBegin { x, y, w, h, matrix } => {
                 if depth == 0 {
-                    let (x, y, w, h, r, m) = filter_params;
-                    segments.push(Seg::Filter {
-                        inner: &cmds[filter_start..i],
-                        x, y, w, h, radius: r, color_matrix: m,
-                    });
-                    cursor = i + 1;
+                    if cursor < i { segments.push(Seg::Main(&cmds[cursor..i])); }
+                    seg_start = i + 1;
+                    tx_params = (*x, *y, *w, *h, *matrix);
+                    active_kind = Some(Kind::Transform);
+                }
+                if active_kind == Some(Kind::Transform) { depth += 1; }
+            }
+            DisplayCommand::TransformEnd => {
+                if active_kind == Some(Kind::Transform) {
+                    depth -= 1;
+                    if depth == 0 {
+                        let (x, y, w, h, m) = tx_params;
+                        segments.push(Seg::Transform3D {
+                            inner: &cmds[seg_start..i],
+                            x, y, w, h, matrix: m,
+                        });
+                        cursor = i + 1;
+                        active_kind = None;
+                    }
                 }
             }
             _ => {}
@@ -584,8 +693,9 @@ fn shift_command_y(cmd: &mut DisplayCommand, dy: f32) {
         | DisplayCommand::Shadow { y, .. }
         | DisplayCommand::Image { y, .. }
         | DisplayCommand::BlurredRect { y, .. }
-        | DisplayCommand::FilterBegin { y, .. } => *y += dy,
-        DisplayCommand::FilterEnd => {}
+        | DisplayCommand::FilterBegin { y, .. }
+        | DisplayCommand::TransformBegin { y, .. } => *y += dy,
+        DisplayCommand::FilterEnd | DisplayCommand::TransformEnd => {}
     }
 }
 
@@ -1495,6 +1605,11 @@ struct Renderer {
     compose_bind_group_layout: wgpu::BindGroupLayout,
     /// Uniform pro compose color matrix (5x vec4 = 80 bytes)
     compose_uniform_buf: wgpu::Buffer,
+    /// 3D transform compose pipeline (samples offscreen RT, kresli quad transformovany matici)
+    transform_pipeline: wgpu::RenderPipeline,
+    transform_bind_group_layout: wgpu::BindGroupLayout,
+    /// Uniform pro transform matrix + center + viewport + uv_box (8x vec4 = 128 bytes)
+    transform_uniform_buf: wgpu::Buffer,
 }
 
 impl Renderer {
@@ -1826,6 +1941,72 @@ impl Renderer {
             multiview: None,
         });
 
+        // Transform pipeline - samples offscreen, drawat 3D transformed quad
+        let transform_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("transform_shader"),
+            source: wgpu::ShaderSource::Wgsl(TRANSFORM_SHADER.into()),
+        });
+        let transform_uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("transform_uniform"),
+            size: 128, // 8x vec4 (mat 4x4 + center + viewport + uv_box)
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let transform_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("transform_bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0, visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1, visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2, visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false, min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let transform_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("transform_pl"),
+            bind_group_layouts: &[&transform_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+        let transform_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("transform_pipeline"),
+            layout: Some(&transform_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &transform_shader, entry_point: "vs_main",
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &transform_shader, entry_point: "fs_main",
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: config.format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+        });
+
         Renderer {
             surface, device, queue, config, pipeline, uniform_buf,
             atlas_tex, atlas_view, atlas_smp, bind_group_layout, bind_group, atlas,
@@ -1836,6 +2017,7 @@ impl Renderer {
             offscreen_tex_b, offscreen_view_b,
             blur_pipeline, blur_bind_group_layout, blur_uniform_buf,
             compose_pipeline, compose_bind_group_layout, compose_uniform_buf,
+            transform_pipeline, transform_bind_group_layout, transform_uniform_buf,
         }
     }
 
@@ -2074,6 +2256,14 @@ impl Renderer {
                     self.compose_offscreen(&view, x, y, w, h, &color_matrix, first_pass);
                     first_pass = false;
                 }
+                Seg::Transform3D { inner, x, y, w, h, matrix } => {
+                    // 1. Capture inner do offscreen_view
+                    let inner_verts = build_vertices(inner, &self.atlas, &self.image_atlas);
+                    self.draw_to_offscreen(&inner_verts);
+                    // 2. Compose s 3D matrix - draw transformed quad samplujici offscreen RT
+                    self.compose_transform(&view, x, y, w, h, &matrix, first_pass);
+                    first_pass = false;
+                }
             }
         }
         // Pokud byl display list prazdny, jeste musime swap chain vyclearovat
@@ -2219,6 +2409,76 @@ impl Renderer {
                 pass.set_scissor_rect(sx as u32, sy as u32, sw as u32, sh as u32);
                 pass.draw(0..3, 0..1);
             }
+        }
+        self.queue.submit(std::iter::once(encoder.finish()));
+    }
+
+    /// Compose offscreen RT do swap chain pres 3D transform pipeline.
+    /// Vykresli quad s 4 rohy transformovanymi 4x4 matici (vc perspective).
+    fn compose_transform(&self, view: &wgpu::TextureView, x: f32, y: f32, w: f32, h: f32, matrix: &[f32; 16], first: bool) {
+        // UV box: jaka cast offscreen RT obsahuje element. Offscreen RT je
+        // viewport size, element je v px (x..x+w, y..y+h). UV = px / viewport.
+        let vw = self.config.width as f32;
+        let vh = self.config.height as f32;
+        let u0 = (x / vw).clamp(0.0, 1.0);
+        let v0 = (y / vh).clamp(0.0, 1.0);
+        let u1 = ((x + w) / vw).clamp(0.0, 1.0);
+        let v1 = ((y + h) / vh).clamp(0.0, 1.0);
+        let cx = x + w * 0.5;
+        let cy = y + h * 0.5;
+        let hw = w * 0.5;
+        let hh = h * 0.5;
+
+        // Layout uniformu: 8x vec4 = 128 bytes
+        // matrix v WGSL row-major: row0 = [m[0], m[1], m[2], m[3]], etc.
+        let m = matrix;
+        let uniform_data: [f32; 32] = [
+            // row0
+            m[0], m[1], m[2], m[3],
+            // row1
+            m[4], m[5], m[6], m[7],
+            // row2
+            m[8], m[9], m[10], m[11],
+            // row3
+            m[12], m[13], m[14], m[15],
+            // center (cx, cy, hw, hh)
+            cx, cy, hw, hh,
+            // viewport
+            vw, vh, 0.0, 0.0,
+            // uv_box
+            u0, v0, u1, v1,
+            // padding
+            0.0, 0.0, 0.0, 0.0,
+        ];
+        self.queue.write_buffer(&self.transform_uniform_buf, 0, bytemuck::cast_slice(&uniform_data));
+
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("transform_bg"),
+            layout: &self.transform_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&self.offscreen_view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.atlas_smp) },
+                wgpu::BindGroupEntry { binding: 2, resource: self.transform_uniform_buf.as_entire_binding() },
+            ],
+        });
+        let load = if first {
+            wgpu::LoadOp::Clear(wgpu::Color { r: 0.95, g: 0.95, b: 0.97, a: 1.0 })
+        } else {
+            wgpu::LoadOp::Load
+        };
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("transform_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view, resolve_target: None,
+                    ops: wgpu::Operations { load, store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: None, timestamp_writes: None, occlusion_query_set: None,
+            });
+            pass.set_pipeline(&self.transform_pipeline);
+            pass.set_bind_group(0, &bg, &[]);
+            pass.draw(0..6, 0..1);
         }
         self.queue.submit(std::iter::once(encoder.finish()));
     }

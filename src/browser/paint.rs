@@ -147,12 +147,23 @@ pub enum DisplayCommand {
     },
     /// Konec filter subtree. Parovan s FilterBegin (LIFO stack).
     FilterEnd,
+    /// Marker zacatku 3D transform subtree. Renderer chytne nasledujici
+    /// commands az do TransformEnd, vykresli je do offscreen RT a slozi
+    /// transformovany quad pres compose pipeline s 4x4 matrix.
+    /// (x, y, w, h) = bbox (untransformed local rect element).
+    /// matrix = 4x4 row-major (vc perspective ancestor).
+    TransformBegin {
+        x: f32, y: f32, w: f32, h: f32,
+        matrix: [f32; 16],
+    },
+    /// Konec 3D transform subtree.
+    TransformEnd,
 }
 
 /// Vrati display list - sekvence primitiv pro renderer.
 pub fn build_display_list(root: &LayoutBox) -> Vec<DisplayCommand> {
     let mut commands = Vec::new();
-    paint_box(root, &mut commands);
+    paint_box(root, &mut commands, None);
     commands
 }
 
@@ -296,7 +307,23 @@ fn emit_svg_children(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>) {
     }
 }
 
-fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>) {
+fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective: Option<f32>) {
+    // Detekce 3D transformu - pokud ano, obal cely emit do TransformBegin/End
+    // a vynech CPU post-process transformaci (renderer aplikuje matrix shader-side).
+    let needs_3d = crate::browser::layout::needs_3d_pipeline(&bx.transforms, parent_perspective);
+    if needs_3d {
+        let m = crate::browser::layout::compute_transform_matrix(&bx.transforms, parent_perspective);
+        cmds.push(DisplayCommand::TransformBegin {
+            x: bx.rect.x,
+            y: bx.rect.y,
+            w: bx.rect.width,
+            h: bx.rect.height,
+            matrix: m,
+        });
+    }
+    // Predame own perspective do children (s fallbackem na parent)
+    let child_perspective = bx.perspective.or(parent_perspective);
+
     // Apply opacity multiply + filter chain + clip-path na vsechny barvy
     let alpha_mul = (bx.opacity * 255.0) as u8;
     let filter = bx.filter.clone();
@@ -641,7 +668,7 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>) {
 
     // Recursivne deti
     for ch in &bx.children {
-        paint_box(ch, cmds);
+        paint_box(ch, cmds, child_perspective);
     }
 
     // Filter subtree end marker - paruje s FilterBegin (LIFO)
@@ -649,11 +676,17 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>) {
         cmds.push(DisplayCommand::FilterEnd);
     }
 
+    // 3D transform: skip CPU post-process - vse resi shader matrix.
+    if needs_3d {
+        cmds.push(DisplayCommand::TransformEnd);
+    }
+
     // Transform aplikovan na vsechny prave vlozene commands tohoto boxu (post-process)
     // Translate / Translate3D - aplikuje shift; rotate/scale 2D pres centroid;
     // matrix3d/perspective - aplikuje matrix multiply na rohy.
+    // Skip kdyz needs_3d - shader pipeline aplikuje cely 4x4 matrix.
     use super::layout::TransformOp;
-    if !bx.transforms.is_empty() {
+    if !bx.transforms.is_empty() && !needs_3d {
         let start = cmds_offset_for_box(bx, cmds);
         // Vypocet centroid box-u pro rotate/scale relative-origin
         let cx = bx.rect.x + bx.rect.width  * 0.5;
@@ -735,14 +768,15 @@ fn scale_cmd(cmd: &mut DisplayCommand, sx: f32, sy: f32, cx: f32, cy: f32) {
         | DisplayCommand::Shadow { x, y, w, h, .. }
         | DisplayCommand::Image { x, y, w, h, .. }
         | DisplayCommand::BlurredRect { x, y, w, h, .. }
-        | DisplayCommand::FilterBegin { x, y, w, h, .. } => {
+        | DisplayCommand::FilterBegin { x, y, w, h, .. }
+        | DisplayCommand::TransformBegin { x, y, w, h, .. } => {
             scale_xy(x, y); scale_wh(w, h);
         }
         DisplayCommand::Text { x, y, font_size, .. } => {
             scale_xy(x, y);
             *font_size *= sy.abs();
         }
-        DisplayCommand::FilterEnd => {}
+        DisplayCommand::FilterEnd | DisplayCommand::TransformEnd => {}
     }
 }
 
@@ -770,8 +804,9 @@ fn rotate_cmd(cmd: &mut DisplayCommand, cos: f32, sin: f32, cx: f32, cy: f32) {
         | DisplayCommand::Image { x, y, .. }
         | DisplayCommand::BlurredRect { x, y, .. }
         | DisplayCommand::FilterBegin { x, y, .. }
+        | DisplayCommand::TransformBegin { x, y, .. }
         | DisplayCommand::Text { x, y, .. } => rotate_xy(x, y),
-        DisplayCommand::FilterEnd => {}
+        DisplayCommand::FilterEnd | DisplayCommand::TransformEnd => {}
     }
 }
 
@@ -784,10 +819,11 @@ fn shift_cmd(cmd: &mut DisplayCommand, dx: f32, dy: f32) {
         | DisplayCommand::Shadow { x, y, .. }
         | DisplayCommand::Image { x, y, .. }
         | DisplayCommand::BlurredRect { x, y, .. }
-        | DisplayCommand::FilterBegin { x, y, .. } => {
+        | DisplayCommand::FilterBegin { x, y, .. }
+        | DisplayCommand::TransformBegin { x, y, .. } => {
             *x += dx;
             *y += dy;
         }
-        DisplayCommand::FilterEnd => {}
+        DisplayCommand::FilterEnd | DisplayCommand::TransformEnd => {}
     }
 }
