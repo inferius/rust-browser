@@ -418,6 +418,174 @@ pub fn radix_string(mut n: u64, radix: u32) -> String {
     buf.iter().rev().collect()
 }
 
+// ─── Web APIs pomucky (Base64, URL, UUID) ─────────────────────────────────
+
+/// Base64 encode (RFC 4648).
+pub fn base64_encode(input: &[u8]) -> String {
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity((input.len() + 2) / 3 * 4);
+    for chunk in input.chunks(3) {
+        let b0 = chunk[0];
+        let b1 = chunk.get(1).copied().unwrap_or(0);
+        let b2 = chunk.get(2).copied().unwrap_or(0);
+        out.push(ALPHABET[(b0 >> 2) as usize] as char);
+        out.push(ALPHABET[(((b0 & 0x03) << 4) | (b1 >> 4)) as usize] as char);
+        if chunk.len() > 1 {
+            out.push(ALPHABET[(((b1 & 0x0F) << 2) | (b2 >> 6)) as usize] as char);
+        } else {
+            out.push('=');
+        }
+        if chunk.len() > 2 {
+            out.push(ALPHABET[(b2 & 0x3F) as usize] as char);
+        } else {
+            out.push('=');
+        }
+    }
+    out
+}
+
+/// Base64 decode.
+pub fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
+    fn decode_char(c: u8) -> Option<u8> {
+        match c {
+            b'A'..=b'Z' => Some(c - b'A'),
+            b'a'..=b'z' => Some(c - b'a' + 26),
+            b'0'..=b'9' => Some(c - b'0' + 52),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    }
+    let cleaned: Vec<u8> = input.bytes().filter(|&c| !c.is_ascii_whitespace() && c != b'=').collect();
+    let mut out = Vec::with_capacity(cleaned.len() * 3 / 4);
+    let mut buf: u32 = 0;
+    let mut bits = 0;
+    for c in cleaned {
+        let v = decode_char(c).ok_or_else(|| format!("InvalidCharacterError: '{}'", c as char))?;
+        buf = (buf << 6) | (v as u32);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((buf >> bits) as u8);
+        }
+    }
+    Ok(out)
+}
+
+/// Parsovany URL.
+pub struct ParsedUrl {
+    pub protocol: String,
+    pub hostname: String,
+    pub port: String,
+    pub pathname: String,
+    pub search: String,
+    pub hash: String,
+    pub host: String,
+    pub origin: String,
+}
+
+pub fn parse_url(url: &str) -> ParsedUrl {
+    let mut s = url.to_string();
+    let mut hash = String::new();
+    if let Some(i) = s.find('#') {
+        hash = s[i..].to_string();
+        s = s[..i].to_string();
+    }
+    let mut search = String::new();
+    if let Some(i) = s.find('?') {
+        search = s[i..].to_string();
+        s = s[..i].to_string();
+    }
+    let (protocol, rest) = if let Some(i) = s.find("://") {
+        (format!("{}:", &s[..i]), s[i+3..].to_string())
+    } else {
+        ("".into(), s)
+    };
+    let (host_full, pathname) = if let Some(i) = rest.find('/') {
+        (rest[..i].to_string(), rest[i..].to_string())
+    } else {
+        (rest, "/".to_string())
+    };
+    let (hostname, port) = if let Some(i) = host_full.find(':') {
+        (host_full[..i].to_string(), host_full[i+1..].to_string())
+    } else {
+        (host_full.clone(), String::new())
+    };
+    let origin = if !protocol.is_empty() {
+        format!("{protocol}//{host_full}")
+    } else {
+        String::new()
+    };
+    ParsedUrl {
+        protocol, hostname, port, pathname, search, hash,
+        host: host_full, origin,
+    }
+}
+
+/// Parse query string ("?a=1&b=2" nebo "a=1&b=2") na Vec<(key, value)>.
+pub fn parse_query_string(s: &str) -> Vec<(String, String)> {
+    let s = s.trim_start_matches('?');
+    if s.is_empty() { return Vec::new(); }
+    s.split('&').filter_map(|pair| {
+        if let Some(eq) = pair.find('=') {
+            Some((url_decode(&pair[..eq]), url_decode(&pair[eq+1..])))
+        } else if !pair.is_empty() {
+            Some((url_decode(pair), String::new()))
+        } else {
+            None
+        }
+    }).collect()
+}
+
+pub fn url_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hex: String = bytes[i+1..=i+2].iter().map(|&b| b as char).collect();
+            if let Ok(n) = u8::from_str_radix(&hex, 16) {
+                out.push(n);
+                i += 3;
+                continue;
+            }
+        } else if bytes[i] == b'+' {
+            out.push(b' ');
+            i += 1;
+            continue;
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Generuje UUID v4 (random).
+/// Format: XXXXXXXX-XXXX-4XXX-YXXX-XXXXXXXXXXXX kde Y = 8/9/A/B
+pub fn generate_uuid_v4() -> String {
+    let mut bytes = [0u8; 16];
+    for byte in bytes.iter_mut() {
+        *byte = (random_u32() & 0xFF) as u8;
+    }
+    bytes[6] = (bytes[6] & 0x0F) | 0x40; // version 4
+    bytes[8] = (bytes[8] & 0x3F) | 0x80; // variant 10
+    format!(
+        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        bytes[0], bytes[1], bytes[2], bytes[3],
+        bytes[4], bytes[5], bytes[6], bytes[7],
+        bytes[8], bytes[9], bytes[10], bytes[11],
+        bytes[12], bytes[13], bytes[14], bytes[15],
+    )
+}
+
+/// Pseudo-random u32 (LCG, deterministicky pro testy).
+pub fn random_u32() -> u32 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static S: AtomicU64 = AtomicU64::new(0xDEADBEEF12345678);
+    let s = S.fetch_add(6364136223846793005, Ordering::Relaxed);
+    (s >> 32) as u32
+}
+
 // ─── Intl - lokalizace (lite, bez ICU) ────────────────────────────────────
 
 /// Formatuje cislo podle locale.

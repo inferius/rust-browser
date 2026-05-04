@@ -444,6 +444,113 @@ pub fn setup_builtins(
 
     e.define("Intl", JsValue::Object(Rc::new(RefCell::new(intl))));
 
+    // ─── atob / btoa - Base64 encode/decode ──────────────────────────────────
+    e.define("btoa", native("btoa", |a| {
+        let s = a.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+        Ok(JsValue::Str(base64_encode(s.as_bytes())))
+    }));
+    e.define("atob", native("atob", |a| {
+        let s = a.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+        match base64_decode(&s) {
+            Ok(bytes) => Ok(JsValue::Str(String::from_utf8_lossy(&bytes).into_owned())),
+            Err(e) => Err(e),
+        }
+    }));
+
+    // ─── TextEncoder / TextDecoder - UTF-8 ───────────────────────────────────
+    // TextEncoder().encode(str) -> Uint8Array (zde reprezentovano jako Array of Numbers)
+    e.define("TextEncoder", native("TextEncoder", |_| {
+        let mut obj = JsObject::new();
+        obj.set("__text_encoder__".into(), JsValue::Bool(true));
+        obj.set("encoding".into(), JsValue::Str("utf-8".into()));
+        Ok(JsValue::Object(Rc::new(RefCell::new(obj))))
+    }));
+    e.define("TextDecoder", native("TextDecoder", |a| {
+        let encoding = a.into_iter().next().map(|v| v.to_string())
+            .unwrap_or_else(|| "utf-8".into());
+        let mut obj = JsObject::new();
+        obj.set("__text_decoder__".into(), JsValue::Bool(true));
+        obj.set("encoding".into(), JsValue::Str(encoding));
+        Ok(JsValue::Object(Rc::new(RefCell::new(obj))))
+    }));
+
+    // ─── URL + URLSearchParams ───────────────────────────────────────────────
+    e.define("URL", native("URL", |a| {
+        let url_str = a.first().map(|v| v.to_string()).unwrap_or_default();
+        let parsed = parse_url(&url_str);
+        let mut obj = JsObject::new();
+        obj.set("__url__".into(), JsValue::Bool(true));
+        obj.set("href".into(),     JsValue::Str(url_str.clone()));
+        obj.set("protocol".into(), JsValue::Str(parsed.protocol));
+        obj.set("hostname".into(), JsValue::Str(parsed.hostname));
+        obj.set("port".into(),     JsValue::Str(parsed.port));
+        obj.set("pathname".into(), JsValue::Str(parsed.pathname));
+        obj.set("search".into(),   JsValue::Str(parsed.search));
+        obj.set("hash".into(),     JsValue::Str(parsed.hash));
+        obj.set("host".into(),     JsValue::Str(parsed.host));
+        obj.set("origin".into(),   JsValue::Str(parsed.origin));
+        Ok(JsValue::Object(Rc::new(RefCell::new(obj))))
+    }));
+
+    e.define("URLSearchParams", native("URLSearchParams", |a| {
+        let init = a.into_iter().next().unwrap_or(JsValue::Undefined);
+        let pairs: Vec<(String, String)> = match init {
+            JsValue::Str(s) => parse_query_string(&s),
+            JsValue::Array(arr) => {
+                arr.borrow().iter().filter_map(|item| {
+                    if let JsValue::Array(pair) = item {
+                        let p = pair.borrow();
+                        let k = p.get(0)?.to_string();
+                        let v = p.get(1)?.to_string();
+                        Some((k, v))
+                    } else { None }
+                }).collect()
+            }
+            _ => Vec::new(),
+        };
+        let mut obj = JsObject::new();
+        obj.set("__url_params__".into(), JsValue::Bool(true));
+        // Ulozime pary jako Array of [k, v]
+        let arr: Vec<JsValue> = pairs.into_iter().map(|(k, v)| {
+            JsValue::Array(Rc::new(RefCell::new(vec![JsValue::Str(k), JsValue::Str(v)])))
+        }).collect();
+        obj.set("__params__".into(), JsValue::Array(Rc::new(RefCell::new(arr))));
+        Ok(JsValue::Object(Rc::new(RefCell::new(obj))))
+    }));
+
+    // ─── crypto - randomUUID + getRandomValues ───────────────────────────────
+    let mut crypto_obj = JsObject::new();
+    crypto_obj.set("randomUUID".into(), native("crypto.randomUUID", |_| {
+        Ok(JsValue::Str(generate_uuid_v4()))
+    }));
+    crypto_obj.set("getRandomValues".into(), native("crypto.getRandomValues", |a| {
+        let arr = a.into_iter().next().unwrap_or(JsValue::Undefined);
+        if let JsValue::Array(rc) = &arr {
+            let len = rc.borrow().len();
+            let mut new_arr: Vec<JsValue> = (0..len).map(|_| {
+                JsValue::Number((random_u32() & 0xFF) as f64)
+            }).collect();
+            std::mem::swap(&mut *rc.borrow_mut(), &mut new_arr);
+        }
+        Ok(arr)
+    }));
+    e.define("crypto", JsValue::Object(Rc::new(RefCell::new(crypto_obj))));
+
+    // ─── fetch - stub vraci rejected Promise (bez backend) ───────────────────
+    // Realna implementace by potrebovala HTTP client (reqwest). Zde stub.
+    e.define("fetch", native("fetch", |a| {
+        let url = a.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+        // Vratime fulfilled Promise s mock Response
+        let mut response = JsObject::new();
+        response.set("__response__".into(), JsValue::Bool(true));
+        response.set("url".into(),    JsValue::Str(url));
+        response.set("status".into(), JsValue::Number(200.0));
+        response.set("ok".into(),     JsValue::Bool(true));
+        response.set("statusText".into(), JsValue::Str("OK".into()));
+        let response_val = JsValue::Object(Rc::new(RefCell::new(response)));
+        Ok(make_settled_promise("fulfilled", response_val))
+    }));
+
     // Konstruktory bez vlastni logiky (logika je v call_new)
     e.define("Map", native("Map", |_| Ok(JsValue::Undefined)));
     e.define("Set", native("Set", |_| Ok(JsValue::Undefined)));
