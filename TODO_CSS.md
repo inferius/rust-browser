@@ -194,8 +194,8 @@ Konvence stavu:
 ### CSS Transforms L1/L2
 - [x] `transform: translate(...)`, `rotate(...)`, `scale(...)`, `skew(...)`, `matrix(...)`
 - [x] `transform-origin`
-- [ ] 3D transformy: `translate3d`, `rotate3d`, `scale3d`, `matrix3d`, `perspective()`
-- [ ] `perspective` property + `perspective-origin`
+- [x] 3D transformy: `translate3d`, `translateZ`, `rotate3d`, `rotateX/Y/Z`, `scale3d`, `matrix3d`, `perspective()` (parser; render aktualne 2D approximace)
+- [ ] `perspective` property + `perspective-origin` (render 3D pipeline)
 - [ ] `transform-style: flat | preserve-3d`
 - [ ] `backface-visibility: hidden`
 - [ ] `transform-box`

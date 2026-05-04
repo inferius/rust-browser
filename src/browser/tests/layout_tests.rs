@@ -358,6 +358,54 @@ fn contain_layout_paint_combo() {
 }
 
 #[test]
+fn parse_transform_translate3d() {
+    use crate::browser::layout::{parse_transform, TransformOp};
+    let t = parse_transform("translate3d(10px, 20px, 30px)").unwrap();
+    if let TransformOp::Translate3D { x, y, z } = t {
+        assert_eq!((x, y, z), (10.0, 20.0, 30.0));
+    } else { panic!(); }
+}
+
+#[test]
+fn parse_transform_rotate3d() {
+    use crate::browser::layout::{parse_transform, TransformOp};
+    let t = parse_transform("rotate3d(0, 1, 0, 90deg)").unwrap();
+    if let TransformOp::Rotate3D { x, y, z, angle_rad } = t {
+        assert_eq!((x, y, z), (0.0, 1.0, 0.0));
+        assert!((angle_rad - std::f32::consts::FRAC_PI_2).abs() < 1e-3);
+    } else { panic!(); }
+}
+
+#[test]
+fn parse_transform_perspective() {
+    use crate::browser::layout::{parse_transform, TransformOp};
+    let t = parse_transform("perspective(500px)").unwrap();
+    if let TransformOp::Perspective(d) = t {
+        assert_eq!(d, 500.0);
+    } else { panic!(); }
+}
+
+#[test]
+fn parse_transform_scale3d() {
+    use crate::browser::layout::{parse_transform, TransformOp};
+    let t = parse_transform("scale3d(1.5, 2.0, 0.5)").unwrap();
+    if let TransformOp::Scale3D { x, y, z } = t {
+        assert_eq!((x, y, z), (1.5, 2.0, 0.5));
+    } else { panic!(); }
+}
+
+#[test]
+fn parse_transform_matrix3d() {
+    use crate::browser::layout::{parse_transform, TransformOp};
+    let t = parse_transform("matrix3d(1,0,0,0, 0,1,0,0, 0,0,1,0, 10,20,30,1)").unwrap();
+    if let TransformOp::Matrix3D(m) = t {
+        assert_eq!(m[0], 1.0);
+        assert_eq!(m[12], 10.0);
+        assert_eq!(m[15], 1.0);
+    } else { panic!(); }
+}
+
+#[test]
 fn font_family_picks_first_from_list() {
     let doc = parse_html(r#"<html><body><p>x</p></body></html>"#, "");
     let css = parse_stylesheet(r#"p { font-family: "MyFont", Arial, sans-serif; }"#);

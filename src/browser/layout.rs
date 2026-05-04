@@ -48,6 +48,14 @@ pub enum TransformOp {
     Translate(f32, f32),
     Rotate(f32),  // radians
     Scale(f32, f32),
+    /// 3D - z osa nepouzite pri 2D rendering (zkracene na xy).
+    Translate3D { x: f32, y: f32, z: f32 },
+    Rotate3D { x: f32, y: f32, z: f32, angle_rad: f32 },
+    Scale3D { x: f32, y: f32, z: f32 },
+    /// 4x4 matice serializovana row-major (16 floats).
+    Matrix3D([f32; 16]),
+    /// Perspective(<length>) - hloubka pohledu.
+    Perspective(f32),
     None,
 }
 
@@ -2307,6 +2315,64 @@ pub fn parse_transform(s: &str) -> Option<TransformOp> {
         let sx = parts.first().and_then(|p| p.parse::<f32>().ok()).unwrap_or(1.0);
         let sy = parts.get(1).and_then(|p| p.parse::<f32>().ok()).unwrap_or(sx);
         return Some(TransformOp::Scale(sx, sy));
+    }
+    // 3D varianty
+    if let Some(inner) = s.strip_prefix("translate3d(").and_then(|x| x.strip_suffix(')')) {
+        let parts: Vec<&str> = inner.split(',').map(str::trim).collect();
+        let x = parts.first().map(|p| parse_length(p)).unwrap_or(0.0);
+        let y = parts.get(1).map(|p| parse_length(p)).unwrap_or(0.0);
+        let z = parts.get(2).map(|p| parse_length(p)).unwrap_or(0.0);
+        return Some(TransformOp::Translate3D { x, y, z });
+    }
+    if let Some(inner) = s.strip_prefix("translateZ(").and_then(|x| x.strip_suffix(')')) {
+        return Some(TransformOp::Translate3D { x: 0.0, y: 0.0, z: parse_length(inner) });
+    }
+    if let Some(inner) = s.strip_prefix("rotate3d(").and_then(|x| x.strip_suffix(')')) {
+        let parts: Vec<&str> = inner.split(',').map(str::trim).collect();
+        let x = parts.first().and_then(|p| p.parse::<f32>().ok()).unwrap_or(0.0);
+        let y = parts.get(1).and_then(|p| p.parse::<f32>().ok()).unwrap_or(0.0);
+        let z = parts.get(2).and_then(|p| p.parse::<f32>().ok()).unwrap_or(0.0);
+        let ang = parts.get(3).and_then(|p| {
+            if let Some(d) = p.strip_suffix("deg") { d.parse::<f32>().ok().map(|v| v.to_radians()) }
+            else if let Some(r) = p.strip_suffix("rad") { r.parse().ok() }
+            else { None }
+        }).unwrap_or(0.0);
+        return Some(TransformOp::Rotate3D { x, y, z, angle_rad: ang });
+    }
+    if let Some(inner) = s.strip_prefix("rotateX(").and_then(|x| x.strip_suffix(')')) {
+        let ang = if let Some(d) = inner.trim().strip_suffix("deg") { d.parse::<f32>().ok().map(|v| v.to_radians()).unwrap_or(0.0) }
+            else { 0.0 };
+        return Some(TransformOp::Rotate3D { x: 1.0, y: 0.0, z: 0.0, angle_rad: ang });
+    }
+    if let Some(inner) = s.strip_prefix("rotateY(").and_then(|x| x.strip_suffix(')')) {
+        let ang = if let Some(d) = inner.trim().strip_suffix("deg") { d.parse::<f32>().ok().map(|v| v.to_radians()).unwrap_or(0.0) }
+            else { 0.0 };
+        return Some(TransformOp::Rotate3D { x: 0.0, y: 1.0, z: 0.0, angle_rad: ang });
+    }
+    if let Some(inner) = s.strip_prefix("rotateZ(").and_then(|x| x.strip_suffix(')')) {
+        let ang = if let Some(d) = inner.trim().strip_suffix("deg") { d.parse::<f32>().ok().map(|v| v.to_radians()).unwrap_or(0.0) }
+            else { 0.0 };
+        return Some(TransformOp::Rotate(ang));
+    }
+    if let Some(inner) = s.strip_prefix("scale3d(").and_then(|x| x.strip_suffix(')')) {
+        let parts: Vec<&str> = inner.split(',').map(str::trim).collect();
+        let x = parts.first().and_then(|p| p.parse().ok()).unwrap_or(1.0);
+        let y = parts.get(1).and_then(|p| p.parse().ok()).unwrap_or(1.0);
+        let z = parts.get(2).and_then(|p| p.parse().ok()).unwrap_or(1.0);
+        return Some(TransformOp::Scale3D { x, y, z });
+    }
+    if let Some(inner) = s.strip_prefix("matrix3d(").and_then(|x| x.strip_suffix(')')) {
+        let parts: Vec<f32> = inner.split(',')
+            .filter_map(|p| p.trim().parse().ok())
+            .collect();
+        if parts.len() == 16 {
+            let mut m = [0.0; 16];
+            m.copy_from_slice(&parts);
+            return Some(TransformOp::Matrix3D(m));
+        }
+    }
+    if let Some(inner) = s.strip_prefix("perspective(").and_then(|x| x.strip_suffix(')')) {
+        return Some(TransformOp::Perspective(parse_length(inner)));
     }
     None
 }
