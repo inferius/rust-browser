@@ -39,3 +39,4 @@ mod promise_extra_tests;
 mod canvas_form_tests;
 mod collections_tests;
 mod strings_extra_tests;
+mod number_math_date_tests;

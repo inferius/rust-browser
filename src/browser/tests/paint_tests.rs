@@ -708,6 +708,178 @@ fn paint_border_zero_no_emit() {
     assert!(!any_border);
 }
 
+// ─── Box shadow edge cases ──────────────────────────────────────────────
+
+#[test]
+fn paint_box_shadow_with_spread() {
+    let cmds = build_dl(
+        r#"<html><body><div></div></body></html>"#,
+        r#"div { background: white; width: 50px; height: 50px;
+                box-shadow: 4px 4px 8px 2px rgba(0,0,0,0.5); }"#,
+    );
+    let with_spread = cmds.iter().any(|c| matches!(c,
+        DC::Shadow { spread, .. } if *spread > 0.0
+    ));
+    assert!(with_spread, "spread param parsed");
+}
+
+#[test]
+fn paint_box_shadow_offset_propagates() {
+    let cmds = build_dl(
+        r#"<html><body><div></div></body></html>"#,
+        r#"div { background: white; width: 50px; height: 50px;
+                box-shadow: 5px 10px 0 black; }"#,
+    );
+    let with_offset = cmds.iter().any(|c| matches!(c,
+        DC::Shadow { offset_x, offset_y, .. }
+            if (*offset_x - 5.0).abs() < 1e-3 && (*offset_y - 10.0).abs() < 1e-3
+    ));
+    assert!(with_offset);
+}
+
+// ─── Image emission via background-image ──────────────────────────────
+
+#[test]
+fn paint_bg_image_url_quoted() {
+    let cmds = build_dl(
+        r#"<html><body><div></div></body></html>"#,
+        r#"div { background-image: url("test.png"); width: 50px; height: 50px; }"#,
+    );
+    let has_img = cmds.iter().any(|c| matches!(c,
+        DC::Image { src, .. } if src.contains("test.png")
+    ));
+    assert!(has_img);
+}
+
+#[test]
+fn paint_no_bg_image_no_emit() {
+    let cmds = build_dl(
+        r#"<html><body><div></div></body></html>"#,
+        r#"div { background: red; width: 50px; height: 50px; }"#,
+    );
+    let any_img = cmds.iter().any(|c| matches!(c, DC::Image { .. }));
+    assert!(!any_img);
+}
+
+// ─── Multiple element nesting ───────────────────────────────────────────
+
+#[test]
+fn paint_nested_divs_emit_multiple_rects() {
+    let cmds = build_dl(
+        r#"<html><body><div><div><div></div></div></div></body></html>"#,
+        r#"div { background: red; width: 50px; height: 50px; padding: 5px; }"#,
+    );
+    let red_count = cmds.iter().filter(|c| matches!(c,
+        DC::Rect { color, .. } if color[0] == 255 && color[1] == 0
+    )).count();
+    assert!(red_count >= 3, "3 nested divs -> 3 red rects, got {red_count}");
+}
+
+#[test]
+fn paint_multiple_siblings_distinct_colors() {
+    let cmds = build_dl(
+        r#"<html><body>
+            <div class="a"></div>
+            <div class="b"></div>
+            <div class="c"></div>
+        </body></html>"#,
+        r#"
+            .a { background: red; width: 50px; height: 50px; }
+            .b { background: green; width: 50px; height: 50px; }
+            .c { background: blue; width: 50px; height: 50px; }
+        "#,
+    );
+    let red = cmds.iter().any(|c| matches!(c, DC::Rect { color, .. } if color[0] == 255 && color[1] == 0));
+    let green = cmds.iter().any(|c| matches!(c, DC::Rect { color, .. } if color[1] >= 100 && color[0] < 50));
+    let blue = cmds.iter().any(|c| matches!(c, DC::Rect { color, .. } if color[2] >= 200 && color[0] < 50));
+    assert!(red && green && blue);
+}
+
+// ─── Filter chain emission combinations ────────────────────────────────
+
+#[test]
+fn paint_multiple_filters_one_marker() {
+    let cmds = build_dl(
+        r#"<html><body><div></div></body></html>"#,
+        r#"div { background: red; width: 50px; height: 50px;
+                filter: blur(3px) brightness(1.5) grayscale(50%); }"#,
+    );
+    // Vsechny 3 filtry pohromade -> jeden FilterBegin
+    assert_eq!(count_filter_begins(&cmds), 1);
+}
+
+#[test]
+fn paint_drop_shadow_chain_emits_shadow_per_op() {
+    let cmds = build_dl(
+        r#"<html><body><div></div></body></html>"#,
+        r#"div { background: white; width: 50px; height: 50px;
+                filter: drop-shadow(2px 2px 4px black) drop-shadow(0 0 8px red); }"#,
+    );
+    let shadow_count = cmds.iter().filter(|c| matches!(c, DC::Shadow { .. })).count();
+    assert!(shadow_count >= 2, "2 drop-shadows = 2 shadows commands");
+}
+
+// ─── Border radius effect ──────────────────────────────────────────────
+
+#[test]
+fn paint_border_radius_propagates_to_rect() {
+    let cmds = build_dl(
+        r#"<html><body><div></div></body></html>"#,
+        r#"div { background: red; width: 50px; height: 50px; border-radius: 10px; }"#,
+    );
+    let with_radius = cmds.iter().any(|c| matches!(c,
+        DC::Rect { radius, .. } if (*radius - 10.0).abs() < 1e-3
+    ));
+    assert!(with_radius, "border-radius -> Rect.radius");
+}
+
+// ─── Outline + offset ──────────────────────────────────────────────────
+
+#[test]
+fn paint_outline_default_no_emit() {
+    let cmds = build_dl(
+        r#"<html><body><div></div></body></html>"#,
+        r#"div { background: white; width: 50px; height: 50px; }"#,
+    );
+    // Bez outline property, jen default Border (none) - nemel by emit pro outline
+    let outline_emit_count = cmds.iter().filter(|c| matches!(c,
+        DC::Border { width, .. } if *width > 0.0
+    )).count();
+    assert_eq!(outline_emit_count, 0);
+}
+
+// ─── Element s mnoho deti ──────────────────────────────────────────────
+
+#[test]
+fn paint_ul_with_many_li_each_text() {
+    let cmds = build_dl(
+        r#"<html><body><ul>
+            <li>1</li><li>2</li><li>3</li><li>4</li><li>5</li>
+        </ul></body></html>"#,
+        r#"li { color: black; }"#,
+    );
+    let text_count = cmds.iter().filter(|c| matches!(c, DC::Text { .. })).count();
+    assert!(text_count >= 5, "5 li -> aspon 5 texts, got {text_count}");
+}
+
+// ─── Empty layout ──────────────────────────────────────────────────────
+
+#[test]
+fn paint_empty_body_emits_minimal() {
+    let cmds = build_dl(r#"<html><body></body></html>"#, "");
+    // Minimal output - no panic
+    let _ = cmds.len();
+}
+
+#[test]
+fn paint_only_text_node_emits_text() {
+    let cmds = build_dl(r#"<html><body>just text</body></html>"#, "");
+    let has_text = cmds.iter().any(|c| matches!(c,
+        DC::Text { content, .. } if content.contains("text")
+    ));
+    assert!(has_text);
+}
+
 #[test]
 fn paint_bg_image_emits_image_command() {
     let cmds = build_dl(
