@@ -219,6 +219,53 @@ pub fn layout_tree(
     layout_root
 }
 
+/// Aplikuje @keyframes animation pri zadanem time.
+/// Pro element s `animation-name: foo` najde keyframes a interpoluje hodnoty.
+/// Funkce ne implementovana plne - zatim helper pro budoucnost.
+pub fn interpolate_keyframes(
+    frames: &[(f32, Vec<super::css_parser::Declaration>)],
+    progress: f32,
+) -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    if frames.is_empty() { return out; }
+    if progress <= frames[0].0 {
+        for d in &frames[0].1 { out.insert(d.property.clone(), d.value.clone()); }
+        return out;
+    }
+    if progress >= frames.last().unwrap().0 {
+        for d in &frames.last().unwrap().1 { out.insert(d.property.clone(), d.value.clone()); }
+        return out;
+    }
+    // Najdi mezi-rame
+    for win in frames.windows(2) {
+        let (p0, decls0) = (&win[0].0, &win[0].1);
+        let (p1, decls1) = (&win[1].0, &win[1].1);
+        if progress >= *p0 && progress <= *p1 {
+            let t = (progress - p0) / (p1 - p0);
+            // Interpoluj kazdou prop pokud je v obou + cislo
+            for d0 in decls0 {
+                let d1 = decls1.iter().find(|d| d.property == d0.property);
+                if let Some(d1) = d1 {
+                    let v0 = parse_length(&d0.value);
+                    let v1 = parse_length(&d1.value);
+                    if v0 != 0.0 || v1 != 0.0 {
+                        let v = v0 + (v1 - v0) * t;
+                        out.insert(d0.property.clone(), format!("{v}px"));
+                    } else {
+                        // Non-numeric: vrat starsi (no real interpolace)
+                        out.insert(d0.property.clone(),
+                            if t < 0.5 { d0.value.clone() } else { d1.value.clone() });
+                    }
+                } else {
+                    out.insert(d0.property.clone(), d0.value.clone());
+                }
+            }
+            break;
+        }
+    }
+    out
+}
+
 /// Vybira layout algoritmus podle display.
 fn layout_dispatch(bx: &mut LayoutBox) {
     match bx.display {

@@ -93,6 +93,32 @@ fn parse_transform_translate() {
 }
 
 #[test]
+fn interpolate_keyframes_at_50pct() {
+    use crate::browser::css_parser::Declaration;
+    let frames = vec![
+        (0.0, vec![Declaration { property: "left".into(), value: "0px".into(), important: false }]),
+        (1.0, vec![Declaration { property: "left".into(), value: "100px".into(), important: false }]),
+    ];
+    let result = layout::interpolate_keyframes(&frames, 0.5);
+    assert_eq!(result.get("left").map(|s| s.as_str()), Some("50px"));
+}
+
+#[test]
+fn parse_keyframes_block() {
+    use crate::browser::css_parser::parse_stylesheet;
+    let s = parse_stylesheet(r#"
+        @keyframes slide {
+            0%   { left: 0px; }
+            50%  { left: 100px; }
+            100% { left: 200px; }
+        }
+    "#);
+    assert_eq!(s.keyframes.len(), 1);
+    assert_eq!(s.keyframes[0].name, "slide");
+    assert_eq!(s.keyframes[0].frames.len(), 3);
+}
+
+#[test]
 fn parse_transform_rotate() {
     use crate::browser::layout::TransformOp;
     let t = layout::parse_transform("rotate(90deg)");

@@ -532,6 +532,10 @@ pub fn run_window_with_html(html: String, css: String) -> Result<(), String> {
                 }
                 WindowEvent::RedrawRequested => {
                     self.render();
+                    // Trigger nasledujici frame (real animation loop)
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
                 }
                 _ => {}
             }
