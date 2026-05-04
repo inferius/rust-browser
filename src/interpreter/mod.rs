@@ -2435,6 +2435,14 @@ impl Interpreter {
                     "type" | "name" | "href" | "src" | "alt" | "title" => {
                         return Ok(JsValue::Str(n.attr(key).unwrap_or_default()));
                     }
+                    // classList - vraci JsObject s methods (add/remove/toggle/contains)
+                    "classList" => {
+                        return Ok(create_class_list(Rc::clone(&n)));
+                    }
+                    // dataset - vraci JsObject se vsemi data-* atributy
+                    "dataset" => {
+                        return Ok(create_dataset(&n));
+                    }
                     // HTMLFormElement properties
                     "action" if n.tag_name().as_deref() == Some("form") => {
                         return Ok(JsValue::Str(n.attr("action").unwrap_or_default()));
@@ -4675,6 +4683,93 @@ impl Interpreter {
 }
 
 
+
+/// classList JS object pro Element - methods add/remove/toggle/contains.
+fn create_class_list(node: Rc<crate::browser::dom::NodeData>) -> JsValue {
+    let obj_rc = Rc::new(RefCell::new(JsObject::new()));
+    {
+        let n = Rc::clone(&node);
+        obj_rc.borrow_mut().set("add".into(), native("classList.add", move |args| {
+            let class = n.attr("class").unwrap_or_default();
+            let mut classes: Vec<String> = class.split_whitespace().map(String::from).collect();
+            for arg in args {
+                let name = arg.to_string();
+                if !classes.contains(&name) { classes.push(name); }
+            }
+            n.set_attr("class", &classes.join(" "));
+            Ok(JsValue::Undefined)
+        }));
+    }
+    {
+        let n = Rc::clone(&node);
+        obj_rc.borrow_mut().set("remove".into(), native("classList.remove", move |args| {
+            let class = n.attr("class").unwrap_or_default();
+            let mut classes: Vec<String> = class.split_whitespace().map(String::from).collect();
+            for arg in args {
+                let name = arg.to_string();
+                classes.retain(|c| c != &name);
+            }
+            n.set_attr("class", &classes.join(" "));
+            Ok(JsValue::Undefined)
+        }));
+    }
+    {
+        let n = Rc::clone(&node);
+        obj_rc.borrow_mut().set("toggle".into(), native("classList.toggle", move |args| {
+            let name = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+            let class = n.attr("class").unwrap_or_default();
+            let mut classes: Vec<String> = class.split_whitespace().map(String::from).collect();
+            let has = classes.contains(&name);
+            if has {
+                classes.retain(|c| c != &name);
+            } else {
+                classes.push(name);
+            }
+            n.set_attr("class", &classes.join(" "));
+            Ok(JsValue::Bool(!has))
+        }));
+    }
+    {
+        let n = Rc::clone(&node);
+        obj_rc.borrow_mut().set("contains".into(), native("classList.contains", move |args| {
+            let name = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+            let class = n.attr("class").unwrap_or_default();
+            let has = class.split_whitespace().any(|c| c == name);
+            Ok(JsValue::Bool(has))
+        }));
+    }
+    JsValue::Object(obj_rc)
+}
+
+/// dataset JS object - vsechny data-* atributy node-u (kebab -> camel keys).
+fn create_dataset(node: &Rc<crate::browser::dom::NodeData>) -> JsValue {
+    let obj_rc = Rc::new(RefCell::new(JsObject::new()));
+    let attrs = node.attributes.borrow();
+    for (k, v) in attrs.iter() {
+        if let Some(rest) = k.strip_prefix("data-") {
+            // kebab-case -> camelCase: data-foo-bar -> fooBar
+            let camel = kebab_to_camel(rest);
+            obj_rc.borrow_mut().set(camel, JsValue::Str(v.clone()));
+        }
+    }
+    JsValue::Object(obj_rc)
+}
+
+fn kebab_to_camel(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut upper = false;
+    for c in s.chars() {
+        if c == '-' {
+            upper = true;
+        } else if upper {
+            out.extend(c.to_uppercase());
+            upper = false;
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
 
 /// Application/x-www-form-urlencoded encoder (RFC 3986 unreserved chars).
 fn url_encode(s: &str) -> String {

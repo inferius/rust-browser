@@ -292,6 +292,44 @@ fn document_html_exists() {
 // ─── Form properties ─────────────────────────────────────────────────────
 
 #[test]
+fn classlist_add_remove_contains() {
+    let v = run(r#"
+        const div = document.createElement("div");
+        div.classList.add("foo");
+        div.classList.add("bar");
+        const has1 = div.classList.contains("foo");
+        div.classList.remove("foo");
+        const has2 = div.classList.contains("foo");
+        const has3 = div.classList.contains("bar");
+        return has1 + ":" + has2 + ":" + has3;
+    "#);
+    assert_eq!(as_str(v), "true:false:true");
+}
+
+#[test]
+fn classlist_toggle_returns_new_state() {
+    let v = run(r#"
+        const div = document.createElement("div");
+        const a = div.classList.toggle("active");
+        const b = div.classList.toggle("active");
+        return a + ":" + b;
+    "#);
+    assert_eq!(as_str(v), "true:false");
+}
+
+#[test]
+fn dataset_kebab_to_camel() {
+    let v = run(r#"
+        const div = document.createElement("div");
+        div.setAttribute("data-user-id", "42");
+        div.setAttribute("data-name", "alice");
+        const ds = div.dataset;
+        return ds.userId + ":" + ds.name;
+    "#);
+    assert_eq!(as_str(v), "42:alice");
+}
+
+#[test]
 fn form_submit_collects_data() {
     let v = run(r#"
         const f = document.createElement("form");
