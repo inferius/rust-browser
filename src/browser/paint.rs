@@ -567,12 +567,43 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>) {
                     for cmd in &mut cmds[start..] { scale_cmd(cmd, *x, *y, cx, cy); }
                 }
                 TransformOp::Matrix3D(m) => {
-                    // Aplikuje 4x4 matrix na pos rect rohy: jen translate slot
-                    // (m[12], m[13]) jako approximation 2D shift.
+                    // Aplikuje 4x4 matrix na pos rect rohy: translate slot
+                    // (m[12], m[13]) + scale (m[0], m[5]) jako approximation 2D
                     let tx = m[12]; let ty = m[13];
+                    let sx = m[0]; let sy = m[5];
+                    if sx != 1.0 || sy != 1.0 {
+                        for cmd in &mut cmds[start..] { scale_cmd(cmd, sx, sy, cx, cy); }
+                    }
                     for cmd in &mut cmds[start..] { shift_cmd(cmd, tx, ty); }
                 }
-                _ => {} // Rotate/Rotate3D/Perspective vyzaduji shader
+                TransformOp::Rotate(rad) => {
+                    // 2D rotace kolem centroid - aplikuje na rect rohy + text pos
+                    // Pri rotate sirka/vyska zustavaji - jen pozice se posuva (approx).
+                    // Real impl by potrebovala shader matrix uniform.
+                    let cos = rad.cos();
+                    let sin = rad.sin();
+                    for cmd in &mut cmds[start..] { rotate_cmd(cmd, cos, sin, cx, cy); }
+                }
+                TransformOp::Rotate3D { x: ax, y: ay, z: az, angle_rad: rad } => {
+                    // Aproximace: kdyz osa ~ Z (0, 0, 1), pouzij 2D rotate.
+                    // Jinak skip (vyzaduje shader matrix).
+                    if az.abs() > 0.5 && ax.abs() < 0.1 && ay.abs() < 0.1 {
+                        let cos = rad.cos();
+                        let sin = rad.sin();
+                        for cmd in &mut cmds[start..] { rotate_cmd(cmd, cos, sin, cx, cy); }
+                    }
+                    // X/Y axis rotation: 2D approximace = squeeze sirky/vysky
+                    // pri 90 deg axis -> 0 visible. Pro start: jen scale dle cos(angle).
+                    else if ax.abs() > 0.5 {
+                        // Y-axis -> stlaceni vysky
+                        let scale_y = rad.cos().abs();
+                        for cmd in &mut cmds[start..] { scale_cmd(cmd, 1.0, scale_y, cx, cy); }
+                    } else if ay.abs() > 0.5 {
+                        let scale_x = rad.cos().abs();
+                        for cmd in &mut cmds[start..] { scale_cmd(cmd, scale_x, 1.0, cx, cy); }
+                    }
+                }
+                TransformOp::Perspective(_) | TransformOp::None => {} // No-op
             }
         }
     } else if let Some(TransformOp::Translate(tx, ty)) = bx.transform {
@@ -612,6 +643,26 @@ fn cmds_offset_for_box(_bx: &LayoutBox, _cmds: &[DisplayCommand]) -> usize {
     // Zatim vraci 0 - znamena translate aplikuje na cely strom (chybne pri vice transformech).
     // Real impl: paint_box vracel range.
     0
+}
+
+/// Rotace pozice kolem centroid (cx, cy). Sirka/vyska zustavaji - jen pos rotuje.
+/// Pro real OBB rotation by se musely vrcholy rotovat zvlast (slozitejsi).
+fn rotate_cmd(cmd: &mut DisplayCommand, cos: f32, sin: f32, cx: f32, cy: f32) {
+    let rotate_xy = |x: &mut f32, y: &mut f32| {
+        let rx = *x - cx;
+        let ry = *y - cy;
+        *x = cx + rx * cos - ry * sin;
+        *y = cy + rx * sin + ry * cos;
+    };
+    match cmd {
+        DisplayCommand::Rect { x, y, .. }
+        | DisplayCommand::Border { x, y, .. }
+        | DisplayCommand::Gradient { x, y, .. }
+        | DisplayCommand::Shadow { x, y, .. }
+        | DisplayCommand::Image { x, y, .. }
+        | DisplayCommand::BlurredRect { x, y, .. }
+        | DisplayCommand::Text { x, y, .. } => rotate_xy(x, y),
+    }
 }
 
 fn shift_cmd(cmd: &mut DisplayCommand, dx: f32, dy: f32) {
