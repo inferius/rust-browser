@@ -2556,6 +2556,8 @@ impl Renderer {
 
     /// Build wgpu pipeline z cached shader modules + vertex layout dle attribs.
     /// Cached per program_id. Vraci true pokud build success (nebo cache hit).
+    /// Pokud uniform_bgl exists pro program (po ensure_webgl_uniform_resources),
+    /// pridava se k pipeline layout.
     pub fn ensure_webgl_pipeline(&mut self, program_id: u32, attribs: &[(u32, crate::interpreter::WebGLAttribSlot)]) -> bool {
         if self.webgl_pipelines.contains_key(&program_id) {
             return true;
@@ -2584,9 +2586,15 @@ impl Renderer {
                 attributes: &attrs,
             }]
         };
+        // Pripoj uniform bind group layout pokud existuje pro program.
+        let bgl_refs: Vec<&wgpu::BindGroupLayout> = if let Some(bgl) = self.webgl_uniform_bgls.get(&program_id) {
+            vec![bgl]
+        } else {
+            Vec::new()
+        };
         let pl_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some(&format!("webgl_pl_{program_id}")),
-            bind_group_layouts: &[],
+            bind_group_layouts: &bgl_refs,
             push_constant_ranges: &[],
         });
         let pipeline = self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -2617,6 +2625,8 @@ impl Renderer {
 
     /// Encode wgpu draw call do canvas RT.
     /// Pipeline + buffer musi byt cached. Vraci true pokud emit success.
+    /// Pokud uniform_bytes neni prazdny + uniform buffer exists, write +
+    /// bind group set.
     pub fn webgl_encode_draw_arrays(
         &self,
         canvas_ptr: usize,
@@ -2625,6 +2635,7 @@ impl Renderer {
         count: i32,
         attribs: &[(u32, crate::interpreter::WebGLAttribSlot)],
         clear_color: Option<[f32; 4]>,
+        uniform_bytes: &[u8],
     ) -> bool {
         let view = match self.webgl_canvas_rts.get(&canvas_ptr) {
             Some((_, v, _, _)) => v,
@@ -2634,6 +2645,20 @@ impl Renderer {
             Some(p) => p,
             None => return false,
         };
+        // Pre-write uniform buffer + bind group create (pokud uniformy)
+        let bind_group = if !uniform_bytes.is_empty() {
+            if let (Some(buf), Some(bgl)) = (self.webgl_uniform_buffers.get(&program_id),
+                                              self.webgl_uniform_bgls.get(&program_id)) {
+                self.queue.write_buffer(buf, 0, uniform_bytes);
+                Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some(&format!("webgl_uniform_bg_{program_id}")),
+                    layout: bgl,
+                    entries: &[
+                        wgpu::BindGroupEntry { binding: 0, resource: buf.as_entire_binding() },
+                    ],
+                }))
+            } else { None }
+        } else { None };
         let mut encoder = self.device.create_command_encoder(&Default::default());
         let load = match clear_color {
             Some(c) => wgpu::LoadOp::Clear(wgpu::Color {
@@ -2651,7 +2676,9 @@ impl Renderer {
                 depth_stencil_attachment: None, timestamp_writes: None, occlusion_query_set: None,
             });
             pass.set_pipeline(pipeline);
-            // Bind vertex buffer (jen prvni attrib slot)
+            if let Some(bg) = &bind_group {
+                pass.set_bind_group(0, bg, &[]);
+            }
             if let Some((_, slot)) = attribs.first() {
                 if let Some(buf) = self.webgl_buffers.get(&slot.buffer_id) {
                     pass.set_vertex_buffer(0, buf.slice(..));
@@ -2714,17 +2741,22 @@ impl Renderer {
         self.ensure_webgl_canvas_rt(canvas_ptr, w, h);
 
         // Extract data z state, pak release borrow
-        let (cmds, buffers_data, programs_wgsl, default_clear): (
+        let (cmds, buffers_data, programs_data, default_clear): (
             Vec<WebGLDrawCmd>,
             std::collections::HashMap<u32, Vec<u8>>,
-            std::collections::HashMap<u32, (Option<String>, Option<String>)>,
+            std::collections::HashMap<u32, (Option<String>, Option<String>, Vec<crate::interpreter::UniformSlot>, u64)>,
             [f32; 4],
         ) = {
             let mut state = state_rc.borrow_mut();
             let cmds: Vec<_> = state.draw_queue.drain(..).collect();
             let buffers: std::collections::HashMap<u32, Vec<u8>> = state.buffers.clone();
-            let programs: std::collections::HashMap<u32, (Option<String>, Option<String>)> = state.programs.iter()
-                .map(|(k, p)| (*k, (p.vertex_wgsl.clone(), p.fragment_wgsl.clone())))
+            let programs = state.programs.iter()
+                .map(|(k, p)| (*k, (
+                    p.vertex_wgsl.clone(),
+                    p.fragment_wgsl.clone(),
+                    p.uniform_layout.clone(),
+                    p.uniform_buffer_size,
+                )))
                 .collect();
             let cc = state.clear_color;
             (cmds, buffers, programs, cc)
@@ -2736,10 +2768,13 @@ impl Renderer {
                 self.upload_webgl_buffer(*id, data);
             }
         }
-        // Build shader modules pro linked programs
-        for (pid, (vs, fs)) in &programs_wgsl {
+        // Build shader modules + uniform resources pro linked programs
+        for (pid, (vs, fs, _layout, buffer_size)) in &programs_data {
             if let (Some(v), Some(f)) = (vs, fs) {
                 self.build_webgl_shader_modules(*pid, v, f);
+            }
+            if *buffer_size > 0 {
+                self.ensure_webgl_uniform_resources(*pid, *buffer_size);
             }
         }
 
@@ -2757,21 +2792,32 @@ impl Renderer {
                         had_render = true;
                     }
                 }
-                WebGLDrawCmd::DrawArrays { program_id, first, count, attribs, .. } => {
+                WebGLDrawCmd::DrawArrays { program_id, first, count, attribs, uniforms, .. } => {
                     if let Some(pid) = program_id {
+                        // Serialize uniformy dle program layout
+                        let bytes = if let Some((_, _, layout, size)) = programs_data.get(&pid) {
+                            if *size > 0 {
+                                webgl_serialize_uniforms(layout, &uniforms, *size)
+                            } else { Vec::new() }
+                        } else { Vec::new() };
                         if self.ensure_webgl_pipeline(pid, &attribs) {
                             let cc = pending_clear.take();
-                            self.webgl_encode_draw_arrays(canvas_ptr, pid, first, count, &attribs, cc);
+                            self.webgl_encode_draw_arrays(canvas_ptr, pid, first, count, &attribs, cc, &bytes);
                             had_render = true;
                         }
                     }
                 }
-                WebGLDrawCmd::DrawElements { program_id, mode, count, index_type, offset, index_buffer_id, attribs, uniforms: _, viewport: _ } => {
+                WebGLDrawCmd::DrawElements { program_id, mode, count, index_type, offset, index_buffer_id, attribs, uniforms, viewport: _ } => {
                     let _ = mode;
                     if let (Some(pid), Some(ibo)) = (program_id, index_buffer_id) {
+                        let bytes = if let Some((_, _, layout, size)) = programs_data.get(&pid) {
+                            if *size > 0 {
+                                webgl_serialize_uniforms(layout, &uniforms, *size)
+                            } else { Vec::new() }
+                        } else { Vec::new() };
                         if self.ensure_webgl_pipeline(pid, &attribs) {
                             let cc = pending_clear.take();
-                            self.webgl_encode_draw_elements(canvas_ptr, pid, count, index_type, offset, ibo, &attribs, cc);
+                            self.webgl_encode_draw_elements(canvas_ptr, pid, count, index_type, offset, ibo, &attribs, cc, &bytes);
                             had_render = true;
                         }
                     }
@@ -2804,6 +2850,7 @@ impl Renderer {
         index_buffer_id: u32,
         attribs: &[(u32, crate::interpreter::WebGLAttribSlot)],
         clear_color: Option<[f32; 4]>,
+        uniform_bytes: &[u8],
     ) -> bool {
         let view = match self.webgl_canvas_rts.get(&canvas_ptr) {
             Some((_, v, _, _)) => v,
@@ -2824,6 +2871,19 @@ impl Renderer {
             _ => wgpu::IndexFormat::Uint16,
         };
         let idx_size_bytes: u64 = if matches!(idx_format, wgpu::IndexFormat::Uint16) { 2 } else { 4 };
+        let bind_group = if !uniform_bytes.is_empty() {
+            if let (Some(buf), Some(bgl)) = (self.webgl_uniform_buffers.get(&program_id),
+                                              self.webgl_uniform_bgls.get(&program_id)) {
+                self.queue.write_buffer(buf, 0, uniform_bytes);
+                Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some(&format!("webgl_uniform_bg_{program_id}_idx")),
+                    layout: bgl,
+                    entries: &[
+                        wgpu::BindGroupEntry { binding: 0, resource: buf.as_entire_binding() },
+                    ],
+                }))
+            } else { None }
+        } else { None };
         let mut encoder = self.device.create_command_encoder(&Default::default());
         let load = match clear_color {
             Some(c) => wgpu::LoadOp::Clear(wgpu::Color {
@@ -2841,6 +2901,9 @@ impl Renderer {
                 depth_stencil_attachment: None, timestamp_writes: None, occlusion_query_set: None,
             });
             pass.set_pipeline(pipeline);
+            if let Some(bg) = &bind_group {
+                pass.set_bind_group(0, bg, &[]);
+            }
             if let Some((_, slot)) = attribs.first() {
                 if let Some(buf) = self.webgl_buffers.get(&slot.buffer_id) {
                     pass.set_vertex_buffer(0, buf.slice(..));
