@@ -1768,10 +1768,10 @@ pub fn run_window_with_html(html: String, css: String) -> Result<(), String> {
             if let Some(interp) = &self.interpreter {
                 let canvas_ops = interp.canvas_ops.borrow();
                 paint_canvas_ops(&layout_root, &canvas_ops, &mut display_list);
-                // WebGL canvas - phase 3b: bg = clear color z aktivni WebGL state.
-                let webgl_states = interp.webgl_states.borrow();
-                paint_webgl_canvases(&layout_root, &webgl_states, &mut display_list);
             }
+            // WebGL canvas - real GPU path je v Renderer::draw_full_frame
+            // (run_webgl_frame). paint_webgl_canvases je placeholder pro
+            // debug viewer / devtools kontexty bez Renderer.
 
             // Apply scroll: posun vsechny y o -scroll_y
             for cmd in display_list.iter_mut() {
