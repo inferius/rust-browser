@@ -2478,7 +2478,42 @@ impl Interpreter {
                             n.attr("tabindex").and_then(|t| t.parse::<f64>().ok()).unwrap_or(0.0)
                         ));
                     }
-                    "type" | "name" | "href" | "src" | "alt" | "title" => {
+                    "open" if matches!(n.tag_name().as_deref(), Some("dialog") | Some("details")) => {
+                        return Ok(JsValue::Bool(n.attr("open").is_some()));
+                    }
+                    "disabled" => {
+                        return Ok(JsValue::Bool(n.attr("disabled").is_some()));
+                    }
+                    "readOnly" | "readonly" => {
+                        return Ok(JsValue::Bool(n.attr("readonly").is_some()));
+                    }
+                    "multiple" => {
+                        return Ok(JsValue::Bool(n.attr("multiple").is_some()));
+                    }
+                    "selected" => {
+                        return Ok(JsValue::Bool(n.attr("selected").is_some()));
+                    }
+                    "src" | "href" | "alt" | "title" | "placeholder" | "lang" | "dir" => {
+                        return Ok(JsValue::Str(n.attr(key).unwrap_or_default()));
+                    }
+                    "currentTime" if matches!(n.tag_name().as_deref(), Some("video") | Some("audio")) => {
+                        return Ok(JsValue::Number(0.0));
+                    }
+                    "duration" if matches!(n.tag_name().as_deref(), Some("video") | Some("audio")) => {
+                        return Ok(JsValue::Number(0.0));
+                    }
+                    "paused" if matches!(n.tag_name().as_deref(), Some("video") | Some("audio")) => {
+                        return Ok(JsValue::Bool(n.attr("paused").is_some()));
+                    }
+                    "muted" => {
+                        return Ok(JsValue::Bool(n.attr("muted").is_some()));
+                    }
+                    "volume" => {
+                        return Ok(JsValue::Number(
+                            n.attr("volume").and_then(|v| v.parse::<f64>().ok()).unwrap_or(1.0)
+                        ));
+                    }
+                    "type" | "name" => {
                         return Ok(JsValue::Str(n.attr(key).unwrap_or_default()));
                     }
                     // classList - vraci JsObject s methods (add/remove/toggle/contains)
@@ -3669,6 +3704,36 @@ impl Interpreter {
                             => {
                             // No-op
                             return Ok(JsValue::Undefined);
+                        }
+                        // HTMLDialogElement
+                        "show" if n.tag_name().as_deref() == Some("dialog") => {
+                            n.set_attr("open", "");
+                            return Ok(JsValue::Undefined);
+                        }
+                        "showModal" if n.tag_name().as_deref() == Some("dialog") => {
+                            n.set_attr("open", "");
+                            n.set_attr("aria-modal", "true");
+                            return Ok(JsValue::Undefined);
+                        }
+                        "close" if n.tag_name().as_deref() == Some("dialog") => {
+                            n.remove_attr("open");
+                            return Ok(JsValue::Undefined);
+                        }
+                        // HTMLMediaElement (video / audio)
+                        "play" | "pause" | "load" if matches!(n.tag_name().as_deref(), Some("video") | Some("audio")) => {
+                            // Pri play, pause aspon set/remove "paused" attr (semantically se chovaji)
+                            match key.as_str() {
+                                "play" => { n.remove_attr("paused"); }
+                                "pause" => { n.set_attr("paused", ""); }
+                                _ => {}
+                            }
+                            return Ok(JsValue::Undefined);
+                        }
+                        // HTMLInputElement
+                        "select" | "setSelectionRange" | "setCustomValidity" | "checkValidity"
+                        | "reportValidity" | "stepUp" | "stepDown"
+                            if matches!(n.tag_name().as_deref(), Some("input") | Some("textarea") | Some("select")) => {
+                            return Ok(JsValue::Bool(true));
                         }
                         "getBoundingClientRect" => {
                             // Vraci object s x/y/width/height/top/left/bottom/right.
