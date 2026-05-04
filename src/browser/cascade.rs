@@ -420,10 +420,13 @@ fn eval_calc_expr(expr: &str) -> String {
     format!("{}{}", acc, unit)
 }
 
-/// Cascade s viewport pro @media queries.
+/// Cascade s viewport pro @media queries + @container queries.
+/// Pro @container: zatim aproximace - container size je root viewport. Pro
+/// presnou implementaci by se musel evaluovat per-element po layout pass
+/// (kruhova zavislost s layoutem).
 pub fn cascade_with_viewport(root: &Rc<Node>, stylesheets: &[Stylesheet],
                               viewport_w: f32, viewport_h: f32) -> StyleMap {
-    // Sjednotit rules + matching media query rules do jednoho seznamu
+    // Sjednotit rules + matching media query + matching container query rules
     let mut effective: Vec<Stylesheet> = Vec::new();
     for sheet in stylesheets {
         let mut combined = sheet.clone();
@@ -433,7 +436,15 @@ pub fn cascade_with_viewport(root: &Rc<Node>, stylesheets: &[Stylesheet],
                 combined.rules.extend(mq.rules.clone());
             }
         }
+        // Aplikuj container queries - pro start s viewport jako approximation
+        // container size. TODO: per-element ancestor lookup.
+        for cq in &sheet.container_queries {
+            if super::css_parser::evaluate_container_query(&cq.condition, viewport_w, viewport_h) {
+                combined.rules.extend(cq.rules.clone());
+            }
+        }
         combined.media_queries.clear();
+        combined.container_queries.clear();
         effective.push(combined);
     }
     cascade(root, &effective)

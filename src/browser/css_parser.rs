@@ -13,6 +13,18 @@ pub struct Stylesheet {
     pub media_queries: Vec<MediaQuery>,
     /// @keyframes: name -> Vec<(percent, declarations)>
     pub keyframes: Vec<Keyframes>,
+    /// @container queries: name (volitelny) + condition + rules
+    pub container_queries: Vec<ContainerQuery>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ContainerQuery {
+    /// Volitelny container name: "@container card (min-width: 400px)" -> "card".
+    /// Bez nazvu (`@container (min-width: ...)`) -> empty string -> match nejblizsiho ancestor s container-type.
+    pub name: String,
+    /// Surovy condition string napr. "(min-width: 400px)".
+    pub condition: String,
+    pub rules: Vec<Rule>,
 }
 
 #[derive(Debug, Clone)]
@@ -145,6 +157,7 @@ pub fn parse_stylesheet(source: &str) -> Stylesheet {
     let mut rules = Vec::new();
     let mut media_queries = Vec::new();
     let mut keyframes = Vec::new();
+    let mut container_queries = Vec::new();
     let mut chars = source.chars().peekable();
 
     while chars.peek().is_some() {
@@ -190,6 +203,12 @@ pub fn parse_stylesheet(source: &str) -> Stylesheet {
                 .trim().to_string();
             let frames = parse_keyframes(&block_str);
             keyframes.push(Keyframes { name, frames });
+        } else if selectors_str.starts_with("@container") {
+            // Format: @container [name] (condition) { rules }
+            let rest = selectors_str.trim_start_matches("@container").trim();
+            let (name, condition) = parse_container_header(rest);
+            let nested = parse_stylesheet(&block_str);
+            container_queries.push(ContainerQuery { name, condition, rules: nested.rules });
         } else if selectors_str.starts_with('@') {
             // Ostatni at-rules ignorujeme (@import, @font-face, ...)
         } else {
@@ -199,7 +218,26 @@ pub fn parse_stylesheet(source: &str) -> Stylesheet {
         }
     }
 
-    Stylesheet { rules, media_queries, keyframes }
+    Stylesheet { rules, media_queries, keyframes, container_queries }
+}
+
+/// Rozpojuje "@container [name] (condition)" header na (name, condition).
+/// `@container card (min-width: 400px)` -> ("card", "(min-width: 400px)")
+/// `@container (min-width: 400px)`      -> ("", "(min-width: 400px)")
+fn parse_container_header(s: &str) -> (String, String) {
+    let s = s.trim();
+    if let Some(paren_idx) = s.find('(') {
+        let before = s[..paren_idx].trim();
+        let cond = s[paren_idx..].trim().to_string();
+        return (before.to_string(), cond);
+    }
+    (String::new(), s.to_string())
+}
+
+/// Vyhodnoti @container query proti (container_w, container_h).
+/// Same syntax as @media (min-width / max-width / orientation / ...).
+pub fn evaluate_container_query(condition: &str, container_w: f32, container_h: f32) -> bool {
+    evaluate_media_query(condition, container_w, container_h)
 }
 
 /// CSS Nesting: rozdeli block na (vlastni declarace, nested rulesets).

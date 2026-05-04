@@ -24,7 +24,7 @@ Konvence stavu:
 - [ ] CSS Transitions L1 (cely modul)
 - [x] CSS Logical Properties L1 (`margin/padding-block/-inline`, `border-*-block/-inline-*`, `inset-*`, `block-size/inline-size`, `border-start-end-radius` rohy) - mapovani LTR + horizontal-tb
 - [x] CSS Nesting L1 (`&` selector + nested rulesets, implicit descendant pri ne-amp prefix, kombinace `.parent.nested` pres `&`)
-- [ ] CSS Container Queries L1 (`@container`, `cqw`, `cqh`)
+- [/] CSS Container Queries L1 (`@container [name] (cond)` parser, cqw/cqh/cqi/cqb/cqmin/cqmax units, evaluation pres viewport - per-element ancestor lookup TODO)
 - [ ] CSS Filter Effects L1 (`filter: blur/brightness/...`)
 
 ### Batch 3 - dalsi
@@ -252,12 +252,13 @@ Konvence stavu:
 - [ ] `content-visibility: auto | hidden | visible`
 
 ### CSS Container Queries L1
-- [ ] `container-type: normal | inline-size | size`
-- [ ] `container-name`
+- [/] `container-type: normal | inline-size | size` (parsing OK, runtime detection TODO)
+- [/] `container-name` (parsing OK)
 - [ ] `container` shorthand
-- [ ] `@container [name] (condition) { rules }`
-- [ ] `cqw`, `cqh`, `cqi`, `cqb`, `cqmin`, `cqmax` jednotky
+- [x] `@container [name] (condition) { rules }` parsing + viewport-fallback evaluation
+- [x] `cqw`, `cqh`, `cqi`, `cqb`, `cqmin`, `cqmax` jednotky (aproximace pres viewport)
 - [ ] Style queries `@container style(--name: val)`
+- [ ] Per-element container ancestor lookup (correct CQ implementation)
 
 ### CSS Nesting L1
 - [x] `&` selector

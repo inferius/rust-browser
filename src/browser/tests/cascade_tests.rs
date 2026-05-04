@@ -214,6 +214,71 @@ fn selector_first_of_type() {
     assert!(cascade::get_styles(&map, &ps[1]).unwrap().get("color").is_none());
 }
 
+// ─── CSS Container Queries L1 ──────────────────────────────────────────
+
+#[test]
+fn container_query_parses_with_name() {
+    let s = parse_stylesheet(r#"
+        @container card (min-width: 400px) {
+            .item { color: red; }
+        }
+    "#);
+    assert_eq!(s.container_queries.len(), 1);
+    assert_eq!(s.container_queries[0].name, "card");
+    assert!(s.container_queries[0].condition.contains("min-width"));
+}
+
+#[test]
+fn container_query_parses_unnamed() {
+    let s = parse_stylesheet(r#"
+        @container (max-width: 600px) {
+            .item { color: blue; }
+        }
+    "#);
+    assert_eq!(s.container_queries.len(), 1);
+    assert_eq!(s.container_queries[0].name, "");
+}
+
+#[test]
+fn container_query_applies_when_viewport_matches() {
+    let doc = parse_html(r#"<html><body><div class="item">x</div></body></html>"#, "");
+    let css = parse_stylesheet(r#"
+        @container (min-width: 400px) {
+            .item { color: red; }
+        }
+    "#);
+    // Viewport 800x600 - condition (min-width 400) je true
+    let map = cascade::cascade_with_viewport(&doc.root, &[css], 800.0, 600.0);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let s = cascade::get_styles(&map, &div).unwrap();
+    assert_eq!(s.get("color").map(|v| v.as_str()), Some("red"));
+}
+
+#[test]
+fn container_query_skipped_when_viewport_too_small() {
+    let doc = parse_html(r#"<html><body><div class="item">x</div></body></html>"#, "");
+    let css = parse_stylesheet(r#"
+        @container (min-width: 1000px) {
+            .item { color: red; }
+        }
+    "#);
+    // Viewport 500 - condition (min-width 1000) je false
+    let map = cascade::cascade_with_viewport(&doc.root, &[css], 500.0, 400.0);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let s = cascade::get_styles(&map, &div).unwrap();
+    assert!(s.get("color").is_none());
+}
+
+#[test]
+fn parse_length_cqw_units() {
+    use crate::browser::layout;
+    // 50cqw na 800x600 -> 400 (50 % vw)
+    assert_eq!(layout::parse_length_ctx("50cqw", 800.0, 600.0, 16.0), 400.0);
+    assert_eq!(layout::parse_length_ctx("100cqh", 800.0, 600.0, 16.0), 600.0);
+    assert_eq!(layout::parse_length_ctx("50cqmin", 800.0, 600.0, 16.0), 300.0);
+    assert_eq!(layout::parse_length_ctx("50cqmax", 800.0, 600.0, 16.0), 400.0);
+}
+
 // ─── CSS Nesting L1 ────────────────────────────────────────────────────
 
 #[test]

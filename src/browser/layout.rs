@@ -1253,6 +1253,33 @@ pub fn parse_length_ctx(s: &str, vw: f32, vh: f32, parent_size: f32) -> f32 {
         let v: f32 = num.trim().parse().unwrap_or(0.0);
         return v * vh / 100.0;
     }
+    // CSS Container Queries L1 jednotky - aktualne aproximace = viewport
+    // (presna implementace by potrebovala lookup nejblizsiho ancestor s container-type).
+    if let Some(num) = s.strip_suffix("cqw") {
+        let v: f32 = num.trim().parse().unwrap_or(0.0);
+        return v * vw / 100.0;
+    }
+    if let Some(num) = s.strip_suffix("cqh") {
+        let v: f32 = num.trim().parse().unwrap_or(0.0);
+        return v * vh / 100.0;
+    }
+    if let Some(num) = s.strip_suffix("cqi") {
+        // inline = horizontal v default writing-mode
+        let v: f32 = num.trim().parse().unwrap_or(0.0);
+        return v * vw / 100.0;
+    }
+    if let Some(num) = s.strip_suffix("cqb") {
+        let v: f32 = num.trim().parse().unwrap_or(0.0);
+        return v * vh / 100.0;
+    }
+    if let Some(num) = s.strip_suffix("cqmin") {
+        let v: f32 = num.trim().parse().unwrap_or(0.0);
+        return v * vw.min(vh) / 100.0;
+    }
+    if let Some(num) = s.strip_suffix("cqmax") {
+        let v: f32 = num.trim().parse().unwrap_or(0.0);
+        return v * vw.max(vh) / 100.0;
+    }
     if let Some(num) = s.strip_suffix("pt") {
         // 1pt = 1.333px
         let v: f32 = num.trim().parse().unwrap_or(0.0);
