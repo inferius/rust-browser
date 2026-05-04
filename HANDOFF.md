@@ -5,10 +5,11 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 ## Stav
 
 - Build: **OK**, 0 errors.
-- Tests: **1577 passed, 0 failed, 3 ignored** (+772 v teto session, +95.9%).
-- Posledni commit: `3f44214 WebGL phase 3c8 part 3 - activeTexture + units`.
+- Tests: **1578 passed, 0 failed, 3 ignored** (+773 v teto session, +96.0%).
+- Posledni commit: `72812ba WebGL phase 3c9 part 2 - encode_draw bind group entries`.
 - Tree: ciste.
-- Branch master, ~268 commitu pred origin/master (NEPUSHOVAT bez vyzvy).
+- Branch master, ~272 commitu pred origin/master (NEPUSHOVAT bez vyzvy).
+- **WebGL pipeline DOKONCEN** - kompletni JS-to-GPU flow vc texture sampling.
 
 ## Recent session highlights
 
@@ -90,10 +91,17 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
   lazy init, execute_webgl_canvas pre-upload. Sampler/texture detection
   z naga IR (sampler_count, texture_count). activeTexture + texture_units
   HashMap (per-unit binding).
-- **WebGL phase 3c9 (TODO)**: sampler + texture bind group entries -
-  ensure_webgl_uniform_resources rozsireni s sampler_count slots +
-  texture_count slots, encode_draw set_bind_group s combined entries.
-  Mapping uniform1i(samplerLoc, unitIdx) -> texture z texture_units[unitIdx].
+- **WebGL phase 3c9 HOTOVO**: extract_resource_bindings z naga (uniform/
+  texture/sampler binding indexy), ensure_webgl_full_resources s BGL
+  entries (uniform/texture/sampler), build_webgl_bind_group helper,
+  encode_draw_arrays/elements predava bindings + texture_units, buduje
+  full bind group s texture sampling support.
+
+**WebGL kompletni flow:**
+JS gl.* calls -> WebGLState -> execute_webgl_canvas extract -> upload
+buffers/textures -> shader modules + full resources -> serialize uniforms
+-> ensure pipeline (s BGL) -> build bind group (uniform/textures/samplers)
+-> encode draw -> compose canvas RT -> swap chain.
 - **Filter v Transform RT (nested)**: aktualne filter inside transform
   je inner cmds bez efektu - lepsi pristup vyzaduje rekursi v draw_segments.
 - **Filter v Transform RT (nested)**: aktualne filter inside transform
