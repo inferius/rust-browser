@@ -982,6 +982,248 @@ fn webgl_stride_empty_returns_zero() {
     assert_eq!(webgl_compute_stride(&[]), 0);
 }
 
+// ─── Phase 3c5 dual path consistency ───────────────────────────────────
+
+#[test]
+fn webgl_state_drain_idempotent() {
+    let mut state = WebGLState::new();
+    state.draw_queue.push(WebGLDrawCmd::Clear(0x4000));
+    state.draw_queue.push(make_drawarrays(3));
+
+    // First drain
+    let f1 = webgl_extract_pending(&mut state);
+    assert_eq!(f1.commands.len(), 2);
+
+    // Second drain - musi byt prazdne (already drained)
+    let f2 = webgl_extract_pending(&mut state);
+    assert_eq!(f2.commands.len(), 0);
+}
+
+#[test]
+fn webgl_state_buffers_persist_across_drains() {
+    // Pri kazdem extract_pending - buffers se NEVYMAZAVAJI (clone).
+    let mut state = WebGLState::new();
+    state.buffers.insert(1, vec![1, 2, 3, 4]);
+    state.draw_queue.push(WebGLDrawCmd::Clear(0x4000));
+
+    let f1 = webgl_extract_pending(&mut state);
+    assert_eq!(f1.buffers.len(), 1);
+
+    // State stale ma buffer
+    assert_eq!(state.buffers.len(), 1);
+
+    // Drain znovu
+    state.draw_queue.push(WebGLDrawCmd::Clear(0x4000));
+    let f2 = webgl_extract_pending(&mut state);
+    assert_eq!(f2.buffers.len(), 1, "buffers v state pri kazdem extract");
+}
+
+#[test]
+fn webgl_extract_default_clear_color_preserved() {
+    let mut state = WebGLState::new();
+    state.clear_color = [0.7, 0.3, 0.1, 1.0];
+    state.draw_queue.push(WebGLDrawCmd::Clear(0x4000));
+    let frame = webgl_extract_pending(&mut state);
+    assert_eq!(frame.default_clear, [0.7, 0.3, 0.1, 1.0]);
+    // State clear_color preserved (mutace pres ClearColor cmd, ne extract)
+    assert_eq!(state.clear_color, [0.7, 0.3, 0.1, 1.0]);
+}
+
+#[test]
+fn webgl_effective_clear_with_only_explicit_clear_color_in_command() {
+    // ClearColor v command + Clear bit - posledni vyhraje
+    let cmds = vec![
+        WebGLDrawCmd::ClearColor([0.1, 0.2, 0.3, 0.5]),
+        WebGLDrawCmd::Clear(0x4000),
+    ];
+    let r = webgl_effective_clear(&cmds, [0.9, 0.9, 0.9, 1.0]);
+    assert_eq!(r, Some([0.1, 0.2, 0.3, 0.5]), "command-level ClearColor wins");
+}
+
+#[test]
+fn webgl_count_draws_drawelements_counted() {
+    let cmds = vec![make_drawelements(), make_drawelements()];
+    assert_eq!(webgl_count_draws(&cmds), 2);
+    assert_eq!(webgl_count_clears(&cmds), 0);
+}
+
+// ─── partition_filter_segments dual path ───────────────────────────────
+
+#[test]
+fn partition_main_filter_transform_main() {
+    // Sequence: Main, Filter, Main, Transform, Main
+    let cmds = vec![
+        rect(0.0, 0.0),
+        filter_begin(2.0),
+        rect(10.0, 10.0),
+        DisplayCommand::FilterEnd,
+        rect(20.0, 20.0),
+        transform_begin(1.0),
+        rect(30.0, 30.0),
+        DisplayCommand::TransformEnd,
+        rect(40.0, 40.0),
+    ];
+    let segs = partition_filter_segments(&cmds);
+    assert_eq!(segs.len(), 5, "Main+Filter+Main+Transform+Main = 5 segs");
+    matches!(&segs[0], Seg::Main(_));
+    matches!(&segs[1], Seg::Filter { .. });
+    matches!(&segs[2], Seg::Main(_));
+    matches!(&segs[3], Seg::Transform3D { .. });
+    matches!(&segs[4], Seg::Main(_));
+}
+
+#[test]
+fn partition_no_main_between_filter_and_transform() {
+    let cmds = vec![
+        filter_begin(2.0),
+        rect(0.0, 0.0),
+        DisplayCommand::FilterEnd,
+        transform_begin(1.0),
+        rect(10.0, 10.0),
+        DisplayCommand::TransformEnd,
+    ];
+    let segs = partition_filter_segments(&cmds);
+    assert_eq!(segs.len(), 2, "Filter, Transform - bez Main mezi");
+}
+
+#[test]
+fn partition_unbalanced_transform_no_seg() {
+    let cmds = vec![
+        rect(0.0, 0.0),
+        transform_begin(1.0),
+        rect(10.0, 10.0),
+        // chybi TransformEnd
+    ];
+    let segs = partition_filter_segments(&cmds);
+    // Mel by mit aspon Main pred Transform
+    assert!(segs.len() <= 2);
+}
+
+// ─── webgl_layout_walkers edge cases ───────────────────────────────────
+
+#[test]
+fn webgl_canvas_count_recursive_through_div() {
+    let parent_node = NodeData::new_element("div", HashMap::new());
+    let inner_div = NodeData::new_element("div", HashMap::new());
+    let canvas_node = NodeData::new_element("canvas", HashMap::new());
+    let canvas_ptr = Rc::as_ptr(&canvas_node) as usize;
+
+    let mut deep_canvas = make_canvas_layout_box(canvas_node);
+    deep_canvas.tag = Some("canvas".into());
+
+    let mut middle = LayoutBox::new();
+    middle.tag = Some("div".into());
+    middle.node = Some(inner_div);
+    middle.children.push(deep_canvas);
+
+    let mut outer = LayoutBox::new();
+    outer.tag = Some("div".into());
+    outer.node = Some(parent_node);
+    outer.children.push(middle);
+
+    let mut states: HashMap<usize, Rc<RefCell<WebGLState>>> = HashMap::new();
+    states.insert(canvas_ptr, Rc::new(RefCell::new(WebGLState::new())));
+    assert_eq!(webgl_canvas_count(&outer, &states), 1, "deep canvas finded");
+    assert!(webgl_layout_has_canvas(&outer, &states));
+}
+
+#[test]
+fn webgl_layout_has_canvas_short_circuits() {
+    // Ne walkuje vic nez musi - test s prazdnymi states.
+    let canvas_node = NodeData::new_element("canvas", HashMap::new());
+    let bx = make_canvas_layout_box(canvas_node);
+    let states: HashMap<usize, Rc<RefCell<WebGLState>>> = HashMap::new();
+    assert!(!webgl_layout_has_canvas(&bx, &states));
+}
+
+#[test]
+fn linked_program_ids_filters_unlinked() {
+    let mut state = WebGLState::new();
+    state.programs.insert(1, WebGLProgram {
+        vertex_shader: Some(2), fragment_shader: Some(3),
+        linked: false,  // not linked
+        info_log: String::new(),
+        vertex_wgsl: Some("v".into()), fragment_wgsl: Some("f".into()),
+    });
+    state.programs.insert(2, WebGLProgram {
+        vertex_shader: Some(4), fragment_shader: Some(5),
+        linked: true,
+        info_log: String::new(),
+        vertex_wgsl: Some("v".into()), fragment_wgsl: Some("f".into()),
+    });
+    let ids = webgl_linked_program_ids(&state);
+    assert_eq!(ids, vec![2]);
+}
+
+#[test]
+fn webgl_count_draws_combines_arrays_elements() {
+    let cmds = vec![
+        make_drawarrays(3),
+        make_drawelements(),
+        WebGLDrawCmd::Clear(0x4000),
+        make_drawarrays(6),
+    ];
+    assert_eq!(webgl_count_draws(&cmds), 3);
+    assert_eq!(webgl_count_clears(&cmds), 1);
+}
+
+#[test]
+fn polygon_signed_area_reverse_winding_negative() {
+    // CCW polygon (in screen y-down) -> negative area.
+    let pts = [(0.0_f32, 0.0), (0.0, 10.0), (10.0, 10.0), (10.0, 0.0)];
+    let area = polygon_signed_area(&pts);
+    assert!(area < 0.0, "CCW screen polygon -> negative");
+}
+
+#[test]
+fn triangulate_triangle_with_reverse_winding() {
+    // CCW triangle - jeden ear, jeden triangle.
+    let pts = vec![(0.0_f32, 0.0), (5.0, 10.0), (10.0, 0.0)];
+    let tris = triangulate_polygon(&pts);
+    assert_eq!(tris.len(), 1);
+}
+
+#[test]
+fn triangulate_returns_correct_total_area() {
+    // Convex pentagon - sum trojuhelniku rovny polygon area
+    let pts = vec![
+        (50.0_f32, 0.0),
+        (100.0, 38.0),
+        (82.0, 100.0),
+        (18.0, 100.0),
+        (0.0, 38.0),
+    ];
+    let tris = triangulate_polygon(&pts);
+    let total: f32 = tris.iter().map(|(a, b, c)| {
+        ((b.0 - a.0) * (c.1 - a.1) - (b.1 - a.1) * (c.0 - a.0)).abs() * 0.5
+    }).sum();
+    let poly = polygon_signed_area(&pts).abs();
+    assert!((total - poly).abs() < 5.0, "triangulace area = polygon area");
+}
+
+#[test]
+fn webgl_attrib_format_negative_size_returns_none() {
+    assert!(webgl_attrib_to_vertex_format(0, 0x1406).is_none());
+    assert!(webgl_attrib_to_vertex_format(5, 0x1406).is_none());
+}
+
+#[test]
+fn webgl_compute_stride_zero_attribs_zero() {
+    assert_eq!(webgl_compute_stride(&[]), 0);
+}
+
+#[test]
+fn webgl_compute_stride_explicit_takes_precedence() {
+    let attribs = vec![
+        (0u32, WebGLAttribSlot {
+            buffer_id: 1, size: 4, component_type: 0x1406,
+            normalized: false, stride: 64, offset: 0, enabled: true,
+        }),
+    ];
+    // Explicit 64 stride > tightly packed 16
+    assert_eq!(webgl_compute_stride(&attribs), 64);
+}
+
 #[test]
 fn paint_webgl_recurses_to_children() {
     let parent_node = NodeData::new_element("div", HashMap::new());

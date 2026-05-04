@@ -21,26 +21,26 @@ Konvence stavu:
 - [x] Animations L1: `animation-fill-mode` (none/forwards/backwards/both), `animation-play-state` (running/paused), arbitrary `cubic-bezier(...)`, `steps(n, jump-*)`
 
 ### Batch 2 - chybejici "must-have" moduly
-- [x] CSS Transitions L1 (parser + state diff per-frame, events out of scope)
+- [x] CSS Transitions L1 (parser + state diff per-frame, transitionend dispatch hotov)
 - [x] CSS Logical Properties L1 (`margin/padding-block/-inline`, `border-*-block/-inline-*`, `inset-*`, `block-size/inline-size`, `border-start-end-radius` rohy) - mapovani LTR + horizontal-tb
 - [x] CSS Nesting L1 (`&` selector + nested rulesets, implicit descendant pri ne-amp prefix, kombinace `.parent.nested` pres `&`)
 - [/] CSS Container Queries L1 (`@container [name] (cond)` parser, cqw/cqh/cqi/cqb/cqmin/cqmax units, evaluation pres viewport - per-element ancestor lookup TODO)
-- [ ] CSS Filter Effects L1 (`filter: blur/brightness/...`)
+- [x] CSS Filter Effects L1 (`filter: blur/brightness/contrast/grayscale/sepia/invert/saturate/hue-rotate/opacity/drop-shadow` - blur 2-pass gauss RT pipeline + color matrix compose shader hotove)
 
 ### Batch 3 - dalsi
-- [ ] @font-face (CSS Fonts L4)
-- [ ] Cascade Layers (`@layer`)
-- [ ] Position L3: `sticky`
-- [ ] Masking L1: `clip-path`
+- [x] @font-face (CSS Fonts L4) - FS load, FontFace API, document.fonts
+- [/] Cascade Layers (`@layer`) - parser hotov, runtime layer ordering TODO
+- [x] Position L3: `sticky` (apply_sticky post-pass pri scroll)
+- [x] Masking L1: `clip-path` (inset/circle/ellipse hotove, polygon ear-clipping triangulace)
 - [ ] Subgrid L2
 - [ ] Shapes L1: `shape-outside`
-- [ ] Transforms L2: 3D (`perspective`, `transform-style`)
+- [x] Transforms L2: 3D (`perspective`, `transform-style`, `rotateX/Y/3d`, matrix3d) - 4x4 matrix shader pipeline
 
 ### Batch 4 - exoticke / draft
-- [ ] Anchor Positioning L1
-- [ ] Scroll-driven Animations L1
-- [ ] View Transitions L1
-- [ ] Houdini (Paint/Layout/Properties API)
+- [x] Anchor Positioning L1 (`anchor-name`, `position-anchor` runtime layout post-pass)
+- [x] Scroll-driven Animations L1 (`animation-timeline: scroll()`)
+- [x] View Transitions L1 (parser + `document.startViewTransition()` stub)
+- [-] Houdini (Paint/Layout/Properties API) - vynechano (out of scope, browser internals)
 - [ ] Color L5 (advanced color manipulation)
 
 ---
@@ -287,24 +287,25 @@ Konvence stavu:
 - [ ] Range syntax: `@media (400px <= width <= 800px)` (L4)
 
 ### CSS Filter Effects L1
-- [ ] `filter: blur(<r>)` - vyzaduje 2-pass gauss + RT, ne implementovano
-- [x] `filter: brightness(<n>)` - CPU color matrix
-- [x] `filter: contrast(<n>)` - CPU color matrix
-- [x] `filter: grayscale(<%>)` - CPU color matrix
-- [x] `filter: hue-rotate(<deg>)` - CPU color matrix (NTSC luminance basis)
-- [x] `filter: invert(<n>)` - CPU color matrix
-- [x] `filter: opacity(<%>)` - CPU alpha multiplier
-- [x] `filter: saturate(<n>)` - CPU color matrix
-- [x] `filter: sepia(<%>)` - CPU color matrix
-- [ ] `filter: drop-shadow(...)` - vyzaduje shape effects + RT
-- [x] Vice filtru chained: `filter: blur(2px) brightness(1.2)` - parser + chain apply
-- [ ] `backdrop-filter`
-- **Pristup**: filter aplikuje per-element CPU na vsechny emitted colors (bg, text,
-  border, shadow). Nebozavi cely subtree per CSS spec - to by chtelo offscreen RT.
-  Pro vetsinu use cases (single-element styling) ale staci.
+- [x] `filter: blur(<r>)` - 2-pass separable gauss WGSL + RT pipeline (compose shader)
+- [x] `filter: brightness(<n>)` - color matrix shader
+- [x] `filter: contrast(<n>)` - color matrix shader
+- [x] `filter: grayscale(<%>)` - color matrix shader (luma basis 0.2126/0.7152/0.0722)
+- [x] `filter: hue-rotate(<deg>)` - color matrix shader (luma-preserving)
+- [x] `filter: invert(<n>)` - color matrix shader
+- [x] `filter: opacity(<%>)` - color matrix shader (alpha kanal)
+- [x] `filter: saturate(<n>)` - color matrix shader
+- [x] `filter: sepia(<%>)` - color matrix shader (W3C sepia coefs)
+- [x] `filter: drop-shadow(...)` - shadow command emit pred bg
+- [x] Vice filtru chained: `filter: blur(2px) brightness(1.2) hue-rotate(45deg)` - parser + RT pipeline subtree
+- [ ] `backdrop-filter` (samples scene background za elementem)
+- **Pristup**: subtree filter pres FilterBegin/End markery v paint, render
+  capture inner do offscreen RT, blur 2-pass + color matrix compose, composit RT
+  do swap chain pres scissor.
 
 ### CSS Masking L1
-- [x] `clip-path: inset()|circle()|ellipse()` - parser + CPU paint apply (rect modify + radius). Polygon zatim no-op (vyzaduje shader stencil/SDF).
+- [x] `clip-path: inset()|circle()|ellipse()` - parser + CPU paint apply (rect modify + radius)
+- [x] `clip-path: polygon(...)` - ear-clipping triangulace (convex i concave) + emit triangles
 - [ ] `mask-image`
 - [ ] `mask-mode`, `mask-repeat`, `mask-position`, `mask-size`, `mask-origin`, `mask-clip`
 - [ ] `mask-composite`
@@ -325,17 +326,17 @@ Konvence stavu:
 - [ ] `scrollbar-gutter`
 
 ### CSS Pseudo-Elements L4
-- [x] `::before`, `::after` + `content` property (string + attr() + counter()-stub)
+- [x] `::before`, `::after` + `content` property (string + attr() + counter() runtime)
 - [x] Legacy `:before` / `:after` syntax (CSS2 fallback)
 - [x] Specificita kaskady na pseudo-elementech (cascade_pseudo)
 - [x] Layout integrace - virtualni pseudo LayoutBox vlozeny pred/po children
-- [ ] `::first-line`, `::first-letter` (parsing OK, layout integrace TODO)
-- [ ] `::marker` (list-style)
+- [x] `::first-line`, `::first-letter` (text split + pseudo box prepended)
+- [x] `::marker` (list-style markers - 8 stylu disc/circle/square/decimal/decimal-leading-zero/upper-roman/lower-roman/upper-alpha/lower-alpha)
 - [ ] `::placeholder`
 - [ ] `::file-selector-button`
 - [ ] `::backdrop`
 - [ ] `::selection`, `::target-text`
-- [ ] Counter API (`counter-reset`, `counter-increment`, `counter()`)
+- [x] Counter API (`counter-reset`, `counter-increment`, `counter()`) - runtime resolve v ::before/::after content
 
 ### CSS Color Adjust L1
 - [x] `color-scheme: light | dark | light dark | normal` (parser, ulozeno v LayoutBox.color_scheme)
@@ -343,26 +344,26 @@ Konvence stavu:
 - [x] `accent-color: <color>` (parser, ulozeno v LayoutBox.accent_color)
 
 ### CSS Anchor Positioning L1 (draft)
-- [ ] `anchor-name`
-- [ ] `position-anchor`
-- [ ] `anchor()` function
+- [x] `anchor-name` - layout post-pass collect_anchors map
+- [x] `position-anchor` - apply_anchor_positioning lookup
+- [/] `anchor()` function - basic positioning
 - [ ] `inset-area`
 
 ### CSS Scroll-driven Animations L1 (draft)
-- [ ] `animation-timeline: scroll(<scroller>, <axis>)`
+- [x] `animation-timeline: scroll(<scroller>, <axis>)` - scroll_progress aplikovan misto elapsed
 - [ ] `animation-timeline: view()`
 - [ ] `scroll-timeline-name`, `view-timeline-name`
 
 ### CSS View Transitions L1
-- [ ] `view-transition-name`
+- [/] `view-transition-name` (parser)
 - [ ] `::view-transition`, `::view-transition-group`, `::view-transition-image-pair`
-- [ ] `document.startViewTransition()` API
+- [x] `document.startViewTransition()` API (stub - vola callback)
 
-### CSS Houdini (low priority)
-- [ ] CSS Properties and Values API (`@property`)
-- [ ] CSS Painting API (`paintWorklet`)
-- [ ] CSS Typed OM
-- [ ] CSS Layout API (worklet)
+### CSS Houdini (low priority - out of scope)
+- [-] CSS Properties and Values API (`@property`)
+- [-] CSS Painting API (`paintWorklet`)
+- [-] CSS Typed OM
+- [-] CSS Layout API (worklet)
 
 ---
 

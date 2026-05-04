@@ -880,6 +880,99 @@ fn paint_only_text_node_emits_text() {
     assert!(has_text);
 }
 
+// ─── Filter v Transform interakce ──────────────────────────────────────
+
+#[test]
+fn paint_filter_inside_transform_emits_both() {
+    let cmds = build_dl(
+        r#"<html><body><div class="o"><div class="i"></div></div></body></html>"#,
+        r#"
+            .o { background: red; width: 100px; height: 100px; transform: rotateX(45deg); }
+            .i { background: blue; width: 50px; height: 50px; filter: blur(5px); }
+        "#,
+    );
+    let begins_t = cmds.iter().filter(|c| matches!(c, DC::TransformBegin { .. })).count();
+    let begins_f = cmds.iter().filter(|c| matches!(c, DC::FilterBegin { .. })).count();
+    assert!(begins_t >= 1, "outer transform marker");
+    assert!(begins_f >= 1, "inner filter marker");
+}
+
+#[test]
+fn paint_transform_then_filter_balanced() {
+    let cmds = build_dl(
+        r#"<html><body><div class="t"><div class="f"></div></div></body></html>"#,
+        r#"
+            .t { background: red; width: 100px; height: 100px; transform: rotateY(45deg); }
+            .f { background: blue; width: 50px; height: 50px; filter: blur(3px); }
+        "#,
+    );
+    let mut depth_t: i32 = 0;
+    let mut depth_f: i32 = 0;
+    for c in &cmds {
+        match c {
+            DC::TransformBegin { .. } => depth_t += 1,
+            DC::TransformEnd => depth_t -= 1,
+            DC::FilterBegin { .. } => depth_f += 1,
+            DC::FilterEnd => depth_f -= 1,
+            _ => {}
+        }
+        assert!(depth_t >= 0 && depth_f >= 0, "ne uncesnete End");
+    }
+    assert_eq!(depth_t, 0);
+    assert_eq!(depth_f, 0);
+}
+
+// ─── Display list ordering ────────────────────────────────────────────
+
+#[test]
+fn paint_emit_order_bg_before_text() {
+    let cmds = build_dl(
+        r#"<html><body><p>Hello</p></body></html>"#,
+        r#"p { background: yellow; color: black; }"#,
+    );
+    let bg_idx = cmds.iter().position(|c| matches!(c,
+        DC::Rect { color, .. } if color[0] >= 200 && color[1] >= 200 && color[2] < 50
+    ));
+    let text_idx = cmds.iter().position(|c| matches!(c,
+        DC::Text { content, .. } if content.contains("Hello")
+    ));
+    if let (Some(b), Some(t)) = (bg_idx, text_idx) {
+        assert!(b < t, "bg pred text");
+    }
+}
+
+#[test]
+fn paint_emit_order_shadow_before_bg() {
+    let cmds = build_dl(
+        r#"<html><body><div></div></body></html>"#,
+        r#"div { background: red; box-shadow: 0 0 10px black; width: 50px; height: 50px; }"#,
+    );
+    let shadow_idx = cmds.iter().position(|c| matches!(c, DC::Shadow { .. }));
+    let bg_idx = cmds.iter().position(|c| matches!(c,
+        DC::Rect { color, .. } if color[0] == 255 && color[1] == 0 && color[2] == 0
+    ));
+    if let (Some(s), Some(b)) = (shadow_idx, bg_idx) {
+        assert!(s < b, "shadow pred bg");
+    }
+}
+
+// ─── Multi-class match ─────────────────────────────────────────────────
+
+#[test]
+fn paint_combined_class_styles_apply() {
+    let cmds = build_dl(
+        r#"<html><body><div class="big red"></div></body></html>"#,
+        r#"
+            .big { width: 200px; height: 100px; }
+            .red { background: red; }
+        "#,
+    );
+    let red_rect = cmds.iter().any(|c| matches!(c,
+        DC::Rect { color, .. } if color[0] == 255 && color[1] == 0 && color[2] == 0
+    ));
+    assert!(red_rect);
+}
+
 #[test]
 fn paint_bg_image_emits_image_command() {
     let cmds = build_dl(
