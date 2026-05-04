@@ -5287,6 +5287,10 @@ pub(crate) struct WebGLProgram {
     pub sampler_count: u32,
     /// Pocet texture image bindings (separate od samplers).
     pub texture_count: u32,
+    /// Resource binding indexy z naga IR. (name, binding_idx) pro kazdy.
+    pub uniform_binding: Option<u32>,
+    pub texture_bindings: Vec<(String, u32)>,
+    pub sampler_bindings: Vec<(String, u32)>,
 }
 
 /// Layout slot pro 1 uniform v GPU buffer.
@@ -5412,6 +5416,38 @@ pub(crate) fn extract_texture_sampler_counts(module: &naga::Module) -> (u32, u32
         }
     }
     (samplers, textures)
+}
+
+/// Vyextrahuje konkretni binding indexy + nazve pro uniform/texture/sampler
+/// resources. Vraci (uniform_binding, texture_bindings, sampler_bindings).
+/// Filtruje group=0 (jen jedna group v WebGL).
+pub(crate) fn extract_resource_bindings(module: &naga::Module) -> (
+    Option<u32>,
+    Vec<(String, u32)>,
+    Vec<(String, u32)>,
+) {
+    use naga::{TypeInner, AddressSpace};
+    let mut uniform_binding: Option<u32> = None;
+    let mut textures: Vec<(String, u32)> = Vec::new();
+    let mut samplers: Vec<(String, u32)> = Vec::new();
+    for (_, gv) in module.global_variables.iter() {
+        let ty = &module.types[gv.ty];
+        let binding = match &gv.binding {
+            Some(b) if b.group == 0 => b.binding,
+            _ => continue,
+        };
+        let name = gv.name.clone().unwrap_or_default();
+        match &ty.inner {
+            TypeInner::Sampler { .. } => samplers.push((name, binding)),
+            TypeInner::Image { .. } => textures.push((name, binding)),
+            _ => {
+                if matches!(gv.space, AddressSpace::Uniform) {
+                    uniform_binding = Some(binding);
+                }
+            }
+        }
+    }
+    (uniform_binding, textures, samplers)
 }
 
 pub(crate) struct WebGLTexture {
@@ -5788,6 +5824,9 @@ fn create_webgl_context(state: Rc<RefCell<WebGLState>>) -> JsValue {
                 info_log: String::new(), vertex_wgsl: None, fragment_wgsl: None,
                 uniform_layout: Vec::new(), uniform_buffer_size: 0,
                 sampler_count: 0, texture_count: 0,
+                uniform_binding: None,
+                texture_bindings: Vec::new(),
+                sampler_bindings: Vec::new(),
             });
             Ok(make_webgl_handle(id, "program"))
         }));
@@ -5818,7 +5857,8 @@ fn create_webgl_context(state: Rc<RefCell<WebGLState>>) -> JsValue {
             if let Some(id) = id {
                 let mut s = st.borrow_mut();
                 // Pre-fetch shader WGSL pred mut borrow programs
-                let (vs_wgsl, fs_wgsl, error_log, layout, layout_size, sampler_cnt, texture_cnt) = {
+                let (vs_wgsl, fs_wgsl, error_log, layout, layout_size, sampler_cnt, texture_cnt,
+                     uniform_b, texture_b, sampler_b) = {
                     let prog = match s.programs.get(&id) { Some(p) => p, None => return Ok(JsValue::Undefined) };
                     let vs_id = prog.vertex_shader;
                     let fs_id = prog.fragment_shader;
@@ -5829,6 +5869,9 @@ fn create_webgl_context(state: Rc<RefCell<WebGLState>>) -> JsValue {
                     let mut combined_size: u64 = 0;
                     let mut samplers = 0u32;
                     let mut textures = 0u32;
+                    let mut uni_b: Option<u32> = None;
+                    let mut tex_b: Vec<(String, u32)> = Vec::new();
+                    let mut samp_b: Vec<(String, u32)> = Vec::new();
                     if let (Some(vid), Some(fid)) = (vs_id, fs_id) {
                         if let Some(vsh) = s.shaders.get(&vid) {
                             if !vsh.compiled {
@@ -5848,6 +5891,10 @@ fn create_webgl_context(state: Rc<RefCell<WebGLState>>) -> JsValue {
                                 let (vs_samp, vs_tex) = extract_texture_sampler_counts(m);
                                 samplers = samplers.max(vs_samp);
                                 textures = textures.max(vs_tex);
+                                let (ub, tb, sb) = extract_resource_bindings(m);
+                                if uni_b.is_none() { uni_b = ub; }
+                                for entry in tb { if !tex_b.iter().any(|(n, _)| n == &entry.0) { tex_b.push(entry); } }
+                                for entry in sb { if !samp_b.iter().any(|(n, _)| n == &entry.0) { samp_b.push(entry); } }
                             }
                         }
                         if let Some(fsh) = s.shaders.get(&fid) {
@@ -5868,12 +5915,16 @@ fn create_webgl_context(state: Rc<RefCell<WebGLState>>) -> JsValue {
                                 let (fs_samp, fs_tex) = extract_texture_sampler_counts(m);
                                 samplers = samplers.max(fs_samp);
                                 textures = textures.max(fs_tex);
+                                let (ub, tb, sb) = extract_resource_bindings(m);
+                                if uni_b.is_none() { uni_b = ub; }
+                                for entry in tb { if !tex_b.iter().any(|(n, _)| n == &entry.0) { tex_b.push(entry); } }
+                                for entry in sb { if !samp_b.iter().any(|(n, _)| n == &entry.0) { samp_b.push(entry); } }
                             }
                         }
                     } else {
                         log.push_str("program postrada vertex nebo fragment shader\n");
                     }
-                    (vw, fw, log, combined_layout, combined_size, samplers, textures)
+                    (vw, fw, log, combined_layout, combined_size, samplers, textures, uni_b, tex_b, samp_b)
                 };
                 // Apply
                 if let Some(prog) = s.programs.get_mut(&id) {
@@ -5885,6 +5936,9 @@ fn create_webgl_context(state: Rc<RefCell<WebGLState>>) -> JsValue {
                     prog.uniform_buffer_size = layout_size;
                     prog.sampler_count = sampler_cnt;
                     prog.texture_count = texture_cnt;
+                    prog.uniform_binding = uniform_b;
+                    prog.texture_bindings = texture_b;
+                    prog.sampler_bindings = sampler_b;
                 }
             }
             Ok(JsValue::Undefined)

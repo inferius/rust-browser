@@ -675,6 +675,7 @@ fn extract_pending_clones_programs_wgsl() {
         fragment_wgsl: Some("@fragment fn main() {}".into()),
         uniform_layout: Vec::new(), uniform_buffer_size: 0,
         sampler_count: 0, texture_count: 0,
+        uniform_binding: None, texture_bindings: Vec::new(), sampler_bindings: Vec::new(),
     });
     let frame = webgl_extract_pending(&mut state);
     assert_eq!(frame.programs.len(), 1);
@@ -791,6 +792,7 @@ fn linked_program_ids_only_linked() {
         vertex_wgsl: Some("v".into()), fragment_wgsl: Some("f".into()),
         uniform_layout: Vec::new(), uniform_buffer_size: 0,
         sampler_count: 0, texture_count: 0,
+        uniform_binding: None, texture_bindings: Vec::new(), sampler_bindings: Vec::new(),
     });
     state.programs.insert(2, WebGLProgram {
         vertex_shader: None, fragment_shader: None,
@@ -799,6 +801,7 @@ fn linked_program_ids_only_linked() {
         vertex_wgsl: None, fragment_wgsl: None,
         uniform_layout: Vec::new(), uniform_buffer_size: 0,
         sampler_count: 0, texture_count: 0,
+        uniform_binding: None, texture_bindings: Vec::new(), sampler_bindings: Vec::new(),
     });
     let ids = webgl_linked_program_ids(&state);
     assert_eq!(ids, vec![1]);
@@ -814,6 +817,7 @@ fn linked_program_ids_skips_missing_wgsl() {
         vertex_wgsl: None, fragment_wgsl: None,
         uniform_layout: Vec::new(), uniform_buffer_size: 0,
         sampler_count: 0, texture_count: 0,
+        uniform_binding: None, texture_bindings: Vec::new(), sampler_bindings: Vec::new(),
     });
     let ids = webgl_linked_program_ids(&state);
     assert_eq!(ids.len(), 0, "linked bez WGSL strings se preskakuje");
@@ -1155,6 +1159,7 @@ fn linked_program_ids_filters_unlinked() {
         vertex_wgsl: Some("v".into()), fragment_wgsl: Some("f".into()),
         uniform_layout: Vec::new(), uniform_buffer_size: 0,
         sampler_count: 0, texture_count: 0,
+        uniform_binding: None, texture_bindings: Vec::new(), sampler_bindings: Vec::new(),
     });
     state.programs.insert(2, WebGLProgram {
         vertex_shader: Some(4), fragment_shader: Some(5),
@@ -1163,6 +1168,7 @@ fn linked_program_ids_filters_unlinked() {
         vertex_wgsl: Some("v".into()), fragment_wgsl: Some("f".into()),
         uniform_layout: Vec::new(), uniform_buffer_size: 0,
         sampler_count: 0, texture_count: 0,
+        uniform_binding: None, texture_bindings: Vec::new(), sampler_bindings: Vec::new(),
     });
     let ids = webgl_linked_program_ids(&state);
     assert_eq!(ids, vec![2]);
