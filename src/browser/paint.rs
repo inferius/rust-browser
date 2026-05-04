@@ -132,6 +132,8 @@ pub enum DisplayCommand {
         src: String,
         radius: f32,
     },
+    /// Blurred solid rect - shader mode 8. Smoothstep edge blur radius.
+    BlurredRect { x: f32, y: f32, w: f32, h: f32, color: [u8; 4], radius: f32, blur: f32 },
 }
 
 /// Vrati display list - sekvence primitiv pro renderer.
@@ -429,14 +431,17 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>) {
             radius: bx.border_radius,
         });
     } else if let Some(bg) = bx.bg_color {
-        cmds.push(DisplayCommand::Rect {
-            x: clip_x,
-            y: clip_y,
-            w: clip_w,
-            h: clip_h,
-            color: with_alpha(bg),
-            radius: clip_radius,
-        });
+        if blur_radius > 0.0 {
+            cmds.push(DisplayCommand::BlurredRect {
+                x: clip_x, y: clip_y, w: clip_w, h: clip_h,
+                color: with_alpha(bg), radius: clip_radius, blur: blur_radius,
+            });
+        } else {
+            cmds.push(DisplayCommand::Rect {
+                x: clip_x, y: clip_y, w: clip_w, h: clip_h,
+                color: with_alpha(bg), radius: clip_radius,
+            });
+        }
     }
 
     // Border
@@ -591,12 +596,13 @@ fn scale_cmd(cmd: &mut DisplayCommand, sx: f32, sy: f32, cx: f32, cy: f32) {
         | DisplayCommand::Border { x, y, w, h, .. }
         | DisplayCommand::Gradient { x, y, w, h, .. }
         | DisplayCommand::Shadow { x, y, w, h, .. }
-        | DisplayCommand::Image { x, y, w, h, .. } => {
+        | DisplayCommand::Image { x, y, w, h, .. }
+        | DisplayCommand::BlurredRect { x, y, w, h, .. } => {
             scale_xy(x, y); scale_wh(w, h);
         }
         DisplayCommand::Text { x, y, font_size, .. } => {
             scale_xy(x, y);
-            *font_size *= sy.abs(); // text scaling pres y
+            *font_size *= sy.abs();
         }
     }
 }
@@ -615,7 +621,8 @@ fn shift_cmd(cmd: &mut DisplayCommand, dx: f32, dy: f32) {
         | DisplayCommand::Text { x, y, .. }
         | DisplayCommand::Gradient { x, y, .. }
         | DisplayCommand::Shadow { x, y, .. }
-        | DisplayCommand::Image { x, y, .. } => {
+        | DisplayCommand::Image { x, y, .. }
+        | DisplayCommand::BlurredRect { x, y, .. } => {
             *x += dx;
             *y += dy;
         }

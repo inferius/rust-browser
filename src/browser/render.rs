@@ -147,6 +147,16 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         let clip = 1.0 - smoothstep(-1.0, 1.0, outer);
         return vec4<f32>(in.color.rgb, in.color.a * alpha * clip);
     }
+    // Mode 8: blurred solid - smoothstep s blur radius na okrajich
+    if (in.mode > 7.5 && in.mode < 8.5) {
+        let blur = max(in.blur, 0.5);
+        let d = sdf_rounded_box(in.local, in.half_size, in.radius);
+        // Inside box (d < -blur): full alpha
+        // Outside (d > blur): zero alpha
+        // Edge: smoothstep
+        let alpha = 1.0 - smoothstep(-blur, blur, d);
+        return vec4<f32>(in.color.rgb, in.color.a * alpha);
+    }
     // Mode 4: image - sample RGBA z image atlasu
     if (in.mode > 3.5 && in.mode < 4.5) {
         var rgba = textureSample(image_tex, atlas_smp, in.uv);
@@ -233,6 +243,9 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: 
                     let placeholder = [0.7, 0.7, 0.75, 1.0];
                     push_rect_rounded(&mut verts, *x, *y, *w, *h, placeholder, *radius);
                 }
+            }
+            DisplayCommand::BlurredRect { x, y, w, h, color, radius, blur } => {
+                push_blurred_rect(&mut verts, *x, *y, *w, *h, normalize_color(color), *radius, *blur);
             }
         }
     }
@@ -406,7 +419,8 @@ fn shift_command_y(cmd: &mut DisplayCommand, dy: f32) {
         | DisplayCommand::Text { y, .. }
         | DisplayCommand::Gradient { y, .. }
         | DisplayCommand::Shadow { y, .. }
-        | DisplayCommand::Image { y, .. } => *y += dy,
+        | DisplayCommand::Image { y, .. }
+        | DisplayCommand::BlurredRect { y, .. } => *y += dy,
     }
 }
 
@@ -462,6 +476,36 @@ fn push_rect_uv(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f32, h: f32,
     let tr = mk(x + w, y,     uv1[0], uv0[1]);
     let bl = mk(x,     y + h, uv0[0], uv1[1]);
     let br = mk(x + w, y + h, uv1[0], uv1[1]);
+    verts.push(tl); verts.push(tr); verts.push(bl);
+    verts.push(bl); verts.push(tr); verts.push(br);
+}
+
+/// Blurred rect: mode 8, solid color s smoothstep blur edge.
+fn push_blurred_rect(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f32, h: f32,
+                     color: [f32; 4], radius: f32, blur: f32) {
+    let hw = w * 0.5;
+    let hh = h * 0.5;
+    let cx = x + hw;
+    let cy = y + hh;
+    // Rozsirit quad o blur radius pro smoothstep prostor
+    let extra = blur + 4.0;
+    let mk = |px: f32, py: f32| -> Vertex {
+        Vertex {
+            pos: [px, py],
+            color,
+            uv: [0.0, 0.0],
+            mode: 8.0,
+            local: [px - cx, py - cy],
+            half_size: [hw, hh],
+            radius,
+            color2: [0.0; 4],
+            blur,
+        }
+    };
+    let tl = mk(x - extra,     y - extra);
+    let tr = mk(x + w + extra, y - extra);
+    let bl = mk(x - extra,     y + h + extra);
+    let br = mk(x + w + extra, y + h + extra);
     verts.push(tl); verts.push(tr); verts.push(bl);
     verts.push(bl); verts.push(tr); verts.push(br);
 }
