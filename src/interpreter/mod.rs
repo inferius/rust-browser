@@ -5239,6 +5239,10 @@ pub(crate) struct WebGLState {
     pub viewport_xywh: [i32; 4],
     pub blend_enabled: bool,
     pub depth_test_enabled: bool,
+    /// Aktualni active texture unit index (z gl.activeTexture(TEXTUREN)).
+    pub active_texture_unit: u32,
+    /// Mapping unit_idx -> texture_id (z gl.bindTexture pri current unit).
+    pub texture_units: std::collections::HashMap<u32, u32>,
     /// Draw call count (pro testovani + diagnostiku)
     pub draw_call_count: u32,
     pub last_error: u32,
@@ -5480,6 +5484,8 @@ impl WebGLState {
             viewport_xywh: [0, 0, 300, 150],
             blend_enabled: false,
             depth_test_enabled: false,
+            active_texture_unit: 0,
+            texture_units: std::collections::HashMap::new(),
             draw_call_count: 0,
             last_error: 0,
             vertex_attribs: vec![None; 16],
@@ -6085,7 +6091,27 @@ fn create_webgl_context(state: Rc<RefCell<WebGLState>>) -> JsValue {
             let target = it.next().map(|v| v.to_number()).unwrap_or(0.0) as u32;
             let id = it.next().and_then(|v| webgl_id_from(&v));
             if target == 0x0DE1 { // TEXTURE_2D
-                st.borrow_mut().bound_texture_2d = id;
+                let mut s = st.borrow_mut();
+                s.bound_texture_2d = id;
+                // Take aktualni active unit -> texture_units mapping
+                let unit = s.active_texture_unit;
+                if let Some(tex_id) = id {
+                    s.texture_units.insert(unit, tex_id);
+                } else {
+                    s.texture_units.remove(&unit);
+                }
+            }
+            Ok(JsValue::Undefined)
+        }));
+    }
+    {
+        let st = Rc::clone(&state);
+        obj_rc.borrow_mut().set("activeTexture".into(), native("gl.activeTexture", move |args| {
+            let target = args.into_iter().next().map(|v| v.to_number()).unwrap_or(0.0) as u32;
+            // GL_TEXTURE0 = 0x84C0, TEXTUREn = 0x84C0 + n
+            if target >= 0x84C0 {
+                let unit = target - 0x84C0;
+                st.borrow_mut().active_texture_unit = unit;
             }
             Ok(JsValue::Undefined)
         }));
@@ -6277,7 +6303,7 @@ fn create_webgl_context(state: Rc<RefCell<WebGLState>>) -> JsValue {
 
     // ─── No-op-zatim metody ──────────────────────────────────────────
     for m in &["blendFunc", "blendFuncSeparate", "depthFunc", "cullFace", "frontFace",
-               "activeTexture", "pixelStorei", "flush", "finish",
+               "pixelStorei", "flush", "finish",
                "scissor", "stencilFunc", "stencilOp", "stencilMask",
                "lineWidth", "polygonOffset", "depthMask", "colorMask"] {
         let name = m.to_string();
@@ -6372,6 +6398,23 @@ fn create_webgl_context(state: Rc<RefCell<WebGLState>>) -> JsValue {
         let st = Rc::clone(&state);
         obj_rc.borrow_mut().set("__draw_queue_size__".into(), native("gl.__draw_queue_size__", move |_| {
             Ok(JsValue::Number(st.borrow().draw_queue.len() as f64))
+        }));
+    }
+    {
+        let st = Rc::clone(&state);
+        obj_rc.borrow_mut().set("__active_texture_unit__".into(), native("gl.__active_texture_unit__", move |_| {
+            Ok(JsValue::Number(st.borrow().active_texture_unit as f64))
+        }));
+    }
+    {
+        let st = Rc::clone(&state);
+        obj_rc.borrow_mut().set("__texture_unit_binding__".into(), native("gl.__texture_unit_binding__", move |args| {
+            let unit = args.into_iter().next().map(|v| v.to_number()).unwrap_or(0.0) as u32;
+            let s = st.borrow();
+            match s.texture_units.get(&unit) {
+                Some(tex_id) => Ok(JsValue::Number(*tex_id as f64)),
+                None => Ok(JsValue::Null),
+            }
         }));
     }
     {

@@ -272,6 +272,66 @@ fn webgl_sampler_count_zero_for_simple_shader() {
 }
 
 #[test]
+fn webgl_active_texture_unit_default_zero() {
+    let r = run(&format!(r#"{SETUP}
+        return gl.__active_texture_unit__();
+    "#));
+    assert_eq!(r.to_string(), "0");
+}
+
+#[test]
+fn webgl_active_texture_set_unit_3() {
+    let r = run(&format!(r#"{SETUP}
+        gl.activeTexture(gl.TEXTURE0 + 3);
+        return gl.__active_texture_unit__();
+    "#));
+    assert_eq!(r.to_string(), "3");
+}
+
+#[test]
+fn webgl_bind_texture_at_active_unit() {
+    let r = run(&format!(r#"{SETUP}
+        const t1 = gl.createTexture();
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, t1);
+        return gl.__texture_unit_binding__(0);
+    "#));
+    let n = r.to_string();
+    assert!(n.parse::<f64>().unwrap_or(-1.0) > 0.0, "unit 0 ma texture id");
+}
+
+#[test]
+fn webgl_bind_texture_different_units() {
+    let r = run(&format!(r#"{SETUP}
+        const t1 = gl.createTexture();
+        const t2 = gl.createTexture();
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, t1);
+        gl.activeTexture(gl.TEXTURE0 + 5);
+        gl.bindTexture(gl.TEXTURE_2D, t2);
+        const u0 = gl.__texture_unit_binding__(0);
+        const u5 = gl.__texture_unit_binding__(5);
+        return u0 + ":" + u5 + ":" + (u0 !== u5);
+    "#));
+    let s = r.to_string();
+    assert!(s.ends_with(":true"), "different texture per unit, got {s}");
+}
+
+#[test]
+fn webgl_bind_null_unbinds() {
+    let r = run(&format!(r#"{SETUP}
+        const t = gl.createTexture();
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, t);
+        gl.bindTexture(gl.TEXTURE_2D, null);
+        const r1 = gl.__texture_unit_binding__(0);
+        return r1;
+    "#));
+    let s = r.to_string();
+    assert!(s == "null" || s == "undefined");
+}
+
+#[test]
 fn webgl_texture_count_zero_for_simple_shader() {
     let r = run(&format!(r#"{SETUP}
         const v = gl.createShader(gl.VERTEX_SHADER);
