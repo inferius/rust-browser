@@ -639,6 +639,24 @@ pub fn paint_webgl_canvases(
                         color: rgba, radius: 0.0,
                     });
                 }
+                // Phase 3c placeholder: pri DrawArrays/DrawElements, emitujem
+                // overlay rect (semi-transparent stripes) jako vizualni indikator
+                // ze JS volal draw call. Real wgpu pipeline v dalsi fazi.
+                if draw_commands_count > 0 {
+                    let stripe_count = (draw_commands_count.min(8)) as i32;
+                    let stripe_h = bx.rect.height / stripe_count.max(1) as f32;
+                    for i in 0..stripe_count {
+                        let alpha = ((i as f32 + 1.0) / stripe_count as f32 * 80.0) as u8;
+                        cmds.push(super::paint::DisplayCommand::Rect {
+                            x: bx.rect.x,
+                            y: bx.rect.y + (i as f32) * stripe_h,
+                            w: bx.rect.width,
+                            h: stripe_h * 0.5,
+                            color: [255, 255, 255, alpha],
+                            radius: 0.0,
+                        });
+                    }
+                }
                 // Diagnostic - draw_commands_count se uchova ve state pro test access.
                 state.draw_call_count = state.draw_call_count.saturating_add(draw_commands_count as u32);
             }

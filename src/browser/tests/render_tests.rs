@@ -559,6 +559,55 @@ fn paint_webgl_skips_non_canvas_tag() {
 }
 
 #[test]
+fn paint_webgl_draw_arrays_emits_stripe_overlay() {
+    // DrawArrays bez clear -> emit indikator stripes (placeholder phase 3c).
+    let node = NodeData::new_element("canvas", HashMap::new());
+    let ptr = Rc::as_ptr(&node) as usize;
+    let bx = make_canvas_layout_box(Rc::clone(&node));
+    let mut state = WebGLState::new();
+    state.draw_queue.push(WebGLDrawCmd::DrawArrays {
+        program_id: Some(1), mode: 4, first: 0, count: 3,
+        attribs: Vec::new(),
+        uniforms: HashMap::new(),
+        viewport: [0, 0, 300, 150],
+    });
+    let mut states: HashMap<usize, Rc<RefCell<WebGLState>>> = HashMap::new();
+    states.insert(ptr, Rc::new(RefCell::new(state)));
+
+    let mut cmds: Vec<DisplayCommand> = Vec::new();
+    paint_webgl_canvases(&bx, &states, &mut cmds);
+    assert!(cmds.len() >= 1, "DrawArrays emit aspon 1 stripe overlay rect");
+}
+
+#[test]
+fn paint_webgl_clear_plus_draw_combines() {
+    // Clear + DrawArrays -> bg rect + stripe overlay
+    let node = NodeData::new_element("canvas", HashMap::new());
+    let ptr = Rc::as_ptr(&node) as usize;
+    let bx = make_canvas_layout_box(Rc::clone(&node));
+    let mut state = WebGLState::new();
+    state.draw_queue.push(WebGLDrawCmd::ClearColor([0.5, 0.0, 0.0, 1.0]));
+    state.draw_queue.push(WebGLDrawCmd::Clear(0x4000));
+    state.draw_queue.push(WebGLDrawCmd::DrawArrays {
+        program_id: Some(1), mode: 4, first: 0, count: 3,
+        attribs: Vec::new(),
+        uniforms: HashMap::new(),
+        viewport: [0, 0, 300, 150],
+    });
+    let mut states: HashMap<usize, Rc<RefCell<WebGLState>>> = HashMap::new();
+    states.insert(ptr, Rc::new(RefCell::new(state)));
+
+    let mut cmds: Vec<DisplayCommand> = Vec::new();
+    paint_webgl_canvases(&bx, &states, &mut cmds);
+    // Min 2 cmds: bg + overlay
+    assert!(cmds.len() >= 2);
+    // Prvni je clear color
+    if let DisplayCommand::Rect { color, .. } = &cmds[0] {
+        assert_eq!(color[0], 127, "red bg ~ 0.5*255");
+    }
+}
+
+#[test]
 fn paint_webgl_recurses_to_children() {
     let parent_node = NodeData::new_element("div", HashMap::new());
     let canvas_node = NodeData::new_element("canvas", HashMap::new());
