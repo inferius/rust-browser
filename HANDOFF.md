@@ -5,10 +5,10 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 ## Stav
 
 - Build: **OK**, 0 errors.
-- Tests: **1543 passed, 0 failed, 3 ignored** (+738 v teto session, +91.7%).
-- Posledni commit: `e1188fd TODO_CSS aktualizace + tests +52`.
+- Tests: **1548 passed, 0 failed, 3 ignored** (+743 v teto session, +92.3%).
+- Posledni commit: `a83cd24 WebGL phase 3c6 - single-frame + drawElements`.
 - Tree: ciste.
-- Branch master, ~256 commitu pred origin/master (NEPUSHOVAT bez vyzvy).
+- Branch master, ~258 commitu pred origin/master (NEPUSHOVAT bez vyzvy).
 
 ## Recent session highlights
 
@@ -78,13 +78,15 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 
 ## Velke remaining work
 
-- **WebGL phase 3c6+**: Single-frame integration cleanup. Aktualne run_webgl_overlay_frame
-  acquire fresh frame + present (2 frames total = potencial flicker). Lepsi:
-  refactor draw_segments aby webgl pass byl AT THE END before single present.
-  Dual path konflict: paint_webgl_canvases (placeholder) + run_webgl_frame (real GPU)
-  uz vyresen z App::render (placeholder skipnut), ale debug viewer cesta jeste pouziva.
-  Plus: uniform buffer support v ensure_webgl_pipeline (bind group), texture upload,
-  drawElements (index buffer). Scope: 200-500 radku.
+- **WebGL phase 3c7**: uniform buffer support v ensure_webgl_pipeline (bind
+  groups). Vyzaduje:
+  - WGSL parser pro uniform struct decl extraction (z naga IR).
+  - Per-program uniform layout map (name -> offset/size).
+  - Bind group layout match s shaderem.
+  - Per-draw write_buffer + bind group setup.
+  Scope: 300-500 radku. Plus texture binding (per-program sampler/texture
+  bind groups). Bez tohoto vetsina realnych WebGL programu (jakekoliv s
+  shader uniforms) ne plne funkci - draws kresli ale bez per-frame data.
 - **Filter v Transform RT (nested)**: aktualne filter inside transform
   je inner cmds bez efektu - lepsi pristup vyzaduje rekursi v draw_segments.
 - **Filter v Transform RT (nested)**: aktualne filter inside transform
