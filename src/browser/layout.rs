@@ -1311,6 +1311,84 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         }
     }
 
+    // Pseudo-element ::first-letter - rozdeli prvni inline text na (first_char, rest)
+    if let Some(pseudo_styles) = super::cascade::get_pseudo_styles(pseudo_map, node, "first-letter") {
+        // Najdi prvni inline child s text (skip leading whitespace text)
+        for child in &mut bx.children {
+            if matches!(child.display, Display::Inline) {
+                if let Some(text) = child.text.clone() {
+                    let trimmed = text.trim_start();
+                    let leading_ws = text.len() - trimmed.len();
+                    let mut chars = trimmed.chars();
+                    if let Some(first_char) = chars.next() {
+                        let rest: String = chars.collect();
+                        // Vytvor pseudo box pro prvni char
+                        let mut letter_text = String::new();
+                        if leading_ws > 0 { letter_text.push_str(&text[..leading_ws]); }
+                        letter_text.push(first_char);
+                        let mut letter_box = LayoutBox::new();
+                        letter_box.display = Display::Inline;
+                        letter_box.tag = Some("::first-letter".to_string());
+                        letter_box.text = Some(letter_text);
+                        // Aplikuj pseudo styly
+                        if let Some(c) = pseudo_styles.get("color") {
+                            letter_box.text_color = parse_color(c);
+                        }
+                        if let Some(fs) = pseudo_styles.get("font-size") { letter_box.font_size = parse_length(fs); }
+                        if let Some(fw) = pseudo_styles.get("font-weight") {
+                            letter_box.bold = matches!(fw.trim(), "bold" | "700" | "800" | "900");
+                        }
+                        if let Some(bg) = pseudo_styles.get("background-color") {
+                            letter_box.bg_color = parse_color(bg);
+                        }
+                        // Zkrátit puvodni text na rest
+                        child.text = Some(rest);
+                        // Insert pred child - vlozim na pozici child v collection
+                        // (predchazejici cyklus bere prvni inline - vlozim hned).
+                        let pos = bx.children.iter().position(|c|
+                            matches!(c.display, Display::Inline)
+                            && c.text.is_some()
+                        ).unwrap_or(0);
+                        bx.children.insert(pos, letter_box);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    // Pseudo-element ::first-line - aproximace: prvni line obali styly do dalsiho text node
+    // Plne implementace by potrebovala znat sirku line (po layout). Zde aproximace:
+    // pridame styles pro ~prvni 50 chars textu.
+    if let Some(pseudo_styles) = super::cascade::get_pseudo_styles(pseudo_map, node, "first-line") {
+        for child in &mut bx.children {
+            if matches!(child.display, Display::Inline) {
+                if let Some(text) = child.text.clone() {
+                    // Vyznacne v aktualni text box stylu (max prvnich ~50 chars)
+                    let max = text.chars().take(50).count().min(text.len());
+                    let split_idx = text.char_indices().take(max).last().map(|(i, c)| i + c.len_utf8()).unwrap_or(text.len());
+                    let (first, rest) = text.split_at(split_idx);
+                    let mut first_line_box = LayoutBox::new();
+                    first_line_box.display = Display::Inline;
+                    first_line_box.tag = Some("::first-line".to_string());
+                    first_line_box.text = Some(first.to_string());
+                    if let Some(c) = pseudo_styles.get("color") {
+                        first_line_box.text_color = parse_color(c);
+                    }
+                    if let Some(fw) = pseudo_styles.get("font-weight") {
+                        first_line_box.bold = matches!(fw.trim(), "bold" | "700" | "800" | "900");
+                    }
+                    child.text = Some(rest.to_string());
+                    let pos = bx.children.iter().position(|c|
+                        matches!(c.display, Display::Inline) && c.text.is_some()
+                    ).unwrap_or(0);
+                    bx.children.insert(pos, first_line_box);
+                    break;
+                }
+            }
+        }
+    }
+
     // Pseudo-element ::after - posledni virtualni child
     if let Some(pseudo_styles) = super::cascade::get_pseudo_styles(pseudo_map, node, "after") {
         if let Some(pa) = build_pseudo_box(node, pseudo_styles, counters) {
