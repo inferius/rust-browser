@@ -313,13 +313,17 @@ Konvence stavu:
 - [ ] `scrollbar-width`, `scrollbar-color`, `scrollbar-gutter`
 
 ### CSS Pseudo-Elements L4
-- [ ] `::before`, `::after` + `content` property
-- [ ] `::first-line`, `::first-letter`
+- [x] `::before`, `::after` + `content` property (string + attr() + counter()-stub)
+- [x] Legacy `:before` / `:after` syntax (CSS2 fallback)
+- [x] Specificita kaskady na pseudo-elementech (cascade_pseudo)
+- [x] Layout integrace - virtualni pseudo LayoutBox vlozeny pred/po children
+- [ ] `::first-line`, `::first-letter` (parsing OK, layout integrace TODO)
 - [ ] `::marker` (list-style)
 - [ ] `::placeholder`
 - [ ] `::file-selector-button`
 - [ ] `::backdrop`
 - [ ] `::selection`, `::target-text`
+- [ ] Counter API (`counter-reset`, `counter-increment`, `counter()`)
 
 ### CSS Color Adjust L1
 - [ ] `color-scheme: light | dark | light dark`

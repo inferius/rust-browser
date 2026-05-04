@@ -899,6 +899,7 @@ pub fn run_window_with_html(html: String, css: String) -> Result<(), String> {
 
             let stylesheets = vec![css_parser::parse_stylesheet(&self.css)];
             let mut style_map = cascade::cascade(&document_root, &stylesheets);
+            let pseudo_map = cascade::cascade_pseudo(&document_root, &stylesheets);
 
             let elapsed = self.start_time.elapsed().as_secs_f32();
 
@@ -918,7 +919,7 @@ pub fn run_window_with_html(html: String, css: String) -> Result<(), String> {
 
             let viewport_w = r.config.width as f32;
             let viewport_h = r.config.height as f32;
-            let layout_root = layout::layout_tree(&document_root, &style_map, viewport_w, viewport_h);
+            let layout_root = layout::layout_tree_with_pseudo(&document_root, &style_map, &pseudo_map, viewport_w, viewport_h);
             let mut display_list = paint::build_display_list(&layout_root);
 
             // Apply scroll: posun vsechny y o -scroll_y

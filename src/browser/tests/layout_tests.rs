@@ -169,6 +169,57 @@ fn parse_linear_gradient_basic() {
 }
 
 #[test]
+fn pseudo_before_creates_virtual_child() {
+    let doc = parse_html(r#"<html><body><p>x</p></body></html>"#, "");
+    let css = parse_stylesheet(r#"p::before { content: "ARROW"; color: red; }"#);
+    let style_map = crate::browser::cascade::cascade(&doc.root, &[css.clone()]);
+    let pseudo_map = crate::browser::cascade::cascade_pseudo(&doc.root, &[css]);
+    let root_box = layout::layout_tree_with_pseudo(&doc.root, &style_map, &pseudo_map, 1024.0, 768.0);
+
+    // Najdi `p` LayoutBox + jeho prvniho childa
+    let p_box = find_box_by_tag(&root_box, "p").expect("p must exist");
+    assert!(!p_box.children.is_empty(), "p musi mit ::before child");
+    let first = &p_box.children[0];
+    assert_eq!(first.tag.as_deref(), Some("::pseudo"));
+    assert_eq!(first.text.as_deref(), Some("ARROW"));
+}
+
+#[test]
+fn pseudo_after_appended_last() {
+    let doc = parse_html(r#"<html><body><p>x</p></body></html>"#, "");
+    let css = parse_stylesheet(r#"p::after { content: "!END"; }"#);
+    let style_map = crate::browser::cascade::cascade(&doc.root, &[css.clone()]);
+    let pseudo_map = crate::browser::cascade::cascade_pseudo(&doc.root, &[css]);
+    let root_box = layout::layout_tree_with_pseudo(&doc.root, &style_map, &pseudo_map, 1024.0, 768.0);
+
+    let p_box = find_box_by_tag(&root_box, "p").unwrap();
+    let last = p_box.children.last().unwrap();
+    assert_eq!(last.tag.as_deref(), Some("::pseudo"));
+    assert_eq!(last.text.as_deref(), Some("!END"));
+}
+
+#[test]
+fn pseudo_attr_content() {
+    let doc = parse_html(r#"<html><body><p data-prefix="-> ">hello</p></body></html>"#, "");
+    let css = parse_stylesheet(r#"p::before { content: attr(data-prefix); }"#);
+    let style_map = crate::browser::cascade::cascade(&doc.root, &[css.clone()]);
+    let pseudo_map = crate::browser::cascade::cascade_pseudo(&doc.root, &[css]);
+    let root_box = layout::layout_tree_with_pseudo(&doc.root, &style_map, &pseudo_map, 1024.0, 768.0);
+
+    let p_box = find_box_by_tag(&root_box, "p").unwrap();
+    let before = &p_box.children[0];
+    assert_eq!(before.text.as_deref(), Some("-> "));
+}
+
+fn find_box_by_tag<'a>(bx: &'a layout::LayoutBox, tag: &str) -> Option<&'a layout::LayoutBox> {
+    if bx.tag.as_deref() == Some(tag) { return Some(bx); }
+    for c in &bx.children {
+        if let Some(found) = find_box_by_tag(c, tag) { return Some(found); }
+    }
+    None
+}
+
+#[test]
 fn parse_filter_chain_blur() {
     use crate::browser::layout::{parse_filter_chain, FilterOp};
     let chain = parse_filter_chain("blur(4px)");

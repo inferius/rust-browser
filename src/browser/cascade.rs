@@ -170,6 +170,10 @@ fn logical_shorthand_pair(prop: &str) -> Option<(&'static str, &'static str)> {
 /// Mapa: pointer na Node -> computed styles.
 pub type StyleMap = HashMap<usize, HashMap<String, String>>;
 
+/// Mapa: (node_id, pseudo-element-name) -> computed styles.
+/// Napr. ((0xabcd, "before"), {"content": "\"->\"", "color": "red"})
+pub type PseudoStyleMap = HashMap<(usize, String), HashMap<String, String>>;
+
 /// Pomocnik: vrati pointer hodnotu Rc<Node> jako klic.
 fn node_id(node: &Rc<Node>) -> usize {
     Rc::as_ptr(node) as usize
@@ -485,6 +489,10 @@ pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
         for sheet in stylesheets {
             for rule in &sheet.rules {
                 for sel in &rule.selectors {
+                    // Pseudo-element selektory aplikujem v cascade_pseudo, ne tady
+                    if sel.parts.last().map(|p| p.pseudo_element.is_some()).unwrap_or(false) {
+                        continue;
+                    }
                     if matches_selector(node, sel) {
                         let spec = specificity(sel);
                         for decl in &rule.declarations {
@@ -532,6 +540,82 @@ pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
     });
 
     style_map
+}
+
+/// Cascade jen pro pseudo-elements (::before / ::after / ...).
+/// Vraci mapu (node_id, pseudo_name) -> computed styles, pro elementy co matchuji
+/// selektor s pseudo_element.
+pub fn cascade_pseudo(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> PseudoStyleMap {
+    let mut out: PseudoStyleMap = HashMap::new();
+
+    // Recyclujeme variables z hlavniho cascade (jen :root)
+    let mut variables: HashMap<String, String> = HashMap::new();
+    for sheet in stylesheets {
+        for rule in &sheet.rules {
+            for sel in &rule.selectors {
+                let is_root = sel.parts.iter().any(|p|
+                    p.tag.as_deref() == Some("html") ||
+                    p.pseudo_classes.iter().any(|pc| pc == "root")
+                ) || sel.parts.is_empty();
+                if !is_root { continue; }
+                for decl in &rule.declarations {
+                    if decl.property.starts_with("--") {
+                        variables.insert(decl.property.clone(), decl.value.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    root.walk(&mut |node| {
+        if !matches!(node.kind, NodeKind::Element { .. }) { return; }
+
+        // Pro kazdy pseudo-element name shromazdime matched declarations
+        let mut by_pseudo: HashMap<String, Vec<((u32, u32, u32, usize), &super::css_parser::Declaration)>>
+            = HashMap::new();
+        let mut order = 0;
+
+        for sheet in stylesheets {
+            for rule in &sheet.rules {
+                for sel in &rule.selectors {
+                    // Najdi pseudo_element v poslední casti selectoru
+                    let pe = sel.parts.last().and_then(|p| p.pseudo_element.clone());
+                    let pe = match pe { Some(p) => p, None => continue };
+                    if !matches_selector(node, sel) { continue; }
+                    let spec = specificity(sel);
+                    for decl in &rule.declarations {
+                        let key = (
+                            if decl.important { 1 } else { 0 },
+                            spec.0,
+                            spec.1 + spec.2,
+                            order,
+                        );
+                        by_pseudo.entry(pe.clone()).or_default().push((key, decl));
+                        order += 1;
+                    }
+                }
+            }
+        }
+
+        for (pe_name, mut list) in by_pseudo {
+            list.sort_by(|a, b| a.0.cmp(&b.0));
+            let mut styles = HashMap::new();
+            for (_, decl) in list {
+                let resolved = resolve_value(&decl.value, &variables);
+                expand_shorthand(&decl.property, &resolved, &mut styles);
+            }
+            out.insert((node_id(node), pe_name), styles);
+        }
+    });
+
+    out
+}
+
+/// Vrati pseudo-element styles pro dany node + name (pomocnik).
+pub fn get_pseudo_styles<'a>(map: &'a PseudoStyleMap, node: &Rc<Node>, pseudo: &str)
+    -> Option<&'a HashMap<String, String>>
+{
+    map.get(&(node_id(node), pseudo.to_string()))
 }
 
 /// Kontrola jestli selektor matchuje uzel.

@@ -213,7 +213,20 @@ pub fn layout_tree(
     viewport_width: f32,
     viewport_height: f32,
 ) -> LayoutBox {
-    let mut layout_root = build_box(root, style_map);
+    let empty_pseudo = super::cascade::PseudoStyleMap::new();
+    layout_tree_with_pseudo(root, style_map, &empty_pseudo, viewport_width, viewport_height)
+}
+
+/// Layout s pseudo-element style map - vyrobi virtualni LayoutBox pro
+/// ::before / ::after children.
+pub fn layout_tree_with_pseudo(
+    root: &Rc<Node>,
+    style_map: &StyleMap,
+    pseudo_map: &super::cascade::PseudoStyleMap,
+    viewport_width: f32,
+    viewport_height: f32,
+) -> LayoutBox {
+    let mut layout_root = build_box_with_pseudo(root, style_map, pseudo_map);
     layout_root.rect.width = viewport_width;
     layout_root.rect.height = viewport_height;
     layout_dispatch(&mut layout_root);
@@ -275,8 +288,22 @@ fn layout_dispatch(bx: &mut LayoutBox) {
     }
 }
 
-/// Rekurzivne stavi LayoutBox z Node.
+/// Wrap pres build_box_with_pseudo s prazdnou pseudo mapou.
 fn build_box(node: &Rc<Node>, style_map: &StyleMap) -> LayoutBox {
+    let empty = super::cascade::PseudoStyleMap::new();
+    build_box_with_pseudo(node, style_map, &empty)
+}
+
+/// Rekurzivne stavi LayoutBox z Node + virtualni boxy pro ::before / ::after.
+fn build_box_with_pseudo(
+    node: &Rc<Node>,
+    style_map: &StyleMap,
+    pseudo_map: &super::cascade::PseudoStyleMap,
+) -> LayoutBox {
+    build_box_inner(node, style_map, pseudo_map)
+}
+
+fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::cascade::PseudoStyleMap) -> LayoutBox {
     let mut bx = LayoutBox::new();
     bx.node = Some(Rc::clone(node));
 
@@ -424,6 +451,13 @@ fn build_box(node: &Rc<Node>, style_map: &StyleMap) -> LayoutBox {
         }
     }
 
+    // Pseudo-element ::before - vlozit jako prvni virtualni child
+    if let Some(pseudo_styles) = super::cascade::get_pseudo_styles(pseudo_map, node, "before") {
+        if let Some(pb) = build_pseudo_box(node, pseudo_styles) {
+            bx.children.push(pb);
+        }
+    }
+
     // Children - skip None display, skip whitespace-only text uzly
     for child in node.children.borrow().iter() {
         // Pre-filter: prazdne text uzly nepokracujeme rekursi
@@ -436,7 +470,7 @@ fn build_box(node: &Rc<Node>, style_map: &StyleMap) -> LayoutBox {
         {
             continue;
         }
-        let cb = build_box(child, style_map);
+        let cb = build_box_inner(child, style_map, pseudo_map);
         if cb.display != Display::None {
             // Text bez obsahu - zahodit
             if matches!(child.kind, NodeKind::Text(_)) && cb.text.is_none() {
@@ -445,7 +479,85 @@ fn build_box(node: &Rc<Node>, style_map: &StyleMap) -> LayoutBox {
             bx.children.push(cb);
         }
     }
+
+    // Pseudo-element ::after - posledni virtualni child
+    if let Some(pseudo_styles) = super::cascade::get_pseudo_styles(pseudo_map, node, "after") {
+        if let Some(pa) = build_pseudo_box(node, pseudo_styles) {
+            bx.children.push(pa);
+        }
+    }
+
     bx
+}
+
+/// Vyrobi LayoutBox pro pseudo-element (::before / ::after) z computed styles.
+/// Content property: "string", attr(name), counter(...) - implementovano: string a attr.
+fn build_pseudo_box(parent_node: &Rc<Node>, styles: &HashMap<String, String>) -> Option<LayoutBox> {
+    let content_raw = styles.get("content")?;
+    let text = parse_content_value(content_raw, parent_node)?;
+    if text.is_empty() { return None; }
+
+    let mut bx = LayoutBox::new();
+    bx.display = Display::Inline;
+    bx.tag = Some("::pseudo".to_string());
+    bx.text = Some(text);
+
+    // Apply styly z pseudo styles
+    if let Some(c) = styles.get("color") {
+        bx.text_color = parse_color(c);
+    }
+    let bg_value = styles.get("background-color").or(styles.get("background"));
+    if let Some(c) = bg_value {
+        if c.contains("linear-gradient(") {
+            bx.bg_gradient = parse_any_gradient(c);
+        } else {
+            bx.bg_color = parse_color(c);
+        }
+    }
+    if let Some(fs) = styles.get("font-size") { bx.font_size = parse_length(fs); }
+    // font-weight: zatim nepouzivame na pseudo-box level (LayoutBox tu prop nedrzi).
+    let _ = styles.get("font-weight");
+    if let Some(p) = styles.get("padding") { bx.padding = parse_length(p); }
+    if let Some(m) = styles.get("margin") { bx.margin = parse_length(m); }
+
+    Some(bx)
+}
+
+/// Parsuje `content` value:
+/// - "string" -> String
+/// - 'string' -> String
+/// - attr(name) -> hodnota atributu na parent node
+/// - normal / none -> None
+/// - counter(name) -> placeholder "1" (counters out of scope zatim)
+fn parse_content_value(raw: &str, parent: &Rc<Node>) -> Option<String> {
+    let s = raw.trim();
+    if s.is_empty() || s == "none" || s == "normal" { return None; }
+
+    // String literal
+    if let Some(stripped) = s.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
+        return Some(stripped.to_string());
+    }
+    if let Some(stripped) = s.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')) {
+        return Some(stripped.to_string());
+    }
+
+    // attr(name)
+    if let Some(inner) = s.strip_prefix("attr(").and_then(|s| s.strip_suffix(')')) {
+        let name = inner.trim();
+        return parent.attr(name).or(Some(String::new()));
+    }
+
+    // counter(name) - placeholder
+    if s.starts_with("counter(") {
+        return Some("0".to_string());
+    }
+
+    // url(...) - placeholder
+    if s.starts_with("url(") {
+        return Some(String::new());
+    }
+
+    Some(s.to_string())
 }
 
 /// Flex layout pres taffy crate.

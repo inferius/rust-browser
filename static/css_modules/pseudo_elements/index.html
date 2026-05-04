@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="UTF-8">
+    <title>CSS Pseudo-Elements ::before / ::after</title>
+    <link rel="stylesheet" href="index.css">
+</head>
+<body>
+    <header>
+        <h1>CSS Pseudo-Elements L4</h1>
+        <p>::before, ::after, content (string + attr())</p>
+    </header>
+    <main>
+        <section>
+            <h2>::before string content</h2>
+            <p class="quote">a chybi mi tady proklamovany prefix</p>
+        </section>
+
+        <section>
+            <h2>::after string content</h2>
+            <p class="required">povinne pole</p>
+        </section>
+
+        <section>
+            <h2>::before + ::after kombinovane</h2>
+            <span class="badge">important</span>
+        </section>
+
+        <section>
+            <h2>attr() content</h2>
+            <p data-prefix="[INFO] ">tohle je info zprava</p>
+            <p data-prefix="[WARN] ">tohle je warn zprava</p>
+            <p data-prefix="[ERROR] ">tohle je error zprava</p>
+        </section>
+
+        <section>
+            <h2>Specificita pseudo cascades</h2>
+            <p class="hi">specifictejsi pravidlo p.hi::before vyhrava</p>
+        </section>
+    </main>
+</body>
+</html>

@@ -214,6 +214,65 @@ fn selector_first_of_type() {
     assert!(cascade::get_styles(&map, &ps[1]).unwrap().get("color").is_none());
 }
 
+// ─── CSS Pseudo-Elements ::before / ::after ────────────────────────────
+
+#[test]
+fn pseudo_before_styles_separate_from_element() {
+    let doc = parse_html(r#"<html><body><p>x</p></body></html>"#, "");
+    let css = parse_stylesheet(r#"
+        p { color: black; }
+        p::before { content: "->"; color: red; }
+    "#);
+    let map = cascade::cascade(&doc.root, &[css.clone()]);
+    let pmap = cascade::cascade_pseudo(&doc.root, &[css]);
+    let p = doc.root.find(|n| n.tag_name().as_deref() == Some("p")).unwrap();
+    // Element p ma color: black
+    assert_eq!(cascade::get_styles(&map, &p).unwrap().get("color").map(|s| s.as_str()), Some("black"));
+    // Pseudo ::before ma content + color: red
+    let before = cascade::get_pseudo_styles(&pmap, &p, "before").unwrap();
+    assert_eq!(before.get("content").map(|s| s.as_str()), Some("\"->\""));
+    assert_eq!(before.get("color").map(|s| s.as_str()), Some("red"));
+}
+
+#[test]
+fn pseudo_after_only_when_matched() {
+    let doc = parse_html(r#"<html><body><p>x</p><div>y</div></body></html>"#, "");
+    let css = parse_stylesheet(r#"
+        p::after { content: "!"; }
+    "#);
+    let pmap = cascade::cascade_pseudo(&doc.root, &[css]);
+    let p = doc.root.find(|n| n.tag_name().as_deref() == Some("p")).unwrap();
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    assert!(cascade::get_pseudo_styles(&pmap, &p, "after").is_some());
+    assert!(cascade::get_pseudo_styles(&pmap, &div, "after").is_none());
+}
+
+#[test]
+fn pseudo_legacy_single_colon_syntax() {
+    // CSS2 :before je legacy - povolime ho
+    let doc = parse_html(r#"<html><body><p>x</p></body></html>"#, "");
+    let css = parse_stylesheet(r#"
+        p:before { content: "x"; }
+    "#);
+    let pmap = cascade::cascade_pseudo(&doc.root, &[css]);
+    let p = doc.root.find(|n| n.tag_name().as_deref() == Some("p")).unwrap();
+    assert!(cascade::get_pseudo_styles(&pmap, &p, "before").is_some());
+}
+
+#[test]
+fn pseudo_specificity_cascades() {
+    let doc = parse_html(r#"<html><body><p class="x">y</p></body></html>"#, "");
+    let css = parse_stylesheet(r#"
+        p::before { color: red; }
+        p.x::before { color: blue; }
+    "#);
+    let pmap = cascade::cascade_pseudo(&doc.root, &[css]);
+    let p = doc.root.find(|n| n.tag_name().as_deref() == Some("p")).unwrap();
+    let before = cascade::get_pseudo_styles(&pmap, &p, "before").unwrap();
+    // .x specificita > p, color = blue
+    assert_eq!(before.get("color").map(|s| s.as_str()), Some("blue"));
+}
+
 // ─── CSS Container Queries L1 ──────────────────────────────────────────
 
 #[test]

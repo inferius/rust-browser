@@ -72,6 +72,8 @@ pub struct SimpleSelector {
     pub pseudo_classes: Vec<String>,
     /// Funkcni pseudo-classes: :is(...), :not(...), :nth-child(...), :has(...)
     pub pseudo_funcs: Vec<PseudoFunc>,
+    /// Pseudo-element ::before / ::after / ::marker / ::placeholder
+    pub pseudo_element: Option<String>,
     /// Combinator pred timto selektorem (None = root, Descendant = " ", Child = ">")
     pub combinator: Option<Combinator>,
 }
@@ -523,6 +525,7 @@ fn parse_single_selector(s: &str) -> Selector {
         let mut attributes = Vec::new();
         let mut pseudo_classes = Vec::new();
         let mut pseudo_funcs = Vec::new();
+        let mut pseudo_element: Option<String> = None;
 
         let chars: Vec<char> = token.chars().collect();
         let mut i = 0;
@@ -559,11 +562,22 @@ fn parse_single_selector(s: &str) -> Selector {
                 }
                 ':' => {
                     i += 1;
-                    // Skip druhy : (::before)
-                    if i < chars.len() && chars[i] == ':' { i += 1; }
+                    // Detekce pseudo-elementu pres `::` nebo legacy `:before`/`:after`
+                    let mut is_pseudo_element_syntax = false;
+                    if i < chars.len() && chars[i] == ':' { i += 1; is_pseudo_element_syntax = true; }
                     let mut name = String::new();
                     while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '-' || chars[i] == '_') {
                         name.push(chars[i]); i += 1;
+                    }
+                    let is_pe_name = matches!(name.as_str(),
+                        "before" | "after" | "first-line" | "first-letter"
+                        | "marker" | "placeholder" | "backdrop" | "selection");
+                    if is_pseudo_element_syntax || is_pe_name {
+                        // Pseudo-element: ulozit do pseudo_element pole
+                        if pseudo_element.is_none() {
+                            pseudo_element = Some(name);
+                        }
+                        continue;
                     }
                     // Funkcni pseudo: :name(args)
                     if i < chars.len() && chars[i] == '(' {
@@ -659,7 +673,8 @@ fn parse_single_selector(s: &str) -> Selector {
         };
 
         parts.push(SimpleSelector {
-            tag, id, classes, attributes, pseudo_classes, pseudo_funcs, combinator,
+            tag, id, classes, attributes, pseudo_classes, pseudo_funcs,
+            pseudo_element, combinator,
         });
     }
     Selector { parts }
