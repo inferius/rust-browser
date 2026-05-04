@@ -292,6 +292,35 @@ fn document_html_exists() {
 // ─── Form properties ─────────────────────────────────────────────────────
 
 #[test]
+fn outer_html_serializes_element() {
+    let v = run(r#"
+        const div = document.createElement("div");
+        div.setAttribute("id", "main");
+        const span = document.createElement("span");
+        span.textContent = "hello";
+        div.appendChild(span);
+        return div.outerHTML;
+    "#);
+    let s = as_str(v);
+    assert!(s.contains("<div"));
+    assert!(s.contains("id=\"main\""));
+    assert!(s.contains("<span>hello</span>"));
+    assert!(s.ends_with("</div>"));
+}
+
+#[test]
+fn inner_html_returns_children_only() {
+    let v = run(r#"
+        const div = document.createElement("div");
+        const span = document.createElement("span");
+        span.textContent = "x";
+        div.appendChild(span);
+        return div.innerHTML;
+    "#);
+    assert_eq!(as_str(v), "<span>x</span>");
+}
+
+#[test]
 fn form_action_method_default() {
     let v = run(r#"
         const f = document.createElement("form");
