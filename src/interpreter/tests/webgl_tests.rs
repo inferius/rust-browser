@@ -59,9 +59,34 @@ fn webgl_create_shader_unique_ids() {
 fn webgl_shader_compile_with_source() {
     let r = run(&format!(r#"{SETUP}
         const sh = gl.createShader(gl.VERTEX_SHADER);
-        gl.shaderSource(sh, "void main() {{}}");
+        gl.shaderSource(sh, "void main() {{ gl_Position = vec4(0.0); }}");
+        gl.compileShader(sh);
+        const ok = gl.getShaderParameter(sh, gl.COMPILE_STATUS);
+        const log = gl.getShaderInfoLog(sh);
+        return ok + "|" + log.substring(0, 200);
+    "#));
+    assert!(r.to_string().starts_with("true|"), "compile failed: {}", r.to_string());
+}
+
+#[test]
+fn webgl_shader_compile_invalid_source_fails() {
+    let r = run(&format!(r#"{SETUP}
+        const sh = gl.createShader(gl.VERTEX_SHADER);
+        gl.shaderSource(sh, "this is not valid glsl @#$");
         gl.compileShader(sh);
         return gl.getShaderParameter(sh, gl.COMPILE_STATUS);
+    "#));
+    assert_eq!(r.to_string(), "false");
+}
+
+#[test]
+fn webgl_shader_info_log_contains_error() {
+    let r = run(&format!(r#"{SETUP}
+        const sh = gl.createShader(gl.VERTEX_SHADER);
+        gl.shaderSource(sh, "syntax error garbage");
+        gl.compileShader(sh);
+        const log = gl.getShaderInfoLog(sh);
+        return log.length > 0;
     "#));
     assert_eq!(r.to_string(), "true");
 }
@@ -80,9 +105,9 @@ fn webgl_shader_compile_empty_source_fails() {
 fn webgl_create_program_link_with_shaders() {
     let r = run(&format!(r#"{SETUP}
         const v = gl.createShader(gl.VERTEX_SHADER);
-        gl.shaderSource(v, "void main(){{}}"); gl.compileShader(v);
+        gl.shaderSource(v, "void main(){{ gl_Position = vec4(0.0); }}"); gl.compileShader(v);
         const f = gl.createShader(gl.FRAGMENT_SHADER);
-        gl.shaderSource(f, "void main(){{}}"); gl.compileShader(f);
+        gl.shaderSource(f, "void main(){{ gl_FragColor = vec4(1.0); }}"); gl.compileShader(f);
         const p = gl.createProgram();
         gl.attachShader(p, v);
         gl.attachShader(p, f);
@@ -90,6 +115,52 @@ fn webgl_create_program_link_with_shaders() {
         return gl.getProgramParameter(p, gl.LINK_STATUS);
     "#));
     assert_eq!(r.to_string(), "true");
+}
+
+#[test]
+fn webgl_link_outputs_wgsl_string() {
+    let r = run(&format!(r#"{SETUP}
+        const v = gl.createShader(gl.VERTEX_SHADER);
+        gl.shaderSource(v, "void main(){{ gl_Position = vec4(0.0); }}"); gl.compileShader(v);
+        const f = gl.createShader(gl.FRAGMENT_SHADER);
+        gl.shaderSource(f, "void main(){{ gl_FragColor = vec4(1.0); }}"); gl.compileShader(f);
+        const p = gl.createProgram();
+        gl.attachShader(p, v); gl.attachShader(p, f);
+        gl.linkProgram(p);
+        const vw = gl.__program_vertex_wgsl__(p);
+        const fw = gl.__program_fragment_wgsl__(p);
+        return typeof vw + "|" + typeof fw + "|" + (vw.length > 0) + "|" + (fw.length > 0);
+    "#));
+    assert_eq!(r.to_string(), "string|string|true|true");
+}
+
+#[test]
+fn webgl_link_with_uncompiled_shader_fails() {
+    let r = run(&format!(r#"{SETUP}
+        const v = gl.createShader(gl.VERTEX_SHADER);
+        gl.shaderSource(v, "garbage"); gl.compileShader(v);
+        const f = gl.createShader(gl.FRAGMENT_SHADER);
+        gl.shaderSource(f, "void main(){{ gl_FragColor = vec4(1.0); }}"); gl.compileShader(f);
+        const p = gl.createProgram();
+        gl.attachShader(p, v); gl.attachShader(p, f);
+        gl.linkProgram(p);
+        return gl.getProgramParameter(p, gl.LINK_STATUS);
+    "#));
+    assert_eq!(r.to_string(), "false");
+}
+
+#[test]
+fn webgl_link_uses_only_compiled_shaders_for_wgsl() {
+    let r = run(&format!(r#"{SETUP}
+        const p = gl.createProgram();
+        // Pripoji jen vertex bez fragment - mel by failnout link.
+        const v = gl.createShader(gl.VERTEX_SHADER);
+        gl.shaderSource(v, "void main(){{ gl_Position = vec4(0.0); }}"); gl.compileShader(v);
+        gl.attachShader(p, v);
+        gl.linkProgram(p);
+        return gl.getProgramParameter(p, gl.LINK_STATUS);
+    "#));
+    assert_eq!(r.to_string(), "false");
 }
 
 #[test]
@@ -220,15 +291,16 @@ fn webgl_viewport_no_throw() {
 
 #[test]
 fn webgl_full_init_sequence() {
-    // Realne typicke WebGL init - 30+ volani
+    // Realne typicke WebGL init - 30+ volani.
+    // Pouzivam minimal valid GLSL ktery parse projde naga.
     let r = run(&format!(r#"{SETUP}
         gl.clearColor(0.1, 0.1, 0.1, 1.0);
         gl.viewport(0, 0, 300, 150);
         gl.enable(gl.BLEND);
         gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
-        const vSrc = "attribute vec2 aPos; void main() {{ gl_Position = vec4(aPos, 0, 1); }}";
-        const fSrc = "void main() {{ gl_FragColor = vec4(1, 0, 0, 1); }}";
+        const vSrc = "void main() {{ gl_Position = vec4(0.0, 0.0, 0.0, 1.0); }}";
+        const fSrc = "void main() {{ gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0); }}";
 
         const v = gl.createShader(gl.VERTEX_SHADER);
         gl.shaderSource(v, vSrc); gl.compileShader(v);
@@ -243,10 +315,6 @@ fn webgl_full_init_sequence() {
         const buf = gl.createBuffer();
         gl.bindBuffer(gl.ARRAY_BUFFER, buf);
         gl.bufferData(gl.ARRAY_BUFFER, [-1, -1, 1, -1, 0, 1], gl.STATIC_DRAW);
-
-        const aPos = gl.getAttribLocation(p, "aPos");
-        gl.enableVertexAttribArray(aPos);
-        gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
 
         gl.clear(gl.COLOR_BUFFER_BIT);
         gl.drawArrays(gl.TRIANGLES, 0, 3);

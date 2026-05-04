@@ -5239,12 +5239,21 @@ pub(crate) struct WebGLShader {
     pub shader_type: u32,
     pub source: String,
     pub compiled: bool,
+    /// Compile log (chyby pri parse / fail reasons).
+    pub info_log: String,
+    /// Naga IR module - cache po uspesnem GLSL parse. Phase 3 pouzije.
+    pub naga_module: Option<naga::Module>,
 }
 
 pub(crate) struct WebGLProgram {
     pub vertex_shader: Option<u32>,
     pub fragment_shader: Option<u32>,
     pub linked: bool,
+    /// Link log.
+    pub info_log: String,
+    /// Vertex + fragment WGSL transpilace (link-time output).
+    pub vertex_wgsl: Option<String>,
+    pub fragment_wgsl: Option<String>,
 }
 
 pub(crate) struct WebGLTexture {
@@ -5280,6 +5289,76 @@ impl WebGLState {
         self.next_id += 1;
         id
     }
+}
+
+/// Pre-processing GLSL ES 1.0 (WebGL 1.0) -> GLSL ES 3.0 (WebGL 2.0)
+/// pro lepsi naga compatibility. WebGL 1.0 bez `#version` line implicitne
+/// 1.0 ES s `attribute`/`varying`/`gl_FragColor`. Naga GLSL frontend lepe
+/// zvlada 300 es se `in`/`out`.
+fn preprocess_glsl_es1_to_es3(source: &str, shader_type: u32) -> String {
+    let trimmed = source.trim_start();
+    if trimmed.starts_with("#version") {
+        return source.to_string();  // user explicit verzi - ne sahat
+    }
+    let is_vertex = shader_type == 0x8B31;
+    let is_fragment = shader_type == 0x8B30;
+    let mut out = String::with_capacity(source.len() + 200);
+    // Naga GLSL frontend nepodporuje "300 es". Pouzijeme desktop 330
+    // (in/out keywords + bezne types). Precision qualifiers se ignoruji.
+    out.push_str("#version 450 core\n");
+    if is_fragment {
+        out.push_str("out vec4 _gl_FragColor;\n");
+    }
+    // Replace deprecated keywords. Naivni - nedotyka se v komentari/string,
+    // ale bez full GLSL preprocesoru je toto rozumne kompromis.
+    let mut transformed = source.to_string();
+    if is_vertex {
+        transformed = transformed.replace("attribute ", "in ");
+        transformed = transformed.replace("varying ", "out ");
+    } else if is_fragment {
+        transformed = transformed.replace("varying ", "in ");
+        transformed = transformed.replace("gl_FragColor", "_gl_FragColor");
+        transformed = transformed.replace("texture2D(", "texture(");
+    }
+    out.push_str(&transformed);
+    out
+}
+
+/// Compile GLSL source pres naga -> Module + validovany.
+/// Vraci (Module, info_log) pri uspechu, nebo (None, error_log) pri fail.
+/// Aplikuje GLSL ES 1.0 -> 3.0 pre-processing pri chybejicim #version.
+pub(crate) fn compile_glsl_to_naga(source: &str, shader_type: u32) -> (Option<naga::Module>, String) {
+    use naga::front::glsl;
+    use naga::ShaderStage;
+    let stage = match shader_type {
+        0x8B31 => ShaderStage::Vertex,    // VERTEX_SHADER
+        0x8B30 => ShaderStage::Fragment,  // FRAGMENT_SHADER
+        _ => return (None, format!("nepodporovany shader type 0x{:X}", shader_type)),
+    };
+    let processed = preprocess_glsl_es1_to_es3(source, shader_type);
+    let mut frontend = glsl::Frontend::default();
+    let options = glsl::Options { stage, defines: Default::default() };
+    match frontend.parse(&options, &processed) {
+        Ok(module) => (Some(module), String::new()),
+        Err(errors) => {
+            let log = errors.errors.iter()
+                .map(|e| format!("{e:?}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            (None, log)
+        }
+    }
+}
+
+/// Konvertuj naga Module na WGSL string.
+pub(crate) fn naga_module_to_wgsl(module: &naga::Module) -> Result<String, String> {
+    use naga::back::wgsl;
+    use naga::valid::{Validator, ValidationFlags, Capabilities};
+    let info = Validator::new(ValidationFlags::all(), Capabilities::all())
+        .validate(module)
+        .map_err(|e| format!("validace: {e:?}"))?;
+    wgsl::write_string(module, &info, wgsl::WriterFlags::empty())
+        .map_err(|e| format!("wgsl write: {e:?}"))
 }
 
 /// Vyrobi WebGL handle objekt (buffer/texture/shader/program) s __webgl_id__.
@@ -5398,7 +5477,10 @@ fn create_webgl_stub_context() -> JsValue {
             let stype = args.into_iter().next().map(|v| v.to_number()).unwrap_or(0.0) as u32;
             let mut s = st.borrow_mut();
             let id = s.alloc_id();
-            s.shaders.insert(id, WebGLShader { shader_type: stype, source: String::new(), compiled: false });
+            s.shaders.insert(id, WebGLShader {
+                shader_type: stype, source: String::new(), compiled: false,
+                info_log: String::new(), naga_module: None,
+            });
             Ok(make_webgl_handle(id, "shader"))
         }));
     }
@@ -5421,9 +5503,23 @@ fn create_webgl_stub_context() -> JsValue {
         obj_rc.borrow_mut().set("compileShader".into(), native("gl.compileShader", move |args| {
             let id = args.into_iter().next().and_then(|v| webgl_id_from(&v));
             if let Some(id) = id {
-                if let Some(sh) = st.borrow_mut().shaders.get_mut(&id) {
-                    // Phase 1: just mark compiled. Phase 2 udela real GLSL parse + naga.
-                    sh.compiled = !sh.source.is_empty();
+                let mut s = st.borrow_mut();
+                if let Some(sh) = s.shaders.get_mut(&id) {
+                    if sh.source.is_empty() {
+                        sh.compiled = false;
+                        sh.info_log = "shader source je prazdny".into();
+                    } else {
+                        // Real GLSL parse pres naga.
+                        let (module, log) = compile_glsl_to_naga(&sh.source, sh.shader_type);
+                        if let Some(m) = module {
+                            sh.naga_module = Some(m);
+                            sh.compiled = true;
+                            sh.info_log = String::new();
+                        } else {
+                            sh.compiled = false;
+                            sh.info_log = log;
+                        }
+                    }
                 }
             }
             Ok(JsValue::Undefined)
@@ -5445,7 +5541,18 @@ fn create_webgl_stub_context() -> JsValue {
             Ok(JsValue::Bool(false))
         }));
     }
-    obj_rc.borrow_mut().set("getShaderInfoLog".into(), native("gl.getShaderInfoLog", |_| Ok(JsValue::Str(String::new()))));
+    {
+        let st = Rc::clone(&state);
+        obj_rc.borrow_mut().set("getShaderInfoLog".into(), native("gl.getShaderInfoLog", move |args| {
+            let id = args.into_iter().next().and_then(|v| webgl_id_from(&v));
+            if let Some(id) = id {
+                if let Some(sh) = st.borrow().shaders.get(&id) {
+                    return Ok(JsValue::Str(sh.info_log.clone()));
+                }
+            }
+            Ok(JsValue::Str(String::new()))
+        }));
+    }
     {
         let st = Rc::clone(&state);
         obj_rc.borrow_mut().set("deleteShader".into(), native("gl.deleteShader", move |args| {
@@ -5461,7 +5568,10 @@ fn create_webgl_stub_context() -> JsValue {
         obj_rc.borrow_mut().set("createProgram".into(), native("gl.createProgram", move |_| {
             let mut s = st.borrow_mut();
             let id = s.alloc_id();
-            s.programs.insert(id, WebGLProgram { vertex_shader: None, fragment_shader: None, linked: false });
+            s.programs.insert(id, WebGLProgram {
+                vertex_shader: None, fragment_shader: None, linked: false,
+                info_log: String::new(), vertex_wgsl: None, fragment_wgsl: None,
+            });
             Ok(make_webgl_handle(id, "program"))
         }));
     }
@@ -5489,8 +5599,48 @@ fn create_webgl_stub_context() -> JsValue {
         obj_rc.borrow_mut().set("linkProgram".into(), native("gl.linkProgram", move |args| {
             let id = args.into_iter().next().and_then(|v| webgl_id_from(&v));
             if let Some(id) = id {
-                if let Some(prog) = st.borrow_mut().programs.get_mut(&id) {
-                    prog.linked = prog.vertex_shader.is_some() && prog.fragment_shader.is_some();
+                let mut s = st.borrow_mut();
+                // Pre-fetch shader WGSL pred mut borrow programs
+                let (vs_wgsl, fs_wgsl, error_log) = {
+                    let prog = match s.programs.get(&id) { Some(p) => p, None => return Ok(JsValue::Undefined) };
+                    let vs_id = prog.vertex_shader;
+                    let fs_id = prog.fragment_shader;
+                    let mut log = String::new();
+                    let mut vw: Option<String> = None;
+                    let mut fw: Option<String> = None;
+                    if let (Some(vid), Some(fid)) = (vs_id, fs_id) {
+                        // Vertex shader: musi byt compiled + naga module
+                        if let Some(vsh) = s.shaders.get(&vid) {
+                            if !vsh.compiled {
+                                log.push_str("vertex shader nezkompilovan\n");
+                            } else if let Some(m) = &vsh.naga_module {
+                                match naga_module_to_wgsl(m) {
+                                    Ok(w) => vw = Some(w),
+                                    Err(e) => log.push_str(&format!("vertex WGSL: {e}\n")),
+                                }
+                            }
+                        }
+                        if let Some(fsh) = s.shaders.get(&fid) {
+                            if !fsh.compiled {
+                                log.push_str("fragment shader nezkompilovan\n");
+                            } else if let Some(m) = &fsh.naga_module {
+                                match naga_module_to_wgsl(m) {
+                                    Ok(w) => fw = Some(w),
+                                    Err(e) => log.push_str(&format!("fragment WGSL: {e}\n")),
+                                }
+                            }
+                        }
+                    } else {
+                        log.push_str("program postrada vertex nebo fragment shader\n");
+                    }
+                    (vw, fw, log)
+                };
+                // Apply
+                if let Some(prog) = s.programs.get_mut(&id) {
+                    prog.linked = vs_wgsl.is_some() && fs_wgsl.is_some() && error_log.is_empty();
+                    prog.vertex_wgsl = vs_wgsl;
+                    prog.fragment_wgsl = fs_wgsl;
+                    prog.info_log = error_log;
                 }
             }
             Ok(JsValue::Undefined)
@@ -5520,7 +5670,43 @@ fn create_webgl_stub_context() -> JsValue {
             Ok(JsValue::Bool(false))
         }));
     }
-    obj_rc.borrow_mut().set("getProgramInfoLog".into(), native("gl.getProgramInfoLog", |_| Ok(JsValue::Str(String::new()))));
+    {
+        let st = Rc::clone(&state);
+        obj_rc.borrow_mut().set("getProgramInfoLog".into(), native("gl.getProgramInfoLog", move |args| {
+            let id = args.into_iter().next().and_then(|v| webgl_id_from(&v));
+            if let Some(id) = id {
+                if let Some(prog) = st.borrow().programs.get(&id) {
+                    return Ok(JsValue::Str(prog.info_log.clone()));
+                }
+            }
+            Ok(JsValue::Str(String::new()))
+        }));
+    }
+    // Diagnostic: vrati WGSL transpilaci po link (pro testy + debug)
+    {
+        let st = Rc::clone(&state);
+        obj_rc.borrow_mut().set("__program_vertex_wgsl__".into(), native("gl.__program_vertex_wgsl__", move |args| {
+            let id = args.into_iter().next().and_then(|v| webgl_id_from(&v));
+            if let Some(id) = id {
+                if let Some(prog) = st.borrow().programs.get(&id) {
+                    return Ok(prog.vertex_wgsl.clone().map(JsValue::Str).unwrap_or(JsValue::Null));
+                }
+            }
+            Ok(JsValue::Null)
+        }));
+    }
+    {
+        let st = Rc::clone(&state);
+        obj_rc.borrow_mut().set("__program_fragment_wgsl__".into(), native("gl.__program_fragment_wgsl__", move |args| {
+            let id = args.into_iter().next().and_then(|v| webgl_id_from(&v));
+            if let Some(id) = id {
+                if let Some(prog) = st.borrow().programs.get(&id) {
+                    return Ok(prog.fragment_wgsl.clone().map(JsValue::Str).unwrap_or(JsValue::Null));
+                }
+            }
+            Ok(JsValue::Null)
+        }));
+    }
     {
         let st = Rc::clone(&state);
         obj_rc.borrow_mut().set("deleteProgram".into(), native("gl.deleteProgram", move |args| {
