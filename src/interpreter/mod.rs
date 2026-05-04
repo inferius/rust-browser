@@ -2557,6 +2557,67 @@ impl Interpreter {
                     "src" | "href" | "alt" | "title" | "placeholder" | "lang" | "dir" => {
                         return Ok(JsValue::Str(n.attr(key).unwrap_or_default()));
                     }
+                    // HTMLAnchorElement / HTMLAreaElement parts (rozkladaji href URL)
+                    "protocol" | "host" | "hostname" | "port" | "pathname"
+                    | "search" | "hash" | "origin"
+                    if matches!(n.tag_name().as_deref(), Some("a") | Some("area")) => {
+                        let href = n.attr("href").unwrap_or_default();
+                        let parts = parse_url_parts(&href);
+                        let key_str: &str = key;
+                        let v: String = match key_str {
+                            "protocol" => parts.protocol,
+                            "host"     => parts.host,
+                            "hostname" => parts.hostname,
+                            "port"     => parts.port,
+                            "pathname" => parts.pathname,
+                            "search"   => parts.search,
+                            "hash"     => parts.hash,
+                            "origin"   => parts.origin,
+                            _ => parts.host,
+                        };
+                        return Ok(JsValue::Str(v));
+                    }
+                    // HTMLLabelElement.control / .htmlFor
+                    "control" if n.tag_name().as_deref() == Some("label") => {
+                        // Vrati cilovy form element (z for attributu)
+                        if let Some(id) = n.attr("for") {
+                            let doc = self.document.borrow().root.clone();
+                            if let Some(target) = doc.get_element_by_id(&id) {
+                                return Ok(JsValue::DomNode(target));
+                            }
+                        }
+                        return Ok(JsValue::Null);
+                    }
+                    "htmlFor" if n.tag_name().as_deref() == Some("label") => {
+                        return Ok(JsValue::Str(n.attr("for").unwrap_or_default()));
+                    }
+                    // HTMLOptionElement
+                    "text" if n.tag_name().as_deref() == Some("option") => {
+                        return Ok(JsValue::Str(n.text_content()));
+                    }
+                    "label" if n.tag_name().as_deref() == Some("option") => {
+                        return Ok(JsValue::Str(n.attr("label")
+                            .unwrap_or_else(|| n.text_content())));
+                    }
+                    "defaultSelected" if n.tag_name().as_deref() == Some("option") => {
+                        return Ok(JsValue::Bool(n.attr("selected").is_some()));
+                    }
+                    // HTMLTableElement / Row / Cell
+                    "rows" if matches!(n.tag_name().as_deref(),
+                        Some("table") | Some("thead") | Some("tbody") | Some("tfoot")) => {
+                        let rows: Vec<JsValue> = n.get_elements_by_tag("tr")
+                            .into_iter().map(JsValue::DomNode).collect();
+                        return Ok(JsValue::Array(Rc::new(RefCell::new(rows))));
+                    }
+                    "cells" if n.tag_name().as_deref() == Some("tr") => {
+                        let mut cells: Vec<JsValue> = Vec::new();
+                        for c in n.children.borrow().iter() {
+                            if matches!(c.tag_name().as_deref(), Some("td") | Some("th")) {
+                                cells.push(JsValue::DomNode(Rc::clone(c)));
+                            }
+                        }
+                        return Ok(JsValue::Array(Rc::new(RefCell::new(cells))));
+                    }
                     "currentTime" if matches!(n.tag_name().as_deref(), Some("video") | Some("audio")) => {
                         return Ok(JsValue::Number(0.0));
                     }
@@ -5286,6 +5347,38 @@ fn kebab_to_camel(s: &str) -> String {
         }
     }
     out
+}
+
+/// URL parts (pro HTMLAnchorElement.protocol/host/...).
+struct UrlParts {
+    protocol: String, host: String, hostname: String, port: String,
+    pathname: String, search: String, hash: String, origin: String,
+}
+
+fn parse_url_parts(url: &str) -> UrlParts {
+    let (proto, rest) = if let Some(idx) = url.find("://") {
+        (format!("{}:", &url[..idx]), url[idx + 3..].to_string())
+    } else {
+        ("https:".to_string(), url.to_string())
+    };
+    let (host_path, hash) = match rest.split_once('#') {
+        Some((a, b)) => (a.to_string(), format!("#{b}")),
+        None => (rest, String::new()),
+    };
+    let (host_path, search) = match host_path.split_once('?') {
+        Some((a, b)) => (a.to_string(), format!("?{b}")),
+        None => (host_path, String::new()),
+    };
+    let (host, pathname) = match host_path.find('/') {
+        Some(i) => (host_path[..i].to_string(), host_path[i..].to_string()),
+        None => (host_path, "/".to_string()),
+    };
+    let (hostname, port) = match host.split_once(':') {
+        Some((h, p)) => (h.to_string(), p.to_string()),
+        None => (host.clone(), String::new()),
+    };
+    let origin = format!("{proto}//{host}");
+    UrlParts { protocol: proto, host, hostname, port, pathname, search, hash, origin }
 }
 
 /// Application/x-www-form-urlencoded encoder (RFC 3986 unreserved chars).
