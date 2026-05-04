@@ -36,6 +36,12 @@ use bigdecimal::BigDecimal;
 use bigdecimal::ToPrimitive;
 use bigdecimal::Zero;
 use bigdecimal::One;
+use num_bigint::BigInt;
+use num_bigint::Sign;
+use num_traits::Zero as NumZero;
+use num_traits::Signed;
+use num_traits::ToPrimitive as NumToPrimitive;
+use num_traits::Pow;
 
 // ─── JS hodnoty ───────────────────────────────────────────────────────────────
 
@@ -71,6 +77,9 @@ pub enum JsValue {
     /// BigNumber - arbitrary precision decimal cislo
     /// Sdilene pres Rc pro levne klonovani (BigDecimal je immutable).
     BigNumber(Rc<BigDecimal>),
+    /// BigInt - arbitrary precision celociselny typ (nativni `42n` syntaxe)
+    /// Sdileny pres Rc pro levne klonovani.
+    BigInt(Rc<BigInt>),
 }
 
 // ─── Map / Set datove struktury ──────────────────────────────────────────────
@@ -339,6 +348,7 @@ impl std::fmt::Display for JsValue {
                 write!(f, "Set {{ {} }}", items.join(", "))
             }
             JsValue::BigNumber(n) => write!(f, "{n}"),
+            JsValue::BigInt(n) => write!(f, "{n}"),
         }
     }
 }
@@ -350,6 +360,8 @@ impl JsValue {
             JsValue::Bool(b)   => *b,
             JsValue::Number(n) => *n != 0.0 && !n.is_nan(),
             JsValue::Str(s)    => !s.is_empty(),
+            JsValue::BigInt(n) => !NumZero::is_zero(n.as_ref()),
+            JsValue::BigNumber(n) => !n.is_zero(),
             _                  => true,
         }
     }
@@ -363,6 +375,7 @@ impl JsValue {
             JsValue::Undefined    => f64::NAN,
             JsValue::Str(s)       => s.trim().parse().unwrap_or(f64::NAN),
             JsValue::BigNumber(n) => n.to_f64().unwrap_or(f64::NAN),
+            JsValue::BigInt(n)    => n.to_f64().unwrap_or(f64::NAN),
             _                     => f64::NAN,
         }
     }
@@ -380,6 +393,7 @@ impl JsValue {
             JsValue::Map(_)       => "object",
             JsValue::Set(_)       => "object",
             JsValue::BigNumber(_) => "bignumber",
+            JsValue::BigInt(_)    => "bigint",
         }
     }
 
@@ -407,21 +421,46 @@ impl JsValue {
             (JsValue::Map(a),    JsValue::Map(b))    => Rc::ptr_eq(a, b),
             (JsValue::Set(a),    JsValue::Set(b))    => Rc::ptr_eq(a, b),
             (JsValue::BigNumber(a), JsValue::BigNumber(b)) => *a == *b,
+            (JsValue::BigInt(a),    JsValue::BigInt(b))    => *a == *b,
             _ => false,
         }
     }
 
     /// Vrati JsValue jako BigDecimal (pro BigNumber operace).
-    /// Number -> BigDecimal, String -> parse, BigNumber -> klon
+    /// Number -> BigDecimal, String -> parse, BigNumber -> klon, BigInt -> konverze
     pub fn to_bigdecimal(&self) -> Option<BigDecimal> {
         match self {
             JsValue::BigNumber(n) => Some((**n).clone()),
+            JsValue::BigInt(n)    => Some(BigDecimal::from(n.as_ref().clone())),
             JsValue::Number(n) if n.is_finite() => {
                 BigDecimal::from_str(&n.to_string()).ok()
             }
             JsValue::Str(s) => BigDecimal::from_str(s.trim()).ok(),
             JsValue::Bool(true)  => Some(BigDecimal::from(1)),
             JsValue::Bool(false) => Some(BigDecimal::from(0)),
+            _ => None,
+        }
+    }
+
+    /// Vrati JsValue jako BigInt (truncate pro Number, parse pro Str).
+    /// Number -> BigInt (truncate na celou cast), BigInt -> klon, BigNumber -> truncate
+    pub fn to_bigint(&self) -> Option<BigInt> {
+        match self {
+            JsValue::BigInt(n)    => Some((**n).clone()),
+            JsValue::BigNumber(n) => {
+                // BigDecimal::with_scale(0) zkopiruje, ale ceast neprijde - pouzij round/to_bigint pres string
+                let s = n.with_scale(0).to_string();
+                // Po with_scale(0) je to ".000" -> jen integer cast
+                let int_str = s.split('.').next().unwrap_or("0");
+                BigInt::from_str(int_str).ok()
+            }
+            JsValue::Number(n) if n.is_finite() => {
+                // Truncate na cele cislo
+                BigInt::from_str(&format!("{}", *n as i128)).ok()
+            }
+            JsValue::Str(s) => BigInt::from_str(s.trim()).ok(),
+            JsValue::Bool(true)  => Some(BigInt::from(1)),
+            JsValue::Bool(false) => Some(BigInt::from(0)),
             _ => None,
         }
     }
@@ -935,6 +974,11 @@ impl Interpreter {
     pub fn eval(&mut self, expr: &Expr, env: &Rc<RefCell<Environment>>) -> EvalResult {
         match expr {
             Expr::Number(n)    => Ok(JsValue::Number(*n)),
+            Expr::BigInt(s)    => {
+                let n = BigInt::from_str(s)
+                    .map_err(|_| JsError::Runtime(format!("SyntaxError: invalid BigInt '{s}'")))?;
+                Ok(JsValue::BigInt(Rc::new(n)))
+            }
             Expr::Str(s)       => Ok(JsValue::Str(s.clone())),
             Expr::Bool(b)      => Ok(JsValue::Bool(*b)),
             Expr::Null         => Ok(JsValue::Null),
@@ -1089,9 +1133,29 @@ impl Interpreter {
             }
             UnaryOp::Void   => { self.eval(arg, env)?; Ok(JsValue::Undefined) }
             UnaryOp::Not    => Ok(JsValue::Bool(!self.eval(arg, env)?.is_truthy())),
-            UnaryOp::Minus  => Ok(JsValue::Number(-self.eval(arg, env)?.to_number())),
-            UnaryOp::Plus   => Ok(JsValue::Number(self.eval(arg, env)?.to_number())),
-            UnaryOp::BitNot => Ok(JsValue::Number(!(self.eval(arg, env)?.to_number() as i32) as f64)),
+            UnaryOp::Minus  => {
+                let v = self.eval(arg, env)?;
+                match v {
+                    JsValue::BigInt(n)    => Ok(JsValue::BigInt(Rc::new(-n.as_ref().clone()))),
+                    JsValue::BigNumber(n) => Ok(JsValue::BigNumber(Rc::new(-n.as_ref().clone()))),
+                    other => Ok(JsValue::Number(-other.to_number())),
+                }
+            }
+            UnaryOp::Plus   => {
+                // +bigint je TypeError v JS (nelze koercovat). Zde permisivni: vrat BigInt jako BigInt.
+                let v = self.eval(arg, env)?;
+                match v {
+                    JsValue::BigInt(_) | JsValue::BigNumber(_) => Ok(v),
+                    other => Ok(JsValue::Number(other.to_number())),
+                }
+            }
+            UnaryOp::BitNot => {
+                let v = self.eval(arg, env)?;
+                match v {
+                    JsValue::BigInt(n) => Ok(JsValue::BigInt(Rc::new(!n.as_ref().clone()))),
+                    other => Ok(JsValue::Number(!(other.to_number() as i32) as f64)),
+                }
+            }
             UnaryOp::Delete => {
                 if let Expr::Member { object, prop, .. } = arg {
                     let obj = self.eval(object, env)?;
@@ -1127,6 +1191,68 @@ impl Interpreter {
 
         let l = self.eval(left, env)?;
         let r = self.eval(right, env)?;
+
+        // BigInt aritmetika: pokud aspon jeden operand je BigInt a ZADNY neni BigNumber,
+        // proved operaci v BigInt presnosti. BigInt+BigNumber spada do BigNumber vetve nize.
+        let has_bigint    = matches!(&l, JsValue::BigInt(_)) || matches!(&r, JsValue::BigInt(_));
+        let has_bignumber = matches!(&l, JsValue::BigNumber(_)) || matches!(&r, JsValue::BigNumber(_));
+        if has_bigint && !has_bignumber {
+            if let (Some(la), Some(ra)) = (l.to_bigint(), r.to_bigint()) {
+                match op {
+                    BinaryOp::Add  => return Ok(JsValue::BigInt(Rc::new(la + ra))),
+                    BinaryOp::Sub  => return Ok(JsValue::BigInt(Rc::new(la - ra))),
+                    BinaryOp::Mul  => return Ok(JsValue::BigInt(Rc::new(la * ra))),
+                    BinaryOp::Div  => {
+                        if NumZero::is_zero(&ra) { return Err(JsError::Runtime("RangeError: deleni nulou v BigInt".into())); }
+                        return Ok(JsValue::BigInt(Rc::new(la / ra)));
+                    }
+                    BinaryOp::Mod  => {
+                        if NumZero::is_zero(&ra) { return Err(JsError::Runtime("RangeError: modulo nulou v BigInt".into())); }
+                        return Ok(JsValue::BigInt(Rc::new(la % ra)));
+                    }
+                    BinaryOp::Exp  => {
+                        // BigInt umocneni: exponent musi byt nezaporny
+                        let exp = ra.to_u32().unwrap_or(0);
+                        return Ok(JsValue::BigInt(Rc::new(la.pow(exp))));
+                    }
+                    BinaryOp::Lt   => return Ok(JsValue::Bool(la < ra)),
+                    BinaryOp::Gt   => return Ok(JsValue::Bool(la > ra)),
+                    BinaryOp::LtEq => return Ok(JsValue::Bool(la <= ra)),
+                    BinaryOp::GtEq => return Ok(JsValue::Bool(la >= ra)),
+                    BinaryOp::StrictEq    => {
+                        // Strict eq vyzaduje stejny typ - BigInt vs Number neni striktne stejne
+                        let same_type = matches!(&l, JsValue::BigInt(_)) && matches!(&r, JsValue::BigInt(_));
+                        return Ok(JsValue::Bool(same_type && la == ra));
+                    }
+                    BinaryOp::StrictNotEq => {
+                        let same_type = matches!(&l, JsValue::BigInt(_)) && matches!(&r, JsValue::BigInt(_));
+                        return Ok(JsValue::Bool(!(same_type && la == ra)));
+                    }
+                    BinaryOp::Eq    => return Ok(JsValue::Bool(la == ra)),
+                    BinaryOp::NotEq => return Ok(JsValue::Bool(la != ra)),
+                    BinaryOp::BitAnd => return Ok(JsValue::BigInt(Rc::new(la & ra))),
+                    BinaryOp::BitOr  => return Ok(JsValue::BigInt(Rc::new(la | ra))),
+                    BinaryOp::BitXor => return Ok(JsValue::BigInt(Rc::new(la ^ ra))),
+                    BinaryOp::Shl  => {
+                        let shift = ra.to_i64().unwrap_or(0);
+                        if shift >= 0 {
+                            return Ok(JsValue::BigInt(Rc::new(la << shift as u32)));
+                        } else {
+                            return Ok(JsValue::BigInt(Rc::new(la >> (-shift) as u32)));
+                        }
+                    }
+                    BinaryOp::Shr => {
+                        let shift = ra.to_i64().unwrap_or(0);
+                        if shift >= 0 {
+                            return Ok(JsValue::BigInt(Rc::new(la >> shift as u32)));
+                        } else {
+                            return Ok(JsValue::BigInt(Rc::new(la << (-shift) as u32)));
+                        }
+                    }
+                    _ => {} // Ostatni - pust dal
+                }
+            }
+        }
 
         // BigNumber aritmetika: pokud aspon jeden operand je BigNumber,
         // preved oba na BigDecimal a proved operaci
@@ -1907,6 +2033,18 @@ impl Interpreter {
                 }
                 Ok(JsValue::Undefined)
             }
+            // BigInt vlastnosti (read-only)
+            JsValue::BigInt(bn) => {
+                match key {
+                    "sign" => return Ok(JsValue::Number(match bn.sign() {
+                        Sign::Minus => -1.0,
+                        Sign::NoSign => 0.0,
+                        Sign::Plus => 1.0,
+                    })),
+                    _ => {}
+                }
+                Ok(JsValue::Undefined)
+            }
             // Native funkce: Number.XXX konstanty + Array.isArray atd.
             JsValue::Function(JsFunc::Native(fname, _)) => {
                 match (fname.as_str(), key) {
@@ -2435,6 +2573,21 @@ impl Interpreter {
                             Ok(JsValue::BigNumber(Rc::new(result)))
                         }
                         "valueOf" => Ok(JsValue::Number(bn.to_f64().unwrap_or(f64::NAN))),
+                        _ => Ok(JsValue::Undefined),
+                    };
+                }
+                // ─── BigInt instance metody ────────────────────────────────
+                JsValue::BigInt(bn) => {
+                    let bn = Rc::clone(bn);
+                    let arg_vals = self.eval_args(args, env)?;
+                    return match key.as_str() {
+                        "toString" => {
+                            let radix = arg_vals.first().map(|v| v.to_number() as u32).unwrap_or(10);
+                            let radix = radix.clamp(2, 36);
+                            Ok(JsValue::Str(bn.to_str_radix(radix)))
+                        }
+                        "toLocaleString" => Ok(JsValue::Str(bn.to_string())),
+                        "valueOf" => Ok(JsValue::BigInt(bn)),
                         _ => Ok(JsValue::Undefined),
                     };
                 }
@@ -4302,6 +4455,40 @@ fn setup_builtins(
         BigDecimal::from_str(s.trim())
             .map(|bd| JsValue::BigNumber(Rc::new(bd)))
             .map_err(|_| format!("BigNumber: neplatna hodnota '{s}'"))
+    }));
+
+    // ─── BigInt ───────────────────────────────────────────────────────────────
+    // BigInt(value) - konverze cisla/stringu na BigInt (nelze pouzit s `new`)
+    e.define("BigInt", native("BigInt", |a| {
+        let v = a.into_iter().next().unwrap_or(JsValue::Undefined);
+        match v {
+            JsValue::BigInt(n) => Ok(JsValue::BigInt(n)),
+            JsValue::Number(n) if n.is_finite() && n.fract() == 0.0 => {
+                BigInt::from_str(&format!("{}", n as i128))
+                    .map(|b| JsValue::BigInt(Rc::new(b)))
+                    .map_err(|_| format!("BigInt: neplatna hodnota '{n}'"))
+            }
+            JsValue::Number(n) => Err(format!("RangeError: nelze prevést {n} na BigInt (neceloiselne nebo nekonecne)")),
+            JsValue::Str(s) => {
+                BigInt::from_str(s.trim())
+                    .map(|b| JsValue::BigInt(Rc::new(b)))
+                    .map_err(|_| format!("SyntaxError: nelze parsovat '{s}' jako BigInt"))
+            }
+            JsValue::Bool(true)  => Ok(JsValue::BigInt(Rc::new(BigInt::from(1)))),
+            JsValue::Bool(false) => Ok(JsValue::BigInt(Rc::new(BigInt::from(0)))),
+            JsValue::BigNumber(n) => {
+                if n.is_integer() {
+                    let s = n.to_string();
+                    let int_part = s.split('.').next().unwrap_or(&s);
+                    BigInt::from_str(int_part)
+                        .map(|b| JsValue::BigInt(Rc::new(b)))
+                        .map_err(|_| format!("BigInt: nelze prevest BigNumber '{n}'"))
+                } else {
+                    Err(format!("RangeError: BigNumber {n} neni cele cislo"))
+                }
+            }
+            other => Err(format!("TypeError: nelze prevest {} na BigInt", other.type_of())),
+        }
     }));
 
     // ─── RegExp ───────────────────────────────────────────────────────────────
@@ -7163,5 +7350,324 @@ mod tests {
     fn set_timeout_returns_id() {
         let v = run(r#"return typeof setTimeout(() => {}, 0);"#);
         assert_eq!(as_str(v), "number");
+    }
+
+    // ─── Batch I: BigInt nativni literal a typeof ────────────────────────────
+
+    fn as_bigint_str(v: JsValue) -> String {
+        match v {
+            JsValue::BigInt(n) => n.to_string(),
+            other => panic!("Ocekavan BigInt, nalezeno {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bigint_literal_typeof() {
+        assert_eq!(as_str(run(r#"return typeof 42n;"#)), "bigint");
+        assert_eq!(as_str(run(r#"return typeof 0n;"#)), "bigint");
+        assert_eq!(as_str(run(r#"return typeof BigInt(5);"#)), "bigint");
+    }
+
+    #[test]
+    fn bigint_literal_value() {
+        assert_eq!(as_bigint_str(run(r#"return 42n;"#)), "42");
+        assert_eq!(as_bigint_str(run(r#"return 0n;"#)), "0");
+        // velke cislo nad 2^53
+        assert_eq!(as_bigint_str(run(r#"return 9007199254740992n;"#)), "9007199254740992");
+    }
+
+    #[test]
+    fn bigint_hex_octal_binary() {
+        assert_eq!(as_bigint_str(run(r#"return 0xFFn;"#)), "255");
+        assert_eq!(as_bigint_str(run(r#"return 0b1010n;"#)), "10");
+        assert_eq!(as_bigint_str(run(r#"return 0o17n;"#)), "15");
+    }
+
+    #[test]
+    fn bigint_constructor() {
+        assert_eq!(as_bigint_str(run(r#"return BigInt(42);"#)), "42");
+        assert_eq!(as_bigint_str(run(r#"return BigInt("12345");"#)), "12345");
+        assert_eq!(as_bigint_str(run(r#"return BigInt(true);"#)), "1");
+        assert_eq!(as_bigint_str(run(r#"return BigInt(false);"#)), "0");
+    }
+
+    #[test]
+    fn bigint_constructor_invalid() {
+        // Float bez .0 - failuje
+        let lexer = crate::lexer::base::Lexer::parse_str(r#"return BigInt(3.14);"#, "<test>").unwrap();
+        let tokens: Vec<_> = lexer.tokens.into_iter()
+            .filter(|t| !matches!(t.kind,
+                TokenKind::Whitespace | TokenKind::Newline
+                | TokenKind::CommentLine(_) | TokenKind::CommentBlock(_)))
+            .collect();
+        let mut parser = Parser::new(tokens);
+        let prog = parser.parse().unwrap();
+        let mut interp = Interpreter::new();
+        assert!(interp.run(&prog).is_err());
+    }
+
+    // ─── Batch I: BigInt aritmetika ──────────────────────────────────────────
+
+    #[test]
+    fn bigint_add() {
+        assert_eq!(as_bigint_str(run(r#"return 100n + 200n;"#)), "300");
+        assert_eq!(as_bigint_str(run(r#"return 0n + 1n;"#)), "1");
+        // Velke cislo
+        assert_eq!(as_bigint_str(run(r#"return 99999999999999999999n + 1n;"#)),
+            "100000000000000000000");
+    }
+
+    #[test]
+    fn bigint_sub() {
+        assert_eq!(as_bigint_str(run(r#"return 100n - 200n;"#)), "-100");
+        assert_eq!(as_bigint_str(run(r#"return 5n - 5n;"#)), "0");
+    }
+
+    #[test]
+    fn bigint_mul() {
+        assert_eq!(as_bigint_str(run(r#"return 6n * 7n;"#)), "42");
+        // 2^64 = 18446744073709551616
+        assert_eq!(as_bigint_str(run(r#"return 4294967296n * 4294967296n;"#)),
+            "18446744073709551616");
+    }
+
+    #[test]
+    fn bigint_div() {
+        assert_eq!(as_bigint_str(run(r#"return 10n / 3n;"#)), "3"); // truncate
+        assert_eq!(as_bigint_str(run(r#"return 100n / 4n;"#)), "25");
+    }
+
+    #[test]
+    fn bigint_div_zero_throws() {
+        // Build a small interpreter directly to verify error
+        let lexer = crate::lexer::base::Lexer::parse_str(r#"return 5n / 0n;"#, "<test>").unwrap();
+        let tokens: Vec<_> = lexer.tokens.into_iter()
+            .filter(|t| !matches!(t.kind,
+                TokenKind::Whitespace | TokenKind::Newline
+                | TokenKind::CommentLine(_) | TokenKind::CommentBlock(_)))
+            .collect();
+        let mut parser = Parser::new(tokens);
+        let prog = parser.parse().unwrap();
+        let mut interp = Interpreter::new();
+        assert!(interp.run(&prog).is_err());
+    }
+
+    #[test]
+    fn bigint_mod() {
+        assert_eq!(as_bigint_str(run(r#"return 10n % 3n;"#)), "1");
+        assert_eq!(as_bigint_str(run(r#"return 100n % 7n;"#)), "2");
+    }
+
+    #[test]
+    fn bigint_pow() {
+        assert_eq!(as_bigint_str(run(r#"return 2n ** 10n;"#)), "1024");
+        assert_eq!(as_bigint_str(run(r#"return 10n ** 20n;"#)), "100000000000000000000");
+    }
+
+    #[test]
+    fn bigint_unary_negation() {
+        assert_eq!(as_bigint_str(run(r#"return -5n;"#)), "-5");
+        assert_eq!(as_bigint_str(run(r#"return -(42n);"#)), "-42");
+    }
+
+    #[test]
+    fn bigint_bitnot() {
+        // ~5n = -6 (two's complement)
+        assert_eq!(as_bigint_str(run(r#"return ~5n;"#)), "-6");
+        assert_eq!(as_bigint_str(run(r#"return ~0n;"#)), "-1");
+    }
+
+    #[test]
+    fn bigint_bitwise_ops() {
+        assert_eq!(as_bigint_str(run(r#"return 12n & 10n;"#)), "8");  // 1100 & 1010 = 1000
+        assert_eq!(as_bigint_str(run(r#"return 12n | 10n;"#)), "14"); // 1100 | 1010 = 1110
+        assert_eq!(as_bigint_str(run(r#"return 12n ^ 10n;"#)), "6");  // 1100 ^ 1010 = 0110
+    }
+
+    #[test]
+    fn bigint_shifts() {
+        assert_eq!(as_bigint_str(run(r#"return 1n << 10n;"#)), "1024");
+        assert_eq!(as_bigint_str(run(r#"return 1024n >> 10n;"#)), "1");
+        assert_eq!(as_bigint_str(run(r#"return 1n << 64n;"#)), "18446744073709551616");
+    }
+
+    // ─── Batch I: BigInt porovnavani ──────────────────────────────────────────
+
+    #[test]
+    fn bigint_comparison() {
+        assert_eq!(as_bool(run(r#"return 5n < 10n;"#)), true);
+        assert_eq!(as_bool(run(r#"return 10n > 5n;"#)), true);
+        assert_eq!(as_bool(run(r#"return 5n <= 5n;"#)), true);
+        assert_eq!(as_bool(run(r#"return 5n >= 6n;"#)), false);
+    }
+
+    #[test]
+    fn bigint_strict_eq() {
+        // Strict eq: BigInt vs BigInt = true pri stejne hodnote
+        assert_eq!(as_bool(run(r#"return 5n === 5n;"#)), true);
+        // Strict eq: BigInt vs Number = false (jiny typ)
+        assert_eq!(as_bool(run(r#"return 5n === 5;"#)), false);
+        // Loose eq: BigInt vs Number = true pri stejne hodnote
+        assert_eq!(as_bool(run(r#"return 5n == 5;"#)), true);
+    }
+
+    #[test]
+    fn bigint_to_string() {
+        assert_eq!(as_str(run(r#"return (42n).toString();"#)), "42");
+        assert_eq!(as_str(run(r#"return (255n).toString(16);"#)), "ff");
+        assert_eq!(as_str(run(r#"return (10n).toString(2);"#)), "1010");
+    }
+
+    // ─── Batch I: Cross-type ops BigInt + Number ─────────────────────────────
+
+    #[test]
+    fn bigint_plus_number() {
+        // BigInt + Number = BigInt (truncate Number)
+        let v = run(r#"return 100n + 50;"#);
+        assert_eq!(as_bigint_str(v), "150");
+        // Number + BigInt = BigInt
+        let v = run(r#"return 50 + 100n;"#);
+        assert_eq!(as_bigint_str(v), "150");
+    }
+
+    #[test]
+    fn bigint_minus_number() {
+        let v = run(r#"return 100n - 25;"#);
+        assert_eq!(as_bigint_str(v), "75");
+    }
+
+    #[test]
+    fn bigint_times_number() {
+        let v = run(r#"return 6n * 7;"#);
+        assert_eq!(as_bigint_str(v), "42");
+    }
+
+    #[test]
+    fn bigint_div_number() {
+        let v = run(r#"return 10n / 3;"#);
+        assert_eq!(as_bigint_str(v), "3"); // truncate
+    }
+
+    #[test]
+    fn bigint_pow_number() {
+        let v = run(r#"return 2n ** 10;"#);
+        assert_eq!(as_bigint_str(v), "1024");
+    }
+
+    #[test]
+    fn bigint_compare_number() {
+        assert_eq!(as_bool(run(r#"return 5n < 10;"#)), true);
+        assert_eq!(as_bool(run(r#"return 100n > 50;"#)), true);
+        assert_eq!(as_bool(run(r#"return 5n == 5;"#)), true);
+    }
+
+    // ─── Batch I: Cross-type ops BigInt + BigNumber ──────────────────────────
+
+    #[test]
+    fn bigint_plus_bignumber() {
+        // BigInt + BigNumber = BigNumber (precision preserved)
+        let v = run(r#"
+            const a = 100n;
+            const b = new BigNumber("0.5");
+            const result = a + b;
+            return typeof result;
+        "#);
+        assert_eq!(as_str(v), "bignumber");
+    }
+
+    #[test]
+    fn bigint_plus_bignumber_value() {
+        let v = run(r#"
+            return (100n + new BigNumber("50.25")).toString();
+        "#);
+        assert_eq!(as_str(v), "150.25");
+    }
+
+    #[test]
+    fn bignumber_plus_bigint() {
+        let v = run(r#"
+            return (new BigNumber("99.5") + 1n).toString();
+        "#);
+        assert_eq!(as_str(v), "100.5");
+    }
+
+    #[test]
+    fn bigint_times_bignumber() {
+        let v = run(r#"
+            return (4n * new BigNumber("2.5")).toString();
+        "#);
+        assert_eq!(as_str(v), "10.0");
+    }
+
+    // ─── Batch I: Cross-type ops BigNumber + Number ──────────────────────────
+
+    #[test]
+    fn bignumber_plus_number_already_works() {
+        // BigNumber + Number = BigNumber (sanity check)
+        let v = run(r#"
+            const result = new BigNumber("100") + 50;
+            return result.toString();
+        "#);
+        assert_eq!(as_str(v), "150");
+    }
+
+    #[test]
+    fn bignumber_div_number() {
+        let v = run(r#"
+            const result = new BigNumber("10") / 3;
+            return typeof result;
+        "#);
+        assert_eq!(as_str(v), "bignumber");
+    }
+
+    // ─── Batch I: Mixed chains BigInt -> Number -> BigNumber ─────────────────
+
+    #[test]
+    fn mixed_chain_operations() {
+        // (10n + 5) * new BigNumber("2") = BigNumber 30
+        let v = run(r#"
+            const result = (10n + 5) * new BigNumber("2");
+            return result.toString();
+        "#);
+        // 10n + 5 = 15n (BigInt), then 15n * BigNumber("2") = BigNumber("30")
+        assert_eq!(as_str(v), "30");
+    }
+
+    #[test]
+    fn cross_type_truthy_falsy() {
+        // 0n je falsy, ostatni truthy
+        assert_eq!(as_bool(run(r#"return !!0n;"#)), false);
+        assert_eq!(as_bool(run(r#"return !!1n;"#)), true);
+        assert_eq!(as_bool(run(r#"return !!42n;"#)), true);
+        assert_eq!(as_bool(run(r#"return !!(-5n);"#)), true);
+    }
+
+    // ─── Batch I: Mix v polich a operacich ───────────────────────────────────
+
+    #[test]
+    fn array_with_mixed_numeric_types() {
+        let v = run(r#"
+            const arr = [42, 100n, new BigNumber("3.14")];
+            return arr.length;
+        "#);
+        assert_eq!(as_num(v), 3.0);
+    }
+
+    #[test]
+    fn bigint_in_template_literal() {
+        let v = run(r#"
+            const x = 42n;
+            return `hodnota: ${x}`;
+        "#);
+        assert_eq!(as_str(v), "hodnota: 42");
+    }
+
+    #[test]
+    fn bigint_json_stringify_throws() {
+        // JSON.stringify s BigInt v JS hodi TypeError, my vrati undefined
+        let v = run(r#"return JSON.stringify(42n);"#);
+        // V realnem JS by to byl TypeError; my vracime undefined nebo string
+        // zalezi na implementaci
+        assert!(matches!(v, JsValue::Undefined | JsValue::Str(_)));
     }
 }

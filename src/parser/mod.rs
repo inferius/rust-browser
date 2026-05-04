@@ -981,7 +981,8 @@ impl Parser {
             TokenKind::NumericLiteral { value, is_bigint, bigint_value, .. } => {
                 self.advance();
                 if is_bigint {
-                    Ok(Expr::Number(bigint_value.map(|b| b.to_string().parse().unwrap_or(0.0)).unwrap_or(0.0)))
+                    let s = bigint_value.map(|b| b.to_string()).unwrap_or_else(|| "0".into());
+                    Ok(Expr::BigInt(s))
                 } else {
                     Ok(Expr::Number(value))
                 }

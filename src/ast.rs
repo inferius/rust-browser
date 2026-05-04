@@ -20,6 +20,9 @@ pub enum Expr {
 
     /// Ciselny literal: `42`, `3.14`, `0xFF`
     Number(f64),
+    /// BigInt literal: `42n`, `0xFFn` - arbitrary precision celociselny
+    /// Hodnota je ulozena jako string (decimalni reprezentace, muze mit '-')
+    BigInt(String),
     /// Retezec: `"hello"` nebo `'world'`
     Str(String),
     /// Boolean: `true` nebo `false`

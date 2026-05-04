@@ -8,6 +8,7 @@ version = "0.1.0"
 dependencies = [
  "bigdecimal",
  "num-bigint",
+ "num-traits",
  "regex",
  "unicode-general-category",
  "unicode-ident",
