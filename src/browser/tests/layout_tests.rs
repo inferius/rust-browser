@@ -46,6 +46,99 @@ fn parse_color_named() {
 }
 
 #[test]
+fn parse_color_modern_rgb_space_syntax() {
+    // Modern syntax: mezery + lomitko alpha
+    assert_eq!(layout::parse_color("rgb(255 0 0)"), Some([255, 0, 0, 255]));
+    assert_eq!(layout::parse_color("rgb(255 0 0 / 0.5)"), Some([255, 0, 0, 128]));
+    assert_eq!(layout::parse_color("rgb(255 0 0 / 50%)"), Some([255, 0, 0, 128]));
+}
+
+#[test]
+fn parse_color_hex_alpha_short() {
+    // #RGBA (4-digit)
+    assert_eq!(layout::parse_color("#f00f"), Some([255, 0, 0, 255]));
+    assert_eq!(layout::parse_color("#f008"), Some([255, 0, 0, 136]));
+}
+
+#[test]
+fn parse_color_hsl() {
+    // hsl(0, 100%, 50%) = red
+    assert_eq!(layout::parse_color("hsl(0, 100%, 50%)"), Some([255, 0, 0, 255]));
+    // hsl(120 100% 50%) modern = green pure
+    assert_eq!(layout::parse_color("hsl(120 100% 50%)"), Some([0, 255, 0, 255]));
+    // hsl(0, 0%, 0%) = black
+    assert_eq!(layout::parse_color("hsl(0, 0%, 0%)"), Some([0, 0, 0, 255]));
+}
+
+#[test]
+fn parse_color_hsla_alpha() {
+    let c = layout::parse_color("hsla(0, 100%, 50%, 0.5)").unwrap();
+    assert_eq!(c[0], 255);
+    assert_eq!(c[1], 0);
+    assert_eq!(c[2], 0);
+    assert!(c[3] >= 127 && c[3] <= 128);
+}
+
+#[test]
+fn parse_color_hwb() {
+    // hwb(0 0% 0%) = red
+    let c = layout::parse_color("hwb(0 0% 0%)").unwrap();
+    assert_eq!(c, [255, 0, 0, 255]);
+    // hwb(0 50% 0%) = svetla cervena
+    let c = layout::parse_color("hwb(0 50% 0%)").unwrap();
+    assert!(c[1] >= 120 && c[1] <= 135);
+}
+
+#[test]
+fn parse_color_oklch_red_approximate() {
+    // oklch(0.628 0.258 29.23) ~ #ff0000 (cervena)
+    let c = layout::parse_color("oklch(0.628 0.258 29.23)").unwrap();
+    assert!(c[0] >= 240, "R={}", c[0]);
+    assert!(c[1] <= 30, "G={}", c[1]);
+    assert!(c[2] <= 30, "B={}", c[2]);
+}
+
+#[test]
+fn parse_color_oklab_zero_zero_zero_black() {
+    // oklab(0 0 0) = cerna
+    let c = layout::parse_color("oklab(0 0 0)").unwrap();
+    assert_eq!(c, [0, 0, 0, 255]);
+}
+
+#[test]
+fn parse_color_lab_d65_red() {
+    // lab(53.24 80.09 67.20) ~ red (D65 reference)
+    let c = layout::parse_color("lab(53.24 80.09 67.20)").unwrap();
+    assert!(c[0] >= 240, "R={}", c[0]);
+    assert!(c[1] <= 30, "G={}", c[1]);
+}
+
+#[test]
+fn parse_color_mix_in_srgb_50_50() {
+    // black + white = mid grey
+    let c = layout::parse_color("color-mix(in srgb, black, white)").unwrap();
+    assert!(c[0] >= 125 && c[0] <= 130);
+    assert!(c[1] >= 125 && c[1] <= 130);
+    assert!(c[2] >= 125 && c[2] <= 130);
+}
+
+#[test]
+fn parse_color_mix_in_oklab_red_blue() {
+    let c = layout::parse_color("color-mix(in oklab, red, blue)").unwrap();
+    // Vysledek je purple-ish (mix v perceptualne uniformnim space)
+    assert!(c[0] > 100, "R={}", c[0]);
+    assert!(c[2] > 100, "B={}", c[2]);
+}
+
+#[test]
+fn parse_color_mix_with_explicit_weights() {
+    // 25% red + 75% blue
+    let c = layout::parse_color("color-mix(in srgb, red 25%, blue 75%)").unwrap();
+    assert!(c[0] >= 60 && c[0] <= 70);
+    assert!(c[2] >= 185 && c[2] <= 195);
+}
+
+#[test]
 fn parse_length_units() {
     assert_eq!(layout::parse_length("16px"), 16.0);
     assert_eq!(layout::parse_length("2em"),  32.0);

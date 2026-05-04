@@ -16,7 +16,7 @@ Konvence stavu:
 ### Batch 1 - dotazeni stavajicich modulu (highest ROI)
 - [x] Selectors L4: `:is()`, `:where()`, `:not()`, `:has()`, `~` general sibling, `:nth-child/-of-type`, `:nth-last-*`, `:empty`, `:first/last/only-of-type`, `:only-child` (`:focus-visible/-within` zatim no-op kvuli runtime stavu)
 - [/] Values L4: `min()`, `max()`, `clamp()`, `env()` hotovo, `attr()` chybi, math funkce (round/sin/cos/...) chybi
-- [ ] Color L4: `oklch()`, `oklab()`, `lab()`, `lch()`, `color-mix()`, relative color syntax
+- [/] Color L4: `oklch`, `oklab`, `lab`, `lch`, `hsl`, `hwb`, `color-mix(in srgb|oklab|oklch)`, modern rgb syntax, hex 4/8 hotovo. Relative color syntax + `color()` namespace + system colors zatim chybi.
 - [ ] Backgrounds L3: multiple backgrounds, `background-clip`, `background-origin`, `background-attachment`
 - [ ] Animations L1: `animation-fill-mode`, `animation-play-state`
 
@@ -67,18 +67,18 @@ Konvence stavu:
 - [ ] `&` nesting selector (CSS Nesting L1)
 
 ### CSS Color L3/L4/L5
-- [x] `#hex`, `#hexa`
-- [x] `rgb()`, `rgba()`
-- [x] `hsl()`, `hsla()`
+- [x] `#hex`, `#hexa` (3/4/6/8)
+- [x] `rgb()`, `rgba()` legacy + modern (mezery + `/` alpha)
+- [x] `hsl()`, `hsla()` legacy + modern
 - [x] Named colors
-- [x] `currentColor`
-- [ ] `hwb(h w b)` (L4)
-- [ ] `lab(l a b)` (L4)
-- [ ] `lch(l c h)` (L4)
-- [ ] `oklab(l a b)` (L4)
-- [ ] `oklch(l c h)` (L4)
+- [x] `currentColor` (parsing)
+- [x] `hwb(h w b)` (L4)
+- [x] `lab(l a b)` (L4) - D65 illuminant
+- [x] `lch(l c h)` (L4) - polar varianta lab
+- [x] `oklab(l a b)` (L4) - Bjorn Ottosson algoritmus
+- [x] `oklch(l c h)` (L4)
 - [ ] `color(colorspace c1 c2 c3)` (L4) - sRGB, display-p3, rec2020, ...
-- [ ] `color-mix(in space, c1 X%, c2 Y%)` (L5)
+- [x] `color-mix(in space, c1 X%, c2 Y%)` (L5) - srgb / oklab / oklch
 - [ ] Relative color: `rgb(from <c> r g b)` (L5)
 - [ ] `system-color` keywords L4
 - [ ] `device-cmyk()` (L4)

@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="UTF-8">
+    <title>CSS Color L4 - test</title>
+    <link rel="stylesheet" href="index.css">
+</head>
+<body>
+    <header>
+        <h1>CSS Color Level 4 / L5</h1>
+        <p>oklch, oklab, lab, lch, hsl, hwb, color-mix, modern rgb syntax</p>
+    </header>
+
+    <main>
+        <section>
+            <h2>Modern rgb syntax (mezery, lomitko alpha)</h2>
+            <div class="row">
+                <div class="swatch a">rgb(255 0 0)</div>
+                <div class="swatch b">rgb(0 255 0 / 0.5)</div>
+                <div class="swatch c">rgb(0 0 255 / 50%)</div>
+            </div>
+        </section>
+
+        <section>
+            <h2>HSL / HSLA</h2>
+            <div class="row">
+                <div class="swatch d">hsl(0, 100%, 50%)</div>
+                <div class="swatch e">hsl(120 100% 50%)</div>
+                <div class="swatch f">hsla(240, 100%, 50%, 0.5)</div>
+            </div>
+        </section>
+
+        <section>
+            <h2>HWB - hue + white + black</h2>
+            <div class="row">
+                <div class="swatch g">hwb(0 0% 0%)</div>
+                <div class="swatch h">hwb(120 30% 0%)</div>
+                <div class="swatch i">hwb(240 0% 30%)</div>
+            </div>
+        </section>
+
+        <section>
+            <h2>Lab / LCH (CIE)</h2>
+            <div class="row">
+                <div class="swatch j">lab(53.24 80 67)</div>
+                <div class="swatch k">lch(50% 80 30deg)</div>
+            </div>
+        </section>
+
+        <section>
+            <h2>OkLab / OkLCH (perceptualne uniformni)</h2>
+            <div class="row">
+                <div class="swatch l">oklab(0.5 0.1 0.1)</div>
+                <div class="swatch m">oklch(0.7 0.2 200deg)</div>
+                <div class="swatch n">oklch(0.628 0.258 29deg)</div>
+            </div>
+        </section>
+
+        <section>
+            <h2>color-mix() L5</h2>
+            <div class="row">
+                <div class="swatch o">in srgb red+blue 50/50</div>
+                <div class="swatch p">in oklab red+blue 50/50</div>
+                <div class="swatch q">in srgb red 25%+blue 75%</div>
+            </div>
+        </section>
+    </main>
+</body>
+</html>

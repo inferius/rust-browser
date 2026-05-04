@@ -684,16 +684,26 @@ pub fn measure_text_width(text: &str, font_size: f32) -> f32 {
     }
 }
 
-/// Parse barvu z CSS string. Podpora: #RGB, #RRGGBB, rgb(R,G,B), rgba(R,G,B,A), nazvy.
+/// Parse barvu z CSS string.
+/// Podpora: #RGB, #RRGGBB, #RRGGBBAA, rgb()/rgba() (legacy + modern), hsl()/hsla(),
+///          hwb(), lab(), lch(), oklab(), oklch(), color-mix(), nazvy.
 pub fn parse_color(s: &str) -> Option<[u8; 4]> {
     let s = s.trim().to_lowercase();
-    // Hex #RGB nebo #RRGGBB
+
+    // Hex #RGB / #RRGGBB / #RRGGBBAA / #RGBA (4 char)
     if let Some(hex) = s.strip_prefix('#') {
         if hex.len() == 3 {
             let r = u8::from_str_radix(&hex[0..1], 16).ok()? * 17;
             let g = u8::from_str_radix(&hex[1..2], 16).ok()? * 17;
             let b = u8::from_str_radix(&hex[2..3], 16).ok()? * 17;
             return Some([r, g, b, 255]);
+        }
+        if hex.len() == 4 {
+            let r = u8::from_str_radix(&hex[0..1], 16).ok()? * 17;
+            let g = u8::from_str_radix(&hex[1..2], 16).ok()? * 17;
+            let b = u8::from_str_radix(&hex[2..3], 16).ok()? * 17;
+            let a = u8::from_str_radix(&hex[3..4], 16).ok()? * 17;
+            return Some([r, g, b, a]);
         }
         if hex.len() == 6 {
             let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
@@ -709,26 +719,106 @@ pub fn parse_color(s: &str) -> Option<[u8; 4]> {
             return Some([r, g, b, a]);
         }
     }
-    // rgb(r, g, b) / rgba(r, g, b, a)
-    if let Some(inner) = s.strip_prefix("rgb(").and_then(|s| s.strip_suffix(')')) {
-        let parts: Vec<&str> = inner.split(',').map(str::trim).collect();
-        if parts.len() == 3 {
-            let r = parts[0].parse::<u8>().ok()?;
-            let g = parts[1].parse::<u8>().ok()?;
-            let b = parts[2].parse::<u8>().ok()?;
-            return Some([r, g, b, 255]);
-        }
-    }
-    if let Some(inner) = s.strip_prefix("rgba(").and_then(|s| s.strip_suffix(')')) {
-        let parts: Vec<&str> = inner.split(',').map(str::trim).collect();
-        if parts.len() == 4 {
-            let r = parts[0].parse::<u8>().ok()?;
-            let g = parts[1].parse::<u8>().ok()?;
-            let b = parts[2].parse::<u8>().ok()?;
-            let a = (parts[3].parse::<f32>().ok()? * 255.0) as u8;
+
+    // rgb()/rgba() - legacy (carky) i modern (mezery + lomitko alpha)
+    if let Some(inner) = s.strip_prefix("rgb(").and_then(|s| s.strip_suffix(')'))
+        .or_else(|| s.strip_prefix("rgba(").and_then(|s| s.strip_suffix(')'))) {
+        let (parts, alpha) = split_color_args(inner);
+        if parts.len() >= 3 {
+            let r = parse_color_byte(parts[0])?;
+            let g = parse_color_byte(parts[1])?;
+            let b = parse_color_byte(parts[2])?;
+            let a = alpha.or_else(|| parts.get(3).and_then(|p| parse_alpha(p))).unwrap_or(255);
             return Some([r, g, b, a]);
         }
     }
+
+    // hsl()/hsla()
+    if let Some(inner) = s.strip_prefix("hsl(").and_then(|s| s.strip_suffix(')'))
+        .or_else(|| s.strip_prefix("hsla(").and_then(|s| s.strip_suffix(')'))) {
+        let (parts, alpha) = split_color_args(inner);
+        if parts.len() >= 3 {
+            let h = parse_angle_deg(parts[0])?;
+            let sat = parse_percent_or_num(parts[1])?;
+            let lit = parse_percent_or_num(parts[2])?;
+            let a = alpha.or_else(|| parts.get(3).and_then(|p| parse_alpha(p))).unwrap_or(255);
+            let (r, g, b) = hsl_to_rgb(h, sat, lit);
+            return Some([r, g, b, a]);
+        }
+    }
+
+    // hwb(h w% b%)
+    if let Some(inner) = s.strip_prefix("hwb(").and_then(|s| s.strip_suffix(')')) {
+        let (parts, alpha) = split_color_args(inner);
+        if parts.len() >= 3 {
+            let h = parse_angle_deg(parts[0])?;
+            let w = parse_percent_or_num(parts[1])?;
+            let bl = parse_percent_or_num(parts[2])?;
+            let a = alpha.or_else(|| parts.get(3).and_then(|p| parse_alpha(p))).unwrap_or(255);
+            let (r, g, b) = hwb_to_rgb(h, w, bl);
+            return Some([r, g, b, a]);
+        }
+    }
+
+    // lab(l a b)
+    if let Some(inner) = s.strip_prefix("lab(").and_then(|s| s.strip_suffix(')')) {
+        let (parts, alpha) = split_color_args(inner);
+        if parts.len() >= 3 {
+            let l = parse_percent_or_num_scaled(parts[0], 100.0)?;
+            let a_lab = parts[1].parse::<f32>().ok()?;
+            let b_lab = parts[2].parse::<f32>().ok()?;
+            let a = alpha.or_else(|| parts.get(3).and_then(|p| parse_alpha(p))).unwrap_or(255);
+            let (r, g, b) = lab_to_rgb(l, a_lab, b_lab);
+            return Some([r, g, b, a]);
+        }
+    }
+
+    // lch(l c h)
+    if let Some(inner) = s.strip_prefix("lch(").and_then(|s| s.strip_suffix(')')) {
+        let (parts, alpha) = split_color_args(inner);
+        if parts.len() >= 3 {
+            let l = parse_percent_or_num_scaled(parts[0], 100.0)?;
+            let c = parts[1].parse::<f32>().ok()?;
+            let h = parse_angle_deg(parts[2])?;
+            let a = alpha.or_else(|| parts.get(3).and_then(|p| parse_alpha(p))).unwrap_or(255);
+            let (la, lb) = (c * h.to_radians().cos(), c * h.to_radians().sin());
+            let (r, g, b) = lab_to_rgb(l, la, lb);
+            return Some([r, g, b, a]);
+        }
+    }
+
+    // oklab(l a b) - L je 0..1 (nebo 0%..100%)
+    if let Some(inner) = s.strip_prefix("oklab(").and_then(|s| s.strip_suffix(')')) {
+        let (parts, alpha) = split_color_args(inner);
+        if parts.len() >= 3 {
+            let l = parse_percent_or_num_scaled(parts[0], 1.0)?;
+            let a_ok = parts[1].parse::<f32>().ok()?;
+            let b_ok = parts[2].parse::<f32>().ok()?;
+            let a = alpha.or_else(|| parts.get(3).and_then(|p| parse_alpha(p))).unwrap_or(255);
+            let (r, g, b) = oklab_to_rgb(l, a_ok, b_ok);
+            return Some([r, g, b, a]);
+        }
+    }
+
+    // oklch(l c h)
+    if let Some(inner) = s.strip_prefix("oklch(").and_then(|s| s.strip_suffix(')')) {
+        let (parts, alpha) = split_color_args(inner);
+        if parts.len() >= 3 {
+            let l = parse_percent_or_num_scaled(parts[0], 1.0)?;
+            let c = parts[1].parse::<f32>().ok()?;
+            let h = parse_angle_deg(parts[2])?;
+            let a = alpha.or_else(|| parts.get(3).and_then(|p| parse_alpha(p))).unwrap_or(255);
+            let (la, lb) = (c * h.to_radians().cos(), c * h.to_radians().sin());
+            let (r, g, b) = oklab_to_rgb(l, la, lb);
+            return Some([r, g, b, a]);
+        }
+    }
+
+    // color-mix(in <space>, c1 [<%>], c2 [<%>])
+    if let Some(inner) = s.strip_prefix("color-mix(").and_then(|s| s.strip_suffix(')')) {
+        return parse_color_mix(inner);
+    }
+
     // Named colors (subset)
     match s.as_str() {
         "black"   => Some([0, 0, 0, 255]),
@@ -742,9 +832,250 @@ pub fn parse_color(s: &str) -> Option<[u8; 4]> {
         "gray" | "grey" => Some([128, 128, 128, 255]),
         "lightgray" | "lightgrey" => Some([211, 211, 211, 255]),
         "darkgray"  | "darkgrey"  => Some([169, 169, 169, 255]),
+        "orange"  => Some([255, 165, 0, 255]),
+        "purple"  => Some([128, 0, 128, 255]),
+        "pink"    => Some([255, 192, 203, 255]),
+        "brown"   => Some([165, 42, 42, 255]),
         "transparent" => Some([0, 0, 0, 0]),
         _ => None,
     }
+}
+
+/// Split argumentu barvy: respektuje modern syntax `r g b / a` (lomitko = alpha).
+/// Vrati (positional_args, optional_alpha_byte).
+fn split_color_args(inner: &str) -> (Vec<&str>, Option<u8>) {
+    // Pokud obsahuje '/', alpha je za nim
+    let (main, alpha_str) = match inner.split_once('/') {
+        Some((m, a)) => (m, Some(a.trim())),
+        None => (inner, None),
+    };
+    // Modern: mezery; legacy: carky. Tolerujem oboje.
+    let parts: Vec<&str> = if main.contains(',') {
+        main.split(',').map(str::trim).collect()
+    } else {
+        main.split_whitespace().collect()
+    };
+    let alpha = alpha_str.and_then(parse_alpha);
+    (parts, alpha)
+}
+
+fn parse_color_byte(s: &str) -> Option<u8> {
+    let s = s.trim();
+    if let Some(p) = s.strip_suffix('%') {
+        let v: f32 = p.trim().parse().ok()?;
+        return Some((v.clamp(0.0, 100.0) / 100.0 * 255.0).round() as u8);
+    }
+    let v: f32 = s.parse().ok()?;
+    Some(v.clamp(0.0, 255.0).round() as u8)
+}
+
+fn parse_alpha(s: &str) -> Option<u8> {
+    let s = s.trim();
+    if let Some(p) = s.strip_suffix('%') {
+        let v: f32 = p.trim().parse().ok()?;
+        return Some((v.clamp(0.0, 100.0) / 100.0 * 255.0).round() as u8);
+    }
+    let v: f32 = s.parse().ok()?;
+    Some((v.clamp(0.0, 1.0) * 255.0).round() as u8)
+}
+
+fn parse_angle_deg(s: &str) -> Option<f32> {
+    let s = s.trim();
+    if let Some(v) = s.strip_suffix("deg") { v.trim().parse().ok() }
+    else if let Some(v) = s.strip_suffix("rad") {
+        v.trim().parse::<f32>().ok().map(|r| r.to_degrees())
+    }
+    else if let Some(v) = s.strip_suffix("turn") {
+        v.trim().parse::<f32>().ok().map(|t| t * 360.0)
+    }
+    else { s.parse().ok() }
+}
+
+fn parse_percent_or_num(s: &str) -> Option<f32> {
+    let s = s.trim();
+    if let Some(p) = s.strip_suffix('%') { p.trim().parse::<f32>().ok().map(|v| v / 100.0) }
+    else { s.parse().ok() }
+}
+
+/// Pro Lab/Oklab L: percent -> scale (lab je 0..100, oklab 0..1).
+fn parse_percent_or_num_scaled(s: &str, scale: f32) -> Option<f32> {
+    let s = s.trim();
+    if let Some(p) = s.strip_suffix('%') { p.trim().parse::<f32>().ok().map(|v| v / 100.0 * scale) }
+    else { s.parse().ok() }
+}
+
+/// HSL -> RGB. h v stupnich, s/l v 0..1.
+fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (u8, u8, u8) {
+    let h = ((h % 360.0) + 360.0) % 360.0 / 360.0;
+    let s = s.clamp(0.0, 1.0);
+    let l = l.clamp(0.0, 1.0);
+    if s == 0.0 {
+        let v = (l * 255.0).round() as u8;
+        return (v, v, v);
+    }
+    let q = if l < 0.5 { l * (1.0 + s) } else { l + s - l * s };
+    let p = 2.0 * l - q;
+    let r = hue_to_rgb(p, q, h + 1.0 / 3.0);
+    let g = hue_to_rgb(p, q, h);
+    let b = hue_to_rgb(p, q, h - 1.0 / 3.0);
+    ((r * 255.0).round() as u8, (g * 255.0).round() as u8, (b * 255.0).round() as u8)
+}
+
+fn hue_to_rgb(p: f32, q: f32, mut t: f32) -> f32 {
+    if t < 0.0 { t += 1.0; }
+    if t > 1.0 { t -= 1.0; }
+    if t < 1.0 / 6.0 { return p + (q - p) * 6.0 * t; }
+    if t < 1.0 / 2.0 { return q; }
+    if t < 2.0 / 3.0 { return p + (q - p) * (2.0 / 3.0 - t) * 6.0; }
+    p
+}
+
+/// HWB -> RGB. h v stupnich, w/b v 0..1.
+fn hwb_to_rgb(h: f32, w: f32, b: f32) -> (u8, u8, u8) {
+    let mut w = w.clamp(0.0, 1.0);
+    let mut b = b.clamp(0.0, 1.0);
+    if w + b > 1.0 {
+        let sum = w + b;
+        w /= sum;
+        b /= sum;
+    }
+    let (r, g, bl) = hsl_to_rgb(h, 1.0, 0.5);
+    let f = |v: u8| {
+        let x = v as f32 / 255.0;
+        let out = x * (1.0 - w - b) + w;
+        (out * 255.0).clamp(0.0, 255.0).round() as u8
+    };
+    (f(r), f(g), f(bl))
+}
+
+/// OkLab -> sRGB (Bjorn Ottosson algoritmus).
+fn oklab_to_rgb(l: f32, a: f32, b: f32) -> (u8, u8, u8) {
+    let l_ = l + 0.3963377774 * a + 0.2158037573 * b;
+    let m_ = l - 0.1055613458 * a - 0.0638541728 * b;
+    let s_ = l - 0.0894841775 * a - 1.2914855480 * b;
+    let l3 = l_ * l_ * l_;
+    let m3 = m_ * m_ * m_;
+    let s3 = s_ * s_ * s_;
+    let r =  4.0767416621 * l3 - 3.3077115913 * m3 + 0.2309699292 * s3;
+    let g = -1.2684380046 * l3 + 2.6097574011 * m3 - 0.3413193965 * s3;
+    let b_ = -0.0041960863 * l3 - 0.7034186147 * m3 + 1.7076147010 * s3;
+    (linear_to_srgb_u8(r), linear_to_srgb_u8(g), linear_to_srgb_u8(b_))
+}
+
+/// CIE Lab -> sRGB. Vstup: L 0..100, a/b ~ -128..127.
+fn lab_to_rgb(l: f32, a: f32, b: f32) -> (u8, u8, u8) {
+    let fy = (l + 16.0) / 116.0;
+    let fx = a / 500.0 + fy;
+    let fz = fy - b / 200.0;
+    let f_inv = |t: f32| {
+        let d = 6.0 / 29.0;
+        if t > d { t * t * t } else { 3.0 * d * d * (t - 4.0 / 29.0) }
+    };
+    // D65 illuminant
+    let xn = 0.95047; let yn = 1.0; let zn = 1.08883;
+    let x = xn * f_inv(fx);
+    let y = yn * f_inv(fy);
+    let z = zn * f_inv(fz);
+    // XYZ -> linear sRGB (D65)
+    let r =  3.2404542 * x - 1.5371385 * y - 0.4985314 * z;
+    let g = -0.9692660 * x + 1.8760108 * y + 0.0415560 * z;
+    let b_ = 0.0556434 * x - 0.2040259 * y + 1.0572252 * z;
+    (linear_to_srgb_u8(r), linear_to_srgb_u8(g), linear_to_srgb_u8(b_))
+}
+
+/// Linear -> sRGB gamma encoding + clamp + round to u8.
+fn linear_to_srgb_u8(v: f32) -> u8 {
+    let v = v.clamp(0.0, 1.0);
+    let s = if v <= 0.0031308 { v * 12.92 } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 };
+    (s * 255.0).clamp(0.0, 255.0).round() as u8
+}
+
+fn srgb_u8_to_linear(v: u8) -> f32 {
+    let s = v as f32 / 255.0;
+    if s <= 0.04045 { s / 12.92 } else { ((s + 0.055) / 1.055).powf(2.4) }
+}
+
+/// sRGB -> OkLab.
+fn rgb_to_oklab(r: u8, g: u8, b: u8) -> (f32, f32, f32) {
+    let r = srgb_u8_to_linear(r);
+    let g = srgb_u8_to_linear(g);
+    let b = srgb_u8_to_linear(b);
+    let l = 0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b;
+    let m = 0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b;
+    let s = 0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b;
+    let l_ = l.cbrt();
+    let m_ = m.cbrt();
+    let s_ = s.cbrt();
+    (
+        0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_,
+        1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_,
+        0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_,
+    )
+}
+
+/// color-mix(in <space>, color1 [<%>], color2 [<%>]).
+/// Podpora space: srgb, oklab, oklch, lab, lch, hsl, hwb.
+fn parse_color_mix(inner: &str) -> Option<[u8; 4]> {
+    // Format: "in <space>, c1 [<%>], c2 [<%>]"
+    let parts = split_top_level_commas(inner);
+    if parts.len() < 3 { return None; }
+    let in_clause = parts[0].trim();
+    let space = in_clause.strip_prefix("in ")?.trim().to_lowercase();
+    // Cisla mohou byt napr. "red 30%" / "red"
+    let parse_color_pct = |s: &str| -> Option<([u8; 4], f32)> {
+        let s = s.trim();
+        // Najdi posledni "<num>%" - znaci vahu
+        if let Some(pct_idx) = s.rfind('%') {
+            let space_idx = s[..pct_idx].rfind(char::is_whitespace);
+            if let Some(si) = space_idx {
+                let pct: f32 = s[si..pct_idx].trim().parse().ok()?;
+                let col = parse_color(s[..si].trim())?;
+                return Some((col, pct / 100.0));
+            }
+        }
+        let col = parse_color(s)?;
+        Some((col, -1.0)) // signal: nezadana vaha
+    };
+    let (c1, p1) = parse_color_pct(&parts[1])?;
+    let (c2, p2) = parse_color_pct(&parts[2])?;
+
+    // Normalize percent vah
+    let (w1, w2) = match (p1, p2) {
+        (-1.0, -1.0) => (0.5, 0.5),
+        (a, -1.0)    => (a, 1.0 - a),
+        (-1.0, b)    => (1.0 - b, b),
+        (a, b) => {
+            let sum = a + b;
+            if sum > 0.0 { (a / sum, b / sum) } else { (0.5, 0.5) }
+        }
+    };
+
+    // Mix dle prostoru
+    let (r, g, b) = match space.as_str() {
+        "srgb" => (
+            (c1[0] as f32 * w1 + c2[0] as f32 * w2).round() as u8,
+            (c1[1] as f32 * w1 + c2[1] as f32 * w2).round() as u8,
+            (c1[2] as f32 * w1 + c2[2] as f32 * w2).round() as u8,
+        ),
+        "oklab" | "oklch" => {
+            let (l1, a1, b1) = rgb_to_oklab(c1[0], c1[1], c1[2]);
+            let (l2, a2, b2) = rgb_to_oklab(c2[0], c2[1], c2[2]);
+            let l = l1 * w1 + l2 * w2;
+            let a = a1 * w1 + a2 * w2;
+            let b = b1 * w1 + b2 * w2;
+            oklab_to_rgb(l, a, b)
+        }
+        _ => {
+            // Fallback: srgb
+            (
+                (c1[0] as f32 * w1 + c2[0] as f32 * w2).round() as u8,
+                (c1[1] as f32 * w1 + c2[1] as f32 * w2).round() as u8,
+                (c1[2] as f32 * w1 + c2[2] as f32 * w2).round() as u8,
+            )
+        }
+    };
+    let alpha = (c1[3] as f32 * w1 + c2[3] as f32 * w2).round() as u8;
+    Some([r, g, b, alpha])
 }
 
 /// Parse linear-gradient(angle, color, color, ...) -> (angle_deg, stops).

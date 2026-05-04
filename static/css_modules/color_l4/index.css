@@ -1,0 +1,67 @@
+body {
+    font-family: Arial, sans-serif;
+    background: #f5f5f7;
+    color: #1d1d1f;
+    margin: 0;
+    padding: 24px;
+}
+header {
+    background: #1d1d1f;
+    color: white;
+    padding: 16px 24px;
+    border-radius: 8px;
+    margin-bottom: 24px;
+}
+header h1 { margin: 0; }
+header p { margin: 8px 0 0 0; color: #a1a1a6; }
+section {
+    background: white;
+    padding: 16px 24px;
+    margin-bottom: 12px;
+    border-radius: 8px;
+    border: 1px solid #d2d2d7;
+}
+section h2 {
+    margin: 0 0 8px 0;
+    font-size: 14px;
+    color: #424245;
+    font-family: monospace;
+}
+.row {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+.swatch {
+    width: 200px;
+    height: 80px;
+    border-radius: 8px;
+    color: white;
+    padding: 8px 12px;
+    font-size: 12px;
+    font-family: monospace;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+
+.a { background: rgb(255 0 0); }
+.b { background: rgb(0 255 0 / 0.5); }
+.c { background: rgb(0 0 255 / 50%); }
+
+.d { background: hsl(0, 100%, 50%); }
+.e { background: hsl(120 100% 50%); color: black; }
+.f { background: hsla(240, 100%, 50%, 0.5); }
+
+.g { background: hwb(0 0% 0%); }
+.h { background: hwb(120 30% 0%); color: black; }
+.i { background: hwb(240 0% 30%); }
+
+.j { background: lab(53.24 80 67); }
+.k { background: lch(50% 80 30deg); }
+
+.l { background: oklab(0.5 0.1 0.1); }
+.m { background: oklch(0.7 0.2 200deg); }
+.n { background: oklch(0.628 0.258 29deg); }
+
+.o { background: color-mix(in srgb, red, blue); }
+.p { background: color-mix(in oklab, red, blue); }
+.q { background: color-mix(in srgb, red 25%, blue 75%); }
