@@ -268,15 +268,18 @@ Konvence stavu:
 - [x] Implicit descendant pri ne-amp prefix (`tag`, `.class`)
 
 ### CSS @media L4/L5
-- [x] `@media (max-width: ...)`, `@media (min-width: ...)`
+- [x] `@media (max-width: ...)`, `@media (min-width: ...)`, `@media (max/min-height)`
 - [x] `@media screen`, `@media print` (parsing)
-- [ ] `@media (prefers-color-scheme: dark)`
-- [ ] `@media (prefers-reduced-motion)`
-- [ ] `@media (hover: hover|none)`
-- [ ] `@media (pointer: coarse|fine|none)`
+- [x] `@media (prefers-color-scheme: dark|light)` - env var override RUST_WEB_ENGINE_DARK
+- [x] `@media (prefers-reduced-motion: reduce|no-preference)` - env var override RUST_WEB_ENGINE_REDUCED_MOTION
+- [x] `@media (hover: hover|none)` - default hover available
+- [x] `@media (pointer: fine|coarse|none)` - default fine
+- [x] `@media (any-hover|any-pointer)` - default match
+- [x] `@media (display-mode: browser|fullscreen)` - default browser
+- [x] `@media (forced-colors: active|none)` - default none
+- [x] `@media (color: 0|n)` - default n>0 (8 bit)
+- [x] `@media (orientation: landscape|portrait)`
 - [ ] Range syntax: `@media (400px <= width <= 800px)` (L4)
-- [ ] `@media (display-mode: ...)`
-- [ ] `@media (forced-colors: active)`
 
 ### CSS Filter Effects L1
 - [ ] `filter: blur(<r>)` - vyzaduje 2-pass gauss + RT, ne implementovano

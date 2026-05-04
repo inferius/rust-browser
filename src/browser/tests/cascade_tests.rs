@@ -214,6 +214,38 @@ fn selector_first_of_type() {
     assert!(cascade::get_styles(&map, &ps[1]).unwrap().get("color").is_none());
 }
 
+// ─── @media L4/L5 prefers-* ────────────────────────────────────────────
+
+#[test]
+fn media_prefers_color_scheme_light_default() {
+    use crate::browser::css_parser::evaluate_media_query;
+    // Default = light, takze dark fail
+    assert!(!evaluate_media_query("(prefers-color-scheme: dark)", 1024.0, 768.0));
+    assert!(evaluate_media_query("(prefers-color-scheme: light)", 1024.0, 768.0));
+}
+
+#[test]
+fn media_hover_default_available() {
+    use crate::browser::css_parser::evaluate_media_query;
+    assert!(evaluate_media_query("(hover: hover)", 1024.0, 768.0));
+    assert!(!evaluate_media_query("(hover: none)", 1024.0, 768.0));
+}
+
+#[test]
+fn media_pointer_fine_default() {
+    use crate::browser::css_parser::evaluate_media_query;
+    assert!(evaluate_media_query("(pointer: fine)", 1024.0, 768.0));
+    assert!(!evaluate_media_query("(pointer: coarse)", 1024.0, 768.0));
+    assert!(!evaluate_media_query("(pointer: none)", 1024.0, 768.0));
+}
+
+#[test]
+fn media_reduced_motion_default_false() {
+    use crate::browser::css_parser::evaluate_media_query;
+    assert!(!evaluate_media_query("(prefers-reduced-motion: reduce)", 1024.0, 768.0));
+    assert!(evaluate_media_query("(prefers-reduced-motion: no-preference)", 1024.0, 768.0));
+}
+
 // ─── Cascade Layers @layer ─────────────────────────────────────────────
 
 #[test]

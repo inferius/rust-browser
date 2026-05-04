@@ -484,6 +484,39 @@ pub fn evaluate_media_query(query: &str, viewport_w: f32, viewport_h: f32) -> bo
                     if val == "landscape" && !landscape { return false; }
                     if val == "portrait" &&  landscape  { return false; }
                 }
+                // User preferences - default rozumne (light theme, no reduced motion, hover/pointer dostupny)
+                "prefers-color-scheme" => {
+                    let dark = std::env::var("RUST_WEB_ENGINE_DARK").is_ok();
+                    if val == "dark" && !dark { return false; }
+                    if val == "light" && dark { return false; }
+                }
+                "prefers-reduced-motion" => {
+                    let reduced = std::env::var("RUST_WEB_ENGINE_REDUCED_MOTION").is_ok();
+                    if val == "reduce" && !reduced { return false; }
+                    if val == "no-preference" && reduced { return false; }
+                }
+                "hover" => {
+                    // Default: hover dostupny
+                    if val == "none" { return false; }
+                }
+                "pointer" => {
+                    // Default: fine pointer (mouse)
+                    if val == "coarse" { return false; }
+                    if val == "none" { return false; }
+                }
+                "any-hover" | "any-pointer" => { /* match default fine/hover */ }
+                "display-mode" => {
+                    // Default: browser
+                    if val != "browser" && val != "fullscreen" { return false; }
+                }
+                "forced-colors" => {
+                    // Default: none
+                    if val == "active" { return false; }
+                }
+                "color" => {
+                    // Default: 8 (256 colors per channel)
+                    if val == "0" { return false; }
+                }
                 _ => {}
             }
         }
