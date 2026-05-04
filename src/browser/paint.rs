@@ -510,16 +510,72 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>) {
             bold: bx.bold,
             font_family: bx.font_family.clone(),
         });
-        // Underline / strikethrough
+        // Underline / strikethrough s ruznymi styly (solid/double/dotted/dashed/wavy)
         if bx.text_underline {
-            cmds.push(DisplayCommand::Rect {
-                x: text_x,
-                y: text_y + bx.font_size + 1.0,
-                w: text_w,
-                h: 1.0,
-                color: text_color,
-                radius: 0.0,
-            });
+            let dec_color = bx.text_decoration_color
+                .map(with_alpha).unwrap_or(text_color);
+            let thickness = bx.text_decoration_thickness.max(1.0);
+            let offset = bx.text_underline_offset;
+            let base_y = text_y + bx.font_size + 1.0 + offset;
+            let style = bx.text_decoration_style.as_str();
+            match style {
+                "double" => {
+                    cmds.push(DisplayCommand::Rect {
+                        x: text_x, y: base_y,
+                        w: text_w, h: thickness,
+                        color: dec_color, radius: 0.0,
+                    });
+                    cmds.push(DisplayCommand::Rect {
+                        x: text_x, y: base_y + thickness + 2.0,
+                        w: text_w, h: thickness,
+                        color: dec_color, radius: 0.0,
+                    });
+                }
+                "dotted" => {
+                    let mut x = text_x;
+                    while x < text_x + text_w {
+                        cmds.push(DisplayCommand::Rect {
+                            x, y: base_y, w: thickness, h: thickness,
+                            color: dec_color, radius: thickness * 0.5,
+                        });
+                        x += thickness * 2.0;
+                    }
+                }
+                "dashed" => {
+                    let mut x = text_x;
+                    let dash = 4.0;
+                    while x < text_x + text_w {
+                        cmds.push(DisplayCommand::Rect {
+                            x, y: base_y, w: dash, h: thickness,
+                            color: dec_color, radius: 0.0,
+                        });
+                        x += dash * 2.0;
+                    }
+                }
+                "wavy" => {
+                    // Approx: zigzag s krokem ~6px
+                    let step = 4.0;
+                    let amp = 2.0;
+                    let mut x = text_x;
+                    let mut up = true;
+                    while x < text_x + text_w {
+                        let y = if up { base_y } else { base_y + amp };
+                        cmds.push(DisplayCommand::Rect {
+                            x, y, w: step, h: thickness,
+                            color: dec_color, radius: 0.0,
+                        });
+                        x += step;
+                        up = !up;
+                    }
+                }
+                _ /* solid */ => {
+                    cmds.push(DisplayCommand::Rect {
+                        x: text_x, y: base_y,
+                        w: text_w, h: thickness,
+                        color: dec_color, radius: 0.0,
+                    });
+                }
+            }
         }
         if bx.text_strikethrough {
             cmds.push(DisplayCommand::Rect {
