@@ -680,6 +680,50 @@ fn find_node_by_ptr(root: &Rc<crate::browser::dom::NodeData>, ptr: usize) -> Opt
     None
 }
 
+/// WebGL component type -> velikost v bytech.
+fn webgl_type_size(ctype: u32) -> u32 {
+    match ctype {
+        0x1400 => 1,  // BYTE
+        0x1401 => 1,  // UNSIGNED_BYTE
+        0x1402 => 2,  // SHORT
+        0x1403 => 2,  // UNSIGNED_SHORT
+        0x1404 => 4,  // INT
+        0x1405 => 4,  // UNSIGNED_INT
+        0x1406 => 4,  // FLOAT
+        _ => 4,
+    }
+}
+
+/// Mapuje WebGL (size, type) na wgpu::VertexFormat.
+/// Vraci None pri nepodporovanem formatu.
+pub fn webgl_attrib_to_vertex_format(size: i32, ctype: u32) -> Option<wgpu::VertexFormat> {
+    use wgpu::VertexFormat as VF;
+    match (size, ctype) {
+        (1, 0x1406) => Some(VF::Float32),       // FLOAT
+        (2, 0x1406) => Some(VF::Float32x2),
+        (3, 0x1406) => Some(VF::Float32x3),
+        (4, 0x1406) => Some(VF::Float32x4),
+        (2, 0x1404) => Some(VF::Sint32x2),      // INT
+        (4, 0x1404) => Some(VF::Sint32x4),
+        (2, 0x1405) => Some(VF::Uint32x2),      // UNSIGNED_INT
+        (4, 0x1405) => Some(VF::Uint32x4),
+        _ => None,
+    }
+}
+
+/// Spocita stride pro vertex layout pokud slot.stride == 0 (tightly packed).
+pub fn webgl_compute_stride(attribs: &[(u32, crate::interpreter::WebGLAttribSlot)]) -> u64 {
+    if let Some((_, slot)) = attribs.first() {
+        if slot.stride > 0 {
+            return slot.stride as u64;
+        }
+    }
+    // Tightly packed: suma sizes * type_size
+    attribs.iter().map(|(_, s)| {
+        (s.size as u32 * webgl_type_size(s.component_type)) as u64
+    }).sum()
+}
+
 /// Segment displej listu pro renderer: Main = normal, Filter = RT-mediated.
 pub enum Seg<'a> {
     Main(&'a [DisplayCommand]),
@@ -2273,6 +2317,30 @@ impl Renderer {
     /// Diagnostic - kolik pipelines v cache.
     pub fn webgl_pipelines_count(&self) -> usize {
         self.webgl_pipelines.len()
+    }
+
+    /// WebGL phase 3c2: upload buffer dat do wgpu::Buffer + cache.
+    /// Idempotent - update existujiciho bufferu pri opetovnem volani.
+    pub fn upload_webgl_buffer(&mut self, buffer_id: u32, data: &[u8]) {
+        if data.is_empty() { return; }
+        // Round size na 4-byte align (WGSL min)
+        let size = ((data.len() + 3) & !3) as u64;
+        let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(&format!("webgl_buf_{buffer_id}")),
+            size,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::INDEX
+                | wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.queue.write_buffer(&buf, 0, data);
+        self.webgl_buffers.insert(buffer_id, buf);
+    }
+
+    pub fn webgl_buffers_count(&self) -> usize {
+        self.webgl_buffers.len()
+    }
+    pub fn webgl_has_buffer(&self, buffer_id: u32) -> bool {
+        self.webgl_buffers.contains_key(&buffer_id)
     }
 
     /// Provede 2-pass gauss blur na offscreen_tex_a -> tex_b -> tex_a.

@@ -3,7 +3,7 @@
 /// filteru a paint segmentaci ano.
 
 use crate::browser::paint::DisplayCommand;
-use crate::browser::render::{partition_filter_segments, Seg, polygon_signed_area, triangulate_polygon, paint_webgl_canvases};
+use crate::browser::render::{partition_filter_segments, Seg, polygon_signed_area, triangulate_polygon, paint_webgl_canvases, webgl_attrib_to_vertex_format, webgl_compute_stride};
 
 fn rect(x: f32, y: f32) -> DisplayCommand {
     DisplayCommand::Rect { x, y, w: 10.0, h: 10.0, color: [255,0,0,255], radius: 0.0 }
@@ -420,7 +420,7 @@ fn triangulate_star_concave_count() {
 use std::rc::Rc;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use crate::interpreter::{WebGLState, WebGLDrawCmd};
+use crate::interpreter::{WebGLState, WebGLDrawCmd, WebGLAttribSlot};
 use crate::browser::dom::NodeData;
 use crate::browser::layout::{LayoutBox, Rect};
 
@@ -605,6 +605,82 @@ fn paint_webgl_clear_plus_draw_combines() {
     if let DisplayCommand::Rect { color, .. } = &cmds[0] {
         assert_eq!(color[0], 127, "red bg ~ 0.5*255");
     }
+}
+
+// ─── WebGL phase 3c2 - vertex format + stride helpers ─────────────────
+
+#[test]
+fn webgl_attrib_format_float_2() {
+    let f = webgl_attrib_to_vertex_format(2, 0x1406);  // FLOAT
+    assert_eq!(f, Some(wgpu::VertexFormat::Float32x2));
+}
+
+#[test]
+fn webgl_attrib_format_float_3() {
+    let f = webgl_attrib_to_vertex_format(3, 0x1406);
+    assert_eq!(f, Some(wgpu::VertexFormat::Float32x3));
+}
+
+#[test]
+fn webgl_attrib_format_float_4() {
+    let f = webgl_attrib_to_vertex_format(4, 0x1406);
+    assert_eq!(f, Some(wgpu::VertexFormat::Float32x4));
+}
+
+#[test]
+fn webgl_attrib_format_uint_2() {
+    let f = webgl_attrib_to_vertex_format(2, 0x1405);  // UNSIGNED_INT
+    assert_eq!(f, Some(wgpu::VertexFormat::Uint32x2));
+}
+
+#[test]
+fn webgl_attrib_format_unsupported_byte() {
+    let f = webgl_attrib_to_vertex_format(1, 0x1401);  // UNSIGNED_BYTE
+    assert!(f.is_none(), "byte size 1 ne support");
+}
+
+#[test]
+fn webgl_stride_explicit() {
+    let attribs = vec![
+        (0u32, WebGLAttribSlot {
+            buffer_id: 1, size: 2, component_type: 0x1406,
+            normalized: false, stride: 32, offset: 0, enabled: true,
+        }),
+    ];
+    assert_eq!(webgl_compute_stride(&attribs), 32);
+}
+
+#[test]
+fn webgl_stride_tightly_packed_float2() {
+    let attribs = vec![
+        (0u32, WebGLAttribSlot {
+            buffer_id: 1, size: 2, component_type: 0x1406,
+            normalized: false, stride: 0, offset: 0, enabled: true,
+        }),
+    ];
+    // 2 * 4 (FLOAT) = 8
+    assert_eq!(webgl_compute_stride(&attribs), 8);
+}
+
+#[test]
+fn webgl_stride_tightly_packed_multi_attrib() {
+    let attribs = vec![
+        (0u32, WebGLAttribSlot {
+            buffer_id: 1, size: 3, component_type: 0x1406,  // pos vec3
+            normalized: false, stride: 0, offset: 0, enabled: true,
+        }),
+        (1u32, WebGLAttribSlot {
+            buffer_id: 1, size: 2, component_type: 0x1406,  // uv vec2
+            normalized: false, stride: 0, offset: 12, enabled: true,
+        }),
+    ];
+    // 3*4 + 2*4 = 20
+    assert_eq!(webgl_compute_stride(&attribs), 20);
+}
+
+#[test]
+fn webgl_stride_empty_returns_zero() {
+    assert_eq!(webgl_compute_stride(&[]), 0);
 }
 
 #[test]
