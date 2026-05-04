@@ -587,6 +587,68 @@ fn paint_canvas_ops(
     }
 }
 
+/// Walk layout tree + pro kazdy canvas tag, pokud existuje WebGLState,
+/// drainuje queue a emituje display commands. Phase 3b: jen Clear color
+/// jako solid Rect bg + Clear barvou. Real wgpu pipeline z WGSL stringu
+/// bude phase 3c.
+pub fn paint_webgl_canvases(
+    bx: &super::layout::LayoutBox,
+    webgl_states: &std::collections::HashMap<usize, std::rc::Rc<std::cell::RefCell<crate::interpreter::WebGLState>>>,
+    cmds: &mut Vec<super::paint::DisplayCommand>,
+) {
+    use crate::interpreter::WebGLDrawCmd;
+    if bx.tag.as_deref() == Some("canvas") {
+        if let Some(node) = &bx.node {
+            let ptr = std::rc::Rc::as_ptr(node) as usize;
+            if let Some(state_rc) = webgl_states.get(&ptr) {
+                let mut state = state_rc.borrow_mut();
+                // Drain queue. Effektivni clear color = posledni ClearColor command.
+                // Pri Clear command s COLOR_BUFFER_BIT (0x4000), vyplnime canvas barvou.
+                let mut last_clear_color: Option<[f32; 4]> = None;
+                let mut had_clear = false;
+                let mut draw_commands_count: usize = 0;
+                for cmd in state.draw_queue.drain(..) {
+                    match cmd {
+                        WebGLDrawCmd::ClearColor(c) => last_clear_color = Some(c),
+                        WebGLDrawCmd::Clear(mask) => {
+                            if mask & 0x4000 != 0 {
+                                had_clear = true;
+                            }
+                        }
+                        WebGLDrawCmd::DrawArrays { .. } | WebGLDrawCmd::DrawElements { .. } => {
+                            draw_commands_count += 1;
+                        }
+                    }
+                }
+                // Aplikace: pokud bylo Clear + last_clear_color, fill canvas.
+                let bg_color = if had_clear {
+                    last_clear_color.or(Some(state.clear_color))
+                } else {
+                    None
+                };
+                if let Some(c) = bg_color {
+                    let rgba: [u8; 4] = [
+                        (c[0].clamp(0.0, 1.0) * 255.0) as u8,
+                        (c[1].clamp(0.0, 1.0) * 255.0) as u8,
+                        (c[2].clamp(0.0, 1.0) * 255.0) as u8,
+                        (c[3].clamp(0.0, 1.0) * 255.0) as u8,
+                    ];
+                    cmds.push(super::paint::DisplayCommand::Rect {
+                        x: bx.rect.x, y: bx.rect.y,
+                        w: bx.rect.width, h: bx.rect.height,
+                        color: rgba, radius: 0.0,
+                    });
+                }
+                // Diagnostic - draw_commands_count se uchova ve state pro test access.
+                state.draw_call_count = state.draw_call_count.saturating_add(draw_commands_count as u32);
+            }
+        }
+    }
+    for child in &bx.children {
+        paint_webgl_canvases(child, webgl_states, cmds);
+    }
+}
+
 /// Najdi DOM node v stromu podle Rc::as_ptr hodnoty (use ve cascade).
 fn find_node_by_ptr(root: &Rc<crate::browser::dom::NodeData>, ptr: usize) -> Option<Rc<crate::browser::dom::NodeData>> {
     if Rc::as_ptr(root) as usize == ptr {
@@ -1643,6 +1705,9 @@ pub fn run_window_with_html(html: String, css: String) -> Result<(), String> {
             if let Some(interp) = &self.interpreter {
                 let canvas_ops = interp.canvas_ops.borrow();
                 paint_canvas_ops(&layout_root, &canvas_ops, &mut display_list);
+                // WebGL canvas - phase 3b: bg = clear color z aktivni WebGL state.
+                let webgl_states = interp.webgl_states.borrow();
+                paint_webgl_canvases(&layout_root, &webgl_states, &mut display_list);
             }
 
             // Apply scroll: posun vsechny y o -scroll_y

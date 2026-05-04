@@ -649,6 +649,8 @@ pub struct Interpreter {
     pub console_log: Rc<RefCell<Vec<(String, String)>>>,
     /// Canvas 2D operations: canvas DOM node ptr -> ops sequence.
     pub canvas_ops: Rc<RefCell<std::collections::HashMap<usize, Vec<crate::browser::paint::CanvasOp>>>>,
+    /// WebGL contexty per canvas DOM node ptr -> sdileny WebGLState.
+    pub webgl_states: Rc<RefCell<std::collections::HashMap<usize, Rc<RefCell<WebGLState>>>>>,
     /// Network log capture: (url, status).
     pub network_log: Rc<RefCell<Vec<(String, u16)>>>,
 }
@@ -688,6 +690,7 @@ impl Interpreter {
             console_log,
             network_log,
             canvas_ops: Rc::new(RefCell::new(std::collections::HashMap::new())),
+            webgl_states: Rc::new(RefCell::new(std::collections::HashMap::new())),
         }
     }
 
@@ -3893,12 +3896,18 @@ impl Interpreter {
                         }
                         "getContext" if n.tag_name().as_deref() == Some("canvas") => {
                             let kind = arg_vals.into_iter().next().map(|v| v.to_string()).unwrap_or_else(|| "2d".into());
+                            let canvas_ptr = Rc::as_ptr(&n) as usize;
                             if kind == "webgl" || kind == "webgl2" || kind == "experimental-webgl" {
-                                // WebGL stub - methods vraci Undefined (no-op)
-                                return Ok(create_webgl_stub_context());
+                                // Sdileny WebGLState - znovu pouzij existujici (idempotent getContext)
+                                let state = {
+                                    let mut states = self.webgl_states.borrow_mut();
+                                    states.entry(canvas_ptr)
+                                        .or_insert_with(|| Rc::new(RefCell::new(WebGLState::new())))
+                                        .clone()
+                                };
+                                return Ok(create_webgl_context(state));
                             }
                             // Default 2D
-                            let canvas_ptr = Rc::as_ptr(&n) as usize;
                             let ctx = create_canvas_2d_context(canvas_ptr, Rc::clone(&self.canvas_ops));
                             return Ok(ctx);
                         }
@@ -5442,8 +5451,7 @@ fn webgl_id_from(value: &JsValue) -> Option<u32> {
     None
 }
 
-fn create_webgl_stub_context() -> JsValue {
-    let state: Rc<RefCell<WebGLState>> = Rc::new(RefCell::new(WebGLState::new()));
+fn create_webgl_context(state: Rc<RefCell<WebGLState>>) -> JsValue {
     let obj_rc = Rc::new(RefCell::new(JsObject::new()));
     // Klicove WebGL constants (alespon tie nejcastejsi)
     let constants = [

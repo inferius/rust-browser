@@ -3,7 +3,7 @@
 /// filteru a paint segmentaci ano.
 
 use crate::browser::paint::DisplayCommand;
-use crate::browser::render::{partition_filter_segments, Seg, polygon_signed_area, triangulate_polygon};
+use crate::browser::render::{partition_filter_segments, Seg, polygon_signed_area, triangulate_polygon, paint_webgl_canvases};
 
 fn rect(x: f32, y: f32) -> DisplayCommand {
     DisplayCommand::Rect { x, y, w: 10.0, h: 10.0, color: [255,0,0,255], radius: 0.0 }
@@ -413,6 +413,175 @@ fn triangulate_star_concave_count() {
     }).collect();
     let tris = triangulate_polygon(&pts);
     assert_eq!(tris.len(), 8, "star (10 vertices) -> n-2 = 8 triangles");
+}
+
+// ─── WebGL phase 3b - paint_webgl_canvases ──────────────────────────────
+
+use std::rc::Rc;
+use std::cell::RefCell;
+use std::collections::HashMap;
+use crate::interpreter::{WebGLState, WebGLDrawCmd};
+use crate::browser::dom::NodeData;
+use crate::browser::layout::{LayoutBox, Rect};
+
+fn make_canvas_layout_box(node_ptr: Rc<NodeData>) -> LayoutBox {
+    let mut bx = LayoutBox::new();
+    bx.tag = Some("canvas".to_string());
+    bx.rect = Rect { x: 10.0, y: 20.0, width: 300.0, height: 150.0 };
+    bx.node = Some(node_ptr);
+    bx
+}
+
+#[test]
+fn paint_webgl_no_state_no_emit() {
+    let node = NodeData::new_element("canvas", HashMap::new());
+    let bx = make_canvas_layout_box(node);
+    let states: HashMap<usize, Rc<RefCell<WebGLState>>> = HashMap::new();
+    let mut cmds: Vec<DisplayCommand> = Vec::new();
+    paint_webgl_canvases(&bx, &states, &mut cmds);
+    assert_eq!(cmds.len(), 0);
+}
+
+#[test]
+fn paint_webgl_clear_emits_rect() {
+    let node = NodeData::new_element("canvas", HashMap::new());
+    let ptr = Rc::as_ptr(&node) as usize;
+    let bx = make_canvas_layout_box(Rc::clone(&node));
+    let mut state = WebGLState::new();
+    state.draw_queue.push(WebGLDrawCmd::ClearColor([1.0, 0.0, 0.0, 1.0]));
+    state.draw_queue.push(WebGLDrawCmd::Clear(0x4000));
+    let mut states: HashMap<usize, Rc<RefCell<WebGLState>>> = HashMap::new();
+    states.insert(ptr, Rc::new(RefCell::new(state)));
+
+    let mut cmds: Vec<DisplayCommand> = Vec::new();
+    paint_webgl_canvases(&bx, &states, &mut cmds);
+
+    assert_eq!(cmds.len(), 1);
+    if let DisplayCommand::Rect { color, w, h, .. } = &cmds[0] {
+        assert_eq!(*color, [255, 0, 0, 255], "red clear color");
+        assert!((*w - 300.0).abs() < 1e-3);
+        assert!((*h - 150.0).abs() < 1e-3);
+    } else {
+        panic!("expected Rect");
+    }
+}
+
+#[test]
+fn paint_webgl_clear_drains_queue() {
+    let node = NodeData::new_element("canvas", HashMap::new());
+    let ptr = Rc::as_ptr(&node) as usize;
+    let bx = make_canvas_layout_box(Rc::clone(&node));
+    let mut state = WebGLState::new();
+    state.draw_queue.push(WebGLDrawCmd::ClearColor([0.5, 0.5, 0.5, 1.0]));
+    state.draw_queue.push(WebGLDrawCmd::Clear(0x4000));
+    let state_rc = Rc::new(RefCell::new(state));
+    let mut states: HashMap<usize, Rc<RefCell<WebGLState>>> = HashMap::new();
+    states.insert(ptr, Rc::clone(&state_rc));
+
+    let mut cmds: Vec<DisplayCommand> = Vec::new();
+    paint_webgl_canvases(&bx, &states, &mut cmds);
+    // Po paint by mela byt queue prazdna (drained)
+    assert_eq!(state_rc.borrow().draw_queue.len(), 0);
+}
+
+#[test]
+fn paint_webgl_no_clear_color_no_emit() {
+    // ClearColor bez Clear -> nic
+    let node = NodeData::new_element("canvas", HashMap::new());
+    let ptr = Rc::as_ptr(&node) as usize;
+    let bx = make_canvas_layout_box(Rc::clone(&node));
+    let mut state = WebGLState::new();
+    state.draw_queue.push(WebGLDrawCmd::ClearColor([1.0, 0.0, 0.0, 1.0]));
+    let mut states: HashMap<usize, Rc<RefCell<WebGLState>>> = HashMap::new();
+    states.insert(ptr, Rc::new(RefCell::new(state)));
+
+    let mut cmds: Vec<DisplayCommand> = Vec::new();
+    paint_webgl_canvases(&bx, &states, &mut cmds);
+    assert_eq!(cmds.len(), 0, "ClearColor sam nestaci, treba Clear bit");
+}
+
+#[test]
+fn paint_webgl_clear_without_color_uses_state_default() {
+    // Clear bez ClearColor -> pouzije se default state.clear_color (0,0,0,1).
+    let node = NodeData::new_element("canvas", HashMap::new());
+    let ptr = Rc::as_ptr(&node) as usize;
+    let bx = make_canvas_layout_box(Rc::clone(&node));
+    let mut state = WebGLState::new();
+    state.draw_queue.push(WebGLDrawCmd::Clear(0x4000));
+    let mut states: HashMap<usize, Rc<RefCell<WebGLState>>> = HashMap::new();
+    states.insert(ptr, Rc::new(RefCell::new(state)));
+
+    let mut cmds: Vec<DisplayCommand> = Vec::new();
+    paint_webgl_canvases(&bx, &states, &mut cmds);
+    assert_eq!(cmds.len(), 1);
+    if let DisplayCommand::Rect { color, .. } = &cmds[0] {
+        assert_eq!(*color, [0, 0, 0, 255], "default clear = black");
+    }
+}
+
+#[test]
+fn paint_webgl_last_clear_color_wins() {
+    // Vice ClearColor + Clear -> pouzije se posledni ClearColor.
+    let node = NodeData::new_element("canvas", HashMap::new());
+    let ptr = Rc::as_ptr(&node) as usize;
+    let bx = make_canvas_layout_box(Rc::clone(&node));
+    let mut state = WebGLState::new();
+    state.draw_queue.push(WebGLDrawCmd::ClearColor([1.0, 0.0, 0.0, 1.0]));
+    state.draw_queue.push(WebGLDrawCmd::ClearColor([0.0, 1.0, 0.0, 1.0]));
+    state.draw_queue.push(WebGLDrawCmd::Clear(0x4000));
+    let mut states: HashMap<usize, Rc<RefCell<WebGLState>>> = HashMap::new();
+    states.insert(ptr, Rc::new(RefCell::new(state)));
+
+    let mut cmds: Vec<DisplayCommand> = Vec::new();
+    paint_webgl_canvases(&bx, &states, &mut cmds);
+    if let DisplayCommand::Rect { color, .. } = &cmds[0] {
+        assert_eq!(*color, [0, 255, 0, 255], "green wins");
+    }
+}
+
+#[test]
+fn paint_webgl_skips_non_canvas_tag() {
+    let node = NodeData::new_element("div", HashMap::new());
+    let ptr = Rc::as_ptr(&node) as usize;
+    let mut bx = LayoutBox::new();
+    bx.tag = Some("div".into());
+    bx.rect = Rect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 };
+    bx.node = Some(Rc::clone(&node));
+    let mut state = WebGLState::new();
+    state.draw_queue.push(WebGLDrawCmd::ClearColor([1.0, 0.0, 0.0, 1.0]));
+    state.draw_queue.push(WebGLDrawCmd::Clear(0x4000));
+    let mut states: HashMap<usize, Rc<RefCell<WebGLState>>> = HashMap::new();
+    states.insert(ptr, Rc::new(RefCell::new(state)));
+
+    let mut cmds: Vec<DisplayCommand> = Vec::new();
+    paint_webgl_canvases(&bx, &states, &mut cmds);
+    assert_eq!(cmds.len(), 0, "non-canvas tag se preskakuje");
+}
+
+#[test]
+fn paint_webgl_recurses_to_children() {
+    let parent_node = NodeData::new_element("div", HashMap::new());
+    let canvas_node = NodeData::new_element("canvas", HashMap::new());
+    let canvas_ptr = Rc::as_ptr(&canvas_node) as usize;
+
+    let mut parent = LayoutBox::new();
+    parent.tag = Some("div".into());
+    parent.rect = Rect { x: 0.0, y: 0.0, width: 800.0, height: 600.0 };
+    parent.node = Some(parent_node);
+    parent.children.push(make_canvas_layout_box(canvas_node));
+
+    let mut state = WebGLState::new();
+    state.draw_queue.push(WebGLDrawCmd::ClearColor([0.0, 0.0, 1.0, 1.0]));
+    state.draw_queue.push(WebGLDrawCmd::Clear(0x4000));
+    let mut states: HashMap<usize, Rc<RefCell<WebGLState>>> = HashMap::new();
+    states.insert(canvas_ptr, Rc::new(RefCell::new(state)));
+
+    let mut cmds: Vec<DisplayCommand> = Vec::new();
+    paint_webgl_canvases(&parent, &states, &mut cmds);
+    assert_eq!(cmds.len(), 1);
+    if let DisplayCommand::Rect { color, .. } = &cmds[0] {
+        assert_eq!(*color, [0, 0, 255, 255], "blue z child canvas");
+    }
 }
 
 #[test]

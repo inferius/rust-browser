@@ -305,6 +305,22 @@
             </div>
         </section>
 
+        <!-- Sekce: WebGL phase 3b - clear color demo -->
+        <section id="webgl" class="section">
+            <h2>WebGL clear color (phase 3b)</h2>
+            <canvas id="gl-canvas" width="200" height="100" style="border: 1px solid #d2d2d7"></canvas>
+            <script>
+                (function() {
+                    var c = document.getElementById("gl-canvas");
+                    if (!c) return;
+                    var gl = c.getContext("webgl");
+                    if (!gl) return;
+                    gl.clearColor(0.18, 0.5, 0.94, 1.0);
+                    gl.clear(gl.COLOR_BUFFER_BIT);
+                })();
+            </script>
+        </section>
+
         <!-- Sekce: SVG -->
         <section id="svg" class="section">
             <h2>SVG basic shapes</h2>
