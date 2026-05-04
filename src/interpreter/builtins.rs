@@ -929,6 +929,48 @@ pub fn setup_builtins(
     doc_obj.set("contentType".into(), JsValue::Str("text/html".into()));
     doc_obj.set("designMode".into(), JsValue::Str("off".into()));
     doc_obj.set("dir".into(), JsValue::Str("ltr".into()));
+    // document.fonts (FontFaceSet)
+    {
+        let fonts = Rc::new(RefCell::new(JsObject::new()));
+        let set: Rc<RefCell<Vec<JsValue>>> = Rc::new(RefCell::new(Vec::new()));
+        {
+            let s = Rc::clone(&set);
+            fonts.borrow_mut().set("add".into(), native("fonts.add", move |args| {
+                if let Some(f) = args.into_iter().next() {
+                    s.borrow_mut().push(f);
+                }
+                Ok(JsValue::Undefined)
+            }));
+        }
+        {
+            let s = Rc::clone(&set);
+            fonts.borrow_mut().set("delete".into(), native("fonts.delete", move |args| {
+                let target = args.into_iter().next().unwrap_or(JsValue::Undefined);
+                if let JsValue::Object(target_o) = &target {
+                    s.borrow_mut().retain(|v| {
+                        if let JsValue::Object(o) = v { !Rc::ptr_eq(o, target_o) } else { true }
+                    });
+                }
+                Ok(JsValue::Bool(true))
+            }));
+        }
+        {
+            let s = Rc::clone(&set);
+            fonts.borrow_mut().set("clear".into(), native("fonts.clear", move |_| {
+                s.borrow_mut().clear();
+                Ok(JsValue::Undefined)
+            }));
+        }
+        fonts.borrow_mut().set("ready".into(),
+            make_settled_promise("fulfilled", JsValue::Undefined));
+        fonts.borrow_mut().set("status".into(), JsValue::Str("loaded".into()));
+        fonts.borrow_mut().set("size".into(), JsValue::Number(0.0));
+        fonts.borrow_mut().set("check".into(),
+            native("fonts.check", |_| Ok(JsValue::Bool(true))));
+        fonts.borrow_mut().set("load".into(),
+            native("fonts.load", |_| Ok(make_settled_promise("fulfilled", JsValue::Array(Rc::new(RefCell::new(Vec::new())))))));
+        doc_obj.set("fonts".into(), JsValue::Object(fonts));
+    }
 
     // document.querySelector - basic #id, .class, tag
     {
@@ -1919,6 +1961,29 @@ pub fn setup_builtins(
             }));
         e.define("indexedDB", JsValue::Object(idb));
     }
+
+    // FontFace constructor + document.fonts
+    e.define("FontFace", native("FontFace", |args| {
+        let mut it = args.into_iter();
+        let family = it.next().map(|v| v.to_string()).unwrap_or_default();
+        let src = it.next().map(|v| v.to_string()).unwrap_or_default();
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        obj.borrow_mut().set("family".into(), JsValue::Str(family));
+        obj.borrow_mut().set("source".into(), JsValue::Str(src));
+        obj.borrow_mut().set("status".into(), JsValue::Str("unloaded".into()));
+        obj.borrow_mut().set("style".into(), JsValue::Str("normal".into()));
+        obj.borrow_mut().set("weight".into(), JsValue::Str("normal".into()));
+        obj.borrow_mut().set("stretch".into(), JsValue::Str("normal".into()));
+        obj.borrow_mut().set("display".into(), JsValue::Str("auto".into()));
+        let obj_clone = Rc::clone(&obj);
+        obj.borrow_mut().set("load".into(), native("FontFace.load", move |_| {
+            obj_clone.borrow_mut().set("status".into(), JsValue::Str("loaded".into()));
+            Ok(make_settled_promise("fulfilled", JsValue::Object(Rc::clone(&obj_clone))))
+        }));
+        obj.borrow_mut().set("loaded".into(),
+            make_settled_promise("fulfilled", JsValue::Undefined));
+        Ok(JsValue::Object(obj))
+    }));
 
     // Blob stub
     e.define("Blob", native("Blob", |_| {
