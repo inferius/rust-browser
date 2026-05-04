@@ -226,6 +226,50 @@ pub struct LayoutBox {
     pub content_visibility: String,
     /// contain-intrinsic-size: <length>
     pub contain_intrinsic_size: f32,
+    /// counter-reset: name [n] [, name n]
+    pub counter_reset: Vec<(String, i32)>,
+    /// counter-increment: name [n] [, name n]
+    pub counter_increment: Vec<(String, i32)>,
+    /// backface-visibility: visible (default) | hidden
+    pub backface_visibility: String,
+    /// transform-style: flat (default) | preserve-3d
+    pub transform_style: String,
+    /// perspective: <length> | none
+    pub perspective: Option<f32>,
+    /// text-emphasis: <style> <color>
+    pub text_emphasis: String,
+    /// will-change: <prop list>
+    pub will_change: String,
+    /// isolation: auto | isolate
+    pub isolation: String,
+    /// mix-blend-mode: normal | multiply | screen | overlay | darken | lighten | ...
+    pub mix_blend_mode: String,
+    /// pointer-events: auto | none
+    pub pointer_events: String,
+    /// user-select: auto | none | text | all
+    pub user_select: String,
+    /// caret-color
+    pub caret_color: Option<[u8; 4]>,
+    /// resize: none | both | horizontal | vertical
+    pub resize: String,
+    /// touch-action: auto | none | pan-x | pan-y | manipulation
+    pub touch_action: String,
+    /// hyphens: none | manual | auto
+    pub hyphens: String,
+    /// tab-size: <integer> | <length>
+    pub tab_size: f32,
+    /// word-break: normal | break-all | keep-all
+    pub word_break: String,
+    /// overflow-wrap: normal | break-word | anywhere
+    pub overflow_wrap: String,
+    /// text-wrap: wrap | nowrap | balance | pretty
+    pub text_wrap: String,
+    /// text-align-last: auto | left | right | center | justify
+    pub text_align_last: String,
+    /// list-style-type: disc | circle | square | decimal | none | ...
+    pub list_style_type: String,
+    /// list-style-position: outside | inside
+    pub list_style_position: String,
     /// Box shadow: (offset_x, offset_y, blur, spread, color)
     /// (offset_x, offset_y, blur, spread, color, inset)
     pub box_shadow: Option<(f32, f32, f32, f32, [u8; 4], bool)>,
@@ -307,6 +351,28 @@ impl LayoutBox {
             writing_mode: String::new(),
             content_visibility: String::new(),
             contain_intrinsic_size: 0.0,
+            counter_reset: Vec::new(),
+            counter_increment: Vec::new(),
+            backface_visibility: String::new(),
+            transform_style: String::new(),
+            perspective: None,
+            text_emphasis: String::new(),
+            will_change: String::new(),
+            isolation: String::new(),
+            mix_blend_mode: String::new(),
+            pointer_events: String::new(),
+            user_select: String::new(),
+            caret_color: None,
+            resize: String::new(),
+            touch_action: String::new(),
+            hyphens: String::new(),
+            tab_size: 8.0,
+            word_break: String::new(),
+            overflow_wrap: String::new(),
+            text_wrap: String::new(),
+            text_align_last: String::new(),
+            list_style_type: String::new(),
+            list_style_position: String::new(),
             box_shadow: None,
             transform: None,
             transforms: Vec::new(),
@@ -686,6 +752,46 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(cis) = s.get("contain-intrinsic-size") {
         bx.contain_intrinsic_size = parse_length(cis);
     }
+    let parse_counter = |v: &str| -> Vec<(String, i32)> {
+        let mut out = Vec::new();
+        for entry in v.split(',') {
+            let parts: Vec<&str> = entry.split_whitespace().collect();
+            if let Some(name) = parts.first() {
+                let n: i32 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(1);
+                out.push((name.to_string(), n));
+            }
+        }
+        out
+    };
+    if let Some(v) = s.get("counter-reset") { bx.counter_reset = parse_counter(v); }
+    if let Some(v) = s.get("counter-increment") { bx.counter_increment = parse_counter(v); }
+    if let Some(v) = s.get("backface-visibility") { bx.backface_visibility = v.trim().to_string(); }
+    if let Some(v) = s.get("transform-style") { bx.transform_style = v.trim().to_string(); }
+    if let Some(v) = s.get("perspective") {
+        if v.trim() != "none" { bx.perspective = Some(parse_length(v)); }
+    }
+    if let Some(v) = s.get("text-emphasis") { bx.text_emphasis = v.trim().to_string(); }
+    if let Some(v) = s.get("will-change") { bx.will_change = v.trim().to_string(); }
+    if let Some(v) = s.get("isolation") { bx.isolation = v.trim().to_string(); }
+    if let Some(v) = s.get("mix-blend-mode") { bx.mix_blend_mode = v.trim().to_string(); }
+    if let Some(v) = s.get("pointer-events") { bx.pointer_events = v.trim().to_string(); }
+    if let Some(v) = s.get("user-select") { bx.user_select = v.trim().to_string(); }
+    if let Some(v) = s.get("caret-color") {
+        if v.trim() != "auto" { bx.caret_color = parse_color(v); }
+    }
+    if let Some(v) = s.get("resize") { bx.resize = v.trim().to_string(); }
+    if let Some(v) = s.get("touch-action") { bx.touch_action = v.trim().to_string(); }
+    if let Some(v) = s.get("hyphens") { bx.hyphens = v.trim().to_string(); }
+    if let Some(v) = s.get("tab-size") {
+        if let Ok(n) = v.trim().parse::<f32>() { bx.tab_size = n; }
+        else { bx.tab_size = parse_length(v); }
+    }
+    if let Some(v) = s.get("word-break") { bx.word_break = v.trim().to_string(); }
+    if let Some(v) = s.get("overflow-wrap").or(s.get("word-wrap")) { bx.overflow_wrap = v.trim().to_string(); }
+    if let Some(v) = s.get("text-wrap") { bx.text_wrap = v.trim().to_string(); }
+    if let Some(v) = s.get("text-align-last") { bx.text_align_last = v.trim().to_string(); }
+    if let Some(v) = s.get("list-style-type") { bx.list_style_type = v.trim().to_string(); }
+    if let Some(v) = s.get("list-style-position") { bx.list_style_position = v.trim().to_string(); }
     // contain - CSS Containment L3
     if let Some(c) = s.get("contain") {
         let mut bits = 0u8;
