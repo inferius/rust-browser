@@ -3,3 +3,6 @@
 # Generovane vystupy debug viewer / devtools
 /debug.html
 /devtools.html
+
+# Test runner logy
+/test_logs/
