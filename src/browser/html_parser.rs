@@ -28,7 +28,7 @@ pub fn parse_html(source: &str, url: &str) -> Document {
         .read_from(&mut source.as_bytes())
         .unwrap();
 
-    let mut document = Document::new(url.to_string());
+    let mut document = Document::empty(url.to_string());
     convert_handle(&dom.document, &document.root);
 
     // Extrakce title
@@ -79,8 +79,10 @@ fn convert_handle(handle: &Handle, parent: &Rc<Node>) {
             RcNodeData::Doctype { name, .. } => {
                 Some(Rc::new(NodeData {
                     kind: super::dom::NodeKind::DocType(name.to_string()),
+                    attributes: std::cell::RefCell::new(HashMap::new()),
                     parent: std::cell::RefCell::new(std::rc::Weak::new()),
                     children: std::cell::RefCell::new(Vec::new()),
+                    listeners: std::cell::RefCell::new(HashMap::new()),
                 }))
             }
             RcNodeData::Document => {
@@ -105,8 +107,8 @@ pub fn dump_tree(node: &Rc<Node>, depth: usize) -> String {
     let mut out = String::new();
     match &node.kind {
         NodeKind::Document => out.push_str(&format!("{indent}#document\n")),
-        NodeKind::Element { tag, attributes } => {
-            let attrs: Vec<String> = attributes.iter()
+        NodeKind::Element(tag) => {
+            let attrs: Vec<String> = node.attributes.borrow().iter()
                 .map(|(k, v)| format!(" {k}=\"{v}\""))
                 .collect();
             out.push_str(&format!("{indent}<{tag}{}>\n", attrs.join("")));

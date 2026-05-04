@@ -49,6 +49,7 @@ pub fn setup_builtins(
     next_timer_id: &Rc<RefCell<u32>>,
     workers: &Rc<RefCell<HashMap<u32, super::WorkerState>>>,
     next_worker_id: &Rc<RefCell<u32>>,
+    document: &Rc<RefCell<crate::browser::dom::Document>>,
 ) {
     let mut e = env.borrow_mut();
 
@@ -744,96 +745,140 @@ pub fn setup_builtins(
     }));
     e.define("Atomics", JsValue::Object(Rc::new(RefCell::new(atomics))));
 
-    // ─── DOM bridge - document, Element, Event ──────────────────────────────
-    // Vlastni lite implementace bez realneho DOM tree.
-    // Element je objekt s tagName, attributes, children, listeners.
+    // ─── DOM bridge - real propojeni s browser::dom ─────────────────────────
+    // Pouziva se sdileny Rc<RefCell<Document>>. Element je JsValue::DomNode.
 
-    // Helper pro vytvoreni Elementu
-    fn make_element(tag_name: &str) -> JsValue {
-        let mut obj = JsObject::new();
-        obj.set("__element__".into(),  JsValue::Bool(true));
-        obj.set("tagName".into(),      JsValue::Str(tag_name.to_uppercase()));
-        obj.set("nodeName".into(),     JsValue::Str(tag_name.to_uppercase()));
-        obj.set("nodeType".into(),     JsValue::Number(1.0)); // ELEMENT_NODE
-        obj.set("textContent".into(),  JsValue::Str(String::new()));
-        obj.set("innerHTML".into(),    JsValue::Str(String::new()));
-        obj.set("id".into(),           JsValue::Str(String::new()));
-        obj.set("className".into(),    JsValue::Str(String::new()));
-        let attrs = JsObject::new();
-        obj.set("__attrs__".into(),    JsValue::Object(Rc::new(RefCell::new(attrs))));
-        let children: Vec<JsValue> = Vec::new();
-        obj.set("childNodes".into(),   JsValue::Array(Rc::new(RefCell::new(children.clone()))));
-        obj.set("children".into(),     JsValue::Array(Rc::new(RefCell::new(children))));
-        let listeners = JsObject::new();
-        obj.set("__listeners__".into(), JsValue::Object(Rc::new(RefCell::new(listeners))));
-        let style = JsObject::new();
-        obj.set("style".into(),        JsValue::Object(Rc::new(RefCell::new(style))));
-        let classes: Vec<JsValue> = Vec::new();
-        obj.set("__classList__".into(), JsValue::Array(Rc::new(RefCell::new(classes))));
-        JsValue::Object(Rc::new(RefCell::new(obj)))
-    }
-
-    // Globalni element registry pro getElementById
-    let element_registry: Rc<RefCell<std::collections::HashMap<String, JsValue>>> =
-        Rc::new(RefCell::new(std::collections::HashMap::new()));
-
-    let mut document = JsObject::new();
-    document.set("__document__".into(), JsValue::Bool(true));
+    let mut doc_obj = JsObject::new();
+    doc_obj.set("__document__".into(), JsValue::Bool(true));
 
     // document.createElement(tagName)
-    document.set("createElement".into(), native("document.createElement", |a| {
+    doc_obj.set("createElement".into(), native("document.createElement", |a| {
+        use crate::browser::dom::NodeData;
         let tag = a.into_iter().next().map(|v| v.to_string()).unwrap_or_else(|| "div".into());
-        Ok(make_element(&tag))
+        let node = NodeData::new_element(&tag, std::collections::HashMap::new());
+        Ok(JsValue::DomNode(node))
     }));
 
     // document.createTextNode(text)
-    document.set("createTextNode".into(), native("document.createTextNode", |a| {
+    doc_obj.set("createTextNode".into(), native("document.createTextNode", |a| {
+        use crate::browser::dom::NodeData;
         let text = a.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
-        let mut obj = JsObject::new();
-        obj.set("__text_node__".into(), JsValue::Bool(true));
-        obj.set("nodeType".into(), JsValue::Number(3.0)); // TEXT_NODE
-        obj.set("nodeValue".into(), JsValue::Str(text.clone()));
-        obj.set("textContent".into(), JsValue::Str(text));
-        Ok(JsValue::Object(Rc::new(RefCell::new(obj))))
+        Ok(JsValue::DomNode(NodeData::new_text(&text)))
     }));
 
-    // document.getElementById(id)
+    // document.getElementById(id) - real walk skrz DOM tree
     {
-        let reg = Rc::clone(&element_registry);
-        document.set("getElementById".into(), native("document.getElementById", move |a| {
+        let doc = Rc::clone(document);
+        doc_obj.set("getElementById".into(), native("document.getElementById", move |a| {
             let id = a.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
-            Ok(reg.borrow().get(&id).cloned().unwrap_or(JsValue::Null))
+            Ok(match doc.borrow().root.get_element_by_id(&id) {
+                Some(n) => JsValue::DomNode(n),
+                None    => JsValue::Null,
+            })
         }));
     }
 
-    // document.querySelector(selector) - very basic: jen #id
+    // document.getElementsByTagName(tag)
     {
-        let reg = Rc::clone(&element_registry);
-        document.set("querySelector".into(), native("document.querySelector", move |a| {
-            let sel = a.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
-            if let Some(id) = sel.strip_prefix('#') {
-                return Ok(reg.borrow().get(id).cloned().unwrap_or(JsValue::Null));
-            }
-            // Pro tag selector / class selector by potreboval prochazet DOM tree
-            Ok(JsValue::Null)
+        let doc = Rc::clone(document);
+        doc_obj.set("getElementsByTagName".into(), native("document.getElementsByTagName", move |a| {
+            let tag = a.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+            let nodes = doc.borrow().root.get_elements_by_tag(&tag);
+            let arr: Vec<JsValue> = nodes.into_iter().map(JsValue::DomNode).collect();
+            Ok(JsValue::Array(Rc::new(RefCell::new(arr))))
         }));
     }
 
-    document.set("querySelectorAll".into(), native("document.querySelectorAll", |_| {
-        Ok(JsValue::Array(Rc::new(RefCell::new(Vec::new()))))
-    }));
+    // document.getElementsByClassName(class)
+    {
+        let doc = Rc::clone(document);
+        doc_obj.set("getElementsByClassName".into(), native("document.getElementsByClassName", move |a| {
+            let class = a.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+            let nodes = doc.borrow().root.get_elements_by_class(&class);
+            let arr: Vec<JsValue> = nodes.into_iter().map(JsValue::DomNode).collect();
+            Ok(JsValue::Array(Rc::new(RefCell::new(arr))))
+        }));
+    }
 
-    // document.body / documentElement - inicializovany prazdne elementy
-    let body = make_element("body");
-    let html = make_element("html");
-    document.set("body".into(), body);
-    document.set("documentElement".into(), html);
-    document.set("head".into(), make_element("head"));
-    document.set("title".into(), JsValue::Str(String::new()));
-    document.set("URL".into(), JsValue::Str("about:blank".into()));
-    document.set("readyState".into(), JsValue::Str("complete".into()));
+    // document.querySelector - basic #id, .class, tag
+    {
+        let doc = Rc::clone(document);
+        doc_obj.set("querySelector".into(), native("document.querySelector", move |a| {
+            let sel = a.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+            let result = if let Some(id) = sel.strip_prefix('#') {
+                doc.borrow().root.get_element_by_id(id)
+            } else if let Some(cls) = sel.strip_prefix('.') {
+                doc.borrow().root.get_elements_by_class(cls).into_iter().next()
+            } else {
+                doc.borrow().root.get_elements_by_tag(&sel).into_iter().next()
+            };
+            Ok(match result {
+                Some(n) => JsValue::DomNode(n),
+                None    => JsValue::Null,
+            })
+        }));
+    }
 
-    e.define("document", JsValue::Object(Rc::new(RefCell::new(document))));
+    // document.querySelectorAll
+    {
+        let doc = Rc::clone(document);
+        doc_obj.set("querySelectorAll".into(), native("document.querySelectorAll", move |a| {
+            let sel = a.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+            let nodes = if let Some(id) = sel.strip_prefix('#') {
+                doc.borrow().root.get_element_by_id(id).into_iter().collect()
+            } else if let Some(cls) = sel.strip_prefix('.') {
+                doc.borrow().root.get_elements_by_class(cls)
+            } else {
+                doc.borrow().root.get_elements_by_tag(&sel)
+            };
+            let arr: Vec<JsValue> = nodes.into_iter().map(JsValue::DomNode).collect();
+            Ok(JsValue::Array(Rc::new(RefCell::new(arr))))
+        }));
+    }
+
+    // document.body / documentElement / head - lazy z document tree
+    {
+        let doc = Rc::clone(document);
+        doc_obj.set("__get_body__".into(), native("document.body", move |_| {
+            Ok(match doc.borrow().body() {
+                Some(n) => JsValue::DomNode(n),
+                None    => JsValue::Null,
+            })
+        }));
+    }
+    {
+        let doc = Rc::clone(document);
+        doc_obj.set("__get_documentElement__".into(), native("document.documentElement", move |_| {
+            Ok(match doc.borrow().html_element() {
+                Some(n) => JsValue::DomNode(n),
+                None    => JsValue::Null,
+            })
+        }));
+    }
+    {
+        let doc = Rc::clone(document);
+        doc_obj.set("__get_head__".into(), native("document.head", move |_| {
+            Ok(match doc.borrow().head() {
+                Some(n) => JsValue::DomNode(n),
+                None    => JsValue::Null,
+            })
+        }));
+    }
+    {
+        let doc = Rc::clone(document);
+        doc_obj.set("__get_title__".into(), native("document.title", move |_| {
+            Ok(JsValue::Str(doc.borrow().title.clone()))
+        }));
+    }
+    {
+        let doc = Rc::clone(document);
+        doc_obj.set("__get_URL__".into(), native("document.URL", move |_| {
+            Ok(JsValue::Str(doc.borrow().url.clone()))
+        }));
+    }
+    doc_obj.set("readyState".into(), JsValue::Str("complete".into()));
+
+    e.define("document", JsValue::Object(Rc::new(RefCell::new(doc_obj))));
 
     // Element/Node konstruktory (pro instanceof kontroly)
     e.define("Element", native("Element", |_| Ok(JsValue::Undefined)));
@@ -891,9 +936,6 @@ pub fn setup_builtins(
     window.set("devicePixelRatio".into(), JsValue::Number(1.0));
     e.define("window", JsValue::Object(Rc::new(RefCell::new(window))));
 
-    // Ulozime registry pro pozdejsi pouziti pri setAttribute("id")
-    // Toto by chtelo lepsi integraci - zatim pouzivame skriptovou registraci
-    let _ = element_registry;
 
     // ─── fetch - real HTTP client (ureq, blocking) ──────────────────────────
     // V sync runtime blokuje na request a vraci settled Promise.

@@ -86,6 +86,9 @@ pub enum JsValue {
     /// BigInt - arbitrary precision celociselny typ (nativni `42n` syntaxe)
     /// Sdileny pres Rc pro levne klonovani.
     BigInt(Rc<BigInt>),
+    /// DOM uzel - real reference do browser::dom tree.
+    /// Sdileny pres Rc s rodicovskym/detskym tree.
+    DomNode(Rc<crate::browser::dom::Node>),
 }
 
 // ─── Map / Set datove struktury ──────────────────────────────────────────────
@@ -355,6 +358,13 @@ impl std::fmt::Display for JsValue {
             }
             JsValue::BigNumber(n) => write!(f, "{n}"),
             JsValue::BigInt(n) => write!(f, "{n}"),
+            JsValue::DomNode(n) => {
+                if let Some(tag) = n.tag_name() {
+                    write!(f, "[DOM <{tag}>]")
+                } else {
+                    write!(f, "[DOM Node]")
+                }
+            }
         }
     }
 }
@@ -368,6 +378,7 @@ impl JsValue {
             JsValue::Str(s)    => !s.is_empty(),
             JsValue::BigInt(n) => !NumZero::is_zero(n.as_ref()),
             JsValue::BigNumber(n) => !n.is_zero(),
+            JsValue::DomNode(_)   => true,
             _                  => true,
         }
     }
@@ -400,6 +411,7 @@ impl JsValue {
             JsValue::Set(_)       => "object",
             JsValue::BigNumber(_) => "bignumber",
             JsValue::BigInt(_)    => "bigint",
+            JsValue::DomNode(_)   => "object",
         }
     }
 
@@ -428,6 +440,7 @@ impl JsValue {
             (JsValue::Set(a),    JsValue::Set(b))    => Rc::ptr_eq(a, b),
             (JsValue::BigNumber(a), JsValue::BigNumber(b)) => *a == *b,
             (JsValue::BigInt(a),    JsValue::BigInt(b))    => *a == *b,
+            (JsValue::DomNode(a),   JsValue::DomNode(b))   => Rc::ptr_eq(a, b),
             _ => false,
         }
     }
@@ -624,6 +637,9 @@ pub struct Interpreter {
     pub workers: Rc<RefCell<HashMap<u32, WorkerState>>>,
     /// Pocitadlo Worker ID
     pub next_worker_id: Rc<RefCell<u32>>,
+    /// DOM Document - sdileny mezi browser engine a JS interpreterem.
+    /// Pri startu prazdny; muze byt nahrazen z parsed HTML.
+    pub document: Rc<RefCell<crate::browser::dom::Document>>,
 }
 
 // ─── Pomocne funkce ──────────────────────────────────────────────────────────
@@ -639,7 +655,10 @@ impl Interpreter {
         let workers: Rc<RefCell<HashMap<u32, WorkerState>>> =
             Rc::new(RefCell::new(HashMap::new()));
         let next_worker_id: Rc<RefCell<u32>> = Rc::new(RefCell::new(1));
-        setup_builtins(&global, &task_queue, &next_timer_id, &workers, &next_worker_id);
+        let document = Rc::new(RefCell::new(
+            crate::browser::dom::Document::new("about:blank".to_string())
+        ));
+        setup_builtins(&global, &task_queue, &next_timer_id, &workers, &next_worker_id, &document);
         Interpreter {
             global, yield_buffer: None, task_queue, next_timer_id,
             module_cache:    Rc::new(RefCell::new(HashMap::new())),
@@ -647,7 +666,13 @@ impl Interpreter {
             current_exports: None,
             base_dir:        Rc::new(RefCell::new(".".to_string())),
             workers, next_worker_id,
+            document,
         }
+    }
+
+    /// Nahradi DOM document novym (po parsu HTML).
+    pub fn set_document(&self, doc: crate::browser::dom::Document) {
+        *self.document.borrow_mut() = doc;
     }
 
     /// Drainuje vsechny worker zpravy a zavola onmessage callbacky.
@@ -2296,6 +2321,63 @@ impl Interpreter {
                 }
                 Ok(JsValue::Undefined)
             }
+            // DOM node properties: tagName, textContent, children, parentNode, ...
+            JsValue::DomNode(n) => {
+                use crate::browser::dom::NodeKind;
+                match key {
+                    "tagName" | "nodeName" => {
+                        return Ok(match n.tag_name() {
+                            Some(t) => JsValue::Str(t.to_uppercase()),
+                            None    => JsValue::Str(String::new()),
+                        });
+                    }
+                    "nodeType" => {
+                        let nt = match &n.kind {
+                            NodeKind::Element { .. } => 1.0,
+                            NodeKind::Text(_)        => 3.0,
+                            NodeKind::Comment(_)     => 8.0,
+                            NodeKind::Document       => 9.0,
+                            NodeKind::DocType(_)     => 10.0,
+                            NodeKind::Cdata(_)       => 4.0,
+                        };
+                        return Ok(JsValue::Number(nt));
+                    }
+                    "textContent" | "innerText" => {
+                        return Ok(JsValue::Str(n.text_content()));
+                    }
+                    "id" => {
+                        return Ok(JsValue::Str(n.attr("id").unwrap_or_default()));
+                    }
+                    "className" => {
+                        return Ok(JsValue::Str(n.attr("class").unwrap_or_default()));
+                    }
+                    "children" | "childNodes" => {
+                        let arr: Vec<JsValue> = n.children.borrow().iter()
+                            .map(|c| JsValue::DomNode(Rc::clone(c))).collect();
+                        return Ok(JsValue::Array(Rc::new(RefCell::new(arr))));
+                    }
+                    "firstChild" => {
+                        return Ok(match n.children.borrow().first() {
+                            Some(c) => JsValue::DomNode(Rc::clone(c)),
+                            None    => JsValue::Null,
+                        });
+                    }
+                    "lastChild" => {
+                        return Ok(match n.children.borrow().last() {
+                            Some(c) => JsValue::DomNode(Rc::clone(c)),
+                            None    => JsValue::Null,
+                        });
+                    }
+                    "parentNode" | "parentElement" => {
+                        return Ok(match n.parent.borrow().upgrade() {
+                            Some(p) => JsValue::DomNode(p),
+                            None    => JsValue::Null,
+                        });
+                    }
+                    _ => {}
+                }
+                Ok(JsValue::Undefined)
+            }
             // BigInt vlastnosti (read-only)
             JsValue::BigInt(bn) => {
                 match key {
@@ -3299,6 +3381,83 @@ impl Interpreter {
                         "valueOf" => Ok(JsValue::BigInt(bn)),
                         _ => Ok(JsValue::Undefined),
                     };
+                }
+                // ─── DomNode metody (real browser::dom Node) ─────────────
+                JsValue::DomNode(node_rc) => {
+                    use crate::browser::dom::{NodeData, NodeKind};
+                    let n = Rc::clone(node_rc);
+                    let arg_vals = self.eval_args(args, env)?;
+                    match key.as_str() {
+                        "getAttribute" => {
+                            let name = arg_vals.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+                            return Ok(match n.attr(&name) {
+                                Some(v) => JsValue::Str(v),
+                                None    => JsValue::Null,
+                            });
+                        }
+                        "setAttribute" => {
+                            let mut iter = arg_vals.into_iter();
+                            let name = iter.next().map(|v| v.to_string()).unwrap_or_default();
+                            let val = iter.next().map(|v| v.to_string()).unwrap_or_default();
+                            n.set_attr(&name, &val);
+                            return Ok(JsValue::Undefined);
+                        }
+                        "removeAttribute" => {
+                            let name = arg_vals.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+                            n.remove_attr(&name);
+                            return Ok(JsValue::Undefined);
+                        }
+                        "hasAttribute" => {
+                            let name = arg_vals.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+                            return Ok(JsValue::Bool(n.has_attr(&name)));
+                        }
+                        "appendChild" => {
+                            let child = arg_vals.into_iter().next().unwrap_or(JsValue::Undefined);
+                            if let JsValue::DomNode(c) = &child {
+                                n.append_child(Rc::clone(c));
+                            }
+                            return Ok(child);
+                        }
+                        "removeChild" => {
+                            let child = arg_vals.into_iter().next().unwrap_or(JsValue::Undefined);
+                            if let JsValue::DomNode(c) = &child {
+                                n.children.borrow_mut().retain(|x| !Rc::ptr_eq(x, c));
+                            }
+                            return Ok(child);
+                        }
+                        "querySelector" => {
+                            let sel = arg_vals.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+                            let result = if let Some(id) = sel.strip_prefix('#') {
+                                n.get_element_by_id(id)
+                            } else if let Some(cls) = sel.strip_prefix('.') {
+                                n.get_elements_by_class(cls).into_iter().next()
+                            } else {
+                                n.get_elements_by_tag(&sel).into_iter().next()
+                            };
+                            return Ok(match result {
+                                Some(node) => JsValue::DomNode(node),
+                                None       => JsValue::Null,
+                            });
+                        }
+                        "getElementsByTagName" => {
+                            let tag = arg_vals.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+                            let nodes = n.get_elements_by_tag(&tag);
+                            let arr: Vec<JsValue> = nodes.into_iter().map(JsValue::DomNode).collect();
+                            return Ok(JsValue::Array(Rc::new(RefCell::new(arr))));
+                        }
+                        "getElementsByClassName" => {
+                            let cls = arg_vals.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+                            let nodes = n.get_elements_by_class(&cls);
+                            let arr: Vec<JsValue> = nodes.into_iter().map(JsValue::DomNode).collect();
+                            return Ok(JsValue::Array(Rc::new(RefCell::new(arr))));
+                        }
+                        // Stuby pro events / focus / blur / click
+                        "addEventListener" | "removeEventListener" | "dispatchEvent"
+                        | "click" | "focus" | "blur" => return Ok(JsValue::Undefined),
+                        _ => {}
+                    }
+                    let _ = NodeData::new_text("");  // suppress unused-import warning
+                    return Ok(JsValue::Undefined);
                 }
                 JsValue::Str(s) => {
                     let s = s.clone();

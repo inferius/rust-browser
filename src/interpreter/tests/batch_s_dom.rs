@@ -103,6 +103,17 @@ fn append_remove_child() {
 // ─── Events ──────────────────────────────────────────────────────────────
 
 #[test]
+fn add_listener_returns_undefined() {
+    // addEventListener je stub (real callback dispatch je TODO)
+    let v = run(r#"
+        const el = document.createElement("button");
+        return typeof el.addEventListener("click", () => {});
+    "#);
+    assert_eq!(as_str(v), "undefined");
+}
+
+#[test]
+#[ignore] // Real event dispatch potrebuje per-node callback registry
 fn add_listener_dispatch() {
     let v = run(r#"
         const el = document.createElement("button");

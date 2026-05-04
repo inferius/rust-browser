@@ -9,31 +9,32 @@ use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 
 /// Typ DOM uzlu.
+/// Attributes jsou na NodeData (RefCell) aby byly mutable.
 #[derive(Debug, Clone)]
 pub enum NodeKind {
     /// Document - korenovy uzel
     Document,
-    /// Element s tagem a atributy: <div id="x">
-    Element {
-        tag: String,
-        attributes: HashMap<String, String>,
-    },
-    /// Textovy uzel (mezi tagy)
+    /// Element s tagem (attributes na NodeData)
+    Element(String),
+    /// Textovy uzel
     Text(String),
-    /// Komentar: <!-- ... -->
+    /// Komentar
     Comment(String),
-    /// CDATA section (XHTML/XML)
+    /// CDATA section
     Cdata(String),
     /// DOCTYPE deklarace
     DocType(String),
 }
 
-/// DOM uzel - public node ID a data.
+/// DOM uzel.
 #[derive(Debug)]
 pub struct NodeData {
     pub kind: NodeKind,
+    pub attributes: RefCell<HashMap<String, String>>,
     pub parent: RefCell<Weak<Node>>,
     pub children: RefCell<Vec<Rc<Node>>>,
+    /// Listeners: event_type -> Vec<callback> (callback je opaque pres usize id)
+    pub listeners: RefCell<HashMap<String, Vec<usize>>>,
 }
 
 pub type Node = NodeData;
@@ -42,35 +43,40 @@ impl NodeData {
     pub fn new_document() -> Rc<Self> {
         Rc::new(NodeData {
             kind: NodeKind::Document,
+            attributes: RefCell::new(HashMap::new()),
             parent: RefCell::new(Weak::new()),
             children: RefCell::new(Vec::new()),
+            listeners: RefCell::new(HashMap::new()),
         })
     }
 
     pub fn new_element(tag: &str, attributes: HashMap<String, String>) -> Rc<Self> {
         Rc::new(NodeData {
-            kind: NodeKind::Element {
-                tag: tag.to_lowercase(),
-                attributes,
-            },
+            kind: NodeKind::Element(tag.to_lowercase()),
+            attributes: RefCell::new(attributes),
             parent: RefCell::new(Weak::new()),
             children: RefCell::new(Vec::new()),
+            listeners: RefCell::new(HashMap::new()),
         })
     }
 
     pub fn new_text(content: &str) -> Rc<Self> {
         Rc::new(NodeData {
             kind: NodeKind::Text(content.to_string()),
+            attributes: RefCell::new(HashMap::new()),
             parent: RefCell::new(Weak::new()),
             children: RefCell::new(Vec::new()),
+            listeners: RefCell::new(HashMap::new()),
         })
     }
 
     pub fn new_comment(content: &str) -> Rc<Self> {
         Rc::new(NodeData {
             kind: NodeKind::Comment(content.to_string()),
+            attributes: RefCell::new(HashMap::new()),
             parent: RefCell::new(Weak::new()),
             children: RefCell::new(Vec::new()),
+            listeners: RefCell::new(HashMap::new()),
         })
     }
 
@@ -82,7 +88,7 @@ impl NodeData {
 
     /// Vrati tag (lowercase) pokud je element.
     pub fn tag_name(&self) -> Option<String> {
-        if let NodeKind::Element { tag, .. } = &self.kind {
+        if let NodeKind::Element(tag) = &self.kind {
             Some(tag.clone())
         } else {
             None
@@ -91,11 +97,22 @@ impl NodeData {
 
     /// Vrati hodnotu atributu (pokud existuje).
     pub fn attr(&self, name: &str) -> Option<String> {
-        if let NodeKind::Element { attributes, .. } = &self.kind {
-            attributes.get(name).cloned()
-        } else {
-            None
-        }
+        self.attributes.borrow().get(name).cloned()
+    }
+
+    /// Nastavi atribut.
+    pub fn set_attr(&self, name: &str, value: &str) {
+        self.attributes.borrow_mut().insert(name.to_string(), value.to_string());
+    }
+
+    /// Smaze atribut.
+    pub fn remove_attr(&self, name: &str) {
+        self.attributes.borrow_mut().remove(name);
+    }
+
+    /// Kontroluje pritomnost atributu.
+    pub fn has_attr(&self, name: &str) -> bool {
+        self.attributes.borrow().contains_key(name)
     }
 
     /// Pretvori DOM podstrom na text content (jen Text uzly).
@@ -179,6 +196,23 @@ pub struct Document {
 
 impl Document {
     pub fn new(url: String) -> Self {
+        // Default: <document> -> <html> -> <head>, <body>
+        let root = NodeData::new_document();
+        let html = NodeData::new_element("html", HashMap::new());
+        let head = NodeData::new_element("head", HashMap::new());
+        let body = NodeData::new_element("body", HashMap::new());
+        html.append_child(head);
+        html.append_child(body);
+        root.append_child(html);
+        Document {
+            root,
+            url,
+            title: String::new(),
+        }
+    }
+
+    /// Vytvori prazdny dokument bez html/head/body (pro testy parseru).
+    pub fn empty(url: String) -> Self {
         Document {
             root: NodeData::new_document(),
             url,
