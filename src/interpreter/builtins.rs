@@ -1646,6 +1646,157 @@ pub fn setup_builtins(
         e.define("navigator", JsValue::Object(nav));
     }
 
+    // TextEncoder / TextDecoder
+    e.define("TextEncoder", native("TextEncoder", |_| {
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        obj.borrow_mut().set("encoding".into(), JsValue::Str("utf-8".into()));
+        obj.borrow_mut().set("encode".into(), native("TextEncoder.encode", |args| {
+            let s = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+            let bytes: Vec<JsValue> = s.bytes().map(|b| JsValue::Number(b as f64)).collect();
+            Ok(JsValue::Array(Rc::new(RefCell::new(bytes))))
+        }));
+        Ok(JsValue::Object(obj))
+    }));
+    e.define("TextDecoder", native("TextDecoder", |_| {
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        obj.borrow_mut().set("encoding".into(), JsValue::Str("utf-8".into()));
+        obj.borrow_mut().set("decode".into(), native("TextDecoder.decode", |args| {
+            let arr = args.into_iter().next().unwrap_or(JsValue::Undefined);
+            if let JsValue::Array(a) = arr {
+                let bytes: Vec<u8> = a.borrow().iter()
+                    .map(|v| v.to_number() as u8).collect();
+                Ok(JsValue::Str(String::from_utf8_lossy(&bytes).into_owned()))
+            } else {
+                Ok(JsValue::Str(String::new()))
+            }
+        }));
+        Ok(JsValue::Object(obj))
+    }));
+
+    // crypto - randomUUID + getRandomValues + subtle stub
+    {
+        let crypto = Rc::new(RefCell::new(JsObject::new()));
+        crypto.borrow_mut().set("randomUUID".into(), native("crypto.randomUUID", |_| {
+            // Simple v4 UUID s pseudo-random pres time-based
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos() as u128)
+                .unwrap_or(0);
+            let h = nanos;
+            let s = format!(
+                "{:08x}-{:04x}-4{:03x}-{:04x}-{:012x}",
+                (h >> 96) as u32, (h >> 80) as u16 & 0xFFFF,
+                (h >> 64) as u16 & 0xFFF,
+                ((h >> 48) as u16 & 0x3FFF) | 0x8000,
+                h as u64 & 0xFFFF_FFFF_FFFF
+            );
+            Ok(JsValue::Str(s))
+        }));
+        crypto.borrow_mut().set("getRandomValues".into(), native("crypto.getRandomValues", |args| {
+            // Vraci puvodni array s "random" hodnotami (deterministicky pseudo-random pres time)
+            let arr = args.into_iter().next().unwrap_or(JsValue::Undefined);
+            if let JsValue::Array(a) = &arr {
+                let nanos = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos() as u64)
+                    .unwrap_or(0);
+                let mut state = nanos.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                let len = a.borrow().len();
+                let mut new_vals = Vec::with_capacity(len);
+                for _ in 0..len {
+                    state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                    new_vals.push(JsValue::Number((state >> 32) as u32 as f64));
+                }
+                *a.borrow_mut() = new_vals;
+            }
+            Ok(arr)
+        }));
+        // Subtle stub
+        let subtle = Rc::new(RefCell::new(JsObject::new()));
+        for m in &["digest", "encrypt", "decrypt", "sign", "verify", "generateKey", "importKey", "exportKey", "deriveKey", "deriveBits", "wrapKey", "unwrapKey"] {
+            let name = m.to_string();
+            subtle.borrow_mut().set(name, native(m, |_| {
+                Ok(make_settled_promise("fulfilled", JsValue::Undefined))
+            }));
+        }
+        crypto.borrow_mut().set("subtle".into(), JsValue::Object(subtle));
+        e.define("crypto", JsValue::Object(crypto));
+    }
+
+    // performance.now() + performance.timeOrigin
+    {
+        let perf = Rc::new(RefCell::new(JsObject::new()));
+        let start = std::time::Instant::now();
+        perf.borrow_mut().set("now".into(), native("performance.now", move |_| {
+            Ok(JsValue::Number(start.elapsed().as_secs_f64() * 1000.0))
+        }));
+        perf.borrow_mut().set("timeOrigin".into(), JsValue::Number(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs_f64() * 1000.0)
+                .unwrap_or(0.0)
+        ));
+        perf.borrow_mut().set("mark".into(), native("performance.mark", |_| Ok(JsValue::Undefined)));
+        perf.borrow_mut().set("measure".into(), native("performance.measure", |_| Ok(JsValue::Undefined)));
+        perf.borrow_mut().set("clearMarks".into(), native("performance.clearMarks", |_| Ok(JsValue::Undefined)));
+        perf.borrow_mut().set("clearMeasures".into(), native("performance.clearMeasures", |_| Ok(JsValue::Undefined)));
+        perf.borrow_mut().set("getEntries".into(), native("performance.getEntries", |_| {
+            Ok(JsValue::Array(Rc::new(RefCell::new(Vec::new()))))
+        }));
+        e.define("performance", JsValue::Object(perf));
+    }
+
+    // FormData stub
+    e.define("FormData", native("FormData", |_| {
+        let pairs: Rc<RefCell<Vec<(String, String)>>> = Rc::new(RefCell::new(Vec::new()));
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        {
+            let p = Rc::clone(&pairs);
+            obj.borrow_mut().set("append".into(), native("FormData.append", move |args| {
+                let mut it = args.into_iter();
+                let k = it.next().map(|v| v.to_string()).unwrap_or_default();
+                let v = it.next().map(|v| v.to_string()).unwrap_or_default();
+                p.borrow_mut().push((k, v));
+                Ok(JsValue::Undefined)
+            }));
+        }
+        {
+            let p = Rc::clone(&pairs);
+            obj.borrow_mut().set("get".into(), native("FormData.get", move |args| {
+                let k = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+                Ok(p.borrow().iter().find(|(kk, _)| kk == &k)
+                    .map(|(_, v)| JsValue::Str(v.clone())).unwrap_or(JsValue::Null))
+            }));
+        }
+        {
+            let p = Rc::clone(&pairs);
+            obj.borrow_mut().set("has".into(), native("FormData.has", move |args| {
+                let k = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+                Ok(JsValue::Bool(p.borrow().iter().any(|(kk, _)| kk == &k)))
+            }));
+        }
+        {
+            let p = Rc::clone(&pairs);
+            obj.borrow_mut().set("delete".into(), native("FormData.delete", move |args| {
+                let k = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+                p.borrow_mut().retain(|(kk, _)| kk != &k);
+                Ok(JsValue::Undefined)
+            }));
+        }
+        Ok(JsValue::Object(obj))
+    }));
+
+    // Blob stub
+    e.define("Blob", native("Blob", |_| {
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        obj.borrow_mut().set("size".into(), JsValue::Number(0.0));
+        obj.borrow_mut().set("type".into(), JsValue::Str(String::new()));
+        obj.borrow_mut().set("text".into(), native("Blob.text", |_| Ok(make_settled_promise("fulfilled", JsValue::Str(String::new())))));
+        obj.borrow_mut().set("arrayBuffer".into(), native("Blob.arrayBuffer", |_| Ok(make_settled_promise("fulfilled", JsValue::Array(Rc::new(RefCell::new(Vec::new())))))));
+        obj.borrow_mut().set("slice".into(), native("Blob.slice", |_| Ok(JsValue::Undefined)));
+        Ok(JsValue::Object(obj))
+    }));
+
     e.define("ResizeObserver", make_observer("ResizeObserver"));
     e.define("IntersectionObserver", make_observer("IntersectionObserver"));
     e.define("MutationObserver", make_observer("MutationObserver"));
