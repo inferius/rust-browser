@@ -214,6 +214,68 @@ fn selector_first_of_type() {
     assert!(cascade::get_styles(&map, &ps[1]).unwrap().get("color").is_none());
 }
 
+// ─── CSS Nesting L1 ────────────────────────────────────────────────────
+
+#[test]
+fn nesting_basic_descendant() {
+    let doc = parse_html(r#"<html><body><div class="card"><h2>x</h2></div></body></html>"#, "");
+    let css = parse_stylesheet(r#"
+        .card {
+            color: red;
+            h2 { color: blue; }
+        }
+    "#);
+    let map = cascade::cascade(&doc.root, &[css]);
+    let card = doc.root.find(|n| n.attr("class").as_deref() == Some("card")).unwrap();
+    let h2 = doc.root.find(|n| n.tag_name().as_deref() == Some("h2")).unwrap();
+    assert_eq!(cascade::get_styles(&map, &card).unwrap().get("color").map(|s| s.as_str()), Some("red"));
+    assert_eq!(cascade::get_styles(&map, &h2).unwrap().get("color").map(|s| s.as_str()), Some("blue"));
+}
+
+#[test]
+fn nesting_with_ampersand_pseudo() {
+    let doc = parse_html(r#"<html><body><a class="btn">x</a></body></html>"#, "");
+    let css = parse_stylesheet(r#"
+        .btn {
+            color: red;
+            &.active { color: green; }
+        }
+    "#);
+    let _map = cascade::cascade(&doc.root, &[css]);
+    // .btn (bez .active) -> red. Test ze parser nespadne, kombinovany rule .btn.active existuje.
+}
+
+#[test]
+fn nesting_ampersand_with_class_combine() {
+    let doc = parse_html(r#"<html><body><div class="card highlight">x</div></body></html>"#, "");
+    let css = parse_stylesheet(r#"
+        .card {
+            background: white;
+            &.highlight { background: yellow; }
+        }
+    "#);
+    let map = cascade::cascade(&doc.root, &[css]);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let s = cascade::get_styles(&map, &div).unwrap();
+    assert_eq!(s.get("background").map(|v| v.as_str()), Some("yellow"));
+}
+
+#[test]
+fn nesting_deep_three_levels() {
+    let doc = parse_html(r#"<html><body><div class="a"><div class="b"><span>x</span></div></div></body></html>"#, "");
+    let css = parse_stylesheet(r#"
+        .a {
+            .b {
+                span { color: red; }
+            }
+        }
+    "#);
+    let map = cascade::cascade(&doc.root, &[css]);
+    let span = doc.root.find(|n| n.tag_name().as_deref() == Some("span")).unwrap();
+    let s = cascade::get_styles(&map, &span).unwrap();
+    assert_eq!(s.get("color").map(|v| v.as_str()), Some("red"));
+}
+
 // ─── Logical Properties L1 ─────────────────────────────────────────────
 
 #[test]

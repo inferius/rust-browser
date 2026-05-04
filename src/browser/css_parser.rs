@@ -194,12 +194,122 @@ pub fn parse_stylesheet(source: &str) -> Stylesheet {
             // Ostatni at-rules ignorujeme (@import, @font-face, ...)
         } else {
             let selectors = parse_selectors(&selectors_str);
-            let declarations = parse_decls_str(&block_str);
-            rules.push(Rule { selectors, declarations });
+            // CSS Nesting L1: zpracuj block s ohledem na nested rulesets
+            process_nested_block(&selectors, &block_str, &mut rules);
         }
     }
 
     Stylesheet { rules, media_queries, keyframes }
+}
+
+/// CSS Nesting: rozdeli block na (vlastni declarace, nested rulesets).
+/// Pro nested rulesets vyrobi kombinovany selector (parent x nested)
+/// a rekurzivne ho ulozi do rules.
+fn process_nested_block(parent: &[Selector], block: &str, rules: &mut Vec<Rule>) {
+    let mut own_decls = String::new();
+    let mut chars = block.chars().peekable();
+    while chars.peek().is_some() {
+        // Sosa do prvniho `;` nebo `{`
+        let mut buf = String::new();
+        let mut found_brace = false;
+        while let Some(&c) = chars.peek() {
+            if c == ';' { chars.next(); break; }
+            if c == '{' { found_brace = true; break; }
+            buf.push(c);
+            chars.next();
+        }
+        if !found_brace {
+            // Pricti k vlastnim deklaracim (semicolon/EOF)
+            if !buf.trim().is_empty() {
+                own_decls.push_str(&buf);
+                own_decls.push(';');
+            }
+            continue;
+        }
+        // Nested ruleset: buf obsahuje nested selektor, dale nasleduje `{...}`
+        chars.next(); // pohlt `{`
+        let nested_sel_str = buf.trim().to_string();
+        let mut inner_block = String::new();
+        let mut depth = 1;
+        while let Some(c) = chars.next() {
+            if c == '{' { depth += 1; }
+            if c == '}' { depth -= 1; if depth == 0 { break; } }
+            inner_block.push(c);
+        }
+        // Spojuj parent x nested
+        let nested_selectors = parse_selectors(&nested_sel_str);
+        let combined = combine_nested_selectors(parent, &nested_selectors);
+        // Rekurzivni nesting
+        process_nested_block(&combined, &inner_block, rules);
+    }
+    if !own_decls.trim().is_empty() {
+        let declarations = parse_decls_str(&own_decls);
+        if !declarations.is_empty() {
+            rules.push(Rule { selectors: parent.to_vec(), declarations });
+        }
+    }
+}
+
+/// Kombinuje parent selektory s nested selektory pres CSS Nesting `&`.
+/// Cartesian product: vsechny kombinace.
+fn combine_nested_selectors(parent: &[Selector], nested: &[Selector]) -> Vec<Selector> {
+    let mut out = Vec::new();
+    for n in nested {
+        for p in parent {
+            out.push(substitute_ampersand(p, n));
+        }
+    }
+    out
+}
+
+/// Provede substituci `&` v nested selektoru za parent.
+/// Pravidla:
+/// - Pokud `&` v nested neni, predpokladame implicit `& <nested>` (descendant).
+/// - `&` v prvni casti nahradi parent ruzove parts.
+/// - `&` v dalsich castech (compound s tagem/classou) - jednoduche zacleneni: pridame parent jako prefix.
+fn substitute_ampersand(parent: &Selector, nested: &Selector) -> Selector {
+    if nested.parts.is_empty() { return parent.clone(); }
+
+    // Detekce zda nested zacina amp
+    let first = &nested.parts[0];
+    let starts_with_amp = first.tag.as_deref() == Some("&")
+        || first.id.as_deref() == Some("&")
+        || first.classes.iter().any(|c| c == "&");
+
+    let mut new_parts = parent.parts.clone();
+    // Bezpecnostne odstran `&` kdykoliv se vyskytuje v parts (parser ho mohl ulozit do tag)
+    if starts_with_amp {
+        // Sloucit prvni part nested (bez `&` markeru) s posledni part parenta
+        if let Some(last) = new_parts.last_mut() {
+            let mut merged = first.clone();
+            // Odstran `&` markery z merged
+            if merged.tag.as_deref() == Some("&") { merged.tag = None; }
+            merged.id = merged.id.filter(|id| id != "&");
+            merged.classes.retain(|c| c != "&");
+            // Pridej z merged do last (concat)
+            if merged.tag.is_some() { last.tag = merged.tag; }
+            if merged.id.is_some()  { last.id = merged.id; }
+            last.classes.extend(merged.classes);
+            last.attributes.extend(merged.attributes);
+            last.pseudo_classes.extend(merged.pseudo_classes);
+            last.pseudo_funcs.extend(merged.pseudo_funcs);
+        }
+        // Zbytek nested.parts (>= 1) pridat s puvodnymi combinatory
+        for part in nested.parts.iter().skip(1) {
+            new_parts.push(part.clone());
+        }
+    } else {
+        // Implicit descendant - pridej cely nested za parent
+        for (i, part) in nested.parts.iter().enumerate() {
+            let mut np = part.clone();
+            // Prvni cast nested musi mit kombinator (default Descendant)
+            if i == 0 && np.combinator.is_none() {
+                np.combinator = Some(Combinator::Descendant);
+            }
+            new_parts.push(np);
+        }
+    }
+    Selector { parts: new_parts }
 }
 
 /// Parsuje @keyframes blok: "0% { ... } 50% { ... } 100% { ... }".
@@ -378,13 +488,18 @@ fn parse_single_selector(s: &str) -> Selector {
 
         let chars: Vec<char> = token.chars().collect();
         let mut i = 0;
-        // Tag / universal (volitelny)
-        let mut tag_buf = String::new();
-        while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '*' || chars[i] == '-') {
-            tag_buf.push(chars[i]);
+        // Tag / universal / `&` (CSS Nesting) (volitelny)
+        if i < chars.len() && chars[i] == '&' {
+            tag = Some("&".to_string());
             i += 1;
+        } else {
+            let mut tag_buf = String::new();
+            while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '*' || chars[i] == '-') {
+                tag_buf.push(chars[i]);
+                i += 1;
+            }
+            if !tag_buf.is_empty() { tag = Some(tag_buf); }
         }
-        if !tag_buf.is_empty() { tag = Some(tag_buf); }
 
         while i < chars.len() {
             match chars[i] {

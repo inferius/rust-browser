@@ -23,7 +23,7 @@ Konvence stavu:
 ### Batch 2 - chybejici "must-have" moduly
 - [ ] CSS Transitions L1 (cely modul)
 - [x] CSS Logical Properties L1 (`margin/padding-block/-inline`, `border-*-block/-inline-*`, `inset-*`, `block-size/inline-size`, `border-start-end-radius` rohy) - mapovani LTR + horizontal-tb
-- [ ] CSS Nesting L1 (`&` selector)
+- [x] CSS Nesting L1 (`&` selector + nested rulesets, implicit descendant pri ne-amp prefix, kombinace `.parent.nested` pres `&`)
 - [ ] CSS Container Queries L1 (`@container`, `cqw`, `cqh`)
 - [ ] CSS Filter Effects L1 (`filter: blur/brightness/...`)
 
@@ -260,9 +260,9 @@ Konvence stavu:
 - [ ] Style queries `@container style(--name: val)`
 
 ### CSS Nesting L1
-- [ ] `&` selector
+- [x] `&` selector
 - [ ] Nested at-rules (`@media`, `@supports` uvnitr ruleset)
-- [ ] Implicit `&` v jednoduchych pripadech
+- [x] Implicit descendant pri ne-amp prefix (`tag`, `.class`)
 
 ### CSS @media L4/L5
 - [x] `@media (max-width: ...)`, `@media (min-width: ...)`

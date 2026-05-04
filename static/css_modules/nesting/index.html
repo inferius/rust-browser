@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="UTF-8">
+    <title>CSS Nesting L1</title>
+    <link rel="stylesheet" href="index.css">
+</head>
+<body>
+    <header>
+        <h1>CSS Nesting Level 1</h1>
+        <p>&amp; selector + nested rulesets</p>
+    </header>
+
+    <main>
+        <section>
+            <h2>Basic descendant nesting</h2>
+            <div class="card">
+                <h3>Nadpis (modry)</h3>
+                <p>Odstavec (cerveny)</p>
+            </div>
+        </section>
+
+        <section>
+            <h2>&amp; combine - .card.highlight</h2>
+            <div class="card highlight">
+                <h3>Highlighted card</h3>
+                <p>tucna varianta</p>
+            </div>
+        </section>
+
+        <section>
+            <h2>Hluboke nesting (3 urovne)</h2>
+            <div class="a">
+                <div class="b">
+                    <span>cervena dik 3 urovnym</span>
+                </div>
+            </div>
+        </section>
+    </main>
+</body>
+</html>
