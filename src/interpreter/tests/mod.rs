@@ -34,3 +34,4 @@ mod url_parts_tests;
 mod web_apis_tests;
 mod webgl_tests;
 mod edge_cases_tests;
+mod dom_api_tests;
