@@ -790,6 +790,18 @@ impl Interpreter {
             }
 
             // Async funkce: `async function name(params) { body }`
+            // Async generator: implementovan jako bezny generator (sync model).
+            // V realnem JS by kazdy yield vracel Promise, my v sync vraci hodnotu.
+            Stmt::AsyncGeneratorFunc { name, params, body } => {
+                let func = JsValue::Function(JsFunc::Generator {
+                    name: Some(name.clone()),
+                    params: params.clone(),
+                    body: body.clone(),
+                    env: Rc::clone(env),
+                });
+                env.borrow_mut().define(name, func);
+                Ok(None)
+            }
             Stmt::AsyncFunc { name, params, body } => {
                 let func = JsValue::Function(JsFunc::Async {
                     name: Some(name.clone()),
@@ -989,6 +1001,29 @@ impl Interpreter {
                 for item in items {
                     let loop_env = Environment::new_child(env);
                     self.bind_target_expr(target, item, &loop_env)?;
+                    match self.exec_stmt(body, &loop_env)? {
+                        Some(Signal::Break(None))    => break,
+                        Some(Signal::Continue(None)) => continue,
+                        Some(s) => return Ok(Some(s)),
+                        None => {}
+                    }
+                }
+                Ok(None)
+            }
+
+            // For-await-of: jako for-of, ale kazdy yielded element rozbal jako Promise
+            // V nasi sync implementaci stejne jako for-of, ale s unwrap_promise_result
+            Stmt::ForAwaitOf { kind: _, target, iter, body } => {
+                let arr_val = self.eval(iter, env)?;
+                let items = self.collect_iterable(arr_val)?;
+                for item in items {
+                    // Pokud je item Promise, await ho
+                    let resolved = match unwrap_promise_result(item) {
+                        Ok(v) => v,
+                        Err(reason) => return Err(JsError::Thrown(reason)),
+                    };
+                    let loop_env = Environment::new_child(env);
+                    self.bind_target_expr(target, resolved, &loop_env)?;
                     match self.exec_stmt(body, &loop_env)? {
                         Some(Signal::Break(None))    => break,
                         Some(Signal::Continue(None)) => continue,
@@ -2499,6 +2534,20 @@ impl Interpreter {
                 }
                 JsValue::Object(obj_rc) => {
                     let obj_rc2 = Rc::clone(obj_rc);
+                    // ─── WeakRef.deref / FinalizationRegistry methods ──────
+                    if obj_rc2.borrow().props.contains_key("__weak_target__") {
+                        if key == "deref" {
+                            return Ok(obj_rc2.borrow().props.get("__weak_target__")
+                                .cloned().unwrap_or(JsValue::Undefined));
+                        }
+                    }
+                    if obj_rc2.borrow().props.contains_key("__finalizer__") {
+                        // Stub: register/unregister - jen vrat undefined
+                        match key.as_str() {
+                            "register" | "unregister" => return Ok(JsValue::Undefined),
+                            _ => {}
+                        }
+                    }
                     // ─── Date instance metody ──────────────────────────────
                     if let JsValue::Number(ms) = obj_rc2.borrow().props.get("__date_ms__").cloned().unwrap_or(JsValue::Undefined) {
                         let arg_vals = self.eval_args(args, env)?;
@@ -3202,6 +3251,20 @@ impl Interpreter {
             match name.as_str() {
                 "Map" | "WeakMap" => return self.construct_map(args),
                 "Set" | "WeakSet" => return self.construct_set(args),
+                "WeakRef" => {
+                    // new WeakRef(target) -> objekt s __weak_target__
+                    let target = args.into_iter().next().unwrap_or(JsValue::Undefined);
+                    let mut obj = JsObject::new();
+                    obj.set("__weak_target__".into(), target);
+                    return Ok(JsValue::Object(Rc::new(RefCell::new(obj))));
+                }
+                "FinalizationRegistry" => {
+                    // new FinalizationRegistry(cb) -> objekt s __finalizer__
+                    let cb = args.into_iter().next().unwrap_or(JsValue::Undefined);
+                    let mut obj = JsObject::new();
+                    obj.set("__finalizer__".into(), cb);
+                    return Ok(JsValue::Object(Rc::new(RefCell::new(obj))));
+                }
                 "Date"            => return self.construct_date(args),
                 "Promise"         => return self.construct_promise(args),
                 "RegExp"          => {

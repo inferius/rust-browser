@@ -21,4 +21,5 @@ mod bigint_tests;
 mod modules_tests;
 mod batch_h_extras;
 mod batch_k_modern;
+mod batch_l_async;
 mod misc;

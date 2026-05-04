@@ -392,6 +392,9 @@ pub enum Stmt {
     ForIn  { kind: Option<VarKind>, target: Box<Expr>, iter: Expr, body: Box<Stmt> },
     /// For-of cyklus: `for (val of iterable) body`
     ForOf  { kind: Option<VarKind>, target: Box<Expr>, iter: Expr, body: Box<Stmt> },
+    /// For-await-of cyklus: `for await (val of asyncIterable) body`
+    /// Pouziva se pro async iteratory (kazdy next() vraci Promise).
+    ForAwaitOf { kind: Option<VarKind>, target: Box<Expr>, iter: Expr, body: Box<Stmt> },
 
     /// Try-catch-finally: `try { } catch (e) { } finally { }`
     Try { body: Vec<Stmt>, catch: Option<CatchClause>, finally: Option<Vec<Stmt>> },
@@ -416,6 +419,10 @@ pub enum Stmt {
 
     /// Deklarace async funkce: `async function name(params) { body }`
     AsyncFunc { name: String, params: Vec<Param>, body: Vec<Stmt> },
+
+    /// Deklarace async generator: `async function* name(params) { body }`
+    /// Spojuje async/await s yield - kazdy yield se zabali do Promise.
+    AsyncGeneratorFunc { name: String, params: Vec<Param>, body: Vec<Stmt> },
 
     /// `import` prikaz: nacte modul a binduje vybrane exporty do scope.
     ///

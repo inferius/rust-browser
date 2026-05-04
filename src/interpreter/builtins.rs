@@ -274,6 +274,23 @@ pub fn setup_builtins(
     e.define("WeakMap", native("WeakMap", |_| Ok(JsValue::Undefined)));
     e.define("WeakSet", native("WeakSet", |_| Ok(JsValue::Undefined)));
 
+    // WeakRef - drzi slabou referenci na objekt (v sync impl bez GC drzi silnou)
+    // .deref() vraci puvodni objekt (nebo undefined kdyby byl zruseny)
+    e.define("WeakRef", native("WeakRef", |a| {
+        let target = a.into_iter().next().unwrap_or(JsValue::Undefined);
+        let mut obj = JsObject::new();
+        obj.set("__weak_target__".into(), target);
+        Ok(JsValue::Object(Rc::new(RefCell::new(obj))))
+    }));
+
+    // FinalizationRegistry - stub (v sync runtime bez GC neni co volat)
+    e.define("FinalizationRegistry", native("FinalizationRegistry", |a| {
+        let cb = a.into_iter().next().unwrap_or(JsValue::Undefined);
+        let mut obj = JsObject::new();
+        obj.set("__finalizer__".into(), cb);
+        Ok(JsValue::Object(Rc::new(RefCell::new(obj))))
+    }));
+
     // JSON
     let mut json_obj = JsObject::new();
     json_obj.set("stringify".into(), native("JSON.stringify", |a| {

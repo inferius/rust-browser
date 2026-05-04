@@ -355,10 +355,17 @@ impl Parser {
     fn parse_async_fn_decl(&mut self) -> Result<Stmt, ParseError> {
         self.expect_kw(KeywordEnum::Function)?;
         self.skip_trivia();
+        // `async function*` - async generator
+        let is_generator = self.eat_op(OperatorEnum::Star);
+        self.skip_trivia();
         let name = self.parse_ident()?;
         let params = self.parse_params()?;
         let body = self.parse_fn_body()?;
-        Ok(Stmt::AsyncFunc { name, params, body })
+        if is_generator {
+            Ok(Stmt::AsyncGeneratorFunc { name, params, body })
+        } else {
+            Ok(Stmt::AsyncFunc { name, params, body })
+        }
     }
 
     // ─── Import / Export ─────────────────────────────────────────────────────
@@ -762,6 +769,10 @@ impl Parser {
 
     fn parse_for(&mut self) -> Result<Stmt, ParseError> {
         self.advance();
+        self.skip_trivia();
+        // `for await (...)` - async iterace
+        let is_await = matches!(self.kind(), TokenKind::Keyword(KeywordEnum::Await));
+        if is_await { self.advance(); self.skip_trivia(); }
         self.expect_op(OperatorEnum::LParen)?;
         self.skip_trivia();
 
@@ -786,6 +797,13 @@ impl Parser {
                 let iter = self.parse_assign_expr()?;
                 self.expect_op(OperatorEnum::RParen)?;
                 let target = pattern_to_expr(pattern);
+                if is_await {
+                    return Ok(Stmt::ForAwaitOf {
+                        kind: Some(kind),
+                        target: Box::new(target),
+                        iter, body: Box::new(self.parse_stmt()?),
+                    });
+                }
                 return Ok(Stmt::ForOf {
                     kind: Some(kind),
                     target: Box::new(target),
