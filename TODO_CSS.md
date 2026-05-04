@@ -134,7 +134,7 @@ Konvence stavu:
 ### CSS Fonts L4/L5
 - [x] `font-family`, `font-size`, `font-weight`, `font-style`
 - [x] `font` shorthand (parsing)
-- [/] `@font-face { font-family; src: url(); }` parser hotovy + ulozeny v Stylesheet.font_faces. Runtime font loading + fontdue registry TODO.
+- [/] `@font-face { font-family; src: url(); }` parser + runtime FS load do Renderer.font_registry. HTTP load + per-text font lookup pri rasterize TODO.
 - [/] `font-display: auto|block|swap|fallback|optional` parsing OK
 - [ ] `font-variation-settings`
 - [ ] `font-feature-settings`

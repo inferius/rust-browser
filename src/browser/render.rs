@@ -898,6 +898,10 @@ pub fn run_window_with_html(html: String, css: String) -> Result<(), String> {
             };
 
             let stylesheets = vec![css_parser::parse_stylesheet(&self.css)];
+            // Nacti @font-face fonty (idempotentni - skip uz loaded)
+            for sheet in &stylesheets {
+                r.load_font_faces(&sheet.font_faces);
+            }
             let mut style_map = cascade::cascade(&document_root, &stylesheets);
             let pseudo_map = cascade::cascade_pseudo(&document_root, &stylesheets);
 
@@ -989,6 +993,10 @@ struct Renderer {
     image_atlas: ImageAtlas,
     image_tex: wgpu::Texture,
     image_view: wgpu::TextureView,
+    /// @font-face loaded fonts: family -> Font.
+    font_registry: std::collections::HashMap<String, fontdue::Font>,
+    /// Loaded font URLs (skip re-load).
+    loaded_font_urls: std::collections::HashSet<String>,
 }
 
 impl Renderer {
@@ -1170,6 +1178,32 @@ impl Renderer {
             surface, device, queue, config, pipeline, uniform_buf,
             atlas_tex, atlas_view, atlas_smp, bind_group_layout, bind_group, atlas,
             image_atlas, image_tex, image_view,
+            font_registry: std::collections::HashMap::new(),
+            loaded_font_urls: std::collections::HashSet::new(),
+        }
+    }
+
+    /// Nacte fonty z @font-face declarations do Font registry.
+    /// Skip uz nahrane URL. FS only (HTTP TODO).
+    fn load_font_faces(&mut self, font_faces: &[crate::browser::css_parser::FontFace]) {
+        use crate::browser::css_parser::extract_font_url;
+        for ff in font_faces {
+            let url = match extract_font_url(&ff.src) { Some(u) => u, None => continue };
+            if self.loaded_font_urls.contains(&url) { continue; }
+            // FS path: relative -> static/<url>
+            let path = if url.starts_with('/') {
+                url.clone()
+            } else if url.starts_with("http://") || url.starts_with("https://") {
+                continue; // HTTP TODO
+            } else {
+                format!("static/{url}")
+            };
+            if let Ok(bytes) = std::fs::read(&path) {
+                if let Ok(font) = fontdue::Font::from_bytes(bytes, fontdue::FontSettings::default()) {
+                    self.font_registry.insert(ff.family.clone(), font);
+                    self.loaded_font_urls.insert(url);
+                }
+            }
         }
     }
 
