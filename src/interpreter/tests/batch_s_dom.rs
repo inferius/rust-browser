@@ -292,6 +292,29 @@ fn document_html_exists() {
 // ─── Form properties ─────────────────────────────────────────────────────
 
 #[test]
+fn style_set_get_property() {
+    let v = run(r#"
+        const div = document.createElement("div");
+        div.style.setProperty("color", "red");
+        div.style.setProperty("background", "blue");
+        return div.style.getPropertyValue("color")
+            + ":" + div.style.getPropertyValue("background");
+    "#);
+    assert_eq!(as_str(v), "red:blue");
+}
+
+#[test]
+fn style_remove_property() {
+    let v = run(r#"
+        const div = document.createElement("div");
+        div.style.setProperty("color", "red");
+        const old = div.style.removeProperty("color");
+        return old + ":" + div.style.getPropertyValue("color");
+    "#);
+    assert_eq!(as_str(v), "red:");
+}
+
+#[test]
 fn classlist_add_remove_contains() {
     let v = run(r#"
         const div = document.createElement("div");

@@ -2443,6 +2443,10 @@ impl Interpreter {
                     "dataset" => {
                         return Ok(create_dataset(&n));
                     }
+                    // style - CSSStyleDeclaration object
+                    "style" => {
+                        return Ok(create_style_object(Rc::clone(&n)));
+                    }
                     // HTMLFormElement properties
                     "action" if n.tag_name().as_deref() == Some("form") => {
                         return Ok(JsValue::Str(n.attr("action").unwrap_or_default()));
@@ -4683,6 +4687,96 @@ impl Interpreter {
 }
 
 
+
+/// CSSStyleDeclaration object pro element.style.
+/// Nese referenci na node + parsuje "style" attribute pro getter / setter.
+fn create_style_object(node: Rc<crate::browser::dom::NodeData>) -> JsValue {
+    let obj_rc = Rc::new(RefCell::new(JsObject::new()));
+    // Pre-naplnim z aktualniho style attributu - kebab-case keys + camelCase
+    if let Some(style_str) = node.attr("style") {
+        for pair in style_str.split(';') {
+            if let Some(idx) = pair.find(':') {
+                let prop = pair[..idx].trim().to_string();
+                let val = pair[idx+1..].trim().to_string();
+                if !prop.is_empty() {
+                    let camel = kebab_to_camel(&prop);
+                    obj_rc.borrow_mut().set(camel, JsValue::Str(val.clone()));
+                    obj_rc.borrow_mut().set(prop, JsValue::Str(val));
+                }
+            }
+        }
+    }
+    // setProperty(name, value)
+    {
+        let n = Rc::clone(&node);
+        obj_rc.borrow_mut().set("setProperty".into(), native("style.setProperty", move |args| {
+            let mut it = args.into_iter();
+            let prop = it.next().map(|v| v.to_string()).unwrap_or_default();
+            let val  = it.next().map(|v| v.to_string()).unwrap_or_default();
+            let mut style = n.attr("style").unwrap_or_default();
+            // Replace nebo pridat
+            let mut found = false;
+            let mut new_pairs: Vec<String> = Vec::new();
+            for pair in style.split(';') {
+                if let Some(idx) = pair.find(':') {
+                    let p = pair[..idx].trim();
+                    if p == prop {
+                        new_pairs.push(format!("{prop}: {val}"));
+                        found = true;
+                    } else if !p.is_empty() {
+                        new_pairs.push(pair.trim().to_string());
+                    }
+                }
+            }
+            if !found {
+                new_pairs.push(format!("{prop}: {val}"));
+            }
+            style = new_pairs.join("; ");
+            n.set_attr("style", &style);
+            Ok(JsValue::Undefined)
+        }));
+    }
+    // getPropertyValue(name)
+    {
+        let n = Rc::clone(&node);
+        obj_rc.borrow_mut().set("getPropertyValue".into(), native("style.getPropertyValue", move |args| {
+            let prop = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+            let style = n.attr("style").unwrap_or_default();
+            for pair in style.split(';') {
+                if let Some(idx) = pair.find(':') {
+                    let p = pair[..idx].trim();
+                    if p == prop {
+                        return Ok(JsValue::Str(pair[idx+1..].trim().to_string()));
+                    }
+                }
+            }
+            Ok(JsValue::Str(String::new()))
+        }));
+    }
+    // removeProperty(name)
+    {
+        let n = Rc::clone(&node);
+        obj_rc.borrow_mut().set("removeProperty".into(), native("style.removeProperty", move |args| {
+            let prop = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+            let style = n.attr("style").unwrap_or_default();
+            let mut removed = String::new();
+            let new_pairs: Vec<String> = style.split(';').filter_map(|pair| {
+                if let Some(idx) = pair.find(':') {
+                    let p = pair[..idx].trim();
+                    if p == prop {
+                        removed = pair[idx+1..].trim().to_string();
+                        return None;
+                    }
+                    if !p.is_empty() { return Some(pair.trim().to_string()); }
+                }
+                None
+            }).collect();
+            n.set_attr("style", &new_pairs.join("; "));
+            Ok(JsValue::Str(removed))
+        }));
+    }
+    JsValue::Object(obj_rc)
+}
 
 /// classList JS object pro Element - methods add/remove/toggle/contains.
 fn create_class_list(node: Rc<crate::browser::dom::NodeData>) -> JsValue {
