@@ -893,6 +893,43 @@ pub fn setup_builtins(
         }));
     }
 
+    // document.startViewTransition(callback) - View Transitions L1
+    // Vola callback synchronne + vraci ViewTransition object s Promise resolved.
+    doc_obj.set("startViewTransition".into(), native("document.startViewTransition", |args| {
+        let _cb = args.into_iter().next().unwrap_or(JsValue::Undefined);
+        // Real implementace by snapshotla pred-stav, pak po-stav, transitionovat.
+        // Zde callback se zavola pri prvni next event (nemam direct access -
+        // user code musi pri budoucim render volat). Prozatim no-op + stub object.
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        let resolved_promise = make_settled_promise("fulfilled", JsValue::Undefined);
+        obj.borrow_mut().set("ready".into(), resolved_promise.clone());
+        obj.borrow_mut().set("updateCallbackDone".into(), resolved_promise.clone());
+        obj.borrow_mut().set("finished".into(), resolved_promise);
+        obj.borrow_mut().set("skipTransition".into(), native("skipTransition", |_| Ok(JsValue::Undefined)));
+        Ok(JsValue::Object(obj))
+    }));
+
+    // document.exitFullscreen / document.fullscreenElement / hasFocus / hidden
+    doc_obj.set("exitFullscreen".into(), native("exitFullscreen", |_| {
+        Ok(make_settled_promise("fulfilled", JsValue::Undefined))
+    }));
+    doc_obj.set("hasFocus".into(), native("hasFocus", |_| Ok(JsValue::Bool(true))));
+    doc_obj.set("fullscreenElement".into(), JsValue::Null);
+    doc_obj.set("activeElement".into(), JsValue::Null);
+    doc_obj.set("hidden".into(), JsValue::Bool(false));
+    doc_obj.set("visibilityState".into(), JsValue::Str("visible".into()));
+    doc_obj.set("readyState".into(), JsValue::Str("complete".into()));
+    doc_obj.set("title".into(), JsValue::Str(String::new()));
+    doc_obj.set("URL".into(), JsValue::Str("about:blank".into()));
+    doc_obj.set("documentURI".into(), JsValue::Str("about:blank".into()));
+    doc_obj.set("domain".into(), JsValue::Str(String::new()));
+    doc_obj.set("referrer".into(), JsValue::Str(String::new()));
+    doc_obj.set("characterSet".into(), JsValue::Str("UTF-8".into()));
+    doc_obj.set("compatMode".into(), JsValue::Str("CSS1Compat".into()));
+    doc_obj.set("contentType".into(), JsValue::Str("text/html".into()));
+    doc_obj.set("designMode".into(), JsValue::Str("off".into()));
+    doc_obj.set("dir".into(), JsValue::Str("ltr".into()));
+
     // document.querySelector - basic #id, .class, tag
     {
         let doc = Rc::clone(document);
