@@ -70,6 +70,8 @@ pub struct LayoutBox {
     pub border_width: f32,
     pub border_color: Option<[u8; 4]>,
     pub font_size: f32,
+    /// Reference na puvodni DOM node (pro hit test -> events).
+    pub node: Option<Rc<Node>>,
 }
 
 impl LayoutBox {
@@ -87,7 +89,24 @@ impl LayoutBox {
             border_width: 0.0,
             border_color: None,
             font_size: 16.0,
+            node: None,
         }
+    }
+
+    /// Hit test: vrati nejdetailnejsi (deepest) box obsahujici (x, y).
+    pub fn hit_test(&self, x: f32, y: f32) -> Option<&LayoutBox> {
+        if x < self.rect.x || x > self.rect.x + self.rect.width
+            || y < self.rect.y || y > self.rect.y + self.rect.height
+        {
+            return None;
+        }
+        // Zkus deti nejdriv (deepest first)
+        for child in &self.children {
+            if let Some(hit) = child.hit_test(x, y) {
+                return Some(hit);
+            }
+        }
+        Some(self)
     }
 }
 
@@ -117,6 +136,7 @@ fn layout_dispatch(bx: &mut LayoutBox) {
 /// Rekurzivne stavi LayoutBox z Node.
 fn build_box(node: &Rc<Node>, style_map: &StyleMap) -> LayoutBox {
     let mut bx = LayoutBox::new();
+    bx.node = Some(Rc::clone(node));
 
     let styles = super::cascade::get_styles(style_map, node);
     let empty: HashMap<String, String> = HashMap::new();

@@ -181,17 +181,17 @@ pub struct JsObject {
 }
 
 impl JsObject {
-    fn new() -> Self {
+    pub fn new() -> Self {
         JsObject { props: HashMap::new(), proto: None, frozen: false }
     }
 
     /// Vytvori objekt s danym prototypem (Object.create(proto)).
-    fn new_with_proto(proto: Rc<RefCell<JsObject>>) -> Self {
+    pub fn new_with_proto(proto: Rc<RefCell<JsObject>>) -> Self {
         JsObject { props: HashMap::new(), proto: Some(proto), frozen: false }
     }
 
     /// Cte vlastnost - prochazi prototypovym retezcem (max 100 uroven).
-    fn get(&self, k: &str) -> JsValue {
+    pub fn get(&self, k: &str) -> JsValue {
         self.get_depth(k, 0)
     }
 
@@ -207,18 +207,18 @@ impl JsObject {
     }
 
     /// Kontroluje vlastni vlastnost (bez prochazeni prototypoveho retezce).
-    fn has_own(&self, k: &str) -> bool {
+    pub fn has_own(&self, k: &str) -> bool {
         self.props.contains_key(k)
     }
 
     /// Nastavi vlastnost. Frozen objekt zmeny ignoruje.
-    fn set(&mut self, k: String, v: JsValue) {
+    pub fn set(&mut self, k: String, v: JsValue) {
         if self.frozen { return; }
         self.props.insert(k, v);
     }
 
     /// Vrati serazeny seznam vlastnich klicu (bez internich `__key__` klicu).
-    fn own_keys(&self) -> Vec<String> {
+    pub fn own_keys(&self) -> Vec<String> {
         let mut keys: Vec<String> = self.props.keys()
             .filter(|k| !is_internal_key(k))
             .cloned()

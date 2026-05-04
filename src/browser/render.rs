@@ -5,6 +5,7 @@
 
 use super::paint::DisplayCommand;
 use bytemuck::{Pod, Zeroable};
+use std::rc::Rc;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -267,10 +268,10 @@ pub fn run_browser(html: &str, css: &str) {
     }
 }
 
-/// Real GUI okno s wgpu rendering.
+/// Real GUI okno s wgpu rendering + JS event integrace.
 pub fn run_window_with_html(html: String, css: String) -> Result<(), String> {
     use winit::application::ApplicationHandler;
-    use winit::event::WindowEvent;
+    use winit::event::{WindowEvent, MouseButton, ElementState};
     use winit::event_loop::{ActiveEventLoop, EventLoop};
     use winit::window::{Window, WindowId};
 
@@ -279,6 +280,10 @@ pub fn run_window_with_html(html: String, css: String) -> Result<(), String> {
         css: String,
         window: Option<std::sync::Arc<Window>>,
         renderer: Option<Renderer>,
+        layout_root: Option<super::layout::LayoutBox>,
+        interpreter: Option<crate::interpreter::Interpreter>,
+        mouse_x: f32,
+        mouse_y: f32,
     }
 
     impl ApplicationHandler for App {
@@ -289,6 +294,16 @@ pub fn run_window_with_html(html: String, css: String) -> Result<(), String> {
             let window = std::sync::Arc::new(event_loop.create_window(attrs).unwrap());
             self.window = Some(window.clone());
             self.renderer = Some(Renderer::new(window.clone()));
+
+            // Vytvor interpreter + nacti HTML do jeho document
+            let mut interp = crate::interpreter::Interpreter::new();
+            let doc = super::html_parser::parse_html(&self.html, "about:blank");
+            interp.set_document(doc);
+
+            // Spust JS uvnitr <script> tagu
+            self.run_inline_scripts(&mut interp);
+
+            self.interpreter = Some(interp);
             self.render();
             window.request_redraw();
         }
@@ -302,6 +317,14 @@ pub fn run_window_with_html(html: String, css: String) -> Result<(), String> {
                     }
                     self.render();
                 }
+                WindowEvent::CursorMoved { position, .. } => {
+                    self.mouse_x = position.x as f32;
+                    self.mouse_y = position.y as f32;
+                }
+                WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } => {
+                    self.handle_click(self.mouse_x, self.mouse_y);
+                    self.render();
+                }
                 WindowEvent::RedrawRequested => {
                     self.render();
                 }
@@ -311,16 +334,82 @@ pub fn run_window_with_html(html: String, css: String) -> Result<(), String> {
     }
 
     impl App {
+        fn run_inline_scripts(&self, interp: &mut crate::interpreter::Interpreter) {
+            use crate::lexer::base::Lexer;
+            use crate::parser::Parser;
+            use crate::tokens::TokenKind;
+
+            let doc_ref = interp.document.clone();
+            let scripts: Vec<String> = doc_ref.borrow().root
+                .get_elements_by_tag("script")
+                .iter()
+                .map(|s| s.text_content())
+                .collect();
+
+            for src in scripts {
+                if src.trim().is_empty() { continue; }
+                if let Ok(lex) = Lexer::parse_str(&src, "<inline>") {
+                    let tokens: Vec<_> = lex.tokens.into_iter()
+                        .filter(|t| !matches!(t.kind,
+                            TokenKind::Whitespace | TokenKind::Newline
+                            | TokenKind::CommentLine(_) | TokenKind::CommentBlock(_)))
+                        .collect();
+                    let mut parser = Parser::new(tokens);
+                    if let Ok(prog) = parser.parse() {
+                        if let Err(e) = interp.run(&prog) {
+                            eprintln!("[script error] {e}");
+                        }
+                    }
+                }
+            }
+        }
+
+        fn handle_click(&mut self, x: f32, y: f32) {
+            let layout_root = match &self.layout_root { Some(l) => l, None => return };
+            let interp = match &mut self.interpreter { Some(i) => i, None => return };
+
+            // Hit test - najdi cilovy LayoutBox
+            let target = layout_root.hit_test(x, y);
+            if let Some(target) = target {
+                if let Some(node) = &target.node {
+                    // Vyvolej click listeners na node
+                    let ids: Vec<usize> = node.listeners.borrow().get("click")
+                        .cloned().unwrap_or_default();
+                    if ids.is_empty() { return; }
+
+                    let mut event = crate::interpreter::JsObject::new();
+                    event.set("type".into(), crate::interpreter::JsValue::Str("click".into()));
+                    event.set("clientX".into(), crate::interpreter::JsValue::Number(x as f64));
+                    event.set("clientY".into(), crate::interpreter::JsValue::Number(y as f64));
+                    event.set("target".into(), crate::interpreter::JsValue::DomNode(std::rc::Rc::clone(node)));
+                    let event_val = crate::interpreter::JsValue::Object(
+                        std::rc::Rc::new(std::cell::RefCell::new(event))
+                    );
+                    for id in ids {
+                        let cb = interp.event_callbacks.borrow().get(&id).cloned();
+                        if let Some(cb) = cb {
+                            let _ = interp.call_function(cb, vec![event_val.clone()], None);
+                        }
+                    }
+                }
+            }
+        }
+
         fn render(&mut self) {
-            use super::{html_parser, css_parser, cascade, layout, paint};
+            use super::{css_parser, cascade, layout, paint};
             let r = match &mut self.renderer { Some(r) => r, None => return };
 
-            let document = html_parser::parse_html(&self.html, "about:blank");
+            // Pouzij document z interpreteru (po JS modifikacich)
+            let document_root = match &self.interpreter {
+                Some(i) => Rc::clone(&i.document.borrow().root),
+                None => return,
+            };
+
             let stylesheets = vec![css_parser::parse_stylesheet(&self.css)];
-            let style_map = cascade::cascade(&document.root, &stylesheets);
+            let style_map = cascade::cascade(&document_root, &stylesheets);
             let viewport_w = r.config.width as f32;
             let viewport_h = r.config.height as f32;
-            let layout_root = layout::layout_tree(&document.root, &style_map, viewport_w, viewport_h);
+            let layout_root = layout::layout_tree(&document_root, &style_map, viewport_w, viewport_h);
             let display_list = paint::build_display_list(&layout_root);
 
             // Pre-rasterize vsechny glyfy do atlasu
@@ -335,11 +424,22 @@ pub fn run_window_with_html(html: String, css: String) -> Result<(), String> {
 
             let verts = build_vertices(&display_list, &r.atlas);
             r.draw(&verts);
+
+            // Ulozim layout pro hit test
+            self.layout_root = Some(layout_root);
         }
     }
 
     let event_loop = EventLoop::new().map_err(|e| e.to_string())?;
-    let mut app = App { html, css, window: None, renderer: None };
+    let mut app = App {
+        html, css,
+        window: None,
+        renderer: None,
+        layout_root: None,
+        interpreter: None,
+        mouse_x: 0.0,
+        mouse_y: 0.0,
+    };
     event_loop.run_app(&mut app).map_err(|e| e.to_string())?;
     Ok(())
 }
