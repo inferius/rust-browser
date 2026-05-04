@@ -592,6 +592,17 @@ pub struct Interpreter {
     task_queue: Rc<RefCell<Vec<(u32, JsValue, Vec<JsValue>)>>>,
     /// Pocitadlo ID pro setTimeout/setInterval
     next_timer_id: Rc<RefCell<u32>>,
+    /// Cache nactenych modulu: cesta -> namespace objekt s exporty
+    /// Sdileny pres Rc, aby ho videly cizi/dynamicky importy.
+    module_cache: Rc<RefCell<HashMap<String, JsValue>>>,
+    /// Vetev pro testy / virtualni FS: source -> obsah
+    /// Pokud je naplneno, importy se hledaji nejdrive zde.
+    pub virtual_modules: Rc<RefCell<HashMap<String, String>>>,
+    /// Aktualni "export" mapa - aktivni jen behem nacitani modulu.
+    /// Stmt::Export prida do tohoto pole; po skonceni se konstruuje namespace.
+    current_exports: Option<Rc<RefCell<HashMap<String, JsValue>>>>,
+    /// Zakladni adresar pro resolve relativnich modulu (current dir nebo file dir).
+    pub base_dir: Rc<RefCell<String>>,
 }
 
 // ─── Pomocne funkce ──────────────────────────────────────────────────────────
@@ -669,7 +680,85 @@ impl Interpreter {
             Rc::new(RefCell::new(Vec::new()));
         let next_timer_id: Rc<RefCell<u32>> = Rc::new(RefCell::new(1));
         setup_builtins(&global, &task_queue, &next_timer_id);
-        Interpreter { global, yield_buffer: None, task_queue, next_timer_id }
+        Interpreter {
+            global, yield_buffer: None, task_queue, next_timer_id,
+            module_cache:    Rc::new(RefCell::new(HashMap::new())),
+            virtual_modules: Rc::new(RefCell::new(HashMap::new())),
+            current_exports: None,
+            base_dir:        Rc::new(RefCell::new(".".to_string())),
+        }
+    }
+
+    /// Prida virtualni modul (pro testy / sandboxing).
+    /// `source` je klic, kterym se modul importuje.
+    pub fn add_virtual_module(&self, source: &str, content: &str) {
+        self.virtual_modules.borrow_mut().insert(source.to_string(), content.to_string());
+    }
+
+    /// Resolve & nacti modul podle source. Vraci namespace objekt (cachovany).
+    fn load_module(&mut self, source: &str) -> EvalResult {
+        // 1. Cache hit
+        if let Some(ns) = self.module_cache.borrow().get(source).cloned() {
+            return Ok(ns);
+        }
+        // 2. Nacti obsah - virtual modules priorita, pak FS
+        let content = if let Some(c) = self.virtual_modules.borrow().get(source).cloned() {
+            c
+        } else {
+            // FS: relativni cesty resolve proti base_dir
+            let path = if source.starts_with("./") || source.starts_with("../") || source.starts_with('/') {
+                let base = self.base_dir.borrow().clone();
+                format!("{}/{}", base, source)
+            } else {
+                source.to_string()
+            };
+            std::fs::read_to_string(&path)
+                .map_err(|e| JsError::Runtime(format!(
+                    "ModuleError: nelze nacist modul '{source}' (cesta: {path}): {e}"
+                )))?
+        };
+
+        // 3. Parse
+        use crate::lexer::base::Lexer;
+        use crate::parser::Parser;
+        let lexer = Lexer::parse_str(&content, source)
+            .map_err(|e| JsError::Runtime(format!("SyntaxError v modulu '{source}': {e}")))?;
+        let tokens: Vec<_> = lexer.tokens.into_iter()
+            .filter(|t| !matches!(t.kind,
+                crate::tokens::TokenKind::Whitespace
+                | crate::tokens::TokenKind::Newline
+                | crate::tokens::TokenKind::CommentLine(_)
+                | crate::tokens::TokenKind::CommentBlock(_)))
+            .collect();
+        let mut parser = Parser::new(tokens);
+        let prog = parser.parse()
+            .map_err(|e| JsError::Runtime(format!("SyntaxError v modulu '{source}': {e}")))?;
+
+        // 4. Spust v izolovanem env (s pristupem ke globalnim builtinum)
+        let module_env = Environment::new_child(&self.global);
+        let exports: Rc<RefCell<HashMap<String, JsValue>>> = Rc::new(RefCell::new(HashMap::new()));
+
+        // Zaregistruj exports rezimu
+        let prev_exports = self.current_exports.take();
+        self.current_exports = Some(Rc::clone(&exports));
+
+        // Pre-cache namespace placeholder (pro cyklicke importy)
+        let ns_obj_rc = Rc::new(RefCell::new(JsObject::new()));
+        let ns_value = JsValue::Object(Rc::clone(&ns_obj_rc));
+        self.module_cache.borrow_mut().insert(source.to_string(), ns_value.clone());
+
+        let exec_result = self.exec_stmts(&prog.body, &module_env);
+
+        // Obnov predchozi exports
+        self.current_exports = prev_exports;
+
+        exec_result?;
+
+        // 5. Naplni namespace objekt z exports mapy
+        for (k, v) in exports.borrow().iter() {
+            ns_obj_rc.borrow_mut().set(k.clone(), v.clone());
+        }
+        Ok(ns_value)
     }
 
     /// Spusti cely program (AST) a vrati posledni `return` hodnotu.
@@ -767,6 +856,71 @@ impl Interpreter {
                     env: Rc::clone(env),
                 });
                 env.borrow_mut().define(name, func);
+                Ok(None)
+            }
+
+            // Import: nacti modul a binduj specifiers do scope
+            Stmt::Import { source, specifiers } => {
+                let ns = self.load_module(source)?;
+                let ns_obj = match &ns {
+                    JsValue::Object(o) => Rc::clone(o),
+                    _ => return Err(JsError::Runtime(
+                        format!("ModuleError: modul '{source}' nevratil objekt")
+                    )),
+                };
+                for spec in specifiers {
+                    match spec {
+                        ImportSpecifier::Default(local) => {
+                            let v = ns_obj.borrow().props.get("default").cloned()
+                                .unwrap_or(JsValue::Undefined);
+                            env.borrow_mut().define(local, v);
+                        }
+                        ImportSpecifier::Named { imported, local } => {
+                            let v = ns_obj.borrow().props.get(imported).cloned()
+                                .unwrap_or(JsValue::Undefined);
+                            env.borrow_mut().define(local, v);
+                        }
+                        ImportSpecifier::Namespace(local) => {
+                            env.borrow_mut().define(local, JsValue::Object(Rc::clone(&ns_obj)));
+                        }
+                    }
+                }
+                Ok(None)
+            }
+
+            // Export: zaregistruje hodnotu do current_exports mapy.
+            // Funguje jen pri nacitani modulu (current_exports = Some).
+            Stmt::Export(kind) => {
+                match kind {
+                    ExportKind::Decl(decl) => {
+                        // Spust deklaraci a pak najdi v env nove definovane jmeno(a)
+                        let pre_keys: Vec<String> = env.borrow().vars.keys().cloned().collect();
+                        self.exec_stmt(decl, env)?;
+                        let post_keys: Vec<String> = env.borrow().vars.keys().cloned().collect();
+                        if let Some(exports) = &self.current_exports {
+                            for k in post_keys {
+                                if !pre_keys.contains(&k) {
+                                    let v = env.borrow().get(&k).unwrap_or(JsValue::Undefined);
+                                    exports.borrow_mut().insert(k, v);
+                                }
+                            }
+                        }
+                    }
+                    ExportKind::Default(expr) => {
+                        let v = self.eval(expr, env)?;
+                        if let Some(exports) = &self.current_exports {
+                            exports.borrow_mut().insert("default".to_string(), v);
+                        }
+                    }
+                    ExportKind::Named(pairs) => {
+                        if let Some(exports) = &self.current_exports {
+                            for (local, exported) in pairs {
+                                let v = env.borrow().get(local).unwrap_or(JsValue::Undefined);
+                                exports.borrow_mut().insert(exported.clone(), v);
+                            }
+                        }
+                    }
+                }
                 Ok(None)
             }
 
@@ -978,6 +1132,23 @@ impl Interpreter {
                 let n = BigInt::from_str(s)
                     .map_err(|_| JsError::Runtime(format!("SyntaxError: invalid BigInt '{s}'")))?;
                 Ok(JsValue::BigInt(Rc::new(n)))
+            }
+            Expr::DynamicImport(arg) => {
+                // Vyhodnot specifier, nacti modul, vrat Promise.fulfilled(namespace).
+                // V chybovem pripade vrat Promise.rejected(error).
+                let spec = self.eval(arg, env)?;
+                let source = spec.to_string();
+                match self.load_module(&source) {
+                    Ok(ns) => Ok(make_settled_promise("fulfilled", ns)),
+                    Err(JsError::Runtime(msg)) => {
+                        let mut err = JsObject::new();
+                        err.set("name".into(),    JsValue::Str("Error".into()));
+                        err.set("message".into(), JsValue::Str(msg));
+                        Ok(make_settled_promise("rejected",
+                            JsValue::Object(Rc::new(RefCell::new(err)))))
+                    }
+                    Err(e) => Err(e),
+                }
             }
             Expr::Str(s)       => Ok(JsValue::Str(s.clone())),
             Expr::Bool(b)      => Ok(JsValue::Bool(*b)),
@@ -7669,5 +7840,247 @@ mod tests {
         // V realnem JS by to byl TypeError; my vracime undefined nebo string
         // zalezi na implementaci
         assert!(matches!(v, JsValue::Undefined | JsValue::Str(_)));
+    }
+
+    // ─── Batch J: import / export staticke ───────────────────────────────────
+
+    /// Helper: spusti src s pre-registrovanymi virtualnimi moduly.
+    fn run_with_modules(src: &str, modules: &[(&str, &str)]) -> JsValue {
+        let lexer = Lexer::parse_str(src, "<test>").unwrap();
+        let tokens: Vec<_> = lexer.tokens.into_iter()
+            .filter(|t| !matches!(t.kind,
+                TokenKind::Whitespace | TokenKind::Newline
+                | TokenKind::CommentLine(_) | TokenKind::CommentBlock(_)))
+            .collect();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse().unwrap();
+        let mut interp = Interpreter::new();
+        for (k, v) in modules {
+            interp.add_virtual_module(k, v);
+        }
+        interp.run(&program).unwrap()
+    }
+
+    #[test]
+    fn import_default() {
+        let v = run_with_modules(
+            r#"
+                import greet from "greeter";
+                return greet("svet");
+            "#,
+            &[("greeter", r#"
+                export default function(name) { return "ahoj " + name; }
+            "#)],
+        );
+        assert_eq!(as_str(v), "ahoj svet");
+    }
+
+    #[test]
+    fn import_named() {
+        let v = run_with_modules(
+            r#"
+                import { add, sub } from "math";
+                return add(10, 3) * 100 + sub(10, 3);
+            "#,
+            &[("math", r#"
+                export function add(a, b) { return a + b; }
+                export function sub(a, b) { return a - b; }
+            "#)],
+        );
+        assert_eq!(as_num(v), 1307.0);
+    }
+
+    #[test]
+    fn import_named_with_alias() {
+        let v = run_with_modules(
+            r#"
+                import { value as PI } from "consts";
+                return PI;
+            "#,
+            &[("consts", r#"export const value = 3.14;"#)],
+        );
+        assert_eq!(as_num(v), 3.14);
+    }
+
+    #[test]
+    fn import_namespace() {
+        let v = run_with_modules(
+            r#"
+                import * as utils from "utils";
+                return utils.double(21);
+            "#,
+            &[("utils", r#"
+                export function double(x) { return x * 2; }
+                export const name = "utils";
+            "#)],
+        );
+        assert_eq!(as_num(v), 42.0);
+    }
+
+    #[test]
+    fn import_default_and_named_combined() {
+        let v = run_with_modules(
+            r#"
+                import main, { helper } from "lib";
+                return main() + helper();
+            "#,
+            &[("lib", r#"
+                export default function() { return 100; }
+                export function helper() { return 23; }
+            "#)],
+        );
+        assert_eq!(as_num(v), 123.0);
+    }
+
+    #[test]
+    fn import_side_effect_only() {
+        let v = run_with_modules(
+            r#"
+                import "side";
+                return "ok";
+            "#,
+            &[("side", r#"
+                // tento modul jen vlozi neco do scope, ale nic neexportuje
+                const x = 42;
+            "#)],
+        );
+        assert_eq!(as_str(v), "ok");
+    }
+
+    #[test]
+    fn export_named_list() {
+        let v = run_with_modules(
+            r#"
+                import { x, y } from "vars";
+                return x + y;
+            "#,
+            &[("vars", r#"
+                const x = 10;
+                const y = 32;
+                export { x, y };
+            "#)],
+        );
+        assert_eq!(as_num(v), 42.0);
+    }
+
+    #[test]
+    fn export_named_list_with_alias() {
+        let v = run_with_modules(
+            r#"
+                import { renamed } from "vars";
+                return renamed;
+            "#,
+            &[("vars", r#"
+                const original = 99;
+                export { original as renamed };
+            "#)],
+        );
+        assert_eq!(as_num(v), 99.0);
+    }
+
+    #[test]
+    fn export_default_value() {
+        let v = run_with_modules(
+            r#"
+                import x from "default-only";
+                return x;
+            "#,
+            &[("default-only", r#"export default 42;"#)],
+        );
+        assert_eq!(as_num(v), 42.0);
+    }
+
+    #[test]
+    fn export_class() {
+        let v = run_with_modules(
+            r#"
+                import { Animal } from "animals";
+                const a = new Animal("rex");
+                return a.name;
+            "#,
+            &[("animals", r#"
+                export class Animal {
+                    constructor(name) { this.name = name; }
+                }
+            "#)],
+        );
+        assert_eq!(as_str(v), "rex");
+    }
+
+    #[test]
+    fn module_cache_executes_once() {
+        // Modul s side effects musi bezet jen jednou pri vicenasobnych importech.
+        let v = run_with_modules(
+            r#"
+                import { count } from "counter";
+                import { count as c2 } from "counter";
+                return count + c2;
+            "#,
+            &[("counter", r#"
+                export const count = 1;
+            "#)],
+        );
+        // 1 + 1 = 2 (ne 4 kdyby modul bezel dvakrat se zvysovani)
+        assert_eq!(as_num(v), 2.0);
+    }
+
+    // ─── Batch J: dynamicky import() ─────────────────────────────────────────
+
+    #[test]
+    fn dynamic_import_returns_promise() {
+        // Detekce Promise: Promise.then by mela jit volat (vrati novy Promise).
+        // Protoze nas Promise je ulozen jako objekt s __promise_state__,
+        // overime ze .then zavolat lze a vraci hodnotu.
+        let v = run_with_modules(
+            r#"
+                let result = "no";
+                import("test-mod").then(m => { result = "yes:" + m.x; });
+                return result;
+            "#,
+            &[("test-mod", r#"export const x = 42;"#)],
+        );
+        assert_eq!(as_str(v), "yes:42");
+    }
+
+    #[test]
+    fn dynamic_import_resolves_namespace() {
+        let v = run_with_modules(
+            r#"
+                const ns = await import("dyn-mod");
+                return ns.value;
+            "#,
+            &[("dyn-mod", r#"export const value = 100;"#)],
+        );
+        assert_eq!(as_num(v), 100.0);
+    }
+
+    #[test]
+    fn dynamic_import_then_chain() {
+        let v = run_with_modules(
+            r#"
+                let result = 0;
+                import("data").then(m => { result = m.x + m.y; });
+                return result;
+            "#,
+            &[("data", r#"
+                export const x = 5;
+                export const y = 7;
+            "#)],
+        );
+        assert_eq!(as_num(v), 12.0);
+    }
+
+    #[test]
+    fn dynamic_import_unknown_rejects() {
+        let v = run_with_modules(
+            r#"
+                let err = null;
+                import("nonexistent").catch(e => { err = e.message; });
+                return typeof err;
+            "#,
+            &[],
+        );
+        // err byl nastaven na string -> typeof "string"
+        assert_eq!(as_str(v), "string");
     }
 }

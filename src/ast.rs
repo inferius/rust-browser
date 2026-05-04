@@ -23,6 +23,8 @@ pub enum Expr {
     /// BigInt literal: `42n`, `0xFFn` - arbitrary precision celociselny
     /// Hodnota je ulozena jako string (decimalni reprezentace, muze mit '-')
     BigInt(String),
+    /// Dynamicky import: `import(specifier)` - vraci Promise s namespace objektem
+    DynamicImport(Box<Expr>),
     /// Retezec: `"hello"` nebo `'world'`
     Str(String),
     /// Boolean: `true` nebo `false`
@@ -414,6 +416,47 @@ pub enum Stmt {
 
     /// Deklarace async funkce: `async function name(params) { body }`
     AsyncFunc { name: String, params: Vec<Param>, body: Vec<Stmt> },
+
+    /// `import` prikaz: nacte modul a binduje vybrane exporty do scope.
+    ///
+    /// Formy:
+    /// - `import foo from "path"` -> default import (specifiers = [Default("foo")])
+    /// - `import { a, b as c } from "path"` -> named (specifiers = [Named("a","a"), Named("b","c")])
+    /// - `import * as ns from "path"` -> namespace (specifiers = [Namespace("ns")])
+    /// - `import "path"` -> side effect only (specifiers = [])
+    /// - kombinace lze kombinovat
+    Import { source: String, specifiers: Vec<ImportSpecifier> },
+
+    /// `export` prikaz: oznaci hodnotu/identifikator jako export modulu.
+    ///
+    /// Formy:
+    /// - `export const x = 1` / `export function f() {}` -> Decl(Stmt)
+    /// - `export default expr` -> Default(Expr)
+    /// - `export { a, b as c }` -> Named(Vec<(local, exported)>)
+    /// - `export { a } from "path"` -> ReExport (zatim nepodporujeme)
+    Export(ExportKind),
+}
+
+/// Specifikator importu - co se z modulu nacita a pod jakym jmenem.
+#[derive(Debug, Clone)]
+pub enum ImportSpecifier {
+    /// `import foo from "x"` -> local jmeno = "foo"
+    Default(String),
+    /// `import { orig as local } from "x"` -> mapovani originalniho jmena na lokalni
+    Named { imported: String, local: String },
+    /// `import * as ns from "x"` -> ns je objekt se vsemi exporty
+    Namespace(String),
+}
+
+/// Druh exportu.
+#[derive(Debug, Clone)]
+pub enum ExportKind {
+    /// `export <declaration>` - exportuje deklarovanou polozku
+    Decl(Box<Stmt>),
+    /// `export default <expr>` - default export
+    Default(Expr),
+    /// `export { local as exported, ... }` - reexport identifikatoru
+    Named(Vec<(String, String)>),
 }
 
 /// Jedna vetev switch prikazu.

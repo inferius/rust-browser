@@ -280,6 +280,21 @@ impl Parser {
             TokenKind::Keyword(KeywordEnum::Try)    => self.parse_try(),
             TokenKind::Keyword(KeywordEnum::Switch) => self.parse_switch(),
             TokenKind::Keyword(KeywordEnum::Class)  => self.parse_class_decl(),
+            TokenKind::Keyword(KeywordEnum::Import) => {
+                // Pozor: `import(specifier)` je dynamicky import (vyraz),
+                // `import "x"` nebo `import X from ...` je staticky (statement).
+                // Peek na nasledujici token: kdyz je to `(`, je to dynamicky.
+                let next_is_paren = matches!(self.tokens.get(self.pos + 1).map(|t| &t.kind),
+                    Some(TokenKind::Operator(OperatorEnum::LParen)));
+                if next_is_paren {
+                    let expr = self.parse_expr()?;
+                    self.eat_semi();
+                    Ok(Stmt::Expr(expr))
+                } else {
+                    self.parse_import_stmt()
+                }
+            }
+            TokenKind::Keyword(KeywordEnum::Export) => self.parse_export_stmt(),
 
             _ => {
                 let expr = self.parse_expr()?;
@@ -344,6 +359,159 @@ impl Parser {
         let params = self.parse_params()?;
         let body = self.parse_fn_body()?;
         Ok(Stmt::AsyncFunc { name, params, body })
+    }
+
+    // ─── Import / Export ─────────────────────────────────────────────────────
+
+    /// Parsuje staticky `import` prikaz. Token `import` jeste neni spotrebovan.
+    /// Formy:
+    ///   import "path";
+    ///   import x from "path";
+    ///   import { a, b as c } from "path";
+    ///   import * as ns from "path";
+    ///   import x, { a } from "path";
+    ///   import x, * as ns from "path";
+    fn parse_import_stmt(&mut self) -> Result<Stmt, ParseError> {
+        self.expect_kw(KeywordEnum::Import)?;
+        self.skip_trivia();
+        let mut specifiers: Vec<ImportSpecifier> = Vec::new();
+
+        // `import "path";` - jen side-effect
+        if matches!(self.kind(), TokenKind::StringLiteral { .. }) {
+            let source = self.parse_string_literal()?;
+            self.eat_semi();
+            return Ok(Stmt::Import { source, specifiers });
+        }
+
+        // Default import: `import name`
+        if let TokenKind::Identifier(name) = self.kind().clone() {
+            self.advance();
+            specifiers.push(ImportSpecifier::Default(name));
+            self.skip_trivia();
+            // Optional `, { ... }` nebo `, * as ns`
+            if self.eat_op(OperatorEnum::Comma) {
+                self.skip_trivia();
+            }
+        }
+
+        // Namespace: `* as ns`
+        if matches!(self.kind(), TokenKind::Operator(OperatorEnum::Star)) {
+            self.advance();
+            self.skip_trivia();
+            self.expect_contextual_keyword("as")?;
+            self.skip_trivia();
+            let ns_name = self.parse_ident()?;
+            specifiers.push(ImportSpecifier::Namespace(ns_name));
+            self.skip_trivia();
+        }
+        // Named: `{ a, b as c }`
+        else if matches!(self.kind(), TokenKind::Operator(OperatorEnum::LBrace)) {
+            self.advance();
+            loop {
+                self.skip_trivia();
+                if matches!(self.kind(), TokenKind::Operator(OperatorEnum::RBrace)) { break; }
+                let imported = self.parse_ident()?;
+                self.skip_trivia();
+                let local = if self.is_contextual_keyword("as") {
+                    self.advance();
+                    self.skip_trivia();
+                    self.parse_ident()?
+                } else {
+                    imported.clone()
+                };
+                specifiers.push(ImportSpecifier::Named { imported, local });
+                self.skip_trivia();
+                if !self.eat_op(OperatorEnum::Comma) { break; }
+            }
+            self.expect_op(OperatorEnum::RBrace)?;
+            self.skip_trivia();
+        }
+
+        // `from "path"`
+        self.expect_contextual_keyword("from")?;
+        self.skip_trivia();
+        let source = self.parse_string_literal()?;
+        self.eat_semi();
+        Ok(Stmt::Import { source, specifiers })
+    }
+
+    /// Parsuje `export` prikaz. Token `export` jeste neni spotrebovan.
+    /// Formy:
+    ///   export default expr;
+    ///   export const x = ...;  / export function f() {} / export class C {}
+    ///   export { a, b as c };
+    fn parse_export_stmt(&mut self) -> Result<Stmt, ParseError> {
+        self.expect_kw(KeywordEnum::Export)?;
+        self.skip_trivia();
+
+        // export default <expr>
+        if matches!(self.kind(), TokenKind::Keyword(KeywordEnum::Default)) {
+            self.advance();
+            self.skip_trivia();
+            // Specialni: `export default function name() {}` nebo `class C {}`
+            // -> bereme jako vyraz (FunctionExpr / ClassExpr)
+            let expr = self.parse_assign_expr()?;
+            self.eat_semi();
+            return Ok(Stmt::Export(ExportKind::Default(expr)));
+        }
+
+        // export { a, b as c }
+        if matches!(self.kind(), TokenKind::Operator(OperatorEnum::LBrace)) {
+            self.advance();
+            let mut names = Vec::new();
+            loop {
+                self.skip_trivia();
+                if matches!(self.kind(), TokenKind::Operator(OperatorEnum::RBrace)) { break; }
+                let local = self.parse_ident()?;
+                self.skip_trivia();
+                let exported = if self.is_contextual_keyword("as") {
+                    self.advance();
+                    self.skip_trivia();
+                    self.parse_ident()?
+                } else {
+                    local.clone()
+                };
+                names.push((local, exported));
+                self.skip_trivia();
+                if !self.eat_op(OperatorEnum::Comma) { break; }
+            }
+            self.expect_op(OperatorEnum::RBrace)?;
+            self.eat_semi();
+            return Ok(Stmt::Export(ExportKind::Named(names)));
+        }
+
+        // export <decl>: const/let/var/function/class
+        let decl = self.parse_stmt()?;
+        Ok(Stmt::Export(ExportKind::Decl(Box::new(decl))))
+    }
+
+    /// Parsuje string literal a vrati jeho hodnotu (pro source v import/export).
+    fn parse_string_literal(&mut self) -> Result<String, ParseError> {
+        match self.kind().clone() {
+            TokenKind::StringLiteral { value, .. } => {
+                self.advance();
+                Ok(value)
+            }
+            _ => Err(self.err("Ocekavan string literal (\"...\")")),
+        }
+    }
+
+    /// Vrati true kdyz aktualni token je identifier s danym jmenem.
+    fn is_contextual_keyword(&mut self, name: &str) -> bool {
+        self.skip_trivia();
+        matches!(self.kind(), TokenKind::Identifier(s) if s == name)
+    }
+
+    /// Spotrebuje contextual keyword (identifier s ocekavanym jmenem).
+    fn expect_contextual_keyword(&mut self, name: &str) -> Result<(), ParseError> {
+        self.skip_trivia();
+        if let TokenKind::Identifier(s) = self.kind().clone() {
+            if s == name {
+                self.advance();
+                return Ok(());
+            }
+        }
+        Err(self.err(&format!("Ocekavano '{name}'")))
     }
 
     fn parse_params(&mut self) -> Result<Vec<Param>, ParseError> {
@@ -996,6 +1164,16 @@ impl Parser {
             TokenKind::Keyword(KeywordEnum::True)  => { self.advance(); Ok(Expr::Bool(true)) }
             TokenKind::Keyword(KeywordEnum::False) => { self.advance(); Ok(Expr::Bool(false)) }
             TokenKind::Keyword(KeywordEnum::Null)  => { self.advance(); Ok(Expr::Null) }
+            TokenKind::Keyword(KeywordEnum::Import) => {
+                // Dynamicky import: `import(specifier)`
+                self.advance();
+                self.skip_trivia();
+                self.expect_op(OperatorEnum::LParen)?;
+                let arg = self.parse_assign_expr()?;
+                self.skip_trivia();
+                self.expect_op(OperatorEnum::RParen)?;
+                Ok(Expr::DynamicImport(Box::new(arg)))
+            }
             TokenKind::Keyword(KeywordEnum::This)  => { self.advance(); Ok(Expr::Ident("this".to_string())) }
             // `super` - jako identifikator, interpreter ho zpracuje specialne
             TokenKind::Keyword(KeywordEnum::Super) => { self.advance(); Ok(Expr::Ident("super".to_string())) }
