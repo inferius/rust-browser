@@ -2853,6 +2853,54 @@ impl Renderer {
         self.queue.submit(std::iter::once(encoder.finish()));
     }
 
+    /// Composit libovolny TextureView do swap chain v ramci canvas rect.
+    /// Pouziva transform_pipeline (samples z source view, mapuje uv 0..1
+    /// na canvas rect quad). Source view musi byt config.format.
+    pub fn compose_view_to_swap(&self, swap_view: &wgpu::TextureView, source_view: &wgpu::TextureView, x: f32, y: f32, w: f32, h: f32) {
+        let cx = x + w * 0.5;
+        let cy = y + h * 0.5;
+        let hw = w * 0.5;
+        let hh = h * 0.5;
+        let vw = self.config.width as f32;
+        let vh = self.config.height as f32;
+        // Identity matrix v transform shader format
+        let uniform_data: [f32; 32] = [
+            1.0, 0.0, 0.0, 0.0,  // row0
+            0.0, 1.0, 0.0, 0.0,  // row1
+            0.0, 0.0, 1.0, 0.0,  // row2
+            0.0, 0.0, 0.0, 1.0,  // row3
+            cx, cy, hw, hh,       // center
+            vw, vh, 0.0, 0.0,     // viewport
+            0.0, 0.0, 1.0, 1.0,   // uv_box (u0, v0, u1, v1)
+            0.0, 0.0, 0.0, 0.0,   // padding
+        ];
+        self.queue.write_buffer(&self.transform_uniform_buf, 0, bytemuck::cast_slice(&uniform_data));
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("compose_view_bg"),
+            layout: &self.transform_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(source_view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.atlas_smp) },
+                wgpu::BindGroupEntry { binding: 2, resource: self.transform_uniform_buf.as_entire_binding() },
+            ],
+        });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("compose_view_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: swap_view, resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: None, timestamp_writes: None, occlusion_query_set: None,
+            });
+            pass.set_pipeline(&self.transform_pipeline);
+            pass.set_bind_group(0, &bg, &[]);
+            pass.draw(0..6, 0..1);
+        }
+        self.queue.submit(std::iter::once(encoder.finish()));
+    }
+
     /// Composit offscreen_tex_a do swap chain pres scissor (x, y, w, h).
     /// Aplikuje 4x5 color matrix (identity = passthrough).
     /// Pouziva fullscreen triangle + alpha blend; scissor omezi vystup na bbox.
