@@ -2413,8 +2413,7 @@ impl Interpreter {
                         return Ok(JsValue::Str(n.text_content()));
                     }
                     "innerHTML" => {
-                        // Zjednoduseny: rekurzivni serializace children
-                        return Ok(JsValue::Str(serialize_inner_html(n)));
+                        return Ok(JsValue::Str(serialize_inner_html(&n)));
                     }
                     "outerHTML" => {
                         return Ok(JsValue::Str(serialize_outer_html(n)));
@@ -2431,6 +2430,53 @@ impl Interpreter {
                     }
                     "checked" => {
                         return Ok(JsValue::Bool(n.has_attr("checked")));
+                    }
+                    // HTMLImageElement / canvas - rozmery
+                    "naturalWidth" if n.tag_name().as_deref() == Some("img") => {
+                        let w = n.attr("width").and_then(|w| w.parse::<f64>().ok()).unwrap_or(0.0);
+                        return Ok(JsValue::Number(w));
+                    }
+                    "naturalHeight" if n.tag_name().as_deref() == Some("img") => {
+                        let h = n.attr("height").and_then(|h| h.parse::<f64>().ok()).unwrap_or(0.0);
+                        return Ok(JsValue::Number(h));
+                    }
+                    "complete" if n.tag_name().as_deref() == Some("img") => {
+                        return Ok(JsValue::Bool(n.attr("src").is_some()));
+                    }
+                    "width" if matches!(n.tag_name().as_deref(), Some("img") | Some("canvas") | Some("svg")) => {
+                        let w = n.attr("width").and_then(|w| w.parse::<f64>().ok()).unwrap_or(0.0);
+                        return Ok(JsValue::Number(w));
+                    }
+                    "height" if matches!(n.tag_name().as_deref(), Some("img") | Some("canvas") | Some("svg")) => {
+                        let h = n.attr("height").and_then(|h| h.parse::<f64>().ok()).unwrap_or(0.0);
+                        return Ok(JsValue::Number(h));
+                    }
+                    // Element bounding rect (zjednoduseny)
+                    "offsetWidth" | "clientWidth" | "scrollWidth" => {
+                        let w = n.attr("width").and_then(|w| w.parse::<f64>().ok()).unwrap_or(0.0);
+                        return Ok(JsValue::Number(w));
+                    }
+                    "offsetHeight" | "clientHeight" | "scrollHeight" => {
+                        let h = n.attr("height").and_then(|h| h.parse::<f64>().ok()).unwrap_or(0.0);
+                        return Ok(JsValue::Number(h));
+                    }
+                    "offsetLeft" | "offsetTop" | "scrollLeft" | "scrollTop" => {
+                        return Ok(JsValue::Number(0.0));
+                    }
+                    // Hidden / contentEditable / draggable
+                    "hidden" => {
+                        return Ok(JsValue::Bool(n.has_attr("hidden")));
+                    }
+                    "contentEditable" => {
+                        return Ok(JsValue::Str(n.attr("contenteditable").unwrap_or_else(|| "inherit".to_string())));
+                    }
+                    "draggable" => {
+                        return Ok(JsValue::Bool(n.attr("draggable").as_deref() == Some("true")));
+                    }
+                    "tabIndex" => {
+                        return Ok(JsValue::Number(
+                            n.attr("tabindex").and_then(|t| t.parse::<f64>().ok()).unwrap_or(0.0)
+                        ));
                     }
                     "type" | "name" | "href" | "src" | "alt" | "title" => {
                         return Ok(JsValue::Str(n.attr(key).unwrap_or_default()));

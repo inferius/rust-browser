@@ -493,10 +493,11 @@ fn build_box_with_pseudo(
     style_map: &StyleMap,
     pseudo_map: &super::cascade::PseudoStyleMap,
 ) -> LayoutBox {
-    build_box_inner(node, style_map, pseudo_map)
+    let mut counters: HashMap<String, i32> = HashMap::new();
+    build_box_inner(node, style_map, pseudo_map, &mut counters)
 }
 
-fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::cascade::PseudoStyleMap) -> LayoutBox {
+fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::cascade::PseudoStyleMap, counters: &mut HashMap<String, i32>) -> LayoutBox {
     let mut bx = LayoutBox::new();
     bx.node = Some(Rc::clone(node));
 
@@ -912,9 +913,18 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         }
     }
 
+    // Counter API: aplikuj counter-reset + counter-increment pred pseudo-elements
+    for (name, n) in &bx.counter_reset {
+        counters.insert(name.clone(), *n);
+    }
+    for (name, n) in &bx.counter_increment {
+        let cur = counters.get(name).copied().unwrap_or(0);
+        counters.insert(name.clone(), cur + n);
+    }
+
     // Pseudo-element ::before - vlozit jako prvni virtualni child
     if let Some(pseudo_styles) = super::cascade::get_pseudo_styles(pseudo_map, node, "before") {
-        if let Some(pb) = build_pseudo_box(node, pseudo_styles) {
+        if let Some(pb) = build_pseudo_box(node, pseudo_styles, counters) {
             bx.children.push(pb);
         }
     }
@@ -931,7 +941,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         {
             continue;
         }
-        let cb = build_box_inner(child, style_map, pseudo_map);
+        let cb = build_box_inner(child, style_map, pseudo_map, counters);
         if cb.display != Display::None {
             // Text bez obsahu - zahodit
             if matches!(child.kind, NodeKind::Text(_)) && cb.text.is_none() {
@@ -943,7 +953,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
 
     // Pseudo-element ::after - posledni virtualni child
     if let Some(pseudo_styles) = super::cascade::get_pseudo_styles(pseudo_map, node, "after") {
-        if let Some(pa) = build_pseudo_box(node, pseudo_styles) {
+        if let Some(pa) = build_pseudo_box(node, pseudo_styles, counters) {
             bx.children.push(pa);
         }
     }
@@ -953,9 +963,9 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
 
 /// Vyrobi LayoutBox pro pseudo-element (::before / ::after) z computed styles.
 /// Content property: "string", attr(name), counter(...) - implementovano: string a attr.
-fn build_pseudo_box(parent_node: &Rc<Node>, styles: &HashMap<String, String>) -> Option<LayoutBox> {
+fn build_pseudo_box(parent_node: &Rc<Node>, styles: &HashMap<String, String>, counters: &HashMap<String, i32>) -> Option<LayoutBox> {
     let content_raw = styles.get("content")?;
-    let text = parse_content_value(content_raw, parent_node)?;
+    let text = parse_content_value(content_raw, parent_node, counters)?;
     if text.is_empty() { return None; }
 
     let mut bx = LayoutBox::new();
@@ -990,7 +1000,7 @@ fn build_pseudo_box(parent_node: &Rc<Node>, styles: &HashMap<String, String>) ->
 /// - attr(name) -> hodnota atributu na parent node
 /// - normal / none -> None
 /// - counter(name) -> placeholder "1" (counters out of scope zatim)
-fn parse_content_value(raw: &str, parent: &Rc<Node>) -> Option<String> {
+fn parse_content_value(raw: &str, parent: &Rc<Node>, counters: &HashMap<String, i32>) -> Option<String> {
     let s = raw.trim();
     if s.is_empty() || s == "none" || s == "normal" { return None; }
 
@@ -1008,9 +1018,19 @@ fn parse_content_value(raw: &str, parent: &Rc<Node>) -> Option<String> {
         return parent.attr(name).or(Some(String::new()));
     }
 
-    // counter(name) - placeholder
-    if s.starts_with("counter(") {
-        return Some("0".to_string());
+    // counter(name) - vrati hodnotu z counter state
+    if let Some(inner) = s.strip_prefix("counter(").and_then(|s| s.strip_suffix(')')) {
+        let parts: Vec<&str> = inner.split(',').map(|p| p.trim()).collect();
+        let name = parts[0];
+        let val = counters.get(name).copied().unwrap_or(0);
+        return Some(val.to_string());
+    }
+    // counters(name, separator) - hierarchicky concat (zjednoduseni: jen aktualni)
+    if let Some(inner) = s.strip_prefix("counters(").and_then(|s| s.strip_suffix(')')) {
+        let parts: Vec<&str> = inner.split(',').map(|p| p.trim()).collect();
+        let name = parts[0];
+        let val = counters.get(name).copied().unwrap_or(0);
+        return Some(val.to_string());
     }
 
     // url(...) - placeholder
