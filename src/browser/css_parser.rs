@@ -205,6 +205,21 @@ pub fn parse_stylesheet(source: &str) -> Stylesheet {
                     let n = name.trim().to_string();
                     if !n.is_empty() && !layer_order.contains(&n) { layer_order.push(n); }
                 }
+            } else if selectors_str.starts_with("@import") {
+                // @import "url" [layer(name)] [supports(...)] [media];
+                // Aktualne nenacitame externi soubory (TODO HTTP fetch + recursive parse).
+                // Aspon detect layer() pro registraci layer name.
+                let rest = selectors_str.trim_start_matches("@import").trim();
+                if let Some(start) = rest.find("layer(") {
+                    let after = &rest[start + 6..];
+                    if let Some(end) = after.find(')') {
+                        let name = after[..end].trim().to_string();
+                        if !name.is_empty() && !layer_order.contains(&name) { layer_order.push(name); }
+                    }
+                }
+            } else if selectors_str.starts_with("@charset")
+                || selectors_str.starts_with("@namespace") {
+                // No-op (pre-parser pro ECMA / vendor prefixes)
             }
             continue;
         }
@@ -262,6 +277,19 @@ pub fn parse_stylesheet(source: &str) -> Stylesheet {
             let _ = block_str;
         } else if selectors_str.starts_with("@page") {
             // @page rules - pro print, zatim no-op
+            let _ = block_str;
+        } else if selectors_str.starts_with("@document") {
+            // Mozilla @document - rules unwrap (treat as if matched)
+            let nested = parse_stylesheet(&block_str);
+            rules.extend(nested.rules);
+        } else if selectors_str.starts_with("@view-transition") {
+            // @view-transition { navigation: auto } - parsing only zatim
+            let _ = block_str;
+        } else if selectors_str.starts_with("@counter-style") {
+            // @counter-style name { system, symbols, ... } - parse only zatim
+            let _ = block_str;
+        } else if selectors_str.starts_with("@font-feature-values") {
+            // @font-feature-values FontName { @styleset {} ... } - parse only
             let _ = block_str;
         } else if selectors_str.starts_with("@property") {
             // @property --name { syntax/inherits/initial-value } - registrace, zatim no-op
