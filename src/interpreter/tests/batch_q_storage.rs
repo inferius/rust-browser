@@ -79,3 +79,31 @@ fn indexed_db_open_stub() {
     "#);
     assert_eq!(as_str(v), "mydb");
 }
+
+#[test]
+fn local_storage_save_load_roundtrip() {
+    // Otestujeme samotnou persist funkci bez env var manipulace
+    use crate::interpreter::helpers::{save_storage_to_disk, load_storage_from_disk, storage_file_path};
+
+    // Pouzijeme unique nazev pro test (vyhybame se default localStorage souboru)
+    let test_name = "test-storage-roundtrip";
+    let path = storage_file_path(test_name);
+    let _ = std::fs::remove_file(&path);
+
+    let entries = vec![
+        ("alpha".to_string(), "value1".to_string()),
+        ("beta".to_string(),  "value with\ttab".to_string()),
+        ("gamma".to_string(), "another\nvalue".to_string()),
+    ];
+
+    save_storage_to_disk(test_name, &entries).expect("save");
+    let loaded = load_storage_from_disk(test_name);
+
+    assert_eq!(loaded.len(), 3);
+    assert_eq!(loaded[0], ("alpha".to_string(), "value1".to_string()));
+    assert_eq!(loaded[1], ("beta".to_string(),  "value with\ttab".to_string()));
+    assert_eq!(loaded[2], ("gamma".to_string(), "another\nvalue".to_string()));
+
+    // Cleanup
+    let _ = std::fs::remove_file(&path);
+}

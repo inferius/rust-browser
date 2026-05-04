@@ -2726,6 +2726,24 @@ impl Interpreter {
                             Some(JsValue::Object(d)) => d,
                             _ => return Ok(JsValue::Undefined),
                         };
+                        // Persist-helper kdyz storage je persistent (localStorage)
+                        let persist_now = || {
+                            let is_persistent = matches!(
+                                obj_rc2.borrow().props.get("__storage_persistent__"),
+                                Some(JsValue::Bool(true))
+                            );
+                            if !is_persistent { return; }
+                            let name = match obj_rc2.borrow().props.get("__storage_name__").cloned() {
+                                Some(JsValue::Str(n)) => n,
+                                _ => return,
+                            };
+                            let entries: Vec<(String, String)> = data.borrow().own_keys()
+                                .into_iter().filter_map(|k| {
+                                    let v = data.borrow().get(&k);
+                                    if let JsValue::Str(s) = v { Some((k, s)) } else { None }
+                                }).collect();
+                            let _ = save_storage_to_disk(&name, &entries);
+                        };
                         match key.as_str() {
                             "setItem" => {
                                 let mut iter = arg_vals.into_iter();
@@ -2735,6 +2753,7 @@ impl Interpreter {
                                 data.borrow_mut().set(k, v);
                                 let len = data.borrow().own_keys().len() as f64;
                                 obj_rc2.borrow_mut().set("length".into(), JsValue::Number(len));
+                                persist_now();
                                 return Ok(JsValue::Undefined);
                             }
                             "getItem" => {
@@ -2747,11 +2766,13 @@ impl Interpreter {
                                 data.borrow_mut().props.remove(&k);
                                 let len = data.borrow().own_keys().len() as f64;
                                 obj_rc2.borrow_mut().set("length".into(), JsValue::Number(len));
+                                persist_now();
                                 return Ok(JsValue::Undefined);
                             }
                             "clear" => {
                                 data.borrow_mut().props.clear();
                                 obj_rc2.borrow_mut().set("length".into(), JsValue::Number(0.0));
+                                persist_now();
                                 return Ok(JsValue::Undefined);
                             }
                             "key" => {

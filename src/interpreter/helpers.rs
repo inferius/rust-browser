@@ -578,6 +578,69 @@ pub fn generate_uuid_v4() -> String {
     )
 }
 
+// ─── Persistent storage (localStorage FS backend) ────────────────────────
+
+/// Vraci cestu k souboru pro persistent localStorage.
+/// Default: ~/.rust-web-engine/local-storage.json
+/// Override: env var RUST_WEB_ENGINE_STORAGE_PATH
+pub fn storage_file_path(name: &str) -> std::path::PathBuf {
+    let env_name = name.to_uppercase().replace('-', "_");
+    if let Ok(p) = std::env::var(format!("RUST_WEB_ENGINE_{env_name}_PATH")) {
+        return std::path::PathBuf::from(p);
+    }
+    let base = if let Ok(home) = std::env::var("USERPROFILE") {
+        std::path::PathBuf::from(home)
+    } else if let Ok(home) = std::env::var("HOME") {
+        std::path::PathBuf::from(home)
+    } else {
+        std::env::temp_dir()
+    };
+    base.join(".rust-web-engine").join(format!("{name}.json"))
+}
+
+/// Nacte storage z disku jako Vec<(key, value)>.
+pub fn load_storage_from_disk(name: &str) -> Vec<(String, String)> {
+    let path = storage_file_path(name);
+    let content = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    // Format: kazdy radek "key=value" (encoded)
+    content.lines().filter_map(|line| {
+        let mut split = line.splitn(2, '\t');
+        let k = split.next()?;
+        let v = split.next()?;
+        Some((url_decode(k), url_decode(v)))
+    }).collect()
+}
+
+/// Uloz storage na disk. Format: tab-separated, URL-encoded.
+pub fn save_storage_to_disk(name: &str, entries: &[(String, String)]) -> std::io::Result<()> {
+    let path = storage_file_path(name);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let content: String = entries.iter()
+        .map(|(k, v)| format!("{}\t{}", url_encode(k), url_encode(v)))
+        .collect::<Vec<_>>().join("\n");
+    std::fs::write(&path, content)
+}
+
+/// URL-encode: pro storage klice/hodnoty (escape \t a \n).
+pub fn url_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.bytes() {
+        match ch {
+            b'\t' => out.push_str("%09"),
+            b'\n' => out.push_str("%0A"),
+            b'\r' => out.push_str("%0D"),
+            b'%'  => out.push_str("%25"),
+            c     => out.push(c as char),
+        }
+    }
+    out
+}
+
 /// Real HTTP request pres ureq (blocking).
 /// Vraci (status, status_text, body, headers).
 pub fn perform_http_request(

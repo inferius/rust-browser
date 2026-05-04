@@ -536,17 +536,27 @@ pub fn setup_builtins(
     }));
     e.define("crypto", JsValue::Object(Rc::new(RefCell::new(crypto_obj))));
 
-    // ─── Storage API (localStorage / sessionStorage) ─────────────────────────
-    // V sync runtime sdilime in-memory storage. Realna implementace by potrebovala FS.
-    fn make_storage() -> JsValue {
+    // ─── Storage API ─────────────────────────────────────────────────────────
+    // localStorage: persistent (FS backend), sessionStorage: in-memory only.
+    fn make_storage(name: &str, persistent: bool) -> JsValue {
         let mut obj = JsObject::new();
         obj.set("__storage__".into(), JsValue::Bool(true));
-        obj.set("__storage_data__".into(), JsValue::Object(Rc::new(RefCell::new(JsObject::new()))));
-        obj.set("length".into(), JsValue::Number(0.0));
+        obj.set("__storage_name__".into(), JsValue::Str(name.into()));
+        obj.set("__storage_persistent__".into(), JsValue::Bool(persistent));
+        let mut data = JsObject::new();
+        // Nacti z disku pri init (jen persistent)
+        if persistent {
+            for (k, v) in load_storage_from_disk(name) {
+                data.set(k, JsValue::Str(v));
+            }
+        }
+        let len = data.own_keys().len() as f64;
+        obj.set("__storage_data__".into(), JsValue::Object(Rc::new(RefCell::new(data))));
+        obj.set("length".into(), JsValue::Number(len));
         JsValue::Object(Rc::new(RefCell::new(obj)))
     }
-    e.define("localStorage",   make_storage());
-    e.define("sessionStorage", make_storage());
+    e.define("localStorage",   make_storage("local-storage", true));
+    e.define("sessionStorage", make_storage("session-storage", false));
 
     // ─── IndexedDB stub ──────────────────────────────────────────────────────
     let mut idb = JsObject::new();
