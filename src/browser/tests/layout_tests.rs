@@ -429,6 +429,53 @@ fn multiple_backgrounds_parsed() {
 }
 
 #[test]
+fn clip_path_circle_emits_rounded_rect() {
+    use crate::browser::paint;
+    let doc = parse_html(r#"<html><body><div></div></body></html>"#, "");
+    let css = parse_stylesheet(r#"
+        div {
+            background: red;
+            clip-path: circle(50% at center);
+        }
+    "#);
+    let style_map = crate::browser::cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &style_map, 1024.0, 768.0);
+    let cmds = paint::build_display_list(&root);
+    // Circle clip - bg rect by mel byt s velkym radius (alespon cca 50% sirky)
+    let red_round = cmds.iter().find(|c| matches!(c,
+        paint::DisplayCommand::Rect { color: [255, 0, 0, 255], radius, .. } if *radius > 100.0));
+    assert!(red_round.is_some(), "circle clip mela emit rect s radius > 100");
+}
+
+#[test]
+fn clip_path_inset_shrinks_rect() {
+    use crate::browser::paint;
+    let doc = parse_html(r#"<html><body><div></div></body></html>"#, "");
+    let css = parse_stylesheet(r#"
+        div {
+            display: inline-block;
+            width: 200px;
+            height: 100px;
+            background: red;
+            clip-path: inset(10px 20px 30px 40px);
+        }
+    "#);
+    let style_map = crate::browser::cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &style_map, 1024.0, 768.0);
+    let cmds = paint::build_display_list(&root);
+    // Bg rect po inset clip: w = puv - left - right, h = puv - top - bottom
+    let red = cmds.iter().find(|c| matches!(c, paint::DisplayCommand::Rect { color: [255, 0, 0, 255], .. }));
+    if let Some(paint::DisplayCommand::Rect { w, h, .. }) = red {
+        // w = orig - 60, h = orig - 40 (relativni, presny w neumime spolehnout
+        // kvuli inline-block layoutu - ale ratio overujem)
+        assert!(*w < 200.0, "w mel byt mensi (clip) - got {}", w);
+        assert!(*h < 100.0, "h mel byt mensi - got {}", h);
+    } else {
+        panic!("missing red rect");
+    }
+}
+
+#[test]
 fn parse_clip_path_inset() {
     use crate::browser::layout::{parse_clip_path, ClipPath};
     let cp = parse_clip_path("inset(10px 20px 30px 40px)").unwrap();

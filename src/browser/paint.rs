@@ -98,6 +98,38 @@ pub fn build_display_list(root: &LayoutBox) -> Vec<DisplayCommand> {
     commands
 }
 
+/// Vypocita clip-path adjusted rect pro element bg/image.
+/// Vrati (x, y, w, h, radius) - radius vetsi nez box.border_radius pri circle/ellipse.
+fn compute_clip_rect(bx: &LayoutBox) -> (f32, f32, f32, f32, f32) {
+    use crate::browser::layout::ClipPath;
+    let default = (bx.rect.x, bx.rect.y, bx.rect.width, bx.rect.height, bx.border_radius);
+    match &bx.clip_path {
+        Some(ClipPath::Inset { top, right, bottom, left, radius }) => (
+            bx.rect.x + left,
+            bx.rect.y + top,
+            (bx.rect.width - left - right).max(0.0),
+            (bx.rect.height - top - bottom).max(0.0),
+            radius.max(bx.border_radius),
+        ),
+        Some(ClipPath::Circle { cx_pct, cy_pct, radius_pct }) => {
+            let cx = bx.rect.x + bx.rect.width  * cx_pct;
+            let cy = bx.rect.y + bx.rect.height * cy_pct;
+            let half_diag = ((bx.rect.width / 2.0).powi(2) + (bx.rect.height / 2.0).powi(2)).sqrt();
+            let r = half_diag * radius_pct;
+            (cx - r, cy - r, 2.0 * r, 2.0 * r, r)
+        }
+        Some(ClipPath::Ellipse { cx_pct, cy_pct, rx_pct, ry_pct }) => {
+            let cx = bx.rect.x + bx.rect.width  * cx_pct;
+            let cy = bx.rect.y + bx.rect.height * cy_pct;
+            let rx = bx.rect.width  * rx_pct;
+            let ry = bx.rect.height * ry_pct;
+            (cx - rx, cy - ry, 2.0 * rx, 2.0 * ry, rx.min(ry))
+        }
+        Some(ClipPath::Polygon(_)) => default,  // Polygon vyzaduje shader/stencil
+        None => default,
+    }
+}
+
 /// Capitalize: prvni pismeno kazdeho slova upper.
 fn capitalize_words(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -209,13 +241,11 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>) {
     // Apply opacity multiply + filter chain + clip-path na vsechny barvy
     let alpha_mul = (bx.opacity * 255.0) as u8;
     let filter = bx.filter.clone();
-    let clip_path = bx.clip_path.clone();
 
-    // Clip-path: pred zakreslenim aplikuj alpha mask na vsechny commands tohoto boxu
-    // CPU pristup: pri emit Rect/Image, pokud rect leží mimo clip shape, alpha = 0
-    // (priblizny - pro presny clip je potreba shader SDF nebo stencil).
-    // Pro start: zjednodusene - pokud ma clip-path, pridam jen omezeny rect mask.
-    let _ = clip_path;
+    // Clip-path: vypocita modifikaci box rectu pro emit Rect/Image.
+    // Single element clip (CPU side) - inset zmensi rect, circle/ellipse pridaji
+    // radius. Polygon zatim no-op.
+    let (clip_x, clip_y, clip_w, clip_h, clip_radius) = compute_clip_rect(bx);
 
     let with_alpha = |c: [u8; 4]| -> [u8; 4] {
         let a = ((c[3] as u16 * alpha_mul as u16) / 255) as u8;
@@ -330,12 +360,12 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>) {
         });
     } else if let Some(bg) = bx.bg_color {
         cmds.push(DisplayCommand::Rect {
-            x: bx.rect.x,
-            y: bx.rect.y,
-            w: bx.rect.width,
-            h: bx.rect.height,
+            x: clip_x,
+            y: clip_y,
+            w: clip_w,
+            h: clip_h,
             color: with_alpha(bg),
-            radius: bx.border_radius,
+            radius: clip_radius,
         });
     }
 

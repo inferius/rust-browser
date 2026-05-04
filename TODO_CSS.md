@@ -304,7 +304,7 @@ Konvence stavu:
   Pro vetsinu use cases (single-element styling) ale staci.
 
 ### CSS Masking L1
-- [/] `clip-path: inset()|circle()|ellipse()|polygon()` parser hotovy + ulozeny v LayoutBox.clip_path. Render aplikace TODO (vyzaduje shader mode + SDF clip).
+- [x] `clip-path: inset()|circle()|ellipse()` - parser + CPU paint apply (rect modify + radius). Polygon zatim no-op (vyzaduje shader stencil/SDF).
 - [ ] `mask-image`
 - [ ] `mask-mode`, `mask-repeat`, `mask-position`, `mask-size`, `mask-origin`, `mask-clip`
 - [ ] `mask-composite`
