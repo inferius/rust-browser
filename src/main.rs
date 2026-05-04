@@ -54,31 +54,25 @@ console.log(greeting, result);
         return;
     }
 
-    // Browser mode: cargo run -- browser nebo cargo run -- window
+    // Browser mode: cargo run -- browser nebo cargo run -- window [path/to/file.html]
     if args.len() > 1 && (args[1] == "browser" || args[1] == "window") {
-        let html = r#"
-            <html>
-            <head><title>Test Page</title></head>
-            <body>
-                <h1>Vitejte v Rust Web Engine!</h1>
-                <p>Toto je testovaci stranka.</p>
-                <div id="box" style="background: red; padding: 20px;">
-                    <p>Cerveny box s padding</p>
-                </div>
-            </body>
-            </html>
-        "#;
-        let css = r#"
-            body { background: white; }
-            h1 { color: blue; font-size: 32px; }
-            p { color: black; margin: 10px; }
-        "#;
+        // Default: static/test.html
+        let html_path = args.get(2).cloned().unwrap_or_else(|| "static/test.html".to_string());
+        let html = match std::fs::read_to_string(&html_path) {
+            Ok(s) => s,
+            Err(e) => { eprintln!("Nelze nacist {html_path}: {e}"); return; }
+        };
+
+        // CSS: nacti z <link> nebo z .css souboru se stejnym nazvem
+        let css_path = html_path.replace(".html", ".css");
+        let css = std::fs::read_to_string(&css_path).unwrap_or_default();
+
         if args[1] == "window" {
-            if let Err(e) = browser::render::run_window_with_html(html.to_string(), css.to_string()) {
+            if let Err(e) = browser::render::run_window_with_html(html, css) {
                 eprintln!("Chyba okna: {e}");
             }
         } else {
-            browser::render::run_browser(html, css);
+            browser::render::run_browser(&html, &css);
         }
         return;
     }

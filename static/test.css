@@ -1,0 +1,279 @@
+/* Rust Web Engine - testovaci stylesheet */
+
+body {
+    background: #f5f5f7;
+    color: #1d1d1f;
+    font-size: 16px;
+    margin: 0;
+    padding: 0;
+}
+
+.page-header {
+    background: #1d1d1f;
+    color: white;
+    padding: 24px;
+    border: 0;
+}
+.page-header h1 {
+    color: #f5f5f7;
+    font-size: 32px;
+    margin: 0;
+}
+.subtitle {
+    color: #a1a1a6;
+    font-size: 14px;
+    margin: 4px 0 0 0;
+}
+
+main {
+    padding: 16px;
+    background: white;
+    margin: 16px;
+    border-radius: 8px;
+}
+
+.section {
+    border: 1px solid #d2d2d7;
+    border-radius: 6px;
+    padding: 16px;
+    margin: 16px 0;
+    background: #fbfbfd;
+}
+.section h2 {
+    color: #0071e3;
+    font-size: 20px;
+    margin-top: 0;
+    border-width: 0;
+}
+
+/* 1. Typografie */
+h1 { font-size: 32px; }
+h2 { font-size: 24px; }
+h3 { font-size: 20px; }
+h4 { font-size: 16px; }
+h5 { font-size: 14px; }
+h6 { font-size: 12px; }
+strong { color: #1d1d1f; }
+em { color: #6e6e73; }
+code {
+    background: #f0f0f3;
+    color: #d12d6c;
+    padding: 2px 6px;
+    border-radius: 3px;
+}
+small { color: #86868b; font-size: 12px; }
+blockquote {
+    background: #fff8e7;
+    border-width: 4px;
+    border-color: #ffd60a;
+    padding: 12px;
+    margin: 12px 0;
+    color: #6e6e73;
+}
+
+/* 2. Barvy */
+.swatch {
+    padding: 16px;
+    margin: 4px;
+    border-radius: 4px;
+    color: white;
+    font-size: 14px;
+}
+.swatch-red     { background: red; }
+.swatch-green   { background: green; }
+.swatch-blue    { background: blue; }
+.swatch-yellow  { background: yellow; color: black; }
+.swatch-cyan    { background: cyan; color: black; }
+.swatch-magenta { background: magenta; }
+.swatch-hex     { background: #3498db; }
+.swatch-rgb     { background: rgb(231, 76, 60); }
+.swatch-rgba    { background: rgba(46, 204, 113, 0.7); }
+
+/* 3. Box model */
+.box {
+    background: #d6e4ff;
+    color: #0a3d91;
+    margin: 8px 0;
+}
+.box-padding { padding: 20px; }
+.box-margin  { margin: 30px 0; padding: 8px; }
+.box-border  {
+    border-width: 4px;
+    border-color: red;
+    padding: 8px;
+}
+.box-all     {
+    padding: 10px;
+    margin: 15px 0;
+    border-width: 3px;
+    border-color: #34c759;
+}
+.nested-outer {
+    background: #e8e8ed;
+    padding: 16px;
+    border-width: 2px;
+    border-color: #1d1d1f;
+}
+.nested-inner {
+    background: #ffd60a;
+    padding: 8px;
+    margin: 8px;
+    color: #1d1d1f;
+}
+
+/* 4. Block layout */
+.block-row {
+    background: #5e5ce6;
+    color: white;
+    padding: 12px;
+    margin: 4px 0;
+    border-radius: 4px;
+}
+
+/* 5. Inline */
+.badge {
+    background: #ff3b30;
+    color: white;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 12px;
+}
+.highlight {
+    background: #ffd60a;
+    color: #1d1d1f;
+    padding: 2px 4px;
+}
+a {
+    color: #0071e3;
+}
+.inline-blocks {
+    margin: 12px 0;
+}
+.ib {
+    background: #34c759;
+    color: white;
+    padding: 12px 24px;
+    margin: 4px;
+    border-radius: 4px;
+}
+
+/* 6. Seznamy */
+ul, ol {
+    padding: 8px 24px;
+    margin: 8px 0;
+}
+li {
+    margin: 4px 0;
+}
+
+/* 7. Tabulka */
+table {
+    background: white;
+    border-width: 1px;
+    border-color: #d2d2d7;
+    margin: 8px 0;
+    padding: 0;
+}
+th, td {
+    padding: 8px 12px;
+    border-width: 1px;
+    border-color: #d2d2d7;
+}
+th {
+    background: #f5f5f7;
+    color: #1d1d1f;
+}
+
+/* 8. Formular */
+form {
+    background: #fbfbfd;
+    padding: 16px;
+    border-radius: 6px;
+}
+label {
+    display: block;
+    margin: 8px 0;
+    color: #6e6e73;
+}
+input, textarea, select {
+    background: white;
+    border-width: 1px;
+    border-color: #d2d2d7;
+    padding: 6px 12px;
+    border-radius: 4px;
+    color: #1d1d1f;
+}
+
+/* 9. Karty */
+.card-grid {
+    margin: 12px 0;
+}
+.card {
+    background: white;
+    border-width: 1px;
+    border-color: #d2d2d7;
+    border-radius: 8px;
+    padding: 16px;
+    margin: 8px;
+}
+.card h3 {
+    color: #0071e3;
+    margin-top: 0;
+}
+
+/* 10. Tlacitka */
+.btn {
+    padding: 8px 16px;
+    margin: 4px;
+    border-width: 0;
+    border-radius: 4px;
+    color: white;
+    font-size: 14px;
+}
+.btn-primary   { background: #0071e3; }
+.btn-secondary { background: #6e6e73; }
+.btn-success   { background: #34c759; }
+.btn-danger    { background: #ff3b30; }
+.btn-disabled  { background: #d2d2d7; color: #86868b; }
+
+/* 11. Vnoreni */
+.level-1 { background: #ffe5b4; padding: 12px; }
+.level-2 { background: #ffcc80; padding: 12px; }
+.level-3 { background: #ffb04c; padding: 12px; }
+.level-4 { background: #ff9500; padding: 12px; color: white; }
+
+/* 12. Mixed */
+article {
+    background: white;
+    padding: 16px;
+    border-width: 1px;
+    border-color: #d2d2d7;
+    border-radius: 6px;
+}
+.num {
+    background: #5856d6;
+    color: white;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 14px;
+}
+.callout {
+    background: #ffe5b4;
+    color: #5d3a00;
+    padding: 12px;
+    border-width: 4px;
+    border-color: #ff9500;
+    border-radius: 4px;
+}
+
+/* Footer */
+.page-footer {
+    background: #1d1d1f;
+    color: #a1a1a6;
+    padding: 16px 24px;
+    margin-top: 16px;
+    text-align: center;
+}
+.page-footer a {
+    color: #2997ff;
+}
