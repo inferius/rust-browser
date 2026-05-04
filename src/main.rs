@@ -10,6 +10,7 @@ mod ast;
 mod lexer;
 mod parser;
 mod interpreter;
+mod browser;
 
 use lexer::base::Lexer;
 use parser::Parser;
@@ -17,6 +18,37 @@ use interpreter::Interpreter;
 use tokens::TokenKind;
 
 fn main() {
+    let args: Vec<String> = std::env::args().collect();
+
+    // Browser mode: cargo run -- browser nebo cargo run -- window
+    if args.len() > 1 && (args[1] == "browser" || args[1] == "window") {
+        let html = r#"
+            <html>
+            <head><title>Test Page</title></head>
+            <body>
+                <h1>Vitejte v Rust Web Engine!</h1>
+                <p>Toto je testovaci stranka.</p>
+                <div id="box" style="background: red; padding: 20px;">
+                    <p>Cerveny box s padding</p>
+                </div>
+            </body>
+            </html>
+        "#;
+        let css = r#"
+            body { background: white; }
+            h1 { color: blue; font-size: 32px; }
+            p { color: black; margin: 10px; }
+        "#;
+        if args[1] == "window" {
+            if let Err(e) = browser::render::run_window_with_html(html.to_string(), css.to_string()) {
+                eprintln!("Chyba okna: {e}");
+            }
+        } else {
+            browser::render::run_browser(html, css);
+        }
+        return;
+    }
+
     let source = r#"
 function foo(a, b) {
     return a + b;

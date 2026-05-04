@@ -26,3 +26,16 @@ ureq = { version = "2.10", features = ["json"] }
 
 # Fancy regex - podporuje lookbehind, backreferences, atomic groups
 fancy-regex = "0.13"
+
+# HTML5 parser - same crate Servo pouziva
+html5ever = "0.27"
+markup5ever_rcdom = "0.3"
+
+# CSS parser
+selectors = "0.25"
+cssparser = "0.34"
+
+# Rendering: wgpu - cross-platform GPU API (wraps Vulkan/Metal/DX12/WebGPU)
+wgpu = "0.20"
+winit = "0.30"
+pollster = "0.3"  # block_on bez tokio
