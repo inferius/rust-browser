@@ -5,10 +5,10 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 ## Stav
 
 - Build: **OK**, 0 errors.
-- Tests: **1563 passed, 0 failed, 3 ignored** (+758 v teto session, +94.2%).
-- Posledni commit: `7b67c2d WebGL phase 3c7 part 3 - uniform per-draw serialize`.
+- Tests: **1569 passed, 0 failed, 3 ignored** (+764 v teto session, +94.9%).
+- Posledni commit: `739d3b1 WebGL phase 3c8 - texture upload + sampler`.
 - Tree: ciste.
-- Branch master, ~262 commitu pred origin/master (NEPUSHOVAT bez vyzvy).
+- Branch master, ~264 commitu pred origin/master (NEPUSHOVAT bez vyzvy).
 
 ## Recent session highlights
 
@@ -85,9 +85,12 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
   webgl_encode_draw_arrays/elements per-draw write_buffer + bind group set.
   Limitace: naga GLSL ES 1.0 single uniform syntax extracts 0 slotu, lepsi
   pres `layout(std140) uniform Block { ... }` syntax.
-- **WebGL phase 3c8 (TODO)**: texture upload + sampler bind groups
-  (texImage2D real GPU upload). Per-program texture bindings. Limitace
-  aktualni: texture stub jen ulozeni bytes do WebGLTexture struct.
+- **WebGL phase 3c8 HOTOVO**: texImage2D real ulozeni v WebGLState,
+  Renderer webgl_textures cache + upload_webgl_texture (RGB->RGBA convert,
+  Rgba8UnormSrgb format), default_sampler lazy init, execute_webgl_canvas
+  pre-uploadi textures. **Phase 3c8 part 2 (TODO)**: texture bind group
+  pro shadery s sampler2D - rozsireni uniform_bgls + bind group entries
+  pro samplers/textures, set_bind_group s combined entries.
 - **Filter v Transform RT (nested)**: aktualne filter inside transform
   je inner cmds bez efektu - lepsi pristup vyzaduje rekursi v draw_segments.
 - **Filter v Transform RT (nested)**: aktualne filter inside transform
