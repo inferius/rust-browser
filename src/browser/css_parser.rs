@@ -56,10 +56,29 @@ pub struct SimpleSelector {
     pub classes: Vec<String>,
     /// Atribute selektory: [type], [type="text"], [class~="foo"]
     pub attributes: Vec<AttrSelector>,
-    /// Pseudo-class :hover, :active, :focus, etc.
+    /// Pseudo-class :hover, :active, :focus, etc. (bez argumentu)
     pub pseudo_classes: Vec<String>,
+    /// Funkcni pseudo-classes: :is(...), :not(...), :nth-child(...), :has(...)
+    pub pseudo_funcs: Vec<PseudoFunc>,
     /// Combinator pred timto selektorem (None = root, Descendant = " ", Child = ">")
     pub combinator: Option<Combinator>,
+}
+
+/// Funkcni pseudo-classy s argumenty.
+#[derive(Debug, Clone)]
+pub enum PseudoFunc {
+    /// `:is(<selector-list>)` - matches-any
+    Is(Vec<Selector>),
+    /// `:where(<selector-list>)` - jako :is ale specificita 0
+    Where(Vec<Selector>),
+    /// `:not(<selector-list>)` - negace
+    Not(Vec<Selector>),
+    /// `:has(<relative-selector-list>)` - relacni (descendant)
+    Has(Vec<Selector>),
+    /// `:nth-child(an+b)` / `:nth-last-child(an+b)`
+    NthChild { a: i32, b: i32, of_type: bool, last: bool },
+    /// Neznamy / nepodporovany - raw args pro forward-compat
+    Unknown { name: String, args: String },
 }
 
 #[derive(Debug, Clone)]
@@ -98,6 +117,25 @@ pub fn specificity(sel: &Selector) -> (u32, u32, u32) {
         class_count += p.attributes.len() as u32;
         class_count += p.pseudo_classes.len() as u32;
         if p.tag.is_some() && p.tag.as_deref() != Some("*") { type_count += 1; }
+
+        // Funkcni pseudo: :is/:not/:has = max specificity argumentu, :where = 0
+        for pf in &p.pseudo_funcs {
+            match pf {
+                PseudoFunc::Is(args) | PseudoFunc::Not(args) | PseudoFunc::Has(args) => {
+                    let mut best = (0, 0, 0);
+                    for arg_sel in args {
+                        let s = specificity(arg_sel);
+                        if s > best { best = s; }
+                    }
+                    id_count += best.0;
+                    class_count += best.1;
+                    type_count += best.2;
+                }
+                PseudoFunc::Where(_) => { /* specificita 0 */ }
+                PseudoFunc::NthChild { .. } => { class_count += 1; }
+                PseudoFunc::Unknown { .. } => { class_count += 1; }
+            }
+        }
     }
     (id_count, class_count, type_count)
 }
@@ -281,13 +319,52 @@ fn parse_decls_str(block: &str) -> Vec<Declaration> {
 }
 
 fn parse_selectors(s: &str) -> Vec<Selector> {
-    s.split(',').map(|sel_str| parse_single_selector(sel_str.trim())).collect()
+    split_top_level_comma(s).into_iter()
+        .map(|sel_str| parse_single_selector(sel_str.trim()))
+        .collect()
+}
+
+/// Split na top-level (respektuje zavorky/uvozovky) podle char.
+fn split_top_level(s: &str, sep: impl Fn(char) -> bool) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut cur = String::new();
+    let mut depth_paren = 0i32;
+    let mut depth_brack = 0i32;
+    let mut quote: Option<char> = None;
+    for ch in s.chars() {
+        if let Some(q) = quote {
+            cur.push(ch);
+            if ch == q { quote = None; }
+            continue;
+        }
+        match ch {
+            '"' | '\'' => { quote = Some(ch); cur.push(ch); }
+            '(' => { depth_paren += 1; cur.push(ch); }
+            ')' => { depth_paren -= 1; cur.push(ch); }
+            '[' => { depth_brack += 1; cur.push(ch); }
+            ']' => { depth_brack -= 1; cur.push(ch); }
+            c if depth_paren == 0 && depth_brack == 0 && sep(c) => {
+                if !cur.is_empty() { tokens.push(std::mem::take(&mut cur)); }
+            }
+            _ => cur.push(ch),
+        }
+    }
+    if !cur.is_empty() { tokens.push(cur); }
+    tokens
+}
+
+fn split_top_level_whitespace(s: &str) -> Vec<String> {
+    split_top_level(s, |c| c.is_whitespace())
+}
+
+fn split_top_level_comma(s: &str) -> Vec<String> {
+    split_top_level(s, |c| c == ',')
 }
 
 fn parse_single_selector(s: &str) -> Selector {
     let mut parts = Vec::new();
     let mut current_combinator: Option<Combinator> = None;
-    for token in s.split_whitespace() {
+    for token in split_top_level_whitespace(s) {
         if token == ">" { current_combinator = Some(Combinator::Child); continue; }
         if token == "+" { current_combinator = Some(Combinator::AdjacentSibling); continue; }
         if token == "~" { current_combinator = Some(Combinator::GeneralSibling); continue; }
@@ -297,6 +374,7 @@ fn parse_single_selector(s: &str) -> Selector {
         let mut classes = Vec::new();
         let mut attributes = Vec::new();
         let mut pseudo_classes = Vec::new();
+        let mut pseudo_funcs = Vec::new();
 
         let chars: Vec<char> = token.chars().collect();
         let mut i = 0;
@@ -330,11 +408,49 @@ fn parse_single_selector(s: &str) -> Selector {
                     i += 1;
                     // Skip druhy : (::before)
                     if i < chars.len() && chars[i] == ':' { i += 1; }
-                    let mut buf = String::new();
+                    let mut name = String::new();
                     while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '-' || chars[i] == '_') {
-                        buf.push(chars[i]); i += 1;
+                        name.push(chars[i]); i += 1;
                     }
-                    pseudo_classes.push(buf);
+                    // Funkcni pseudo: :name(args)
+                    if i < chars.len() && chars[i] == '(' {
+                        i += 1;
+                        let mut depth = 1;
+                        let mut args = String::new();
+                        while i < chars.len() {
+                            let c = chars[i];
+                            if c == '(' { depth += 1; }
+                            if c == ')' { depth -= 1; if depth == 0 { i += 1; break; } }
+                            args.push(c);
+                            i += 1;
+                        }
+                        let pf = match name.as_str() {
+                            "is" => PseudoFunc::Is(parse_selectors(&args)),
+                            "where" => PseudoFunc::Where(parse_selectors(&args)),
+                            "not" => PseudoFunc::Not(parse_selectors(&args)),
+                            "has" => PseudoFunc::Has(parse_selectors(&args)),
+                            "nth-child" => {
+                                let (a, b) = parse_an_plus_b(&args);
+                                PseudoFunc::NthChild { a, b, of_type: false, last: false }
+                            }
+                            "nth-last-child" => {
+                                let (a, b) = parse_an_plus_b(&args);
+                                PseudoFunc::NthChild { a, b, of_type: false, last: true }
+                            }
+                            "nth-of-type" => {
+                                let (a, b) = parse_an_plus_b(&args);
+                                PseudoFunc::NthChild { a, b, of_type: true, last: false }
+                            }
+                            "nth-last-of-type" => {
+                                let (a, b) = parse_an_plus_b(&args);
+                                PseudoFunc::NthChild { a, b, of_type: true, last: true }
+                            }
+                            _ => PseudoFunc::Unknown { name: name.clone(), args: args.clone() },
+                        };
+                        pseudo_funcs.push(pf);
+                    } else {
+                        pseudo_classes.push(name);
+                    }
                 }
                 '[' => {
                     i += 1;
@@ -390,10 +506,37 @@ fn parse_single_selector(s: &str) -> Selector {
         };
 
         parts.push(SimpleSelector {
-            tag, id, classes, attributes, pseudo_classes, combinator,
+            tag, id, classes, attributes, pseudo_classes, pseudo_funcs, combinator,
         });
     }
     Selector { parts }
+}
+
+/// Parsuje `an+b` syntax pro :nth-* pseudo-classes.
+/// Specialni: "odd" = (2, 1), "even" = (2, 0).
+fn parse_an_plus_b(s: &str) -> (i32, i32) {
+    let s = s.trim();
+    if s == "odd" { return (2, 1); }
+    if s == "even" { return (2, 0); }
+    if s == "n" { return (1, 0); }
+    if s == "-n" { return (-1, 0); }
+
+    // Try plain integer "5"
+    if let Ok(n) = s.parse::<i32>() { return (0, n); }
+
+    // Pattern: "an" / "an+b" / "an-b" / "n+b"
+    if let Some(n_pos) = s.find('n') {
+        let a_str = &s[..n_pos];
+        let a: i32 = match a_str {
+            "" | "+" => 1,
+            "-" => -1,
+            _ => a_str.parse().unwrap_or(1),
+        };
+        let rest = s[n_pos + 1..].trim();
+        let b: i32 = if rest.is_empty() { 0 } else { rest.replace(' ', "").parse().unwrap_or(0) };
+        return (a, b);
+    }
+    (0, 0)
 }
 
 /// Konverze deklaraci na HashMap (property -> value).

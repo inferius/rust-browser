@@ -309,6 +309,10 @@ pub fn matches_selector(node: &Rc<Node>, sel: &Selector) -> bool {
     let mut current_part = sel.parts.len() - 2;
     let mut current_node = node.parent.borrow().upgrade();
 
+    // Pro sibling combinatory drzime aktualni "scope node" - pri prvni iteraci
+    // je to puvodni `node`, jeho parent je current_node uz nastavene.
+    let mut scope_node = Rc::clone(node);
+
     loop {
         let part = &sel.parts[current_part];
         let combinator = sel.parts[current_part + 1].combinator.clone()
@@ -322,6 +326,7 @@ pub fn matches_selector(node: &Rc<Node>, sel: &Selector) -> bool {
                     if current_part == 0 { return true; }
                     current_part -= 1;
                     let next = p.parent.borrow().upgrade();
+                    scope_node = Rc::clone(&p);
                     current_node = next;
                 } else { return false; }
             }
@@ -334,6 +339,7 @@ pub fn matches_selector(node: &Rc<Node>, sel: &Selector) -> bool {
                         if current_part == 0 { return true; }
                         current_part -= 1;
                         let next = p.parent.borrow().upgrade();
+                        scope_node = Rc::clone(&p);
                         current_node = next;
                         found = true;
                         break;
@@ -343,8 +349,50 @@ pub fn matches_selector(node: &Rc<Node>, sel: &Selector) -> bool {
                 }
                 if !found { return false; }
             }
-            // Sibling combinators - zatim nepodporujeme spravne
-            _ => return false,
+            Combinator::AdjacentSibling => {
+                // Predchazejici sourozenec scope_node musi matchovat part
+                let parent = scope_node.parent.borrow().upgrade();
+                let parent = match parent { Some(p) => p, None => return false };
+                let children = parent.children.borrow();
+                let idx = children.iter().position(|c| Rc::ptr_eq(c, &scope_node));
+                let idx = match idx { Some(i) => i, None => return false };
+                // Najdi predchazejici element (skip text/comment)
+                let mut prev: Option<Rc<Node>> = None;
+                for j in (0..idx).rev() {
+                    if matches!(children[j].kind, NodeKind::Element(_)) {
+                        prev = Some(Rc::clone(&children[j]));
+                        break;
+                    }
+                }
+                let prev = match prev { Some(p) => p, None => return false };
+                if !matches_simple(&prev, part) { return false; }
+                if current_part == 0 { return true; }
+                current_part -= 1;
+                scope_node = Rc::clone(&prev);
+                current_node = prev.parent.borrow().upgrade();
+            }
+            Combinator::GeneralSibling => {
+                // Nektery predchazejici sourozenec musi matchovat part
+                let parent = scope_node.parent.borrow().upgrade();
+                let parent = match parent { Some(p) => p, None => return false };
+                let children = parent.children.borrow();
+                let idx = children.iter().position(|c| Rc::ptr_eq(c, &scope_node));
+                let idx = match idx { Some(i) => i, None => return false };
+                let mut found: Option<Rc<Node>> = None;
+                for j in (0..idx).rev() {
+                    if matches!(children[j].kind, NodeKind::Element(_))
+                        && matches_simple(&children[j], part)
+                    {
+                        found = Some(Rc::clone(&children[j]));
+                        break;
+                    }
+                }
+                let prev = match found { Some(p) => p, None => return false };
+                if current_part == 0 { return true; }
+                current_part -= 1;
+                scope_node = Rc::clone(&prev);
+                current_node = prev.parent.borrow().upgrade();
+            }
         }
     }
 }
@@ -406,12 +454,10 @@ pub fn matches_simple(node: &Rc<Node>, sel: &SimpleSelector) -> bool {
         }
     }
 
-    // Pseudo-classes :hover/:active/:focus zatim ignorujeme (vyzaduji runtime stav)
-    // Skip - vraci match aby se pravidlo neaplikovalo zbytecne
+    // Pseudo-classes (bez argumentu)
     for pc in &sel.pseudo_classes {
         match pc.as_str() {
             "root" => {
-                // :root match jen html element
                 if tag != "html" { return false; }
             }
             "first-child" => {
@@ -419,7 +465,7 @@ pub fn matches_simple(node: &Rc<Node>, sel: &SimpleSelector) -> bool {
                 if let Some(p) = parent {
                     let children = p.children.borrow();
                     let first_el = children.iter().find(|c| matches!(c.kind, NodeKind::Element(_)));
-                    if first_el.map(|f| !std::rc::Rc::ptr_eq(f, node)).unwrap_or(true) {
+                    if first_el.map(|f| !Rc::ptr_eq(f, node)).unwrap_or(true) {
                         return false;
                     }
                 }
@@ -429,18 +475,112 @@ pub fn matches_simple(node: &Rc<Node>, sel: &SimpleSelector) -> bool {
                 if let Some(p) = parent {
                     let children = p.children.borrow();
                     let last_el = children.iter().rev().find(|c| matches!(c.kind, NodeKind::Element(_)));
-                    if last_el.map(|f| !std::rc::Rc::ptr_eq(f, node)).unwrap_or(true) {
+                    if last_el.map(|f| !Rc::ptr_eq(f, node)).unwrap_or(true) {
                         return false;
                     }
                 }
             }
-            // hover/active/focus - bez runtime nemuzu - skip (pravidlo se NEaplikuje)
-            "hover" | "active" | "focus" | "visited" | "link" => return false,
+            "only-child" => {
+                let parent = node.parent.borrow().upgrade();
+                if let Some(p) = parent {
+                    let children = p.children.borrow();
+                    let count = children.iter().filter(|c| matches!(c.kind, NodeKind::Element(_))).count();
+                    if count != 1 { return false; }
+                }
+            }
+            "first-of-type" | "last-of-type" | "only-of-type" => {
+                let parent = node.parent.borrow().upgrade();
+                if let Some(p) = parent {
+                    let children = p.children.borrow();
+                    let same_tag: Vec<_> = children.iter()
+                        .filter(|c| matches!(c.kind, NodeKind::Element(_)))
+                        .filter(|c| c.tag_name().as_deref() == Some(tag.as_str()))
+                        .collect();
+                    let pos = same_tag.iter().position(|c| Rc::ptr_eq(c, node));
+                    let pos = match pos { Some(p) => p, None => return false };
+                    match pc.as_str() {
+                        "first-of-type" => if pos != 0 { return false; },
+                        "last-of-type" => if pos != same_tag.len() - 1 { return false; },
+                        "only-of-type" => if same_tag.len() != 1 { return false; },
+                        _ => {}
+                    }
+                }
+            }
+            "empty" => {
+                let children = node.children.borrow();
+                let has_content = children.iter().any(|c| match &c.kind {
+                    NodeKind::Element(_) => true,
+                    NodeKind::Text(t) => !t.is_empty(),
+                    _ => false,
+                });
+                if has_content { return false; }
+            }
+            "any-link" | "scope" => { /* OK */ }
+            // hover/active/focus - bez runtime stavu - skip
+            "hover" | "active" | "focus" | "focus-visible" | "focus-within"
+            | "visited" | "link" | "checked" | "disabled" | "enabled" => return false,
             _ => {}
         }
     }
 
+    // Funkcni pseudo-classes
+    for pf in &sel.pseudo_funcs {
+        match pf {
+            super::css_parser::PseudoFunc::Is(args)
+            | super::css_parser::PseudoFunc::Where(args) => {
+                if !args.iter().any(|s| matches_selector(node, s)) { return false; }
+            }
+            super::css_parser::PseudoFunc::Not(args) => {
+                if args.iter().any(|s| matches_selector(node, s)) { return false; }
+            }
+            super::css_parser::PseudoFunc::Has(args) => {
+                // :has(selector) - existuje descendant matchujici selector
+                if !has_matching_descendant(node, args) { return false; }
+            }
+            super::css_parser::PseudoFunc::NthChild { a, b, of_type, last } => {
+                if !nth_child_matches(node, *a, *b, *of_type, *last, &tag) { return false; }
+            }
+            super::css_parser::PseudoFunc::Unknown { .. } => {
+                // Neznamy pseudo - nepouzit pravidlo (safe)
+                return false;
+            }
+        }
+    }
+
     true
+}
+
+/// :has(selector) - vrati true pokud nejaky descendant matchuje arg.
+fn has_matching_descendant(node: &Rc<Node>, args: &[super::css_parser::Selector]) -> bool {
+    let children = node.children.borrow();
+    for child in children.iter() {
+        if !matches!(child.kind, NodeKind::Element(_)) { continue; }
+        if args.iter().any(|s| matches_selector(child, s)) { return true; }
+        if has_matching_descendant(child, args) { return true; }
+    }
+    false
+}
+
+/// :nth-child / :nth-of-type / :nth-last-* matching.
+/// an+b: vrati true pokud index splnuje (index = (n*a + b) pro n=0,1,2,...).
+fn nth_child_matches(node: &Rc<Node>, a: i32, b: i32, of_type: bool, last: bool, tag: &str) -> bool {
+    let parent = match node.parent.borrow().upgrade() { Some(p) => p, None => return false };
+    let children = parent.children.borrow();
+    let siblings: Vec<_> = children.iter()
+        .filter(|c| matches!(c.kind, NodeKind::Element(_)))
+        .filter(|c| !of_type || c.tag_name().as_deref() == Some(tag))
+        .collect();
+    let pos = siblings.iter().position(|c| Rc::ptr_eq(c, node));
+    let pos = match pos { Some(p) => p, None => return false };
+    let idx = if last { siblings.len() - 1 - pos + 1 } else { pos + 1 } as i32; // 1-based
+
+    // Reseni an+b = idx -> (idx - b) % a == 0 a (idx - b) / a >= 0
+    if a == 0 {
+        return idx == b;
+    }
+    let diff = idx - b;
+    if diff % a != 0 { return false; }
+    diff / a >= 0
 }
 
 /// Vrati computed styles pro dany uzel (z StyleMap).

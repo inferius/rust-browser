@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="UTF-8">
+    <title>CSS Selectors L4 - test</title>
+    <link rel="stylesheet" href="index.css">
+</head>
+<body>
+    <header>
+        <h1>CSS Selectors Level 4</h1>
+        <p>Test :is, :where, :not, :has, ~, :nth-*, :empty, :first/last/only-of-type</p>
+    </header>
+
+    <main>
+        <section>
+            <h2>:is(p, h3) - red</h2>
+            <p>tento odstavec ma byt cerveny</p>
+            <h3>tento heading taky</h3>
+            <h4>tento h4 ne</h4>
+        </section>
+
+        <section>
+            <h2>:where vs class - blue vyhrava (specificita 0)</h2>
+            <p class="low">modry text (where 0 spec, class wins)</p>
+        </section>
+
+        <section>
+            <h2>:not(.skip) - red bez .skip</h2>
+            <p class="skip">vynechany</p>
+            <p>cerveny</p>
+            <p class="skip">vynechany</p>
+            <p>cerveny</p>
+        </section>
+
+        <section>
+            <h2>:has(span) - red kdyz ma uvnitr span</h2>
+            <div class="boxed"><span>obsahuje span</span></div>
+            <div class="boxed">jen text</div>
+            <div class="boxed"><span>span tady</span></div>
+        </section>
+
+        <section>
+            <h2>h3 ~ p - vsechny p za h3 cervene</h2>
+            <h3>nadpis</h3>
+            <p>1</p>
+            <span>span mezi</span>
+            <p>2</p>
+            <p>3</p>
+        </section>
+
+        <section>
+            <h2>li:nth-child(odd) - lichy</h2>
+            <ul>
+                <li>1 (cervena)</li>
+                <li>2 (modra)</li>
+                <li>3 (cervena)</li>
+                <li>4 (modra)</li>
+                <li>5 (cervena)</li>
+            </ul>
+        </section>
+
+        <section>
+            <h2>li:nth-child(3n+1) - 1, 4, 7</h2>
+            <ol class="threes">
+                <li>1</li>
+                <li>2</li>
+                <li>3</li>
+                <li>4</li>
+                <li>5</li>
+                <li>6</li>
+                <li>7</li>
+            </ol>
+        </section>
+
+        <section>
+            <h2>p:first-of-type / :last-of-type</h2>
+            <h3>nadpis</h3>
+            <p>prvni p (zelena)</p>
+            <p>prostredni p</p>
+            <p>posledni p (oranzova)</p>
+        </section>
+
+        <section>
+            <h2>div:empty - prazdny div</h2>
+            <div class="empty-test"></div>
+            <div class="empty-test">neni prazdny</div>
+            <div class="empty-test"></div>
+        </section>
+    </main>
+</body>
+</html>
