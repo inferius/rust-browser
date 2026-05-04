@@ -131,8 +131,8 @@ pub struct LayoutBox {
     /// Underline / strikethrough flagy
     pub text_underline: bool,
     pub text_strikethrough: bool,
-    /// Linear gradient pozadi: (angle_deg, Vec<(offset, color)>)
-    pub bg_gradient: Option<(f32, Vec<(f32, [u8; 4])>)>,
+    /// Gradient pozadi (linear/radial/conic) + barevne stops.
+    pub bg_gradient: Option<BgGradient>,
     /// Box shadow: (offset_x, offset_y, blur, spread, color)
     /// (offset_x, offset_y, blur, spread, color, inset)
     pub box_shadow: Option<(f32, f32, f32, f32, [u8; 4], bool)>,
@@ -325,7 +325,7 @@ fn build_box(node: &Rc<Node>, style_map: &StyleMap) -> LayoutBox {
     let bg_value = s.get("background-color").or(s.get("background"));
     if let Some(c) = bg_value {
         if c.contains("linear-gradient(") {
-            bx.bg_gradient = parse_linear_gradient(c);
+            bx.bg_gradient = parse_any_gradient(c);
         } else {
             bx.bg_color = parse_color(c);
         }
@@ -1077,6 +1077,163 @@ fn parse_color_mix(inner: &str) -> Option<[u8; 4]> {
     };
     let alpha = (c1[3] as f32 * w1 + c2[3] as f32 * w2).round() as u8;
     Some([r, g, b, alpha])
+}
+
+/// Vsechny varianty gradientu pro background-image.
+#[derive(Debug, Clone)]
+pub struct BgGradient {
+    pub kind: BgGradientKind,
+    pub stops: Vec<(f32, [u8; 4])>,
+}
+
+#[derive(Debug, Clone)]
+pub enum BgGradientKind {
+    Linear { angle_deg: f32 },
+    /// cx/cy/radius v procentech (0..1). radius_pct = polomer relativni k farthest-corner.
+    Radial { cx_pct: f32, cy_pct: f32, radius_pct: f32 },
+    /// start_angle_deg: poradi od 12 hod. cx/cy v procentech.
+    Conic { cx_pct: f32, cy_pct: f32, start_angle_deg: f32 },
+}
+
+/// Parsuje linear-gradient / radial-gradient / conic-gradient.
+pub fn parse_any_gradient(s: &str) -> Option<BgGradient> {
+    let s = s.trim();
+    if s.starts_with("linear-gradient(") {
+        let (angle, stops) = parse_linear_gradient(s)?;
+        return Some(BgGradient {
+            kind: BgGradientKind::Linear { angle_deg: angle },
+            stops,
+        });
+    }
+    if s.starts_with("radial-gradient(") {
+        return parse_radial_gradient(s);
+    }
+    if s.starts_with("conic-gradient(") {
+        return parse_conic_gradient(s);
+    }
+    None
+}
+
+/// Parse radial-gradient([circle|ellipse] [at <position>], color1, color2, ...).
+/// Zjednoduseno: bere "circle" jako default, position default center, radius
+/// = farthest-corner. Tezi az `at <pos>` syntax. Vsechny dalsi tokeny pred
+/// prvnim color jsou ignored.
+pub fn parse_radial_gradient(s: &str) -> Option<BgGradient> {
+    let inner = s.trim().strip_prefix("radial-gradient(")?.strip_suffix(')')?;
+    let parts = split_top_level_commas(inner);
+    if parts.len() < 2 { return None; }
+
+    // Pocatecni "config" cast (pres pozici, tvar, velikost). Heuristika:
+    // pokud prvni cast neobsahuje barvu, je to config.
+    let mut start_idx = 0;
+    let mut cx_pct: f32 = 0.5;
+    let mut cy_pct: f32 = 0.5;
+    let radius_pct: f32 = 1.0; // farthest-corner default
+
+    let first = parts[0].trim();
+    if parse_color(first).is_none() && !first.contains('%') || first.contains("at ") {
+        // Detekuj "at <pos>"
+        if let Some(at_idx) = first.find("at ") {
+            let pos = first[at_idx + 3..].trim();
+            let pos_parts: Vec<&str> = pos.split_whitespace().collect();
+            // Pozice: keyword (left/center/right/top/bottom) nebo procenta
+            let pct_or_kw = |kw: &str| -> Option<f32> {
+                match kw {
+                    "left" | "top" => Some(0.0),
+                    "center" => Some(0.5),
+                    "right" | "bottom" => Some(1.0),
+                    s if s.ends_with('%') => s.trim_end_matches('%').parse::<f32>().ok().map(|v| v / 100.0),
+                    _ => None,
+                }
+            };
+            if pos_parts.len() >= 1 {
+                if let Some(v) = pct_or_kw(pos_parts[0]) { cx_pct = v; }
+            }
+            if pos_parts.len() >= 2 {
+                if let Some(v) = pct_or_kw(pos_parts[1]) { cy_pct = v; }
+            }
+        }
+        start_idx = 1;
+    }
+
+    let stops = parse_gradient_stops(&parts[start_idx..]);
+    if stops.is_empty() { return None; }
+    Some(BgGradient {
+        kind: BgGradientKind::Radial { cx_pct, cy_pct, radius_pct },
+        stops,
+    })
+}
+
+/// Parse conic-gradient([from <angle>] [at <pos>], color1, color2, ...).
+pub fn parse_conic_gradient(s: &str) -> Option<BgGradient> {
+    let inner = s.trim().strip_prefix("conic-gradient(")?.strip_suffix(')')?;
+    let parts = split_top_level_commas(inner);
+    if parts.len() < 2 { return None; }
+
+    let mut start_idx = 0;
+    let mut cx_pct: f32 = 0.5;
+    let mut cy_pct: f32 = 0.5;
+    let mut start_angle_deg: f32 = 0.0;
+
+    let first = parts[0].trim();
+    if parse_color(first).is_none() {
+        // "from 30deg at center" / "from 0deg" / "at 50% 50%"
+        if let Some(from_idx) = first.find("from ") {
+            let after = &first[from_idx + 5..];
+            let token: String = after.chars().take_while(|c| !c.is_whitespace()).collect();
+            if let Some(deg) = token.strip_suffix("deg") {
+                start_angle_deg = deg.parse().unwrap_or(0.0);
+            }
+        }
+        if let Some(at_idx) = first.find("at ") {
+            let pos = first[at_idx + 3..].trim();
+            let pos_parts: Vec<&str> = pos.split_whitespace().collect();
+            let pct_or_kw = |kw: &str| -> Option<f32> {
+                match kw {
+                    "left" | "top" => Some(0.0),
+                    "center" => Some(0.5),
+                    "right" | "bottom" => Some(1.0),
+                    s if s.ends_with('%') => s.trim_end_matches('%').parse::<f32>().ok().map(|v| v / 100.0),
+                    _ => None,
+                }
+            };
+            if pos_parts.len() >= 1 {
+                if let Some(v) = pct_or_kw(pos_parts[0]) { cx_pct = v; }
+            }
+            if pos_parts.len() >= 2 {
+                if let Some(v) = pct_or_kw(pos_parts[1]) { cy_pct = v; }
+            }
+        }
+        start_idx = 1;
+    }
+
+    let stops = parse_gradient_stops(&parts[start_idx..]);
+    if stops.is_empty() { return None; }
+    Some(BgGradient {
+        kind: BgGradientKind::Conic { cx_pct, cy_pct, start_angle_deg },
+        stops,
+    })
+}
+
+/// Parsuje gradient stops "red 50%" / "red" do (offset 0..1, color).
+fn parse_gradient_stops(parts: &[&str]) -> Vec<(f32, [u8; 4])> {
+    let mut stops: Vec<(f32, [u8; 4])> = Vec::new();
+    let n = parts.len();
+    for (i, p) in parts.iter().enumerate() {
+        let trimmed = p.trim();
+        let (color_str, offset) = if let Some(percent_idx) = trimmed.rfind('%') {
+            let space_idx = trimmed[..percent_idx].rfind(' ').unwrap_or(0);
+            let pct: f32 = trimmed[space_idx..percent_idx].trim().parse().unwrap_or(0.0);
+            (trimmed[..space_idx].trim().to_string(), pct / 100.0)
+        } else {
+            let default_offset = if n <= 1 { 0.0 } else { i as f32 / (n - 1) as f32 };
+            (trimmed.to_string(), default_offset)
+        };
+        if let Some(c) = parse_color(&color_str) {
+            stops.push((offset, c));
+        }
+    }
+    stops
 }
 
 /// Parse linear-gradient(angle, color, color, ...) -> (angle_deg, stops).

@@ -169,6 +169,56 @@ fn parse_linear_gradient_basic() {
 }
 
 #[test]
+fn parse_radial_gradient_basic() {
+    let g = layout::parse_radial_gradient("radial-gradient(red, blue)").unwrap();
+    matches!(g.kind, crate::browser::layout::BgGradientKind::Radial { .. });
+    assert_eq!(g.stops.len(), 2);
+    assert_eq!(g.stops[0].1, [255, 0, 0, 255]);
+    assert_eq!(g.stops[1].1, [0, 0, 255, 255]);
+}
+
+#[test]
+fn parse_radial_gradient_with_position() {
+    let g = layout::parse_radial_gradient("radial-gradient(circle at top left, red, blue)").unwrap();
+    if let crate::browser::layout::BgGradientKind::Radial { cx_pct, cy_pct, .. } = g.kind {
+        assert_eq!(cx_pct, 0.0);
+        assert_eq!(cy_pct, 0.0);
+    } else {
+        panic!("expected Radial");
+    }
+}
+
+#[test]
+fn parse_conic_gradient_basic() {
+    let g = layout::parse_conic_gradient("conic-gradient(red, yellow, green, blue, red)").unwrap();
+    matches!(g.kind, crate::browser::layout::BgGradientKind::Conic { .. });
+    assert_eq!(g.stops.len(), 5);
+}
+
+#[test]
+fn parse_conic_gradient_from_angle() {
+    let g = layout::parse_conic_gradient("conic-gradient(from 90deg at center, red, blue)").unwrap();
+    if let crate::browser::layout::BgGradientKind::Conic { start_angle_deg, cx_pct, cy_pct } = g.kind {
+        assert_eq!(start_angle_deg, 90.0);
+        assert_eq!(cx_pct, 0.5);
+        assert_eq!(cy_pct, 0.5);
+    } else {
+        panic!("expected Conic");
+    }
+}
+
+#[test]
+fn parse_any_gradient_dispatches() {
+    use crate::browser::layout::{parse_any_gradient, BgGradientKind};
+    let lin = parse_any_gradient("linear-gradient(45deg, red, blue)").unwrap();
+    assert!(matches!(lin.kind, BgGradientKind::Linear { .. }));
+    let rad = parse_any_gradient("radial-gradient(red, blue)").unwrap();
+    assert!(matches!(rad.kind, BgGradientKind::Radial { .. }));
+    let con = parse_any_gradient("conic-gradient(red, blue)").unwrap();
+    assert!(matches!(con.kind, BgGradientKind::Conic { .. }));
+}
+
+#[test]
 fn parse_box_shadow_inset() {
     let s = layout::parse_box_shadow("inset 0 0 10px rgba(0,0,0,0.5)").unwrap();
     assert_eq!(s.5, true, "inset flag musi byt true");

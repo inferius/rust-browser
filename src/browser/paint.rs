@@ -3,6 +3,18 @@
 
 use super::layout::{LayoutBox, TextAlign, measure_text_width};
 
+/// Typ gradientu - linear / radial / conic.
+#[derive(Debug, Clone)]
+pub enum GradientKind {
+    /// Linearni gradient. angle_deg: 0=nahoru, 90=doprava, 180=dolu, 270=doleva.
+    Linear { angle_deg: f32 },
+    /// Radialni gradient od stredu k okraji.
+    /// center_pct = (cx, cy) v procentech 0..1, radius = poloomer v px.
+    Radial { cx: f32, cy: f32, radius: f32 },
+    /// Conic gradient - barva podle uhlu od stredu.
+    Conic { cx: f32, cy: f32, start_angle_deg: f32 },
+}
+
 #[derive(Debug, Clone)]
 pub enum DisplayCommand {
     /// Solid filled rectangle.
@@ -11,11 +23,10 @@ pub enum DisplayCommand {
     Border { x: f32, y: f32, w: f32, h: f32, width: f32, color: [u8; 4] },
     /// Text rendering.
     Text { x: f32, y: f32, content: String, color: [u8; 4], font_size: f32, bold: bool },
-    /// Linear gradient rect: barva interpolovana podle smeru.
-    /// angle_deg: 0 = nahoru (z dola), 90 = doprava, 180 = dolu, 270 = doleva
+    /// Linear/radial/conic gradient rect.
     Gradient {
         x: f32, y: f32, w: f32, h: f32,
-        angle_deg: f32,
+        kind: GradientKind,
         stops: Vec<(f32, [u8; 4])>,  // (offset 0..1, color)
         radius: f32,
     },
@@ -87,14 +98,31 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>) {
     }
 
     // Background gradient ma prioritu pred solid color
-    if let Some((angle, ref stops)) = bx.bg_gradient {
+    if let Some(g) = &bx.bg_gradient {
+        use crate::browser::layout::BgGradientKind;
+        let kind = match g.kind {
+            BgGradientKind::Linear { angle_deg } => GradientKind::Linear { angle_deg },
+            BgGradientKind::Radial { cx_pct, cy_pct, radius_pct } => {
+                let cx = bx.rect.x + bx.rect.width  * cx_pct;
+                let cy = bx.rect.y + bx.rect.height * cy_pct;
+                // Polomer = farthest-corner * radius_pct
+                let half_diag = ((bx.rect.width / 2.0).powi(2) + (bx.rect.height / 2.0).powi(2)).sqrt();
+                let radius = half_diag * radius_pct;
+                GradientKind::Radial { cx, cy, radius }
+            }
+            BgGradientKind::Conic { cx_pct, cy_pct, start_angle_deg } => {
+                let cx = bx.rect.x + bx.rect.width  * cx_pct;
+                let cy = bx.rect.y + bx.rect.height * cy_pct;
+                GradientKind::Conic { cx, cy, start_angle_deg }
+            }
+        };
         cmds.push(DisplayCommand::Gradient {
             x: bx.rect.x,
             y: bx.rect.y,
             w: bx.rect.width,
             h: bx.rect.height,
-            angle_deg: angle,
-            stops: stops.iter().map(|(o, c)| (*o, with_alpha(*c))).collect(),
+            kind,
+            stops: g.stops.iter().map(|(o, c)| (*o, with_alpha(*c))).collect(),
             radius: bx.border_radius,
         });
     } else if let Some(bg) = bx.bg_color {

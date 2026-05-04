@@ -107,6 +107,32 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         let alpha = 1.0 - smoothstep(-blur, blur, d);
         return vec4<f32>(in.color.rgb, in.color.a * alpha);
     }
+    // Mode 6: radial gradient - t = dist(local, grad_center) / grad_radius
+    if (in.mode > 5.5 && in.mode < 6.5) {
+        let d = length(in.local - in.half_size);
+        let t = clamp(d / max(in.blur, 1.0), 0.0, 1.0);
+        var rgba = mix(in.color, in.color2, t);
+        if (in.radius > 0.5) {
+            // Pro border-radius musim recover pravy half_size - aproximace:
+            // local je relativni k box stredu, takze max abs hodnota je half_size.
+            let bbox = vec2<f32>(abs(in.local.x), abs(in.local.y));
+            let approx_hs = vec2<f32>(max(bbox.x, in.radius * 2.0), max(bbox.y, in.radius * 2.0));
+            let dd = sdf_rounded_box(in.local, approx_hs, in.radius);
+            let aa = 1.0 - smoothstep(-1.0, 1.0, dd);
+            rgba = vec4<f32>(rgba.rgb, rgba.a * aa);
+        }
+        return rgba;
+    }
+    // Mode 7: conic gradient - t = (atan2(p.y, p.x) - start) / 2pi
+    if (in.mode > 6.5 && in.mode < 7.5) {
+        let p = in.local - in.half_size;
+        var ang = atan2(p.y, p.x) - in.blur;
+        // Normalize do 0..2pi (-> 0..1)
+        let two_pi = 6.28318530718;
+        ang = ang - floor(ang / two_pi) * two_pi;
+        let t = clamp(ang / two_pi, 0.0, 1.0);
+        return mix(in.color, in.color2, t);
+    }
     // Mode 5: inset shadow - kresli uvnitr boxu, fade smerem dovnitr od okraju
     if (in.mode > 4.5 && in.mode < 5.5) {
         let blur = max(in.blur, 1.0);
@@ -174,11 +200,22 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: 
                     }
                 }
             }
-            DisplayCommand::Gradient { x, y, w, h, angle_deg, stops, radius } => {
+            DisplayCommand::Gradient { x, y, w, h, kind, stops, radius } => {
                 if stops.len() >= 2 {
                     let c0 = normalize_color(&stops[0].1);
                     let c1 = normalize_color(&stops.last().unwrap().1);
-                    push_gradient(&mut verts, *x, *y, *w, *h, *angle_deg, c0, c1, *radius);
+                    use crate::browser::paint::GradientKind;
+                    match kind {
+                        GradientKind::Linear { angle_deg } => {
+                            push_gradient(&mut verts, *x, *y, *w, *h, *angle_deg, c0, c1, *radius);
+                        }
+                        GradientKind::Radial { cx, cy, radius: grad_r } => {
+                            push_radial_gradient(&mut verts, *x, *y, *w, *h, *cx, *cy, *grad_r, c0, c1, *radius);
+                        }
+                        GradientKind::Conic { cx, cy, start_angle_deg } => {
+                            push_conic_gradient(&mut verts, *x, *y, *w, *h, *cx, *cy, *start_angle_deg, c0, c1, *radius);
+                        }
+                    }
                 }
             }
             DisplayCommand::Shadow { x, y, w, h, color, blur, radius, inset, offset_x, offset_y, .. } => {
@@ -325,6 +362,69 @@ fn push_gradient(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f32, h: f32,
             radius,
             color2: c1,
             blur: 0.0,
+        }
+    };
+    let tl = mk(x,     y);
+    let tr = mk(x + w, y);
+    let bl = mk(x,     y + h);
+    let br = mk(x + w, y + h);
+    verts.push(tl); verts.push(tr); verts.push(bl);
+    verts.push(bl); verts.push(tr); verts.push(br);
+}
+
+/// Radial gradient quad. Mode 6.
+/// V shaderu: t = distance(local, gradient_center) / gradient_radius.
+/// gradient_center se predava jako half_size (reuse pole), gradient_radius jako blur.
+fn push_radial_gradient(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f32, h: f32,
+                        gcx: f32, gcy: f32, grad_r: f32,
+                        c0: [f32; 4], c1: [f32; 4], radius: f32) {
+    let hw = w * 0.5;
+    let hh = h * 0.5;
+    let box_cx = x + hw;
+    let box_cy = y + hh;
+    let mk = |px: f32, py: f32| -> Vertex {
+        Vertex {
+            pos: [px, py],
+            color: c0,
+            uv: [0.0, 0.0],
+            mode: 6.0,
+            local: [px - box_cx, py - box_cy],
+            // half_size reuse: ulozim relativni gradient center (gcx-box_cx, gcy-box_cy)
+            half_size: [gcx - box_cx, gcy - box_cy],
+            radius,
+            color2: c1,
+            blur: grad_r,
+        }
+    };
+    let tl = mk(x,     y);
+    let tr = mk(x + w, y);
+    let bl = mk(x,     y + h);
+    let br = mk(x + w, y + h);
+    verts.push(tl); verts.push(tr); verts.push(bl);
+    verts.push(bl); verts.push(tr); verts.push(br);
+}
+
+/// Conic gradient quad. Mode 7.
+/// V shaderu: t = (atan2(local.y - gcy, local.x - gcx) - start) / 2pi.
+fn push_conic_gradient(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f32, h: f32,
+                       gcx: f32, gcy: f32, start_deg: f32,
+                       c0: [f32; 4], c1: [f32; 4], radius: f32) {
+    let hw = w * 0.5;
+    let hh = h * 0.5;
+    let box_cx = x + hw;
+    let box_cy = y + hh;
+    let start_rad = start_deg.to_radians();
+    let mk = |px: f32, py: f32| -> Vertex {
+        Vertex {
+            pos: [px, py],
+            color: c0,
+            uv: [0.0, 0.0],
+            mode: 7.0,
+            local: [px - box_cx, py - box_cy],
+            half_size: [gcx - box_cx, gcy - box_cy],
+            radius,
+            color2: c1,
+            blur: start_rad,
         }
     };
     let tl = mk(x,     y);
