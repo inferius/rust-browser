@@ -74,6 +74,18 @@ fn apply_default_tag_styles(bx: &mut LayoutBox, tag: &str) {
         "pre" | "code" => { /* monospace by-implication, zatim default */ }
         "hr" => { bx.border_width = 1.0; bx.border_color = Some([200, 200, 200, 255]); }
         "a" => { /* color modra typicky pres CSS */ }
+        "canvas" => {
+            // CSS default: 300x150 px (HTML spec)
+            if bx.rect.width == 0.0 { bx.rect.width = 300.0; }
+            if bx.rect.height == 0.0 { bx.rect.height = 150.0; }
+            // Default bg cerny aby canvas byl viditelny
+            if bx.bg_color.is_none() { bx.bg_color = Some([0, 0, 0, 255]); }
+        }
+        "svg" => {
+            // SVG default 300x150 (jako canvas) pokud nedano viewBox/width/height
+            if bx.rect.width == 0.0 { bx.rect.width = 300.0; }
+            if bx.rect.height == 0.0 { bx.rect.height = 150.0; }
+        }
         _ => {}
     }
 }
@@ -88,6 +100,7 @@ pub fn default_display(tag: &str) -> Display {
             => Display::Block,
         "span" | "a" | "em" | "strong" | "b" | "i" | "u" | "code" | "small"
         | "br" | "img" | "input" | "label" | "button" | "select" | "textarea"
+        | "canvas" | "svg"
             => Display::Inline,
         _ => Display::Block,
     }
@@ -138,6 +151,8 @@ pub struct LayoutBox {
     /// Background layers (Backgrounds L3) - jen prvni layer pouzity zatim,
     /// vice layeru emitted bottom-to-top kdyz pridana plne podpora.
     pub backgrounds: Vec<BgLayer>,
+    /// CSS clip-path: inset(...) / circle(...) / ellipse(...) / polygon(...).
+    pub clip_path: Option<ClipPath>,
     /// Box shadow: (offset_x, offset_y, blur, spread, color)
     /// (offset_x, offset_y, blur, spread, color, inset)
     pub box_shadow: Option<(f32, f32, f32, f32, [u8; 4], bool)>,
@@ -188,6 +203,7 @@ impl LayoutBox {
             bg_gradient: None,
             filter: Vec::new(),
             backgrounds: Vec::new(),
+            clip_path: None,
             box_shadow: None,
             transform: None,
             image_src: None,
@@ -345,6 +361,25 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         if bx.rect.width == 0.0 { bx.rect.width = 100.0; }
     }
 
+    // Canvas tag: precti width/height attributes
+    if bx.tag.as_deref() == Some("canvas") {
+        if let Some(w) = node.attr("width").and_then(|w| w.parse::<f32>().ok()) {
+            bx.rect.width = w;
+        }
+        if let Some(h) = node.attr("height").and_then(|h| h.parse::<f32>().ok()) {
+            bx.rect.height = h;
+        }
+    }
+    // SVG tag: viewport z width/height
+    if bx.tag.as_deref() == Some("svg") {
+        if let Some(w) = node.attr("width").and_then(|w| w.parse::<f32>().ok()) {
+            bx.rect.width = w;
+        }
+        if let Some(h) = node.attr("height").and_then(|h| h.parse::<f32>().ok()) {
+            bx.rect.height = h;
+        }
+    }
+
     if matches!(node.kind, NodeKind::Text(_)) {
         bx.display = Display::Inline;
         if let NodeKind::Text(t) = &node.kind {
@@ -394,6 +429,10 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     // Filter chain
     if let Some(f) = s.get("filter") {
         bx.filter = parse_filter_chain(f);
+    }
+    // clip-path
+    if let Some(cp) = s.get("clip-path") {
+        bx.clip_path = parse_clip_path(cp);
     }
     // Transform
     if let Some(tr) = s.get("transform") {
@@ -1239,6 +1278,139 @@ pub enum BgGradientKind {
     Radial { cx_pct: f32, cy_pct: f32, radius_pct: f32 },
     /// start_angle_deg: poradi od 12 hod. cx/cy v procentech.
     Conic { cx_pct: f32, cy_pct: f32, start_angle_deg: f32 },
+}
+
+/// CSS clip-path L1 - tvar pro clipping elementu.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ClipPath {
+    /// inset(top right bottom left [round <radius>])
+    Inset { top: f32, right: f32, bottom: f32, left: f32, radius: f32 },
+    /// circle(<r> [at <pos>])
+    Circle { cx_pct: f32, cy_pct: f32, radius_pct: f32 },
+    /// ellipse(<rx> <ry> [at <pos>])
+    Ellipse { cx_pct: f32, cy_pct: f32, rx_pct: f32, ry_pct: f32 },
+    /// polygon(p1, p2, ...) - kazdy bod (x_pct, y_pct).
+    Polygon(Vec<(f32, f32)>),
+}
+
+pub fn parse_clip_path(s: &str) -> Option<ClipPath> {
+    let s = s.trim();
+    if s == "none" || s.is_empty() { return None; }
+    if let Some(args) = s.strip_prefix("inset(").and_then(|s| s.strip_suffix(')')) {
+        return parse_inset_clip(args);
+    }
+    if let Some(args) = s.strip_prefix("circle(").and_then(|s| s.strip_suffix(')')) {
+        return parse_circle_clip(args);
+    }
+    if let Some(args) = s.strip_prefix("ellipse(").and_then(|s| s.strip_suffix(')')) {
+        return parse_ellipse_clip(args);
+    }
+    if let Some(args) = s.strip_prefix("polygon(").and_then(|s| s.strip_suffix(')')) {
+        return parse_polygon_clip(args);
+    }
+    None
+}
+
+fn parse_inset_clip(args: &str) -> Option<ClipPath> {
+    let mut radius = 0.0;
+    let main = if let Some((before, r)) = args.split_once("round ") {
+        radius = parse_length(r.trim());
+        before.trim()
+    } else {
+        args.trim()
+    };
+    let parts: Vec<&str> = main.split_whitespace().collect();
+    let (t, r, b, l) = match parts.len() {
+        1 => (parts[0], parts[0], parts[0], parts[0]),
+        2 => (parts[0], parts[1], parts[0], parts[1]),
+        3 => (parts[0], parts[1], parts[2], parts[1]),
+        4 => (parts[0], parts[1], parts[2], parts[3]),
+        _ => return None,
+    };
+    Some(ClipPath::Inset {
+        top: parse_length(t),
+        right: parse_length(r),
+        bottom: parse_length(b),
+        left: parse_length(l),
+        radius,
+    })
+}
+
+fn parse_circle_clip(args: &str) -> Option<ClipPath> {
+    let mut cx_pct: f32 = 0.5;
+    let mut cy_pct: f32 = 0.5;
+    let mut radius_pct: f32 = 0.5;
+    let (before_at, after_at) = args.split_once(" at ")
+        .map(|(a, b)| (a.trim(), Some(b.trim())))
+        .unwrap_or((args.trim(), None));
+    if !before_at.is_empty() {
+        if let Some(p) = before_at.strip_suffix('%') {
+            radius_pct = p.parse::<f32>().ok()? / 100.0;
+        }
+    }
+    if let Some(pos) = after_at {
+        let pos_parts: Vec<&str> = pos.split_whitespace().collect();
+        let kw = |t: &str| -> Option<f32> {
+            match t {
+                "left" | "top" => Some(0.0),
+                "center" => Some(0.5),
+                "right" | "bottom" => Some(1.0),
+                s if s.ends_with('%') => s.trim_end_matches('%').parse::<f32>().ok().map(|v| v / 100.0),
+                _ => None,
+            }
+        };
+        if let Some(v) = pos_parts.first().and_then(|t| kw(t)) { cx_pct = v; }
+        if let Some(v) = pos_parts.get(1).and_then(|t| kw(t)) { cy_pct = v; }
+    }
+    Some(ClipPath::Circle { cx_pct, cy_pct, radius_pct })
+}
+
+fn parse_ellipse_clip(args: &str) -> Option<ClipPath> {
+    let mut cx_pct: f32 = 0.5;
+    let mut cy_pct: f32 = 0.5;
+    let mut rx_pct: f32 = 0.5;
+    let mut ry_pct: f32 = 0.5;
+    let (before_at, after_at) = args.split_once(" at ")
+        .map(|(a, b)| (a.trim(), Some(b.trim())))
+        .unwrap_or((args.trim(), None));
+    let parts: Vec<&str> = before_at.split_whitespace().collect();
+    if let Some(p) = parts.first().and_then(|t| t.strip_suffix('%'))
+        .and_then(|p| p.parse::<f32>().ok()) { rx_pct = p / 100.0; }
+    if let Some(p) = parts.get(1).and_then(|t| t.strip_suffix('%'))
+        .and_then(|p| p.parse::<f32>().ok()) { ry_pct = p / 100.0; }
+    if let Some(pos) = after_at {
+        let pp: Vec<&str> = pos.split_whitespace().collect();
+        let kw = |t: &str| -> Option<f32> {
+            match t {
+                "left" | "top" => Some(0.0),
+                "center" => Some(0.5),
+                "right" | "bottom" => Some(1.0),
+                s if s.ends_with('%') => s.trim_end_matches('%').parse::<f32>().ok().map(|v| v / 100.0),
+                _ => None,
+            }
+        };
+        if let Some(v) = pp.first().and_then(|t| kw(t)) { cx_pct = v; }
+        if let Some(v) = pp.get(1).and_then(|t| kw(t)) { cy_pct = v; }
+    }
+    Some(ClipPath::Ellipse { cx_pct, cy_pct, rx_pct, ry_pct })
+}
+
+fn parse_polygon_clip(args: &str) -> Option<ClipPath> {
+    // "0 0, 100% 0, 50% 100%"
+    let mut points = Vec::new();
+    for pair in args.split(',') {
+        let parts: Vec<&str> = pair.split_whitespace().collect();
+        if parts.len() < 2 { continue; }
+        let x = parse_pct_or_px(parts[0]);
+        let y = parse_pct_or_px(parts[1]);
+        points.push((x, y));
+    }
+    if points.is_empty() { None } else { Some(ClipPath::Polygon(points)) }
+}
+
+fn parse_pct_or_px(s: &str) -> f32 {
+    if let Some(p) = s.strip_suffix('%') { p.parse::<f32>().unwrap_or(0.0) / 100.0 }
+    else { parse_length(s) / 100.0 } // approximace - px za 100 = 1.0
 }
 
 /// CSS Backgrounds L3 - jedna vrstva.

@@ -129,8 +129,8 @@ Konvence stavu:
 ### CSS Fonts L4/L5
 - [x] `font-family`, `font-size`, `font-weight`, `font-style`
 - [x] `font` shorthand (parsing)
-- [ ] `@font-face { font-family; src: url(); }`
-- [ ] `font-display: auto|block|swap|fallback|optional`
+- [/] `@font-face { font-family; src: url(); }` parser hotovy + ulozeny v Stylesheet.font_faces. Runtime font loading + fontdue registry TODO.
+- [/] `font-display: auto|block|swap|fallback|optional` parsing OK
 - [ ] `font-variation-settings`
 - [ ] `font-feature-settings`
 - [ ] `font-stretch`
@@ -295,7 +295,7 @@ Konvence stavu:
   Pro vetsinu use cases (single-element styling) ale staci.
 
 ### CSS Masking L1
-- [ ] `clip-path: inset()|circle()|ellipse()|polygon()|path()|url()`
+- [/] `clip-path: inset()|circle()|ellipse()|polygon()` parser hotovy + ulozeny v LayoutBox.clip_path. Render aplikace TODO (vyzaduje shader mode + SDF clip).
 - [ ] `mask-image`
 - [ ] `mask-mode`, `mask-repeat`, `mask-position`, `mask-size`, `mask-origin`, `mask-clip`
 - [ ] `mask-composite`

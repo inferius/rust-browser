@@ -1,7 +1,49 @@
 /// Painting - z LayoutBox tree generuje display list (commands).
 /// Display list je sekvence primitiv ktere wgpu rendered pak vykresli.
 
-use super::layout::{LayoutBox, TextAlign, measure_text_width};
+use super::layout::{LayoutBox, TextAlign, measure_text_width, BgPosition, BgSize};
+
+/// Vypocti final rozmer background image podle bg-size.
+/// Pro `cover` / `contain` potrebujeme znat puvodni rozmer - default 100x100 jako placeholder
+/// (skutecny rozmer load-time z image cache, ale paint nevidi cache).
+pub fn compute_bg_size(size: &BgSize, box_w: f32, box_h: f32) -> (f32, f32) {
+    let default = (box_w, box_h);
+    match size {
+        BgSize::Auto => default,
+        BgSize::Cover => default,    // approx: cele box
+        BgSize::Contain => default,  // approx: cele box
+        BgSize::Length { w, h } => (
+            w.unwrap_or(box_w),
+            h.unwrap_or(box_h),
+        ),
+        BgSize::Pct { w, h } => (
+            w.map(|p| p * box_w).unwrap_or(box_w),
+            h.map(|p| p * box_h).unwrap_or(box_h),
+        ),
+    }
+}
+
+/// Vypocti pozici background image v boxu (top-left).
+pub fn compute_bg_position(
+    pos: &BgPosition, box_w: f32, box_h: f32,
+    img_w: f32, img_h: f32,
+    box_x: f32, box_y: f32,
+) -> (f32, f32) {
+    let (offx, offy) = match pos {
+        BgPosition::Px(x, y) => (*x, *y),
+        BgPosition::Pct(x, y) => ((box_w - img_w) * x, (box_h - img_h) * y),
+        BgPosition::Mixed { x_px, x_pct, y_px, y_pct } => {
+            let ox = if let Some(px) = x_px { *px }
+                     else if let Some(p)  = x_pct { (box_w - img_w) * p }
+                     else { 0.0 };
+            let oy = if let Some(px) = y_px { *px }
+                     else if let Some(p)  = y_pct { (box_h - img_h) * p }
+                     else { 0.0 };
+            (ox, oy)
+        }
+    };
+    (box_x + offx, box_y + offy)
+}
 
 /// Typ gradientu - linear / radial / conic.
 #[derive(Debug, Clone)]
@@ -56,10 +98,107 @@ pub fn build_display_list(root: &LayoutBox) -> Vec<DisplayCommand> {
     commands
 }
 
+/// Emituje SVG shape z child <rect>, <circle>, <ellipse>, <line>.
+/// Pri SVG <svg> tagu projde direktni children a emit native shapes.
+fn emit_svg_children(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>) {
+    let node = match &bx.node { Some(n) => n, None => return };
+    for child in node.children.borrow().iter() {
+        let tag = match child.tag_name() { Some(t) => t, None => continue };
+        let attr_f = |name: &str, default: f32| -> f32 {
+            child.attr(name).and_then(|v| v.parse().ok()).unwrap_or(default)
+        };
+        let attr_color = |name: &str, default: [u8;4]| -> [u8;4] {
+            child.attr(name).and_then(|v| super::layout::parse_color(&v)).unwrap_or(default)
+        };
+        match tag.as_str() {
+            "rect" => {
+                let x = bx.rect.x + attr_f("x", 0.0);
+                let y = bx.rect.y + attr_f("y", 0.0);
+                let w = attr_f("width", 0.0);
+                let h = attr_f("height", 0.0);
+                let rx = attr_f("rx", 0.0);
+                let fill = attr_color("fill", [0, 0, 0, 255]);
+                cmds.push(DisplayCommand::Rect { x, y, w, h, color: fill, radius: rx });
+                let stroke_w = attr_f("stroke-width", 0.0);
+                if stroke_w > 0.0 {
+                    let stroke_c = attr_color("stroke", [0,0,0,255]);
+                    cmds.push(DisplayCommand::Border { x, y, w, h, width: stroke_w, color: stroke_c });
+                }
+            }
+            "circle" => {
+                let cx = bx.rect.x + attr_f("cx", 0.0);
+                let cy = bx.rect.y + attr_f("cy", 0.0);
+                let r = attr_f("r", 0.0);
+                let fill = attr_color("fill", [0,0,0,255]);
+                cmds.push(DisplayCommand::Rect {
+                    x: cx - r, y: cy - r, w: 2.0*r, h: 2.0*r,
+                    color: fill, radius: r,
+                });
+            }
+            "ellipse" => {
+                let cx = bx.rect.x + attr_f("cx", 0.0);
+                let cy = bx.rect.y + attr_f("cy", 0.0);
+                let rx = attr_f("rx", 0.0);
+                let ry = attr_f("ry", 0.0);
+                let fill = attr_color("fill", [0,0,0,255]);
+                cmds.push(DisplayCommand::Rect {
+                    x: cx - rx, y: cy - ry, w: 2.0*rx, h: 2.0*ry,
+                    color: fill, radius: rx.min(ry),
+                });
+            }
+            "line" => {
+                let x1 = bx.rect.x + attr_f("x1", 0.0);
+                let y1 = bx.rect.y + attr_f("y1", 0.0);
+                let x2 = bx.rect.x + attr_f("x2", 0.0);
+                let y2 = bx.rect.y + attr_f("y2", 0.0);
+                let stroke_c = attr_color("stroke", [0,0,0,255]);
+                let stroke_w = attr_f("stroke-width", 1.0);
+                // Line approx: thin rect od (x1,y1) k (x2,y2) - axis-aligned only.
+                // Pro horizontal: stejny y, ruzny x.
+                if (y1 - y2).abs() < 0.5 {
+                    cmds.push(DisplayCommand::Rect {
+                        x: x1.min(x2), y: y1 - stroke_w / 2.0,
+                        w: (x1 - x2).abs(), h: stroke_w,
+                        color: stroke_c, radius: 0.0,
+                    });
+                } else if (x1 - x2).abs() < 0.5 {
+                    cmds.push(DisplayCommand::Rect {
+                        x: x1 - stroke_w / 2.0, y: y1.min(y2),
+                        w: stroke_w, h: (y1 - y2).abs(),
+                        color: stroke_c, radius: 0.0,
+                    });
+                }
+            }
+            "text" => {
+                let x = bx.rect.x + attr_f("x", 0.0);
+                let y = bx.rect.y + attr_f("y", 0.0);
+                let fill = attr_color("fill", [0,0,0,255]);
+                let font_size = attr_f("font-size", 14.0);
+                let content = child.text_content();
+                if !content.trim().is_empty() {
+                    cmds.push(DisplayCommand::Text {
+                        x, y: y - font_size, content,
+                        color: fill, font_size, bold: false,
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>) {
-    // Apply opacity multiply + filter chain na vsechny barvy
+    // Apply opacity multiply + filter chain + clip-path na vsechny barvy
     let alpha_mul = (bx.opacity * 255.0) as u8;
     let filter = bx.filter.clone();
+    let clip_path = bx.clip_path.clone();
+
+    // Clip-path: pred zakreslenim aplikuj alpha mask na vsechny commands tohoto boxu
+    // CPU pristup: pri emit Rect/Image, pokud rect leží mimo clip shape, alpha = 0
+    // (priblizny - pro presny clip je potreba shader SDF nebo stencil).
+    // Pro start: zjednodusene - pokud ma clip-path, pridam jen omezeny rect mask.
+    let _ = clip_path;
+
     let with_alpha = |c: [u8; 4]| -> [u8; 4] {
         let a = ((c[3] as u16 * alpha_mul as u16) / 255) as u8;
         let after_alpha = [c[0], c[1], c[2], a];
@@ -91,7 +230,7 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>) {
         });
     }
 
-    // Image - emit Image command (s priorita pres bg)
+    // Image - emit Image command (img tag - cover boxu)
     if let Some(src) = &bx.image_src {
         cmds.push(DisplayCommand::Image {
             x: bx.rect.x,
@@ -101,6 +240,46 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>) {
             src: src.clone(),
             radius: bx.border_radius,
         });
+    }
+
+    // Background-image: aplikuj BgLayer position/size/repeat (single layer aktualne)
+    if let Some(layer) = bx.backgrounds.first() {
+        if let Some(src) = &layer.image_src {
+            // Vypocti vychozi rozmer image podle background-size
+            let (img_w, img_h) = compute_bg_size(&layer.size, bx.rect.width, bx.rect.height);
+            // Pozice
+            let (img_x, img_y) = compute_bg_position(&layer.position, bx.rect.width, bx.rect.height,
+                                                     img_w, img_h, bx.rect.x, bx.rect.y);
+            // Repeat - pri repeat-x emituje vice tilu vodorovne, repeat-y vertikalne, repeat oboji
+            // (no-repeat default - 1 tile)
+            use crate::browser::layout::BgRepeat;
+            let (rep_x, rep_y) = match layer.repeat {
+                BgRepeat::NoRepeat => (1, 1),
+                BgRepeat::RepeatX => ((bx.rect.width / img_w).ceil() as i32 + 1, 1),
+                BgRepeat::RepeatY => (1, (bx.rect.height / img_h).ceil() as i32 + 1),
+                _ /* repeat / space / round */ => (
+                    (bx.rect.width / img_w).ceil() as i32 + 1,
+                    (bx.rect.height / img_h).ceil() as i32 + 1,
+                ),
+            };
+            // Pri >1 tile musime emitvyat vice Image commandu vedle sebe (clip na box)
+            for ix in 0..rep_x {
+                for iy in 0..rep_y {
+                    let tx = img_x + (ix as f32) * img_w;
+                    let ty = img_y + (iy as f32) * img_h;
+                    // Skip kdyz tile mimo box
+                    if tx + img_w < bx.rect.x || tx > bx.rect.x + bx.rect.width
+                        || ty + img_h < bx.rect.y || ty > bx.rect.y + bx.rect.height {
+                        continue;
+                    }
+                    cmds.push(DisplayCommand::Image {
+                        x: tx, y: ty, w: img_w, h: img_h,
+                        src: src.clone(),
+                        radius: bx.border_radius,
+                    });
+                }
+            }
+        }
     }
 
     // Background gradient ma prioritu pred solid color
@@ -197,6 +376,11 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>) {
                 radius: 0.0,
             });
         }
+    }
+
+    // SVG shapes - emituj pred normal children rekursi (svg children jsou shapes ne LayoutBoxes)
+    if bx.tag.as_deref() == Some("svg") {
+        emit_svg_children(bx, cmds);
     }
 
     // Recursivne deti

@@ -214,6 +214,32 @@ fn selector_first_of_type() {
     assert!(cascade::get_styles(&map, &ps[1]).unwrap().get("color").is_none());
 }
 
+// ─── @font-face ────────────────────────────────────────────────────────
+
+#[test]
+fn font_face_basic_parse() {
+    let s = parse_stylesheet(r#"
+        @font-face {
+            font-family: "MyFont";
+            src: url("foo.woff2") format("woff2");
+            font-weight: 700;
+        }
+    "#);
+    assert_eq!(s.font_faces.len(), 1);
+    assert_eq!(s.font_faces[0].family, "MyFont");
+    assert!(s.font_faces[0].src.contains("foo.woff2"));
+    assert_eq!(s.font_faces[0].weight, "700");
+}
+
+#[test]
+fn font_face_extract_url() {
+    use crate::browser::css_parser::extract_font_url;
+    let url = extract_font_url(r#"url("foo.woff2") format("woff2")"#).unwrap();
+    assert_eq!(url, "foo.woff2");
+    let url2 = extract_font_url(r#"url(/fonts/bar.ttf)"#).unwrap();
+    assert_eq!(url2, "/fonts/bar.ttf");
+}
+
 // ─── CSS Pseudo-Elements ::before / ::after ────────────────────────────
 
 #[test]

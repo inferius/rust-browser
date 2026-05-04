@@ -15,6 +15,17 @@ pub struct Stylesheet {
     pub keyframes: Vec<Keyframes>,
     /// @container queries: name (volitelny) + condition + rules
     pub container_queries: Vec<ContainerQuery>,
+    /// @font-face declarations - kazdy ma family + src + dalsi properties.
+    pub font_faces: Vec<FontFace>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct FontFace {
+    pub family: String,
+    pub src: String, // url() / local() string raw
+    pub weight: String,
+    pub style: String,
+    pub display: String,
 }
 
 #[derive(Debug, Clone)]
@@ -160,6 +171,7 @@ pub fn parse_stylesheet(source: &str) -> Stylesheet {
     let mut media_queries = Vec::new();
     let mut keyframes = Vec::new();
     let mut container_queries = Vec::new();
+    let mut font_faces = Vec::new();
     let mut chars = source.chars().peekable();
 
     while chars.peek().is_some() {
@@ -205,6 +217,20 @@ pub fn parse_stylesheet(source: &str) -> Stylesheet {
                 .trim().to_string();
             let frames = parse_keyframes(&block_str);
             keyframes.push(Keyframes { name, frames });
+        } else if selectors_str.starts_with("@font-face") {
+            let mut ff = FontFace::default();
+            let decls = parse_decls_str(&block_str);
+            for d in decls {
+                match d.property.as_str() {
+                    "font-family" => ff.family = d.value.trim_matches('"').trim_matches('\'').to_string(),
+                    "src"         => ff.src = d.value.clone(),
+                    "font-weight" => ff.weight = d.value.clone(),
+                    "font-style"  => ff.style = d.value.clone(),
+                    "font-display" => ff.display = d.value.clone(),
+                    _ => {}
+                }
+            }
+            if !ff.family.is_empty() { font_faces.push(ff); }
         } else if selectors_str.starts_with("@container") {
             // Format: @container [name] (condition) { rules }
             let rest = selectors_str.trim_start_matches("@container").trim();
@@ -220,7 +246,17 @@ pub fn parse_stylesheet(source: &str) -> Stylesheet {
         }
     }
 
-    Stylesheet { rules, media_queries, keyframes, container_queries }
+    Stylesheet { rules, media_queries, keyframes, container_queries, font_faces }
+}
+
+/// Vytahne URL z @font-face src deklarace: `src: url("foo.woff2") format("woff2")` -> "foo.woff2".
+pub fn extract_font_url(src: &str) -> Option<String> {
+    let s = src.trim();
+    let url_idx = s.find("url(")?;
+    let after = &s[url_idx + 4..];
+    let close = after.find(')')?;
+    let raw = &after[..close];
+    Some(raw.trim().trim_matches('"').trim_matches('\'').to_string())
 }
 
 /// Rozpojuje "@container [name] (condition)" header na (name, condition).

@@ -169,6 +169,63 @@ fn parse_linear_gradient_basic() {
 }
 
 #[test]
+fn svg_rect_emits_display_command() {
+    use crate::browser::paint;
+    let doc = parse_html(r#"<html><body>
+        <svg width="100" height="50">
+            <rect x="0" y="0" width="50" height="20" fill="red"/>
+        </svg>
+    </body></html>"#, "");
+    let css = parse_stylesheet("");
+    let style_map = crate::browser::cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &style_map, 1024.0, 768.0);
+    let cmds = paint::build_display_list(&root);
+    // SVG <rect> by mel emit Rect command s red color
+    let red_rect = cmds.iter().find(|c| matches!(c,
+        paint::DisplayCommand::Rect { color: [255, 0, 0, 255], .. }));
+    assert!(red_rect.is_some(), "svg rect mel byt emitten");
+}
+
+#[test]
+fn svg_circle_emits_rounded_rect() {
+    use crate::browser::paint;
+    let doc = parse_html(r#"<html><body>
+        <svg width="100" height="100">
+            <circle cx="50" cy="50" r="30" fill="blue"/>
+        </svg>
+    </body></html>"#, "");
+    let css = parse_stylesheet("");
+    let style_map = crate::browser::cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &style_map, 1024.0, 768.0);
+    let cmds = paint::build_display_list(&root);
+    let blue = cmds.iter().find(|c| matches!(c,
+        paint::DisplayCommand::Rect { color: [0, 0, 255, 255], radius, .. } if *radius == 30.0));
+    assert!(blue.is_some());
+}
+
+#[test]
+fn canvas_default_size_300_150() {
+    let doc = parse_html(r#"<html><body><canvas></canvas></body></html>"#, "");
+    let css = parse_stylesheet("");
+    let style_map = crate::browser::cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &style_map, 1024.0, 768.0);
+    let canvas = find_box_by_tag(&root, "canvas").unwrap();
+    assert_eq!(canvas.rect.width, 300.0);
+    assert_eq!(canvas.rect.height, 150.0);
+}
+
+#[test]
+fn canvas_custom_attr_size() {
+    let doc = parse_html(r#"<html><body><canvas width="500" height="200"></canvas></body></html>"#, "");
+    let css = parse_stylesheet("");
+    let style_map = crate::browser::cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &style_map, 1024.0, 768.0);
+    let canvas = find_box_by_tag(&root, "canvas").unwrap();
+    assert_eq!(canvas.rect.width, 500.0);
+    assert_eq!(canvas.rect.height, 200.0);
+}
+
+#[test]
 fn pseudo_before_creates_virtual_child() {
     let doc = parse_html(r#"<html><body><p>x</p></body></html>"#, "");
     let css = parse_stylesheet(r#"p::before { content: "ARROW"; color: red; }"#);
@@ -217,6 +274,55 @@ fn find_box_by_tag<'a>(bx: &'a layout::LayoutBox, tag: &str) -> Option<&'a layou
         if let Some(found) = find_box_by_tag(c, tag) { return Some(found); }
     }
     None
+}
+
+#[test]
+fn parse_clip_path_inset() {
+    use crate::browser::layout::{parse_clip_path, ClipPath};
+    let cp = parse_clip_path("inset(10px 20px 30px 40px)").unwrap();
+    if let ClipPath::Inset { top, right, bottom, left, .. } = cp {
+        assert_eq!(top, 10.0);
+        assert_eq!(right, 20.0);
+        assert_eq!(bottom, 30.0);
+        assert_eq!(left, 40.0);
+    } else { panic!("expected Inset"); }
+}
+
+#[test]
+fn parse_clip_path_inset_with_radius() {
+    use crate::browser::layout::{parse_clip_path, ClipPath};
+    let cp = parse_clip_path("inset(10px round 8px)").unwrap();
+    if let ClipPath::Inset { radius, .. } = cp {
+        assert_eq!(radius, 8.0);
+    } else { panic!(); }
+}
+
+#[test]
+fn parse_clip_path_circle() {
+    use crate::browser::layout::{parse_clip_path, ClipPath};
+    let cp = parse_clip_path("circle(50% at center)").unwrap();
+    if let ClipPath::Circle { cx_pct, cy_pct, radius_pct } = cp {
+        assert_eq!(radius_pct, 0.5);
+        assert_eq!(cx_pct, 0.5);
+        assert_eq!(cy_pct, 0.5);
+    } else { panic!(); }
+}
+
+#[test]
+fn parse_clip_path_polygon() {
+    use crate::browser::layout::{parse_clip_path, ClipPath};
+    let cp = parse_clip_path("polygon(0 0, 100% 0, 50% 100%)").unwrap();
+    if let ClipPath::Polygon(points) = cp {
+        assert_eq!(points.len(), 3);
+        assert_eq!(points[1].0, 1.0); // 100%
+    } else { panic!(); }
+}
+
+#[test]
+fn parse_clip_path_none() {
+    use crate::browser::layout::parse_clip_path;
+    assert!(parse_clip_path("none").is_none());
+    assert!(parse_clip_path("").is_none());
 }
 
 #[test]
