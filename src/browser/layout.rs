@@ -118,6 +118,17 @@ pub struct LayoutBox {
     pub offset_right: Option<f32>,
     pub offset_bottom: Option<f32>,
     pub offset_left: Option<f32>,
+    /// Opacity 0..1
+    pub opacity: f32,
+    /// Underline / strikethrough flagy
+    pub text_underline: bool,
+    pub text_strikethrough: bool,
+    /// Overflow: hidden/scroll/visible/auto
+    pub overflow_hidden: bool,
+    /// White-space: nowrap zachazi text jako jeden radek
+    pub white_space_nowrap: bool,
+    /// Cursor (jen string - real impl pres OS cursor)
+    pub cursor: Option<String>,
     /// Reference na puvodni DOM node (pro hit test -> events).
     pub node: Option<Rc<Node>>,
 }
@@ -146,6 +157,12 @@ impl LayoutBox {
             offset_right: None,
             offset_bottom: None,
             offset_left: None,
+            opacity: 1.0,
+            text_underline: false,
+            text_strikethrough: false,
+            overflow_hidden: false,
+            white_space_nowrap: false,
+            cursor: None,
             node: None,
         }
     }
@@ -284,6 +301,34 @@ fn build_box(node: &Rc<Node>, style_map: &StyleMap) -> LayoutBox {
     if let Some(v) = s.get("right")  { bx.offset_right  = Some(parse_length(v)); }
     if let Some(v) = s.get("bottom") { bx.offset_bottom = Some(parse_length(v)); }
     if let Some(v) = s.get("left")   { bx.offset_left   = Some(parse_length(v)); }
+    // Opacity
+    if let Some(o) = s.get("opacity") {
+        bx.opacity = o.trim().parse::<f32>().unwrap_or(1.0).clamp(0.0, 1.0);
+    }
+    // Text-decoration
+    if let Some(td) = s.get("text-decoration") {
+        let t = td.to_lowercase();
+        if t.contains("underline")    { bx.text_underline = true; }
+        if t.contains("line-through") { bx.text_strikethrough = true; }
+    }
+    // Overflow
+    if let Some(ov) = s.get("overflow") {
+        bx.overflow_hidden = matches!(ov.trim(), "hidden" | "clip");
+    }
+    // White-space
+    if let Some(ws) = s.get("white-space") {
+        bx.white_space_nowrap = ws.trim() == "nowrap";
+    }
+    // Cursor
+    if let Some(cur) = s.get("cursor") {
+        bx.cursor = Some(cur.trim().to_string());
+    }
+    // Default underline pro <a> tag (pokud nebyla explicitne odebrana)
+    if let Some(tag) = bx.tag.clone() {
+        if tag == "a" && s.get("text-decoration").is_none() {
+            bx.text_underline = true;
+        }
+    }
 
     // Children - skip None display, skip whitespace-only text uzly
     for child in node.children.borrow().iter() {

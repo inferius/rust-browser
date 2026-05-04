@@ -21,6 +21,13 @@ pub fn build_display_list(root: &LayoutBox) -> Vec<DisplayCommand> {
 }
 
 fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>) {
+    // Apply opacity multiply na vsechny barvy
+    let alpha_mul = (bx.opacity * 255.0) as u8;
+    let with_alpha = |c: [u8; 4]| -> [u8; 4] {
+        let a = ((c[3] as u16 * alpha_mul as u16) / 255) as u8;
+        [c[0], c[1], c[2], a]
+    };
+
     // Background
     if let Some(bg) = bx.bg_color {
         cmds.push(DisplayCommand::Rect {
@@ -28,7 +35,7 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>) {
             y: bx.rect.y,
             w: bx.rect.width,
             h: bx.rect.height,
-            color: bg,
+            color: with_alpha(bg),
             radius: bx.border_radius,
         });
     }
@@ -42,7 +49,7 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>) {
                 w: bx.rect.width,
                 h: bx.rect.height,
                 width: bx.border_width,
-                color: bc,
+                color: with_alpha(bc),
             });
         }
     }
@@ -56,14 +63,38 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>) {
             TextAlign::Center => ((inner_w - text_w) * 0.5).max(0.0),
             TextAlign::Right  => (inner_w - text_w).max(0.0),
         };
+        let text_x = bx.rect.x + bx.padding + align_offset;
+        let text_y = bx.rect.y + bx.padding;
+        let text_color = with_alpha(bx.text_color.unwrap_or([0, 0, 0, 255]));
         cmds.push(DisplayCommand::Text {
-            x: bx.rect.x + bx.padding + align_offset,
-            y: bx.rect.y + bx.padding,
+            x: text_x,
+            y: text_y,
             content: text.clone(),
-            color: bx.text_color.unwrap_or([0, 0, 0, 255]),
+            color: text_color,
             font_size: bx.font_size,
             bold: bx.bold,
         });
+        // Underline / strikethrough
+        if bx.text_underline {
+            cmds.push(DisplayCommand::Rect {
+                x: text_x,
+                y: text_y + bx.font_size + 1.0,
+                w: text_w,
+                h: 1.0,
+                color: text_color,
+                radius: 0.0,
+            });
+        }
+        if bx.text_strikethrough {
+            cmds.push(DisplayCommand::Rect {
+                x: text_x,
+                y: text_y + bx.font_size * 0.55,
+                w: text_w,
+                h: 1.0,
+                color: text_color,
+                radius: 0.0,
+            });
+        }
     }
 
     // Recursivne deti
