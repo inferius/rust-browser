@@ -3655,11 +3655,81 @@ impl Interpreter {
                             return Ok(JsValue::Undefined);
                         }
                         "getContext" if n.tag_name().as_deref() == Some("canvas") => {
-                            // Vraci JsObject reprezentujici 2D canvas context.
-                            // Hidden slot __canvas_ptr__ ulozeno jako Number (canvas DomNode ptr).
+                            let kind = arg_vals.into_iter().next().map(|v| v.to_string()).unwrap_or_else(|| "2d".into());
+                            if kind == "webgl" || kind == "webgl2" || kind == "experimental-webgl" {
+                                // WebGL stub - methods vraci Undefined (no-op)
+                                return Ok(create_webgl_stub_context());
+                            }
+                            // Default 2D
                             let canvas_ptr = Rc::as_ptr(&n) as usize;
                             let ctx = create_canvas_2d_context(canvas_ptr, Rc::clone(&self.canvas_ops));
                             return Ok(ctx);
+                        }
+                        "scrollIntoView" | "scroll" | "scrollBy" | "scrollTo"
+                            => {
+                            // No-op
+                            return Ok(JsValue::Undefined);
+                        }
+                        "getBoundingClientRect" => {
+                            // Vraci object s x/y/width/height/top/left/bottom/right.
+                            let w = n.attr("width").and_then(|w| w.parse::<f64>().ok()).unwrap_or(0.0);
+                            let h = n.attr("height").and_then(|h| h.parse::<f64>().ok()).unwrap_or(0.0);
+                            let r = Rc::new(RefCell::new(JsObject::new()));
+                            {
+                                let mut o = r.borrow_mut();
+                                o.set("x".into(), JsValue::Number(0.0));
+                                o.set("y".into(), JsValue::Number(0.0));
+                                o.set("width".into(), JsValue::Number(w));
+                                o.set("height".into(), JsValue::Number(h));
+                                o.set("top".into(), JsValue::Number(0.0));
+                                o.set("left".into(), JsValue::Number(0.0));
+                                o.set("right".into(), JsValue::Number(w));
+                                o.set("bottom".into(), JsValue::Number(h));
+                            }
+                            return Ok(JsValue::Object(r));
+                        }
+                        "hasAttribute" => {
+                            let name = arg_vals.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+                            return Ok(JsValue::Bool(n.attr(&name).is_some()));
+                        }
+                        "removeAttribute" => {
+                            let name = arg_vals.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+                            n.remove_attr(&name);
+                            return Ok(JsValue::Undefined);
+                        }
+                        "toggleAttribute" => {
+                            let name = arg_vals.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+                            if n.attr(&name).is_some() {
+                                n.remove_attr(&name);
+                                return Ok(JsValue::Bool(false));
+                            } else {
+                                n.set_attr(&name, "");
+                                return Ok(JsValue::Bool(true));
+                            }
+                        }
+                        "cloneNode" => {
+                            // Clone node deep (zjednodusene pres serialize -> parse fragment)
+                            let html = serialize_outer_html(&n);
+                            let frag = crate::browser::html_parser::parse_html_fragment(&html);
+                            let frag_children: Vec<_> = frag.children.borrow().clone();
+                            // Najdi prvni element child
+                            for ch in &frag_children {
+                                let body_children: Vec<_> = ch.children.borrow().clone();
+                                if let Some(b) = body_children.into_iter().next() {
+                                    return Ok(JsValue::DomNode(b));
+                                }
+                            }
+                            return Ok(JsValue::DomNode(Rc::clone(&n)));
+                        }
+                        "contains" => {
+                            // Element.contains(other)
+                            let other = arg_vals.into_iter().next().unwrap_or(JsValue::Null);
+                            if let JsValue::DomNode(o) = other {
+                                let mut found = false;
+                                n.walk(&mut |node| { if Rc::ptr_eq(node, &o) { found = true; } });
+                                return Ok(JsValue::Bool(found));
+                            }
+                            return Ok(JsValue::Bool(false));
                         }
                         "querySelector" => {
                             let sel = arg_vals.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
@@ -4768,6 +4838,51 @@ impl Interpreter {
 }
 
 
+
+/// WebGL context stub - vsechny methods no-op.
+fn create_webgl_stub_context() -> JsValue {
+    let obj_rc = Rc::new(RefCell::new(JsObject::new()));
+    // Klicove WebGL constants (alespon tie nejcastejsi)
+    let constants = [
+        ("VERTEX_SHADER", 0x8B31), ("FRAGMENT_SHADER", 0x8B30),
+        ("ARRAY_BUFFER", 0x8892), ("ELEMENT_ARRAY_BUFFER", 0x8893),
+        ("STATIC_DRAW", 0x88E4), ("DYNAMIC_DRAW", 0x88E8),
+        ("FLOAT", 0x1406), ("UNSIGNED_INT", 0x1405), ("UNSIGNED_SHORT", 0x1403),
+        ("TRIANGLES", 0x0004), ("TRIANGLE_STRIP", 0x0005), ("LINES", 0x0001),
+        ("COLOR_BUFFER_BIT", 0x4000), ("DEPTH_BUFFER_BIT", 0x0100),
+        ("DEPTH_TEST", 0x0B71), ("BLEND", 0x0BE2),
+        ("TEXTURE_2D", 0x0DE1), ("TEXTURE0", 0x84C0),
+        ("RGBA", 0x1908), ("RGB", 0x1907),
+        ("UNSIGNED_BYTE", 0x1401),
+        ("LINEAR", 0x2601), ("NEAREST", 0x2600),
+        ("CLAMP_TO_EDGE", 0x812F), ("REPEAT", 0x2901),
+    ];
+    for (name, val) in &constants {
+        obj_rc.borrow_mut().set(name.to_string(), JsValue::Number(*val as f64));
+    }
+    // No-op methods - kazda return Undefined / Null
+    let methods = [
+        "clearColor", "clear", "viewport", "enable", "disable",
+        "createShader", "shaderSource", "compileShader", "deleteShader",
+        "createProgram", "attachShader", "linkProgram", "useProgram", "deleteProgram",
+        "getShaderParameter", "getProgramParameter",
+        "getAttribLocation", "getUniformLocation",
+        "createBuffer", "bindBuffer", "bufferData", "deleteBuffer",
+        "vertexAttribPointer", "enableVertexAttribArray",
+        "uniform1f", "uniform2f", "uniform3f", "uniform4f",
+        "uniform1i", "uniform2i", "uniform3i", "uniform4i",
+        "uniformMatrix2fv", "uniformMatrix3fv", "uniformMatrix4fv",
+        "drawArrays", "drawElements",
+        "createTexture", "bindTexture", "texImage2D", "texParameteri", "deleteTexture",
+        "blendFunc", "depthFunc", "cullFace", "frontFace",
+        "getError", "flush", "finish",
+    ];
+    for m in &methods {
+        let name = m.to_string();
+        obj_rc.borrow_mut().set(name.clone(), native(&name, |_| Ok(JsValue::Undefined)));
+    }
+    JsValue::Object(obj_rc)
+}
 
 /// CSSStyleDeclaration object pro element.style.
 /// Nese referenci na node + parsuje "style" attribute pro getter / setter.
