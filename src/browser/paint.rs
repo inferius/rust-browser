@@ -85,7 +85,15 @@ pub enum DisplayCommand {
     /// Border (rectangle outline).
     Border { x: f32, y: f32, w: f32, h: f32, width: f32, color: [u8; 4] },
     /// Text rendering.
-    Text { x: f32, y: f32, content: String, color: [u8; 4], font_size: f32, bold: bool },
+    Text {
+        x: f32, y: f32,
+        content: String,
+        color: [u8; 4],
+        font_size: f32,
+        bold: bool,
+        /// font-family - "" pro default
+        font_family: String,
+    },
     /// Linear/radial/conic gradient rect.
     Gradient {
         x: f32, y: f32, w: f32, h: f32,
@@ -250,6 +258,7 @@ fn emit_svg_children(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>) {
                     cmds.push(DisplayCommand::Text {
                         x, y: y - font_size, content,
                         color: fill, font_size, bold: false,
+                        font_family: String::new(),
                     });
                 }
             }
@@ -444,6 +453,7 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>) {
                 color: with_alpha(color),
                 font_size: bx.font_size,
                 bold: bx.bold,
+                font_family: bx.font_family.clone(),
             });
         }
         cmds.push(DisplayCommand::Text {
@@ -453,6 +463,7 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>) {
             color: text_color,
             font_size: bx.font_size,
             bold: bx.bold,
+            font_family: bx.font_family.clone(),
         });
         // Underline / strikethrough
         if bx.text_underline {

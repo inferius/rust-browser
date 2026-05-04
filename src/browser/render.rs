@@ -185,12 +185,12 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: 
                 push_rect(&mut verts, *x, *y, bw, *h, c, [0.0, 0.0], 0.0);
                 push_rect(&mut verts, *x + *w - bw, *y, bw, *h, c, [0.0, 0.0], 0.0);
             }
-            DisplayCommand::Text { x, y, content, color, font_size, bold: _ } => {
+            DisplayCommand::Text { x, y, content, color, font_size, bold: _, font_family } => {
                 let c = normalize_color(color);
                 let mut pen_x = *x;
                 let pen_y = *y + *font_size;
                 for ch in content.chars() {
-                    if let Some(g) = atlas.get(ch, *font_size as u32) {
+                    if let Some(g) = atlas.get(font_family, ch, *font_size as u32) {
                         let gx = pen_x + g.bearing_x;
                         let gy = pen_y - g.bearing_y;
                         push_rect_uv(&mut verts, gx, gy, g.width, g.height, c, g.uv0, g.uv1, 1.0);
@@ -288,6 +288,7 @@ fn paint_canvas_ops(
                                 color: current_fill,
                                 font_size: current_font_size,
                                 bold: false,
+                                font_family: String::new(),
                             });
                         }
                     }
@@ -609,11 +610,14 @@ struct GlyphInfo {
 }
 
 struct GlyphAtlas {
+    /// Default font (fallback pri family lookup miss)
     font: fontdue::Font,
+    /// @font-face loaded fonty: family name -> Font
+    extra_fonts: std::collections::HashMap<String, fontdue::Font>,
     /// Atlas pixely (shedy: 0=transparent, 255=opaque)
     pixels: Vec<u8>,
-    /// (char, font_size) -> glyph info
-    cache: std::collections::HashMap<(char, u32), GlyphInfo>,
+    /// (family, char, font_size) -> glyph info. Family "" = default.
+    cache: std::collections::HashMap<(String, char, u32), GlyphInfo>,
     /// Volna pozice pro dalsi glyph
     cursor_x: u32,
     cursor_y: u32,
@@ -630,6 +634,7 @@ impl GlyphAtlas {
             .expect("font parse failed");
         GlyphAtlas {
             font,
+            extra_fonts: std::collections::HashMap::new(),
             pixels: vec![0u8; (ATLAS_SIZE * ATLAS_SIZE) as usize],
             cache: std::collections::HashMap::new(),
             cursor_x: 0,
@@ -638,14 +643,22 @@ impl GlyphAtlas {
         }
     }
 
-    fn get(&self, ch: char, size: u32) -> Option<&GlyphInfo> {
-        self.cache.get(&(ch, size))
+    /// Vrati referenci na font dle family. "" nebo neznamy -> default.
+    fn font_for(&self, family: &str) -> &fontdue::Font {
+        if family.is_empty() { return &self.font; }
+        self.extra_fonts.get(family).unwrap_or(&self.font)
     }
 
-    /// Rasterize glyph and add to atlas. Returns GlyphInfo.
-    fn add(&mut self, ch: char, size: u32) {
-        if self.cache.contains_key(&(ch, size)) { return; }
-        let (metrics, bitmap) = self.font.rasterize(ch, size as f32);
+    fn get(&self, family: &str, ch: char, size: u32) -> Option<&GlyphInfo> {
+        self.cache.get(&(family.to_string(), ch, size))
+    }
+
+    /// Rasterize glyph and add to atlas.
+    fn add(&mut self, family: &str, ch: char, size: u32) {
+        let key = (family.to_string(), ch, size);
+        if self.cache.contains_key(&key) { return; }
+        let font = self.font_for(family);
+        let (metrics, bitmap) = font.rasterize(ch, size as f32);
         let w = metrics.width as u32;
         let h = metrics.height as u32;
 
@@ -679,7 +692,7 @@ impl GlyphAtlas {
             bearing_y: metrics.ymin as f32 + h as f32,
             advance: metrics.advance_width,
         };
-        self.cache.insert((ch, size), info);
+        self.cache.insert(key, info);
         self.cursor_x += w + 1;
         self.row_height = self.row_height.max(h);
     }
@@ -1001,9 +1014,9 @@ pub fn run_window_with_html(html: String, css: String) -> Result<(), String> {
             // Pre-rasterize vsechny glyfy do atlasu + nacti images
             for cmd in &display_list {
                 match cmd {
-                    DisplayCommand::Text { content, font_size, .. } => {
+                    DisplayCommand::Text { content, font_size, font_family, .. } => {
                         for ch in content.chars() {
-                            r.atlas.add(ch, *font_size as u32);
+                            r.atlas.add(font_family, ch, *font_size as u32);
                         }
                     }
                     DisplayCommand::Image { src, .. } => {
@@ -1267,7 +1280,9 @@ impl Renderer {
             };
             if let Ok(bytes) = std::fs::read(&path) {
                 if let Ok(font) = fontdue::Font::from_bytes(bytes, fontdue::FontSettings::default()) {
-                    self.font_registry.insert(ff.family.clone(), font);
+                    self.font_registry.insert(ff.family.clone(), font.clone());
+                    // Sdilet do atlasu pro rasterize lookup
+                    self.atlas.extra_fonts.insert(ff.family.clone(), font);
                     self.loaded_font_urls.insert(url);
                 }
             }

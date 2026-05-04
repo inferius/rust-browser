@@ -134,7 +134,7 @@ Konvence stavu:
 ### CSS Fonts L4/L5
 - [x] `font-family`, `font-size`, `font-weight`, `font-style`
 - [x] `font` shorthand (parsing)
-- [/] `@font-face { font-family; src: url(); }` parser + runtime FS load do Renderer.font_registry. HTTP load + per-text font lookup pri rasterize TODO.
+- [x] `@font-face { font-family; src: url(); }` parser + runtime FS load + GlyphAtlas extra_fonts + per-text font lookup pri rasterize. HTTP load TODO.
 - [/] `font-display: auto|block|swap|fallback|optional` parsing OK
 - [ ] `font-variation-settings`
 - [ ] `font-feature-settings`
