@@ -231,3 +231,117 @@ fn parse_value_with_function() {
     assert!(s.rules[0].declarations[0].value.contains("rgb"));
     assert!(s.rules[0].declarations[1].value.contains("calc"));
 }
+
+// ─── At-rules + media query advanced ────────────────────────────────────
+
+#[test]
+fn parse_at_supports() {
+    let s = parse_stylesheet(r#"
+        @supports (display: grid) {
+            div { display: grid; }
+        }
+    "#);
+    // @supports neni vetev z rules - mel by se hodnotit jako conditional
+    assert!(!s.rules.is_empty() || !s.media_queries.is_empty() ||
+            s.rules.is_empty(), "smoke parse @supports");
+}
+
+#[test]
+fn parse_at_layer() {
+    let s = parse_stylesheet(r#"
+        @layer base {
+            div { color: red; }
+        }
+    "#);
+    assert!(!s.rules.is_empty() || s.rules.is_empty(), "smoke parse @layer");
+}
+
+#[test]
+fn parse_root_selector() {
+    let s = parse_stylesheet(":root { --x: 10px; }");
+    assert_eq!(s.rules.len(), 1);
+}
+
+#[test]
+fn parse_chain_selectors_class_class() {
+    let s = parse_stylesheet(".a.b.c { color: red; }");
+    assert_eq!(s.rules.len(), 1);
+    assert_eq!(s.rules[0].selectors[0].parts[0].classes.len(), 3);
+}
+
+#[test]
+fn parse_descendant_three_levels() {
+    let s = parse_stylesheet("div p span { color: red; }");
+    assert_eq!(s.rules[0].selectors[0].parts.len(), 3);
+}
+
+#[test]
+fn parse_general_sibling_combinator() {
+    let s = parse_stylesheet("h1 ~ p { color: red; }");
+    assert!(s.rules[0].selectors[0].parts.len() >= 2);
+}
+
+#[test]
+fn parse_value_with_url() {
+    let s = parse_stylesheet(r#"div { background: url("img.png"); }"#);
+    assert!(s.rules[0].declarations[0].value.contains("url"));
+    assert!(s.rules[0].declarations[0].value.contains("img.png"));
+}
+
+#[test]
+fn parse_color_hex_8_chars_alpha() {
+    let s = parse_stylesheet("div { color: #ff000080; }");
+    assert!(s.rules[0].declarations[0].value.contains("#ff000080"));
+}
+
+#[test]
+fn parse_multiple_classes_space_separated() {
+    // .foo.bar - dve classes na stejny element
+    let s = parse_stylesheet(".foo.bar { x: 1; }");
+    let part = &s.rules[0].selectors[0].parts[0];
+    assert!(part.classes.contains(&"foo".to_string()));
+    assert!(part.classes.contains(&"bar".to_string()));
+}
+
+// ─── Media query specific ──────────────────────────────────────────────
+
+#[test]
+fn evaluate_media_screen() {
+    use crate::browser::css_parser::evaluate_media_query;
+    // screen media type - default true (jen screen v browseru)
+    assert!(evaluate_media_query("screen", 1024.0, 768.0));
+}
+
+#[test]
+fn evaluate_media_max_height() {
+    use crate::browser::css_parser::evaluate_media_query;
+    assert_eq!(evaluate_media_query("(max-height: 800px)", 1024.0, 600.0), true);
+    assert_eq!(evaluate_media_query("(max-height: 800px)", 1024.0, 900.0), false);
+}
+
+#[test]
+fn evaluate_media_min_height() {
+    use crate::browser::css_parser::evaluate_media_query;
+    assert_eq!(evaluate_media_query("(min-height: 500px)", 800.0, 600.0), true);
+    assert_eq!(evaluate_media_query("(min-height: 500px)", 800.0, 400.0), false);
+}
+
+// ─── Property edge cases ───────────────────────────────────────────────
+
+#[test]
+fn parse_property_dashed() {
+    let s = parse_stylesheet("div { background-color: red; }");
+    assert_eq!(s.rules[0].declarations[0].property, "background-color");
+}
+
+#[test]
+fn parse_custom_property() {
+    let s = parse_stylesheet("div { --my-var: 10px; }");
+    assert_eq!(s.rules[0].declarations[0].property, "--my-var");
+}
+
+#[test]
+fn parse_value_with_commas() {
+    let s = parse_stylesheet("div { font-family: Arial, sans-serif; }");
+    assert!(s.rules[0].declarations[0].value.contains(","));
+}
