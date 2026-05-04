@@ -104,3 +104,85 @@ fn proxy_typeof_object() {
     "#);
     assert_eq!(as_str(v), "object");
 }
+
+// ─── Proxy traps (full handler calls) ────────────────────────────────────
+
+#[test]
+fn proxy_get_trap() {
+    let v = run(r#"
+        const target = { x: 10 };
+        const handler = {
+            get: function(t, key) {
+                return t[key] * 2;
+            }
+        };
+        const p = new Proxy(target, handler);
+        return p.x;
+    "#);
+    assert_eq!(as_num(v), 20.0);
+}
+
+#[test]
+fn proxy_get_trap_returns_default_when_missing() {
+    let v = run(r#"
+        const handler = {
+            get: function(t, key) {
+                return key in t ? t[key] : "default";
+            }
+        };
+        const p = new Proxy({}, handler);
+        return p.foo;
+    "#);
+    assert_eq!(as_str(v), "default");
+}
+
+#[test]
+fn proxy_set_trap() {
+    let v = run(r#"
+        let captured = "";
+        const handler = {
+            set: function(t, key, val) {
+                captured = key + "=" + val;
+                t[key] = val;
+            }
+        };
+        const p = new Proxy({}, handler);
+        p.name = "Alice";
+        return captured;
+    "#);
+    assert_eq!(as_str(v), "name=Alice");
+}
+
+#[test]
+fn proxy_set_trap_intercepts() {
+    // Set trap muze zmenit hodnotu pred zapisem
+    let v = run(r#"
+        const target = {};
+        const handler = {
+            set: function(t, key, val) {
+                t[key] = val * 10;
+            }
+        };
+        const p = new Proxy(target, handler);
+        p.x = 5;
+        return target.x;
+    "#);
+    assert_eq!(as_num(v), 50.0);
+}
+
+#[test]
+fn proxy_get_logs_access() {
+    let v = run(r#"
+        const log = [];
+        const handler = {
+            get: function(t, key) {
+                log.push(key);
+                return t[key];
+            }
+        };
+        const p = new Proxy({a: 1, b: 2}, handler);
+        p.a; p.b; p.a;
+        return log.length;
+    "#);
+    assert_eq!(as_num(v), 3.0);
+}

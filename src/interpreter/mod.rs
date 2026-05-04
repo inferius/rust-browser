@@ -1607,6 +1607,25 @@ impl Interpreter {
                 let key = self.resolve_prop_key(prop, env)?;
                 match &obj {
                     JsValue::Object(o) => {
+                        // Proxy trap 'set': handler.set(target, key, value, receiver)
+                        let has_handler = o.borrow().props.contains_key("__proxy_handler__");
+                        if has_handler && !key.starts_with("__") {
+                            let handler = o.borrow().props.get("__proxy_handler__").cloned()
+                                .unwrap_or(JsValue::Undefined);
+                            let target = o.borrow().props.get("__proxy_target__").cloned()
+                                .unwrap_or(JsValue::Undefined);
+                            if let JsValue::Object(h) = &handler {
+                                let trap = h.borrow().props.get("set").cloned();
+                                if let Some(trap_fn) = trap {
+                                    self.call_function(
+                                        trap_fn,
+                                        vec![target, JsValue::Str(key.clone()), val.clone(), obj.clone()],
+                                        None,
+                                    )?;
+                                    return Ok(());
+                                }
+                            }
+                        }
                         // Specialni klic __proto__: prirazeni meni prototyp
                         if key == "__proto__" {
                             match &val {
@@ -2095,6 +2114,27 @@ impl Interpreter {
             return Ok(JsValue::Undefined);
         }
         let key = self.resolve_prop_key(prop, env)?;
+
+        // Proxy trap 'get': handler.get(target, key, receiver)
+        if let JsValue::Object(ref o) = obj {
+            let has_handler = o.borrow().props.contains_key("__proxy_handler__");
+            if has_handler && !key.starts_with("__") {
+                let handler = o.borrow().props.get("__proxy_handler__").cloned()
+                    .unwrap_or(JsValue::Undefined);
+                let target = o.borrow().props.get("__proxy_target__").cloned()
+                    .unwrap_or(JsValue::Undefined);
+                if let JsValue::Object(h) = &handler {
+                    let trap = h.borrow().props.get("get").cloned();
+                    if let Some(trap_fn) = trap {
+                        return self.call_function(
+                            trap_fn,
+                            vec![target, JsValue::Str(key.clone()), obj.clone()],
+                            None,
+                        );
+                    }
+                }
+            }
+        }
 
         // Getter podpora: kdyz objekt ma `__get_key__` vlastnost (funkci), zavolej ji
         if let JsValue::Object(ref o) = obj {
