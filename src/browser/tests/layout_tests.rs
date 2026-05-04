@@ -110,6 +110,24 @@ fn flex_layout_horizontal() {
 }
 
 #[test]
+fn position_relative_offsets() {
+    let doc = parse_html(r#"<html><body>
+        <div class="rel" style="position: relative; top: 50px; left: 30px;">moved</div>
+    </body></html>"#, "");
+    let css = parse_stylesheet(".rel { background: blue; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let layout = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+    let div = layout.children.iter()
+        .find(|c| c.tag.as_deref() == Some("html"))
+        .and_then(|h| h.children.iter().find(|c| c.tag.as_deref() == Some("body")))
+        .and_then(|b| b.children.iter().find(|c| c.tag.as_deref() == Some("div")))
+        .unwrap();
+    // Relative element: top + left aplikovany
+    // Original y by byl ~80 (po headerech), s top:50 by mel byt ~130
+    assert!(div.rect.x >= 30.0, "left should add 30px, got x={}", div.rect.x);
+}
+
+#[test]
 fn paint_generates_commands() {
     let doc = parse_html(r#"<html><body><div></div></body></html>"#, "");
     let css = parse_stylesheet("div { background: red; }");

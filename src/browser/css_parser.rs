@@ -38,8 +38,29 @@ pub struct SimpleSelector {
     pub id: Option<String>,
     /// Classes
     pub classes: Vec<String>,
+    /// Atribute selektory: [type], [type="text"], [class~="foo"]
+    pub attributes: Vec<AttrSelector>,
+    /// Pseudo-class :hover, :active, :focus, etc.
+    pub pseudo_classes: Vec<String>,
     /// Combinator pred timto selektorem (None = root, Descendant = " ", Child = ">")
     pub combinator: Option<Combinator>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AttrSelector {
+    pub name: String,
+    pub op: AttrOp,
+    pub value: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum AttrOp {
+    Exists,        // [name]
+    Equals,        // [name="value"]
+    Contains,      // [name*="value"]
+    StartsWith,    // [name^="value"]
+    EndsWith,      // [name$="value"]
+    WordContains,  // [name~="value"]
 }
 
 #[derive(Debug, Clone)]
@@ -58,6 +79,8 @@ pub fn specificity(sel: &Selector) -> (u32, u32, u32) {
     for p in &sel.parts {
         if p.id.is_some() { id_count += 1; }
         class_count += p.classes.len() as u32;
+        class_count += p.attributes.len() as u32;
+        class_count += p.pseudo_classes.len() as u32;
         if p.tag.is_some() && p.tag.as_deref() != Some("*") { type_count += 1; }
     }
     (id_count, class_count, type_count)
@@ -156,7 +179,6 @@ fn parse_single_selector(s: &str) -> Selector {
     let mut parts = Vec::new();
     let mut current_combinator: Option<Combinator> = None;
     for token in s.split_whitespace() {
-        // Detekce combinatoru
         if token == ">" { current_combinator = Some(Combinator::Child); continue; }
         if token == "+" { current_combinator = Some(Combinator::AdjacentSibling); continue; }
         if token == "~" { current_combinator = Some(Combinator::GeneralSibling); continue; }
@@ -164,10 +186,12 @@ fn parse_single_selector(s: &str) -> Selector {
         let mut tag: Option<String> = None;
         let mut id: Option<String> = None;
         let mut classes = Vec::new();
+        let mut attributes = Vec::new();
+        let mut pseudo_classes = Vec::new();
 
         let chars: Vec<char> = token.chars().collect();
         let mut i = 0;
-        // Tag (volitelny, na zacatku)
+        // Tag / universal (volitelny)
         let mut tag_buf = String::new();
         while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '*' || chars[i] == '-') {
             tag_buf.push(chars[i]);
@@ -193,6 +217,59 @@ fn parse_single_selector(s: &str) -> Selector {
                     }
                     classes.push(buf);
                 }
+                ':' => {
+                    i += 1;
+                    // Skip druhy : (::before)
+                    if i < chars.len() && chars[i] == ':' { i += 1; }
+                    let mut buf = String::new();
+                    while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '-' || chars[i] == '_') {
+                        buf.push(chars[i]); i += 1;
+                    }
+                    pseudo_classes.push(buf);
+                }
+                '[' => {
+                    i += 1;
+                    let mut name = String::new();
+                    while i < chars.len() && chars[i] != ']' && chars[i] != '=' && chars[i] != '~'
+                        && chars[i] != '^' && chars[i] != '$' && chars[i] != '*' && chars[i] != '|'
+                    {
+                        name.push(chars[i]); i += 1;
+                    }
+                    let name = name.trim().to_string();
+                    let mut op = AttrOp::Exists;
+                    let mut value: Option<String> = None;
+                    if i < chars.len() && chars[i] != ']' {
+                        // Detekce operatoru
+                        op = match chars[i] {
+                            '=' => AttrOp::Equals,
+                            '~' => { i += 1; AttrOp::WordContains }
+                            '^' => { i += 1; AttrOp::StartsWith }
+                            '$' => { i += 1; AttrOp::EndsWith }
+                            '*' => { i += 1; AttrOp::Contains }
+                            _   => AttrOp::Exists,
+                        };
+                        if i < chars.len() && chars[i] == '=' { i += 1; }
+                        // Hodnota - mozna v uvozovkach
+                        if i < chars.len() && (chars[i] == '"' || chars[i] == '\'') {
+                            let quote = chars[i];
+                            i += 1;
+                            let mut buf = String::new();
+                            while i < chars.len() && chars[i] != quote {
+                                buf.push(chars[i]); i += 1;
+                            }
+                            if i < chars.len() { i += 1; }
+                            value = Some(buf);
+                        } else {
+                            let mut buf = String::new();
+                            while i < chars.len() && chars[i] != ']' {
+                                buf.push(chars[i]); i += 1;
+                            }
+                            if !buf.is_empty() { value = Some(buf); }
+                        }
+                    }
+                    if i < chars.len() && chars[i] == ']' { i += 1; }
+                    attributes.push(AttrSelector { name, op, value });
+                }
                 _ => { i += 1; }
             }
         }
@@ -203,7 +280,9 @@ fn parse_single_selector(s: &str) -> Selector {
             current_combinator.take().or(Some(Combinator::Descendant))
         };
 
-        parts.push(SimpleSelector { tag, id, classes, combinator });
+        parts.push(SimpleSelector {
+            tag, id, classes, attributes, pseudo_classes, combinator,
+        });
     }
     Selector { parts }
 }

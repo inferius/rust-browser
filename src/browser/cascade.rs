@@ -194,6 +194,8 @@ pub fn matches_selector(node: &Rc<Node>, sel: &Selector) -> bool {
 
 /// Kontroluje simple selector proti uzlu.
 pub fn matches_simple(node: &Rc<Node>, sel: &SimpleSelector) -> bool {
+    use super::css_parser::AttrOp;
+
     let tag = match node.tag_name() {
         Some(t) => t,
         None => return false,
@@ -218,6 +220,66 @@ pub fn matches_simple(node: &Rc<Node>, sel: &SimpleSelector) -> bool {
             if !classes.contains(&required.as_str()) {
                 return false;
             }
+        }
+    }
+
+    // Atribute selektory
+    for attr_sel in &sel.attributes {
+        let actual = node.attr(&attr_sel.name);
+        match (&attr_sel.op, &attr_sel.value, &actual) {
+            (AttrOp::Exists, _, None) => return false,
+            (AttrOp::Exists, _, Some(_)) => {}
+            (_, _, None) => return false,
+            (AttrOp::Equals, Some(want), Some(got)) => {
+                if want != got { return false; }
+            }
+            (AttrOp::Contains, Some(want), Some(got)) => {
+                if !got.contains(want.as_str()) { return false; }
+            }
+            (AttrOp::StartsWith, Some(want), Some(got)) => {
+                if !got.starts_with(want.as_str()) { return false; }
+            }
+            (AttrOp::EndsWith, Some(want), Some(got)) => {
+                if !got.ends_with(want.as_str()) { return false; }
+            }
+            (AttrOp::WordContains, Some(want), Some(got)) => {
+                if !got.split_whitespace().any(|w| w == want) { return false; }
+            }
+            _ => {}
+        }
+    }
+
+    // Pseudo-classes :hover/:active/:focus zatim ignorujeme (vyzaduji runtime stav)
+    // Skip - vraci match aby se pravidlo neaplikovalo zbytecne
+    for pc in &sel.pseudo_classes {
+        match pc.as_str() {
+            "root" => {
+                // :root match jen html element
+                if tag != "html" { return false; }
+            }
+            "first-child" => {
+                let parent = node.parent.borrow().upgrade();
+                if let Some(p) = parent {
+                    let children = p.children.borrow();
+                    let first_el = children.iter().find(|c| matches!(c.kind, NodeKind::Element(_)));
+                    if first_el.map(|f| !std::rc::Rc::ptr_eq(f, node)).unwrap_or(true) {
+                        return false;
+                    }
+                }
+            }
+            "last-child" => {
+                let parent = node.parent.borrow().upgrade();
+                if let Some(p) = parent {
+                    let children = p.children.borrow();
+                    let last_el = children.iter().rev().find(|c| matches!(c.kind, NodeKind::Element(_)));
+                    if last_el.map(|f| !std::rc::Rc::ptr_eq(f, node)).unwrap_or(true) {
+                        return false;
+                    }
+                }
+            }
+            // hover/active/focus - bez runtime nemuzu - skip (pravidlo se NEaplikuje)
+            "hover" | "active" | "focus" | "visited" | "link" => return false,
+            _ => {}
         }
     }
 

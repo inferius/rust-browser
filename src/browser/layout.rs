@@ -26,6 +26,15 @@ pub enum TextAlign {
     Justify,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Position {
+    Static,
+    Relative,
+    Absolute,
+    Fixed,
+    Sticky,
+}
+
 impl Display {
     pub fn from_str(s: &str) -> Self {
         match s.trim() {
@@ -102,6 +111,13 @@ pub struct LayoutBox {
     pub text_align: TextAlign,
     pub bold: bool,
     pub border_radius: f32,
+    pub line_height: f32,
+    pub position: Position,
+    /// Top/right/bottom/left offsety pro positioned elements (None = auto).
+    pub offset_top: Option<f32>,
+    pub offset_right: Option<f32>,
+    pub offset_bottom: Option<f32>,
+    pub offset_left: Option<f32>,
     /// Reference na puvodni DOM node (pro hit test -> events).
     pub node: Option<Rc<Node>>,
 }
@@ -124,6 +140,12 @@ impl LayoutBox {
             text_align: TextAlign::Left,
             bold: false,
             border_radius: 0.0,
+            line_height: 1.4,
+            position: Position::Static,
+            offset_top: None,
+            offset_right: None,
+            offset_bottom: None,
+            offset_left: None,
             node: None,
         }
     }
@@ -234,6 +256,34 @@ fn build_box(node: &Rc<Node>, style_map: &StyleMap) -> LayoutBox {
     if let Some(br) = s.get("border-radius") {
         bx.border_radius = parse_length(br);
     }
+    // Line-height: cislo (multiplier) nebo length (px)
+    if let Some(lh) = s.get("line-height") {
+        let trimmed = lh.trim();
+        if let Ok(num) = trimmed.parse::<f32>() {
+            bx.line_height = num;
+        } else if trimmed.ends_with("px") || trimmed.ends_with("em") || trimmed.ends_with("rem") {
+            // V px - prevest na multiplier
+            let px = parse_length(trimmed);
+            if bx.font_size > 0.0 {
+                bx.line_height = px / bx.font_size;
+            }
+        }
+    }
+    // Position
+    if let Some(pos) = s.get("position") {
+        bx.position = match pos.trim() {
+            "relative" => Position::Relative,
+            "absolute" => Position::Absolute,
+            "fixed"    => Position::Fixed,
+            "sticky"   => Position::Sticky,
+            _ => Position::Static,
+        };
+    }
+    // Top/right/bottom/left offsety
+    if let Some(v) = s.get("top")    { bx.offset_top    = Some(parse_length(v)); }
+    if let Some(v) = s.get("right")  { bx.offset_right  = Some(parse_length(v)); }
+    if let Some(v) = s.get("bottom") { bx.offset_bottom = Some(parse_length(v)); }
+    if let Some(v) = s.get("left")   { bx.offset_left   = Some(parse_length(v)); }
 
     // Children - skip None display, skip whitespace-only text uzly
     for child in node.children.borrow().iter() {
@@ -353,13 +403,38 @@ fn layout_block(bx: &mut LayoutBox) {
                 child.rect.width = inner_w - 2.0 * child.margin;
                 if child.rect.height == 0.0 {
                     child.rect.height = if child.text.is_some() {
-                        child.font_size * 1.4 + child.padding * 2.0
+                        child.font_size * child.line_height + child.padding * 2.0
                     } else {
                         20.0
                     };
                 }
                 layout_dispatch(child);
-                cursor_y += child.rect.height + 2.0 * child.margin;
+
+                // Apply position offsety
+                let is_in_flow = matches!(child.position, Position::Static | Position::Relative);
+                match child.position {
+                    Position::Relative => {
+                        if let Some(t) = child.offset_top  { child.rect.y += t; }
+                        if let Some(l) = child.offset_left { child.rect.x += l; }
+                    }
+                    Position::Absolute | Position::Fixed => {
+                        // Pro Absolute/Fixed: prepocitej polohu z parent
+                        if let Some(t) = child.offset_top {
+                            child.rect.y = inner_y + t;
+                        }
+                        if let Some(l) = child.offset_left {
+                            child.rect.x = inner_x + l;
+                        }
+                        if let Some(r) = child.offset_right {
+                            child.rect.x = inner_x + inner_w - r - child.rect.width;
+                        }
+                    }
+                    _ => {}
+                }
+                if is_in_flow {
+                    cursor_y += child.rect.height + 2.0 * child.margin;
+                }
+                // Absolute/fixed neposunuji cursor_y - jsou out of flow
             }
             Display::Inline | Display::InlineBlock => {
                 inline_buffer.push(i);
