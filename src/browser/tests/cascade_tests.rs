@@ -93,6 +93,31 @@ fn cascade_pseudo_first_child() {
 }
 
 #[test]
+fn cascade_css_variable() {
+    let doc = parse_html("<html><body><p>x</p></body></html>", "");
+    let css = parse_stylesheet(r#"
+        :root { --primary: blue; }
+        p { color: var(--primary); }
+    "#);
+    let map = cascade::cascade(&doc.root, &[css]);
+    let p = doc.root.find(|n| n.tag_name().as_deref() == Some("p")).unwrap();
+    let styles = cascade::get_styles(&map, &p).unwrap();
+    assert_eq!(styles.get("color").map(|s| s.as_str()), Some("blue"));
+}
+
+#[test]
+fn cascade_css_variable_fallback() {
+    let doc = parse_html("<html><body><p>x</p></body></html>", "");
+    let css = parse_stylesheet(r#"
+        p { color: var(--missing, red); }
+    "#);
+    let map = cascade::cascade(&doc.root, &[css]);
+    let p = doc.root.find(|n| n.tag_name().as_deref() == Some("p")).unwrap();
+    let styles = cascade::get_styles(&map, &p).unwrap();
+    assert_eq!(styles.get("color").map(|s| s.as_str()), Some("red"));
+}
+
+#[test]
 fn cascade_no_match() {
     let doc = parse_html("<html><body><p>x</p></body></html>", "");
     let css = parse_stylesheet("h1 { color: red; }");

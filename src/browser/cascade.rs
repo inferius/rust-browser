@@ -76,9 +76,145 @@ fn node_id(node: &Rc<Node>) -> usize {
     Rc::as_ptr(node) as usize
 }
 
+/// Resolvuje CSS var(--name) a calc() expressions.
+/// Pri var(--x, fallback): pokud --x v variables, pouzij ho, jinak fallback.
+pub fn resolve_value(value: &str, variables: &HashMap<String, String>) -> String {
+    let mut out = value.to_string();
+    let mut iters = 0;
+    // Iterativne nahrazuj var() - max 10 urovnich nesteni
+    while out.contains("var(") && iters < 10 {
+        let new_out = replace_var_once(&out, variables);
+        if new_out == out { break; }
+        out = new_out;
+        iters += 1;
+    }
+    // Calc() - jednoduchy parser (jen + - * /)
+    if out.contains("calc(") {
+        out = resolve_calc(&out);
+    }
+    out
+}
+
+fn replace_var_once(s: &str, variables: &HashMap<String, String>) -> String {
+    let mut out = String::new();
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if i + 4 < bytes.len() && &bytes[i..i+4] == b"var(" {
+            // Najdi matching )
+            let mut depth = 1;
+            let mut j = i + 4;
+            while j < bytes.len() && depth > 0 {
+                match bytes[j] {
+                    b'(' => depth += 1,
+                    b')' => depth -= 1,
+                    _ => {}
+                }
+                if depth == 0 { break; }
+                j += 1;
+            }
+            let inner = &s[i+4..j];
+            // Split na name + fallback
+            let (name, fallback) = match inner.find(',') {
+                Some(idx) => (inner[..idx].trim(), Some(inner[idx+1..].trim())),
+                None      => (inner.trim(), None),
+            };
+            let resolved = variables.get(name).cloned()
+                .or_else(|| fallback.map(|f| f.to_string()))
+                .unwrap_or_default();
+            out.push_str(&resolved);
+            i = j + 1;
+            continue;
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
+}
+
+fn resolve_calc(s: &str) -> String {
+    let mut out = String::new();
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if i + 5 < bytes.len() && &bytes[i..i+5] == b"calc(" {
+            let mut depth = 1;
+            let mut j = i + 5;
+            while j < bytes.len() && depth > 0 {
+                match bytes[j] {
+                    b'(' => depth += 1,
+                    b')' => depth -= 1,
+                    _ => {}
+                }
+                if depth == 0 { break; }
+                j += 1;
+            }
+            let expr = &s[i+5..j];
+            let result = eval_calc_expr(expr);
+            out.push_str(&result);
+            i = j + 1;
+            continue;
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
+}
+
+/// Velmi zjednoduseny calc evaluator - vstupy "Npx + Npx", "Nem * 2".
+fn eval_calc_expr(expr: &str) -> String {
+    // Najdi unit - pouzij prvni numerickou hodnotu
+    let parts: Vec<&str> = expr.split_whitespace().collect();
+    if parts.len() < 3 {
+        return expr.trim().to_string();
+    }
+
+    let mut acc = super::layout::parse_length(parts[0]);
+    let mut unit = "px".to_string();
+    if let Some(u) = ["px", "em", "rem", "%"].iter().find(|u| parts[0].ends_with(*u)) {
+        unit = u.to_string();
+    }
+
+    let mut i = 1;
+    while i + 1 < parts.len() {
+        let op = parts[i];
+        let val = super::layout::parse_length(parts[i+1]);
+        match op {
+            "+" => acc += val,
+            "-" => acc -= val,
+            "*" => acc *= val,
+            "/" => if val != 0.0 { acc /= val; },
+            _ => break,
+        }
+        i += 2;
+    }
+    format!("{}{}", acc, unit)
+}
+
 /// Aplikuje stylesheet na DOM strom, vrati StyleMap.
 pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
     let mut style_map: StyleMap = HashMap::new();
+    // Globalni :root variables - resolved jednou
+    let mut variables: HashMap<String, String> = HashMap::new();
+    for sheet in stylesheets {
+        for rule in &sheet.rules {
+            for sel in &rule.selectors {
+                let is_root = sel.parts.iter().any(|p|
+                    p.tag.as_deref() == Some("html") ||
+                    p.pseudo_classes.iter().any(|pc| pc == "root")
+                ) || sel.parts.is_empty();
+                if !is_root && !sel.parts.iter().any(|p| p.tag.as_deref() == Some(":root")) {
+                    // Selektor :root nebo html
+                    continue;
+                }
+                for decl in &rule.declarations {
+                    if decl.property.starts_with("--") {
+                        variables.insert(decl.property.clone(), decl.value.clone());
+                    }
+                }
+            }
+        }
+    }
 
     // Prochazime DOM, pro kazdy element zkontrolujeme vsechny rules
     root.walk(&mut |node| {
@@ -115,7 +251,8 @@ pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
 
         let mut styles = HashMap::new();
         for (_, decl) in matched_decls {
-            expand_shorthand(&decl.property, &decl.value, &mut styles);
+            let resolved = resolve_value(&decl.value, &variables);
+            expand_shorthand(&decl.property, &resolved, &mut styles);
         }
 
         // Inline styly z attributu "style" maji nejvyssi prioritu (mimo !important rules)
@@ -125,7 +262,8 @@ pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
                     let prop = pair[..colon].trim().to_string();
                     let val = pair[colon+1..].trim().to_string();
                     if !prop.is_empty() && !val.is_empty() {
-                        expand_shorthand(&prop, &val, &mut styles);
+                        let resolved = resolve_value(&val, &variables);
+                        expand_shorthand(&prop, &resolved, &mut styles);
                     }
                 }
             }
