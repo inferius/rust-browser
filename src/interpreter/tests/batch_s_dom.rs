@@ -292,6 +292,42 @@ fn document_html_exists() {
 // ─── Form properties ─────────────────────────────────────────────────────
 
 #[test]
+fn element_append_string_and_node() {
+    let v = run(r#"
+        const div = document.createElement("div");
+        const span = document.createElement("span");
+        div.append(span, "hello");
+        return div.children.length + ":" + div.textContent;
+    "#);
+    let s = as_str(v);
+    assert!(s.contains("hello"));
+}
+
+#[test]
+fn element_remove_self() {
+    let v = run(r#"
+        const parent = document.createElement("div");
+        const child = document.createElement("span");
+        parent.appendChild(child);
+        child.remove();
+        return parent.children.length;
+    "#);
+    assert_eq!(as_num(v), 0.0);
+}
+
+#[test]
+fn element_get_bounding_client_rect() {
+    let v = run(r#"
+        const c = document.createElement("canvas");
+        c.setAttribute("width", "300");
+        c.setAttribute("height", "150");
+        const r = c.getBoundingClientRect();
+        return r.width + ":" + r.height + ":" + r.bottom;
+    "#);
+    assert_eq!(as_str(v), "300:150:150");
+}
+
+#[test]
 fn element_matches_selector() {
     let v = run(r#"
         const div = document.createElement("div");

@@ -3713,7 +3713,6 @@ impl Interpreter {
                             return Ok(JsValue::DomNode(Rc::clone(&n)));
                         }
                         "contains" => {
-                            // Element.contains(other)
                             let other = arg_vals.into_iter().next().unwrap_or(JsValue::Null);
                             if let JsValue::DomNode(o) = other {
                                 let mut found = false;
@@ -3721,6 +3720,117 @@ impl Interpreter {
                                 return Ok(JsValue::Bool(found));
                             }
                             return Ok(JsValue::Bool(false));
+                        }
+                        "append" => {
+                            // Append vsechny DomNode args jako children + Strings jako text nodes
+                            for arg in arg_vals {
+                                match arg {
+                                    JsValue::DomNode(c) => { n.append_child(c); }
+                                    JsValue::Str(s) => {
+                                        n.append_child(crate::browser::dom::NodeData::new_text(&s));
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            return Ok(JsValue::Undefined);
+                        }
+                        "prepend" => {
+                            let mut new_first: Vec<Rc<crate::browser::dom::NodeData>> = Vec::new();
+                            for arg in arg_vals {
+                                match arg {
+                                    JsValue::DomNode(c) => new_first.push(c),
+                                    JsValue::Str(s) => new_first.push(crate::browser::dom::NodeData::new_text(&s)),
+                                    _ => {}
+                                }
+                            }
+                            let mut children = n.children.borrow_mut();
+                            for (i, c) in new_first.into_iter().enumerate() {
+                                children.insert(i, c);
+                            }
+                            return Ok(JsValue::Undefined);
+                        }
+                        "before" | "after" | "replaceWith" => {
+                            let parent = match n.parent.borrow().upgrade() {
+                                Some(p) => p, None => return Ok(JsValue::Undefined),
+                            };
+                            let mut new_nodes: Vec<Rc<crate::browser::dom::NodeData>> = Vec::new();
+                            for arg in arg_vals {
+                                match arg {
+                                    JsValue::DomNode(c) => new_nodes.push(c),
+                                    JsValue::Str(s) => new_nodes.push(crate::browser::dom::NodeData::new_text(&s)),
+                                    _ => {}
+                                }
+                            }
+                            let mut children = parent.children.borrow_mut();
+                            let idx = children.iter().position(|c| Rc::ptr_eq(c, &n));
+                            if let Some(i) = idx {
+                                let insert_at = match key.as_str() {
+                                    "before" => i,
+                                    "after" => i + 1,
+                                    _ /* replaceWith */ => {
+                                        children.remove(i);
+                                        i
+                                    }
+                                };
+                                for (k, c) in new_nodes.into_iter().enumerate() {
+                                    children.insert(insert_at + k, c);
+                                }
+                            }
+                            return Ok(JsValue::Undefined);
+                        }
+                        "remove" => {
+                            // Element.remove() - pasivne odstrani z parenta
+                            if let Some(parent) = n.parent.borrow().upgrade() {
+                                let mut children = parent.children.borrow_mut();
+                                children.retain(|c| !Rc::ptr_eq(c, &n));
+                            }
+                            return Ok(JsValue::Undefined);
+                        }
+                        "insertAdjacentHTML" => {
+                            let mut it = arg_vals.into_iter();
+                            let position = it.next().map(|v| v.to_string()).unwrap_or_default();
+                            let html = it.next().map(|v| v.to_string()).unwrap_or_default();
+                            let frag = crate::browser::html_parser::parse_html_fragment(&html);
+                            // Vytahnu nove nody (odznacka <html><body>... struktur)
+                            let mut new_nodes: Vec<Rc<crate::browser::dom::NodeData>> = Vec::new();
+                            for ch in frag.children.borrow().iter() {
+                                for grandch in ch.children.borrow().iter() {
+                                    new_nodes.push(Rc::clone(grandch));
+                                }
+                            }
+                            match position.as_str() {
+                                "beforebegin" => {
+                                    if let Some(p) = n.parent.borrow().upgrade() {
+                                        let mut c = p.children.borrow_mut();
+                                        if let Some(i) = c.iter().position(|x| Rc::ptr_eq(x, &n)) {
+                                            for (k, nn) in new_nodes.into_iter().enumerate() {
+                                                c.insert(i + k, nn);
+                                            }
+                                        }
+                                    }
+                                }
+                                "afterbegin" => {
+                                    let mut c = n.children.borrow_mut();
+                                    for (k, nn) in new_nodes.into_iter().enumerate() {
+                                        c.insert(k, nn);
+                                    }
+                                }
+                                "beforeend" => {
+                                    for nn in new_nodes { n.append_child(nn); }
+                                }
+                                "afterend" => {
+                                    if let Some(p) = n.parent.borrow().upgrade() {
+                                        let mut c = p.children.borrow_mut();
+                                        if let Some(i) = c.iter().position(|x| Rc::ptr_eq(x, &n)) {
+                                            for (k, nn) in new_nodes.into_iter().enumerate() {
+                                                c.insert(i + 1 + k, nn);
+                                            }
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                            return Ok(JsValue::Undefined);
                         }
                         "querySelector" => {
                             let sel = arg_vals.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
