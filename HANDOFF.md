@@ -4,11 +4,23 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 
 ## Stav
 
-- Build: **OK**, 0 errors, par non-fatal warnings (duplicate match arms).
-- Tests: **805 passed, 0 failed, 3 ignored** (z 639 puv, +166 v session).
-- Posledni commit: `8d2350f Hlavni test.html rozsireni - rotation/text-deco/lists/outline demo`.
+- Build: **OK**, 0 errors.
+- Tests: **1003 passed, 0 failed, 3 ignored** (+198 v teto session).
+- Posledni commit: `c6a3b6d Cascade + DOM testy +20`.
 - Tree: ciste.
-- Branch master, ~220 commitu pred origin/master (NEPUSHOVAT bez vyzvy).
+- Branch master, ~225 commitu pred origin/master (NEPUSHOVAT bez vyzvy).
+
+## Recent session highlights
+
+1. **Filter blur subtree orchestration** (commit cc1c531) - paint emit FilterBegin/End,
+   render::draw_segments rozdeli display list na Main/Filter, vola RT pre-pass +
+   run_blur_passes + compose_offscreen.
+2. **Filter color matrix subtree** (commit 3ac8ea6) - rozsireni z blur-only na
+   obecne color matrix filtry (hue/saturate/grayscale/sepia/invert/contrast/
+   brightness/opacity). Compose shader s 4x5 row-major matrix. partition_filter_segments
+   pub fn (testovatelna). +159 testu.
+3. **Cascade + DOM testy** (commit c6a3b6d) - 38 dalsich testu pro cascade
+   pseudo selectors + DOM API.
 
 ## Test runner
 
