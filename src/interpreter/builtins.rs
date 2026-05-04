@@ -18,6 +18,7 @@
 /// - Timery: setTimeout/clearTimeout/setInterval/clearInterval
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::str::FromStr;
 use bigdecimal::BigDecimal;
@@ -25,10 +26,29 @@ use num_bigint::BigInt;
 use super::{JsValue, JsObject, Environment};
 use super::helpers::*;
 
+/// Worker thread loop: cte zpravy z main, vola worker script (zatim stub).
+/// Realna implementace by nacetla skript a interpretovala ho s onmessage handlerem.
+/// Zatim jen echo - posila zpet kazdou zpravu.
+fn run_worker_thread(
+    _script_url: &str,
+    incoming: std::sync::mpsc::Receiver<String>,
+    outgoing: std::sync::mpsc::Sender<String>,
+) {
+    while let Ok(msg) = incoming.recv() {
+        // Stub: echo + prefix "worker:"
+        let response = format!("\"worker received: {}\"", msg.replace('"', "\\\""));
+        if outgoing.send(response).is_err() {
+            break;
+        }
+    }
+}
+
 pub fn setup_builtins(
     env: &Rc<RefCell<Environment>>,
     task_queue: &Rc<RefCell<Vec<(u32, JsValue, Vec<JsValue>)>>>,
     next_timer_id: &Rc<RefCell<u32>>,
+    workers: &Rc<RefCell<HashMap<u32, super::WorkerState>>>,
+    next_worker_id: &Rc<RefCell<u32>>,
 ) {
     let mut e = env.borrow_mut();
 
@@ -569,16 +589,43 @@ pub fn setup_builtins(
     }));
     e.define("indexedDB", JsValue::Object(Rc::new(RefCell::new(idb))));
 
-    // ─── Worker stub ─────────────────────────────────────────────────────────
-    // Worker(scriptURL) - vraci objekt s postMessage/terminate stubs.
-    // V sync runtime nelze realne spustit - jen registrujeme API.
-    e.define("Worker", native("Worker", |a| {
-        let url = a.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
-        let mut obj = JsObject::new();
-        obj.set("__worker__".into(), JsValue::Bool(true));
-        obj.set("url".into(), JsValue::Str(url));
-        Ok(JsValue::Object(Rc::new(RefCell::new(obj))))
-    }));
+    // ─── Worker - real thread + mpsc channels ────────────────────────────────
+    {
+        let workers_ref = Rc::clone(workers);
+        let id_ctr = Rc::clone(next_worker_id);
+        e.define("Worker", native("Worker", move |a| {
+            let url = a.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+            let id = {
+                let mut c = id_ctr.borrow_mut();
+                let i = *c;
+                *c += 1;
+                i
+            };
+
+            // Channels pro main <-> worker komunikaci
+            let (main_to_worker_tx, main_to_worker_rx) = std::sync::mpsc::channel::<String>();
+            let (worker_to_main_tx, worker_to_main_rx) = std::sync::mpsc::channel::<String>();
+
+            // Spusti worker thread
+            let url_clone = url.clone();
+            let handle = std::thread::spawn(move || {
+                run_worker_thread(&url_clone, main_to_worker_rx, worker_to_main_tx);
+            });
+
+            workers_ref.borrow_mut().insert(id, super::WorkerState {
+                sender: main_to_worker_tx,
+                outgoing: worker_to_main_rx,
+                handle: Some(handle),
+                on_message: None,
+            });
+
+            let mut obj = JsObject::new();
+            obj.set("__worker__".into(), JsValue::Bool(true));
+            obj.set("__worker_id__".into(), JsValue::Number(id as f64));
+            obj.set("url".into(), JsValue::Str(url));
+            Ok(JsValue::Object(Rc::new(RefCell::new(obj))))
+        }));
+    }
 
     // ─── SharedArrayBuffer stub ──────────────────────────────────────────────
     // V sync runtime se chova jako bezne pole bytu.

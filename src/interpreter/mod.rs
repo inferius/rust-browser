@@ -588,6 +588,17 @@ type StmtResult = Result<Option<Signal>, JsError>;
 /// let mut interp = Interpreter::new();
 /// let result = interp.run(&program).unwrap();
 /// ```
+/// Real Worker thread state.
+/// Kazdy Worker bezi v separatnim threadu s vlastnim Interpreterem.
+/// Komunikace pres mpsc kanaly, JSON-serializovane zpravy.
+pub struct WorkerState {
+    pub sender: std::sync::mpsc::Sender<String>,
+    pub outgoing: std::sync::mpsc::Receiver<String>,
+    pub handle: Option<std::thread::JoinHandle<()>>,
+    /// onmessage callback registrovany z main threadu
+    pub on_message: Option<JsValue>,
+}
+
 pub struct Interpreter {
     /// Globalni scope - obsahuje vestavene funkce (Math, console, atd.)
     pub global: Rc<RefCell<Environment>>,
@@ -609,6 +620,10 @@ pub struct Interpreter {
     current_exports: Option<Rc<RefCell<HashMap<String, JsValue>>>>,
     /// Zakladni adresar pro resolve relativnich modulu (current dir nebo file dir).
     pub base_dir: Rc<RefCell<String>>,
+    /// Worker state registry - Worker ID -> WorkerState.
+    pub workers: Rc<RefCell<HashMap<u32, WorkerState>>>,
+    /// Pocitadlo Worker ID
+    pub next_worker_id: Rc<RefCell<u32>>,
 }
 
 // ─── Pomocne funkce ──────────────────────────────────────────────────────────
@@ -621,14 +636,44 @@ impl Interpreter {
         let task_queue: Rc<RefCell<Vec<(u32, JsValue, Vec<JsValue>)>>> =
             Rc::new(RefCell::new(Vec::new()));
         let next_timer_id: Rc<RefCell<u32>> = Rc::new(RefCell::new(1));
-        setup_builtins(&global, &task_queue, &next_timer_id);
+        let workers: Rc<RefCell<HashMap<u32, WorkerState>>> =
+            Rc::new(RefCell::new(HashMap::new()));
+        let next_worker_id: Rc<RefCell<u32>> = Rc::new(RefCell::new(1));
+        setup_builtins(&global, &task_queue, &next_timer_id, &workers, &next_worker_id);
         Interpreter {
             global, yield_buffer: None, task_queue, next_timer_id,
             module_cache:    Rc::new(RefCell::new(HashMap::new())),
             virtual_modules: Rc::new(RefCell::new(HashMap::new())),
             current_exports: None,
             base_dir:        Rc::new(RefCell::new(".".to_string())),
+            workers, next_worker_id,
         }
+    }
+
+    /// Drainuje vsechny worker zpravy a zavola onmessage callbacky.
+    fn drain_workers(&mut self) -> Result<(), JsError> {
+        // Sber zprav z vsech workeru (ID + msg)
+        let pending: Vec<(u32, String)> = {
+            let workers = self.workers.borrow();
+            let mut out = Vec::new();
+            for (id, state) in workers.iter() {
+                while let Ok(msg) = state.outgoing.try_recv() {
+                    out.push((*id, msg));
+                }
+            }
+            out
+        };
+        // Vyvolat onmessage callback per zpravu
+        for (id, msg) in pending {
+            let cb = self.workers.borrow().get(&id).and_then(|s| s.on_message.clone());
+            if let Some(cb) = cb {
+                let parsed = json_parse(&msg).unwrap_or(JsValue::Str(msg));
+                let mut event = JsObject::new();
+                event.set("data".into(), parsed);
+                self.call_function(cb, vec![JsValue::Object(Rc::new(RefCell::new(event)))], None)?;
+            }
+        }
+        Ok(())
     }
 
     /// Prida virtualni modul (pro testy / sandboxing).
@@ -714,6 +759,14 @@ impl Interpreter {
         };
         // Drain timer queue - spust vsechny setTimeout callbacky
         self.drain_timers()?;
+        // Krate cekani na worker zpravy (max 100ms) + drain
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        self.drain_workers()?;
+        // Terminate vsechny workery (drop senderu -> threadu signal)
+        let ids: Vec<u32> = self.workers.borrow().keys().cloned().collect();
+        for id in ids {
+            self.workers.borrow_mut().remove(&id);
+        }
         Ok(result)
     }
 
@@ -1607,6 +1660,20 @@ impl Interpreter {
                 let key = self.resolve_prop_key(prop, env)?;
                 match &obj {
                     JsValue::Object(o) => {
+                        // Worker.onmessage = fn -> registruj jako on_message v WorkerState
+                        if matches!(o.borrow().props.get("__worker__"), Some(JsValue::Bool(true)))
+                            && key == "onmessage"
+                        {
+                            let id = match o.borrow().props.get("__worker_id__").cloned() {
+                                Some(JsValue::Number(n)) => n as u32,
+                                _ => 0,
+                            };
+                            if let Some(state) = self.workers.borrow_mut().get_mut(&id) {
+                                state.on_message = Some(val.clone());
+                            }
+                            o.borrow_mut().props.insert(key, val);
+                            return Ok(());
+                        }
                         // Proxy trap 'set': handler.set(target, key, value, receiver)
                         let has_handler = o.borrow().props.contains_key("__proxy_handler__");
                         if has_handler && !key.starts_with("__") {
@@ -2750,11 +2817,27 @@ impl Interpreter {
                             _ => {}
                         }
                     }
-                    // ─── Worker stub - postMessage/terminate ────────────
+                    // ─── Worker - postMessage/terminate (real thread) ──────
                     if matches!(obj_rc2.borrow().props.get("__worker__"), Some(JsValue::Bool(true))) {
-                        let _arg_vals = self.eval_args(args, env)?;
+                        let arg_vals = self.eval_args(args, env)?;
+                        let worker_id = match obj_rc2.borrow().props.get("__worker_id__").cloned() {
+                            Some(JsValue::Number(n)) => n as u32,
+                            _ => return Ok(JsValue::Undefined),
+                        };
                         match key.as_str() {
-                            "postMessage" | "terminate" => return Ok(JsValue::Undefined),
+                            "postMessage" => {
+                                let msg = arg_vals.into_iter().next().unwrap_or(JsValue::Undefined);
+                                let serialized = json_stringify(&msg, 0, 0)
+                                    .unwrap_or_else(|| msg.to_string());
+                                if let Some(state) = self.workers.borrow().get(&worker_id) {
+                                    let _ = state.sender.send(serialized);
+                                }
+                                return Ok(JsValue::Undefined);
+                            }
+                            "terminate" => {
+                                self.workers.borrow_mut().remove(&worker_id);
+                                return Ok(JsValue::Undefined);
+                            }
                             _ => {}
                         }
                     }

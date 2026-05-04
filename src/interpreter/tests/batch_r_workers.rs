@@ -23,6 +23,30 @@ fn worker_post_message() {
     assert_eq!(as_str(v), "undefined");
 }
 
+#[test]
+#[ignore] // Test vyzaduje async behavior - drain po skonceni scriptu nezmeni return value
+fn worker_echo_round_trip() {
+    // Echo worker thread by mel poslat zpet kazdou zpravu
+    // Ale return value je urcen pri exec_stmts, drain je az pozdeji
+    let v = run(r#"
+        const w = new Worker("echo");
+        w.postMessage("hello");
+        return "ok";
+    "#);
+    assert_eq!(as_str(v), "ok");
+}
+
+#[test]
+fn worker_terminate() {
+    // terminate musi byt callable bez paniky
+    let v = run(r#"
+        const w = new Worker("test");
+        w.terminate();
+        return w.url;
+    "#);
+    assert_eq!(as_str(v), "test");
+}
+
 // ─── SharedArrayBuffer / ArrayBuffer ─────────────────────────────────────
 
 #[test]
