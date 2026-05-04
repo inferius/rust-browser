@@ -536,6 +536,29 @@ pub fn setup_builtins(
     }));
     e.define("crypto", JsValue::Object(Rc::new(RefCell::new(crypto_obj))));
 
+    // ─── Storage API (localStorage / sessionStorage) ─────────────────────────
+    // V sync runtime sdilime in-memory storage. Realna implementace by potrebovala FS.
+    fn make_storage() -> JsValue {
+        let mut obj = JsObject::new();
+        obj.set("__storage__".into(), JsValue::Bool(true));
+        obj.set("__storage_data__".into(), JsValue::Object(Rc::new(RefCell::new(JsObject::new()))));
+        obj.set("length".into(), JsValue::Number(0.0));
+        JsValue::Object(Rc::new(RefCell::new(obj)))
+    }
+    e.define("localStorage",   make_storage());
+    e.define("sessionStorage", make_storage());
+
+    // ─── IndexedDB stub ──────────────────────────────────────────────────────
+    let mut idb = JsObject::new();
+    idb.set("open".into(), native("indexedDB.open", |a| {
+        let name = a.first().map(|v| v.to_string()).unwrap_or_default();
+        let mut req = JsObject::new();
+        req.set("__idb_request__".into(), JsValue::Bool(true));
+        req.set("name".into(), JsValue::Str(name));
+        Ok(JsValue::Object(Rc::new(RefCell::new(req))))
+    }));
+    e.define("indexedDB", JsValue::Object(Rc::new(RefCell::new(idb))));
+
     // ─── fetch - stub vraci rejected Promise (bez backend) ───────────────────
     // Realna implementace by potrebovala HTTP client (reqwest). Zde stub.
     e.define("fetch", native("fetch", |a| {

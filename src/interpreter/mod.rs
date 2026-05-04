@@ -2542,6 +2542,50 @@ impl Interpreter {
                 }
                 JsValue::Object(obj_rc) => {
                     let obj_rc2 = Rc::clone(obj_rc);
+                    // ─── Storage API (localStorage/sessionStorage) ──────
+                    if matches!(obj_rc2.borrow().props.get("__storage__"), Some(JsValue::Bool(true))) {
+                        let arg_vals = self.eval_args(args, env)?;
+                        let data_val = obj_rc2.borrow().props.get("__storage_data__").cloned();
+                        let data = match data_val {
+                            Some(JsValue::Object(d)) => d,
+                            _ => return Ok(JsValue::Undefined),
+                        };
+                        match key.as_str() {
+                            "setItem" => {
+                                let mut iter = arg_vals.into_iter();
+                                let k = iter.next().map(|v| v.to_string()).unwrap_or_default();
+                                let v = iter.next().map(|v| JsValue::Str(v.to_string()))
+                                    .unwrap_or(JsValue::Str(String::new()));
+                                data.borrow_mut().set(k, v);
+                                let len = data.borrow().own_keys().len() as f64;
+                                obj_rc2.borrow_mut().set("length".into(), JsValue::Number(len));
+                                return Ok(JsValue::Undefined);
+                            }
+                            "getItem" => {
+                                let k = arg_vals.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+                                let v = data.borrow().get(&k);
+                                return Ok(if matches!(v, JsValue::Undefined) { JsValue::Null } else { v });
+                            }
+                            "removeItem" => {
+                                let k = arg_vals.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+                                data.borrow_mut().props.remove(&k);
+                                let len = data.borrow().own_keys().len() as f64;
+                                obj_rc2.borrow_mut().set("length".into(), JsValue::Number(len));
+                                return Ok(JsValue::Undefined);
+                            }
+                            "clear" => {
+                                data.borrow_mut().props.clear();
+                                obj_rc2.borrow_mut().set("length".into(), JsValue::Number(0.0));
+                                return Ok(JsValue::Undefined);
+                            }
+                            "key" => {
+                                let i = arg_vals.into_iter().next().map(|v| v.to_number() as usize).unwrap_or(0);
+                                let keys = data.borrow().own_keys();
+                                return Ok(keys.get(i).cloned().map(JsValue::Str).unwrap_or(JsValue::Null));
+                            }
+                            _ => {}
+                        }
+                    }
                     // ─── Intl.* metody ───────────────────────────────────
                     if let Some(JsValue::Str(kind)) = obj_rc2.borrow().props.get("__intl_kind__").cloned() {
                         let locale = match obj_rc2.borrow().props.get("__intl_locale__").cloned() {
