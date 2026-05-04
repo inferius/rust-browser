@@ -1467,6 +1467,148 @@ pub fn setup_builtins(
         Ok(JsValue::Object(obj))
     }));
 
+    // localStorage / sessionStorage - in-memory storage
+    let make_storage = || {
+        let store: Rc<RefCell<std::collections::HashMap<String, String>>> = Rc::new(RefCell::new(std::collections::HashMap::new()));
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        {
+            let s = Rc::clone(&store);
+            obj.borrow_mut().set("getItem".into(), native("Storage.getItem", move |args| {
+                let key = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+                Ok(s.borrow().get(&key).cloned().map(JsValue::Str).unwrap_or(JsValue::Null))
+            }));
+        }
+        {
+            let s = Rc::clone(&store);
+            let o = Rc::clone(&obj);
+            obj.borrow_mut().set("setItem".into(), native("Storage.setItem", move |args| {
+                let mut it = args.into_iter();
+                let key = it.next().map(|v| v.to_string()).unwrap_or_default();
+                let val = it.next().map(|v| v.to_string()).unwrap_or_default();
+                s.borrow_mut().insert(key, val);
+                let len = s.borrow().len();
+                o.borrow_mut().set("length".into(), JsValue::Number(len as f64));
+                Ok(JsValue::Undefined)
+            }));
+        }
+        {
+            let s = Rc::clone(&store);
+            let o = Rc::clone(&obj);
+            obj.borrow_mut().set("removeItem".into(), native("Storage.removeItem", move |args| {
+                let key = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+                s.borrow_mut().remove(&key);
+                let len = s.borrow().len();
+                o.borrow_mut().set("length".into(), JsValue::Number(len as f64));
+                Ok(JsValue::Undefined)
+            }));
+        }
+        {
+            let s = Rc::clone(&store);
+            let o = Rc::clone(&obj);
+            obj.borrow_mut().set("clear".into(), native("Storage.clear", move |_| {
+                s.borrow_mut().clear();
+                o.borrow_mut().set("length".into(), JsValue::Number(0.0));
+                Ok(JsValue::Undefined)
+            }));
+        }
+        {
+            let s = Rc::clone(&store);
+            obj.borrow_mut().set("key".into(), native("Storage.key", move |args| {
+                let n = args.into_iter().next().map(|v| v.to_number() as usize).unwrap_or(0);
+                Ok(s.borrow().keys().nth(n).cloned().map(JsValue::Str).unwrap_or(JsValue::Null))
+            }));
+        }
+        obj.borrow_mut().set("length".into(), JsValue::Number(0.0));
+        JsValue::Object(obj)
+    };
+    e.define("localStorage", make_storage());
+    e.define("sessionStorage", make_storage());
+
+    // Headers stub
+    e.define("Headers", native("Headers", |_args| {
+        let map: Rc<RefCell<Vec<(String, String)>>> = Rc::new(RefCell::new(Vec::new()));
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        {
+            let m = Rc::clone(&map);
+            obj.borrow_mut().set("get".into(), native("Headers.get", move |args| {
+                let name = args.into_iter().next().map(|v| v.to_string().to_lowercase()).unwrap_or_default();
+                Ok(m.borrow().iter().find(|(k, _)| k.to_lowercase() == name)
+                    .map(|(_, v)| JsValue::Str(v.clone())).unwrap_or(JsValue::Null))
+            }));
+        }
+        {
+            let m = Rc::clone(&map);
+            obj.borrow_mut().set("set".into(), native("Headers.set", move |args| {
+                let mut it = args.into_iter();
+                let k = it.next().map(|v| v.to_string()).unwrap_or_default();
+                let v = it.next().map(|v| v.to_string()).unwrap_or_default();
+                let mut m = m.borrow_mut();
+                m.retain(|(kk, _)| kk.to_lowercase() != k.to_lowercase());
+                m.push((k, v));
+                Ok(JsValue::Undefined)
+            }));
+        }
+        {
+            let m = Rc::clone(&map);
+            obj.borrow_mut().set("append".into(), native("Headers.append", move |args| {
+                let mut it = args.into_iter();
+                let k = it.next().map(|v| v.to_string()).unwrap_or_default();
+                let v = it.next().map(|v| v.to_string()).unwrap_or_default();
+                m.borrow_mut().push((k, v));
+                Ok(JsValue::Undefined)
+            }));
+        }
+        {
+            let m = Rc::clone(&map);
+            obj.borrow_mut().set("has".into(), native("Headers.has", move |args| {
+                let k = args.into_iter().next().map(|v| v.to_string().to_lowercase()).unwrap_or_default();
+                Ok(JsValue::Bool(m.borrow().iter().any(|(kk, _)| kk.to_lowercase() == k)))
+            }));
+        }
+        {
+            let m = Rc::clone(&map);
+            obj.borrow_mut().set("delete".into(), native("Headers.delete", move |args| {
+                let k = args.into_iter().next().map(|v| v.to_string().to_lowercase()).unwrap_or_default();
+                m.borrow_mut().retain(|(kk, _)| kk.to_lowercase() != k);
+                Ok(JsValue::Undefined)
+            }));
+        }
+        Ok(JsValue::Object(obj))
+    }));
+
+    // navigator object
+    {
+        let nav = Rc::new(RefCell::new(JsObject::new()));
+        {
+            let mut n = nav.borrow_mut();
+            n.set("userAgent".into(), JsValue::Str("RustWebEngine/0.1".into()));
+            n.set("language".into(), JsValue::Str("cs-CZ".into()));
+            n.set("languages".into(), JsValue::Array(Rc::new(RefCell::new(vec![
+                JsValue::Str("cs-CZ".into()), JsValue::Str("en-US".into()),
+            ]))));
+            n.set("platform".into(), JsValue::Str(std::env::consts::OS.into()));
+            n.set("onLine".into(), JsValue::Bool(true));
+            n.set("cookieEnabled".into(), JsValue::Bool(true));
+            n.set("hardwareConcurrency".into(),
+                JsValue::Number(std::thread::available_parallelism()
+                    .map(|n| n.get() as f64).unwrap_or(4.0)));
+            n.set("maxTouchPoints".into(), JsValue::Number(0.0));
+            n.set("vendor".into(), JsValue::Str("RustWebEngine".into()));
+            // Geolocation stub
+            let geo = Rc::new(RefCell::new(JsObject::new()));
+            geo.borrow_mut().set("getCurrentPosition".into(), native("getCurrentPosition", |_| Ok(JsValue::Undefined)));
+            geo.borrow_mut().set("watchPosition".into(), native("watchPosition", |_| Ok(JsValue::Number(0.0))));
+            geo.borrow_mut().set("clearWatch".into(), native("clearWatch", |_| Ok(JsValue::Undefined)));
+            n.set("geolocation".into(), JsValue::Object(geo));
+            // Clipboard stub
+            let cb = Rc::new(RefCell::new(JsObject::new()));
+            cb.borrow_mut().set("writeText".into(), native("clipboard.writeText", |_| Ok(JsValue::Undefined)));
+            cb.borrow_mut().set("readText".into(), native("clipboard.readText", |_| Ok(JsValue::Str(String::new()))));
+            n.set("clipboard".into(), JsValue::Object(cb));
+        }
+        e.define("navigator", JsValue::Object(nav));
+    }
+
     e.define("ResizeObserver", make_observer("ResizeObserver"));
     e.define("IntersectionObserver", make_observer("IntersectionObserver"));
     e.define("MutationObserver", make_observer("MutationObserver"));
