@@ -5,10 +5,10 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 ## Stav
 
 - Build: **OK**, 0 errors.
-- Tests: **1113 passed, 0 failed, 3 ignored** (+308 v teto session, +38.3%).
-- Posledni commit: `73586c5 WebGL phase 3c5b - App::render preferuje real GPU path`.
+- Tests: **1297 passed, 0 failed, 3 ignored** (+492 v teto session, +61.1%).
+- Posledni commit: `3ff3720 CSS parser tests rozsireno +15`.
 - Tree: ciste.
-- Branch master, ~243 commitu pred origin/master (NEPUSHOVAT bez vyzvy).
+- Branch master, ~250 commitu pred origin/master (NEPUSHOVAT bez vyzvy).
 
 ## Recent session highlights
 
@@ -68,6 +68,11 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
     encode draws, composit RT do swap chain. paint_webgl_canvases removed
     z App::render path - placeholder zustava pub pro debug viewer /
     devtools (bez Renderer).
+16. **Test coverage extension** (commits 231582e + 95092d5 + f6fc228 +
+    66144b1 + 3ff3720) - +184 unit testy pres pure-logic helpers, edge
+    cases, lexer, parser, cascade selectors, DOM API, CSS @rules.
+    Pure-logic WebGL helpers (extract_pending, effective_clear,
+    count_draws/clears, linked_program_ids, layout walkers).
 
 ## Velke remaining work
 
