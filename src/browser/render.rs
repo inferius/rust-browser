@@ -33,6 +33,7 @@ struct Uniforms {
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var atlas_tex: texture_2d<f32>;
 @group(0) @binding(2) var atlas_smp: sampler;
+@group(0) @binding(3) var image_tex: texture_2d<f32>;
 
 struct VertexIn {
     @location(0) pos: vec2<f32>,
@@ -100,11 +101,22 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         return rgba;
     }
     // Mode 3: shadow with blur (Gaussian-like fade)
-    if (in.mode > 2.5) {
+    if (in.mode > 2.5 && in.mode < 3.5) {
         let blur = max(in.blur, 1.0);
         let d = sdf_rounded_box(in.local, in.half_size, in.radius);
         let alpha = 1.0 - smoothstep(-blur, blur, d);
         return vec4<f32>(in.color.rgb, in.color.a * alpha);
+    }
+    // Mode 4: image - sample RGBA z image atlasu
+    if (in.mode > 3.5) {
+        var rgba = textureSample(image_tex, atlas_smp, in.uv);
+        rgba.a = rgba.a * in.color.a;
+        if (in.radius > 0.5) {
+            let d = sdf_rounded_box(in.local, in.half_size, in.radius);
+            let aa = 1.0 - smoothstep(-1.0, 1.0, d);
+            rgba.a = rgba.a * aa;
+        }
+        return rgba;
     }
     // Mode 0: solid s rounded corners
     if (in.radius > 0.5) {
@@ -118,7 +130,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 
 /// Vrati bytemuck-friendly vertices pro display list.
 /// Pro Rect: 6 vertexu (2 trojuhelniky). Pro text: 6 vertexu per glyph.
-fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas) -> Vec<Vertex> {
+fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: &ImageAtlas) -> Vec<Vertex> {
     let mut verts = Vec::new();
     for cmd in commands {
         match cmd {
@@ -158,10 +170,14 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas) -> Vec<Vertex
             DisplayCommand::Shadow { x, y, w, h, color, blur, radius, .. } => {
                 push_shadow(&mut verts, *x, *y, *w, *h, normalize_color(color), *blur, *radius);
             }
-            DisplayCommand::Image { x, y, w, h, src: _, radius } => {
-                // Pro start: placeholder seda barva (real impl by sample texture)
-                let placeholder = [0.7, 0.7, 0.75, 1.0];
-                push_rect_rounded(&mut verts, *x, *y, *w, *h, placeholder, *radius);
+            DisplayCommand::Image { x, y, w, h, src, radius } => {
+                if let Some(info) = image_atlas.get(src) {
+                    push_image(&mut verts, *x, *y, *w, *h, info.uv0, info.uv1, *radius);
+                } else {
+                    // Fallback: placeholder seda kdyz image neni v atlase
+                    let placeholder = [0.7, 0.7, 0.75, 1.0];
+                    push_rect_rounded(&mut verts, *x, *y, *w, *h, placeholder, *radius);
+                }
             }
         }
     }
@@ -224,6 +240,34 @@ fn push_rect_uv(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f32, h: f32,
             local: [0.0, 0.0],
             half_size: [0.0, 0.0],
             radius: 0.0,
+            color2: [0.0; 4],
+            blur: 0.0,
+        }
+    };
+    let tl = mk(x,     y,     uv0[0], uv0[1]);
+    let tr = mk(x + w, y,     uv1[0], uv0[1]);
+    let bl = mk(x,     y + h, uv0[0], uv1[1]);
+    let br = mk(x + w, y + h, uv1[0], uv1[1]);
+    verts.push(tl); verts.push(tr); verts.push(bl);
+    verts.push(bl); verts.push(tr); verts.push(br);
+}
+
+/// Image quad: mode 4, sample z image atlasu pres UV. SDF rounded corners pri radius>0.
+fn push_image(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f32, h: f32,
+              uv0: [f32; 2], uv1: [f32; 2], radius: f32) {
+    let hw = w * 0.5;
+    let hh = h * 0.5;
+    let cx = x + hw;
+    let cy = y + hh;
+    let mk = |px: f32, py: f32, u: f32, v: f32| -> Vertex {
+        Vertex {
+            pos: [px, py],
+            color: [1.0, 1.0, 1.0, 1.0],  // alpha multiplier
+            uv: [u, v],
+            mode: 4.0,
+            local: [px - cx, py - cy],
+            half_size: [hw, hh],
+            radius,
             color2: [0.0; 4],
             blur: 0.0,
         }
@@ -428,6 +472,92 @@ impl GlyphAtlas {
         self.cache.insert((ch, size), info);
         self.cursor_x += w + 1;
         self.row_height = self.row_height.max(h);
+    }
+}
+
+// ─── Image atlas (RGBA8 packed) ─────────────────────────────────────────
+
+/// Velikost RGBA atlasu - 2048x2048 = 16 MB. Dost pro typickou stranku.
+const IMAGE_ATLAS_SIZE: u32 = 2048;
+
+#[derive(Clone, Copy)]
+struct ImageInfo {
+    /// UV coords v atlasu (0..1)
+    uv0: [f32; 2],
+    uv1: [f32; 2],
+    width: f32,
+    height: f32,
+}
+
+struct ImageAtlas {
+    /// RGBA pixely (4 byte per pixel)
+    pixels: Vec<u8>,
+    /// src URL/path -> ImageInfo
+    cache: std::collections::HashMap<String, ImageInfo>,
+    /// Shelf packing kurzor
+    cursor_x: u32,
+    cursor_y: u32,
+    row_height: u32,
+    /// Dirty flag - byly pridany nove obrazky -> potreba upload
+    dirty: bool,
+}
+
+impl ImageAtlas {
+    fn new() -> Self {
+        ImageAtlas {
+            pixels: vec![0u8; (IMAGE_ATLAS_SIZE * IMAGE_ATLAS_SIZE * 4) as usize],
+            cache: std::collections::HashMap::new(),
+            cursor_x: 0,
+            cursor_y: 0,
+            row_height: 0,
+            dirty: false,
+        }
+    }
+
+    fn get(&self, src: &str) -> Option<&ImageInfo> {
+        self.cache.get(src)
+    }
+
+    /// Vlozi RGBA bitmap do atlasu. Pri overflow vrati false.
+    fn add(&mut self, src: &str, w: u32, h: u32, rgba: &[u8]) -> bool {
+        if self.cache.contains_key(src) { return true; }
+        if w == 0 || h == 0 { return false; }
+        // Obrazek vetsi nez cely atlas - nelze
+        if w > IMAGE_ATLAS_SIZE || h > IMAGE_ATLAS_SIZE { return false; }
+
+        // Shelf packing: novy radek pri preteceni X
+        if self.cursor_x + w > IMAGE_ATLAS_SIZE {
+            self.cursor_x = 0;
+            self.cursor_y += self.row_height;
+            self.row_height = 0;
+        }
+        if self.cursor_y + h > IMAGE_ATLAS_SIZE {
+            return false; // atlas full
+        }
+
+        // Copy RGBA bytes do atlasu
+        for row in 0..h {
+            let src_off = (row * w * 4) as usize;
+            let dst_off = (((self.cursor_y + row) * IMAGE_ATLAS_SIZE + self.cursor_x) * 4) as usize;
+            let len = (w * 4) as usize;
+            if src_off + len <= rgba.len() && dst_off + len <= self.pixels.len() {
+                self.pixels[dst_off..dst_off + len].copy_from_slice(&rgba[src_off..src_off + len]);
+            }
+        }
+
+        let info = ImageInfo {
+            uv0: [self.cursor_x as f32 / IMAGE_ATLAS_SIZE as f32,
+                  self.cursor_y as f32 / IMAGE_ATLAS_SIZE as f32],
+            uv1: [(self.cursor_x + w) as f32 / IMAGE_ATLAS_SIZE as f32,
+                  (self.cursor_y + h) as f32 / IMAGE_ATLAS_SIZE as f32],
+            width: w as f32,
+            height: h as f32,
+        };
+        self.cache.insert(src.to_string(), info);
+        self.cursor_x += w + 1;
+        self.row_height = self.row_height.max(h);
+        self.dirty = true;
+        true
     }
 }
 
@@ -646,8 +776,9 @@ pub fn run_window_with_html(html: String, css: String) -> Result<(), String> {
                 }
             }
             r.upload_atlas();
+            r.upload_image_atlas();
 
-            let verts = build_vertices(&display_list, &r.atlas);
+            let verts = build_vertices(&display_list, &r.atlas, &r.image_atlas);
             r.draw(&verts);
 
             // Ulozim layout pro hit test
@@ -686,8 +817,10 @@ struct Renderer {
     bind_group_layout: wgpu::BindGroupLayout,
     bind_group: wgpu::BindGroup,
     atlas: GlyphAtlas,
-    /// Cache decoded images: src -> (width, height, RGBA bytes)
-    image_cache: std::collections::HashMap<String, (u32, u32, Vec<u8>)>,
+    /// Image RGBA atlas + GPU texture
+    image_atlas: ImageAtlas,
+    image_tex: wgpu::Texture,
+    image_view: wgpu::TextureView,
 }
 
 impl Renderer {
@@ -736,6 +869,21 @@ impl Renderer {
             ..Default::default()
         });
 
+        // Image RGBA atlas texture
+        let image_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("image_atlas"),
+            size: wgpu::Extent3d {
+                width: IMAGE_ATLAS_SIZE, height: IMAGE_ATLAS_SIZE, depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let image_view = image_tex.create_view(&Default::default());
+
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("uniform"),
             size: 16, // viewport (vec2) + padding
@@ -772,6 +920,16 @@ impl Renderer {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -782,6 +940,7 @@ impl Renderer {
                 wgpu::BindGroupEntry { binding: 0, resource: uniform_buf.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&atlas_view) },
                 wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&atlas_smp) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&image_view) },
             ],
         });
 
@@ -837,19 +996,20 @@ impl Renderer {
 
         let atlas = GlyphAtlas::new();
 
+        let image_atlas = ImageAtlas::new();
+
         Renderer {
             surface, device, queue, config, pipeline, uniform_buf,
             atlas_tex, atlas_view, atlas_smp, bind_group_layout, bind_group, atlas,
-            image_cache: std::collections::HashMap::new(),
+            image_atlas, image_tex, image_view,
         }
     }
 
-    /// Nacte image ze souboru / URL do cache (RGBA bytes).
+    /// Nacte image ze souboru a vlozi do RGBA atlasu (pokud neni jiz cached).
     fn load_image(&mut self, src: &str) {
-        if self.image_cache.contains_key(src) { return; }
-        // Pro start: jen FS load (ne HTTP)
+        if self.image_atlas.cache.contains_key(src) { return; }
+        // FS load (HTTP zatim skip)
         let path = if src.starts_with("http://") || src.starts_with("https://") {
-            // Skip HTTP zatim
             return;
         } else if src.starts_with('/') {
             src.to_string()
@@ -860,9 +1020,46 @@ impl Renderer {
             if let Ok(img) = image::load_from_memory(&bytes) {
                 let rgba = img.to_rgba8();
                 let (w, h) = (rgba.width(), rgba.height());
-                self.image_cache.insert(src.to_string(), (w, h, rgba.into_raw()));
+                let raw = rgba.into_raw();
+                // Velke obrazky downscalujem aby se vesly do atlasu
+                if w > IMAGE_ATLAS_SIZE / 2 || h > IMAGE_ATLAS_SIZE / 2 {
+                    let max = IMAGE_ATLAS_SIZE / 2;
+                    let scale = (max as f32 / w.max(h) as f32).min(1.0);
+                    let new_w = (w as f32 * scale) as u32;
+                    let new_h = (h as f32 * scale) as u32;
+                    if let Ok(decoded) = image::load_from_memory(&bytes) {
+                        let small = decoded.resize_exact(new_w, new_h, image::imageops::FilterType::Triangle);
+                        let small_rgba = small.to_rgba8();
+                        self.image_atlas.add(src, new_w, new_h, &small_rgba.into_raw());
+                        return;
+                    }
+                }
+                self.image_atlas.add(src, w, h, &raw);
             }
         }
+    }
+
+    /// Upload image atlas do GPU, jen pokud byly pridany nove obrazky.
+    fn upload_image_atlas(&mut self) {
+        if !self.image_atlas.dirty { return; }
+        self.queue.write_texture(
+            wgpu::ImageCopyTexture {
+                texture: &self.image_tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &self.image_atlas.pixels,
+            wgpu::ImageDataLayout {
+                offset: 0,
+                bytes_per_row: Some(IMAGE_ATLAS_SIZE * 4),
+                rows_per_image: Some(IMAGE_ATLAS_SIZE),
+            },
+            wgpu::Extent3d {
+                width: IMAGE_ATLAS_SIZE, height: IMAGE_ATLAS_SIZE, depth_or_array_layers: 1,
+            },
+        );
+        self.image_atlas.dirty = false;
     }
 
     fn resize(&mut self, w: u32, h: u32) {
@@ -936,5 +1133,62 @@ impl Renderer {
 
         self.queue.submit(std::iter::once(encoder.finish()));
         frame.present();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn red_rgba(w: u32, h: u32) -> Vec<u8> {
+        let mut v = Vec::with_capacity((w * h * 4) as usize);
+        for _ in 0..(w * h) {
+            v.extend_from_slice(&[255, 0, 0, 255]);
+        }
+        v
+    }
+
+    #[test]
+    fn image_atlas_add_returns_uv() {
+        let mut atlas = ImageAtlas::new();
+        let ok = atlas.add("a.png", 100, 50, &red_rgba(100, 50));
+        assert!(ok);
+        let info = atlas.get("a.png").unwrap();
+        assert_eq!(info.width, 100.0);
+        assert_eq!(info.height, 50.0);
+        assert_eq!(info.uv0, [0.0, 0.0]);
+        assert!(info.uv1[0] > 0.0 && info.uv1[0] <= 1.0);
+        assert!(atlas.dirty);
+    }
+
+    #[test]
+    fn image_atlas_packs_two_images_side_by_side() {
+        let mut atlas = ImageAtlas::new();
+        atlas.add("a.png", 100, 50, &red_rgba(100, 50));
+        atlas.add("b.png", 200, 80, &red_rgba(200, 80));
+        let a = atlas.get("a.png").unwrap();
+        let b = atlas.get("b.png").unwrap();
+        // b ma pozici za a (cursor_x posunut)
+        assert!(b.uv0[0] > a.uv1[0] - 1e-6, "b ma byt vpravo od a");
+        assert_eq!(a.uv0[1], b.uv0[1]); // stejny radek
+    }
+
+    #[test]
+    fn image_atlas_overflow_returns_false() {
+        let mut atlas = ImageAtlas::new();
+        // Vetsi nez atlas
+        let ok = atlas.add("huge.png", IMAGE_ATLAS_SIZE + 100, 100, &red_rgba(IMAGE_ATLAS_SIZE + 100, 100));
+        assert!(!ok);
+        assert!(atlas.get("huge.png").is_none());
+    }
+
+    #[test]
+    fn image_atlas_dedup_same_src() {
+        let mut atlas = ImageAtlas::new();
+        atlas.add("a.png", 100, 50, &red_rgba(100, 50));
+        let cursor_after_first = atlas.cursor_x;
+        atlas.add("a.png", 100, 50, &red_rgba(100, 50));
+        // Druhe pridani neposunuje kurzor (cached)
+        assert_eq!(atlas.cursor_x, cursor_after_first);
     }
 }
