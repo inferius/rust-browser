@@ -1574,7 +1574,7 @@ fn parse_content_value(raw: &str, parent: &Rc<Node>, counters: &HashMap<String, 
         return Some(String::new());
     }
 
-    Some(s.to_string())
+    Some(raw.to_string())
 }
 
 /// Flex layout pres taffy crate.

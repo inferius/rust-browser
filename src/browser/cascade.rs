@@ -274,6 +274,73 @@ fn resolve_env(s: &str) -> String {
     out
 }
 
+/// Resolvuje attr(name) / attr(name <type>) / attr(name, fallback) v CSS hodnote.
+/// Vyzaduje DOM node pro cteni atributu elementu.
+/// type muze byt CSS jednotka (px/em/%) nebo "string"/"number"/"color".
+pub fn resolve_attr_in_value(value: &str, node: &Rc<Node>) -> String {
+    if !value.contains("attr(") { return value.to_string(); }
+    let bytes = value.as_bytes();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i..].starts_with(b"attr(") {
+            // Najdi odpovidajici uzaviraci zavorku
+            let mut depth = 1usize;
+            let mut j = i + 5;
+            while j < bytes.len() && depth > 0 {
+                match bytes[j] { b'(' => depth += 1, b')' => { depth -= 1; } _ => {} }
+                if depth == 0 { break; }
+                j += 1;
+            }
+            let inner = &value[i + 5..j];
+            out.push_str(&attr_inner_resolve(inner, node));
+            i = j + 1;
+        } else {
+            out.push(bytes[i] as char);
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Zpracuje obsah attr(...): "name", "name type", "name, fallback", "name type, fallback".
+fn attr_inner_resolve(inner: &str, node: &Rc<Node>) -> String {
+    // Oddelit fallback (prvni carka mimo zavorky)
+    let (name_type, fallback) = split_at_comma_depth0(inner);
+    let name_type = name_type.trim();
+    // Oddelit name od type (prvni mezera)
+    let (attr_name, attr_type) = match name_type.find(char::is_whitespace) {
+        Some(sp) => (&name_type[..sp], Some(name_type[sp+1..].trim())),
+        None => (name_type, None),
+    };
+    match node.attr(attr_name) {
+        Some(val) => match attr_type {
+            Some(t) if is_css_length_unit(t) => format!("{}{}", val.trim(), t),
+            _ => val,
+        },
+        None => fallback.map(|f| f.trim().to_string()).unwrap_or_default(),
+    }
+}
+
+/// Vrati true pro CSS delkove/casove/uhlove jednotky.
+fn is_css_length_unit(s: &str) -> bool {
+    matches!(s, "px"|"em"|"rem"|"%"|"vw"|"vh"|"vmin"|"vmax"
+             |"pt"|"pc"|"in"|"cm"|"mm"|"ch"|"ex"|"lh"|"rlh"
+             |"deg"|"rad"|"grad"|"turn"|"s"|"ms"|"hz"|"khz")
+}
+
+/// Rozdeli retezec na (cast pred prvni carkou na depth=0, Option<zbytek>).
+fn split_at_comma_depth0(s: &str) -> (&str, Option<&str>) {
+    let mut depth = 0usize;
+    for (i, c) in s.char_indices() {
+        match c { '(' => depth += 1, ')' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => return (&s[..i], Some(&s[i+1..])),
+            _ => {}
+        }
+    }
+    (s, None)
+}
+
 /// Resolvuje min(a, b, ...), max(a, b, ...), clamp(min, val, max).
 /// Najde nejvnitrnejsi vyskyt (zaden child neni mezi argumenty), pak iterativne.
 fn resolve_math_func(s: &str) -> String {
@@ -622,6 +689,7 @@ pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
         let mut styles = HashMap::new();
         for (_, decl) in matched_decls {
             let resolved = resolve_value(&decl.value, &variables);
+            let resolved = resolve_attr_in_value(&resolved, node);
             expand_shorthand(&decl.property, &resolved, &mut styles);
         }
 
@@ -633,6 +701,7 @@ pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
                     let val = pair[colon+1..].trim().to_string();
                     if !prop.is_empty() && !val.is_empty() {
                         let resolved = resolve_value(&val, &variables);
+                        let resolved = resolve_attr_in_value(&resolved, node);
                         expand_shorthand(&prop, &resolved, &mut styles);
                     }
                 }
@@ -705,6 +774,7 @@ pub fn cascade_pseudo(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> PseudoStyl
             let mut styles = HashMap::new();
             for (_, decl) in list {
                 let resolved = resolve_value(&decl.value, &variables);
+                let resolved = resolve_attr_in_value(&resolved, node);
                 expand_shorthand(&decl.property, &resolved, &mut styles);
             }
             out.insert((node_id(node), pe_name), styles);
