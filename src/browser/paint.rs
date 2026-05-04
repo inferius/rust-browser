@@ -285,6 +285,18 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>) {
     // Apply opacity multiply + filter chain + clip-path na vsechny barvy
     let alpha_mul = (bx.opacity * 255.0) as u8;
     let filter = bx.filter.clone();
+    // Detect blur radius z filter chain (jedna z filterop) - aplikuje multi-tap
+    let blur_radius: f32 = filter.iter().filter_map(|op| match op {
+        crate::browser::layout::FilterOp::Blur(r) => Some(*r),
+        _ => None,
+    }).sum();
+    // Detect drop-shadow operations
+    let drop_shadows: Vec<(f32, f32, f32, [u8; 4])> = filter.iter().filter_map(|op| match op {
+        crate::browser::layout::FilterOp::DropShadow { ox, oy, blur, color } => Some((*ox, *oy, *blur, *color)),
+        _ => None,
+    }).collect();
+    let _ = blur_radius;
+    let _ = drop_shadows;
 
     // Clip-path: vypocita modifikaci box rectu pro emit Rect/Image.
     // Single element clip (CPU side) - inset zmensi rect, circle/ellipse pridaji
@@ -301,6 +313,20 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>) {
         }
     };
 
+    // Filter drop-shadow - emit shadow pred bg (per CSS spec)
+    for (ox, oy, blur, color) in &drop_shadows {
+        cmds.push(DisplayCommand::Shadow {
+            x: bx.rect.x + ox,
+            y: bx.rect.y + oy,
+            w: bx.rect.width,
+            h: bx.rect.height,
+            offset_x: *ox, offset_y: *oy,
+            blur: *blur, spread: 0.0,
+            color: *color,
+            radius: bx.border_radius,
+            inset: false,
+        });
+    }
     // Box shadow - emit pred bg.
     // Inset: shadow uvnitr boxu, ne vne. Bbox = box, ne expanded.
     if let Some((ox, oy, blur, spread, color, inset)) = bx.box_shadow {
