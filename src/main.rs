@@ -11,6 +11,7 @@ mod lexer;
 mod parser;
 mod interpreter;
 mod browser;
+mod debug_view;
 
 use lexer::base::Lexer;
 use parser::Parser;
@@ -19,6 +20,39 @@ use tokens::TokenKind;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+
+    // Debug viewer: cargo run -- debug [file.js] [output.html]
+    if args.len() > 1 && args[1] == "debug" {
+        let (source, source_name) = if args.len() > 2 {
+            let path = &args[2];
+            match std::fs::read_to_string(path) {
+                Ok(s) => (s, path.clone()),
+                Err(e) => { eprintln!("Nelze nacist {path}: {e}"); return; }
+            }
+        } else {
+            // Default ukazka
+            (r#"// Demo JS pro debug viewer
+const greeting = `Ahoj svete!`;
+function fact(n) {
+    if (n <= 1) return 1n;
+    return BigInt(n) * fact(n - 1);
+}
+const result = fact(10);
+console.log(greeting, result);
+"#.to_string(), "demo.js".to_string())
+        };
+        let out_path = if args.len() > 3 { args[3].clone() } else { "debug.html".to_string() };
+        let html = debug_view::generate_debug_html(&source, &source_name);
+        if let Err(e) = std::fs::write(&out_path, &html) {
+            eprintln!("Nelze zapsat {out_path}: {e}");
+            return;
+        }
+        println!("Debug HTML zapsan: {out_path}");
+        println!("Otevri v prohlizeci: file:///{}/{}",
+            std::env::current_dir().unwrap().display().to_string().replace('\\', "/"),
+            out_path);
+        return;
+    }
 
     // Browser mode: cargo run -- browser nebo cargo run -- window
     if args.len() > 1 && (args[1] == "browser" || args[1] == "window") {

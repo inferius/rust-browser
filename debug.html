@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+<meta charset="UTF-8">
+<title>demo.js - Rust Web Engine Debug</title>
+<style>
+* { box-sizing: border-box; }
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    margin: 0;
+    background: #1e1e2e;
+    color: #cdd6f4;
+}
+header {
+    background: #181825;
+    padding: 16px 24px;
+    border-bottom: 2px solid #313244;
+}
+h1 { margin: 0 0 4px; color: #89b4fa; font-size: 20px; }
+h2 { margin: 0 0 12px; color: #94a3b8; font-size: 14px; font-weight: normal; }
+h3 { color: #f9e2af; }
+nav { display: flex; gap: 8px; }
+.tab {
+    background: #313244;
+    color: #cdd6f4;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+}
+.tab:hover { background: #45475a; }
+.tab.active { background: #89b4fa; color: #1e1e2e; }
+main { padding: 24px; max-width: 1400px; margin: 0 auto; }
+.panel { display: none; }
+.panel.active { display: block; }
+.source {
+    background: #181825;
+    padding: 16px;
+    border-radius: 6px;
+    border: 1px solid #313244;
+    overflow-x: auto;
+    color: #cdd6f4;
+    font-family: "Cascadia Code", "Fira Code", Consolas, monospace;
+    line-height: 1.5;
+}
+
+/* Tokens */
+.tokens {
+    background: #181825;
+    padding: 16px;
+    border-radius: 6px;
+    border: 1px solid #313244;
+    line-height: 2.4;
+}
+.token {
+    display: inline-block;
+    padding: 2px 6px;
+    margin: 2px;
+    border-radius: 3px;
+    font-family: "Cascadia Code", Consolas, monospace;
+    font-size: 13px;
+    cursor: help;
+    border: 1px solid transparent;
+    transition: transform 0.1s;
+    white-space: pre;
+}
+.token:hover {
+    transform: scale(1.1);
+    border-color: #f9e2af;
+    z-index: 10;
+    position: relative;
+}
+.tk-keyword    { background: #f38ba8; color: #1e1e2e; }
+.tk-ident      { background: #cdd6f4; color: #1e1e2e; }
+.tk-number     { background: #fab387; color: #1e1e2e; }
+.tk-string     { background: #a6e3a1; color: #1e1e2e; }
+.tk-regex      { background: #cba6f7; color: #1e1e2e; }
+.tk-template   { background: #a6e3a1; color: #1e1e2e; font-style: italic; }
+.tk-operator   { background: #f9e2af; color: #1e1e2e; }
+.tk-comment    { background: #6c7086; color: #cdd6f4; font-style: italic; }
+.tk-whitespace { background: #313244; color: #6c7086; font-size: 11px; }
+.tk-newline    { background: #313244; color: #74c7ec; }
+.tk-eof        { background: #45475a; color: #cdd6f4; }
+
+.legend {
+    background: #181825;
+    padding: 8px 12px;
+    border-radius: 4px;
+    margin-bottom: 12px;
+    border: 1px solid #313244;
+}
+
+/* Stats */
+.stats {
+    margin-top: 24px;
+    background: #181825;
+    padding: 16px;
+    border-radius: 6px;
+    border: 1px solid #313244;
+}
+.stats h3 { margin-top: 0; }
+.stats table { border-collapse: collapse; min-width: 300px; }
+.stats th, .stats td {
+    padding: 6px 12px;
+    border-bottom: 1px solid #313244;
+    text-align: left;
+}
+.stats th { background: #313244; }
+
+/* AST */
+.ast-tree {
+    background: #181825;
+    padding: 16px;
+    border-radius: 6px;
+    border: 1px solid #313244;
+    font-family: "Cascadia Code", Consolas, monospace;
+    font-size: 13px;
+}
+.ast-tree details { margin-left: 0; }
+.ast-tree summary {
+    cursor: pointer;
+    padding: 3px 6px;
+    border-radius: 3px;
+    user-select: none;
+    list-style: none;
+}
+.ast-tree summary::before {
+    content: "▶ ";
+    display: inline-block;
+    transition: transform 0.15s;
+    color: #6c7086;
+}
+.ast-tree details[open] > summary::before {
+    transform: rotate(90deg);
+}
+.ast-tree summary:hover { background: #313244; }
+.ast-children {
+    margin-left: 20px;
+    border-left: 1px dashed #45475a;
+    padding-left: 8px;
+}
+.ast-leaf {
+    padding: 3px 6px;
+    margin: 2px 0;
+    color: #94a3b8;
+}
+.ast-stmt    { color: #f38ba8; }
+.ast-expr    { color: #89b4fa; }
+.ast-literal { color: #fab387; }
+.ast-ident   { color: #a6e3a1; }
+.ast-decl    { color: #cba6f7; }
+.ast-field   { color: #74c7ec; }
+.ast-root    { color: #f9e2af; font-weight: bold; }
+.ast-controls { margin-bottom: 12px; }
+.ast-controls button {
+    background: #313244;
+    color: #cdd6f4;
+    border: none;
+    padding: 6px 12px;
+    margin-right: 8px;
+    border-radius: 4px;
+    cursor: pointer;
+}
+.ast-controls button:hover { background: #45475a; }
+
+/* Tooltip */
+.tooltip {
+    position: fixed;
+    background: #11111b;
+    color: #cdd6f4;
+    padding: 8px 12px;
+    border: 1px solid #f9e2af;
+    border-radius: 4px;
+    font-family: "Cascadia Code", Consolas, monospace;
+    font-size: 12px;
+    pointer-events: none;
+    white-space: pre;
+    z-index: 1000;
+    display: none;
+    max-width: 500px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+}
+
+.error { color: #f38ba8; padding: 12px; background: #181825; border-radius: 4px; }
+.muted { color: #6c7086; padding: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Rust Web Engine - Debug Viewer</h1>
+  <h2>demo.js</h2>
+  <nav>
+    <button onclick="showPanel('source')" class="tab active">Source</button>
+    <button onclick="showPanel('tokens')" class="tab">Tokens</button>
+    <button onclick="showPanel('ast')" class="tab">AST</button>
+  </nav>
+</header>
+
+<main>
+  <section id="panel-source" class="panel active">
+    <h3>Zdrojovy kod</h3>
+    <pre class="source">// Demo JS pro debug viewer
+const greeting = `Ahoj svete!`;
+function fact(n) {
+    if (n &lt;= 1) return 1n;
+    return BigInt(n) * fact(n - 1);
+}
+const result = fact(10);
+console.log(greeting, result);
+</pre>
+  </section>
+
+  <section id="panel-tokens" class="panel">
+    <h3>Tokeny (najedte mysi pro detail)</h3>
+    <div class="legend">
+      <span class="token tk-keyword">keyword</span>
+      <span class="token tk-ident">identifier</span>
+      <span class="token tk-number">number</span>
+      <span class="token tk-string">string</span>
+      <span class="token tk-regex">regex</span>
+      <span class="token tk-template">template</span>
+      <span class="token tk-operator">operator</span>
+      <span class="token tk-comment">comment</span>
+      <span class="token tk-whitespace">·1·</span>
+      <span class="token tk-newline">↵</span>
+    </div>
+    <div class="tokens"><span class="token tk-comment" data-tip="Typ: CommentLine
+Lexeme: &quot; Demo JS pro debug viewer&quot;
+Line: 1, Col: 27
+Range: 0..25"> Demo JS pro debug viewer</span><span class="token tk-newline" data-tip="Typ: Newline
+Lexeme: &quot;\n&quot;
+Line: 2, Col: 0
+Range: 27..28">↵</span><br/><span class="token tk-keyword" data-tip="Typ: Keyword(const)
+Lexeme: &quot;const&quot;
+Line: 2, Col: 5
+Range: 28..33
+Keyword: const">const</span><span class="token tk-whitespace" data-tip="Typ: Whitespace
+Lexeme: &quot; &quot;
+Line: 2, Col: 6
+Range: 33..34">·1·</span><span class="token tk-ident" data-tip="Typ: Identifier
+Lexeme: &quot;greeting&quot;
+Line: 2, Col: 14
+Range: 34..42">greeting</span><span class="token tk-whitespace" data-tip="Typ: Whitespace
+Lexeme: &quot; &quot;
+Line: 2, Col: 15
+Range: 42..43">·1·</span><span class="token tk-operator" data-tip="Typ: Operator(=)
+Lexeme: &quot;=&quot;
+Line: 2, Col: 16
+Range: 43..44
+Operator: =">=</span><span class="token tk-whitespace" data-tip="Typ: Whitespace
+Lexeme: &quot; &quot;
+Line: 2, Col: 17
+Range: 44..45">·1·</span><span class="token tk-template" data-tip="Typ: Template
+Lexeme: &quot;Ahoj svete!&quot;
+Line: 2, Col: 30
+Range: 45..56">Ahoj svete!</span><span class="token tk-operator" data-tip="Typ: Operator(;)
+Lexeme: &quot;;&quot;
+Line: 2, Col: 31
+Range: 58..59
+Operator: ;">;</span><span class="token tk-newline" data-tip="Typ: Newline
+Lexeme: &quot;\n&quot;
+Line: 3, Col: 0
+Range: 59..60">↵</span><br/><span class="token tk-keyword" data-tip="Typ: Keyword(function)
+Lexeme: &quot;function&quot;
+Line: 3, Col: 8
+Range: 60..68
+Keyword: function">function</span><span class="token tk-whitespace" data-tip="Typ: Whitespace
+Lexeme: &quot; &quot;
+Line: 3, Col: 9
+Range: 68..69">·1·</span><span class="token tk-ident" data-tip="Typ: Identifier
+Lexeme: &quot;fact&quot;
+Line: 3, Col: 13
+Range: 69..73">fact</span><span class="token tk-operator" data-tip="Typ: Operator(()
+Lexeme: &quot;(&quot;
+Line: 3, Col: 14
+Range: 73..74
+Operator: (">(</span><span class="token tk-ident" data-tip="Typ: Identifier
+Lexeme: &quot;n&quot;
+Line: 3, Col: 15
+Range: 74..75">n</span><span class="token tk-operator" data-tip="Typ: Operator())
+Lexeme: &quot;)&quot;
+Line: 3, Col: 16
+Range: 75..76
+Operator: )">)</span><span class="token tk-whitespace" data-tip="Typ: Whitespace
+Lexeme: &quot; &quot;
+Line: 3, Col: 17
+Range: 76..77">·1·</span><span class="token tk-operator" data-tip="Typ: Operator({)
+Lexeme: &quot;{&quot;
+Line: 3, Col: 18
+Range: 77..78
+Operator: {">{</span><span class="token tk-newline" data-tip="Typ: Newline
+Lexeme: &quot;\n&quot;
+Line: 4, Col: 0
+Range: 78..79">↵</span><br/><span class="token tk-whitespace" data-tip="Typ: Whitespace
+Lexeme: &quot;    &quot;
+Line: 4, Col: 4
+Range: 79..83">·4·</span><span class="token tk-keyword" data-tip="Typ: Keyword(if)
+Lexeme: &quot;if&quot;
+Line: 4, Col: 6
+Range: 83..85
+Keyword: if">if</span><span class="token tk-whitespace" data-tip="Typ: Whitespace
+Lexeme: &quot; &quot;
+Line: 4, Col: 7
+Range: 85..86">·1·</span><span class="token tk-operator" data-tip="Typ: Operator(()
+Lexeme: &quot;(&quot;
+Line: 4, Col: 8
+Range: 86..87
+Operator: (">(</span><span class="token tk-ident" data-tip="Typ: Identifier
+Lexeme: &quot;n&quot;
+Line: 4, Col: 9
+Range: 87..88">n</span><span class="token tk-whitespace" data-tip="Typ: Whitespace
+Lexeme: &quot; &quot;
+Line: 4, Col: 10
+Range: 88..89">·1·</span><span class="token tk-operator" data-tip="Typ: Operator(&lt;=)
+Lexeme: &quot;&lt;=&quot;
+Line: 4, Col: 12
+Range: 89..91
+Operator: &lt;=">&lt;=</span><span class="token tk-whitespace" data-tip="Typ: Whitespace
+Lexeme: &quot; &quot;
+Line: 4, Col: 13
+Range: 91..92">·1·</span><span class="token tk-number" data-tip="Typ: NumericLiteral
+Lexeme: &quot;1&quot;
+Line: 4, Col: 14
+Range: 92..93
+Hodnota: 1
+Raw: 1
+Base: Decimal">1</span><span class="token tk-operator" data-tip="Typ: Operator())
+Lexeme: &quot;)&quot;
+Line: 4, Col: 15
+Range: 93..94
+Operator: )">)</span><span class="token tk-whitespace" data-tip="Typ: Whitespace
+Lexeme: &quot; &quot;
+Line: 4, Col: 16
+Range: 94..95">·1·</span><span class="token tk-keyword" data-tip="Typ: Keyword(return)
+Lexeme: &quot;return&quot;
+Line: 4, Col: 22
+Range: 95..101
+Keyword: return">return</span><span class="token tk-whitespace" data-tip="Typ: Whitespace
+Lexeme: &quot; &quot;
+Line: 4, Col: 23
+Range: 101..102">·1·</span><span class="token tk-number" data-tip="Typ: NumericLiteral
+Lexeme: &quot;1n&quot;
+Line: 4, Col: 25
+Range: 102..104
+Hodnota: NaN
+Raw: 1n
+Base: Decimal
+BigInt: 1">1n</span><span class="token tk-operator" data-tip="Typ: Operator(;)
+Lexeme: &quot;;&quot;
+Line: 4, Col: 26
+Range: 104..105
+Operator: ;">;</span><span class="token tk-newline" data-tip="Typ: Newline
+Lexeme: &quot;\n&quot;
+Line: 5, Col: 0
+Range: 105..106">↵</span><br/><span class="token tk-whitespace" data-tip="Typ: Whitespace
+Lexeme: &quot;    &quot;
+Line: 5, Col: 4
+Range: 106..110">·4·</span><span class="token tk-keyword" data-tip="Typ: Keyword(return)
+Lexeme: &quot;return&quot;
+Line: 5, Col: 10
+Range: 110..116
+Keyword: return">return</span><span class="token tk-whitespace" data-tip="Typ: Whitespace
+Lexeme: &quot; &quot;
+Line: 5, Col: 11
+Range: 116..117">·1·</span><span class="token tk-ident" data-tip="Typ: Identifier
+Lexeme: &quot;BigInt&quot;
+Line: 5, Col: 17
+Range: 117..123">BigInt</span><span class="token tk-operator" data-tip="Typ: Operator(()
+Lexeme: &quot;(&quot;
+Line: 5, Col: 18
+Range: 123..124
+Operator: (">(</span><span class="token tk-ident" data-tip="Typ: Identifier
+Lexeme: &quot;n&quot;
+Line: 5, Col: 19
+Range: 124..125">n</span><span class="token tk-operator" data-tip="Typ: Operator())
+Lexeme: &quot;)&quot;
+Line: 5, Col: 20
+Range: 125..126
+Operator: )">)</span><span class="token tk-whitespace" data-tip="Typ: Whitespace
+Lexeme: &quot; &quot;
+Line: 5, Col: 21
+Range: 126..127">·1·</span><span class="token tk-operator" data-tip="Typ: Operator(*)
+Lexeme: &quot;*&quot;
+Line: 5, Col: 22
+Range: 127..128
+Operator: *">*</span><span class="token tk-whitespace" data-tip="Typ: Whitespace
+Lexeme: &quot; &quot;
+Line: 5, Col: 23
+Range: 128..129">·1·</span><span class="token tk-ident" data-tip="Typ: Identifier
+Lexeme: &quot;fact&quot;
+Line: 5, Col: 27
+Range: 129..133">fact</span><span class="token tk-operator" data-tip="Typ: Operator(()
+Lexeme: &quot;(&quot;
+Line: 5, Col: 28
+Range: 133..134
+Operator: (">(</span><span class="token tk-ident" data-tip="Typ: Identifier
+Lexeme: &quot;n&quot;
+Line: 5, Col: 29
+Range: 134..135">n</span><span class="token tk-whitespace" data-tip="Typ: Whitespace
+Lexeme: &quot; &quot;
+Line: 5, Col: 30
+Range: 135..136">·1·</span><span class="token tk-operator" data-tip="Typ: Operator(-)
+Lexeme: &quot;-&quot;
+Line: 5, Col: 31
+Range: 136..137
+Operator: -">-</span><span class="token tk-whitespace" data-tip="Typ: Whitespace
+Lexeme: &quot; &quot;
+Line: 5, Col: 32
+Range: 137..138">·1·</span><span class="token tk-number" data-tip="Typ: NumericLiteral
+Lexeme: &quot;1&quot;
+Line: 5, Col: 33
+Range: 138..139
+Hodnota: 1
+Raw: 1
+Base: Decimal">1</span><span class="token tk-operator" data-tip="Typ: Operator())
+Lexeme: &quot;)&quot;
+Line: 5, Col: 34
+Range: 139..140
+Operator: )">)</span><span class="token tk-operator" data-tip="Typ: Operator(;)
+Lexeme: &quot;;&quot;
+Line: 5, Col: 35
+Range: 140..141
+Operator: ;">;</span><span class="token tk-newline" data-tip="Typ: Newline
+Lexeme: &quot;\n&quot;
+Line: 6, Col: 0
+Range: 141..142">↵</span><br/><span class="token tk-operator" data-tip="Typ: Operator(})
+Lexeme: &quot;}&quot;
+Line: 6, Col: 1
+Range: 142..143
+Operator: }">}</span><span class="token tk-newline" data-tip="Typ: Newline
+Lexeme: &quot;\n&quot;
+Line: 7, Col: 0
+Range: 143..144">↵</span><br/><span class="token tk-keyword" data-tip="Typ: Keyword(const)
+Lexeme: &quot;const&quot;
+Line: 7, Col: 5
+Range: 144..149
+Keyword: const">const</span><span class="token tk-whitespace" data-tip="Typ: Whitespace
+Lexeme: &quot; &quot;
+Line: 7, Col: 6
+Range: 149..150">·1·</span><span class="token tk-ident" data-tip="Typ: Identifier
+Lexeme: &quot;result&quot;
+Line: 7, Col: 12
+Range: 150..156">result</span><span class="token tk-whitespace" data-tip="Typ: Whitespace
+Lexeme: &quot; &quot;
+Line: 7, Col: 13
+Range: 156..157">·1·</span><span class="token tk-operator" data-tip="Typ: Operator(=)
+Lexeme: &quot;=&quot;
+Line: 7, Col: 14
+Range: 157..158
+Operator: =">=</span><span class="token tk-whitespace" data-tip="Typ: Whitespace
+Lexeme: &quot; &quot;
+Line: 7, Col: 15
+Range: 158..159">·1·</span><span class="token tk-ident" data-tip="Typ: Identifier
+Lexeme: &quot;fact&quot;
+Line: 7, Col: 19
+Range: 159..163">fact</span><span class="token tk-operator" data-tip="Typ: Operator(()
+Lexeme: &quot;(&quot;
+Line: 7, Col: 20
+Range: 163..164
+Operator: (">(</span><span class="token tk-number" data-tip="Typ: NumericLiteral
+Lexeme: &quot;10&quot;
+Line: 7, Col: 22
+Range: 164..166
+Hodnota: 10
+Raw: 10
+Base: Decimal">10</span><span class="token tk-operator" data-tip="Typ: Operator())
+Lexeme: &quot;)&quot;
+Line: 7, Col: 23
+Range: 166..167
+Operator: )">)</span><span class="token tk-operator" data-tip="Typ: Operator(;)
+Lexeme: &quot;;&quot;
+Line: 7, Col: 24
+Range: 167..168
+Operator: ;">;</span><span class="token tk-newline" data-tip="Typ: Newline
+Lexeme: &quot;\n&quot;
+Line: 8, Col: 0
+Range: 168..169">↵</span><br/><span class="token tk-ident" data-tip="Typ: Identifier
+Lexeme: &quot;console&quot;
+Line: 8, Col: 7
+Range: 169..176">console</span><span class="token tk-operator" data-tip="Typ: Operator(.)
+Lexeme: &quot;.&quot;
+Line: 8, Col: 8
+Range: 176..177
+Operator: .">.</span><span class="token tk-ident" data-tip="Typ: Identifier
+Lexeme: &quot;log&quot;
+Line: 8, Col: 11
+Range: 177..180">log</span><span class="token tk-operator" data-tip="Typ: Operator(()
+Lexeme: &quot;(&quot;
+Line: 8, Col: 12
+Range: 180..181
+Operator: (">(</span><span class="token tk-ident" data-tip="Typ: Identifier
+Lexeme: &quot;greeting&quot;
+Line: 8, Col: 20
+Range: 181..189">greeting</span><span class="token tk-operator" data-tip="Typ: Operator(,)
+Lexeme: &quot;,&quot;
+Line: 8, Col: 21
+Range: 189..190
+Operator: ,">,</span><span class="token tk-whitespace" data-tip="Typ: Whitespace
+Lexeme: &quot; &quot;
+Line: 8, Col: 22
+Range: 190..191">·1·</span><span class="token tk-ident" data-tip="Typ: Identifier
+Lexeme: &quot;result&quot;
+Line: 8, Col: 28
+Range: 191..197">result</span><span class="token tk-operator" data-tip="Typ: Operator())
+Lexeme: &quot;)&quot;
+Line: 8, Col: 29
+Range: 197..198
+Operator: )">)</span><span class="token tk-operator" data-tip="Typ: Operator(;)
+Lexeme: &quot;;&quot;
+Line: 8, Col: 30
+Range: 198..199
+Operator: ;">;</span><span class="token tk-newline" data-tip="Typ: Newline
+Lexeme: &quot;\n&quot;
+Line: 9, Col: 0
+Range: 199..200">↵</span><br/><span class="token tk-eof" data-tip="Typ: EOF
+Lexeme: &quot;&quot;
+Line: 9, Col: 0
+Range: 200..200"></span></div><div class="stats"><h3>Statistika</h3><table><tr><th>Typ</th><th>Pocet</th></tr><tr><td>Whitespace</td><td>21</td></tr><tr><td>Identifier</td><td>14</td></tr><tr><td>Newline</td><td>8</td></tr><tr><td>Operator(()</td><td>6</td></tr><tr><td>Operator())</td><td>6</td></tr><tr><td>Operator(;)</td><td>5</td></tr><tr><td>NumericLiteral</td><td>4</td></tr><tr><td>Operator(=)</td><td>2</td></tr><tr><td>Keyword(return)</td><td>2</td></tr><tr><td>Keyword(const)</td><td>2</td></tr><tr><td>Operator(-)</td><td>1</td></tr><tr><td>Keyword(if)</td><td>1</td></tr><tr><td>Operator(.)</td><td>1</td></tr><tr><td>Operator(&lt;=)</td><td>1</td></tr><tr><td>Operator(*)</td><td>1</td></tr><tr><td>CommentLine</td><td>1</td></tr><tr><td>Operator(})</td><td>1</td></tr><tr><td>Operator({)</td><td>1</td></tr><tr><td>Operator(,)</td><td>1</td></tr><tr><td>Keyword(function)</td><td>1</td></tr><tr><td>EOF</td><td>1</td></tr><tr><td>Template</td><td>1</td></tr></table></div>
+  </section>
+
+  <section id="panel-ast" class="panel">
+    <h3>AST (klikni pro rozbaleni)</h3>
+    <div class="ast-controls">
+      <button onclick="expandAll()">Expand all</button>
+      <button onclick="collapseAll()">Collapse all</button>
+    </div>
+    <div class="ast-tree"><details open><summary class="ast-root">Program (4 stmts)</summary><details open><summary class="ast-node ast-stmt">VariableDeclaration (Const, 1 decls)</summary><div class="ast-children"><details open><summary class="ast-node ast-decl">VarDecl greeting</summary><div class="ast-children"><details open><summary class="ast-node ast-field">init</summary><div class="ast-children"><div class="ast-leaf ast-literal">String: &quot;Ahoj svete!&quot;</div></div></details></div></details></div></details><details open><summary class="ast-node ast-stmt">FunctionDeclaration: fact (1 params)</summary><div class="ast-children"><details open><summary class="ast-node ast-field">params</summary><div class="ast-children"><div class="ast-leaf ast-field">n</div></div></details><details open><summary class="ast-node ast-field">body (2 stmts)</summary><div class="ast-children"><details open><summary class="ast-node ast-stmt">IfStatement</summary><div class="ast-children"><details open><summary class="ast-node ast-field">test</summary><div class="ast-children"><details open><summary class="ast-node ast-expr">Binary LtEq</summary><div class="ast-children"><div class="ast-leaf ast-ident">Identifier: n</div><div class="ast-leaf ast-literal">Number: 1</div></div></details></div></details><details open><summary class="ast-node ast-field">then</summary><div class="ast-children"><details open><summary class="ast-node ast-stmt">ReturnStatement</summary><div class="ast-children"><div class="ast-leaf ast-literal">BigInt: 1n</div></div></details></div></details></div></details><details open><summary class="ast-node ast-stmt">ReturnStatement</summary><div class="ast-children"><details open><summary class="ast-node ast-expr">Binary Mul</summary><div class="ast-children"><details open><summary class="ast-node ast-expr">Call (1 args)</summary><div class="ast-children"><details open><summary class="ast-node ast-field">callee</summary><div class="ast-children"><div class="ast-leaf ast-ident">Identifier: BigInt</div></div></details><details open><summary class="ast-node ast-field">arg[0]</summary><div class="ast-children"><div class="ast-leaf ast-ident">Identifier: n</div></div></details></div></details><details open><summary class="ast-node ast-expr">Call (1 args)</summary><div class="ast-children"><details open><summary class="ast-node ast-field">callee</summary><div class="ast-children"><div class="ast-leaf ast-ident">Identifier: fact</div></div></details><details open><summary class="ast-node ast-field">arg[0]</summary><div class="ast-children"><details open><summary class="ast-node ast-expr">Binary Sub</summary><div class="ast-children"><div class="ast-leaf ast-ident">Identifier: n</div><div class="ast-leaf ast-literal">Number: 1</div></div></details></div></details></div></details></div></details></div></details></div></details></div></details><details open><summary class="ast-node ast-stmt">VariableDeclaration (Const, 1 decls)</summary><div class="ast-children"><details open><summary class="ast-node ast-decl">VarDecl result</summary><div class="ast-children"><details open><summary class="ast-node ast-field">init</summary><div class="ast-children"><details open><summary class="ast-node ast-expr">Call (1 args)</summary><div class="ast-children"><details open><summary class="ast-node ast-field">callee</summary><div class="ast-children"><div class="ast-leaf ast-ident">Identifier: fact</div></div></details><details open><summary class="ast-node ast-field">arg[0]</summary><div class="ast-children"><div class="ast-leaf ast-literal">Number: 10</div></div></details></div></details></div></details></div></details></div></details><details open><summary class="ast-node ast-stmt">ExpressionStatement</summary><div class="ast-children"><details open><summary class="ast-node ast-expr">Call (2 args)</summary><div class="ast-children"><details open><summary class="ast-node ast-field">callee</summary><div class="ast-children"><details open><summary class="ast-node ast-expr">Member .</summary><div class="ast-children"><div class="ast-leaf ast-ident">Identifier: console</div><div class="ast-leaf ast-field">.log</div></div></details></div></details><details open><summary class="ast-node ast-field">arg[0]</summary><div class="ast-children"><div class="ast-leaf ast-ident">Identifier: greeting</div></div></details><details open><summary class="ast-node ast-field">arg[1]</summary><div class="ast-children"><div class="ast-leaf ast-ident">Identifier: result</div></div></details></div></details></div></details></details></div>
+  </section>
+</main>
+
+<div id="tooltip" class="tooltip"></div>
+
+<script>
+// Tab switching
+function showPanel(name) {
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    const panel = document.getElementById('panel-' + name);
+    if (panel) panel.classList.add('active');
+    event.target.classList.add('active');
+}
+
+// Token tooltip
+const tooltip = document.getElementById('tooltip');
+document.addEventListener('mouseover', (e) => {
+    const tk = e.target.closest('.token');
+    if (tk && tk.dataset.tip) {
+        tooltip.textContent = tk.dataset.tip;
+        tooltip.style.display = 'block';
+    }
+});
+document.addEventListener('mousemove', (e) => {
+    if (tooltip.style.display === 'block') {
+        const x = e.clientX + 12;
+        const y = e.clientY + 12;
+        tooltip.style.left = x + 'px';
+        tooltip.style.top  = y + 'px';
+    }
+});
+document.addEventListener('mouseout', (e) => {
+    if (e.target.closest('.token')) {
+        tooltip.style.display = 'none';
+    }
+});
+
+// AST expand/collapse all
+function expandAll() {
+    document.querySelectorAll('.ast-tree details').forEach(d => d.open = true);
+}
+function collapseAll() {
+    document.querySelectorAll('.ast-tree details').forEach(d => d.open = false);
+    // Krome rootu
+    const root = document.querySelector('.ast-tree > details');
+    if (root) root.open = true;
+}
+</script>
+</body>
+</html>
