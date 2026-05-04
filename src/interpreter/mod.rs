@@ -696,6 +696,25 @@ impl Interpreter {
         *self.document.borrow_mut() = doc;
     }
 
+    /// Pomocnik pro render - dispatch event na konkretni DOM node z external code.
+    /// Volat addEventListener listenery pro `event_type`.
+    pub fn dispatch_event(
+        &mut self,
+        node: &Rc<crate::browser::dom::NodeData>,
+        event_type: &str,
+        event_val: JsValue,
+    ) -> Result<(), JsError> {
+        let ids: Vec<usize> = node.listeners.borrow().get(event_type)
+            .cloned().unwrap_or_default();
+        for id in ids {
+            let cb = self.event_callbacks.borrow().get(&id).cloned();
+            if let Some(cb) = cb {
+                self.call_function(cb, vec![event_val.clone()], None)?;
+            }
+        }
+        Ok(())
+    }
+
     /// Drainuje vsechny worker zpravy a zavola onmessage callbacky.
     fn drain_workers(&mut self) -> Result<(), JsError> {
         // Sber zprav z vsech workeru (ID + msg)

@@ -385,6 +385,19 @@ fn paint_canvas_ops(
     }
 }
 
+/// Najdi DOM node v stromu podle Rc::as_ptr hodnoty (use ve cascade).
+fn find_node_by_ptr(root: &Rc<crate::browser::dom::NodeData>, ptr: usize) -> Option<Rc<crate::browser::dom::NodeData>> {
+    if Rc::as_ptr(root) as usize == ptr {
+        return Some(Rc::clone(root));
+    }
+    for child in root.children.borrow().iter() {
+        if let Some(found) = find_node_by_ptr(child, ptr) {
+            return Some(found);
+        }
+    }
+    None
+}
+
 /// Posune Y souradnice display command (pro scroll).
 fn shift_command_y(cmd: &mut DisplayCommand, dy: f32) {
     match cmd {
@@ -1066,12 +1079,39 @@ pub fn run_window_with_html(html: String, css: String) -> Result<(), String> {
             let elapsed = self.start_time.elapsed().as_secs_f32();
 
             // CSS Transitions: detekuj zmeny vs prev_style_map a vyrob aktivni transitions.
+            let mut ended_transitions: Vec<(usize, String)> = Vec::new();
             if let Some(prev) = &self.prev_style_map {
-                let active = std::mem::take(&mut self.active_transitions);
-                self.active_transitions = cascade::detect_transitions(prev, &style_map, active, elapsed);
+                let active_before = std::mem::take(&mut self.active_transitions);
+                let prev_keys: std::collections::HashSet<(usize, String)> = active_before.iter()
+                    .map(|t| (t.node_id, t.property.clone())).collect();
+                self.active_transitions = cascade::detect_transitions(prev, &style_map, active_before, elapsed);
+                let now_keys: std::collections::HashSet<(usize, String)> = self.active_transitions.iter()
+                    .map(|t| (t.node_id, t.property.clone())).collect();
+                for k in prev_keys.difference(&now_keys) {
+                    ended_transitions.push(k.clone());
+                }
             }
             // Aplikuj transitions na current style map (override hodnoty)
             cascade::apply_transitions(&mut style_map, &self.active_transitions, elapsed);
+
+            // Dispatch transitionend events
+            for (node_id, prop) in &ended_transitions {
+                if let Some(interp) = &mut self.interpreter {
+                    let doc_root = Rc::clone(&interp.document.borrow().root);
+                    if let Some(target) = find_node_by_ptr(&doc_root, *node_id) {
+                        let mut event = crate::interpreter::JsObject::new();
+                        event.set("type".into(),
+                            crate::interpreter::JsValue::Str("transitionend".into()));
+                        event.set("propertyName".into(),
+                            crate::interpreter::JsValue::Str(prop.clone()));
+                        event.set("target".into(),
+                            crate::interpreter::JsValue::DomNode(Rc::clone(&target)));
+                        let event_val = crate::interpreter::JsValue::Object(
+                            std::rc::Rc::new(std::cell::RefCell::new(event)));
+                        let _ = interp.dispatch_event(&target, "transitionend", event_val);
+                    }
+                }
+            }
 
             // Runtime CSS animation: aplikuj @keyframes na elementy s `animation: ...`
             let _animating = cascade::apply_animations(&mut style_map, &stylesheets, elapsed);
