@@ -31,6 +31,36 @@ pub fn expand_shorthand(prop: &str, value: &str, out: &mut HashMap<String, Strin
         out.insert(prop.into(), value.into());
         return;
     }
+    // place-content / place-items / place-self shorthandy: <align> <justify>
+    if matches!(prop, "place-content" | "place-items" | "place-self") {
+        let parts: Vec<&str> = value.split_whitespace().collect();
+        let (align, justify) = match parts.len() {
+            1 => (parts[0], parts[0]),
+            _ => (parts[0], parts[1]),
+        };
+        let (align_prop, justify_prop) = match prop {
+            "place-content" => ("align-content", "justify-content"),
+            "place-items"   => ("align-items", "justify-items"),
+            "place-self"    => ("align-self", "justify-self"),
+            _ => unreachable!(),
+        };
+        out.insert(align_prop.into(), align.into());
+        out.insert(justify_prop.into(), justify.into());
+        out.insert(prop.into(), value.into());
+        return;
+    }
+    // gap shorthand: <row-gap> <column-gap>
+    if prop == "gap" {
+        let parts: Vec<&str> = value.split_whitespace().collect();
+        let (row, col) = match parts.len() {
+            1 => (parts[0], parts[0]),
+            _ => (parts[0], parts[1]),
+        };
+        out.insert("row-gap".into(), row.into());
+        out.insert("column-gap".into(), col.into());
+        out.insert("gap".into(), value.into());
+        return;
+    }
     if prop == "inset" {
         // inset = top right bottom left (analog margin)
         let parts: Vec<&str> = value.split_whitespace().collect();

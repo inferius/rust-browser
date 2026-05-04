@@ -173,7 +173,7 @@ Konvence stavu:
 - [x] `display: flex`, `flex-direction`, `flex-wrap`, `justify-content`, `align-items`, `align-self`, `gap`, `flex` shorthand (pres taffy)
 - [x] `flex-grow`, `flex-shrink`, `flex-basis`
 - [x] `align-content`
-- [ ] `place-content`, `place-items`, `place-self` shorthandy
+- [x] `place-content`, `place-items`, `place-self` shorthandy (expand do align-/justify-)
 - [ ] `order`
 - [ ] Edge cases: aspect-ratio interakce, intrinsic sizing
 

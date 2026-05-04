@@ -214,6 +214,41 @@ fn selector_first_of_type() {
     assert!(cascade::get_styles(&map, &ps[1]).unwrap().get("color").is_none());
 }
 
+// ─── place-* + gap shorthandy ──────────────────────────────────────────
+
+#[test]
+fn place_items_shorthand_expands() {
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { place-items: center start; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let s = cascade::get_styles(&map, &div).unwrap();
+    assert_eq!(s.get("align-items").map(|v| v.as_str()), Some("center"));
+    assert_eq!(s.get("justify-items").map(|v| v.as_str()), Some("start"));
+}
+
+#[test]
+fn place_content_single_value_both() {
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { place-content: center; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let s = cascade::get_styles(&map, &div).unwrap();
+    assert_eq!(s.get("align-content").map(|v| v.as_str()), Some("center"));
+    assert_eq!(s.get("justify-content").map(|v| v.as_str()), Some("center"));
+}
+
+#[test]
+fn gap_shorthand_two_values() {
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { gap: 10px 20px; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let s = cascade::get_styles(&map, &div).unwrap();
+    assert_eq!(s.get("row-gap").map(|v| v.as_str()), Some("10px"));
+    assert_eq!(s.get("column-gap").map(|v| v.as_str()), Some("20px"));
+}
+
 // ─── Form pseudo-classes ───────────────────────────────────────────────
 
 #[test]
