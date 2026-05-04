@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>Canvas API</title><link rel="stylesheet" href="index.css"></head>
+<body>
+    <header><h1>Canvas API 2D</h1>
+        <p>fillRect, strokeRect, fillText, fillStyle, strokeStyle, font</p>
+    </header>
+    <main>
+        <section><h2>Bg + ruzne fillRect</h2>
+            <canvas id="c1" width="400" height="200"></canvas>
+        </section>
+    </main>
+    <script>
+        const c = document.getElementById("c1");
+        const ctx = c.getContext("2d");
+        ctx.fillStyle = "red";
+        ctx.fillRect(10, 10, 100, 80);
+        ctx.fillStyle = "green";
+        ctx.fillRect(120, 10, 100, 80);
+        ctx.fillStyle = "blue";
+        ctx.fillRect(230, 10, 100, 80);
+        ctx.strokeStyle = "yellow";
+        ctx.lineWidth = 3;
+        ctx.strokeRect(10, 100, 320, 80);
+        ctx.fillStyle = "white";
+        ctx.font = "20px Arial";
+        ctx.fillText("Canvas API works!", 30, 150);
+    </script>
+</body>
+</html>

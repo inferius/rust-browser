@@ -239,6 +239,67 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: 
     verts
 }
 
+/// Emituje DisplayCommands pro canvas tag z canvas_ops storage.
+fn paint_canvas_ops(
+    bx: &super::layout::LayoutBox,
+    ops_storage: &std::collections::HashMap<usize, Vec<super::paint::CanvasOp>>,
+    cmds: &mut Vec<super::paint::DisplayCommand>,
+) {
+    if bx.tag.as_deref() == Some("canvas") {
+        if let Some(node) = &bx.node {
+            let ptr = std::rc::Rc::as_ptr(node) as usize;
+            if let Some(ops) = ops_storage.get(&ptr) {
+                use super::paint::{CanvasOp, DisplayCommand};
+                let mut current_fill: [u8; 4] = [0, 0, 0, 255];
+                let mut current_stroke: [u8; 4] = [0, 0, 0, 255];
+                let mut current_lw: f32 = 1.0;
+                let mut current_font_size: f32 = 14.0;
+                let ox = bx.rect.x;
+                let oy = bx.rect.y;
+                for op in ops {
+                    match op {
+                        CanvasOp::FillStyle(c) => current_fill = *c,
+                        CanvasOp::StrokeStyle(c) => current_stroke = *c,
+                        CanvasOp::LineWidth(w) => current_lw = *w,
+                        CanvasOp::Font { size, .. } => current_font_size = *size,
+                        CanvasOp::FillRect { x, y, w, h } => {
+                            cmds.push(DisplayCommand::Rect {
+                                x: ox + *x, y: oy + *y, w: *w, h: *h,
+                                color: current_fill, radius: 0.0,
+                            });
+                        }
+                        CanvasOp::StrokeRect { x, y, w, h } => {
+                            cmds.push(DisplayCommand::Border {
+                                x: ox + *x, y: oy + *y, w: *w, h: *h,
+                                width: current_lw, color: current_stroke,
+                            });
+                        }
+                        CanvasOp::ClearRect { x, y, w, h } => {
+                            // Clear = bg cerny (canvas default)
+                            cmds.push(DisplayCommand::Rect {
+                                x: ox + *x, y: oy + *y, w: *w, h: *h,
+                                color: [0, 0, 0, 255], radius: 0.0,
+                            });
+                        }
+                        CanvasOp::FillText { text, x, y } => {
+                            cmds.push(DisplayCommand::Text {
+                                x: ox + *x, y: oy + *y - current_font_size,
+                                content: text.clone(),
+                                color: current_fill,
+                                font_size: current_font_size,
+                                bold: false,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+    for child in &bx.children {
+        paint_canvas_ops(child, ops_storage, cmds);
+    }
+}
+
 /// Posune Y souradnice display command (pro scroll).
 fn shift_command_y(cmd: &mut DisplayCommand, dy: f32) {
     match cmd {
@@ -925,6 +986,12 @@ pub fn run_window_with_html(html: String, css: String) -> Result<(), String> {
             let viewport_h = r.config.height as f32;
             let layout_root = layout::layout_tree_with_pseudo(&document_root, &style_map, &pseudo_map, viewport_w, viewport_h);
             let mut display_list = paint::build_display_list(&layout_root);
+
+            // Canvas API: emit canvas ops jako DisplayCommands.
+            if let Some(interp) = &self.interpreter {
+                let canvas_ops = interp.canvas_ops.borrow();
+                paint_canvas_ops(&layout_root, &canvas_ops, &mut display_list);
+            }
 
             // Apply scroll: posun vsechny y o -scroll_y
             for cmd in display_list.iter_mut() {
