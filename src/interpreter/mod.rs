@@ -5274,6 +5274,119 @@ pub(crate) struct WebGLProgram {
     /// Vertex + fragment WGSL transpilace (link-time output).
     pub vertex_wgsl: Option<String>,
     pub fragment_wgsl: Option<String>,
+    /// Uniform layout - jak serializovat uniformy do GPU buffer.
+    /// Name -> (offset_bytes, size_bytes, ty).
+    pub uniform_layout: Vec<UniformSlot>,
+    /// Total uniform buffer size (zaokrouhleno na 16-byte multiple pro WGSL).
+    pub uniform_buffer_size: u64,
+}
+
+/// Layout slot pro 1 uniform v GPU buffer.
+#[derive(Clone, Debug)]
+pub(crate) struct UniformSlot {
+    pub name: String,
+    pub offset: u32,
+    pub size: u32,
+    pub kind: UniformSlotKind,
+}
+
+/// Typ uniformu pro serializaci. Match naga TypeInner.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum UniformSlotKind {
+    Float,        // f32
+    Vec2,         // vec2<f32>
+    Vec3,         // vec3<f32>
+    Vec4,         // vec4<f32>
+    Int,          // i32
+    Mat2,         // mat2x2
+    Mat3,         // mat3x3
+    Mat4,         // mat4x4
+    Other,        // unknown - skip serialize
+}
+
+/// Extract uniform layout z naga Module - prochazi global variables s
+/// Uniform address space, mapuje na UniformSlot list. Vraci take total
+/// size buffer (16-byte align).
+pub(crate) fn extract_uniform_layout(module: &naga::Module) -> (Vec<UniformSlot>, u64) {
+    use naga::{AddressSpace, TypeInner, ScalarKind};
+    let mut slots: Vec<UniformSlot> = Vec::new();
+    let mut max_end: u32 = 0;
+
+    let kind_of = |inner: &TypeInner| -> (UniformSlotKind, u32) {
+        match inner {
+            TypeInner::Scalar(s) => match s.kind {
+                ScalarKind::Float => (UniformSlotKind::Float, 4),
+                ScalarKind::Sint | ScalarKind::Uint => (UniformSlotKind::Int, 4),
+                _ => (UniformSlotKind::Other, 4),
+            },
+            TypeInner::Vector { size, scalar } if matches!(scalar.kind, ScalarKind::Float) => {
+                match size {
+                    naga::VectorSize::Bi => (UniformSlotKind::Vec2, 8),
+                    naga::VectorSize::Tri => (UniformSlotKind::Vec3, 16), // padded
+                    naga::VectorSize::Quad => (UniformSlotKind::Vec4, 16),
+                }
+            }
+            TypeInner::Matrix { columns, rows, .. } => {
+                let bytes = match (columns, rows) {
+                    (naga::VectorSize::Bi, naga::VectorSize::Bi) => 16,
+                    (naga::VectorSize::Tri, naga::VectorSize::Tri) => 48,
+                    (naga::VectorSize::Quad, naga::VectorSize::Quad) => 64,
+                    _ => 16,
+                };
+                let kind = match (columns, rows) {
+                    (naga::VectorSize::Bi, naga::VectorSize::Bi) => UniformSlotKind::Mat2,
+                    (naga::VectorSize::Tri, naga::VectorSize::Tri) => UniformSlotKind::Mat3,
+                    (naga::VectorSize::Quad, naga::VectorSize::Quad) => UniformSlotKind::Mat4,
+                    _ => UniformSlotKind::Other,
+                };
+                (kind, bytes)
+            }
+            _ => (UniformSlotKind::Other, 16),
+        }
+    };
+
+    for (_, gv) in module.global_variables.iter() {
+        if !matches!(gv.space, AddressSpace::Uniform) { continue; }
+        let ty = &module.types[gv.ty];
+        match &ty.inner {
+            TypeInner::Struct { members, span } => {
+                for m in members {
+                    let name = m.name.clone().unwrap_or_default();
+                    if name.is_empty() { continue; }
+                    let mty = &module.types[m.ty];
+                    let (kind, size) = kind_of(&mty.inner);
+                    slots.push(UniformSlot {
+                        name,
+                        offset: m.offset,
+                        size,
+                        kind,
+                    });
+                    let end = m.offset + size;
+                    if end > max_end { max_end = end; }
+                }
+                if *span > max_end { max_end = *span; }
+            }
+            other => {
+                // Top-level uniform (rare po naga wrap)
+                let name = gv.name.clone().unwrap_or_default();
+                if !name.is_empty() {
+                    let (kind, size) = kind_of(other);
+                    slots.push(UniformSlot {
+                        name, offset: 0, size, kind,
+                    });
+                    if size > max_end { max_end = size; }
+                }
+            }
+        }
+    }
+
+    // Round up na 16 bytes (WGSL std140-like requirement). Pri zadnych slotech vraci 0.
+    if slots.is_empty() {
+        (slots, 0)
+    } else {
+        let total = ((max_end as u64 + 15) / 16) * 16;
+        (slots, total.max(16))
+    }
 }
 
 pub(crate) struct WebGLTexture {
@@ -5646,6 +5759,7 @@ fn create_webgl_context(state: Rc<RefCell<WebGLState>>) -> JsValue {
             s.programs.insert(id, WebGLProgram {
                 vertex_shader: None, fragment_shader: None, linked: false,
                 info_log: String::new(), vertex_wgsl: None, fragment_wgsl: None,
+                uniform_layout: Vec::new(), uniform_buffer_size: 0,
             });
             Ok(make_webgl_handle(id, "program"))
         }));
@@ -5676,13 +5790,15 @@ fn create_webgl_context(state: Rc<RefCell<WebGLState>>) -> JsValue {
             if let Some(id) = id {
                 let mut s = st.borrow_mut();
                 // Pre-fetch shader WGSL pred mut borrow programs
-                let (vs_wgsl, fs_wgsl, error_log) = {
+                let (vs_wgsl, fs_wgsl, error_log, layout, layout_size) = {
                     let prog = match s.programs.get(&id) { Some(p) => p, None => return Ok(JsValue::Undefined) };
                     let vs_id = prog.vertex_shader;
                     let fs_id = prog.fragment_shader;
                     let mut log = String::new();
                     let mut vw: Option<String> = None;
                     let mut fw: Option<String> = None;
+                    let mut combined_layout: Vec<UniformSlot> = Vec::new();
+                    let mut combined_size: u64 = 0;
                     if let (Some(vid), Some(fid)) = (vs_id, fs_id) {
                         // Vertex shader: musi byt compiled + naga module
                         if let Some(vsh) = s.shaders.get(&vid) {
@@ -5693,6 +5809,13 @@ fn create_webgl_context(state: Rc<RefCell<WebGLState>>) -> JsValue {
                                     Ok(w) => vw = Some(w),
                                     Err(e) => log.push_str(&format!("vertex WGSL: {e}\n")),
                                 }
+                                let (slots, sz) = extract_uniform_layout(m);
+                                for slot in slots {
+                                    if !combined_layout.iter().any(|s: &UniformSlot| s.name == slot.name) {
+                                        combined_layout.push(slot);
+                                    }
+                                }
+                                if sz > combined_size { combined_size = sz; }
                             }
                         }
                         if let Some(fsh) = s.shaders.get(&fid) {
@@ -5703,12 +5826,19 @@ fn create_webgl_context(state: Rc<RefCell<WebGLState>>) -> JsValue {
                                     Ok(w) => fw = Some(w),
                                     Err(e) => log.push_str(&format!("fragment WGSL: {e}\n")),
                                 }
+                                let (slots, sz) = extract_uniform_layout(m);
+                                for slot in slots {
+                                    if !combined_layout.iter().any(|s: &UniformSlot| s.name == slot.name) {
+                                        combined_layout.push(slot);
+                                    }
+                                }
+                                if sz > combined_size { combined_size = sz; }
                             }
                         }
                     } else {
                         log.push_str("program postrada vertex nebo fragment shader\n");
                     }
-                    (vw, fw, log)
+                    (vw, fw, log, combined_layout, combined_size)
                 };
                 // Apply
                 if let Some(prog) = s.programs.get_mut(&id) {
@@ -5716,6 +5846,8 @@ fn create_webgl_context(state: Rc<RefCell<WebGLState>>) -> JsValue {
                     prog.vertex_wgsl = vs_wgsl;
                     prog.fragment_wgsl = fs_wgsl;
                     prog.info_log = error_log;
+                    prog.uniform_layout = layout;
+                    prog.uniform_buffer_size = layout_size;
                 }
             }
             Ok(JsValue::Undefined)
@@ -5780,6 +5912,30 @@ fn create_webgl_context(state: Rc<RefCell<WebGLState>>) -> JsValue {
                 }
             }
             Ok(JsValue::Null)
+        }));
+    }
+    {
+        let st = Rc::clone(&state);
+        obj_rc.borrow_mut().set("__program_uniform_count__".into(), native("gl.__program_uniform_count__", move |args| {
+            let id = args.into_iter().next().and_then(|v| webgl_id_from(&v));
+            if let Some(id) = id {
+                if let Some(prog) = st.borrow().programs.get(&id) {
+                    return Ok(JsValue::Number(prog.uniform_layout.len() as f64));
+                }
+            }
+            Ok(JsValue::Number(0.0))
+        }));
+    }
+    {
+        let st = Rc::clone(&state);
+        obj_rc.borrow_mut().set("__program_uniform_buffer_size__".into(), native("gl.__program_uniform_buffer_size__", move |args| {
+            let id = args.into_iter().next().and_then(|v| webgl_id_from(&v));
+            if let Some(id) = id {
+                if let Some(prog) = st.borrow().programs.get(&id) {
+                    return Ok(JsValue::Number(prog.uniform_buffer_size as f64));
+                }
+            }
+            Ok(JsValue::Number(0.0))
         }));
     }
     {

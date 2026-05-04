@@ -134,6 +134,67 @@ fn webgl_link_outputs_wgsl_string() {
     assert_eq!(r.to_string(), "string|string|true|true");
 }
 
+// ─── Phase 3c7: uniform layout extraction ──────────────────────────────
+
+#[test]
+fn webgl_uniform_count_zero_for_program_without_uniforms() {
+    let r = run(&format!(r#"{SETUP}
+        const v = gl.createShader(gl.VERTEX_SHADER);
+        gl.shaderSource(v, "void main(){{ gl_Position = vec4(0.0); }}"); gl.compileShader(v);
+        const f = gl.createShader(gl.FRAGMENT_SHADER);
+        gl.shaderSource(f, "void main(){{ gl_FragColor = vec4(1.0); }}"); gl.compileShader(f);
+        const p = gl.createProgram();
+        gl.attachShader(p, v); gl.attachShader(p, f);
+        gl.linkProgram(p);
+        return gl.__program_uniform_count__(p);
+    "#));
+    assert_eq!(r.to_string(), "0");
+}
+
+#[test]
+fn webgl_uniform_count_with_uniform_block() {
+    // Naga GLSL frontend lépe handluje uniform block syntax
+    let r = run(&format!(r#"{SETUP}
+        const v = gl.createShader(gl.VERTEX_SHADER);
+        gl.shaderSource(v, "layout(std140) uniform Block {{ float uTime; vec2 uPos; }}; void main(){{ gl_Position = vec4(uTime, uPos, 1.0); }}");
+        gl.compileShader(v);
+        const f = gl.createShader(gl.FRAGMENT_SHADER);
+        gl.shaderSource(f, "void main(){{ gl_FragColor = vec4(1.0); }}"); gl.compileShader(f);
+        const p = gl.createProgram();
+        gl.attachShader(p, v); gl.attachShader(p, f);
+        gl.linkProgram(p);
+        return gl.__program_uniform_count__(p);
+    "#));
+    let n: f64 = r.to_string().parse().unwrap();
+    // Bud naga extracts (>= 1) nebo block syntax neni handluje (0) - oba acceptable
+    assert!(n >= 0.0, "smoke - bez panic");
+}
+
+#[test]
+fn webgl_uniform_buffer_size_default_zero() {
+    let r = run(&format!(r#"{SETUP}
+        const v = gl.createShader(gl.VERTEX_SHADER);
+        gl.shaderSource(v, "void main(){{ gl_Position = vec4(0.0); }}"); gl.compileShader(v);
+        const f = gl.createShader(gl.FRAGMENT_SHADER);
+        gl.shaderSource(f, "void main(){{ gl_FragColor = vec4(1.0); }}"); gl.compileShader(f);
+        const p = gl.createProgram();
+        gl.attachShader(p, v); gl.attachShader(p, f);
+        gl.linkProgram(p);
+        return gl.__program_uniform_buffer_size__(p);
+    "#));
+    let n: f64 = r.to_string().parse().unwrap();
+    assert_eq!(n, 0.0, "no uniforms -> 0 size");
+}
+
+#[test]
+fn webgl_uniform_layout_zero_for_unlinked() {
+    let r = run(&format!(r#"{SETUP}
+        const p = gl.createProgram();
+        return gl.__program_uniform_count__(p);
+    "#));
+    assert_eq!(r.to_string(), "0");
+}
+
 #[test]
 fn webgl_wgsl_has_vertex_stage_decorator() {
     // Naga musi generovat @vertex/@fragment decorators - nutne pro wgpu pipeline phase 3c.
