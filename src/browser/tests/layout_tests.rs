@@ -277,6 +277,25 @@ fn find_box_by_tag<'a>(bx: &'a layout::LayoutBox, tag: &str) -> Option<&'a layou
 }
 
 #[test]
+fn scroll_snap_parsed() {
+    let doc = parse_html(r#"<html><body><div></div></body></html>"#, "");
+    let css = parse_stylesheet(r#"
+        div {
+            scroll-snap-type: x mandatory;
+            scroll-snap-align: start;
+            scroll-padding: 10px 20px;
+        }
+    "#);
+    let style_map = crate::browser::cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &style_map, 1024.0, 768.0);
+    let d = find_box_by_tag(&root, "div").unwrap();
+    assert_eq!(d.scroll_snap_type, "x mandatory");
+    assert_eq!(d.scroll_snap_align, "start");
+    // 2 hodnoty: top/bottom = 10, left/right = 20
+    assert_eq!(d.scroll_padding, [10.0, 20.0, 10.0, 20.0]);
+}
+
+#[test]
 fn scroll_behavior_smooth() {
     let doc = parse_html(r#"<html><body><div></div></body></html>"#, "");
     let css = parse_stylesheet("div { scroll-behavior: smooth; overscroll-behavior: contain; }");

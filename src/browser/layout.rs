@@ -186,6 +186,14 @@ pub struct LayoutBox {
     pub scrollbar_color: Option<([u8; 4], [u8; 4])>,
     /// overscroll-behavior: "auto" | "contain" | "none"
     pub overscroll_behavior: String,
+    /// scroll-snap-type: "none" | "x mandatory" | "y proximity" / ...
+    pub scroll_snap_type: String,
+    /// scroll-snap-align: "none" | "start" | "end" | "center"
+    pub scroll_snap_align: String,
+    /// scroll-padding (top right bottom left v px)
+    pub scroll_padding: [f32; 4],
+    /// scroll-margin
+    pub scroll_margin: [f32; 4],
     /// Box shadow: (offset_x, offset_y, blur, spread, color)
     /// (offset_x, offset_y, blur, spread, color, inset)
     pub box_shadow: Option<(f32, f32, f32, f32, [u8; 4], bool)>,
@@ -249,6 +257,10 @@ impl LayoutBox {
             scrollbar_width: String::new(),
             scrollbar_color: None,
             overscroll_behavior: String::new(),
+            scroll_snap_type: String::new(),
+            scroll_snap_align: String::new(),
+            scroll_padding: [0.0; 4],
+            scroll_margin: [0.0; 4],
             box_shadow: None,
             transform: None,
             image_src: None,
@@ -568,6 +580,25 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(ob) = s.get("overscroll-behavior") {
         bx.overscroll_behavior = ob.trim().to_string();
     }
+    // scroll-snap
+    if let Some(sst) = s.get("scroll-snap-type") {
+        bx.scroll_snap_type = sst.trim().to_string();
+    }
+    if let Some(ssa) = s.get("scroll-snap-align") {
+        bx.scroll_snap_align = ssa.trim().to_string();
+    }
+    let parse_4 = |v: &str| -> [f32; 4] {
+        let parts: Vec<&str> = v.split_whitespace().collect();
+        match parts.len() {
+            1 => { let a = parse_length(parts[0]); [a, a, a, a] }
+            2 => { let a = parse_length(parts[0]); let b = parse_length(parts[1]); [a, b, a, b] }
+            3 => [parse_length(parts[0]), parse_length(parts[1]), parse_length(parts[2]), parse_length(parts[1])],
+            4 => [parse_length(parts[0]), parse_length(parts[1]), parse_length(parts[2]), parse_length(parts[3])],
+            _ => [0.0; 4],
+        }
+    };
+    if let Some(sp) = s.get("scroll-padding") { bx.scroll_padding = parse_4(sp); }
+    if let Some(sm) = s.get("scroll-margin")  { bx.scroll_margin  = parse_4(sm); }
     // contain - CSS Containment L3
     if let Some(c) = s.get("contain") {
         let mut bits = 0u8;

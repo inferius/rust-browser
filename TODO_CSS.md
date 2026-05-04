@@ -319,7 +319,7 @@ Konvence stavu:
 - [ ] `overflow-clip-margin`
 - [x] `overscroll-behavior` (parser, runtime TODO)
 - [x] `scroll-behavior: auto | smooth` (parser, runtime TODO)
-- [ ] `scroll-snap-type`, `scroll-snap-align`, `scroll-padding`, `scroll-margin`
+- [x] `scroll-snap-type`, `scroll-snap-align`, `scroll-padding`, `scroll-margin` (parser, runtime TODO)
 - [x] `scrollbar-width: auto | thin | none` (parser)
 - [x] `scrollbar-color: <thumb> <track>` (parser)
 - [ ] `scrollbar-gutter`
