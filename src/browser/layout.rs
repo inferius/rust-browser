@@ -19,6 +19,14 @@ pub enum Display {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TextTransform {
+    None,
+    Uppercase,
+    Lowercase,
+    Capitalize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TextAlign {
     Left,
     Center,
@@ -155,6 +163,14 @@ pub struct LayoutBox {
     pub clip_path: Option<ClipPath>,
     /// text-shadow: (offset_x, offset_y, blur, color).
     pub text_shadow: Option<(f32, f32, f32, [u8; 4])>,
+    /// text-transform: none / uppercase / lowercase / capitalize
+    pub text_transform: TextTransform,
+    /// letter-spacing pridava extra mezeru mezi znaky (px).
+    pub letter_spacing: f32,
+    /// word-spacing pridava extra mezeru mezi slovy (px).
+    pub word_spacing: f32,
+    /// aspect-ratio: width / height. None = auto.
+    pub aspect_ratio: Option<f32>,
     /// Box shadow: (offset_x, offset_y, blur, spread, color)
     /// (offset_x, offset_y, blur, spread, color, inset)
     pub box_shadow: Option<(f32, f32, f32, f32, [u8; 4], bool)>,
@@ -207,6 +223,10 @@ impl LayoutBox {
             backgrounds: Vec::new(),
             clip_path: None,
             text_shadow: None,
+            text_transform: TextTransform::None,
+            letter_spacing: 0.0,
+            word_spacing: 0.0,
+            aspect_ratio: None,
             box_shadow: None,
             transform: None,
             image_src: None,
@@ -478,6 +498,35 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     // text-shadow: parsuje "offset_x offset_y blur color"
     if let Some(ts) = s.get("text-shadow") {
         bx.text_shadow = parse_text_shadow(ts);
+    }
+    // text-transform
+    if let Some(tt) = s.get("text-transform") {
+        bx.text_transform = match tt.trim() {
+            "uppercase"  => TextTransform::Uppercase,
+            "lowercase"  => TextTransform::Lowercase,
+            "capitalize" => TextTransform::Capitalize,
+            _            => TextTransform::None,
+        };
+    }
+    // letter-spacing / word-spacing
+    if let Some(ls) = s.get("letter-spacing") {
+        if ls.trim() != "normal" { bx.letter_spacing = parse_length(ls); }
+    }
+    if let Some(ws) = s.get("word-spacing") {
+        if ws.trim() != "normal" { bx.word_spacing = parse_length(ws); }
+    }
+    // aspect-ratio: "16 / 9" / "1.5" / "auto"
+    if let Some(ar) = s.get("aspect-ratio") {
+        let s = ar.trim();
+        if s != "auto" {
+            if let Some((w, h)) = s.split_once('/') {
+                let w: f32 = w.trim().parse().unwrap_or(1.0);
+                let h: f32 = h.trim().parse().unwrap_or(1.0);
+                if h > 0.0 { bx.aspect_ratio = Some(w / h); }
+            } else if let Ok(r) = s.parse::<f32>() {
+                bx.aspect_ratio = Some(r);
+            }
+        }
     }
     // Transform
     if let Some(tr) = s.get("transform") {

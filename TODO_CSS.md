@@ -104,7 +104,7 @@ Konvence stavu:
 - [x] `width`, `height`, `min-width`, `min-height`, `max-width`, `max-height`
 - [x] `padding`, `margin`, `border`
 - [x] `box-sizing: content-box | border-box`
-- [ ] `aspect-ratio`
+- [x] `aspect-ratio: <w> / <h>` / `aspect-ratio: <ratio>` (parser + LayoutBox.aspect_ratio)
 - [ ] `min-content`, `max-content`, `fit-content` keywords
 
 ### CSS Backgrounds & Borders L3/L4
@@ -144,9 +144,9 @@ Konvence stavu:
 - [x] `line-height`
 - [/] `white-space` (parsing OK?, layout?)
 - [ ] `text-indent`
-- [ ] `text-transform: uppercase|lowercase|capitalize|none`
-- [ ] `letter-spacing`
-- [ ] `word-spacing`
+- [x] `text-transform: uppercase|lowercase|capitalize|none` (paint apply)
+- [x] `letter-spacing` parser (paint apply TODO)
+- [x] `word-spacing` parser (paint apply TODO)
 - [ ] `tab-size`
 - [ ] `word-break: normal|break-all|keep-all`
 - [ ] `overflow-wrap` / `word-wrap`

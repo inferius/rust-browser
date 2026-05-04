@@ -277,6 +277,38 @@ fn find_box_by_tag<'a>(bx: &'a layout::LayoutBox, tag: &str) -> Option<&'a layou
 }
 
 #[test]
+fn text_transform_uppercase_applied() {
+    use crate::browser::layout::TextTransform;
+    let doc = parse_html(r#"<html><body><p>hello world</p></body></html>"#, "");
+    let css = parse_stylesheet("p { text-transform: uppercase; }");
+    let style_map = crate::browser::cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &style_map, 1024.0, 768.0);
+    let p = find_box_by_tag(&root, "p").unwrap();
+    assert_eq!(p.text_transform, TextTransform::Uppercase);
+}
+
+#[test]
+fn aspect_ratio_parsed_from_fraction() {
+    let doc = parse_html(r#"<html><body><div></div></body></html>"#, "");
+    let css = parse_stylesheet("div { aspect-ratio: 16 / 9; }");
+    let style_map = crate::browser::cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &style_map, 1024.0, 768.0);
+    let d = find_box_by_tag(&root, "div").unwrap();
+    let ar = d.aspect_ratio.unwrap();
+    assert!((ar - 16.0/9.0).abs() < 0.001);
+}
+
+#[test]
+fn aspect_ratio_parsed_from_decimal() {
+    let doc = parse_html(r#"<html><body><div></div></body></html>"#, "");
+    let css = parse_stylesheet("div { aspect-ratio: 1.5; }");
+    let style_map = crate::browser::cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &style_map, 1024.0, 768.0);
+    let d = find_box_by_tag(&root, "div").unwrap();
+    assert_eq!(d.aspect_ratio, Some(1.5));
+}
+
+#[test]
 fn parse_text_shadow_basic() {
     let s = layout::parse_text_shadow("2px 4px 8px black").unwrap();
     assert_eq!(s.0, 2.0);

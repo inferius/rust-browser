@@ -98,6 +98,24 @@ pub fn build_display_list(root: &LayoutBox) -> Vec<DisplayCommand> {
     commands
 }
 
+/// Capitalize: prvni pismeno kazdeho slova upper.
+fn capitalize_words(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut new_word = true;
+    for c in s.chars() {
+        if c.is_whitespace() {
+            new_word = true;
+            out.push(c);
+        } else if new_word {
+            out.extend(c.to_uppercase());
+            new_word = false;
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// Emituje SVG shape z child <rect>, <circle>, <ellipse>, <line>.
 /// Pri SVG <svg> tagu projde direktni children a emit native shapes.
 fn emit_svg_children(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>) {
@@ -337,6 +355,25 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>) {
 
     // Text - aplikuj text_align: x posun podle align
     if let Some(text) = &bx.text {
+        // text-transform aplikace pred mereni
+        let text_owned: String;
+        let text: &str = match bx.text_transform {
+            crate::browser::layout::TextTransform::None => text.as_str(),
+            crate::browser::layout::TextTransform::Uppercase => {
+                text_owned = text.to_uppercase();
+                &text_owned
+            }
+            crate::browser::layout::TextTransform::Lowercase => {
+                text_owned = text.to_lowercase();
+                &text_owned
+            }
+            crate::browser::layout::TextTransform::Capitalize => {
+                text_owned = capitalize_words(text);
+                &text_owned
+            }
+        };
+        let text = text.to_string();
+        let text = &text;
         let text_w = measure_text_width(text, bx.font_size);
         let inner_w = bx.rect.width - 2.0 * bx.padding;
         let align_offset = match bx.text_align {
