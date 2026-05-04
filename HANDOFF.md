@@ -5,10 +5,10 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 ## Stav
 
 - Build: **OK**, 0 warnings.
-- Tests: **788 passed, 0 failed, 3 ignored** (z 639 puv, +149 v session).
-- Posledni commit: `617556c innerHTML / outerHTML getters`.
+- Tests: **800 passed, 0 failed, 3 ignored** (z 639 puv, +161 v session).
+- Posledni commit: `3032772 Element.matches + closest`.
 - Tree: ciste.
-- Branch master, ~125 commitu pred origin/master.
+- Branch master, ~140 commitu pred origin/master.
 
 ## Test runner
 
@@ -19,22 +19,28 @@ powershell -ExecutionPolicy Bypass -File run_tests.ps1   # Win
 
 ## Co bylo posledni session hotovo
 
-Velky CSS feature stream + JS API rozsireni:
+CSS:
+- Selectors L4, Values L4, Color L4, Logical Properties, Animations rozsireni,
+  Nesting, Container Queries, Box-shadow inset, Radial+conic gradients,
+  Transitions L1, Filter Effects (parser+CPU render), Pseudo-elements
+  ::before/::after, Backgrounds L3 (parser+paint+multi),
+  @font-face (parser+FS runtime+per-text font lookup), SVG basic shapes,
+  Canvas tag layout, clip-path (parser+CPU render), Cascade Layers @layer,
+  text-shadow, @media L4 (prefers-*/hover/pointer), Math fci L4,
+  text-transform/aspect-ratio, Form pseudo-classes, Color Adjust + Containment,
+  scroll/scrollbar properties, place-* + gap, scroll-snap parser,
+  3D transforms parsing, transform chain, text-decoration L4, text-indent
 
-CSS Selectors L4, Values L4, Color L4, Logical Properties, Animations rozsireni,
-Nesting, Container Queries, Box-shadow inset, Radial+conic gradients,
-Transitions L1, Filter Effects (parser+CPU render), Pseudo-elements ::before/::after,
-Backgrounds L3 (parser+paint+multi), @font-face (parser+FS runtime),
-SVG basic shapes, Canvas tag layout, clip-path (parser+CPU render),
-Cascade Layers @layer, text-shadow, @media L4 (prefers-*/hover/pointer),
-Math fci L4 (round/sqrt/sin/cos/pow/hypot...), text-transform/aspect-ratio,
-Form pseudo-classes (:required/:disabled/:checked/:read-only/:placeholder-shown),
-Color Adjust + Containment, scroll/scrollbar properties,
-place-* + gap shorthandy, scroll-snap parser,
-3D transforms parsing (translate3d/rotate3d/scale3d/matrix3d/perspective),
-transform chain, text-decoration L4, text-indent,
-HTMLFormElement props (action/method/elements), innerHTML/outerHTML,
-font-family parser.
+JS API:
+- HTMLFormElement (action/method/elements/submit() + form data + url_encode)
+- innerHTML / outerHTML getters
+- font-family parser + GlyphAtlas refactor (per-text font lookup)
+- Canvas API JS bindings + paths (fillRect/strokeRect/clearRect/fillText/
+  beginPath/moveTo/lineTo/arc/closePath/stroke/fill) + render emit
+- HTMLElement.style.setProperty/getPropertyValue/removeProperty
+- Element.classList (add/remove/toggle/contains)
+- Element.dataset (data-* atributy, kebab->camelCase)
+- Element.matches(selector), Element.closest(selector)
 
 Test runner skripty (run_tests.ps1 + .sh).
 
@@ -44,18 +50,13 @@ Test runner skripty (run_tests.ps1 + .sh).
 1. **Filter blur + drop-shadow render** - 2-pass gauss + offscreen RT
 2. **Filter na cely subtree** - render-to-texture pipeline
 3. **Polygon clip-path** - shader stencil pipeline
-4. **Canvas API JS bindings** - canvas.getContext('2d') + 2D methods
-5. **Per-text font lookup z registry** - GlyphAtlas refactor (family, char, size)
-6. **Form submit() method** + form data POST
-7. **3D transform render pipeline** - perspective + 3D matrix multiply
-8. **innerHTML setter** - HTML parser + DOM mutation
-9. **WebGL**
-10. **Pseudo-elements ::first-line / ::first-letter layout**
-11. **Counter API**
-12. **Anchor positioning L1** (Chrome experimental)
-13. **Scroll-driven animations**
-14. **View transitions L1**
-15. **Houdini APIs**
+4. **3D transform render pipeline** - perspective + matrix multiply
+5. **Form submit fetch POST** - aktualne jen log, real POST pres ureq
+6. **innerHTML setter** - HTML parser + DOM mutation
+7. **Pseudo-elements ::first-line / ::first-letter layout**
+8. **Counter API** (counter-reset/-increment/counter())
+9. **WebGL** - po Canvas, vlastni GL context emulace
+10. **HTTP @font-face load** - aktualne jen FS
 
 ### Mensi
 - :valid/:invalid (form validation)
@@ -72,13 +73,14 @@ Test runner skripty (run_tests.ps1 + .sh).
 - mask-image / mask-mode
 - shape-outside
 - direction: rtl + writing-mode runtime
-- dataset property (data-* attributes)
-- classList (add/remove/toggle/contains)
-- HTMLElement.style.setProperty/getPropertyValue
-- text-decoration render (style wavy/dashed/double)
+- Anchor positioning L1 (Chrome experimental)
+- Scroll-driven animations
+- View transitions L1
+- Houdini APIs
 
 ### TypeScript kompilator
 **User pozadoval**: dotahnu prohlizec, pak prokonzultujem.
+
 Otazky:
 - Scope: full TSC superset vs subset
 - Type checking vs jen strip types -> JS
@@ -97,40 +99,26 @@ Otazky:
 ## Klicove soubory
 
 - `src/main.rs` - CLI rezimy
-- `src/browser/cascade.rs` (~2000 lines) - cascade + animations + transitions +
-  Logical + Values L4 (math fci) + cascade_pseudo + apply_*
-- `src/browser/css_parser.rs` - CSS -> Stylesheet (selectors L4, nesting,
-  container queries, keyframes, pseudo-elements, @font-face, @layer)
-- `src/browser/layout.rs` (~2700 lines) - LayoutBox + parsers (color L4,
-  gradient *, filter, shadow, clip-path, transform chain 3D, BgLayer,
-  text-decoration L4, scroll-snap)
-- `src/browser/render.rs` (~1500 lines) - winit + wgpu, App, frame loop,
-  image atlas, font_registry, WGSL 8 modu shader
-- `src/browser/paint.rs` - DisplayList emit (filter, pseudo, SVG, multi-bg,
-  clip-path apply, text-shadow, text-transform)
-- `src/interpreter/mod.rs` (~3500 lines) - Interpreter, JsValue, DomNode
-  property dispatch (form props, innerHTML/outerHTML)
-- `src/interpreter/builtins.rs` (>2000 lines)
+- `src/browser/cascade.rs` (~2000 lines) - cascade + animations + transitions
+- `src/browser/css_parser.rs` - CSS -> Stylesheet (pub parse_selectors)
+- `src/browser/layout.rs` (~2700 lines) - LayoutBox + parsers + 3D transforms
+- `src/browser/render.rs` (~1700 lines) - winit + wgpu, GlyphAtlas s family
+  lookup, ImageAtlas, font_registry, canvas paint_canvas_ops
+- `src/browser/paint.rs` - DisplayList emit + CanvasOp enum
+- `src/interpreter/mod.rs` (~3700 lines) - Interpreter, JsValue, DomNode
+  property dispatch, style/classList/dataset/canvas/form helpers
 - `static/test.html` + .css - hlavni test page
-- `static/css_modules/<modul>/` - 17+ per-feature stranek
-
-## Co necist hned (velke soubory)
-
-- `src/interpreter/builtins.rs` (>2000)
-- `src/browser/cascade.rs` (~2000)
-- `src/browser/layout.rs` (~2700)
-- `src/browser/render.rs` (~1500)
-- `src/interpreter/mod.rs` (~3500)
-- `src/debug_view/devtools.rs` (>500)
+- `static/css_modules/<modul>/` - 19+ test stranek
 
 ## Dalsi krok pri pokracovani
 
 User: "vsechno, pokracuj. Komplet prohlizec, pak TypeScript".
-Doporucene volby:
-- **A)** Filter blur + RT pipeline
-- **B)** Canvas API JS bindings
-- **C)** Per-text font lookup (GlyphAtlas refactor)
-- **D)** 3D transform render pipeline
-- **E)** form submit() + form data POST
+Doporucene:
+- **A)** Filter blur RT pipeline (offscreen RT, multi-pass gauss)
+- **B)** 3D transform render pipeline (perspective + matrix)
+- **C)** innerHTML setter (HTML parser + DOM mutation)
+- **D)** Counter API (counter-reset/increment/counter())
+- **E)** Form submit real fetch POST
+- **F)** TypeScript kompilator design konzultace
 
 Pri nejasnosti zeptat se.
