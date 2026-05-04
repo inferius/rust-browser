@@ -5233,6 +5233,17 @@ pub(crate) struct WebGLState {
     /// Draw call count (pro testovani + diagnostiku)
     pub draw_call_count: u32,
     pub last_error: u32,
+    /// Vertex attribute slots - index -> slot. Sparse Vec, pevny size 16
+    /// (typical max attributes pro WebGL 1.0 = 8, WebGL 2.0 = 16).
+    pub vertex_attribs: Vec<Option<WebGLAttribSlot>>,
+    /// Uniformy nastavene pro current program (key = uniform name).
+    pub uniforms: std::collections::HashMap<String, WebGLUniformValue>,
+    /// Map z uniform location ID na uniform name (z getUniformLocation).
+    pub uniform_locations: std::collections::HashMap<u32, String>,
+    /// Map z attrib location ID na attrib name (pro debug).
+    pub attrib_locations: std::collections::HashMap<u32, String>,
+    /// Recorded draw commands queue (phase 3b: renderer drain + real wgpu emit).
+    pub draw_queue: Vec<WebGLDrawCmd>,
 }
 
 pub(crate) struct WebGLShader {
@@ -5263,6 +5274,53 @@ pub(crate) struct WebGLTexture {
     pub data: Vec<u8>,
 }
 
+/// Vertex attribute slot - state nastaveny pres vertexAttribPointer/enableVertexAttribArray.
+#[derive(Clone, Debug)]
+pub(crate) struct WebGLAttribSlot {
+    pub buffer_id: u32,
+    pub size: i32,         // 1..4 components
+    pub component_type: u32,  // FLOAT/UNSIGNED_BYTE/...
+    pub normalized: bool,
+    pub stride: i32,
+    pub offset: i32,
+    pub enabled: bool,
+}
+
+/// Uniform value (float/int/matrix variants).
+#[derive(Clone, Debug)]
+pub(crate) enum WebGLUniformValue {
+    Float(Vec<f32>),    // 1f, 2f, 3f, 4f, 1fv, 2fv, 3fv, 4fv
+    Int(Vec<i32>),      // 1i, 2i, 3i, 4i, 1iv, ...
+    Mat(Vec<f32>),      // matrix2/3/4 fv
+}
+
+/// Recorded draw command - queue pro renderer (phase 3b real emission).
+#[derive(Clone, Debug)]
+pub(crate) enum WebGLDrawCmd {
+    ClearColor([f32; 4]),
+    Clear(u32),  // mask
+    DrawArrays {
+        program_id: Option<u32>,
+        mode: u32,
+        first: i32,
+        count: i32,
+        attribs: Vec<(u32, WebGLAttribSlot)>,  // (location, slot)
+        uniforms: std::collections::HashMap<String, WebGLUniformValue>,
+        viewport: [i32; 4],
+    },
+    DrawElements {
+        program_id: Option<u32>,
+        mode: u32,
+        count: i32,
+        index_type: u32,
+        offset: i32,
+        index_buffer_id: Option<u32>,
+        attribs: Vec<(u32, WebGLAttribSlot)>,
+        uniforms: std::collections::HashMap<String, WebGLUniformValue>,
+        viewport: [i32; 4],
+    },
+}
+
 impl WebGLState {
     pub fn new() -> Self {
         Self {
@@ -5281,6 +5339,11 @@ impl WebGLState {
             depth_test_enabled: false,
             draw_call_count: 0,
             last_error: 0,
+            vertex_attribs: vec![None; 16],
+            uniforms: std::collections::HashMap::new(),
+            uniform_locations: std::collections::HashMap::new(),
+            attrib_locations: std::collections::HashMap::new(),
+            draw_queue: Vec::new(),
         }
     }
 
@@ -5421,15 +5484,19 @@ fn create_webgl_stub_context() -> JsValue {
             let g = it.next().map(|v| v.to_number()).unwrap_or(0.0) as f32;
             let b = it.next().map(|v| v.to_number()).unwrap_or(0.0) as f32;
             let a = it.next().map(|v| v.to_number()).unwrap_or(1.0) as f32;
-            st.borrow_mut().clear_color = [r, g, b, a];
+            let mut s = st.borrow_mut();
+            s.clear_color = [r, g, b, a];
+            s.draw_queue.push(WebGLDrawCmd::ClearColor([r, g, b, a]));
             Ok(JsValue::Undefined)
         }));
     }
     {
         let st = Rc::clone(&state);
-        obj_rc.borrow_mut().set("clear".into(), native("gl.clear", move |_| {
-            // Phase 1: jen zaznameni clear count + reset state markers.
-            st.borrow_mut().draw_call_count += 1;
+        obj_rc.borrow_mut().set("clear".into(), native("gl.clear", move |args| {
+            let mask = args.into_iter().next().map(|v| v.to_number()).unwrap_or(0.0) as u32;
+            let mut s = st.borrow_mut();
+            s.draw_call_count += 1;
+            s.draw_queue.push(WebGLDrawCmd::Clear(mask));
             Ok(JsValue::Undefined)
         }));
     }
@@ -5815,35 +5882,140 @@ fn create_webgl_stub_context() -> JsValue {
         }));
     }
 
-    // ─── Locations + uniforms (stub - vraci unique IDs) ──────────────
-    obj_rc.borrow_mut().set("getAttribLocation".into(), native("gl.getAttribLocation", |args| {
-        // Hash z prog_id + name -> stable id (positive, ne -1)
-        let mut it = args.into_iter();
-        let _prog = it.next();
-        let name = it.next().map(|v| v.to_string()).unwrap_or_default();
-        // Pseudo-stable ID podle name hash
-        let id = name.bytes().fold(0u32, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u32)) & 0xFF;
-        Ok(JsValue::Number(id as f64))
-    }));
-    obj_rc.borrow_mut().set("getUniformLocation".into(), native("gl.getUniformLocation", |args| {
-        let mut it = args.into_iter();
-        let _prog = it.next();
-        let name = it.next().map(|v| v.to_string()).unwrap_or_default();
-        let id = name.bytes().fold(0u32, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u32)) & 0xFF;
-        // Vrati objekt (WebGL spec - nekteri lib check `=== null`)
-        let obj = Rc::new(RefCell::new(JsObject::new()));
-        obj.borrow_mut().set("__webgl_uniform_id__".into(), JsValue::Number(id as f64));
-        obj.borrow_mut().set("__webgl_uniform_name__".into(), JsValue::Str(name));
-        Ok(JsValue::Object(obj))
-    }));
+    // ─── Locations + uniforms ────────────────────────────────────────
+    {
+        let st = Rc::clone(&state);
+        obj_rc.borrow_mut().set("getAttribLocation".into(), native("gl.getAttribLocation", move |args| {
+            let mut it = args.into_iter();
+            let _prog = it.next();
+            let name = it.next().map(|v| v.to_string()).unwrap_or_default();
+            // Stable ID podle name hash (positive, ne -1)
+            let id = name.bytes().fold(0u32, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u32)) % 16;
+            st.borrow_mut().attrib_locations.insert(id, name);
+            Ok(JsValue::Number(id as f64))
+        }));
+    }
+    {
+        let st = Rc::clone(&state);
+        obj_rc.borrow_mut().set("getUniformLocation".into(), native("gl.getUniformLocation", move |args| {
+            let mut it = args.into_iter();
+            let _prog = it.next();
+            let name = it.next().map(|v| v.to_string()).unwrap_or_default();
+            let id = name.bytes().fold(0u32, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u32)) & 0xFFFF;
+            st.borrow_mut().uniform_locations.insert(id, name.clone());
+            let obj = Rc::new(RefCell::new(JsObject::new()));
+            obj.borrow_mut().set("__webgl_uniform_id__".into(), JsValue::Number(id as f64));
+            obj.borrow_mut().set("__webgl_uniform_name__".into(), JsValue::Str(name));
+            Ok(JsValue::Object(obj))
+        }));
+    }
 
-    // ─── Vertex attribs + uniforms (no-op pro phase 1) ──────────────
-    for m in &["vertexAttribPointer", "enableVertexAttribArray", "disableVertexAttribArray",
-               "uniform1f", "uniform2f", "uniform3f", "uniform4f",
+    // ─── Vertex attribs ──────────────────────────────────────────────
+    {
+        let st = Rc::clone(&state);
+        obj_rc.borrow_mut().set("vertexAttribPointer".into(), native("gl.vertexAttribPointer", move |args| {
+            let mut it = args.into_iter();
+            let index = it.next().map(|v| v.to_number()).unwrap_or(0.0) as usize;
+            let size = it.next().map(|v| v.to_number()).unwrap_or(0.0) as i32;
+            let component_type = it.next().map(|v| v.to_number()).unwrap_or(0.0) as u32;
+            let normalized = it.next().map(|v| matches!(v, JsValue::Bool(true))).unwrap_or(false);
+            let stride = it.next().map(|v| v.to_number()).unwrap_or(0.0) as i32;
+            let offset = it.next().map(|v| v.to_number()).unwrap_or(0.0) as i32;
+            let mut s = st.borrow_mut();
+            let buf_id = s.bound_array_buffer.unwrap_or(0);
+            if index < s.vertex_attribs.len() {
+                let prev_enabled = s.vertex_attribs[index].as_ref().map(|a| a.enabled).unwrap_or(false);
+                s.vertex_attribs[index] = Some(WebGLAttribSlot {
+                    buffer_id: buf_id, size, component_type, normalized, stride, offset,
+                    enabled: prev_enabled,
+                });
+            }
+            Ok(JsValue::Undefined)
+        }));
+    }
+    {
+        let st = Rc::clone(&state);
+        obj_rc.borrow_mut().set("enableVertexAttribArray".into(), native("gl.enableVertexAttribArray", move |args| {
+            let index = args.into_iter().next().map(|v| v.to_number()).unwrap_or(0.0) as usize;
+            let mut s = st.borrow_mut();
+            if index < s.vertex_attribs.len() {
+                if let Some(slot) = s.vertex_attribs[index].as_mut() {
+                    slot.enabled = true;
+                } else {
+                    // Vytvori placeholder slot
+                    s.vertex_attribs[index] = Some(WebGLAttribSlot {
+                        buffer_id: 0, size: 0, component_type: 0, normalized: false,
+                        stride: 0, offset: 0, enabled: true,
+                    });
+                }
+            }
+            Ok(JsValue::Undefined)
+        }));
+    }
+    {
+        let st = Rc::clone(&state);
+        obj_rc.borrow_mut().set("disableVertexAttribArray".into(), native("gl.disableVertexAttribArray", move |args| {
+            let index = args.into_iter().next().map(|v| v.to_number()).unwrap_or(0.0) as usize;
+            let mut s = st.borrow_mut();
+            if index < s.vertex_attribs.len() {
+                if let Some(slot) = s.vertex_attribs[index].as_mut() {
+                    slot.enabled = false;
+                }
+            }
+            Ok(JsValue::Undefined)
+        }));
+    }
+
+    // ─── Uniforms - real recording ───────────────────────────────────
+    let make_uniform_setter = |kind: &'static str, st: Rc<RefCell<WebGLState>>| {
+        native(&format!("gl.{kind}"), move |args| {
+            let mut it = args.into_iter();
+            let loc = it.next();
+            let name = match &loc {
+                Some(JsValue::Object(o)) => o.borrow().props.get("__webgl_uniform_name__")
+                    .map(|v| v.to_string()).unwrap_or_default(),
+                _ => return Ok(JsValue::Undefined),
+            };
+            let value: WebGLUniformValue = match kind {
+                "uniform1f" | "uniform2f" | "uniform3f" | "uniform4f" => {
+                    let nums: Vec<f32> = it.map(|v| v.to_number() as f32).collect();
+                    WebGLUniformValue::Float(nums)
+                }
+                "uniform1fv" | "uniform2fv" | "uniform3fv" | "uniform4fv" => {
+                    let arg = it.next().unwrap_or(JsValue::Undefined);
+                    let nums: Vec<f32> = if let JsValue::Array(a) = arg {
+                        a.borrow().iter().map(|v| v.to_number() as f32).collect()
+                    } else { vec![arg.to_number() as f32] };
+                    WebGLUniformValue::Float(nums)
+                }
+                "uniform1i" | "uniform2i" | "uniform3i" | "uniform4i" => {
+                    let nums: Vec<i32> = it.map(|v| v.to_number() as i32).collect();
+                    WebGLUniformValue::Int(nums)
+                }
+                "uniformMatrix2fv" | "uniformMatrix3fv" | "uniformMatrix4fv" => {
+                    let _transpose = it.next();  // ignore
+                    let arg = it.next().unwrap_or(JsValue::Undefined);
+                    let nums: Vec<f32> = if let JsValue::Array(a) = arg {
+                        a.borrow().iter().map(|v| v.to_number() as f32).collect()
+                    } else { Vec::new() };
+                    WebGLUniformValue::Mat(nums)
+                }
+                _ => WebGLUniformValue::Float(Vec::new()),
+            };
+            st.borrow_mut().uniforms.insert(name, value);
+            Ok(JsValue::Undefined)
+        })
+    };
+    for m in &["uniform1f", "uniform2f", "uniform3f", "uniform4f",
                "uniform1i", "uniform2i", "uniform3i", "uniform4i",
                "uniform1fv", "uniform2fv", "uniform3fv", "uniform4fv",
-               "uniformMatrix2fv", "uniformMatrix3fv", "uniformMatrix4fv",
-               "blendFunc", "blendFuncSeparate", "depthFunc", "cullFace", "frontFace",
+               "uniformMatrix2fv", "uniformMatrix3fv", "uniformMatrix4fv"] {
+        let name = m.to_string();
+        obj_rc.borrow_mut().set(name.clone(), make_uniform_setter(m, Rc::clone(&state)));
+    }
+
+    // ─── No-op-zatim metody ──────────────────────────────────────────
+    for m in &["blendFunc", "blendFuncSeparate", "depthFunc", "cullFace", "frontFace",
                "activeTexture", "pixelStorei", "flush", "finish",
                "scissor", "stencilFunc", "stencilOp", "stencilMask",
                "lineWidth", "polygonOffset", "depthMask", "colorMask"] {
@@ -5851,18 +6023,53 @@ fn create_webgl_stub_context() -> JsValue {
         obj_rc.borrow_mut().set(name.clone(), native(&name, |_| Ok(JsValue::Undefined)));
     }
 
-    // ─── Draw calls (incrementuje counter) ──────────────────────────
+    // ─── Draw calls - real recording ────────────────────────────────
     {
         let st = Rc::clone(&state);
-        obj_rc.borrow_mut().set("drawArrays".into(), native("gl.drawArrays", move |_| {
-            st.borrow_mut().draw_call_count += 1;
+        obj_rc.borrow_mut().set("drawArrays".into(), native("gl.drawArrays", move |args| {
+            let mut it = args.into_iter();
+            let mode = it.next().map(|v| v.to_number()).unwrap_or(0.0) as u32;
+            let first = it.next().map(|v| v.to_number()).unwrap_or(0.0) as i32;
+            let count = it.next().map(|v| v.to_number()).unwrap_or(0.0) as i32;
+            let mut s = st.borrow_mut();
+            s.draw_call_count += 1;
+            // Snapshot enabled attribs
+            let attribs: Vec<(u32, WebGLAttribSlot)> = s.vertex_attribs.iter().enumerate()
+                .filter_map(|(i, opt)| opt.as_ref().filter(|a| a.enabled).map(|a| (i as u32, a.clone())))
+                .collect();
+            let cmd = WebGLDrawCmd::DrawArrays {
+                program_id: s.current_program,
+                mode, first, count,
+                attribs,
+                uniforms: s.uniforms.clone(),
+                viewport: s.viewport_xywh,
+            };
+            s.draw_queue.push(cmd);
             Ok(JsValue::Undefined)
         }));
     }
     {
         let st = Rc::clone(&state);
-        obj_rc.borrow_mut().set("drawElements".into(), native("gl.drawElements", move |_| {
-            st.borrow_mut().draw_call_count += 1;
+        obj_rc.borrow_mut().set("drawElements".into(), native("gl.drawElements", move |args| {
+            let mut it = args.into_iter();
+            let mode = it.next().map(|v| v.to_number()).unwrap_or(0.0) as u32;
+            let count = it.next().map(|v| v.to_number()).unwrap_or(0.0) as i32;
+            let index_type = it.next().map(|v| v.to_number()).unwrap_or(0.0) as u32;
+            let offset = it.next().map(|v| v.to_number()).unwrap_or(0.0) as i32;
+            let mut s = st.borrow_mut();
+            s.draw_call_count += 1;
+            let attribs: Vec<(u32, WebGLAttribSlot)> = s.vertex_attribs.iter().enumerate()
+                .filter_map(|(i, opt)| opt.as_ref().filter(|a| a.enabled).map(|a| (i as u32, a.clone())))
+                .collect();
+            let cmd = WebGLDrawCmd::DrawElements {
+                program_id: s.current_program,
+                mode, count, index_type, offset,
+                index_buffer_id: s.bound_element_buffer,
+                attribs,
+                uniforms: s.uniforms.clone(),
+                viewport: s.viewport_xywh,
+            };
+            s.draw_queue.push(cmd);
             Ok(JsValue::Undefined)
         }));
     }
@@ -5898,6 +6105,43 @@ fn create_webgl_stub_context() -> JsValue {
         let st = Rc::clone(&state);
         obj_rc.borrow_mut().set("__draw_call_count__".into(), native("gl.__draw_call_count__", move |_| {
             Ok(JsValue::Number(st.borrow().draw_call_count as f64))
+        }));
+    }
+    {
+        let st = Rc::clone(&state);
+        obj_rc.borrow_mut().set("__draw_queue_size__".into(), native("gl.__draw_queue_size__", move |_| {
+            Ok(JsValue::Number(st.borrow().draw_queue.len() as f64))
+        }));
+    }
+    {
+        let st = Rc::clone(&state);
+        obj_rc.borrow_mut().set("__attrib_enabled__".into(), native("gl.__attrib_enabled__", move |args| {
+            let idx = args.into_iter().next().map(|v| v.to_number()).unwrap_or(0.0) as usize;
+            let s = st.borrow();
+            let enabled = s.vertex_attribs.get(idx).and_then(|a| a.as_ref()).map(|a| a.enabled).unwrap_or(false);
+            Ok(JsValue::Bool(enabled))
+        }));
+    }
+    {
+        let st = Rc::clone(&state);
+        obj_rc.borrow_mut().set("__uniform_value__".into(), native("gl.__uniform_value__", move |args| {
+            let name = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+            let s = st.borrow();
+            match s.uniforms.get(&name) {
+                Some(WebGLUniformValue::Float(v)) => {
+                    let arr: Vec<JsValue> = v.iter().map(|x| JsValue::Number(*x as f64)).collect();
+                    Ok(JsValue::Array(Rc::new(RefCell::new(arr))))
+                }
+                Some(WebGLUniformValue::Int(v)) => {
+                    let arr: Vec<JsValue> = v.iter().map(|x| JsValue::Number(*x as f64)).collect();
+                    Ok(JsValue::Array(Rc::new(RefCell::new(arr))))
+                }
+                Some(WebGLUniformValue::Mat(v)) => {
+                    let arr: Vec<JsValue> = v.iter().map(|x| JsValue::Number(*x as f64)).collect();
+                    Ok(JsValue::Array(Rc::new(RefCell::new(arr))))
+                }
+                None => Ok(JsValue::Null),
+            }
         }));
     }
     {

@@ -348,3 +348,164 @@ fn webgl_is_context_lost_false() {
     "#));
     assert_eq!(r.to_string(), "false");
 }
+
+// ─── Phase 3a: command queue + state recording ─────────────────────────
+
+#[test]
+fn webgl_clear_color_pushed_to_queue() {
+    let r = run(&format!(r#"{SETUP}
+        gl.clearColor(0.5, 0.5, 0.5, 1.0);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        return gl.__draw_queue_size__();
+    "#));
+    assert_eq!(r.to_string(), "2", "ClearColor + Clear = 2 queue items");
+}
+
+#[test]
+fn webgl_draw_arrays_pushes_to_queue() {
+    let r = run(&format!(r#"{SETUP}
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+        gl.drawArrays(gl.TRIANGLES, 0, 6);
+        return gl.__draw_queue_size__();
+    "#));
+    assert_eq!(r.to_string(), "2");
+}
+
+#[test]
+fn webgl_draw_elements_pushes_to_queue() {
+    let r = run(&format!(r#"{SETUP}
+        gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, 0);
+        return gl.__draw_queue_size__();
+    "#));
+    assert_eq!(r.to_string(), "1");
+}
+
+#[test]
+fn webgl_enable_vertex_attrib_array_state() {
+    let r = run(&format!(r#"{SETUP}
+        const p = gl.createProgram();
+        const loc = gl.getAttribLocation(p, "aPos");
+        gl.enableVertexAttribArray(loc);
+        return gl.__attrib_enabled__(loc);
+    "#));
+    assert_eq!(r.to_string(), "true");
+}
+
+#[test]
+fn webgl_disable_vertex_attrib_array_state() {
+    let r = run(&format!(r#"{SETUP}
+        const p = gl.createProgram();
+        const loc = gl.getAttribLocation(p, "aPos");
+        gl.enableVertexAttribArray(loc);
+        gl.disableVertexAttribArray(loc);
+        return gl.__attrib_enabled__(loc);
+    "#));
+    assert_eq!(r.to_string(), "false");
+}
+
+#[test]
+fn webgl_uniform1f_stored() {
+    let r = run(&format!(r#"{SETUP}
+        const p = gl.createProgram();
+        const loc = gl.getUniformLocation(p, "uTime");
+        gl.uniform1f(loc, 0.42);
+        const v = gl.__uniform_value__("uTime");
+        return v[0];
+    "#));
+    let val: f64 = r.to_string().parse().unwrap();
+    assert!((val - 0.42).abs() < 1e-3);
+}
+
+#[test]
+fn webgl_uniform2f_stored() {
+    let r = run(&format!(r#"{SETUP}
+        const p = gl.createProgram();
+        const loc = gl.getUniformLocation(p, "uPos");
+        gl.uniform2f(loc, 1.0, 2.0);
+        const v = gl.__uniform_value__("uPos");
+        return v[0] + "," + v[1];
+    "#));
+    assert_eq!(r.to_string(), "1,2");
+}
+
+#[test]
+fn webgl_uniform4f_stored() {
+    let r = run(&format!(r#"{SETUP}
+        const p = gl.createProgram();
+        const loc = gl.getUniformLocation(p, "uColor");
+        gl.uniform4f(loc, 1.0, 0.5, 0.25, 1.0);
+        const v = gl.__uniform_value__("uColor");
+        return v.join(",");
+    "#));
+    assert_eq!(r.to_string(), "1,0.5,0.25,1");
+}
+
+#[test]
+fn webgl_uniform_matrix4fv_stored() {
+    let r = run(&format!(r#"{SETUP}
+        const p = gl.createProgram();
+        const loc = gl.getUniformLocation(p, "uMVP");
+        const id = [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1];
+        gl.uniformMatrix4fv(loc, false, id);
+        const v = gl.__uniform_value__("uMVP");
+        return v.length;
+    "#));
+    assert_eq!(r.to_string(), "16");
+}
+
+#[test]
+fn webgl_uniform1i_stored() {
+    let r = run(&format!(r#"{SETUP}
+        const p = gl.createProgram();
+        const loc = gl.getUniformLocation(p, "uSampler");
+        gl.uniform1i(loc, 7);
+        const v = gl.__uniform_value__("uSampler");
+        return v[0];
+    "#));
+    assert_eq!(r.to_string(), "7");
+}
+
+#[test]
+fn webgl_uniform_uninitialized_returns_null() {
+    let r = run(&format!(r#"{SETUP}
+        const v = gl.__uniform_value__("undefined_uniform");
+        return v;
+    "#));
+    let s = r.to_string();
+    assert!(s == "null" || s == "undefined");
+}
+
+#[test]
+fn webgl_realistic_render_loop_records_full_queue() {
+    let r = run(&format!(r#"{SETUP}
+        // Setup
+        const v = gl.createShader(gl.VERTEX_SHADER);
+        gl.shaderSource(v, "void main() {{ gl_Position = vec4(0.0); }}"); gl.compileShader(v);
+        const f = gl.createShader(gl.FRAGMENT_SHADER);
+        gl.shaderSource(f, "void main() {{ gl_FragColor = vec4(1.0); }}"); gl.compileShader(f);
+        const p = gl.createProgram();
+        gl.attachShader(p, v); gl.attachShader(p, f);
+        gl.linkProgram(p); gl.useProgram(p);
+
+        const buf = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+        gl.bufferData(gl.ARRAY_BUFFER, [-1, -1, 1, -1, 0, 1], gl.STATIC_DRAW);
+
+        const aPos = gl.getAttribLocation(p, "aPos");
+        gl.enableVertexAttribArray(aPos);
+        gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+        const uTime = gl.getUniformLocation(p, "uTime");
+        gl.uniform1f(uTime, 1.5);
+
+        // 60 frame render loop
+        for (let i = 0; i < 60; i++) {{
+            gl.clearColor(0, 0, 0, 1);
+            gl.clear(gl.COLOR_BUFFER_BIT);
+            gl.drawArrays(gl.TRIANGLES, 0, 3);
+        }}
+        return gl.__draw_queue_size__();
+    "#));
+    // 60 * (clearColor + clear + drawArrays) = 180
+    assert_eq!(r.to_string(), "180");
+}
