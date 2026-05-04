@@ -2140,6 +2140,14 @@ impl Interpreter {
                 Ok(JsValue::Undefined)
             }
             JsValue::Object(o) => {
+                // Proxy: delegovani na target (bez full handler traps)
+                // Pokud key je interni, vrat primo; jinak deleguj
+                if !key.starts_with("__") {
+                    let proxy_target = o.borrow().props.get("__proxy_target__").cloned();
+                    if let Some(target) = proxy_target {
+                        return self.get_prop(&target, key);
+                    }
+                }
                 // Specialni klic __proto__ vraci prototyp objektu
                 if key == "__proto__" {
                     return Ok(match o.borrow().proto.clone() {
@@ -3256,6 +3264,16 @@ impl Interpreter {
                     let target = args.into_iter().next().unwrap_or(JsValue::Undefined);
                     let mut obj = JsObject::new();
                     obj.set("__weak_target__".into(), target);
+                    return Ok(JsValue::Object(Rc::new(RefCell::new(obj))));
+                }
+                "Proxy" => {
+                    // new Proxy(target, handler) - wraps target with trap calls
+                    let mut iter = args.into_iter();
+                    let target = iter.next().unwrap_or(JsValue::Undefined);
+                    let handler = iter.next().unwrap_or(JsValue::Undefined);
+                    let mut obj = JsObject::new();
+                    obj.set("__proxy_target__".into(), target);
+                    obj.set("__proxy_handler__".into(), handler);
                     return Ok(JsValue::Object(Rc::new(RefCell::new(obj))));
                 }
                 "FinalizationRegistry" => {
