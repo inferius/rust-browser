@@ -1,23 +1,250 @@
 /// wgpu renderer + winit window + frame loop.
 ///
-/// Strategie: jeden render pass per frame. Display list (painting) preveden
-/// na vertex bufer (rectangly = 2 trojuhelniky). Text zatim ne (potrebuje glyph atlas).
-///
-/// Module je gated za feature `gui` aby `cargo build` v knihovne (testy)
-/// nemusel slingovat winit/wgpu pri kazde kompilaci.
+/// Real implementace - vertex buffer s rectangly + glyph atlas pro text.
+/// Display list (paint::DisplayCommand) -> vertex data -> GPU.
 
 use super::paint::DisplayCommand;
+use bytemuck::{Pod, Zeroable};
 
-#[cfg(feature = "gui")]
-mod gpu_impl {
-    use super::*;
-    // ... budouci wgpu kod ...
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct Vertex {
+    pos: [f32; 2],   // pixel coords
+    color: [f32; 4], // RGBA 0..1
+    uv: [f32; 2],    // texture coords (pro text)
+    is_text: f32,    // 0.0 = solid color, 1.0 = sample texture
 }
 
-/// Public API renderer - vytvori window, spustí event loop, vykresli display list.
-/// Tento entry point bude volan z main.rs pri rezimu "browser run".
-///
-/// Aktualne stub - skutecny wgpu kod si vyzada zaslouzene mnozstvi setup.
+const RECT_SHADER: &str = r#"
+struct Uniforms {
+    viewport: vec2<f32>,
+};
+@group(0) @binding(0) var<uniform> u: Uniforms;
+@group(0) @binding(1) var atlas_tex: texture_2d<f32>;
+@group(0) @binding(2) var atlas_smp: sampler;
+
+struct VertexIn {
+    @location(0) pos: vec2<f32>,
+    @location(1) color: vec4<f32>,
+    @location(2) uv: vec2<f32>,
+    @location(3) is_text: f32,
+};
+
+struct VertexOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) color: vec4<f32>,
+    @location(1) uv: vec2<f32>,
+    @location(2) is_text: f32,
+};
+
+@vertex
+fn vs_main(in: VertexIn) -> VertexOut {
+    var out: VertexOut;
+    // Pixel -> NDC: (0,0) top-left -> (-1,1); (w,h) bottom-right -> (1,-1)
+    let x = (in.pos.x / u.viewport.x) * 2.0 - 1.0;
+    let y = 1.0 - (in.pos.y / u.viewport.y) * 2.0;
+    out.clip = vec4<f32>(x, y, 0.0, 1.0);
+    out.color = in.color;
+    out.uv = in.uv;
+    out.is_text = in.is_text;
+    return out;
+}
+
+@fragment
+fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
+    if (in.is_text > 0.5) {
+        // Text: sample atlas alpha, color is text color
+        let alpha = textureSample(atlas_tex, atlas_smp, in.uv).r;
+        return vec4<f32>(in.color.rgb, in.color.a * alpha);
+    }
+    return in.color;
+}
+"#;
+
+/// Vrati bytemuck-friendly vertices pro display list.
+/// Pro Rect: 6 vertexu (2 trojuhelniky). Pro text: 6 vertexu per glyph.
+fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas) -> Vec<Vertex> {
+    let mut verts = Vec::new();
+    for cmd in commands {
+        match cmd {
+            DisplayCommand::Rect { x, y, w, h, color } => {
+                push_rect(&mut verts, *x, *y, *w, *h, normalize_color(color), [0.0, 0.0], 0.0);
+            }
+            DisplayCommand::Border { x, y, w, h, width, color } => {
+                let c = normalize_color(color);
+                let bw = *width;
+                // Top
+                push_rect(&mut verts, *x, *y, *w, bw, c, [0.0, 0.0], 0.0);
+                // Bottom
+                push_rect(&mut verts, *x, *y + *h - bw, *w, bw, c, [0.0, 0.0], 0.0);
+                // Left
+                push_rect(&mut verts, *x, *y, bw, *h, c, [0.0, 0.0], 0.0);
+                // Right
+                push_rect(&mut verts, *x + *w - bw, *y, bw, *h, c, [0.0, 0.0], 0.0);
+            }
+            DisplayCommand::Text { x, y, content, color, font_size } => {
+                let c = normalize_color(color);
+                let mut pen_x = *x;
+                let pen_y = *y + *font_size;  // baseline
+                for ch in content.chars() {
+                    if let Some(g) = atlas.get(ch, *font_size as u32) {
+                        let gx = pen_x + g.bearing_x;
+                        let gy = pen_y - g.bearing_y;
+                        push_rect_uv(&mut verts, gx, gy, g.width, g.height, c, g.uv0, g.uv1, 1.0);
+                        pen_x += g.advance;
+                    } else {
+                        pen_x += font_size * 0.5;
+                    }
+                }
+            }
+        }
+    }
+    verts
+}
+
+fn push_rect(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f32, h: f32,
+             color: [f32; 4], uv: [f32; 2], is_text: f32) {
+    push_rect_uv(verts, x, y, w, h, color, uv, [uv[0], uv[1]], is_text);
+}
+
+fn push_rect_uv(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f32, h: f32,
+                color: [f32; 4], uv0: [f32; 2], uv1: [f32; 2], is_text: f32) {
+    // 2 trojuhelniky: TL-TR-BL a BL-TR-BR
+    let tl = Vertex { pos: [x,     y],     color, uv: [uv0[0], uv0[1]], is_text };
+    let tr = Vertex { pos: [x + w, y],     color, uv: [uv1[0], uv0[1]], is_text };
+    let bl = Vertex { pos: [x,     y + h], color, uv: [uv0[0], uv1[1]], is_text };
+    let br = Vertex { pos: [x + w, y + h], color, uv: [uv1[0], uv1[1]], is_text };
+    verts.push(tl); verts.push(tr); verts.push(bl);
+    verts.push(bl); verts.push(tr); verts.push(br);
+}
+
+fn normalize_color(c: &[u8; 4]) -> [f32; 4] {
+    [
+        c[0] as f32 / 255.0,
+        c[1] as f32 / 255.0,
+        c[2] as f32 / 255.0,
+        c[3] as f32 / 255.0,
+    ]
+}
+
+/// Pokusi se najit a nacist systemovy font.
+fn load_default_font() -> Vec<u8> {
+    if let Ok(path) = std::env::var("RUST_WEB_ENGINE_FONT_PATH") {
+        if let Ok(data) = std::fs::read(&path) { return data; }
+    }
+    let candidates: &[&str] = &[
+        "C:\\Windows\\Fonts\\arial.ttf",
+        "C:\\Windows\\Fonts\\segoeui.ttf",
+        "C:\\Windows\\Fonts\\verdana.ttf",
+        "/System/Library/Fonts/Helvetica.ttc",
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans.ttf",
+    ];
+    for path in candidates {
+        if let Ok(data) = std::fs::read(path) {
+            return data;
+        }
+    }
+    panic!("Nelze najit system font. Set RUST_WEB_ENGINE_FONT_PATH na cestu k TTF souboru.");
+}
+
+// ─── Glyph atlas ────────────────────────────────────────────────────────
+
+const ATLAS_SIZE: u32 = 1024;
+
+struct GlyphInfo {
+    /// UV coords v atlasu (0..1)
+    uv0: [f32; 2],
+    uv1: [f32; 2],
+    width: f32,
+    height: f32,
+    bearing_x: f32,
+    bearing_y: f32,
+    advance: f32,
+}
+
+struct GlyphAtlas {
+    font: fontdue::Font,
+    /// Atlas pixely (shedy: 0=transparent, 255=opaque)
+    pixels: Vec<u8>,
+    /// (char, font_size) -> glyph info
+    cache: std::collections::HashMap<(char, u32), GlyphInfo>,
+    /// Volna pozice pro dalsi glyph
+    cursor_x: u32,
+    cursor_y: u32,
+    /// Vyska aktualniho radku
+    row_height: u32,
+}
+
+impl GlyphAtlas {
+    fn new() -> Self {
+        // Loadnuti systemoveho fontu - zkusi standardni umisteni.
+        // Override: env var RUST_WEB_ENGINE_FONT_PATH
+        let font_data = load_default_font();
+        let font = fontdue::Font::from_bytes(font_data, fontdue::FontSettings::default())
+            .expect("font parse failed");
+        GlyphAtlas {
+            font,
+            pixels: vec![0u8; (ATLAS_SIZE * ATLAS_SIZE) as usize],
+            cache: std::collections::HashMap::new(),
+            cursor_x: 0,
+            cursor_y: 0,
+            row_height: 0,
+        }
+    }
+
+    fn get(&self, ch: char, size: u32) -> Option<&GlyphInfo> {
+        self.cache.get(&(ch, size))
+    }
+
+    /// Rasterize glyph and add to atlas. Returns GlyphInfo.
+    fn add(&mut self, ch: char, size: u32) {
+        if self.cache.contains_key(&(ch, size)) { return; }
+        let (metrics, bitmap) = self.font.rasterize(ch, size as f32);
+        let w = metrics.width as u32;
+        let h = metrics.height as u32;
+
+        // Najdi misto v atlasu
+        if self.cursor_x + w > ATLAS_SIZE {
+            self.cursor_x = 0;
+            self.cursor_y += self.row_height;
+            self.row_height = 0;
+        }
+        if self.cursor_y + h > ATLAS_SIZE {
+            return; // atlas full
+        }
+        // Copy bitmap do atlasu
+        for row in 0..h {
+            for col in 0..w {
+                let src = (row * w + col) as usize;
+                let dst = ((self.cursor_y + row) * ATLAS_SIZE + (self.cursor_x + col)) as usize;
+                if let Some(p) = bitmap.get(src) {
+                    self.pixels[dst] = *p;
+                }
+            }
+        }
+        let info = GlyphInfo {
+            uv0: [self.cursor_x as f32 / ATLAS_SIZE as f32,
+                  self.cursor_y as f32 / ATLAS_SIZE as f32],
+            uv1: [(self.cursor_x + w) as f32 / ATLAS_SIZE as f32,
+                  (self.cursor_y + h) as f32 / ATLAS_SIZE as f32],
+            width: w as f32,
+            height: h as f32,
+            bearing_x: metrics.xmin as f32,
+            bearing_y: metrics.ymin as f32 + h as f32,
+            advance: metrics.advance_width,
+        };
+        self.cache.insert((ch, size), info);
+        self.cursor_x += w + 1;
+        self.row_height = self.row_height.max(h);
+    }
+}
+
+// ─── Public API ─────────────────────────────────────────────────────────
+
+/// Text-mode dump display listu (bez okna).
 pub fn run_browser(html: &str, css: &str) {
     use super::{html_parser, css_parser, cascade, layout, paint};
 
@@ -30,22 +257,17 @@ pub fn run_browser(html: &str, css: &str) {
     let layout_root = layout::layout_tree(&document.root, &style_map, viewport_w, viewport_h);
     let display_list = paint::build_display_list(&layout_root);
 
-    // Bez wgpu init: jen vypisem kolik commandu mame
     println!("Document title: {}", document.title);
     println!("Display list: {} commands", display_list.len());
-    for (i, cmd) in display_list.iter().enumerate().take(10) {
+    for (i, cmd) in display_list.iter().enumerate().take(20) {
         println!("  [{i}] {cmd:?}");
     }
-    if display_list.len() > 10 {
-        println!("  ... +{} more", display_list.len() - 10);
+    if display_list.len() > 20 {
+        println!("  ... +{} more", display_list.len() - 20);
     }
-
-    println!();
-    println!("Pro real rendering spusti binar s argumentem 'window' (vyzaduje winit + wgpu setup).");
 }
 
-/// Public API - spusteni real GUI okna pres winit + wgpu.
-/// Tato funkce je sync (block_on pro async wgpu init).
+/// Real GUI okno s wgpu rendering.
 pub fn run_window_with_html(html: String, css: String) -> Result<(), String> {
     use winit::application::ApplicationHandler;
     use winit::event::WindowEvent;
@@ -59,13 +281,6 @@ pub fn run_window_with_html(html: String, css: String) -> Result<(), String> {
         renderer: Option<Renderer>,
     }
 
-    struct Renderer {
-        surface: wgpu::Surface<'static>,
-        device: wgpu::Device,
-        queue: wgpu::Queue,
-        config: wgpu::SurfaceConfiguration,
-    }
-
     impl ApplicationHandler for App {
         fn resumed(&mut self, event_loop: &ActiveEventLoop) {
             let attrs = Window::default_attributes()
@@ -73,37 +288,8 @@ pub fn run_window_with_html(html: String, css: String) -> Result<(), String> {
                 .with_inner_size(winit::dpi::LogicalSize::new(1024.0, 768.0));
             let window = std::sync::Arc::new(event_loop.create_window(attrs).unwrap());
             self.window = Some(window.clone());
-
-            // wgpu init
-            let instance = wgpu::Instance::default();
-            let surface = instance.create_surface(window.clone()).unwrap();
-            let adapter = pollster::block_on(instance.request_adapter(
-                &wgpu::RequestAdapterOptions {
-                    compatible_surface: Some(&surface),
-                    ..Default::default()
-                }
-            )).unwrap();
-            let (device, queue) = pollster::block_on(adapter.request_device(
-                &wgpu::DeviceDescriptor::default(),
-                None,
-            )).unwrap();
-            let size = window.inner_size();
-            let surface_caps = surface.get_capabilities(&adapter);
-            let config = wgpu::SurfaceConfiguration {
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                format: surface_caps.formats[0],
-                width: size.width,
-                height: size.height,
-                present_mode: wgpu::PresentMode::Fifo,
-                alpha_mode: surface_caps.alpha_modes[0],
-                view_formats: vec![],
-                desired_maximum_frame_latency: 2,
-            };
-            surface.configure(&device, &config);
-
-            self.renderer = Some(Renderer { surface, device, queue, config });
-
-            // Trigger inital paint
+            self.renderer = Some(Renderer::new(window.clone()));
+            self.render();
             window.request_redraw();
         }
 
@@ -112,14 +298,12 @@ pub fn run_window_with_html(html: String, css: String) -> Result<(), String> {
                 WindowEvent::CloseRequested => event_loop.exit(),
                 WindowEvent::Resized(size) => {
                     if let Some(r) = &mut self.renderer {
-                        r.config.width = size.width.max(1);
-                        r.config.height = size.height.max(1);
-                        r.surface.configure(&r.device, &r.config);
+                        r.resize(size.width.max(1), size.height.max(1));
                     }
+                    self.render();
                 }
                 WindowEvent::RedrawRequested => {
                     self.render();
-                    if let Some(w) = &self.window { w.request_redraw(); }
                 }
                 _ => {}
             }
@@ -127,33 +311,30 @@ pub fn run_window_with_html(html: String, css: String) -> Result<(), String> {
     }
 
     impl App {
-        fn render(&self) {
-            let r = match &self.renderer { Some(r) => r, None => return };
-            let frame = match r.surface.get_current_texture() {
-                Ok(f) => f,
-                Err(_) => return,
-            };
-            let view = frame.texture.create_view(&Default::default());
-            let mut encoder = r.device.create_command_encoder(&Default::default());
-            {
-                let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("clear"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &view,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.95, g: 0.95, b: 0.97, a: 1.0 }),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                });
-                // TODO: render display list (rectangly + text) pres wgpu pipeline
+        fn render(&mut self) {
+            use super::{html_parser, css_parser, cascade, layout, paint};
+            let r = match &mut self.renderer { Some(r) => r, None => return };
+
+            let document = html_parser::parse_html(&self.html, "about:blank");
+            let stylesheets = vec![css_parser::parse_stylesheet(&self.css)];
+            let style_map = cascade::cascade(&document.root, &stylesheets);
+            let viewport_w = r.config.width as f32;
+            let viewport_h = r.config.height as f32;
+            let layout_root = layout::layout_tree(&document.root, &style_map, viewport_w, viewport_h);
+            let display_list = paint::build_display_list(&layout_root);
+
+            // Pre-rasterize vsechny glyfy do atlasu
+            for cmd in &display_list {
+                if let DisplayCommand::Text { content, font_size, .. } = cmd {
+                    for ch in content.chars() {
+                        r.atlas.add(ch, *font_size as u32);
+                    }
+                }
             }
-            r.queue.submit(std::iter::once(encoder.finish()));
-            frame.present();
+            r.upload_atlas();
+
+            let verts = build_vertices(&display_list, &r.atlas);
+            r.draw(&verts);
         }
     }
 
@@ -161,4 +342,243 @@ pub fn run_window_with_html(html: String, css: String) -> Result<(), String> {
     let mut app = App { html, css, window: None, renderer: None };
     event_loop.run_app(&mut app).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+// ─── Renderer ───────────────────────────────────────────────────────────
+
+struct Renderer {
+    surface: wgpu::Surface<'static>,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    config: wgpu::SurfaceConfiguration,
+    pipeline: wgpu::RenderPipeline,
+    uniform_buf: wgpu::Buffer,
+    atlas_tex: wgpu::Texture,
+    atlas_view: wgpu::TextureView,
+    atlas_smp: wgpu::Sampler,
+    bind_group_layout: wgpu::BindGroupLayout,
+    bind_group: wgpu::BindGroup,
+    atlas: GlyphAtlas,
+}
+
+impl Renderer {
+    fn new(window: std::sync::Arc<winit::window::Window>) -> Self {
+        let instance = wgpu::Instance::default();
+        let surface = instance.create_surface(window.clone()).unwrap();
+        let adapter = pollster::block_on(instance.request_adapter(
+            &wgpu::RequestAdapterOptions {
+                compatible_surface: Some(&surface),
+                ..Default::default()
+            }
+        )).expect("adapter");
+        let (device, queue) = pollster::block_on(adapter.request_device(
+            &wgpu::DeviceDescriptor::default(),
+            None,
+        )).expect("device");
+        let size = window.inner_size();
+        let surface_caps = surface.get_capabilities(&adapter);
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format: surface_caps.formats[0],
+            width: size.width.max(1),
+            height: size.height.max(1),
+            present_mode: wgpu::PresentMode::Fifo,
+            alpha_mode: surface_caps.alpha_modes[0],
+            view_formats: vec![],
+            desired_maximum_frame_latency: 2,
+        };
+        surface.configure(&device, &config);
+
+        // Atlas texture
+        let atlas_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("glyph_atlas"),
+            size: wgpu::Extent3d { width: ATLAS_SIZE, height: ATLAS_SIZE, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let atlas_view = atlas_tex.create_view(&Default::default());
+        let atlas_smp = device.create_sampler(&wgpu::SamplerDescriptor {
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+
+        let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("uniform"),
+            size: 16, // viewport (vec2) + padding
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("bg"),
+            layout: &bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: uniform_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&atlas_view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&atlas_smp) },
+            ],
+        });
+
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("rect_shader"),
+            source: wgpu::ShaderSource::Wgsl(RECT_SHADER.into()),
+        });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("pl"),
+            bind_group_layouts: &[&bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: "vs_main",
+                compilation_options: Default::default(),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<Vertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![
+                        0 => Float32x2, // pos
+                        1 => Float32x4, // color
+                        2 => Float32x2, // uv
+                        3 => Float32,   // is_text
+                    ],
+                }],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: "fs_main",
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: config.format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+        });
+
+        let atlas = GlyphAtlas::new();
+
+        Renderer {
+            surface, device, queue, config, pipeline, uniform_buf,
+            atlas_tex, atlas_view, atlas_smp, bind_group_layout, bind_group, atlas,
+        }
+    }
+
+    fn resize(&mut self, w: u32, h: u32) {
+        self.config.width = w;
+        self.config.height = h;
+        self.surface.configure(&self.device, &self.config);
+    }
+
+    fn upload_atlas(&self) {
+        self.queue.write_texture(
+            wgpu::ImageCopyTexture {
+                texture: &self.atlas_tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &self.atlas.pixels,
+            wgpu::ImageDataLayout {
+                offset: 0,
+                bytes_per_row: Some(ATLAS_SIZE),
+                rows_per_image: Some(ATLAS_SIZE),
+            },
+            wgpu::Extent3d { width: ATLAS_SIZE, height: ATLAS_SIZE, depth_or_array_layers: 1 },
+        );
+    }
+
+    fn draw(&self, vertices: &[Vertex]) {
+        // Update uniform: viewport
+        let vp = [self.config.width as f32, self.config.height as f32, 0.0, 0.0];
+        self.queue.write_buffer(&self.uniform_buf, 0, bytemuck::cast_slice(&vp));
+
+        let frame = match self.surface.get_current_texture() {
+            Ok(f) => f,
+            Err(_) => return,
+        };
+        let view = frame.texture.create_view(&Default::default());
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+
+        let vbuf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("vb"),
+            size: (vertices.len() * std::mem::size_of::<Vertex>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        if !vertices.is_empty() {
+            self.queue.write_buffer(&vbuf, 0, bytemuck::cast_slice(vertices));
+        }
+
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("main"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.95, g: 0.95, b: 0.97, a: 1.0 }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            if !vertices.is_empty() {
+                pass.set_pipeline(&self.pipeline);
+                pass.set_bind_group(0, &self.bind_group, &[]);
+                pass.set_vertex_buffer(0, vbuf.slice(..));
+                pass.draw(0..vertices.len() as u32, 0..1);
+            }
+        }
+
+        self.queue.submit(std::iter::once(encoder.finish()));
+        frame.present();
+    }
 }
