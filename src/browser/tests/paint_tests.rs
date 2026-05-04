@@ -567,6 +567,147 @@ fn paint_inset_clip_no_clipped_rect() {
     assert!(!has_clipped, "inset neni polygon - emit Rect, ne ClippedRect");
 }
 
+// ─── Display Command transform handlers (scroll-y shift) ───────────────
+
+use crate::browser::paint::DisplayCommand as DC;
+
+#[test]
+fn paint_clipped_rect_emit_with_polygon_in_pixels() {
+    // Polygon clip-path bgcolor produces ClippedRect s 5 body
+    let cmds = build_dl(
+        r#"<html><body><div></div></body></html>"#,
+        r#"div { background: green; width: 100px; height: 100px;
+                clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%); }"#,
+    );
+    let clipped = cmds.iter().find_map(|c| if let DC::ClippedRect { points, color } = c {
+        Some((points.clone(), *color))
+    } else { None });
+    let (pts, color) = clipped.expect("ClippedRect");
+    assert_eq!(pts.len(), 4, "kosoctverec ma 4 body");
+    assert_eq!(color[1], 128, "green color");
+}
+
+#[test]
+fn paint_clipped_rect_inset_clip_path_no_emit() {
+    // inset clip-path neni polygon -> stale Rect, ne ClippedRect.
+    let cmds = build_dl(
+        r#"<html><body><div></div></body></html>"#,
+        r#"div { background: red; width: 100px; height: 100px;
+                clip-path: inset(20px); }"#,
+    );
+    assert!(!cmds.iter().any(|c| matches!(c, DC::ClippedRect { .. })));
+}
+
+// ─── Filter color matrix runtime in markers ────────────────────────────
+
+#[test]
+fn paint_chained_filter_color_matrix_combines() {
+    let cmds = build_dl(
+        r#"<html><body><div></div></body></html>"#,
+        r#"div { background: red; width: 50px; height: 50px;
+                filter: brightness(0.5) invert(1); }"#,
+    );
+    for cmd in &cmds {
+        if let DC::FilterBegin { color_matrix, .. } = cmd {
+            // brightness 0.5 then invert: r' = 1 - 0.5*r -> coef -0.5 + 1
+            assert!((color_matrix[0] + 0.5).abs() < 1e-3, "r coef chain: {}", color_matrix[0]);
+            assert!((color_matrix[4] - 1.0).abs() < 1e-3, "r offset 1.0");
+            return;
+        }
+    }
+    panic!("FilterBegin nenalezen");
+}
+
+#[test]
+fn paint_filter_blur_radius_zero_no_marker() {
+    let cmds = build_dl(
+        r#"<html><body><div></div></body></html>"#,
+        r#"div { background: red; width: 50px; height: 50px;
+                filter: blur(0px); }"#,
+    );
+    let begins = count_filter_begins(&cmds);
+    assert_eq!(begins, 0, "blur(0) je no-op, ne emit FilterBegin");
+}
+
+#[test]
+fn paint_filter_brightness_over_one_emits_marker() {
+    // brightness > 1 = non-identity matrix -> emit
+    let cmds = build_dl(
+        r#"<html><body><div></div></body></html>"#,
+        r#"div { background: red; width: 50px; height: 50px;
+                filter: brightness(1.5); }"#,
+    );
+    assert!(count_filter_begins(&cmds) >= 1);
+}
+
+// ─── Element bg color extraction ────────────────────────────────────────
+
+#[test]
+fn paint_div_emits_rect_with_correct_bg() {
+    let cmds = build_dl(
+        r#"<html><body><div></div></body></html>"#,
+        r#"div { background: blue; width: 50px; height: 50px; }"#,
+    );
+    let blue_rect = cmds.iter().any(|c| matches!(c,
+        DC::Rect { color, .. } if color[2] >= 200 && color[0] < 50
+    ));
+    assert!(blue_rect);
+}
+
+#[test]
+fn paint_no_bg_color_no_rect() {
+    let cmds = build_dl(
+        r#"<html><body><div>X</div></body></html>"#,
+        r#"div { width: 50px; height: 50px; }"#,
+    );
+    // Bez bg color, nemel by emit Rect (jen text)
+    let has_solid_rect = cmds.iter().any(|c| matches!(c,
+        DC::Rect { color, .. } if color[3] == 255 && (color[0] > 0 || color[1] > 0 || color[2] > 0)
+    ));
+    assert!(!has_solid_rect);
+}
+
+#[test]
+fn paint_rgba_alpha_propagates() {
+    let cmds = build_dl(
+        r#"<html><body><div></div></body></html>"#,
+        r#"div { background: rgba(255, 0, 0, 0.5); width: 50px; height: 50px; }"#,
+    );
+    let semi_red = cmds.iter().any(|c| matches!(c,
+        DC::Rect { color, .. } if color[0] == 255 && color[3] >= 100 && color[3] < 200
+    ));
+    assert!(semi_red);
+}
+
+// ─── Border styles ──────────────────────────────────────────────────────
+
+#[test]
+fn paint_border_width_and_color() {
+    let cmds = build_dl(
+        r#"<html><body><div></div></body></html>"#,
+        r#"div { background: white; width: 50px; height: 50px;
+                border: 5px solid green; }"#,
+    );
+    let green_5 = cmds.iter().any(|c| matches!(c,
+        DC::Border { width, color, .. } if (*width - 5.0).abs() < 1e-3 && color[1] >= 100
+    ));
+    assert!(green_5);
+}
+
+#[test]
+fn paint_border_zero_no_emit() {
+    let cmds = build_dl(
+        r#"<html><body><div></div></body></html>"#,
+        r#"div { background: white; width: 50px; height: 50px;
+                border: 0 solid green; }"#,
+    );
+    // Border width 0 by se nemel emit
+    let any_border = cmds.iter().any(|c| matches!(c,
+        DC::Border { width, color, .. } if *width > 0.0 && color[1] > 50
+    ));
+    assert!(!any_border);
+}
+
 #[test]
 fn paint_bg_image_emits_image_command() {
     let cmds = build_dl(

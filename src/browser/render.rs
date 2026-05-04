@@ -712,6 +712,108 @@ pub fn webgl_attrib_to_vertex_format(size: i32, ctype: u32) -> Option<wgpu::Vert
     }
 }
 
+/// Snapshot z WebGLState extrahovany pro processing.
+/// Pure data - nepotrebuje wgpu Device, lze testovat unit.
+pub struct WebGLPendingFrame {
+    pub commands: Vec<crate::interpreter::WebGLDrawCmd>,
+    pub buffers: std::collections::HashMap<u32, Vec<u8>>,
+    /// program_id -> (vertex_wgsl, fragment_wgsl)
+    pub programs: std::collections::HashMap<u32, (Option<String>, Option<String>)>,
+    pub default_clear: [f32; 4],
+}
+
+/// Drain queue + clone buffers + extract WGSL strings z linked programs.
+/// Po volani je state.draw_queue prazdne. Buffers a programs zustavaji
+/// nezmeneny (jen clone).
+pub fn webgl_extract_pending(state: &mut crate::interpreter::WebGLState) -> WebGLPendingFrame {
+    let commands: Vec<_> = state.draw_queue.drain(..).collect();
+    let buffers = state.buffers.clone();
+    let programs: std::collections::HashMap<u32, (Option<String>, Option<String>)> = state.programs.iter()
+        .map(|(k, p)| (*k, (p.vertex_wgsl.clone(), p.fragment_wgsl.clone())))
+        .collect();
+    let default_clear = state.clear_color;
+    WebGLPendingFrame { commands, buffers, programs, default_clear }
+}
+
+/// Vypocita efektivni clear color z command sequence.
+/// Vraci Some(color) pokud queue obsahuje Clear s COLOR_BUFFER_BIT (0x4000).
+/// Color = posledni ClearColor pred Clear, nebo default pri zadnym ClearColor.
+/// None pokud Clear bit chybi.
+pub fn webgl_effective_clear(commands: &[crate::interpreter::WebGLDrawCmd], default: [f32; 4]) -> Option<[f32; 4]> {
+    use crate::interpreter::WebGLDrawCmd;
+    let mut last_cc: Option<[f32; 4]> = None;
+    let mut had_clear = false;
+    for cmd in commands {
+        match cmd {
+            WebGLDrawCmd::ClearColor(c) => last_cc = Some(*c),
+            WebGLDrawCmd::Clear(mask) => {
+                if mask & 0x4000 != 0 { had_clear = true; }
+            }
+            _ => {}
+        }
+    }
+    if had_clear { Some(last_cc.unwrap_or(default)) } else { None }
+}
+
+/// Pocet draw calls (DrawArrays + DrawElements) v command sequence.
+pub fn webgl_count_draws(commands: &[crate::interpreter::WebGLDrawCmd]) -> usize {
+    use crate::interpreter::WebGLDrawCmd;
+    commands.iter().filter(|c| matches!(c,
+        WebGLDrawCmd::DrawArrays { .. } | WebGLDrawCmd::DrawElements { .. }
+    )).count()
+}
+
+/// Pocet clear calls v sequence (jen Clear, ne ClearColor).
+pub fn webgl_count_clears(commands: &[crate::interpreter::WebGLDrawCmd]) -> usize {
+    use crate::interpreter::WebGLDrawCmd;
+    commands.iter().filter(|c| matches!(c, WebGLDrawCmd::Clear(_))).count()
+}
+
+/// Vraci IDs vsech linkovanych programu (s vertex + fragment WGSL).
+pub fn webgl_linked_program_ids(state: &crate::interpreter::WebGLState) -> Vec<u32> {
+    state.programs.iter()
+        .filter(|(_, p)| p.linked && p.vertex_wgsl.is_some() && p.fragment_wgsl.is_some())
+        .map(|(k, _)| *k)
+        .collect()
+}
+
+/// True pokud layout tree obsahuje canvas tag s WebGL state pres webgl_states map.
+/// Walk celym tree, vraci pri prvni hit.
+pub fn webgl_layout_has_canvas(
+    bx: &super::layout::LayoutBox,
+    webgl_states: &std::collections::HashMap<usize, std::rc::Rc<std::cell::RefCell<crate::interpreter::WebGLState>>>,
+) -> bool {
+    if bx.tag.as_deref() == Some("canvas") {
+        if let Some(node) = &bx.node {
+            let ptr = std::rc::Rc::as_ptr(node) as usize;
+            if webgl_states.contains_key(&ptr) {
+                return true;
+            }
+        }
+    }
+    bx.children.iter().any(|ch| webgl_layout_has_canvas(ch, webgl_states))
+}
+
+/// Spocita pocet WebGL canvases v layout tree.
+pub fn webgl_canvas_count(
+    bx: &super::layout::LayoutBox,
+    webgl_states: &std::collections::HashMap<usize, std::rc::Rc<std::cell::RefCell<crate::interpreter::WebGLState>>>,
+) -> usize {
+    let mut count = 0;
+    if bx.tag.as_deref() == Some("canvas") {
+        if let Some(node) = &bx.node {
+            let ptr = std::rc::Rc::as_ptr(node) as usize;
+            if webgl_states.contains_key(&ptr) {
+                count += 1;
+            }
+        }
+    }
+    for ch in &bx.children {
+        count += webgl_canvas_count(ch, webgl_states);
+    }
+    count
+}
+
 /// Spocita stride pro vertex layout pokud slot.stride == 0 (tightly packed).
 pub fn webgl_compute_stride(attribs: &[(u32, crate::interpreter::WebGLAttribSlot)]) -> u64 {
     if let Some((_, slot)) = attribs.first() {

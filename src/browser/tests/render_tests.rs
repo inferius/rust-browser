@@ -3,7 +3,12 @@
 /// filteru a paint segmentaci ano.
 
 use crate::browser::paint::DisplayCommand;
-use crate::browser::render::{partition_filter_segments, Seg, polygon_signed_area, triangulate_polygon, paint_webgl_canvases, webgl_attrib_to_vertex_format, webgl_compute_stride};
+use crate::browser::render::{
+    partition_filter_segments, Seg, polygon_signed_area, triangulate_polygon,
+    paint_webgl_canvases, webgl_attrib_to_vertex_format, webgl_compute_stride,
+    webgl_extract_pending, webgl_effective_clear, webgl_count_draws, webgl_count_clears,
+    webgl_linked_program_ids, webgl_layout_has_canvas, webgl_canvas_count,
+};
 
 fn rect(x: f32, y: f32) -> DisplayCommand {
     DisplayCommand::Rect { x, y, w: 10.0, h: 10.0, color: [255,0,0,255], radius: 0.0 }
@@ -420,7 +425,7 @@ fn triangulate_star_concave_count() {
 use std::rc::Rc;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use crate::interpreter::{WebGLState, WebGLDrawCmd, WebGLAttribSlot};
+use crate::interpreter::{WebGLState, WebGLDrawCmd, WebGLAttribSlot, WebGLProgram};
 use crate::browser::dom::NodeData;
 use crate::browser::layout::{LayoutBox, Rect};
 
@@ -605,6 +610,300 @@ fn paint_webgl_clear_plus_draw_combines() {
     if let DisplayCommand::Rect { color, .. } = &cmds[0] {
         assert_eq!(color[0], 127, "red bg ~ 0.5*255");
     }
+}
+
+// ─── WebGL phase 3c5 pure-logic helpers ────────────────────────────────
+
+fn make_drawarrays(count: i32) -> WebGLDrawCmd {
+    WebGLDrawCmd::DrawArrays {
+        program_id: Some(1), mode: 4, first: 0, count,
+        attribs: Vec::new(),
+        uniforms: HashMap::new(),
+        viewport: [0, 0, 100, 100],
+    }
+}
+
+fn make_drawelements() -> WebGLDrawCmd {
+    WebGLDrawCmd::DrawElements {
+        program_id: Some(1), mode: 4, count: 6,
+        index_type: 0x1403, offset: 0,
+        index_buffer_id: Some(1),
+        attribs: Vec::new(),
+        uniforms: HashMap::new(),
+        viewport: [0, 0, 100, 100],
+    }
+}
+
+#[test]
+fn extract_pending_drains_queue() {
+    let mut state = WebGLState::new();
+    state.draw_queue.push(WebGLDrawCmd::ClearColor([1.0, 0.0, 0.0, 1.0]));
+    state.draw_queue.push(WebGLDrawCmd::Clear(0x4000));
+    let frame = webgl_extract_pending(&mut state);
+    assert_eq!(frame.commands.len(), 2);
+    assert_eq!(state.draw_queue.len(), 0, "queue drained");
+}
+
+#[test]
+fn extract_pending_empty_returns_empty() {
+    let mut state = WebGLState::new();
+    let frame = webgl_extract_pending(&mut state);
+    assert_eq!(frame.commands.len(), 0);
+    assert_eq!(frame.buffers.len(), 0);
+    assert_eq!(frame.programs.len(), 0);
+}
+
+#[test]
+fn extract_pending_clones_buffers() {
+    let mut state = WebGLState::new();
+    state.buffers.insert(1, vec![1, 2, 3, 4]);
+    state.buffers.insert(2, vec![5, 6]);
+    let frame = webgl_extract_pending(&mut state);
+    assert_eq!(frame.buffers.len(), 2);
+    assert_eq!(frame.buffers.get(&1), Some(&vec![1, 2, 3, 4]));
+    assert_eq!(state.buffers.len(), 2, "state buffers preserved");
+}
+
+#[test]
+fn extract_pending_clones_programs_wgsl() {
+    let mut state = WebGLState::new();
+    state.programs.insert(1, WebGLProgram {
+        vertex_shader: Some(2), fragment_shader: Some(3), linked: true,
+        info_log: String::new(),
+        vertex_wgsl: Some("@vertex fn main() {}".into()),
+        fragment_wgsl: Some("@fragment fn main() {}".into()),
+    });
+    let frame = webgl_extract_pending(&mut state);
+    assert_eq!(frame.programs.len(), 1);
+    let (vs, fs) = frame.programs.get(&1).unwrap();
+    assert!(vs.as_ref().unwrap().contains("@vertex"));
+    assert!(fs.as_ref().unwrap().contains("@fragment"));
+}
+
+#[test]
+fn extract_pending_default_clear() {
+    let mut state = WebGLState::new();
+    state.clear_color = [0.5, 0.25, 0.75, 1.0];
+    let frame = webgl_extract_pending(&mut state);
+    assert_eq!(frame.default_clear, [0.5, 0.25, 0.75, 1.0]);
+}
+
+#[test]
+fn effective_clear_empty_none() {
+    let cmds: Vec<WebGLDrawCmd> = Vec::new();
+    assert!(webgl_effective_clear(&cmds, [0.0, 0.0, 0.0, 1.0]).is_none());
+}
+
+#[test]
+fn effective_clear_clear_only_uses_default() {
+    let cmds = vec![WebGLDrawCmd::Clear(0x4000)];
+    let r = webgl_effective_clear(&cmds, [0.1, 0.2, 0.3, 1.0]);
+    assert_eq!(r, Some([0.1, 0.2, 0.3, 1.0]));
+}
+
+#[test]
+fn effective_clear_color_then_clear_uses_color() {
+    let cmds = vec![
+        WebGLDrawCmd::ClearColor([0.7, 0.8, 0.9, 1.0]),
+        WebGLDrawCmd::Clear(0x4000),
+    ];
+    let r = webgl_effective_clear(&cmds, [0.0; 4]);
+    assert_eq!(r, Some([0.7, 0.8, 0.9, 1.0]));
+}
+
+#[test]
+fn effective_clear_last_color_wins() {
+    let cmds = vec![
+        WebGLDrawCmd::ClearColor([1.0, 0.0, 0.0, 1.0]),
+        WebGLDrawCmd::ClearColor([0.0, 1.0, 0.0, 1.0]),
+        WebGLDrawCmd::Clear(0x4000),
+    ];
+    let r = webgl_effective_clear(&cmds, [0.0; 4]);
+    assert_eq!(r, Some([0.0, 1.0, 0.0, 1.0]));
+}
+
+#[test]
+fn effective_clear_color_without_clear_returns_none() {
+    let cmds = vec![WebGLDrawCmd::ClearColor([1.0, 0.0, 0.0, 1.0])];
+    assert!(webgl_effective_clear(&cmds, [0.0; 4]).is_none());
+}
+
+#[test]
+fn effective_clear_depth_bit_only_no_color() {
+    // Clear s jen DEPTH_BUFFER_BIT (0x100) bez COLOR (0x4000) -> None
+    let cmds = vec![WebGLDrawCmd::Clear(0x100)];
+    assert!(webgl_effective_clear(&cmds, [0.0; 4]).is_none());
+}
+
+#[test]
+fn effective_clear_combined_bits() {
+    // COLOR | DEPTH = 0x4100
+    let cmds = vec![WebGLDrawCmd::Clear(0x4100)];
+    let r = webgl_effective_clear(&cmds, [0.5, 0.5, 0.5, 1.0]);
+    assert_eq!(r, Some([0.5, 0.5, 0.5, 1.0]));
+}
+
+#[test]
+fn count_draws_only_drawarrays() {
+    let cmds = vec![make_drawarrays(3), make_drawarrays(6), make_drawarrays(9)];
+    assert_eq!(webgl_count_draws(&cmds), 3);
+}
+
+#[test]
+fn count_draws_mixed_with_clears() {
+    let cmds = vec![
+        WebGLDrawCmd::ClearColor([0.0; 4]),
+        WebGLDrawCmd::Clear(0x4000),
+        make_drawarrays(3),
+        WebGLDrawCmd::Clear(0x4000),
+        make_drawelements(),
+    ];
+    assert_eq!(webgl_count_draws(&cmds), 2);
+    assert_eq!(webgl_count_clears(&cmds), 2);
+}
+
+#[test]
+fn count_draws_empty() {
+    assert_eq!(webgl_count_draws(&[]), 0);
+    assert_eq!(webgl_count_clears(&[]), 0);
+}
+
+#[test]
+fn count_clears_ignores_clear_color() {
+    let cmds = vec![
+        WebGLDrawCmd::ClearColor([0.0; 4]),
+        WebGLDrawCmd::ClearColor([0.0; 4]),
+        WebGLDrawCmd::Clear(0x4000),
+    ];
+    assert_eq!(webgl_count_clears(&cmds), 1, "ClearColor neni Clear");
+}
+
+#[test]
+fn linked_program_ids_only_linked() {
+    let mut state = WebGLState::new();
+    state.programs.insert(1, WebGLProgram {
+        vertex_shader: Some(10), fragment_shader: Some(11),
+        linked: true,
+        info_log: String::new(),
+        vertex_wgsl: Some("v".into()), fragment_wgsl: Some("f".into()),
+    });
+    state.programs.insert(2, WebGLProgram {
+        vertex_shader: None, fragment_shader: None,
+        linked: false,
+        info_log: String::new(),
+        vertex_wgsl: None, fragment_wgsl: None,
+    });
+    let ids = webgl_linked_program_ids(&state);
+    assert_eq!(ids, vec![1]);
+}
+
+#[test]
+fn linked_program_ids_skips_missing_wgsl() {
+    let mut state = WebGLState::new();
+    state.programs.insert(1, WebGLProgram {
+        vertex_shader: Some(1), fragment_shader: Some(2),
+        linked: true,  // marked linked, ale chybi WGSL
+        info_log: String::new(),
+        vertex_wgsl: None, fragment_wgsl: None,
+    });
+    let ids = webgl_linked_program_ids(&state);
+    assert_eq!(ids.len(), 0, "linked bez WGSL strings se preskakuje");
+}
+
+#[test]
+fn linked_program_ids_empty_state() {
+    let state = WebGLState::new();
+    assert_eq!(webgl_linked_program_ids(&state).len(), 0);
+}
+
+#[test]
+fn layout_has_canvas_finds_top_level() {
+    let node = NodeData::new_element("canvas", HashMap::new());
+    let ptr = Rc::as_ptr(&node) as usize;
+    let bx = make_canvas_layout_box(node);
+    let mut states: HashMap<usize, Rc<RefCell<WebGLState>>> = HashMap::new();
+    states.insert(ptr, Rc::new(RefCell::new(WebGLState::new())));
+    assert!(webgl_layout_has_canvas(&bx, &states));
+}
+
+#[test]
+fn layout_has_canvas_finds_in_children() {
+    let parent_node = NodeData::new_element("div", HashMap::new());
+    let canvas_node = NodeData::new_element("canvas", HashMap::new());
+    let canvas_ptr = Rc::as_ptr(&canvas_node) as usize;
+    let mut parent = LayoutBox::new();
+    parent.tag = Some("div".into());
+    parent.node = Some(parent_node);
+    parent.children.push(make_canvas_layout_box(canvas_node));
+
+    let mut states: HashMap<usize, Rc<RefCell<WebGLState>>> = HashMap::new();
+    states.insert(canvas_ptr, Rc::new(RefCell::new(WebGLState::new())));
+    assert!(webgl_layout_has_canvas(&parent, &states));
+}
+
+#[test]
+fn layout_has_canvas_no_state_returns_false() {
+    let node = NodeData::new_element("canvas", HashMap::new());
+    let bx = make_canvas_layout_box(node);
+    let states: HashMap<usize, Rc<RefCell<WebGLState>>> = HashMap::new();
+    assert!(!webgl_layout_has_canvas(&bx, &states));
+}
+
+#[test]
+fn layout_has_canvas_non_canvas_tag_false() {
+    let node = NodeData::new_element("div", HashMap::new());
+    let ptr = Rc::as_ptr(&node) as usize;
+    let mut bx = LayoutBox::new();
+    bx.tag = Some("div".into());
+    bx.node = Some(node);
+    let mut states: HashMap<usize, Rc<RefCell<WebGLState>>> = HashMap::new();
+    states.insert(ptr, Rc::new(RefCell::new(WebGLState::new())));
+    assert!(!webgl_layout_has_canvas(&bx, &states), "div neni canvas");
+}
+
+#[test]
+fn canvas_count_zero_when_no_state() {
+    let node = NodeData::new_element("canvas", HashMap::new());
+    let bx = make_canvas_layout_box(node);
+    let states: HashMap<usize, Rc<RefCell<WebGLState>>> = HashMap::new();
+    assert_eq!(webgl_canvas_count(&bx, &states), 0);
+}
+
+#[test]
+fn canvas_count_multiple_canvases() {
+    let parent_node = NodeData::new_element("div", HashMap::new());
+    let c1_node = NodeData::new_element("canvas", HashMap::new());
+    let c2_node = NodeData::new_element("canvas", HashMap::new());
+    let c1_ptr = Rc::as_ptr(&c1_node) as usize;
+    let c2_ptr = Rc::as_ptr(&c2_node) as usize;
+    let mut parent = LayoutBox::new();
+    parent.tag = Some("div".into());
+    parent.node = Some(parent_node);
+    parent.children.push(make_canvas_layout_box(c1_node));
+    parent.children.push(make_canvas_layout_box(c2_node));
+
+    let mut states: HashMap<usize, Rc<RefCell<WebGLState>>> = HashMap::new();
+    states.insert(c1_ptr, Rc::new(RefCell::new(WebGLState::new())));
+    states.insert(c2_ptr, Rc::new(RefCell::new(WebGLState::new())));
+    assert_eq!(webgl_canvas_count(&parent, &states), 2);
+}
+
+#[test]
+fn canvas_count_partial_states() {
+    // 2 canvas v tree, jen 1 ma WebGL state.
+    let c1_node = NodeData::new_element("canvas", HashMap::new());
+    let c2_node = NodeData::new_element("canvas", HashMap::new());
+    let c1_ptr = Rc::as_ptr(&c1_node) as usize;
+    let parent_node = NodeData::new_element("div", HashMap::new());
+    let mut parent = LayoutBox::new();
+    parent.tag = Some("div".into());
+    parent.node = Some(parent_node);
+    parent.children.push(make_canvas_layout_box(c1_node));
+    parent.children.push(make_canvas_layout_box(c2_node));
+
+    let mut states: HashMap<usize, Rc<RefCell<WebGLState>>> = HashMap::new();
+    states.insert(c1_ptr, Rc::new(RefCell::new(WebGLState::new())));
+    assert_eq!(webgl_canvas_count(&parent, &states), 1);
 }
 
 // ─── WebGL phase 3c2 - vertex format + stride helpers ─────────────────
