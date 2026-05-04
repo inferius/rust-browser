@@ -123,6 +123,15 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas) -> Vec<Vertex
     verts
 }
 
+/// Posune Y souradnice display command (pro scroll).
+fn shift_command_y(cmd: &mut DisplayCommand, dy: f32) {
+    match cmd {
+        DisplayCommand::Rect { y, .. }
+        | DisplayCommand::Border { y, .. }
+        | DisplayCommand::Text { y, .. } => *y += dy,
+    }
+}
+
 /// Push rect with rounded corners (SDF rendering).
 fn push_rect_rounded(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f32, h: f32,
                      color: [f32; 4], radius: f32) {
@@ -346,6 +355,7 @@ pub fn run_window_with_html(html: String, css: String) -> Result<(), String> {
         interpreter: Option<crate::interpreter::Interpreter>,
         mouse_x: f32,
         mouse_y: f32,
+        scroll_y: f32,
     }
 
     impl ApplicationHandler for App {
@@ -381,10 +391,25 @@ pub fn run_window_with_html(html: String, css: String) -> Result<(), String> {
                 }
                 WindowEvent::CursorMoved { position, .. } => {
                     self.mouse_x = position.x as f32;
-                    self.mouse_y = position.y as f32;
+                    self.mouse_y = position.y as f32 + self.scroll_y;
                 }
                 WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } => {
                     self.handle_click(self.mouse_x, self.mouse_y);
+                    self.render();
+                }
+                WindowEvent::MouseWheel { delta, .. } => {
+                    let scroll_amount = match delta {
+                        winit::event::MouseScrollDelta::LineDelta(_, y) => y * 30.0,
+                        winit::event::MouseScrollDelta::PixelDelta(p) => p.y as f32,
+                    };
+                    self.scroll_y -= scroll_amount;
+                    if self.scroll_y < 0.0 { self.scroll_y = 0.0; }
+                    // Clamp na max scroll
+                    if let Some(layout) = &self.layout_root {
+                        let viewport_h = self.renderer.as_ref().map(|r| r.config.height as f32).unwrap_or(768.0);
+                        let max_scroll = (layout.rect.height - viewport_h).max(0.0);
+                        if self.scroll_y > max_scroll { self.scroll_y = max_scroll; }
+                    }
                     self.render();
                 }
                 WindowEvent::RedrawRequested => {
@@ -472,7 +497,12 @@ pub fn run_window_with_html(html: String, css: String) -> Result<(), String> {
             let viewport_w = r.config.width as f32;
             let viewport_h = r.config.height as f32;
             let layout_root = layout::layout_tree(&document_root, &style_map, viewport_w, viewport_h);
-            let display_list = paint::build_display_list(&layout_root);
+            let mut display_list = paint::build_display_list(&layout_root);
+
+            // Apply scroll: posun vsechny y o -scroll_y
+            for cmd in display_list.iter_mut() {
+                shift_command_y(cmd, -self.scroll_y);
+            }
 
             // Pre-rasterize vsechny glyfy do atlasu
             for cmd in &display_list {
@@ -501,6 +531,7 @@ pub fn run_window_with_html(html: String, css: String) -> Result<(), String> {
         interpreter: None,
         mouse_x: 0.0,
         mouse_y: 0.0,
+        scroll_y: 0.0,
     };
     event_loop.run_app(&mut app).map_err(|e| e.to_string())?;
     Ok(())
