@@ -447,3 +447,185 @@ pub fn matches_simple(node: &Rc<Node>, sel: &SimpleSelector) -> bool {
 pub fn get_styles<'a>(map: &'a StyleMap, node: &Rc<Node>) -> Option<&'a HashMap<String, String>> {
     map.get(&node_id(node))
 }
+
+/// Parsovany shorthand `animation` property.
+/// Spec je permisive co do poradi tokenu.
+#[derive(Debug, Clone)]
+pub struct AnimationSpec {
+    pub name: String,
+    pub duration_secs: f32,
+    pub timing_function: String, // "linear" / "ease" / "ease-in" / "ease-out" / "ease-in-out"
+    pub iteration_count: f32,    // f32::INFINITY pro "infinite"
+    pub direction: String,        // "normal" / "reverse" / "alternate" / "alternate-reverse"
+    pub delay_secs: f32,
+}
+
+impl AnimationSpec {
+    pub fn from_styles(styles: &HashMap<String, String>) -> Option<AnimationSpec> {
+        // Bud `animation` shorthand, nebo `animation-name` + dalsi longhand.
+        let mut name: Option<String> = None;
+        let mut duration: f32 = 0.0;
+        let mut timing: String = "linear".into();
+        let mut iter: f32 = 1.0;
+        let mut direction: String = "normal".into();
+        let mut delay: f32 = 0.0;
+
+        // Shorthand parsing
+        if let Some(short) = styles.get("animation") {
+            for tok in short.split_whitespace() {
+                if let Some(s) = parse_time(tok) {
+                    if duration == 0.0 { duration = s; } else { delay = s; }
+                } else if tok == "infinite" {
+                    iter = f32::INFINITY;
+                } else if let Ok(n) = tok.parse::<f32>() {
+                    iter = n;
+                } else if matches!(tok, "linear" | "ease" | "ease-in" | "ease-out" | "ease-in-out" | "step-start" | "step-end") {
+                    timing = tok.to_string();
+                } else if matches!(tok, "normal" | "reverse" | "alternate" | "alternate-reverse") {
+                    direction = tok.to_string();
+                } else {
+                    // Predpokladej name
+                    if name.is_none() { name = Some(tok.to_string()); }
+                }
+            }
+        }
+
+        // Longhand override
+        if let Some(v) = styles.get("animation-name") { name = Some(v.trim().to_string()); }
+        if let Some(v) = styles.get("animation-duration").and_then(|s| parse_time(s.trim())) { duration = v; }
+        if let Some(v) = styles.get("animation-timing-function") { timing = v.trim().to_string(); }
+        if let Some(v) = styles.get("animation-iteration-count") {
+            iter = if v.trim() == "infinite" { f32::INFINITY } else { v.trim().parse().unwrap_or(1.0) };
+        }
+        if let Some(v) = styles.get("animation-direction") { direction = v.trim().to_string(); }
+        if let Some(v) = styles.get("animation-delay").and_then(|s| parse_time(s.trim())) { delay = v; }
+
+        let name = name?;
+        if name == "none" || duration <= 0.0 { return None; }
+        Some(AnimationSpec {
+            name, duration_secs: duration, timing_function: timing,
+            iteration_count: iter, direction, delay_secs: delay,
+        })
+    }
+}
+
+/// Parsuje "2s" / "500ms" / "0.3s". Vrati sekundy.
+fn parse_time(s: &str) -> Option<f32> {
+    let s = s.trim();
+    if let Some(num) = s.strip_suffix("ms") {
+        num.parse::<f32>().ok().map(|n| n / 1000.0)
+    } else if let Some(num) = s.strip_suffix('s') {
+        num.parse::<f32>().ok()
+    } else {
+        None
+    }
+}
+
+/// Aplikuje easing na linearni progress (0..1).
+fn apply_easing(t: f32, easing: &str) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    match easing {
+        "linear" => t,
+        "ease"        => cubic_bezier(t, 0.25, 0.1, 0.25, 1.0),
+        "ease-in"     => cubic_bezier(t, 0.42, 0.0, 1.0, 1.0),
+        "ease-out"    => cubic_bezier(t, 0.0, 0.0, 0.58, 1.0),
+        "ease-in-out" => cubic_bezier(t, 0.42, 0.0, 0.58, 1.0),
+        "step-start"  => 1.0,
+        "step-end"    => if t >= 1.0 { 1.0 } else { 0.0 },
+        _ => t,
+    }
+}
+
+/// Newton-iterace pro cubic-bezier easing kompletne na sjednoceni s CSS spec.
+fn cubic_bezier(t: f32, x1: f32, y1: f32, x2: f32, y2: f32) -> f32 {
+    // Najdi parametr u takovy ze bezier_x(u) = t, vrat bezier_y(u).
+    let mut u = t;
+    for _ in 0..8 {
+        let x = bezier(u, x1, x2);
+        let dx = bezier_deriv(u, x1, x2);
+        if dx.abs() < 1e-6 { break; }
+        let diff = x - t;
+        if diff.abs() < 1e-4 { break; }
+        u -= diff / dx;
+    }
+    bezier(u.clamp(0.0, 1.0), y1, y2)
+}
+
+fn bezier(u: f32, p1: f32, p2: f32) -> f32 {
+    let iu = 1.0 - u;
+    3.0 * iu * iu * u * p1 + 3.0 * iu * u * u * p2 + u * u * u
+}
+
+fn bezier_deriv(u: f32, p1: f32, p2: f32) -> f32 {
+    let iu = 1.0 - u;
+    3.0 * iu * iu * p1 + 6.0 * iu * u * (p2 - p1) + 3.0 * u * u * (1.0 - p2)
+}
+
+/// Aplikuje runtime CSS animace na StyleMap pri zadanem elapsed time (sekundy).
+/// Pro kazdy element s `animation` / `animation-name`:
+///   1. Najdi @keyframes by name v stylesheets.
+///   2. Vypocti progress dle duration / iter-count / direction / delay / easing.
+///   3. Interpoluj keyframes a override do ComputedStyle.
+///
+/// Vrati true pokud nejaka animace probiha (= caller by mel re-redrawit).
+pub fn apply_animations(
+    style_map: &mut StyleMap,
+    stylesheets: &[Stylesheet],
+    elapsed_secs: f32,
+) -> bool {
+    use super::layout::interpolate_keyframes;
+    let mut any_active = false;
+
+    for styles in style_map.values_mut() {
+        let spec = match AnimationSpec::from_styles(styles) {
+            Some(s) => s, None => continue,
+        };
+
+        // Najdi keyframes
+        let frames = stylesheets.iter()
+            .flat_map(|s| s.keyframes.iter())
+            .find(|k| k.name == spec.name);
+        let frames = match frames { Some(k) => &k.frames, None => continue };
+
+        // Cas po zaciatku animace (bez delay)
+        let t = elapsed_secs - spec.delay_secs;
+        if t < 0.0 { continue; }
+
+        // Iter count check
+        let total_progress = t / spec.duration_secs; // pocet kompletnich + zlomek iteraci
+        if total_progress >= spec.iteration_count {
+            // Animace dokoncena - aplikuj posledni snimek
+            let final_progress = match spec.direction.as_str() {
+                "reverse" => 0.0,
+                "alternate" if (spec.iteration_count as i32) % 2 == 0 => 0.0,
+                "alternate-reverse" if (spec.iteration_count as i32) % 2 == 0 => 1.0,
+                _ => 1.0,
+            };
+            let interp_vals = interpolate_keyframes(frames, final_progress);
+            for (k, v) in interp_vals { styles.insert(k, v); }
+            continue;
+        }
+
+        // Aktivni iteration
+        let iter_idx = total_progress.floor() as i32;
+        let mut local = total_progress.fract(); // 0..1 v ramci aktualni iterace
+
+        // Direction handling
+        let reverse = match spec.direction.as_str() {
+            "reverse" => true,
+            "alternate" => iter_idx % 2 == 1,
+            "alternate-reverse" => iter_idx % 2 == 0,
+            _ => false,
+        };
+        if reverse { local = 1.0 - local; }
+
+        // Easing
+        let progress = apply_easing(local, &spec.timing_function);
+
+        let interp_vals = interpolate_keyframes(frames, progress);
+        for (k, v) in interp_vals { styles.insert(k, v); }
+        any_active = true;
+    }
+
+    any_active
+}

@@ -215,3 +215,50 @@ fn paint_generates_commands() {
     let has_rect = cmds.iter().any(|c| matches!(c, paint::DisplayCommand::Rect { .. }));
     assert!(has_rect);
 }
+
+#[test]
+fn animation_spec_shorthand_parsing() {
+    use std::collections::HashMap;
+    let mut s: HashMap<String, String> = HashMap::new();
+    s.insert("animation".into(), "slide 2s linear infinite".into());
+    let spec = cascade::AnimationSpec::from_styles(&s).unwrap();
+    assert_eq!(spec.name, "slide");
+    assert_eq!(spec.duration_secs, 2.0);
+    assert_eq!(spec.timing_function, "linear");
+    assert!(spec.iteration_count.is_infinite());
+}
+
+#[test]
+fn animation_spec_longhand_overrides() {
+    use std::collections::HashMap;
+    let mut s: HashMap<String, String> = HashMap::new();
+    s.insert("animation-name".into(), "fade".into());
+    s.insert("animation-duration".into(), "500ms".into());
+    s.insert("animation-iteration-count".into(), "3".into());
+    let spec = cascade::AnimationSpec::from_styles(&s).unwrap();
+    assert_eq!(spec.name, "fade");
+    assert_eq!(spec.duration_secs, 0.5);
+    assert_eq!(spec.iteration_count, 3.0);
+}
+
+#[test]
+fn apply_animations_interpolates_at_half_duration() {
+    let doc = parse_html(r#"<html><body><div id="x"></div></body></html>"#, "");
+    let css = parse_stylesheet(r#"
+        #x { animation: slide 2s linear; left: 0px; position: relative; }
+        @keyframes slide {
+            0%   { left: 0px; }
+            100% { left: 100px; }
+        }
+    "#);
+    let mut map = cascade::cascade(&doc.root, &[css.clone()]);
+    // V case 1.0s (50% z 2s) - linearne -> left 50px
+    let active = cascade::apply_animations(&mut map, &[css], 1.0);
+    assert!(active);
+    // Najdi div node a jeho styles
+    let divs = doc.root.get_elements_by_tag("div");
+    let div = divs.first().unwrap();
+    let styles = cascade::get_styles(&map, div).unwrap();
+    let left = styles.get("left").map(|s| s.as_str()).unwrap_or("");
+    assert_eq!(left, "50px", "expected left=50px at t=1s of 2s linear, got {left}");
+}

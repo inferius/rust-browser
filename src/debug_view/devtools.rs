@@ -105,7 +105,7 @@ fn render_computed_styles(root: &Rc<Node>, style_map: &StyleMap) -> String {
         let mut props_html = String::new();
         if let Some(s) = styles {
             let mut entries: Vec<_> = s.iter().collect();
-            entries.sort_by_key(|(k, _)| k.clone());
+            entries.sort_by_key(|(k, _)| (*k).clone());
             for (k, v) in entries.iter().take(15) {
                 props_html.push_str(&format!(
                     "<div class=\"prop\"><span class=\"prop-key\">{}</span>: <span class=\"prop-val\">{}</span></div>",

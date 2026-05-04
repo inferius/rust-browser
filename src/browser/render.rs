@@ -615,7 +615,12 @@ pub fn run_window_with_html(html: String, css: String) -> Result<(), String> {
             };
 
             let stylesheets = vec![css_parser::parse_stylesheet(&self.css)];
-            let style_map = cascade::cascade(&document_root, &stylesheets);
+            let mut style_map = cascade::cascade(&document_root, &stylesheets);
+
+            // Runtime CSS animation: aplikuj @keyframes na elementy s `animation: ...`
+            let elapsed = self.start_time.elapsed().as_secs_f32();
+            let _animating = cascade::apply_animations(&mut style_map, &stylesheets, elapsed);
+
             let viewport_w = r.config.width as f32;
             let viewport_h = r.config.height as f32;
             let layout_root = layout::layout_tree(&document_root, &style_map, viewport_w, viewport_h);
