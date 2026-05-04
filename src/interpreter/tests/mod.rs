@@ -24,4 +24,5 @@ mod batch_k_modern;
 mod batch_l_async;
 mod batch_m_meta;
 mod batch_n_intl;
+mod batch_o_regex;
 mod misc;

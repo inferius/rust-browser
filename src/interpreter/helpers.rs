@@ -568,6 +568,8 @@ pub fn bigdecimal_pow(base: BigDecimal, exp: u64) -> BigDecimal {
 // ─── RegExp ──────────────────────────────────────────────────────────────
 
 pub fn js_regex_to_rust(pattern: &str, flags: &str) -> Result<Regex, String> {
+    // ES2024 /v flag (Unicode sets) - akceptujeme stejne jako /u
+    // /d flag (hasIndices) - ignorujeme (ne support v Rust regex)
     let ignore_case = flags.contains('i');
     let multiline = flags.contains('m');
     let dot_all = flags.contains('s');
@@ -583,6 +585,24 @@ pub fn js_regex_to_rust(pattern: &str, flags: &str) -> Result<Regex, String> {
         format!("{prefix}{pattern}")
     };
     Regex::new(&full).map_err(|e| format!("SyntaxError: Neplatny regex /{pattern}/{flags}: {e}"))
+}
+
+/// regex_exec s podporou named groups - vraci (positional, named).
+/// Named groups jsou Vec<(name, value)>.
+pub fn regex_exec_named(pattern: &str, flags: &str, text: &str)
+    -> Option<(Vec<Option<String>>, Vec<(String, Option<String>)>)>
+{
+    let re = js_regex_to_rust(pattern, flags).ok()?;
+    let caps = re.captures(text)?;
+    let mut positional = Vec::new();
+    for i in 0..caps.len() {
+        positional.push(caps.get(i).map(|m| m.as_str().to_string()));
+    }
+    let mut named = Vec::new();
+    for name in re.capture_names().flatten() {
+        named.push((name.to_string(), caps.name(name).map(|m| m.as_str().to_string())));
+    }
+    Some((positional, named))
 }
 
 pub fn make_regex_object(pattern: &str, flags: &str) -> JsValue {

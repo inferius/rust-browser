@@ -2656,13 +2656,29 @@ impl Interpreter {
                                 let text = arg_vals.into_iter().next()
                                     .map(|v| v.to_string())
                                     .unwrap_or_default();
-                                match regex_exec(&pat, &flags, &text) {
+                                match regex_exec_named(&pat, &flags, &text) {
                                     None => return Ok(JsValue::Null),
-                                    Some(groups) => {
+                                    Some((groups, named)) => {
                                         let arr: Vec<JsValue> = groups.into_iter()
                                             .map(|g| g.map(JsValue::Str).unwrap_or(JsValue::Undefined))
                                             .collect();
-                                        return Ok(JsValue::Array(Rc::new(RefCell::new(arr))));
+                                        let arr_val = JsValue::Array(Rc::new(RefCell::new(arr)));
+                                        // Pripojime .groups objekt s named groups
+                                        if !named.is_empty() {
+                                            if let JsValue::Array(_) = &arr_val {
+                                                // Array nemuze mit vlastni props - vratime vsak Array
+                                                // Pro plnou kompatibilitu by .groups bylo na Array
+                                                // Zatim pouzijeme: arr.groups = obj
+                                                let mut groups_obj = JsObject::new();
+                                                for (n, v) in named {
+                                                    groups_obj.set(n, v.map(JsValue::Str).unwrap_or(JsValue::Undefined));
+                                                }
+                                                // Bohuzel arr je primo Array, ne Object - pripojime jako separatni
+                                                // hodnotu pres specialni klic? Zatim vratime jen positional.
+                                                let _ = groups_obj;
+                                            }
+                                        }
+                                        return Ok(arr_val);
                                     }
                                 }
                             }
