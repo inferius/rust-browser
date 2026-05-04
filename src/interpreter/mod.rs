@@ -2497,6 +2497,86 @@ impl Interpreter {
                             n.attr("tabindex").and_then(|t| t.parse::<f64>().ok()).unwrap_or(0.0)
                         ));
                     }
+                    // HTMLTemplateElement.content - vraci self (template node-content uz drzi children)
+                    "content" if n.tag_name().as_deref() == Some("template") => {
+                        return Ok(JsValue::DomNode(Rc::clone(&n)));
+                    }
+                    // Element.namespaceURI / localName / prefix
+                    "namespaceURI" => {
+                        let ns = match n.tag_name().as_deref() {
+                            Some("svg") => "http://www.w3.org/2000/svg",
+                            Some("math") => "http://www.w3.org/1998/Math/MathML",
+                            _ => "http://www.w3.org/1999/xhtml",
+                        };
+                        return Ok(JsValue::Str(ns.into()));
+                    }
+                    "localName" => {
+                        return Ok(JsValue::Str(n.tag_name().unwrap_or_default()));
+                    }
+                    "prefix" => {
+                        return Ok(JsValue::Null);
+                    }
+                    // ChildNode.previousElementSibling / nextElementSibling
+                    "previousElementSibling" | "nextElementSibling" => {
+                        let parent = match n.parent.borrow().upgrade() { Some(p) => p, None => return Ok(JsValue::Null) };
+                        let children = parent.children.borrow();
+                        let idx = match children.iter().position(|c| Rc::ptr_eq(c, &n)) { Some(i) => i, None => return Ok(JsValue::Null) };
+                        let key_str: &str = key;
+                        let target = if key_str == "previousElementSibling" {
+                            (0..idx).rev().find(|&i| matches!(children[i].kind, crate::browser::dom::NodeKind::Element { .. }))
+                        } else {
+                            (idx + 1..children.len()).find(|&i| matches!(children[i].kind, crate::browser::dom::NodeKind::Element { .. }))
+                        };
+                        return Ok(target.map(|i| JsValue::DomNode(Rc::clone(&children[i])))
+                            .unwrap_or(JsValue::Null));
+                    }
+                    "previousSibling" | "nextSibling" => {
+                        let parent = match n.parent.borrow().upgrade() { Some(p) => p, None => return Ok(JsValue::Null) };
+                        let children = parent.children.borrow();
+                        let idx = match children.iter().position(|c| Rc::ptr_eq(c, &n)) { Some(i) => i, None => return Ok(JsValue::Null) };
+                        let key_str: &str = key;
+                        let target_idx = if key_str == "previousSibling" {
+                            if idx == 0 { return Ok(JsValue::Null); }
+                            idx - 1
+                        } else {
+                            if idx + 1 >= children.len() { return Ok(JsValue::Null); }
+                            idx + 1
+                        };
+                        return Ok(JsValue::DomNode(Rc::clone(&children[target_idx])));
+                    }
+                    "childElementCount" => {
+                        let count = n.children.borrow().iter()
+                            .filter(|c| matches!(c.kind, crate::browser::dom::NodeKind::Element { .. }))
+                            .count();
+                        return Ok(JsValue::Number(count as f64));
+                    }
+                    "firstElementChild" => {
+                        return Ok(n.children.borrow().iter()
+                            .find(|c| matches!(c.kind, crate::browser::dom::NodeKind::Element { .. }))
+                            .map(|c| JsValue::DomNode(Rc::clone(c)))
+                            .unwrap_or(JsValue::Null));
+                    }
+                    "lastElementChild" => {
+                        return Ok(n.children.borrow().iter().rev()
+                            .find(|c| matches!(c.kind, crate::browser::dom::NodeKind::Element { .. }))
+                            .map(|c| JsValue::DomNode(Rc::clone(c)))
+                            .unwrap_or(JsValue::Null));
+                    }
+                    "isConnected" => {
+                        // Walk parents na document
+                        let mut cur = Some(Rc::clone(&n));
+                        while let Some(c) = cur {
+                            if matches!(c.kind, crate::browser::dom::NodeKind::Document) {
+                                return Ok(JsValue::Bool(true));
+                            }
+                            cur = c.parent.borrow().upgrade();
+                        }
+                        return Ok(JsValue::Bool(false));
+                    }
+                    "ownerDocument" => {
+                        // Return DomNode of the document root
+                        return Ok(JsValue::DomNode(Rc::clone(&self.document.borrow().root)));
+                    }
                     "open" if matches!(n.tag_name().as_deref(), Some("dialog") | Some("details")) => {
                         return Ok(JsValue::Bool(n.attr("open").is_some()));
                     }
