@@ -45,6 +45,27 @@ pub fn compute_bg_position(
     (box_x + offx, box_y + offy)
 }
 
+/// Canvas 2D op - JS API mapping na primitivy.
+#[derive(Debug, Clone)]
+pub enum CanvasOp {
+    /// fillStyle = "<color>"
+    FillStyle([u8; 4]),
+    /// strokeStyle = "<color>"
+    StrokeStyle([u8; 4]),
+    /// lineWidth = N
+    LineWidth(f32),
+    /// font = "<size>px <family>"
+    Font { size: f32, family: String },
+    /// fillRect(x, y, w, h)
+    FillRect { x: f32, y: f32, w: f32, h: f32 },
+    /// strokeRect(x, y, w, h)
+    StrokeRect { x: f32, y: f32, w: f32, h: f32 },
+    /// clearRect(x, y, w, h) - zaplni transparent
+    ClearRect { x: f32, y: f32, w: f32, h: f32 },
+    /// fillText(text, x, y)
+    FillText { text: String, x: f32, y: f32 },
+}
+
 /// Typ gradientu - linear / radial / conic.
 #[derive(Debug, Clone)]
 pub enum GradientKind {

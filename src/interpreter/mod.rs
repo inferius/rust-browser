@@ -647,6 +647,8 @@ pub struct Interpreter {
     pub next_callback_id: Rc<RefCell<usize>>,
     /// Console log capture pro DevTools: (level, message).
     pub console_log: Rc<RefCell<Vec<(String, String)>>>,
+    /// Canvas 2D operations: canvas DOM node ptr -> ops sequence.
+    pub canvas_ops: Rc<RefCell<std::collections::HashMap<usize, Vec<crate::browser::paint::CanvasOp>>>>,
     /// Network log capture: (url, status).
     pub network_log: Rc<RefCell<Vec<(String, u16)>>>,
 }
@@ -685,6 +687,7 @@ impl Interpreter {
             next_callback_id: Rc::new(RefCell::new(1)),
             console_log,
             network_log,
+            canvas_ops: Rc::new(RefCell::new(std::collections::HashMap::new())),
         }
     }
 
@@ -3527,6 +3530,13 @@ impl Interpreter {
                             }
                             return Ok(child);
                         }
+                        "getContext" if n.tag_name().as_deref() == Some("canvas") => {
+                            // Vraci JsObject reprezentujici 2D canvas context.
+                            // Hidden slot __canvas_ptr__ ulozeno jako Number (canvas DomNode ptr).
+                            let canvas_ptr = Rc::as_ptr(&n) as usize;
+                            let ctx = create_canvas_2d_context(canvas_ptr, Rc::clone(&self.canvas_ops));
+                            return Ok(ctx);
+                        }
                         "querySelector" => {
                             let sel = arg_vals.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
                             let result = if let Some(id) = sel.strip_prefix('#') {
@@ -4634,6 +4644,127 @@ impl Interpreter {
 }
 
 
+
+/// Vyrobi JS object reprezentujici Canvas 2D context.
+/// Vsechny native methods pripoji ops do canvas_ops[canvas_ptr].
+fn create_canvas_2d_context(
+    canvas_ptr: usize,
+    ops_storage: Rc<RefCell<std::collections::HashMap<usize, Vec<crate::browser::paint::CanvasOp>>>>,
+) -> JsValue {
+    use crate::browser::paint::CanvasOp;
+    use crate::browser::layout::parse_color;
+
+    let obj_rc: Rc<RefCell<JsObject>> = Rc::new(RefCell::new(JsObject::new()));
+    {
+        let mut o = obj_rc.borrow_mut();
+        o.set("__canvas_ptr__".into(), JsValue::Number(canvas_ptr as f64));
+        o.set("fillStyle".into(), JsValue::Str("#000000".into()));
+        o.set("strokeStyle".into(), JsValue::Str("#000000".into()));
+        o.set("lineWidth".into(), JsValue::Number(1.0));
+        o.set("font".into(), JsValue::Str("14px sans-serif".into()));
+    }
+
+    let push_op = {
+        let storage = Rc::clone(&ops_storage);
+        move |op: CanvasOp| {
+            storage.borrow_mut().entry(canvas_ptr).or_default().push(op);
+        }
+    };
+
+    // fillRect
+    {
+        let push = push_op.clone();
+        let obj_clone = Rc::clone(&obj_rc);
+        obj_rc.borrow_mut().set("fillRect".into(), native("fillRect", move |args| {
+            let mut it = args.into_iter();
+            let x = it.next().map(|v| v.to_number()).unwrap_or(0.0) as f32;
+            let y = it.next().map(|v| v.to_number()).unwrap_or(0.0) as f32;
+            let w = it.next().map(|v| v.to_number()).unwrap_or(0.0) as f32;
+            let h = it.next().map(|v| v.to_number()).unwrap_or(0.0) as f32;
+            let style_str = obj_clone.borrow().props.get("fillStyle")
+                .map(|v| v.to_string()).unwrap_or_else(|| "black".into());
+            let color = parse_color(&style_str).unwrap_or([0, 0, 0, 255]);
+            push(CanvasOp::FillStyle(color));
+            push(CanvasOp::FillRect { x, y, w, h });
+            Ok(JsValue::Undefined)
+        }));
+    }
+    // strokeRect
+    {
+        let push = push_op.clone();
+        let obj_clone = Rc::clone(&obj_rc);
+        obj_rc.borrow_mut().set("strokeRect".into(), native("strokeRect", move |args| {
+            let mut it = args.into_iter();
+            let x = it.next().map(|v| v.to_number()).unwrap_or(0.0) as f32;
+            let y = it.next().map(|v| v.to_number()).unwrap_or(0.0) as f32;
+            let w = it.next().map(|v| v.to_number()).unwrap_or(0.0) as f32;
+            let h = it.next().map(|v| v.to_number()).unwrap_or(0.0) as f32;
+            let style_str = obj_clone.borrow().props.get("strokeStyle")
+                .map(|v| v.to_string()).unwrap_or_else(|| "black".into());
+            let color = parse_color(&style_str).unwrap_or([0, 0, 0, 255]);
+            let lw = obj_clone.borrow().props.get("lineWidth")
+                .map(|v| v.to_number()).unwrap_or(1.0) as f32;
+            push(CanvasOp::StrokeStyle(color));
+            push(CanvasOp::LineWidth(lw));
+            push(CanvasOp::StrokeRect { x, y, w, h });
+            Ok(JsValue::Undefined)
+        }));
+    }
+    // clearRect
+    {
+        let push = push_op.clone();
+        obj_rc.borrow_mut().set("clearRect".into(), native("clearRect", move |args| {
+            let mut it = args.into_iter();
+            let x = it.next().map(|v| v.to_number()).unwrap_or(0.0) as f32;
+            let y = it.next().map(|v| v.to_number()).unwrap_or(0.0) as f32;
+            let w = it.next().map(|v| v.to_number()).unwrap_or(0.0) as f32;
+            let h = it.next().map(|v| v.to_number()).unwrap_or(0.0) as f32;
+            push(CanvasOp::ClearRect { x, y, w, h });
+            Ok(JsValue::Undefined)
+        }));
+    }
+    // fillText
+    {
+        let push = push_op;
+        let obj_clone = Rc::clone(&obj_rc);
+        obj_rc.borrow_mut().set("fillText".into(), native("fillText", move |args| {
+            let mut it = args.into_iter();
+            let text = it.next().map(|v| v.to_string()).unwrap_or_default();
+            let x = it.next().map(|v| v.to_number()).unwrap_or(0.0) as f32;
+            let y = it.next().map(|v| v.to_number()).unwrap_or(0.0) as f32;
+            let style_str = obj_clone.borrow().props.get("fillStyle")
+                .map(|v| v.to_string()).unwrap_or_else(|| "black".into());
+            let color = parse_color(&style_str).unwrap_or([0, 0, 0, 255]);
+            let font_str = obj_clone.borrow().props.get("font")
+                .map(|v| v.to_string()).unwrap_or_else(|| "14px sans-serif".into());
+            let (size, family) = parse_canvas_font(&font_str);
+            push(CanvasOp::FillStyle(color));
+            push(CanvasOp::Font { size, family });
+            push(CanvasOp::FillText { text, x, y });
+            Ok(JsValue::Undefined)
+        }));
+    }
+
+    JsValue::Object(obj_rc)
+}
+
+fn parse_canvas_font(s: &str) -> (f32, String) {
+    let parts: Vec<&str> = s.split_whitespace().collect();
+    let mut size = 14.0;
+    let mut family = String::from("sans-serif");
+    for (i, p) in parts.iter().enumerate() {
+        if let Some(num) = p.strip_suffix("px") {
+            if let Ok(n) = num.parse::<f32>() {
+                size = n;
+                if i + 1 < parts.len() {
+                    family = parts[i+1..].join(" ").trim_matches('"').trim_matches('\'').to_string();
+                }
+                break;
+            }
+        }
+    }
+    (size, family)
+}
 
 /// Zjednoduseny innerHTML serializer - text obsah + tagy children.
 fn serialize_inner_html(node: &Rc<crate::browser::dom::NodeData>) -> String {

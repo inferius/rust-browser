@@ -292,6 +292,39 @@ fn document_html_exists() {
 // ─── Form properties ─────────────────────────────────────────────────────
 
 #[test]
+fn canvas_get_context_returns_object() {
+    let v = run(r#"
+        const c = document.createElement("canvas");
+        const ctx = c.getContext("2d");
+        return typeof ctx;
+    "#);
+    assert_eq!(as_str(v), "object");
+}
+
+#[test]
+fn canvas_fill_style_setter() {
+    let v = run(r#"
+        const c = document.createElement("canvas");
+        const ctx = c.getContext("2d");
+        ctx.fillStyle = "red";
+        return ctx.fillStyle;
+    "#);
+    assert_eq!(as_str(v), "red");
+}
+
+#[test]
+fn canvas_fill_rect_no_throw() {
+    let v = run(r#"
+        const c = document.createElement("canvas");
+        const ctx = c.getContext("2d");
+        ctx.fillStyle = "blue";
+        ctx.fillRect(10, 20, 100, 50);
+        return "ok";
+    "#);
+    assert_eq!(as_str(v), "ok");
+}
+
+#[test]
 fn outer_html_serializes_element() {
     let v = run(r#"
         const div = document.createElement("div");
