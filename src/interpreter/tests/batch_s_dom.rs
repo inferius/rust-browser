@@ -292,6 +292,26 @@ fn document_html_exists() {
 // ─── Form properties ─────────────────────────────────────────────────────
 
 #[test]
+fn form_submit_collects_data() {
+    let v = run(r#"
+        const f = document.createElement("form");
+        f.setAttribute("action", "/api/submit");
+        f.setAttribute("method", "POST");
+        const i1 = document.createElement("input");
+        i1.setAttribute("name", "user");
+        i1.setAttribute("value", "alice");
+        const i2 = document.createElement("input");
+        i2.setAttribute("name", "pass");
+        i2.setAttribute("value", "secret 123");
+        f.appendChild(i1);
+        f.appendChild(i2);
+        f.submit();
+        return "submitted";
+    "#);
+    assert_eq!(as_str(v), "submitted");
+}
+
+#[test]
 fn canvas_get_context_returns_object() {
     let v = run(r#"
         const c = document.createElement("canvas");

@@ -3530,6 +3530,37 @@ impl Interpreter {
                             }
                             return Ok(child);
                         }
+                        "submit" if n.tag_name().as_deref() == Some("form") => {
+                            // Collect form data (name=value pairs from inputs)
+                            let action = n.attr("action").unwrap_or_else(|| "/".to_string());
+                            let method = n.attr("method").unwrap_or_else(|| "GET".to_string()).to_uppercase();
+                            let mut pairs: Vec<(String, String)> = Vec::new();
+                            n.walk(&mut |node| {
+                                if Rc::ptr_eq(node, &n) { return; }
+                                if let Some(t) = node.tag_name() {
+                                    if matches!(t.as_str(), "input" | "select" | "textarea") {
+                                        if let Some(name) = node.attr("name") {
+                                            let value = node.attr("value").unwrap_or_default();
+                                            pairs.push((name, value));
+                                        }
+                                    }
+                                }
+                            });
+                            // URL encode body
+                            let body = pairs.iter()
+                                .map(|(k, v)| format!("{}={}",
+                                    url_encode(k), url_encode(v)))
+                                .collect::<Vec<_>>().join("&");
+                            // Log do console (replace pro real fetch)
+                            self.console_log.borrow_mut().push((
+                                "log".into(),
+                                format!("[form submit] {method} {action} body={body}"),
+                            ));
+                            self.network_log.borrow_mut().push((
+                                format!("{method} {action}"), 0,
+                            ));
+                            return Ok(JsValue::Undefined);
+                        }
                         "getContext" if n.tag_name().as_deref() == Some("canvas") => {
                             // Vraci JsObject reprezentujici 2D canvas context.
                             // Hidden slot __canvas_ptr__ ulozeno jako Number (canvas DomNode ptr).
@@ -4644,6 +4675,23 @@ impl Interpreter {
 }
 
 
+
+/// Application/x-www-form-urlencoded encoder (RFC 3986 unreserved chars).
+fn url_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char);
+            }
+            b' ' => out.push('+'),
+            _ => {
+                out.push_str(&format!("%{:02X}", b));
+            }
+        }
+    }
+    out
+}
 
 /// Vyrobi JS object reprezentujici Canvas 2D context.
 /// Vsechny native methods pripoji ops do canvas_ops[canvas_ptr].
