@@ -640,6 +640,11 @@ pub struct Interpreter {
     /// DOM Document - sdileny mezi browser engine a JS interpreterem.
     /// Pri startu prazdny; muze byt nahrazen z parsed HTML.
     pub document: Rc<RefCell<crate::browser::dom::Document>>,
+    /// Event callback registry: ID -> JS callback funkce.
+    /// Pouziva se pro addEventListener / dispatchEvent.
+    pub event_callbacks: Rc<RefCell<HashMap<usize, JsValue>>>,
+    /// Counter pro callback ID.
+    pub next_callback_id: Rc<RefCell<usize>>,
 }
 
 // ─── Pomocne funkce ──────────────────────────────────────────────────────────
@@ -667,6 +672,8 @@ impl Interpreter {
             base_dir:        Rc::new(RefCell::new(".".to_string())),
             workers, next_worker_id,
             document,
+            event_callbacks: Rc::new(RefCell::new(HashMap::new())),
+            next_callback_id: Rc::new(RefCell::new(1)),
         }
     }
 
@@ -3451,9 +3458,59 @@ impl Interpreter {
                             let arr: Vec<JsValue> = nodes.into_iter().map(JsValue::DomNode).collect();
                             return Ok(JsValue::Array(Rc::new(RefCell::new(arr))));
                         }
-                        // Stuby pro events / focus / blur / click
-                        "addEventListener" | "removeEventListener" | "dispatchEvent"
-                        | "click" | "focus" | "blur" => return Ok(JsValue::Undefined),
+                        "addEventListener" => {
+                            let mut iter = arg_vals.into_iter();
+                            let event_type = iter.next().map(|v| v.to_string()).unwrap_or_default();
+                            let callback = iter.next().unwrap_or(JsValue::Undefined);
+                            let id = {
+                                let mut c = self.next_callback_id.borrow_mut();
+                                let id = *c;
+                                *c += 1;
+                                id
+                            };
+                            self.event_callbacks.borrow_mut().insert(id, callback);
+                            n.listeners.borrow_mut().entry(event_type).or_default().push(id);
+                            return Ok(JsValue::Undefined);
+                        }
+                        "removeEventListener" => {
+                            // Bez ID nelze najit konkretni callback - zatim no-op
+                            return Ok(JsValue::Undefined);
+                        }
+                        "dispatchEvent" => {
+                            let event = arg_vals.into_iter().next().unwrap_or(JsValue::Undefined);
+                            let event_type = if let JsValue::Object(eo) = &event {
+                                match eo.borrow().get("type") {
+                                    JsValue::Str(s) => s,
+                                    _ => String::new(),
+                                }
+                            } else { String::new() };
+                            let ids: Vec<usize> = n.listeners.borrow().get(&event_type)
+                                .cloned().unwrap_or_default();
+                            for id in ids {
+                                let cb = self.event_callbacks.borrow().get(&id).cloned();
+                                if let Some(cb) = cb {
+                                    self.call_function(cb, vec![event.clone()], None)?;
+                                }
+                            }
+                            return Ok(JsValue::Bool(true));
+                        }
+                        "click" => {
+                            // Programaticke click - dispatchEvent("click")
+                            let ids: Vec<usize> = n.listeners.borrow().get("click")
+                                .cloned().unwrap_or_default();
+                            let mut event = JsObject::new();
+                            event.set("type".into(), JsValue::Str("click".into()));
+                            event.set("target".into(), JsValue::DomNode(Rc::clone(&n)));
+                            let event_val = JsValue::Object(Rc::new(RefCell::new(event)));
+                            for id in ids {
+                                let cb = self.event_callbacks.borrow().get(&id).cloned();
+                                if let Some(cb) = cb {
+                                    self.call_function(cb, vec![event_val.clone()], None)?;
+                                }
+                            }
+                            return Ok(JsValue::Undefined);
+                        }
+                        "focus" | "blur" => return Ok(JsValue::Undefined),
                         _ => {}
                     }
                     let _ = NodeData::new_text("");  // suppress unused-import warning

@@ -113,8 +113,8 @@ fn add_listener_returns_undefined() {
 }
 
 #[test]
-#[ignore] // Real event dispatch potrebuje per-node callback registry
 fn add_listener_dispatch() {
+    // Real event dispatch s callback registry
     let v = run(r#"
         const el = document.createElement("button");
         let clicked = false;
@@ -123,6 +123,49 @@ fn add_listener_dispatch() {
         return clicked;
     "#);
     assert_eq!(as_bool(v), true);
+}
+
+#[test]
+fn click_method_fires_listener() {
+    // .click() programaticky vyvola listener
+    let v = run(r#"
+        const el = document.createElement("button");
+        let count = 0;
+        el.addEventListener("click", () => { count++; });
+        el.click();
+        el.click();
+        el.click();
+        return count;
+    "#);
+    assert_eq!(as_num(v), 3.0);
+}
+
+#[test]
+fn click_passes_event_target() {
+    // event.target je DomNode
+    let v = run(r#"
+        const el = document.createElement("button");
+        el.setAttribute("id", "btn");
+        let target_id = "";
+        el.addEventListener("click", (e) => { target_id = e.target.id; });
+        el.click();
+        return target_id;
+    "#);
+    assert_eq!(as_str(v), "btn");
+}
+
+#[test]
+fn multiple_listeners_all_fire() {
+    let v = run(r#"
+        const el = document.createElement("div");
+        let calls = "";
+        el.addEventListener("custom", () => { calls += "a"; });
+        el.addEventListener("custom", () => { calls += "b"; });
+        el.addEventListener("custom", () => { calls += "c"; });
+        el.dispatchEvent(new Event("custom"));
+        return calls;
+    "#);
+    assert_eq!(as_str(v), "abc");
 }
 
 #[test]
