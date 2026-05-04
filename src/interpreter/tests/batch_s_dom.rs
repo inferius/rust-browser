@@ -292,6 +292,30 @@ fn document_html_exists() {
 // ─── Form properties ─────────────────────────────────────────────────────
 
 #[test]
+fn observer_constructor_returns_object() {
+    let v = run(r#"
+        const r = new ResizeObserver(() => {});
+        const i = new IntersectionObserver(() => {});
+        const m = new MutationObserver(() => {});
+        const p = new PerformanceObserver(() => {});
+        r.observe(document.body);
+        i.disconnect();
+        return typeof r + ":" + typeof i + ":" + typeof m + ":" + typeof p;
+    "#);
+    assert_eq!(as_str(v), "object:object:object:object");
+}
+
+#[test]
+fn raf_returns_id() {
+    let v = run(r#"
+        const id = requestAnimationFrame(() => {});
+        cancelAnimationFrame(id);
+        return typeof id;
+    "#);
+    assert_eq!(as_str(v), "number");
+}
+
+#[test]
 fn element_append_string_and_node() {
     let v = run(r#"
         const div = document.createElement("div");

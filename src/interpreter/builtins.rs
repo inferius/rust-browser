@@ -1306,4 +1306,62 @@ pub fn setup_builtins(
             Ok(JsValue::Undefined)
         }));
     }
+
+    // ─── Observer stuby (ResizeObserver / IntersectionObserver / MutationObserver / PerformanceObserver) ──
+    // Vsechny constructors vraci object s observe/unobserve/disconnect/takeRecords methods
+    // (no-op aktualne - real runtime tracking TODO).
+    let make_observer = |name: &str| {
+        let n = name.to_string();
+        native(name, move |_args| {
+            let obj = std::rc::Rc::new(std::cell::RefCell::new(JsObject::new()));
+            {
+                let mut o = obj.borrow_mut();
+                o.set("__observer_kind__".into(), JsValue::Str(n.clone()));
+                o.set("observe".into(), native("observe", |_| Ok(JsValue::Undefined)));
+                o.set("unobserve".into(), native("unobserve", |_| Ok(JsValue::Undefined)));
+                o.set("disconnect".into(), native("disconnect", |_| Ok(JsValue::Undefined)));
+                o.set("takeRecords".into(), native("takeRecords", |_| {
+                    Ok(JsValue::Array(std::rc::Rc::new(std::cell::RefCell::new(Vec::new()))))
+                }));
+            }
+            Ok(JsValue::Object(obj))
+        })
+    };
+    e.define("ResizeObserver", make_observer("ResizeObserver"));
+    e.define("IntersectionObserver", make_observer("IntersectionObserver"));
+    e.define("MutationObserver", make_observer("MutationObserver"));
+    e.define("PerformanceObserver", make_observer("PerformanceObserver"));
+
+    // requestAnimationFrame / cancelAnimationFrame - stub via setTimeout
+    {
+        let tq = Rc::clone(task_queue);
+        let id_ctr = Rc::clone(next_timer_id);
+        e.define("requestAnimationFrame", native("requestAnimationFrame", move |a| {
+            let cb = a.into_iter().next().unwrap_or(JsValue::Undefined);
+            let id = { let mut ctr = id_ctr.borrow_mut(); let id = *ctr; *ctr += 1; id };
+            tq.borrow_mut().push((id, cb, vec![JsValue::Number(0.0)]));
+            Ok(JsValue::Number(id as f64))
+        }));
+    }
+    {
+        let tq = Rc::clone(task_queue);
+        e.define("cancelAnimationFrame", native("cancelAnimationFrame", move |a| {
+            let id = a.into_iter().next().map(|v| v.to_number() as u32).unwrap_or(0);
+            tq.borrow_mut().retain(|(tid, _, _)| *tid != id);
+            Ok(JsValue::Undefined)
+        }));
+    }
+
+    // queueMicrotask(callback)
+    {
+        let tq = Rc::clone(task_queue);
+        let id_ctr = Rc::clone(next_timer_id);
+        e.define("queueMicrotask", native("queueMicrotask", move |a| {
+            let cb = a.into_iter().next().unwrap_or(JsValue::Undefined);
+            let id = { let mut ctr = id_ctr.borrow_mut(); let id = *ctr; *ctr += 1; id };
+            tq.borrow_mut().push((id, cb, Vec::new()));
+            Ok(JsValue::Undefined)
+        }));
+    }
+
 }
