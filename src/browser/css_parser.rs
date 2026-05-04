@@ -11,6 +11,14 @@ pub struct Stylesheet {
     pub rules: Vec<Rule>,
     /// @media queries: kazda obsahuje query string + nested rules
     pub media_queries: Vec<MediaQuery>,
+    /// @keyframes: name -> Vec<(percent, declarations)>
+    pub keyframes: Vec<Keyframes>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Keyframes {
+    pub name: String,
+    pub frames: Vec<(f32, Vec<Declaration>)>, // (percent 0..1, declarations)
 }
 
 #[derive(Debug, Clone)]
@@ -98,21 +106,30 @@ pub fn specificity(sel: &Selector) -> (u32, u32, u32) {
 pub fn parse_stylesheet(source: &str) -> Stylesheet {
     let mut rules = Vec::new();
     let mut media_queries = Vec::new();
+    let mut keyframes = Vec::new();
     let mut chars = source.chars().peekable();
 
     while chars.peek().is_some() {
         skip_whitespace_and_comments(&mut chars);
         if chars.peek().is_none() { break; }
 
-        // Read selectors / at-rule until '{'
+        // Read selectors / at-rule until '{' or ';'
         let mut selectors_str = String::new();
+        let mut has_block = false;
         while let Some(&c) = chars.peek() {
-            if c == '{' { chars.next(); break; }
+            if c == '{' { chars.next(); has_block = true; break; }
+            if c == ';' { chars.next(); break; }
             selectors_str.push(c);
             chars.next();
         }
         let selectors_str = selectors_str.trim().to_string();
         if selectors_str.is_empty() { break; }
+
+        // @import / @charset bez bloku - skip
+        if !has_block {
+            // Tato at-rule je zpracovana (@import "url" pro budoucnost, ted ignored)
+            continue;
+        }
 
         // Read block until matching '}'
         let mut block_str = String::new();
@@ -128,8 +145,15 @@ pub fn parse_stylesheet(source: &str) -> Stylesheet {
             let query = selectors_str.trim_start_matches("@media").trim().to_string();
             let nested = parse_stylesheet(&block_str);
             media_queries.push(MediaQuery { query, rules: nested.rules });
+        } else if selectors_str.starts_with("@keyframes") || selectors_str.starts_with("@-webkit-keyframes") {
+            let name = selectors_str
+                .trim_start_matches("@keyframes")
+                .trim_start_matches("@-webkit-keyframes")
+                .trim().to_string();
+            let frames = parse_keyframes(&block_str);
+            keyframes.push(Keyframes { name, frames });
         } else if selectors_str.starts_with('@') {
-            // Ostatni at-rules zatim ignorujeme (@import, @keyframes, atd.)
+            // Ostatni at-rules ignorujeme (@import, @font-face, ...)
         } else {
             let selectors = parse_selectors(&selectors_str);
             let declarations = parse_decls_str(&block_str);
@@ -137,7 +161,43 @@ pub fn parse_stylesheet(source: &str) -> Stylesheet {
         }
     }
 
-    Stylesheet { rules, media_queries }
+    Stylesheet { rules, media_queries, keyframes }
+}
+
+/// Parsuje @keyframes blok: "0% { ... } 50% { ... } 100% { ... }".
+fn parse_keyframes(block: &str) -> Vec<(f32, Vec<Declaration>)> {
+    let mut frames = Vec::new();
+    let mut chars = block.chars().peekable();
+    while chars.peek().is_some() {
+        skip_whitespace_and_comments(&mut chars);
+        if chars.peek().is_none() { break; }
+        let mut sel = String::new();
+        while let Some(&c) = chars.peek() {
+            if c == '{' { chars.next(); break; }
+            sel.push(c);
+            chars.next();
+        }
+        let mut block_inner = String::new();
+        let mut depth = 1;
+        while let Some(c) = chars.next() {
+            if c == '{' { depth += 1; }
+            if c == '}' { depth -= 1; if depth == 0 { break; } }
+            block_inner.push(c);
+        }
+        // Sel: napr "0%", "50%", "from", "to"
+        for part in sel.split(',') {
+            let s = part.trim();
+            let percent = match s {
+                "from" => 0.0,
+                "to"   => 1.0,
+                _ => s.trim_end_matches('%').parse::<f32>().unwrap_or(0.0) / 100.0,
+            };
+            let decls = parse_decls_str(&block_inner);
+            frames.push((percent, decls));
+        }
+    }
+    frames.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    frames
 }
 
 /// Vyhodnoti media query string proti viewport.

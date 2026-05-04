@@ -622,12 +622,18 @@ pub fn run_window_with_html(html: String, css: String) -> Result<(), String> {
                 shift_command_y(cmd, -self.scroll_y);
             }
 
-            // Pre-rasterize vsechny glyfy do atlasu
+            // Pre-rasterize vsechny glyfy do atlasu + nacti images
             for cmd in &display_list {
-                if let DisplayCommand::Text { content, font_size, .. } = cmd {
-                    for ch in content.chars() {
-                        r.atlas.add(ch, *font_size as u32);
+                match cmd {
+                    DisplayCommand::Text { content, font_size, .. } => {
+                        for ch in content.chars() {
+                            r.atlas.add(ch, *font_size as u32);
+                        }
                     }
+                    DisplayCommand::Image { src, .. } => {
+                        r.load_image(src);
+                    }
+                    _ => {}
                 }
             }
             r.upload_atlas();
@@ -671,6 +677,8 @@ struct Renderer {
     bind_group_layout: wgpu::BindGroupLayout,
     bind_group: wgpu::BindGroup,
     atlas: GlyphAtlas,
+    /// Cache decoded images: src -> (width, height, RGBA bytes)
+    image_cache: std::collections::HashMap<String, (u32, u32, Vec<u8>)>,
 }
 
 impl Renderer {
@@ -823,6 +831,28 @@ impl Renderer {
         Renderer {
             surface, device, queue, config, pipeline, uniform_buf,
             atlas_tex, atlas_view, atlas_smp, bind_group_layout, bind_group, atlas,
+            image_cache: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Nacte image ze souboru / URL do cache (RGBA bytes).
+    fn load_image(&mut self, src: &str) {
+        if self.image_cache.contains_key(src) { return; }
+        // Pro start: jen FS load (ne HTTP)
+        let path = if src.starts_with("http://") || src.starts_with("https://") {
+            // Skip HTTP zatim
+            return;
+        } else if src.starts_with('/') {
+            src.to_string()
+        } else {
+            format!("static/{src}")
+        };
+        if let Ok(bytes) = std::fs::read(&path) {
+            if let Ok(img) = image::load_from_memory(&bytes) {
+                let rgba = img.to_rgba8();
+                let (w, h) = (rgba.width(), rgba.height());
+                self.image_cache.insert(src.to_string(), (w, h, rgba.into_raw()));
+            }
         }
     }
 

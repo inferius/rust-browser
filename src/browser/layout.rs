@@ -839,13 +839,26 @@ fn split_top_level_commas(s: &str) -> Vec<&str> {
     parts
 }
 
-/// Parse delku v px nebo em. Vraci pixely.
-/// Delsi suffixy musi byt kontrolovany drive (rem pred em).
+/// Parse delku v px/em/rem/vw/vh/% (bez kontextu - vraci 0 pro %).
+/// Delsi suffixy musi byt kontrolovany drive.
 pub fn parse_length(s: &str) -> f32 {
+    parse_length_ctx(s, 1024.0, 768.0, 16.0)
+}
+
+/// Parse delky s viewport kontextem (pro vw/vh/% support).
+pub fn parse_length_ctx(s: &str, vw: f32, vh: f32, parent_size: f32) -> f32 {
     let s = s.trim();
     if let Some(num) = s.strip_suffix("rem") {
         let v: f32 = num.trim().parse().unwrap_or(0.0);
         return v * 16.0;
+    }
+    if let Some(num) = s.strip_suffix("vmin") {
+        let v: f32 = num.trim().parse().unwrap_or(0.0);
+        return v * vw.min(vh) / 100.0;
+    }
+    if let Some(num) = s.strip_suffix("vmax") {
+        let v: f32 = num.trim().parse().unwrap_or(0.0);
+        return v * vw.max(vh) / 100.0;
     }
     if let Some(num) = s.strip_suffix("px") {
         return num.trim().parse().unwrap_or(0.0);
@@ -854,9 +867,22 @@ pub fn parse_length(s: &str) -> f32 {
         let v: f32 = num.trim().parse().unwrap_or(0.0);
         return v * 16.0;
     }
+    if let Some(num) = s.strip_suffix("vw") {
+        let v: f32 = num.trim().parse().unwrap_or(0.0);
+        return v * vw / 100.0;
+    }
+    if let Some(num) = s.strip_suffix("vh") {
+        let v: f32 = num.trim().parse().unwrap_or(0.0);
+        return v * vh / 100.0;
+    }
+    if let Some(num) = s.strip_suffix("pt") {
+        // 1pt = 1.333px
+        let v: f32 = num.trim().parse().unwrap_or(0.0);
+        return v * 1.333;
+    }
     if let Some(num) = s.strip_suffix('%') {
-        let _: f32 = num.trim().parse().unwrap_or(0.0);
-        return 0.0;
+        let v: f32 = num.trim().parse().unwrap_or(0.0);
+        return v * parent_size / 100.0;
     }
     s.parse().unwrap_or(0.0)
 }

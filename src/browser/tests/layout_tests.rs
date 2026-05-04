@@ -50,6 +50,57 @@ fn parse_length_units() {
     assert_eq!(layout::parse_length("16px"), 16.0);
     assert_eq!(layout::parse_length("2em"),  32.0);
     assert_eq!(layout::parse_length("1rem"), 16.0);
+    // pt -> px (1.333 multiplier)
+    let pt = layout::parse_length("12pt");
+    assert!((pt - 16.0).abs() < 1.0);
+}
+
+#[test]
+fn parse_length_viewport_units() {
+    use crate::browser::layout::parse_length_ctx;
+    assert_eq!(parse_length_ctx("50vw", 1000.0, 800.0, 16.0), 500.0);
+    assert_eq!(parse_length_ctx("25vh", 1000.0, 800.0, 16.0), 200.0);
+    assert_eq!(parse_length_ctx("10vmin", 1000.0, 800.0, 16.0), 80.0);
+    assert_eq!(parse_length_ctx("10vmax", 1000.0, 800.0, 16.0), 100.0);
+    // % parent based
+    assert_eq!(parse_length_ctx("50%", 1000.0, 800.0, 200.0), 100.0);
+}
+
+#[test]
+fn parse_linear_gradient_basic() {
+    let g = layout::parse_linear_gradient("linear-gradient(45deg, red, blue)");
+    assert!(g.is_some());
+    let (angle, stops) = g.unwrap();
+    assert_eq!(angle, 45.0);
+    assert_eq!(stops.len(), 2);
+}
+
+#[test]
+fn parse_box_shadow_basic() {
+    let s = layout::parse_box_shadow("2px 4px 8px black");
+    assert!(s.is_some());
+    let (ox, oy, blur, _spread, _color) = s.unwrap();
+    assert_eq!(ox, 2.0);
+    assert_eq!(oy, 4.0);
+    assert_eq!(blur, 8.0);
+}
+
+#[test]
+fn parse_transform_translate() {
+    use crate::browser::layout::TransformOp;
+    let t = layout::parse_transform("translate(10px, 20px)");
+    assert!(matches!(t, Some(TransformOp::Translate(10.0, 20.0))));
+}
+
+#[test]
+fn parse_transform_rotate() {
+    use crate::browser::layout::TransformOp;
+    let t = layout::parse_transform("rotate(90deg)");
+    if let Some(TransformOp::Rotate(rad)) = t {
+        assert!((rad - std::f32::consts::FRAC_PI_2).abs() < 0.01);
+    } else {
+        panic!("expected Rotate");
+    }
 }
 
 #[test]
