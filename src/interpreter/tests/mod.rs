@@ -35,3 +35,5 @@ mod web_apis_tests;
 mod webgl_tests;
 mod edge_cases_tests;
 mod dom_api_tests;
+mod promise_extra_tests;
+mod canvas_form_tests;

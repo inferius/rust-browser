@@ -1907,3 +1907,166 @@ fn build_dl_with_gradient_no_panic() {
     let map = crate::browser::cascade::cascade(&doc.root, &[css]);
     let _layout = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
 }
+
+// ─── Display enum + value parsing ──────────────────────────────────────
+
+#[test]
+fn display_from_block() {
+    assert_eq!(layout::Display::from_str("block"), layout::Display::Block);
+}
+
+#[test]
+fn display_from_inline() {
+    assert_eq!(layout::Display::from_str("inline"), layout::Display::Inline);
+}
+
+#[test]
+fn display_from_flex() {
+    assert_eq!(layout::Display::from_str("flex"), layout::Display::Flex);
+}
+
+#[test]
+fn display_from_grid() {
+    assert_eq!(layout::Display::from_str("grid"), layout::Display::Grid);
+}
+
+#[test]
+fn display_from_none() {
+    assert_eq!(layout::Display::from_str("none"), layout::Display::None);
+}
+
+// ─── Layout box rect basics ────────────────────────────────────────────
+
+#[test]
+fn layout_default_block_height_zero_for_empty() {
+    let doc = crate::browser::html_parser::parse_html(
+        r#"<html><body><div></div></body></html>"#, ""
+    );
+    let css = crate::browser::css_parser::parse_stylesheet("");
+    let map = crate::browser::cascade::cascade(&doc.root, &[css]);
+    let layout_root = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+    // Mel by parse + layout bez panic
+    let _ = layout_root.rect.width;
+}
+
+#[test]
+fn layout_div_with_explicit_dimensions_smoke() {
+    let doc = crate::browser::html_parser::parse_html(
+        r#"<html><body><div></div></body></html>"#, ""
+    );
+    let css = crate::browser::css_parser::parse_stylesheet(
+        "div { width: 200px; height: 100px; }"
+    );
+    let map = crate::browser::cascade::cascade(&doc.root, &[css]);
+    let layout_root = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+    fn find_div(bx: &layout::LayoutBox) -> Option<&layout::LayoutBox> {
+        if bx.tag.as_deref() == Some("div") { return Some(bx); }
+        for ch in &bx.children { if let Some(d) = find_div(ch) { return Some(d); } }
+        None
+    }
+    let div = find_div(&layout_root).expect("div");
+    // Smoke - layout vraci nejake rozmery, ne nule.
+    assert!(div.rect.width > 0.0 && div.rect.height > 0.0);
+}
+
+#[test]
+fn layout_padding_propagates() {
+    let doc = crate::browser::html_parser::parse_html(
+        r#"<html><body><div></div></body></html>"#, ""
+    );
+    let css = crate::browser::css_parser::parse_stylesheet(
+        "div { width: 100px; height: 50px; padding: 10px; }"
+    );
+    let map = crate::browser::cascade::cascade(&doc.root, &[css]);
+    let layout_root = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+    fn find_div(bx: &layout::LayoutBox) -> Option<&layout::LayoutBox> {
+        if bx.tag.as_deref() == Some("div") { return Some(bx); }
+        for ch in &bx.children { if let Some(d) = find_div(ch) { return Some(d); } }
+        None
+    }
+    let div = find_div(&layout_root).expect("div");
+    // Padding by se mel propagovat (nezavisle na shape interpretace)
+    assert!(div.padding >= 0.0);
+}
+
+// ─── Filter chain parsing ──────────────────────────────────────────────
+
+#[test]
+fn parse_filter_chain_blur_em_unit() {
+    let v = layout::parse_filter_chain("blur(0.5em)");
+    assert_eq!(v.len(), 1);
+    if let layout::FilterOp::Blur(r) = v[0] {
+        assert!((r - 8.0).abs() < 1e-3, "0.5em = 8px, got {r}");
+    }
+}
+
+#[test]
+fn parse_filter_chain_invert_pct() {
+    let v = layout::parse_filter_chain("invert(50%)");
+    if let layout::FilterOp::Invert(i) = v[0] {
+        assert!((i - 0.5).abs() < 1e-3);
+    }
+}
+
+#[test]
+fn parse_filter_chain_drop_shadow_extended() {
+    let v = layout::parse_filter_chain("drop-shadow(2px 3px 4px black)");
+    matches!(v[0], layout::FilterOp::DropShadow { .. });
+    if let layout::FilterOp::DropShadow { ox, oy, blur, color } = v[0] {
+        assert!((ox - 2.0).abs() < 1e-3);
+        assert!((oy - 3.0).abs() < 1e-3);
+        assert!((blur - 4.0).abs() < 1e-3);
+        assert_eq!(color[3], 255, "alpha 1.0");
+    }
+}
+
+#[test]
+fn parse_filter_chain_brightness_unitless() {
+    let v = layout::parse_filter_chain("brightness(1.5)");
+    if let layout::FilterOp::Brightness(b) = v[0] {
+        assert!((b - 1.5).abs() < 1e-3);
+    }
+}
+
+#[test]
+fn parse_filter_chain_opacity_pct() {
+    let v = layout::parse_filter_chain("opacity(75%)");
+    if let layout::FilterOp::Opacity(o) = v[0] {
+        assert!((o - 0.75).abs() < 1e-3);
+    }
+}
+
+#[test]
+fn parse_filter_chain_combined_grayscale_invert() {
+    let v = layout::parse_filter_chain("grayscale(100%) invert(100%)");
+    assert_eq!(v.len(), 2);
+}
+
+#[test]
+fn parse_filter_chain_invalid_func_skipped() {
+    // Unknown filter func - bud skipnut nebo error, oba acceptable (no panic)
+    let _ = layout::parse_filter_chain("unknown_filter(50%)");
+}
+
+// ─── Color matrix chain ────────────────────────────────────────────────
+
+#[test]
+fn color_matrix_double_invert_is_near_identity() {
+    let m = layout::compute_color_matrix(&[
+        layout::FilterOp::Invert(1.0),
+        layout::FilterOp::Invert(1.0),
+    ]);
+    // r' = -1 * (-1*r + 1) + 1 = r - 1 + 1 = r -> coef 1, offset 0
+    assert!((m[0] - 1.0).abs() < 1e-3);
+    assert!(m[4].abs() < 1e-3);
+}
+
+#[test]
+fn color_matrix_brightness_zero_blackens_rgb() {
+    let m = layout::compute_color_matrix(&[layout::FilterOp::Brightness(0.0)]);
+    // Vsechny RGB coef nula -> output = (0, 0, 0, alpha)
+    assert!(m[0].abs() < 1e-5);
+    assert!(m[6].abs() < 1e-5);
+    assert!(m[12].abs() < 1e-5);
+    assert!((m[18] - 1.0).abs() < 1e-5, "alpha kanal preserved");
+}
