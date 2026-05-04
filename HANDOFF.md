@@ -6,9 +6,9 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 
 - Build: **OK**, 0 errors.
 - Tests: **1113 passed, 0 failed, 3 ignored** (+308 v teto session, +38.3%).
-- Posledni commit: `a8c0ecd WebGL phase 3c2 - vertex layout helpers + buffer upload`.
+- Posledni commit: `73586c5 WebGL phase 3c5b - App::render preferuje real GPU path`.
 - Tree: ciste.
-- Branch master, ~239 commitu pred origin/master (NEPUSHOVAT bez vyzvy).
+- Branch master, ~243 commitu pred origin/master (NEPUSHOVAT bez vyzvy).
 
 ## Recent session highlights
 
@@ -54,19 +54,30 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
     wgpu::VertexFormat), webgl_compute_stride (explicit nebo tightly
     packed). Renderer::upload_webgl_buffer pro real GPU buffer cache.
     +9 testu.
+13. **WebGL phase 3c3** (commit 19c6567) - per-canvas RT alloc
+    (ensure_webgl_canvas_rt) + pipeline build z modules + vertex layout
+    (ensure_webgl_pipeline) + draw/clear pass encoding helpers
+    (webgl_encode_draw_arrays / webgl_encode_clear).
+14. **WebGL phase 3c4** (commit 746be2c) - compose_view_to_swap helper
+    (parametric compose). Pouziva transform_pipeline aby canvas RT
+    samples z 0..1 uv mapped na canvas rect quad (correct ne fullscreen).
+15. **WebGL phase 3c5** (commits 3d30b2b + 73586c5) - integrace App::render:
+    Renderer::draw_full_frame wrapper kolem draw_segments + WebGL
+    overlay frame. run_webgl_frame walks layout tree, execute_webgl_canvas
+    drain state queue, upload buffers, build modules, ensure pipeline,
+    encode draws, composit RT do swap chain. paint_webgl_canvases removed
+    z App::render path - placeholder zustava pub pro debug viewer /
+    devtools (bez Renderer).
 
 ## Velke remaining work
 
-- **WebGL phase 3c3**: Connect dohromady - vertex layout pres VertexBufferLayout
-  z helpers, build pipeline z modules + layout, real wgpu draw call. Vyzaduje:
-  - Refactor paint_webgl_canvases na Renderer metodu (self.device + queue access).
-  - Pri DrawArrays/Elements: lookup buffer + pipeline cache; pokud miss,
-    build z webgl_shader_modules + helpers.
-  - Per-canvas offscreen RT (Vec<wgpu::Texture> per canvas_ptr).
-  - Composit canvas RT do swap chain pres image_atlas / new compose pass.
-  - Bind group pro uniform buffer (kazdy DrawArrays write_buffer pred draw).
-  Scope: 400-700 radku, prevazne refactor existing paint_webgl_canvases
-  + render-pass encoding logiky.
+- **WebGL phase 3c6+**: Single-frame integration cleanup. Aktualne run_webgl_overlay_frame
+  acquire fresh frame + present (2 frames total = potencial flicker). Lepsi:
+  refactor draw_segments aby webgl pass byl AT THE END before single present.
+  Dual path konflict: paint_webgl_canvases (placeholder) + run_webgl_frame (real GPU)
+  uz vyresen z App::render (placeholder skipnut), ale debug viewer cesta jeste pouziva.
+  Plus: uniform buffer support v ensure_webgl_pipeline (bind group), texture upload,
+  drawElements (index buffer). Scope: 200-500 radku.
 - **Filter v Transform RT (nested)**: aktualne filter inside transform
   je inner cmds bez efektu - lepsi pristup vyzaduje rekursi v draw_segments.
 - **Filter v Transform RT (nested)**: aktualne filter inside transform
