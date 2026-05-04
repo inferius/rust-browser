@@ -367,3 +367,43 @@ p[data-info]::before {
 .g-rad { background: radial-gradient(red, blue); }
 .g-con { background: conic-gradient(red, yellow, green, blue, red); }
 
+/* Rotation */
+.rot-box {
+    width: 80px;
+    height: 60px;
+    background: #2997ff;
+    color: white;
+    text-align: center;
+    line-height: 60px;
+    border-radius: 4px;
+}
+.r-0 { transform: rotate(0deg); }
+.r-15 { transform: rotate(15deg); }
+.r-45 { transform: rotate(45deg); }
+.r-scale { transform: scale(1.5); }
+
+/* text-decoration styles */
+.td-solid  { text-decoration: underline; text-decoration-style: solid; }
+.td-double { text-decoration: underline; text-decoration-style: double; }
+.td-dotted { text-decoration: underline; text-decoration-style: dotted; text-decoration-color: blue; }
+.td-dashed { text-decoration: underline; text-decoration-style: dashed; text-decoration-color: green; }
+.td-wavy   { text-decoration: underline; text-decoration-style: wavy; text-decoration-color: red; }
+
+/* List styles */
+.ls-disc { list-style-type: disc; padding-left: 24px; }
+.ls-decimal { list-style-type: decimal; padding-left: 24px; }
+.ls-roman { list-style-type: upper-roman; padding-left: 24px; }
+
+/* Outline */
+.ol-box {
+    width: 100px;
+    height: 60px;
+    background: white;
+    border: 1px solid black;
+    outline: 3px solid red;
+}
+.ol-offset {
+    outline-offset: 8px;
+}
+
+
