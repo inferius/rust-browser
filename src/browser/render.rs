@@ -26,6 +26,60 @@ struct Vertex {
     blur: f32,
 }
 
+/// Separable Gaussian blur shader - 2 pass (horizontal + vertical).
+/// Sample 9 tapu s gauss vahami.
+const BLUR_SHADER: &str = r#"
+struct BlurParams {
+    /// direction.x = 1 horizontal, .y = 1 vertical
+    direction: vec2<f32>,
+    /// blur radius in pixels
+    radius: f32,
+    /// texel size 1/width or 1/height
+    texel: f32,
+};
+@group(0) @binding(0) var<uniform> params: BlurParams;
+@group(0) @binding(1) var src_tex: texture_2d<f32>;
+@group(0) @binding(2) var src_smp: sampler;
+
+struct VertexOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+
+@vertex
+fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOut {
+    // Fullscreen triangle
+    var pos = array<vec2<f32>, 3>(
+        vec2<f32>(-1.0, -1.0),
+        vec2<f32>( 3.0, -1.0),
+        vec2<f32>(-1.0,  3.0),
+    );
+    var uv = array<vec2<f32>, 3>(
+        vec2<f32>(0.0, 1.0),
+        vec2<f32>(2.0, 1.0),
+        vec2<f32>(0.0, -1.0),
+    );
+    var out: VertexOut;
+    out.clip = vec4<f32>(pos[idx], 0.0, 1.0);
+    out.uv = uv[idx];
+    return out;
+}
+
+@fragment
+fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
+    // 9-tap Gaussian (sigma ~ radius/3)
+    let weights = array<f32, 5>(0.227027, 0.1945946, 0.1216216, 0.054054, 0.016216);
+    let step = params.direction * params.texel * params.radius * 0.3;
+    var color = textureSample(src_tex, src_smp, in.uv) * weights[0];
+    for (var i = 1; i < 5; i = i + 1) {
+        let off = step * f32(i);
+        color = color + textureSample(src_tex, src_smp, in.uv + off) * weights[i];
+        color = color + textureSample(src_tex, src_smp, in.uv - off) * weights[i];
+    }
+    return color;
+}
+"#;
+
 const RECT_SHADER: &str = r#"
 struct Uniforms {
     viewport: vec2<f32>,
@@ -1315,9 +1369,16 @@ struct Renderer {
     /// Loaded font URLs (skip re-load).
     loaded_font_urls: std::collections::HashSet<String>,
     /// Offscreen RT pro filter blur / view-transitions (RGBA8 viewport size).
-    /// Pripravene k 2-pass gauss + composit. Aktualne neaktivni.
     offscreen_tex: wgpu::Texture,
     offscreen_view: wgpu::TextureView,
+    /// Druhy RT pro blur 2-pass (ping-pong)
+    offscreen_tex_b: wgpu::Texture,
+    offscreen_view_b: wgpu::TextureView,
+    /// Blur pipeline + bind group layout (separate od main)
+    blur_pipeline: wgpu::RenderPipeline,
+    blur_bind_group_layout: wgpu::BindGroupLayout,
+    /// Uniform pro blur direction (0=horizontal, 1=vertical) + radius
+    blur_uniform_buf: wgpu::Buffer,
 }
 
 impl Renderer {
@@ -1495,22 +1556,91 @@ impl Renderer {
 
         let image_atlas = ImageAtlas::new();
 
-        // Offscreen RT - viewport size, RGBA8UnormSrgb
-        let offscreen_tex = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("offscreen_rt"),
-            size: wgpu::Extent3d {
-                width: config.width.max(1), height: config.height.max(1), depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
+        // Offscreen RT_a + RT_b - viewport size, RGBA8UnormSrgb (ping-pong pro blur)
+        let make_rt = |dev: &wgpu::Device, label: &str, w: u32, h: u32| {
+            let tex = dev.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d { width: w.max(1), height: h.max(1), depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            let view = tex.create_view(&Default::default());
+            (tex, view)
+        };
+        let (offscreen_tex,   offscreen_view)   = make_rt(&device, "offscreen_rt_a", config.width, config.height);
+        let (offscreen_tex_b, offscreen_view_b) = make_rt(&device, "offscreen_rt_b", config.width, config.height);
+
+        // Blur shader + pipeline
+        let blur_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("blur_shader"),
+            source: wgpu::ShaderSource::Wgsl(BLUR_SHADER.into()),
         });
-        let offscreen_view = offscreen_tex.create_view(&Default::default());
+        let blur_uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("blur_uniform"),
+            size: 16, // direction.xy + radius + texel
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let blur_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("blur_bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0, visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false, min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1, visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2, visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let blur_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("blur_pl"),
+            bind_group_layouts: &[&blur_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+        let blur_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("blur_pipeline"),
+            layout: Some(&blur_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &blur_shader, entry_point: "vs_main",
+                compilation_options: Default::default(),
+                buffers: &[], // fullscreen triangle, no vertex buffer
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &blur_shader, entry_point: "fs_main",
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+        });
 
         Renderer {
             surface, device, queue, config, pipeline, uniform_buf,
@@ -1519,7 +1649,79 @@ impl Renderer {
             font_registry: std::collections::HashMap::new(),
             loaded_font_urls: std::collections::HashSet::new(),
             offscreen_tex, offscreen_view,
+            offscreen_tex_b, offscreen_view_b,
+            blur_pipeline, blur_bind_group_layout, blur_uniform_buf,
         }
+    }
+
+    /// Provede 2-pass gauss blur na offscreen_tex_a -> tex_b -> tex_a.
+    /// Volat po vykresleni do offscreen_tex_a.
+    fn run_blur_passes(&mut self, radius: f32) {
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+
+        // Pass 1: horizontal RT_a -> RT_b
+        let texel_x = 1.0 / self.config.width as f32;
+        let params_h = [1.0_f32, 0.0, radius, texel_x];
+        self.queue.write_buffer(&self.blur_uniform_buf, 0, bytemuck::cast_slice(&params_h));
+        let bg_h = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("blur_bg_h"), layout: &self.blur_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: self.blur_uniform_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&self.offscreen_view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.atlas_smp) },
+            ],
+        });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("blur_h"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.offscreen_view_b,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None, timestamp_writes: None, occlusion_query_set: None,
+            });
+            pass.set_pipeline(&self.blur_pipeline);
+            pass.set_bind_group(0, &bg_h, &[]);
+            pass.draw(0..3, 0..1);
+        }
+
+        // Pass 2: vertical RT_b -> RT_a
+        let texel_y = 1.0 / self.config.height as f32;
+        let params_v = [0.0_f32, 1.0, radius, texel_y];
+        // Pouzijeme stejny buffer (write_buffer)
+        let mut encoder2 = self.device.create_command_encoder(&Default::default());
+        self.queue.submit(std::iter::once(encoder.finish()));
+        self.queue.write_buffer(&self.blur_uniform_buf, 0, bytemuck::cast_slice(&params_v));
+        let bg_v = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("blur_bg_v"), layout: &self.blur_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: self.blur_uniform_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&self.offscreen_view_b) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.atlas_smp) },
+            ],
+        });
+        {
+            let mut pass = encoder2.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("blur_v"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.offscreen_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None, timestamp_writes: None, occlusion_query_set: None,
+            });
+            pass.set_pipeline(&self.blur_pipeline);
+            pass.set_bind_group(0, &bg_v, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        self.queue.submit(std::iter::once(encoder2.finish()));
     }
 
     /// Nacte fonty z @font-face declarations do Font registry.
@@ -1609,20 +1811,26 @@ impl Renderer {
         self.config.width = w;
         self.config.height = h;
         self.surface.configure(&self.device, &self.config);
-        // Recreate offscreen RT na novou velikost
-        self.offscreen_tex = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("offscreen_rt"),
-            size: wgpu::Extent3d { width: w.max(1), height: h.max(1), depth_or_array_layers: 1 },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        self.offscreen_view = self.offscreen_tex.create_view(&Default::default());
+        // Recreate offscreen RTs
+        let make = |dev: &wgpu::Device, label: &str| {
+            let tex = dev.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d { width: w.max(1), height: h.max(1), depth_or_array_layers: 1 },
+                mip_level_count: 1, sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            let view = tex.create_view(&Default::default());
+            (tex, view)
+        };
+        let (a_t, a_v) = make(&self.device, "offscreen_rt_a");
+        let (b_t, b_v) = make(&self.device, "offscreen_rt_b");
+        self.offscreen_tex = a_t; self.offscreen_view = a_v;
+        self.offscreen_tex_b = b_t; self.offscreen_view_b = b_v;
     }
 
     fn upload_atlas(&self) {
