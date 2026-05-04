@@ -358,6 +358,28 @@ fn contain_layout_paint_combo() {
 }
 
 #[test]
+fn text_decoration_l4_props() {
+    let doc = parse_html(r#"<html><body><p>x</p></body></html>"#, "");
+    let css = parse_stylesheet(r#"
+        p {
+            text-decoration-color: red;
+            text-decoration-style: wavy;
+            text-decoration-thickness: 3px;
+            text-underline-offset: 4px;
+            text-indent: 16px;
+        }
+    "#);
+    let style_map = crate::browser::cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &style_map, 1024.0, 768.0);
+    let p = find_box_by_tag(&root, "p").unwrap();
+    assert_eq!(p.text_decoration_color, Some([255, 0, 0, 255]));
+    assert_eq!(p.text_decoration_style, "wavy");
+    assert_eq!(p.text_decoration_thickness, 3.0);
+    assert_eq!(p.text_underline_offset, 4.0);
+    assert_eq!(p.text_indent, 16.0);
+}
+
+#[test]
 fn parse_transform_chain_three_ops() {
     use crate::browser::layout::{parse_transform_chain, TransformOp};
     let chain = parse_transform_chain("translate(10px, 20px) rotate(45deg) scale(1.5)");

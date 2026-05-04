@@ -148,7 +148,7 @@ Konvence stavu:
 - [x] `text-align`
 - [x] `line-height`
 - [/] `white-space` (parsing OK?, layout?)
-- [ ] `text-indent`
+- [x] `text-indent` (parser, paint apply TODO)
 - [x] `text-transform: uppercase|lowercase|capitalize|none` (paint apply)
 - [x] `letter-spacing` parser (paint apply TODO)
 - [x] `word-spacing` parser (paint apply TODO)
@@ -162,10 +162,10 @@ Konvence stavu:
 
 ### CSS Text Decoration L3/L4
 - [x] `text-decoration: underline|overline|line-through`
-- [ ] `text-decoration-color`
-- [ ] `text-decoration-style: solid|double|dotted|dashed|wavy`
-- [ ] `text-decoration-thickness`
-- [ ] `text-underline-offset`
+- [x] `text-decoration-color` (parser, render apply TODO)
+- [x] `text-decoration-style: solid|double|dotted|dashed|wavy` (parser, render TODO)
+- [x] `text-decoration-thickness` (parser)
+- [x] `text-underline-offset` (parser)
 - [x] `text-shadow` (offset_x offset_y blur color, paint emit pred main text)
 - [ ] `text-emphasis`
 

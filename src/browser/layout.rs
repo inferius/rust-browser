@@ -175,6 +175,16 @@ pub struct LayoutBox {
     pub text_transform: TextTransform,
     /// font-family - prvni nazev z comma-separated list (nejvyssi prio).
     pub font_family: String,
+    /// text-decoration-color
+    pub text_decoration_color: Option<[u8; 4]>,
+    /// text-decoration-style: solid (default) | double | dotted | dashed | wavy
+    pub text_decoration_style: String,
+    /// text-decoration-thickness (px)
+    pub text_decoration_thickness: f32,
+    /// text-underline-offset (px)
+    pub text_underline_offset: f32,
+    /// text-indent (px)
+    pub text_indent: f32,
     /// letter-spacing pridava extra mezeru mezi znaky (px).
     pub letter_spacing: f32,
     /// word-spacing pridava extra mezeru mezi slovy (px).
@@ -260,6 +270,11 @@ impl LayoutBox {
             text_shadow: None,
             text_transform: TextTransform::None,
             font_family: String::new(),
+            text_decoration_color: None,
+            text_decoration_style: String::new(),
+            text_decoration_thickness: 1.0,
+            text_underline_offset: 0.0,
+            text_indent: 0.0,
             letter_spacing: 0.0,
             word_spacing: 0.0,
             aspect_ratio: None,
@@ -561,6 +576,22 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
             "capitalize" => TextTransform::Capitalize,
             _            => TextTransform::None,
         };
+    }
+    // text-decoration L4 detail props
+    if let Some(c) = s.get("text-decoration-color") {
+        bx.text_decoration_color = parse_color(c);
+    }
+    if let Some(st) = s.get("text-decoration-style") {
+        bx.text_decoration_style = st.trim().to_string();
+    }
+    if let Some(t) = s.get("text-decoration-thickness") {
+        if t.trim() != "auto" { bx.text_decoration_thickness = parse_length(t); }
+    }
+    if let Some(o) = s.get("text-underline-offset") {
+        if o.trim() != "auto" { bx.text_underline_offset = parse_length(o); }
+    }
+    if let Some(ti) = s.get("text-indent") {
+        bx.text_indent = parse_length(ti);
     }
     // letter-spacing / word-spacing
     if let Some(ls) = s.get("letter-spacing") {
