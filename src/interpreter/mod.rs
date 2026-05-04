@@ -2512,6 +2512,48 @@ impl Interpreter {
                     "selected" => {
                         return Ok(JsValue::Bool(n.attr("selected").is_some()));
                     }
+                    "options" if n.tag_name().as_deref() == Some("select") => {
+                        let opts: Vec<JsValue> = n.get_elements_by_tag("option")
+                            .into_iter().map(JsValue::DomNode).collect();
+                        return Ok(JsValue::Array(Rc::new(RefCell::new(opts))));
+                    }
+                    "selectedIndex" if n.tag_name().as_deref() == Some("select") => {
+                        let opts = n.get_elements_by_tag("option");
+                        let idx = opts.iter().position(|o| o.attr("selected").is_some());
+                        return Ok(JsValue::Number(idx.map(|i| i as f64).unwrap_or(-1.0)));
+                    }
+                    "selectedOptions" if n.tag_name().as_deref() == Some("select") => {
+                        let opts: Vec<JsValue> = n.get_elements_by_tag("option").into_iter()
+                            .filter(|o| o.attr("selected").is_some())
+                            .map(JsValue::DomNode).collect();
+                        return Ok(JsValue::Array(Rc::new(RefCell::new(opts))));
+                    }
+                    "form" if matches!(n.tag_name().as_deref(),
+                        Some("input") | Some("select") | Some("textarea") | Some("button")) => {
+                        // Najdi nejblizsi form ancestor
+                        let mut cur = n.parent.borrow().upgrade();
+                        while let Some(p) = cur {
+                            if p.tag_name().as_deref() == Some("form") {
+                                return Ok(JsValue::DomNode(p));
+                            }
+                            cur = p.parent.borrow().upgrade();
+                        }
+                        return Ok(JsValue::Null);
+                    }
+                    "labels" if matches!(n.tag_name().as_deref(),
+                        Some("input") | Some("select") | Some("textarea") | Some("button")) => {
+                        // Vrati vsechny label elementy s for=id ukazujici na tento element
+                        let id = n.attr("id").unwrap_or_default();
+                        if id.is_empty() {
+                            return Ok(JsValue::Array(Rc::new(RefCell::new(Vec::new()))));
+                        }
+                        let doc_root = self.document.borrow().root.clone();
+                        let labels = doc_root.get_elements_by_tag("label").into_iter()
+                            .filter(|l| l.attr("for").as_deref() == Some(id.as_str()))
+                            .map(JsValue::DomNode)
+                            .collect();
+                        return Ok(JsValue::Array(Rc::new(RefCell::new(labels))));
+                    }
                     "src" | "href" | "alt" | "title" | "placeholder" | "lang" | "dir" => {
                         return Ok(JsValue::Str(n.attr(key).unwrap_or_default()));
                     }
