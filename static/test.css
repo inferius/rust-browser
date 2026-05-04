@@ -322,3 +322,48 @@ article {
     50%  { opacity: 0.2; }
     100% { opacity: 1; }
 }
+
+/* Pseudo-elements showcase */
+.quote::before { content: "\""; color: #2997ff; font-weight: bold; }
+.quote::after  { content: "\""; color: #2997ff; font-weight: bold; }
+.required::after { content: " *"; color: red; }
+p[data-info]::before {
+    content: attr(data-info);
+    color: #af52de;
+    font-family: monospace;
+    font-weight: bold;
+}
+
+/* Filter showcase */
+.filter-row {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+.filter-box, .color-box, .grad-box {
+    width: 100px;
+    height: 60px;
+    background: #2997ff;
+    color: white;
+    text-align: center;
+    line-height: 60px;
+    border-radius: 4px;
+    font-size: 12px;
+}
+.filter-box.base   {}
+.filter-box.bright { filter: brightness(1.5); }
+.filter-box.gray   { filter: grayscale(100%); }
+.filter-box.sepia  { filter: sepia(100%); }
+.filter-box.hue    { filter: hue-rotate(180deg); }
+
+/* Color L4 showcase */
+.c1 { background: oklch(0.7 0.2 200); }
+.c2 { background: hsl(280 80% 60%); }
+.c3 { background: hwb(120 30% 0%); color: black; }
+.c4 { background: color-mix(in oklab, red, blue); }
+
+/* Gradients */
+.g-lin { background: linear-gradient(45deg, red, blue); }
+.g-rad { background: radial-gradient(red, blue); }
+.g-con { background: conic-gradient(red, yellow, green, blue, red); }
+
