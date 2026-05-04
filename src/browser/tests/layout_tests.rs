@@ -81,6 +81,34 @@ fn inline_text_wraps_to_new_line() {
 }
 
 #[test]
+fn flex_layout_horizontal() {
+    let doc = parse_html(r#"<html><body>
+        <div class="row">
+            <div class="item">A</div>
+            <div class="item">B</div>
+            <div class="item">C</div>
+        </div>
+    </body></html>"#, "");
+    let css = parse_stylesheet(r#"
+        .row { display: flex; }
+        .item { padding: 10px; background: blue; }
+    "#);
+    let map = cascade::cascade(&doc.root, &[css]);
+    let layout = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+
+    let row = layout.children.iter()
+        .find(|c| c.tag.as_deref() == Some("html"))
+        .and_then(|h| h.children.iter().find(|c| c.tag.as_deref() == Some("body")))
+        .and_then(|b| b.children.iter().find(|c| c.tag.as_deref() == Some("div")))
+        .unwrap();
+    // Item A i B by mely byt na stejnem y (horizontal flex)
+    if row.children.len() >= 2 {
+        assert!((row.children[0].rect.y - row.children[1].rect.y).abs() < 5.0,
+            "flex items should be horizontal");
+    }
+}
+
+#[test]
 fn paint_generates_commands() {
     let doc = parse_html(r#"<html><body><div></div></body></html>"#, "");
     let css = parse_stylesheet("div { background: red; }");

@@ -41,3 +41,4 @@ winit = "0.30"
 pollster = "0.3"  # block_on bez tokio
 bytemuck = { version = "1.16", features = ["derive"] }  # vertex bytes
 fontdue = "0.9"  # font rasterizer pro glyph atlas
+taffy = "0.5"  # flex/grid layout engine (Servo-grade)

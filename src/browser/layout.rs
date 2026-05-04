@@ -13,6 +13,8 @@ pub enum Display {
     Block,
     Inline,
     InlineBlock,
+    Flex,
+    Grid,
     None,
 }
 
@@ -22,8 +24,10 @@ impl Display {
             "block"        => Display::Block,
             "inline"       => Display::Inline,
             "inline-block" => Display::InlineBlock,
+            "flex"         => Display::Flex,
+            "grid"         => Display::Grid,
             "none"         => Display::None,
-            _ => Display::Block, // default block pro div/p, inline pro span - simplifikace
+            _ => Display::Block,
         }
     }
 }
@@ -98,8 +102,16 @@ pub fn layout_tree(
     let mut layout_root = build_box(root, style_map);
     layout_root.rect.width = viewport_width;
     layout_root.rect.height = viewport_height;
-    layout_block(&mut layout_root);
+    layout_dispatch(&mut layout_root);
     layout_root
+}
+
+/// Vybira layout algoritmus podle display.
+fn layout_dispatch(bx: &mut LayoutBox) {
+    match bx.display {
+        Display::Flex | Display::Grid => layout_flex(bx),
+        _ => layout_block(bx),
+    }
 }
 
 /// Rekurzivne stavi LayoutBox z Node.
@@ -168,6 +180,74 @@ fn build_box(node: &Rc<Node>, style_map: &StyleMap) -> LayoutBox {
     bx
 }
 
+/// Flex layout pres taffy crate.
+fn layout_flex(bx: &mut LayoutBox) {
+    use taffy::prelude::*;
+
+    let inner_x = bx.rect.x + bx.padding + bx.margin + bx.border_width;
+    let inner_y = bx.rect.y + bx.padding + bx.margin + bx.border_width;
+    let inner_w = bx.rect.width - 2.0 * (bx.padding + bx.margin + bx.border_width);
+
+    let mut taffy: TaffyTree<()> = TaffyTree::new();
+    let mut child_nodes: Vec<NodeId> = Vec::new();
+
+    // Vytvor child nodes
+    for ch in bx.children.iter() {
+        let est_w = if let Some(t) = &ch.text {
+            measure_text_width(t, ch.font_size)
+        } else { 100.0 };
+        let est_h = if ch.text.is_some() { ch.font_size * 1.4 } else { 50.0 };
+        let style = Style {
+            size: Size { width: length(est_w), height: length(est_h) },
+            margin: taffy::geometry::Rect::length(ch.margin),
+            padding: taffy::geometry::Rect::length(ch.padding),
+            ..Default::default()
+        };
+        if let Ok(node) = taffy.new_leaf(style) {
+            child_nodes.push(node);
+        }
+    }
+
+    let parent_style = Style {
+        display: taffy::Display::Flex,
+        size: Size { width: length(inner_w), height: auto() },
+        flex_wrap: FlexWrap::Wrap,
+        gap: Size { width: length(8.0), height: length(8.0) },
+        ..Default::default()
+    };
+
+    let root = match taffy.new_with_children(parent_style, &child_nodes) {
+        Ok(r) => r,
+        Err(_) => return,
+    };
+
+    let _ = taffy.compute_layout(root, Size {
+        width: AvailableSpace::Definite(inner_w),
+        height: AvailableSpace::MinContent,
+    });
+
+    // Aplikuj layout zpet do bx.children
+    for (i, node) in child_nodes.iter().enumerate() {
+        if let Ok(layout) = taffy.layout(*node) {
+            let child = &mut bx.children[i];
+            child.rect.x = inner_x + layout.location.x;
+            child.rect.y = inner_y + layout.location.y;
+            child.rect.width = layout.size.width;
+            child.rect.height = layout.size.height;
+            // Recursive layout uvnitr child boxu
+            layout_block(child);
+        }
+    }
+
+    // Update parent height na zaklade celkove vysky deti
+    if let Ok(layout) = taffy.layout(root) {
+        let needed_h = layout.size.height + 2.0 * (bx.padding + bx.border_width);
+        if bx.rect.height < needed_h {
+            bx.rect.height = needed_h;
+        }
+    }
+}
+
 /// Block layout: kazdy block dite je vlastni radek, sirka = parent.
 /// Inline deti se sbiraji do "line boxu" a wrappuji.
 fn layout_block(bx: &mut LayoutBox) {
@@ -183,7 +263,7 @@ fn layout_block(bx: &mut LayoutBox) {
     while i < bx.children.len() {
         let display = bx.children[i].display;
         match display {
-            Display::Block => {
+            Display::Block | Display::Flex | Display::Grid => {
                 if !inline_buffer.is_empty() {
                     cursor_y = flush_inline(bx, &inline_buffer, inner_x, cursor_y, inner_w);
                     inline_buffer.clear();
@@ -199,7 +279,7 @@ fn layout_block(bx: &mut LayoutBox) {
                         20.0
                     };
                 }
-                layout_block(child);
+                layout_dispatch(child);
                 cursor_y += child.rect.height + 2.0 * child.margin;
             }
             Display::Inline | Display::InlineBlock => {
