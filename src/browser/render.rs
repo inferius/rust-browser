@@ -681,6 +681,82 @@ fn find_node_by_ptr(root: &Rc<crate::browser::dom::NodeData>, ptr: usize) -> Opt
     None
 }
 
+/// Serialize uniformy z WebGLState dle program uniform layout do bytes.
+/// Buffer alokovan na uniform_buffer_size, prazdne sloty zustavaji 0.
+pub fn webgl_serialize_uniforms(
+    layout: &[crate::interpreter::UniformSlot],
+    values: &std::collections::HashMap<String, crate::interpreter::WebGLUniformValue>,
+    buffer_size: u64,
+) -> Vec<u8> {
+    use crate::interpreter::{UniformSlotKind, WebGLUniformValue};
+    let mut out = vec![0u8; buffer_size as usize];
+    for slot in layout {
+        let val = match values.get(&slot.name) {
+            Some(v) => v,
+            None => continue,
+        };
+        let off = slot.offset as usize;
+        if off + slot.size as usize > out.len() { continue; }
+        match (slot.kind, val) {
+            (UniformSlotKind::Float, WebGLUniformValue::Float(v)) => {
+                if let Some(&x) = v.first() {
+                    out[off..off+4].copy_from_slice(&x.to_le_bytes());
+                }
+            }
+            (UniformSlotKind::Vec2, WebGLUniformValue::Float(v)) => {
+                if v.len() >= 2 {
+                    out[off..off+4].copy_from_slice(&v[0].to_le_bytes());
+                    out[off+4..off+8].copy_from_slice(&v[1].to_le_bytes());
+                }
+            }
+            (UniformSlotKind::Vec3, WebGLUniformValue::Float(v)) => {
+                if v.len() >= 3 {
+                    out[off..off+4].copy_from_slice(&v[0].to_le_bytes());
+                    out[off+4..off+8].copy_from_slice(&v[1].to_le_bytes());
+                    out[off+8..off+12].copy_from_slice(&v[2].to_le_bytes());
+                    // Vec3 v WGSL std140 ma 4-component padding (16 byte size).
+                }
+            }
+            (UniformSlotKind::Vec4, WebGLUniformValue::Float(v)) => {
+                for i in 0..4.min(v.len()) {
+                    out[off+i*4..off+i*4+4].copy_from_slice(&v[i].to_le_bytes());
+                }
+            }
+            (UniformSlotKind::Int, WebGLUniformValue::Int(v)) => {
+                if let Some(&x) = v.first() {
+                    out[off..off+4].copy_from_slice(&x.to_le_bytes());
+                }
+            }
+            (UniformSlotKind::Mat2, WebGLUniformValue::Mat(v)) => {
+                for i in 0..4.min(v.len()) {
+                    out[off+i*4..off+i*4+4].copy_from_slice(&v[i].to_le_bytes());
+                }
+            }
+            (UniformSlotKind::Mat3, WebGLUniformValue::Mat(v)) => {
+                // mat3x3 v WGSL std140: 3 vec3 s padding (3 * 16 = 48 bytes)
+                for col in 0..3 {
+                    for row in 0..3 {
+                        let src_idx = col * 3 + row;
+                        if src_idx < v.len() {
+                            let dst = off + col * 16 + row * 4;
+                            if dst + 4 <= out.len() {
+                                out[dst..dst+4].copy_from_slice(&v[src_idx].to_le_bytes());
+                            }
+                        }
+                    }
+                }
+            }
+            (UniformSlotKind::Mat4, WebGLUniformValue::Mat(v)) => {
+                for i in 0..16.min(v.len()) {
+                    out[off+i*4..off+i*4+4].copy_from_slice(&v[i].to_le_bytes());
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 /// WebGL component type -> velikost v bytech.
 fn webgl_type_size(ctype: u32) -> u32 {
     match ctype {
@@ -1980,6 +2056,10 @@ struct Renderer {
     webgl_buffers: std::collections::HashMap<u32, wgpu::Buffer>,
     /// Per-canvas offscreen RT (canvas_ptr -> Texture + View).
     webgl_canvas_rts: std::collections::HashMap<usize, (wgpu::Texture, wgpu::TextureView, u32, u32)>,
+    /// Per-program uniform buffer cache (program_id -> Buffer).
+    webgl_uniform_buffers: std::collections::HashMap<u32, wgpu::Buffer>,
+    /// Per-program uniform bind group layout cache.
+    webgl_uniform_bgls: std::collections::HashMap<u32, wgpu::BindGroupLayout>,
     /// 3D transform compose pipeline (samples offscreen RT, kresli quad transformovany matici)
     transform_pipeline: wgpu::RenderPipeline,
     transform_bind_group_layout: wgpu::BindGroupLayout,
@@ -2397,7 +2477,48 @@ impl Renderer {
             webgl_pipelines: std::collections::HashMap::new(),
             webgl_buffers: std::collections::HashMap::new(),
             webgl_canvas_rts: std::collections::HashMap::new(),
+            webgl_uniform_buffers: std::collections::HashMap::new(),
+            webgl_uniform_bgls: std::collections::HashMap::new(),
         }
+    }
+
+    /// Ensure uniform buffer + bind group layout pro program.
+    /// Pri buffer_size=0 nedela nic. Idempotent.
+    pub fn ensure_webgl_uniform_resources(&mut self, program_id: u32, buffer_size: u64) {
+        if buffer_size == 0 { return; }
+        if !self.webgl_uniform_buffers.contains_key(&program_id) {
+            let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(&format!("webgl_uniform_buf_{program_id}")),
+                size: buffer_size,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.webgl_uniform_buffers.insert(program_id, buf);
+        }
+        if !self.webgl_uniform_bgls.contains_key(&program_id) {
+            let bgl = self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some(&format!("webgl_uniform_bgl_{program_id}")),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false, min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+            self.webgl_uniform_bgls.insert(program_id, bgl);
+        }
+    }
+
+    pub fn webgl_has_uniform_buffer(&self, program_id: u32) -> bool {
+        self.webgl_uniform_buffers.contains_key(&program_id)
+    }
+    pub fn webgl_uniform_buffer_count(&self) -> usize {
+        self.webgl_uniform_buffers.len()
     }
 
     /// Ensure per-canvas offscreen RT vznikne (alloc pri prvni navsteve nebo

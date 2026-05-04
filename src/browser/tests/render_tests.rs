@@ -8,6 +8,7 @@ use crate::browser::render::{
     paint_webgl_canvases, webgl_attrib_to_vertex_format, webgl_compute_stride,
     webgl_extract_pending, webgl_effective_clear, webgl_count_draws, webgl_count_clears,
     webgl_linked_program_ids, webgl_layout_has_canvas, webgl_canvas_count,
+    webgl_serialize_uniforms,
 };
 
 fn rect(x: f32, y: f32) -> DisplayCommand {
@@ -425,7 +426,7 @@ fn triangulate_star_concave_count() {
 use std::rc::Rc;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use crate::interpreter::{WebGLState, WebGLDrawCmd, WebGLAttribSlot, WebGLProgram};
+use crate::interpreter::{WebGLState, WebGLDrawCmd, WebGLAttribSlot, WebGLProgram, UniformSlot, UniformSlotKind, WebGLUniformValue};
 use crate::browser::dom::NodeData;
 use crate::browser::layout::{LayoutBox, Rect};
 
@@ -1216,6 +1217,160 @@ fn webgl_attrib_format_negative_size_returns_none() {
 #[test]
 fn webgl_compute_stride_zero_attribs_zero() {
     assert_eq!(webgl_compute_stride(&[]), 0);
+}
+
+// ─── Phase 3c7 uniform serialize ───────────────────────────────────────
+
+#[test]
+fn serialize_uniforms_empty_returns_zero_buffer() {
+    let layout: Vec<UniformSlot> = Vec::new();
+    let values: HashMap<String, WebGLUniformValue> = HashMap::new();
+    let bytes = webgl_serialize_uniforms(&layout, &values, 16);
+    assert_eq!(bytes.len(), 16);
+    assert!(bytes.iter().all(|&b| b == 0));
+}
+
+#[test]
+fn serialize_uniforms_float_at_offset() {
+    let layout = vec![UniformSlot {
+        name: "uTime".into(), offset: 0, size: 4, kind: UniformSlotKind::Float,
+    }];
+    let mut values: HashMap<String, WebGLUniformValue> = HashMap::new();
+    values.insert("uTime".into(), WebGLUniformValue::Float(vec![1.5]));
+    let bytes = webgl_serialize_uniforms(&layout, &values, 16);
+    let read = f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+    assert!((read - 1.5).abs() < 1e-5);
+}
+
+#[test]
+fn serialize_uniforms_vec2_at_offset() {
+    let layout = vec![UniformSlot {
+        name: "uPos".into(), offset: 0, size: 8, kind: UniformSlotKind::Vec2,
+    }];
+    let mut values: HashMap<String, WebGLUniformValue> = HashMap::new();
+    values.insert("uPos".into(), WebGLUniformValue::Float(vec![3.0, 4.0]));
+    let bytes = webgl_serialize_uniforms(&layout, &values, 16);
+    assert_eq!(f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]), 3.0);
+    assert_eq!(f32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]), 4.0);
+}
+
+#[test]
+fn serialize_uniforms_vec4_at_offset() {
+    let layout = vec![UniformSlot {
+        name: "uColor".into(), offset: 0, size: 16, kind: UniformSlotKind::Vec4,
+    }];
+    let mut values: HashMap<String, WebGLUniformValue> = HashMap::new();
+    values.insert("uColor".into(), WebGLUniformValue::Float(vec![1.0, 0.5, 0.25, 1.0]));
+    let bytes = webgl_serialize_uniforms(&layout, &values, 16);
+    assert_eq!(f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]), 1.0);
+    assert_eq!(f32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]), 0.5);
+    assert_eq!(f32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]), 0.25);
+    assert_eq!(f32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]), 1.0);
+}
+
+#[test]
+fn serialize_uniforms_int_at_offset() {
+    let layout = vec![UniformSlot {
+        name: "uIdx".into(), offset: 0, size: 4, kind: UniformSlotKind::Int,
+    }];
+    let mut values: HashMap<String, WebGLUniformValue> = HashMap::new();
+    values.insert("uIdx".into(), WebGLUniformValue::Int(vec![42]));
+    let bytes = webgl_serialize_uniforms(&layout, &values, 16);
+    assert_eq!(i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]), 42);
+}
+
+#[test]
+fn serialize_uniforms_mat4_full_16_floats() {
+    let layout = vec![UniformSlot {
+        name: "uMVP".into(), offset: 0, size: 64, kind: UniformSlotKind::Mat4,
+    }];
+    let mut values: HashMap<String, WebGLUniformValue> = HashMap::new();
+    values.insert("uMVP".into(), WebGLUniformValue::Mat(vec![
+        1.0, 0.0, 0.0, 0.0,
+        0.0, 1.0, 0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0,
+        0.0, 0.0, 0.0, 1.0,
+    ]));
+    let bytes = webgl_serialize_uniforms(&layout, &values, 64);
+    assert_eq!(bytes.len(), 64);
+    // Diagonal = 1.0, mimo = 0.0
+    assert_eq!(f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]), 1.0);
+    assert_eq!(f32::from_le_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]), 1.0);
+    assert_eq!(f32::from_le_bytes([bytes[40], bytes[41], bytes[42], bytes[43]]), 1.0);
+    assert_eq!(f32::from_le_bytes([bytes[60], bytes[61], bytes[62], bytes[63]]), 1.0);
+}
+
+#[test]
+fn serialize_uniforms_multiple_at_different_offsets() {
+    let layout = vec![
+        UniformSlot { name: "a".into(), offset: 0,  size: 4, kind: UniformSlotKind::Float },
+        UniformSlot { name: "b".into(), offset: 4,  size: 4, kind: UniformSlotKind::Float },
+        UniformSlot { name: "c".into(), offset: 8,  size: 4, kind: UniformSlotKind::Float },
+    ];
+    let mut values: HashMap<String, WebGLUniformValue> = HashMap::new();
+    values.insert("a".into(), WebGLUniformValue::Float(vec![1.0]));
+    values.insert("b".into(), WebGLUniformValue::Float(vec![2.0]));
+    values.insert("c".into(), WebGLUniformValue::Float(vec![3.0]));
+    let bytes = webgl_serialize_uniforms(&layout, &values, 16);
+    assert_eq!(f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]), 1.0);
+    assert_eq!(f32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]), 2.0);
+    assert_eq!(f32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]), 3.0);
+}
+
+#[test]
+fn serialize_uniforms_missing_value_zeros() {
+    let layout = vec![
+        UniformSlot { name: "a".into(), offset: 0, size: 4, kind: UniformSlotKind::Float },
+        UniformSlot { name: "b".into(), offset: 4, size: 4, kind: UniformSlotKind::Float },
+    ];
+    let mut values: HashMap<String, WebGLUniformValue> = HashMap::new();
+    // jen "a" set, "b" missing
+    values.insert("a".into(), WebGLUniformValue::Float(vec![5.0]));
+    let bytes = webgl_serialize_uniforms(&layout, &values, 16);
+    assert_eq!(f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]), 5.0);
+    // b zustal 0
+    assert_eq!(f32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]), 0.0);
+}
+
+#[test]
+fn serialize_uniforms_offset_beyond_buffer_skipped() {
+    let layout = vec![
+        UniformSlot { name: "a".into(), offset: 100, size: 4, kind: UniformSlotKind::Float },
+    ];
+    let mut values: HashMap<String, WebGLUniformValue> = HashMap::new();
+    values.insert("a".into(), WebGLUniformValue::Float(vec![1.0]));
+    // Buffer 16 bytes - offset 100 mimo
+    let bytes = webgl_serialize_uniforms(&layout, &values, 16);
+    assert_eq!(bytes.len(), 16);
+    // No panic, just skip
+}
+
+#[test]
+fn serialize_uniforms_vec3_writes_three_floats() {
+    let layout = vec![UniformSlot {
+        name: "uXYZ".into(), offset: 0, size: 16, kind: UniformSlotKind::Vec3,
+    }];
+    let mut values: HashMap<String, WebGLUniformValue> = HashMap::new();
+    values.insert("uXYZ".into(), WebGLUniformValue::Float(vec![10.0, 20.0, 30.0]));
+    let bytes = webgl_serialize_uniforms(&layout, &values, 16);
+    assert_eq!(f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]), 10.0);
+    assert_eq!(f32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]), 20.0);
+    assert_eq!(f32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]), 30.0);
+    // Vec3 padding - posledni 4 bytes zustaly 0
+    assert_eq!(f32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]), 0.0);
+}
+
+#[test]
+fn serialize_uniforms_type_mismatch_skipped() {
+    // Float slot ale Int value -> skip (no panic)
+    let layout = vec![UniformSlot {
+        name: "x".into(), offset: 0, size: 4, kind: UniformSlotKind::Float,
+    }];
+    let mut values: HashMap<String, WebGLUniformValue> = HashMap::new();
+    values.insert("x".into(), WebGLUniformValue::Int(vec![42]));
+    let bytes = webgl_serialize_uniforms(&layout, &values, 16);
+    // Mismatch: Int do Float slot - kind doesn't match, skip
+    assert_eq!(f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]), 0.0);
 }
 
 // ─── Phase 3c6 single-frame integration testy ──────────────────────────
