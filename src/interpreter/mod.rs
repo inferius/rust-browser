@@ -3581,13 +3581,30 @@ impl Interpreter {
                                 .map(|(k, v)| format!("{}={}",
                                     url_encode(k), url_encode(v)))
                                 .collect::<Vec<_>>().join("&");
-                            // Log do console (replace pro real fetch)
+                            // Real fetch pres ureq pokud HTTP(S) URL
+                            let mut status: u16 = 0;
+                            if action.starts_with("http://") || action.starts_with("https://") {
+                                let req_result = if method == "POST" {
+                                    ureq::post(&action)
+                                        .set("Content-Type", "application/x-www-form-urlencoded")
+                                        .send_string(&body)
+                                } else {
+                                    let url = if body.is_empty() { action.clone() }
+                                              else { format!("{action}?{body}") };
+                                    ureq::get(&url).call()
+                                };
+                                status = match &req_result {
+                                    Ok(r) => r.status(),
+                                    Err(ureq::Error::Status(s, _)) => *s,
+                                    Err(_) => 0,
+                                };
+                            }
                             self.console_log.borrow_mut().push((
                                 "log".into(),
-                                format!("[form submit] {method} {action} body={body}"),
+                                format!("[form submit] {method} {action} body={body} status={status}"),
                             ));
                             self.network_log.borrow_mut().push((
-                                format!("{method} {action}"), 0,
+                                format!("{method} {action}"), status,
                             ));
                             return Ok(JsValue::Undefined);
                         }

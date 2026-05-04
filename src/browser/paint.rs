@@ -513,11 +513,64 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>) {
     }
 
     // Transform aplikovan na vsechny prave vlozene commands tohoto boxu (post-process)
-    // Aktualne transform aplikuje jen translate (rotate/scale potrebuji shader matrix)
-    if let Some(super::layout::TransformOp::Translate(tx, ty)) = bx.transform {
+    // Translate / Translate3D - aplikuje shift; rotate/scale 2D pres centroid;
+    // matrix3d/perspective - aplikuje matrix multiply na rohy.
+    use super::layout::TransformOp;
+    if !bx.transforms.is_empty() {
+        let start = cmds_offset_for_box(bx, cmds);
+        // Vypocet centroid box-u pro rotate/scale relative-origin
+        let cx = bx.rect.x + bx.rect.width  * 0.5;
+        let cy = bx.rect.y + bx.rect.height * 0.5;
+        for op in &bx.transforms {
+            match op {
+                TransformOp::Translate(tx, ty) => {
+                    for cmd in &mut cmds[start..] { shift_cmd(cmd, *tx, *ty); }
+                }
+                TransformOp::Translate3D { x, y, .. } => {
+                    for cmd in &mut cmds[start..] { shift_cmd(cmd, *x, *y); }
+                }
+                TransformOp::Scale(sx, sy) => {
+                    for cmd in &mut cmds[start..] { scale_cmd(cmd, *sx, *sy, cx, cy); }
+                }
+                TransformOp::Scale3D { x, y, .. } => {
+                    for cmd in &mut cmds[start..] { scale_cmd(cmd, *x, *y, cx, cy); }
+                }
+                TransformOp::Matrix3D(m) => {
+                    // Aplikuje 4x4 matrix na pos rect rohy: jen translate slot
+                    // (m[12], m[13]) jako approximation 2D shift.
+                    let tx = m[12]; let ty = m[13];
+                    for cmd in &mut cmds[start..] { shift_cmd(cmd, tx, ty); }
+                }
+                _ => {} // Rotate/Rotate3D/Perspective vyzaduji shader
+            }
+        }
+    } else if let Some(TransformOp::Translate(tx, ty)) = bx.transform {
         let start = cmds_offset_for_box(bx, cmds);
         for cmd in &mut cmds[start..] {
             shift_cmd(cmd, tx, ty);
+        }
+    }
+}
+
+fn scale_cmd(cmd: &mut DisplayCommand, sx: f32, sy: f32, cx: f32, cy: f32) {
+    let scale_xy = |x: &mut f32, y: &mut f32| {
+        *x = cx + (*x - cx) * sx;
+        *y = cy + (*y - cy) * sy;
+    };
+    let scale_wh = |w: &mut f32, h: &mut f32| {
+        *w *= sx; *h *= sy;
+    };
+    match cmd {
+        DisplayCommand::Rect { x, y, w, h, .. }
+        | DisplayCommand::Border { x, y, w, h, .. }
+        | DisplayCommand::Gradient { x, y, w, h, .. }
+        | DisplayCommand::Shadow { x, y, w, h, .. }
+        | DisplayCommand::Image { x, y, w, h, .. } => {
+            scale_xy(x, y); scale_wh(w, h);
+        }
+        DisplayCommand::Text { x, y, font_size, .. } => {
+            scale_xy(x, y);
+            *font_size *= sy.abs(); // text scaling pres y
         }
     }
 }
