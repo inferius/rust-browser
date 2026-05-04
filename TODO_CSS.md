@@ -92,7 +92,7 @@ Konvence stavu:
 - [x] `clamp(min, val, max)`
 - [ ] `attr(name <type>, fallback)`
 - [x] `env(name, fallback)` (no-op s fallback)
-- [ ] Math fci L4: `round()`, `mod()`, `rem()`, `sin()`, `cos()`, `tan()`, `asin()`, `acos()`, `atan()`, `atan2()`, `pow()`, `sqrt()`, `hypot()`, `log()`, `exp()`, `abs()`, `sign()`
+- [x] Math fci L4: `round`, `floor`, `ceil`, `mod`, `rem`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `pow`, `sqrt`, `hypot`, `log`, `exp`, `abs`, `sign`
 - [ ] Container queries units: `cqw`, `cqh`, `cqi`, `cqb`, `cqmin`, `cqmax`
 - [ ] `lh`, `rlh` (line-height units)
 - [ ] `ch`, `ex` (font units)

@@ -193,7 +193,14 @@ pub fn resolve_value(value: &str, variables: &HashMap<String, String>) -> String
         if out.contains("env(") {
             out = resolve_env(&out);
         }
-        if out.contains("min(") || out.contains("max(") || out.contains("clamp(") {
+        if out.contains("min(") || out.contains("max(") || out.contains("clamp(")
+            || out.contains("abs(") || out.contains("sign(") || out.contains("sqrt(")
+            || out.contains("round(") || out.contains("floor(") || out.contains("ceil(")
+            || out.contains("exp(") || out.contains("log(") || out.contains("pow(")
+            || out.contains("hypot(") || out.contains("mod(") || out.contains("rem(")
+            || out.contains("sin(") || out.contains("cos(") || out.contains("tan(")
+            || out.contains("asin(") || out.contains("acos(") || out.contains("atan(")
+        {
             out = resolve_math_func(&out);
         }
         if out.contains("calc(") {
@@ -239,7 +246,12 @@ fn resolve_env(s: &str) -> String {
 /// Resolvuje min(a, b, ...), max(a, b, ...), clamp(min, val, max).
 /// Najde nejvnitrnejsi vyskyt (zaden child neni mezi argumenty), pak iterativne.
 fn resolve_math_func(s: &str) -> String {
-    let names = ["min(", "max(", "clamp("];
+    let names = [
+        "min(", "max(", "clamp(",
+        "abs(", "sign(", "sqrt(", "round(", "floor(", "ceil(",
+        "exp(", "log(", "pow(", "hypot(", "mod(", "rem(",
+        "sin(", "cos(", "tan(", "asin(", "acos(", "atan(", "atan2(",
+    ];
     let mut out = s.to_string();
     loop {
         let bytes: Vec<u8> = out.as_bytes().to_vec();
@@ -262,9 +274,10 @@ fn resolve_math_func(s: &str) -> String {
                         j += 1;
                     }
                     if j >= bytes.len() { break 'outer; }
-                    // Zkontroluj ze argumenty NEobsahuji dalsi math func
+                    // Zkontroluj ze argumenty NEobsahuji dalsi math func (kromě calc)
                     let inner = &out[idx + nb.len()..j];
-                    if !inner.contains("min(") && !inner.contains("max(") && !inner.contains("clamp(") {
+                    let has_inner = names.iter().any(|n| inner.contains(*n));
+                    if !has_inner {
                         found = Some((idx, j, name.trim_end_matches('(')));
                         break 'outer;
                     }
@@ -299,10 +312,41 @@ fn eval_math_func(name: &str, args: &str) -> String {
             let lo = nums[0]; let val = nums[1]; let hi = nums[2];
             val.max(lo).min(hi)
         }
+        // Math funkce L4 - vsechny pracuji v jednotkach prvniho argumentu
+        "abs"   => nums[0].abs(),
+        "sign"  => nums[0].signum(),
+        "sqrt"  => nums[0].sqrt(),
+        "round" => nums[0].round(),
+        "floor" => nums[0].floor(),
+        "ceil"  => nums[0].ceil(),
+        "exp"   => nums[0].exp(),
+        "log"   if nums.len() == 1 => nums[0].ln(),
+        "log"   if nums.len() == 2 => nums[0].log(nums[1]),
+        "pow"   if nums.len() == 2 => nums[0].powf(nums[1]),
+        "hypot" => nums.iter().map(|x| x * x).sum::<f32>().sqrt(),
+        "mod"   if nums.len() == 2 => nums[0].rem_euclid(nums[1]),
+        "rem"   if nums.len() == 2 => nums[0] % nums[1],
+        "sin"   => nums[0].to_radians().sin(),
+        "cos"   => nums[0].to_radians().cos(),
+        "tan"   => nums[0].to_radians().tan(),
+        "asin"  => nums[0].asin().to_degrees(),
+        "acos"  => nums[0].acos().to_degrees(),
+        "atan"  => nums[0].atan().to_degrees(),
+        "atan2" if nums.len() == 2 => nums[0].atan2(nums[1]).to_degrees(),
         _ => return args.to_string(),
     };
+    // Trigonometrie sin/cos/tan + sqrt + exp + log + sign: vraci ciste cislo.
+    // asin/acos/atan/atan2: vraci stupne (deg).
+    let unitless = matches!(name,
+        "sqrt" | "exp" | "log" | "sign" | "pow" | "hypot"
+        | "sin" | "cos" | "tan");
+    let angle = matches!(name, "asin" | "acos" | "atan" | "atan2");
 
-    if unit.is_empty() {
+    if unitless {
+        format!("{result}")
+    } else if angle {
+        format!("{result}deg")
+    } else if unit.is_empty() {
         format!("{result}")
     } else {
         format!("{result}{unit}")

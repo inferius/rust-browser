@@ -562,6 +562,52 @@ fn logical_border_radius_corners() {
 // ─── Values L4: min/max/clamp/env ──────────────────────────────────────
 
 #[test]
+fn resolve_abs_returns_positive() {
+    let v = std::collections::HashMap::new();
+    assert_eq!(cascade::resolve_value("abs(-15px)", &v), "15px");
+}
+
+#[test]
+fn resolve_sqrt_unitless() {
+    let v = std::collections::HashMap::new();
+    assert_eq!(cascade::resolve_value("sqrt(16)", &v), "4");
+}
+
+#[test]
+fn resolve_pow_two_args() {
+    let v = std::collections::HashMap::new();
+    assert_eq!(cascade::resolve_value("pow(2, 10)", &v), "1024");
+}
+
+#[test]
+fn resolve_round_to_int() {
+    let v = std::collections::HashMap::new();
+    assert_eq!(cascade::resolve_value("round(15.7px)", &v), "16px");
+}
+
+#[test]
+fn resolve_sin_zero_returns_zero() {
+    let v = std::collections::HashMap::new();
+    let r = cascade::resolve_value("sin(0deg)", &v);
+    let parsed: f32 = r.parse().unwrap_or(0.0);
+    assert!(parsed.abs() < 1e-3);
+}
+
+#[test]
+fn resolve_cos_zero_returns_one() {
+    let v = std::collections::HashMap::new();
+    let r = cascade::resolve_value("cos(0deg)", &v);
+    let parsed: f32 = r.parse().unwrap_or(0.0);
+    assert!((parsed - 1.0).abs() < 1e-3);
+}
+
+#[test]
+fn resolve_hypot_3_4_returns_5() {
+    let v = std::collections::HashMap::new();
+    assert_eq!(cascade::resolve_value("hypot(3, 4)", &v), "5");
+}
+
+#[test]
 fn resolve_min_picks_smallest() {
     let vars = std::collections::HashMap::new();
     let r = cascade::resolve_value("min(20px, 50px, 30px)", &vars);
