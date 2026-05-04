@@ -1,0 +1,19 @@
+@layer first, second;
+
+@layer base {
+    .a { color: red; }
+}
+.a { color: blue; }
+
+@layer first {
+    .b { color: red; }
+}
+@layer second {
+    .b { color: green; }
+}
+
+body { font-family: Arial; padding: 24px; }
+header { background: #1d1d1f; color: white; padding: 16px; border-radius: 8px; margin-bottom: 16px; }
+header h1 { margin: 0; } header p { margin: 8px 0 0; color: #a1a1a6; }
+section { background: white; padding: 16px; margin-bottom: 12px; border-radius: 6px; border: 1px solid #d2d2d7; }
+section h2 { margin: 0 0 8px; font-size: 13px; font-family: monospace; }

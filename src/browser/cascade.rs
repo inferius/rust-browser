@@ -487,6 +487,37 @@ pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
         let mut order = 0;
 
         for sheet in stylesheets {
+            // Layered rules nejprve (nizsi prio) - per CSS Cascade Layers L5.
+            // Layer order: pozdejsi v `layer_order` ma vyssi prio v ramci layered.
+            // Vsechny layered jsou pod unlayered.
+            for (layer_name, rules) in &sheet.layered_rules {
+                let layer_priority = sheet.layer_order.iter().position(|n| n == layer_name)
+                    .unwrap_or(0) as u32;
+                for rule in rules {
+                    for sel in &rule.selectors {
+                        if sel.parts.last().map(|p| p.pseudo_element.is_some()).unwrap_or(false) {
+                            continue;
+                        }
+                        if matches_selector(node, sel) {
+                            let spec = specificity(sel);
+                            for decl in &rule.declarations {
+                                // Layer priority je nizsi nez unlayered (kterym dame "important_offset" 0)
+                                // Layered: priority bit = 0, dale layer_priority pro razeni mezi layery
+                                let key = (
+                                    if decl.important { 1 } else { 0 },
+                                    layer_priority, // nizsi 1. komponent => layered jdou nahoru
+                                    spec.0 * 1000 + spec.1 + spec.2,
+                                    order,
+                                );
+                                matched_decls.push(((key.0, key.1, key.2, key.3), decl));
+                                order += 1;
+                            }
+                        }
+                    }
+                }
+            }
+            // Unlayered (default) - nejvyssi prio (po !important).
+            // Pouzivame layer_priority = u32::MAX aby unlayered prepsalo layered.
             for rule in &sheet.rules {
                 for sel in &rule.selectors {
                     // Pseudo-element selektory aplikujem v cascade_pseudo, ne tady
@@ -498,14 +529,11 @@ pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
                         for decl in &rule.declarations {
                             let key = (
                                 if decl.important { 1 } else { 0 },
-                                spec.0,
-                                spec.1 + spec.2,
+                                u32::MAX, // unlayered = nejvyssi
+                                spec.0 * 1000 + spec.1 + spec.2,
                                 order,
                             );
-                            matched_decls.push((
-                                (key.0, key.1, key.2, key.3),
-                                decl,
-                            ));
+                            matched_decls.push(((key.0, key.1, key.2, key.3), decl));
                             order += 1;
                         }
                     }

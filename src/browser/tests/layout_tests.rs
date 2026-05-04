@@ -277,6 +277,45 @@ fn find_box_by_tag<'a>(bx: &'a layout::LayoutBox, tag: &str) -> Option<&'a layou
 }
 
 #[test]
+fn parse_text_shadow_basic() {
+    let s = layout::parse_text_shadow("2px 4px 8px black").unwrap();
+    assert_eq!(s.0, 2.0);
+    assert_eq!(s.1, 4.0);
+    assert_eq!(s.2, 8.0);
+    assert_eq!(s.3, [0, 0, 0, 255]);
+}
+
+#[test]
+fn parse_text_shadow_no_blur() {
+    let s = layout::parse_text_shadow("1px 1px red").unwrap();
+    assert_eq!(s.0, 1.0);
+    assert_eq!(s.1, 1.0);
+    assert_eq!(s.2, 0.0);
+    assert_eq!(s.3, [255, 0, 0, 255]);
+}
+
+#[test]
+fn multiple_backgrounds_parsed() {
+    let doc = parse_html(r#"<html><body><div></div></body></html>"#, "");
+    let css = parse_stylesheet(r#"
+        div {
+            background-image: url("a.png"), url("b.png");
+            background-position: top left, bottom right;
+            background-color: yellow;
+        }
+    "#);
+    let style_map = crate::browser::cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &style_map, 1024.0, 768.0);
+    let div = find_box_by_tag(&root, "div").unwrap();
+    assert_eq!(div.backgrounds.len(), 2);
+    assert_eq!(div.backgrounds[0].image_src, Some("a.png".into()));
+    assert_eq!(div.backgrounds[1].image_src, Some("b.png".into()));
+    // Color jen na posledni layer
+    assert_eq!(div.backgrounds[1].color, Some([255, 255, 0, 255]));
+    assert_eq!(div.backgrounds[0].color, None);
+}
+
+#[test]
 fn parse_clip_path_inset() {
     use crate::browser::layout::{parse_clip_path, ClipPath};
     let cp = parse_clip_path("inset(10px 20px 30px 40px)").unwrap();

@@ -347,6 +347,17 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>) {
         let text_x = bx.rect.x + bx.padding + align_offset;
         let text_y = bx.rect.y + bx.padding;
         let text_color = with_alpha(bx.text_color.unwrap_or([0, 0, 0, 255]));
+        // Text shadow - emit pred main text aby byl v pozadi
+        if let Some((ox, oy, _blur, color)) = bx.text_shadow {
+            cmds.push(DisplayCommand::Text {
+                x: text_x + ox,
+                y: text_y + oy,
+                content: text.clone(),
+                color: with_alpha(color),
+                font_size: bx.font_size,
+                bold: bx.bold,
+            });
+        }
         cmds.push(DisplayCommand::Text {
             x: text_x,
             y: text_y,

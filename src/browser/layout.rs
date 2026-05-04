@@ -153,6 +153,8 @@ pub struct LayoutBox {
     pub backgrounds: Vec<BgLayer>,
     /// CSS clip-path: inset(...) / circle(...) / ellipse(...) / polygon(...).
     pub clip_path: Option<ClipPath>,
+    /// text-shadow: (offset_x, offset_y, blur, color).
+    pub text_shadow: Option<(f32, f32, f32, [u8; 4])>,
     /// Box shadow: (offset_x, offset_y, blur, spread, color)
     /// (offset_x, offset_y, blur, spread, color, inset)
     pub box_shadow: Option<(f32, f32, f32, f32, [u8; 4], bool)>,
@@ -204,6 +206,7 @@ impl LayoutBox {
             filter: Vec::new(),
             backgrounds: Vec::new(),
             clip_path: None,
+            text_shadow: None,
             box_shadow: None,
             transform: None,
             image_src: None,
@@ -399,27 +402,65 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
             bx.bg_color = parse_color(c);
         }
     }
-    // Backgrounds L3 - single layer s pozicemi/velikosti/repeat/clip/origin
+    // Backgrounds L3 - multiple layers (oddelene carkou), pole ulozene shora-dolu
     {
-        let mut layer = BgLayer::default();
-        if let Some(c) = s.get("background-color") { layer.color = parse_color(c); }
-        if let Some(p) = s.get("background-position") { layer.position = parse_bg_position(p); }
-        if let Some(sz) = s.get("background-size")     { layer.size = parse_bg_size(sz); }
-        if let Some(r) = s.get("background-repeat")    { layer.repeat = parse_bg_repeat(r); }
-        if let Some(c) = s.get("background-clip")      { layer.clip = parse_bg_box(c); }
-        if let Some(o) = s.get("background-origin")    { layer.origin = parse_bg_box(o); }
-        if let Some(a) = s.get("background-attachment"){ layer.attachment = parse_bg_attachment(a); }
-        if let Some(img) = s.get("background-image") {
-            if img.contains("linear-gradient(") || img.contains("radial-gradient(") || img.contains("conic-gradient(") {
-                layer.gradient = parse_any_gradient(img);
-            } else if let Some(url_stripped) = img.strip_prefix("url(").and_then(|s| s.strip_suffix(")")) {
-                let cleaned = url_stripped.trim().trim_matches('"').trim_matches('\'');
-                layer.image_src = Some(cleaned.to_string());
+        // background-image: image1, image2, image3
+        // background-position: pos1, pos2, pos3
+        // background-repeat:   r1, r2, r3
+        // ... atd.
+        // Vyrobi N layeru kde N = max poctu z prop.
+        let images: Vec<String> = s.get("background-image")
+            .map(|v| split_top_level_commas_string(v))
+            .unwrap_or_default();
+        let positions: Vec<String> = s.get("background-position")
+            .map(|v| split_top_level_commas_string(v))
+            .unwrap_or_default();
+        let sizes: Vec<String> = s.get("background-size")
+            .map(|v| split_top_level_commas_string(v))
+            .unwrap_or_default();
+        let repeats: Vec<String> = s.get("background-repeat")
+            .map(|v| split_top_level_commas_string(v))
+            .unwrap_or_default();
+        let clips: Vec<String> = s.get("background-clip")
+            .map(|v| split_top_level_commas_string(v))
+            .unwrap_or_default();
+        let origins: Vec<String> = s.get("background-origin")
+            .map(|v| split_top_level_commas_string(v))
+            .unwrap_or_default();
+        let attachments: Vec<String> = s.get("background-attachment")
+            .map(|v| split_top_level_commas_string(v))
+            .unwrap_or_default();
+
+        let count = [images.len(), positions.len(), sizes.len(), repeats.len()]
+            .iter().max().copied().unwrap_or(0).max(1);
+
+        for i in 0..count {
+            let mut layer = BgLayer::default();
+            // Color jen na posledni layer (CSS spec)
+            if i == count - 1 {
+                if let Some(c) = s.get("background-color") { layer.color = parse_color(c); }
             }
-        }
-        // Pridat layer jen pokud nejak nese info
-        if layer.color.is_some() || layer.image_src.is_some() || layer.gradient.is_some() {
-            bx.backgrounds.push(layer);
+            if let Some(img) = images.get(i) {
+                let img = img.trim();
+                if img.contains("linear-gradient(") || img.contains("radial-gradient(") || img.contains("conic-gradient(") {
+                    layer.gradient = parse_any_gradient(img);
+                } else if let Some(url_stripped) = img.strip_prefix("url(").and_then(|s| s.strip_suffix(")")) {
+                    let cleaned = url_stripped.trim().trim_matches('"').trim_matches('\'');
+                    layer.image_src = Some(cleaned.to_string());
+                } else if img != "none" {
+                    layer.image_src = Some(img.to_string());
+                }
+            }
+            if let Some(p) = positions.get(i) { layer.position = parse_bg_position(p); }
+            if let Some(sz) = sizes.get(i) { layer.size = parse_bg_size(sz); }
+            if let Some(r) = repeats.get(i) { layer.repeat = parse_bg_repeat(r); }
+            if let Some(c) = clips.get(i) { layer.clip = parse_bg_box(c); }
+            if let Some(o) = origins.get(i) { layer.origin = parse_bg_box(o); }
+            if let Some(a) = attachments.get(i) { layer.attachment = parse_bg_attachment(a); }
+
+            if layer.color.is_some() || layer.image_src.is_some() || layer.gradient.is_some() {
+                bx.backgrounds.push(layer);
+            }
         }
     }
     // Box shadow
@@ -433,6 +474,10 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     // clip-path
     if let Some(cp) = s.get("clip-path") {
         bx.clip_path = parse_clip_path(cp);
+    }
+    // text-shadow: parsuje "offset_x offset_y blur color"
+    if let Some(ts) = s.get("text-shadow") {
+        bx.text_shadow = parse_text_shadow(ts);
     }
     // Transform
     if let Some(tr) = s.get("transform") {
@@ -1773,6 +1818,33 @@ pub fn apply_filter_chain(rgba: [u8; 4], chain: &[FilterOp]) -> [u8; 4] {
     ]
 }
 
+/// Top-level comma split - vraci Vec<String> trimmed.
+fn split_top_level_commas_string(s: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut cur = String::new();
+    let mut depth = 0i32;
+    let mut quote: Option<char> = None;
+    for c in s.chars() {
+        if let Some(q) = quote {
+            cur.push(c);
+            if c == q { quote = None; }
+            continue;
+        }
+        match c {
+            '"' | '\'' => { quote = Some(c); cur.push(c); }
+            '(' => { depth += 1; cur.push(c); }
+            ')' => { depth -= 1; cur.push(c); }
+            ',' if depth == 0 => {
+                if !cur.trim().is_empty() { tokens.push(cur.trim().to_string()); }
+                cur.clear();
+            }
+            _ => cur.push(c),
+        }
+    }
+    if !cur.trim().is_empty() { tokens.push(cur.trim().to_string()); }
+    tokens
+}
+
 fn split_top_level_whitespace_str(s: &str) -> Vec<&str> {
     let mut tokens = Vec::new();
     let mut start = 0;
@@ -1984,6 +2056,28 @@ pub fn parse_linear_gradient(s: &str) -> Option<(f32, Vec<(f32, [u8; 4])>)> {
     }
     if stops.is_empty() { return None; }
     Some((angle, stops))
+}
+
+/// Parse text-shadow: "offset_x offset_y blur color" / "offset_x offset_y color".
+pub fn parse_text_shadow(s: &str) -> Option<(f32, f32, f32, [u8; 4])> {
+    let s = s.trim();
+    if s == "none" || s.is_empty() { return None; }
+    let parts: Vec<&str> = s.split_whitespace().collect();
+    if parts.len() < 3 { return None; }
+    let ox = parse_length(parts[0]);
+    let oy = parse_length(parts[1]);
+    let mut blur = 0.0f32;
+    let mut color_idx = 2;
+    if parts[2].chars().next().map(|c| c.is_ascii_digit() || c == '.').unwrap_or(false)
+        || parts[2].ends_with("px") || parts[2].ends_with("em")
+    {
+        blur = parse_length(parts[2]);
+        color_idx = 3;
+    }
+    if color_idx >= parts.len() { return None; }
+    let rest: String = parts[color_idx..].join(" ");
+    let color = parse_color(&rest)?;
+    Some((ox, oy, blur, color))
 }
 
 /// Parse box-shadow: "[inset] offset_x offset_y blur spread color".

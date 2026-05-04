@@ -113,7 +113,7 @@ Konvence stavu:
 - [x] `background-image: url(...)`
 - [x] `border-width`, `border-style`, `border-color`, `border-radius`
 - [x] `box-shadow` (drop)
-- [ ] Multiple backgrounds (kazdy oddelen carkou) - parser jen single layer
+- [x] Multiple backgrounds (kazdy oddelen carkou) - vsechny props comma-split, layery v Vec<BgLayer>
 - [x] `background-position` (parser - keywords/length/% mix)
 - [x] `background-size: cover|contain|<length>|<%>` (parser)
 - [x] `background-repeat: repeat/-x/-y/no-repeat/space/round` (parser)
@@ -161,7 +161,7 @@ Konvence stavu:
 - [ ] `text-decoration-style: solid|double|dotted|dashed|wavy`
 - [ ] `text-decoration-thickness`
 - [ ] `text-underline-offset`
-- [ ] `text-shadow`
+- [x] `text-shadow` (offset_x offset_y blur color, paint emit pred main text)
 - [ ] `text-emphasis`
 
 ### CSS Flexbox L1
@@ -227,8 +227,9 @@ Konvence stavu:
 - [x] Specificita selektoru
 - [x] `!important`
 - [x] User-agent default styly per tag
-- [ ] `@layer name { ... }` cascade layers
-- [ ] `@import url(...) layer(name);`
+- [x] `@layer name { ... }` cascade layers (parser + cascade prio)
+- [x] `@layer name1, name2;` order declaration
+- [ ] `@import url(...) layer(name);` - vyzaduje @import support
 - [ ] `revert`, `revert-layer`, `unset` keywords
 - [ ] Origin importance (user vs author)
 

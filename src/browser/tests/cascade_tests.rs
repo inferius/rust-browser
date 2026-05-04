@@ -214,6 +214,50 @@ fn selector_first_of_type() {
     assert!(cascade::get_styles(&map, &ps[1]).unwrap().get("color").is_none());
 }
 
+// ─── Cascade Layers @layer ─────────────────────────────────────────────
+
+#[test]
+fn cascade_layer_order_declared() {
+    let s = parse_stylesheet(r#"
+        @layer reset, theme, components;
+    "#);
+    assert_eq!(s.layer_order, vec!["reset", "theme", "components"]);
+}
+
+#[test]
+fn cascade_layer_block_rules_lower_prio_than_unlayered() {
+    let doc = parse_html(r#"<html><body><p>x</p></body></html>"#, "");
+    let css = parse_stylesheet(r#"
+        @layer base {
+            p { color: red; }
+        }
+        p { color: blue; }
+    "#);
+    let map = cascade::cascade(&doc.root, &[css]);
+    let p = doc.root.find(|n| n.tag_name().as_deref() == Some("p")).unwrap();
+    let s = cascade::get_styles(&map, &p).unwrap();
+    // Unlayered ma vyssi prio
+    assert_eq!(s.get("color").map(|v| v.as_str()), Some("blue"));
+}
+
+#[test]
+fn cascade_layer_later_wins_over_earlier() {
+    let doc = parse_html(r#"<html><body><p>x</p></body></html>"#, "");
+    let css = parse_stylesheet(r#"
+        @layer first {
+            p { color: red; }
+        }
+        @layer second {
+            p { color: green; }
+        }
+    "#);
+    let map = cascade::cascade(&doc.root, &[css]);
+    let p = doc.root.find(|n| n.tag_name().as_deref() == Some("p")).unwrap();
+    let s = cascade::get_styles(&map, &p).unwrap();
+    // second je pozdejsi -> vyssi prio v rame layeru
+    assert_eq!(s.get("color").map(|v| v.as_str()), Some("green"));
+}
+
 // ─── @font-face ────────────────────────────────────────────────────────
 
 #[test]

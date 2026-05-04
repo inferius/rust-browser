@@ -17,6 +17,11 @@ pub struct Stylesheet {
     pub container_queries: Vec<ContainerQuery>,
     /// @font-face declarations - kazdy ma family + src + dalsi properties.
     pub font_faces: Vec<FontFace>,
+    /// @layer declarace order (jmeno -> priorita; pozdejsi = vyssi priorita).
+    pub layer_order: Vec<String>,
+    /// Rules patrici do layer: layer_name -> Vec<Rule>.
+    /// Layered rules maji nizsi prio nez unlayered (per CSS Cascade Layers spec L5).
+    pub layered_rules: Vec<(String, Vec<Rule>)>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -172,6 +177,8 @@ pub fn parse_stylesheet(source: &str) -> Stylesheet {
     let mut keyframes = Vec::new();
     let mut container_queries = Vec::new();
     let mut font_faces = Vec::new();
+    let mut layer_order: Vec<String> = Vec::new();
+    let mut layered_rules: Vec<(String, Vec<Rule>)> = Vec::new();
     let mut chars = source.chars().peekable();
 
     while chars.peek().is_some() {
@@ -190,9 +197,15 @@ pub fn parse_stylesheet(source: &str) -> Stylesheet {
         let selectors_str = selectors_str.trim().to_string();
         if selectors_str.is_empty() { break; }
 
-        // @import / @charset bez bloku - skip
+        // @import / @charset / @layer (bez bloku - jen order declaration) - handle pred general skip
         if !has_block {
-            // Tato at-rule je zpracovana (@import "url" pro budoucnost, ted ignored)
+            if selectors_str.starts_with("@layer") {
+                let rest = selectors_str.trim_start_matches("@layer").trim();
+                for name in rest.split(',') {
+                    let n = name.trim().to_string();
+                    if !n.is_empty() && !layer_order.contains(&n) { layer_order.push(n); }
+                }
+            }
             continue;
         }
 
@@ -217,6 +230,25 @@ pub fn parse_stylesheet(source: &str) -> Stylesheet {
                 .trim().to_string();
             let frames = parse_keyframes(&block_str);
             keyframes.push(Keyframes { name, frames });
+        } else if selectors_str.starts_with("@layer") {
+            // @layer name1, name2, name3;  - declarace order bez bloku
+            // @layer name { rules } - rules v layeru
+            let rest = selectors_str.trim_start_matches("@layer").trim();
+            if !has_block {
+                // Order declaration
+                for name in rest.split(',') {
+                    let n = name.trim().to_string();
+                    if !n.is_empty() && !layer_order.contains(&n) { layer_order.push(n); }
+                }
+                continue;
+            }
+            // S blokem: rules patrici do layer
+            let layer_name = rest.split(',').next().unwrap_or("").trim().to_string();
+            if !layer_name.is_empty() && !layer_order.contains(&layer_name) {
+                layer_order.push(layer_name.clone());
+            }
+            let nested = parse_stylesheet(&block_str);
+            layered_rules.push((layer_name, nested.rules));
         } else if selectors_str.starts_with("@font-face") {
             let mut ff = FontFace::default();
             let decls = parse_decls_str(&block_str);
@@ -246,7 +278,10 @@ pub fn parse_stylesheet(source: &str) -> Stylesheet {
         }
     }
 
-    Stylesheet { rules, media_queries, keyframes, container_queries, font_faces }
+    Stylesheet {
+        rules, media_queries, keyframes, container_queries, font_faces,
+        layer_order, layered_rules,
+    }
 }
 
 /// Vytahne URL z @font-face src deklarace: `src: url("foo.woff2") format("woff2")` -> "foo.woff2".
