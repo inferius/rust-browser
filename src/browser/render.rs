@@ -1226,7 +1226,9 @@ pub fn run_window_with_html(html: String, css: String) -> Result<(), String> {
 
             let viewport_w = r.config.width as f32;
             let viewport_h = r.config.height as f32;
-            let layout_root = layout::layout_tree_with_pseudo(&document_root, &style_map, &pseudo_map, viewport_w, viewport_h);
+            let mut layout_root = layout::layout_tree_with_pseudo(&document_root, &style_map, &pseudo_map, viewport_w, viewport_h);
+            // Apply position: sticky pri current scroll
+            layout::apply_sticky(&mut layout_root, self.scroll_y);
             let mut display_list = paint::build_display_list(&layout_root);
 
             // Canvas API: emit canvas ops jako DisplayCommands.

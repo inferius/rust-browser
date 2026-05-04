@@ -659,6 +659,32 @@ pub fn layout_tree_with_pseudo(
     layout_root
 }
 
+/// Aplikuje position: sticky pri zadanem scroll offsetu.
+/// Volat z render po layout, pred display_list build.
+/// Sticky element: pri scroll dosahne urovne sticky -> drzi se na top.
+pub fn apply_sticky(root: &mut LayoutBox, scroll_y: f32) {
+    fn walk(bx: &mut LayoutBox, scroll_y: f32, parent_bottom: f32) {
+        if matches!(bx.position, Position::Sticky) {
+            let top = bx.offset_top.unwrap_or(0.0);
+            let original_y = bx.rect.y;
+            let viewport_top = scroll_y + top;
+            // Pokud element je nad viewport_top, posunout dolu (visible at viewport_top)
+            if original_y < viewport_top {
+                let new_y = viewport_top;
+                // Don't push past parent bottom
+                let max_y = parent_bottom - bx.rect.height;
+                bx.rect.y = new_y.min(max_y).max(original_y);
+            }
+        }
+        let pb = bx.rect.y + bx.rect.height;
+        for child in &mut bx.children {
+            walk(child, scroll_y, pb);
+        }
+    }
+    let pb = root.rect.y + root.rect.height;
+    walk(root, scroll_y, pb);
+}
+
 /// Walk tree + collect anchor-name -> rect map.
 fn collect_anchors(bx: &LayoutBox) -> std::collections::HashMap<String, Rect> {
     let mut out = std::collections::HashMap::new();
