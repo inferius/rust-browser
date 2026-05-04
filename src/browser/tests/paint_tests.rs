@@ -486,6 +486,87 @@ fn paint_transform_marker_includes_matrix() {
     panic!("TransformBegin nenalezen");
 }
 
+// ─── Polygon clip-path ──────────────────────────────────────────────────
+
+#[test]
+fn paint_polygon_clip_emits_clipped_rect() {
+    let cmds = build_dl(
+        r#"<html><body><div></div></body></html>"#,
+        r#"div { background: red; width: 100px; height: 100px;
+                clip-path: polygon(50% 0%, 100% 100%, 0% 100%); }"#,
+    );
+    let has_clipped = cmds.iter().any(|c| matches!(c, DisplayCommand::ClippedRect { .. }));
+    assert!(has_clipped, "polygon clip-path emit ClippedRect");
+}
+
+#[test]
+fn paint_polygon_clip_no_default_rect() {
+    let cmds = build_dl(
+        r#"<html><body><div></div></body></html>"#,
+        r#"div { background: red; width: 100px; height: 100px;
+                clip-path: polygon(50% 0%, 100% 100%, 0% 100%); }"#,
+    );
+    // Default Rect bg by se NEMEL emit (jen ClippedRect).
+    // Pripustime: padding/wrapper rectangly, ale red background by mel byt ClippedRect.
+    let red_solid_rects = cmds.iter().filter(|c| matches!(c, DisplayCommand::Rect { color, .. } if color[0] == 255 && color[1] == 0 && color[2] == 0)).count();
+    let red_clipped = cmds.iter().filter(|c| matches!(c, DisplayCommand::ClippedRect { color, .. } if color[0] == 255 && color[1] == 0)).count();
+    assert!(red_clipped >= 1);
+    assert_eq!(red_solid_rects, 0, "bg jen jako ClippedRect, ne Rect");
+}
+
+#[test]
+fn paint_polygon_clip_points_count_matches() {
+    let cmds = build_dl(
+        r#"<html><body><div></div></body></html>"#,
+        r#"div { background: red; width: 100px; height: 100px;
+                clip-path: polygon(0 0, 100px 0, 100px 100px, 0 100px); }"#,
+    );
+    for cmd in &cmds {
+        if let DisplayCommand::ClippedRect { points, .. } = cmd {
+            assert_eq!(points.len(), 4, "4-point polygon");
+            return;
+        }
+    }
+    panic!("ClippedRect nenalezen");
+}
+
+#[test]
+fn paint_polygon_clip_points_in_pixel_space() {
+    let cmds = build_dl(
+        r#"<html><body><div></div></body></html>"#,
+        r#"div { background: blue; width: 200px; height: 100px; padding: 0; margin: 0;
+                clip-path: polygon(50% 0%, 100% 100%, 0% 100%); }"#,
+    );
+    for cmd in &cmds {
+        if let DisplayCommand::ClippedRect { points, .. } = cmd {
+            // Bod 0 = 50% 0% -> (rect.x + 100, rect.y)
+            // Bod 1 = 100% 100% -> (rect.x + 200, rect.y + 100)
+            // Bod 2 = 0% 100% -> (rect.x + 0, rect.y + 100)
+            assert_eq!(points.len(), 3);
+            // Y kordy: 1. bod ma min Y, 2. a 3. ma max Y
+            let y0 = points[0].1;
+            let y1 = points[1].1;
+            let y2 = points[2].1;
+            assert!(y0 < y1, "first point higher up");
+            assert!((y1 - y2).abs() < 1.0, "bottom two points stejna y");
+            return;
+        }
+    }
+    panic!("ClippedRect nenalezen");
+}
+
+#[test]
+fn paint_inset_clip_no_clipped_rect() {
+    // inset clip-path -> stale Rect (CPU compute_clip_rect handluje).
+    let cmds = build_dl(
+        r#"<html><body><div></div></body></html>"#,
+        r#"div { background: red; width: 100px; height: 100px;
+                clip-path: inset(10px); }"#,
+    );
+    let has_clipped = cmds.iter().any(|c| matches!(c, DisplayCommand::ClippedRect { .. }));
+    assert!(!has_clipped, "inset neni polygon - emit Rect, ne ClippedRect");
+}
+
 #[test]
 fn paint_bg_image_emits_image_command() {
     let cmds = build_dl(

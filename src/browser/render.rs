@@ -429,6 +429,18 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: 
             | DisplayCommand::TransformBegin { .. } | DisplayCommand::TransformEnd => {
                 // Markers - zpracovava se v render flow, ne ve vertex builderu.
             }
+            DisplayCommand::ClippedRect { color, points } => {
+                // Triangle fan pro convex polygon: P0 + P_i + P_{i+1}
+                let c = normalize_color(color);
+                if points.len() >= 3 {
+                    let p0 = points[0];
+                    for i in 1..points.len() - 1 {
+                        let p1 = points[i];
+                        let p2 = points[i + 1];
+                        push_triangle(&mut verts, p0, p1, p2, c);
+                    }
+                }
+            }
         }
     }
     verts
@@ -695,6 +707,11 @@ fn shift_command_y(cmd: &mut DisplayCommand, dy: f32) {
         | DisplayCommand::BlurredRect { y, .. }
         | DisplayCommand::FilterBegin { y, .. }
         | DisplayCommand::TransformBegin { y, .. } => *y += dy,
+        DisplayCommand::ClippedRect { points, .. } => {
+            for (_, py) in points.iter_mut() {
+                *py += dy;
+            }
+        }
         DisplayCommand::FilterEnd | DisplayCommand::TransformEnd => {}
     }
 }
@@ -753,6 +770,26 @@ fn push_rect_uv(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f32, h: f32,
     let br = mk(x + w, y + h, uv1[0], uv1[1]);
     verts.push(tl); verts.push(tr); verts.push(bl);
     verts.push(bl); verts.push(tr); verts.push(br);
+}
+
+/// Push 3-vertex triangle pro polygon clip-path (mode 0 = solid).
+fn push_triangle(verts: &mut Vec<Vertex>, p0: (f32, f32), p1: (f32, f32), p2: (f32, f32), color: [f32; 4]) {
+    let mk = |p: (f32, f32)| -> Vertex {
+        Vertex {
+            pos: [p.0, p.1],
+            color,
+            uv: [0.0, 0.0],
+            mode: 0.0,
+            local: [0.0, 0.0],
+            half_size: [0.0, 0.0],
+            radius: 0.0,
+            color2: [0.0; 4],
+            blur: 0.0,
+        }
+    };
+    verts.push(mk(p0));
+    verts.push(mk(p1));
+    verts.push(mk(p2));
 }
 
 /// Blurred rect: mode 8, solid color s smoothstep blur edge.

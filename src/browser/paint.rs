@@ -158,6 +158,13 @@ pub enum DisplayCommand {
     },
     /// Konec 3D transform subtree.
     TransformEnd,
+    /// Rect oriznuty polygonem (CSS clip-path: polygon(...)).
+    /// Body jsou absolutni px souradnice. Renderer triangulate via fan
+    /// (convex predpoklad). Concave polygon = artefakty.
+    ClippedRect {
+        color: [u8; 4],
+        points: Vec<(f32, f32)>,
+    },
 }
 
 /// Vrati display list - sekvence primitiv pro renderer.
@@ -492,13 +499,27 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
             radius: bx.border_radius,
         });
     } else if let Some(bg) = bx.bg_color {
-        // Pokud je has_blur_subtree, RT pipeline blur aplikuje na cely subtree
-        // -> emitujem normalni Rect. BlurredRect (mode 8) je legacy fallback,
-        // pouzity jen kdyz neni RT pipeline (napr. pri error).
-        cmds.push(DisplayCommand::Rect {
-            x: clip_x, y: clip_y, w: clip_w, h: clip_h,
-            color: with_alpha(bg), radius: clip_radius,
-        });
+        // Polygon clip-path: emit ClippedRect misto Rect.
+        // Renderer aplikuje fan triangulation (convex polygon assumption).
+        if let Some(crate::browser::layout::ClipPath::Polygon(pct_pts)) = &bx.clip_path {
+            let abs_pts: Vec<(f32, f32)> = pct_pts.iter().map(|(xp, yp)| {
+                (bx.rect.x + bx.rect.width * xp, bx.rect.y + bx.rect.height * yp)
+            }).collect();
+            if abs_pts.len() >= 3 {
+                cmds.push(DisplayCommand::ClippedRect {
+                    color: with_alpha(bg),
+                    points: abs_pts,
+                });
+            }
+        } else {
+            // Pokud je has_blur_subtree, RT pipeline blur aplikuje na cely subtree
+            // -> emitujem normalni Rect. BlurredRect (mode 8) je legacy fallback,
+            // pouzity jen kdyz neni RT pipeline (napr. pri error).
+            cmds.push(DisplayCommand::Rect {
+                x: clip_x, y: clip_y, w: clip_w, h: clip_h,
+                color: with_alpha(bg), radius: clip_radius,
+            });
+        }
     }
 
     // Border
@@ -776,6 +797,11 @@ fn scale_cmd(cmd: &mut DisplayCommand, sx: f32, sy: f32, cx: f32, cy: f32) {
             scale_xy(x, y);
             *font_size *= sy.abs();
         }
+        DisplayCommand::ClippedRect { points, .. } => {
+            for (px, py) in points.iter_mut() {
+                scale_xy(px, py);
+            }
+        }
         DisplayCommand::FilterEnd | DisplayCommand::TransformEnd => {}
     }
 }
@@ -806,6 +832,11 @@ fn rotate_cmd(cmd: &mut DisplayCommand, cos: f32, sin: f32, cx: f32, cy: f32) {
         | DisplayCommand::FilterBegin { x, y, .. }
         | DisplayCommand::TransformBegin { x, y, .. }
         | DisplayCommand::Text { x, y, .. } => rotate_xy(x, y),
+        DisplayCommand::ClippedRect { points, .. } => {
+            for (px, py) in points.iter_mut() {
+                rotate_xy(px, py);
+            }
+        }
         DisplayCommand::FilterEnd | DisplayCommand::TransformEnd => {}
     }
 }
@@ -823,6 +854,12 @@ fn shift_cmd(cmd: &mut DisplayCommand, dx: f32, dy: f32) {
         | DisplayCommand::TransformBegin { x, y, .. } => {
             *x += dx;
             *y += dy;
+        }
+        DisplayCommand::ClippedRect { points, .. } => {
+            for (px, py) in points.iter_mut() {
+                *px += dx;
+                *py += dy;
+            }
         }
         DisplayCommand::FilterEnd | DisplayCommand::TransformEnd => {}
     }

@@ -388,6 +388,21 @@ p[data-info]::before {
 .t-rxy   { transform: rotateX(30deg) rotateY(30deg); background: #5856d6; }
 .t-persp { transform: perspective(600px) rotateY(35deg); background: #af52de; }
 
+/* Polygon clip-path - fan triangulace */
+.clip-box {
+    width: 100px;
+    height: 100px;
+    color: white;
+    text-align: center;
+    line-height: 100px;
+    margin: 8px;
+    font-size: 12px;
+}
+.clip-tri      { background: #ff3b30; clip-path: polygon(50% 0%, 100% 100%, 0% 100%); }
+.clip-rhombus  { background: #34c759; clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%); }
+.clip-pent     { background: #5856d6; clip-path: polygon(50% 0%, 100% 38%, 82% 100%, 18% 100%, 0% 38%); }
+.clip-arrow    { background: #ff9500; clip-path: polygon(0 25%, 60% 25%, 60% 0, 100% 50%, 60% 100%, 60% 75%, 0 75%); }
+
 /* text-decoration styles */
 .td-solid  { text-decoration: underline; text-decoration-style: solid; }
 .td-double { text-decoration: underline; text-decoration-style: double; }
