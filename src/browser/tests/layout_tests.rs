@@ -220,6 +220,107 @@ fn find_box_by_tag<'a>(bx: &'a layout::LayoutBox, tag: &str) -> Option<&'a layou
 }
 
 #[test]
+fn parse_bg_position_keywords() {
+    use crate::browser::layout::{parse_bg_position, BgPosition};
+    let p = parse_bg_position("center top");
+    if let BgPosition::Mixed { x_pct, y_pct, .. } = p {
+        assert_eq!(x_pct, Some(0.5));
+        assert_eq!(y_pct, Some(0.0));
+    } else { panic!("expected Mixed"); }
+
+    let p2 = parse_bg_position("right bottom");
+    if let BgPosition::Mixed { x_pct, y_pct, .. } = p2 {
+        assert_eq!(x_pct, Some(1.0));
+        assert_eq!(y_pct, Some(1.0));
+    } else { panic!(); }
+}
+
+#[test]
+fn parse_bg_position_lengths() {
+    use crate::browser::layout::{parse_bg_position, BgPosition};
+    let p = parse_bg_position("10px 20px");
+    if let BgPosition::Mixed { x_px, y_px, .. } = p {
+        assert_eq!(x_px, Some(10.0));
+        assert_eq!(y_px, Some(20.0));
+    } else { panic!(); }
+}
+
+#[test]
+fn parse_bg_position_pct() {
+    use crate::browser::layout::{parse_bg_position, BgPosition};
+    let p = parse_bg_position("50% 25%");
+    if let BgPosition::Mixed { x_pct, y_pct, .. } = p {
+        assert_eq!(x_pct, Some(0.5));
+        assert_eq!(y_pct, Some(0.25));
+    } else { panic!(); }
+}
+
+#[test]
+fn parse_bg_size_keywords() {
+    use crate::browser::layout::{parse_bg_size, BgSize};
+    assert!(matches!(parse_bg_size("cover"), BgSize::Cover));
+    assert!(matches!(parse_bg_size("contain"), BgSize::Contain));
+    assert!(matches!(parse_bg_size("auto"), BgSize::Auto));
+}
+
+#[test]
+fn parse_bg_size_lengths() {
+    use crate::browser::layout::{parse_bg_size, BgSize};
+    if let BgSize::Length { w, h } = parse_bg_size("100px 200px") {
+        assert_eq!(w, Some(100.0));
+        assert_eq!(h, Some(200.0));
+    } else { panic!(); }
+    if let BgSize::Pct { w, h } = parse_bg_size("50% auto") {
+        assert_eq!(w, Some(0.5));
+        assert_eq!(h, None);
+    } else { panic!(); }
+}
+
+#[test]
+fn parse_bg_repeat_variants() {
+    use crate::browser::layout::{parse_bg_repeat, BgRepeat};
+    assert!(matches!(parse_bg_repeat("no-repeat"), BgRepeat::NoRepeat));
+    assert!(matches!(parse_bg_repeat("repeat-x"), BgRepeat::RepeatX));
+    assert!(matches!(parse_bg_repeat("repeat-y"), BgRepeat::RepeatY));
+    assert!(matches!(parse_bg_repeat("repeat"), BgRepeat::Repeat));
+    assert!(matches!(parse_bg_repeat("space"), BgRepeat::Space));
+    assert!(matches!(parse_bg_repeat("round"), BgRepeat::Round));
+}
+
+#[test]
+fn parse_bg_box_variants() {
+    use crate::browser::layout::{parse_bg_box, BgBox};
+    assert!(matches!(parse_bg_box("border-box"), BgBox::BorderBox));
+    assert!(matches!(parse_bg_box("padding-box"), BgBox::PaddingBox));
+    assert!(matches!(parse_bg_box("content-box"), BgBox::ContentBox));
+}
+
+#[test]
+fn build_box_populates_backgrounds() {
+    let doc = parse_html(r#"<html><body><div></div></body></html>"#, "");
+    let css = parse_stylesheet(r#"
+        div {
+            background-color: red;
+            background-image: url("logo.png");
+            background-position: 50% 50%;
+            background-size: cover;
+            background-repeat: no-repeat;
+            background-clip: padding-box;
+        }
+    "#);
+    let style_map = crate::browser::cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &style_map, 1024.0, 768.0);
+    let div = find_box_by_tag(&root, "div").unwrap();
+    assert_eq!(div.backgrounds.len(), 1);
+    let bg = &div.backgrounds[0];
+    assert_eq!(bg.color, Some([255, 0, 0, 255]));
+    assert_eq!(bg.image_src, Some("logo.png".into()));
+    assert!(matches!(bg.size, layout::BgSize::Cover));
+    assert!(matches!(bg.repeat, layout::BgRepeat::NoRepeat));
+    assert!(matches!(bg.clip, layout::BgBox::PaddingBox));
+}
+
+#[test]
 fn apply_filter_grayscale_full_makes_gray() {
     use crate::browser::layout::{apply_filter_chain, FilterOp};
     let red = [255, 0, 0, 255];

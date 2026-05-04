@@ -135,6 +135,9 @@ pub struct LayoutBox {
     pub bg_gradient: Option<BgGradient>,
     /// CSS Filter Effects - chain of color matrix operations + opacity + drop-shadow.
     pub filter: Vec<FilterOp>,
+    /// Background layers (Backgrounds L3) - jen prvni layer pouzity zatim,
+    /// vice layeru emitted bottom-to-top kdyz pridana plne podpora.
+    pub backgrounds: Vec<BgLayer>,
     /// Box shadow: (offset_x, offset_y, blur, spread, color)
     /// (offset_x, offset_y, blur, spread, color, inset)
     pub box_shadow: Option<(f32, f32, f32, f32, [u8; 4], bool)>,
@@ -184,6 +187,7 @@ impl LayoutBox {
             cursor: None,
             bg_gradient: None,
             filter: Vec::new(),
+            backgrounds: Vec::new(),
             box_shadow: None,
             transform: None,
             image_src: None,
@@ -354,10 +358,33 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     // Color parsing - if linear-gradient, parse jako gradient, jinak solid color
     let bg_value = s.get("background-color").or(s.get("background"));
     if let Some(c) = bg_value {
-        if c.contains("linear-gradient(") {
+        if c.contains("linear-gradient(") || c.contains("radial-gradient(") || c.contains("conic-gradient(") {
             bx.bg_gradient = parse_any_gradient(c);
         } else {
             bx.bg_color = parse_color(c);
+        }
+    }
+    // Backgrounds L3 - single layer s pozicemi/velikosti/repeat/clip/origin
+    {
+        let mut layer = BgLayer::default();
+        if let Some(c) = s.get("background-color") { layer.color = parse_color(c); }
+        if let Some(p) = s.get("background-position") { layer.position = parse_bg_position(p); }
+        if let Some(sz) = s.get("background-size")     { layer.size = parse_bg_size(sz); }
+        if let Some(r) = s.get("background-repeat")    { layer.repeat = parse_bg_repeat(r); }
+        if let Some(c) = s.get("background-clip")      { layer.clip = parse_bg_box(c); }
+        if let Some(o) = s.get("background-origin")    { layer.origin = parse_bg_box(o); }
+        if let Some(a) = s.get("background-attachment"){ layer.attachment = parse_bg_attachment(a); }
+        if let Some(img) = s.get("background-image") {
+            if img.contains("linear-gradient(") || img.contains("radial-gradient(") || img.contains("conic-gradient(") {
+                layer.gradient = parse_any_gradient(img);
+            } else if let Some(url_stripped) = img.strip_prefix("url(").and_then(|s| s.strip_suffix(")")) {
+                let cleaned = url_stripped.trim().trim_matches('"').trim_matches('\'');
+                layer.image_src = Some(cleaned.to_string());
+            }
+        }
+        // Pridat layer jen pokud nejak nese info
+        if layer.color.is_some() || layer.image_src.is_some() || layer.gradient.is_some() {
+            bx.backgrounds.push(layer);
         }
     }
     // Box shadow
@@ -1212,6 +1239,175 @@ pub enum BgGradientKind {
     Radial { cx_pct: f32, cy_pct: f32, radius_pct: f32 },
     /// start_angle_deg: poradi od 12 hod. cx/cy v procentech.
     Conic { cx_pct: f32, cy_pct: f32, start_angle_deg: f32 },
+}
+
+/// CSS Backgrounds L3 - jedna vrstva.
+#[derive(Debug, Clone, Default)]
+pub struct BgLayer {
+    pub color: Option<[u8; 4]>,
+    pub image_src: Option<String>,
+    pub gradient: Option<BgGradient>,
+    pub position: BgPosition,
+    pub size: BgSize,
+    pub repeat: BgRepeat,
+    pub clip: BgBox,
+    pub origin: BgBox,
+    pub attachment: BgAttachment,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BgPosition {
+    /// Px / % offset od top-left
+    Px(f32, f32),
+    /// Procenta (0..1)
+    Pct(f32, f32),
+    /// Mix - x px, y %
+    Mixed { x_px: Option<f32>, x_pct: Option<f32>, y_px: Option<f32>, y_pct: Option<f32> },
+}
+impl Default for BgPosition {
+    fn default() -> Self { BgPosition::Pct(0.0, 0.0) }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BgSize {
+    /// Auto - puvodni image rozmer
+    Auto,
+    Cover,
+    Contain,
+    /// Lengths: (w, h) - None = auto
+    Length { w: Option<f32>, h: Option<f32> },
+    /// Procenta vuci kontejneru
+    Pct { w: Option<f32>, h: Option<f32> },
+}
+impl Default for BgSize {
+    fn default() -> Self { BgSize::Auto }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BgRepeat {
+    Repeat,
+    RepeatX,
+    RepeatY,
+    NoRepeat,
+    Space,
+    Round,
+}
+impl Default for BgRepeat {
+    fn default() -> Self { BgRepeat::Repeat }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BgBox {
+    BorderBox,
+    PaddingBox,
+    ContentBox,
+}
+impl Default for BgBox {
+    fn default() -> Self { BgBox::BorderBox }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BgAttachment {
+    Scroll,
+    Fixed,
+    Local,
+}
+impl Default for BgAttachment {
+    fn default() -> Self { BgAttachment::Scroll }
+}
+
+/// Parsuje background-position: "left", "center", "50%", "10px 20px", "right top".
+pub fn parse_bg_position(s: &str) -> BgPosition {
+    let parts: Vec<&str> = s.split_whitespace().collect();
+    let kw_pct = |kw: &str| -> Option<f32> {
+        match kw {
+            "left" | "top" => Some(0.0),
+            "center" => Some(0.5),
+            "right" | "bottom" => Some(1.0),
+            _ => None,
+        }
+    };
+    let parse_axis = |t: &str| -> (Option<f32>, Option<f32>) {
+        // (px, pct)
+        if let Some(p) = kw_pct(t) { return (None, Some(p)); }
+        if let Some(p) = t.strip_suffix('%') {
+            return (None, p.parse::<f32>().ok().map(|v| v / 100.0));
+        }
+        let v = parse_length(t);
+        (Some(v), None)
+    };
+    match parts.len() {
+        0 => BgPosition::default(),
+        1 => {
+            let (px, pct) = parse_axis(parts[0]);
+            BgPosition::Mixed { x_px: px, x_pct: pct, y_px: None, y_pct: Some(0.5) }
+        }
+        _ => {
+            let (xpx, xpct) = parse_axis(parts[0]);
+            let (ypx, ypct) = parse_axis(parts[1]);
+            BgPosition::Mixed { x_px: xpx, x_pct: xpct, y_px: ypx, y_pct: ypct }
+        }
+    }
+}
+
+/// Parsuje background-size: "auto", "cover", "contain", "100px 200px", "50% auto".
+pub fn parse_bg_size(s: &str) -> BgSize {
+    let s = s.trim();
+    match s {
+        "cover" => return BgSize::Cover,
+        "contain" => return BgSize::Contain,
+        "auto" | "" => return BgSize::Auto,
+        _ => {}
+    }
+    let parts: Vec<&str> = s.split_whitespace().collect();
+    let parse_one = |t: &str| -> Option<f32> {
+        if t == "auto" { return None; }
+        if let Some(p) = t.strip_suffix('%') {
+            return p.parse::<f32>().ok().map(|v| v / 100.0);
+        }
+        Some(parse_length(t))
+    };
+    if parts.len() == 1 {
+        // pct path
+        if parts[0].ends_with('%') {
+            return BgSize::Pct { w: parse_one(parts[0]), h: None };
+        }
+        return BgSize::Length { w: parse_one(parts[0]), h: None };
+    }
+    let w = parse_one(parts[0]);
+    let h = parse_one(parts[1]);
+    if parts[0].ends_with('%') || parts[1].ends_with('%') {
+        BgSize::Pct { w, h }
+    } else {
+        BgSize::Length { w, h }
+    }
+}
+
+pub fn parse_bg_repeat(s: &str) -> BgRepeat {
+    match s.trim() {
+        "no-repeat" => BgRepeat::NoRepeat,
+        "repeat-x"  => BgRepeat::RepeatX,
+        "repeat-y"  => BgRepeat::RepeatY,
+        "space"     => BgRepeat::Space,
+        "round"     => BgRepeat::Round,
+        _ => BgRepeat::Repeat,
+    }
+}
+
+pub fn parse_bg_box(s: &str) -> BgBox {
+    match s.trim() {
+        "padding-box" => BgBox::PaddingBox,
+        "content-box" => BgBox::ContentBox,
+        _ => BgBox::BorderBox,
+    }
+}
+
+pub fn parse_bg_attachment(s: &str) -> BgAttachment {
+    match s.trim() {
+        "fixed" => BgAttachment::Fixed,
+        "local" => BgAttachment::Local,
+        _ => BgAttachment::Scroll,
+    }
 }
 
 /// CSS Filter Effects L1 - jednotliva operace.

@@ -17,7 +17,7 @@ Konvence stavu:
 - [x] Selectors L4: `:is()`, `:where()`, `:not()`, `:has()`, `~` general sibling, `:nth-child/-of-type`, `:nth-last-*`, `:empty`, `:first/last/only-of-type`, `:only-child` (`:focus-visible/-within` zatim no-op kvuli runtime stavu)
 - [/] Values L4: `min()`, `max()`, `clamp()`, `env()` hotovo, `attr()` chybi, math funkce (round/sin/cos/...) chybi
 - [/] Color L4: `oklch`, `oklab`, `lab`, `lch`, `hsl`, `hwb`, `color-mix(in srgb|oklab|oklch)`, modern rgb syntax, hex 4/8 hotovo. Relative color syntax + `color()` namespace + system colors zatim chybi.
-- [ ] Backgrounds L3: multiple backgrounds, `background-clip`, `background-origin`, `background-attachment`
+- [/] Backgrounds L3: position/size/repeat/clip/origin/attachment parser hotovy. Multiple backgrounds (carkove) + paint integrace TODO.
 - [x] Animations L1: `animation-fill-mode` (none/forwards/backwards/both), `animation-play-state` (running/paused), arbitrary `cubic-bezier(...)`, `steps(n, jump-*)`
 
 ### Batch 2 - chybejici "must-have" moduly
@@ -113,13 +113,14 @@ Konvence stavu:
 - [x] `background-image: url(...)`
 - [x] `border-width`, `border-style`, `border-color`, `border-radius`
 - [x] `box-shadow` (drop)
-- [ ] Multiple backgrounds (kazdy oddelen carkou)
-- [ ] `background-position`
-- [ ] `background-size: cover|contain|<length>`
-- [ ] `background-repeat`
-- [ ] `background-attachment: scroll|fixed|local`
-- [ ] `background-clip: border-box|padding-box|content-box|text`
-- [ ] `background-origin`
+- [ ] Multiple backgrounds (kazdy oddelen carkou) - parser jen single layer
+- [x] `background-position` (parser - keywords/length/% mix)
+- [x] `background-size: cover|contain|<length>|<%>` (parser)
+- [x] `background-repeat: repeat/-x/-y/no-repeat/space/round` (parser)
+- [x] `background-attachment: scroll|fixed|local` (parser)
+- [x] `background-clip: border-box|padding-box|content-box` (parser)
+- [x] `background-origin: border-box|padding-box|content-box` (parser)
+- [ ] `background-clip: text` (text mask - vyzaduje RT)
 - [ ] `background-blend-mode`
 - [ ] `border-image-*` (L4)
 - [x] `box-shadow inset` varianta (mode 5 SDF shader, fade smerem dovnitr od okraju)
