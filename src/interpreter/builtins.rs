@@ -687,6 +687,157 @@ pub fn setup_builtins(
     }));
     e.define("Atomics", JsValue::Object(Rc::new(RefCell::new(atomics))));
 
+    // ─── DOM bridge - document, Element, Event ──────────────────────────────
+    // Vlastni lite implementace bez realneho DOM tree.
+    // Element je objekt s tagName, attributes, children, listeners.
+
+    // Helper pro vytvoreni Elementu
+    fn make_element(tag_name: &str) -> JsValue {
+        let mut obj = JsObject::new();
+        obj.set("__element__".into(),  JsValue::Bool(true));
+        obj.set("tagName".into(),      JsValue::Str(tag_name.to_uppercase()));
+        obj.set("nodeName".into(),     JsValue::Str(tag_name.to_uppercase()));
+        obj.set("nodeType".into(),     JsValue::Number(1.0)); // ELEMENT_NODE
+        obj.set("textContent".into(),  JsValue::Str(String::new()));
+        obj.set("innerHTML".into(),    JsValue::Str(String::new()));
+        obj.set("id".into(),           JsValue::Str(String::new()));
+        obj.set("className".into(),    JsValue::Str(String::new()));
+        let attrs = JsObject::new();
+        obj.set("__attrs__".into(),    JsValue::Object(Rc::new(RefCell::new(attrs))));
+        let children: Vec<JsValue> = Vec::new();
+        obj.set("childNodes".into(),   JsValue::Array(Rc::new(RefCell::new(children.clone()))));
+        obj.set("children".into(),     JsValue::Array(Rc::new(RefCell::new(children))));
+        let listeners = JsObject::new();
+        obj.set("__listeners__".into(), JsValue::Object(Rc::new(RefCell::new(listeners))));
+        let style = JsObject::new();
+        obj.set("style".into(),        JsValue::Object(Rc::new(RefCell::new(style))));
+        let classes: Vec<JsValue> = Vec::new();
+        obj.set("__classList__".into(), JsValue::Array(Rc::new(RefCell::new(classes))));
+        JsValue::Object(Rc::new(RefCell::new(obj)))
+    }
+
+    // Globalni element registry pro getElementById
+    let element_registry: Rc<RefCell<std::collections::HashMap<String, JsValue>>> =
+        Rc::new(RefCell::new(std::collections::HashMap::new()));
+
+    let mut document = JsObject::new();
+    document.set("__document__".into(), JsValue::Bool(true));
+
+    // document.createElement(tagName)
+    document.set("createElement".into(), native("document.createElement", |a| {
+        let tag = a.into_iter().next().map(|v| v.to_string()).unwrap_or_else(|| "div".into());
+        Ok(make_element(&tag))
+    }));
+
+    // document.createTextNode(text)
+    document.set("createTextNode".into(), native("document.createTextNode", |a| {
+        let text = a.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+        let mut obj = JsObject::new();
+        obj.set("__text_node__".into(), JsValue::Bool(true));
+        obj.set("nodeType".into(), JsValue::Number(3.0)); // TEXT_NODE
+        obj.set("nodeValue".into(), JsValue::Str(text.clone()));
+        obj.set("textContent".into(), JsValue::Str(text));
+        Ok(JsValue::Object(Rc::new(RefCell::new(obj))))
+    }));
+
+    // document.getElementById(id)
+    {
+        let reg = Rc::clone(&element_registry);
+        document.set("getElementById".into(), native("document.getElementById", move |a| {
+            let id = a.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+            Ok(reg.borrow().get(&id).cloned().unwrap_or(JsValue::Null))
+        }));
+    }
+
+    // document.querySelector(selector) - very basic: jen #id
+    {
+        let reg = Rc::clone(&element_registry);
+        document.set("querySelector".into(), native("document.querySelector", move |a| {
+            let sel = a.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+            if let Some(id) = sel.strip_prefix('#') {
+                return Ok(reg.borrow().get(id).cloned().unwrap_or(JsValue::Null));
+            }
+            // Pro tag selector / class selector by potreboval prochazet DOM tree
+            Ok(JsValue::Null)
+        }));
+    }
+
+    document.set("querySelectorAll".into(), native("document.querySelectorAll", |_| {
+        Ok(JsValue::Array(Rc::new(RefCell::new(Vec::new()))))
+    }));
+
+    // document.body / documentElement - inicializovany prazdne elementy
+    let body = make_element("body");
+    let html = make_element("html");
+    document.set("body".into(), body);
+    document.set("documentElement".into(), html);
+    document.set("head".into(), make_element("head"));
+    document.set("title".into(), JsValue::Str(String::new()));
+    document.set("URL".into(), JsValue::Str("about:blank".into()));
+    document.set("readyState".into(), JsValue::Str("complete".into()));
+
+    e.define("document", JsValue::Object(Rc::new(RefCell::new(document))));
+
+    // Element/Node konstruktory (pro instanceof kontroly)
+    e.define("Element", native("Element", |_| Ok(JsValue::Undefined)));
+    e.define("HTMLElement", native("HTMLElement", |_| Ok(JsValue::Undefined)));
+    e.define("Node", native("Node", |_| Ok(JsValue::Undefined)));
+    e.define("Document", native("Document", |_| Ok(JsValue::Undefined)));
+
+    // Event konstruktor: new Event(type, options?)
+    e.define("Event", native("Event", |a| {
+        let mut iter = a.into_iter();
+        let event_type = iter.next().map(|v| v.to_string()).unwrap_or_default();
+        let _options = iter.next();
+        let mut obj = JsObject::new();
+        obj.set("__event__".into(), JsValue::Bool(true));
+        obj.set("type".into(), JsValue::Str(event_type));
+        obj.set("bubbles".into(), JsValue::Bool(false));
+        obj.set("cancelable".into(), JsValue::Bool(false));
+        obj.set("defaultPrevented".into(), JsValue::Bool(false));
+        obj.set("target".into(), JsValue::Null);
+        obj.set("currentTarget".into(), JsValue::Null);
+        obj.set("timeStamp".into(), JsValue::Number(now_ms()));
+        Ok(JsValue::Object(Rc::new(RefCell::new(obj))))
+    }));
+
+    e.define("CustomEvent", native("CustomEvent", |a| {
+        let mut iter = a.into_iter();
+        let event_type = iter.next().map(|v| v.to_string()).unwrap_or_default();
+        let options = iter.next().unwrap_or(JsValue::Undefined);
+        let mut obj = JsObject::new();
+        obj.set("__event__".into(), JsValue::Bool(true));
+        obj.set("type".into(), JsValue::Str(event_type));
+        if let JsValue::Object(opts) = options {
+            let detail = opts.borrow().props.get("detail").cloned().unwrap_or(JsValue::Null);
+            obj.set("detail".into(), detail);
+        }
+        Ok(JsValue::Object(Rc::new(RefCell::new(obj))))
+    }));
+
+    // window stub (zaroven globalThis-like)
+    let mut window = JsObject::new();
+    window.set("__window__".into(), JsValue::Bool(true));
+    window.set("location".into(), {
+        let mut loc = JsObject::new();
+        loc.set("href".into(), JsValue::Str("about:blank".into()));
+        loc.set("origin".into(), JsValue::Str("null".into()));
+        loc.set("protocol".into(), JsValue::Str(String::new()));
+        loc.set("host".into(), JsValue::Str(String::new()));
+        loc.set("pathname".into(), JsValue::Str("/".into()));
+        loc.set("search".into(), JsValue::Str(String::new()));
+        loc.set("hash".into(), JsValue::Str(String::new()));
+        JsValue::Object(Rc::new(RefCell::new(loc)))
+    });
+    window.set("innerWidth".into(),  JsValue::Number(1024.0));
+    window.set("innerHeight".into(), JsValue::Number(768.0));
+    window.set("devicePixelRatio".into(), JsValue::Number(1.0));
+    e.define("window", JsValue::Object(Rc::new(RefCell::new(window))));
+
+    // Ulozime registry pro pozdejsi pouziti pri setAttribute("id")
+    // Toto by chtelo lepsi integraci - zatim pouzivame skriptovou registraci
+    let _ = element_registry;
+
     // ─── fetch - stub vraci rejected Promise (bez backend) ───────────────────
     // Realna implementace by potrebovala HTTP client (reqwest). Zde stub.
     e.define("fetch", native("fetch", |a| {

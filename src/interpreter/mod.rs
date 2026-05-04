@@ -2542,6 +2542,125 @@ impl Interpreter {
                 }
                 JsValue::Object(obj_rc) => {
                     let obj_rc2 = Rc::clone(obj_rc);
+                    // ─── DOM Element metody ─────────────────────────────
+                    if matches!(obj_rc2.borrow().props.get("__element__"), Some(JsValue::Bool(true))) {
+                        let arg_vals = self.eval_args(args, env)?;
+                        match key.as_str() {
+                            "getAttribute" => {
+                                let name = arg_vals.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+                                let attrs = obj_rc2.borrow().props.get("__attrs__").cloned();
+                                if let Some(JsValue::Object(a)) = attrs {
+                                    let v = a.borrow().get(&name);
+                                    return Ok(if matches!(v, JsValue::Undefined) { JsValue::Null } else { v });
+                                }
+                                return Ok(JsValue::Null);
+                            }
+                            "setAttribute" => {
+                                let mut iter = arg_vals.into_iter();
+                                let name = iter.next().map(|v| v.to_string()).unwrap_or_default();
+                                let val = iter.next().map(|v| JsValue::Str(v.to_string()))
+                                    .unwrap_or(JsValue::Str(String::new()));
+                                let attrs = obj_rc2.borrow().props.get("__attrs__").cloned();
+                                if let Some(JsValue::Object(a)) = attrs {
+                                    a.borrow_mut().set(name.clone(), val.clone());
+                                }
+                                // Specialni atributy: id, class promitnout do props
+                                match name.as_str() {
+                                    "id" | "class" => {
+                                        let prop = if name == "class" { "className" } else { "id" };
+                                        obj_rc2.borrow_mut().set(prop.into(), val);
+                                    }
+                                    _ => {}
+                                }
+                                return Ok(JsValue::Undefined);
+                            }
+                            "hasAttribute" => {
+                                let name = arg_vals.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+                                let attrs = obj_rc2.borrow().props.get("__attrs__").cloned();
+                                if let Some(JsValue::Object(a)) = attrs {
+                                    return Ok(JsValue::Bool(a.borrow().has_own(&name)));
+                                }
+                                return Ok(JsValue::Bool(false));
+                            }
+                            "removeAttribute" => {
+                                let name = arg_vals.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+                                let attrs = obj_rc2.borrow().props.get("__attrs__").cloned();
+                                if let Some(JsValue::Object(a)) = attrs {
+                                    a.borrow_mut().props.remove(&name);
+                                }
+                                return Ok(JsValue::Undefined);
+                            }
+                            "appendChild" => {
+                                let child = arg_vals.into_iter().next().unwrap_or(JsValue::Undefined);
+                                let children = obj_rc2.borrow().props.get("childNodes").cloned();
+                                if let Some(JsValue::Array(arr)) = children {
+                                    arr.borrow_mut().push(child.clone());
+                                }
+                                return Ok(child);
+                            }
+                            "removeChild" => {
+                                let child = arg_vals.into_iter().next().unwrap_or(JsValue::Undefined);
+                                let children = obj_rc2.borrow().props.get("childNodes").cloned();
+                                if let Some(JsValue::Array(arr)) = children {
+                                    if let JsValue::Object(child_obj) = &child {
+                                        arr.borrow_mut().retain(|item| {
+                                            if let JsValue::Object(o) = item {
+                                                !Rc::ptr_eq(o, child_obj)
+                                            } else { true }
+                                        });
+                                    }
+                                }
+                                return Ok(child);
+                            }
+                            "addEventListener" => {
+                                let mut iter = arg_vals.into_iter();
+                                let evt_type = iter.next().map(|v| v.to_string()).unwrap_or_default();
+                                let listener = iter.next().unwrap_or(JsValue::Undefined);
+                                let listeners_val = obj_rc2.borrow().props.get("__listeners__").cloned();
+                                if let Some(JsValue::Object(lst)) = listeners_val {
+                                    let existing = lst.borrow().props.get(&evt_type).cloned();
+                                    let arr = match existing {
+                                        Some(JsValue::Array(a)) => a,
+                                        _ => {
+                                            let new_arr = Rc::new(RefCell::new(Vec::new()));
+                                            lst.borrow_mut().set(evt_type.clone(),
+                                                JsValue::Array(Rc::clone(&new_arr)));
+                                            new_arr
+                                        }
+                                    };
+                                    arr.borrow_mut().push(listener);
+                                }
+                                return Ok(JsValue::Undefined);
+                            }
+                            "removeEventListener" => {
+                                return Ok(JsValue::Undefined);
+                            }
+                            "dispatchEvent" => {
+                                let event = arg_vals.into_iter().next().unwrap_or(JsValue::Undefined);
+                                let evt_type = if let JsValue::Object(eo) = &event {
+                                    match eo.borrow().get("type") {
+                                        JsValue::Str(s) => s,
+                                        _ => String::new(),
+                                    }
+                                } else { String::new() };
+                                let listeners_val = obj_rc2.borrow().props.get("__listeners__").cloned();
+                                if let Some(JsValue::Object(lst)) = listeners_val {
+                                    let arr = lst.borrow().props.get(&evt_type).cloned();
+                                    if let Some(JsValue::Array(a)) = arr {
+                                        let listeners: Vec<JsValue> = a.borrow().clone();
+                                        for l in listeners {
+                                            self.call_function(l, vec![event.clone()], None)?;
+                                        }
+                                    }
+                                }
+                                return Ok(JsValue::Bool(true));
+                            }
+                            "click" | "focus" | "blur" => {
+                                return Ok(JsValue::Undefined);
+                            }
+                            _ => {}
+                        }
+                    }
                     // ─── Worker stub - postMessage/terminate ────────────
                     if matches!(obj_rc2.borrow().props.get("__worker__"), Some(JsValue::Bool(true))) {
                         let _arg_vals = self.eval_args(args, env)?;
