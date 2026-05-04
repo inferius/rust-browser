@@ -61,6 +61,34 @@ fn parse_important_declaration() {
 }
 
 #[test]
+fn parse_media_query() {
+    let s = parse_stylesheet(r#"
+        body { color: black; }
+        @media (max-width: 768px) {
+            body { color: red; }
+            h1 { font-size: 20px; }
+        }
+    "#);
+    assert_eq!(s.media_queries.len(), 1);
+    assert_eq!(s.media_queries[0].rules.len(), 2);
+    assert!(s.media_queries[0].query.contains("max-width"));
+}
+
+#[test]
+fn evaluate_media_query_max_width() {
+    use crate::browser::css_parser::evaluate_media_query;
+    assert_eq!(evaluate_media_query("(max-width: 800px)", 600.0, 400.0), true);
+    assert_eq!(evaluate_media_query("(max-width: 800px)", 1024.0, 400.0), false);
+}
+
+#[test]
+fn evaluate_media_query_min_width() {
+    use crate::browser::css_parser::evaluate_media_query;
+    assert_eq!(evaluate_media_query("(min-width: 600px)", 800.0, 400.0), true);
+    assert_eq!(evaluate_media_query("(min-width: 600px)", 400.0, 400.0), false);
+}
+
+#[test]
 fn specificity_levels() {
     use crate::browser::css_parser::specificity;
     let s_id = parse_stylesheet("#a { x: 1; }");

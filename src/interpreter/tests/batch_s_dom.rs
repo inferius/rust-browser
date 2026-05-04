@@ -185,6 +185,39 @@ fn inner_html_setter() {
 }
 
 #[test]
+fn input_value_get_set() {
+    let v = run(r#"
+        const inp = document.createElement("input");
+        inp.value = "ahoj";
+        return inp.value;
+    "#);
+    assert_eq!(as_str(v), "ahoj");
+}
+
+#[test]
+fn input_checked_get_set() {
+    let v = run(r#"
+        const inp = document.createElement("input");
+        inp.checked = true;
+        const a = inp.checked;
+        inp.checked = false;
+        const b = inp.checked;
+        return a + ":" + b;
+    "#);
+    assert_eq!(as_str(v), "true:false");
+}
+
+#[test]
+fn href_attribute_get() {
+    let v = run(r#"
+        const a = document.createElement("a");
+        a.setAttribute("href", "/page");
+        return a.href;
+    "#);
+    assert_eq!(as_str(v), "/page");
+}
+
+#[test]
 fn id_setter_changes_attribute() {
     let v = run(r#"
         const el = document.createElement("div");

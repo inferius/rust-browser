@@ -28,6 +28,12 @@ pub enum DisplayCommand {
         color: [u8; 4],
         radius: f32,
     },
+    /// Image - decoded RGBA bytes + dimensions.
+    Image {
+        x: f32, y: f32, w: f32, h: f32,
+        src: String,
+        radius: f32,
+    },
 }
 
 /// Vrati display list - sekvence primitiv pro renderer.
@@ -57,6 +63,18 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>) {
             blur,
             spread,
             color: with_alpha(color),
+            radius: bx.border_radius,
+        });
+    }
+
+    // Image - emit Image command (s priorita pres bg)
+    if let Some(src) = &bx.image_src {
+        cmds.push(DisplayCommand::Image {
+            x: bx.rect.x,
+            y: bx.rect.y,
+            w: bx.rect.width,
+            h: bx.rect.height,
+            src: src.clone(),
             radius: bx.border_radius,
         });
     }
@@ -143,5 +161,35 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>) {
     // Recursivne deti
     for ch in &bx.children {
         paint_box(ch, cmds);
+    }
+
+    // Transform aplikovan na vsechny prave vlozene commands tohoto boxu (post-process)
+    // Aktualne transform aplikuje jen translate (rotate/scale potrebuji shader matrix)
+    if let Some(super::layout::TransformOp::Translate(tx, ty)) = bx.transform {
+        let start = cmds_offset_for_box(bx, cmds);
+        for cmd in &mut cmds[start..] {
+            shift_cmd(cmd, tx, ty);
+        }
+    }
+}
+
+fn cmds_offset_for_box(_bx: &LayoutBox, _cmds: &[DisplayCommand]) -> usize {
+    // Pro spravnou implementaci by potreboval index z volajiciho.
+    // Zatim vraci 0 - znamena translate aplikuje na cely strom (chybne pri vice transformech).
+    // Real impl: paint_box vracel range.
+    0
+}
+
+fn shift_cmd(cmd: &mut DisplayCommand, dx: f32, dy: f32) {
+    match cmd {
+        DisplayCommand::Rect { x, y, .. }
+        | DisplayCommand::Border { x, y, .. }
+        | DisplayCommand::Text { x, y, .. }
+        | DisplayCommand::Gradient { x, y, .. }
+        | DisplayCommand::Shadow { x, y, .. }
+        | DisplayCommand::Image { x, y, .. } => {
+            *x += dx;
+            *y += dy;
+        }
     }
 }

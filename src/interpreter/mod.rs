@@ -1698,6 +1698,17 @@ impl Interpreter {
                                 n.set_text_content(&val.to_string());
                                 return Ok(());
                             }
+                            "value" => {
+                                // Form inputs - ulozit jako attribute "value"
+                                n.set_attr("value", &val.to_string());
+                                return Ok(());
+                            }
+                            "checked" => {
+                                let s = if val.is_truthy() { "checked" } else { "" };
+                                if s.is_empty() { n.remove_attr("checked"); }
+                                else { n.set_attr("checked", "checked"); }
+                                return Ok(());
+                            }
                             "innerHTML" => {
                                 // Parse HTML fragment a nahrad children
                                 let frag = crate::browser::html_parser::parse_html_fragment(&val.to_string());
@@ -2392,6 +2403,16 @@ impl Interpreter {
                     }
                     "className" => {
                         return Ok(JsValue::Str(n.attr("class").unwrap_or_default()));
+                    }
+                    "value" => {
+                        // Form input value
+                        return Ok(JsValue::Str(n.attr("value").unwrap_or_default()));
+                    }
+                    "checked" => {
+                        return Ok(JsValue::Bool(n.has_attr("checked")));
+                    }
+                    "type" | "name" | "href" | "src" | "alt" | "title" => {
+                        return Ok(JsValue::Str(n.attr(key).unwrap_or_default()));
                     }
                     "children" | "childNodes" => {
                         let arr: Vec<JsValue> = n.children.borrow().iter()

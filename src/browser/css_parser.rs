@@ -9,6 +9,14 @@ use std::collections::HashMap;
 #[derive(Debug, Clone)]
 pub struct Stylesheet {
     pub rules: Vec<Rule>,
+    /// @media queries: kazda obsahuje query string + nested rules
+    pub media_queries: Vec<MediaQuery>,
+}
+
+#[derive(Debug, Clone)]
+pub struct MediaQuery {
+    pub query: String,        // "(max-width: 768px)" / "screen and (min-width: 600px)"
+    pub rules: Vec<Rule>,
 }
 
 #[derive(Debug, Clone)]
@@ -89,14 +97,14 @@ pub fn specificity(sel: &Selector) -> (u32, u32, u32) {
 /// Parsuje CSS stylesheet (lite parser, hand-rolled).
 pub fn parse_stylesheet(source: &str) -> Stylesheet {
     let mut rules = Vec::new();
+    let mut media_queries = Vec::new();
     let mut chars = source.chars().peekable();
 
     while chars.peek().is_some() {
-        // Skip whitespace + comments
         skip_whitespace_and_comments(&mut chars);
         if chars.peek().is_none() { break; }
 
-        // Read selectors until '{'
+        // Read selectors / at-rule until '{'
         let mut selectors_str = String::new();
         while let Some(&c) = chars.peek() {
             if c == '{' { chars.next(); break; }
@@ -106,7 +114,7 @@ pub fn parse_stylesheet(source: &str) -> Stylesheet {
         let selectors_str = selectors_str.trim().to_string();
         if selectors_str.is_empty() { break; }
 
-        // Read declarations until '}'
+        // Read block until matching '}'
         let mut block_str = String::new();
         let mut depth = 1;
         while let Some(c) = chars.next() {
@@ -115,12 +123,53 @@ pub fn parse_stylesheet(source: &str) -> Stylesheet {
             block_str.push(c);
         }
 
-        let selectors = parse_selectors(&selectors_str);
-        let declarations = parse_decls_str(&block_str);
-        rules.push(Rule { selectors, declarations });
+        // Detekce @media
+        if selectors_str.starts_with("@media") {
+            let query = selectors_str.trim_start_matches("@media").trim().to_string();
+            let nested = parse_stylesheet(&block_str);
+            media_queries.push(MediaQuery { query, rules: nested.rules });
+        } else if selectors_str.starts_with('@') {
+            // Ostatni at-rules zatim ignorujeme (@import, @keyframes, atd.)
+        } else {
+            let selectors = parse_selectors(&selectors_str);
+            let declarations = parse_decls_str(&block_str);
+            rules.push(Rule { selectors, declarations });
+        }
     }
 
-    Stylesheet { rules }
+    Stylesheet { rules, media_queries }
+}
+
+/// Vyhodnoti media query string proti viewport.
+/// Podporuje: (max-width: Npx), (min-width: Npx), (orientation: ...)
+pub fn evaluate_media_query(query: &str, viewport_w: f32, viewport_h: f32) -> bool {
+    // Mlha: zjednoduseny - pokud "screen", "all" nebo prazdny -> true
+    let q = query.trim().to_lowercase();
+    // Strip type "screen"/"all" + "and"
+    let q = q.replace("screen", "").replace("all", "").replace(" and ", " ");
+    // Conditions oddelene zavorkami
+    for cond in q.split(')').filter(|s| !s.trim().is_empty()) {
+        let c = cond.trim_start_matches('(').trim();
+        if c.is_empty() { continue; }
+        if let Some(idx) = c.find(':') {
+            let prop = c[..idx].trim();
+            let val = c[idx+1..].trim();
+            let num: f32 = val.trim_end_matches("px").trim().parse().unwrap_or(0.0);
+            match prop {
+                "max-width"  => if viewport_w > num  { return false; }
+                "min-width"  => if viewport_w < num  { return false; }
+                "max-height" => if viewport_h > num  { return false; }
+                "min-height" => if viewport_h < num  { return false; }
+                "orientation" => {
+                    let landscape = viewport_w >= viewport_h;
+                    if val == "landscape" && !landscape { return false; }
+                    if val == "portrait" &&  landscape  { return false; }
+                }
+                _ => {}
+            }
+        }
+    }
+    true
 }
 
 fn skip_whitespace_and_comments<I: Iterator<Item=char>>(chars: &mut std::iter::Peekable<I>) {

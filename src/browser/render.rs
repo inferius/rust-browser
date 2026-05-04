@@ -158,6 +158,11 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas) -> Vec<Vertex
             DisplayCommand::Shadow { x, y, w, h, color, blur, radius, .. } => {
                 push_shadow(&mut verts, *x, *y, *w, *h, normalize_color(color), *blur, *radius);
             }
+            DisplayCommand::Image { x, y, w, h, src: _, radius } => {
+                // Pro start: placeholder seda barva (real impl by sample texture)
+                let placeholder = [0.7, 0.7, 0.75, 1.0];
+                push_rect_rounded(&mut verts, *x, *y, *w, *h, placeholder, *radius);
+            }
         }
     }
     verts
@@ -170,7 +175,8 @@ fn shift_command_y(cmd: &mut DisplayCommand, dy: f32) {
         | DisplayCommand::Border { y, .. }
         | DisplayCommand::Text { y, .. }
         | DisplayCommand::Gradient { y, .. }
-        | DisplayCommand::Shadow { y, .. } => *y += dy,
+        | DisplayCommand::Shadow { y, .. }
+        | DisplayCommand::Image { y, .. } => *y += dy,
     }
 }
 
@@ -467,6 +473,7 @@ pub fn run_window_with_html(html: String, css: String) -> Result<(), String> {
         mouse_x: f32,
         mouse_y: f32,
         scroll_y: f32,
+        start_time: std::time::Instant,
     }
 
     impl ApplicationHandler for App {
@@ -643,6 +650,7 @@ pub fn run_window_with_html(html: String, css: String) -> Result<(), String> {
         mouse_x: 0.0,
         mouse_y: 0.0,
         scroll_y: 0.0,
+        start_time: std::time::Instant::now(),
     };
     event_loop.run_app(&mut app).map_err(|e| e.to_string())?;
     Ok(())

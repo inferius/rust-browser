@@ -143,6 +143,8 @@ pub struct LayoutBox {
     pub white_space_nowrap: bool,
     /// Cursor (jen string - real impl pres OS cursor)
     pub cursor: Option<String>,
+    /// Image src URL (z img tagu).
+    pub image_src: Option<String>,
     /// Reference na puvodni DOM node (pro hit test -> events).
     pub node: Option<Rc<Node>>,
 }
@@ -180,6 +182,7 @@ impl LayoutBox {
             bg_gradient: None,
             box_shadow: None,
             transform: None,
+            image_src: None,
             node: None,
         }
     }
@@ -245,6 +248,19 @@ fn build_box(node: &Rc<Node>, style_map: &StyleMap) -> LayoutBox {
     // Apply browser default styles per tag (user-agent stylesheet)
     if let Some(tag) = bx.tag.clone() {
         apply_default_tag_styles(&mut bx, &tag);
+    }
+
+    // Img tag: precti src + width/height
+    if bx.tag.as_deref() == Some("img") {
+        bx.image_src = node.attr("src");
+        if let Some(w) = node.attr("width").and_then(|w| w.parse::<f32>().ok()) {
+            bx.rect.width = w;
+        }
+        if let Some(h) = node.attr("height").and_then(|h| h.parse::<f32>().ok()) {
+            bx.rect.height = h;
+        }
+        if bx.rect.height == 0.0 { bx.rect.height = 100.0; }
+        if bx.rect.width == 0.0 { bx.rect.width = 100.0; }
     }
 
     if matches!(node.kind, NodeKind::Text(_)) {

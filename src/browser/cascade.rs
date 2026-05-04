@@ -191,6 +191,25 @@ fn eval_calc_expr(expr: &str) -> String {
     format!("{}{}", acc, unit)
 }
 
+/// Cascade s viewport pro @media queries.
+pub fn cascade_with_viewport(root: &Rc<Node>, stylesheets: &[Stylesheet],
+                              viewport_w: f32, viewport_h: f32) -> StyleMap {
+    // Sjednotit rules + matching media query rules do jednoho seznamu
+    let mut effective: Vec<Stylesheet> = Vec::new();
+    for sheet in stylesheets {
+        let mut combined = sheet.clone();
+        // Aplikuj jen vyhovujici media queries
+        for mq in &sheet.media_queries {
+            if super::css_parser::evaluate_media_query(&mq.query, viewport_w, viewport_h) {
+                combined.rules.extend(mq.rules.clone());
+            }
+        }
+        combined.media_queries.clear();
+        effective.push(combined);
+    }
+    cascade(root, &effective)
+}
+
 /// Aplikuje stylesheet na DOM strom, vrati StyleMap.
 pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
     let mut style_map: StyleMap = HashMap::new();
