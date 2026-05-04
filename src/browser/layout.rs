@@ -114,7 +114,7 @@ fn apply_default_tag_styles(bx: &mut LayoutBox, tag: &str) {
         "p" => { bx.margin = 8.0; }
         "b" | "strong" => { bx.bold = true; }
         "ul" | "ol" => { bx.padding = 16.0; bx.margin = 8.0; }
-        "li" => { bx.margin = 2.0; }
+        "li" => { bx.margin = 2.0; bx.padding = 4.0; }
         "blockquote" => { bx.margin = 16.0; bx.padding = 8.0; }
         "pre" | "code" => { /* monospace by-implication, zatim default */ }
         "hr" => { bx.border_width = 1.0; bx.border_color = Some([200, 200, 200, 255]); }
@@ -1240,6 +1240,40 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         counters.insert(name.clone(), cur + n);
     }
 
+    // ::marker pro li - automaticky bullet/decimal podle list-style-type
+    if bx.tag.as_deref() == Some("li") {
+        let cur = counters.get("list-item").copied().unwrap_or(0) + 1;
+        counters.insert("list-item".into(), cur);
+        let style = if bx.list_style_type.is_empty() { "disc" } else { bx.list_style_type.as_str() };
+        let marker_text = match style {
+            "none" => String::new(),
+            "decimal" => format!("{cur}. "),
+            "decimal-leading-zero" => format!("{:02}. ", cur),
+            "lower-roman" => format!("{}. ", to_roman(cur).to_lowercase()),
+            "upper-roman" => format!("{}. ", to_roman(cur)),
+            "lower-alpha" | "lower-latin" => {
+                let c = ((b'a' + ((cur - 1) % 26) as u8) as char).to_string();
+                format!("{c}. ")
+            }
+            "upper-alpha" | "upper-latin" => {
+                let c = ((b'A' + ((cur - 1) % 26) as u8) as char).to_string();
+                format!("{c}. ")
+            }
+            "circle" => "\u{25CB} ".to_string(),
+            "square" => "\u{25A0} ".to_string(),
+            _ /* disc default */ => "\u{2022} ".to_string(),
+        };
+        if !marker_text.is_empty() {
+            let mut marker_box = LayoutBox::new();
+            marker_box.display = Display::Inline;
+            marker_box.tag = Some("::marker".to_string());
+            marker_box.text = Some(marker_text);
+            marker_box.text_color = bx.text_color;
+            marker_box.font_size = bx.font_size;
+            bx.children.push(marker_box);
+        }
+    }
+
     // Pseudo-element ::before - vlozit jako prvni virtualni child
     if let Some(pseudo_styles) = super::cascade::get_pseudo_styles(pseudo_map, node, "before") {
         if let Some(pb) = build_pseudo_box(node, pseudo_styles, counters) {
@@ -2137,6 +2171,25 @@ fn parse_polygon_clip(args: &str) -> Option<ClipPath> {
         points.push((x, y));
     }
     if points.is_empty() { None } else { Some(ClipPath::Polygon(points)) }
+}
+
+/// Konvertuje cislo na rimske cislice (1..3999).
+pub fn to_roman(n: i32) -> String {
+    let pairs: &[(i32, &str)] = &[
+        (1000, "M"), (900, "CM"), (500, "D"), (400, "CD"),
+        (100,  "C"), (90,  "XC"), (50,  "L"), (40,  "XL"),
+        (10,   "X"), (9,   "IX"), (5,   "V"), (4,   "IV"),
+        (1,    "I"),
+    ];
+    let mut out = String::new();
+    let mut n = n.max(0);
+    for (val, sym) in pairs {
+        while n >= *val {
+            out.push_str(sym);
+            n -= val;
+        }
+    }
+    out
 }
 
 fn parse_pct_or_px(s: &str) -> f32 {
