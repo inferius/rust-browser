@@ -2340,6 +2340,60 @@ impl Interpreter {
             }
             let key = self.resolve_prop_key(prop, env)?;
 
+            // ─── Object.groupBy / Map.groupBy (ES2024) ───────────────────────
+            // Detekce DRIVE nez specificke arms, protoze Map/Native have early return
+            if key.as_str() == "groupBy" {
+                if let Expr::Ident(name) = object.as_ref() {
+                    if name == "Object" || name == "Map" {
+                        let arg_vals = self.eval_args(args, env)?;
+                        let mut iter = arg_vals.into_iter();
+                        let items_val = iter.next().unwrap_or(JsValue::Undefined);
+                        let cb = iter.next().unwrap_or(JsValue::Undefined);
+                        let items = collect_iterable_values(&items_val);
+                        if name == "Object" {
+                            let groups_obj = JsObject::new();
+                            let groups_rc = Rc::new(RefCell::new(groups_obj));
+                            for (i, item) in items.into_iter().enumerate() {
+                                let k = self.call_function(
+                                    cb.clone(),
+                                    vec![item.clone(), JsValue::Number(i as f64)],
+                                    None,
+                                )?;
+                                let key_str = k.to_string();
+                                let mut g = groups_rc.borrow_mut();
+                                let bucket = g.props.entry(key_str)
+                                    .or_insert_with(|| JsValue::Array(Rc::new(RefCell::new(Vec::new()))));
+                                if let JsValue::Array(a) = bucket {
+                                    a.borrow_mut().push(item);
+                                }
+                            }
+                            return Ok(JsValue::Object(groups_rc));
+                        } else {
+                            // Map.groupBy
+                            let mut m = JsMap::new();
+                            for (i, item) in items.into_iter().enumerate() {
+                                let k = self.call_function(
+                                    cb.clone(),
+                                    vec![item.clone(), JsValue::Number(i as f64)],
+                                    None,
+                                )?;
+                                let existing = m.get(&k);
+                                let bucket = match existing {
+                                    JsValue::Array(a) => a,
+                                    _ => {
+                                        let new_arr = Rc::new(RefCell::new(Vec::new()));
+                                        m.set(k.clone(), JsValue::Array(Rc::clone(&new_arr)));
+                                        new_arr
+                                    }
+                                };
+                                bucket.borrow_mut().push(item);
+                            }
+                            return Ok(JsValue::Map(Rc::new(RefCell::new(m))));
+                        }
+                    }
+                }
+            }
+
             // Built-in Array/String/Object/Map/Set instance metody -- dispatch pred call_function
             match &this {
                 // ─── Map metody ────────────────────────────────────────────
@@ -2428,6 +2482,75 @@ impl Interpreter {
                                 self.call_function(cb.clone(), vec![v.clone(), v, JsValue::Set(Rc::clone(&set_rc2))], None)?;
                             }
                             return Ok(JsValue::Undefined);
+                        }
+                        // ─── ES2025 Set operace ─────────────────────────────
+                        "union" => {
+                            let other = arg_vals.into_iter().next().unwrap_or(JsValue::Undefined);
+                            let other_vals = collect_iterable_values(&other);
+                            let mut result = JsSet::new();
+                            for v in set_rc2.borrow().values.clone() { result.add(v); }
+                            for v in other_vals { result.add(v); }
+                            return Ok(JsValue::Set(Rc::new(RefCell::new(result))));
+                        }
+                        "intersection" => {
+                            let other = arg_vals.into_iter().next().unwrap_or(JsValue::Undefined);
+                            let other_vals = collect_iterable_values(&other);
+                            let mut result = JsSet::new();
+                            for v in set_rc2.borrow().values.clone() {
+                                if other_vals.iter().any(|x| JsMap::key_eq(x, &v)) {
+                                    result.add(v);
+                                }
+                            }
+                            return Ok(JsValue::Set(Rc::new(RefCell::new(result))));
+                        }
+                        "difference" => {
+                            let other = arg_vals.into_iter().next().unwrap_or(JsValue::Undefined);
+                            let other_vals = collect_iterable_values(&other);
+                            let mut result = JsSet::new();
+                            for v in set_rc2.borrow().values.clone() {
+                                if !other_vals.iter().any(|x| JsMap::key_eq(x, &v)) {
+                                    result.add(v);
+                                }
+                            }
+                            return Ok(JsValue::Set(Rc::new(RefCell::new(result))));
+                        }
+                        "symmetricDifference" => {
+                            let other = arg_vals.into_iter().next().unwrap_or(JsValue::Undefined);
+                            let other_vals = collect_iterable_values(&other);
+                            let mut result = JsSet::new();
+                            for v in set_rc2.borrow().values.clone() {
+                                if !other_vals.iter().any(|x| JsMap::key_eq(x, &v)) {
+                                    result.add(v);
+                                }
+                            }
+                            for v in other_vals {
+                                if !set_rc2.borrow().has(&v) {
+                                    result.add(v);
+                                }
+                            }
+                            return Ok(JsValue::Set(Rc::new(RefCell::new(result))));
+                        }
+                        "isSubsetOf" => {
+                            let other = arg_vals.into_iter().next().unwrap_or(JsValue::Undefined);
+                            let other_vals = collect_iterable_values(&other);
+                            let result = set_rc2.borrow().values.iter().all(|v| {
+                                other_vals.iter().any(|x| JsMap::key_eq(x, v))
+                            });
+                            return Ok(JsValue::Bool(result));
+                        }
+                        "isSupersetOf" => {
+                            let other = arg_vals.into_iter().next().unwrap_or(JsValue::Undefined);
+                            let other_vals = collect_iterable_values(&other);
+                            let result = other_vals.iter().all(|v| set_rc2.borrow().has(v));
+                            return Ok(JsValue::Bool(result));
+                        }
+                        "isDisjointFrom" => {
+                            let other = arg_vals.into_iter().next().unwrap_or(JsValue::Undefined);
+                            let other_vals = collect_iterable_values(&other);
+                            let result = !set_rc2.borrow().values.iter().any(|v| {
+                                other_vals.iter().any(|x| JsMap::key_eq(x, v))
+                            });
+                            return Ok(JsValue::Bool(result));
                         }
                         _ => return Ok(JsValue::Undefined),
                     }
@@ -2949,6 +3072,59 @@ impl Interpreter {
                                 .collect();
                             return Ok(JsValue::Str(s));
                         }
+                        ("Promise", "withResolvers") => {
+                            // ES2024: { promise, resolve, reject }
+                            // V nasi sync implementaci pouzivame stav v sdilenem RefCell
+                            let state: Rc<RefCell<(String, JsValue)>> =
+                                Rc::new(RefCell::new(("pending".to_string(), JsValue::Undefined)));
+                            let promise_obj_rc = Rc::new(RefCell::new(JsObject::new()));
+                            promise_obj_rc.borrow_mut().set("__promise_state__".into(), JsValue::Str("pending".into()));
+                            promise_obj_rc.borrow_mut().set("__promise_value__".into(), JsValue::Undefined);
+                            let promise_val = JsValue::Object(Rc::clone(&promise_obj_rc));
+
+                            let p1 = Rc::clone(&promise_obj_rc);
+                            let s1 = Rc::clone(&state);
+                            let resolve_fn = native("resolve", move |a| {
+                                let v = a.into_iter().next().unwrap_or(JsValue::Undefined);
+                                if s1.borrow().0 == "pending" {
+                                    *s1.borrow_mut() = ("fulfilled".into(), v.clone());
+                                    p1.borrow_mut().set("__promise_state__".into(), JsValue::Str("fulfilled".into()));
+                                    p1.borrow_mut().set("__promise_value__".into(), v);
+                                }
+                                Ok(JsValue::Undefined)
+                            });
+                            let p2 = Rc::clone(&promise_obj_rc);
+                            let s2 = Rc::clone(&state);
+                            let reject_fn = native("reject", move |a| {
+                                let v = a.into_iter().next().unwrap_or(JsValue::Undefined);
+                                if s2.borrow().0 == "pending" {
+                                    *s2.borrow_mut() = ("rejected".into(), v.clone());
+                                    p2.borrow_mut().set("__promise_state__".into(), JsValue::Str("rejected".into()));
+                                    p2.borrow_mut().set("__promise_value__".into(), v);
+                                }
+                                Ok(JsValue::Undefined)
+                            });
+
+                            let mut result = JsObject::new();
+                            result.set("promise".into(), promise_val);
+                            result.set("resolve".into(), resolve_fn);
+                            result.set("reject".into(),  reject_fn);
+                            return Ok(JsValue::Object(Rc::new(RefCell::new(result))));
+                        }
+                        ("Promise", "try") => {
+                            // ES2025: zavola callback synchronne, zabali vysledek do Promise
+                            let cb = arg_vals.into_iter().next().unwrap_or(JsValue::Undefined);
+                            match self.call_function(cb, vec![], None) {
+                                Ok(v) => {
+                                    if get_promise_state(&v).is_some() {
+                                        return Ok(v);
+                                    }
+                                    return Ok(make_settled_promise("fulfilled", v));
+                                }
+                                Err(JsError::Thrown(v)) => return Ok(make_settled_promise("rejected", v)),
+                                Err(e) => return Err(e),
+                            }
+                        }
                         ("Promise", "any") => {
                             let arr = match arg_vals.into_iter().next() {
                                 Some(JsValue::Array(a)) => a.borrow().clone(),
@@ -3152,14 +3328,22 @@ impl Interpreter {
     }
 
     /// Konstruktor `new Error("msg")`, `new TypeError("msg")`, atd.
+    /// ES2022: druhy argument je options objekt s `cause`.
     fn construct_error(&mut self, name: String, args: Vec<JsValue>) -> EvalResult {
-        let msg = args.into_iter().next()
-            .map(|v| v.to_string())
-            .unwrap_or_default();
+        let mut iter = args.into_iter();
+        let msg = iter.next().map(|v| v.to_string()).unwrap_or_default();
+        let options = iter.next();
         let mut obj = JsObject::new();
         obj.set("name".into(),    JsValue::Str(name.clone()));
         obj.set("message".into(), JsValue::Str(msg.clone()));
         obj.set("stack".into(),   JsValue::Str(format!("{name}: {msg}")));
+        // ES2022 Error.cause: pokud options.cause existuje, uloz
+        if let Some(JsValue::Object(opts)) = options {
+            let cause = opts.borrow().props.get("cause").cloned();
+            if let Some(c) = cause {
+                obj.set("cause".into(), c);
+            }
+        }
         Ok(JsValue::Object(Rc::new(RefCell::new(obj))))
     }
 
@@ -3597,6 +3781,96 @@ impl Interpreter {
                     other => other.to_string(),
                 }).collect::<Vec<_>>().join(",");
                 Ok(Some(JsValue::Str(s)))
+            }
+            // ─── ES2023 immutable varianty ─────────────────────────────────
+            "toSorted" => {
+                // Vraci NOVE pole, neupravuje original
+                let mut copy: Vec<JsValue> = arr.borrow().clone();
+                if args.is_empty() {
+                    copy.sort_by(|a, b| a.to_string().cmp(&b.to_string()));
+                } else {
+                    let cb = args.into_iter().next().unwrap();
+                    let n = copy.len();
+                    for i in 0..n {
+                        for j in 0..n-1-i {
+                            match self.call_function(cb.clone(), vec![copy[j].clone(), copy[j+1].clone()], None) {
+                                Ok(v) if v.to_number() > 0.0 => copy.swap(j, j+1),
+                                Err(e) => return Err(e),
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                Ok(Some(JsValue::Array(Rc::new(RefCell::new(copy)))))
+            }
+            "toReversed" => {
+                let mut copy: Vec<JsValue> = arr.borrow().clone();
+                copy.reverse();
+                Ok(Some(JsValue::Array(Rc::new(RefCell::new(copy)))))
+            }
+            "toSpliced" => {
+                // toSpliced(start, deleteCount, ...items) - immutable splice
+                let len = arr.borrow().len() as i64;
+                let start = args.first().map(|v| v.to_number() as i64).unwrap_or(0);
+                let s = if start < 0 { (len + start).max(0) } else { start.min(len) } as usize;
+                let delete_count = args.get(1).map(|v| v.to_number() as usize)
+                    .unwrap_or(arr.borrow().len() - s);
+                let mut copy: Vec<JsValue> = arr.borrow().clone();
+                let end = (s + delete_count).min(copy.len());
+                copy.drain(s..end);
+                let inserts: Vec<JsValue> = if args.len() > 2 { args[2..].to_vec() } else { vec![] };
+                for (i, v) in inserts.into_iter().enumerate() { copy.insert(s + i, v); }
+                Ok(Some(JsValue::Array(Rc::new(RefCell::new(copy)))))
+            }
+            "with" => {
+                // with(index, value) - immutable [index] = value
+                let len = arr.borrow().len() as i64;
+                let idx = args.first().map(|v| v.to_number() as i64).unwrap_or(0);
+                let real = if idx < 0 { len + idx } else { idx };
+                if real < 0 || real >= len {
+                    return Err(JsError::Runtime(format!("RangeError: index {idx} mimo rozsah")));
+                }
+                let val = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let mut copy: Vec<JsValue> = arr.borrow().clone();
+                copy[real as usize] = val;
+                Ok(Some(JsValue::Array(Rc::new(RefCell::new(copy)))))
+            }
+            // ─── ES2023 findLast / findLastIndex ──────────────────────────
+            "findLast" => {
+                let cb = args.into_iter().next().unwrap_or(JsValue::Undefined);
+                let items: Vec<JsValue> = arr.borrow().clone();
+                for (i, v) in items.iter().enumerate().rev() {
+                    if self.call_function(cb.clone(), vec![v.clone(), JsValue::Number(i as f64)], None)?.is_truthy() {
+                        return Ok(Some(v.clone()));
+                    }
+                }
+                Ok(Some(JsValue::Undefined))
+            }
+            "findLastIndex" => {
+                let cb = args.into_iter().next().unwrap_or(JsValue::Undefined);
+                let items: Vec<JsValue> = arr.borrow().clone();
+                for (i, v) in items.iter().enumerate().rev() {
+                    if self.call_function(cb.clone(), vec![v.clone(), JsValue::Number(i as f64)], None)?.is_truthy() {
+                        return Ok(Some(JsValue::Number(i as f64)));
+                    }
+                }
+                Ok(Some(JsValue::Number(-1.0)))
+            }
+            // ES2023 copyWithin (mutating)
+            "copyWithin" => {
+                let len = arr.borrow().len() as i64;
+                let target = args.first().map(|v| v.to_number() as i64).unwrap_or(0);
+                let start  = args.get(1).map(|v| v.to_number() as i64).unwrap_or(0);
+                let end    = args.get(2).map(|v| v.to_number() as i64).unwrap_or(len);
+                let t = if target < 0 { (len + target).max(0) } else { target.min(len) } as usize;
+                let s = if start  < 0 { (len + start ).max(0) } else { start .min(len) } as usize;
+                let e = if end    < 0 { (len + end   ).max(0) } else { end   .min(len) } as usize;
+                let count = (e.saturating_sub(s)).min(arr.borrow().len().saturating_sub(t));
+                let segment: Vec<JsValue> = arr.borrow()[s..s+count].to_vec();
+                for i in 0..count {
+                    arr.borrow_mut()[t + i] = segment[i].clone();
+                }
+                Ok(Some(JsValue::Array(arr)))
             }
             _ => Ok(None), // neni znama array metoda -> zkus get_prop
         }
@@ -4069,6 +4343,19 @@ fn make_date_object(ms: f64) -> JsValue {
 }
 
 // ─── Promise pomucky ──────────────────────────────────────────────────────────
+
+/// Free helper: nasbira hodnoty z iterable (Array/Set/Map/Str) bez self.
+/// Pro Set ops a podobne kde nepotrebujeme volat user iterator protocol.
+fn collect_iterable_values(val: &JsValue) -> Vec<JsValue> {
+    match val {
+        JsValue::Array(a) => a.borrow().clone(),
+        JsValue::Set(s)   => s.borrow().values.clone(),
+        JsValue::Map(m)   => m.borrow().entries.iter()
+            .map(|(k,_)| k.clone()).collect(),
+        JsValue::Str(s)   => s.chars().map(|c| JsValue::Str(c.to_string())).collect(),
+        _ => Vec::new(),
+    }
+}
 
 /// Vytvori uz-vyreseny (settled) Promise objekt.
 fn make_settled_promise(state: &str, value: JsValue) -> JsValue {
@@ -8068,6 +8355,241 @@ mod tests {
             "#)],
         );
         assert_eq!(as_num(v), 12.0);
+    }
+
+    // ─── Batch K: ES2023 immutable Array varianty ────────────────────────────
+
+    #[test]
+    fn array_to_sorted() {
+        let v = run(r#"
+            const a = [3, 1, 2];
+            const b = a.toSorted();
+            return a[0] + "," + b[0];
+        "#);
+        assert_eq!(as_str(v), "3,1");
+    }
+
+    #[test]
+    fn array_to_reversed() {
+        let v = run(r#"
+            const a = [1, 2, 3];
+            const b = a.toReversed();
+            return a[0] + "," + b[0];
+        "#);
+        assert_eq!(as_str(v), "1,3");
+    }
+
+    #[test]
+    fn array_to_spliced() {
+        let v = run(r#"
+            const a = [1, 2, 3, 4];
+            const b = a.toSpliced(1, 2, 99, 100);
+            return a.length + ":" + b.length + ":" + b[1] + "," + b[2];
+        "#);
+        assert_eq!(as_str(v), "4:4:99,100");
+    }
+
+    #[test]
+    fn array_with_method() {
+        let v = run(r#"
+            const a = [1, 2, 3];
+            const b = a.with(1, 99);
+            return a[1] + "," + b[1];
+        "#);
+        assert_eq!(as_str(v), "2,99");
+    }
+
+    #[test]
+    fn array_with_negative_index() {
+        let v = run(r#"
+            const a = [1, 2, 3];
+            const b = a.with(-1, 42);
+            return b[2];
+        "#);
+        assert_eq!(as_num(v), 42.0);
+    }
+
+    #[test]
+    fn array_find_last() {
+        let v = run(r#"return [1, 2, 3, 4].findLast(x => x < 4);"#);
+        assert_eq!(as_num(v), 3.0);
+    }
+
+    #[test]
+    fn array_find_last_index() {
+        let v = run(r#"return [10, 20, 30, 20].findLastIndex(x => x === 20);"#);
+        assert_eq!(as_num(v), 3.0);
+    }
+
+    #[test]
+    fn array_copy_within() {
+        let v = run(r#"
+            const a = [1, 2, 3, 4, 5];
+            a.copyWithin(0, 3);
+            return a.join(",");
+        "#);
+        assert_eq!(as_str(v), "4,5,3,4,5");
+    }
+
+    // ─── Batch K: ES2025 Set operace ─────────────────────────────────────────
+
+    #[test]
+    fn set_union() {
+        let v = run(r#"
+            const a = new Set([1, 2, 3]);
+            const b = new Set([3, 4, 5]);
+            return a.union(b).size;
+        "#);
+        assert_eq!(as_num(v), 5.0);
+    }
+
+    #[test]
+    fn set_intersection() {
+        let v = run(r#"
+            const a = new Set([1, 2, 3]);
+            const b = new Set([2, 3, 4]);
+            return a.intersection(b).size;
+        "#);
+        assert_eq!(as_num(v), 2.0);
+    }
+
+    #[test]
+    fn set_difference() {
+        let v = run(r#"
+            const a = new Set([1, 2, 3]);
+            const b = new Set([2, 3]);
+            const d = a.difference(b);
+            return d.size + ":" + d.has(1);
+        "#);
+        assert_eq!(as_str(v), "1:true");
+    }
+
+    #[test]
+    fn set_symmetric_difference() {
+        let v = run(r#"
+            const a = new Set([1, 2, 3]);
+            const b = new Set([2, 3, 4]);
+            return a.symmetricDifference(b).size;
+        "#);
+        assert_eq!(as_num(v), 2.0); // {1, 4}
+    }
+
+    #[test]
+    fn set_is_subset_of() {
+        assert_eq!(as_bool(run(r#"
+            return new Set([1, 2]).isSubsetOf(new Set([1, 2, 3]));
+        "#)), true);
+        assert_eq!(as_bool(run(r#"
+            return new Set([1, 4]).isSubsetOf(new Set([1, 2, 3]));
+        "#)), false);
+    }
+
+    #[test]
+    fn set_is_superset_of() {
+        assert_eq!(as_bool(run(r#"
+            return new Set([1, 2, 3]).isSupersetOf(new Set([1, 2]));
+        "#)), true);
+    }
+
+    #[test]
+    fn set_is_disjoint_from() {
+        assert_eq!(as_bool(run(r#"
+            return new Set([1, 2]).isDisjointFrom(new Set([3, 4]));
+        "#)), true);
+        assert_eq!(as_bool(run(r#"
+            return new Set([1, 2]).isDisjointFrom(new Set([2, 3]));
+        "#)), false);
+    }
+
+    // ─── Batch K: Object.groupBy / Map.groupBy (ES2024) ──────────────────────
+
+    #[test]
+    fn object_group_by() {
+        let v = run(r#"
+            const arr = [1, 2, 3, 4, 5, 6];
+            const groups = Object.groupBy(arr, x => x % 2 === 0 ? "even" : "odd");
+            return groups.even.length + ":" + groups.odd.length;
+        "#);
+        assert_eq!(as_str(v), "3:3");
+    }
+
+    #[test]
+    fn map_group_by() {
+        let v = run(r#"
+            const arr = ["a", "bb", "ccc", "dd"];
+            const groups = Map.groupBy(arr, s => s.length);
+            return groups.size;
+        "#);
+        // 3 ruzne delky: 1, 2, 3
+        assert_eq!(as_num(v), 3.0);
+    }
+
+    // ─── Batch K: Promise.withResolvers / Promise.try ────────────────────────
+
+    #[test]
+    fn promise_with_resolvers_resolve() {
+        let v = run(r#"
+            const { promise, resolve } = Promise.withResolvers();
+            resolve(42);
+            let result = 0;
+            promise.then(x => { result = x; });
+            return result;
+        "#);
+        assert_eq!(as_num(v), 42.0);
+    }
+
+    #[test]
+    fn promise_with_resolvers_reject() {
+        let v = run(r#"
+            const { promise, reject } = Promise.withResolvers();
+            reject("nope");
+            let err = null;
+            promise.catch(e => { err = e; });
+            return err;
+        "#);
+        assert_eq!(as_str(v), "nope");
+    }
+
+    #[test]
+    fn promise_try_sync_value() {
+        let v = run(r#"
+            let result = 0;
+            Promise.try(() => 42).then(x => { result = x; });
+            return result;
+        "#);
+        assert_eq!(as_num(v), 42.0);
+    }
+
+    #[test]
+    fn promise_try_throws() {
+        let v = run(r#"
+            let err = null;
+            Promise.try(() => { throw new Error("bad"); }).catch(e => { err = e.message; });
+            return err;
+        "#);
+        assert_eq!(as_str(v), "bad");
+    }
+
+    // ─── Batch K: Error.cause (ES2022) ───────────────────────────────────────
+
+    #[test]
+    fn error_cause() {
+        let v = run(r#"
+            const original = new Error("low-level");
+            const wrapped  = new Error("high-level", { cause: original });
+            return wrapped.cause.message;
+        "#);
+        assert_eq!(as_str(v), "low-level");
+    }
+
+    #[test]
+    fn error_cause_optional() {
+        // Pokud neni cause, nemelo by selhat
+        let v = run(r#"
+            const e = new Error("plain");
+            return e.cause === undefined;
+        "#);
+        assert_eq!(as_bool(v), true);
     }
 
     #[test]
