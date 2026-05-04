@@ -169,10 +169,24 @@ fn parse_linear_gradient_basic() {
 }
 
 #[test]
+fn parse_box_shadow_inset() {
+    let s = layout::parse_box_shadow("inset 0 0 10px rgba(0,0,0,0.5)").unwrap();
+    assert_eq!(s.5, true, "inset flag musi byt true");
+    let s2 = layout::parse_box_shadow("0 0 10px black").unwrap();
+    assert_eq!(s2.5, false);
+    let s3 = layout::parse_box_shadow("2px 4px 8px 2px red inset").unwrap();
+    assert_eq!(s3.5, true, "inset na konci taky pocitano");
+    assert_eq!(s3.0, 2.0); // offset_x
+    assert_eq!(s3.1, 4.0); // offset_y
+    assert_eq!(s3.2, 8.0); // blur
+    assert_eq!(s3.3, 2.0); // spread
+}
+
+#[test]
 fn parse_box_shadow_basic() {
     let s = layout::parse_box_shadow("2px 4px 8px black");
     assert!(s.is_some());
-    let (ox, oy, blur, _spread, _color) = s.unwrap();
+    let (ox, oy, blur, _spread, _color, _inset) = s.unwrap();
     assert_eq!(ox, 2.0);
     assert_eq!(oy, 4.0);
     assert_eq!(blur, 8.0);

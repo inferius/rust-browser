@@ -27,6 +27,8 @@ pub enum DisplayCommand {
         spread: f32,
         color: [u8; 4],
         radius: f32,
+        /// Inset varianta: stin uvnitr boxu (smer fade obraceny).
+        inset: bool,
     },
     /// Image - decoded RGBA bytes + dimensions.
     Image {
@@ -51,19 +53,24 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>) {
         [c[0], c[1], c[2], a]
     };
 
-    // Box shadow - emit pred bg
-    if let Some((ox, oy, blur, spread, color)) = bx.box_shadow {
+    // Box shadow - emit pred bg.
+    // Inset: shadow uvnitr boxu, ne vne. Bbox = box, ne expanded.
+    if let Some((ox, oy, blur, spread, color, inset)) = bx.box_shadow {
+        let (sx, sy, sw, sh) = if inset {
+            (bx.rect.x, bx.rect.y, bx.rect.width, bx.rect.height)
+        } else {
+            (bx.rect.x + ox - spread, bx.rect.y + oy - spread,
+             bx.rect.width + 2.0 * spread, bx.rect.height + 2.0 * spread)
+        };
         cmds.push(DisplayCommand::Shadow {
-            x: bx.rect.x + ox - spread,
-            y: bx.rect.y + oy - spread,
-            w: bx.rect.width + 2.0 * spread,
-            h: bx.rect.height + 2.0 * spread,
+            x: sx, y: sy, w: sw, h: sh,
             offset_x: ox,
             offset_y: oy,
             blur,
             spread,
             color: with_alpha(color),
             radius: bx.border_radius,
+            inset,
         });
     }
 

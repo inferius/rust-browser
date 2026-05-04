@@ -122,7 +122,7 @@ Konvence stavu:
 - [ ] `background-origin`
 - [ ] `background-blend-mode`
 - [ ] `border-image-*` (L4)
-- [ ] `box-shadow inset` varianta
+- [x] `box-shadow inset` varianta (mode 5 SDF shader, fade smerem dovnitr od okraju)
 - [ ] Asymetricke `border-radius` (`/` syntax)
 
 ### CSS Fonts L4/L5

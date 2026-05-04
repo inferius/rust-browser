@@ -134,7 +134,8 @@ pub struct LayoutBox {
     /// Linear gradient pozadi: (angle_deg, Vec<(offset, color)>)
     pub bg_gradient: Option<(f32, Vec<(f32, [u8; 4])>)>,
     /// Box shadow: (offset_x, offset_y, blur, spread, color)
-    pub box_shadow: Option<(f32, f32, f32, f32, [u8; 4])>,
+    /// (offset_x, offset_y, blur, spread, color, inset)
+    pub box_shadow: Option<(f32, f32, f32, f32, [u8; 4], bool)>,
     /// Transform: simple translate/rotate/scale
     pub transform: Option<TransformOp>,
     /// Overflow: hidden/scroll/visible/auto
@@ -1131,11 +1132,20 @@ pub fn parse_linear_gradient(s: &str) -> Option<(f32, Vec<(f32, [u8; 4])>)> {
     Some((angle, stops))
 }
 
-/// Parse box-shadow: "offset_x offset_y blur spread color".
-pub fn parse_box_shadow(s: &str) -> Option<(f32, f32, f32, f32, [u8; 4])> {
+/// Parse box-shadow: "[inset] offset_x offset_y blur spread color".
+pub fn parse_box_shadow(s: &str) -> Option<(f32, f32, f32, f32, [u8; 4], bool)> {
     let s = s.trim();
     if s == "none" { return None; }
-    let parts: Vec<&str> = s.split_whitespace().collect();
+    // Detect "inset" kdekoliv v retezci - odeber + zaznamenej.
+    let mut inset = false;
+    let cleaned: String = s.split_whitespace()
+        .filter(|w| {
+            if *w == "inset" { inset = true; false } else { true }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    let parts: Vec<&str> = cleaned.split_whitespace().collect();
     if parts.len() < 3 { return None; }
     let ox = parse_length(parts[0]);
     let oy = parse_length(parts[1]);
@@ -1158,7 +1168,7 @@ pub fn parse_box_shadow(s: &str) -> Option<(f32, f32, f32, f32, [u8; 4])> {
             color = c;
         }
     }
-    Some((ox, oy, blur, spread, color))
+    Some((ox, oy, blur, spread, color, inset))
 }
 
 /// Parse transform: "translate(10px, 20px)" / "rotate(45deg)" / "scale(1.5)".

@@ -107,8 +107,22 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         let alpha = 1.0 - smoothstep(-blur, blur, d);
         return vec4<f32>(in.color.rgb, in.color.a * alpha);
     }
+    // Mode 5: inset shadow - kresli uvnitr boxu, fade smerem dovnitr od okraju
+    if (in.mode > 4.5 && in.mode < 5.5) {
+        let blur = max(in.blur, 1.0);
+        // Offset shift sample center: pri offset (ox, oy) shadow se posune v opacnem smeru
+        let p = in.local - vec2<f32>(in.color2.x, in.color2.y);
+        let d = sdf_rounded_box(p, in.half_size, in.radius);
+        // Pozitivni d = vne boxu = nezobrazi (mimo cliping kvadr)
+        // Negativni d = uvnitr -> alpha podle vzdalenosti od okraje
+        let alpha = smoothstep(-blur, blur, d);
+        // Clip mimo box
+        let outer = sdf_rounded_box(in.local, in.half_size, in.radius);
+        let clip = 1.0 - smoothstep(-1.0, 1.0, outer);
+        return vec4<f32>(in.color.rgb, in.color.a * alpha * clip);
+    }
     // Mode 4: image - sample RGBA z image atlasu
-    if (in.mode > 3.5) {
+    if (in.mode > 3.5 && in.mode < 4.5) {
         var rgba = textureSample(image_tex, atlas_smp, in.uv);
         rgba.a = rgba.a * in.color.a;
         if (in.radius > 0.5) {
@@ -167,8 +181,12 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: 
                     push_gradient(&mut verts, *x, *y, *w, *h, *angle_deg, c0, c1, *radius);
                 }
             }
-            DisplayCommand::Shadow { x, y, w, h, color, blur, radius, .. } => {
-                push_shadow(&mut verts, *x, *y, *w, *h, normalize_color(color), *blur, *radius);
+            DisplayCommand::Shadow { x, y, w, h, color, blur, radius, inset, offset_x, offset_y, .. } => {
+                if *inset {
+                    push_inset_shadow(&mut verts, *x, *y, *w, *h, normalize_color(color), *blur, *radius, *offset_x, *offset_y);
+                } else {
+                    push_shadow(&mut verts, *x, *y, *w, *h, normalize_color(color), *blur, *radius);
+                }
             }
             DisplayCommand::Image { x, y, w, h, src, radius } => {
                 if let Some(info) = image_atlas.get(src) {
@@ -342,6 +360,37 @@ fn push_shadow(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f32, h: f32,
     let tr = mk(x + w + extra, y - extra);
     let bl = mk(x - extra,     y + h + extra);
     let br = mk(x + w + extra, y + h + extra);
+    verts.push(tl); verts.push(tr); verts.push(bl);
+    verts.push(bl); verts.push(tr); verts.push(br);
+}
+
+/// Inset box-shadow: stin uvnitr boxu, fade smerem dovnitr od okraju + offset.
+/// Quad presne na rozmer boxu (clip), color2.xy = (offset_x, offset_y).
+fn push_inset_shadow(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f32, h: f32,
+                     color: [f32; 4], blur: f32, radius: f32,
+                     offset_x: f32, offset_y: f32) {
+    let hw = w * 0.5;
+    let hh = h * 0.5;
+    let cx = x + hw;
+    let cy = y + hh;
+    let mk = |px: f32, py: f32| -> Vertex {
+        Vertex {
+            pos: [px, py],
+            color,
+            uv: [0.0, 0.0],
+            mode: 5.0,  // mode 5 = inset shadow
+            local: [px - cx, py - cy],
+            half_size: [hw, hh],
+            radius,
+            // color2.xy = offset, .zw = padding
+            color2: [offset_x, offset_y, 0.0, 0.0],
+            blur,
+        }
+    };
+    let tl = mk(x,     y);
+    let tr = mk(x + w, y);
+    let bl = mk(x,     y + h);
+    let br = mk(x + w, y + h);
     verts.push(tl); verts.push(tr); verts.push(bl);
     verts.push(bl); verts.push(tr); verts.push(br);
 }
