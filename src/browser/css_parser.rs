@@ -249,6 +249,23 @@ pub fn parse_stylesheet(source: &str) -> Stylesheet {
             }
             let nested = parse_stylesheet(&block_str);
             layered_rules.push((layer_name, nested.rules));
+        } else if selectors_str.starts_with("@supports") {
+            // @supports (prop: value) { rules } - aktualne assume vse podporujem
+            let nested = parse_stylesheet(&block_str);
+            rules.extend(nested.rules);
+        } else if selectors_str.starts_with("@scope") {
+            // @scope (selector) { rules } - rules s scope (zatim ignorujem scope, jen unwrap)
+            let nested = parse_stylesheet(&block_str);
+            rules.extend(nested.rules);
+        } else if selectors_str.starts_with("@starting-style") {
+            // @starting-style { rules } - drives transition starting state, zatim no-op
+            let _ = block_str;
+        } else if selectors_str.starts_with("@page") {
+            // @page rules - pro print, zatim no-op
+            let _ = block_str;
+        } else if selectors_str.starts_with("@property") {
+            // @property --name { syntax/inherits/initial-value } - registrace, zatim no-op
+            let _ = block_str;
         } else if selectors_str.starts_with("@font-face") {
             let mut ff = FontFace::default();
             let decls = parse_decls_str(&block_str);
@@ -282,6 +299,46 @@ pub fn parse_stylesheet(source: &str) -> Stylesheet {
         rules, media_queries, keyframes, container_queries, font_faces,
         layer_order, layered_rules,
     }
+}
+
+/// Range syntax @media L4: `400px <= width <= 800px`, `width < 600px`, `400px < width`.
+/// Vrati Some(true/false) pri detekci range, None kdyz to neni range query.
+fn eval_range_query(c: &str, vw: f32, vh: f32) -> Option<bool> {
+    // Pokud neobsahuje '<' ani '>', neni range
+    if !c.contains('<') && !c.contains('>') { return None; }
+    // Tokenize na (a, op1, b, op2, c) nebo (a, op, b)
+    // Replace <= / >= / < / > whitespace-padded
+    let s = c.replace("<=", " <= ").replace(">=", " >= ")
+             .replace('<', " < ").replace('>', " > ");
+    let toks: Vec<&str> = s.split_whitespace().collect();
+    let parse_val = |t: &str| -> Option<f32> {
+        if t == "width" { return Some(vw); }
+        if t == "height" { return Some(vh); }
+        let n = t.trim_end_matches("px").trim();
+        n.parse().ok()
+    };
+    let cmp = |a: f32, op: &str, b: f32| -> bool {
+        match op {
+            "<"  => a <  b,
+            "<=" => a <= b,
+            ">"  => a >  b,
+            ">=" => a >= b,
+            _    => true,
+        }
+    };
+    if toks.len() == 5 {
+        let (a, op1, b, op2, cc) = (toks[0], toks[1], toks[2], toks[3], toks[4]);
+        let av = parse_val(a)?;
+        let bv = parse_val(b)?;
+        let cv = parse_val(cc)?;
+        return Some(cmp(av, op1, bv) && cmp(bv, op2, cv));
+    }
+    if toks.len() == 3 {
+        let av = parse_val(toks[0])?;
+        let bv = parse_val(toks[2])?;
+        return Some(cmp(av, toks[1], bv));
+    }
+    None
 }
 
 /// Vytahne URL z @font-face src deklarace: `src: url("foo.woff2") format("woff2")` -> "foo.woff2".
@@ -466,6 +523,17 @@ pub fn evaluate_media_query(query: &str, viewport_w: f32, viewport_h: f32) -> bo
     let q = query.trim().to_lowercase();
     // Strip type "screen"/"all" + "and"
     let q = q.replace("screen", "").replace("all", "").replace(" and ", " ");
+    // Range syntax L4: "(400px <= width <= 800px)" / "(width < 600px)" / "(width >= 800px)"
+    // Try detect <= / >= / < / >
+    for cond_raw in q.split(')').filter(|s| !s.trim().is_empty()) {
+        let c = cond_raw.trim_start_matches('(').trim();
+        if c.is_empty() { continue; }
+        // Range: a OP1 b OP2 c
+        if let Some(eval) = eval_range_query(c, viewport_w, viewport_h) {
+            if !eval { return false; }
+            continue;
+        }
+    }
     // Conditions oddelene zavorkami
     for cond in q.split(')').filter(|s| !s.trim().is_empty()) {
         let c = cond.trim_start_matches('(').trim();

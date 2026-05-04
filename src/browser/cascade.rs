@@ -982,6 +982,51 @@ pub fn matches_simple(node: &Rc<Node>, sel: &SimpleSelector) -> bool {
                 let value_empty = node.attr("value").map(|v| v.is_empty()).unwrap_or(true);
                 if !has_placeholder || !value_empty { return false; }
             }
+            "valid" => {
+                // :valid match pokud form input s required ma neprazdnou hodnotu
+                let is_form = matches!(tag.as_str(), "input" | "select" | "textarea" | "form");
+                if !is_form { return false; }
+                if node.attr("required").is_some() {
+                    let val = node.attr("value").unwrap_or_default();
+                    if val.is_empty() { return false; }
+                }
+                // type="email" - musi obsahovat @
+                if let Some(ty) = node.attr("type") {
+                    if ty == "email" {
+                        let val = node.attr("value").unwrap_or_default();
+                        if !val.is_empty() && !val.contains('@') { return false; }
+                    }
+                }
+            }
+            "invalid" => {
+                let is_form = matches!(tag.as_str(), "input" | "select" | "textarea" | "form");
+                if !is_form { return false; }
+                let mut is_invalid = false;
+                if node.attr("required").is_some() {
+                    let val = node.attr("value").unwrap_or_default();
+                    if val.is_empty() { is_invalid = true; }
+                }
+                if let Some(ty) = node.attr("type") {
+                    if ty == "email" {
+                        let val = node.attr("value").unwrap_or_default();
+                        if !val.is_empty() && !val.contains('@') { is_invalid = true; }
+                    }
+                }
+                if !is_invalid { return false; }
+            }
+            "default" => {
+                // :default match pro default-checked input + button[type=submit]
+                let is_default = match tag.as_str() {
+                    "button" => node.attr("type").as_deref().unwrap_or("submit") == "submit",
+                    "input" => node.attr("checked").is_some(),
+                    _ => false,
+                };
+                if !is_default { return false; }
+            }
+            "indeterminate" | "in-range" | "out-of-range" => {
+                // Vyzaduje runtime stav - skip
+                return false;
+            }
             // hover/active/focus - vyzaduje runtime stav - skip (rule se neaplikuje staticky)
             "hover" | "active" | "focus" | "focus-visible" | "focus-within"
             | "visited" | "link" => return false,

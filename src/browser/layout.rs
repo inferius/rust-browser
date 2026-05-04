@@ -214,6 +214,18 @@ pub struct LayoutBox {
     pub scroll_padding: [f32; 4],
     /// scroll-margin
     pub scroll_margin: [f32; 4],
+    /// mask-image: url() / linear-gradient(...)
+    pub mask_image: Option<String>,
+    /// shape-outside: circle()/ellipse()/inset()/polygon()/url()
+    pub shape_outside: Option<String>,
+    /// direction: ltr (default) | rtl
+    pub direction: String,
+    /// writing-mode: horizontal-tb (default) | vertical-rl | vertical-lr
+    pub writing_mode: String,
+    /// content-visibility: visible (default) | auto | hidden
+    pub content_visibility: String,
+    /// contain-intrinsic-size: <length>
+    pub contain_intrinsic_size: f32,
     /// Box shadow: (offset_x, offset_y, blur, spread, color)
     /// (offset_x, offset_y, blur, spread, color, inset)
     pub box_shadow: Option<(f32, f32, f32, f32, [u8; 4], bool)>,
@@ -289,6 +301,12 @@ impl LayoutBox {
             scroll_snap_align: String::new(),
             scroll_padding: [0.0; 4],
             scroll_margin: [0.0; 4],
+            mask_image: None,
+            shape_outside: None,
+            direction: String::new(),
+            writing_mode: String::new(),
+            content_visibility: String::new(),
+            contain_intrinsic_size: 0.0,
             box_shadow: None,
             transform: None,
             transforms: Vec::new(),
@@ -650,6 +668,24 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     };
     if let Some(sp) = s.get("scroll-padding") { bx.scroll_padding = parse_4(sp); }
     if let Some(sm) = s.get("scroll-margin")  { bx.scroll_margin  = parse_4(sm); }
+    if let Some(m) = s.get("mask-image") {
+        if m.trim() != "none" { bx.mask_image = Some(m.trim().to_string()); }
+    }
+    if let Some(so) = s.get("shape-outside") {
+        if so.trim() != "none" { bx.shape_outside = Some(so.trim().to_string()); }
+    }
+    if let Some(d) = s.get("direction") {
+        bx.direction = d.trim().to_string();
+    }
+    if let Some(wm) = s.get("writing-mode") {
+        bx.writing_mode = wm.trim().to_string();
+    }
+    if let Some(cv) = s.get("content-visibility") {
+        bx.content_visibility = cv.trim().to_string();
+    }
+    if let Some(cis) = s.get("contain-intrinsic-size") {
+        bx.contain_intrinsic_size = parse_length(cis);
+    }
     // contain - CSS Containment L3
     if let Some(c) = s.get("contain") {
         let mut bits = 0u8;
