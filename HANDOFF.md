@@ -5,10 +5,10 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 ## Stav
 
 - Build: **OK**, 0 errors.
-- Tests: **1103 passed, 0 failed, 3 ignored** (+298 v teto session, +37%).
-- Posledni commit: `ff2787f WebGL phase 3b: DrawArrays visual placeholder`.
+- Tests: **1104 passed, 0 failed, 3 ignored** (+299 v teto session, +37.1%).
+- Posledni commit: `082b403 WebGL phase 3c sanity test - WGSL stage decorators`.
 - Tree: ciste.
-- Branch master, ~234 commitu pred origin/master (NEPUSHOVAT bez vyzvy).
+- Branch master, ~236 commitu pred origin/master (NEPUSHOVAT bez vyzvy).
 
 ## Recent session highlights
 
@@ -49,15 +49,20 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 ## Velke remaining work
 
 - **WebGL phase 3c**: Real wgpu pipeline z WGSL stringu (linkProgram
-  output) + real draw call emission. Vyzaduje:
+  output) + real draw call emission.
+  Sanity confirmed: naga generuje WGSL s `@vertex`/`@fragment` decorators
+  takze wgpu::RenderPipeline construction proveditelna.
+  Vyzaduje:
   - Pipeline cache HashMap<u32, RenderPipeline> v Renderer.
-  - wgpu Device sdileny do paint kontextu (refactor paint_webgl_canvases
-    na Renderer metodu).
-  - Per-canvas offscreen RT.
-  - Vertex layout derivace z WebGLAttribSlot[] -> wgpu::VertexBufferLayout.
-  - Bind group pro uniforms + textures.
-  - Composit canvas RT do main swap chain.
-  Scope: 800-1500 radku.
+  - ShaderModule cache HashMap<u32, (vertex, fragment)> per program.
+  - Buffer cache HashMap<u32, wgpu::Buffer> upload na bind.
+  - Refactor paint_webgl_canvases na Renderer metodu (Device + Queue access).
+  - Vertex layout derivace z WGSL `@location(N)` decls -> VertexBufferLayout.
+  - Bind group pro uniform buffer (per-frame upload).
+  - Per-canvas offscreen RT + composit do swap chain pres image_atlas.
+  Scope: 800-1500 radku, doporuceno rozdeli na 3c1 (pipeline cache +
+  shader modules), 3c2 (vertex layout + buffer upload), 3c3 (real draw +
+  composit).
 - **Filter v Transform RT (nested)**: aktualne filter inside transform
   je inner cmds bez efektu - lepsi pristup vyzaduje rekursi v draw_segments.
 - **TypeScript kompilator** - design konzultace stale otevrena.
