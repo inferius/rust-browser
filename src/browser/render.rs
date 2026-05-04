@@ -10,10 +10,15 @@ use std::rc::Rc;
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct Vertex {
-    pos: [f32; 2],   // pixel coords
-    color: [f32; 4], // RGBA 0..1
-    uv: [f32; 2],    // texture coords (pro text)
-    is_text: f32,    // 0.0 = solid color, 1.0 = sample texture
+    pos: [f32; 2],     // pixel coords
+    color: [f32; 4],   // RGBA 0..1
+    uv: [f32; 2],      // texture coords (pro text)
+    is_text: f32,      // 0.0 = solid color, 1.0 = sample texture
+    /// Local coords v ramci rectanglu (-1..1) - pro SDF rounded
+    local: [f32; 2],
+    /// Half size + radius (pro SDF rounded box)
+    half_size: [f32; 2],
+    radius: f32,
 }
 
 const RECT_SHADER: &str = r#"
@@ -29,6 +34,9 @@ struct VertexIn {
     @location(1) color: vec4<f32>,
     @location(2) uv: vec2<f32>,
     @location(3) is_text: f32,
+    @location(4) local: vec2<f32>,
+    @location(5) half_size: vec2<f32>,
+    @location(6) radius: f32,
 };
 
 struct VertexOut {
@@ -36,27 +44,43 @@ struct VertexOut {
     @location(0) color: vec4<f32>,
     @location(1) uv: vec2<f32>,
     @location(2) is_text: f32,
+    @location(3) local: vec2<f32>,
+    @location(4) half_size: vec2<f32>,
+    @location(5) radius: f32,
 };
 
 @vertex
 fn vs_main(in: VertexIn) -> VertexOut {
     var out: VertexOut;
-    // Pixel -> NDC: (0,0) top-left -> (-1,1); (w,h) bottom-right -> (1,-1)
     let x = (in.pos.x / u.viewport.x) * 2.0 - 1.0;
     let y = 1.0 - (in.pos.y / u.viewport.y) * 2.0;
     out.clip = vec4<f32>(x, y, 0.0, 1.0);
     out.color = in.color;
     out.uv = in.uv;
     out.is_text = in.is_text;
+    out.local = in.local;
+    out.half_size = in.half_size;
+    out.radius = in.radius;
     return out;
+}
+
+/// Signed distance to rounded rectangle.
+fn sdf_rounded_box(p: vec2<f32>, half_size: vec2<f32>, r: f32) -> f32 {
+    let q = abs(p) - half_size + vec2<f32>(r, r);
+    return min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0, 0.0))) - r;
 }
 
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     if (in.is_text > 0.5) {
-        // Text: sample atlas alpha, color is text color
         let alpha = textureSample(atlas_tex, atlas_smp, in.uv).r;
         return vec4<f32>(in.color.rgb, in.color.a * alpha);
+    }
+    // Solid rect with optional rounded corners (SDF anti-aliasing)
+    if (in.radius > 0.5) {
+        let d = sdf_rounded_box(in.local, in.half_size, in.radius);
+        let aa = 1.0 - smoothstep(-1.0, 1.0, d);
+        return vec4<f32>(in.color.rgb, in.color.a * aa);
     }
     return in.color;
 }
@@ -68,9 +92,8 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas) -> Vec<Vertex
     let mut verts = Vec::new();
     for cmd in commands {
         match cmd {
-            DisplayCommand::Rect { x, y, w, h, color, radius: _ } => {
-                // Border-radius zatim ignorujeme (vyzaduje SDF/instancing)
-                push_rect(&mut verts, *x, *y, *w, *h, normalize_color(color), [0.0, 0.0], 0.0);
+            DisplayCommand::Rect { x, y, w, h, color, radius } => {
+                push_rect_rounded(&mut verts, *x, *y, *w, *h, normalize_color(color), *radius);
             }
             DisplayCommand::Border { x, y, w, h, width, color } => {
                 let c = normalize_color(color);
@@ -100,6 +123,33 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas) -> Vec<Vertex
     verts
 }
 
+/// Push rect with rounded corners (SDF rendering).
+fn push_rect_rounded(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f32, h: f32,
+                     color: [f32; 4], radius: f32) {
+    let hw = w * 0.5;
+    let hh = h * 0.5;
+    let cx = x + hw;
+    let cy = y + hh;
+    // 4 vertices kazdy ma local coords centered (-hw..hw, -hh..hh)
+    let make = |px: f32, py: f32| -> Vertex {
+        Vertex {
+            pos: [px, py],
+            color,
+            uv: [0.0, 0.0],
+            is_text: 0.0,
+            local: [px - cx, py - cy],
+            half_size: [hw, hh],
+            radius,
+        }
+    };
+    let tl = make(x,     y);
+    let tr = make(x + w, y);
+    let bl = make(x,     y + h);
+    let br = make(x + w, y + h);
+    verts.push(tl); verts.push(tr); verts.push(bl);
+    verts.push(bl); verts.push(tr); verts.push(br);
+}
+
 fn push_rect(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f32, h: f32,
              color: [f32; 4], uv: [f32; 2], is_text: f32) {
     push_rect_uv(verts, x, y, w, h, color, uv, [uv[0], uv[1]], is_text);
@@ -107,11 +157,21 @@ fn push_rect(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f32, h: f32,
 
 fn push_rect_uv(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f32, h: f32,
                 color: [f32; 4], uv0: [f32; 2], uv1: [f32; 2], is_text: f32) {
-    // 2 trojuhelniky: TL-TR-BL a BL-TR-BR
-    let tl = Vertex { pos: [x,     y],     color, uv: [uv0[0], uv0[1]], is_text };
-    let tr = Vertex { pos: [x + w, y],     color, uv: [uv1[0], uv0[1]], is_text };
-    let bl = Vertex { pos: [x,     y + h], color, uv: [uv0[0], uv1[1]], is_text };
-    let br = Vertex { pos: [x + w, y + h], color, uv: [uv1[0], uv1[1]], is_text };
+    let mk = |px: f32, py: f32, u: f32, v: f32| -> Vertex {
+        Vertex {
+            pos: [px, py],
+            color,
+            uv: [u, v],
+            is_text,
+            local: [0.0, 0.0],
+            half_size: [0.0, 0.0],
+            radius: 0.0,
+        }
+    };
+    let tl = mk(x,     y,     uv0[0], uv0[1]);
+    let tr = mk(x + w, y,     uv1[0], uv0[1]);
+    let bl = mk(x,     y + h, uv0[0], uv1[1]);
+    let br = mk(x + w, y + h, uv1[0], uv1[1]);
     verts.push(tl); verts.push(tr); verts.push(bl);
     verts.push(bl); verts.push(tr); verts.push(br);
 }
@@ -584,6 +644,9 @@ impl Renderer {
                         1 => Float32x4, // color
                         2 => Float32x2, // uv
                         3 => Float32,   // is_text
+                        4 => Float32x2, // local
+                        5 => Float32x2, // half_size
+                        6 => Float32,   // radius
                     ],
                 }],
             },
