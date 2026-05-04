@@ -753,6 +753,10 @@ pub fn run_window_with_html(html: String, css: String) -> Result<(), String> {
         mouse_y: f32,
         scroll_y: f32,
         start_time: std::time::Instant,
+        /// Predchozi cascaded styles - pro detekci transitions.
+        prev_style_map: Option<super::cascade::StyleMap>,
+        /// Aktivni CSS transitions.
+        active_transitions: Vec<super::cascade::ActiveTransition>,
     }
 
     impl ApplicationHandler for App {
@@ -896,9 +900,21 @@ pub fn run_window_with_html(html: String, css: String) -> Result<(), String> {
             let stylesheets = vec![css_parser::parse_stylesheet(&self.css)];
             let mut style_map = cascade::cascade(&document_root, &stylesheets);
 
-            // Runtime CSS animation: aplikuj @keyframes na elementy s `animation: ...`
             let elapsed = self.start_time.elapsed().as_secs_f32();
+
+            // CSS Transitions: detekuj zmeny vs prev_style_map a vyrob aktivni transitions.
+            if let Some(prev) = &self.prev_style_map {
+                let active = std::mem::take(&mut self.active_transitions);
+                self.active_transitions = cascade::detect_transitions(prev, &style_map, active, elapsed);
+            }
+            // Aplikuj transitions na current style map (override hodnoty)
+            cascade::apply_transitions(&mut style_map, &self.active_transitions, elapsed);
+
+            // Runtime CSS animation: aplikuj @keyframes na elementy s `animation: ...`
             let _animating = cascade::apply_animations(&mut style_map, &stylesheets, elapsed);
+
+            // Uloz current style_map pro dalsi frame (transition diff source)
+            self.prev_style_map = Some(style_map.clone());
 
             let viewport_w = r.config.width as f32;
             let viewport_h = r.config.height as f32;
@@ -946,6 +962,8 @@ pub fn run_window_with_html(html: String, css: String) -> Result<(), String> {
         mouse_y: 0.0,
         scroll_y: 0.0,
         start_time: std::time::Instant::now(),
+        prev_style_map: None,
+        active_transitions: Vec::new(),
     };
     event_loop.run_app(&mut app).map_err(|e| e.to_string())?;
     Ok(())

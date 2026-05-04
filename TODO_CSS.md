@@ -21,7 +21,7 @@ Konvence stavu:
 - [x] Animations L1: `animation-fill-mode` (none/forwards/backwards/both), `animation-play-state` (running/paused), arbitrary `cubic-bezier(...)`, `steps(n, jump-*)`
 
 ### Batch 2 - chybejici "must-have" moduly
-- [ ] CSS Transitions L1 (cely modul)
+- [x] CSS Transitions L1 (parser + state diff per-frame, events out of scope)
 - [x] CSS Logical Properties L1 (`margin/padding-block/-inline`, `border-*-block/-inline-*`, `inset-*`, `block-size/inline-size`, `border-start-end-radius` rohy) - mapovani LTR + horizontal-tb
 - [x] CSS Nesting L1 (`&` selector + nested rulesets, implicit descendant pri ne-amp prefix, kombinace `.parent.nested` pres `&`)
 - [/] CSS Container Queries L1 (`@container [name] (cond)` parser, cqw/cqh/cqi/cqb/cqmin/cqmax units, evaluation pres viewport - per-element ancestor lookup TODO)
@@ -207,13 +207,13 @@ Konvence stavu:
 - [ ] `animation-timeline` (scroll-driven, L2 draft)
 
 ### CSS Transitions L1
-- [ ] `transition-property`
-- [ ] `transition-duration`
-- [ ] `transition-timing-function`
-- [ ] `transition-delay`
-- [ ] `transition` shorthand
+- [x] `transition-property`
+- [x] `transition-duration`
+- [x] `transition-timing-function`
+- [x] `transition-delay`
+- [x] `transition` shorthand (vc. multiple comma-separated)
 - [ ] `transitionrun`/`transitionstart`/`transitionend`/`transitioncancel` events
-- [ ] State diff detection (interpoluje pri zmene stylu)
+- [x] State diff detection (interpoluje pri zmene stylu) - per-frame v render loopu
 
 ### CSS Custom Properties L1
 - [x] `--name: value` definice

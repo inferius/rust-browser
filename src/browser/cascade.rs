@@ -904,6 +904,105 @@ impl AnimationSpec {
     }
 }
 
+/// CSS Transitions L1 parsovany shorthand.
+/// "transition: <prop> <duration> <timing-function> <delay> [, <next>]"
+#[derive(Debug, Clone)]
+pub struct TransitionSpec {
+    pub property: String,           // "all" / "color" / "transform" / ...
+    pub duration_secs: f32,
+    pub timing_function: String,    // "linear" / "ease" / "cubic-bezier(...)" / ...
+    pub delay_secs: f32,
+}
+
+impl TransitionSpec {
+    /// Parsuje vsechny transitions z computed styles. Vraci seznam (mozne vice
+    /// transitions oddelenych carkou, kazda pro jine property).
+    pub fn from_styles(styles: &HashMap<String, String>) -> Vec<TransitionSpec> {
+        let mut out = Vec::new();
+
+        // Shorthand "transition" - muze obsahovat carku pro vice transitions
+        if let Some(short) = styles.get("transition") {
+            for entry in split_top_level_commas_str(short) {
+                if let Some(spec) = Self::parse_one(&entry) {
+                    out.push(spec);
+                }
+            }
+            if !out.is_empty() { return out; }
+        }
+
+        // Longhand: transition-property/-duration/-timing-function/-delay
+        let props = styles.get("transition-property").map(|s| s.trim().to_string());
+        let durations = styles.get("transition-duration").map(|s| s.trim().to_string());
+        let timings = styles.get("transition-timing-function").map(|s| s.trim().to_string());
+        let delays = styles.get("transition-delay").map(|s| s.trim().to_string());
+
+        if let Some(p) = props {
+            let p_list: Vec<&str> = p.split(',').map(|s| s.trim()).collect();
+            let d_list: Vec<&str> = durations.as_deref().unwrap_or("0s").split(',').map(|s| s.trim()).collect();
+            let t_list: Vec<&str> = timings.as_deref().unwrap_or("ease").split(',').map(|s| s.trim()).collect();
+            let dl_list: Vec<&str> = delays.as_deref().unwrap_or("0s").split(',').map(|s| s.trim()).collect();
+
+            for (i, prop) in p_list.iter().enumerate() {
+                let dur = d_list.get(i % d_list.len()).copied().unwrap_or("0s");
+                let timing = t_list.get(i % t_list.len()).copied().unwrap_or("ease");
+                let delay = dl_list.get(i % dl_list.len()).copied().unwrap_or("0s");
+                out.push(TransitionSpec {
+                    property: prop.to_string(),
+                    duration_secs: parse_time(dur).unwrap_or(0.0),
+                    timing_function: timing.to_string(),
+                    delay_secs: parse_time(delay).unwrap_or(0.0),
+                });
+            }
+        }
+        out
+    }
+
+    fn parse_one(entry: &str) -> Option<TransitionSpec> {
+        let mut property: Option<String> = None;
+        let mut duration: f32 = 0.0;
+        let mut timing: String = "ease".into();
+        let mut delay: f32 = 0.0;
+        let mut times_seen = 0;
+
+        for tok in tokenize_balanced(entry) {
+            let tok = tok.as_str();
+            if let Some(t) = parse_time(tok) {
+                if times_seen == 0 { duration = t; } else { delay = t; }
+                times_seen += 1;
+            } else if matches!(tok, "linear" | "ease" | "ease-in" | "ease-out" | "ease-in-out" | "step-start" | "step-end")
+                || tok.starts_with("cubic-bezier(") || tok.starts_with("steps(")
+            {
+                timing = tok.to_string();
+            } else {
+                if property.is_none() { property = Some(tok.to_string()); }
+            }
+        }
+        let property = property.unwrap_or_else(|| "all".to_string());
+        if duration <= 0.0 { return None; }
+        Some(TransitionSpec { property, duration_secs: duration, timing_function: timing, delay_secs: delay })
+    }
+}
+
+/// Split na top-level carce (string varianta, navrat Vec<String>).
+fn split_top_level_commas_str(s: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut cur = String::new();
+    let mut depth = 0i32;
+    for ch in s.chars() {
+        match ch {
+            '(' => { depth += 1; cur.push(ch); }
+            ')' => { depth -= 1; cur.push(ch); }
+            ',' if depth == 0 => {
+                if !cur.trim().is_empty() { tokens.push(std::mem::take(&mut cur).trim().to_string()); }
+                cur.clear();
+            }
+            _ => cur.push(ch),
+        }
+    }
+    if !cur.trim().is_empty() { tokens.push(cur.trim().to_string()); }
+    tokens
+}
+
 /// Tokenize string respektujici vyvazene zavorky (pro cubic-bezier/steps).
 fn tokenize_balanced(s: &str) -> Vec<String> {
     let mut tokens = Vec::new();
@@ -1004,6 +1103,111 @@ fn bezier(u: f32, p1: f32, p2: f32) -> f32 {
 fn bezier_deriv(u: f32, p1: f32, p2: f32) -> f32 {
     let iu = 1.0 - u;
     3.0 * iu * iu * p1 + 6.0 * iu * u * (p2 - p1) + 3.0 * u * u * (1.0 - p2)
+}
+
+/// Aktivni transition - po-spu sleduje stav per element + property.
+#[derive(Debug, Clone)]
+pub struct ActiveTransition {
+    pub node_id: usize,
+    pub property: String,
+    pub from_value: String,
+    pub to_value: String,
+    pub spec: TransitionSpec,
+    /// Cas v sekundach kdy transition zacala.
+    pub start_time: f32,
+}
+
+/// Detekuje zmeny stylu mezi prev_map a current_map a vyrobi nove ActiveTransitions
+/// pro elementy s `transition` property co maji match. Vsechny aktualne probihajici
+/// transitions po dokonceni zmizi.
+///
+/// Vraci aktualizovany seznam transitions po teto frame iteraci.
+pub fn detect_transitions(
+    prev_map: &StyleMap,
+    current_map: &StyleMap,
+    active: Vec<ActiveTransition>,
+    elapsed_secs: f32,
+) -> Vec<ActiveTransition> {
+    let mut result: Vec<ActiveTransition> = Vec::new();
+
+    // Zachovaj aktivni transitions ktere jeste nedohrali
+    for at in active {
+        let total = at.spec.duration_secs + at.spec.delay_secs;
+        if elapsed_secs - at.start_time < total {
+            result.push(at);
+        }
+    }
+
+    // Pro kazdy element v current detect zmeny vs prev
+    for (node_id, cur) in current_map {
+        let prev = match prev_map.get(node_id) { Some(p) => p, None => continue };
+        let specs = TransitionSpec::from_styles(cur);
+        if specs.is_empty() { continue; }
+
+        for spec in &specs {
+            // Match: bud "all" nebo konkretni property
+            let props_to_check: Vec<&String> = if spec.property == "all" {
+                cur.keys().collect()
+            } else {
+                if cur.contains_key(&spec.property) { vec![&spec.property] } else { vec![] }
+            };
+
+            for prop in props_to_check {
+                let cur_val = cur.get(prop).map(|s| s.as_str()).unwrap_or("");
+                let prev_val = prev.get(prop).map(|s| s.as_str()).unwrap_or("");
+                if cur_val != prev_val && !prev_val.is_empty() {
+                    // Skip pokud uz transition na tu prop existuje
+                    if result.iter().any(|t| t.node_id == *node_id && t.property == *prop) { continue; }
+                    result.push(ActiveTransition {
+                        node_id: *node_id,
+                        property: prop.clone(),
+                        from_value: prev_val.to_string(),
+                        to_value: cur_val.to_string(),
+                        spec: spec.clone(),
+                        start_time: elapsed_secs,
+                    });
+                }
+            }
+        }
+    }
+    result
+}
+
+/// Aplikuje aktivni transitions na current style map - interpoluje hodnoty.
+pub fn apply_transitions(
+    style_map: &mut StyleMap,
+    active: &[ActiveTransition],
+    elapsed_secs: f32,
+) {
+    use super::layout::interpolate_keyframes as _;
+    for at in active {
+        let t = elapsed_secs - at.start_time - at.spec.delay_secs;
+        if t < 0.0 { continue; }
+        let raw_progress = (t / at.spec.duration_secs).clamp(0.0, 1.0);
+        let progress = apply_easing(raw_progress, &at.spec.timing_function);
+
+        // Interpoluj hodnotu - pres parse_length jako f32
+        let from = super::layout::parse_length(&at.from_value);
+        let to = super::layout::parse_length(&at.to_value);
+        let interpolated = if from != 0.0 || to != 0.0 {
+            // Numericka prop: interpoluj
+            let v = from + (to - from) * progress;
+            // Zachovaj jednotku z to_value (heuristika)
+            let unit = ["px", "em", "rem", "%", "vw", "vh", "deg", "rad"]
+                .iter()
+                .find(|u| at.to_value.ends_with(*u))
+                .copied()
+                .unwrap_or("px");
+            format!("{v}{unit}")
+        } else {
+            // Non-numericka - krokove (snap)
+            if progress < 0.5 { at.from_value.clone() } else { at.to_value.clone() }
+        };
+
+        if let Some(styles) = style_map.get_mut(&at.node_id) {
+            styles.insert(at.property.clone(), interpolated);
+        }
+    }
 }
 
 /// Aplikuje runtime CSS animace na StyleMap pri zadanem elapsed time (sekundy).

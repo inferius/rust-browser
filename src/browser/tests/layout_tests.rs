@@ -386,6 +386,115 @@ fn animation_spec_shorthand_parsing() {
 }
 
 #[test]
+fn transition_spec_shorthand_simple() {
+    use std::collections::HashMap;
+    let mut s: HashMap<String, String> = HashMap::new();
+    s.insert("transition".into(), "color 200ms ease-in".into());
+    let specs = cascade::TransitionSpec::from_styles(&s);
+    assert_eq!(specs.len(), 1);
+    assert_eq!(specs[0].property, "color");
+    assert_eq!(specs[0].duration_secs, 0.2);
+    assert_eq!(specs[0].timing_function, "ease-in");
+    assert_eq!(specs[0].delay_secs, 0.0);
+}
+
+#[test]
+fn transition_spec_shorthand_with_delay() {
+    use std::collections::HashMap;
+    let mut s: HashMap<String, String> = HashMap::new();
+    s.insert("transition".into(), "transform 0.5s linear 1s".into());
+    let specs = cascade::TransitionSpec::from_styles(&s);
+    assert_eq!(specs.len(), 1);
+    assert_eq!(specs[0].property, "transform");
+    assert_eq!(specs[0].duration_secs, 0.5);
+    assert_eq!(specs[0].delay_secs, 1.0);
+}
+
+#[test]
+fn transition_spec_multiple_comma() {
+    use std::collections::HashMap;
+    let mut s: HashMap<String, String> = HashMap::new();
+    s.insert("transition".into(), "color 200ms, opacity 500ms ease-in".into());
+    let specs = cascade::TransitionSpec::from_styles(&s);
+    assert_eq!(specs.len(), 2);
+    assert_eq!(specs[0].property, "color");
+    assert_eq!(specs[0].duration_secs, 0.2);
+    assert_eq!(specs[1].property, "opacity");
+    assert_eq!(specs[1].duration_secs, 0.5);
+    assert_eq!(specs[1].timing_function, "ease-in");
+}
+
+#[test]
+fn transition_spec_longhand() {
+    use std::collections::HashMap;
+    let mut s: HashMap<String, String> = HashMap::new();
+    s.insert("transition-property".into(), "color, transform".into());
+    s.insert("transition-duration".into(), "200ms, 500ms".into());
+    s.insert("transition-timing-function".into(), "linear".into());
+    let specs = cascade::TransitionSpec::from_styles(&s);
+    assert_eq!(specs.len(), 2);
+    assert_eq!(specs[0].duration_secs, 0.2);
+    assert_eq!(specs[1].duration_secs, 0.5);
+    // Timing function se opakuje (1 hodnota -> aplikovana pro vsechny)
+    assert_eq!(specs[0].timing_function, "linear");
+    assert_eq!(specs[1].timing_function, "linear");
+}
+
+#[test]
+fn transition_detect_change_creates_active() {
+    use crate::browser::cascade;
+    use std::collections::HashMap;
+
+    let mut prev: cascade::StyleMap = HashMap::new();
+    let mut cur: cascade::StyleMap = HashMap::new();
+
+    let mut prev_styles: HashMap<String, String> = HashMap::new();
+    prev_styles.insert("color".into(), "red".into());
+    prev_styles.insert("transition".into(), "color 200ms".into());
+    prev.insert(42, prev_styles);
+
+    let mut cur_styles: HashMap<String, String> = HashMap::new();
+    cur_styles.insert("color".into(), "blue".into());
+    cur_styles.insert("transition".into(), "color 200ms".into());
+    cur.insert(42, cur_styles);
+
+    let active = cascade::detect_transitions(&prev, &cur, vec![], 1.0);
+    assert_eq!(active.len(), 1);
+    assert_eq!(active[0].property, "color");
+    assert_eq!(active[0].from_value, "red");
+    assert_eq!(active[0].to_value, "blue");
+}
+
+#[test]
+fn transition_apply_interpolates_numeric() {
+    use crate::browser::cascade::{ActiveTransition, TransitionSpec, apply_transitions};
+    use std::collections::HashMap;
+
+    let mut style_map: cascade::StyleMap = HashMap::new();
+    let mut styles: HashMap<String, String> = HashMap::new();
+    styles.insert("opacity".into(), "1".into());
+    style_map.insert(99, styles);
+
+    let active = vec![ActiveTransition {
+        node_id: 99,
+        property: "opacity".into(),
+        from_value: "0px".into(),
+        to_value: "100px".into(),
+        spec: TransitionSpec {
+            property: "opacity".into(),
+            duration_secs: 1.0,
+            timing_function: "linear".into(),
+            delay_secs: 0.0,
+        },
+        start_time: 0.0,
+    }];
+    apply_transitions(&mut style_map, &active, 0.5);
+    let v = style_map.get(&99).unwrap().get("opacity").unwrap();
+    // 50px na 50% prubehu (linear)
+    assert_eq!(v, "50px");
+}
+
+#[test]
 fn animation_spec_fill_mode_play_state() {
     use std::collections::HashMap;
     let mut s: HashMap<String, String> = HashMap::new();
