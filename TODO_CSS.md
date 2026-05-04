@@ -15,7 +15,7 @@ Konvence stavu:
 
 ### Batch 1 - dotazeni stavajicich modulu (highest ROI)
 - [x] Selectors L4: `:is()`, `:where()`, `:not()`, `:has()`, `~` general sibling, `:nth-child/-of-type`, `:nth-last-*`, `:empty`, `:first/last/only-of-type`, `:only-child` (`:focus-visible/-within` zatim no-op kvuli runtime stavu)
-- [ ] Values L4: `min()`, `max()`, `clamp()`, `attr()`, `env()`
+- [/] Values L4: `min()`, `max()`, `clamp()`, `env()` hotovo, `attr()` chybi, math funkce (round/sin/cos/...) chybi
 - [ ] Color L4: `oklch()`, `oklab()`, `lab()`, `lch()`, `color-mix()`, relative color syntax
 - [ ] Backgrounds L3: multiple backgrounds, `background-clip`, `background-origin`, `background-attachment`
 - [ ] Animations L1: `animation-fill-mode`, `animation-play-state`
@@ -87,11 +87,11 @@ Konvence stavu:
 - [x] Length: `px`, `em`, `rem`, `%`, `vw`, `vh`, `vmin`, `vmax`, `pt`
 - [x] `calc()`
 - [x] `var()` + fallback
-- [ ] `min()`
-- [ ] `max()`
-- [ ] `clamp(min, val, max)`
+- [x] `min(a, b, ...)`
+- [x] `max(a, b, ...)`
+- [x] `clamp(min, val, max)`
 - [ ] `attr(name <type>, fallback)`
-- [ ] `env(safe-area-inset-top, ...)`
+- [x] `env(name, fallback)` (no-op s fallback)
 - [ ] Math fci L4: `round()`, `mod()`, `rem()`, `sin()`, `cos()`, `tan()`, `asin()`, `acos()`, `atan()`, `atan2()`, `pow()`, `sqrt()`, `hypot()`, `log()`, `exp()`, `abs()`, `sign()`
 - [ ] Container queries units: `cqw`, `cqh`, `cqi`, `cqb`, `cqmin`, `cqmax`
 - [ ] `lh`, `rlh` (line-height units)

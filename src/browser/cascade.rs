@@ -76,23 +76,153 @@ fn node_id(node: &Rc<Node>) -> usize {
     Rc::as_ptr(node) as usize
 }
 
-/// Resolvuje CSS var(--name) a calc() expressions.
+/// Resolvuje CSS var(--name), env(), calc(), min(), max(), clamp() expressions.
 /// Pri var(--x, fallback): pokud --x v variables, pouzij ho, jinak fallback.
 pub fn resolve_value(value: &str, variables: &HashMap<String, String>) -> String {
     let mut out = value.to_string();
-    let mut iters = 0;
-    // Iterativne nahrazuj var() - max 10 urovnich nesteni
-    while out.contains("var(") && iters < 10 {
-        let new_out = replace_var_once(&out, variables);
-        if new_out == out { break; }
-        out = new_out;
-        iters += 1;
-    }
-    // Calc() - jednoduchy parser (jen + - * /)
-    if out.contains("calc(") {
-        out = resolve_calc(&out);
+    // Iterativne resolvujem do fixed pointu (max 10 prochodu).
+    // var() muze obsahovat calc(), calc() muze obsahovat min(), atd.
+    for _ in 0..10 {
+        let before = out.clone();
+        if out.contains("var(") {
+            out = replace_var_once(&out, variables);
+        }
+        if out.contains("env(") {
+            out = resolve_env(&out);
+        }
+        if out.contains("min(") || out.contains("max(") || out.contains("clamp(") {
+            out = resolve_math_func(&out);
+        }
+        if out.contains("calc(") {
+            out = resolve_calc(&out);
+        }
+        if out == before { break; }
     }
     out
+}
+
+/// env(safe-area-inset-top, fallback) - bez safe-area kontextu vrati fallback nebo 0px.
+fn resolve_env(s: &str) -> String {
+    let mut out = String::new();
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if i + 4 <= bytes.len() && &bytes[i..i+4] == b"env(" {
+            let mut depth = 1;
+            let mut j = i + 4;
+            while j < bytes.len() && depth > 0 {
+                match bytes[j] {
+                    b'(' => depth += 1,
+                    b')' => depth -= 1,
+                    _ => {}
+                }
+                if depth == 0 { break; }
+                j += 1;
+            }
+            let inner = &s[i+4..j];
+            // Format: "name" nebo "name, fallback"
+            let fallback = inner.find(',').map(|idx| inner[idx+1..].trim().to_string());
+            let val = fallback.unwrap_or_else(|| "0px".to_string());
+            out.push_str(&val);
+            i = j + 1;
+            continue;
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
+}
+
+/// Resolvuje min(a, b, ...), max(a, b, ...), clamp(min, val, max).
+/// Najde nejvnitrnejsi vyskyt (zaden child neni mezi argumenty), pak iterativne.
+fn resolve_math_func(s: &str) -> String {
+    let names = ["min(", "max(", "clamp("];
+    let mut out = s.to_string();
+    loop {
+        let bytes: Vec<u8> = out.as_bytes().to_vec();
+        let mut found: Option<(usize, usize, &str)> = None;
+        // Najdi nejvnitrnejsi (nejlevejsi po procesu, kde uvnitr neni dalsi math func)
+        'outer: for (idx, _) in bytes.iter().enumerate() {
+            for &name in &names {
+                let nb = name.as_bytes();
+                if idx + nb.len() <= bytes.len() && &bytes[idx..idx + nb.len()] == nb {
+                    // Najdi matching )
+                    let mut depth = 1;
+                    let mut j = idx + nb.len();
+                    while j < bytes.len() && depth > 0 {
+                        match bytes[j] {
+                            b'(' => depth += 1,
+                            b')' => depth -= 1,
+                            _ => {}
+                        }
+                        if depth == 0 { break; }
+                        j += 1;
+                    }
+                    if j >= bytes.len() { break 'outer; }
+                    // Zkontroluj ze argumenty NEobsahuji dalsi math func
+                    let inner = &out[idx + nb.len()..j];
+                    if !inner.contains("min(") && !inner.contains("max(") && !inner.contains("clamp(") {
+                        found = Some((idx, j, name.trim_end_matches('(')));
+                        break 'outer;
+                    }
+                }
+            }
+        }
+        let (start, end, fname) = match found { Some(t) => t, None => break };
+        let nb_len = fname.len() + 1; // +1 pro '('
+        let inner = out[start + nb_len..end].to_string();
+        let result = eval_math_func(fname, &inner);
+        out.replace_range(start..end + 1, &result);
+    }
+    out
+}
+
+fn eval_math_func(name: &str, args: &str) -> String {
+    let parts: Vec<&str> = args.split(',').map(|s| s.trim()).collect();
+    if parts.is_empty() { return args.to_string(); }
+
+    // Parsuj kazdy argument: vrati (number, unit_string).
+    let parsed: Vec<(f32, String)> = parts.iter().map(|p| parse_value_with_unit(p)).collect();
+    if parsed.is_empty() { return args.to_string(); }
+
+    // Pouzij jednotku z prvniho argumentu jako vystupni
+    let unit = parsed[0].1.clone();
+    let nums: Vec<f32> = parsed.iter().map(|(n, _)| *n).collect();
+
+    let result = match name {
+        "min" => nums.iter().cloned().fold(f32::INFINITY, f32::min),
+        "max" => nums.iter().cloned().fold(f32::NEG_INFINITY, f32::max),
+        "clamp" if nums.len() >= 3 => {
+            let lo = nums[0]; let val = nums[1]; let hi = nums[2];
+            val.max(lo).min(hi)
+        }
+        _ => return args.to_string(),
+    };
+
+    if unit.is_empty() {
+        format!("{result}")
+    } else {
+        format!("{result}{unit}")
+    }
+}
+
+/// Parsuje hodnotu typu "12.5px", "100%", "2em", "42" -> (number, "px").
+fn parse_value_with_unit(s: &str) -> (f32, String) {
+    let s = s.trim();
+    let units = ["px", "em", "rem", "vw", "vh", "vmin", "vmax", "pt", "%",
+                 "ch", "ex", "lh", "rlh", "cqw", "cqh", "cqi", "cqb",
+                 "deg", "rad", "turn", "ms", "s"];
+    for u in &units {
+        if let Some(num_part) = s.strip_suffix(u) {
+            if let Ok(n) = num_part.trim().parse::<f32>() {
+                return (n, u.to_string());
+            }
+        }
+    }
+    if let Ok(n) = s.parse::<f32>() {
+        return (n, String::new());
+    }
+    (0.0, String::new())
 }
 
 fn replace_var_once(s: &str, variables: &HashMap<String, String>) -> String {

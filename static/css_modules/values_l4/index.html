@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="UTF-8">
+    <title>CSS Values L4 - test</title>
+    <link rel="stylesheet" href="index.css">
+</head>
+<body>
+    <header>
+        <h1>CSS Values & Units Level 4</h1>
+        <p>min(), max(), clamp(), env() funkce</p>
+    </header>
+
+    <main>
+        <section>
+            <h2>min(20px, 50px, 30px) = 20px</h2>
+            <div class="b1">sirka 20px</div>
+        </section>
+
+        <section>
+            <h2>max(20px, 50px, 30px) = 50px</h2>
+            <div class="b2">sirka 50px</div>
+        </section>
+
+        <section>
+            <h2>clamp(100px, 200px, 300px) = 200px</h2>
+            <div class="b3">sirka 200px</div>
+        </section>
+
+        <section>
+            <h2>clamp(100px, 50px, 300px) = 100px (pod minimem)</h2>
+            <div class="b4">sirka 100px</div>
+        </section>
+
+        <section>
+            <h2>min() s var()</h2>
+            <div class="b5">var --small=80px, min(var, 200px) = 80px</div>
+        </section>
+
+        <section>
+            <h2>calc s clamp uvnitr</h2>
+            <div class="b6">10px + clamp(5px, 20px, 30px) = 30px</div>
+        </section>
+
+        <section>
+            <h2>env() s fallback</h2>
+            <div class="b7">env(safe-area-inset, 24px) = 24px</div>
+        </section>
+    </main>
+</body>
+</html>

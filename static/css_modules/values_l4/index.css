@@ -1,0 +1,52 @@
+:root {
+    --small: 80px;
+}
+
+body {
+    font-family: Arial, sans-serif;
+    background: #f5f5f7;
+    color: #1d1d1f;
+    margin: 0;
+    padding: 24px;
+}
+
+header {
+    background: #1d1d1f;
+    color: white;
+    padding: 16px 24px;
+    border-radius: 8px;
+    margin-bottom: 24px;
+}
+header h1 { margin: 0; }
+header p { margin: 8px 0 0 0; color: #a1a1a6; }
+
+section {
+    background: white;
+    padding: 16px 24px;
+    margin-bottom: 12px;
+    border-radius: 8px;
+    border: 1px solid #d2d2d7;
+}
+section h2 {
+    margin: 0 0 8px 0;
+    font-size: 14px;
+    color: #424245;
+    font-family: monospace;
+}
+
+.b1, .b2, .b3, .b4, .b5, .b6, .b7 {
+    background: #2997ff;
+    color: white;
+    height: 32px;
+    border-radius: 4px;
+    padding: 6px 10px;
+    line-height: 20px;
+}
+
+.b1 { width: min(20px, 50px, 30px); }
+.b2 { width: max(20px, 50px, 30px); }
+.b3 { width: clamp(100px, 200px, 300px); }
+.b4 { width: clamp(100px, 50px, 300px); }
+.b5 { width: min(var(--small), 200px); }
+.b6 { width: calc(10px + clamp(5px, 20px, 30px)); }
+.b7 { padding-left: env(safe-area-inset-left, 24px); }

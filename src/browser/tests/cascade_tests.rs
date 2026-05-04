@@ -214,6 +214,73 @@ fn selector_first_of_type() {
     assert!(cascade::get_styles(&map, &ps[1]).unwrap().get("color").is_none());
 }
 
+// ─── Values L4: min/max/clamp/env ──────────────────────────────────────
+
+#[test]
+fn resolve_min_picks_smallest() {
+    let vars = std::collections::HashMap::new();
+    let r = cascade::resolve_value("min(20px, 50px, 30px)", &vars);
+    assert_eq!(r, "20px");
+}
+
+#[test]
+fn resolve_max_picks_largest() {
+    let vars = std::collections::HashMap::new();
+    let r = cascade::resolve_value("max(20px, 50px, 30px)", &vars);
+    assert_eq!(r, "50px");
+}
+
+#[test]
+fn resolve_clamp_within_range() {
+    let vars = std::collections::HashMap::new();
+    let r = cascade::resolve_value("clamp(10px, 20px, 30px)", &vars);
+    assert_eq!(r, "20px");
+}
+
+#[test]
+fn resolve_clamp_above_max() {
+    let vars = std::collections::HashMap::new();
+    let r = cascade::resolve_value("clamp(10px, 100px, 30px)", &vars);
+    assert_eq!(r, "30px");
+}
+
+#[test]
+fn resolve_clamp_below_min() {
+    let vars = std::collections::HashMap::new();
+    let r = cascade::resolve_value("clamp(10px, 5px, 30px)", &vars);
+    assert_eq!(r, "10px");
+}
+
+#[test]
+fn resolve_min_with_var() {
+    let mut vars = std::collections::HashMap::new();
+    vars.insert("--small".to_string(), "10px".to_string());
+    let r = cascade::resolve_value("min(var(--small), 50px)", &vars);
+    assert_eq!(r, "10px");
+}
+
+#[test]
+fn resolve_env_fallback() {
+    let vars = std::collections::HashMap::new();
+    let r = cascade::resolve_value("env(safe-area-inset-top, 12px)", &vars);
+    assert_eq!(r, "12px");
+}
+
+#[test]
+fn resolve_env_no_fallback_returns_zero() {
+    let vars = std::collections::HashMap::new();
+    let r = cascade::resolve_value("env(unknown)", &vars);
+    assert_eq!(r, "0px");
+}
+
+#[test]
+fn resolve_nested_clamp_inside_calc() {
+    let vars = std::collections::HashMap::new();
+    // calc(10px + clamp(5px, 20px, 30px)) -> calc(10px + 20px) -> 30px
+    let r = cascade::resolve_value("calc(10px + clamp(5px, 20px, 30px))", &vars);
+    assert_eq!(r, "30px");
+}
+
 #[test]
 fn selector_empty() {
     let doc = parse_html("<html><body><div></div><div>x</div></body></html>", "");
