@@ -15,6 +15,23 @@ pub enum Display {
     InlineBlock,
     Flex,
     Grid,
+    /// CSS Display L3: contents - element zmizi, deti se chovaji jako primi descendants parenta
+    Contents,
+    /// list-item - block s ::marker
+    ListItem,
+    /// table / table-row / table-cell - tabulkove layouty
+    Table,
+    TableRow,
+    TableCell,
+    TableHeader,
+    TableHeaderCell,
+    TableCaption,
+    InlineFlex,
+    InlineGrid,
+    /// Subgrid (Grid L2) - zatim layouted jako Grid
+    Subgrid,
+    /// Ruby (CJK)
+    Ruby,
     None,
 }
 
@@ -67,6 +84,18 @@ impl Display {
             "inline-block" => Display::InlineBlock,
             "flex"         => Display::Flex,
             "grid"         => Display::Grid,
+            "contents"     => Display::Contents,
+            "list-item"    => Display::ListItem,
+            "table"        => Display::Table,
+            "table-row"    => Display::TableRow,
+            "table-cell"   => Display::TableCell,
+            "table-header-group" | "thead" => Display::TableHeader,
+            "table-row-group" | "tbody" | "tfoot" => Display::TableHeader,
+            "table-caption" => Display::TableCaption,
+            "inline-flex"  => Display::InlineFlex,
+            "inline-grid"  => Display::InlineGrid,
+            "subgrid"      => Display::Subgrid,
+            "ruby" | "ruby-base" | "ruby-text" => Display::Ruby,
             "none"         => Display::None,
             _ => Display::Block,
         }
@@ -300,6 +329,38 @@ pub struct LayoutBox {
     pub outline_offset: f32,
     /// margin-trim
     pub margin_trim: String,
+    /// CSS Anchor Positioning L1 - anchor-name (e.g. "--my-anchor")
+    pub anchor_name: String,
+    /// position-anchor: <name>
+    pub position_anchor: String,
+    /// inset-area (top / left / center / start / end / span-* keywords)
+    pub inset_area: String,
+    /// CSS Scroll-driven Animations - animation-timeline
+    pub animation_timeline: String,
+    /// scroll-timeline-name / scroll-timeline-axis
+    pub scroll_timeline_name: String,
+    pub scroll_timeline_axis: String,
+    /// view-timeline-name / view-timeline-axis / view-timeline-inset
+    pub view_timeline_name: String,
+    pub view_timeline_axis: String,
+    pub view_timeline_inset: String,
+    /// CSS View Transitions L1 - view-transition-name
+    pub view_transition_name: String,
+    /// CSS Containment L3 - container-type (uz mam string), pridam container
+    pub container_type: String,
+    pub container_name: String,
+    /// page-break-before / -after / -inside
+    pub page_break_before: String,
+    pub page_break_after: String,
+    pub page_break_inside: String,
+    /// break-before / -after / -inside (CSS Fragmentation L3)
+    pub break_before: String,
+    pub break_after: String,
+    pub break_inside: String,
+    pub orphans: i32,
+    pub widows: i32,
+    /// counter-set (CSS L3)
+    pub counter_set: Vec<(String, i32)>,
     /// Box shadow: (offset_x, offset_y, blur, spread, color)
     /// (offset_x, offset_y, blur, spread, color, inset)
     pub box_shadow: Option<(f32, f32, f32, f32, [u8; 4], bool)>,
@@ -420,6 +481,27 @@ impl LayoutBox {
             outline_color: None,
             outline_offset: 0.0,
             margin_trim: String::new(),
+            anchor_name: String::new(),
+            position_anchor: String::new(),
+            inset_area: String::new(),
+            animation_timeline: String::new(),
+            scroll_timeline_name: String::new(),
+            scroll_timeline_axis: String::new(),
+            view_timeline_name: String::new(),
+            view_timeline_axis: String::new(),
+            view_timeline_inset: String::new(),
+            view_transition_name: String::new(),
+            container_type: String::new(),
+            container_name: String::new(),
+            page_break_before: String::new(),
+            page_break_after: String::new(),
+            page_break_inside: String::new(),
+            break_before: String::new(),
+            break_after: String::new(),
+            break_inside: String::new(),
+            orphans: 2,
+            widows: 2,
+            counter_set: Vec::new(),
             box_shadow: None,
             transform: None,
             transforms: Vec::new(),
@@ -522,6 +604,29 @@ pub fn interpolate_keyframes(
 
 /// Vybira layout algoritmus podle display.
 fn layout_dispatch(bx: &mut LayoutBox) {
+    // Aliases - inline-flex/grid -> flex/grid; subgrid -> grid; ruby -> inline; list-item -> block
+    let effective = match bx.display {
+        Display::InlineFlex => Display::Flex,
+        Display::InlineGrid | Display::Subgrid => Display::Grid,
+        Display::ListItem => Display::Block,
+        Display::Ruby => Display::Inline,
+        Display::Table | Display::TableHeader => Display::Block,
+        Display::TableRow => Display::Inline,
+        Display::TableCell | Display::TableHeaderCell | Display::TableCaption => Display::Block,
+        Display::Contents => {
+            // Element zmizi - layout-time prom contents skip a deti se chovaji jako parent's
+            // Pro start: fallback na Inline aby children flowed.
+            Display::Inline
+        }
+        d => d,
+    };
+    let saved = bx.display;
+    bx.display = effective;
+    layout_dispatch_inner(bx);
+    bx.display = saved;
+}
+
+fn layout_dispatch_inner(bx: &mut LayoutBox) {
     match bx.display {
         Display::Flex | Display::Grid => layout_flex(bx),
         _ => layout_block(bx),
@@ -861,6 +966,27 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     }
     if let Some(v) = s.get("outline-offset") { bx.outline_offset = parse_length(v); }
     if let Some(v) = s.get("margin-trim") { bx.margin_trim = v.trim().to_string(); }
+    if let Some(v) = s.get("anchor-name") { bx.anchor_name = v.trim().to_string(); }
+    if let Some(v) = s.get("position-anchor") { bx.position_anchor = v.trim().to_string(); }
+    if let Some(v) = s.get("inset-area") { bx.inset_area = v.trim().to_string(); }
+    if let Some(v) = s.get("animation-timeline") { bx.animation_timeline = v.trim().to_string(); }
+    if let Some(v) = s.get("scroll-timeline-name") { bx.scroll_timeline_name = v.trim().to_string(); }
+    if let Some(v) = s.get("scroll-timeline-axis") { bx.scroll_timeline_axis = v.trim().to_string(); }
+    if let Some(v) = s.get("view-timeline-name") { bx.view_timeline_name = v.trim().to_string(); }
+    if let Some(v) = s.get("view-timeline-axis") { bx.view_timeline_axis = v.trim().to_string(); }
+    if let Some(v) = s.get("view-timeline-inset") { bx.view_timeline_inset = v.trim().to_string(); }
+    if let Some(v) = s.get("view-transition-name") { bx.view_transition_name = v.trim().to_string(); }
+    if let Some(v) = s.get("container-type") { bx.container_type = v.trim().to_string(); }
+    if let Some(v) = s.get("container-name") { bx.container_name = v.trim().to_string(); }
+    if let Some(v) = s.get("page-break-before") { bx.page_break_before = v.trim().to_string(); }
+    if let Some(v) = s.get("page-break-after")  { bx.page_break_after  = v.trim().to_string(); }
+    if let Some(v) = s.get("page-break-inside") { bx.page_break_inside = v.trim().to_string(); }
+    if let Some(v) = s.get("break-before") { bx.break_before = v.trim().to_string(); }
+    if let Some(v) = s.get("break-after")  { bx.break_after  = v.trim().to_string(); }
+    if let Some(v) = s.get("break-inside") { bx.break_inside = v.trim().to_string(); }
+    if let Some(v) = s.get("orphans") { bx.orphans = v.trim().parse().unwrap_or(2); }
+    if let Some(v) = s.get("widows") { bx.widows = v.trim().parse().unwrap_or(2); }
+    if let Some(v) = s.get("counter-set") { bx.counter_set = parse_counter(v); }
     // contain - CSS Containment L3
     if let Some(c) = s.get("contain") {
         let mut bits = 0u8;
@@ -1192,7 +1318,10 @@ fn layout_block(bx: &mut LayoutBox) {
     while i < bx.children.len() {
         let display = bx.children[i].display;
         match display {
-            Display::Block | Display::Flex | Display::Grid => {
+            Display::Block | Display::Flex | Display::Grid
+            | Display::ListItem | Display::Table | Display::TableHeader
+            | Display::TableCell | Display::TableHeaderCell | Display::TableCaption
+            | Display::Subgrid => {
                 if !inline_buffer.is_empty() {
                     cursor_y = flush_inline(bx, &inline_buffer, inner_x, cursor_y, inner_w);
                     inline_buffer.clear();
@@ -1236,7 +1365,9 @@ fn layout_block(bx: &mut LayoutBox) {
                 }
                 // Absolute/fixed neposunuji cursor_y - jsou out of flow
             }
-            Display::Inline | Display::InlineBlock => {
+            Display::Inline | Display::InlineBlock | Display::Contents
+            | Display::TableRow | Display::Ruby
+            | Display::InlineFlex | Display::InlineGrid => {
                 inline_buffer.push(i);
             }
             Display::None => {}
