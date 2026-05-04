@@ -653,7 +653,55 @@ pub fn layout_tree_with_pseudo(
     layout_root.rect.width = viewport_width;
     layout_root.rect.height = viewport_height;
     layout_dispatch(&mut layout_root);
+    // Post-pass: anchor positioning resolve
+    let anchor_map = collect_anchors(&layout_root);
+    apply_anchor_positioning(&mut layout_root, &anchor_map);
     layout_root
+}
+
+/// Walk tree + collect anchor-name -> rect map.
+fn collect_anchors(bx: &LayoutBox) -> std::collections::HashMap<String, Rect> {
+    let mut out = std::collections::HashMap::new();
+    fn walk(b: &LayoutBox, m: &mut std::collections::HashMap<String, Rect>) {
+        if !b.anchor_name.is_empty() {
+            // anchor-name muze byt "--name" - ulozim s prefixem
+            m.insert(b.anchor_name.clone(), b.rect);
+        }
+        for c in &b.children { walk(c, m); }
+    }
+    walk(bx, &mut out);
+    out
+}
+
+/// Aplikuje anchor positioning - pri elementu s position-anchor + inset-area
+/// posun jeho pozice relativne k anchor.
+fn apply_anchor_positioning(bx: &mut LayoutBox, anchors: &std::collections::HashMap<String, Rect>) {
+    if !bx.position_anchor.is_empty() {
+        if let Some(anchor_rect) = anchors.get(&bx.position_anchor) {
+            // Aplikuj inset-area: top/bottom/left/right/center jako relative position
+            let area = bx.inset_area.trim();
+            let (tx, ty) = match area {
+                "top"        => (anchor_rect.x, anchor_rect.y - bx.rect.height),
+                "bottom"     => (anchor_rect.x, anchor_rect.y + anchor_rect.height),
+                "left"       => (anchor_rect.x - bx.rect.width, anchor_rect.y),
+                "right"      => (anchor_rect.x + anchor_rect.width, anchor_rect.y),
+                "top left"   => (anchor_rect.x - bx.rect.width, anchor_rect.y - bx.rect.height),
+                "top right"  => (anchor_rect.x + anchor_rect.width, anchor_rect.y - bx.rect.height),
+                "bottom left"  => (anchor_rect.x - bx.rect.width, anchor_rect.y + anchor_rect.height),
+                "bottom right" => (anchor_rect.x + anchor_rect.width, anchor_rect.y + anchor_rect.height),
+                "center"     => (
+                    anchor_rect.x + (anchor_rect.width - bx.rect.width) * 0.5,
+                    anchor_rect.y + (anchor_rect.height - bx.rect.height) * 0.5,
+                ),
+                _ => (bx.rect.x, bx.rect.y),
+            };
+            bx.rect.x = tx;
+            bx.rect.y = ty;
+        }
+    }
+    for child in &mut bx.children {
+        apply_anchor_positioning(child, anchors);
+    }
 }
 
 /// Aplikuje @keyframes animation pri zadanem time.
