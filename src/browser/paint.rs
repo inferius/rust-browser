@@ -134,6 +134,12 @@ pub enum DisplayCommand {
     },
     /// Blurred solid rect - shader mode 8. Smoothstep edge blur radius.
     BlurredRect { x: f32, y: f32, w: f32, h: f32, color: [u8; 4], radius: f32, blur: f32 },
+    /// Marker zacatku filter blur subtree. Renderer chytne nasledujici commands
+    /// (vc nested) az do FilterEnd a vykresli je do offscreen RT s gauss blur.
+    /// (x, y, w, h) je bbox subtree pro composit + scissor.
+    FilterBegin { x: f32, y: f32, w: f32, h: f32, blur_radius: f32 },
+    /// Konec filter subtree. Parovan s FilterBegin (LIFO stack).
+    FilterEnd,
 }
 
 /// Vrati display list - sekvence primitiv pro renderer.
@@ -297,8 +303,23 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>) {
         crate::browser::layout::FilterOp::DropShadow { ox, oy, blur, color } => Some((*ox, *oy, *blur, *color)),
         _ => None,
     }).collect();
-    let _ = blur_radius;
     let _ = drop_shadows;
+
+    // Filter blur: emit FilterBegin marker pro renderer.
+    // Bbox se rozsiri o 2*blur_radius (kazda strana) aby se vlezl edge bleed.
+    // Nesting: nemusime nic delat - renderer se s LIFO stackem vypora sam.
+    // Skip pokud blur_radius < 0.5 (vizualne nic).
+    let has_blur_subtree = blur_radius >= 0.5;
+    if has_blur_subtree {
+        let pad = 2.0 * blur_radius;
+        cmds.push(DisplayCommand::FilterBegin {
+            x: bx.rect.x - pad,
+            y: bx.rect.y - pad,
+            w: bx.rect.width  + 2.0 * pad,
+            h: bx.rect.height + 2.0 * pad,
+            blur_radius,
+        });
+    }
 
     // Clip-path: vypocita modifikaci box rectu pro emit Rect/Image.
     // Single element clip (CPU side) - inset zmensi rect, circle/ellipse pridaji
@@ -431,17 +452,13 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>) {
             radius: bx.border_radius,
         });
     } else if let Some(bg) = bx.bg_color {
-        if blur_radius > 0.0 {
-            cmds.push(DisplayCommand::BlurredRect {
-                x: clip_x, y: clip_y, w: clip_w, h: clip_h,
-                color: with_alpha(bg), radius: clip_radius, blur: blur_radius,
-            });
-        } else {
-            cmds.push(DisplayCommand::Rect {
-                x: clip_x, y: clip_y, w: clip_w, h: clip_h,
-                color: with_alpha(bg), radius: clip_radius,
-            });
-        }
+        // Pokud je has_blur_subtree, RT pipeline blur aplikuje na cely subtree
+        // -> emitujem normalni Rect. BlurredRect (mode 8) je legacy fallback,
+        // pouzity jen kdyz neni RT pipeline (napr. pri error).
+        cmds.push(DisplayCommand::Rect {
+            x: clip_x, y: clip_y, w: clip_w, h: clip_h,
+            color: with_alpha(bg), radius: clip_radius,
+        });
     }
 
     // Border
@@ -614,6 +631,11 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>) {
         paint_box(ch, cmds);
     }
 
+    // Filter blur subtree end marker - paruje s FilterBegin (LIFO)
+    if has_blur_subtree {
+        cmds.push(DisplayCommand::FilterEnd);
+    }
+
     // Transform aplikovan na vsechny prave vlozene commands tohoto boxu (post-process)
     // Translate / Translate3D - aplikuje shift; rotate/scale 2D pres centroid;
     // matrix3d/perspective - aplikuje matrix multiply na rohy.
@@ -699,13 +721,15 @@ fn scale_cmd(cmd: &mut DisplayCommand, sx: f32, sy: f32, cx: f32, cy: f32) {
         | DisplayCommand::Gradient { x, y, w, h, .. }
         | DisplayCommand::Shadow { x, y, w, h, .. }
         | DisplayCommand::Image { x, y, w, h, .. }
-        | DisplayCommand::BlurredRect { x, y, w, h, .. } => {
+        | DisplayCommand::BlurredRect { x, y, w, h, .. }
+        | DisplayCommand::FilterBegin { x, y, w, h, .. } => {
             scale_xy(x, y); scale_wh(w, h);
         }
         DisplayCommand::Text { x, y, font_size, .. } => {
             scale_xy(x, y);
             *font_size *= sy.abs();
         }
+        DisplayCommand::FilterEnd => {}
     }
 }
 
@@ -732,7 +756,9 @@ fn rotate_cmd(cmd: &mut DisplayCommand, cos: f32, sin: f32, cx: f32, cy: f32) {
         | DisplayCommand::Shadow { x, y, .. }
         | DisplayCommand::Image { x, y, .. }
         | DisplayCommand::BlurredRect { x, y, .. }
+        | DisplayCommand::FilterBegin { x, y, .. }
         | DisplayCommand::Text { x, y, .. } => rotate_xy(x, y),
+        DisplayCommand::FilterEnd => {}
     }
 }
 
@@ -744,9 +770,11 @@ fn shift_cmd(cmd: &mut DisplayCommand, dx: f32, dy: f32) {
         | DisplayCommand::Gradient { x, y, .. }
         | DisplayCommand::Shadow { x, y, .. }
         | DisplayCommand::Image { x, y, .. }
-        | DisplayCommand::BlurredRect { x, y, .. } => {
+        | DisplayCommand::BlurredRect { x, y, .. }
+        | DisplayCommand::FilterBegin { x, y, .. } => {
             *x += dx;
             *y += dy;
         }
+        DisplayCommand::FilterEnd => {}
     }
 }

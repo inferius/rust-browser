@@ -80,6 +80,41 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 }
 "#;
 
+/// Compose shader - samples offscreen_tex (mid-blur result) a kresli do swap chain.
+/// Pouziva uniform pro tint alpha + region pro scissor (renderer set_scissor).
+const COMPOSE_SHADER: &str = r#"
+@group(0) @binding(0) var src_tex: texture_2d<f32>;
+@group(0) @binding(1) var src_smp: sampler;
+
+struct VertexOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+
+@vertex
+fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOut {
+    var pos = array<vec2<f32>, 3>(
+        vec2<f32>(-1.0, -1.0),
+        vec2<f32>( 3.0, -1.0),
+        vec2<f32>(-1.0,  3.0),
+    );
+    var uv = array<vec2<f32>, 3>(
+        vec2<f32>(0.0, 1.0),
+        vec2<f32>(2.0, 1.0),
+        vec2<f32>(0.0, -1.0),
+    );
+    var out: VertexOut;
+    out.clip = vec4<f32>(pos[idx], 0.0, 1.0);
+    out.uv = uv[idx];
+    return out;
+}
+
+@fragment
+fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
+    return textureSample(src_tex, src_smp, in.uv);
+}
+"#;
+
 const RECT_SHADER: &str = r#"
 struct Uniforms {
     viewport: vec2<f32>,
@@ -301,6 +336,9 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: 
             DisplayCommand::BlurredRect { x, y, w, h, color, radius, blur } => {
                 push_blurred_rect(&mut verts, *x, *y, *w, *h, normalize_color(color), *radius, *blur);
             }
+            DisplayCommand::FilterBegin { .. } | DisplayCommand::FilterEnd => {
+                // Markers - zpracovava se v render flow, ne ve vertex builderu.
+            }
         }
     }
     verts
@@ -474,7 +512,9 @@ fn shift_command_y(cmd: &mut DisplayCommand, dy: f32) {
         | DisplayCommand::Gradient { y, .. }
         | DisplayCommand::Shadow { y, .. }
         | DisplayCommand::Image { y, .. }
-        | DisplayCommand::BlurredRect { y, .. } => *y += dy,
+        | DisplayCommand::BlurredRect { y, .. }
+        | DisplayCommand::FilterBegin { y, .. } => *y += dy,
+        DisplayCommand::FilterEnd => {}
     }
 }
 
@@ -1317,8 +1357,7 @@ pub fn run_window_with_html(html: String, css: String) -> Result<(), String> {
             r.upload_atlas();
             r.upload_image_atlas();
 
-            let verts = build_vertices(&display_list, &r.atlas, &r.image_atlas);
-            r.draw(&verts);
+            r.draw_segments(&display_list);
 
             // Ulozim layout pro hit test
             self.layout_root = Some(layout_root);
@@ -1379,6 +1418,10 @@ struct Renderer {
     blur_bind_group_layout: wgpu::BindGroupLayout,
     /// Uniform pro blur direction (0=horizontal, 1=vertical) + radius
     blur_uniform_buf: wgpu::Buffer,
+    /// Compose pipeline - samples offscreen_tex a kresli do swap chain.
+    /// Pouziva fullscreen triangle + scissor pro region.
+    compose_pipeline: wgpu::RenderPipeline,
+    compose_bind_group_layout: wgpu::BindGroupLayout,
 }
 
 impl Renderer {
@@ -1556,7 +1599,9 @@ impl Renderer {
 
         let image_atlas = ImageAtlas::new();
 
-        // Offscreen RT_a + RT_b - viewport size, RGBA8UnormSrgb (ping-pong pro blur)
+        // Offscreen RT_a + RT_b - viewport size, format = swap chain format
+        // (aby main pipeline mohl renderovat do RT a compose pipeline samplovat).
+        let offscreen_format = config.format;
         let make_rt = |dev: &wgpu::Device, label: &str, w: u32, h: u32| {
             let tex = dev.create_texture(&wgpu::TextureDescriptor {
                 label: Some(label),
@@ -1564,7 +1609,7 @@ impl Renderer {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                format: offscreen_format,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING
                     | wgpu::TextureUsages::RENDER_ATTACHMENT
                     | wgpu::TextureUsages::COPY_DST,
@@ -1631,8 +1676,60 @@ impl Renderer {
                 module: &blur_shader, entry_point: "fs_main",
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                    format: offscreen_format,
                     blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+        });
+
+        // Compose shader + pipeline - samples offscreen RT, kresli do swap chain
+        let compose_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("compose_shader"),
+            source: wgpu::ShaderSource::Wgsl(COMPOSE_SHADER.into()),
+        });
+        let compose_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("compose_bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0, visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1, visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let compose_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("compose_pl"),
+            bind_group_layouts: &[&compose_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+        let compose_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("compose_pipeline"),
+            layout: Some(&compose_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &compose_shader, entry_point: "vs_main",
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &compose_shader, entry_point: "fs_main",
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: config.format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
@@ -1651,6 +1748,7 @@ impl Renderer {
             offscreen_tex, offscreen_view,
             offscreen_tex_b, offscreen_view_b,
             blur_pipeline, blur_bind_group_layout, blur_uniform_buf,
+            compose_pipeline, compose_bind_group_layout,
         }
     }
 
@@ -1811,14 +1909,15 @@ impl Renderer {
         self.config.width = w;
         self.config.height = h;
         self.surface.configure(&self.device, &self.config);
-        // Recreate offscreen RTs
+        // Recreate offscreen RTs (format = swap chain pro main pipeline kompat)
+        let fmt = self.config.format;
         let make = |dev: &wgpu::Device, label: &str| {
             let tex = dev.create_texture(&wgpu::TextureDescriptor {
                 label: Some(label),
                 size: wgpu::Extent3d { width: w.max(1), height: h.max(1), depth_or_array_layers: 1 },
                 mip_level_count: 1, sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                format: fmt,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING
                     | wgpu::TextureUsages::RENDER_ATTACHMENT
                     | wgpu::TextureUsages::COPY_DST,
@@ -1849,6 +1948,218 @@ impl Renderer {
             },
             wgpu::Extent3d { width: ATLAS_SIZE, height: ATLAS_SIZE, depth_or_array_layers: 1 },
         );
+    }
+
+    /// Renderuje display list s podporou filter blur subtree.
+    /// Rozdeli display_list na segmenty: Main(commands rendered normalne) +
+    /// Filter(commands rendered do offscreen RT a blurred, pak composited).
+    fn draw_segments(&mut self, cmds: &[DisplayCommand]) {
+        // Pomocna struktura: rozsah cmds + typ
+        enum Seg<'a> {
+            Main(&'a [DisplayCommand]),
+            Filter { inner: &'a [DisplayCommand], x: f32, y: f32, w: f32, h: f32, radius: f32 },
+        }
+
+        // Partition: depth-1 spans (vnorene FilterBegin v ramci jednoho top-level
+        // jsou ignorovany - inner cmds prosly bez vnoreneho blur podruhe)
+        let mut segments: Vec<Seg> = Vec::new();
+        let mut depth: i32 = 0;
+        let mut cursor: usize = 0;
+        let mut filter_start: usize = 0;
+        let mut filter_params = (0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32);
+        for i in 0..cmds.len() {
+            match &cmds[i] {
+                DisplayCommand::FilterBegin { x, y, w, h, blur_radius } => {
+                    if depth == 0 {
+                        if cursor < i {
+                            segments.push(Seg::Main(&cmds[cursor..i]));
+                        }
+                        filter_start = i + 1;
+                        filter_params = (*x, *y, *w, *h, *blur_radius);
+                    }
+                    depth += 1;
+                }
+                DisplayCommand::FilterEnd => {
+                    depth -= 1;
+                    if depth == 0 {
+                        let (x, y, w, h, r) = filter_params;
+                        segments.push(Seg::Filter {
+                            inner: &cmds[filter_start..i],
+                            x, y, w, h, radius: r,
+                        });
+                        cursor = i + 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if cursor < cmds.len() {
+            segments.push(Seg::Main(&cmds[cursor..]));
+        }
+
+        // Update viewport uniform
+        let vp = [self.config.width as f32, self.config.height as f32, 0.0, 0.0];
+        self.queue.write_buffer(&self.uniform_buf, 0, bytemuck::cast_slice(&vp));
+
+        // Acquire swap chain
+        let frame = match self.surface.get_current_texture() {
+            Ok(f) => f,
+            Err(_) => return,
+        };
+        let view = frame.texture.create_view(&Default::default());
+
+        let mut first_pass = true;
+        for seg in segments {
+            match seg {
+                Seg::Main(slice) => {
+                    let verts = build_vertices(slice, &self.atlas, &self.image_atlas);
+                    self.draw_main_pass(&view, &verts, first_pass);
+                    first_pass = false;
+                }
+                Seg::Filter { inner, x, y, w, h, radius } => {
+                    // 1. Render inner cmds do offscreen_view (clear transparent)
+                    let inner_verts = build_vertices(inner, &self.atlas, &self.image_atlas);
+                    self.draw_to_offscreen(&inner_verts);
+                    // 2. Blur 2-pass (offscreen -> b -> offscreen)
+                    self.run_blur_passes(radius);
+                    // 3. Composit do swap chain pres scissor region
+                    self.compose_offscreen(&view, x, y, w, h, first_pass);
+                    first_pass = false;
+                }
+            }
+        }
+        // Pokud byl display list prazdny, jeste musime swap chain vyclearovat
+        if first_pass {
+            let mut encoder = self.device.create_command_encoder(&Default::default());
+            {
+                let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("clear_only"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view, resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.95, g: 0.95, b: 0.97, a: 1.0 }),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None, timestamp_writes: None, occlusion_query_set: None,
+                });
+            }
+            self.queue.submit(std::iter::once(encoder.finish()));
+        }
+        frame.present();
+    }
+
+    /// Vykresli main vertex strip do swap chain (pripadne s Clear, pripadne Load).
+    fn draw_main_pass(&self, view: &wgpu::TextureView, vertices: &[Vertex], first: bool) {
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        let vbuf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("vb_main"),
+            size: ((vertices.len().max(1)) * std::mem::size_of::<Vertex>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        if !vertices.is_empty() {
+            self.queue.write_buffer(&vbuf, 0, bytemuck::cast_slice(vertices));
+        }
+        let load = if first {
+            wgpu::LoadOp::Clear(wgpu::Color { r: 0.95, g: 0.95, b: 0.97, a: 1.0 })
+        } else {
+            wgpu::LoadOp::Load
+        };
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("main_seg"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view, resolve_target: None,
+                    ops: wgpu::Operations { load, store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: None, timestamp_writes: None, occlusion_query_set: None,
+            });
+            if !vertices.is_empty() {
+                pass.set_pipeline(&self.pipeline);
+                pass.set_bind_group(0, &self.bind_group, &[]);
+                pass.set_vertex_buffer(0, vbuf.slice(..));
+                pass.draw(0..vertices.len() as u32, 0..1);
+            }
+        }
+        self.queue.submit(std::iter::once(encoder.finish()));
+    }
+
+    /// Renderuje filter inner cmds do offscreen_view (clear transparent).
+    fn draw_to_offscreen(&self, vertices: &[Vertex]) {
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        let vbuf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("vb_offscr"),
+            size: ((vertices.len().max(1)) * std::mem::size_of::<Vertex>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        if !vertices.is_empty() {
+            self.queue.write_buffer(&vbuf, 0, bytemuck::cast_slice(vertices));
+        }
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("offscreen_subtree"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.offscreen_view, resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None, timestamp_writes: None, occlusion_query_set: None,
+            });
+            if !vertices.is_empty() {
+                pass.set_pipeline(&self.pipeline);
+                pass.set_bind_group(0, &self.bind_group, &[]);
+                pass.set_vertex_buffer(0, vbuf.slice(..));
+                pass.draw(0..vertices.len() as u32, 0..1);
+            }
+        }
+        self.queue.submit(std::iter::once(encoder.finish()));
+    }
+
+    /// Composit offscreen_tex_a do swap chain pres scissor (x, y, w, h).
+    /// Pouziva fullscreen triangle + alpha blend; scissor omezi vystup na bbox.
+    fn compose_offscreen(&self, view: &wgpu::TextureView, x: f32, y: f32, w: f32, h: f32, first: bool) {
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("compose_bg"),
+            layout: &self.compose_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&self.offscreen_view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.atlas_smp) },
+            ],
+        });
+        let load = if first {
+            wgpu::LoadOp::Clear(wgpu::Color { r: 0.95, g: 0.95, b: 0.97, a: 1.0 })
+        } else {
+            wgpu::LoadOp::Load
+        };
+        // Scissor: clamp do swap chain rozmeru, integer pixely
+        let vw = self.config.width as i32;
+        let vh = self.config.height as i32;
+        let sx = x.max(0.0) as i32;
+        let sy = y.max(0.0) as i32;
+        let sw = ((x + w).min(vw as f32) as i32 - sx).max(0);
+        let sh = ((y + h).min(vh as f32) as i32 - sy).max(0);
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("compose_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view, resolve_target: None,
+                    ops: wgpu::Operations { load, store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: None, timestamp_writes: None, occlusion_query_set: None,
+            });
+            if sw > 0 && sh > 0 {
+                pass.set_pipeline(&self.compose_pipeline);
+                pass.set_bind_group(0, &bg, &[]);
+                pass.set_scissor_rect(sx as u32, sy as u32, sw as u32, sh as u32);
+                pass.draw(0..3, 0..1);
+            }
+        }
+        self.queue.submit(std::iter::once(encoder.finish()));
     }
 
     fn draw(&self, vertices: &[Vertex]) {
