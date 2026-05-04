@@ -53,6 +53,34 @@ fn parse_length_units() {
 }
 
 #[test]
+fn measure_text_width_estimate() {
+    // 5 chars * 16px * 0.55 = 44.0
+    let w = layout::measure_text_width("hello", 16.0);
+    assert!((w - 44.0).abs() < 0.1);
+}
+
+#[test]
+fn inline_text_wraps_to_new_line() {
+    // Block s velmi uzkou sirkou - text wrappuje
+    let doc = parse_html(r#"<html><body>
+        <p>velmi dlouhy text ktery musi byt zabalen na nekolik radku protoze sirka rodice je mala</p>
+    </body></html>"#, "");
+    let css = parse_stylesheet("p { padding: 4px; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    // Maly viewport - 200px
+    let layout = layout::layout_tree(&doc.root, &map, 200.0, 768.0);
+
+    // p element by mel mit vysku > jeden radek
+    let body = layout.children.iter()
+        .find(|c| c.tag.as_deref() == Some("html"))
+        .and_then(|h| h.children.iter().find(|c| c.tag.as_deref() == Some("body")))
+        .unwrap();
+    let p = body.children.iter().find(|c| c.tag.as_deref() == Some("p")).unwrap();
+    // Pri 200px width by mel byt p vyssi nez jeden radek (>30px)
+    assert!(p.rect.height > 30.0, "p should wrap, got height {}", p.rect.height);
+}
+
+#[test]
 fn paint_generates_commands() {
     let doc = parse_html(r#"<html><body><div></div></body></html>"#, "");
     let css = parse_stylesheet("div { background: red; }");

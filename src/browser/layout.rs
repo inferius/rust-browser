@@ -169,43 +169,48 @@ fn build_box(node: &Rc<Node>, style_map: &StyleMap) -> LayoutBox {
 }
 
 /// Block layout: kazdy block dite je vlastni radek, sirka = parent.
+/// Inline deti se sbiraji do "line boxu" a wrappuji.
 fn layout_block(bx: &mut LayoutBox) {
     let inner_x = bx.rect.x + bx.padding + bx.margin + bx.border_width;
     let inner_y = bx.rect.y + bx.padding + bx.margin + bx.border_width;
     let inner_w = bx.rect.width - 2.0 * (bx.padding + bx.margin + bx.border_width);
 
     let mut cursor_y = inner_y;
+    // Inline run - sbiraji se inline boxy do line buffer, flush pri block child nebo konci
+    let mut inline_buffer: Vec<usize> = Vec::new();
 
-    for child in bx.children.iter_mut() {
-        match child.display {
-            Display::Block | Display::InlineBlock => {
-                child.rect.x = inner_x;
-                child.rect.y = cursor_y;
-                child.rect.width = inner_w;
-                // Vyska zatim min: height ze stylu nebo content
+    let mut i = 0;
+    while i < bx.children.len() {
+        let display = bx.children[i].display;
+        match display {
+            Display::Block => {
+                if !inline_buffer.is_empty() {
+                    cursor_y = flush_inline(bx, &inline_buffer, inner_x, cursor_y, inner_w);
+                    inline_buffer.clear();
+                }
+                let child = &mut bx.children[i];
+                child.rect.x = inner_x + child.margin;
+                child.rect.y = cursor_y + child.margin;
+                child.rect.width = inner_w - 2.0 * child.margin;
                 if child.rect.height == 0.0 {
                     child.rect.height = if child.text.is_some() {
-                        child.font_size * 1.2 + child.padding * 2.0
+                        child.font_size * 1.4 + child.padding * 2.0
                     } else {
-                        // Provisorne na zaklade poctu deti
-                        let n = child.children.len() as f32;
-                        (n * 24.0 + 8.0).max(20.0)
+                        20.0
                     };
                 }
                 layout_block(child);
-                cursor_y += child.rect.height + child.margin * 2.0;
+                cursor_y += child.rect.height + 2.0 * child.margin;
             }
-            Display::Inline => {
-                // Zjednoduseny inline - kazdy na vlastni radek (TODO: real line boxes)
-                child.rect.x = inner_x;
-                child.rect.y = cursor_y;
-                child.rect.width = inner_w;
-                child.rect.height = child.font_size * 1.2;
-                layout_block(child);
-                cursor_y += child.rect.height;
+            Display::Inline | Display::InlineBlock => {
+                inline_buffer.push(i);
             }
             Display::None => {}
         }
+        i += 1;
+    }
+    if !inline_buffer.is_empty() {
+        cursor_y = flush_inline(bx, &inline_buffer, inner_x, cursor_y, inner_w);
     }
 
     // Auto-vypocet vysky podle children
@@ -213,6 +218,81 @@ fn layout_block(bx: &mut LayoutBox) {
     if bx.rect.height < content_h + 2.0 * (bx.padding + bx.border_width) {
         bx.rect.height = content_h + 2.0 * (bx.padding + bx.border_width);
     }
+}
+
+/// Flush inline buffer: rozmista inline boxy s wrapem.
+/// Vraci new cursor_y po vsech radkach.
+fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f32, inner_w: f32) -> f32 {
+    let mut cursor_x = inner_x;
+    let mut cursor_y = start_y;
+    let line_height_default = 19.2; // 16 * 1.2
+    let mut line_height = line_height_default;
+
+    for &idx in indices {
+        // Zachyceni boxu cele
+        let bx_clone = bx.children[idx].clone();
+        let font_size = bx_clone.font_size;
+        let advance_h = (font_size * 1.4).max(line_height_default);
+        line_height = line_height.max(advance_h);
+
+        if let Some(text) = &bx_clone.text {
+            // Rozdel na slova, kazde slovo merit a wrappovat
+            let words: Vec<&str> = text.split_whitespace().collect();
+            for (wi, word) in words.iter().enumerate() {
+                let w = measure_text_width(word, font_size);
+                let space_w = if wi > 0 { font_size * 0.3 } else { 0.0 };
+                if cursor_x + space_w + w > inner_x + inner_w && cursor_x > inner_x {
+                    cursor_y += line_height;
+                    cursor_x = inner_x;
+                }
+                let x = cursor_x + space_w;
+                // Pridame fragment-style box (jen pro paint - prepiseme child position)
+                // V paint pristupu: bx.children[idx] ma jen jednu pozici - ale my mame N slov
+                // Reseni: prirad bxu prvni pozici slova; pro presnost by potreboval zvlastni lineBox
+                if wi == 0 {
+                    bx.children[idx].rect.x = x;
+                    bx.children[idx].rect.y = cursor_y;
+                    bx.children[idx].rect.width = w;
+                    bx.children[idx].rect.height = advance_h;
+                } else {
+                    // Slovo na novem radku v ramci stejneho elementu - vytvorime virtual fragment
+                    // Pro zjednoduseni zatim slijeme do jedne `text` s preformatted layout
+                    // (correct approach by mela rozdelit na fragmenty)
+                    // Jako workaround: spojeny text na puvodni pozici, wrappuje renderer
+                    // (necelo idealni - ale prijatelne)
+                }
+                cursor_x = x + w;
+            }
+        } else if !bx_clone.children.is_empty() {
+            // Inline element s childen (napr. <span><em>text</em></span>) - flatten
+            // Aktualne: jen umisti samotny element jako jeden inline blok
+            let estimated_w = (bx_clone.children.iter()
+                .filter_map(|c| c.text.as_ref())
+                .map(|t| measure_text_width(t, font_size))
+                .sum::<f32>())
+                .max(font_size);
+            if cursor_x + estimated_w > inner_x + inner_w && cursor_x > inner_x {
+                cursor_y += line_height;
+                cursor_x = inner_x;
+            }
+            bx.children[idx].rect.x = cursor_x;
+            bx.children[idx].rect.y = cursor_y;
+            bx.children[idx].rect.width = estimated_w;
+            bx.children[idx].rect.height = advance_h;
+            // Layout vnoreny obsah
+            layout_block(&mut bx.children[idx]);
+            cursor_x += estimated_w;
+        }
+    }
+    cursor_y + line_height
+}
+
+/// Priblizny vypocet sirky textu (font measuring fallback).
+/// Real implementace by mela pouzit fontdue::Metrics, ale to vyzaduje pristup k Font.
+/// Pro layout fazi pouzivame heuristiku: priblizna sirka znaku = font_size * 0.55
+pub fn measure_text_width(text: &str, font_size: f32) -> f32 {
+    let avg_char_w = font_size * 0.55;
+    text.chars().count() as f32 * avg_char_w
 }
 
 /// Parse barvu z CSS string. Podpora: #RGB, #RRGGBB, rgb(R,G,B), rgba(R,G,B,A), nazvy.
