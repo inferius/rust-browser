@@ -586,35 +586,61 @@ pub fn random_u32() -> u32 {
     (s >> 32) as u32
 }
 
-// ─── Intl - lokalizace (lite, bez ICU) ────────────────────────────────────
+// ─── Intl - real implementace pres ICU4X ──────────────────────────────────
 
-/// Formatuje cislo podle locale.
-/// cs-CZ: " " jako tisice, "," jako desetinna
-/// de-DE: "." jako tisice, "," jako desetinna
-/// en-US: "," jako tisice, "." jako desetinna (default)
-/// fr-FR: " " jako tisice, "," jako desetinna
+/// Formatuje cislo podle locale pres ICU4X FixedDecimalFormatter.
+/// Fallback na manualni implementaci kdyz locale nelze parsovat.
 pub fn format_number_intl(n: f64, locale: &str) -> String {
+    use icu::locid::Locale;
+    use icu::decimal::FixedDecimalFormatter;
+    use fixed_decimal::FixedDecimal;
+    use std::str::FromStr;
+
     if n.is_nan()      { return "NaN".into(); }
     if n.is_infinite() { return if n > 0.0 { "∞".into() } else { "-∞".into() }; }
-    let (thousand_sep, decimal_sep) = locale_separators(locale);
+
+    // Parse locale
+    let loc = match Locale::from_str(locale) {
+        Ok(l) => l,
+        Err(_) => return format_number_locale_fallback(n, locale),
+    };
+
+    // Konverze f64 -> FixedDecimal pres string (zachovava presnost)
+    let s = format!("{n}");
+    let fd = match FixedDecimal::from_str(&s) {
+        Ok(d) => d,
+        Err(_) => return format_number_locale_fallback(n, locale),
+    };
+
+    let formatter = match FixedDecimalFormatter::try_new(
+        &loc.into(),
+        Default::default(),
+    ) {
+        Ok(f) => f,
+        Err(_) => return format_number_locale_fallback(n, locale),
+    };
+
+    formatter.format(&fd).to_string()
+}
+
+/// Manualni fallback formatter pokud ICU selze.
+fn format_number_locale_fallback(n: f64, locale: &str) -> String {
+    let (thousand_sep, decimal_sep) = match locale {
+        s if s.starts_with("cs") || s.starts_with("sk") || s.starts_with("fr")
+            || s.starts_with("pl") || s.starts_with("ru") => (' ', ','),
+        s if s.starts_with("de") || s.starts_with("it") || s.starts_with("es") => ('.', ','),
+        _ => (',', '.'),
+    };
     let s = format!("{n}");
     let (int_part, dec_part) = if let Some(dot) = s.find('.') {
         (&s[..dot], Some(&s[dot+1..]))
-    } else {
-        (s.as_str(), None)
-    };
+    } else { (s.as_str(), None) };
     let (neg, digits) = if int_part.starts_with('-') {
         (true, &int_part[1..])
-    } else {
-        (false, int_part)
-    };
+    } else { (false, int_part) };
     let with_sep: String = digits.chars().rev().enumerate()
         .flat_map(|(i, c)| {
-            if i > 0 && i % 3 == 0 {
-                vec![thousand_sep, c]
-            } else {
-                vec![c]
-            }
+            if i > 0 && i % 3 == 0 { vec![thousand_sep, c] } else { vec![c] }
         })
         .collect::<String>()
         .chars().rev().collect();
@@ -625,31 +651,51 @@ pub fn format_number_intl(n: f64, locale: &str) -> String {
     if neg { format!("-{result}") } else { result }
 }
 
-/// Vrati (thousand_sep, decimal_sep) pro dany locale.
-fn locale_separators(locale: &str) -> (char, char) {
-    match locale {
-        s if s.starts_with("cs") => (' ', ','),
-        s if s.starts_with("de") => ('.', ','),
-        s if s.starts_with("fr") => (' ', ','),
-        s if s.starts_with("sk") => (' ', ','),
-        s if s.starts_with("pl") => (' ', ','),
-        s if s.starts_with("ru") => (' ', ','),
-        s if s.starts_with("it") => ('.', ','),
-        s if s.starts_with("es") => ('.', ','),
-        _ => (',', '.'), // en-US default
-    }
+/// Formatuje date/time podle locale pres ICU4X DateTimeFormatter.
+/// Pri selhani fallback na manualni format.
+pub fn format_datetime_intl(ms: f64, locale: &str) -> String {
+    use icu::locid::Locale;
+    use icu::datetime::{DateTimeFormatter, options::length};
+    use icu::calendar::DateTime;
+    use std::str::FromStr;
+
+    let loc = match Locale::from_str(locale) {
+        Ok(l) => l,
+        Err(_) => return format_datetime_fallback(ms, locale),
+    };
+
+    // Konverze ms -> DateTime
+    let (yr, mo, day, hr, min, sec, _) = ms_to_parts(ms);
+    let dt = match DateTime::try_new_iso_datetime(
+        yr as i32,
+        (mo + 1) as u8,
+        day as u8,
+        hr as u8,
+        min as u8,
+        sec as u8,
+    ) {
+        Ok(d) => d.to_any(),
+        Err(_) => return format_datetime_fallback(ms, locale),
+    };
+
+    let options = length::Bag::from_date_time_style(
+        length::Date::Medium,
+        length::Time::Medium,
+    );
+
+    let formatter = match DateTimeFormatter::try_new(&loc.into(), options.into()) {
+        Ok(f) => f,
+        Err(_) => return format_datetime_fallback(ms, locale),
+    };
+
+    formatter.format_to_string(&dt).unwrap_or_else(|_| format_datetime_fallback(ms, locale))
 }
 
-/// Formatuje date/time podle locale (jen zaklad: short date format).
-/// cs-CZ: "15. 6. 2024 12:30:45"
-/// de-DE: "15.6.2024 12:30:45"
-/// en-US: "6/15/2024 12:30:45 PM"
-pub fn format_datetime_intl(ms: f64, locale: &str) -> String {
+fn format_datetime_fallback(ms: f64, locale: &str) -> String {
     let (yr, mo, day, hr, min, sec, _) = ms_to_parts(ms);
     match locale {
         s if s.starts_with("cs") => format!("{day}. {}. {yr} {hr:02}:{min:02}:{sec:02}", mo+1),
         s if s.starts_with("de") => format!("{day}.{}.{yr} {hr:02}:{min:02}:{sec:02}", mo+1),
-        s if s.starts_with("fr") => format!("{day}/{}/{yr} {hr:02}:{min:02}:{sec:02}", mo+1),
         _ => {
             let pm = hr >= 12;
             let h12 = if hr == 0 { 12 } else if hr > 12 { hr - 12 } else { hr };
@@ -658,36 +704,60 @@ pub fn format_datetime_intl(ms: f64, locale: &str) -> String {
     }
 }
 
-/// Vrati plural kategorii pro cislo a locale (one/few/many/other).
+/// Plural kategorie pres ICU4X PluralRules.
+/// Pokryva CLDR rules pro vsechny world locales.
 pub fn plural_select(n: f64, locale: &str) -> String {
-    let abs = n.abs();
-    let int_n = abs as i64;
-    match locale {
-        // cs-CZ: 1 -> one, 2-4 -> few, jine cele -> other (zjednoduseni)
-        s if s.starts_with("cs") || s.starts_with("sk") => {
-            if int_n == 1 && abs.fract() == 0.0 { "one".into() }
-            else if (2..=4).contains(&int_n) && abs.fract() == 0.0 { "few".into() }
-            else if abs.fract() != 0.0 { "many".into() }
-            else { "other".into() }
-        }
-        // pl: 1 -> one, 2-4 (ne 12-14) -> few, jinak many
-        s if s.starts_with("pl") => {
-            if int_n == 1 { "one".into() }
-            else if (2..=4).contains(&(int_n % 10)) && !(12..=14).contains(&(int_n % 100)) { "few".into() }
-            else { "many".into() }
-        }
-        // ru: 1 -> one, 2-4 -> few, jinak many
-        s if s.starts_with("ru") => {
-            let last_digit = int_n % 10;
-            let last_two = int_n % 100;
-            if last_digit == 1 && last_two != 11 { "one".into() }
-            else if (2..=4).contains(&last_digit) && !(12..=14).contains(&last_two) { "few".into() }
-            else { "many".into() }
-        }
-        // en, de, fr, ...: 1 -> one, jine -> other
-        _ => {
-            if abs == 1.0 { "one".into() } else { "other".into() }
-        }
+    use icu::locid::Locale;
+    use icu::plurals::{PluralRules, PluralRuleType};
+    use fixed_decimal::FixedDecimal;
+    use std::str::FromStr;
+
+    let loc = match Locale::from_str(locale) {
+        Ok(l) => l,
+        Err(_) => return plural_select_fallback(n, locale),
+    };
+
+    let rules = match PluralRules::try_new(&loc.into(), PluralRuleType::Cardinal) {
+        Ok(r) => r,
+        Err(_) => return plural_select_fallback(n, locale),
+    };
+
+    let s = format!("{n}");
+    let fd = match FixedDecimal::from_str(&s) {
+        Ok(d) => d,
+        Err(_) => return plural_select_fallback(n, locale),
+    };
+
+    use icu::plurals::PluralCategory::*;
+    match rules.category_for(&fd) {
+        Zero  => "zero".into(),
+        One   => "one".into(),
+        Two   => "two".into(),
+        Few   => "few".into(),
+        Many  => "many".into(),
+        Other => "other".into(),
+    }
+}
+
+fn plural_select_fallback(n: f64, _locale: &str) -> String {
+    if n.abs() == 1.0 { "one".into() } else { "other".into() }
+}
+
+/// Collator compare pres ICU4X.
+pub fn collator_compare_intl(a: &str, b: &str, locale: &str) -> i32 {
+    use icu::locid::Locale;
+    use icu::collator::Collator;
+    use std::str::FromStr;
+
+    let loc = Locale::from_str(locale).unwrap_or_default();
+    let collator = match Collator::try_new(&loc.into(), Default::default()) {
+        Ok(c) => c,
+        Err(_) => return a.cmp(b) as i32,
+    };
+    match collator.compare(a, b) {
+        std::cmp::Ordering::Less    => -1,
+        std::cmp::Ordering::Greater =>  1,
+        std::cmp::Ordering::Equal   =>  0,
     }
 }
 

@@ -2734,13 +2734,8 @@ impl Interpreter {
                             ("collator", "compare") => {
                                 let a = arg_vals.get(0).map(|v| v.to_string()).unwrap_or_default();
                                 let b = arg_vals.get(1).map(|v| v.to_string()).unwrap_or_default();
-                                let cmp = a.to_lowercase().cmp(&b.to_lowercase());
-                                let n = match cmp {
-                                    std::cmp::Ordering::Less    => -1.0,
-                                    std::cmp::Ordering::Greater =>  1.0,
-                                    std::cmp::Ordering::Equal   =>  0.0,
-                                };
-                                return Ok(JsValue::Number(n));
+                                let cmp = collator_compare_intl(&a, &b, &locale);
+                                return Ok(JsValue::Number(cmp as f64));
                             }
                             ("plural", "select") => {
                                 let n = arg_vals.first().map(|v| v.to_number()).unwrap_or(0.0);

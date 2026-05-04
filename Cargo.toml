@@ -15,3 +15,8 @@ num-bigint = "0.4.6"
 num-traits = "0.2"
 regex = "1"
 bigdecimal = "0.4"
+
+# Real Intl pres ICU4X (compiled_data = locale data baked at compile time)
+icu = { version = "1.5", features = ["compiled_data"] }
+fixed_decimal = "0.5"
+writeable = "0.5"
