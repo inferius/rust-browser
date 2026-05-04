@@ -135,6 +135,25 @@ fn webgl_link_outputs_wgsl_string() {
 }
 
 #[test]
+fn webgl_wgsl_has_vertex_stage_decorator() {
+    // Naga musi generovat @vertex/@fragment decorators - nutne pro wgpu pipeline phase 3c.
+    let r = run(&format!(r#"{SETUP}
+        const v = gl.createShader(gl.VERTEX_SHADER);
+        gl.shaderSource(v, "void main(){{ gl_Position = vec4(0.0); }}"); gl.compileShader(v);
+        const f = gl.createShader(gl.FRAGMENT_SHADER);
+        gl.shaderSource(f, "void main(){{ gl_FragColor = vec4(1.0); }}"); gl.compileShader(f);
+        const p = gl.createProgram();
+        gl.attachShader(p, v); gl.attachShader(p, f);
+        gl.linkProgram(p);
+        const vw = gl.__program_vertex_wgsl__(p);
+        const fw = gl.__program_fragment_wgsl__(p);
+        return (vw.indexOf("@vertex") >= 0) + "|" + (fw.indexOf("@fragment") >= 0);
+    "#));
+    assert_eq!(r.to_string(), "true|true",
+        "WGSL musi mit stage decorators @vertex + @fragment pro wgpu pipeline");
+}
+
+#[test]
 fn webgl_link_with_uncompiled_shader_fails() {
     let r = run(&format!(r#"{SETUP}
         const v = gl.createShader(gl.VERTEX_SHADER);
