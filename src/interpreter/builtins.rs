@@ -1786,6 +1786,140 @@ pub fn setup_builtins(
         Ok(JsValue::Object(obj))
     }));
 
+    // AbortController / AbortSignal stuby
+    e.define("AbortController", native("AbortController", |_| {
+        let signal = Rc::new(RefCell::new(JsObject::new()));
+        signal.borrow_mut().set("aborted".into(), JsValue::Bool(false));
+        signal.borrow_mut().set("reason".into(), JsValue::Undefined);
+        signal.borrow_mut().set("addEventListener".into(),
+            native("AbortSignal.addEventListener", |_| Ok(JsValue::Undefined)));
+        signal.borrow_mut().set("removeEventListener".into(),
+            native("AbortSignal.removeEventListener", |_| Ok(JsValue::Undefined)));
+
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        let sig_clone = Rc::clone(&signal);
+        obj.borrow_mut().set("signal".into(), JsValue::Object(signal));
+        obj.borrow_mut().set("abort".into(), native("AbortController.abort", move |args| {
+            let reason = args.into_iter().next().unwrap_or(JsValue::Undefined);
+            sig_clone.borrow_mut().set("aborted".into(), JsValue::Bool(true));
+            sig_clone.borrow_mut().set("reason".into(), reason);
+            Ok(JsValue::Undefined)
+        }));
+        Ok(JsValue::Object(obj))
+    }));
+
+    // history (pushState/replaceState/back/forward/length)
+    {
+        let history = Rc::new(RefCell::new(JsObject::new()));
+        let stack: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(vec!["/".into()]));
+        history.borrow_mut().set("length".into(), JsValue::Number(1.0));
+        history.borrow_mut().set("state".into(), JsValue::Null);
+        {
+            let st = Rc::clone(&stack);
+            let h = Rc::clone(&history);
+            history.borrow_mut().set("pushState".into(), native("history.pushState", move |args| {
+                let mut it = args.into_iter();
+                let state = it.next().unwrap_or(JsValue::Null);
+                let _title = it.next();
+                let url = it.next().map(|v| v.to_string()).unwrap_or_default();
+                if !url.is_empty() { st.borrow_mut().push(url); }
+                h.borrow_mut().set("state".into(), state);
+                h.borrow_mut().set("length".into(), JsValue::Number(st.borrow().len() as f64));
+                Ok(JsValue::Undefined)
+            }));
+        }
+        {
+            let st = Rc::clone(&stack);
+            let h = Rc::clone(&history);
+            history.borrow_mut().set("replaceState".into(), native("history.replaceState", move |args| {
+                let mut it = args.into_iter();
+                let state = it.next().unwrap_or(JsValue::Null);
+                let _title = it.next();
+                let url = it.next().map(|v| v.to_string()).unwrap_or_default();
+                if !url.is_empty() {
+                    let mut s = st.borrow_mut();
+                    if let Some(last) = s.last_mut() { *last = url; } else { s.push(url); }
+                }
+                h.borrow_mut().set("state".into(), state);
+                Ok(JsValue::Undefined)
+            }));
+        }
+        history.borrow_mut().set("back".into(), native("history.back", |_| Ok(JsValue::Undefined)));
+        history.borrow_mut().set("forward".into(), native("history.forward", |_| Ok(JsValue::Undefined)));
+        history.borrow_mut().set("go".into(), native("history.go", |_| Ok(JsValue::Undefined)));
+        e.define("history", JsValue::Object(history));
+    }
+
+    // WebSocket stub - constructor vraci object s methods, neco ne real connect.
+    e.define("WebSocket", native("WebSocket", |args| {
+        let url = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        obj.borrow_mut().set("url".into(), JsValue::Str(url));
+        obj.borrow_mut().set("readyState".into(), JsValue::Number(0.0)); // CONNECTING
+        obj.borrow_mut().set("CONNECTING".into(), JsValue::Number(0.0));
+        obj.borrow_mut().set("OPEN".into(), JsValue::Number(1.0));
+        obj.borrow_mut().set("CLOSING".into(), JsValue::Number(2.0));
+        obj.borrow_mut().set("CLOSED".into(), JsValue::Number(3.0));
+        obj.borrow_mut().set("send".into(), native("WebSocket.send", |_| Ok(JsValue::Undefined)));
+        obj.borrow_mut().set("close".into(), native("WebSocket.close", |_| Ok(JsValue::Undefined)));
+        obj.borrow_mut().set("addEventListener".into(),
+            native("WebSocket.addEventListener", |_| Ok(JsValue::Undefined)));
+        Ok(JsValue::Object(obj))
+    }));
+
+    // EventSource stub (Server-Sent Events)
+    e.define("EventSource", native("EventSource", |args| {
+        let url = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        obj.borrow_mut().set("url".into(), JsValue::Str(url));
+        obj.borrow_mut().set("readyState".into(), JsValue::Number(0.0));
+        obj.borrow_mut().set("CONNECTING".into(), JsValue::Number(0.0));
+        obj.borrow_mut().set("OPEN".into(), JsValue::Number(1.0));
+        obj.borrow_mut().set("CLOSED".into(), JsValue::Number(2.0));
+        obj.borrow_mut().set("close".into(), native("EventSource.close", |_| Ok(JsValue::Undefined)));
+        obj.borrow_mut().set("addEventListener".into(),
+            native("EventSource.addEventListener", |_| Ok(JsValue::Undefined)));
+        Ok(JsValue::Object(obj))
+    }));
+
+    // BroadcastChannel stub
+    e.define("BroadcastChannel", native("BroadcastChannel", |args| {
+        let name = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        obj.borrow_mut().set("name".into(), JsValue::Str(name));
+        obj.borrow_mut().set("postMessage".into(),
+            native("BroadcastChannel.postMessage", |_| Ok(JsValue::Undefined)));
+        obj.borrow_mut().set("close".into(),
+            native("BroadcastChannel.close", |_| Ok(JsValue::Undefined)));
+        obj.borrow_mut().set("addEventListener".into(),
+            native("BroadcastChannel.addEventListener", |_| Ok(JsValue::Undefined)));
+        Ok(JsValue::Object(obj))
+    }));
+
+    // IndexedDB stub
+    {
+        let idb = Rc::new(RefCell::new(JsObject::new()));
+        idb.borrow_mut().set("open".into(), native("indexedDB.open", |args| {
+            let name = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+            // Vraci IDBOpenDBRequest - asynchronni Promise-like
+            let req = Rc::new(RefCell::new(JsObject::new()));
+            req.borrow_mut().set("name".into(), JsValue::Str(name));
+            req.borrow_mut().set("readyState".into(), JsValue::Str("done".into()));
+            req.borrow_mut().set("result".into(), JsValue::Null);
+            req.borrow_mut().set("error".into(), JsValue::Null);
+            req.borrow_mut().set("addEventListener".into(),
+                native("addEventListener", |_| Ok(JsValue::Undefined)));
+            Ok(JsValue::Object(req))
+        }));
+        idb.borrow_mut().set("deleteDatabase".into(),
+            native("indexedDB.deleteDatabase", |_| Ok(JsValue::Undefined)));
+        idb.borrow_mut().set("databases".into(),
+            native("indexedDB.databases", |_| {
+                Ok(make_settled_promise("fulfilled", JsValue::Array(Rc::new(RefCell::new(Vec::new())))))
+            }));
+        e.define("indexedDB", JsValue::Object(idb));
+    }
+
     // Blob stub
     e.define("Blob", native("Blob", |_| {
         let obj = Rc::new(RefCell::new(JsObject::new()));
