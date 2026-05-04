@@ -5,10 +5,10 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 ## Stav
 
 - Build: **OK**, 0 errors.
-- Tests: **1548 passed, 0 failed, 3 ignored** (+743 v teto session, +92.3%).
-- Posledni commit: `a83cd24 WebGL phase 3c6 - single-frame + drawElements`.
+- Tests: **1563 passed, 0 failed, 3 ignored** (+758 v teto session, +94.2%).
+- Posledni commit: `7b67c2d WebGL phase 3c7 part 3 - uniform per-draw serialize`.
 - Tree: ciste.
-- Branch master, ~258 commitu pred origin/master (NEPUSHOVAT bez vyzvy).
+- Branch master, ~262 commitu pred origin/master (NEPUSHOVAT bez vyzvy).
 
 ## Recent session highlights
 
@@ -78,15 +78,16 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 
 ## Velke remaining work
 
-- **WebGL phase 3c7**: uniform buffer support v ensure_webgl_pipeline (bind
-  groups). Vyzaduje:
-  - WGSL parser pro uniform struct decl extraction (z naga IR).
-  - Per-program uniform layout map (name -> offset/size).
-  - Bind group layout match s shaderem.
-  - Per-draw write_buffer + bind group setup.
-  Scope: 300-500 radku. Plus texture binding (per-program sampler/texture
-  bind groups). Bez tohoto vetsina realnych WebGL programu (jakekoliv s
-  shader uniforms) ne plne funkci - draws kresli ale bez per-frame data.
+- **WebGL phase 3c7 HOTOVO**: uniform layout extraction z naga IR,
+  webgl_serialize_uniforms helper (Float/Vec2/Vec3/Vec4/Int/Mat2/3/4 std140
+  s padding), per-program uniform buffer + bind group cache,
+  ensure_webgl_uniform_resources, ensure_webgl_pipeline pripoji bgl,
+  webgl_encode_draw_arrays/elements per-draw write_buffer + bind group set.
+  Limitace: naga GLSL ES 1.0 single uniform syntax extracts 0 slotu, lepsi
+  pres `layout(std140) uniform Block { ... }` syntax.
+- **WebGL phase 3c8 (TODO)**: texture upload + sampler bind groups
+  (texImage2D real GPU upload). Per-program texture bindings. Limitace
+  aktualni: texture stub jen ulozeni bytes do WebGLTexture struct.
 - **Filter v Transform RT (nested)**: aktualne filter inside transform
   je inner cmds bez efektu - lepsi pristup vyzaduje rekursi v draw_segments.
 - **Filter v Transform RT (nested)**: aktualne filter inside transform
