@@ -5,10 +5,10 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 ## Stav
 
 - Build: **OK**, 0 errors.
-- Tests: **1093 passed, 0 failed, 3 ignored** (+288 v teto session, +35.8%).
-- Posledni commit: `cce4ef1 WebGL phase 3a - command queue + state recording`.
+- Tests: **1103 passed, 0 failed, 3 ignored** (+298 v teto session, +37%).
+- Posledni commit: `ff2787f WebGL phase 3b: DrawArrays visual placeholder`.
 - Tree: ciste.
-- Branch master, ~232 commitu pred origin/master (NEPUSHOVAT bez vyzvy).
+- Branch master, ~234 commitu pred origin/master (NEPUSHOVAT bez vyzvy).
 
 ## Recent session highlights
 
@@ -38,16 +38,26 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 9. **WebGL phase 3a** (commit cce4ef1) - command queue + state recording.
    WebGLAttribSlot/UniformValue/DrawCmd structs. vertexAttribPointer/
    enableVertexAttribArray/uniform*/uniformMatrix*fv/drawArrays/drawElements
-   ted naplnuji state + push do queue (zapis state pri kazdem draw call).
-   +12 testu.
+   ted naplnuji state + push do queue. +12 testu.
+10. **WebGL phase 3b** (commits b1b6197 + ff2787f) - Interpreter sdili
+    `webgl_states: Rc<RefCell<HashMap<canvas_ptr, Rc<RefCell<WebGLState>>>>>`.
+    paint_webgl_canvases() drainuje queue per canvas a emituje:
+    - Clear color jako solid Rect bbox.
+    - DrawArrays/Elements jako stripe overlay (placeholder phase 3c).
+    Test stranka #webgl section s blue clear demo. +10 testu.
 
 ## Velke remaining work
 
-- **WebGL phase 3b**: Renderer drain queue per canvas element, wgpu
-  pipeline lookup z WGSL stringu (linkProgram output), real draw emission
-  do offscreen RT, composite do main swap chain. Vyzaduje refactoring
-  Interpreter <-> Renderer komunikace (WebGLState pres Rc<RefCell<>>
-  share s Renderer).
+- **WebGL phase 3c**: Real wgpu pipeline z WGSL stringu (linkProgram
+  output) + real draw call emission. Vyzaduje:
+  - Pipeline cache HashMap<u32, RenderPipeline> v Renderer.
+  - wgpu Device sdileny do paint kontextu (refactor paint_webgl_canvases
+    na Renderer metodu).
+  - Per-canvas offscreen RT.
+  - Vertex layout derivace z WebGLAttribSlot[] -> wgpu::VertexBufferLayout.
+  - Bind group pro uniforms + textures.
+  - Composit canvas RT do main swap chain.
+  Scope: 800-1500 radku.
 - **Filter v Transform RT (nested)**: aktualne filter inside transform
   je inner cmds bez efektu - lepsi pristup vyzaduje rekursi v draw_segments.
 - **TypeScript kompilator** - design konzultace stale otevrena.
