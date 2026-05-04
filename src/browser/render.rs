@@ -589,8 +589,9 @@ fn paint_canvas_ops(
 
 /// Walk layout tree + pro kazdy canvas tag, pokud existuje WebGLState,
 /// drainuje queue a emituje display commands. Phase 3b: jen Clear color
-/// jako solid Rect bg + Clear barvou. Real wgpu pipeline z WGSL stringu
-/// bude phase 3c.
+/// jako solid Rect bg + DrawArrays stripe overlay placeholder.
+/// Pro real GPU draw integration phase 3c5+ vyzaduje refactor (dual path
+/// konflict s run_webgl_frame).
 pub fn paint_webgl_canvases(
     bx: &super::layout::LayoutBox,
     webgl_states: &std::collections::HashMap<usize, std::rc::Rc<std::cell::RefCell<crate::interpreter::WebGLState>>>,
@@ -1794,7 +1795,14 @@ pub fn run_window_with_html(html: String, css: String) -> Result<(), String> {
             r.upload_atlas();
             r.upload_image_atlas();
 
-            r.draw_segments(&display_list);
+            // Pri WebGL canvas s pending queue, vyuzij webgl-aware draw flow.
+            let webgl_states_opt = self.interpreter.as_ref().map(|i| i.webgl_states.clone());
+            if let Some(states_rc) = &webgl_states_opt {
+                let states = states_rc.borrow();
+                r.draw_full_frame(&display_list, &layout_root, Some(&*states));
+            } else {
+                r.draw_segments(&display_list);
+            }
 
             // Ulozim layout pro hit test
             self.layout_root = Some(layout_root);
@@ -2434,6 +2442,121 @@ impl Renderer {
         true
     }
 
+    /// Walk layout tree + pro kazdy canvas s WebGL state, drain queue
+    /// a encode real wgpu draw passes do per-canvas RT, composit RT do
+    /// swap chain.
+    pub fn run_webgl_frame(
+        &mut self,
+        root: &super::layout::LayoutBox,
+        swap_view: &wgpu::TextureView,
+        webgl_states: &std::collections::HashMap<usize, std::rc::Rc<std::cell::RefCell<crate::interpreter::WebGLState>>>,
+    ) {
+        self.walk_webgl(root, swap_view, webgl_states);
+    }
+
+    fn walk_webgl(
+        &mut self,
+        bx: &super::layout::LayoutBox,
+        swap_view: &wgpu::TextureView,
+        webgl_states: &std::collections::HashMap<usize, std::rc::Rc<std::cell::RefCell<crate::interpreter::WebGLState>>>,
+    ) {
+        if bx.tag.as_deref() == Some("canvas") {
+            if let Some(node) = &bx.node {
+                let ptr = std::rc::Rc::as_ptr(node) as usize;
+                if let Some(state_rc) = webgl_states.get(&ptr) {
+                    self.execute_webgl_canvas(ptr, state_rc, bx, swap_view);
+                }
+            }
+        }
+        for ch in &bx.children {
+            self.walk_webgl(ch, swap_view, webgl_states);
+        }
+    }
+
+    fn execute_webgl_canvas(
+        &mut self,
+        canvas_ptr: usize,
+        state_rc: &std::rc::Rc<std::cell::RefCell<crate::interpreter::WebGLState>>,
+        bx: &super::layout::LayoutBox,
+        swap_view: &wgpu::TextureView,
+    ) {
+        use crate::interpreter::WebGLDrawCmd;
+        let w = (bx.rect.width as u32).max(1);
+        let h = (bx.rect.height as u32).max(1);
+        self.ensure_webgl_canvas_rt(canvas_ptr, w, h);
+
+        // Extract data z state, pak release borrow
+        let (cmds, buffers_data, programs_wgsl, default_clear): (
+            Vec<WebGLDrawCmd>,
+            std::collections::HashMap<u32, Vec<u8>>,
+            std::collections::HashMap<u32, (Option<String>, Option<String>)>,
+            [f32; 4],
+        ) = {
+            let mut state = state_rc.borrow_mut();
+            let cmds: Vec<_> = state.draw_queue.drain(..).collect();
+            let buffers: std::collections::HashMap<u32, Vec<u8>> = state.buffers.clone();
+            let programs: std::collections::HashMap<u32, (Option<String>, Option<String>)> = state.programs.iter()
+                .map(|(k, p)| (*k, (p.vertex_wgsl.clone(), p.fragment_wgsl.clone())))
+                .collect();
+            let cc = state.clear_color;
+            (cmds, buffers, programs, cc)
+        };
+
+        // Upload buffers
+        for (id, data) in &buffers_data {
+            if !self.webgl_buffers.contains_key(id) && !data.is_empty() {
+                self.upload_webgl_buffer(*id, data);
+            }
+        }
+        // Build shader modules pro linked programs
+        for (pid, (vs, fs)) in &programs_wgsl {
+            if let (Some(v), Some(f)) = (vs, fs) {
+                self.build_webgl_shader_modules(*pid, v, f);
+            }
+        }
+
+        // Process commands
+        let mut pending_clear: Option<[f32; 4]> = None;
+        let mut had_render = false;
+        for cmd in cmds {
+            match cmd {
+                WebGLDrawCmd::ClearColor(c) => pending_clear = Some(c),
+                WebGLDrawCmd::Clear(mask) => {
+                    if mask & 0x4000 != 0 {
+                        let c = pending_clear.unwrap_or(default_clear);
+                        self.webgl_encode_clear(canvas_ptr, c);
+                        pending_clear = None;
+                        had_render = true;
+                    }
+                }
+                WebGLDrawCmd::DrawArrays { program_id, first, count, attribs, .. } => {
+                    if let Some(pid) = program_id {
+                        if self.ensure_webgl_pipeline(pid, &attribs) {
+                            let cc = pending_clear.take();
+                            self.webgl_encode_draw_arrays(canvas_ptr, pid, first, count, &attribs, cc);
+                            had_render = true;
+                        }
+                    }
+                }
+                WebGLDrawCmd::DrawElements { program_id, .. } => {
+                    // Phase 3c5+ : indexed draw not yet wired
+                    let _ = program_id;
+                }
+            }
+        }
+
+        // Composit canvas RT region do swap chain
+        if had_render {
+            // Vyrobit novy view z texture (TextureView neni Clone, ale Texture umi vyrobit dalsi view).
+            let new_view = self.webgl_canvas_rts.get(&canvas_ptr).map(|(tex, _, _, _)| {
+                tex.create_view(&Default::default())
+            });
+            if let Some(view) = new_view {
+                self.compose_view_to_swap(swap_view, &view, bx.rect.x, bx.rect.y, bx.rect.width, bx.rect.height);
+            }
+        }
+    }
+
     /// Encode jen clear color do canvas RT (bez draw call).
     pub fn webgl_encode_clear(&self, canvas_ptr: usize, color: [f32; 4]) -> bool {
         let view = match self.webgl_canvas_rts.get(&canvas_ptr) {
@@ -2718,6 +2841,83 @@ impl Renderer {
     /// Renderuje display list s podporou filter subtree (blur + color matrix).
     /// Rozdeli display_list na segmenty: Main(commands rendered normalne) +
     /// Filter(commands rendered do offscreen RT, pak composited s blur+matrix).
+    /// Wrapper kolem draw_segments + run_webgl_frame.
+    /// Pri WebGL canvas v layout, vykresli WebGL passes a composit do swap.
+    pub fn draw_full_frame(
+        &mut self,
+        cmds: &[DisplayCommand],
+        layout_root: &super::layout::LayoutBox,
+        webgl_states: Option<&std::collections::HashMap<usize, std::rc::Rc<std::cell::RefCell<crate::interpreter::WebGLState>>>>,
+    ) {
+        // Main display list pass (jiz prezentuje frame).
+        self.draw_segments(cmds);
+        // WebGL post-pass: pri kazdem WebGL canvas drainuje queue + composit
+        // RT do dalsi swap chain frame. Bezi jako separate present (overlay
+        // efekt). Pri zadnych WebGL contextu skip.
+        if let Some(states) = webgl_states {
+            if !states.is_empty() && self.has_canvas_with_state(layout_root, states) {
+                self.run_webgl_overlay_frame(layout_root, states);
+            }
+        }
+    }
+
+    fn has_canvas_with_state(
+        &self,
+        bx: &super::layout::LayoutBox,
+        webgl_states: &std::collections::HashMap<usize, std::rc::Rc<std::cell::RefCell<crate::interpreter::WebGLState>>>,
+    ) -> bool {
+        if bx.tag.as_deref() == Some("canvas") {
+            if let Some(node) = &bx.node {
+                let ptr = std::rc::Rc::as_ptr(node) as usize;
+                if webgl_states.contains_key(&ptr) {
+                    let has_pending = webgl_states.get(&ptr).map(|s| !s.borrow().draw_queue.is_empty()).unwrap_or(false);
+                    if has_pending { return true; }
+                }
+            }
+        }
+        for ch in &bx.children {
+            if self.has_canvas_with_state(ch, webgl_states) { return true; }
+        }
+        false
+    }
+
+    fn run_webgl_overlay_frame(
+        &mut self,
+        layout_root: &super::layout::LayoutBox,
+        webgl_states: &std::collections::HashMap<usize, std::rc::Rc<std::cell::RefCell<crate::interpreter::WebGLState>>>,
+    ) {
+        // Acquire next frame, kresli WebGL nad existujici scene.
+        // Tu samou frame nemuzeme znova - preferujeme overlay v dalsim frame.
+        // Realny browser by spojil oba do jednoho passu - simplified zde.
+        let frame = match self.surface.get_current_texture() {
+            Ok(f) => f,
+            Err(_) => return,
+        };
+        let view = frame.texture.create_view(&Default::default());
+        // Clear na soucasny obsah - pres LoadOp::Load v compose_view_to_swap.
+        // Aby novy frame nezachazel staré, prvne nasleduje main (uz proslo).
+        // V tomto presentu mame jen WebGL canvas overlays nad clear.
+        // Pro real overlay efekt by bylo lepsi mit single frame, ale to vyzaduje
+        // bigger refactor. Zatim prijatelne.
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        {
+            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("webgl_overlay_clear"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view, resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.95, g: 0.95, b: 0.97, a: 1.0 }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None, timestamp_writes: None, occlusion_query_set: None,
+            });
+        }
+        self.queue.submit(std::iter::once(encoder.finish()));
+        self.run_webgl_frame(layout_root, &view, webgl_states);
+        frame.present();
+    }
+
     fn draw_segments(&mut self, cmds: &[DisplayCommand]) {
         let segments: Vec<Seg> = partition_filter_segments(cmds);
 
