@@ -358,6 +358,16 @@ fn contain_layout_paint_combo() {
 }
 
 #[test]
+fn parse_transform_chain_three_ops() {
+    use crate::browser::layout::{parse_transform_chain, TransformOp};
+    let chain = parse_transform_chain("translate(10px, 20px) rotate(45deg) scale(1.5)");
+    assert_eq!(chain.len(), 3);
+    assert!(matches!(chain[0], TransformOp::Translate(10.0, 20.0)));
+    assert!(matches!(chain[1], TransformOp::Rotate(_)));
+    assert!(matches!(chain[2], TransformOp::Scale(1.5, 1.5)));
+}
+
+#[test]
 fn parse_transform_translate3d() {
     use crate::browser::layout::{parse_transform, TransformOp};
     let t = parse_transform("translate3d(10px, 20px, 30px)").unwrap();

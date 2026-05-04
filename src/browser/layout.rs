@@ -209,6 +209,8 @@ pub struct LayoutBox {
     pub box_shadow: Option<(f32, f32, f32, f32, [u8; 4], bool)>,
     /// Transform: simple translate/rotate/scale
     pub transform: Option<TransformOp>,
+    /// Multi-op transform chain (transform: A() B() C()).
+    pub transforms: Vec<TransformOp>,
     /// Overflow: hidden/scroll/visible/auto
     pub overflow_hidden: bool,
     /// White-space: nowrap zachazi text jako jeden radek
@@ -274,6 +276,7 @@ impl LayoutBox {
             scroll_margin: [0.0; 4],
             box_shadow: None,
             transform: None,
+            transforms: Vec::new(),
             image_src: None,
             node: None,
         }
@@ -645,9 +648,10 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
             }
         }
     }
-    // Transform
+    // Transform - single + chain
     if let Some(tr) = s.get("transform") {
         bx.transform = parse_transform(tr);
+        bx.transforms = parse_transform_chain(tr);
     }
     if let Some(c) = s.get("color") {
         bx.text_color = parse_color(c);
@@ -2286,6 +2290,49 @@ pub fn parse_box_shadow(s: &str) -> Option<(f32, f32, f32, f32, [u8; 4], bool)> 
 }
 
 /// Parse transform: "translate(10px, 20px)" / "rotate(45deg)" / "scale(1.5)".
+/// Parsuje cely transform chain ("translate(10px) rotate(45deg) scale(1.5)").
+/// Vyvazene zavorky pri tokenize.
+pub fn parse_transform_chain(s: &str) -> Vec<TransformOp> {
+    let mut out = Vec::new();
+    let s = s.trim();
+    if s == "none" || s.is_empty() { return out; }
+    let mut chars = s.char_indices().peekable();
+    while let Some(&(_, c)) = chars.peek() {
+        if c.is_whitespace() { chars.next(); continue; }
+        // Najdi name + (...)
+        let start = chars.peek().map(|&(i, _)| i).unwrap_or(0);
+        // Read az do '('
+        while let Some(&(_, c)) = chars.peek() {
+            if c == '(' { break; }
+            if c.is_whitespace() { break; }
+            chars.next();
+        }
+        // Pokracuj az '('
+        while let Some(&(_, c)) = chars.peek() {
+            if c == '(' { break; }
+            chars.next();
+        }
+        // Sosa do matching ')' - vyvazene
+        let mut end = start;
+        if let Some(&(i, _)) = chars.peek() {
+            chars.next(); // '('
+            let mut depth = 1;
+            while let Some(&(j, c)) = chars.peek() {
+                end = j;
+                if c == '(' { depth += 1; }
+                if c == ')' { depth -= 1; if depth == 0 { chars.next(); break; } }
+                chars.next();
+            }
+            let _ = i;
+        }
+        let name_args = &s[start..=end.min(s.len()-1)];
+        if let Some(op) = parse_transform(name_args) {
+            out.push(op);
+        }
+    }
+    out
+}
+
 pub fn parse_transform(s: &str) -> Option<TransformOp> {
     let s = s.trim();
     if s == "none" { return Some(TransformOp::None); }
