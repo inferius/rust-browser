@@ -458,6 +458,21 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>) {
         }
     }
 
+    // Outline (mimo border, posunuto o offset, neovlivnuje layout)
+    if bx.outline_width > 0.0 && bx.outline_style != "none" && !bx.outline_style.is_empty() {
+        if let Some(oc) = bx.outline_color {
+            let off = bx.outline_offset;
+            cmds.push(DisplayCommand::Border {
+                x: bx.rect.x - bx.outline_width - off,
+                y: bx.rect.y - bx.outline_width - off,
+                w: bx.rect.width + 2.0 * (bx.outline_width + off),
+                h: bx.rect.height + 2.0 * (bx.outline_width + off),
+                width: bx.outline_width,
+                color: with_alpha(oc),
+            });
+        }
+    }
+
     // Text - aplikuj text_align: x posun podle align
     if let Some(text) = &bx.text {
         // text-transform aplikace pred mereni
