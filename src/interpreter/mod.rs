@@ -3542,6 +3542,24 @@ impl Interpreter {
                             }
                             return Ok(child);
                         }
+                        "matches" => {
+                            let sel = arg_vals.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+                            let parsed = crate::browser::css_parser::parse_selectors(&sel);
+                            let any = parsed.iter().any(|s| crate::browser::cascade::matches_selector(&n, s));
+                            return Ok(JsValue::Bool(any));
+                        }
+                        "closest" => {
+                            let sel = arg_vals.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+                            let parsed = crate::browser::css_parser::parse_selectors(&sel);
+                            let mut current = Some(Rc::clone(&n));
+                            while let Some(c) = current {
+                                if parsed.iter().any(|s| crate::browser::cascade::matches_selector(&c, s)) {
+                                    return Ok(JsValue::DomNode(c));
+                                }
+                                current = c.parent.borrow().upgrade();
+                            }
+                            return Ok(JsValue::Null);
+                        }
                         "submit" if n.tag_name().as_deref() == Some("form") => {
                             // Collect form data (name=value pairs from inputs)
                             let action = n.attr("action").unwrap_or_else(|| "/".to_string());

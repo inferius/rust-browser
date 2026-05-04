@@ -572,7 +572,7 @@ fn parse_decls_str(block: &str) -> Vec<Declaration> {
     decls
 }
 
-fn parse_selectors(s: &str) -> Vec<Selector> {
+pub fn parse_selectors(s: &str) -> Vec<Selector> {
     split_top_level_comma(s).into_iter()
         .map(|sel_str| parse_single_selector(sel_str.trim()))
         .collect()

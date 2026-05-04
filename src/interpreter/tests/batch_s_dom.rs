@@ -292,6 +292,32 @@ fn document_html_exists() {
 // ─── Form properties ─────────────────────────────────────────────────────
 
 #[test]
+fn element_matches_selector() {
+    let v = run(r#"
+        const div = document.createElement("div");
+        div.setAttribute("class", "card big");
+        const m1 = div.matches("div");
+        const m2 = div.matches(".card");
+        const m3 = div.matches(".small");
+        return m1 + ":" + m2 + ":" + m3;
+    "#);
+    assert_eq!(as_str(v), "true:true:false");
+}
+
+#[test]
+fn element_closest_walks_parents() {
+    let v = run(r#"
+        const outer = document.createElement("section");
+        outer.setAttribute("class", "container");
+        const inner = document.createElement("p");
+        outer.appendChild(inner);
+        const found = inner.closest(".container");
+        return found.tagName;
+    "#);
+    assert_eq!(as_str(v), "SECTION");
+}
+
+#[test]
 fn style_set_get_property() {
     let v = run(r#"
         const div = document.createElement("div");
