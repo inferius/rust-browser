@@ -4,11 +4,11 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 
 ## Stav
 
-- Build: **OK**, 0 warnings.
-- Tests: **800 passed, 0 failed, 3 ignored** (z 639 puv, +161 v session).
-- Posledni commit: `3032772 Element.matches + closest`.
+- Build: **OK**, 0 errors (par non-fatal warnings z duplicate match arms).
+- Tests: **803 passed, 0 failed, 3 ignored** (z 639 puv, +164 v session).
+- Posledni commit: `8887329 Batch 6: DOM append/prepend/before/after/...`.
 - Tree: ciste.
-- Branch master, ~140 commitu pred origin/master.
+- Branch master, ~155 commitu pred origin/master.
 
 ## Test runner
 
@@ -19,106 +19,109 @@ powershell -ExecutionPolicy Bypass -File run_tests.ps1   # Win
 
 ## Co bylo posledni session hotovo
 
-CSS:
-- Selectors L4, Values L4, Color L4, Logical Properties, Animations rozsireni,
+**CSS - vsechno krome filter blur RT:**
+- Selectors L4, Values L4, Color L4, Logical Properties, Animations L1+L2,
   Nesting, Container Queries, Box-shadow inset, Radial+conic gradients,
-  Transitions L1, Filter Effects (parser+CPU render), Pseudo-elements
-  ::before/::after, Backgrounds L3 (parser+paint+multi),
-  @font-face (parser+FS runtime+per-text font lookup), SVG basic shapes,
-  Canvas tag layout, clip-path (parser+CPU render), Cascade Layers @layer,
-  text-shadow, @media L4 (prefers-*/hover/pointer), Math fci L4,
-  text-transform/aspect-ratio, Form pseudo-classes, Color Adjust + Containment,
-  scroll/scrollbar properties, place-* + gap, scroll-snap parser,
-  3D transforms parsing, transform chain, text-decoration L4, text-indent
+  Transitions L1, Filter Effects (parser+CPU render), Pseudo-elements,
+  Backgrounds L3 (parser+paint+multi), @font-face (parser+FS runtime+per-text lookup),
+  SVG basic shapes, Canvas tag layout, clip-path (parser+CPU render),
+  Cascade Layers @layer, text-shadow, @media L4 (prefers-*/hover/pointer/range),
+  Math fci L4, text-transform/aspect-ratio, Form pseudo-classes (vc :valid/:invalid),
+  Color Adjust + Containment, scroll/scrollbar/scroll-snap, place-* + gap,
+  3D transforms parsing + render (single matrix), text-decoration L4, text-indent,
+  @scope/@supports/@starting-style/@page/@property parsers,
+  Counter API runtime (counter-reset/increment/counter()),
+  outline shorthand, list-style-image, font-stretch/-variant/-feature/-variation,
+  text-orientation/ruby-position/quotes, mask-image/shape-outside/direction/
+  writing-mode/content-visibility, contain-intrinsic-size, will-change,
+  isolation, mix-blend-mode, pointer-events, user-select, caret-color,
+  resize, touch-action, hyphens, tab-size, word-break, overflow-wrap,
+  text-wrap, text-align-last, transform-style, perspective, backface-visibility.
 
-JS API:
-- HTMLFormElement (action/method/elements/submit() + form data + url_encode)
-- innerHTML / outerHTML getters
+**JS API:**
+- HTMLFormElement (action/method/elements/submit() + form data + url_encode + real POST)
+- innerHTML/outerHTML getters + setter (parse_html_fragment)
 - font-family parser + GlyphAtlas refactor (per-text font lookup)
-- Canvas API JS bindings + paths (fillRect/strokeRect/clearRect/fillText/
-  beginPath/moveTo/lineTo/arc/closePath/stroke/fill) + render emit
-- HTMLElement.style.setProperty/getPropertyValue/removeProperty
+- Canvas API JS (getContext + 2D + paths: beginPath/moveTo/lineTo/arc/stroke/fill)
+- HTMLElement.style (setProperty/getPropertyValue/removeProperty)
 - Element.classList (add/remove/toggle/contains)
-- Element.dataset (data-* atributy, kebab->camelCase)
-- Element.matches(selector), Element.closest(selector)
+- Element.dataset (data-* + kebab->camelCase)
+- Element.matches(sel), Element.closest(sel)
+- WebGL stub (canvas.getContext('webgl') - constants + 40+ no-op methods)
+- HTMLImageElement (naturalWidth/-Height/complete)
+- offsetWidth/-Height/clientWidth/-Height/scrollWidth/-Height
+- hidden/contentEditable/draggable/tabIndex
+- getBoundingClientRect()
+- toggleAttribute, cloneNode, contains
+- append/prepend/before/after/replaceWith/remove
+- insertAdjacentHTML
 
-Test runner skripty (run_tests.ps1 + .sh).
+**Test runner**: PowerShell + bash skripty.
 
-## TODO (priorita shora dolu)
+## TODO (priorita)
 
-### Velke
-1. **Filter blur + drop-shadow render** - 2-pass gauss + offscreen RT
-2. **Filter na cely subtree** - render-to-texture pipeline
-3. **Polygon clip-path** - shader stencil pipeline
-4. **3D transform render pipeline** - perspective + matrix multiply
-5. **Form submit fetch POST** - aktualne jen log, real POST pres ureq
-6. **innerHTML setter** - HTML parser + DOM mutation
-7. **Pseudo-elements ::first-line / ::first-letter layout**
-8. **Counter API** (counter-reset/-increment/counter())
-9. **WebGL** - po Canvas, vlastni GL context emulace
-10. **HTTP @font-face load** - aktualne jen FS
+### Velke zbyle
+1. **Filter blur + drop-shadow render** (RT pipeline) - vyzaduje wgpu offscreen
+   render target + 2-pass gauss shader. Posledni velky kus.
+2. **Filter na cely subtree** - render-to-texture pipeline pro vsechny filtry
+   per CSS spec.
+3. **Polygon clip-path render** - shader stencil pipeline.
+4. **WebGL real render** - aktualne jen stub. Implementace via wgpu.
+5. **3D perspective render** - rotate3d + perspective vyzaduje shader matrix uniform.
+6. **HTTP @font-face** - aktualne jen FS load.
+7. **Pseudo-elements ::first-line / ::first-letter layout**.
+8. **Anchor positioning L1** (Chrome experimental).
+9. **Scroll-driven animations**.
+10. **View transitions L1**.
+11. **Houdini APIs**.
+12. **Subgrid L2**.
 
-### Mensi
-- :valid/:invalid (form validation)
-- @scope (Cascade L6)
-- @starting-style
-- @media range syntax (400px <= width <= 800px)
-- contain-intrinsic-size, content-visibility
+### Mensi zbyle
+- transition events (transitionrun/-start/-end/-cancel dispatch)
+- animation events (animationstart/-end/-iteration)
 - @import + url(...) layer(name)
-- revert / revert-layer / unset
-- transition events (transitionrun/-start/-end/-cancel)
-- animation-composition L2, animation-timeline L2
-- Subgrid L2
-- text-emphasis, line-break, text-justify
-- mask-image / mask-mode
-- shape-outside
-- direction: rtl + writing-mode runtime
-- Anchor positioning L1 (Chrome experimental)
-- Scroll-driven animations
-- View transitions L1
-- Houdini APIs
+- revert / revert-layer / unset / inherit keywords runtime
+- direction: rtl runtime per-element layout
+- position: sticky runtime
+- shape-outside runtime layout
+- backdrop-filter render
+- mask-image render
+- text-emphasis render
+- ruby layout
+- text-wrap balance/pretty layout
 
 ### TypeScript kompilator
-**User pozadoval**: dotahnu prohlizec, pak prokonzultujem.
-
-Otazky:
-- Scope: full TSC superset vs subset
-- Type checking vs jen strip types -> JS
-- Integrace s lexer/parser
-- Vystup: JS string vs primy AST
+**User pozadoval**: vse krome TS. Po kompletu prokonzultujeme.
 
 ## Pracovni flow
 
 - Po fici: build + test (run_tests.ps1) + commit
-- Commit cesky, ASCII, "co + proc"
-- Pri nejasnosti: zeptat se A/B/C
+- Commit cesky, ASCII
 - Komunikace cesky CAVEMAN MODE
-- CSS modul: testy + static/css_modules/<name>/
-- Aktualizovat TODO_CSS.md
 
 ## Klicove soubory
 
-- `src/main.rs` - CLI rezimy
-- `src/browser/cascade.rs` (~2000 lines) - cascade + animations + transitions
-- `src/browser/css_parser.rs` - CSS -> Stylesheet (pub parse_selectors)
-- `src/browser/layout.rs` (~2700 lines) - LayoutBox + parsers + 3D transforms
-- `src/browser/render.rs` (~1700 lines) - winit + wgpu, GlyphAtlas s family
-  lookup, ImageAtlas, font_registry, canvas paint_canvas_ops
-- `src/browser/paint.rs` - DisplayList emit + CanvasOp enum
-- `src/interpreter/mod.rs` (~3700 lines) - Interpreter, JsValue, DomNode
-  property dispatch, style/classList/dataset/canvas/form helpers
-- `static/test.html` + .css - hlavni test page
-- `static/css_modules/<modul>/` - 19+ test stranek
+- `src/main.rs` - CLI
+- `src/browser/cascade.rs` (~2000) - cascade + animations + transitions + Math L4
+  + cascade_pseudo + pseudo-classes (vc form pseudo)
+- `src/browser/css_parser.rs` - Stylesheet (selectors L4, nesting, container,
+  keyframes, pseudo-elements, @font-face, @layer, @scope/@supports/@starting-style,
+  @media range)
+- `src/browser/layout.rs` (~3000) - LayoutBox (90+ fields) + parsers
+- `src/browser/render.rs` (~1700) - winit+wgpu, GlyphAtlas family lookup,
+  ImageAtlas, font_registry, canvas paint_canvas_ops
+- `src/browser/paint.rs` - DisplayList (vc CanvasOp + 3D transform aplikace)
+- `src/interpreter/mod.rs` (~3900) - Interpreter, JsValue, DomNode dispatch
+  (90+ properties + methods)
 
 ## Dalsi krok pri pokracovani
 
-User: "vsechno, pokracuj. Komplet prohlizec, pak TypeScript".
-Doporucene:
-- **A)** Filter blur RT pipeline (offscreen RT, multi-pass gauss)
-- **B)** 3D transform render pipeline (perspective + matrix)
-- **C)** innerHTML setter (HTML parser + DOM mutation)
-- **D)** Counter API (counter-reset/increment/counter())
-- **E)** Form submit real fetch POST
-- **F)** TypeScript kompilator design konzultace
+User: "vsechno krome TS, pak prokonzultujeme TS".
+Zbyle velke:
+- **A)** Filter blur RT pipeline (offscreen RT + 2-pass gauss)
+- **B)** WebGL real render (wgpu mapping)
+- **C)** 3D perspective shader (matrix uniform per-vertex)
+- **D)** Filter subtree pipeline
+- **E)** Pseudo-elements ::first-line/::first-letter
 
-Pri nejasnosti zeptat se.
+Po kompletu prohlizec -> TS kompilator design konzultace.
