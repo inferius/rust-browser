@@ -277,18 +277,21 @@ Konvence stavu:
 - [ ] `@media (forced-colors: active)`
 
 ### CSS Filter Effects L1
-- [ ] `filter: blur(<r>)`
-- [ ] `filter: brightness(<n>)`
-- [ ] `filter: contrast(<n>)`
-- [ ] `filter: grayscale(<%>)`
-- [ ] `filter: hue-rotate(<deg>)`
-- [ ] `filter: invert(<n>)`
-- [ ] `filter: opacity(<%>)`
-- [ ] `filter: saturate(<n>)`
-- [ ] `filter: sepia(<%>)`
-- [ ] `filter: drop-shadow(...)`
-- [ ] Vice filtru chained: `filter: blur(2px) brightness(1.2)`
+- [/] `filter: blur(<r>)` - parser, render TODO (vyzaduje 2-pass gauss)
+- [/] `filter: brightness(<n>)` - parser, render TODO (color matrix)
+- [/] `filter: contrast(<n>)` - parser, render TODO
+- [/] `filter: grayscale(<%>)` - parser, render TODO
+- [/] `filter: hue-rotate(<deg>)` - parser, render TODO
+- [/] `filter: invert(<n>)` - parser, render TODO
+- [/] `filter: opacity(<%>)` - parser
+- [/] `filter: saturate(<n>)` - parser, render TODO
+- [/] `filter: sepia(<%>)` - parser, render TODO
+- [/] `filter: drop-shadow(...)` - parser
+- [x] Vice filtru chained: `filter: blur(2px) brightness(1.2)` - parser
 - [ ] `backdrop-filter`
+- [ ] **Render**: vyzaduje render-to-texture (offscreen RT) pro presnu CSS spec
+  implementaci na cely subtree. Single-element filter mozno pres color matrix
+  v shader fragment. TODO: postup viz Filter Effects implementacni plan.
 
 ### CSS Masking L1
 - [ ] `clip-path: inset()|circle()|ellipse()|polygon()|path()|url()`

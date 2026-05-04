@@ -169,6 +169,55 @@ fn parse_linear_gradient_basic() {
 }
 
 #[test]
+fn parse_filter_chain_blur() {
+    use crate::browser::layout::{parse_filter_chain, FilterOp};
+    let chain = parse_filter_chain("blur(4px)");
+    assert_eq!(chain.len(), 1);
+    assert_eq!(chain[0], FilterOp::Blur(4.0));
+}
+
+#[test]
+fn parse_filter_chain_multiple() {
+    use crate::browser::layout::{parse_filter_chain, FilterOp};
+    let chain = parse_filter_chain("blur(2px) brightness(1.2) hue-rotate(45deg)");
+    assert_eq!(chain.len(), 3);
+    assert_eq!(chain[0], FilterOp::Blur(2.0));
+    assert_eq!(chain[1], FilterOp::Brightness(1.2));
+    assert_eq!(chain[2], FilterOp::HueRotate(45.0));
+}
+
+#[test]
+fn parse_filter_chain_pct() {
+    use crate::browser::layout::{parse_filter_chain, FilterOp};
+    let chain = parse_filter_chain("grayscale(50%) sepia(30%)");
+    assert_eq!(chain.len(), 2);
+    assert_eq!(chain[0], FilterOp::Grayscale(0.5));
+    assert_eq!(chain[1], FilterOp::Sepia(0.3));
+}
+
+#[test]
+fn parse_filter_chain_drop_shadow() {
+    use crate::browser::layout::{parse_filter_chain, FilterOp};
+    let chain = parse_filter_chain("drop-shadow(2px 4px 8px black)");
+    assert_eq!(chain.len(), 1);
+    if let FilterOp::DropShadow { ox, oy, blur, color } = chain[0] {
+        assert_eq!(ox, 2.0);
+        assert_eq!(oy, 4.0);
+        assert_eq!(blur, 8.0);
+        assert_eq!(color, [0, 0, 0, 255]);
+    } else {
+        panic!("expected DropShadow");
+    }
+}
+
+#[test]
+fn parse_filter_chain_none() {
+    use crate::browser::layout::parse_filter_chain;
+    assert!(parse_filter_chain("none").is_empty());
+    assert!(parse_filter_chain("").is_empty());
+}
+
+#[test]
 fn parse_radial_gradient_basic() {
     let g = layout::parse_radial_gradient("radial-gradient(red, blue)").unwrap();
     matches!(g.kind, crate::browser::layout::BgGradientKind::Radial { .. });

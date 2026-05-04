@@ -1095,6 +1095,136 @@ pub enum BgGradientKind {
     Conic { cx_pct: f32, cy_pct: f32, start_angle_deg: f32 },
 }
 
+/// CSS Filter Effects L1 - jednotliva operace.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FilterOp {
+    Blur(f32),                   // pixelu
+    Brightness(f32),             // 0..1+
+    Contrast(f32),               // 0..1+
+    Grayscale(f32),              // 0..1
+    HueRotate(f32),              // ve stupnich
+    Invert(f32),                 // 0..1
+    Saturate(f32),               // 0..1+
+    Sepia(f32),                  // 0..1
+    Opacity(f32),                // 0..1
+    /// drop-shadow(offset_x offset_y blur color)
+    DropShadow { ox: f32, oy: f32, blur: f32, color: [u8; 4] },
+}
+
+/// Parsuje filter / backdrop-filter property na chain operaci.
+/// "filter: blur(2px) brightness(1.2) hue-rotate(45deg)" -> 3 ops.
+pub fn parse_filter_chain(s: &str) -> Vec<FilterOp> {
+    let s = s.trim();
+    if s.is_empty() || s == "none" { return Vec::new(); }
+    let mut out = Vec::new();
+    let mut chars = s.char_indices().peekable();
+    while let Some(&(start, _)) = chars.peek() {
+        // Skip whitespace
+        while let Some(&(_, c)) = chars.peek() {
+            if c.is_whitespace() { chars.next(); } else { break; }
+        }
+        let start_idx = match chars.peek() { Some(&(i, _)) => i, None => break };
+        // Read function name do `(`
+        let mut name_end = start_idx;
+        while let Some(&(i, c)) = chars.peek() {
+            if c == '(' { name_end = i; chars.next(); break; }
+            if c.is_whitespace() {
+                // Mozna keyword bez argumentu - skip
+                break;
+            }
+            chars.next();
+            name_end = i + c.len_utf8();
+        }
+        let name = &s[start_idx..name_end];
+        if name.is_empty() { break; }
+        // Read args do `)` - respektovat nesteni
+        let arg_start = match chars.peek() { Some(&(i, _)) => i, None => break };
+        let _ = start;
+        let mut depth = 1;
+        let mut arg_end = arg_start;
+        while let Some(&(i, c)) = chars.peek() {
+            arg_end = i;
+            if c == '(' { depth += 1; }
+            if c == ')' { depth -= 1; if depth == 0 { chars.next(); break; } }
+            chars.next();
+        }
+        let args = &s[arg_start..arg_end];
+        if let Some(op) = parse_filter_one(name, args) {
+            out.push(op);
+        }
+    }
+    out
+}
+
+fn parse_filter_one(name: &str, args: &str) -> Option<FilterOp> {
+    let args = args.trim();
+    let parse_pct_or_num = |s: &str| -> Option<f32> {
+        let s = s.trim();
+        if let Some(p) = s.strip_suffix('%') { p.trim().parse::<f32>().ok().map(|v| v / 100.0) }
+        else { s.parse().ok() }
+    };
+    Some(match name {
+        "blur" => FilterOp::Blur(parse_length(args)),
+        "brightness" => FilterOp::Brightness(parse_pct_or_num(args)?),
+        "contrast"   => FilterOp::Contrast(parse_pct_or_num(args)?),
+        "grayscale"  => FilterOp::Grayscale(parse_pct_or_num(args)?),
+        "hue-rotate" => {
+            // deg / rad / turn
+            if let Some(v) = args.strip_suffix("deg") { FilterOp::HueRotate(v.trim().parse().ok()?) }
+            else if let Some(v) = args.strip_suffix("rad") {
+                FilterOp::HueRotate(v.trim().parse::<f32>().ok()?.to_degrees())
+            }
+            else if let Some(v) = args.strip_suffix("turn") {
+                FilterOp::HueRotate(v.trim().parse::<f32>().ok()? * 360.0)
+            }
+            else { FilterOp::HueRotate(args.parse().ok()?) }
+        }
+        "invert"   => FilterOp::Invert(parse_pct_or_num(args)?),
+        "saturate" => FilterOp::Saturate(parse_pct_or_num(args)?),
+        "sepia"    => FilterOp::Sepia(parse_pct_or_num(args)?),
+        "opacity"  => FilterOp::Opacity(parse_pct_or_num(args)?),
+        "drop-shadow" => {
+            // "<ox> <oy> [<blur>] <color>"
+            let parts: Vec<&str> = split_top_level_whitespace_str(args);
+            if parts.len() < 3 { return None; }
+            let ox = parse_length(parts[0]);
+            let oy = parse_length(parts[1]);
+            let mut blur = 0.0f32;
+            let mut color_idx = 2;
+            if parts[2].chars().next().map(|c| c.is_ascii_digit() || c == '.').unwrap_or(false)
+                || parts[2].ends_with("px") || parts[2].ends_with("em")
+            {
+                blur = parse_length(parts[2]);
+                color_idx = 3;
+            }
+            if color_idx >= parts.len() { return None; }
+            let rest: String = parts[color_idx..].join(" ");
+            let color = parse_color(&rest)?;
+            FilterOp::DropShadow { ox, oy, blur, color }
+        }
+        _ => return None,
+    })
+}
+
+fn split_top_level_whitespace_str(s: &str) -> Vec<&str> {
+    let mut tokens = Vec::new();
+    let mut start = 0;
+    let mut depth = 0i32;
+    for (i, c) in s.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            c if c.is_whitespace() && depth == 0 => {
+                if i > start { tokens.push(&s[start..i]); }
+                start = i + c.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    if start < s.len() { tokens.push(&s[start..]); }
+    tokens.into_iter().filter(|t| !t.is_empty()).collect()
+}
+
 /// Parsuje linear-gradient / radial-gradient / conic-gradient.
 pub fn parse_any_gradient(s: &str) -> Option<BgGradient> {
     let s = s.trim();
