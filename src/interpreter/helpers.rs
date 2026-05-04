@@ -418,6 +418,111 @@ pub fn radix_string(mut n: u64, radix: u32) -> String {
     buf.iter().rev().collect()
 }
 
+// ─── Intl - lokalizace (lite, bez ICU) ────────────────────────────────────
+
+/// Formatuje cislo podle locale.
+/// cs-CZ: " " jako tisice, "," jako desetinna
+/// de-DE: "." jako tisice, "," jako desetinna
+/// en-US: "," jako tisice, "." jako desetinna (default)
+/// fr-FR: " " jako tisice, "," jako desetinna
+pub fn format_number_intl(n: f64, locale: &str) -> String {
+    if n.is_nan()      { return "NaN".into(); }
+    if n.is_infinite() { return if n > 0.0 { "∞".into() } else { "-∞".into() }; }
+    let (thousand_sep, decimal_sep) = locale_separators(locale);
+    let s = format!("{n}");
+    let (int_part, dec_part) = if let Some(dot) = s.find('.') {
+        (&s[..dot], Some(&s[dot+1..]))
+    } else {
+        (s.as_str(), None)
+    };
+    let (neg, digits) = if int_part.starts_with('-') {
+        (true, &int_part[1..])
+    } else {
+        (false, int_part)
+    };
+    let with_sep: String = digits.chars().rev().enumerate()
+        .flat_map(|(i, c)| {
+            if i > 0 && i % 3 == 0 {
+                vec![thousand_sep, c]
+            } else {
+                vec![c]
+            }
+        })
+        .collect::<String>()
+        .chars().rev().collect();
+    let result = match dec_part {
+        Some(d) => format!("{with_sep}{decimal_sep}{d}"),
+        None    => with_sep,
+    };
+    if neg { format!("-{result}") } else { result }
+}
+
+/// Vrati (thousand_sep, decimal_sep) pro dany locale.
+fn locale_separators(locale: &str) -> (char, char) {
+    match locale {
+        s if s.starts_with("cs") => (' ', ','),
+        s if s.starts_with("de") => ('.', ','),
+        s if s.starts_with("fr") => (' ', ','),
+        s if s.starts_with("sk") => (' ', ','),
+        s if s.starts_with("pl") => (' ', ','),
+        s if s.starts_with("ru") => (' ', ','),
+        s if s.starts_with("it") => ('.', ','),
+        s if s.starts_with("es") => ('.', ','),
+        _ => (',', '.'), // en-US default
+    }
+}
+
+/// Formatuje date/time podle locale (jen zaklad: short date format).
+/// cs-CZ: "15. 6. 2024 12:30:45"
+/// de-DE: "15.6.2024 12:30:45"
+/// en-US: "6/15/2024 12:30:45 PM"
+pub fn format_datetime_intl(ms: f64, locale: &str) -> String {
+    let (yr, mo, day, hr, min, sec, _) = ms_to_parts(ms);
+    match locale {
+        s if s.starts_with("cs") => format!("{day}. {}. {yr} {hr:02}:{min:02}:{sec:02}", mo+1),
+        s if s.starts_with("de") => format!("{day}.{}.{yr} {hr:02}:{min:02}:{sec:02}", mo+1),
+        s if s.starts_with("fr") => format!("{day}/{}/{yr} {hr:02}:{min:02}:{sec:02}", mo+1),
+        _ => {
+            let pm = hr >= 12;
+            let h12 = if hr == 0 { 12 } else if hr > 12 { hr - 12 } else { hr };
+            format!("{}/{day}/{yr} {h12}:{min:02}:{sec:02} {}", mo+1, if pm { "PM" } else { "AM" })
+        }
+    }
+}
+
+/// Vrati plural kategorii pro cislo a locale (one/few/many/other).
+pub fn plural_select(n: f64, locale: &str) -> String {
+    let abs = n.abs();
+    let int_n = abs as i64;
+    match locale {
+        // cs-CZ: 1 -> one, 2-4 -> few, jine cele -> other (zjednoduseni)
+        s if s.starts_with("cs") || s.starts_with("sk") => {
+            if int_n == 1 && abs.fract() == 0.0 { "one".into() }
+            else if (2..=4).contains(&int_n) && abs.fract() == 0.0 { "few".into() }
+            else if abs.fract() != 0.0 { "many".into() }
+            else { "other".into() }
+        }
+        // pl: 1 -> one, 2-4 (ne 12-14) -> few, jinak many
+        s if s.starts_with("pl") => {
+            if int_n == 1 { "one".into() }
+            else if (2..=4).contains(&(int_n % 10)) && !(12..=14).contains(&(int_n % 100)) { "few".into() }
+            else { "many".into() }
+        }
+        // ru: 1 -> one, 2-4 -> few, jinak many
+        s if s.starts_with("ru") => {
+            let last_digit = int_n % 10;
+            let last_two = int_n % 100;
+            if last_digit == 1 && last_two != 11 { "one".into() }
+            else if (2..=4).contains(&last_digit) && !(12..=14).contains(&last_two) { "few".into() }
+            else { "many".into() }
+        }
+        // en, de, fr, ...: 1 -> one, jine -> other
+        _ => {
+            if abs == 1.0 { "one".into() } else { "other".into() }
+        }
+    }
+}
+
 pub fn format_number_locale(n: f64) -> String {
     if n.is_nan()      { return "NaN".into(); }
     if n.is_infinite() { return if n > 0.0 { "Infinity".into() } else { "-Infinity".into() }; }

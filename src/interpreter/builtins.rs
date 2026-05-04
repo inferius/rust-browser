@@ -402,6 +402,48 @@ pub fn setup_builtins(
     // Proxy konstruktor - logika je v call_new, registrujeme stub
     e.define("Proxy", native("Proxy", |_| Ok(JsValue::Undefined)));
 
+    // ─── Intl (ECMA-402) - lokalizace ────────────────────────────────────────
+    // Vlastni lite implementace pro nejcastejsi locale (cs-CZ, en-US, de-DE).
+    let mut intl = JsObject::new();
+
+    // Intl.NumberFormat(locale).format(num) -> "1 234 567,89" (cs-CZ)
+    intl.set("NumberFormat".into(), native("Intl.NumberFormat", |a| {
+        let locale = a.first().map(|v| v.to_string()).unwrap_or_else(|| "en-US".into());
+        let mut obj = JsObject::new();
+        obj.set("__intl_locale__".into(), JsValue::Str(locale.clone()));
+        obj.set("__intl_kind__".into(), JsValue::Str("number".into()));
+        Ok(JsValue::Object(Rc::new(RefCell::new(obj))))
+    }));
+
+    // Intl.DateTimeFormat(locale).format(date)
+    intl.set("DateTimeFormat".into(), native("Intl.DateTimeFormat", |a| {
+        let locale = a.first().map(|v| v.to_string()).unwrap_or_else(|| "en-US".into());
+        let mut obj = JsObject::new();
+        obj.set("__intl_locale__".into(), JsValue::Str(locale.clone()));
+        obj.set("__intl_kind__".into(), JsValue::Str("datetime".into()));
+        Ok(JsValue::Object(Rc::new(RefCell::new(obj))))
+    }));
+
+    // Intl.Collator(locale).compare(a, b) -> -1/0/1
+    intl.set("Collator".into(), native("Intl.Collator", |a| {
+        let locale = a.first().map(|v| v.to_string()).unwrap_or_else(|| "en-US".into());
+        let mut obj = JsObject::new();
+        obj.set("__intl_locale__".into(), JsValue::Str(locale.clone()));
+        obj.set("__intl_kind__".into(), JsValue::Str("collator".into()));
+        Ok(JsValue::Object(Rc::new(RefCell::new(obj))))
+    }));
+
+    // Intl.PluralRules(locale).select(n) -> "one"/"other"/...
+    intl.set("PluralRules".into(), native("Intl.PluralRules", |a| {
+        let locale = a.first().map(|v| v.to_string()).unwrap_or_else(|| "en-US".into());
+        let mut obj = JsObject::new();
+        obj.set("__intl_locale__".into(), JsValue::Str(locale.clone()));
+        obj.set("__intl_kind__".into(), JsValue::Str("plural".into()));
+        Ok(JsValue::Object(Rc::new(RefCell::new(obj))))
+    }));
+
+    e.define("Intl", JsValue::Object(Rc::new(RefCell::new(intl))));
+
     // Konstruktory bez vlastni logiky (logika je v call_new)
     e.define("Map", native("Map", |_| Ok(JsValue::Undefined)));
     e.define("Set", native("Set", |_| Ok(JsValue::Undefined)));

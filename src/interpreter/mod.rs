@@ -2542,6 +2542,42 @@ impl Interpreter {
                 }
                 JsValue::Object(obj_rc) => {
                     let obj_rc2 = Rc::clone(obj_rc);
+                    // ─── Intl.* metody ───────────────────────────────────
+                    if let Some(JsValue::Str(kind)) = obj_rc2.borrow().props.get("__intl_kind__").cloned() {
+                        let locale = match obj_rc2.borrow().props.get("__intl_locale__").cloned() {
+                            Some(JsValue::Str(s)) => s,
+                            _ => "en-US".into(),
+                        };
+                        let arg_vals = self.eval_args(args, env)?;
+                        match (kind.as_str(), key.as_str()) {
+                            ("number", "format") => {
+                                let n = arg_vals.first().map(|v| v.to_number()).unwrap_or(f64::NAN);
+                                return Ok(JsValue::Str(format_number_intl(n, &locale)));
+                            }
+                            ("datetime", "format") => {
+                                let ms = arg_vals.first().and_then(|v| get_date_ms(v))
+                                    .or_else(|| arg_vals.first().map(|v| v.to_number()))
+                                    .unwrap_or(0.0);
+                                return Ok(JsValue::Str(format_datetime_intl(ms, &locale)));
+                            }
+                            ("collator", "compare") => {
+                                let a = arg_vals.get(0).map(|v| v.to_string()).unwrap_or_default();
+                                let b = arg_vals.get(1).map(|v| v.to_string()).unwrap_or_default();
+                                let cmp = a.to_lowercase().cmp(&b.to_lowercase());
+                                let n = match cmp {
+                                    std::cmp::Ordering::Less    => -1.0,
+                                    std::cmp::Ordering::Greater =>  1.0,
+                                    std::cmp::Ordering::Equal   =>  0.0,
+                                };
+                                return Ok(JsValue::Number(n));
+                            }
+                            ("plural", "select") => {
+                                let n = arg_vals.first().map(|v| v.to_number()).unwrap_or(0.0);
+                                return Ok(JsValue::Str(plural_select(n, &locale)));
+                            }
+                            _ => {}
+                        }
+                    }
                     // ─── WeakRef.deref / FinalizationRegistry methods ──────
                     if obj_rc2.borrow().props.contains_key("__weak_target__") {
                         if key == "deref" {
@@ -2795,7 +2831,12 @@ impl Interpreter {
                         }
                         "valueOf" => return Ok(JsValue::Number(n)),
                         "toLocaleString" => {
-                            return Ok(JsValue::Str(format_number_locale(n)));
+                            // Volitelny prvni argument: locale string
+                            let locale = arg_vals.first().map(|v| v.to_string());
+                            return Ok(JsValue::Str(match locale {
+                                Some(loc) => format_number_intl(n, &loc),
+                                None      => format_number_locale(n),
+                            }));
                         }
                         _ => {}
                     }
@@ -3307,8 +3348,14 @@ impl Interpreter {
             }
         }
         // `new FunctionConstructor()` - stary styl
+        // Pro Native funkce: kdyz vrati Object, pouzij jeho return value
+        // (umoznuje natnivnim konstruktorum vratit objekt vlastniho typu)
+        let is_native = matches!(&func, JsValue::Function(JsFunc::Native(_, _)));
         let obj = JsValue::Object(Rc::new(RefCell::new(JsObject::new())));
-        self.call_function(func, args, Some(obj.clone()))?;
+        let result = self.call_function(func, args, Some(obj.clone()))?;
+        if is_native && matches!(&result, JsValue::Object(_)) {
+            return Ok(result);
+        }
         Ok(obj)
     }
 
