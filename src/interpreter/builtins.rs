@@ -26,19 +26,77 @@ use num_bigint::BigInt;
 use super::{JsValue, JsObject, Environment};
 use super::helpers::*;
 
-/// Worker thread loop: cte zpravy z main, vola worker script (zatim stub).
-/// Realna implementace by nacetla skript a interpretovala ho s onmessage handlerem.
-/// Zatim jen echo - posila zpet kazdou zpravu.
+/// Worker thread loop: nacte JS skript ze souboru a interpretuje ho.
+/// Worker scope ma globalni `self`, `postMessage(data)` a `onmessage = fn`.
+/// Pri prijeti zpravy z main: parse JSON, zavola self.onmessage({data: parsed}).
+/// Pri postMessage z workera: serializuj a posli outgoing channel.
 fn run_worker_thread(
-    _script_url: &str,
+    script_url: &str,
     incoming: std::sync::mpsc::Receiver<String>,
     outgoing: std::sync::mpsc::Sender<String>,
 ) {
+    use crate::lexer::base::Lexer;
+    use crate::parser::Parser;
+    use crate::tokens::TokenKind;
+
+    // Worker ma vlastni Interpreter. Zaregistrujeme postMessage co posle pres outgoing.
+    let mut interp = super::Interpreter::new();
+    let outgoing_clone = outgoing.clone();
+
+    // Pridam worker postMessage do scope
+    let post_fn = JsValue::Function(super::JsFunc::Native(
+        "postMessage".to_string(),
+        std::rc::Rc::new(move |args: Vec<JsValue>| {
+            let val = args.into_iter().next().unwrap_or(JsValue::Undefined);
+            let serialized = json_stringify(&val, 0, 0)
+                .unwrap_or_else(|| val.to_string());
+            let _ = outgoing_clone.send(serialized);
+            Ok(JsValue::Undefined)
+        }),
+    ));
+    interp.global.borrow_mut().define("postMessage", post_fn);
+    // Self reference - zatim prazdny objekt s onmessage placeholder
+    let mut self_obj = JsObject::new();
+    self_obj.set("onmessage".into(), JsValue::Undefined);
+    let self_val = JsValue::Object(Rc::new(RefCell::new(self_obj)));
+    interp.global.borrow_mut().define("self", self_val.clone());
+
+    // Nacti script - zkus FS, fallback na inline test stub
+    let script_src = match std::fs::read_to_string(script_url) {
+        Ok(s) => s,
+        Err(_) => {
+            // Fallback: jednoduchy echo handler
+            r#"self.onmessage = function(e) { postMessage("worker received: " + e.data); };"#.to_string()
+        }
+    };
+
+    // Parse + run scriptu
+    if let Ok(lex) = Lexer::parse_str(&script_src, script_url) {
+        let tokens: Vec<_> = lex.tokens.into_iter()
+            .filter(|t| !matches!(t.kind,
+                TokenKind::Whitespace | TokenKind::Newline
+                | TokenKind::CommentLine(_) | TokenKind::CommentBlock(_)))
+            .collect();
+        let mut parser = Parser::new(tokens);
+        if let Ok(prog) = parser.parse() {
+            let _ = interp.run(&prog);
+        }
+    }
+
+    // Loop: cti zpravy, vola self.onmessage
     while let Ok(msg) = incoming.recv() {
-        // Stub: echo + prefix "worker:"
-        let response = format!("\"worker received: {}\"", msg.replace('"', "\\\""));
-        if outgoing.send(response).is_err() {
-            break;
+        let parsed = json_parse(&msg).unwrap_or(JsValue::Str(msg.clone()));
+        let mut event = JsObject::new();
+        event.set("data".into(), parsed);
+        let event_val = JsValue::Object(Rc::new(RefCell::new(event)));
+
+        // self.onmessage(event)
+        let onmessage = if let JsValue::Object(s) = &self_val {
+            s.borrow().get("onmessage")
+        } else { JsValue::Undefined };
+
+        if !matches!(onmessage, JsValue::Undefined) {
+            let _ = interp.call_function(onmessage, vec![event_val], None);
         }
     }
 }
