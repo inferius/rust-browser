@@ -214,6 +214,53 @@ fn selector_first_of_type() {
     assert!(cascade::get_styles(&map, &ps[1]).unwrap().get("color").is_none());
 }
 
+// ─── Form pseudo-classes ───────────────────────────────────────────────
+
+#[test]
+fn pseudo_required_matches_required_input() {
+    let doc = parse_html(r#"<html><body><input required><input></body></html>"#, "");
+    let css = parse_stylesheet("input:required { color: red; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let inputs = doc.root.get_elements_by_tag("input");
+    let req = &inputs[0];
+    let opt = &inputs[1];
+    assert_eq!(cascade::get_styles(&map, req).unwrap().get("color").map(|s| s.as_str()), Some("red"));
+    assert!(cascade::get_styles(&map, opt).unwrap().get("color").is_none());
+}
+
+#[test]
+fn pseudo_disabled_matches_disabled() {
+    let doc = parse_html(r#"<html><body><button disabled>x</button><button>y</button></body></html>"#, "");
+    let css = parse_stylesheet("button:disabled { color: gray; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let buttons = doc.root.get_elements_by_tag("button");
+    assert_eq!(cascade::get_styles(&map, &buttons[0]).unwrap().get("color").map(|s| s.as_str()), Some("gray"));
+    assert!(cascade::get_styles(&map, &buttons[1]).unwrap().get("color").is_none());
+}
+
+#[test]
+fn pseudo_checked_matches_input() {
+    let doc = parse_html(r#"<html><body><input type="checkbox" checked><input type="checkbox"></body></html>"#, "");
+    let css = parse_stylesheet("input:checked { color: green; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let inputs = doc.root.get_elements_by_tag("input");
+    assert_eq!(cascade::get_styles(&map, &inputs[0]).unwrap().get("color").map(|s| s.as_str()), Some("green"));
+    assert!(cascade::get_styles(&map, &inputs[1]).unwrap().get("color").is_none());
+}
+
+#[test]
+fn pseudo_placeholder_shown_matches_empty_value() {
+    let doc = parse_html(r#"<html><body>
+        <input placeholder="hint" value="">
+        <input placeholder="hint" value="filled">
+    </body></html>"#, "");
+    let css = parse_stylesheet(r#"input:placeholder-shown { color: gray; }"#);
+    let map = cascade::cascade(&doc.root, &[css]);
+    let inputs = doc.root.get_elements_by_tag("input");
+    assert_eq!(cascade::get_styles(&map, &inputs[0]).unwrap().get("color").map(|s| s.as_str()), Some("gray"));
+    assert!(cascade::get_styles(&map, &inputs[1]).unwrap().get("color").is_none());
+}
+
 // ─── @media L4/L5 prefers-* ────────────────────────────────────────────
 
 #[test]

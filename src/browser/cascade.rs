@@ -912,9 +912,49 @@ pub fn matches_simple(node: &Rc<Node>, sel: &SimpleSelector) -> bool {
                 if has_content { return false; }
             }
             "any-link" | "scope" => { /* OK */ }
-            // hover/active/focus - bez runtime stavu - skip
+            // Form attribute pseudo-classes - lze staticky overit z DOM attributes
+            "required" => {
+                if node.attr("required").is_none() { return false; }
+            }
+            "optional" => {
+                // :optional - jen na form input/select/textarea co NEMA required
+                let is_form = matches!(tag.as_str(), "input" | "select" | "textarea");
+                if !is_form || node.attr("required").is_some() { return false; }
+            }
+            "disabled" => {
+                if node.attr("disabled").is_none() { return false; }
+            }
+            "enabled" => {
+                let is_form = matches!(tag.as_str(), "input" | "select" | "textarea" | "button");
+                if !is_form || node.attr("disabled").is_some() { return false; }
+            }
+            "checked" => {
+                // checkbox / radio s checked attributem
+                if node.attr("checked").is_none() { return false; }
+            }
+            "read-only" => {
+                let is_form = matches!(tag.as_str(), "input" | "textarea");
+                if !is_form { return false; }
+                // readonly attribut nebo not text-like input
+                if node.attr("readonly").is_none() {
+                    return false;
+                }
+            }
+            "read-write" => {
+                let is_form = matches!(tag.as_str(), "input" | "textarea");
+                if !is_form || node.attr("readonly").is_some() || node.attr("disabled").is_some() {
+                    return false;
+                }
+            }
+            "placeholder-shown" => {
+                // :placeholder-shown match pokud value je prazdne a element ma placeholder
+                let has_placeholder = node.attr("placeholder").is_some();
+                let value_empty = node.attr("value").map(|v| v.is_empty()).unwrap_or(true);
+                if !has_placeholder || !value_empty { return false; }
+            }
+            // hover/active/focus - vyzaduje runtime stav - skip (rule se neaplikuje staticky)
             "hover" | "active" | "focus" | "focus-visible" | "focus-within"
-            | "visited" | "link" | "checked" | "disabled" | "enabled" => return false,
+            | "visited" | "link" => return false,
             _ => {}
         }
     }

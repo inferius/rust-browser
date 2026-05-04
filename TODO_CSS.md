@@ -62,7 +62,12 @@ Konvence stavu:
 - [x] `:nth-of-type(an+b)`, `:nth-last-child(an+b)`, `:nth-last-of-type(an+b)`, `:nth-child(an+b)` (vc. odd/even)
 - [ ] `:lang()`, `:dir()`
 - [x] `:any-link`, `:scope` (no-op match - bez navigation context)
-- [ ] `:placeholder-shown`, `:read-only`, `:read-write`, `:required`, `:optional`, `:valid`, `:invalid`
+- [x] `:required`, `:optional` (z required attribut)
+- [x] `:disabled`, `:enabled` (z disabled attribut)
+- [x] `:checked` (z checked attribut)
+- [x] `:read-only`, `:read-write` (z readonly/disabled)
+- [x] `:placeholder-shown` (placeholder + empty value)
+- [ ] `:valid`, `:invalid` - vyzaduje runtime form validation
 - [ ] `||` column combinator (table cells)
 - [ ] `&` nesting selector (CSS Nesting L1)
 
