@@ -1868,6 +1868,8 @@ struct Renderer {
     webgl_pipelines: std::collections::HashMap<u32, wgpu::RenderPipeline>,
     /// Uploadovane vertex/index buffers per WebGLBuffer ID.
     webgl_buffers: std::collections::HashMap<u32, wgpu::Buffer>,
+    /// Per-canvas offscreen RT (canvas_ptr -> Texture + View).
+    webgl_canvas_rts: std::collections::HashMap<usize, (wgpu::Texture, wgpu::TextureView, u32, u32)>,
     /// 3D transform compose pipeline (samples offscreen RT, kresli quad transformovany matici)
     transform_pipeline: wgpu::RenderPipeline,
     transform_bind_group_layout: wgpu::BindGroupLayout,
@@ -2284,7 +2286,179 @@ impl Renderer {
             webgl_shader_modules: std::collections::HashMap::new(),
             webgl_pipelines: std::collections::HashMap::new(),
             webgl_buffers: std::collections::HashMap::new(),
+            webgl_canvas_rts: std::collections::HashMap::new(),
         }
+    }
+
+    /// Ensure per-canvas offscreen RT vznikne (alloc pri prvni navsteve nebo
+    /// resize). Vraci view.
+    pub fn ensure_webgl_canvas_rt(&mut self, canvas_ptr: usize, w: u32, h: u32) {
+        let need_create = match self.webgl_canvas_rts.get(&canvas_ptr) {
+            Some((_, _, cw, ch)) => *cw != w || *ch != h,
+            None => true,
+        };
+        if need_create {
+            let tex = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(&format!("webgl_canvas_rt_{canvas_ptr}")),
+                size: wgpu::Extent3d {
+                    width: w.max(1), height: h.max(1), depth_or_array_layers: 1,
+                },
+                mip_level_count: 1, sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: self.config.format,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            let view = tex.create_view(&Default::default());
+            self.webgl_canvas_rts.insert(canvas_ptr, (tex, view, w, h));
+        }
+    }
+
+    pub fn webgl_canvas_rt_count(&self) -> usize {
+        self.webgl_canvas_rts.len()
+    }
+    pub fn webgl_has_canvas_rt(&self, canvas_ptr: usize) -> bool {
+        self.webgl_canvas_rts.contains_key(&canvas_ptr)
+    }
+
+    /// Build wgpu pipeline z cached shader modules + vertex layout dle attribs.
+    /// Cached per program_id. Vraci true pokud build success (nebo cache hit).
+    pub fn ensure_webgl_pipeline(&mut self, program_id: u32, attribs: &[(u32, crate::interpreter::WebGLAttribSlot)]) -> bool {
+        if self.webgl_pipelines.contains_key(&program_id) {
+            return true;
+        }
+        let modules = match self.webgl_shader_modules.get(&program_id) {
+            Some(m) => m,
+            None => return false,  // shader modules nutno predtim
+        };
+        // Vertex layout: jeden vertex buffer s vsemi attribs.
+        let stride = webgl_compute_stride(attribs);
+        let attrs: Vec<wgpu::VertexAttribute> = attribs.iter().filter_map(|(loc, slot)| {
+            webgl_attrib_to_vertex_format(slot.size, slot.component_type).map(|fmt| {
+                wgpu::VertexAttribute {
+                    format: fmt,
+                    offset: slot.offset as u64,
+                    shader_location: *loc,
+                }
+            })
+        }).collect();
+        let buffers: Vec<wgpu::VertexBufferLayout> = if attrs.is_empty() {
+            Vec::new()
+        } else {
+            vec![wgpu::VertexBufferLayout {
+                array_stride: stride.max(4),
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &attrs,
+            }]
+        };
+        let pl_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some(&format!("webgl_pl_{program_id}")),
+            bind_group_layouts: &[],
+            push_constant_ranges: &[],
+        });
+        let pipeline = self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(&format!("webgl_pipeline_{program_id}")),
+            layout: Some(&pl_layout),
+            vertex: wgpu::VertexState {
+                module: &modules.0, entry_point: "main",
+                compilation_options: Default::default(),
+                buffers: &buffers,
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &modules.1, entry_point: "main",
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: self.config.format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+        });
+        self.webgl_pipelines.insert(program_id, pipeline);
+        true
+    }
+
+    /// Encode wgpu draw call do canvas RT.
+    /// Pipeline + buffer musi byt cached. Vraci true pokud emit success.
+    pub fn webgl_encode_draw_arrays(
+        &self,
+        canvas_ptr: usize,
+        program_id: u32,
+        first: i32,
+        count: i32,
+        attribs: &[(u32, crate::interpreter::WebGLAttribSlot)],
+        clear_color: Option<[f32; 4]>,
+    ) -> bool {
+        let view = match self.webgl_canvas_rts.get(&canvas_ptr) {
+            Some((_, v, _, _)) => v,
+            None => return false,
+        };
+        let pipeline = match self.webgl_pipelines.get(&program_id) {
+            Some(p) => p,
+            None => return false,
+        };
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        let load = match clear_color {
+            Some(c) => wgpu::LoadOp::Clear(wgpu::Color {
+                r: c[0] as f64, g: c[1] as f64, b: c[2] as f64, a: c[3] as f64,
+            }),
+            None => wgpu::LoadOp::Load,
+        };
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("webgl_draw_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view, resolve_target: None,
+                    ops: wgpu::Operations { load, store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: None, timestamp_writes: None, occlusion_query_set: None,
+            });
+            pass.set_pipeline(pipeline);
+            // Bind vertex buffer (jen prvni attrib slot)
+            if let Some((_, slot)) = attribs.first() {
+                if let Some(buf) = self.webgl_buffers.get(&slot.buffer_id) {
+                    pass.set_vertex_buffer(0, buf.slice(..));
+                }
+            }
+            if count > 0 {
+                pass.draw(first as u32..(first + count) as u32, 0..1);
+            }
+        }
+        self.queue.submit(std::iter::once(encoder.finish()));
+        true
+    }
+
+    /// Encode jen clear color do canvas RT (bez draw call).
+    pub fn webgl_encode_clear(&self, canvas_ptr: usize, color: [f32; 4]) -> bool {
+        let view = match self.webgl_canvas_rts.get(&canvas_ptr) {
+            Some((_, v, _, _)) => v,
+            None => return false,
+        };
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        {
+            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("webgl_clear"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view, resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: color[0] as f64, g: color[1] as f64,
+                            b: color[2] as f64, a: color[3] as f64,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None, timestamp_writes: None, occlusion_query_set: None,
+            });
+        }
+        self.queue.submit(std::iter::once(encoder.finish()));
+        true
     }
 
     /// WebGL phase 3c1: zkompiluje WGSL strings na ShaderModules a ulozi
