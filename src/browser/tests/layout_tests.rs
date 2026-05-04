@@ -1825,3 +1825,85 @@ fn parse_color_hsl_red() {
 fn parse_color_invalid_returns_none() {
     assert!(layout::parse_color("#xyz").is_none());
 }
+
+// ─── ClipPath parsing ───────────────────────────────────────────────────
+
+#[test]
+fn parse_clip_path_inset_basic() {
+    let cp = layout::parse_clip_path("inset(10px)");
+    assert!(matches!(cp, Some(layout::ClipPath::Inset { .. })));
+}
+
+#[test]
+fn parse_clip_path_inset_4_values() {
+    if let Some(layout::ClipPath::Inset { top, right, bottom, left, .. }) =
+        layout::parse_clip_path("inset(10px 20px 30px 40px)")
+    {
+        assert_eq!(top, 10.0);
+        assert_eq!(right, 20.0);
+        assert_eq!(bottom, 30.0);
+        assert_eq!(left, 40.0);
+    } else {
+        panic!("expected Inset");
+    }
+}
+
+#[test]
+fn parse_clip_path_circle_only() {
+    let cp = layout::parse_clip_path("circle(50%)");
+    assert!(matches!(cp, Some(layout::ClipPath::Circle { .. })));
+}
+
+#[test]
+fn parse_clip_path_ellipse_only() {
+    let cp = layout::parse_clip_path("ellipse(40% 60%)");
+    assert!(matches!(cp, Some(layout::ClipPath::Ellipse { .. })));
+}
+
+#[test]
+fn parse_clip_path_polygon_count() {
+    let cp = layout::parse_clip_path("polygon(0 0, 100% 0, 50% 100%)");
+    if let Some(layout::ClipPath::Polygon(pts)) = cp {
+        assert_eq!(pts.len(), 3);
+    } else {
+        panic!("expected Polygon");
+    }
+}
+
+#[test]
+fn parse_clip_path_none_returns_none() {
+    assert!(layout::parse_clip_path("none").is_none());
+    assert!(layout::parse_clip_path("").is_none());
+}
+
+#[test]
+fn parse_clip_path_unknown_returns_none() {
+    assert!(layout::parse_clip_path("unknown(50%)").is_none());
+}
+
+#[test]
+fn parse_clip_path_polygon_pct_to_normalized() {
+    let cp = layout::parse_clip_path("polygon(50% 0%, 100% 100%, 0% 100%)");
+    if let Some(layout::ClipPath::Polygon(pts)) = cp {
+        // Body v normalizovanem 0..1 ramci
+        assert!((pts[0].0 - 0.5).abs() < 1e-3 && pts[0].1.abs() < 1e-3);
+        assert!((pts[1].0 - 1.0).abs() < 1e-3 && (pts[1].1 - 1.0).abs() < 1e-3);
+        assert!(pts[2].0.abs() < 1e-3 && (pts[2].1 - 1.0).abs() < 1e-3);
+    } else {
+        panic!("expected Polygon");
+    }
+}
+
+// ─── BgGradientKind parsing - smoke ────────────────────────────────────
+
+#[test]
+fn build_dl_with_gradient_no_panic() {
+    let doc = crate::browser::html_parser::parse_html(
+        r#"<html><body><div></div></body></html>"#, ""
+    );
+    let css = crate::browser::css_parser::parse_stylesheet(
+        "div { background: linear-gradient(90deg, red 0%, blue 100%); width: 100px; height: 100px; }"
+    );
+    let map = crate::browser::cascade::cascade(&doc.root, &[css]);
+    let _layout = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+}

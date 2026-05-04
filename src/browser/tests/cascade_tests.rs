@@ -975,3 +975,159 @@ fn cascade_max_function() {
     let r = cascade::resolve_value("max(10px, 5px, 20px)", &vars);
     assert_eq!(r, "20px");
 }
+
+// ─── Advanced selector tests ────────────────────────────────────────────
+
+#[test]
+fn cascade_not_pseudo() {
+    let doc = parse_html(r#"<html><body><p>X</p><p class="a">Y</p></body></html>"#, "");
+    let css = parse_stylesheet("p:not(.a) { color: blue; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let ps = doc.root.get_elements_by_tag("p");
+    let c1 = cascade::get_styles(&map, &ps[0]).and_then(|s| s.get("color").cloned());
+    let c2 = cascade::get_styles(&map, &ps[1]).and_then(|s| s.get("color").cloned());
+    assert_eq!(c1.as_deref(), Some("blue"));
+    assert!(c2.is_none(), "p.a vyrazeno");
+}
+
+#[test]
+fn cascade_root_pseudo() {
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet(":root { --primary: red; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    // :root by mel match html element
+    if let Some(html) = doc.root.find(|n| n.tag_name().as_deref() == Some("html")) {
+        let _ = cascade::get_styles(&map, &html);
+    }
+}
+
+#[test]
+fn cascade_compound_selector_id_class_tag() {
+    let doc = parse_html(r#"<html><body><div id="main" class="box">x</div></body></html>"#, "");
+    let css = parse_stylesheet("div#main.box { padding: 20px; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let p = cascade::get_styles(&map, &div).and_then(|s| s.get("padding").cloned());
+    assert_eq!(p.as_deref(), Some("20px"));
+}
+
+#[test]
+fn cascade_id_with_dash() {
+    let doc = parse_html(r#"<html><body><div id="my-id"></div></body></html>"#, "");
+    let css = parse_stylesheet("#my-id { color: green; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    assert_eq!(cascade::get_styles(&map, &div).and_then(|s| s.get("color").cloned()).as_deref(), Some("green"));
+}
+
+#[test]
+fn cascade_attribute_starts_with() {
+    let doc = parse_html(r#"<html><body><a href="https://x.com">a</a><a href="http://y.com">b</a></body></html>"#, "");
+    let css = parse_stylesheet(r#"a[href^="https"] { color: green; }"#);
+    let map = cascade::cascade(&doc.root, &[css]);
+    let links = doc.root.get_elements_by_tag("a");
+    let c1 = cascade::get_styles(&map, &links[0]).and_then(|s| s.get("color").cloned());
+    let c2 = cascade::get_styles(&map, &links[1]).and_then(|s| s.get("color").cloned());
+    assert_eq!(c1.as_deref(), Some("green"));
+    assert!(c2.is_none() || c2 != c1);
+}
+
+#[test]
+fn cascade_attribute_ends_with() {
+    let doc = parse_html(r#"<html><body><img src="logo.png"><img src="data.json"></body></html>"#, "");
+    let css = parse_stylesheet(r#"img[src$=".png"] { border: 1px solid red; }"#);
+    let map = cascade::cascade(&doc.root, &[css]);
+    let imgs = doc.root.get_elements_by_tag("img");
+    let b1 = cascade::get_styles(&map, &imgs[0]).and_then(|s| s.get("border").cloned());
+    let b2 = cascade::get_styles(&map, &imgs[1]).and_then(|s| s.get("border").cloned());
+    assert!(b1.is_some());
+    assert!(b2.is_none() || b2 != b1);
+}
+
+#[test]
+fn cascade_attribute_contains() {
+    let doc = parse_html(r#"<html><body><div class="foo-bar-baz"></div><div class="other"></div></body></html>"#, "");
+    let css = parse_stylesheet(r#"div[class*="bar"] { color: pink; }"#);
+    let map = cascade::cascade(&doc.root, &[css]);
+    let divs = doc.root.get_elements_by_tag("div");
+    let c1 = cascade::get_styles(&map, &divs[0]).and_then(|s| s.get("color").cloned());
+    let c2 = cascade::get_styles(&map, &divs[1]).and_then(|s| s.get("color").cloned());
+    assert_eq!(c1.as_deref(), Some("pink"));
+    assert!(c2.is_none());
+}
+
+#[test]
+fn cascade_general_sibling_combinator() {
+    let doc = parse_html(r#"
+        <html><body>
+            <h1>title</h1>
+            <p>p1</p>
+            <span>span</span>
+            <p>p2</p>
+        </body></html>
+    "#, "");
+    let css = parse_stylesheet("h1 ~ p { color: red; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let ps = doc.root.get_elements_by_tag("p");
+    let c1 = cascade::get_styles(&map, &ps[0]).and_then(|s| s.get("color").cloned());
+    let c2 = cascade::get_styles(&map, &ps[1]).and_then(|s| s.get("color").cloned());
+    assert_eq!(c1.as_deref(), Some("red"));
+    assert_eq!(c2.as_deref(), Some("red"));
+}
+
+#[test]
+fn cascade_only_child_pseudo() {
+    let doc = parse_html(r#"
+        <html><body>
+            <div><span>only</span></div>
+            <div><span>first</span><span>second</span></div>
+        </body></html>
+    "#, "");
+    let css = parse_stylesheet("span:only-child { color: red; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let spans = doc.root.get_elements_by_tag("span");
+    let c1 = cascade::get_styles(&map, &spans[0]).and_then(|s| s.get("color").cloned());
+    let c2 = cascade::get_styles(&map, &spans[1]).and_then(|s| s.get("color").cloned());
+    assert_eq!(c1.as_deref(), Some("red"));
+    assert!(c2.is_none(), "non only-child");
+}
+
+#[test]
+fn cascade_disabled_pseudo() {
+    let doc = parse_html(r#"<html><body><input disabled><input></body></html>"#, "");
+    let css = parse_stylesheet("input:disabled { background: gray; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let inputs = doc.root.get_elements_by_tag("input");
+    let b1 = cascade::get_styles(&map, &inputs[0]).and_then(|s| s.get("background").cloned());
+    let b2 = cascade::get_styles(&map, &inputs[1]).and_then(|s| s.get("background").cloned());
+    assert_eq!(b1.as_deref(), Some("gray"));
+    assert!(b2.is_none());
+}
+
+// ─── Custom property cascade chain ─────────────────────────────────────
+
+#[test]
+fn cascade_custom_property_inherited() {
+    let doc = parse_html(r#"<html><body><div><span>x</span></div></body></html>"#, "");
+    let css = parse_stylesheet(r#"
+        :root { --my-color: purple; }
+        span { color: var(--my-color); }
+    "#);
+    let map = cascade::cascade(&doc.root, &[css]);
+    let span = doc.root.find(|n| n.tag_name().as_deref() == Some("span")).unwrap();
+    let c = cascade::get_styles(&map, &span).and_then(|s| s.get("color").cloned());
+    assert_eq!(c.as_deref(), Some("purple"));
+}
+
+#[test]
+fn cascade_var_chain_resolves() {
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet(r#"
+        :root { --base: 10px; --scaled: var(--base); }
+        div { padding: var(--scaled); }
+    "#);
+    let map = cascade::cascade(&doc.root, &[css]);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let p = cascade::get_styles(&map, &div).and_then(|s| s.get("padding").cloned());
+    assert_eq!(p.as_deref(), Some("10px"));
+}
