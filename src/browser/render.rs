@@ -426,6 +426,7 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: 
                 push_blurred_rect(&mut verts, *x, *y, *w, *h, normalize_color(color), *radius, *blur);
             }
             DisplayCommand::FilterBegin { .. } | DisplayCommand::FilterEnd
+            | DisplayCommand::BackdropFilterBegin { .. } | DisplayCommand::BackdropFilterEnd
             | DisplayCommand::TransformBegin { .. } | DisplayCommand::TransformEnd => {
                 // Markers - zpracovava se v render flow, ne ve vertex builderu.
             }
@@ -917,6 +918,14 @@ pub enum Seg<'a> {
         x: f32, y: f32, w: f32, h: f32,
         matrix: [f32; 16],
     },
+    /// Backdrop-filter: snapshotne main_rt (scenu za elementem), aplikuje
+    /// blur + color matrix, composit jako podklad, pak inner obsah nahoru.
+    BackdropFilter {
+        inner: &'a [DisplayCommand],
+        x: f32, y: f32, w: f32, h: f32,
+        radius: f32,
+        color_matrix: [f32; 20],
+    },
 }
 
 /// Rozdeli display list na Main + Filter + Transform3D segmenty pres
@@ -926,7 +935,7 @@ pub enum Seg<'a> {
 /// Symetricnost markeru je predpokladana.
 pub fn partition_filter_segments(cmds: &[DisplayCommand]) -> Vec<Seg<'_>> {
     #[derive(Clone, Copy, PartialEq)]
-    enum Kind { Filter, Transform }
+    enum Kind { Filter, Transform, Backdrop }
     let mut segments: Vec<Seg> = Vec::new();
     let mut depth: i32 = 0;
     let mut active_kind: Option<Kind> = None;
@@ -936,6 +945,8 @@ pub fn partition_filter_segments(cmds: &[DisplayCommand]) -> Vec<Seg<'_>> {
         (0.0, 0.0, 0.0, 0.0, 0.0, [0.0; 20]);
     let mut tx_params: (f32, f32, f32, f32, [f32; 16]) =
         (0.0, 0.0, 0.0, 0.0, [0.0; 16]);
+    let mut backdrop_params: (f32, f32, f32, f32, f32, [f32; 20]) =
+        (0.0, 0.0, 0.0, 0.0, 0.0, [0.0; 20]);
     for i in 0..cmds.len() {
         match &cmds[i] {
             DisplayCommand::FilterBegin { x, y, w, h, blur_radius, color_matrix } => {
@@ -984,6 +995,29 @@ pub fn partition_filter_segments(cmds: &[DisplayCommand]) -> Vec<Seg<'_>> {
                     }
                 }
             }
+            DisplayCommand::BackdropFilterBegin { x, y, w, h, blur_radius, color_matrix } => {
+                if depth == 0 {
+                    if cursor < i { segments.push(Seg::Main(&cmds[cursor..i])); }
+                    seg_start = i + 1;
+                    backdrop_params = (*x, *y, *w, *h, *blur_radius, *color_matrix);
+                    active_kind = Some(Kind::Backdrop);
+                }
+                if active_kind == Some(Kind::Backdrop) { depth += 1; }
+            }
+            DisplayCommand::BackdropFilterEnd => {
+                if active_kind == Some(Kind::Backdrop) {
+                    depth -= 1;
+                    if depth == 0 {
+                        let (x, y, w, h, r, m) = backdrop_params;
+                        segments.push(Seg::BackdropFilter {
+                            inner: &cmds[seg_start..i],
+                            x, y, w, h, radius: r, color_matrix: m,
+                        });
+                        cursor = i + 1;
+                        active_kind = None;
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -1004,13 +1038,14 @@ fn shift_command_y(cmd: &mut DisplayCommand, dy: f32) {
         | DisplayCommand::Image { y, .. }
         | DisplayCommand::BlurredRect { y, .. }
         | DisplayCommand::FilterBegin { y, .. }
+        | DisplayCommand::BackdropFilterBegin { y, .. }
         | DisplayCommand::TransformBegin { y, .. } => *y += dy,
         DisplayCommand::ClippedRect { points, .. } => {
             for (_, py) in points.iter_mut() {
                 *py += dy;
             }
         }
-        DisplayCommand::FilterEnd | DisplayCommand::TransformEnd => {}
+        DisplayCommand::FilterEnd | DisplayCommand::BackdropFilterEnd | DisplayCommand::TransformEnd => {}
     }
 }
 
@@ -2036,6 +2071,10 @@ struct Renderer {
     /// Druhy RT pro blur 2-pass (ping-pong)
     offscreen_tex_b: wgpu::Texture,
     offscreen_view_b: wgpu::TextureView,
+    /// Hlavni RT - vse kreslime sem misto prima na swap chain. Backdrop-filter
+    /// snapshotuje obsah tohoto RT. Na konci framu composit main_rt -> swap chain.
+    /// Usage: TEXTURE_BINDING | RENDER_ATTACHMENT | COPY_SRC
+    main_rt: wgpu::Texture,
     /// Blur pipeline + bind group layout (separate od main)
     blur_pipeline: wgpu::RenderPipeline,
     blur_bind_group_layout: wgpu::BindGroupLayout,
@@ -2267,6 +2306,18 @@ impl Renderer {
         };
         let (offscreen_tex,   offscreen_view)   = make_rt(&device, "offscreen_rt_a", config.width, config.height);
         let (offscreen_tex_b, offscreen_view_b) = make_rt(&device, "offscreen_rt_b", config.width, config.height);
+        // Main RT - COPY_SRC misto COPY_DST (backdrop-filter snapshots z tohoto RT)
+        let main_rt = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("main_rt"),
+            size: wgpu::Extent3d { width: config.width.max(1), height: config.height.max(1), depth_or_array_layers: 1 },
+            mip_level_count: 1, sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: offscreen_format,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
 
         // Blur shader + pipeline
         let blur_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -2474,6 +2525,7 @@ impl Renderer {
             loaded_font_urls: std::collections::HashSet::new(),
             offscreen_tex, offscreen_view,
             offscreen_tex_b, offscreen_view_b,
+            main_rt,
             blur_pipeline, blur_bind_group_layout, blur_uniform_buf,
             compose_pipeline, compose_bind_group_layout, compose_uniform_buf,
             transform_pipeline, transform_bind_group_layout, transform_uniform_buf,
@@ -3384,6 +3436,17 @@ impl Renderer {
         let (b_t, b_v) = make(&self.device, "offscreen_rt_b");
         self.offscreen_tex = a_t; self.offscreen_view = a_v;
         self.offscreen_tex_b = b_t; self.offscreen_view_b = b_v;
+        self.main_rt = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("main_rt"),
+            size: wgpu::Extent3d { width: w.max(1), height: h.max(1), depth_or_array_layers: 1 },
+            mip_level_count: 1, sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: fmt,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
     }
 
     fn upload_atlas(&self) {
@@ -3404,10 +3467,10 @@ impl Renderer {
         );
     }
 
-    /// Renderuje display list s podporou filter subtree (blur + color matrix)
+    /// Renderuje display list s podporou filter subtree + backdrop-filter
     /// + WebGL canvas pass v ramci JEDNOHO swap chain frame.
-    /// Phase 3c6: single-frame integration - pred frame.present() vola
-    /// run_webgl_frame s acquired view (zadne 2 framy s overlay).
+    /// Vse kreslime do main_rt (intermediate RT), na konci compose -> swap chain.
+    /// Backdrop-filter muze cist obsah main_rt (scena za elementem).
     pub fn draw_full_frame(
         &mut self,
         cmds: &[DisplayCommand],
@@ -3423,27 +3486,34 @@ impl Renderer {
             Ok(f) => f,
             Err(_) => return,
         };
-        let view = frame.texture.create_view(&Default::default());
+        let swap_view = frame.texture.create_view(&Default::default());
+        // Main RT view - sem kreslime (ne primo na swap chain)
+        let main_rt_view = self.main_rt.create_view(&Default::default());
 
-        // 1. Main display list (segments: Main / Filter / Transform3D)
-        let had_segments = self.draw_segments_into_view(&view, cmds);
+        // 1. CSS display list -> main_rt
+        let had_segments = self.draw_segments_into_view(&main_rt_view, cmds);
 
-        // 2. WebGL pass (pokud nejaky canvas s pending queue)
+        // 2. WebGL pass -> main_rt
         let mut webgl_did_render = false;
         if let Some(states) = webgl_states {
             if !states.is_empty() {
-                webgl_did_render = self.run_webgl_frame(layout_root, &view, states);
+                webgl_did_render = self.run_webgl_frame(layout_root, &main_rt_view, states);
             }
         }
 
-        // 3. Pokud nic, alespon clear (aby frame nezustal undefined)
-        if !had_segments && !webgl_did_render {
+        // 3. Composit main_rt -> swap chain
+        if had_segments || webgl_did_render {
+            let vw = self.config.width as f32;
+            let vh = self.config.height as f32;
+            self.compose_view_to_swap(&swap_view, &main_rt_view, 0.0, 0.0, vw, vh);
+        } else {
+            // Nic nekresleno - clear swap chain primo
             let mut encoder = self.device.create_command_encoder(&Default::default());
             {
                 let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("frame_clear"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &view, resolve_target: None,
+                        view: &swap_view, resolve_target: None,
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.95, g: 0.95, b: 0.97, a: 1.0 }),
                             store: wgpu::StoreOp::Store,
@@ -3461,6 +3531,8 @@ impl Renderer {
 
     /// Renderuje display list segmenty do existujici TextureView (bez acquire/present).
     /// Vraci true pokud aspon jedna pass byla provedena (pro frame fallback clear).
+    /// Pro BackdropFilter: view musi byt main_rt (COPY_SRC) - snapshotuje obsah
+    /// pres copy_texture_to_texture pred aplikaci filtru.
     fn draw_segments_into_view(&mut self, view: &wgpu::TextureView, cmds: &[DisplayCommand]) -> bool {
         let segments: Vec<Seg> = partition_filter_segments(cmds);
         let mut first_pass = true;
@@ -3485,6 +3557,64 @@ impl Renderer {
                     self.draw_to_offscreen(&inner_verts);
                     self.compose_transform(view, x, y, w, h, &matrix, first_pass);
                     first_pass = false;
+                }
+                Seg::BackdropFilter { inner, x, y, w, h, radius, color_matrix } => {
+                    // 1. Snapshot main_rt -> offscreen_tex (scena za elementem)
+                    let mut enc = self.device.create_command_encoder(&Default::default());
+                    enc.copy_texture_to_texture(
+                        wgpu::ImageCopyTexture {
+                            texture: &self.main_rt,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d::ZERO,
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        wgpu::ImageCopyTexture {
+                            texture: &self.offscreen_tex,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d::ZERO,
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        wgpu::Extent3d {
+                            width: self.config.width.max(1),
+                            height: self.config.height.max(1),
+                            depth_or_array_layers: 1,
+                        },
+                    );
+                    self.queue.submit(std::iter::once(enc.finish()));
+
+                    // 2. Blur snapshot
+                    if radius >= 0.5 {
+                        self.run_blur_passes(radius);
+                    }
+
+                    // 3. Composit filtrovany snapshot jako podklad do view
+                    self.compose_offscreen(view, x, y, w, h, &color_matrix, first_pass);
+                    first_pass = false;
+
+                    // 4. Render inner obsah elementu nahoru (primo do view)
+                    let inner_segs = partition_filter_segments(inner);
+                    for iseg in inner_segs {
+                        match iseg {
+                            Seg::Main(s) => {
+                                let v = build_vertices(s, &self.atlas, &self.image_atlas);
+                                self.draw_main_pass(view, &v, false);
+                            }
+                            Seg::Filter { inner: fi, x: fx, y: fy, w: fw, h: fh, radius: fr, color_matrix: fm } => {
+                                let iv = build_vertices(fi, &self.atlas, &self.image_atlas);
+                                self.draw_to_offscreen(&iv);
+                                if fr >= 0.5 { self.run_blur_passes(fr); }
+                                self.compose_offscreen(view, fx, fy, fw, fh, &fm, false);
+                            }
+                            Seg::Transform3D { inner: ti, x: tx, y: ty, w: tw, h: th, matrix: tm } => {
+                                let iv = build_vertices(ti, &self.atlas, &self.image_atlas);
+                                self.draw_to_offscreen(&iv);
+                                self.compose_transform(view, tx, ty, tw, th, &tm, false);
+                            }
+                            Seg::BackdropFilter { .. } => {
+                                // Nested backdrop-filter uvnitr backdrop-filter: skip (nepodporovano)
+                            }
+                        }
+                    }
                 }
             }
         }

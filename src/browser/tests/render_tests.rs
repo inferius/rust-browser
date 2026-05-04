@@ -1518,8 +1518,50 @@ fn partition_preserves_command_count() {
             Seg::Main(s) => total += s.len(),
             Seg::Filter { inner, .. } => total += inner.len(),
             Seg::Transform3D { inner, .. } => total += inner.len(),
+            Seg::BackdropFilter { inner, .. } => total += inner.len(),
         }
     }
     // 5 ne-marker cmds (3 mimo + 2 uvnitr filtru); markery se neztraceji v inner
     assert_eq!(total, 5);
+}
+
+#[test]
+fn partition_backdrop_filter_segment() {
+    // BackdropFilterBegin/End vytvori Seg::BackdropFilter s inner commands.
+    let identity = {
+        let mut m = [0.0f32; 20];
+        m[0] = 1.0; m[6] = 1.0; m[12] = 1.0; m[18] = 1.0; // identity diagonala
+        m
+    };
+    let cmds = vec![
+        rect(0.0, 0.0),
+        DisplayCommand::BackdropFilterBegin { x: 0.0, y: 0.0, w: 100.0, h: 100.0, blur_radius: 5.0, color_matrix: identity },
+        rect(10.0, 10.0),
+        rect(20.0, 20.0),
+        DisplayCommand::BackdropFilterEnd,
+        rect(30.0, 30.0),
+    ];
+    let segs = partition_filter_segments(&cmds);
+    assert_eq!(segs.len(), 3, "Main + BackdropFilter + Main");
+    match &segs[1] {
+        Seg::BackdropFilter { inner, radius, .. } => {
+            assert_eq!(inner.len(), 2, "2 inner cmds");
+            assert!((radius - 5.0).abs() < 1e-4, "blur radius");
+        }
+        _ => panic!("ocekavan BackdropFilter segment"),
+    }
+}
+
+#[test]
+fn backdrop_filter_layout_box_field() {
+    use crate::browser::layout::{parse_filter_chain, FilterOp, LayoutBox};
+    let chain = parse_filter_chain("blur(8px) brightness(1.2)");
+    assert_eq!(chain.len(), 2);
+    let mut bx = LayoutBox::new();
+    bx.backdrop_filter = chain.clone();
+    assert_eq!(bx.backdrop_filter.len(), 2);
+    match &bx.backdrop_filter[0] {
+        FilterOp::Blur(r) => assert!((r - 8.0).abs() < 1e-3),
+        _ => panic!("ocekavan Blur"),
+    }
 }

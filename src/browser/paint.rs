@@ -147,6 +147,16 @@ pub enum DisplayCommand {
     },
     /// Konec filter subtree. Parovan s FilterBegin (LIFO stack).
     FilterEnd,
+    /// Marker pro backdrop-filter. Renderer snapshotne scenu za elementem,
+    /// aplikuje filter (blur + color matrix), composit jako podklad,
+    /// pak vykresli inner obsah elementu nahoru.
+    BackdropFilterBegin {
+        x: f32, y: f32, w: f32, h: f32,
+        blur_radius: f32,
+        color_matrix: [f32; 20],
+    },
+    /// Konec backdrop-filter subtree.
+    BackdropFilterEnd,
     /// Marker zacatku 3D transform subtree. Renderer chytne nasledujici
     /// commands az do TransformEnd, vykresli je do offscreen RT a slozi
     /// transformovany quad pres compose pipeline s 4x4 matrix.
@@ -345,6 +355,27 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
         _ => None,
     }).collect();
     let _ = drop_shadows;
+
+    // Backdrop-filter: outer marker - snapshotne scenu, pak element obsah nahoru.
+    // Musi byt pred FilterBegin (wraps cely element vcetne filter subtre).
+    let backdrop = bx.backdrop_filter.clone();
+    let backdrop_blur: f32 = backdrop.iter().filter_map(|op| match op {
+        crate::browser::layout::FilterOp::Blur(r) => Some(*r),
+        _ => None,
+    }).sum();
+    let backdrop_matrix = crate::browser::layout::compute_color_matrix(&backdrop);
+    let has_backdrop_filter = !backdrop.is_empty();
+    if has_backdrop_filter {
+        let pad = 2.0 * backdrop_blur;
+        cmds.push(DisplayCommand::BackdropFilterBegin {
+            x: bx.rect.x - pad,
+            y: bx.rect.y - pad,
+            w: bx.rect.width  + 2.0 * pad,
+            h: bx.rect.height + 2.0 * pad,
+            blur_radius: if backdrop_blur >= 0.5 { backdrop_blur } else { 0.0 },
+            color_matrix: backdrop_matrix,
+        });
+    }
 
     // Filter subtree: emit FilterBegin marker pokud chain obsahuje neco
     // co RT pipeline umi - blur (run_blur_passes) NEBO non-identity color
@@ -696,6 +727,10 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
     if has_subtree_filter {
         cmds.push(DisplayCommand::FilterEnd);
     }
+    // Backdrop-filter end marker - paruje s BackdropFilterBegin
+    if has_backdrop_filter {
+        cmds.push(DisplayCommand::BackdropFilterEnd);
+    }
 
     // 3D transform: skip CPU post-process - vse resi shader matrix.
     if needs_3d {
@@ -790,6 +825,7 @@ fn scale_cmd(cmd: &mut DisplayCommand, sx: f32, sy: f32, cx: f32, cy: f32) {
         | DisplayCommand::Image { x, y, w, h, .. }
         | DisplayCommand::BlurredRect { x, y, w, h, .. }
         | DisplayCommand::FilterBegin { x, y, w, h, .. }
+        | DisplayCommand::BackdropFilterBegin { x, y, w, h, .. }
         | DisplayCommand::TransformBegin { x, y, w, h, .. } => {
             scale_xy(x, y); scale_wh(w, h);
         }
@@ -802,7 +838,7 @@ fn scale_cmd(cmd: &mut DisplayCommand, sx: f32, sy: f32, cx: f32, cy: f32) {
                 scale_xy(px, py);
             }
         }
-        DisplayCommand::FilterEnd | DisplayCommand::TransformEnd => {}
+        DisplayCommand::FilterEnd | DisplayCommand::BackdropFilterEnd | DisplayCommand::TransformEnd => {}
     }
 }
 
@@ -830,6 +866,7 @@ fn rotate_cmd(cmd: &mut DisplayCommand, cos: f32, sin: f32, cx: f32, cy: f32) {
         | DisplayCommand::Image { x, y, .. }
         | DisplayCommand::BlurredRect { x, y, .. }
         | DisplayCommand::FilterBegin { x, y, .. }
+        | DisplayCommand::BackdropFilterBegin { x, y, .. }
         | DisplayCommand::TransformBegin { x, y, .. }
         | DisplayCommand::Text { x, y, .. } => rotate_xy(x, y),
         DisplayCommand::ClippedRect { points, .. } => {
@@ -837,7 +874,7 @@ fn rotate_cmd(cmd: &mut DisplayCommand, cos: f32, sin: f32, cx: f32, cy: f32) {
                 rotate_xy(px, py);
             }
         }
-        DisplayCommand::FilterEnd | DisplayCommand::TransformEnd => {}
+        DisplayCommand::FilterEnd | DisplayCommand::BackdropFilterEnd | DisplayCommand::TransformEnd => {}
     }
 }
 
@@ -851,6 +888,7 @@ fn shift_cmd(cmd: &mut DisplayCommand, dx: f32, dy: f32) {
         | DisplayCommand::Image { x, y, .. }
         | DisplayCommand::BlurredRect { x, y, .. }
         | DisplayCommand::FilterBegin { x, y, .. }
+        | DisplayCommand::BackdropFilterBegin { x, y, .. }
         | DisplayCommand::TransformBegin { x, y, .. } => {
             *x += dx;
             *y += dy;
@@ -861,6 +899,6 @@ fn shift_cmd(cmd: &mut DisplayCommand, dx: f32, dy: f32) {
                 *py += dy;
             }
         }
-        DisplayCommand::FilterEnd | DisplayCommand::TransformEnd => {}
+        DisplayCommand::FilterEnd | DisplayCommand::BackdropFilterEnd | DisplayCommand::TransformEnd => {}
     }
 }

@@ -193,6 +193,8 @@ pub struct LayoutBox {
     pub bg_gradient: Option<BgGradient>,
     /// CSS Filter Effects - chain of color matrix operations + opacity + drop-shadow.
     pub filter: Vec<FilterOp>,
+    /// CSS backdrop-filter - filter aplikovany na scenu za elementem.
+    pub backdrop_filter: Vec<FilterOp>,
     /// Background layers (Backgrounds L3) - jen prvni layer pouzity zatim,
     /// vice layeru emitted bottom-to-top kdyz pridana plne podpora.
     pub backgrounds: Vec<BgLayer>,
@@ -466,6 +468,7 @@ impl LayoutBox {
             cursor: None,
             bg_gradient: None,
             filter: Vec::new(),
+            backdrop_filter: Vec::new(),
             backgrounds: Vec::new(),
             clip_path: None,
             text_shadow: None,
@@ -962,9 +965,12 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(sh) = s.get("box-shadow") {
         bx.box_shadow = parse_box_shadow(sh);
     }
-    // Filter chain
+    // Filter chain + backdrop-filter
     if let Some(f) = s.get("filter") {
         bx.filter = parse_filter_chain(f);
+    }
+    if let Some(f) = s.get("backdrop-filter") {
+        bx.backdrop_filter = parse_filter_chain(f);
     }
     // clip-path
     if let Some(cp) = s.get("clip-path") {
