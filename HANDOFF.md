@@ -6,9 +6,9 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 
 - Build: **OK**, 0 errors (par non-fatal duplicate match arms warnings).
 - Tests: **805 passed, 0 failed, 3 ignored** (z 639 puv, +166 v session).
-- Posledni commit: `98d0c5a Batch 13: Storage + Headers + navigator`.
+- Posledni commit: `8fcfa86 DOM API rozsireni - templates/siblings/namespace`.
 - Tree: ciste.
-- Branch master, ~170 commitu pred origin/master.
+- Branch master, ~180 commitu pred origin/master.
 
 ## Test runner
 
@@ -85,6 +85,23 @@ powershell -ExecutionPolicy Bypass -File run_tests.ps1   # Win
 - new Headers() - get/set/append/has/delete (case-insensitive)
 - navigator (userAgent/language/platform/onLine/cookieEnabled/
   hardwareConcurrency/geolocation/clipboard)
+
+**Posledni inkrement od milestone:**
+- transitionend / animationstart / animationend events dispatch
+- HTMLAnchorElement url parts (protocol/host/port/origin/...)
+- HTMLLabelElement.control + .htmlFor
+- HTMLOptionElement.text/.label/.defaultSelected
+- HTMLTableElement.rows + tr.cells
+- HTMLSelectElement.options/selectedIndex/selectedOptions
+- form-controls.form / .labels lookup
+- HTMLTemplateElement.content
+- namespaceURI / localName / prefix
+- previousElementSibling / nextElementSibling / siblings
+- childElementCount / firstElementChild / lastElementChild
+- isConnected / ownerDocument
+- Filter drop-shadow render emit (Shadow command)
+- Offscreen RT setup (RGBA8 viewport size, recreate on resize) -
+  pripravene na budouci 2-pass blur
 
 **Test runner**: PowerShell + bash skripty.
 
