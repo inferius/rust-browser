@@ -5,10 +5,10 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 ## Stav
 
 - Build: **OK**, 0 errors.
-- Tests: **1104 passed, 0 failed, 3 ignored** (+299 v teto session, +37.1%).
-- Posledni commit: `082b403 WebGL phase 3c sanity test - WGSL stage decorators`.
+- Tests: **1113 passed, 0 failed, 3 ignored** (+308 v teto session, +38.3%).
+- Posledni commit: `a8c0ecd WebGL phase 3c2 - vertex layout helpers + buffer upload`.
 - Tree: ciste.
-- Branch master, ~236 commitu pred origin/master (NEPUSHOVAT bez vyzvy).
+- Branch master, ~239 commitu pred origin/master (NEPUSHOVAT bez vyzvy).
 
 ## Recent session highlights
 
@@ -45,24 +45,30 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
     - Clear color jako solid Rect bbox.
     - DrawArrays/Elements jako stripe overlay (placeholder phase 3c).
     Test stranka #webgl section s blue clear demo. +10 testu.
+11. **WebGL phase 3c1** (commit d325d2b) - pipeline + shader module cache
+    infrastructure v Renderer (webgl_shader_modules, webgl_pipelines,
+    webgl_buffers HashMaps). build_webgl_shader_modules helper
+    (idempotent cache).
+12. **WebGL phase 3c2** (commit a8c0ecd) - vertex layout helpers:
+    webgl_attrib_to_vertex_format mapper (FLOAT/INT/UINT x size 1-4 ->
+    wgpu::VertexFormat), webgl_compute_stride (explicit nebo tightly
+    packed). Renderer::upload_webgl_buffer pro real GPU buffer cache.
+    +9 testu.
 
 ## Velke remaining work
 
-- **WebGL phase 3c**: Real wgpu pipeline z WGSL stringu (linkProgram
-  output) + real draw call emission.
-  Sanity confirmed: naga generuje WGSL s `@vertex`/`@fragment` decorators
-  takze wgpu::RenderPipeline construction proveditelna.
-  Vyzaduje:
-  - Pipeline cache HashMap<u32, RenderPipeline> v Renderer.
-  - ShaderModule cache HashMap<u32, (vertex, fragment)> per program.
-  - Buffer cache HashMap<u32, wgpu::Buffer> upload na bind.
-  - Refactor paint_webgl_canvases na Renderer metodu (Device + Queue access).
-  - Vertex layout derivace z WGSL `@location(N)` decls -> VertexBufferLayout.
-  - Bind group pro uniform buffer (per-frame upload).
-  - Per-canvas offscreen RT + composit do swap chain pres image_atlas.
-  Scope: 800-1500 radku, doporuceno rozdeli na 3c1 (pipeline cache +
-  shader modules), 3c2 (vertex layout + buffer upload), 3c3 (real draw +
-  composit).
+- **WebGL phase 3c3**: Connect dohromady - vertex layout pres VertexBufferLayout
+  z helpers, build pipeline z modules + layout, real wgpu draw call. Vyzaduje:
+  - Refactor paint_webgl_canvases na Renderer metodu (self.device + queue access).
+  - Pri DrawArrays/Elements: lookup buffer + pipeline cache; pokud miss,
+    build z webgl_shader_modules + helpers.
+  - Per-canvas offscreen RT (Vec<wgpu::Texture> per canvas_ptr).
+  - Composit canvas RT do swap chain pres image_atlas / new compose pass.
+  - Bind group pro uniform buffer (kazdy DrawArrays write_buffer pred draw).
+  Scope: 400-700 radku, prevazne refactor existing paint_webgl_canvases
+  + render-pass encoding logiky.
+- **Filter v Transform RT (nested)**: aktualne filter inside transform
+  je inner cmds bez efektu - lepsi pristup vyzaduje rekursi v draw_segments.
 - **Filter v Transform RT (nested)**: aktualne filter inside transform
   je inner cmds bez efektu - lepsi pristup vyzaduje rekursi v draw_segments.
 - **TypeScript kompilator** - design konzultace stale otevrena.
