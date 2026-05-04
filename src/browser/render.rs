@@ -430,15 +430,10 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: 
                 // Markers - zpracovava se v render flow, ne ve vertex builderu.
             }
             DisplayCommand::ClippedRect { color, points } => {
-                // Triangle fan pro convex polygon: P0 + P_i + P_{i+1}
+                // Ear-clipping triangulace - funguje pro convex i concave.
                 let c = normalize_color(color);
-                if points.len() >= 3 {
-                    let p0 = points[0];
-                    for i in 1..points.len() - 1 {
-                        let p1 = points[i];
-                        let p2 = points[i + 1];
-                        push_triangle(&mut verts, p0, p1, p2, c);
-                    }
+                for (a, b, d) in triangulate_polygon(points) {
+                    push_triangle(&mut verts, a, b, d, c);
                 }
             }
         }
@@ -770,6 +765,103 @@ fn push_rect_uv(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f32, h: f32,
     let br = mk(x + w, y + h, uv1[0], uv1[1]);
     verts.push(tl); verts.push(tr); verts.push(bl);
     verts.push(bl); verts.push(tr); verts.push(br);
+}
+
+/// Cross product (b - a) x (c - a) v 2D (z-component).
+fn poly_cross(a: (f32, f32), b: (f32, f32), c: (f32, f32)) -> f32 {
+    (b.0 - a.0) * (c.1 - a.1) - (b.1 - a.1) * (c.0 - a.0)
+}
+
+/// Test ze bod p je uvnitr trojuhelniku (a, b, c) - barycentric.
+fn point_in_triangle(p: (f32, f32), a: (f32, f32), b: (f32, f32), c: (f32, f32)) -> bool {
+    let d1 = poly_cross(p, a, b);
+    let d2 = poly_cross(p, b, c);
+    let d3 = poly_cross(p, c, a);
+    let has_neg = d1 < 0.0 || d2 < 0.0 || d3 < 0.0;
+    let has_pos = d1 > 0.0 || d2 > 0.0 || d3 > 0.0;
+    !(has_neg && has_pos)
+}
+
+/// Spocita signed area polygonu - standardni shoelace formula.
+/// V screen-space (y down): CW polygon -> kladne, CCW -> zaporne.
+/// V matematickem (y up) je obracene.
+pub fn polygon_signed_area(points: &[(f32, f32)]) -> f32 {
+    if points.len() < 3 { return 0.0; }
+    let mut sum = 0.0;
+    for i in 0..points.len() {
+        let p1 = points[i];
+        let p2 = points[(i + 1) % points.len()];
+        sum += p1.0 * p2.1 - p2.0 * p1.1;
+    }
+    sum * 0.5
+}
+
+/// Ear-clipping triangulace. Vraci trojuhelniky jako (P0, P1, P2) tuples.
+/// Funguje pro convex i concave (simple) polygon. Pro self-intersecting ne.
+/// Pri failure (degenerate) fallback na fan triangulation.
+pub fn triangulate_polygon(points: &[(f32, f32)]) -> Vec<((f32, f32), (f32, f32), (f32, f32))> {
+    if points.len() < 3 { return Vec::new(); }
+    if points.len() == 3 {
+        return vec![(points[0], points[1], points[2])];
+    }
+    let mut remaining: Vec<(f32, f32)> = points.to_vec();
+    let mut triangles = Vec::new();
+    // Detekce winding pro ear convexity check.
+    // V screen-space (y down): CW polygon -> signed_area > 0, CCW -> < 0.
+    // Convex ear cross sign musi sledovat winding znamenku.
+    let area_sign = if polygon_signed_area(&remaining) >= 0.0 { 1.0 } else { -1.0 };
+    let max_iter = remaining.len() * remaining.len();
+    let mut iter_count = 0;
+    while remaining.len() > 3 && iter_count < max_iter {
+        iter_count += 1;
+        let n = remaining.len();
+        let mut found_ear: Option<usize> = None;
+        for i in 0..n {
+            let prev = remaining[(i + n - 1) % n];
+            let curr = remaining[i];
+            let next = remaining[(i + 1) % n];
+            // Convex check vzhledem k winding.
+            let cross_v = poly_cross(prev, curr, next);
+            // Pri CW screen polygonu (area > 0): convex ear ma cross > 0.
+            // Pri CCW (area < 0): cross < 0.
+            if cross_v * area_sign <= 0.0 { continue; }
+            // No other vertex inside triangle
+            let mut contains = false;
+            for j in 0..n {
+                if j == i || j == (i + n - 1) % n || j == (i + 1) % n { continue; }
+                if point_in_triangle(remaining[j], prev, curr, next) {
+                    contains = true;
+                    break;
+                }
+            }
+            if !contains {
+                found_ear = Some(i);
+                break;
+            }
+        }
+        match found_ear {
+            Some(i) => {
+                let n = remaining.len();
+                let prev = remaining[(i + n - 1) % n];
+                let curr = remaining[i];
+                let next = remaining[(i + 1) % n];
+                triangles.push((prev, curr, next));
+                remaining.remove(i);
+            }
+            None => {
+                // Failed - fallback fan na zbytek
+                let p0 = remaining[0];
+                for k in 1..remaining.len() - 1 {
+                    triangles.push((p0, remaining[k], remaining[k + 1]));
+                }
+                return triangles;
+            }
+        }
+    }
+    if remaining.len() == 3 {
+        triangles.push((remaining[0], remaining[1], remaining[2]));
+    }
+    triangles
 }
 
 /// Push 3-vertex triangle pro polygon clip-path (mode 0 = solid).

@@ -3,7 +3,7 @@
 /// filteru a paint segmentaci ano.
 
 use crate::browser::paint::DisplayCommand;
-use crate::browser::render::{partition_filter_segments, Seg};
+use crate::browser::render::{partition_filter_segments, Seg, polygon_signed_area, triangulate_polygon};
 
 fn rect(x: f32, y: f32) -> DisplayCommand {
     DisplayCommand::Rect { x, y, w: 10.0, h: 10.0, color: [255,0,0,255], radius: 0.0 }
@@ -289,6 +289,130 @@ fn partition_two_consecutive_transforms() {
     assert_eq!(markers.len(), 2);
     assert!((markers[0] - 1.0).abs() < 1e-5);
     assert!((markers[1] - 2.0).abs() < 1e-5);
+}
+
+// ─── Polygon triangulation ──────────────────────────────────────────────
+
+#[test]
+fn polygon_signed_area_square_cw_screen() {
+    // Square (y down): (0,0), (10,0), (10,10), (0,10) - CW screen orientation
+    let pts = [(0.0_f32, 0.0_f32), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)];
+    let area = polygon_signed_area(&pts);
+    // Algoritmus pro screen-space (y down): CW -> kladne
+    assert!(area > 0.0, "CW square has positive screen area, got {area}");
+    assert!((area.abs() - 100.0).abs() < 1.0, "area magnitude ~100");
+}
+
+#[test]
+fn polygon_signed_area_triangle() {
+    let pts = [(0.0_f32, 0.0_f32), (10.0, 0.0), (10.0, 10.0)];
+    let area = polygon_signed_area(&pts);
+    assert!((area.abs() - 50.0).abs() < 1.0);
+}
+
+#[test]
+fn triangulate_triangle_returns_one() {
+    let pts = vec![(0.0_f32, 0.0_f32), (10.0, 0.0), (5.0, 10.0)];
+    let tris = triangulate_polygon(&pts);
+    assert_eq!(tris.len(), 1);
+}
+
+#[test]
+fn triangulate_quad_returns_two() {
+    let pts = vec![(0.0_f32, 0.0_f32), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)];
+    let tris = triangulate_polygon(&pts);
+    assert_eq!(tris.len(), 2, "quad -> 2 triangles");
+}
+
+#[test]
+fn triangulate_pentagon_returns_three() {
+    let pts = vec![
+        (50.0_f32, 0.0_f32),
+        (100.0, 38.0),
+        (82.0, 100.0),
+        (18.0, 100.0),
+        (0.0, 38.0),
+    ];
+    let tris = triangulate_polygon(&pts);
+    assert_eq!(tris.len(), 3, "pentagon -> n-2 = 3 triangles");
+}
+
+#[test]
+fn triangulate_concave_arrow_correct_count() {
+    // Arrow shape: 7 bodu, mel by emit 5 trojuhelniku
+    let pts = vec![
+        (0.0_f32, 25.0_f32),
+        (60.0, 25.0),
+        (60.0, 0.0),
+        (100.0, 50.0),
+        (60.0, 100.0),
+        (60.0, 75.0),
+        (0.0, 75.0),
+    ];
+    let tris = triangulate_polygon(&pts);
+    assert_eq!(tris.len(), 5, "arrow (7 vertices) -> 5 triangles");
+}
+
+#[test]
+fn triangulate_concave_l_shape() {
+    // L-shape: 6 bodu, mel by emit 4 trojuhelniky
+    let pts = vec![
+        (0.0_f32, 0.0_f32),
+        (10.0, 0.0),
+        (10.0, 5.0),
+        (5.0, 5.0),
+        (5.0, 10.0),
+        (0.0, 10.0),
+    ];
+    let tris = triangulate_polygon(&pts);
+    assert_eq!(tris.len(), 4, "L-shape -> n-2 = 4 triangles");
+}
+
+#[test]
+fn triangulate_empty_returns_empty() {
+    let tris = triangulate_polygon(&[]);
+    assert_eq!(tris.len(), 0);
+}
+
+#[test]
+fn triangulate_two_points_returns_empty() {
+    let tris = triangulate_polygon(&[(0.0, 0.0), (10.0, 0.0)]);
+    assert_eq!(tris.len(), 0);
+}
+
+#[test]
+fn triangulate_concave_no_overlap() {
+    // Arrow polygon: trojuhelniky se nesmeji prekryvat ani vyletavat ven.
+    // Test: vsechny trojuhelniky maji pozitivni area + total area = polygon area.
+    let pts = vec![
+        (0.0_f32, 25.0_f32),
+        (60.0, 25.0),
+        (60.0, 0.0),
+        (100.0, 50.0),
+        (60.0, 100.0),
+        (60.0, 75.0),
+        (0.0, 75.0),
+    ];
+    let tris = triangulate_polygon(&pts);
+    let total_tri_area: f32 = tris.iter().map(|(a, b, c)| {
+        let area = ((b.0 - a.0) * (c.1 - a.1) - (b.1 - a.1) * (c.0 - a.0)).abs() * 0.5;
+        area
+    }).sum();
+    let poly_area = polygon_signed_area(&pts).abs();
+    assert!((total_tri_area - poly_area).abs() < 1.0,
+        "sum trojuhelniku ({total_tri_area}) ~ polygon area ({poly_area})");
+}
+
+#[test]
+fn triangulate_star_concave_count() {
+    // 5-cipa hvezda = 10 bodu, n-2 = 8 trojuhelniku
+    let pts: Vec<(f32, f32)> = (0..10).map(|i| {
+        let angle = (i as f32) * std::f32::consts::PI / 5.0;
+        let r = if i % 2 == 0 { 50.0 } else { 20.0 };
+        (50.0 + r * angle.cos(), 50.0 + r * angle.sin())
+    }).collect();
+    let tris = triangulate_polygon(&pts);
+    assert_eq!(tris.len(), 8, "star (10 vertices) -> n-2 = 8 triangles");
 }
 
 #[test]
