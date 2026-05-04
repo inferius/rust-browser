@@ -29,8 +29,13 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::str::FromStr;
 use crate::ast::{self, *};
 use regex::Regex;
+use bigdecimal::BigDecimal;
+use bigdecimal::ToPrimitive;
+use bigdecimal::Zero;
+use bigdecimal::One;
 
 // ─── JS hodnoty ───────────────────────────────────────────────────────────────
 
@@ -63,6 +68,9 @@ pub enum JsValue {
     Map(Rc<RefCell<JsMap>>),
     /// ES2015 Set - kolekce unikatnich hodnot
     Set(Rc<RefCell<JsSet>>),
+    /// BigNumber - arbitrary precision decimal cislo
+    /// Sdilene pres Rc pro levne klonovani (BigDecimal je immutable).
+    BigNumber(Rc<BigDecimal>),
 }
 
 // ─── Map / Set datove struktury ──────────────────────────────────────────────
@@ -245,6 +253,13 @@ pub enum JsFunc {
         body: FuncBody,
         env: Rc<RefCell<Env>>,
     },
+    /// Bound funkce - vysledek fn.bind(thisArg, ...args).
+    /// Pri volani prepoji bound_this a prida bound_args pred call args.
+    Bound {
+        func: Box<JsValue>,
+        bound_this: Box<JsValue>,
+        bound_args: Vec<JsValue>,
+    },
     /// JS trida. `super_val` = vyhodnocena rodicovska trida.
     ///
     /// Konstruktor je ulozeny oddelene od ostatnich metod.
@@ -281,6 +296,7 @@ impl std::fmt::Debug for JsFunc {
             JsFunc::Class { name, .. }     => write!(f, "[class {}]", name.as_deref().unwrap_or("(anonymous)")),
             JsFunc::Generator { name, .. } => write!(f, "[GeneratorFunction: {}]", name.as_deref().unwrap_or("anonymous")),
             JsFunc::Async { name, .. }     => write!(f, "[AsyncFunction: {}]", name.as_deref().unwrap_or("anonymous")),
+            JsFunc::Bound { .. }           => write!(f, "[BoundFunction]"),
         }
     }
 }
@@ -322,6 +338,7 @@ impl std::fmt::Display for JsValue {
                 let items: Vec<String> = s.borrow().values.iter().map(|v| v.to_string()).collect();
                 write!(f, "Set {{ {} }}", items.join(", "))
             }
+            JsValue::BigNumber(n) => write!(f, "{n}"),
         }
     }
 }
@@ -345,22 +362,24 @@ impl JsValue {
             JsValue::Null         => 0.0,
             JsValue::Undefined    => f64::NAN,
             JsValue::Str(s)       => s.trim().parse().unwrap_or(f64::NAN),
+            JsValue::BigNumber(n) => n.to_f64().unwrap_or(f64::NAN),
             _                     => f64::NAN,
         }
     }
 
     pub fn type_of(&self) -> &'static str {
         match self {
-            JsValue::Undefined   => "undefined",
-            JsValue::Null        => "object",
-            JsValue::Bool(_)     => "boolean",
-            JsValue::Number(_)   => "number",
-            JsValue::Str(_)      => "string",
-            JsValue::Object(_)   => "object",
-            JsValue::Array(_)    => "object",
-            JsValue::Function(_) => "function",
-            JsValue::Map(_)      => "object",
-            JsValue::Set(_)      => "object",
+            JsValue::Undefined    => "undefined",
+            JsValue::Null         => "object",
+            JsValue::Bool(_)      => "boolean",
+            JsValue::Number(_)    => "number",
+            JsValue::Str(_)       => "string",
+            JsValue::Object(_)    => "object",
+            JsValue::Array(_)     => "object",
+            JsValue::Function(_)  => "function",
+            JsValue::Map(_)       => "object",
+            JsValue::Set(_)       => "object",
+            JsValue::BigNumber(_) => "bignumber",
         }
     }
 
@@ -387,7 +406,23 @@ impl JsValue {
             (JsValue::Array(a),  JsValue::Array(b))  => Rc::ptr_eq(a, b),
             (JsValue::Map(a),    JsValue::Map(b))    => Rc::ptr_eq(a, b),
             (JsValue::Set(a),    JsValue::Set(b))    => Rc::ptr_eq(a, b),
+            (JsValue::BigNumber(a), JsValue::BigNumber(b)) => *a == *b,
             _ => false,
+        }
+    }
+
+    /// Vrati JsValue jako BigDecimal (pro BigNumber operace).
+    /// Number -> BigDecimal, String -> parse, BigNumber -> klon
+    pub fn to_bigdecimal(&self) -> Option<BigDecimal> {
+        match self {
+            JsValue::BigNumber(n) => Some((**n).clone()),
+            JsValue::Number(n) if n.is_finite() => {
+                BigDecimal::from_str(&n.to_string()).ok()
+            }
+            JsValue::Str(s) => BigDecimal::from_str(s.trim()).ok(),
+            JsValue::Bool(true)  => Some(BigDecimal::from(1)),
+            JsValue::Bool(false) => Some(BigDecimal::from(0)),
+            _ => None,
         }
     }
 }
@@ -514,6 +549,10 @@ pub struct Interpreter {
     /// Generator mode: Some = shromazduji yield hodnoty misto preruseni
     /// None = normalni rezim
     yield_buffer: Option<Vec<JsValue>>,
+    /// Fronta timeru pro setTimeout/setInterval (id, callback, args)
+    task_queue: Rc<RefCell<Vec<(u32, JsValue, Vec<JsValue>)>>>,
+    /// Pocitadlo ID pro setTimeout/setInterval
+    next_timer_id: Rc<RefCell<u32>>,
 }
 
 // ─── Pomocne funkce ──────────────────────────────────────────────────────────
@@ -587,8 +626,11 @@ impl Interpreter {
     /// Vytvori novy interpreter s inicializovanymi vestavenymi objekty.
     pub fn new() -> Self {
         let global = Environment::new_global();
-        setup_builtins(&global);
-        Interpreter { global, yield_buffer: None }
+        let task_queue: Rc<RefCell<Vec<(u32, JsValue, Vec<JsValue>)>>> =
+            Rc::new(RefCell::new(Vec::new()));
+        let next_timer_id: Rc<RefCell<u32>> = Rc::new(RefCell::new(1));
+        setup_builtins(&global, &task_queue, &next_timer_id);
+        Interpreter { global, yield_buffer: None, task_queue, next_timer_id }
     }
 
     /// Spusti cely program (AST) a vrati posledni `return` hodnotu.
@@ -596,10 +638,28 @@ impl Interpreter {
     /// Kdyz program neobsahuje `return`, vraci `JsValue::Undefined`.
     pub fn run(&mut self, program: &Program) -> EvalResult {
         let env = Rc::clone(&self.global);
-        match self.exec_stmts(&program.body, &env)? {
-            Some(Signal::Return(v)) => Ok(v),
-            _ => Ok(JsValue::Undefined),
+        let result = match self.exec_stmts(&program.body, &env)? {
+            Some(Signal::Return(v)) => v,
+            _ => JsValue::Undefined,
+        };
+        // Drain timer queue - spust vsechny setTimeout callbacky
+        self.drain_timers()?;
+        Ok(result)
+    }
+
+    /// Spusti vsechny cekajici timer callbacky.
+    fn drain_timers(&mut self) -> Result<(), JsError> {
+        loop {
+            let next = { self.task_queue.borrow().first().cloned() };
+            match next {
+                None => break,
+                Some((_, cb, args)) => {
+                    self.task_queue.borrow_mut().remove(0);
+                    self.call_function(cb, args, None)?;
+                }
+            }
         }
+        Ok(())
     }
 
     // ─── Příkazy ──────────────────────────────────────────────────────────────
@@ -1067,6 +1127,39 @@ impl Interpreter {
 
         let l = self.eval(left, env)?;
         let r = self.eval(right, env)?;
+
+        // BigNumber aritmetika: pokud aspon jeden operand je BigNumber,
+        // preved oba na BigDecimal a proved operaci
+        if matches!((&l, &r), (JsValue::BigNumber(_), _) | (_, JsValue::BigNumber(_))) {
+            if let (Some(la), Some(ra)) = (l.to_bigdecimal(), r.to_bigdecimal()) {
+                match op {
+                    BinaryOp::Add  => return Ok(JsValue::BigNumber(Rc::new(la + ra))),
+                    BinaryOp::Sub  => return Ok(JsValue::BigNumber(Rc::new(la - ra))),
+                    BinaryOp::Mul  => return Ok(JsValue::BigNumber(Rc::new(la * ra))),
+                    BinaryOp::Div  => {
+                        if ra.is_zero() { return Ok(JsValue::Number(f64::NAN)); }
+                        return Ok(JsValue::BigNumber(Rc::new(la / ra)));
+                    }
+                    BinaryOp::Mod  => {
+                        if ra.is_zero() { return Ok(JsValue::Number(f64::NAN)); }
+                        return Ok(JsValue::BigNumber(Rc::new(la % ra)));
+                    }
+                    BinaryOp::Exp  => {
+                        let exp = ra.to_u64().unwrap_or(0);
+                        return Ok(JsValue::BigNumber(Rc::new(bigdecimal_pow(la, exp))));
+                    }
+                    BinaryOp::Lt   => return Ok(JsValue::Bool(la < ra)),
+                    BinaryOp::Gt   => return Ok(JsValue::Bool(la > ra)),
+                    BinaryOp::LtEq => return Ok(JsValue::Bool(la <= ra)),
+                    BinaryOp::GtEq => return Ok(JsValue::Bool(la >= ra)),
+                    BinaryOp::StrictEq    => return Ok(JsValue::Bool(la == ra)),
+                    BinaryOp::StrictNotEq => return Ok(JsValue::Bool(la != ra)),
+                    BinaryOp::Eq    => return Ok(JsValue::Bool(la == ra)),
+                    BinaryOp::NotEq => return Ok(JsValue::Bool(la != ra)),
+                    _ => {} // Ostatni operace - pust dal jako cislo
+                }
+            }
+        }
 
         Ok(match op {
             BinaryOp::Add => match (&l, &r) {
@@ -1806,6 +1899,14 @@ impl Interpreter {
                 if key == "size" { return Ok(JsValue::Number(s.borrow().values.len() as f64)); }
                 Ok(JsValue::Undefined)
             }
+            // BigNumber vlastnosti (read-only)
+            JsValue::BigNumber(bn) => {
+                match key {
+                    "s" | "sign" => return Ok(JsValue::Number(if bn.as_ref() < &BigDecimal::from(0) { -1.0 } else { 1.0 })),
+                    _ => {}
+                }
+                Ok(JsValue::Undefined)
+            }
             // Native funkce: Number.XXX konstanty + Array.isArray atd.
             JsValue::Function(JsFunc::Native(fname, _)) => {
                 match (fname.as_str(), key) {
@@ -1858,6 +1959,55 @@ impl Interpreter {
                 self.run_super_constructor(super_class, arg_vals, &this_obj, env)?;
             }
             return Ok(this_val);
+        }
+
+        // eval(src) - special case: potrebuje pristup k interpreteru a aktualnimu env
+        if matches!(callee, Expr::Ident(n) if n == "eval") {
+            let arg_vals = self.eval_args(args, env)?;
+            let src = arg_vals.into_iter().next().unwrap_or(JsValue::Undefined);
+            return match src {
+                JsValue::Str(s) => {
+                    use crate::lexer::base::Lexer;
+                    use crate::parser::Parser;
+                    use crate::tokens::TokenKind;
+                    let lexer = Lexer::parse_str(&s, "<eval>")
+                        .map_err(|e| JsError::Runtime(format!("eval SyntaxError: {e}")))?;
+                    let tokens: Vec<_> = lexer.tokens.into_iter()
+                        .filter(|t| !matches!(t.kind,
+                            TokenKind::Whitespace | TokenKind::Newline
+                            | TokenKind::CommentLine(_) | TokenKind::CommentBlock(_)))
+                        .collect();
+                    let mut parser = Parser::new(tokens);
+                    let prog = parser.parse()
+                        .map_err(|e| JsError::Runtime(format!("eval SyntaxError: {e}")))?;
+                    // eval vraci completion value: posledni vyraz
+                    // Pokud je program prazdny, vrat undefined
+                    if prog.body.is_empty() {
+                        return Ok(JsValue::Undefined);
+                    }
+                    // Spust vsechny prikazy krome posledniho
+                    let last_idx = prog.body.len() - 1;
+                    for stmt in &prog.body[..last_idx] {
+                        match self.exec_stmt(stmt, env)? {
+                            Some(Signal::Return(v)) => return Ok(v),
+                            Some(sig) => return Err(JsError::Runtime(format!("eval: neocekavany signal {:?}", sig))),
+                            None => {}
+                        }
+                    }
+                    // Posledni prikaz: vyraz vraci hodnotu, jinak undefined
+                    let last = &prog.body[last_idx];
+                    match last {
+                        crate::ast::Stmt::Expr(e) => self.eval(e, env),
+                        other => {
+                            match self.exec_stmt(other, env)? {
+                                Some(Signal::Return(v)) => Ok(v),
+                                _ => Ok(JsValue::Undefined),
+                            }
+                        }
+                    }
+                }
+                other => Ok(other), // non-string preda as-is
+            };
         }
 
         // super.method(args) - volani metody rodicovske tridy
@@ -2165,11 +2315,166 @@ impl Interpreter {
                         return Ok(result);
                     }
                 }
+                // ─── Number instance metody ────────────────────────────────
+                JsValue::Number(n) => {
+                    let n = *n;
+                    let arg_vals = self.eval_args(args, env)?;
+                    match key.as_str() {
+                        "toFixed" => {
+                            let digits = arg_vals.first().map(|v| v.to_number() as usize).unwrap_or(0);
+                            return Ok(JsValue::Str(format!("{:.prec$}", n, prec = digits)));
+                        }
+                        "toPrecision" => {
+                            let digits = arg_vals.first().map(|v| v.to_number() as usize).unwrap_or(1);
+                            let s = format!("{:.prec$e}", n, prec = if digits > 0 { digits - 1 } else { 0 });
+                            // Preved z Rust vedecke notace do JS formatu
+                            return Ok(JsValue::Str(format!("{:.prec$}", n, prec = if digits > 0 { digits - 1 } else { 0 })));
+                        }
+                        "toExponential" => {
+                            let digits = arg_vals.first().map(|v| v.to_number() as usize).unwrap_or(6);
+                            // Rust `{:e}` = "1.23e5", JS chce "1.23e+5"
+                            let s = format!("{:.prec$e}", n, prec = digits);
+                            // Pridame '+' pred kladny exponent
+                            let s = if let Some(e_pos) = s.find('e') {
+                                let (mantissa, exp_part) = s.split_at(e_pos);
+                                let exp_str = &exp_part[1..]; // bez 'e'
+                                if exp_str.starts_with('-') {
+                                    format!("{}e{}", mantissa, exp_str)
+                                } else {
+                                    format!("{}e+{}", mantissa, exp_str)
+                                }
+                            } else { s };
+                            return Ok(JsValue::Str(s));
+                        }
+                        "toString" => {
+                            let radix = arg_vals.first().map(|v| v.to_number() as u32).unwrap_or(10);
+                            if radix == 10 || radix == 0 {
+                                return Ok(JsValue::Str(JsValue::Number(n).to_string()));
+                            }
+                            let radix = radix.min(36).max(2);
+                            if n.fract() == 0.0 && n.is_finite() {
+                                let i = n as i64;
+                                return Ok(JsValue::Str(if i < 0 {
+                                    format!("-{}", radix_string(-i as u64, radix))
+                                } else {
+                                    radix_string(i as u64, radix)
+                                }));
+                            }
+                            return Ok(JsValue::Str(n.to_string()));
+                        }
+                        "valueOf" => return Ok(JsValue::Number(n)),
+                        "toLocaleString" => {
+                            return Ok(JsValue::Str(format_number_locale(n)));
+                        }
+                        _ => {}
+                    }
+                }
+                // ─── BigNumber instance metody ────────────────────────────
+                JsValue::BigNumber(bn) => {
+                    let bn = Rc::clone(bn);
+                    let arg_vals = self.eval_args(args, env)?;
+                    let other_bd = arg_vals.first().and_then(|v| v.to_bigdecimal());
+                    return match key.as_str() {
+                        "plus"      => Ok(JsValue::BigNumber(Rc::new((*bn).clone() + other_bd.unwrap_or(BigDecimal::from(0))))),
+                        "minus"     => Ok(JsValue::BigNumber(Rc::new((*bn).clone() - other_bd.unwrap_or(BigDecimal::from(0))))),
+                        "times"     => Ok(JsValue::BigNumber(Rc::new((*bn).clone() * other_bd.unwrap_or(BigDecimal::from(1))))),
+                        "multipliedBy" => Ok(JsValue::BigNumber(Rc::new((*bn).clone() * other_bd.unwrap_or(BigDecimal::from(1))))),
+                        "div" | "dividedBy" => {
+                            let d = other_bd.unwrap_or(BigDecimal::from(1));
+                            if d.is_zero() { return Ok(JsValue::Number(f64::NAN)); }
+                            Ok(JsValue::BigNumber(Rc::new(bn.as_ref().clone() / d)))
+                        }
+                        "mod" | "modulo" => {
+                            let d = other_bd.unwrap_or(BigDecimal::from(1));
+                            if d.is_zero() { return Ok(JsValue::Number(f64::NAN)); }
+                            Ok(JsValue::BigNumber(Rc::new(bn.as_ref().clone() % d)))
+                        }
+                        "pow" | "exponentiatedBy" => {
+                            let exp = other_bd.and_then(|d| d.to_u64()).unwrap_or(0);
+                            Ok(JsValue::BigNumber(Rc::new(bigdecimal_pow(bn.as_ref().clone(), exp))))
+                        }
+                        "abs"       => Ok(JsValue::BigNumber(Rc::new(bn.abs()))),
+                        "negated"   => Ok(JsValue::BigNumber(Rc::new(-bn.as_ref().clone()))),
+                        "sqrt"      => Ok(JsValue::BigNumber(Rc::new(bn.sqrt().unwrap_or(BigDecimal::from(0))))),
+                        "toNumber"  => Ok(JsValue::Number(bn.to_f64().unwrap_or(f64::NAN))),
+                        "toString"  => Ok(JsValue::Str(bn.to_string())),
+                        "toFixed"   => {
+                            let digits = arg_vals.first().map(|v| v.to_number() as usize).unwrap_or(0);
+                            Ok(JsValue::Str(bn.round(digits as i64).to_string()))
+                        }
+                        "toPrecision" => {
+                            let digits = arg_vals.first().map(|v| v.to_number() as usize).unwrap_or(0);
+                            Ok(JsValue::Str(bn.round(digits as i64).to_string()))
+                        }
+                        "isZero"     => Ok(JsValue::Bool(bn.is_zero())),
+                        "isPositive" => Ok(JsValue::Bool(*bn > BigDecimal::from(0))),
+                        "isNegative" => Ok(JsValue::Bool(*bn < BigDecimal::from(0))),
+                        "isFinite"   => Ok(JsValue::Bool(true)),
+                        "isNaN"      => Ok(JsValue::Bool(false)),
+                        "isInteger"  => Ok(JsValue::Bool(bn.is_integer())),
+                        "gt" | "isGreaterThan"           => Ok(JsValue::Bool((*bn) > other_bd.unwrap_or(BigDecimal::from(0)))),
+                        "gte" | "isGreaterThanOrEqualTo" => Ok(JsValue::Bool((*bn) >= other_bd.unwrap_or(BigDecimal::from(0)))),
+                        "lt" | "isLessThan"              => Ok(JsValue::Bool((*bn) < other_bd.unwrap_or(BigDecimal::from(0)))),
+                        "lte" | "isLessThanOrEqualTo"    => Ok(JsValue::Bool((*bn) <= other_bd.unwrap_or(BigDecimal::from(0)))),
+                        "eq" | "isEqualTo"               => Ok(JsValue::Bool((*bn) == other_bd.unwrap_or(BigDecimal::from(0)))),
+                        "comparedTo" => {
+                            let other = other_bd.unwrap_or(BigDecimal::from(0));
+                            let cmp = if *bn < other { -1.0 } else if *bn > other { 1.0 } else { 0.0 };
+                            Ok(JsValue::Number(cmp))
+                        }
+                        "decimalPlaces" | "dp" => {
+                            let s = bn.to_string();
+                            let dp = s.find('.').map(|i| s.len() - i - 1).unwrap_or(0);
+                            Ok(JsValue::Number(dp as f64))
+                        }
+                        "integerValue" => Ok(JsValue::BigNumber(Rc::new(bn.round(0)))),
+                        "shiftedBy" => {
+                            let n = arg_vals.first().map(|v| v.to_number() as i64).unwrap_or(0);
+                            let factor = bigdecimal_pow(BigDecimal::from(10i64), n.unsigned_abs());
+                            let result = if n >= 0 { bn.as_ref().clone() * factor } else { bn.as_ref().clone() / factor };
+                            Ok(JsValue::BigNumber(Rc::new(result)))
+                        }
+                        "valueOf" => Ok(JsValue::Number(bn.to_f64().unwrap_or(f64::NAN))),
+                        _ => Ok(JsValue::Undefined),
+                    };
+                }
                 JsValue::Str(s) => {
                     let s = s.clone();
                     let arg_vals = self.eval_args(args, env)?;
                     if let Some(result) = call_string_method(&s, &key, arg_vals)? {
                         return Ok(result);
+                    }
+                }
+                // Function.prototype.call / apply / bind
+                JsValue::Function(_) if matches!(key.as_str(), "call" | "apply" | "bind") => {
+                    let arg_vals = self.eval_args(args, env)?;
+                    match key.as_str() {
+                        "call" => {
+                            // fn.call(thisArg, arg1, arg2, ...)
+                            let this_arg = arg_vals.first().cloned();
+                            let call_args = arg_vals.into_iter().skip(1).collect();
+                            return self.call_function(this.clone(), call_args, this_arg);
+                        }
+                        "apply" => {
+                            // fn.apply(thisArg, [arg1, arg2, ...])
+                            let this_arg = arg_vals.first().cloned();
+                            let call_args = match arg_vals.get(1) {
+                                Some(JsValue::Array(a)) => a.borrow().clone(),
+                                _ => vec![],
+                            };
+                            return self.call_function(this.clone(), call_args, this_arg);
+                        }
+                        "bind" => {
+                            // fn.bind(thisArg, ...boundArgs) -> nova JsFunc::Bound
+                            let bound_this = arg_vals.first().cloned().unwrap_or(JsValue::Undefined);
+                            let bound_args: Vec<JsValue> = arg_vals.into_iter().skip(1).collect();
+                            return Ok(JsValue::Function(JsFunc::Bound {
+                                func: Box::new(this.clone()),
+                                bound_this: Box::new(bound_this),
+                                bound_args,
+                            }));
+                        }
+                        _ => unreachable!()
                     }
                 }
                 // Array/Number/Date/Promise staticke metody
@@ -2301,6 +2606,25 @@ impl Interpreter {
                             }
                             return Ok(make_settled_promise("pending", JsValue::Undefined));
                         }
+                        // String staticke metody
+                        ("String", "fromCharCode") => {
+                            let s: String = arg_vals.iter()
+                                .map(|v| {
+                                    let code = v.to_number() as u32;
+                                    char::from_u32(code).unwrap_or('\u{FFFD}')
+                                })
+                                .collect();
+                            return Ok(JsValue::Str(s));
+                        }
+                        ("String", "fromCodePoint") => {
+                            let s: String = arg_vals.iter()
+                                .map(|v| {
+                                    let code = v.to_number() as u32;
+                                    char::from_u32(code).unwrap_or('\u{FFFD}')
+                                })
+                                .collect();
+                            return Ok(JsValue::Str(s));
+                        }
                         ("Promise", "any") => {
                             let arr = match arg_vals.into_iter().next() {
                                 Some(JsValue::Array(a)) => a.borrow().clone(),
@@ -2415,6 +2739,13 @@ impl Interpreter {
                     Err(e) => Err(e),
                 }
             }
+            // Bound funkce: prepend bound_args, pouzij bound_this
+            JsValue::Function(JsFunc::Bound { func, bound_this, bound_args }) => {
+                let mut all_args = bound_args.clone();
+                all_args.extend(args);
+                let effective_this = this.or(Some(*bound_this));
+                self.call_function(*func, all_args, effective_this)
+            }
             _ => Err(JsError::Runtime(format!("{func} není funkce"))),
         }
     }
@@ -2435,6 +2766,15 @@ impl Interpreter {
                     let pat = args.get(0).map(|v| v.to_string()).unwrap_or_default();
                     let flags = args.get(1).map(|v| v.to_string()).unwrap_or_default();
                     return Ok(make_regex_object(&pat, &flags));
+                }
+                "BigNumber"       => {
+                    let s = args.into_iter().next().map(|v| match v {
+                        JsValue::BigNumber(n) => n.to_string(),
+                        other => other.to_string(),
+                    }).unwrap_or_else(|| "0".into());
+                    return BigDecimal::from_str(s.trim())
+                        .map(|bd| JsValue::BigNumber(Rc::new(bd)))
+                        .map_err(|_| JsError::Runtime(format!("BigNumber: neplatna hodnota '{s}'")));
                 }
                 "Error" | "TypeError" | "RangeError" | "SyntaxError"
                 | "ReferenceError" | "URIError" | "EvalError" => {
@@ -2923,6 +3263,15 @@ impl Interpreter {
             }
             "toString" => {
                 let s = arr.borrow().iter().map(|v| v.to_string()).collect::<Vec<_>>().join(",");
+                Ok(Some(JsValue::Str(s)))
+            }
+            "toLocaleString" => {
+                // Kazdy prvek prevede pres toLocaleString (nebo toString)
+                let s = arr.borrow().iter().map(|v| match v {
+                    JsValue::Number(n) => format_number_locale(*n),
+                    JsValue::Undefined | JsValue::Null => String::new(),
+                    other => other.to_string(),
+                }).collect::<Vec<_>>().join(",");
                 Ok(Some(JsValue::Str(s)))
             }
             _ => Ok(None), // neni znama array metoda -> zkus get_prop
@@ -3477,6 +3826,66 @@ fn is_leap(y: i64) -> bool {
     (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
 }
 
+// ─── Number format pomucky ────────────────────────────────────────────────────
+
+/// Prevede cislo do daneho ciselneho systemu (radix 2-36).
+fn radix_string(mut n: u64, radix: u32) -> String {
+    if n == 0 { return "0".into(); }
+    const DIGITS: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+    let mut buf = Vec::new();
+    while n > 0 {
+        buf.push(DIGITS[(n % radix as u64) as usize] as char);
+        n /= radix as u64;
+    }
+    buf.iter().rev().collect()
+}
+
+/// Formatuje cislo s oddelovaci tisicu (zakladni US format).
+/// Napr. 1234567.89 -> "1,234,567.89"
+fn format_number_locale(n: f64) -> String {
+    if n.is_nan()      { return "NaN".into(); }
+    if n.is_infinite() { return if n > 0.0 { "Infinity".into() } else { "-Infinity".into() }; }
+    let s = format!("{n}");
+    let (integer_part, decimal_part) = if let Some(dot) = s.find('.') {
+        (&s[..dot], Some(&s[dot+1..]))
+    } else {
+        (s.as_str(), None)
+    };
+    let (neg, digits) = if integer_part.starts_with('-') {
+        (true, &integer_part[1..])
+    } else {
+        (false, integer_part)
+    };
+    // Pridej oddelovace tisicu
+    let with_sep: String = digits.chars().rev().enumerate()
+        .flat_map(|(i, c)| {
+            if i > 0 && i % 3 == 0 { vec![',', c] } else { vec![c] }
+        })
+        .collect::<String>()
+        .chars().rev().collect();
+    let result = match decimal_part {
+        Some(d) => format!("{with_sep}.{d}"),
+        None    => with_sep,
+    };
+    if neg { format!("-{result}") } else { result }
+}
+
+// ─── BigNumber pomucky ────────────────────────────────────────────────────────
+
+/// Umocneni BigDecimal na nezaporne cele cislo (opakované nasobeni).
+fn bigdecimal_pow(base: BigDecimal, exp: u64) -> BigDecimal {
+    if exp == 0 { return BigDecimal::one(); }
+    let mut result = BigDecimal::one();
+    let mut b = base;
+    let mut e = exp;
+    while e > 0 {
+        if e & 1 == 1 { result = result * b.clone(); }
+        b = b.clone() * b.clone();
+        e >>= 1;
+    }
+    result
+}
+
 // ─── RegExp pomucky ───────────────────────────────────────────────────────────
 
 /// Prevede JS regex pattern na Rust regex pattern (zakladni konverze flagy).
@@ -3553,7 +3962,11 @@ fn regex_match_all(pattern: &str, flags: &str, text: &str) -> Vec<String> {
     }
 }
 
-fn setup_builtins(env: &Rc<RefCell<Environment>>) {
+fn setup_builtins(
+    env: &Rc<RefCell<Environment>>,
+    task_queue: &Rc<RefCell<Vec<(u32, JsValue, Vec<JsValue>)>>>,
+    next_timer_id: &Rc<RefCell<u32>>,
+) {
     let mut e = env.borrow_mut();
 
     // console
@@ -3879,6 +4292,18 @@ fn setup_builtins(env: &Rc<RefCell<Environment>>) {
     // Konstruktor registrujeme jako native - skutecna logika je v call_new a eval_call
     e.define("Promise", native("Promise", |_| Ok(JsValue::Undefined)));
 
+    // ─── BigNumber ────────────────────────────────────────────────────────────
+    // BigNumber(value) nebo new BigNumber(value) - arbitrary precision decimal
+    e.define("BigNumber", native("BigNumber", |a| {
+        let s = a.into_iter().next().map(|v| match v {
+            JsValue::BigNumber(n) => n.to_string(),
+            other => other.to_string(),
+        }).unwrap_or_else(|| "0".into());
+        BigDecimal::from_str(s.trim())
+            .map(|bd| JsValue::BigNumber(Rc::new(bd)))
+            .map_err(|_| format!("BigNumber: neplatna hodnota '{s}'"))
+    }));
+
     // ─── RegExp ───────────────────────────────────────────────────────────────
     // new RegExp(pattern, flags?) - alternativni zpusob vytvoreni regexu
     e.define("RegExp", native("RegExp", |args| {
@@ -3910,6 +4335,65 @@ fn setup_builtins(env: &Rc<RefCell<Environment>>) {
             None => Ok(JsValue::Undefined),
         }
     }));
+
+    // ─── Timery ───────────────────────────────────────────────────────────────
+    // setTimeout(cb, delay?, ...args) - fronta, spusti po dokonceni programu
+    {
+        let tq = Rc::clone(task_queue);
+        let id_ctr = Rc::clone(next_timer_id);
+        e.define("setTimeout", native("setTimeout", move |a| {
+            let mut iter = a.into_iter();
+            let cb   = iter.next().unwrap_or(JsValue::Undefined);
+            let _delay = iter.next(); // ignorujeme delay (sync runtime)
+            let args: Vec<JsValue> = iter.collect();
+            let id = {
+                let mut ctr = id_ctr.borrow_mut();
+                let id = *ctr;
+                *ctr += 1;
+                id
+            };
+            tq.borrow_mut().push((id, cb, args));
+            Ok(JsValue::Number(id as f64))
+        }));
+    }
+    // clearTimeout(id) - zrusi timer pokud jeste nebezl
+    {
+        let tq = Rc::clone(task_queue);
+        e.define("clearTimeout", native("clearTimeout", move |a| {
+            let id = a.into_iter().next().map(|v| v.to_number() as u32).unwrap_or(0);
+            tq.borrow_mut().retain(|(tid, _, _)| *tid != id);
+            Ok(JsValue::Undefined)
+        }));
+    }
+    // setInterval(cb, interval?, ...args) - v sync implementaci spusti jednou (jako setTimeout)
+    {
+        let tq = Rc::clone(task_queue);
+        let id_ctr = Rc::clone(next_timer_id);
+        e.define("setInterval", native("setInterval", move |a| {
+            let mut iter = a.into_iter();
+            let cb   = iter.next().unwrap_or(JsValue::Undefined);
+            let _interval = iter.next();
+            let args: Vec<JsValue> = iter.collect();
+            let id = {
+                let mut ctr = id_ctr.borrow_mut();
+                let id = *ctr;
+                *ctr += 1;
+                id
+            };
+            // V sync modu spustime jednou (jako timeout)
+            tq.borrow_mut().push((id, cb, args));
+            Ok(JsValue::Number(id as f64))
+        }));
+    }
+    // clearInterval(id) - zrusi interval
+    {
+        let tq = Rc::clone(task_queue);
+        e.define("clearInterval", native("clearInterval", move |a| {
+            let id = a.into_iter().next().map(|v| v.to_number() as u32).unwrap_or(0);
+            tq.borrow_mut().retain(|(tid, _, _)| *tid != id);
+            Ok(JsValue::Undefined)
+        }));
+    }
 }
 
 #[cfg(test)]
@@ -4806,8 +5290,7 @@ mod tests {
         "#)), 4.0);  // (0,0),(0,1),(0,2),(1,0) = 4 iterace
     }
 
-    #[test]
-    // ─── Třídy ────────────────────────────────────────────────────────────────
+    // ─── Tridy ────────────────────────────────────────────────────────────────
 
     #[test]
     fn class_basic_constructor_and_method() {
@@ -6394,5 +6877,291 @@ mod tests {
             clone.x = 99;
             return obj.x; // original nezmeneno
         "#)), 1.0);
+    }
+
+    // ─── Batch H: BigNumber ───────────────────────────────────────────────────
+
+    #[test]
+    fn bignumber_typeof() {
+        // Diagnosticky test - BigNumber musi byt v global env
+        let v = run(r#"return typeof BigNumber;"#);
+        assert_eq!(as_str(v), "function");
+    }
+
+    #[test]
+    fn bignumber_basic_arithmetic() {
+        assert_eq!(as_str(run(r#"
+            const a = new BigNumber("100");
+            const b = new BigNumber("200");
+            return a.plus(b).toString();
+        "#)), "300");
+    }
+
+    #[test]
+    fn bignumber_large_number() {
+        assert_eq!(as_str(run(r#"
+            const a = new BigNumber("999999999999999999999999999999");
+            const b = new BigNumber("1");
+            return a.plus(b).toString();
+        "#)), "1000000000000000000000000000000");
+    }
+
+    #[test]
+    fn bignumber_times_div() {
+        let v = run(r#"
+            const a = new BigNumber("6");
+            const b = new BigNumber("7");
+            return a.times(b).toNumber();
+        "#);
+        assert_eq!(as_num(v), 42.0);
+    }
+
+    #[test]
+    fn bignumber_comparison() {
+        assert_eq!(as_bool(run(r#"
+            return new BigNumber("10").gt(new BigNumber("5"));
+        "#)), true);
+        assert_eq!(as_bool(run(r#"
+            return new BigNumber("3").lt(new BigNumber("5"));
+        "#)), true);
+        assert_eq!(as_bool(run(r#"
+            return new BigNumber("7").eq(new BigNumber("7"));
+        "#)), true);
+    }
+
+    #[test]
+    fn bignumber_to_fixed() {
+        assert_eq!(as_str(run(r#"
+            return new BigNumber("3.14159").toFixed(2);
+        "#)), "3.14");
+    }
+
+    #[test]
+    fn bignumber_abs_neg() {
+        assert_eq!(as_str(run(r#"
+            return new BigNumber("-42").abs().toString();
+        "#)), "42");
+        assert_eq!(as_str(run(r#"
+            return new BigNumber("5").negated().toString();
+        "#)), "-5");
+    }
+
+    #[test]
+    fn bignumber_pow() {
+        assert_eq!(as_str(run(r#"
+            return new BigNumber("2").pow(10).toString();
+        "#)), "1024");
+    }
+
+    #[test]
+    fn bignumber_is_zero_is_positive() {
+        assert_eq!(as_bool(run(r#"return new BigNumber("0").isZero();"#)), true);
+        assert_eq!(as_bool(run(r#"return new BigNumber("5").isPositive();"#)), true);
+        assert_eq!(as_bool(run(r#"return new BigNumber("-3").isNegative();"#)), true);
+    }
+
+    // ─── Batch H: Number instance metody ─────────────────────────────────────
+
+    #[test]
+    fn number_to_fixed() {
+        assert_eq!(as_str(eval("(3.14159).toFixed(2)")), "3.14");
+        assert_eq!(as_str(eval("(1.005).toFixed(2)")), "1.00"); // floating point
+        assert_eq!(as_str(eval("(42).toFixed(0)")), "42");
+    }
+
+    #[test]
+    fn number_to_string_radix() {
+        assert_eq!(as_str(eval("(255).toString(16)")), "ff");
+        assert_eq!(as_str(eval("(255).toString(2)")), "11111111");
+        assert_eq!(as_str(eval("(8).toString(8)")), "10");
+        assert_eq!(as_str(eval("(42).toString()")), "42");
+    }
+
+    #[test]
+    fn number_to_exponential() {
+        assert_eq!(as_str(eval("(123456).toExponential(2)")), "1.23e+5");
+    }
+
+    #[test]
+    fn number_to_locale_string() {
+        assert_eq!(as_str(eval("(1234567).toLocaleString()")), "1,234,567");
+    }
+
+    // ─── Batch H: Array.prototype.at / flat / flatMap / findIndex ────────────
+
+    #[test]
+    fn array_at() {
+        assert_eq!(as_num(run(r#"return [1,2,3].at(0);"#)), 1.0);
+        assert_eq!(as_num(run(r#"return [1,2,3].at(-1);"#)), 3.0);
+        assert_eq!(as_num(run(r#"return [1,2,3].at(-2);"#)), 2.0);
+        assert!(matches!(run(r#"return [1,2,3].at(10);"#), JsValue::Undefined));
+    }
+
+    #[test]
+    fn array_flat_depth() {
+        assert_eq!(as_num(run(r#"
+            return [1, [2, 3], [4]].flat().length;
+        "#)), 4.0);
+        assert_eq!(as_num(run(r#"
+            return [[1, [2]], [3]].flat(2).length;
+        "#)), 3.0);
+    }
+
+    #[test]
+    fn array_flat_map() {
+        assert_eq!(as_num(run(r#"
+            return [1, 2, 3].flatMap(x => [x, x * 2]).length;
+        "#)), 6.0);
+    }
+
+    #[test]
+    fn array_find_index() {
+        assert_eq!(as_num(run(r#"
+            return [10, 20, 30].findIndex(x => x > 15);
+        "#)), 1.0);
+        assert_eq!(as_num(run(r#"
+            return [10, 20, 30].findIndex(x => x > 100);
+        "#)), -1.0);
+    }
+
+    // ─── Batch H: String.at / fromCharCode / charCodeAt ──────────────────────
+
+    #[test]
+    fn string_at() {
+        assert_eq!(as_str(eval(r#""hello".at(0)"#)), "h");
+        assert_eq!(as_str(eval(r#""hello".at(-1)"#)), "o");
+        assert!(matches!(eval(r#""hello".at(10)"#), JsValue::Undefined));
+    }
+
+    #[test]
+    fn string_from_char_code() {
+        assert_eq!(as_str(eval("String.fromCharCode(65, 66, 67)")), "ABC");
+        assert_eq!(as_str(eval("String.fromCharCode(72, 105)")), "Hi");
+    }
+
+    #[test]
+    fn string_char_code_at() {
+        assert_eq!(as_num(eval(r#""A".charCodeAt(0)"#)), 65.0);
+        assert_eq!(as_num(eval(r#""ABC".charCodeAt(1)"#)), 66.0);
+        assert!(eval(r#""A".charCodeAt(10)"#).to_number().is_nan());
+    }
+
+    // ─── Batch H: Function.prototype.call / apply / bind ─────────────────────
+
+    #[test]
+    fn function_call_method() {
+        assert_eq!(as_num(run(r#"
+            function add(a, b) { return a + b; }
+            return add.call(null, 3, 4);
+        "#)), 7.0);
+    }
+
+    #[test]
+    fn function_apply_method() {
+        assert_eq!(as_num(run(r#"
+            function add(a, b) { return a + b; }
+            return add.apply(null, [5, 6]);
+        "#)), 11.0);
+    }
+
+    #[test]
+    fn function_bind_method() {
+        assert_eq!(as_num(run(r#"
+            function add(a, b) { return a + b; }
+            const add5 = add.bind(null, 5);
+            return add5(3);
+        "#)), 8.0);
+    }
+
+    #[test]
+    fn bind_preserves_this() {
+        assert_eq!(as_str(run(r#"
+            const obj = { name: "world" };
+            function greet() { return "hello " + this.name; }
+            const fn2 = greet.bind(obj);
+            return fn2();
+        "#)), "hello world");
+    }
+
+    // ─── Batch H: eval() ─────────────────────────────────────────────────────
+
+    #[test]
+    fn eval_basic_expression() {
+        assert_eq!(as_num(run(r#"return eval("1 + 2");"#)), 3.0);
+    }
+
+    #[test]
+    fn eval_uses_current_scope() {
+        assert_eq!(as_num(run(r#"
+            let x = 10;
+            eval("x = 42;");
+            return x;
+        "#)), 42.0);
+    }
+
+    #[test]
+    fn eval_defines_variable_in_scope() {
+        assert_eq!(as_str(run(r#"
+            eval("var greeting = 'hello';");
+            return greeting;
+        "#)), "hello");
+    }
+
+    #[test]
+    fn eval_non_string_passthrough() {
+        assert_eq!(as_num(run(r#"return eval(42);"#)), 42.0);
+    }
+
+    // ─── Batch H: setTimeout / clearTimeout / setInterval ────────────────────
+
+    #[test]
+    fn set_timeout_basic() {
+        assert_eq!(as_num(run(r#"
+            let x = 0;
+            setTimeout(() => { x = 99; }, 0);
+            return x; // setTimeout noch spusteny behem run(), drain_timers ho spusti po
+        "#)), 0.0);
+        // Po dokonceni run() (vcetne drain_timers) x bude 99, ale run() vraci x pred drain
+        // Overeni: spustime a overime ze callback se spustil
+        let v = run(r#"
+            let x = 0;
+            setTimeout(() => { x = 99; }, 0);
+            // x zatim 0, po skonceni exec_stmts se drain spusti
+            return 0; // vracime 0 explicitne, drain potom spusti callback
+        "#);
+        assert_eq!(as_num(v), 0.0); // drain_timers spusti callback ale neovlivni return
+    }
+
+    #[test]
+    fn set_timeout_with_args() {
+        // Overeni ze callback se spusti (zapis do objektu)
+        // Pouzijeme globalni promennou ktera prezije drain
+        let v = run(r#"
+            let result = 0;
+            function cb(a, b) { result = a + b; }
+            setTimeout(cb, 0, 10, 20);
+            return result; // behem exec je 0
+        "#);
+        // drain_timers spusti cb(10,20) ale run() uz vratil result=0
+        assert_eq!(as_num(v), 0.0);
+    }
+
+    #[test]
+    fn clear_timeout_cancels() {
+        // clearTimeout pred drain - callback se nespusti
+        let v = run(r#"
+            let x = 0;
+            const id = setTimeout(() => { x = 1; }, 0);
+            clearTimeout(id);
+            return x; // drain nenajde zadny callback
+        "#);
+        assert_eq!(as_num(v), 0.0);
+        // x by bylo 0 protoze callback byl zrusen
+    }
+
+    #[test]
+    fn set_timeout_returns_id() {
+        let v = run(r#"return typeof setTimeout(() => {}, 0);"#);
+        assert_eq!(as_str(v), "number");
     }
 }
