@@ -605,6 +605,14 @@ impl LayoutBox {
 
     /// Hit test: vrati nejdetailnejsi (deepest) box obsahujici (x, y).
     pub fn hit_test(&self, x: f32, y: f32) -> Option<&LayoutBox> {
+        // pointer-events: none -> element ignored pri hit test (vc deti pokud none nezruseno)
+        if self.pointer_events == "none" {
+            return None;
+        }
+        // visibility: hidden -> taky skip hit test
+        if self.opacity == 0.0 {
+            return None;
+        }
         if x < self.rect.x || x > self.rect.x + self.rect.width
             || y < self.rect.y || y > self.rect.y + self.rect.height
         {
