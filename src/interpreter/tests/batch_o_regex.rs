@@ -68,3 +68,41 @@ fn regex_unicode_flag() {
     "#);
     assert_eq!(as_bool(v), true);
 }
+
+// ─── Lookbehind (fancy-regex) ───────────────────────────────────────────
+
+#[test]
+fn regex_positive_lookbehind() {
+    // (?<=$)\d+ - match cisla po dollar znaku
+    let v = run(r#"return /(?<=\$)\d+/.test("price: $42");"#);
+    assert_eq!(as_bool(v), true);
+}
+
+#[test]
+fn regex_negative_lookbehind() {
+    // (?<!$)\d+ - cisla NE po dollar
+    let v = run(r#"return /(?<!\$)\d+/.test("count: 42");"#);
+    assert_eq!(as_bool(v), true);
+}
+
+#[test]
+fn regex_lookbehind_extract() {
+    let v = run(r#"
+        const m = /(?<=USD\s)\d+/.exec("price USD 100 EUR 200");
+        return m[0];
+    "#);
+    assert_eq!(as_str(v), "100");
+}
+
+#[test]
+fn regex_backreference() {
+    // Backreference \1 - opakuje predchozi capture
+    let v = run(r#"return /(\w+)\s\1/.test("hello hello");"#);
+    assert_eq!(as_bool(v), true);
+}
+
+#[test]
+fn regex_backreference_no_match() {
+    let v = run(r#"return /(\w+)\s\1/.test("hello world");"#);
+    assert_eq!(as_bool(v), false);
+}

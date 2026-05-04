@@ -951,22 +951,133 @@ pub fn js_regex_to_rust(pattern: &str, flags: &str) -> Result<Regex, String> {
     Regex::new(&full).map_err(|e| format!("SyntaxError: Neplatny regex /{pattern}/{flags}: {e}"))
 }
 
+/// Detekuje jestli pattern vyzaduje fancy-regex (lookbehind, backreference, atd.).
+fn needs_fancy_regex(pattern: &str) -> bool {
+    // Lookbehind: (?<= nebo (?<!
+    if pattern.contains("(?<=") || pattern.contains("(?<!") { return true; }
+    // Backreferences: \1 .. \9 (ne v char tridach)
+    let bytes = pattern.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\\' && i + 1 < bytes.len() {
+            if (b'1'..=b'9').contains(&bytes[i + 1]) {
+                return true;
+            }
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+    false
+}
+
+/// Sjednocene rozhrani: bud std regex (rychly) nebo fancy-regex (vice features).
+pub enum JsRegex {
+    Std(Regex),
+    Fancy(fancy_regex::Regex),
+}
+
+impl JsRegex {
+    pub fn compile(pattern: &str, flags: &str) -> Result<Self, String> {
+        let ignore_case = flags.contains('i');
+        let multiline = flags.contains('m');
+        let dot_all = flags.contains('s');
+        let prefix = format!(
+            "(?{}{}{})",
+            if ignore_case { "i" } else { "" },
+            if multiline  { "m" } else { "" },
+            if dot_all    { "s" } else { "" },
+        );
+        let full = if prefix == "(?)" {
+            pattern.to_string()
+        } else {
+            format!("{prefix}{pattern}")
+        };
+        if needs_fancy_regex(pattern) {
+            fancy_regex::Regex::new(&full)
+                .map(JsRegex::Fancy)
+                .map_err(|e| format!("SyntaxError: Neplatny regex /{pattern}/{flags}: {e}"))
+        } else {
+            // Try std regex first (faster)
+            match Regex::new(&full) {
+                Ok(re) => Ok(JsRegex::Std(re)),
+                Err(_) => fancy_regex::Regex::new(&full)
+                    .map(JsRegex::Fancy)
+                    .map_err(|e| format!("SyntaxError: Neplatny regex /{pattern}/{flags}: {e}")),
+            }
+        }
+    }
+
+    pub fn is_match(&self, text: &str) -> bool {
+        match self {
+            JsRegex::Std(r)   => r.is_match(text),
+            JsRegex::Fancy(r) => r.is_match(text).unwrap_or(false),
+        }
+    }
+
+    /// Najde prvni shodu, vrati positional groups.
+    pub fn captures(&self, text: &str) -> Option<Vec<Option<String>>> {
+        match self {
+            JsRegex::Std(r) => {
+                let caps = r.captures(text)?;
+                let mut out = Vec::new();
+                for i in 0..caps.len() {
+                    out.push(caps.get(i).map(|m| m.as_str().to_string()));
+                }
+                Some(out)
+            }
+            JsRegex::Fancy(r) => {
+                let caps = r.captures(text).ok()??;
+                let mut out = Vec::new();
+                for i in 0..caps.len() {
+                    out.push(caps.get(i).map(|m| m.as_str().to_string()));
+                }
+                Some(out)
+            }
+        }
+    }
+
+    pub fn find_all(&self, text: &str) -> Vec<String> {
+        match self {
+            JsRegex::Std(r)   => r.find_iter(text).map(|m| m.as_str().to_string()).collect(),
+            JsRegex::Fancy(r) => r.find_iter(text).filter_map(|res| res.ok())
+                .map(|m| m.as_str().to_string()).collect(),
+        }
+    }
+}
+
 /// regex_exec s podporou named groups - vraci (positional, named).
-/// Named groups jsou Vec<(name, value)>.
+/// Pouziva JsRegex (std nebo fancy podle patternu).
 pub fn regex_exec_named(pattern: &str, flags: &str, text: &str)
     -> Option<(Vec<Option<String>>, Vec<(String, Option<String>)>)>
 {
-    let re = js_regex_to_rust(pattern, flags).ok()?;
-    let caps = re.captures(text)?;
-    let mut positional = Vec::new();
-    for i in 0..caps.len() {
-        positional.push(caps.get(i).map(|m| m.as_str().to_string()));
+    let re = JsRegex::compile(pattern, flags).ok()?;
+    match re {
+        JsRegex::Std(r) => {
+            let caps = r.captures(text)?;
+            let mut positional = Vec::new();
+            for i in 0..caps.len() {
+                positional.push(caps.get(i).map(|m| m.as_str().to_string()));
+            }
+            let mut named = Vec::new();
+            for name in r.capture_names().flatten() {
+                named.push((name.to_string(), caps.name(name).map(|m| m.as_str().to_string())));
+            }
+            Some((positional, named))
+        }
+        JsRegex::Fancy(r) => {
+            let caps = r.captures(text).ok()??;
+            let mut positional = Vec::new();
+            for i in 0..caps.len() {
+                positional.push(caps.get(i).map(|m| m.as_str().to_string()));
+            }
+            let mut named = Vec::new();
+            for name in r.capture_names().flatten() {
+                named.push((name.to_string(), caps.name(name).map(|m| m.as_str().to_string())));
+            }
+            Some((positional, named))
+        }
     }
-    let mut named = Vec::new();
-    for name in re.capture_names().flatten() {
-        named.push((name.to_string(), caps.name(name).map(|m| m.as_str().to_string())));
-    }
-    Some((positional, named))
 }
 
 pub fn make_regex_object(pattern: &str, flags: &str) -> JsValue {
@@ -995,24 +1106,19 @@ pub fn get_regex_parts(val: &JsValue) -> Option<(String, String)> {
 }
 
 pub fn regex_test(pattern: &str, flags: &str, text: &str) -> bool {
-    js_regex_to_rust(pattern, flags)
+    JsRegex::compile(pattern, flags)
         .map(|re| re.is_match(text))
         .unwrap_or(false)
 }
 
 pub fn regex_exec(pattern: &str, flags: &str, text: &str) -> Option<Vec<Option<String>>> {
-    let re = js_regex_to_rust(pattern, flags).ok()?;
-    let caps = re.captures(text)?;
-    let mut result = Vec::new();
-    for i in 0..caps.len() {
-        result.push(caps.get(i).map(|m| m.as_str().to_string()));
-    }
-    Some(result)
+    let re = JsRegex::compile(pattern, flags).ok()?;
+    re.captures(text)
 }
 
 pub fn regex_match_all(pattern: &str, flags: &str, text: &str) -> Vec<String> {
-    match js_regex_to_rust(pattern, flags) {
-        Ok(re) => re.find_iter(text).map(|m| m.as_str().to_string()).collect(),
+    match JsRegex::compile(pattern, flags) {
+        Ok(re) => re.find_all(text),
         Err(_) => vec![],
     }
 }

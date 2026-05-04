@@ -23,3 +23,6 @@ writeable = "0.5"
 
 # Real HTTP client pro fetch() - blocking varianta (sync runtime)
 ureq = { version = "2.10", features = ["json"] }
+
+# Fancy regex - podporuje lookbehind, backreferences, atomic groups
+fancy-regex = "0.13"
