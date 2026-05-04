@@ -2546,14 +2546,16 @@ impl Renderer {
 
     /// Walk layout tree + pro kazdy canvas s WebGL state, drain queue
     /// a encode real wgpu draw passes do per-canvas RT, composit RT do
-    /// swap chain.
+    /// swap chain. Vraci true pokud aspon 1 canvas drawnut.
     pub fn run_webgl_frame(
         &mut self,
         root: &super::layout::LayoutBox,
         swap_view: &wgpu::TextureView,
         webgl_states: &std::collections::HashMap<usize, std::rc::Rc<std::cell::RefCell<crate::interpreter::WebGLState>>>,
-    ) {
-        self.walk_webgl(root, swap_view, webgl_states);
+    ) -> bool {
+        let mut any = false;
+        self.walk_webgl(root, swap_view, webgl_states, &mut any);
+        any
     }
 
     fn walk_webgl(
@@ -2561,17 +2563,20 @@ impl Renderer {
         bx: &super::layout::LayoutBox,
         swap_view: &wgpu::TextureView,
         webgl_states: &std::collections::HashMap<usize, std::rc::Rc<std::cell::RefCell<crate::interpreter::WebGLState>>>,
+        any: &mut bool,
     ) {
         if bx.tag.as_deref() == Some("canvas") {
             if let Some(node) = &bx.node {
                 let ptr = std::rc::Rc::as_ptr(node) as usize;
                 if let Some(state_rc) = webgl_states.get(&ptr) {
-                    self.execute_webgl_canvas(ptr, state_rc, bx, swap_view);
+                    if self.execute_webgl_canvas(ptr, state_rc, bx, swap_view) {
+                        *any = true;
+                    }
                 }
             }
         }
         for ch in &bx.children {
-            self.walk_webgl(ch, swap_view, webgl_states);
+            self.walk_webgl(ch, swap_view, webgl_states, any);
         }
     }
 
@@ -2581,7 +2586,7 @@ impl Renderer {
         state_rc: &std::rc::Rc<std::cell::RefCell<crate::interpreter::WebGLState>>,
         bx: &super::layout::LayoutBox,
         swap_view: &wgpu::TextureView,
-    ) {
+    ) -> bool {
         use crate::interpreter::WebGLDrawCmd;
         let w = (bx.rect.width as u32).max(1);
         let h = (bx.rect.height as u32).max(1);
@@ -2640,9 +2645,15 @@ impl Renderer {
                         }
                     }
                 }
-                WebGLDrawCmd::DrawElements { program_id, .. } => {
-                    // Phase 3c5+ : indexed draw not yet wired
-                    let _ = program_id;
+                WebGLDrawCmd::DrawElements { program_id, mode, count, index_type, offset, index_buffer_id, attribs, uniforms: _, viewport: _ } => {
+                    let _ = mode;
+                    if let (Some(pid), Some(ibo)) = (program_id, index_buffer_id) {
+                        if self.ensure_webgl_pipeline(pid, &attribs) {
+                            let cc = pending_clear.take();
+                            self.webgl_encode_draw_elements(canvas_ptr, pid, count, index_type, offset, ibo, &attribs, cc);
+                            had_render = true;
+                        }
+                    }
                 }
             }
         }
@@ -2657,6 +2668,71 @@ impl Renderer {
                 self.compose_view_to_swap(swap_view, &view, bx.rect.x, bx.rect.y, bx.rect.width, bx.rect.height);
             }
         }
+        had_render
+    }
+
+    /// Encode drawElements (indexed draw) do canvas RT.
+    /// Pipeline + vertex buffer + index buffer musi byt cached.
+    pub fn webgl_encode_draw_elements(
+        &self,
+        canvas_ptr: usize,
+        program_id: u32,
+        count: i32,
+        index_type: u32,
+        offset: i32,
+        index_buffer_id: u32,
+        attribs: &[(u32, crate::interpreter::WebGLAttribSlot)],
+        clear_color: Option<[f32; 4]>,
+    ) -> bool {
+        let view = match self.webgl_canvas_rts.get(&canvas_ptr) {
+            Some((_, v, _, _)) => v,
+            None => return false,
+        };
+        let pipeline = match self.webgl_pipelines.get(&program_id) {
+            Some(p) => p,
+            None => return false,
+        };
+        let index_buf = match self.webgl_buffers.get(&index_buffer_id) {
+            Some(b) => b,
+            None => return false,
+        };
+        // Index format: GL_UNSIGNED_SHORT (0x1403) -> Uint16, GL_UNSIGNED_INT (0x1405) -> Uint32
+        let idx_format = match index_type {
+            0x1403 => wgpu::IndexFormat::Uint16,
+            0x1405 => wgpu::IndexFormat::Uint32,
+            _ => wgpu::IndexFormat::Uint16,
+        };
+        let idx_size_bytes: u64 = if matches!(idx_format, wgpu::IndexFormat::Uint16) { 2 } else { 4 };
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        let load = match clear_color {
+            Some(c) => wgpu::LoadOp::Clear(wgpu::Color {
+                r: c[0] as f64, g: c[1] as f64, b: c[2] as f64, a: c[3] as f64,
+            }),
+            None => wgpu::LoadOp::Load,
+        };
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("webgl_draw_elements"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view, resolve_target: None,
+                    ops: wgpu::Operations { load, store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: None, timestamp_writes: None, occlusion_query_set: None,
+            });
+            pass.set_pipeline(pipeline);
+            if let Some((_, slot)) = attribs.first() {
+                if let Some(buf) = self.webgl_buffers.get(&slot.buffer_id) {
+                    pass.set_vertex_buffer(0, buf.slice(..));
+                }
+            }
+            let offset_bytes = offset as u64 * idx_size_bytes;
+            pass.set_index_buffer(index_buf.slice(offset_bytes..), idx_format);
+            if count > 0 {
+                pass.draw_indexed(0..count as u32, 0, 0..1);
+            }
+        }
+        self.queue.submit(std::iter::once(encoder.finish()));
+        true
     }
 
     /// Encode jen clear color do canvas RT (bez draw call).
@@ -2940,132 +3016,106 @@ impl Renderer {
         );
     }
 
-    /// Renderuje display list s podporou filter subtree (blur + color matrix).
-    /// Rozdeli display_list na segmenty: Main(commands rendered normalne) +
-    /// Filter(commands rendered do offscreen RT, pak composited s blur+matrix).
-    /// Wrapper kolem draw_segments + run_webgl_frame.
-    /// Pri WebGL canvas v layout, vykresli WebGL passes a composit do swap.
+    /// Renderuje display list s podporou filter subtree (blur + color matrix)
+    /// + WebGL canvas pass v ramci JEDNOHO swap chain frame.
+    /// Phase 3c6: single-frame integration - pred frame.present() vola
+    /// run_webgl_frame s acquired view (zadne 2 framy s overlay).
     pub fn draw_full_frame(
         &mut self,
         cmds: &[DisplayCommand],
         layout_root: &super::layout::LayoutBox,
         webgl_states: Option<&std::collections::HashMap<usize, std::rc::Rc<std::cell::RefCell<crate::interpreter::WebGLState>>>>,
     ) {
-        // Main display list pass (jiz prezentuje frame).
-        self.draw_segments(cmds);
-        // WebGL post-pass: pri kazdem WebGL canvas drainuje queue + composit
-        // RT do dalsi swap chain frame. Bezi jako separate present (overlay
-        // efekt). Pri zadnych WebGL contextu skip.
-        if let Some(states) = webgl_states {
-            if !states.is_empty() && self.has_canvas_with_state(layout_root, states) {
-                self.run_webgl_overlay_frame(layout_root, states);
-            }
-        }
-    }
-
-    fn has_canvas_with_state(
-        &self,
-        bx: &super::layout::LayoutBox,
-        webgl_states: &std::collections::HashMap<usize, std::rc::Rc<std::cell::RefCell<crate::interpreter::WebGLState>>>,
-    ) -> bool {
-        if bx.tag.as_deref() == Some("canvas") {
-            if let Some(node) = &bx.node {
-                let ptr = std::rc::Rc::as_ptr(node) as usize;
-                if webgl_states.contains_key(&ptr) {
-                    let has_pending = webgl_states.get(&ptr).map(|s| !s.borrow().draw_queue.is_empty()).unwrap_or(false);
-                    if has_pending { return true; }
-                }
-            }
-        }
-        for ch in &bx.children {
-            if self.has_canvas_with_state(ch, webgl_states) { return true; }
-        }
-        false
-    }
-
-    fn run_webgl_overlay_frame(
-        &mut self,
-        layout_root: &super::layout::LayoutBox,
-        webgl_states: &std::collections::HashMap<usize, std::rc::Rc<std::cell::RefCell<crate::interpreter::WebGLState>>>,
-    ) {
-        // Acquire next frame, kresli WebGL nad existujici scene.
-        // Tu samou frame nemuzeme znova - preferujeme overlay v dalsim frame.
-        // Realny browser by spojil oba do jednoho passu - simplified zde.
-        let frame = match self.surface.get_current_texture() {
-            Ok(f) => f,
-            Err(_) => return,
-        };
-        let view = frame.texture.create_view(&Default::default());
-        // Clear na soucasny obsah - pres LoadOp::Load v compose_view_to_swap.
-        // Aby novy frame nezachazel staré, prvne nasleduje main (uz proslo).
-        // V tomto presentu mame jen WebGL canvas overlays nad clear.
-        // Pro real overlay efekt by bylo lepsi mit single frame, ale to vyzaduje
-        // bigger refactor. Zatim prijatelne.
-        let mut encoder = self.device.create_command_encoder(&Default::default());
-        {
-            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("webgl_overlay_clear"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view, resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.95, g: 0.95, b: 0.97, a: 1.0 }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None, timestamp_writes: None, occlusion_query_set: None,
-            });
-        }
-        self.queue.submit(std::iter::once(encoder.finish()));
-        self.run_webgl_frame(layout_root, &view, webgl_states);
-        frame.present();
-    }
-
-    fn draw_segments(&mut self, cmds: &[DisplayCommand]) {
-        let segments: Vec<Seg> = partition_filter_segments(cmds);
-
-        // Update viewport uniform
+        // Update viewport uniform pro main pipeline
         let vp = [self.config.width as f32, self.config.height as f32, 0.0, 0.0];
         self.queue.write_buffer(&self.uniform_buf, 0, bytemuck::cast_slice(&vp));
 
-        // Acquire swap chain
+        // Acquire frame
         let frame = match self.surface.get_current_texture() {
             Ok(f) => f,
             Err(_) => return,
         };
         let view = frame.texture.create_view(&Default::default());
 
+        // 1. Main display list (segments: Main / Filter / Transform3D)
+        let had_segments = self.draw_segments_into_view(&view, cmds);
+
+        // 2. WebGL pass (pokud nejaky canvas s pending queue)
+        let mut webgl_did_render = false;
+        if let Some(states) = webgl_states {
+            if !states.is_empty() {
+                webgl_did_render = self.run_webgl_frame(layout_root, &view, states);
+            }
+        }
+
+        // 3. Pokud nic, alespon clear (aby frame nezustal undefined)
+        if !had_segments && !webgl_did_render {
+            let mut encoder = self.device.create_command_encoder(&Default::default());
+            {
+                let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("frame_clear"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view, resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.95, g: 0.95, b: 0.97, a: 1.0 }),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None, timestamp_writes: None, occlusion_query_set: None,
+                });
+            }
+            self.queue.submit(std::iter::once(encoder.finish()));
+        }
+
+        // 4. Single present
+        frame.present();
+    }
+
+    /// Renderuje display list segmenty do existujici TextureView (bez acquire/present).
+    /// Vraci true pokud aspon jedna pass byla provedena (pro frame fallback clear).
+    fn draw_segments_into_view(&mut self, view: &wgpu::TextureView, cmds: &[DisplayCommand]) -> bool {
+        let segments: Vec<Seg> = partition_filter_segments(cmds);
         let mut first_pass = true;
         for seg in segments {
             match seg {
                 Seg::Main(slice) => {
                     let verts = build_vertices(slice, &self.atlas, &self.image_atlas);
-                    self.draw_main_pass(&view, &verts, first_pass);
+                    self.draw_main_pass(view, &verts, first_pass);
                     first_pass = false;
                 }
                 Seg::Filter { inner, x, y, w, h, radius, color_matrix } => {
-                    // 1. Render inner cmds do offscreen_view (clear transparent)
                     let inner_verts = build_vertices(inner, &self.atlas, &self.image_atlas);
                     self.draw_to_offscreen(&inner_verts);
-                    // 2. Blur 2-pass (offscreen -> b -> offscreen) - skip pri radius=0
                     if radius >= 0.5 {
                         self.run_blur_passes(radius);
                     }
-                    // 3. Composit do swap chain pres scissor region (s color matrix)
-                    self.compose_offscreen(&view, x, y, w, h, &color_matrix, first_pass);
+                    self.compose_offscreen(view, x, y, w, h, &color_matrix, first_pass);
                     first_pass = false;
                 }
                 Seg::Transform3D { inner, x, y, w, h, matrix } => {
-                    // 1. Capture inner do offscreen_view
                     let inner_verts = build_vertices(inner, &self.atlas, &self.image_atlas);
                     self.draw_to_offscreen(&inner_verts);
-                    // 2. Compose s 3D matrix - draw transformed quad samplujici offscreen RT
-                    self.compose_transform(&view, x, y, w, h, &matrix, first_pass);
+                    self.compose_transform(view, x, y, w, h, &matrix, first_pass);
                     first_pass = false;
                 }
             }
         }
-        // Pokud byl display list prazdny, jeste musime swap chain vyclearovat
-        if first_pass {
+        !first_pass
+    }
+
+    /// Legacy wrapper - draw_segments bez WebGL pass.
+    /// Pro App::render se preferuje draw_full_frame ktera handluje WebGL.
+    fn draw_segments(&mut self, cmds: &[DisplayCommand]) {
+        // Update viewport uniform
+        let vp = [self.config.width as f32, self.config.height as f32, 0.0, 0.0];
+        self.queue.write_buffer(&self.uniform_buf, 0, bytemuck::cast_slice(&vp));
+        let frame = match self.surface.get_current_texture() {
+            Ok(f) => f,
+            Err(_) => return,
+        };
+        let view = frame.texture.create_view(&Default::default());
+        let had_segments = self.draw_segments_into_view(&view, cmds);
+        if !had_segments {
             let mut encoder = self.device.create_command_encoder(&Default::default());
             {
                 let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

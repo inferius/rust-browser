@@ -1212,6 +1212,83 @@ fn webgl_compute_stride_zero_attribs_zero() {
     assert_eq!(webgl_compute_stride(&[]), 0);
 }
 
+// ─── Phase 3c6 single-frame integration testy ──────────────────────────
+
+#[test]
+fn webgl_run_frame_state_extraction_handles_drawelements() {
+    // DrawElements je teď real wired (nezahazi se).
+    let mut state = WebGLState::new();
+    state.draw_queue.push(make_drawelements());
+    state.draw_queue.push(make_drawelements());
+    let frame = webgl_extract_pending(&mut state);
+    assert_eq!(frame.commands.len(), 2);
+    assert_eq!(webgl_count_draws(&frame.commands), 2);
+}
+
+#[test]
+fn webgl_run_frame_combines_clear_drawarrays_drawelements() {
+    let mut state = WebGLState::new();
+    state.draw_queue.push(WebGLDrawCmd::ClearColor([0.5, 0.5, 0.5, 1.0]));
+    state.draw_queue.push(WebGLDrawCmd::Clear(0x4000));
+    state.draw_queue.push(make_drawarrays(3));
+    state.draw_queue.push(make_drawelements());
+    state.draw_queue.push(make_drawarrays(6));
+    let frame = webgl_extract_pending(&mut state);
+    assert_eq!(frame.commands.len(), 5);
+    assert_eq!(webgl_count_draws(&frame.commands), 3);
+    assert_eq!(webgl_count_clears(&frame.commands), 1);
+}
+
+#[test]
+fn webgl_run_frame_with_no_state_no_crash() {
+    // Bez pripojene WebGL state, run_webgl_frame se nezavola
+    // (test layout walker behavior).
+    let canvas_node = NodeData::new_element("canvas", HashMap::new());
+    let bx = make_canvas_layout_box(canvas_node);
+    let states: HashMap<usize, Rc<RefCell<WebGLState>>> = HashMap::new();
+    assert_eq!(webgl_canvas_count(&bx, &states), 0);
+}
+
+#[test]
+fn webgl_extract_pending_includes_drawelements() {
+    let mut state = WebGLState::new();
+    state.buffers.insert(1, vec![0u8; 64]);  // index buffer
+    state.buffers.insert(2, vec![0u8; 128]); // vertex buffer
+    state.draw_queue.push(WebGLDrawCmd::DrawElements {
+        program_id: Some(1), mode: 4, count: 6, index_type: 0x1403,
+        offset: 0, index_buffer_id: Some(1),
+        attribs: vec![
+            (0, WebGLAttribSlot {
+                buffer_id: 2, size: 2, component_type: 0x1406,
+                normalized: false, stride: 8, offset: 0, enabled: true,
+            }),
+        ],
+        uniforms: HashMap::new(),
+        viewport: [0, 0, 100, 100],
+    });
+    let frame = webgl_extract_pending(&mut state);
+    assert_eq!(frame.commands.len(), 1);
+    assert_eq!(frame.buffers.len(), 2);
+
+    // Zkontroluj ze prikaz je DrawElements s spravnymi parametry.
+    if let WebGLDrawCmd::DrawElements { count, index_buffer_id, .. } = &frame.commands[0] {
+        assert_eq!(*count, 6);
+        assert_eq!(*index_buffer_id, Some(1));
+    } else {
+        panic!("expected DrawElements");
+    }
+}
+
+#[test]
+fn webgl_run_frame_returns_false_for_no_canvas() {
+    // run_webgl_frame vraci bool - false kdyz nic nedelal.
+    // Smoke test pres pure logic - kdyz state je empty, count_draws = 0.
+    let states: HashMap<usize, Rc<RefCell<WebGLState>>> = HashMap::new();
+    let canvas_node = NodeData::new_element("canvas", HashMap::new());
+    let bx = make_canvas_layout_box(canvas_node);
+    assert!(!webgl_layout_has_canvas(&bx, &states));
+}
+
 #[test]
 fn webgl_compute_stride_explicit_takes_precedence() {
     let attribs = vec![
