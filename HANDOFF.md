@@ -5,10 +5,10 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 ## Stav
 
 - Build: **OK**, 0 errors.
-- Tests: **1297 passed, 0 failed, 3 ignored** (+492 v teto session, +61.1%).
-- Posledni commit: `3ff3720 CSS parser tests rozsireno +15`.
+- Tests: **1491 passed, 0 failed, 3 ignored** (+686 v teto session, +85.2%).
+- Posledni commit: `8e48baa Number/Math/Date/BigInt + Paint primitive tests +56`.
 - Tree: ciste.
-- Branch master, ~250 commitu pred origin/master (NEPUSHOVAT bez vyzvy).
+- Branch master, ~254 commitu pred origin/master (NEPUSHOVAT bez vyzvy).
 
 ## Recent session highlights
 
@@ -69,10 +69,12 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
     z App::render path - placeholder zustava pub pro debug viewer /
     devtools (bez Renderer).
 16. **Test coverage extension** (commits 231582e + 95092d5 + f6fc228 +
-    66144b1 + 3ff3720) - +184 unit testy pres pure-logic helpers, edge
-    cases, lexer, parser, cascade selectors, DOM API, CSS @rules.
-    Pure-logic WebGL helpers (extract_pending, effective_clear,
-    count_draws/clears, linked_program_ids, layout walkers).
+    66144b1 + 3ff3720 + 4b67c7c + b5528de + 8e48baa) - +378 unit testy pres
+    pure-logic helpers, edge cases, lexer, parser, cascade selectors,
+    DOM API, CSS @rules, Promise/async, Canvas 2D, form inputs,
+    Set/Map/iterator, String/Array methody, Number/Math/Date/BigInt,
+    paint display commands. Pure-logic WebGL helpers (extract_pending,
+    effective_clear, count_draws/clears, linked_program_ids, layout walkers).
 
 ## Velke remaining work
 
