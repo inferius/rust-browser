@@ -1163,6 +1163,10 @@ pub fn run_window_with_html(html: String, css: String) -> Result<(), String> {
 
             // Runtime CSS animation: aplikuj @keyframes na elementy s `animation: ...`
             let _animating = cascade::apply_animations(&mut style_map, &stylesheets, elapsed);
+            // Scroll-driven animations - pri animation-timeline: scroll() pouzij scroll progress
+            let max_scroll = (style_map.len() as f32).max(1.0); // approx; lepsi z layout
+            let scroll_progress = if max_scroll > 1.0 { self.scroll_y / max_scroll.max(1.0) } else { 0.0 };
+            let _ = cascade::apply_scroll_animations(&mut style_map, &stylesheets, scroll_progress);
 
             // Detect animation start/end + iteration events
             let mut current_anims: std::collections::HashSet<(usize, String)> = std::collections::HashSet::new();

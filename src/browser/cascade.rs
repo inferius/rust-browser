@@ -1482,6 +1482,34 @@ pub fn apply_transitions(
     }
 }
 
+/// Aplikuje scroll-driven animations - misto time elapsed pouzij scroll progress.
+/// `scroll_progress` = scroll_y / max_scroll (0..1).
+pub fn apply_scroll_animations(
+    style_map: &mut StyleMap,
+    stylesheets: &[Stylesheet],
+    scroll_progress: f32,
+) -> bool {
+    use super::layout::interpolate_keyframes;
+    let mut any_active = false;
+    for styles in style_map.values_mut() {
+        // Detect animation-timeline pres styles
+        let timeline = styles.get("animation-timeline").cloned().unwrap_or_default();
+        if !timeline.starts_with("scroll(") && timeline != "scroll" { continue; }
+        let spec = match AnimationSpec::from_styles(styles) {
+            Some(s) => s, None => continue,
+        };
+        let frames = stylesheets.iter()
+            .flat_map(|s| s.keyframes.iter())
+            .find(|k| k.name == spec.name);
+        let frames = match frames { Some(k) => &k.frames, None => continue };
+        let progress = scroll_progress.clamp(0.0, 1.0);
+        let interp_vals = interpolate_keyframes(frames, progress);
+        for (k, v) in interp_vals { styles.insert(k, v); }
+        any_active = true;
+    }
+    any_active
+}
+
 /// Aplikuje runtime CSS animace na StyleMap pri zadanem elapsed time (sekundy).
 /// Pro kazdy element s `animation` / `animation-name`:
 ///   1. Najdi @keyframes by name v stylesheets.
