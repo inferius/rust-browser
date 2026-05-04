@@ -1327,6 +1327,146 @@ pub fn setup_builtins(
             Ok(JsValue::Object(obj))
         })
     };
+    // customElements registry stub
+    {
+        let registry = Rc::new(RefCell::new(JsObject::new()));
+        let r = Rc::clone(&registry);
+        registry.borrow_mut().set("define".into(), native("customElements.define", move |args| {
+            let mut it = args.into_iter();
+            let name = it.next().map(|v| v.to_string()).unwrap_or_default();
+            let ctor = it.next().unwrap_or(JsValue::Undefined);
+            // Ulozim registry: name -> constructor
+            r.borrow_mut().set(name, ctor);
+            Ok(JsValue::Undefined)
+        }));
+        let r2 = Rc::clone(&registry);
+        registry.borrow_mut().set("get".into(), native("customElements.get", move |args| {
+            let name = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+            Ok(r2.borrow().props.get(&name).cloned().unwrap_or(JsValue::Undefined))
+        }));
+        registry.borrow_mut().set("whenDefined".into(), native("customElements.whenDefined", |_| {
+            // Vraci resolved Promise (Promise.resolve())
+            Ok(JsValue::Undefined)
+        }));
+        registry.borrow_mut().set("upgrade".into(), native("customElements.upgrade", |_| Ok(JsValue::Undefined)));
+        e.define("customElements", JsValue::Object(registry));
+    }
+
+    // CSSStyleSheet constructor stub - new CSSStyleSheet() vraci object
+    e.define("CSSStyleSheet", native("CSSStyleSheet", |_| {
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        {
+            let mut o = obj.borrow_mut();
+            o.set("cssRules".into(), JsValue::Array(Rc::new(RefCell::new(Vec::new()))));
+            o.set("rules".into(), JsValue::Array(Rc::new(RefCell::new(Vec::new()))));
+            o.set("insertRule".into(), native("insertRule", |_| Ok(JsValue::Number(0.0))));
+            o.set("deleteRule".into(), native("deleteRule", |_| Ok(JsValue::Undefined)));
+            o.set("replaceSync".into(), native("replaceSync", |_| Ok(JsValue::Undefined)));
+            o.set("replace".into(), native("replace", |_| Ok(JsValue::Undefined)));
+        }
+        Ok(JsValue::Object(obj))
+    }));
+
+    // URL constructor + URLSearchParams stub
+    e.define("URL", native("URL", |args| {
+        let url = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        {
+            let mut o = obj.borrow_mut();
+            // Basic URL parsing - protocol, host, pathname, search, hash
+            let (proto, rest) = if let Some(idx) = url.find("://") {
+                (url[..idx + 1].to_string(), url[idx + 3..].to_string())
+            } else {
+                ("https:".to_string(), url.clone())
+            };
+            let (host_path, hash) = match rest.split_once('#') {
+                Some((a, b)) => (a.to_string(), format!("#{b}")),
+                None => (rest, String::new()),
+            };
+            let (host_path, search) = match host_path.split_once('?') {
+                Some((a, b)) => (a.to_string(), format!("?{b}")),
+                None => (host_path, String::new()),
+            };
+            let (host, pathname) = match host_path.find('/') {
+                Some(i) => (host_path[..i].to_string(), host_path[i..].to_string()),
+                None => (host_path, "/".to_string()),
+            };
+            // Split host na hostname + port
+            let (hostname, port) = match host.split_once(':') {
+                Some((h, p)) => (h.to_string(), p.to_string()),
+                None => (host.clone(), String::new()),
+            };
+            let origin = format!("{proto}//{host}");
+            o.set("href".into(), JsValue::Str(url));
+            o.set("protocol".into(), JsValue::Str(proto));
+            o.set("host".into(), JsValue::Str(host));
+            o.set("hostname".into(), JsValue::Str(hostname));
+            o.set("pathname".into(), JsValue::Str(pathname));
+            o.set("search".into(), JsValue::Str(search));
+            o.set("hash".into(), JsValue::Str(hash));
+            o.set("port".into(), JsValue::Str(port));
+            o.set("origin".into(), JsValue::Str(origin));
+        }
+        Ok(JsValue::Object(obj))
+    }));
+
+    e.define("URLSearchParams", native("URLSearchParams", |args| {
+        let s = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+        let s = s.trim_start_matches('?');
+        let mut pairs: Vec<(String, String)> = Vec::new();
+        for p in s.split('&').filter(|s| !s.is_empty()) {
+            if let Some((k, v)) = p.split_once('=') {
+                pairs.push((k.to_string(), v.to_string()));
+            } else {
+                pairs.push((p.to_string(), String::new()));
+            }
+        }
+        let pairs_rc = Rc::new(RefCell::new(pairs));
+
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        {
+            let p = Rc::clone(&pairs_rc);
+            obj.borrow_mut().set("get".into(), native("URLSearchParams.get", move |args| {
+                let name = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+                Ok(p.borrow().iter().find(|(k, _)| k == &name)
+                    .map(|(_, v)| JsValue::Str(v.clone()))
+                    .unwrap_or(JsValue::Null))
+            }));
+        }
+        {
+            let p = Rc::clone(&pairs_rc);
+            obj.borrow_mut().set("has".into(), native("URLSearchParams.has", move |args| {
+                let name = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+                Ok(JsValue::Bool(p.borrow().iter().any(|(k, _)| k == &name)))
+            }));
+        }
+        {
+            let p = Rc::clone(&pairs_rc);
+            obj.borrow_mut().set("set".into(), native("URLSearchParams.set", move |args| {
+                let mut it = args.into_iter();
+                let name = it.next().map(|v| v.to_string()).unwrap_or_default();
+                let val = it.next().map(|v| v.to_string()).unwrap_or_default();
+                let mut pairs = p.borrow_mut();
+                if let Some(entry) = pairs.iter_mut().find(|(k, _)| k == &name) {
+                    entry.1 = val;
+                } else {
+                    pairs.push((name, val));
+                }
+                Ok(JsValue::Undefined)
+            }));
+        }
+        {
+            let p = Rc::clone(&pairs_rc);
+            obj.borrow_mut().set("toString".into(), native("URLSearchParams.toString", move |_| {
+                let s = p.borrow().iter()
+                    .map(|(k, v)| format!("{k}={v}"))
+                    .collect::<Vec<_>>().join("&");
+                Ok(JsValue::Str(s))
+            }));
+        }
+        Ok(JsValue::Object(obj))
+    }));
+
     e.define("ResizeObserver", make_observer("ResizeObserver"));
     e.define("IntersectionObserver", make_observer("IntersectionObserver"));
     e.define("MutationObserver", make_observer("MutationObserver"));
