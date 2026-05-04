@@ -1817,6 +1817,13 @@ struct Renderer {
     compose_bind_group_layout: wgpu::BindGroupLayout,
     /// Uniform pro compose color matrix (5x vec4 = 80 bytes)
     compose_uniform_buf: wgpu::Buffer,
+    /// WebGL phase 3c1: cache zkompilovanych shader modules per program ID.
+    /// Klic = WebGLProgram id (z linkProgram).
+    webgl_shader_modules: std::collections::HashMap<u32, (wgpu::ShaderModule, wgpu::ShaderModule)>,
+    /// WebGL pipeline cache per program ID. Build pri prvnim Draw* commandu.
+    webgl_pipelines: std::collections::HashMap<u32, wgpu::RenderPipeline>,
+    /// Uploadovane vertex/index buffers per WebGLBuffer ID.
+    webgl_buffers: std::collections::HashMap<u32, wgpu::Buffer>,
     /// 3D transform compose pipeline (samples offscreen RT, kresli quad transformovany matici)
     transform_pipeline: wgpu::RenderPipeline,
     transform_bind_group_layout: wgpu::BindGroupLayout,
@@ -2230,7 +2237,42 @@ impl Renderer {
             blur_pipeline, blur_bind_group_layout, blur_uniform_buf,
             compose_pipeline, compose_bind_group_layout, compose_uniform_buf,
             transform_pipeline, transform_bind_group_layout, transform_uniform_buf,
+            webgl_shader_modules: std::collections::HashMap::new(),
+            webgl_pipelines: std::collections::HashMap::new(),
+            webgl_buffers: std::collections::HashMap::new(),
         }
+    }
+
+    /// WebGL phase 3c1: zkompiluje WGSL strings na ShaderModules a ulozi
+    /// do cache. Vraci true pokud cache miss + uspesny build, false pokud
+    /// uz cached (idempotent) nebo build failed.
+    pub fn build_webgl_shader_modules(&mut self, program_id: u32, vertex_wgsl: &str, fragment_wgsl: &str) -> bool {
+        if self.webgl_shader_modules.contains_key(&program_id) {
+            return false;  // already cached
+        }
+        let v_module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some(&format!("webgl_v_{}", program_id)),
+            source: wgpu::ShaderSource::Wgsl(vertex_wgsl.into()),
+        });
+        let f_module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some(&format!("webgl_f_{}", program_id)),
+            source: wgpu::ShaderSource::Wgsl(fragment_wgsl.into()),
+        });
+        self.webgl_shader_modules.insert(program_id, (v_module, f_module));
+        true
+    }
+
+    /// Diagnostic - kolik shader modules v cache.
+    pub fn webgl_shader_modules_count(&self) -> usize {
+        self.webgl_shader_modules.len()
+    }
+    /// Diagnostic - true pokud program ID je v cache.
+    pub fn webgl_has_shader_modules(&self, program_id: u32) -> bool {
+        self.webgl_shader_modules.contains_key(&program_id)
+    }
+    /// Diagnostic - kolik pipelines v cache.
+    pub fn webgl_pipelines_count(&self) -> usize {
+        self.webgl_pipelines.len()
     }
 
     /// Provede 2-pass gauss blur na offscreen_tex_a -> tex_b -> tex_a.
