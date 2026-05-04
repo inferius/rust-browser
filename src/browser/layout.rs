@@ -171,6 +171,13 @@ pub struct LayoutBox {
     pub word_spacing: f32,
     /// aspect-ratio: width / height. None = auto.
     pub aspect_ratio: Option<f32>,
+    /// color-scheme: "light" | "dark" | "light dark" | "normal" - preference.
+    pub color_scheme: String,
+    /// accent-color: vlastni barva accent (form controls).
+    pub accent_color: Option<[u8; 4]>,
+    /// CSS Containment - bitfield: layout / paint / size / style.
+    /// 1 = layout, 2 = paint, 4 = size, 8 = style.
+    pub contain: u8,
     /// Box shadow: (offset_x, offset_y, blur, spread, color)
     /// (offset_x, offset_y, blur, spread, color, inset)
     pub box_shadow: Option<(f32, f32, f32, f32, [u8; 4], bool)>,
@@ -227,6 +234,9 @@ impl LayoutBox {
             letter_spacing: 0.0,
             word_spacing: 0.0,
             aspect_ratio: None,
+            color_scheme: String::new(),
+            accent_color: None,
+            contain: 0,
             box_shadow: None,
             transform: None,
             image_src: None,
@@ -514,6 +524,32 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     }
     if let Some(ws) = s.get("word-spacing") {
         if ws.trim() != "normal" { bx.word_spacing = parse_length(ws); }
+    }
+    // color-scheme
+    if let Some(cs) = s.get("color-scheme") {
+        bx.color_scheme = cs.trim().to_string();
+    }
+    // accent-color
+    if let Some(ac) = s.get("accent-color") {
+        if ac.trim() != "auto" {
+            bx.accent_color = parse_color(ac);
+        }
+    }
+    // contain - CSS Containment L3
+    if let Some(c) = s.get("contain") {
+        let mut bits = 0u8;
+        for tok in c.split_whitespace() {
+            match tok {
+                "layout" => bits |= 1,
+                "paint"  => bits |= 2,
+                "size"   => bits |= 4,
+                "style"  => bits |= 8,
+                "content" => bits |= 1 | 2 | 8, // layout + paint + style
+                "strict"  => bits |= 1 | 2 | 4 | 8, // vsechno
+                _ => {}
+            }
+        }
+        bx.contain = bits;
     }
     // aspect-ratio: "16 / 9" / "1.5" / "auto"
     if let Some(ar) = s.get("aspect-ratio") {

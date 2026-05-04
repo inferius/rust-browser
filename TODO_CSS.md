@@ -254,7 +254,7 @@ Konvence stavu:
 - [ ] `writing-mode: horizontal-tb | vertical-rl | vertical-lr` - aktualne predpoklad horizontal-tb
 
 ### CSS Containment L3
-- [ ] `contain: layout | paint | size | style | content | strict`
+- [x] `contain: layout | paint | size | style | content | strict` (parser + bitfield)
 - [ ] `contain-intrinsic-size`
 - [ ] `content-visibility: auto | hidden | visible`
 
@@ -336,9 +336,9 @@ Konvence stavu:
 - [ ] Counter API (`counter-reset`, `counter-increment`, `counter()`)
 
 ### CSS Color Adjust L1
-- [ ] `color-scheme: light | dark | light dark`
+- [x] `color-scheme: light | dark | light dark | normal` (parser, ulozeno v LayoutBox.color_scheme)
 - [ ] `forced-color-adjust`
-- [ ] `accent-color`
+- [x] `accent-color: <color>` (parser, ulozeno v LayoutBox.accent_color)
 
 ### CSS Anchor Positioning L1 (draft)
 - [ ] `anchor-name`

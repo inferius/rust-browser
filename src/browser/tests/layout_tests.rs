@@ -277,6 +277,46 @@ fn find_box_by_tag<'a>(bx: &'a layout::LayoutBox, tag: &str) -> Option<&'a layou
 }
 
 #[test]
+fn color_scheme_parsed() {
+    let doc = parse_html(r#"<html><body><div></div></body></html>"#, "");
+    let css = parse_stylesheet("div { color-scheme: light dark; }");
+    let style_map = crate::browser::cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &style_map, 1024.0, 768.0);
+    let d = find_box_by_tag(&root, "div").unwrap();
+    assert_eq!(d.color_scheme, "light dark");
+}
+
+#[test]
+fn accent_color_parsed() {
+    let doc = parse_html(r#"<html><body><div></div></body></html>"#, "");
+    let css = parse_stylesheet("div { accent-color: red; }");
+    let style_map = crate::browser::cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &style_map, 1024.0, 768.0);
+    let d = find_box_by_tag(&root, "div").unwrap();
+    assert_eq!(d.accent_color, Some([255, 0, 0, 255]));
+}
+
+#[test]
+fn contain_strict_sets_all_bits() {
+    let doc = parse_html(r#"<html><body><div></div></body></html>"#, "");
+    let css = parse_stylesheet("div { contain: strict; }");
+    let style_map = crate::browser::cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &style_map, 1024.0, 768.0);
+    let d = find_box_by_tag(&root, "div").unwrap();
+    assert_eq!(d.contain, 1 | 2 | 4 | 8);
+}
+
+#[test]
+fn contain_layout_paint_combo() {
+    let doc = parse_html(r#"<html><body><div></div></body></html>"#, "");
+    let css = parse_stylesheet("div { contain: layout paint; }");
+    let style_map = crate::browser::cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &style_map, 1024.0, 768.0);
+    let d = find_box_by_tag(&root, "div").unwrap();
+    assert_eq!(d.contain, 1 | 2);
+}
+
+#[test]
 fn text_transform_uppercase_applied() {
     use crate::browser::layout::TextTransform;
     let doc = parse_html(r#"<html><body><p>hello world</p></body></html>"#, "");
