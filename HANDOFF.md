@@ -5,10 +5,10 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 ## Stav
 
 - Build: **OK**, 0 errors.
-- Tests: **1065 passed, 0 failed, 3 ignored** (+260 v teto session, +32%).
-- Posledni commit: `514d0c1 WebGL phase 1 - state machine + handles`.
+- Tests: **1093 passed, 0 failed, 3 ignored** (+288 v teto session, +35.8%).
+- Posledni commit: `cce4ef1 WebGL phase 3a - command queue + state recording`.
 - Tree: ciste.
-- Branch master, ~228 commitu pred origin/master (NEPUSHOVAT bez vyzvy).
+- Branch master, ~232 commitu pred origin/master (NEPUSHOVAT bez vyzvy).
 
 ## Recent session highlights
 
@@ -27,16 +27,30 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
    polygons. ClippedRect display command. +5 testu.
 6. **WebGL phase 1** (commit 514d0c1) - state machine + handle objects +
    clear color + buffer/shader/texture/program management. +26 testu.
+7. **WebGL phase 2** (commit 91969a4) - GLSL -> WGSL transpile pres naga
+   crate. preprocess_glsl_es1_to_es3 (attribute->in, varying->out/in,
+   gl_FragColor->_gl_FragColor, version 450 core). compileShader real
+   parse. linkProgram vyrobi WGSL strings. +5 testu.
+8. **Concave polygon ear-clipping** (commit 6ca3b39) - real triangulace
+   pro concave polygons (sipky, L-shape, hvezdy). polygon_signed_area
+   shoelace, triangulate_polygon ear-clipping s convex check + point-in-
+   triangle. Fallback fan pri stuck. +11 testu.
+9. **WebGL phase 3a** (commit cce4ef1) - command queue + state recording.
+   WebGLAttribSlot/UniformValue/DrawCmd structs. vertexAttribPointer/
+   enableVertexAttribArray/uniform*/uniformMatrix*fv/drawArrays/drawElements
+   ted naplnuji state + push do queue (zapis state pri kazdem draw call).
+   +12 testu.
 
 ## Velke remaining work
 
-- **WebGL phase 2**: GLSL -> WGSL pres naga crate. shader compile.
-- **WebGL phase 3**: real wgpu pipeline + draw call emission, canvas RT
-  composite do main swap chain.
-- **Concave polygon clip-path**: aktualni fan triangulation pro convex,
-  ear-clipping + earcut algoritm pro general polygon.
+- **WebGL phase 3b**: Renderer drain queue per canvas element, wgpu
+  pipeline lookup z WGSL stringu (linkProgram output), real draw emission
+  do offscreen RT, composite do main swap chain. Vyzaduje refactoring
+  Interpreter <-> Renderer komunikace (WebGLState pres Rc<RefCell<>>
+  share s Renderer).
 - **Filter v Transform RT (nested)**: aktualne filter inside transform
   je inner cmds bez efektu - lepsi pristup vyzaduje rekursi v draw_segments.
+- **TypeScript kompilator** - design konzultace stale otevrena.
 
 ## Test runner
 
