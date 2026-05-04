@@ -18,6 +18,14 @@ pub enum Display {
     None,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TextAlign {
+    Left,
+    Center,
+    Right,
+    Justify,
+}
+
 impl Display {
     pub fn from_str(s: &str) -> Self {
         match s.trim() {
@@ -29,6 +37,27 @@ impl Display {
             "none"         => Display::None,
             _ => Display::Block,
         }
+    }
+}
+
+/// Aplikuje default styles per tag (browser user-agent stylesheet).
+fn apply_default_tag_styles(bx: &mut LayoutBox, tag: &str) {
+    match tag {
+        "h1" => { bx.font_size = 32.0; bx.bold = true; bx.margin = 8.0; }
+        "h2" => { bx.font_size = 24.0; bx.bold = true; bx.margin = 8.0; }
+        "h3" => { bx.font_size = 20.0; bx.bold = true; bx.margin = 6.0; }
+        "h4" => { bx.font_size = 16.0; bx.bold = true; bx.margin = 6.0; }
+        "h5" => { bx.font_size = 14.0; bx.bold = true; bx.margin = 4.0; }
+        "h6" => { bx.font_size = 12.0; bx.bold = true; bx.margin = 4.0; }
+        "p" => { bx.margin = 8.0; }
+        "b" | "strong" => { bx.bold = true; }
+        "ul" | "ol" => { bx.padding = 16.0; bx.margin = 8.0; }
+        "li" => { bx.margin = 2.0; }
+        "blockquote" => { bx.margin = 16.0; bx.padding = 8.0; }
+        "pre" | "code" => { /* monospace by-implication, zatim default */ }
+        "hr" => { bx.border_width = 1.0; bx.border_color = Some([200, 200, 200, 255]); }
+        "a" => { /* color modra typicky pres CSS */ }
+        _ => {}
     }
 }
 
@@ -70,6 +99,9 @@ pub struct LayoutBox {
     pub border_width: f32,
     pub border_color: Option<[u8; 4]>,
     pub font_size: f32,
+    pub text_align: TextAlign,
+    pub bold: bool,
+    pub border_radius: f32,
     /// Reference na puvodni DOM node (pro hit test -> events).
     pub node: Option<Rc<Node>>,
 }
@@ -89,6 +121,9 @@ impl LayoutBox {
             border_width: 0.0,
             border_color: None,
             font_size: 16.0,
+            text_align: TextAlign::Left,
+            bold: false,
+            border_radius: 0.0,
             node: None,
         }
     }
@@ -151,6 +186,11 @@ fn build_box(node: &Rc<Node>, style_map: &StyleMap) -> LayoutBox {
 
     bx.tag = node.tag_name();
 
+    // Apply browser default styles per tag (user-agent stylesheet)
+    if let Some(tag) = bx.tag.clone() {
+        apply_default_tag_styles(&mut bx, &tag);
+    }
+
     if matches!(node.kind, NodeKind::Text(_)) {
         bx.display = Display::Inline;
         if let NodeKind::Text(t) = &node.kind {
@@ -169,12 +209,31 @@ fn build_box(node: &Rc<Node>, style_map: &StyleMap) -> LayoutBox {
         bx.text_color = parse_color(c);
     }
 
-    // Padding / margin / border-width
-    if let Some(p) = s.get("padding") { bx.padding = parse_length(p); }
-    if let Some(m) = s.get("margin")  { bx.margin = parse_length(m); }
+    // Padding / margin / border-width - prefer expanded shorthand
+    let padding_v = s.get("padding-top").or(s.get("padding"));
+    if let Some(p) = padding_v { bx.padding = parse_length(p); }
+    let margin_v = s.get("margin-top").or(s.get("margin"));
+    if let Some(m) = margin_v { bx.margin = parse_length(m); }
     if let Some(b) = s.get("border-width") { bx.border_width = parse_length(b); }
     if let Some(bc) = s.get("border-color") { bx.border_color = parse_color(bc); }
     if let Some(fs) = s.get("font-size") { bx.font_size = parse_length(fs); }
+    // Text align
+    if let Some(ta) = s.get("text-align") {
+        bx.text_align = match ta.trim() {
+            "center"  => TextAlign::Center,
+            "right"   => TextAlign::Right,
+            "justify" => TextAlign::Justify,
+            _ => TextAlign::Left,
+        };
+    }
+    // Font weight - bold per HTML semantika
+    if let Some(fw) = s.get("font-weight") {
+        bx.bold = fw.contains("bold") || fw.parse::<u32>().map(|n| n >= 600).unwrap_or(false);
+    }
+    // Border radius
+    if let Some(br) = s.get("border-radius") {
+        bx.border_radius = parse_length(br);
+    }
 
     // Children - skip None display, skip whitespace-only text uzly
     for child in node.children.borrow().iter() {
@@ -387,12 +446,29 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
     cursor_y + line_height
 }
 
-/// Priblizny vypocet sirky textu (font measuring fallback).
-/// Real implementace by mela pouzit fontdue::Metrics, ale to vyzaduje pristup k Font.
-/// Pro layout fazi pouzivame heuristiku: priblizna sirka znaku = font_size * 0.55
+/// Real vypocet sirky textu pres globalni shared font.
+/// Fallback na heuristiku kdyz font neni dostupny.
 pub fn measure_text_width(text: &str, font_size: f32) -> f32 {
-    let avg_char_w = font_size * 0.55;
-    text.chars().count() as f32 * avg_char_w
+    use std::sync::OnceLock;
+    static FONT: OnceLock<Option<fontdue::Font>> = OnceLock::new();
+
+    let font_opt = FONT.get_or_init(|| {
+        super::render::try_load_default_font()
+            .and_then(|data| fontdue::Font::from_bytes(data, fontdue::FontSettings::default()).ok())
+    });
+
+    match font_opt {
+        Some(font) => {
+            text.chars().map(|ch| {
+                font.metrics(ch, font_size).advance_width
+            }).sum()
+        }
+        None => {
+            // Fallback heuristika
+            let avg_char_w = font_size * 0.55;
+            text.chars().count() as f32 * avg_char_w
+        }
+    }
 }
 
 /// Parse barvu z CSS string. Podpora: #RGB, #RRGGBB, rgb(R,G,B), rgba(R,G,B,A), nazvy.

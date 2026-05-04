@@ -68,25 +68,22 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas) -> Vec<Vertex
     let mut verts = Vec::new();
     for cmd in commands {
         match cmd {
-            DisplayCommand::Rect { x, y, w, h, color } => {
+            DisplayCommand::Rect { x, y, w, h, color, radius: _ } => {
+                // Border-radius zatim ignorujeme (vyzaduje SDF/instancing)
                 push_rect(&mut verts, *x, *y, *w, *h, normalize_color(color), [0.0, 0.0], 0.0);
             }
             DisplayCommand::Border { x, y, w, h, width, color } => {
                 let c = normalize_color(color);
                 let bw = *width;
-                // Top
                 push_rect(&mut verts, *x, *y, *w, bw, c, [0.0, 0.0], 0.0);
-                // Bottom
                 push_rect(&mut verts, *x, *y + *h - bw, *w, bw, c, [0.0, 0.0], 0.0);
-                // Left
                 push_rect(&mut verts, *x, *y, bw, *h, c, [0.0, 0.0], 0.0);
-                // Right
                 push_rect(&mut verts, *x + *w - bw, *y, bw, *h, c, [0.0, 0.0], 0.0);
             }
-            DisplayCommand::Text { x, y, content, color, font_size } => {
+            DisplayCommand::Text { x, y, content, color, font_size, bold: _ } => {
                 let c = normalize_color(color);
                 let mut pen_x = *x;
-                let pen_y = *y + *font_size;  // baseline
+                let pen_y = *y + *font_size;
                 for ch in content.chars() {
                     if let Some(g) = atlas.get(ch, *font_size as u32) {
                         let gx = pen_x + g.bearing_x;
@@ -128,10 +125,10 @@ fn normalize_color(c: &[u8; 4]) -> [f32; 4] {
     ]
 }
 
-/// Pokusi se najit a nacist systemovy font.
-fn load_default_font() -> Vec<u8> {
+/// Pokusi se najit a nacist systemovy font (None pri selhani - pro layout fallback).
+pub fn try_load_default_font() -> Option<Vec<u8>> {
     if let Ok(path) = std::env::var("RUST_WEB_ENGINE_FONT_PATH") {
-        if let Ok(data) = std::fs::read(&path) { return data; }
+        if let Ok(data) = std::fs::read(&path) { return Some(data); }
     }
     let candidates: &[&str] = &[
         "C:\\Windows\\Fonts\\arial.ttf",
@@ -145,10 +142,15 @@ fn load_default_font() -> Vec<u8> {
     ];
     for path in candidates {
         if let Ok(data) = std::fs::read(path) {
-            return data;
+            return Some(data);
         }
     }
-    panic!("Nelze najit system font. Set RUST_WEB_ENGINE_FONT_PATH na cestu k TTF souboru.");
+    None
+}
+
+fn load_default_font() -> Vec<u8> {
+    try_load_default_font()
+        .expect("Nelze najit system font. Set RUST_WEB_ENGINE_FONT_PATH na cestu k TTF souboru.")
 }
 
 // ─── Glyph atlas ────────────────────────────────────────────────────────

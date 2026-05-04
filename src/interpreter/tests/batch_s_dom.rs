@@ -155,6 +155,46 @@ fn click_passes_event_target() {
 }
 
 #[test]
+fn event_prevent_default() {
+    let v = run(r#"
+        const e = new Event("click", { cancelable: true });
+        e.preventDefault();
+        return e.defaultPrevented;
+    "#);
+    assert_eq!(as_bool(v), true);
+}
+
+#[test]
+fn text_content_setter() {
+    let v = run(r#"
+        const el = document.createElement("div");
+        el.textContent = "ahoj svete";
+        return el.textContent;
+    "#);
+    assert_eq!(as_str(v), "ahoj svete");
+}
+
+#[test]
+fn inner_html_setter() {
+    let v = run(r#"
+        const el = document.createElement("div");
+        el.innerHTML = "<p>vnoreny obsah</p>";
+        return el.children.length;
+    "#);
+    assert!(as_num(v) >= 1.0);
+}
+
+#[test]
+fn id_setter_changes_attribute() {
+    let v = run(r#"
+        const el = document.createElement("div");
+        el.id = "my-element";
+        return el.getAttribute("id");
+    "#);
+    assert_eq!(as_str(v), "my-element");
+}
+
+#[test]
 fn multiple_listeners_all_fire() {
     let v = run(r#"
         const el = document.createElement("div");

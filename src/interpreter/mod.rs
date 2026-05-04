@@ -1691,6 +1691,41 @@ impl Interpreter {
                 let obj = self.eval(object, env)?;
                 let key = self.resolve_prop_key(prop, env)?;
                 match &obj {
+                    JsValue::DomNode(n) => {
+                        // DOM property setters
+                        match key.as_str() {
+                            "textContent" | "innerText" => {
+                                n.set_text_content(&val.to_string());
+                                return Ok(());
+                            }
+                            "innerHTML" => {
+                                // Parse HTML fragment a nahrad children
+                                let frag = crate::browser::html_parser::parse_html_fragment(&val.to_string());
+                                n.children.borrow_mut().clear();
+                                let frag_children: Vec<_> = frag.children.borrow().clone();
+                                for ch in frag_children {
+                                    // Vnoreny <html><body>... structure - extrahuj body deti
+                                    let body_children: Vec<Rc<crate::browser::dom::Node>> = ch.children.borrow().clone();
+                                    for grandch in body_children {
+                                        n.append_child(Rc::clone(&grandch));
+                                    }
+                                }
+                                return Ok(());
+                            }
+                            "id" => {
+                                n.set_attr("id", &val.to_string());
+                                return Ok(());
+                            }
+                            "className" => {
+                                n.set_attr("class", &val.to_string());
+                                return Ok(());
+                            }
+                            _ => {
+                                // Ostatni props - ignorujeme (DomNode nema generic prop store)
+                                return Ok(());
+                            }
+                        }
+                    }
                     JsValue::Object(o) => {
                         // Worker.onmessage = fn -> registruj jako on_message v WorkerState
                         if matches!(o.borrow().props.get("__worker__"), Some(JsValue::Bool(true)))

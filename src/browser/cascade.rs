@@ -8,6 +8,66 @@ use std::rc::Rc;
 use super::dom::{Node, NodeKind};
 use super::css_parser::{Stylesheet, Selector, SimpleSelector, Combinator, specificity};
 
+/// Expanduje CSS shorthand props (margin/padding/border) do longhand.
+/// Napr. "margin: 10px 20px;" -> margin-top:10, margin-right:20, margin-bottom:10, margin-left:20.
+/// "border: 1px solid red;" -> border-width:1, border-style:solid, border-color:red.
+pub fn expand_shorthand(prop: &str, value: &str, out: &mut HashMap<String, String>) {
+    match prop {
+        "margin" | "padding" => {
+            let parts: Vec<&str> = value.split_whitespace().collect();
+            let (t, r, b, l) = match parts.len() {
+                1 => (parts[0], parts[0], parts[0], parts[0]),
+                2 => (parts[0], parts[1], parts[0], parts[1]),
+                3 => (parts[0], parts[1], parts[2], parts[1]),
+                4 => (parts[0], parts[1], parts[2], parts[3]),
+                _ => return,
+            };
+            out.insert(format!("{prop}-top"),    t.into());
+            out.insert(format!("{prop}-right"),  r.into());
+            out.insert(format!("{prop}-bottom"), b.into());
+            out.insert(format!("{prop}-left"),   l.into());
+            out.insert(prop.into(), value.into()); // shorthand zachovan pro existing read
+        }
+        "border" => {
+            // "1px solid red" - parse postupne
+            let parts: Vec<&str> = value.split_whitespace().collect();
+            for p in &parts {
+                if p.ends_with("px") || p.ends_with("em") || p.ends_with("rem") {
+                    out.insert("border-width".into(), p.to_string());
+                } else if matches!(*p, "solid" | "dashed" | "dotted" | "double" | "none") {
+                    out.insert("border-style".into(), p.to_string());
+                } else if super::layout::parse_color(p).is_some() {
+                    out.insert("border-color".into(), p.to_string());
+                }
+            }
+            out.insert("border".into(), value.into());
+        }
+        "background" => {
+            // Zjednoduseno: pokud je color, ulozit jako background-color
+            if super::layout::parse_color(value).is_some() {
+                out.insert("background-color".into(), value.into());
+            }
+            out.insert("background".into(), value.into());
+        }
+        "font" => {
+            // "16px Arial" / "bold 14px Verdana" - parse size + family
+            for p in value.split_whitespace() {
+                if p.ends_with("px") || p.ends_with("em") || p.ends_with("rem") {
+                    out.insert("font-size".into(), p.into());
+                } else if p == "bold" {
+                    out.insert("font-weight".into(), "bold".into());
+                } else if p == "italic" {
+                    out.insert("font-style".into(), "italic".into());
+                }
+            }
+            out.insert("font".into(), value.into());
+        }
+        _ => {
+            out.insert(prop.into(), value.into());
+        }
+    }
+}
+
 /// Mapa: pointer na Node -> computed styles.
 pub type StyleMap = HashMap<usize, HashMap<String, String>>;
 
@@ -55,7 +115,7 @@ pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
 
         let mut styles = HashMap::new();
         for (_, decl) in matched_decls {
-            styles.insert(decl.property.clone(), decl.value.clone());
+            expand_shorthand(&decl.property, &decl.value, &mut styles);
         }
 
         // Inline styly z attributu "style" maji nejvyssi prioritu (mimo !important rules)
@@ -65,7 +125,7 @@ pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
                     let prop = pair[..colon].trim().to_string();
                     let val = pair[colon+1..].trim().to_string();
                     if !prop.is_empty() && !val.is_empty() {
-                        styles.insert(prop, val);
+                        expand_shorthand(&prop, &val, &mut styles);
                     }
                 }
             }

@@ -948,17 +948,42 @@ pub fn setup_builtins(
     e.define("Event", native("Event", |a| {
         let mut iter = a.into_iter();
         let event_type = iter.next().map(|v| v.to_string()).unwrap_or_default();
-        let _options = iter.next();
+        let options = iter.next().unwrap_or(JsValue::Undefined);
         let mut obj = JsObject::new();
         obj.set("__event__".into(), JsValue::Bool(true));
         obj.set("type".into(), JsValue::Str(event_type));
-        obj.set("bubbles".into(), JsValue::Bool(false));
-        obj.set("cancelable".into(), JsValue::Bool(false));
+        if let JsValue::Object(opts) = &options {
+            let b = opts.borrow();
+            if let JsValue::Bool(v) = b.get("bubbles") {
+                obj.set("bubbles".into(), JsValue::Bool(v));
+            } else { obj.set("bubbles".into(), JsValue::Bool(false)); }
+            if let JsValue::Bool(v) = b.get("cancelable") {
+                obj.set("cancelable".into(), JsValue::Bool(v));
+            } else { obj.set("cancelable".into(), JsValue::Bool(false)); }
+        } else {
+            obj.set("bubbles".into(), JsValue::Bool(false));
+            obj.set("cancelable".into(), JsValue::Bool(false));
+        }
         obj.set("defaultPrevented".into(), JsValue::Bool(false));
+        obj.set("__propagation_stopped__".into(), JsValue::Bool(false));
         obj.set("target".into(), JsValue::Null);
         obj.set("currentTarget".into(), JsValue::Null);
         obj.set("timeStamp".into(), JsValue::Number(now_ms()));
-        Ok(JsValue::Object(Rc::new(RefCell::new(obj))))
+
+        // preventDefault metoda - mutuje defaultPrevented na sobe
+        let obj_rc = Rc::new(RefCell::new(obj));
+        let obj_for_pd = Rc::clone(&obj_rc);
+        obj_rc.borrow_mut().set("preventDefault".into(), native("preventDefault", move |_| {
+            obj_for_pd.borrow_mut().set("defaultPrevented".into(), JsValue::Bool(true));
+            Ok(JsValue::Undefined)
+        }));
+        let obj_for_sp = Rc::clone(&obj_rc);
+        obj_rc.borrow_mut().set("stopPropagation".into(), native("stopPropagation", move |_| {
+            obj_for_sp.borrow_mut().set("__propagation_stopped__".into(), JsValue::Bool(true));
+            Ok(JsValue::Undefined)
+        }));
+
+        Ok(JsValue::Object(obj_rc))
     }));
 
     e.define("CustomEvent", native("CustomEvent", |a| {

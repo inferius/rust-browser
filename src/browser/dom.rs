@@ -115,6 +115,14 @@ impl NodeData {
         self.attributes.borrow().contains_key(name)
     }
 
+    /// Nastavi text content - smazne deti, vlozi jeden Text node.
+    pub fn set_text_content(self: &Rc<Self>, text: &str) {
+        self.children.borrow_mut().clear();
+        if !text.is_empty() {
+            self.append_child(NodeData::new_text(text));
+        }
+    }
+
     /// Pretvori DOM podstrom na text content (jen Text uzly).
     pub fn text_content(&self) -> String {
         let mut out = String::new();
