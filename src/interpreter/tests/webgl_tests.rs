@@ -134,6 +134,76 @@ fn webgl_link_outputs_wgsl_string() {
     assert_eq!(r.to_string(), "string|string|true|true");
 }
 
+// ─── Phase 3c8: texImage2D real ulozeni ───────────────────────────────
+
+#[test]
+fn webgl_tex_image_2d_stores_dimensions() {
+    let r = run(&format!(r#"{SETUP}
+        const t = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, t);
+        const data = [255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255];
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 2, 2, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
+        return t.__webgl_id__;
+    "#));
+    let n: f64 = r.to_string().parse().unwrap();
+    assert!(n > 0.0, "texture id allocated");
+}
+
+#[test]
+fn webgl_tex_image_2d_no_throw_on_missing_data() {
+    // 6-arg variant (image element) - data missing
+    let r = run(&format!(r#"{SETUP}
+        const t = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, t);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, null);
+        return "ok";
+    "#));
+    assert_eq!(r.to_string(), "ok");
+}
+
+#[test]
+fn webgl_tex_image_2d_without_bound_no_throw() {
+    let r = run(&format!(r#"{SETUP}
+        const data = [255, 0, 0, 255];
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
+        return "ok";
+    "#));
+    assert_eq!(r.to_string(), "ok");
+}
+
+#[test]
+fn webgl_create_texture_unique_ids() {
+    let r = run(&format!(r#"{SETUP}
+        const t1 = gl.createTexture();
+        const t2 = gl.createTexture();
+        return t1.__webgl_id__ !== t2.__webgl_id__;
+    "#));
+    assert_eq!(r.to_string(), "true");
+}
+
+#[test]
+fn webgl_bind_texture_state_tracked() {
+    let r = run(&format!(r#"{SETUP}
+        const t = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, t);
+        return "ok";
+    "#));
+    assert_eq!(r.to_string(), "ok");
+}
+
+#[test]
+fn webgl_tex_parameteri_no_throw() {
+    let r = run(&format!(r#"{SETUP}
+        const t = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, t);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        return "ok";
+    "#));
+    assert_eq!(r.to_string(), "ok");
+}
+
 // ─── Phase 3c7: uniform layout extraction ──────────────────────────────
 
 #[test]

@@ -6035,7 +6035,49 @@ fn create_webgl_context(state: Rc<RefCell<WebGLState>>) -> JsValue {
             Ok(JsValue::Undefined)
         }));
     }
-    obj_rc.borrow_mut().set("texImage2D".into(), native("gl.texImage2D", |_| Ok(JsValue::Undefined)));
+    {
+        // texImage2D - dva overloady (8-arg s width/height/data + 6-arg s ImageElement).
+        // Phase 3c8: ukladame width, height, format, data do bound texture v WebGLState.
+        let st = Rc::clone(&state);
+        obj_rc.borrow_mut().set("texImage2D".into(), native("gl.texImage2D", move |args| {
+            // Args (8-arg variant): target, level, internalformat, width, height, border, format, type, pixels
+            // Args (6-arg variant): target, level, internalformat, format, type, source(ImageData|HTMLImageElement)
+            let n = args.len();
+            let (width, height, format, data) = if n >= 9 {
+                let mut it = args.into_iter();
+                let _target = it.next();
+                let _level = it.next();
+                let _internalformat = it.next();
+                let w = it.next().map(|v| v.to_number()).unwrap_or(0.0) as u32;
+                let h = it.next().map(|v| v.to_number()).unwrap_or(0.0) as u32;
+                let _border = it.next();
+                let fmt = it.next().map(|v| v.to_number()).unwrap_or(6408.0) as u32;
+                let _ty = it.next();
+                let pixels = it.next().unwrap_or(JsValue::Null);
+                let bytes: Vec<u8> = match pixels {
+                    JsValue::Array(arr) => arr.borrow().iter()
+                        .map(|v| (v.to_number() as i64).clamp(0, 255) as u8)
+                        .collect(),
+                    _ => Vec::new(),
+                };
+                (w, h, fmt, bytes)
+            } else {
+                (0u32, 0u32, 0x1908u32, Vec::new())
+            };
+            let mut s = st.borrow_mut();
+            if let Some(tex_id) = s.bound_texture_2d {
+                if let Some(tex) = s.textures.get_mut(&tex_id) {
+                    if width > 0 && height > 0 {
+                        tex.width = width;
+                        tex.height = height;
+                        tex.format = format;
+                        tex.data = data;
+                    }
+                }
+            }
+            Ok(JsValue::Undefined)
+        }));
+    }
     obj_rc.borrow_mut().set("texParameteri".into(), native("gl.texParameteri", |_| Ok(JsValue::Undefined)));
     {
         let st = Rc::clone(&state);

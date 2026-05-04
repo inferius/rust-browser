@@ -2060,6 +2060,10 @@ struct Renderer {
     webgl_uniform_buffers: std::collections::HashMap<u32, wgpu::Buffer>,
     /// Per-program uniform bind group layout cache.
     webgl_uniform_bgls: std::collections::HashMap<u32, wgpu::BindGroupLayout>,
+    /// Per-WebGLTexture id -> wgpu::Texture + View.
+    webgl_textures: std::collections::HashMap<u32, (wgpu::Texture, wgpu::TextureView)>,
+    /// Default sampler pro WebGL texture binding (linear filter, repeat wrap).
+    webgl_default_sampler: Option<wgpu::Sampler>,
     /// 3D transform compose pipeline (samples offscreen RT, kresli quad transformovany matici)
     transform_pipeline: wgpu::RenderPipeline,
     transform_bind_group_layout: wgpu::BindGroupLayout,
@@ -2479,7 +2483,80 @@ impl Renderer {
             webgl_canvas_rts: std::collections::HashMap::new(),
             webgl_uniform_buffers: std::collections::HashMap::new(),
             webgl_uniform_bgls: std::collections::HashMap::new(),
+            webgl_textures: std::collections::HashMap::new(),
+            webgl_default_sampler: None,
         }
+    }
+
+    /// Upload WebGL texture data do GPU. RGBA bytes (rozmer = w*h*4).
+    /// Format: GL_RGBA (0x1908) -> Rgba8UnormSrgb.
+    /// Idempotent reupload.
+    pub fn upload_webgl_texture(&mut self, texture_id: u32, w: u32, h: u32, format: u32, data: &[u8]) -> bool {
+        if w == 0 || h == 0 || data.is_empty() { return false; }
+        // Format mapping. GL_RGBA = 0x1908, GL_RGB = 0x1907.
+        // Pro Rgb -> dopadovat na Rgba (GPU nepodporuje 24-bit usually).
+        let wgpu_format = wgpu::TextureFormat::Rgba8UnormSrgb;
+        let bytes_per_pixel = 4u32;
+        // Pri RGB (3 bytes/pixel) konvertujem na RGBA s alpha=255.
+        let rgba_data: Vec<u8> = match format {
+            0x1907 => {
+                // RGB -> RGBA
+                let mut out = Vec::with_capacity((w * h * 4) as usize);
+                for chunk in data.chunks_exact(3) {
+                    out.extend_from_slice(chunk);
+                    out.push(255);
+                }
+                out
+            }
+            _ => data.to_vec(),
+        };
+        let expected_size = (w * h * bytes_per_pixel) as usize;
+        if rgba_data.len() < expected_size { return false; }
+        let tex = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(&format!("webgl_tex_{texture_id}")),
+            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            mip_level_count: 1, sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu_format,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        self.queue.write_texture(
+            wgpu::ImageCopyTexture {
+                texture: &tex, mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &rgba_data[..expected_size],
+            wgpu::ImageDataLayout {
+                offset: 0,
+                bytes_per_row: Some(w * bytes_per_pixel),
+                rows_per_image: Some(h),
+            },
+            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        );
+        let view = tex.create_view(&Default::default());
+        self.webgl_textures.insert(texture_id, (tex, view));
+        if self.webgl_default_sampler.is_none() {
+            self.webgl_default_sampler = Some(self.device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some("webgl_default_sampler"),
+                address_mode_u: wgpu::AddressMode::Repeat,
+                address_mode_v: wgpu::AddressMode::Repeat,
+                address_mode_w: wgpu::AddressMode::Repeat,
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                mipmap_filter: wgpu::FilterMode::Linear,
+                ..Default::default()
+            }));
+        }
+        true
+    }
+
+    pub fn webgl_texture_count(&self) -> usize {
+        self.webgl_textures.len()
+    }
+    pub fn webgl_has_texture(&self, texture_id: u32) -> bool {
+        self.webgl_textures.contains_key(&texture_id)
     }
 
     /// Ensure uniform buffer + bind group layout pro program.
@@ -2741,10 +2818,11 @@ impl Renderer {
         self.ensure_webgl_canvas_rt(canvas_ptr, w, h);
 
         // Extract data z state, pak release borrow
-        let (cmds, buffers_data, programs_data, default_clear): (
+        let (cmds, buffers_data, programs_data, textures_data, default_clear): (
             Vec<WebGLDrawCmd>,
             std::collections::HashMap<u32, Vec<u8>>,
             std::collections::HashMap<u32, (Option<String>, Option<String>, Vec<crate::interpreter::UniformSlot>, u64)>,
+            std::collections::HashMap<u32, (u32, u32, u32, Vec<u8>)>,
             [f32; 4],
         ) = {
             let mut state = state_rc.borrow_mut();
@@ -2758,14 +2836,23 @@ impl Renderer {
                     p.uniform_buffer_size,
                 )))
                 .collect();
+            let textures = state.textures.iter()
+                .map(|(k, t)| (*k, (t.width, t.height, t.format, t.data.clone())))
+                .collect();
             let cc = state.clear_color;
-            (cmds, buffers, programs, cc)
+            (cmds, buffers, programs, textures, cc)
         };
 
         // Upload buffers
         for (id, data) in &buffers_data {
             if !self.webgl_buffers.contains_key(id) && !data.is_empty() {
                 self.upload_webgl_buffer(*id, data);
+            }
+        }
+        // Upload textures
+        for (id, (w, h, format, data)) in &textures_data {
+            if !self.webgl_textures.contains_key(id) && !data.is_empty() && *w > 0 && *h > 0 {
+                self.upload_webgl_texture(*id, *w, *h, *format, data);
             }
         }
         // Build shader modules + uniform resources pro linked programs
