@@ -98,3 +98,136 @@ fn specificity_levels() {
     let s_tag = parse_stylesheet("div { x: 1; }");
     assert_eq!(specificity(&s_tag.rules[0].selectors[0]), (0, 0, 1));
 }
+
+// ─── Pseudo selectors ──────────────────────────────────────────────────
+
+#[test]
+fn parse_pseudo_class_hover() {
+    let s = parse_stylesheet("a:hover { color: red; }");
+    assert_eq!(s.rules.len(), 1);
+    assert!(s.rules[0].selectors[0].parts[0].pseudo_classes.iter().any(|p| p.contains("hover")));
+}
+
+#[test]
+fn parse_pseudo_element_before() {
+    let s = parse_stylesheet("p::before { content: \"->\"; }");
+    assert_eq!(s.rules.len(), 1);
+    let part = &s.rules[0].selectors[0].parts[0];
+    assert!(part.pseudo_element.as_deref() == Some("before") || part.pseudo_classes.iter().any(|p| p.contains("before")));
+}
+
+#[test]
+fn parse_attribute_selector_eq() {
+    let s = parse_stylesheet(r#"input[type="text"] { padding: 4px; }"#);
+    assert_eq!(s.rules.len(), 1);
+    let part = &s.rules[0].selectors[0].parts[0];
+    assert_eq!(part.attributes.len(), 1);
+}
+
+#[test]
+fn parse_child_combinator() {
+    let s = parse_stylesheet("ul > li { margin: 0; }");
+    assert!(s.rules[0].selectors[0].parts.len() >= 2);
+}
+
+#[test]
+fn parse_adjacent_sibling() {
+    let s = parse_stylesheet("h1 + p { margin-top: 0; }");
+    assert!(s.rules[0].selectors[0].parts.len() >= 2);
+}
+
+#[test]
+fn parse_universal_selector() {
+    let s = parse_stylesheet("* { box-sizing: border-box; }");
+    assert_eq!(s.rules.len(), 1);
+}
+
+// ─── At-rules ──────────────────────────────────────────────────────────
+
+#[test]
+fn parse_keyframes() {
+    let s = parse_stylesheet(r#"
+        @keyframes slide {
+            0%   { left: 0; }
+            100% { left: 100px; }
+        }
+    "#);
+    assert!(s.keyframes.iter().any(|k| k.name == "slide"));
+}
+
+#[test]
+fn parse_keyframes_multiple_steps() {
+    let s = parse_stylesheet(r#"
+        @keyframes pulse {
+            0%   { opacity: 1; }
+            50%  { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+    "#);
+    let kf = s.keyframes.iter().find(|k| k.name == "pulse").expect("pulse keyframes");
+    assert!(kf.frames.len() >= 3);
+}
+
+#[test]
+fn parse_font_face() {
+    let s = parse_stylesheet(r#"
+        @font-face {
+            font-family: "Custom";
+            src: url("custom.woff2");
+        }
+    "#);
+    assert!(s.font_faces.iter().any(|ff| ff.family == "Custom"));
+}
+
+#[test]
+fn parse_evaluate_media_orientation() {
+    use crate::browser::css_parser::evaluate_media_query;
+    // orientation: landscape kdyz width > height
+    assert_eq!(evaluate_media_query("(orientation: landscape)", 1024.0, 768.0), true);
+    assert_eq!(evaluate_media_query("(orientation: portrait)", 1024.0, 768.0), false);
+    assert_eq!(evaluate_media_query("(orientation: portrait)", 600.0, 800.0), true);
+}
+
+#[test]
+fn parse_evaluate_media_compound() {
+    use crate::browser::css_parser::evaluate_media_query;
+    // Compound `and` queries - simple within-range
+    assert_eq!(evaluate_media_query("(min-width: 500px) and (max-width: 1000px)", 800.0, 600.0), true);
+    // 200px doesn't satisfy min-width 500 -> false
+    assert_eq!(evaluate_media_query("(min-width: 500px) and (max-width: 1000px)", 200.0, 600.0), false);
+}
+
+// ─── Important + comments ──────────────────────────────────────────────
+
+#[test]
+fn parse_skip_block_comment() {
+    let s = parse_stylesheet("/* komentar */ body { color: red; } /* dalsi */");
+    assert_eq!(s.rules.len(), 1);
+    assert_eq!(s.rules[0].declarations[0].property, "color");
+}
+
+#[test]
+fn parse_multiple_declarations() {
+    let s = parse_stylesheet("div { color: red; background: blue; padding: 10px; margin: 5px; }");
+    assert_eq!(s.rules[0].declarations.len(), 4);
+}
+
+#[test]
+fn parse_empty_stylesheet() {
+    let s = parse_stylesheet("");
+    assert_eq!(s.rules.len(), 0);
+}
+
+#[test]
+fn parse_stylesheet_with_only_whitespace() {
+    let s = parse_stylesheet("   \n\t  ");
+    assert_eq!(s.rules.len(), 0);
+}
+
+#[test]
+fn parse_value_with_function() {
+    let s = parse_stylesheet("div { color: rgb(255, 0, 0); width: calc(100% - 20px); }");
+    assert_eq!(s.rules[0].declarations.len(), 2);
+    assert!(s.rules[0].declarations[0].value.contains("rgb"));
+    assert!(s.rules[0].declarations[1].value.contains("calc"));
+}

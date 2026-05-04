@@ -30,3 +30,5 @@ mod batch_q_storage;
 mod batch_r_workers;
 mod batch_s_dom;
 mod misc;
+mod url_parts_tests;
+mod web_apis_tests;

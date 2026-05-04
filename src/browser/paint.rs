@@ -134,10 +134,17 @@ pub enum DisplayCommand {
     },
     /// Blurred solid rect - shader mode 8. Smoothstep edge blur radius.
     BlurredRect { x: f32, y: f32, w: f32, h: f32, color: [u8; 4], radius: f32, blur: f32 },
-    /// Marker zacatku filter blur subtree. Renderer chytne nasledujici commands
-    /// (vc nested) az do FilterEnd a vykresli je do offscreen RT s gauss blur.
+    /// Marker zacatku filter subtree. Renderer chytne nasledujici commands
+    /// (vc nested) az do FilterEnd a vykresli je do offscreen RT s gauss blur
+    /// + color matrix transform.
     /// (x, y, w, h) je bbox subtree pro composit + scissor.
-    FilterBegin { x: f32, y: f32, w: f32, h: f32, blur_radius: f32 },
+    /// blur_radius = 0 znamena bez gauss blur. color_matrix - 4x5 row-major
+    /// (identita = no-op color transform).
+    FilterBegin {
+        x: f32, y: f32, w: f32, h: f32,
+        blur_radius: f32,
+        color_matrix: [f32; 20],
+    },
     /// Konec filter subtree. Parovan s FilterBegin (LIFO stack).
     FilterEnd,
 }
@@ -305,19 +312,22 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>) {
     }).collect();
     let _ = drop_shadows;
 
-    // Filter blur: emit FilterBegin marker pro renderer.
-    // Bbox se rozsiri o 2*blur_radius (kazda strana) aby se vlezl edge bleed.
-    // Nesting: nemusime nic delat - renderer se s LIFO stackem vypora sam.
-    // Skip pokud blur_radius < 0.5 (vizualne nic).
-    let has_blur_subtree = blur_radius >= 0.5;
-    if has_blur_subtree {
+    // Filter subtree: emit FilterBegin marker pokud chain obsahuje neco
+    // co RT pipeline umi - blur (run_blur_passes) NEBO non-identity color
+    // matrix (compose shader). Bbox se rozsiri o 2*blur_radius.
+    let color_matrix = crate::browser::layout::compute_color_matrix(&filter);
+    let needs_blur = blur_radius >= 0.5;
+    let needs_color = !crate::browser::layout::is_identity_matrix(&color_matrix);
+    let has_subtree_filter = needs_blur || needs_color;
+    if has_subtree_filter {
         let pad = 2.0 * blur_radius;
         cmds.push(DisplayCommand::FilterBegin {
             x: bx.rect.x - pad,
             y: bx.rect.y - pad,
             w: bx.rect.width  + 2.0 * pad,
             h: bx.rect.height + 2.0 * pad,
-            blur_radius,
+            blur_radius: if needs_blur { blur_radius } else { 0.0 },
+            color_matrix,
         });
     }
 
@@ -329,7 +339,10 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>) {
     let with_alpha = |c: [u8; 4]| -> [u8; 4] {
         let a = ((c[3] as u16 * alpha_mul as u16) / 255) as u8;
         let after_alpha = [c[0], c[1], c[2], a];
-        if filter.is_empty() {
+        // Subtree filtry resi RT pipeline + compose shader -> CPU chain skip
+        // (jinak by se aplikoval dvakrat). Pro elementy bez subtree filteru
+        // (napr. pouze drop-shadow) ponechame CPU chain.
+        if filter.is_empty() || has_subtree_filter {
             after_alpha
         } else {
             crate::browser::layout::apply_filter_chain(after_alpha, &filter)
@@ -631,8 +644,8 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>) {
         paint_box(ch, cmds);
     }
 
-    // Filter blur subtree end marker - paruje s FilterBegin (LIFO)
-    if has_blur_subtree {
+    // Filter subtree end marker - paruje s FilterBegin (LIFO)
+    if has_subtree_filter {
         cmds.push(DisplayCommand::FilterEnd);
     }
 

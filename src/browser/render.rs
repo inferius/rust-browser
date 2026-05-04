@@ -81,10 +81,22 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 "#;
 
 /// Compose shader - samples offscreen_tex (mid-blur result) a kresli do swap chain.
-/// Pouziva uniform pro tint alpha + region pro scissor (renderer set_scissor).
+/// Aplikuje 4x5 color matrix (vetsina filter operaci) - identity = passthrough.
 const COMPOSE_SHADER: &str = r#"
+struct ComposeParams {
+    /// 4x5 color matrix (4 vec4 row + 4-element offset vector).
+    /// row[i] = m[i*5..i*5+4], offset[i] = m[i*5+4].
+    /// WGSL: dva pole pres 4x mat4x4 by stacilo, ale pripravime 5 vec4 (16+16 bytes navic):
+    /// row0(rgba), row1(rgba), row2(rgba), row3(rgba), offset(rgba).
+    row0: vec4<f32>,
+    row1: vec4<f32>,
+    row2: vec4<f32>,
+    row3: vec4<f32>,
+    offset: vec4<f32>,
+};
 @group(0) @binding(0) var src_tex: texture_2d<f32>;
 @group(0) @binding(1) var src_smp: sampler;
+@group(0) @binding(2) var<uniform> params: ComposeParams;
 
 struct VertexOut {
     @builtin(position) clip: vec4<f32>,
@@ -111,7 +123,12 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOut {
 
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
-    return textureSample(src_tex, src_smp, in.uv);
+    let src = textureSample(src_tex, src_smp, in.uv);
+    let r = dot(params.row0, src) + params.offset.x;
+    let g = dot(params.row1, src) + params.offset.y;
+    let b = dot(params.row2, src) + params.offset.z;
+    let a = dot(params.row3, src) + params.offset.w;
+    return vec4<f32>(r, g, b, a);
 }
 "#;
 
@@ -501,6 +518,60 @@ fn find_node_by_ptr(root: &Rc<crate::browser::dom::NodeData>, ptr: usize) -> Opt
         }
     }
     None
+}
+
+/// Segment displej listu pro renderer: Main = normal, Filter = RT-mediated.
+pub enum Seg<'a> {
+    Main(&'a [DisplayCommand]),
+    Filter {
+        inner: &'a [DisplayCommand],
+        x: f32, y: f32, w: f32, h: f32,
+        radius: f32,
+        color_matrix: [f32; 20],
+    },
+}
+
+/// Rozdeli display list na Main + Filter segmenty pres FilterBegin/FilterEnd
+/// markery. Vnorene FilterBegin v ramci jednoho top-level filter spans
+/// se nezpracovavaji (renderuji se jako soucast inner cmds bez recursion).
+/// Symetricnost markeru je predpokladana (paint je emituje paroved).
+pub fn partition_filter_segments(cmds: &[DisplayCommand]) -> Vec<Seg<'_>> {
+    let mut segments: Vec<Seg> = Vec::new();
+    let mut depth: i32 = 0;
+    let mut cursor: usize = 0;
+    let mut filter_start: usize = 0;
+    let mut filter_params: (f32, f32, f32, f32, f32, [f32; 20]) =
+        (0.0, 0.0, 0.0, 0.0, 0.0, [0.0; 20]);
+    for i in 0..cmds.len() {
+        match &cmds[i] {
+            DisplayCommand::FilterBegin { x, y, w, h, blur_radius, color_matrix } => {
+                if depth == 0 {
+                    if cursor < i {
+                        segments.push(Seg::Main(&cmds[cursor..i]));
+                    }
+                    filter_start = i + 1;
+                    filter_params = (*x, *y, *w, *h, *blur_radius, *color_matrix);
+                }
+                depth += 1;
+            }
+            DisplayCommand::FilterEnd => {
+                depth -= 1;
+                if depth == 0 {
+                    let (x, y, w, h, r, m) = filter_params;
+                    segments.push(Seg::Filter {
+                        inner: &cmds[filter_start..i],
+                        x, y, w, h, radius: r, color_matrix: m,
+                    });
+                    cursor = i + 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    if cursor < cmds.len() {
+        segments.push(Seg::Main(&cmds[cursor..]));
+    }
+    segments
 }
 
 /// Posune Y souradnice display command (pro scroll).
@@ -1419,9 +1490,11 @@ struct Renderer {
     /// Uniform pro blur direction (0=horizontal, 1=vertical) + radius
     blur_uniform_buf: wgpu::Buffer,
     /// Compose pipeline - samples offscreen_tex a kresli do swap chain.
-    /// Pouziva fullscreen triangle + scissor pro region.
+    /// Pouziva fullscreen triangle + scissor pro region + color matrix uniform.
     compose_pipeline: wgpu::RenderPipeline,
     compose_bind_group_layout: wgpu::BindGroupLayout,
+    /// Uniform pro compose color matrix (5x vec4 = 80 bytes)
+    compose_uniform_buf: wgpu::Buffer,
 }
 
 impl Renderer {
@@ -1692,6 +1765,12 @@ impl Renderer {
             label: Some("compose_shader"),
             source: wgpu::ShaderSource::Wgsl(COMPOSE_SHADER.into()),
         });
+        let compose_uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("compose_uniform"),
+            size: 80, // 5x vec4
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let compose_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("compose_bgl"),
             entries: &[
@@ -1707,6 +1786,14 @@ impl Renderer {
                 wgpu::BindGroupLayoutEntry {
                     binding: 1, visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2, visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false, min_binding_size: None,
+                    },
                     count: None,
                 },
             ],
@@ -1748,7 +1835,7 @@ impl Renderer {
             offscreen_tex, offscreen_view,
             offscreen_tex_b, offscreen_view_b,
             blur_pipeline, blur_bind_group_layout, blur_uniform_buf,
-            compose_pipeline, compose_bind_group_layout,
+            compose_pipeline, compose_bind_group_layout, compose_uniform_buf,
         }
     }
 
@@ -1950,52 +2037,11 @@ impl Renderer {
         );
     }
 
-    /// Renderuje display list s podporou filter blur subtree.
+    /// Renderuje display list s podporou filter subtree (blur + color matrix).
     /// Rozdeli display_list na segmenty: Main(commands rendered normalne) +
-    /// Filter(commands rendered do offscreen RT a blurred, pak composited).
+    /// Filter(commands rendered do offscreen RT, pak composited s blur+matrix).
     fn draw_segments(&mut self, cmds: &[DisplayCommand]) {
-        // Pomocna struktura: rozsah cmds + typ
-        enum Seg<'a> {
-            Main(&'a [DisplayCommand]),
-            Filter { inner: &'a [DisplayCommand], x: f32, y: f32, w: f32, h: f32, radius: f32 },
-        }
-
-        // Partition: depth-1 spans (vnorene FilterBegin v ramci jednoho top-level
-        // jsou ignorovany - inner cmds prosly bez vnoreneho blur podruhe)
-        let mut segments: Vec<Seg> = Vec::new();
-        let mut depth: i32 = 0;
-        let mut cursor: usize = 0;
-        let mut filter_start: usize = 0;
-        let mut filter_params = (0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32);
-        for i in 0..cmds.len() {
-            match &cmds[i] {
-                DisplayCommand::FilterBegin { x, y, w, h, blur_radius } => {
-                    if depth == 0 {
-                        if cursor < i {
-                            segments.push(Seg::Main(&cmds[cursor..i]));
-                        }
-                        filter_start = i + 1;
-                        filter_params = (*x, *y, *w, *h, *blur_radius);
-                    }
-                    depth += 1;
-                }
-                DisplayCommand::FilterEnd => {
-                    depth -= 1;
-                    if depth == 0 {
-                        let (x, y, w, h, r) = filter_params;
-                        segments.push(Seg::Filter {
-                            inner: &cmds[filter_start..i],
-                            x, y, w, h, radius: r,
-                        });
-                        cursor = i + 1;
-                    }
-                }
-                _ => {}
-            }
-        }
-        if cursor < cmds.len() {
-            segments.push(Seg::Main(&cmds[cursor..]));
-        }
+        let segments: Vec<Seg> = partition_filter_segments(cmds);
 
         // Update viewport uniform
         let vp = [self.config.width as f32, self.config.height as f32, 0.0, 0.0];
@@ -2016,14 +2062,16 @@ impl Renderer {
                     self.draw_main_pass(&view, &verts, first_pass);
                     first_pass = false;
                 }
-                Seg::Filter { inner, x, y, w, h, radius } => {
+                Seg::Filter { inner, x, y, w, h, radius, color_matrix } => {
                     // 1. Render inner cmds do offscreen_view (clear transparent)
                     let inner_verts = build_vertices(inner, &self.atlas, &self.image_atlas);
                     self.draw_to_offscreen(&inner_verts);
-                    // 2. Blur 2-pass (offscreen -> b -> offscreen)
-                    self.run_blur_passes(radius);
-                    // 3. Composit do swap chain pres scissor region
-                    self.compose_offscreen(&view, x, y, w, h, first_pass);
+                    // 2. Blur 2-pass (offscreen -> b -> offscreen) - skip pri radius=0
+                    if radius >= 0.5 {
+                        self.run_blur_passes(radius);
+                    }
+                    // 3. Composit do swap chain pres scissor region (s color matrix)
+                    self.compose_offscreen(&view, x, y, w, h, &color_matrix, first_pass);
                     first_pass = false;
                 }
             }
@@ -2120,8 +2168,20 @@ impl Renderer {
     }
 
     /// Composit offscreen_tex_a do swap chain pres scissor (x, y, w, h).
+    /// Aplikuje 4x5 color matrix (identity = passthrough).
     /// Pouziva fullscreen triangle + alpha blend; scissor omezi vystup na bbox.
-    fn compose_offscreen(&self, view: &wgpu::TextureView, x: f32, y: f32, w: f32, h: f32, first: bool) {
+    fn compose_offscreen(&self, view: &wgpu::TextureView, x: f32, y: f32, w: f32, h: f32, color_matrix: &[f32; 20], first: bool) {
+        // Upload color matrix do uniform: 5x vec4 (rgba per row + offset)
+        // Layout: [row0_rgba, row1_rgba, row2_rgba, row3_rgba, offset_rgba]
+        let m = color_matrix;
+        let uniform_data: [f32; 20] = [
+            m[0], m[1], m[2], m[3],
+            m[5], m[6], m[7], m[8],
+            m[10], m[11], m[12], m[13],
+            m[15], m[16], m[17], m[18],
+            m[4], m[9], m[14], m[19],
+        ];
+        self.queue.write_buffer(&self.compose_uniform_buf, 0, bytemuck::cast_slice(&uniform_data));
         let mut encoder = self.device.create_command_encoder(&Default::default());
         let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("compose_bg"),
@@ -2129,6 +2189,7 @@ impl Renderer {
             entries: &[
                 wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&self.offscreen_view) },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.atlas_smp) },
+                wgpu::BindGroupEntry { binding: 2, resource: self.compose_uniform_buf.as_entire_binding() },
             ],
         });
         let load = if first {

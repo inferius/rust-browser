@@ -101,6 +101,91 @@ fn run_worker_thread(
     }
 }
 
+/// Helper - vytvori URLSearchParams-like object z search retezce ("?a=1&b=2").
+fn build_search_params(search: &str) -> JsValue {
+    let s = search.trim_start_matches('?');
+    let mut pairs: Vec<(String, String)> = Vec::new();
+    for p in s.split('&').filter(|s| !s.is_empty()) {
+        if let Some((k, v)) = p.split_once('=') {
+            pairs.push((k.to_string(), v.to_string()));
+        } else {
+            pairs.push((p.to_string(), String::new()));
+        }
+    }
+    let pairs_rc = Rc::new(RefCell::new(pairs));
+    let obj = Rc::new(RefCell::new(JsObject::new()));
+    {
+        let p = Rc::clone(&pairs_rc);
+        obj.borrow_mut().set("get".into(), native("URLSearchParams.get", move |args| {
+            let name = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+            Ok(p.borrow().iter().find(|(k, _)| k == &name)
+                .map(|(_, v)| JsValue::Str(v.clone()))
+                .unwrap_or(JsValue::Null))
+        }));
+    }
+    {
+        let p = Rc::clone(&pairs_rc);
+        obj.borrow_mut().set("has".into(), native("URLSearchParams.has", move |args| {
+            let name = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+            Ok(JsValue::Bool(p.borrow().iter().any(|(k, _)| k == &name)))
+        }));
+    }
+    {
+        let p = Rc::clone(&pairs_rc);
+        obj.borrow_mut().set("getAll".into(), native("URLSearchParams.getAll", move |args| {
+            let name = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+            let arr: Vec<JsValue> = p.borrow().iter()
+                .filter(|(k, _)| k == &name)
+                .map(|(_, v)| JsValue::Str(v.clone()))
+                .collect();
+            Ok(JsValue::Array(Rc::new(RefCell::new(arr))))
+        }));
+    }
+    {
+        let p = Rc::clone(&pairs_rc);
+        obj.borrow_mut().set("append".into(), native("URLSearchParams.append", move |args| {
+            let mut it = args.into_iter();
+            let name = it.next().map(|v| v.to_string()).unwrap_or_default();
+            let val = it.next().map(|v| v.to_string()).unwrap_or_default();
+            p.borrow_mut().push((name, val));
+            Ok(JsValue::Undefined)
+        }));
+    }
+    {
+        let p = Rc::clone(&pairs_rc);
+        obj.borrow_mut().set("delete".into(), native("URLSearchParams.delete", move |args| {
+            let name = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+            p.borrow_mut().retain(|(k, _)| k != &name);
+            Ok(JsValue::Undefined)
+        }));
+    }
+    {
+        let p = Rc::clone(&pairs_rc);
+        obj.borrow_mut().set("set".into(), native("URLSearchParams.set", move |args| {
+            let mut it = args.into_iter();
+            let name = it.next().map(|v| v.to_string()).unwrap_or_default();
+            let val = it.next().map(|v| v.to_string()).unwrap_or_default();
+            let mut pairs = p.borrow_mut();
+            if let Some(entry) = pairs.iter_mut().find(|(k, _)| k == &name) {
+                entry.1 = val;
+            } else {
+                pairs.push((name, val));
+            }
+            Ok(JsValue::Undefined)
+        }));
+    }
+    {
+        let p = Rc::clone(&pairs_rc);
+        obj.borrow_mut().set("toString".into(), native("URLSearchParams.toString", move |_| {
+            let s = p.borrow().iter()
+                .map(|(k, v)| format!("{k}={v}"))
+                .collect::<Vec<_>>().join("&");
+            Ok(JsValue::Str(s))
+        }));
+    }
+    JsValue::Object(obj)
+}
+
 pub fn setup_builtins(
     env: &Rc<RefCell<Environment>>,
     task_queue: &Rc<RefCell<Vec<(u32, JsValue, Vec<JsValue>)>>>,
@@ -1481,10 +1566,13 @@ pub fn setup_builtins(
             o.set("host".into(), JsValue::Str(host));
             o.set("hostname".into(), JsValue::Str(hostname));
             o.set("pathname".into(), JsValue::Str(pathname));
-            o.set("search".into(), JsValue::Str(search));
+            o.set("search".into(), JsValue::Str(search.clone()));
             o.set("hash".into(), JsValue::Str(hash));
             o.set("port".into(), JsValue::Str(port));
             o.set("origin".into(), JsValue::Str(origin));
+            // searchParams - sub-objekt
+            let sp = build_search_params(&search);
+            o.set("searchParams".into(), sp);
         }
         Ok(JsValue::Object(obj))
     }));
@@ -1541,6 +1629,35 @@ pub fn setup_builtins(
                     .map(|(k, v)| format!("{k}={v}"))
                     .collect::<Vec<_>>().join("&");
                 Ok(JsValue::Str(s))
+            }));
+        }
+        {
+            let p = Rc::clone(&pairs_rc);
+            obj.borrow_mut().set("append".into(), native("URLSearchParams.append", move |args| {
+                let mut it = args.into_iter();
+                let name = it.next().map(|v| v.to_string()).unwrap_or_default();
+                let val = it.next().map(|v| v.to_string()).unwrap_or_default();
+                p.borrow_mut().push((name, val));
+                Ok(JsValue::Undefined)
+            }));
+        }
+        {
+            let p = Rc::clone(&pairs_rc);
+            obj.borrow_mut().set("delete".into(), native("URLSearchParams.delete", move |args| {
+                let name = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+                p.borrow_mut().retain(|(k, _)| k != &name);
+                Ok(JsValue::Undefined)
+            }));
+        }
+        {
+            let p = Rc::clone(&pairs_rc);
+            obj.borrow_mut().set("getAll".into(), native("URLSearchParams.getAll", move |args| {
+                let name = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+                let arr: Vec<JsValue> = p.borrow().iter()
+                    .filter(|(k, _)| k == &name)
+                    .map(|(_, v)| JsValue::Str(v.clone()))
+                    .collect();
+                Ok(JsValue::Array(Rc::new(RefCell::new(arr))))
             }));
         }
         Ok(JsValue::Object(obj))
@@ -1985,12 +2102,44 @@ pub fn setup_builtins(
         Ok(JsValue::Object(obj))
     }));
 
-    // Blob stub
-    e.define("Blob", native("Blob", |_| {
+    // Blob - shrnuje size z parts[0..] + type z options.type
+    e.define("Blob", native("Blob", |args| {
+        let mut size: f64 = 0.0;
+        let mut text_concat = String::new();
+        let mut it = args.into_iter();
+        if let Some(parts) = it.next() {
+            // parts: array stringu nebo bytes
+            if let JsValue::Array(arr) = &parts {
+                for p in arr.borrow().iter() {
+                    match p {
+                        JsValue::Str(s) => {
+                            size += s.len() as f64;
+                            text_concat.push_str(s);
+                        }
+                        JsValue::Array(bytes) => {
+                            size += bytes.borrow().len() as f64;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        // options.type
+        let mut mime = String::new();
+        if let Some(opts) = it.next() {
+            if let JsValue::Object(o) = &opts {
+                if let Some(JsValue::Str(t)) = o.borrow().props.get("type") {
+                    mime = t.clone();
+                }
+            }
+        }
         let obj = Rc::new(RefCell::new(JsObject::new()));
-        obj.borrow_mut().set("size".into(), JsValue::Number(0.0));
-        obj.borrow_mut().set("type".into(), JsValue::Str(String::new()));
-        obj.borrow_mut().set("text".into(), native("Blob.text", |_| Ok(make_settled_promise("fulfilled", JsValue::Str(String::new())))));
+        obj.borrow_mut().set("size".into(), JsValue::Number(size));
+        obj.borrow_mut().set("type".into(), JsValue::Str(mime));
+        let text_for_async = text_concat.clone();
+        obj.borrow_mut().set("text".into(), native("Blob.text", move |_| {
+            Ok(make_settled_promise("fulfilled", JsValue::Str(text_for_async.clone())))
+        }));
         obj.borrow_mut().set("arrayBuffer".into(), native("Blob.arrayBuffer", |_| Ok(make_settled_promise("fulfilled", JsValue::Array(Rc::new(RefCell::new(Vec::new())))))));
         obj.borrow_mut().set("slice".into(), native("Blob.slice", |_| Ok(JsValue::Undefined)));
         Ok(JsValue::Object(obj))

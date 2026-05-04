@@ -1229,3 +1229,394 @@ fn apply_animations_interpolates_at_half_duration() {
     let left = styles.get("left").map(|s| s.as_str()).unwrap_or("");
     assert_eq!(left, "50px", "expected left=50px at t=1s of 2s linear, got {left}");
 }
+
+// ─── Color matrix ───────────────────────────────────────────────────────
+
+fn approx_eq_mat(a: &[f32; 20], b: &[f32; 20], eps: f32) -> bool {
+    a.iter().zip(b.iter()).all(|(x, y)| (x - y).abs() < eps)
+}
+
+#[test]
+fn color_matrix_empty_is_identity() {
+    let m = layout::compute_color_matrix(&[]);
+    assert!(layout::is_identity_matrix(&m));
+}
+
+#[test]
+fn color_matrix_brightness_one_is_identity() {
+    let m = layout::compute_color_matrix(&[layout::FilterOp::Brightness(1.0)]);
+    assert!(layout::is_identity_matrix(&m));
+}
+
+#[test]
+fn color_matrix_brightness_half_scales_rgb() {
+    let m = layout::compute_color_matrix(&[layout::FilterOp::Brightness(0.5)]);
+    // R, G, B kanaly skalovany 0.5; alpha + offsety nezmeny
+    assert!((m[0] - 0.5).abs() < 1e-5, "r coef");
+    assert!((m[6] - 0.5).abs() < 1e-5, "g coef");
+    assert!((m[12] - 0.5).abs() < 1e-5, "b coef");
+    assert!((m[18] - 1.0).abs() < 1e-5, "alpha coef nezmenen");
+    assert!((m[4]).abs() < 1e-5, "no offset r");
+}
+
+#[test]
+fn color_matrix_contrast_half() {
+    let m = layout::compute_color_matrix(&[layout::FilterOp::Contrast(0.5)]);
+    // contrast: r' = 0.5*r + 0.25
+    assert!((m[0] - 0.5).abs() < 1e-5);
+    assert!((m[4] - 0.25).abs() < 1e-5);
+}
+
+#[test]
+fn color_matrix_invert_full() {
+    let m = layout::compute_color_matrix(&[layout::FilterOp::Invert(1.0)]);
+    // r' = -1*r + 1
+    assert!((m[0] + 1.0).abs() < 1e-5);
+    assert!((m[4] - 1.0).abs() < 1e-5);
+}
+
+#[test]
+fn color_matrix_invert_zero_is_identity() {
+    let m = layout::compute_color_matrix(&[layout::FilterOp::Invert(0.0)]);
+    assert!(layout::is_identity_matrix(&m));
+}
+
+#[test]
+fn color_matrix_grayscale_full_uses_luma() {
+    let m = layout::compute_color_matrix(&[layout::FilterOp::Grayscale(1.0)]);
+    // Vsechny RGB rady = (0.2126, 0.7152, 0.0722, 0)
+    assert!((m[0] - 0.2126).abs() < 1e-4);
+    assert!((m[1] - 0.7152).abs() < 1e-4);
+    assert!((m[2] - 0.0722).abs() < 1e-4);
+    assert!((m[5] - 0.2126).abs() < 1e-4);
+    assert!((m[6] - 0.7152).abs() < 1e-4);
+}
+
+#[test]
+fn color_matrix_grayscale_zero_is_identity() {
+    let m = layout::compute_color_matrix(&[layout::FilterOp::Grayscale(0.0)]);
+    assert!(layout::is_identity_matrix(&m));
+}
+
+#[test]
+fn color_matrix_sepia_full_known_coeffs() {
+    let m = layout::compute_color_matrix(&[layout::FilterOp::Sepia(1.0)]);
+    // R: 0.393, 0.769, 0.189
+    assert!((m[0] - 0.393).abs() < 1e-3);
+    assert!((m[1] - 0.769).abs() < 1e-3);
+    assert!((m[2] - 0.189).abs() < 1e-3);
+    // G: 0.349, 0.686, 0.168
+    assert!((m[5] - 0.349).abs() < 1e-3);
+}
+
+#[test]
+fn color_matrix_saturate_one_is_identity() {
+    let m = layout::compute_color_matrix(&[layout::FilterOp::Saturate(1.0)]);
+    assert!(layout::is_identity_matrix(&m));
+}
+
+#[test]
+fn color_matrix_saturate_zero_collapses_to_luma() {
+    let m = layout::compute_color_matrix(&[layout::FilterOp::Saturate(0.0)]);
+    // Pri saturate(0) by mely byt vsechny radky (lr, lg, lb, 0, 0)
+    assert!((m[0] - 0.213).abs() < 1e-3);
+    assert!((m[1] - 0.715).abs() < 1e-3);
+    assert!((m[5] - 0.213).abs() < 1e-3);
+    assert!((m[10] - 0.213).abs() < 1e-3);
+}
+
+#[test]
+fn color_matrix_hue_zero_is_identity() {
+    let m = layout::compute_color_matrix(&[layout::FilterOp::HueRotate(0.0)]);
+    assert!(layout::is_identity_matrix(&m));
+}
+
+#[test]
+fn color_matrix_hue_360_is_identity() {
+    let m = layout::compute_color_matrix(&[layout::FilterOp::HueRotate(360.0)]);
+    assert!(layout::is_identity_matrix(&m));
+}
+
+#[test]
+fn color_matrix_opacity_full_is_identity() {
+    let m = layout::compute_color_matrix(&[layout::FilterOp::Opacity(1.0)]);
+    assert!(layout::is_identity_matrix(&m));
+}
+
+#[test]
+fn color_matrix_opacity_half_scales_alpha() {
+    let m = layout::compute_color_matrix(&[layout::FilterOp::Opacity(0.5)]);
+    assert!((m[18] - 0.5).abs() < 1e-5, "alpha kanal scaled");
+}
+
+#[test]
+fn color_matrix_blur_skipped() {
+    // Blur a DropShadow nemaji color matrix prispevek
+    let m = layout::compute_color_matrix(&[
+        layout::FilterOp::Blur(5.0),
+        layout::FilterOp::DropShadow { ox: 0.0, oy: 0.0, blur: 0.0, color: [0,0,0,255] },
+    ]);
+    assert!(layout::is_identity_matrix(&m));
+}
+
+#[test]
+fn color_matrix_chain_brightness_invert() {
+    // Order matters: invert(1) o brightness(0.5)
+    let m = layout::compute_color_matrix(&[
+        layout::FilterOp::Brightness(0.5),
+        layout::FilterOp::Invert(1.0),
+    ]);
+    // Po brightness 0.5 -> r' = 0.5r. Po invert -> r'' = 1 - 0.5r = -0.5r + 1
+    assert!((m[0] + 0.5).abs() < 1e-5);
+    assert!((m[4] - 1.0).abs() < 1e-5);
+}
+
+#[test]
+fn is_identity_matrix_detects_diff() {
+    let mut m = [
+        1.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 1.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 1.0, 0.0,
+    ];
+    assert!(layout::is_identity_matrix(&m));
+    m[0] = 0.99;
+    assert!(!layout::is_identity_matrix(&m));
+}
+
+#[test]
+fn is_identity_matrix_zero_offset_only() {
+    // Mensi rozdil nez epsilon - 1e-5 < 1e-4 -> stale identity
+    let m = [
+        1.0 + 1e-5, 0.0, 0.0, 0.0, 0.0,
+        0.0, 1.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 1.0, 0.0,
+    ];
+    assert!(layout::is_identity_matrix(&m));
+}
+
+#[test]
+fn color_matrix_chain_double_brightness_multiplies() {
+    // brightness(0.5) twice -> 0.25
+    let m = layout::compute_color_matrix(&[
+        layout::FilterOp::Brightness(0.5),
+        layout::FilterOp::Brightness(0.5),
+    ]);
+    assert!((m[0] - 0.25).abs() < 1e-5);
+    assert!((m[6] - 0.25).abs() < 1e-5);
+    assert!((m[12] - 0.25).abs() < 1e-5);
+}
+
+#[test]
+fn color_matrix_chain_grayscale_then_invert() {
+    // Verify chain doesn't degrade
+    let m = layout::compute_color_matrix(&[
+        layout::FilterOp::Grayscale(1.0),
+        layout::FilterOp::Invert(1.0),
+    ]);
+    let id = [
+        1.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 1.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 1.0, 0.0,
+    ];
+    // Result is NOT identity (non-trivial chain)
+    assert!(!approx_eq_mat(&m, &id, 1e-3));
+}
+
+// ─── Roman numerals ─────────────────────────────────────────────────────
+
+#[test]
+fn to_roman_basic() {
+    assert_eq!(layout::to_roman(1), "I");
+    assert_eq!(layout::to_roman(3), "III");
+    assert_eq!(layout::to_roman(4), "IV");
+    assert_eq!(layout::to_roman(9), "IX");
+    assert_eq!(layout::to_roman(40), "XL");
+    assert_eq!(layout::to_roman(50), "L");
+    assert_eq!(layout::to_roman(90), "XC");
+    assert_eq!(layout::to_roman(100), "C");
+    assert_eq!(layout::to_roman(400), "CD");
+    assert_eq!(layout::to_roman(500), "D");
+    assert_eq!(layout::to_roman(900), "CM");
+    assert_eq!(layout::to_roman(1000), "M");
+}
+
+#[test]
+fn to_roman_compound() {
+    assert_eq!(layout::to_roman(2024), "MMXXIV");
+    assert_eq!(layout::to_roman(1999), "MCMXCIX");
+    assert_eq!(layout::to_roman(3888), "MMMDCCCLXXXVIII");
+}
+
+#[test]
+fn to_roman_zero_or_negative_returns_empty() {
+    assert_eq!(layout::to_roman(0), "");
+    assert_eq!(layout::to_roman(-5), "");
+}
+
+// ─── Filter chain parser ────────────────────────────────────────────────
+
+#[test]
+fn parse_filter_chain_blur_px() {
+    let v = layout::parse_filter_chain("blur(5px)");
+    assert_eq!(v.len(), 1);
+    matches!(v[0], layout::FilterOp::Blur(_));
+    if let layout::FilterOp::Blur(r) = v[0] {
+        assert!((r - 5.0).abs() < 1e-5);
+    }
+}
+
+#[test]
+fn parse_filter_chain_multiple_ops() {
+    let v = layout::parse_filter_chain("blur(2px) brightness(1.2) hue-rotate(45deg) saturate(2)");
+    assert_eq!(v.len(), 4);
+    matches!(v[0], layout::FilterOp::Blur(_));
+    matches!(v[1], layout::FilterOp::Brightness(_));
+    matches!(v[2], layout::FilterOp::HueRotate(_));
+    matches!(v[3], layout::FilterOp::Saturate(_));
+}
+
+#[test]
+fn parse_filter_chain_none_empty() {
+    assert_eq!(layout::parse_filter_chain("none").len(), 0);
+    assert_eq!(layout::parse_filter_chain("").len(), 0);
+    assert_eq!(layout::parse_filter_chain("   ").len(), 0);
+}
+
+#[test]
+fn parse_filter_chain_grayscale_pct() {
+    let v = layout::parse_filter_chain("grayscale(50%)");
+    assert_eq!(v.len(), 1);
+    if let layout::FilterOp::Grayscale(g) = v[0] {
+        assert!((g - 0.5).abs() < 1e-5);
+    } else { panic!("expected grayscale"); }
+}
+
+#[test]
+fn parse_filter_chain_hue_rad() {
+    let v = layout::parse_filter_chain("hue-rotate(3.14159rad)");
+    assert_eq!(v.len(), 1);
+    if let layout::FilterOp::HueRotate(d) = v[0] {
+        assert!((d - 180.0).abs() < 0.5, "rad->deg konverze, got {d}");
+    } else { panic!("expected hue-rotate"); }
+}
+
+#[test]
+fn apply_filter_chain_brightness_doubles_red() {
+    let result = layout::apply_filter_chain([100, 50, 25, 200], &[layout::FilterOp::Brightness(2.0)]);
+    assert_eq!(result[0], 200);
+    assert_eq!(result[1], 100);
+    assert_eq!(result[2], 50);
+    assert_eq!(result[3], 200);  // alpha nezmenen
+}
+
+#[test]
+fn apply_filter_chain_brightness_clamps() {
+    let result = layout::apply_filter_chain([200, 0, 0, 255], &[layout::FilterOp::Brightness(2.0)]);
+    assert_eq!(result[0], 255, "clamped to 255");
+}
+
+#[test]
+fn apply_filter_chain_invert_full() {
+    let result = layout::apply_filter_chain([255, 0, 100, 255], &[layout::FilterOp::Invert(1.0)]);
+    assert_eq!(result[0], 0);
+    assert_eq!(result[1], 255);
+    assert_eq!(result[2], 155);
+}
+
+// ─── parse_length / parse_length_ctx ────────────────────────────────────
+
+#[test]
+fn parse_length_px() {
+    assert_eq!(layout::parse_length("16px"), 16.0);
+    assert_eq!(layout::parse_length("0px"), 0.0);
+    assert_eq!(layout::parse_length("100px"), 100.0);
+}
+
+#[test]
+fn parse_length_em_uses_16() {
+    assert_eq!(layout::parse_length("1em"), 16.0);
+    assert_eq!(layout::parse_length("2em"), 32.0);
+    assert_eq!(layout::parse_length("0.5em"), 8.0);
+}
+
+#[test]
+fn parse_length_rem_uses_16() {
+    assert_eq!(layout::parse_length("1rem"), 16.0);
+    assert_eq!(layout::parse_length("2rem"), 32.0);
+}
+
+#[test]
+fn parse_length_vw() {
+    let v = layout::parse_length_ctx("50vw", 1000.0, 800.0, 16.0);
+    assert!((v - 500.0).abs() < 1e-3);
+}
+
+#[test]
+fn parse_length_vh() {
+    let v = layout::parse_length_ctx("25vh", 1000.0, 800.0, 16.0);
+    assert!((v - 200.0).abs() < 1e-3);
+}
+
+#[test]
+fn parse_length_vmin_uses_smaller() {
+    let v = layout::parse_length_ctx("50vmin", 1000.0, 800.0, 16.0);
+    assert!((v - 400.0).abs() < 1e-3, "vmin = 50% z 800");
+}
+
+#[test]
+fn parse_length_vmax_uses_larger() {
+    let v = layout::parse_length_ctx("50vmax", 1000.0, 800.0, 16.0);
+    assert!((v - 500.0).abs() < 1e-3, "vmax = 50% z 1000");
+}
+
+#[test]
+fn parse_length_pt_to_px() {
+    // 12pt ~= 16px
+    let v = layout::parse_length("12pt");
+    assert!((v - 16.0).abs() < 0.5);
+}
+
+#[test]
+fn parse_length_invalid_returns_zero() {
+    assert_eq!(layout::parse_length("invalid"), 0.0);
+    assert_eq!(layout::parse_length(""), 0.0);
+}
+
+#[test]
+fn parse_length_negative() {
+    assert_eq!(layout::parse_length("-10px"), -10.0);
+}
+
+// ─── parse_color rozsireno ──────────────────────────────────────────────
+
+#[test]
+fn parse_color_named_basic() {
+    assert_eq!(layout::parse_color("red"), Some([255, 0, 0, 255]));
+    assert_eq!(layout::parse_color("blue"), Some([0, 0, 255, 255]));
+    assert_eq!(layout::parse_color("white"), Some([255, 255, 255, 255]));
+    assert_eq!(layout::parse_color("black"), Some([0, 0, 0, 255]));
+}
+
+#[test]
+fn parse_color_transparent() {
+    let c = layout::parse_color("transparent");
+    assert!(c.is_some());
+    assert_eq!(c.unwrap()[3], 0);
+}
+
+#[test]
+fn parse_color_hsl_red() {
+    // hsl(0, 100%, 50%) = pure red
+    let c = layout::parse_color("hsl(0, 100%, 50%)");
+    assert!(c.is_some());
+    let rgba = c.unwrap();
+    assert!(rgba[0] >= 250 && rgba[1] < 10 && rgba[2] < 10);
+}
+
+#[test]
+fn parse_color_invalid_returns_none() {
+    assert!(layout::parse_color("#xyz").is_none());
+}

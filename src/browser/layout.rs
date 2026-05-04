@@ -2735,6 +2735,147 @@ pub fn apply_filter_chain(rgba: [u8; 4], chain: &[FilterOp]) -> [u8; 4] {
     ]
 }
 
+/// Vypocita 4x5 row-major color matrix z filter chain.
+/// Format: vystup[i] = sum_j(m[i*5 + j] * input[j]) + m[i*5 + 4]; j=0..3 (rgba).
+/// Vraci identity (1,0,0,0,0; 0,1,0,0,0; 0,0,1,0,0; 0,0,0,1,0) pro prazdny chain.
+/// Blur a DropShadow se ignoruji (jine fazy pipeline).
+pub fn compute_color_matrix(chain: &[FilterOp]) -> [f32; 20] {
+    // Identity
+    let mut m: [f32; 20] = [
+        1.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 1.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 1.0, 0.0,
+    ];
+    // Compose: new = filter_matrix * current
+    let compose = |m: &mut [f32; 20], f: [f32; 20]| {
+        let mut r = [0.0_f32; 20];
+        for row in 0..4 {
+            for col in 0..4 {
+                let mut s = 0.0;
+                for k in 0..4 {
+                    s += f[row * 5 + k] * m[k * 5 + col];
+                }
+                r[row * 5 + col] = s;
+            }
+            // Offset: f[row*5+4] + sum_k(f[row*5+k] * m[k*5+4])
+            let mut s = f[row * 5 + 4];
+            for k in 0..4 {
+                s += f[row * 5 + k] * m[k * 5 + 4];
+            }
+            r[row * 5 + 4] = s;
+        }
+        *m = r;
+    };
+    let identity = || -> [f32; 20] {
+        [
+            1.0, 0.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 1.0, 0.0,
+        ]
+    };
+    for op in chain {
+        match op {
+            FilterOp::Brightness(v) => {
+                let b = *v;
+                let mut f = identity();
+                f[0] = b; f[6] = b; f[12] = b;
+                compose(&mut m, f);
+            }
+            FilterOp::Contrast(c) => {
+                let off = 0.5 * (1.0 - c);
+                let mut f = identity();
+                f[0] = *c; f[4] = off;
+                f[6] = *c; f[9] = off;
+                f[12] = *c; f[14] = off;
+                compose(&mut m, f);
+            }
+            FilterOp::Invert(i) => {
+                let coef = 1.0 - 2.0 * i;
+                let mut f = identity();
+                f[0] = coef; f[4] = *i;
+                f[6] = coef; f[9] = *i;
+                f[12] = coef; f[14] = *i;
+                compose(&mut m, f);
+            }
+            FilterOp::Grayscale(amount) => {
+                let a = *amount;
+                let inv = 1.0 - a;
+                // SVG luminance coeffs 0.2126/0.7152/0.0722
+                let lr = 0.2126_f32; let lg = 0.7152_f32; let lb = 0.0722_f32;
+                let f: [f32; 20] = [
+                    inv + a*lr, a*lg,       a*lb,       0.0, 0.0,
+                    a*lr,       inv + a*lg, a*lb,       0.0, 0.0,
+                    a*lr,       a*lg,       inv + a*lb, 0.0, 0.0,
+                    0.0,        0.0,        0.0,        1.0, 0.0,
+                ];
+                compose(&mut m, f);
+            }
+            FilterOp::Sepia(amount) => {
+                let a = *amount;
+                let inv = 1.0 - a;
+                // Sepia coeffs from W3C
+                let f: [f32; 20] = [
+                    inv + a*0.393, a*0.769,       a*0.189,       0.0, 0.0,
+                    a*0.349,       inv + a*0.686, a*0.168,       0.0, 0.0,
+                    a*0.272,       a*0.534,       inv + a*0.131, 0.0, 0.0,
+                    0.0,           0.0,           0.0,           1.0, 0.0,
+                ];
+                compose(&mut m, f);
+            }
+            FilterOp::Saturate(s) => {
+                // Standard SVG saturate matrix
+                let inv = 1.0 - s;
+                let lr = 0.213_f32; let lg = 0.715_f32; let lb = 0.072_f32;
+                let f: [f32; 20] = [
+                    lr*inv + s, lg*inv,     lb*inv,     0.0, 0.0,
+                    lr*inv,     lg*inv + s, lb*inv,     0.0, 0.0,
+                    lr*inv,     lg*inv,     lb*inv + s, 0.0, 0.0,
+                    0.0,        0.0,        0.0,        1.0, 0.0,
+                ];
+                compose(&mut m, f);
+            }
+            FilterOp::HueRotate(deg) => {
+                let rad = deg.to_radians();
+                let c = rad.cos();
+                let s = rad.sin();
+                // SVG hue-rotate matrix (luma-preserving)
+                let f: [f32; 20] = [
+                    0.213 + c*0.787  + s*-0.213, 0.715 + c*-0.715 + s*-0.715, 0.072 + c*-0.072 + s*0.928,  0.0, 0.0,
+                    0.213 + c*-0.213 + s*0.143,  0.715 + c*0.285  + s*0.140,  0.072 + c*-0.072 + s*-0.283, 0.0, 0.0,
+                    0.213 + c*-0.213 + s*-0.787, 0.715 + c*-0.715 + s*0.715,  0.072 + c*0.928  + s*0.072,  0.0, 0.0,
+                    0.0,                         0.0,                         0.0,                         1.0, 0.0,
+                ];
+                compose(&mut m, f);
+            }
+            FilterOp::Opacity(o) => {
+                let mut f = identity();
+                f[18] = *o;
+                compose(&mut m, f);
+            }
+            FilterOp::Blur(_) | FilterOp::DropShadow { .. } => {
+                // Jine faze pipeline - skip
+            }
+        }
+    }
+    m
+}
+
+/// True pokud color matrix neni identity (do epsilonu).
+pub fn is_identity_matrix(m: &[f32; 20]) -> bool {
+    let id: [f32; 20] = [
+        1.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 1.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 1.0, 0.0,
+    ];
+    for i in 0..20 {
+        if (m[i] - id[i]).abs() > 1e-4 { return false; }
+    }
+    true
+}
+
 /// Top-level comma split - vraci Vec<String> trimmed.
 fn split_top_level_commas_string(s: &str) -> Vec<String> {
     let mut tokens = Vec::new();

@@ -5430,12 +5430,12 @@ fn kebab_to_camel(s: &str) -> String {
 }
 
 /// URL parts (pro HTMLAnchorElement.protocol/host/...).
-struct UrlParts {
-    protocol: String, host: String, hostname: String, port: String,
-    pathname: String, search: String, hash: String, origin: String,
+pub(crate) struct UrlParts {
+    pub protocol: String, pub host: String, pub hostname: String, pub port: String,
+    pub pathname: String, pub search: String, pub hash: String, pub origin: String,
 }
 
-fn parse_url_parts(url: &str) -> UrlParts {
+pub(crate) fn parse_url_parts(url: &str) -> UrlParts {
     let (proto, rest) = if let Some(idx) = url.find("://") {
         (format!("{}:", &url[..idx]), url[idx + 3..].to_string())
     } else {
@@ -5462,7 +5462,7 @@ fn parse_url_parts(url: &str) -> UrlParts {
 }
 
 /// Application/x-www-form-urlencoded encoder (RFC 3986 unreserved chars).
-fn url_encode(s: &str) -> String {
+pub(crate) fn url_encode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
         match b {
