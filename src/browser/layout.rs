@@ -1070,6 +1070,10 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     }
     if let Some(d) = s.get("direction") {
         bx.direction = d.trim().to_string();
+        // RTL: text-align default = right (pokud nezadany)
+        if bx.direction == "rtl" && s.get("text-align").is_none() {
+            bx.text_align = TextAlign::Right;
+        }
     }
     if let Some(wm) = s.get("writing-mode") {
         bx.writing_mode = wm.trim().to_string();
@@ -1326,6 +1330,20 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if bx.tag.as_deref() == Some("li") {
         let cur = counters.get("list-item").copied().unwrap_or(0) + 1;
         counters.insert("list-item".into(), cur);
+        // list-style-image: pokud zadany url(), pouzit obrazek misto markeru
+        if let Some(img_url) = &bx.list_style_image {
+            if let Some(url_inner) = img_url.strip_prefix("url(").and_then(|s| s.strip_suffix(')')) {
+                let cleaned = url_inner.trim().trim_matches('"').trim_matches('\'');
+                let mut img_box = LayoutBox::new();
+                img_box.display = Display::Inline;
+                img_box.tag = Some("::marker".to_string());
+                img_box.image_src = Some(cleaned.to_string());
+                img_box.rect.width = bx.font_size;
+                img_box.rect.height = bx.font_size;
+                bx.children.push(img_box);
+                return bx;
+            }
+        }
         let style = if bx.list_style_type.is_empty() { "disc" } else { bx.list_style_type.as_str() };
         let marker_text = match style {
             "none" => String::new(),
