@@ -2542,6 +2542,14 @@ impl Interpreter {
                 }
                 JsValue::Object(obj_rc) => {
                     let obj_rc2 = Rc::clone(obj_rc);
+                    // ─── Worker stub - postMessage/terminate ────────────
+                    if matches!(obj_rc2.borrow().props.get("__worker__"), Some(JsValue::Bool(true))) {
+                        let _arg_vals = self.eval_args(args, env)?;
+                        match key.as_str() {
+                            "postMessage" | "terminate" => return Ok(JsValue::Undefined),
+                            _ => {}
+                        }
+                    }
                     // ─── Storage API (localStorage/sessionStorage) ──────
                     if matches!(obj_rc2.borrow().props.get("__storage__"), Some(JsValue::Bool(true))) {
                         let arg_vals = self.eval_args(args, env)?;

@@ -559,6 +559,134 @@ pub fn setup_builtins(
     }));
     e.define("indexedDB", JsValue::Object(Rc::new(RefCell::new(idb))));
 
+    // ─── Worker stub ─────────────────────────────────────────────────────────
+    // Worker(scriptURL) - vraci objekt s postMessage/terminate stubs.
+    // V sync runtime nelze realne spustit - jen registrujeme API.
+    e.define("Worker", native("Worker", |a| {
+        let url = a.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+        let mut obj = JsObject::new();
+        obj.set("__worker__".into(), JsValue::Bool(true));
+        obj.set("url".into(), JsValue::Str(url));
+        Ok(JsValue::Object(Rc::new(RefCell::new(obj))))
+    }));
+
+    // ─── SharedArrayBuffer stub ──────────────────────────────────────────────
+    // V sync runtime se chova jako bezne pole bytu.
+    e.define("SharedArrayBuffer", native("SharedArrayBuffer", |a| {
+        let len = a.into_iter().next().map(|v| v.to_number() as usize).unwrap_or(0);
+        let mut obj = JsObject::new();
+        obj.set("__shared_buffer__".into(), JsValue::Bool(true));
+        obj.set("byteLength".into(), JsValue::Number(len as f64));
+        // Reprezentujeme jako Array of u8
+        let bytes: Vec<JsValue> = vec![JsValue::Number(0.0); len];
+        obj.set("__bytes__".into(), JsValue::Array(Rc::new(RefCell::new(bytes))));
+        Ok(JsValue::Object(Rc::new(RefCell::new(obj))))
+    }));
+
+    // ArrayBuffer - alias k SharedArrayBuffer v sync runtime
+    e.define("ArrayBuffer", native("ArrayBuffer", |a| {
+        let len = a.into_iter().next().map(|v| v.to_number() as usize).unwrap_or(0);
+        let mut obj = JsObject::new();
+        obj.set("__buffer__".into(), JsValue::Bool(true));
+        obj.set("byteLength".into(), JsValue::Number(len as f64));
+        let bytes: Vec<JsValue> = vec![JsValue::Number(0.0); len];
+        obj.set("__bytes__".into(), JsValue::Array(Rc::new(RefCell::new(bytes))));
+        Ok(JsValue::Object(Rc::new(RefCell::new(obj))))
+    }));
+
+    // Typed Arrays - jen Uint8Array stub
+    e.define("Uint8Array", native("Uint8Array", |a| {
+        let val = a.into_iter().next().unwrap_or(JsValue::Number(0.0));
+        let bytes = match val {
+            JsValue::Number(n) => vec![JsValue::Number(0.0); n as usize],
+            JsValue::Array(arr) => arr.borrow().clone(),
+            _ => vec![],
+        };
+        let len = bytes.len() as f64;
+        let mut obj = JsObject::new();
+        obj.set("__typed_array__".into(), JsValue::Str("Uint8Array".into()));
+        obj.set("length".into(), JsValue::Number(len));
+        obj.set("byteLength".into(), JsValue::Number(len));
+        obj.set("__bytes__".into(), JsValue::Array(Rc::new(RefCell::new(bytes))));
+        Ok(JsValue::Object(Rc::new(RefCell::new(obj))))
+    }));
+
+    // ─── Atomics ─────────────────────────────────────────────────────────────
+    // V sync runtime jsou to bezne operace (zadna konkurence).
+    let mut atomics = JsObject::new();
+    atomics.set("load".into(), native("Atomics.load", |a| {
+        let arr = a.first().cloned().unwrap_or(JsValue::Undefined);
+        let i = a.get(1).map(|v| v.to_number() as usize).unwrap_or(0);
+        if let JsValue::Object(o) = arr {
+            if let Some(JsValue::Array(bytes)) = o.borrow().props.get("__bytes__") {
+                return Ok(bytes.borrow().get(i).cloned().unwrap_or(JsValue::Number(0.0)));
+            }
+        }
+        Ok(JsValue::Number(0.0))
+    }));
+    atomics.set("store".into(), native("Atomics.store", |a| {
+        let arr = a.first().cloned().unwrap_or(JsValue::Undefined);
+        let i = a.get(1).map(|v| v.to_number() as usize).unwrap_or(0);
+        let val = a.get(2).cloned().unwrap_or(JsValue::Number(0.0));
+        if let JsValue::Object(o) = arr {
+            if let Some(JsValue::Array(bytes)) = o.borrow().props.get("__bytes__") {
+                let mut b = bytes.borrow_mut();
+                while b.len() <= i { b.push(JsValue::Number(0.0)); }
+                b[i] = val.clone();
+            }
+        }
+        Ok(val)
+    }));
+    atomics.set("add".into(), native("Atomics.add", |a| {
+        let arr = a.first().cloned().unwrap_or(JsValue::Undefined);
+        let i = a.get(1).map(|v| v.to_number() as usize).unwrap_or(0);
+        let delta = a.get(2).map(|v| v.to_number()).unwrap_or(0.0);
+        if let JsValue::Object(o) = arr {
+            if let Some(JsValue::Array(bytes)) = o.borrow().props.get("__bytes__") {
+                let mut b = bytes.borrow_mut();
+                let old = b.get(i).map(|v| v.to_number()).unwrap_or(0.0);
+                while b.len() <= i { b.push(JsValue::Number(0.0)); }
+                b[i] = JsValue::Number(old + delta);
+                return Ok(JsValue::Number(old));
+            }
+        }
+        Ok(JsValue::Number(0.0))
+    }));
+    atomics.set("sub".into(), native("Atomics.sub", |a| {
+        let arr = a.first().cloned().unwrap_or(JsValue::Undefined);
+        let i = a.get(1).map(|v| v.to_number() as usize).unwrap_or(0);
+        let delta = a.get(2).map(|v| v.to_number()).unwrap_or(0.0);
+        if let JsValue::Object(o) = arr {
+            if let Some(JsValue::Array(bytes)) = o.borrow().props.get("__bytes__") {
+                let mut b = bytes.borrow_mut();
+                let old = b.get(i).map(|v| v.to_number()).unwrap_or(0.0);
+                while b.len() <= i { b.push(JsValue::Number(0.0)); }
+                b[i] = JsValue::Number(old - delta);
+                return Ok(JsValue::Number(old));
+            }
+        }
+        Ok(JsValue::Number(0.0))
+    }));
+    atomics.set("compareExchange".into(), native("Atomics.compareExchange", |a| {
+        let arr = a.first().cloned().unwrap_or(JsValue::Undefined);
+        let i = a.get(1).map(|v| v.to_number() as usize).unwrap_or(0);
+        let expected = a.get(2).map(|v| v.to_number()).unwrap_or(0.0);
+        let new_val = a.get(3).map(|v| v.to_number()).unwrap_or(0.0);
+        if let JsValue::Object(o) = arr {
+            if let Some(JsValue::Array(bytes)) = o.borrow().props.get("__bytes__") {
+                let mut b = bytes.borrow_mut();
+                let current = b.get(i).map(|v| v.to_number()).unwrap_or(0.0);
+                if current == expected {
+                    while b.len() <= i { b.push(JsValue::Number(0.0)); }
+                    b[i] = JsValue::Number(new_val);
+                }
+                return Ok(JsValue::Number(current));
+            }
+        }
+        Ok(JsValue::Number(0.0))
+    }));
+    e.define("Atomics", JsValue::Object(Rc::new(RefCell::new(atomics))));
+
     // ─── fetch - stub vraci rejected Promise (bez backend) ───────────────────
     // Realna implementace by potrebovala HTTP client (reqwest). Zde stub.
     e.define("fetch", native("fetch", |a| {
