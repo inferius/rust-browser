@@ -165,6 +165,8 @@ pub struct LayoutBox {
     pub text_shadow: Option<(f32, f32, f32, [u8; 4])>,
     /// text-transform: none / uppercase / lowercase / capitalize
     pub text_transform: TextTransform,
+    /// font-family - prvni nazev z comma-separated list (nejvyssi prio).
+    pub font_family: String,
     /// letter-spacing pridava extra mezeru mezi znaky (px).
     pub letter_spacing: f32,
     /// word-spacing pridava extra mezeru mezi slovy (px).
@@ -247,6 +249,7 @@ impl LayoutBox {
             clip_path: None,
             text_shadow: None,
             text_transform: TextTransform::None,
+            font_family: String::new(),
             letter_spacing: 0.0,
             word_spacing: 0.0,
             aspect_ratio: None,
@@ -532,6 +535,12 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     // text-shadow: parsuje "offset_x offset_y blur color"
     if let Some(ts) = s.get("text-shadow") {
         bx.text_shadow = parse_text_shadow(ts);
+    }
+    // font-family - vez prvni z comma-separated list (CSS spec: try in order)
+    if let Some(ff) = s.get("font-family") {
+        let first = ff.split(',').next().unwrap_or("").trim()
+            .trim_matches('"').trim_matches('\'');
+        bx.font_family = first.to_string();
     }
     // text-transform
     if let Some(tt) = s.get("text-transform") {

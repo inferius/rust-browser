@@ -358,6 +358,16 @@ fn contain_layout_paint_combo() {
 }
 
 #[test]
+fn font_family_picks_first_from_list() {
+    let doc = parse_html(r#"<html><body><p>x</p></body></html>"#, "");
+    let css = parse_stylesheet(r#"p { font-family: "MyFont", Arial, sans-serif; }"#);
+    let style_map = crate::browser::cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &style_map, 1024.0, 768.0);
+    let p = find_box_by_tag(&root, "p").unwrap();
+    assert_eq!(p.font_family, "MyFont");
+}
+
+#[test]
 fn text_transform_uppercase_applied() {
     use crate::browser::layout::TextTransform;
     let doc = parse_html(r#"<html><body><p>hello world</p></body></html>"#, "");
