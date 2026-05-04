@@ -108,23 +108,58 @@ pub fn setup_builtins(
     workers: &Rc<RefCell<HashMap<u32, super::WorkerState>>>,
     next_worker_id: &Rc<RefCell<u32>>,
     document: &Rc<RefCell<crate::browser::dom::Document>>,
+    console_log: &Rc<RefCell<Vec<(String, String)>>>,
+    network_log: &Rc<RefCell<Vec<(String, u16)>>>,
 ) {
     let mut e = env.borrow_mut();
 
-    // console
+    // console - vsechny varianty captureju do console_log Rc<RefCell<Vec>>
     let mut console = JsObject::new();
-    console.set("log".into(), native("log", |args| {
-        println!("{}", args.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" "));
-        Ok(JsValue::Undefined)
-    }));
-    console.set("error".into(), native("error", |args| {
-        eprintln!("[error] {}", args.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" "));
-        Ok(JsValue::Undefined)
-    }));
-    console.set("warn".into(), native("warn", |args| {
-        eprintln!("[warn] {}", args.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" "));
-        Ok(JsValue::Undefined)
-    }));
+    {
+        let log = Rc::clone(console_log);
+        console.set("log".into(), native("log", move |args| {
+            let msg = args.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" ");
+            println!("{msg}");
+            log.borrow_mut().push(("log".into(), msg));
+            Ok(JsValue::Undefined)
+        }));
+    }
+    {
+        let log = Rc::clone(console_log);
+        console.set("error".into(), native("error", move |args| {
+            let msg = args.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" ");
+            eprintln!("[error] {msg}");
+            log.borrow_mut().push(("error".into(), msg));
+            Ok(JsValue::Undefined)
+        }));
+    }
+    {
+        let log = Rc::clone(console_log);
+        console.set("warn".into(), native("warn", move |args| {
+            let msg = args.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" ");
+            eprintln!("[warn] {msg}");
+            log.borrow_mut().push(("warn".into(), msg));
+            Ok(JsValue::Undefined)
+        }));
+    }
+    {
+        let log = Rc::clone(console_log);
+        console.set("info".into(), native("info", move |args| {
+            let msg = args.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" ");
+            println!("[info] {msg}");
+            log.borrow_mut().push(("info".into(), msg));
+            Ok(JsValue::Undefined)
+        }));
+    }
+    {
+        let log = Rc::clone(console_log);
+        console.set("debug".into(), native("debug", move |args| {
+            let msg = args.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" ");
+            println!("[debug] {msg}");
+            log.borrow_mut().push(("debug".into(), msg));
+            Ok(JsValue::Undefined)
+        }));
+    }
     e.define("console", JsValue::Object(Rc::new(RefCell::new(console))));
 
     // Math
@@ -1021,9 +1056,9 @@ pub fn setup_builtins(
 
 
     // ─── fetch - real HTTP client (ureq, blocking) ──────────────────────────
-    // V sync runtime blokuje na request a vraci settled Promise.
-    // Druhy argument je init objekt: { method, headers, body }
-    e.define("fetch", native("fetch", |a| {
+    let net_log_clone = Rc::clone(network_log);
+    e.define("fetch", native("fetch", move |a| {
+        let net_log = Rc::clone(&net_log_clone);
         let mut iter = a.into_iter();
         let url = iter.next().map(|v| v.to_string()).unwrap_or_default();
         let init = iter.next().unwrap_or(JsValue::Undefined);
@@ -1047,6 +1082,12 @@ pub fn setup_builtins(
 
         // Dispatch request
         let req_result = perform_http_request(&url, &method, &headers, body.as_deref());
+        // Log network call
+        let log_status = match &req_result {
+            Ok((s, ..)) => *s,
+            Err(_) => 0,
+        };
+        net_log.borrow_mut().push((url.clone(), log_status));
         match req_result {
             Ok((status, status_text, resp_body, resp_headers)) => {
                 let mut response = JsObject::new();

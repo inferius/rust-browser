@@ -68,15 +68,38 @@ console.log(greeting, result);
         let stylesheets = vec![browser::css_parser::parse_stylesheet(&css)];
 
         // Extract <script> obsah pro Sources panel
-        let script_src: Option<String> = document.root.get_elements_by_tag("script")
-            .iter().map(|s| s.text_content()).find(|s| !s.trim().is_empty());
+        let scripts: Vec<String> = document.root.get_elements_by_tag("script")
+            .iter().map(|s| s.text_content()).collect();
+        let script_src = scripts.iter().find(|s| !s.trim().is_empty()).cloned();
+
+        // Spust JS v interpreteru aby se zachytily console.log + fetch logy
+        let mut interp = interpreter::Interpreter::new();
+        interp.set_document(browser::html_parser::parse_html(&html, &html_path));
+        for src in &scripts {
+            if src.trim().is_empty() { continue; }
+            let lex = match lexer::base::Lexer::parse_str(src, "<script>") {
+                Ok(l) => l, Err(_) => continue,
+            };
+            let tokens: Vec<_> = lex.tokens.into_iter()
+                .filter(|t| !matches!(t.kind,
+                    tokens::TokenKind::Whitespace | tokens::TokenKind::Newline
+                    | tokens::TokenKind::CommentLine(_) | tokens::TokenKind::CommentBlock(_)))
+                .collect();
+            let mut parser = parser::Parser::new(tokens);
+            if let Ok(prog) = parser.parse() {
+                let _ = interp.run(&prog);
+            }
+        }
+
+        let console_log = interp.console_log.borrow().clone();
+        let network_log = interp.network_log.borrow().clone();
 
         let html_out = debug_view::devtools::generate_devtools_html(
             &document,
             &stylesheets,
             script_src.as_deref(),
-            &[],
-            &[],
+            &console_log,
+            &network_log,
         );
 
         let out_path = args.get(3).cloned().unwrap_or_else(|| "devtools.html".to_string());
@@ -85,6 +108,7 @@ console.log(greeting, result);
             return;
         }
         println!("DevTools HTML zapsan: {out_path}");
+        println!("Console logs: {}, Network calls: {}", console_log.len(), network_log.len());
         return;
     }
 

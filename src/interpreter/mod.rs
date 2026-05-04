@@ -645,6 +645,10 @@ pub struct Interpreter {
     pub event_callbacks: Rc<RefCell<HashMap<usize, JsValue>>>,
     /// Counter pro callback ID.
     pub next_callback_id: Rc<RefCell<usize>>,
+    /// Console log capture pro DevTools: (level, message).
+    pub console_log: Rc<RefCell<Vec<(String, String)>>>,
+    /// Network log capture: (url, status).
+    pub network_log: Rc<RefCell<Vec<(String, u16)>>>,
 }
 
 // ─── Pomocne funkce ──────────────────────────────────────────────────────────
@@ -663,7 +667,12 @@ impl Interpreter {
         let document = Rc::new(RefCell::new(
             crate::browser::dom::Document::new("about:blank".to_string())
         ));
-        setup_builtins(&global, &task_queue, &next_timer_id, &workers, &next_worker_id, &document);
+        let console_log: Rc<RefCell<Vec<(String, String)>>> = Rc::new(RefCell::new(Vec::new()));
+        let network_log: Rc<RefCell<Vec<(String, u16)>>> = Rc::new(RefCell::new(Vec::new()));
+        setup_builtins(
+            &global, &task_queue, &next_timer_id, &workers, &next_worker_id,
+            &document, &console_log, &network_log,
+        );
         Interpreter {
             global, yield_buffer: None, task_queue, next_timer_id,
             module_cache:    Rc::new(RefCell::new(HashMap::new())),
@@ -674,6 +683,8 @@ impl Interpreter {
             document,
             event_callbacks: Rc::new(RefCell::new(HashMap::new())),
             next_callback_id: Rc::new(RefCell::new(1)),
+            console_log,
+            network_log,
         }
     }
 
