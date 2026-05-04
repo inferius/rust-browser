@@ -32,3 +32,4 @@ mod batch_s_dom;
 mod misc;
 mod url_parts_tests;
 mod web_apis_tests;
+mod webgl_tests;

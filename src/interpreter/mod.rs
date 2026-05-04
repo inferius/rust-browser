@@ -5208,7 +5208,100 @@ impl Interpreter {
 
 
 /// WebGL context stub - vsechny methods no-op.
+/// WebGL state objekt - sdileny pres Rc<RefCell<>> mezi metodami.
+/// Phase 1: handle counters + state tracking. Phase 2: shader compile.
+/// Phase 3: real draw call emission.
+pub(crate) struct WebGLState {
+    pub next_id: u32,
+    /// Shaders: id -> (type, source, compiled_ok)
+    pub shaders: std::collections::HashMap<u32, WebGLShader>,
+    /// Programs: id -> (vertex_shader_id, fragment_shader_id, linked)
+    pub programs: std::collections::HashMap<u32, WebGLProgram>,
+    /// Buffers: id -> raw bytes
+    pub buffers: std::collections::HashMap<u32, Vec<u8>>,
+    /// Textures: id -> (width, height, rgba_bytes)
+    pub textures: std::collections::HashMap<u32, WebGLTexture>,
+    /// Currently bound state (per WebGL spec)
+    pub current_program: Option<u32>,
+    pub bound_array_buffer: Option<u32>,
+    pub bound_element_buffer: Option<u32>,
+    pub bound_texture_2d: Option<u32>,
+    pub clear_color: [f32; 4],
+    pub viewport_xywh: [i32; 4],
+    pub blend_enabled: bool,
+    pub depth_test_enabled: bool,
+    /// Draw call count (pro testovani + diagnostiku)
+    pub draw_call_count: u32,
+    pub last_error: u32,
+}
+
+pub(crate) struct WebGLShader {
+    pub shader_type: u32,
+    pub source: String,
+    pub compiled: bool,
+}
+
+pub(crate) struct WebGLProgram {
+    pub vertex_shader: Option<u32>,
+    pub fragment_shader: Option<u32>,
+    pub linked: bool,
+}
+
+pub(crate) struct WebGLTexture {
+    pub width: u32,
+    pub height: u32,
+    pub format: u32,
+    pub data: Vec<u8>,
+}
+
+impl WebGLState {
+    pub fn new() -> Self {
+        Self {
+            next_id: 1,
+            shaders: std::collections::HashMap::new(),
+            programs: std::collections::HashMap::new(),
+            buffers: std::collections::HashMap::new(),
+            textures: std::collections::HashMap::new(),
+            current_program: None,
+            bound_array_buffer: None,
+            bound_element_buffer: None,
+            bound_texture_2d: None,
+            clear_color: [0.0, 0.0, 0.0, 1.0],
+            viewport_xywh: [0, 0, 300, 150],
+            blend_enabled: false,
+            depth_test_enabled: false,
+            draw_call_count: 0,
+            last_error: 0,
+        }
+    }
+
+    pub fn alloc_id(&mut self) -> u32 {
+        let id = self.next_id;
+        self.next_id += 1;
+        id
+    }
+}
+
+/// Vyrobi WebGL handle objekt (buffer/texture/shader/program) s __webgl_id__.
+fn make_webgl_handle(id: u32, kind: &str) -> JsValue {
+    let obj = Rc::new(RefCell::new(JsObject::new()));
+    obj.borrow_mut().set("__webgl_id__".into(), JsValue::Number(id as f64));
+    obj.borrow_mut().set("__webgl_kind__".into(), JsValue::Str(kind.into()));
+    JsValue::Object(obj)
+}
+
+/// Vyextrahuje __webgl_id__ z handle objektu.
+fn webgl_id_from(value: &JsValue) -> Option<u32> {
+    if let JsValue::Object(o) = value {
+        if let Some(JsValue::Number(n)) = o.borrow().props.get("__webgl_id__") {
+            return Some(*n as u32);
+        }
+    }
+    None
+}
+
 fn create_webgl_stub_context() -> JsValue {
+    let state: Rc<RefCell<WebGLState>> = Rc::new(RefCell::new(WebGLState::new()));
     let obj_rc = Rc::new(RefCell::new(JsObject::new()));
     // Klicove WebGL constants (alespon tie nejcastejsi)
     let constants = [
@@ -5224,31 +5317,416 @@ fn create_webgl_stub_context() -> JsValue {
         ("UNSIGNED_BYTE", 0x1401),
         ("LINEAR", 0x2601), ("NEAREST", 0x2600),
         ("CLAMP_TO_EDGE", 0x812F), ("REPEAT", 0x2901),
+        ("COMPILE_STATUS", 0x8B81), ("LINK_STATUS", 0x8B82),
+        ("NO_ERROR", 0x0000),
+        ("SRC_ALPHA", 0x0302), ("ONE_MINUS_SRC_ALPHA", 0x0303), ("ONE", 0x0001), ("ZERO", 0x0000),
+        ("LESS", 0x0201), ("LEQUAL", 0x0203), ("ALWAYS", 0x0207),
+        ("CCW", 0x0901), ("CW", 0x0900),
+        ("BACK", 0x0405), ("FRONT", 0x0404),
+        ("TEXTURE_MIN_FILTER", 0x2801), ("TEXTURE_MAG_FILTER", 0x2800),
+        ("TEXTURE_WRAP_S", 0x2802), ("TEXTURE_WRAP_T", 0x2803),
     ];
     for (name, val) in &constants {
         obj_rc.borrow_mut().set(name.to_string(), JsValue::Number(*val as f64));
     }
-    // No-op methods - kazda return Undefined / Null
-    let methods = [
-        "clearColor", "clear", "viewport", "enable", "disable",
-        "createShader", "shaderSource", "compileShader", "deleteShader",
-        "createProgram", "attachShader", "linkProgram", "useProgram", "deleteProgram",
-        "getShaderParameter", "getProgramParameter",
-        "getAttribLocation", "getUniformLocation",
-        "createBuffer", "bindBuffer", "bufferData", "deleteBuffer",
-        "vertexAttribPointer", "enableVertexAttribArray",
-        "uniform1f", "uniform2f", "uniform3f", "uniform4f",
-        "uniform1i", "uniform2i", "uniform3i", "uniform4i",
-        "uniformMatrix2fv", "uniformMatrix3fv", "uniformMatrix4fv",
-        "drawArrays", "drawElements",
-        "createTexture", "bindTexture", "texImage2D", "texParameteri", "deleteTexture",
-        "blendFunc", "depthFunc", "cullFace", "frontFace",
-        "getError", "flush", "finish",
-    ];
-    for m in &methods {
+    // canvas property (minimal stub)
+    obj_rc.borrow_mut().set("drawingBufferWidth".into(), JsValue::Number(300.0));
+    obj_rc.borrow_mut().set("drawingBufferHeight".into(), JsValue::Number(150.0));
+
+    // ─── State setters ──────────────────────────────────────────────
+    {
+        let st = Rc::clone(&state);
+        obj_rc.borrow_mut().set("clearColor".into(), native("gl.clearColor", move |args| {
+            let mut it = args.into_iter();
+            let r = it.next().map(|v| v.to_number()).unwrap_or(0.0) as f32;
+            let g = it.next().map(|v| v.to_number()).unwrap_or(0.0) as f32;
+            let b = it.next().map(|v| v.to_number()).unwrap_or(0.0) as f32;
+            let a = it.next().map(|v| v.to_number()).unwrap_or(1.0) as f32;
+            st.borrow_mut().clear_color = [r, g, b, a];
+            Ok(JsValue::Undefined)
+        }));
+    }
+    {
+        let st = Rc::clone(&state);
+        obj_rc.borrow_mut().set("clear".into(), native("gl.clear", move |_| {
+            // Phase 1: jen zaznameni clear count + reset state markers.
+            st.borrow_mut().draw_call_count += 1;
+            Ok(JsValue::Undefined)
+        }));
+    }
+    {
+        let st = Rc::clone(&state);
+        obj_rc.borrow_mut().set("viewport".into(), native("gl.viewport", move |args| {
+            let mut it = args.into_iter();
+            let x = it.next().map(|v| v.to_number()).unwrap_or(0.0) as i32;
+            let y = it.next().map(|v| v.to_number()).unwrap_or(0.0) as i32;
+            let w = it.next().map(|v| v.to_number()).unwrap_or(0.0) as i32;
+            let h = it.next().map(|v| v.to_number()).unwrap_or(0.0) as i32;
+            st.borrow_mut().viewport_xywh = [x, y, w, h];
+            Ok(JsValue::Undefined)
+        }));
+    }
+    {
+        let st = Rc::clone(&state);
+        obj_rc.borrow_mut().set("enable".into(), native("gl.enable", move |args| {
+            let cap = args.into_iter().next().map(|v| v.to_number()).unwrap_or(0.0) as u32;
+            match cap {
+                0x0BE2 => st.borrow_mut().blend_enabled = true,
+                0x0B71 => st.borrow_mut().depth_test_enabled = true,
+                _ => {}
+            }
+            Ok(JsValue::Undefined)
+        }));
+    }
+    {
+        let st = Rc::clone(&state);
+        obj_rc.borrow_mut().set("disable".into(), native("gl.disable", move |args| {
+            let cap = args.into_iter().next().map(|v| v.to_number()).unwrap_or(0.0) as u32;
+            match cap {
+                0x0BE2 => st.borrow_mut().blend_enabled = false,
+                0x0B71 => st.borrow_mut().depth_test_enabled = false,
+                _ => {}
+            }
+            Ok(JsValue::Undefined)
+        }));
+    }
+
+    // ─── Shader management ───────────────────────────────────────────
+    {
+        let st = Rc::clone(&state);
+        obj_rc.borrow_mut().set("createShader".into(), native("gl.createShader", move |args| {
+            let stype = args.into_iter().next().map(|v| v.to_number()).unwrap_or(0.0) as u32;
+            let mut s = st.borrow_mut();
+            let id = s.alloc_id();
+            s.shaders.insert(id, WebGLShader { shader_type: stype, source: String::new(), compiled: false });
+            Ok(make_webgl_handle(id, "shader"))
+        }));
+    }
+    {
+        let st = Rc::clone(&state);
+        obj_rc.borrow_mut().set("shaderSource".into(), native("gl.shaderSource", move |args| {
+            let mut it = args.into_iter();
+            let id = it.next().and_then(|v| webgl_id_from(&v));
+            let src = it.next().map(|v| v.to_string()).unwrap_or_default();
+            if let Some(id) = id {
+                if let Some(sh) = st.borrow_mut().shaders.get_mut(&id) {
+                    sh.source = src;
+                }
+            }
+            Ok(JsValue::Undefined)
+        }));
+    }
+    {
+        let st = Rc::clone(&state);
+        obj_rc.borrow_mut().set("compileShader".into(), native("gl.compileShader", move |args| {
+            let id = args.into_iter().next().and_then(|v| webgl_id_from(&v));
+            if let Some(id) = id {
+                if let Some(sh) = st.borrow_mut().shaders.get_mut(&id) {
+                    // Phase 1: just mark compiled. Phase 2 udela real GLSL parse + naga.
+                    sh.compiled = !sh.source.is_empty();
+                }
+            }
+            Ok(JsValue::Undefined)
+        }));
+    }
+    {
+        let st = Rc::clone(&state);
+        obj_rc.borrow_mut().set("getShaderParameter".into(), native("gl.getShaderParameter", move |args| {
+            let mut it = args.into_iter();
+            let id = it.next().and_then(|v| webgl_id_from(&v));
+            let pname = it.next().map(|v| v.to_number()).unwrap_or(0.0) as u32;
+            if pname == 0x8B81 { // COMPILE_STATUS
+                if let Some(id) = id {
+                    if let Some(sh) = st.borrow().shaders.get(&id) {
+                        return Ok(JsValue::Bool(sh.compiled));
+                    }
+                }
+            }
+            Ok(JsValue::Bool(false))
+        }));
+    }
+    obj_rc.borrow_mut().set("getShaderInfoLog".into(), native("gl.getShaderInfoLog", |_| Ok(JsValue::Str(String::new()))));
+    {
+        let st = Rc::clone(&state);
+        obj_rc.borrow_mut().set("deleteShader".into(), native("gl.deleteShader", move |args| {
+            let id = args.into_iter().next().and_then(|v| webgl_id_from(&v));
+            if let Some(id) = id { st.borrow_mut().shaders.remove(&id); }
+            Ok(JsValue::Undefined)
+        }));
+    }
+
+    // ─── Program management ──────────────────────────────────────────
+    {
+        let st = Rc::clone(&state);
+        obj_rc.borrow_mut().set("createProgram".into(), native("gl.createProgram", move |_| {
+            let mut s = st.borrow_mut();
+            let id = s.alloc_id();
+            s.programs.insert(id, WebGLProgram { vertex_shader: None, fragment_shader: None, linked: false });
+            Ok(make_webgl_handle(id, "program"))
+        }));
+    }
+    {
+        let st = Rc::clone(&state);
+        obj_rc.borrow_mut().set("attachShader".into(), native("gl.attachShader", move |args| {
+            let mut it = args.into_iter();
+            let prog_id = it.next().and_then(|v| webgl_id_from(&v));
+            let sh_id = it.next().and_then(|v| webgl_id_from(&v));
+            if let (Some(pid), Some(sid)) = (prog_id, sh_id) {
+                let stype = st.borrow().shaders.get(&sid).map(|s| s.shader_type);
+                if let Some(prog) = st.borrow_mut().programs.get_mut(&pid) {
+                    match stype {
+                        Some(0x8B31) => prog.vertex_shader = Some(sid), // VERTEX_SHADER
+                        Some(0x8B30) => prog.fragment_shader = Some(sid), // FRAGMENT_SHADER
+                        _ => {}
+                    }
+                }
+            }
+            Ok(JsValue::Undefined)
+        }));
+    }
+    {
+        let st = Rc::clone(&state);
+        obj_rc.borrow_mut().set("linkProgram".into(), native("gl.linkProgram", move |args| {
+            let id = args.into_iter().next().and_then(|v| webgl_id_from(&v));
+            if let Some(id) = id {
+                if let Some(prog) = st.borrow_mut().programs.get_mut(&id) {
+                    prog.linked = prog.vertex_shader.is_some() && prog.fragment_shader.is_some();
+                }
+            }
+            Ok(JsValue::Undefined)
+        }));
+    }
+    {
+        let st = Rc::clone(&state);
+        obj_rc.borrow_mut().set("useProgram".into(), native("gl.useProgram", move |args| {
+            let id = args.into_iter().next().and_then(|v| webgl_id_from(&v));
+            st.borrow_mut().current_program = id;
+            Ok(JsValue::Undefined)
+        }));
+    }
+    {
+        let st = Rc::clone(&state);
+        obj_rc.borrow_mut().set("getProgramParameter".into(), native("gl.getProgramParameter", move |args| {
+            let mut it = args.into_iter();
+            let id = it.next().and_then(|v| webgl_id_from(&v));
+            let pname = it.next().map(|v| v.to_number()).unwrap_or(0.0) as u32;
+            if pname == 0x8B82 { // LINK_STATUS
+                if let Some(id) = id {
+                    if let Some(prog) = st.borrow().programs.get(&id) {
+                        return Ok(JsValue::Bool(prog.linked));
+                    }
+                }
+            }
+            Ok(JsValue::Bool(false))
+        }));
+    }
+    obj_rc.borrow_mut().set("getProgramInfoLog".into(), native("gl.getProgramInfoLog", |_| Ok(JsValue::Str(String::new()))));
+    {
+        let st = Rc::clone(&state);
+        obj_rc.borrow_mut().set("deleteProgram".into(), native("gl.deleteProgram", move |args| {
+            let id = args.into_iter().next().and_then(|v| webgl_id_from(&v));
+            if let Some(id) = id { st.borrow_mut().programs.remove(&id); }
+            Ok(JsValue::Undefined)
+        }));
+    }
+
+    // ─── Buffer management ───────────────────────────────────────────
+    {
+        let st = Rc::clone(&state);
+        obj_rc.borrow_mut().set("createBuffer".into(), native("gl.createBuffer", move |_| {
+            let mut s = st.borrow_mut();
+            let id = s.alloc_id();
+            s.buffers.insert(id, Vec::new());
+            Ok(make_webgl_handle(id, "buffer"))
+        }));
+    }
+    {
+        let st = Rc::clone(&state);
+        obj_rc.borrow_mut().set("bindBuffer".into(), native("gl.bindBuffer", move |args| {
+            let mut it = args.into_iter();
+            let target = it.next().map(|v| v.to_number()).unwrap_or(0.0) as u32;
+            let id = it.next().and_then(|v| webgl_id_from(&v));
+            let mut s = st.borrow_mut();
+            match target {
+                0x8892 => s.bound_array_buffer = id, // ARRAY_BUFFER
+                0x8893 => s.bound_element_buffer = id, // ELEMENT_ARRAY_BUFFER
+                _ => {}
+            }
+            Ok(JsValue::Undefined)
+        }));
+    }
+    {
+        let st = Rc::clone(&state);
+        obj_rc.borrow_mut().set("bufferData".into(), native("gl.bufferData", move |args| {
+            let mut it = args.into_iter();
+            let target = it.next().map(|v| v.to_number()).unwrap_or(0.0) as u32;
+            let data = it.next().unwrap_or(JsValue::Undefined);
+            let mut s = st.borrow_mut();
+            let bound_id = match target {
+                0x8892 => s.bound_array_buffer,
+                0x8893 => s.bound_element_buffer,
+                _ => None,
+            };
+            if let Some(id) = bound_id {
+                // data muze byt: number (size), Array (typed array values), nebo cele Float32Array
+                let bytes: Vec<u8> = match &data {
+                    JsValue::Array(arr) => {
+                        let arr = arr.borrow();
+                        let mut buf = Vec::with_capacity(arr.len() * 4);
+                        for v in arr.iter() {
+                            let f = v.to_number() as f32;
+                            buf.extend_from_slice(&f.to_le_bytes());
+                        }
+                        buf
+                    }
+                    JsValue::Number(n) => vec![0u8; *n as usize],
+                    _ => Vec::new(),
+                };
+                if let Some(b) = s.buffers.get_mut(&id) { *b = bytes; }
+            }
+            Ok(JsValue::Undefined)
+        }));
+    }
+    {
+        let st = Rc::clone(&state);
+        obj_rc.borrow_mut().set("deleteBuffer".into(), native("gl.deleteBuffer", move |args| {
+            let id = args.into_iter().next().and_then(|v| webgl_id_from(&v));
+            if let Some(id) = id { st.borrow_mut().buffers.remove(&id); }
+            Ok(JsValue::Undefined)
+        }));
+    }
+
+    // ─── Texture management ──────────────────────────────────────────
+    {
+        let st = Rc::clone(&state);
+        obj_rc.borrow_mut().set("createTexture".into(), native("gl.createTexture", move |_| {
+            let mut s = st.borrow_mut();
+            let id = s.alloc_id();
+            s.textures.insert(id, WebGLTexture { width: 0, height: 0, format: 0x1908, data: Vec::new() });
+            Ok(make_webgl_handle(id, "texture"))
+        }));
+    }
+    {
+        let st = Rc::clone(&state);
+        obj_rc.borrow_mut().set("bindTexture".into(), native("gl.bindTexture", move |args| {
+            let mut it = args.into_iter();
+            let target = it.next().map(|v| v.to_number()).unwrap_or(0.0) as u32;
+            let id = it.next().and_then(|v| webgl_id_from(&v));
+            if target == 0x0DE1 { // TEXTURE_2D
+                st.borrow_mut().bound_texture_2d = id;
+            }
+            Ok(JsValue::Undefined)
+        }));
+    }
+    obj_rc.borrow_mut().set("texImage2D".into(), native("gl.texImage2D", |_| Ok(JsValue::Undefined)));
+    obj_rc.borrow_mut().set("texParameteri".into(), native("gl.texParameteri", |_| Ok(JsValue::Undefined)));
+    {
+        let st = Rc::clone(&state);
+        obj_rc.borrow_mut().set("deleteTexture".into(), native("gl.deleteTexture", move |args| {
+            let id = args.into_iter().next().and_then(|v| webgl_id_from(&v));
+            if let Some(id) = id { st.borrow_mut().textures.remove(&id); }
+            Ok(JsValue::Undefined)
+        }));
+    }
+
+    // ─── Locations + uniforms (stub - vraci unique IDs) ──────────────
+    obj_rc.borrow_mut().set("getAttribLocation".into(), native("gl.getAttribLocation", |args| {
+        // Hash z prog_id + name -> stable id (positive, ne -1)
+        let mut it = args.into_iter();
+        let _prog = it.next();
+        let name = it.next().map(|v| v.to_string()).unwrap_or_default();
+        // Pseudo-stable ID podle name hash
+        let id = name.bytes().fold(0u32, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u32)) & 0xFF;
+        Ok(JsValue::Number(id as f64))
+    }));
+    obj_rc.borrow_mut().set("getUniformLocation".into(), native("gl.getUniformLocation", |args| {
+        let mut it = args.into_iter();
+        let _prog = it.next();
+        let name = it.next().map(|v| v.to_string()).unwrap_or_default();
+        let id = name.bytes().fold(0u32, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u32)) & 0xFF;
+        // Vrati objekt (WebGL spec - nekteri lib check `=== null`)
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        obj.borrow_mut().set("__webgl_uniform_id__".into(), JsValue::Number(id as f64));
+        obj.borrow_mut().set("__webgl_uniform_name__".into(), JsValue::Str(name));
+        Ok(JsValue::Object(obj))
+    }));
+
+    // ─── Vertex attribs + uniforms (no-op pro phase 1) ──────────────
+    for m in &["vertexAttribPointer", "enableVertexAttribArray", "disableVertexAttribArray",
+               "uniform1f", "uniform2f", "uniform3f", "uniform4f",
+               "uniform1i", "uniform2i", "uniform3i", "uniform4i",
+               "uniform1fv", "uniform2fv", "uniform3fv", "uniform4fv",
+               "uniformMatrix2fv", "uniformMatrix3fv", "uniformMatrix4fv",
+               "blendFunc", "blendFuncSeparate", "depthFunc", "cullFace", "frontFace",
+               "activeTexture", "pixelStorei", "flush", "finish",
+               "scissor", "stencilFunc", "stencilOp", "stencilMask",
+               "lineWidth", "polygonOffset", "depthMask", "colorMask"] {
         let name = m.to_string();
         obj_rc.borrow_mut().set(name.clone(), native(&name, |_| Ok(JsValue::Undefined)));
     }
+
+    // ─── Draw calls (incrementuje counter) ──────────────────────────
+    {
+        let st = Rc::clone(&state);
+        obj_rc.borrow_mut().set("drawArrays".into(), native("gl.drawArrays", move |_| {
+            st.borrow_mut().draw_call_count += 1;
+            Ok(JsValue::Undefined)
+        }));
+    }
+    {
+        let st = Rc::clone(&state);
+        obj_rc.borrow_mut().set("drawElements".into(), native("gl.drawElements", move |_| {
+            st.borrow_mut().draw_call_count += 1;
+            Ok(JsValue::Undefined)
+        }));
+    }
+
+    // ─── Diagnostic ──────────────────────────────────────────────────
+    {
+        let st = Rc::clone(&state);
+        obj_rc.borrow_mut().set("getError".into(), native("gl.getError", move |_| {
+            let err = st.borrow().last_error;
+            st.borrow_mut().last_error = 0;
+            Ok(JsValue::Number(err as f64))
+        }));
+    }
+    obj_rc.borrow_mut().set("getParameter".into(), native("gl.getParameter", |args| {
+        let pname = args.into_iter().next().map(|v| v.to_number()).unwrap_or(0.0) as u32;
+        // Klicove parametry pro lib detection
+        match pname {
+            0x1F00 => Ok(JsValue::Str("Mozilla".into())),  // VENDOR
+            0x1F01 => Ok(JsValue::Str("RustWebEngine WebGL".into())),  // RENDERER
+            0x1F02 => Ok(JsValue::Str("WebGL 1.0 (RustWebEngine)".into())),  // VERSION
+            0x8B8C => Ok(JsValue::Str("WebGL GLSL ES 1.0".into())),  // SHADING_LANGUAGE_VERSION
+            _ => Ok(JsValue::Number(0.0)),
+        }
+    }));
+    obj_rc.borrow_mut().set("getSupportedExtensions".into(), native("gl.getSupportedExtensions", |_| {
+        Ok(JsValue::Array(Rc::new(RefCell::new(Vec::new()))))
+    }));
+    obj_rc.borrow_mut().set("getExtension".into(), native("gl.getExtension", |_| Ok(JsValue::Null)));
+    obj_rc.borrow_mut().set("isContextLost".into(), native("gl.isContextLost", |_| Ok(JsValue::Bool(false))));
+
+    // Diagnostic accessor pro tests - drawCallCount
+    {
+        let st = Rc::clone(&state);
+        obj_rc.borrow_mut().set("__draw_call_count__".into(), native("gl.__draw_call_count__", move |_| {
+            Ok(JsValue::Number(st.borrow().draw_call_count as f64))
+        }));
+    }
+    {
+        let st = Rc::clone(&state);
+        obj_rc.borrow_mut().set("__clear_color__".into(), native("gl.__clear_color__", move |_| {
+            let cc = st.borrow().clear_color;
+            Ok(JsValue::Array(Rc::new(RefCell::new(vec![
+                JsValue::Number(cc[0] as f64),
+                JsValue::Number(cc[1] as f64),
+                JsValue::Number(cc[2] as f64),
+                JsValue::Number(cc[3] as f64),
+            ]))))
+        }));
+    }
+
     JsValue::Object(obj_rc)
 }
 
