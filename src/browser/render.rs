@@ -254,6 +254,9 @@ fn paint_canvas_ops(
                 let mut current_stroke: [u8; 4] = [0, 0, 0, 255];
                 let mut current_lw: f32 = 1.0;
                 let mut current_font_size: f32 = 14.0;
+                // Path state
+                let mut path_points: Vec<(f32, f32)> = Vec::new();
+                let mut path_arcs: Vec<(f32, f32, f32)> = Vec::new(); // (cx, cy, r)
                 let ox = bx.rect.x;
                 let oy = bx.rect.y;
                 for op in ops {
@@ -262,6 +265,87 @@ fn paint_canvas_ops(
                         CanvasOp::StrokeStyle(c) => current_stroke = *c,
                         CanvasOp::LineWidth(w) => current_lw = *w,
                         CanvasOp::Font { size, .. } => current_font_size = *size,
+                        CanvasOp::BeginPath => {
+                            path_points.clear();
+                            path_arcs.clear();
+                        }
+                        CanvasOp::MoveTo { x, y } | CanvasOp::LineTo { x, y } => {
+                            path_points.push((ox + *x, oy + *y));
+                        }
+                        CanvasOp::Arc { cx, cy, r, .. } => {
+                            path_arcs.push((ox + *cx, oy + *cy, *r));
+                        }
+                        CanvasOp::ClosePath => {
+                            if let (Some(first), Some(last)) = (path_points.first().copied(), path_points.last().copied()) {
+                                if first != last { path_points.push(first); }
+                            }
+                        }
+                        CanvasOp::Stroke => {
+                            // Pro path_points: kresli ax-aligned line segmenty (zjednoduseni)
+                            for w in path_points.windows(2) {
+                                let (x1, y1) = w[0];
+                                let (x2, y2) = w[1];
+                                if (y1 - y2).abs() < 0.5 {
+                                    cmds.push(super::paint::DisplayCommand::Rect {
+                                        x: x1.min(x2), y: y1 - current_lw / 2.0,
+                                        w: (x1 - x2).abs(), h: current_lw,
+                                        color: current_stroke, radius: 0.0,
+                                    });
+                                } else if (x1 - x2).abs() < 0.5 {
+                                    cmds.push(super::paint::DisplayCommand::Rect {
+                                        x: x1 - current_lw / 2.0, y: y1.min(y2),
+                                        w: current_lw, h: (y1 - y2).abs(),
+                                        color: current_stroke, radius: 0.0,
+                                    });
+                                } else {
+                                    // Diagonal - aproximace pres axis-aligned mensich segmentu
+                                    let dx = x2 - x1; let dy = y2 - y1;
+                                    let steps = ((dx.abs() + dy.abs()) / 2.0).max(1.0) as i32;
+                                    for i in 0..steps {
+                                        let t = i as f32 / steps as f32;
+                                        let x = x1 + dx * t;
+                                        let y = y1 + dy * t;
+                                        cmds.push(super::paint::DisplayCommand::Rect {
+                                            x: x - current_lw / 2.0, y: y - current_lw / 2.0,
+                                            w: current_lw, h: current_lw,
+                                            color: current_stroke, radius: 0.0,
+                                        });
+                                    }
+                                }
+                            }
+                            // Arcs jako rounded rect outline aproximace
+                            for (cx, cy, r) in &path_arcs {
+                                cmds.push(super::paint::DisplayCommand::Border {
+                                    x: cx - r, y: cy - r,
+                                    w: 2.0 * r, h: 2.0 * r,
+                                    width: current_lw, color: current_stroke,
+                                });
+                            }
+                        }
+                        CanvasOp::Fill => {
+                            // Fill: pro arc - emit rect s plnym radius
+                            for (cx, cy, r) in &path_arcs {
+                                cmds.push(super::paint::DisplayCommand::Rect {
+                                    x: cx - r, y: cy - r,
+                                    w: 2.0 * r, h: 2.0 * r,
+                                    color: current_fill, radius: *r,
+                                });
+                            }
+                            // Polygon fill: bounding box approx
+                            if path_points.len() >= 3 {
+                                let xs: Vec<f32> = path_points.iter().map(|p| p.0).collect();
+                                let ys: Vec<f32> = path_points.iter().map(|p| p.1).collect();
+                                let xmin = xs.iter().cloned().fold(f32::INFINITY, f32::min);
+                                let xmax = xs.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+                                let ymin = ys.iter().cloned().fold(f32::INFINITY, f32::min);
+                                let ymax = ys.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+                                cmds.push(super::paint::DisplayCommand::Rect {
+                                    x: xmin, y: ymin,
+                                    w: xmax - xmin, h: ymax - ymin,
+                                    color: current_fill, radius: 0.0,
+                                });
+                            }
+                        }
                         CanvasOp::FillRect { x, y, w, h } => {
                             cmds.push(DisplayCommand::Rect {
                                 x: ox + *x, y: oy + *y, w: *w, h: *h,

@@ -64,6 +64,20 @@ pub enum CanvasOp {
     ClearRect { x: f32, y: f32, w: f32, h: f32 },
     /// fillText(text, x, y)
     FillText { text: String, x: f32, y: f32 },
+    /// beginPath - reset path
+    BeginPath,
+    /// moveTo(x, y)
+    MoveTo { x: f32, y: f32 },
+    /// lineTo(x, y)
+    LineTo { x: f32, y: f32 },
+    /// arc(cx, cy, r, start_rad, end_rad)
+    Arc { cx: f32, cy: f32, r: f32, start: f32, end: f32 },
+    /// closePath - close current sub-path
+    ClosePath,
+    /// stroke - kresli path obrysem
+    Stroke,
+    /// fill - vyplni path
+    Fill,
 }
 
 /// Typ gradientu - linear / radial / conic.

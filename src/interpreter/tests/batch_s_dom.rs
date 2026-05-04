@@ -333,6 +333,26 @@ fn canvas_fill_style_setter() {
 }
 
 #[test]
+fn canvas_path_methods_no_throw() {
+    let v = run(r#"
+        const c = document.createElement("canvas");
+        const ctx = c.getContext("2d");
+        ctx.beginPath();
+        ctx.moveTo(10, 10);
+        ctx.lineTo(100, 100);
+        ctx.lineTo(100, 10);
+        ctx.closePath();
+        ctx.stroke();
+        ctx.fillStyle = "blue";
+        ctx.beginPath();
+        ctx.arc(50, 50, 30, 0, 6.28);
+        ctx.fill();
+        return "ok";
+    "#);
+    assert_eq!(as_str(v), "ok");
+}
+
+#[test]
 fn canvas_fill_rect_no_throw() {
     let v = run(r#"
         const c = document.createElement("canvas");

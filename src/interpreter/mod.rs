@@ -4773,7 +4773,7 @@ fn create_canvas_2d_context(
     }
     // fillText
     {
-        let push = push_op;
+        let push = push_op.clone();
         let obj_clone = Rc::clone(&obj_rc);
         obj_rc.borrow_mut().set("fillText".into(), native("fillText", move |args| {
             let mut it = args.into_iter();
@@ -4789,6 +4789,81 @@ fn create_canvas_2d_context(
             push(CanvasOp::FillStyle(color));
             push(CanvasOp::Font { size, family });
             push(CanvasOp::FillText { text, x, y });
+            Ok(JsValue::Undefined)
+        }));
+    }
+    // Path methods
+    {
+        let push = push_op.clone();
+        obj_rc.borrow_mut().set("beginPath".into(), native("beginPath", move |_| {
+            push(CanvasOp::BeginPath);
+            Ok(JsValue::Undefined)
+        }));
+    }
+    {
+        let push = push_op.clone();
+        obj_rc.borrow_mut().set("moveTo".into(), native("moveTo", move |args| {
+            let mut it = args.into_iter();
+            let x = it.next().map(|v| v.to_number()).unwrap_or(0.0) as f32;
+            let y = it.next().map(|v| v.to_number()).unwrap_or(0.0) as f32;
+            push(CanvasOp::MoveTo { x, y });
+            Ok(JsValue::Undefined)
+        }));
+    }
+    {
+        let push = push_op.clone();
+        obj_rc.borrow_mut().set("lineTo".into(), native("lineTo", move |args| {
+            let mut it = args.into_iter();
+            let x = it.next().map(|v| v.to_number()).unwrap_or(0.0) as f32;
+            let y = it.next().map(|v| v.to_number()).unwrap_or(0.0) as f32;
+            push(CanvasOp::LineTo { x, y });
+            Ok(JsValue::Undefined)
+        }));
+    }
+    {
+        let push = push_op.clone();
+        obj_rc.borrow_mut().set("arc".into(), native("arc", move |args| {
+            let mut it = args.into_iter();
+            let cx = it.next().map(|v| v.to_number()).unwrap_or(0.0) as f32;
+            let cy = it.next().map(|v| v.to_number()).unwrap_or(0.0) as f32;
+            let r = it.next().map(|v| v.to_number()).unwrap_or(0.0) as f32;
+            let start = it.next().map(|v| v.to_number()).unwrap_or(0.0) as f32;
+            let end = it.next().map(|v| v.to_number()).unwrap_or(0.0) as f32;
+            push(CanvasOp::Arc { cx, cy, r, start, end });
+            Ok(JsValue::Undefined)
+        }));
+    }
+    {
+        let push = push_op.clone();
+        obj_rc.borrow_mut().set("closePath".into(), native("closePath", move |_| {
+            push(CanvasOp::ClosePath);
+            Ok(JsValue::Undefined)
+        }));
+    }
+    {
+        let push = push_op.clone();
+        let obj_clone = Rc::clone(&obj_rc);
+        obj_rc.borrow_mut().set("stroke".into(), native("stroke", move |_| {
+            let style_str = obj_clone.borrow().props.get("strokeStyle")
+                .map(|v| v.to_string()).unwrap_or_else(|| "black".into());
+            let color = parse_color(&style_str).unwrap_or([0, 0, 0, 255]);
+            let lw = obj_clone.borrow().props.get("lineWidth")
+                .map(|v| v.to_number()).unwrap_or(1.0) as f32;
+            push(CanvasOp::StrokeStyle(color));
+            push(CanvasOp::LineWidth(lw));
+            push(CanvasOp::Stroke);
+            Ok(JsValue::Undefined)
+        }));
+    }
+    {
+        let push = push_op;
+        let obj_clone = Rc::clone(&obj_rc);
+        obj_rc.borrow_mut().set("fill".into(), native("fill", move |_| {
+            let style_str = obj_clone.borrow().props.get("fillStyle")
+                .map(|v| v.to_string()).unwrap_or_else(|| "black".into());
+            let color = parse_color(&style_str).unwrap_or([0, 0, 0, 255]);
+            push(CanvasOp::FillStyle(color));
+            push(CanvasOp::Fill);
             Ok(JsValue::Undefined)
         }));
     }
