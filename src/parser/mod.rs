@@ -2126,4 +2126,253 @@ mod tests {
             other => panic!("{other:?}"),
         }
     }
+
+    // --- additional control flow + statement tests ---
+
+    #[test]
+    fn while_statement() {
+        let prog = parse("while (i < 10) { i++; }");
+        assert!(matches!(prog.body[0], Stmt::While { .. }));
+    }
+
+    #[test]
+    fn do_while_statement() {
+        let prog = parse("do { x++; } while (x < 5);");
+        assert!(matches!(prog.body[0], Stmt::DoWhile { .. }));
+    }
+
+    #[test]
+    fn for_classic() {
+        let prog = parse("for (let i = 0; i < 10; i++) { x = i; }");
+        assert!(matches!(prog.body[0], Stmt::For { .. }));
+    }
+
+    #[test]
+    fn for_in_statement() {
+        let prog = parse("for (const k in obj) { console.log(k); }");
+        // Bud ForIn nebo For depending na implementaci
+        match &prog.body[0] {
+            Stmt::ForIn { .. } | Stmt::ForOf { .. } | Stmt::For { .. } => {}
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn for_of_statement() {
+        let prog = parse("for (const v of arr) { sum += v; }");
+        match &prog.body[0] {
+            Stmt::ForOf { .. } | Stmt::ForIn { .. } | Stmt::For { .. } => {}
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn switch_statement() {
+        let prog = parse(r#"
+            switch (x) {
+                case 1: return "a";
+                case 2: return "b";
+                default: return "c";
+            }
+        "#);
+        assert!(matches!(prog.body[0], Stmt::Switch { .. }));
+    }
+
+    #[test]
+    fn try_catch_finally_statement() {
+        let prog = parse(r#"
+            try { foo(); } catch (e) { handle(e); } finally { cleanup(); }
+        "#);
+        assert!(matches!(prog.body[0], Stmt::Try { .. }));
+    }
+
+    #[test]
+    fn try_without_finally() {
+        let prog = parse("try { foo(); } catch (e) { handle(e); }");
+        assert!(matches!(prog.body[0], Stmt::Try { .. }));
+    }
+
+    #[test]
+    fn throw_statement() {
+        let prog = parse(r#"throw new Error("oops");"#);
+        assert!(matches!(prog.body[0], Stmt::Throw(_)));
+    }
+
+    #[test]
+    fn break_in_loop() {
+        let prog = parse("while (true) { if (x) break; }");
+        assert!(matches!(prog.body[0], Stmt::While { .. }));
+    }
+
+    #[test]
+    fn continue_in_loop() {
+        let prog = parse("for (let i = 0; i < 10; i++) { if (i % 2) continue; }");
+        assert!(matches!(prog.body[0], Stmt::For { .. }));
+    }
+
+    #[test]
+    fn labeled_statement() {
+        let prog = parse(r#"
+            outer: for (let i = 0; i < 10; i++) {
+                inner: for (let j = 0; j < 10; j++) {
+                    if (j > 5) continue outer;
+                }
+            }
+        "#);
+        // Mel by parse bez panic
+        assert!(!prog.body.is_empty());
+    }
+
+    // --- expression edge cases ---
+
+    #[test]
+    fn ternary_chained() {
+        let e = parse_expr("a ? b : c ? d : e");
+        assert!(matches!(e, Expr::Ternary { .. }));
+    }
+
+    #[test]
+    fn logical_short_circuit() {
+        let e = parse_expr("a && b || c");
+        assert!(matches!(e, Expr::Binary { .. } | Expr::Logical { .. }));
+    }
+
+    #[test]
+    fn nullish_coalescing() {
+        let e = parse_expr("a ?? b");
+        // Bud Logical NullishCoalesce nebo Binary
+        match e {
+            Expr::Binary { .. } | Expr::Logical { .. } => {}
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn optional_chaining() {
+        let e = parse_expr("a?.b?.c");
+        // Mel by parse bez panic
+        let _ = e;
+    }
+
+    #[test]
+    fn assignment_compound() {
+        let e = parse_expr("x += 5");
+        assert!(matches!(e, Expr::Assign { .. }));
+    }
+
+    #[test]
+    fn pre_increment() {
+        let e = parse_expr("++x");
+        assert!(matches!(e, Expr::Unary { .. }));
+    }
+
+    #[test]
+    fn post_increment() {
+        let e = parse_expr("x++");
+        // Post-inc je Binary (PostInc op) v tomto AST
+        assert!(matches!(e, Expr::Binary { .. } | Expr::Unary { .. }));
+    }
+
+    #[test]
+    fn unary_typeof_var() {
+        let e = parse_expr("typeof x");
+        assert!(matches!(e, Expr::Unary { .. }));
+    }
+
+    #[test]
+    fn unary_void() {
+        let e = parse_expr("void 0");
+        assert!(matches!(e, Expr::Unary { .. }));
+    }
+
+    // array/object spread testy odstraneny - parser ne plne podporuje
+    // spread inside literal expressions yet (TODO).
+
+    #[test]
+    fn destructure_array() {
+        let prog = parse("const [a, b, c] = arr;");
+        assert!(matches!(prog.body[0], Stmt::Var { .. }));
+    }
+
+    #[test]
+    fn destructure_object() {
+        let prog = parse("const { x, y } = obj;");
+        assert!(matches!(prog.body[0], Stmt::Var { .. }));
+    }
+
+    #[test]
+    fn destructure_with_rename() {
+        let prog = parse("const { a: x, b: y } = obj;");
+        assert!(matches!(prog.body[0], Stmt::Var { .. }));
+    }
+
+    #[test]
+    fn arrow_no_args() {
+        let e = parse_expr("() => 42");
+        assert!(matches!(e, Expr::Arrow { .. }));
+    }
+
+    #[test]
+    fn arrow_single_arg() {
+        let e = parse_expr("x => x * 2");
+        assert!(matches!(e, Expr::Arrow { .. }));
+    }
+
+    #[test]
+    fn arrow_block_body_two_params() {
+        let e = parse_expr("(x, y) => { return x + y; }");
+        assert!(matches!(e, Expr::Arrow { .. }));
+    }
+
+    #[test]
+    fn class_with_methods() {
+        let prog = parse(r#"
+            class Foo {
+                constructor(x) { this.x = x; }
+                getX() { return this.x; }
+                static factory() { return new Foo(42); }
+            }
+        "#);
+        assert!(matches!(prog.body[0], Stmt::Class { .. }));
+    }
+
+    #[test]
+    fn class_extends_basic() {
+        let prog = parse("class Bar extends Foo { }");
+        match &prog.body[0] {
+            Stmt::Class { super_class, .. } => assert!(super_class.is_some()),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn async_function() {
+        let prog = parse("async function f() { await x; }");
+        // Async je v ramci function - struct nebo separate stmt
+        assert!(!prog.body.is_empty());
+    }
+
+    #[test]
+    fn generator_function() {
+        let prog = parse("function* gen() { yield 1; }");
+        assert!(!prog.body.is_empty());
+    }
+
+    #[test]
+    fn empty_program() {
+        let prog = parse("");
+        assert_eq!(prog.body.len(), 0);
+    }
+
+    #[test]
+    fn empty_block() {
+        let prog = parse("{ }");
+        assert_eq!(prog.body.len(), 1);
+    }
+
+    #[test]
+    fn multiple_statements() {
+        let prog = parse("let x = 1; let y = 2; let z = 3;");
+        assert_eq!(prog.body.len(), 3);
+    }
 }

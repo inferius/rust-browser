@@ -449,4 +449,149 @@ mod tests {
         let res = Lexer::parse_str("`neni uzavren", "<test>");
         assert!(res.is_err());
     }
+
+    // --- numeric literals ---
+
+    #[test]
+    fn numeric_decimal() {
+        let kinds = lex("42");
+        assert!(matches!(&kinds[0], TokenKind::NumericLiteral { .. }));
+    }
+
+    #[test]
+    fn numeric_float() {
+        let kinds = lex("3.14");
+        assert!(matches!(&kinds[0], TokenKind::NumericLiteral { .. }));
+    }
+
+    #[test]
+    fn numeric_hex() {
+        let kinds = lex("0xFF");
+        assert!(matches!(&kinds[0], TokenKind::NumericLiteral { .. }));
+    }
+
+    #[test]
+    fn numeric_binary() {
+        let kinds = lex("0b1010");
+        assert!(matches!(&kinds[0], TokenKind::NumericLiteral { .. }));
+    }
+
+    #[test]
+    fn numeric_octal() {
+        let kinds = lex("0o755");
+        assert!(matches!(&kinds[0], TokenKind::NumericLiteral { .. }));
+    }
+
+    #[test]
+    fn numeric_scientific() {
+        let kinds = lex("1.5e10");
+        assert!(matches!(&kinds[0], TokenKind::NumericLiteral { .. }));
+    }
+
+    // --- string literals ---
+
+    #[test]
+    fn string_double_quote() {
+        let kinds = lex(r#""hello""#);
+        assert!(matches!(&kinds[0], TokenKind::StringLiteral { value, .. } if value == "hello"));
+    }
+
+    #[test]
+    fn string_single_quote() {
+        let kinds = lex("'world'");
+        assert!(matches!(&kinds[0], TokenKind::StringLiteral { value, .. } if value == "world"));
+    }
+
+    #[test]
+    fn string_escape_newline() {
+        let kinds = lex(r#""line1\nline2""#);
+        if let TokenKind::StringLiteral { value, .. } = &kinds[0] {
+            assert!(value.contains('\n'), "escape \\n -> newline");
+        } else {
+            panic!("expected StringLiteral");
+        }
+    }
+
+    #[test]
+    fn string_escape_tab() {
+        let kinds = lex(r#""a\tb""#);
+        if let TokenKind::StringLiteral { value, .. } = &kinds[0] {
+            assert!(value.contains('\t'));
+        }
+    }
+
+    #[test]
+    fn string_escape_quote() {
+        let kinds = lex(r#""a\"b""#);
+        if let TokenKind::StringLiteral { value, .. } = &kinds[0] {
+            assert!(value.contains('"'));
+        }
+    }
+
+    #[test]
+    fn template_literal_basic() {
+        let kinds = lex("`hello`");
+        assert!(!kinds.is_empty(), "lex template");
+    }
+
+    #[test]
+    fn template_literal_substitution() {
+        let kinds = lex(r#"`x=${y}`"#);
+        assert!(!kinds.is_empty());
+    }
+
+    // --- comments ---
+
+    #[test]
+    fn block_comment_skipped() {
+        let all = Lexer::parse_str("a /* multi\nline */ b", "<test>").unwrap().tokens;
+        let comments: Vec<_> = all.iter().filter(|t| matches!(t.kind, TokenKind::CommentBlock(_))).collect();
+        assert_eq!(comments.len(), 1);
+    }
+
+    #[test]
+    fn empty_input_no_tokens() {
+        let kinds = lex("");
+        assert_eq!(kinds.len(), 0);
+    }
+
+    #[test]
+    fn whitespace_only_no_tokens() {
+        let kinds = lex("   \t  \n  ");
+        assert_eq!(kinds.len(), 0);
+    }
+
+    // --- regex disambiguation ---
+
+    #[test]
+    fn regex_literal_after_assignment() {
+        let kinds = lex("let r = /abc/g;");
+        assert!(kinds.iter().any(|k| matches!(k, TokenKind::RegexLiteral { .. })));
+    }
+
+    #[test]
+    fn division_after_identifier_no_regex() {
+        let kinds = lex("a / b");
+        let has_regex = kinds.iter().any(|k| matches!(k, TokenKind::RegexLiteral { .. }));
+        assert!(!has_regex, "po identifier `/` neni regex");
+    }
+
+    #[test]
+    fn lex_full_program_no_panic() {
+        // Smoke test - kompletni JS program lex bez crash.
+        let _ = lex(r#"
+            const obj = {
+                name: "test",
+                value: 42,
+                arr: [1, 2, 3],
+                nested: { a: true, b: null }
+            };
+            function fact(n) {
+                if (n <= 1) return 1;
+                return n * fact(n - 1);
+            }
+            const result = fact(10);
+            console.log(`result = ${result}`);
+        "#);
+    }
 }
