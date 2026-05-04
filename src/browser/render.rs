@@ -1236,6 +1236,10 @@ struct Renderer {
     font_registry: std::collections::HashMap<String, fontdue::Font>,
     /// Loaded font URLs (skip re-load).
     loaded_font_urls: std::collections::HashSet<String>,
+    /// Offscreen RT pro filter blur / view-transitions (RGBA8 viewport size).
+    /// Pripravene k 2-pass gauss + composit. Aktualne neaktivni.
+    offscreen_tex: wgpu::Texture,
+    offscreen_view: wgpu::TextureView,
 }
 
 impl Renderer {
@@ -1413,12 +1417,30 @@ impl Renderer {
 
         let image_atlas = ImageAtlas::new();
 
+        // Offscreen RT - viewport size, RGBA8UnormSrgb
+        let offscreen_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("offscreen_rt"),
+            size: wgpu::Extent3d {
+                width: config.width.max(1), height: config.height.max(1), depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let offscreen_view = offscreen_tex.create_view(&Default::default());
+
         Renderer {
             surface, device, queue, config, pipeline, uniform_buf,
             atlas_tex, atlas_view, atlas_smp, bind_group_layout, bind_group, atlas,
             image_atlas, image_tex, image_view,
             font_registry: std::collections::HashMap::new(),
             loaded_font_urls: std::collections::HashSet::new(),
+            offscreen_tex, offscreen_view,
         }
     }
 
@@ -1509,6 +1531,20 @@ impl Renderer {
         self.config.width = w;
         self.config.height = h;
         self.surface.configure(&self.device, &self.config);
+        // Recreate offscreen RT na novou velikost
+        self.offscreen_tex = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("offscreen_rt"),
+            size: wgpu::Extent3d { width: w.max(1), height: h.max(1), depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        self.offscreen_view = self.offscreen_tex.create_view(&Default::default());
     }
 
     fn upload_atlas(&self) {
