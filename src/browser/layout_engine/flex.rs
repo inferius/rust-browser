@@ -140,6 +140,14 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                     if matches!(gc.display, super::super::layout::Display::None) { continue; }
                     let mut gc_w = gc.explicit_width.unwrap_or(0.0);
                     let mut gc_h = gc.explicit_height.unwrap_or(0.0);
+                    // Text intrinsic v taffy_mode: 10/char.
+                    if gc.taffy_mode {
+                        if let Some(t) = &gc.text {
+                            let tw = t.chars().filter(|c| !matches!(*c, '\u{200B}' | ' ' | '\n' | '\t')).count() as f32 * 10.0;
+                            if gc_w == 0.0 { gc_w = tw; }
+                            if gc_h == 0.0 { gc_h = 10.0; }
+                        }
+                    }
                     // Pri grandchild bez explicit, recursive intrinsic (flex/grid recursive layout,
                     // block sum z ggchild).
                     if (gc_w == 0.0 || gc_h == 0.0) && !gc.children.is_empty() {
