@@ -619,6 +619,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                 let m_b_c = ch.margin_bottom.unwrap_or(ch.margin);
                 let self_str = ch.align_self.clone();
                 let self_align = if self_str.is_empty() || self_str == "auto" { align } else { parse_align_items(&self_str) };
+                let is_wrap_reverse = matches!(wrap, FlexWrap::WrapReverse);
                 if direction.is_row() {
                     if no_inset_x {
                         let free = (cb_w - ch.rect.width - m_l_c - m_r_c).max(0.0);
@@ -630,9 +631,19 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                         ch.rect.x = cb_x + m_l_c + off;
                     }
                     if no_inset_y {
-                        let use_align = if !ch.align_self.is_empty() && ch.align_self != "auto" { self_align } else { align };
+                        let mut use_align = if !ch.align_self.is_empty() && ch.align_self != "auto" { self_align } else { align };
+                        // Pro abs s explicit cross size, Stretch nedava smysl - default FlexStart.
+                        if matches!(use_align, AlignItems::Stretch) { use_align = AlignItems::FlexStart; }
                         let free = (cb_h - ch.rect.height - m_t_c - m_b_c).max(0.0);
-                        let off = match use_align {
+                        // Wrap-reverse flips cross start/end.
+                        let effective_align = if is_wrap_reverse {
+                            match use_align {
+                                AlignItems::FlexStart => AlignItems::FlexEnd,
+                                AlignItems::FlexEnd => AlignItems::FlexStart,
+                                a => a,
+                            }
+                        } else { use_align };
+                        let off = match effective_align {
                             AlignItems::FlexEnd => free,
                             AlignItems::Center => free / 2.0,
                             _ => 0.0,
@@ -650,9 +661,17 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                         ch.rect.y = cb_y + m_t_c + off;
                     }
                     if no_inset_x {
-                        let use_align = if !ch.align_self.is_empty() && ch.align_self != "auto" { self_align } else { align };
+                        let mut use_align = if !ch.align_self.is_empty() && ch.align_self != "auto" { self_align } else { align };
+                        if matches!(use_align, AlignItems::Stretch) { use_align = AlignItems::FlexStart; }
                         let free = (cb_w - ch.rect.width - m_l_c - m_r_c).max(0.0);
-                        let off = match use_align {
+                        let effective_align = if is_wrap_reverse {
+                            match use_align {
+                                AlignItems::FlexStart => AlignItems::FlexEnd,
+                                AlignItems::FlexEnd => AlignItems::FlexStart,
+                                a => a,
+                            }
+                        } else { use_align };
+                        let off = match effective_align {
                             AlignItems::FlexEnd => free,
                             AlignItems::Center => free / 2.0,
                             _ => 0.0,
