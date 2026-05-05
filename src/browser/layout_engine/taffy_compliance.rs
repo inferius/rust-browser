@@ -514,7 +514,7 @@ mod tests {
             100.0 * stats.pass as f32 / stats.total.max(1) as f32,
             stats.fail, stats.skip
         );
-        for (n, d) in stats.failed_examples.iter().take(3) {
+        for (n, d) in stats.failed_examples.iter().take(20) {
             println!("  FAIL {}: {}", n, d);
         }
         assert!(stats.total > 0);

@@ -379,7 +379,59 @@ pub fn layout_flex(bx: &mut LayoutBox) {
     let cb_h = (bx.rect.height - bw_t - bw_b).max(0.0);
     for ch in bx.children.iter_mut() {
         if super::is_out_of_flow(ch) {
+            // Pre-layout: pokud abs nema inset v dane ose, pouzij flex-container
+            // alignment (justify-content / align-items) pro static position.
             super::layout_absolute_child(ch, cb_x, cb_y, cb_w, cb_h);
+            // Override pri zadnem insetu: respektuj justify-content / align-items.
+            let no_inset_x = ch.offset_left.is_none() && ch.offset_right.is_none();
+            let no_inset_y = ch.offset_top.is_none() && ch.offset_bottom.is_none();
+            if no_inset_x || no_inset_y {
+                let m_l_c = ch.margin_left.unwrap_or(ch.margin);
+                let m_t_c = ch.margin_top.unwrap_or(ch.margin);
+                let m_r_c = ch.margin_right.unwrap_or(ch.margin);
+                let m_b_c = ch.margin_bottom.unwrap_or(ch.margin);
+                if direction.is_row() {
+                    if no_inset_x {
+                        // justify-content na main (x)
+                        let free = (cb_w - ch.rect.width - m_l_c - m_r_c).max(0.0);
+                        let off = match justify {
+                            JustifyContent::FlexEnd => free,
+                            JustifyContent::Center => free / 2.0,
+                            _ => 0.0,
+                        };
+                        ch.rect.x = cb_x + m_l_c + off;
+                    }
+                    if no_inset_y {
+                        let free = (cb_h - ch.rect.height - m_t_c - m_b_c).max(0.0);
+                        let off = match align {
+                            AlignItems::FlexEnd => free,
+                            AlignItems::Center => free / 2.0,
+                            _ => 0.0,
+                        };
+                        ch.rect.y = cb_y + m_t_c + off;
+                    }
+                } else {
+                    // column: justify ovlivnuje y, align ovlivnuje x
+                    if no_inset_y {
+                        let free = (cb_h - ch.rect.height - m_t_c - m_b_c).max(0.0);
+                        let off = match justify {
+                            JustifyContent::FlexEnd => free,
+                            JustifyContent::Center => free / 2.0,
+                            _ => 0.0,
+                        };
+                        ch.rect.y = cb_y + m_t_c + off;
+                    }
+                    if no_inset_x {
+                        let free = (cb_w - ch.rect.width - m_l_c - m_r_c).max(0.0);
+                        let off = match align {
+                            AlignItems::FlexEnd => free,
+                            AlignItems::Center => free / 2.0,
+                            _ => 0.0,
+                        };
+                        ch.rect.x = cb_x + m_l_c + off;
+                    }
+                }
+            }
         }
     }
 
