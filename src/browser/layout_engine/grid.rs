@@ -445,6 +445,19 @@ pub fn layout_grid(bx: &mut LayoutBox) {
             // CSS spec: pri grid-col-start ale no end, CB konci na border-box edge.
             let has_col_end = ch.grid_column_end > 0 || ch.grid_column_span > 0;
             let has_row_end = ch.grid_row_end > 0 || ch.grid_row_span > 0;
+            // Only end (no start): CB od border-edge do track end.
+            if ch.grid_column_start == 0 && ch.grid_column_end > 0 {
+                let c_idx = ((ch.grid_column_end - 1) as usize).min(cols.saturating_sub(1));
+                let track_end = inner_x + col_positions.get(c_idx).copied().unwrap_or(0.0);
+                ab_cb_x = bx.rect.x;
+                ab_cb_w = (track_end - bx.rect.x).max(0.0);
+            }
+            if ch.grid_row_start == 0 && ch.grid_row_end > 0 {
+                let r_idx = ((ch.grid_row_end - 1) as usize).min(rows.saturating_sub(1));
+                let track_end = inner_y + row_positions.get(r_idx).copied().unwrap_or(0.0);
+                ab_cb_y = bx.rect.y;
+                ab_cb_h = (track_end - bx.rect.y).max(0.0);
+            }
             if ch.grid_column_start > 0 {
                 let c_idx = ((ch.grid_column_start - 1) as usize).min(cols.saturating_sub(1));
                 let track_x = inner_x + col_positions.get(c_idx).copied().unwrap_or(0.0);
