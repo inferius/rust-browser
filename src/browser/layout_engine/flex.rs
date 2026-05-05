@@ -442,6 +442,15 @@ pub fn layout_flex(bx: &mut LayoutBox) {
     // 9. Recursive layout uvnitr child boxu (jen non-abs - abs uz layoutnut)
     for ch in bx.children.iter_mut() {
         if super::is_out_of_flow(ch) { continue; }
+        // Aplikuj relative position offset (top/left/bottom/right) na in-flow items.
+        let off_x = if let Some(l) = ch.offset_left { l }
+                    else if let Some(r) = ch.offset_right { -r }
+                    else { 0.0 };
+        let off_y = if let Some(t) = ch.offset_top { t }
+                    else if let Some(b) = ch.offset_bottom { -b }
+                    else { 0.0 };
+        ch.rect.x += off_x;
+        ch.rect.y += off_y;
         match ch.display {
             super::super::layout::Display::Flex => super::flex::layout_flex(ch),
             super::super::layout::Display::Grid => super::grid::layout_grid(ch),

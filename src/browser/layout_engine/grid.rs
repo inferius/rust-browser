@@ -212,6 +212,11 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         }};
         child.rect.x = inner_x + cx + m_l + off_x;
         child.rect.y = inner_y + cy + m_t + off_y;
+        // Relative position offset (top/left/bottom/right)
+        if let Some(l) = child.offset_left { child.rect.x += l; }
+        else if let Some(r) = child.offset_right { child.rect.x -= r; }
+        if let Some(t) = child.offset_top { child.rect.y += t; }
+        else if let Some(b) = child.offset_bottom { child.rect.y -= b; }
         child.rect.width = final_w;
         child.rect.height = final_h;
         // Dispatch podle child.display (block/flex/grid) - layout_block jen flowuje
