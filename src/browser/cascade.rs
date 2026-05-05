@@ -224,6 +224,9 @@ pub fn resolve_value(value: &str, variables: &HashMap<String, String>) -> String
         if out.contains("env(") {
             out = resolve_env(&out);
         }
+        if out.contains("if(") {
+            out = resolve_if_function(&out);
+        }
         if out.contains("min(") || out.contains("max(") || out.contains("clamp(")
             || out.contains("abs(") || out.contains("sign(") || out.contains("sqrt(")
             || out.contains("round(") || out.contains("floor(") || out.contains("ceil(")
@@ -240,6 +243,58 @@ pub fn resolve_value(value: &str, variables: &HashMap<String, String>) -> String
         if out == before { break; }
     }
     out
+}
+
+/// CSS Values L5 - if(<test>, <if-true>, <if-false>).
+/// Test je literal: true/false/yes/no/1/0. Pokud match -> if-true, jinak if-false.
+/// (Plna spec: test je media query / supports - to nas vyzaduje runtime kontext.
+/// Implementuju literal-only verzi.)
+fn resolve_if_function(s: &str) -> String {
+    let mut out = String::new();
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if i + 3 < bytes.len() && &bytes[i..i+3] == b"if(" {
+            let mut depth = 1i32; let mut j = i + 3;
+            while j < bytes.len() && depth > 0 {
+                match bytes[j] { b'(' => depth += 1, b')' => depth -= 1, _ => {} }
+                if depth == 0 { break; }
+                j += 1;
+            }
+            let inner = &s[i+3..j];
+            let parts = split_top_level_commas(inner);
+            if parts.len() >= 2 {
+                let test = parts[0].trim();
+                let truthy = matches!(test, "true" | "yes" | "1");
+                let result = if truthy { parts[1].trim() }
+                             else if parts.len() >= 3 { parts[2].trim() }
+                             else { "" };
+                out.push_str(result);
+            }
+            i = j + 1;
+        } else {
+            out.push(bytes[i] as char);
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Split top-level commas (respektuje zavorky).
+fn split_top_level_commas(s: &str) -> Vec<&str> {
+    let bytes = s.as_bytes();
+    let mut parts = Vec::new();
+    let mut depth = 0i32;
+    let mut start = 0usize;
+    for (i, &b) in bytes.iter().enumerate() {
+        match b { b'(' => depth += 1, b')' => depth -= 1, _ => {} }
+        if depth == 0 && b == b',' {
+            parts.push(&s[start..i]);
+            start = i + 1;
+        }
+    }
+    if start < bytes.len() { parts.push(&s[start..]); }
+    parts
 }
 
 /// env(safe-area-inset-top, fallback) - bez safe-area kontextu vrati fallback nebo 0px.

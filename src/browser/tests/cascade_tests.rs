@@ -1346,6 +1346,28 @@ fn pseudo_modal_dialog_with_attribute() {
 }
 
 #[test]
+fn css_if_function_true_branch() {
+    let doc = parse_html(r#"<html><body><div></div></body></html>"#, "");
+    let css = parse_stylesheet(":root { --enabled: true; } div { color: if(var(--enabled), red, blue); }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let styles = cascade::get_styles(&map, &div);
+    let c = styles.and_then(|s| s.get("color")).cloned().unwrap_or_default();
+    assert_eq!(c.trim(), "red", "if(true, red, blue) -> red");
+}
+
+#[test]
+fn css_if_function_false_branch() {
+    let doc = parse_html(r#"<html><body><div></div></body></html>"#, "");
+    let css = parse_stylesheet(":root { --enabled: false; } div { color: if(var(--enabled), red, blue); }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let styles = cascade::get_styles(&map, &div);
+    let c = styles.and_then(|s| s.get("color")).cloned().unwrap_or_default();
+    assert_eq!(c.trim(), "blue", "if(false, red, blue) -> blue");
+}
+
+#[test]
 fn pseudo_user_invalid_match() {
     let doc = parse_html(r#"<html><body><input type="email" required value="" data-user-invalid="true" /></body></html>"#, "");
     let css = parse_stylesheet("input:user-invalid { border-color: red; }");

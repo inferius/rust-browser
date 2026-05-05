@@ -36,6 +36,17 @@ pub struct Stylesheet {
     pub view_transition_navigation: Option<String>,
     /// @page rules - per-page declarations pro print.
     pub page_rules: Vec<Rule>,
+    /// @function --name(<args>) <returns> { ... } - user-defined CSS functions (Functions L1).
+    pub functions: Vec<CssFunction>,
+}
+
+/// CSS Functions L1 - user-defined function.
+#[derive(Debug, Clone, Default)]
+pub struct CssFunction {
+    pub name: String,
+    pub args: Vec<String>,
+    pub returns: String,
+    pub body: String,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -230,6 +241,98 @@ pub fn specificity(sel: &Selector) -> (u32, u32, u32) {
     (id_count, class_count, type_count)
 }
 
+/// CSS @supports condition evaluation (Conditional Rules L4).
+/// Podporuje: (prop: value), selector(...), font-tech(...), font-format(...),
+/// not (...), and / or operatory.
+pub fn evaluate_supports(condition: &str) -> bool {
+    let c = condition.trim();
+    // Cely condition v zavorkach -> unwrap
+    if let Some(inner) = strip_outer_parens(c) {
+        return evaluate_supports(inner);
+    }
+    // not <cond>
+    if let Some(rest) = c.strip_prefix("not ") {
+        return !evaluate_supports(rest.trim());
+    }
+    // and / or - hleda top-level operator
+    if let Some((left, right, is_and)) = split_supports_op(c) {
+        return if is_and {
+            evaluate_supports(left.trim()) && evaluate_supports(right.trim())
+        } else {
+            evaluate_supports(left.trim()) || evaluate_supports(right.trim())
+        };
+    }
+    // selector(<sel>) - zda umime parse selector. Aktualne assume yes.
+    if let Some(_inner) = c.strip_prefix("selector(").and_then(|s| s.strip_suffix(')')) {
+        return true;
+    }
+    // font-tech(<keyword>) - color-COLRv1, color-CBDT, ...
+    if let Some(inner) = c.strip_prefix("font-tech(").and_then(|s| s.strip_suffix(')')) {
+        let tech = inner.trim();
+        // Vetsina moderni: variations, palettes, color-COLRv1, features-aat, features-graphite
+        return matches!(tech,
+            "variations" | "palettes" | "color-COLRv0" | "color-COLRv1" |
+            "color-SVG" | "color-sbix" | "color-CBDT" |
+            "features-opentype" | "features-aat" | "features-graphite" |
+            "incremental"
+        );
+    }
+    // font-format(<keyword>) - opentype, woff2, woff, truetype, ...
+    if let Some(inner) = c.strip_prefix("font-format(").and_then(|s| s.strip_suffix(')')) {
+        let fmt = inner.trim().trim_matches('"').trim_matches('\'');
+        return matches!(fmt,
+            "opentype" | "truetype" | "woff" | "woff2" | "embedded-opentype" |
+            "svg" | "collection"
+        );
+    }
+    // (prop: value) - assume yes (vsechny props parsujem)
+    if let Some(inner) = c.strip_prefix('(').and_then(|s| s.strip_suffix(')')) {
+        if inner.contains(':') {
+            return true;
+        }
+    }
+    // Default - assume yes
+    true
+}
+
+fn strip_outer_parens(s: &str) -> Option<&str> {
+    let s = s.trim();
+    if !s.starts_with('(') || !s.ends_with(')') { return None; }
+    let bytes = s.as_bytes();
+    let mut depth = 0i32;
+    for (i, &b) in bytes.iter().enumerate() {
+        match b { b'(' => depth += 1, b')' => depth -= 1, _ => {} }
+        if depth == 0 && i < bytes.len() - 1 { return None; }
+    }
+    Some(&s[1..s.len()-1])
+}
+
+fn split_supports_op(s: &str) -> Option<(&str, &str, bool)> {
+    let bytes = s.as_bytes();
+    let mut depth = 0i32;
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'(' => depth += 1,
+            b')' => depth -= 1,
+            _ => {}
+        }
+        if depth == 0 {
+            // Hledame " and " nebo " or " na top-level
+            if i + 4 < bytes.len() && bytes[i] == b' '
+                && &bytes[i+1..i+4] == b"and" && bytes[i+4] == b' ' {
+                return Some((&s[..i], &s[i+5..], true));
+            }
+            if i + 3 < bytes.len() && bytes[i] == b' '
+                && &bytes[i+1..i+3] == b"or" && bytes[i+3] == b' ' {
+                return Some((&s[..i], &s[i+4..], false));
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
 /// Parsuje @scope header: "(root_sel) [to (limit_sel)]" -> (root, optional limit).
 pub fn parse_scope_header(header: &str) -> (String, Option<String>) {
     let h = header.trim();
@@ -279,6 +382,7 @@ pub fn parse_stylesheet(source: &str) -> Stylesheet {
     let mut counter_styles: Vec<CounterStyle> = Vec::new();
     let mut view_transition_navigation: Option<String> = None;
     let mut page_rules: Vec<Rule> = Vec::new();
+    let mut functions: Vec<CssFunction> = Vec::new();
     let mut chars = source.chars().peekable();
 
     while chars.peek().is_some() {
@@ -365,9 +469,14 @@ pub fn parse_stylesheet(source: &str) -> Stylesheet {
             let nested = parse_stylesheet(&block_str);
             layered_rules.push((layer_name, nested.rules));
         } else if selectors_str.starts_with("@supports") {
-            // @supports (prop: value) { rules } - aktualne assume vse podporujem
-            let nested = parse_stylesheet(&block_str);
-            rules.extend(nested.rules);
+            // @supports <condition> { rules }
+            // Conditions: (prop: value), selector(...), font-tech(...), font-format(...),
+            //             not (...), (...) and (...), (...) or (...).
+            let condition = selectors_str.trim_start_matches("@supports").trim();
+            if evaluate_supports(condition) {
+                let nested = parse_stylesheet(&block_str);
+                rules.extend(nested.rules);
+            }
         } else if selectors_str.starts_with("@scope") {
             // @scope (root_selector) [to (limit_selector)] { rules }
             let header = selectors_str.trim_start_matches("@scope").trim();
@@ -440,6 +549,25 @@ pub fn parse_stylesheet(source: &str) -> Stylesheet {
                 selectors: vec![],
                 declarations: decls,
             });
+        } else if selectors_str.starts_with("@function") {
+            // @function --name(<arg1>, <arg2>) returns <type> { result: <expr>; }
+            let header = selectors_str.trim_start_matches("@function").trim();
+            let mut func = CssFunction::default();
+            // Parse name(args) returns Type
+            if let Some(open) = header.find('(') {
+                func.name = header[..open].trim().to_string();
+                if let Some(close) = header[open..].find(')') {
+                    let args_str = &header[open+1..open+close];
+                    func.args = args_str.split(',').map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty()).collect();
+                    let after = &header[open+close+1..].trim();
+                    if let Some(rest) = after.strip_prefix("returns") {
+                        func.returns = rest.trim().to_string();
+                    }
+                }
+            }
+            func.body = block_str.clone();
+            functions.push(func);
         } else if selectors_str.starts_with("@font-feature-values") {
             // @font-feature-values FontName { @styleset {} ... } - parse only
             let _ = block_str;
@@ -490,6 +618,7 @@ pub fn parse_stylesheet(source: &str) -> Stylesheet {
         layer_order, layered_rules, registered_properties,
         scopes, starting_style_rules,
         font_palettes, counter_styles, view_transition_navigation, page_rules,
+        functions,
     }
 }
 

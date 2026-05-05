@@ -437,6 +437,42 @@ fn transition_behavior_allow_discrete() {
 }
 
 #[test]
+fn animation_range_extras() {
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade, layout};
+    let doc = parse_html(r#"<html><body><div></div></body></html>"#, "");
+    let css = parse_stylesheet("div { animation-range-start: entry 50%; animation-range-end: exit 0%; timeline-scope: --my; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+    let d = find_box_by_tag(&root, "div").unwrap();
+    assert_eq!(d.animation_range_start, "entry 50%");
+    assert_eq!(d.animation_range_end, "exit 0%");
+    assert_eq!(d.timeline_scope, "--my");
+}
+
+#[test]
+fn scroll_marker_group_parsed() {
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade, layout};
+    let doc = parse_html(r#"<html><body><div></div></body></html>"#, "");
+    let css = parse_stylesheet("div { scroll-marker-group: after; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+    let d = find_box_by_tag(&root, "div").unwrap();
+    assert_eq!(d.scroll_marker_group, "after");
+}
+
+#[test]
+fn contain_intrinsic_size_axes() {
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade, layout};
+    let doc = parse_html(r#"<html><body><div></div></body></html>"#, "");
+    let css = parse_stylesheet("div { contain-intrinsic-block-size: 200px; contain-intrinsic-inline-size: 300px; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+    let d = find_box_by_tag(&root, "div").unwrap();
+    assert!((d.contain_intrinsic_block_size - 200.0).abs() < 0.1);
+    assert!((d.contain_intrinsic_inline_size - 300.0).abs() < 0.1);
+}
+
+#[test]
 fn parse_color_modern_rgb_space_syntax() {
     // Modern syntax: mezery + lomitko alpha
     assert_eq!(layout::parse_color("rgb(255 0 0)"), Some([255, 0, 0, 255]));

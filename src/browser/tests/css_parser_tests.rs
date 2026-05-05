@@ -452,3 +452,77 @@ fn parse_at_page_basic() {
     assert_eq!(s.page_rules.len(), 1);
     assert!(s.page_rules[0].declarations.iter().any(|d| d.property == "margin"));
 }
+
+#[test]
+fn supports_property_value_yes() {
+    use crate::browser::css_parser::evaluate_supports;
+    assert!(evaluate_supports("(display: flex)"));
+    assert!(evaluate_supports("(color: red)"));
+}
+
+#[test]
+fn supports_selector_function() {
+    use crate::browser::css_parser::evaluate_supports;
+    assert!(evaluate_supports("selector(:has(p))"));
+}
+
+#[test]
+fn supports_font_tech() {
+    use crate::browser::css_parser::evaluate_supports;
+    assert!(evaluate_supports("font-tech(color-COLRv1)"));
+    assert!(evaluate_supports("font-tech(palettes)"));
+    assert!(!evaluate_supports("font-tech(unknown-tech)"));
+}
+
+#[test]
+fn supports_font_format() {
+    use crate::browser::css_parser::evaluate_supports;
+    assert!(evaluate_supports("font-format(woff2)"));
+    assert!(evaluate_supports("font-format(\"opentype\")"));
+    assert!(!evaluate_supports("font-format(notreal)"));
+}
+
+#[test]
+fn supports_not_operator() {
+    use crate::browser::css_parser::evaluate_supports;
+    assert!(!evaluate_supports("not (display: flex)"));
+    assert!(evaluate_supports("not font-format(notreal)"));
+}
+
+#[test]
+fn supports_and_or() {
+    use crate::browser::css_parser::evaluate_supports;
+    assert!(evaluate_supports("(display: flex) and (color: red)"));
+    assert!(evaluate_supports("(display: flex) or font-format(notreal)"));
+    assert!(!evaluate_supports("(display: flex) and font-format(notreal)"));
+}
+
+#[test]
+fn parse_at_function_basic() {
+    let s = parse_stylesheet(
+        "@function --double(x) returns <length> { result: calc(var(--x) * 2); }"
+    );
+    assert_eq!(s.functions.len(), 1);
+    let f = &s.functions[0];
+    assert_eq!(f.name, "--double");
+    assert_eq!(f.args.len(), 1);
+    assert_eq!(f.args[0], "x");
+    assert_eq!(f.returns, "<length>");
+    assert!(f.body.contains("result"));
+}
+
+#[test]
+fn supports_block_skipped_when_unsupported() {
+    let s = parse_stylesheet(
+        "@supports font-tech(unknown) { p { color: red; } } \
+         p { color: blue; }"
+    );
+    // p { color: blue } only - red rule skipped
+    let p_rules: Vec<_> = s.rules.iter().filter(|r|
+        r.selectors.iter().any(|sel| sel.parts.iter().any(|p| p.tag.as_deref() == Some("p")))
+    ).collect();
+    let red_count = p_rules.iter().filter(|r|
+        r.declarations.iter().any(|d| d.property == "color" && d.value.trim() == "red")
+    ).count();
+    assert_eq!(red_count, 0, "@supports unknown skipped");
+}

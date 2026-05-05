@@ -496,6 +496,17 @@ pub struct LayoutBox {
     pub color_interpolation: String,
     /// CSS Lists L3 - lazy lookup pres animation-name pak counter manipulation
     pub lazy_counters: String,
+    /// CSS Scroll-Driven Animations L1 (extras nad existujici impl)
+    pub timeline_scope: String,
+    pub animation_range_start: String,
+    pub animation_range_end: String,
+    /// CSS Carousels - scroll-marker / scroll-button
+    pub scroll_marker_group: String,
+    /// CSS Filter Effects L2 - filter alternative names.
+    pub backdrop_filter_string: String,
+    /// CSS Containment L2 - contain-intrinsic-block-size / contain-intrinsic-inline-size.
+    pub contain_intrinsic_block_size: f32,
+    pub contain_intrinsic_inline_size: f32,
     /// Box shadow: (offset_x, offset_y, blur, spread, color)
     /// (offset_x, offset_y, blur, spread, color, inset)
     pub box_shadow: Option<(f32, f32, f32, f32, [u8; 4], bool)>,
@@ -730,6 +741,13 @@ impl LayoutBox {
             animation_composition: String::new(),
             color_interpolation: String::new(),
             lazy_counters: String::new(),
+            timeline_scope: String::new(),
+            animation_range_start: String::new(),
+            animation_range_end: String::new(),
+            scroll_marker_group: String::new(),
+            backdrop_filter_string: String::new(),
+            contain_intrinsic_block_size: 0.0,
+            contain_intrinsic_inline_size: 0.0,
             box_shadow: None,
             transform: None,
             transforms: Vec::new(),
@@ -1307,6 +1325,17 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(tb) = s.get("transition-behavior") { bx.transition_behavior = tb.trim().to_string(); }
     if let Some(ac) = s.get("animation-composition") { bx.animation_composition = ac.trim().to_string(); }
     if let Some(ci) = s.get("color-interpolation") { bx.color_interpolation = ci.trim().to_string(); }
+    // CSS Scroll-Driven Animations L1 extras
+    if let Some(v) = s.get("timeline-scope") { bx.timeline_scope = v.trim().to_string(); }
+    if let Some(v) = s.get("animation-range-start") { bx.animation_range_start = v.trim().to_string(); }
+    if let Some(v) = s.get("animation-range-end") { bx.animation_range_end = v.trim().to_string(); }
+    // CSS Carousels (Scroll Driven Animations + scroll-marker)
+    if let Some(v) = s.get("scroll-marker-group") { bx.scroll_marker_group = v.trim().to_string(); }
+    // CSS Filters L2 backdrop-filter raw string (parsovan jinde do filter ops)
+    if let Some(v) = s.get("backdrop-filter") { bx.backdrop_filter_string = v.trim().to_string(); }
+    // CSS Containment intrinsic sizes
+    if let Some(v) = s.get("contain-intrinsic-block-size") { bx.contain_intrinsic_block_size = parse_length(v); }
+    if let Some(v) = s.get("contain-intrinsic-inline-size") { bx.contain_intrinsic_inline_size = parse_length(v); }
     // inset shorthand: top right bottom left
     if let Some(ins) = s.get("inset") {
         let parts: Vec<&str> = ins.split_whitespace().collect();
