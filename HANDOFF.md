@@ -5,8 +5,9 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 ## Stav
 
 - Build: **OK**, 0 errors, 0 warnings.
-- Tests: **2009 passed, 0 failed, 3 ignored**.
-- Posledni commit: `09c1831 DataView extras + Subgrid skip`.
+- Tests: **2021 passed, 0 failed, 3 ignored**.
+- Posledni commit: `<vlastni layout_engine - taffy ODSTRANEN>`.
+- **Layout engine pod nasi kontrolou** - vlastni flex/grid v `src/browser/layout_engine/`.
 - Tree: ciste.
 - Branch master, ~290 commitu pred origin/master (NEPUSHOVAT bez vyzvy).
 - **WebGL pipeline DOKONCEN** + **CSS L4-L6 KOMPLET** + **JS DOM kompletni**:
