@@ -242,6 +242,9 @@ mod tests {
                 }
                 "grid-template-columns" => bx.grid_template_columns = v.clone(),
                 "grid-template-rows" => bx.grid_template_rows = v.clone(),
+                "grid-auto-columns" => bx.grid_auto_columns = v.clone(),
+                "grid-auto-rows" => bx.grid_auto_rows = v.clone(),
+                "grid-auto-flow" => bx.grid_auto_flow = v.clone(),
                 "padding" => bx.padding = parse_dim(v, container_w).unwrap_or(0.0),
                 "margin" => bx.margin = parse_dim(v, container_w).unwrap_or(0.0),
                 "position" => {

@@ -94,20 +94,36 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         }
         out
     };
-    // Implicitni rows: pokud potreba vic nez explicit, doplnit z child explicit_height (jinak 0).
+    // Grid-auto-rows: tokens pro implicit rows (cycle, default Auto).
+    let auto_row_tokens: Vec<Track> = if !bx.grid_auto_rows.is_empty() {
+        parse_track_tokens_sized(&bx.grid_auto_rows, inner_h, row_gap)
+    } else { Vec::new() };
+    let auto_row_resolved: Vec<f32> = if !bx.grid_auto_rows.is_empty() {
+        resolve_tracks(&bx.grid_auto_rows, inner_h, row_gap)
+    } else { Vec::new() };
+    // Implicitni rows: pokud potreba vic nez explicit, doplnit z grid-auto-rows cycle.
     while row_tracks.len() < rows {
         let r = row_tracks.len();
-        let mut h = 0.0_f32;
-        for c in 0..cols {
-            let idx = r * cols + c;
-            if let Some(child) = bx.children.get(idx) {
-                if let Some(eh) = child.explicit_height {
-                    h = h.max(eh);
+        // Pri grid-auto-rows nastav cyklem (delete zde row-from-children fallback).
+        let auto_h = if !auto_row_resolved.is_empty() {
+            let explicit_count = if !rows_explicit_str.is_empty() { parse_track_count(&rows_explicit_str) } else { 0 };
+            let implicit_idx = r.saturating_sub(explicit_count);
+            auto_row_resolved[implicit_idx % auto_row_resolved.len()]
+        } else {
+            let mut h = 0.0_f32;
+            for c in 0..cols {
+                let idx = r * cols + c;
+                if let Some(child) = bx.children.get(idx) {
+                    if let Some(eh) = child.explicit_height {
+                        h = h.max(eh);
+                    }
                 }
             }
-        }
-        row_tracks.push(h);
+            h
+        };
+        row_tracks.push(auto_h);
     }
+    let _ = auto_row_tokens;
 
     // In-flow indices (skip abs/fixed + display:none)
     let in_flow: Vec<usize> = bx.children.iter().enumerate()
