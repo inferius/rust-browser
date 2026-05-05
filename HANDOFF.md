@@ -5,8 +5,8 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 ## Stav
 
 - Build: **OK**, 0 errors, 0 warnings.
-- Tests: **1814 passed, 0 failed, 3 ignored**.
-- Posledni commit: `ce7747d Canvas 2D API rozsireni`.
+- Tests: **1827 passed, 0 failed, 3 ignored**.
+- Posledni commit: `6c4b69b SVG support + radial/conic/inset shadow tests`.
 - Tree: ciste.
 - Branch master, ~290 commitu pred origin/master (NEPUSHOVAT bez vyzvy).
 - **WebGL pipeline DOKONCEN** + **CSS L4-L6 KOMPLET** + **JS DOM kompletni**:
@@ -25,6 +25,11 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
     setLineDash/getLineDash + drawImage (3/5/9-arg) + createLinearGradient/
     createRadialGradient s addColorStop + createImageData/getImageData/putImageData +
     isPointInPath/isPointInStroke. CanvasOp enum + render paint_canvas_ops update.
+  - SVG support kompletni: rect/circle/ellipse/line/text + polygon/polyline/path/g.
+    parse_svg_path s M/L/H/V/Z/C/Q (relative + absolute), Bezier endpoint emit,
+    group recursion. parse_svg_points helper.
+  - Gradient render: radial (mode 6) + conic (mode 7) + linear (mode 2) WGSL.
+    Inset box-shadow (mode 5) full SDF impl.
 
 ## Test runner
 
