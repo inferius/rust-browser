@@ -5,8 +5,8 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 ## Stav
 
 - Build: **OK**, 0 errors, 0 warnings.
-- Tests: **1909 passed, 0 failed, 3 ignored**.
-- Posledni commit: `a093bc5 Web Streams + Compression + Cookie Store + Typed Arrays`.
+- Tests: **1953 passed, 0 failed, 3 ignored**.
+- Posledni commit: `992cfdb DOMException + ImageData + OffscreenCanvas + Path2D`.
 - Tree: ciste.
 - Branch master, ~290 commitu pred origin/master (NEPUSHOVAT bez vyzvy).
 - **WebGL pipeline DOKONCEN** + **CSS L4-L6 KOMPLET** + **JS DOM kompletni**:
@@ -76,6 +76,26 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
   - Cookie Store API real: get/set/delete/getAll s in-memory storage.
   - Typed Arrays kompletni: Uint8/Int8/Uint8Clamped/Uint16/Int16/Uint32/Int32/
     Float32/Float64/BigInt64/BigUint64 s BYTES_PER_ELEMENT + byteLength.
+  - HTML form elements: HTMLProgressElement (value/max/position),
+    HTMLMeterElement (value/min/max/low/high/optimum), HTMLDataListElement.options,
+    HTMLSelectElement.selectedIndex, HTMLAnchorElement.relList, Element.popover.
+  - Popover API: showPopover/hidePopover/togglePopover.
+  - Atomics extras: wait/waitAsync/notify/pause/isLockFree/load/store/exchange/
+    and/or/xor (real impl s SharedArrayBuffer __bytes__).
+  - URL.canParse / URL.parse (ES2024+).
+  - TextDecoder s {fatal, ignoreBOM} options + accepts ArrayBuffer.
+  - TextEncoderStream / TextDecoderStream stubs.
+  - Performance API real: mark/measure entries (HashMap + Vec), getEntries/
+    getEntriesByType/getEntriesByName, clearMarks/clearMeasures s name filter.
+  - FormData real: append/set/get/getAll/has/delete/keys/values/entries iterators.
+  - Headers (Fetch API): get/set/append (combine ", ")/has/delete/entries case-insens.
+  - Request constructor: url/method/body/cache/credentials/mode/redirect/referrer.
+  - DOM Geometry: DOMRect/DOMRectReadOnly/DOMPoint/DOMPointReadOnly/DOMMatrix/
+    DOMMatrixReadOnly/DOMQuad s a..f / m11..m44 / multiply/inverse/translate/scale.
+  - Console extras: trace/table/group/groupCollapsed/groupEnd/time/timeEnd/timeLog/
+    count/countReset/assert/dir/dirxml/clear/profile/timeStamp s real timer + counter state.
+  - DOMException: name/message/code mapping (NotFoundError=8, QuotaExceededError=22, atd.).
+  - ImageData/OffscreenCanvas/createImageBitmap/Path2D constructors.
 
 ## Test runner
 
