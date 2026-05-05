@@ -56,6 +56,10 @@ pub enum JustifyContent {
     SpaceBetween,
     SpaceAround,
     SpaceEvenly,
+    /// Box Alignment "start" - pack at start of writing-mode (NOT flex-direction).
+    Start,
+    /// Box Alignment "end" - pack at end of writing-mode.
+    End,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -370,22 +374,15 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         } else {
             Box::new(line_indices.iter().enumerate())
         };
-        // Pri reverse, posuneme start_main aby items skoncily na konci main axis.
+        // Pri reverse direction, FlexStart/FlexEnd flipnou polohu (main-axis reverse).
+        // Start/End jsou writing-mode aware (NEZmeni se v reverse).
         if direction.is_reverse() {
-            start_main = (container_main - used_main - effective_free).max(0.0) + free_main;
-            // Vlastne: items v reverse iter postupne klesaji od start_main + total_used.
-            // Jednodussi: posunout start na (container_main - total_used).
-            start_main = container_main - used_main + effective_free - free_main;
-            // Hmm, drz original justify pak overlay bottom-pack.
-            start_main = container_main - used_main + (compute_justify_offsets(justify, effective_free, resolved.main_sizes.len(), main_gap).0);
-            // Simplest: pri reverse, uchylne zacit od konce.
-            start_main = container_main - used_main - between_main * resolved.main_sizes.len().saturating_sub(1) as f32 - effective_free;
-            if matches!(justify, JustifyContent::FlexStart) {
-                start_main = container_main - used_main;
-            } else if matches!(justify, JustifyContent::FlexEnd) {
-                start_main = 0.0;
-            } else {
-                start_main = compute_justify_offsets(justify, effective_free, resolved.main_sizes.len(), main_gap).0;
+            match justify {
+                JustifyContent::FlexStart => { start_main = container_main - used_main; }
+                JustifyContent::FlexEnd => { start_main = 0.0; }
+                JustifyContent::Start => { start_main = 0.0; }
+                JustifyContent::End => { start_main = container_main - used_main; }
+                _ => { /* center/space-* zustanou */ }
             }
         }
 
@@ -783,8 +780,8 @@ fn compute_justify_offsets(justify: JustifyContent, free: f32, count: usize, gap
     // Pri negativni free fallback na start (CSS spec pro space-* a center mimo overflow-position).
     let neg = free < 0.0;
     match justify {
-        JustifyContent::FlexStart => (0.0, 0.0),
-        JustifyContent::FlexEnd => (free, 0.0),
+        JustifyContent::FlexStart | JustifyContent::Start => (0.0, 0.0),
+        JustifyContent::FlexEnd | JustifyContent::End => (free, 0.0),
         JustifyContent::Center => (free / 2.0, 0.0),
         JustifyContent::SpaceBetween => {
             if neg || count == 1 { (0.0, 0.0) }
@@ -828,7 +825,9 @@ fn parse_flex_wrap(s: &str) -> FlexWrap {
 
 fn parse_justify_content(s: &str) -> JustifyContent {
     match s {
-        "flex-end" | "end" => JustifyContent::FlexEnd,
+        "flex-end" => JustifyContent::FlexEnd,
+        "end" => JustifyContent::End,
+        "start" => JustifyContent::Start,
         "center" => JustifyContent::Center,
         "space-between" => JustifyContent::SpaceBetween,
         "space-around" => JustifyContent::SpaceAround,
