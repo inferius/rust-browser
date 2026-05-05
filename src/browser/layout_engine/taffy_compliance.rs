@@ -270,8 +270,8 @@ mod tests {
             let path = entry.path();
             if path.extension().is_none_or(|ext| ext != "xml") { continue; }
             let fname = path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
-            // Skip RTL + content_box
-            if fname.contains("_rtl") || fname.contains("content_box") { continue; }
+            // Skip RTL (nepodporujem)
+            if fname.contains("_rtl") { continue; }
             stats.total += 1;
             let content = match fs::read_to_string(&path) {
                 Ok(c) => c,
