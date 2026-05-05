@@ -93,11 +93,20 @@ pub fn layout_flex(bx: &mut LayoutBox) {
 
     if bx.children.is_empty() { return; }
 
-    // 0. Collect in-flow indices (abs/fixed jdou mimo flex flow)
+    // 0. Collect in-flow indices (abs/fixed jdou mimo flex flow, display:none vyradit zcela)
     let in_flow: Vec<usize> = bx.children.iter().enumerate()
-        .filter(|(_, c)| !super::is_out_of_flow(c))
+        .filter(|(_, c)| !super::is_out_of_flow(c) && !matches!(c.display, super::super::layout::Display::None))
         .map(|(i, _)| i)
         .collect();
+    // display:none -> 0x0
+    for ch in bx.children.iter_mut() {
+        if matches!(ch.display, super::super::layout::Display::None) {
+            ch.rect.x = 0.0;
+            ch.rect.y = 0.0;
+            ch.rect.width = 0.0;
+            ch.rect.height = 0.0;
+        }
+    }
 
     // 1. Estimate item sizes (flex-basis or content)
     let mut items: Vec<FlexItem> = Vec::with_capacity(in_flow.len());

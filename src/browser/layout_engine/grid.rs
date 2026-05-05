@@ -93,11 +93,19 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         if i + 1 < rows { y_cursor += row_gap + ac_between; }
     }
 
-    // In-flow indices (skip abs/fixed)
+    // In-flow indices (skip abs/fixed + display:none)
     let in_flow: Vec<usize> = bx.children.iter().enumerate()
-        .filter(|(_, c)| !super::is_out_of_flow(c))
+        .filter(|(_, c)| !super::is_out_of_flow(c) && !matches!(c.display, super::super::layout::Display::None))
         .map(|(i, _)| i)
         .collect();
+    for ch in bx.children.iter_mut() {
+        if matches!(ch.display, super::super::layout::Display::None) {
+            ch.rect.x = 0.0;
+            ch.rect.y = 0.0;
+            ch.rect.width = 0.0;
+            ch.rect.height = 0.0;
+        }
+    }
 
     // Place items v auto-flow row order (jen in-flow)
     for (k, &real_idx) in in_flow.iter().enumerate() {

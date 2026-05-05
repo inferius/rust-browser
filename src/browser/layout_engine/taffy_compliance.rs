@@ -353,6 +353,14 @@ mod tests {
             if matches!(child.position, Position::Absolute | Position::Fixed) {
                 continue;
             }
+            // display:none -> 0x0, neposunouva cursor
+            if matches!(child.display, Display::None) {
+                child.rect.x = 0.0;
+                child.rect.y = 0.0;
+                child.rect.width = 0.0;
+                child.rect.height = 0.0;
+                continue;
+            }
             let m_l = child.margin_left.unwrap_or(child.margin);
             let m_t = child.margin_top.unwrap_or(child.margin);
             let m_r = child.margin_right.unwrap_or(child.margin);
