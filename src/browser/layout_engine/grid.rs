@@ -195,19 +195,36 @@ pub fn layout_grid(bx: &mut LayoutBox) {
             }
             item_placement.push((row, col, span_row, span_col));
         }
-        // Pro kazdy auto col, najdi max intrinsic width z items (single col span only - simple).
+        // Pro kazdy auto col, najdi max intrinsic width z items (min-content).
+        // Reset auto cols na min-content (z items) misto auto_base.
         for c_idx in 0..cols {
             if !col_is_auto[c_idx] { continue; }
-            let mut max_w = col_tracks[c_idx];
+            let mut max_w = 0.0_f32;
             for (i, &real_idx) in in_flow.iter().enumerate() {
                 let (_, col, _, span_col) = item_placement[i];
                 if col == c_idx && span_col == 1 {
                     let item = &bx.children[real_idx];
                     let intrinsic = item.explicit_width.unwrap_or(item.rect.width);
-                    if intrinsic > max_w { max_w = intrinsic; }
+                    let pb_l = item.padding_left.unwrap_or(item.padding) + item.border_left_width.unwrap_or(item.border_width);
+                    let pb_r = item.padding_right.unwrap_or(item.padding) + item.border_right_width.unwrap_or(item.border_width);
+                    let cw_min_p = super::super::layout::parse_length(&item.min_width_v);
+                    let real_intrinsic = intrinsic.max(pb_l + pb_r).max(cw_min_p);
+                    if real_intrinsic > max_w { max_w = real_intrinsic; }
                 }
             }
             col_tracks[c_idx] = max_w;
+        }
+        // Distribute leftover free space rovnomerne mezi auto cols.
+        if inner_w > 0.0 {
+            let total_used: f32 = col_tracks.iter().sum::<f32>() + col_gap * (cols.saturating_sub(1) as f32);
+            let leftover = inner_w - total_used;
+            let auto_count = col_is_auto.iter().filter(|&&b| b).count();
+            if leftover > 0.0 && auto_count > 0 {
+                let share = leftover / auto_count as f32;
+                for c_idx in 0..cols {
+                    if col_is_auto[c_idx] { col_tracks[c_idx] += share; }
+                }
+            }
         }
     }
     // Auto rows similar.
