@@ -2563,3 +2563,121 @@ fn crypto_unknown_algo_rejects() {
         assert_eq!(s, "rejected");
     }
 }
+
+// ─── Typed Array methods ──────────────────────────────────────────────
+
+#[test]
+fn typed_array_subarray() {
+    let code = r#"
+        const ta = new Uint8Array([1, 2, 3, 4, 5]);
+        const sub = ta.subarray(1, 4);
+        return sub.length + "|" + sub.__bytes__[0] + "|" + sub.__bytes__[2];
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "3|2|4");
+    }
+}
+
+#[test]
+fn typed_array_set_offset() {
+    let code = r#"
+        const ta = new Uint8Array(5);
+        ta.set([10, 20, 30], 1);
+        return ta.__bytes__[0] + "|" + ta.__bytes__[1] + "|" + ta.__bytes__[3];
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "0|10|30");
+    }
+}
+
+#[test]
+fn typed_array_fill() {
+    let code = r#"
+        const ta = new Int32Array(4);
+        ta.fill(7);
+        return ta.__bytes__[0] + "|" + ta.__bytes__[3];
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "7|7");
+    }
+}
+
+#[test]
+fn typed_array_slice() {
+    let code = r#"
+        const ta = new Uint16Array([10, 20, 30, 40]);
+        const sl = ta.slice(1, 3);
+        return sl.length + "|" + sl.__bytes__[0];
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "2|20");
+    }
+}
+
+#[test]
+fn typed_array_index_of() {
+    let code = r#"
+        const ta = new Uint8Array([5, 10, 15, 20]);
+        return ta.indexOf(15) + "|" + ta.indexOf(99);
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "2|-1");
+    }
+}
+
+#[test]
+fn typed_array_includes() {
+    let code = r#"
+        const ta = new Uint8Array([1, 2, 3]);
+        return ta.includes(2) + "|" + ta.includes(99);
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "true|false");
+    }
+}
+
+#[test]
+fn typed_array_reverse() {
+    let code = r#"
+        const ta = new Uint8Array([1, 2, 3]);
+        ta.reverse();
+        return ta.__bytes__[0] + "|" + ta.__bytes__[2];
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "3|1");
+    }
+}
+
+#[test]
+fn typed_array_join() {
+    let code = r#"
+        const ta = new Uint8Array([1, 2, 3]);
+        return ta.join("-");
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "1-2-3");
+    }
+}
+
+#[test]
+fn typed_array_buffer_view() {
+    let code = r#"
+        const ta = new Uint16Array(4);
+        return ta.buffer.byteLength + "|" + ta.byteOffset;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "8|0"); // 4 elem * 2 bytes = 8
+    }
+}
+
+#[test]
+fn typed_array_copy_within() {
+    let code = r#"
+        const ta = new Uint8Array([1, 2, 3, 4, 5]);
+        ta.copyWithin(0, 3);
+        return ta.__bytes__.join(",");
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "4,5,3,4,5");
+    }
+}

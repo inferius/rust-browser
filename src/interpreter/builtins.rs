@@ -1215,13 +1215,144 @@ pub fn setup_builtins(
                 _ => vec![],
             };
             let len = bytes.len() as f64;
-            let mut obj = JsObject::new();
-            obj.set("__typed_array__".into(), JsValue::Str(n.clone()));
-            obj.set("length".into(), JsValue::Number(len));
-            obj.set("byteLength".into(), JsValue::Number(len * bytes_per_element as f64));
-            obj.set("BYTES_PER_ELEMENT".into(), JsValue::Number(bytes_per_element as f64));
-            obj.set("__bytes__".into(), JsValue::Array(Rc::new(RefCell::new(bytes))));
-            Ok(JsValue::Object(Rc::new(RefCell::new(obj))))
+            let bytes_rc = Rc::new(RefCell::new(bytes));
+            let obj = Rc::new(RefCell::new(JsObject::new()));
+            obj.borrow_mut().set("__typed_array__".into(), JsValue::Str(n.clone()));
+            obj.borrow_mut().set("length".into(), JsValue::Number(len));
+            obj.borrow_mut().set("byteLength".into(), JsValue::Number(len * bytes_per_element as f64));
+            obj.borrow_mut().set("BYTES_PER_ELEMENT".into(), JsValue::Number(bytes_per_element as f64));
+            obj.borrow_mut().set("byteOffset".into(), JsValue::Number(0.0));
+            obj.borrow_mut().set("__bytes__".into(), JsValue::Array(Rc::clone(&bytes_rc)));
+            // buffer - vytvori novy ArrayBuffer view
+            let buf_bytes = Rc::clone(&bytes_rc);
+            let buffer = Rc::new(RefCell::new(JsObject::new()));
+            buffer.borrow_mut().set("__buffer__".into(), JsValue::Bool(true));
+            buffer.borrow_mut().set("byteLength".into(), JsValue::Number(len * bytes_per_element as f64));
+            buffer.borrow_mut().set("__bytes__".into(), JsValue::Array(buf_bytes));
+            obj.borrow_mut().set("buffer".into(), JsValue::Object(buffer));
+
+            // Methods: subarray, set, copyWithin, fill, slice, indexOf, includes, reverse, sort, join
+            let b1 = Rc::clone(&bytes_rc);
+            let n_sub = n.clone();
+            obj.borrow_mut().set("subarray".into(), native("subarray", move |args| {
+                let mut it = args.into_iter();
+                let begin = it.next().map(|v| v.to_number() as usize).unwrap_or(0);
+                let end = it.next().map(|v| v.to_number() as usize)
+                    .unwrap_or_else(|| b1.borrow().len());
+                let src = b1.borrow();
+                let sub: Vec<JsValue> = if begin < end {
+                    src[begin..end.min(src.len())].to_vec()
+                } else { Vec::new() };
+                let new_obj = Rc::new(RefCell::new(JsObject::new()));
+                new_obj.borrow_mut().set("__typed_array__".into(), JsValue::Str(n_sub.clone()));
+                new_obj.borrow_mut().set("length".into(), JsValue::Number(sub.len() as f64));
+                new_obj.borrow_mut().set("byteLength".into(),
+                    JsValue::Number((sub.len() * bytes_per_element) as f64));
+                new_obj.borrow_mut().set("BYTES_PER_ELEMENT".into(),
+                    JsValue::Number(bytes_per_element as f64));
+                new_obj.borrow_mut().set("__bytes__".into(),
+                    JsValue::Array(Rc::new(RefCell::new(sub))));
+                Ok(JsValue::Object(new_obj))
+            }));
+            let b2 = Rc::clone(&bytes_rc);
+            obj.borrow_mut().set("set".into(), native("set", move |args| {
+                let mut it = args.into_iter();
+                let src = it.next().unwrap_or(JsValue::Undefined);
+                let offset = it.next().map(|v| v.to_number() as usize).unwrap_or(0);
+                let src_vals: Vec<JsValue> = match src {
+                    JsValue::Array(a) => a.borrow().clone(),
+                    JsValue::Object(o) => {
+                        if let JsValue::Array(a) = o.borrow().get("__bytes__") {
+                            a.borrow().clone()
+                        } else { Vec::new() }
+                    }
+                    _ => Vec::new(),
+                };
+                let mut dst = b2.borrow_mut();
+                for (i, v) in src_vals.into_iter().enumerate() {
+                    while dst.len() <= offset + i { dst.push(JsValue::Number(0.0)); }
+                    dst[offset + i] = v;
+                }
+                Ok(JsValue::Undefined)
+            }));
+            let b3 = Rc::clone(&bytes_rc);
+            obj.borrow_mut().set("fill".into(), native("fill", move |args| {
+                let mut it = args.into_iter();
+                let val = it.next().unwrap_or(JsValue::Number(0.0));
+                let start = it.next().map(|v| v.to_number() as usize).unwrap_or(0);
+                let end_opt = it.next().map(|v| v.to_number() as usize);
+                let mut dst = b3.borrow_mut();
+                let end = end_opt.unwrap_or(dst.len()).min(dst.len());
+                for i in start..end {
+                    dst[i] = val.clone();
+                }
+                Ok(JsValue::Undefined)
+            }));
+            let b4 = Rc::clone(&bytes_rc);
+            obj.borrow_mut().set("copyWithin".into(), native("copyWithin", move |args| {
+                let mut it = args.into_iter();
+                let target = it.next().map(|v| v.to_number() as usize).unwrap_or(0);
+                let start = it.next().map(|v| v.to_number() as usize).unwrap_or(0);
+                let mut dst = b4.borrow_mut();
+                let end = it.next().map(|v| v.to_number() as usize).unwrap_or_else(|| dst.len());
+                let copy_count = (end.min(dst.len()) - start.min(dst.len())).min(dst.len().saturating_sub(target));
+                let copy: Vec<JsValue> = dst[start..start + copy_count].to_vec();
+                for (i, v) in copy.into_iter().enumerate() {
+                    if target + i < dst.len() { dst[target + i] = v; }
+                }
+                Ok(JsValue::Undefined)
+            }));
+            let b5 = Rc::clone(&bytes_rc);
+            let n_slice = n.clone();
+            obj.borrow_mut().set("slice".into(), native("slice", move |args| {
+                let mut it = args.into_iter();
+                let start = it.next().map(|v| v.to_number() as usize).unwrap_or(0);
+                let end = it.next().map(|v| v.to_number() as usize)
+                    .unwrap_or_else(|| b5.borrow().len());
+                let src = b5.borrow();
+                let sub: Vec<JsValue> = if start < end && start < src.len() {
+                    src[start..end.min(src.len())].to_vec()
+                } else { Vec::new() };
+                let new_obj = Rc::new(RefCell::new(JsObject::new()));
+                new_obj.borrow_mut().set("__typed_array__".into(), JsValue::Str(n_slice.clone()));
+                new_obj.borrow_mut().set("length".into(), JsValue::Number(sub.len() as f64));
+                new_obj.borrow_mut().set("byteLength".into(),
+                    JsValue::Number((sub.len() * bytes_per_element) as f64));
+                new_obj.borrow_mut().set("BYTES_PER_ELEMENT".into(),
+                    JsValue::Number(bytes_per_element as f64));
+                new_obj.borrow_mut().set("__bytes__".into(),
+                    JsValue::Array(Rc::new(RefCell::new(sub))));
+                Ok(JsValue::Object(new_obj))
+            }));
+            let b6 = Rc::clone(&bytes_rc);
+            obj.borrow_mut().set("indexOf".into(), native("indexOf", move |args| {
+                let needle = args.into_iter().next().unwrap_or(JsValue::Undefined);
+                let target = needle.to_number();
+                for (i, v) in b6.borrow().iter().enumerate() {
+                    if v.to_number() == target {
+                        return Ok(JsValue::Number(i as f64));
+                    }
+                }
+                Ok(JsValue::Number(-1.0))
+            }));
+            let b7 = Rc::clone(&bytes_rc);
+            obj.borrow_mut().set("includes".into(), native("includes", move |args| {
+                let needle = args.into_iter().next().unwrap_or(JsValue::Undefined);
+                let target = needle.to_number();
+                Ok(JsValue::Bool(b7.borrow().iter().any(|v| v.to_number() == target)))
+            }));
+            let b8 = Rc::clone(&bytes_rc);
+            obj.borrow_mut().set("reverse".into(), native("reverse", move |_| {
+                b8.borrow_mut().reverse();
+                Ok(JsValue::Undefined)
+            }));
+            let b9 = Rc::clone(&bytes_rc);
+            obj.borrow_mut().set("join".into(), native("join", move |args| {
+                let sep = args.into_iter().next().map(|v| v.to_string()).unwrap_or_else(|| ",".into());
+                let s: Vec<String> = b9.borrow().iter().map(|v| v.to_string()).collect();
+                Ok(JsValue::Str(s.join(&sep)))
+            }));
+            Ok(JsValue::Object(obj))
         })
     };
     e.define("Uint8Array", make_typed_array("Uint8Array", 1));
