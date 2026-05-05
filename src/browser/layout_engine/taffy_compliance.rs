@@ -447,7 +447,11 @@ mod tests {
             let m_r = child.margin_right.unwrap_or(child.margin);
             let auto_l = child.margin_left_auto;
             let auto_r = child.margin_right_auto;
-            let mut base_w = child.explicit_width.unwrap_or((inner_w - m_l - m_r).max(0.0));
+            let mut base_w = if let Some(w) = child.explicit_width { w }
+                             else if let (Some(h), Some(ar)) = (child.explicit_height, child.aspect_ratio) {
+                                 if ar > 0.0 { h * ar } else { (inner_w - m_l - m_r).max(0.0) }
+                             }
+                             else { (inner_w - m_l - m_r).max(0.0) };
             // Apply min/max width
             let cw_min = crate::browser::layout::parse_length(&child.min_width_v);
             let cw_max = if child.max_width_v.is_empty() { f32::INFINITY } else { crate::browser::layout::parse_length(&child.max_width_v) };
@@ -473,6 +477,7 @@ mod tests {
             child.rect.x += off_x;
             child.rect.y += off_y;
             // Aspect-ratio: dopocet height z width
+            let has_explicit_h = child.explicit_height.is_some();
             let mut h_val = if let Some(h) = child.explicit_height {
                 h
             } else if let Some(ar) = child.aspect_ratio {
@@ -490,6 +495,30 @@ mod tests {
                 Display::Grid => layout_grid(child),
                 Display::Block | Display::None => block_layout_simple(child),
                 _ => {}
+            }
+            // Po recursivnim layoutu: kdyz nemel explicit_height, dopocti z content.
+            if !has_explicit_h && child.aspect_ratio.is_none() {
+                // Najit max y+h z in-flow children
+                let pad_t_c = child.padding_top.unwrap_or(child.padding) + child.border_top_width.unwrap_or(child.border_width);
+                let pad_b_c = child.padding_bottom.unwrap_or(child.padding) + child.border_bottom_width.unwrap_or(child.border_width);
+                let mut content_bottom = child.rect.y + pad_t_c;
+                for grandchild in &child.children {
+                    if matches!(grandchild.position, Position::Absolute | Position::Fixed) { continue; }
+                    if matches!(grandchild.display, Display::None) { continue; }
+                    let m_b_g = grandchild.margin_bottom.unwrap_or(grandchild.margin);
+                    let bottom = grandchild.rect.y + grandchild.rect.height + m_b_g;
+                    if bottom > content_bottom { content_bottom = bottom; }
+                }
+                let new_h = content_bottom - child.rect.y + pad_b_c;
+                let new_h_clamped = {
+                    let mut v = new_h;
+                    v = v.min(ch_max);
+                    if ch_min > 0.0 { v = v.max(ch_min); }
+                    v.max(0.0)
+                };
+                if new_h_clamped > child.rect.height {
+                    child.rect.height = new_h_clamped;
+                }
             }
             cursor_y += child.rect.height + m_t;
             let m_b = child.margin_bottom.unwrap_or(child.margin);
