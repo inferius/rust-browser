@@ -68,7 +68,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                 }
             }
         }
-        let fallback_h = if any_explicit { 50.0 } else if rows > 0 { (inner_h / rows as f32).max(0.0) } else { inner_h.max(0.0) };
+        let fallback_h = if any_explicit { 0.0 } else if rows > 0 { (inner_h / rows as f32).max(0.0) } else { inner_h.max(0.0) };
         for r in 0..rows {
             let mut h = fallback_h;
             let mut row_has_explicit = false;
@@ -76,7 +76,11 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                 let idx = r * cols + c;
                 if let Some(child) = bx.children.get(idx) {
                     if let Some(eh) = child.explicit_height {
-                        h = h.max(eh);
+                        // Floor by padding+border (item nemuze byt mensi).
+                        let pb_t = child.padding_top.unwrap_or(child.padding) + child.border_top_width.unwrap_or(child.border_width);
+                        let pb_b = child.padding_bottom.unwrap_or(child.padding) + child.border_bottom_width.unwrap_or(child.border_width);
+                        let real_h = eh.max(pb_t + pb_b);
+                        h = h.max(real_h);
                         row_has_explicit = true;
                     }
                 }
