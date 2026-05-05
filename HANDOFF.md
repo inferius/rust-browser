@@ -5,8 +5,8 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 ## Stav
 
 - Build: **OK**, 0 errors, 0 warnings.
-- Tests: **1827 passed, 0 failed, 3 ignored**.
-- Posledni commit: `6c4b69b SVG support + radial/conic/inset shadow tests`.
+- Tests: **1836 passed, 0 failed, 3 ignored**.
+- Posledni commit: `31eb2b3 GPU image: HTTP fetch + data URI base64 + atlas tests`.
 - Tree: ciste.
 - Branch master, ~290 commitu pred origin/master (NEPUSHOVAT bez vyzvy).
 - **WebGL pipeline DOKONCEN** + **CSS L4-L6 KOMPLET** + **JS DOM kompletni**:
@@ -30,6 +30,10 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
     group recursion. parse_svg_points helper.
   - Gradient render: radial (mode 6) + conic (mode 7) + linear (mode 2) WGSL.
     Inset box-shadow (mode 5) full SDF impl.
+  - GPU image rendering: ImageAtlas RGBA s shelf packing, 2048x2048 atlas.
+    HTTP fetch pres ureq sync (10s timeout), data: URI base64 dekoder
+    (self-contained), FS fallback. WGSL mode 4 sample image_tex.
+    push_image emit + UV bounds tracking.
 
 ## Test runner
 
