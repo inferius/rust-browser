@@ -108,6 +108,31 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         }
     }
 
+    // 0.5 Pre-pass: pre items bez explicit size, recursivne lay out (do "0,0,0,0")
+    // a zmeri grandchildren content. Zachova nature item rect. Toto pomaha intrinsic
+    // sizing items v flex contextu.
+    for &i in &in_flow {
+        let ch = &mut bx.children[i];
+        if ch.explicit_width.is_some() && ch.explicit_height.is_some() { continue; }
+        if ch.children.is_empty() { continue; }
+        // Pre-set rect na 0 pro layout; ulozime puvodni
+        let saved_rect = ch.rect.clone();
+        ch.rect.x = 0.0; ch.rect.y = 0.0;
+        // Pri unset rozmerech, set na 0 aby vnitrek zjistil natural size.
+        if ch.explicit_width.is_none() { ch.rect.width = 0.0; }
+        if ch.explicit_height.is_none() { ch.rect.height = 0.0; }
+        // Recursivni layout: nemenime explicit values, jen rect.
+        match ch.display {
+            super::super::layout::Display::Flex => super::flex::layout_flex(ch),
+            super::super::layout::Display::Grid => super::grid::layout_grid(ch),
+            _ => {}
+        }
+        // Po layoutu: rect.width/height muze byt rozsiren z content (auto-grow).
+        // Restore rect.x/y, zachovaj nove width/height jako "intrinsic" pro nasledny ze.
+        ch.rect.x = saved_rect.x;
+        ch.rect.y = saved_rect.y;
+    }
+
     // 1. Estimate item sizes (flex-basis or content)
     let mut items: Vec<FlexItem> = Vec::with_capacity(in_flow.len());
     for &i in &in_flow {
@@ -115,10 +140,10 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         let mut est_w = ch.explicit_width.unwrap_or_else(|| {
             if let Some(t) = &ch.text {
                 super::super::layout::measure_text_width(t, ch.font_size)
-            } else { 0.0 }
+            } else if ch.rect.width > 0.0 { ch.rect.width } else { 0.0 }
         });
         let mut est_h = ch.explicit_height.unwrap_or_else(|| {
-            if ch.text.is_some() { ch.font_size * 1.4 } else { 0.0 }
+            if ch.text.is_some() { ch.font_size * 1.4 } else if ch.rect.height > 0.0 { ch.rect.height } else { 0.0 }
         });
         // flex-basis override main size kdyz nastaveno (a neni "auto")
         let basis_v = ch.flex_basis.trim();
