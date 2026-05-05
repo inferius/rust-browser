@@ -89,14 +89,24 @@ pub fn layout_flex(bx: &mut LayoutBox) {
     let item_count = bx.children.len();
     let mut items: Vec<FlexItem> = Vec::with_capacity(item_count);
     for ch in bx.children.iter() {
-        let est_w = ch.explicit_width.unwrap_or_else(|| {
+        let mut est_w = ch.explicit_width.unwrap_or_else(|| {
             if let Some(t) = &ch.text {
                 super::super::layout::measure_text_width(t, ch.font_size)
             } else { 100.0 }
         });
-        let est_h = ch.explicit_height.unwrap_or_else(|| {
+        let mut est_h = ch.explicit_height.unwrap_or_else(|| {
             if ch.text.is_some() { ch.font_size * 1.4 } else { 50.0 }
         });
+        // Aspect-ratio dopocet
+        if let Some(ar) = ch.aspect_ratio {
+            if ar > 0.0 {
+                if ch.explicit_width.is_some() && ch.explicit_height.is_none() {
+                    est_h = est_w / ar;
+                } else if ch.explicit_height.is_some() && ch.explicit_width.is_none() {
+                    est_w = est_h * ar;
+                }
+            }
+        }
         items.push(FlexItem {
             main_size: if direction.is_row() { est_w } else { est_h },
             cross_size: if direction.is_row() { est_h } else { est_w },
@@ -109,6 +119,26 @@ pub fn layout_flex(bx: &mut LayoutBox) {
     // 2. Container main size
     let inner_h = bx.rect.height - 2.0 * (bx.padding + bx.margin + bx.border_width);
     let container_main = if direction.is_row() { inner_w } else { inner_h.max(0.0) };
+
+    // Apply min/max width/height na items (z bx props - to nas zdrojuje)
+    for (i, ch) in bx.children.iter().enumerate() {
+        if i >= items.len() { break; }
+        let cw_min = super::super::layout::parse_length(&ch.min_width_v);
+        let cw_max = if ch.max_width_v.is_empty() { f32::INFINITY } else { super::super::layout::parse_length(&ch.max_width_v) };
+        let ch_min = super::super::layout::parse_length(&ch.min_height_v);
+        let ch_max = if ch.max_height_v.is_empty() { f32::INFINITY } else { super::super::layout::parse_length(&ch.max_height_v) };
+        if direction.is_row() {
+            if cw_min > 0.0 { items[i].main_size = items[i].main_size.max(cw_min); }
+            items[i].main_size = items[i].main_size.min(cw_max);
+            if ch_min > 0.0 { items[i].cross_size = items[i].cross_size.max(ch_min); }
+            items[i].cross_size = items[i].cross_size.min(ch_max);
+        } else {
+            if ch_min > 0.0 { items[i].main_size = items[i].main_size.max(ch_min); }
+            items[i].main_size = items[i].main_size.min(ch_max);
+            if cw_min > 0.0 { items[i].cross_size = items[i].cross_size.max(cw_min); }
+            items[i].cross_size = items[i].cross_size.min(cw_max);
+        }
+    }
 
     // 3. Collect lines (wrap)
     let lines = collect_lines(&items, container_main, wrap, if direction.is_row() { col_gap } else { row_gap });

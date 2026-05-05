@@ -202,8 +202,21 @@ mod tests {
                 "padding" => bx.padding = parse_dim(v, container_w).unwrap_or(0.0),
                 "margin" => bx.margin = parse_dim(v, container_w).unwrap_or(0.0),
                 "position" if v != "static" && v != "relative" => return None,
-                "aspect-ratio" => return None,
-                "min-width" | "min-height" | "max-width" | "max-height" => return None,
+                "aspect-ratio" => {
+                    // Parse: "3" nebo "3 / 2"
+                    let v = v.trim();
+                    if let Some(idx) = v.find('/') {
+                        let a: f32 = v[..idx].trim().parse().ok()?;
+                        let b: f32 = v[idx+1..].trim().parse().ok()?;
+                        if b > 0.0 { bx.aspect_ratio = Some(a / b); }
+                    } else if let Ok(r) = v.parse::<f32>() {
+                        bx.aspect_ratio = Some(r);
+                    }
+                }
+                "min-width" => bx.min_width_v = v.clone(),
+                "min-height" => bx.min_height_v = v.clone(),
+                "max-width" => bx.max_width_v = v.clone(),
+                "max-height" => bx.max_height_v = v.clone(),
                 "padding-left" | "padding-right" => {
                     let p = parse_dim(v, container_w).unwrap_or(0.0);
                     bx.padding = bx.padding.max(p);
@@ -306,7 +319,12 @@ mod tests {
             child.rect.x = inner_x;
             child.rect.y = cursor_y;
             child.rect.width = child.explicit_width.unwrap_or(inner_w);
-            child.rect.height = child.explicit_height.unwrap_or(0.0);
+            // Aspect-ratio: dopocet height z width
+            child.rect.height = if let Some(h) = child.explicit_height {
+                h
+            } else if let Some(ar) = child.aspect_ratio {
+                if ar > 0.0 { child.rect.width / ar } else { 0.0 }
+            } else { 0.0 };
             // Recursive
             match child.display {
                 Display::Flex => layout_flex(child),
