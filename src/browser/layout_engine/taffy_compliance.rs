@@ -18,6 +18,7 @@ mod tests {
     struct TestNode {
         attrs: Vec<(String, String)>,
         children: Vec<TestNode>,
+        text_content: String,
     }
 
     #[derive(Debug, Default)]
@@ -46,7 +47,26 @@ mod tests {
 
         while let Some(&c) = chars.peek() {
             if c.is_whitespace() { chars.next(); continue; }
-            if c != '<' { chars.next(); continue; }
+            if c != '<' {
+                if in_input && !node_stack.is_empty() {
+                    let mut text_buf = String::new();
+                    while let Some(&cc) = chars.peek() {
+                        if cc == '<' { break; }
+                        text_buf.push(cc);
+                        chars.next();
+                    }
+                    let trimmed = text_buf.trim();
+                    if !trimmed.is_empty() {
+                        if let Some(top) = node_stack.last_mut() {
+                            if !top.text_content.is_empty() { top.text_content.push(' '); }
+                            top.text_content.push_str(trimmed);
+                        }
+                    }
+                    continue;
+                }
+                chars.next();
+                continue;
+            }
             chars.next();
             if chars.peek() == Some(&'/') {
                 chars.next();
@@ -117,7 +137,7 @@ mod tests {
                 "input" => { in_input = true; }
                 "expectations" => { in_expectations = true; }
                 "div" | "node" | "text" if in_input => {
-                    let n = TestNode { attrs, children: Vec::new() };
+                    let n = TestNode { attrs, children: Vec::new(), text_content: String::new() };
                     if self_closing {
                         if let Some(parent) = node_stack.last_mut() {
                             parent.children.push(n);
@@ -180,6 +200,11 @@ mod tests {
     fn convert_to_layout_impl(node: &TestNode, container_w: f32, container_h: f32, container_h_for_inset: f32, default_display: Display) -> Option<LayoutBox> {
         let mut bx = LayoutBox::new();
         bx.taffy_mode = true;
+        if !node.text_content.is_empty() && node.children.is_empty() {
+            bx.text = Some(node.text_content.clone());
+            bx.font_size = 10.0;
+            bx.line_height = 1.0;
+        }
         let mut display = default_display;
         for (k, v) in &node.attrs {
             match k.as_str() {

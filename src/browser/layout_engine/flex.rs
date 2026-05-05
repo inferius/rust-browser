@@ -190,11 +190,18 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         let ch = &bx.children[i];
         let mut est_w = ch.explicit_width.unwrap_or_else(|| {
             if let Some(t) = &ch.text {
-                super::super::layout::measure_text_width(t, ch.font_size)
+                if ch.taffy_mode {
+                    // Taffy fixtures: 10px per visible char (excl. ZWS).
+                    t.chars().filter(|c| !matches!(*c, '\u{200B}' | ' ' | '\n' | '\t')).count() as f32 * 10.0
+                } else {
+                    super::super::layout::measure_text_width(t, ch.font_size)
+                }
             } else if ch.rect.width > 0.0 { ch.rect.width } else { 0.0 }
         });
         let mut est_h = ch.explicit_height.unwrap_or_else(|| {
-            if ch.text.is_some() { ch.font_size * 1.4 } else if ch.rect.height > 0.0 { ch.rect.height } else { 0.0 }
+            if ch.text.is_some() {
+                if ch.taffy_mode { 10.0 } else { ch.font_size * 1.4 }
+            } else if ch.rect.height > 0.0 { ch.rect.height } else { 0.0 }
         });
         // flex-basis override main size kdyz nastaveno (a neni "auto")
         let basis_v = ch.flex_basis.trim();
