@@ -366,13 +366,13 @@ pub fn resolve_tracks(s: &str, container_size: f32, gap: f32) -> Vec<f32> {
             Track::Fr(f) => fr_total += *f,
             Track::Auto => auto_count += 1,
             Track::Minmax(min, max, is_fr) => {
+                let min_resolved = if *min < 0.0 { container_size * (-min) } else { *min };
                 if *is_fr {
-                    fixed_total += *min; // min jako baseline pro fr
+                    fixed_total += min_resolved;
                     fr_total += *max;
                 } else {
-                    // both fixed (min,max) - chovani jako auto v rozsahu
-                    fixed_total += *min;
-                    auto_count += 1; // distribute remaining v rozsahu
+                    fixed_total += min_resolved;
+                    auto_count += 1;
                 }
             }
         }
@@ -389,13 +389,14 @@ pub fn resolve_tracks(s: &str, container_size: f32, gap: f32) -> Vec<f32> {
         Track::Fr(f) => fr_base * f,
         Track::Auto => auto_base,
         Track::Minmax(min, max, is_fr) => {
+            let min_r = if *min < 0.0 { container_size * (-min) } else { *min };
+            let max_r = if *max < 0.0 { container_size * (-max) } else { *max };
             if *is_fr {
-                let v = min + fr_base * max;
-                v.max(*min)
+                let v = min_r + fr_base * max;
+                v.max(min_r)
             } else {
-                // fixed min/max: clamp(min + auto_share, min, max)
-                let v = min + auto_base;
-                v.clamp(*min, *max)
+                let v = min_r + auto_base;
+                v.clamp(min_r, max_r)
             }
         }
     }).collect()
@@ -557,21 +558,25 @@ fn parse_single_track(s: &str) -> Track {
     if let Some(num) = s.strip_suffix('%') {
         return Track::Percent(num.trim().parse().unwrap_or(0.0));
     }
-    // minmax(min, max)
+    // minmax(min, max). Percent ulozeno jako negativni hodnota (sentinel)
+    // a resolve_tracks ho prepocita podle container_size.
     if let Some(rest) = s.strip_prefix("minmax(").and_then(|x| x.strip_suffix(')')) {
         let parts: Vec<&str> = rest.split(',').collect();
         if parts.len() == 2 {
             let min_s = parts[0].trim();
             let max_s = parts[1].trim();
-            // Parse min: pouzij px / percent (auto -> 0).
-            let min_v = if min_s == "auto" || min_s == "min-content" || min_s == "max-content" {
-                0.0
-            } else if let Some(num) = min_s.strip_suffix('%') {
-                num.parse::<f32>().unwrap_or(0.0) // percent rozhodneme pozdeji v resolve
-            } else {
-                super::super::layout::parse_length(min_s)
+            // Pouzijeme negativni sentinel pro percent: -p kde p je 0..1.
+            // Pri resolve to detekuje a vynasobi container.
+            let parse_part = |p: &str| -> f32 {
+                if p == "auto" || p == "min-content" || p == "max-content" { return 0.0; }
+                if let Some(num) = p.strip_suffix('%') {
+                    let v: f32 = num.trim().parse().unwrap_or(0.0);
+                    return -(v / 100.0); // sentinel
+                }
+                super::super::layout::parse_length(p)
             };
-            // Parse max
+            let min_v = parse_part(min_s);
+            // Max
             if let Some(num) = max_s.strip_suffix("fr") {
                 let max_fr = num.trim().parse().unwrap_or(1.0);
                 return Track::Minmax(min_v, max_fr, true);
@@ -579,7 +584,7 @@ fn parse_single_track(s: &str) -> Track {
             let max_v = if max_s == "auto" || max_s == "min-content" || max_s == "max-content" {
                 f32::INFINITY
             } else {
-                super::super::layout::parse_length(max_s)
+                parse_part(max_s)
             };
             return Track::Minmax(min_v, max_v, false);
         }
