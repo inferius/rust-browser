@@ -257,10 +257,32 @@ mod tests {
                         bx.aspect_ratio = Some(r);
                     }
                 }
-                "min-width" => bx.min_width_v = v.clone(),
-                "min-height" => bx.min_height_v = v.clone(),
-                "max-width" => bx.max_width_v = v.clone(),
-                "max-height" => bx.max_height_v = v.clone(),
+                // Min/max ulozit jako "Npx" abychom mohli snadno re-parse pres parse_length.
+                // Percent prepocitat ihned proti container_w/h.
+                "min-width" => {
+                    if let Some(num) = v.trim().strip_suffix('%') {
+                        let pct: f32 = num.parse().unwrap_or(0.0);
+                        bx.min_width_v = format!("{}px", container_w * pct / 100.0);
+                    } else { bx.min_width_v = v.clone(); }
+                }
+                "min-height" => {
+                    if let Some(num) = v.trim().strip_suffix('%') {
+                        let pct: f32 = num.parse().unwrap_or(0.0);
+                        bx.min_height_v = format!("{}px", container_h * pct / 100.0);
+                    } else { bx.min_height_v = v.clone(); }
+                }
+                "max-width" => {
+                    if let Some(num) = v.trim().strip_suffix('%') {
+                        let pct: f32 = num.parse().unwrap_or(0.0);
+                        bx.max_width_v = format!("{}px", container_w * pct / 100.0);
+                    } else { bx.max_width_v = v.clone(); }
+                }
+                "max-height" => {
+                    if let Some(num) = v.trim().strip_suffix('%') {
+                        let pct: f32 = num.parse().unwrap_or(0.0);
+                        bx.max_height_v = format!("{}px", container_h * pct / 100.0);
+                    } else { bx.max_height_v = v.clone(); }
+                }
                 "padding-left" => bx.padding_left = parse_dim(v, container_w),
                 "padding-right" => bx.padding_right = parse_dim(v, container_w),
                 "padding-top" => bx.padding_top = parse_dim(v, container_h),
