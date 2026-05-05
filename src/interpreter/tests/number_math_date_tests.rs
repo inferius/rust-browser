@@ -432,3 +432,87 @@ fn math_imul()          { assert_eq!(as_num(run("return Math.imul(3, 4);")), 12.
 fn math_clz32()         { assert_eq!(as_num(run("return Math.clz32(1);")), 31.0); }
 #[test]
 fn math_floor_negative(){ assert_eq!(as_num(run("return Math.floor(-1.5);")), -2.0); }
+
+// Date arithmetic - difference
+#[test]
+fn date_subtraction_returns_ms() {
+    let code = r#"
+        const a = new Date(2024, 0, 1);
+        const b = new Date(2024, 0, 2);
+        return b - a;
+    "#;
+    let result = as_num(run(code));
+    assert_eq!(result, 86_400_000.0, "1 den = 86,400,000 ms");
+}
+
+#[test]
+fn date_to_number_via_unary_plus() {
+    let code = r#"
+        const d = new Date(2000, 0, 1);
+        return +d;
+    "#;
+    let result = as_num(run(code));
+    assert!(result > 0.0, "+date vrati epoch ms");
+}
+
+#[test]
+fn date_valueOf_method() {
+    let code = r#"
+        const d = new Date(2000, 0, 1);
+        return d.valueOf();
+    "#;
+    let result = as_num(run(code));
+    assert!(result > 0.0);
+}
+
+#[test]
+fn date_now_static_returns_number() {
+    let code = "return typeof Date.now();";
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "number");
+    } else {
+        panic!("ocekavan string");
+    }
+}
+
+#[test]
+fn date_arithmetic_minutes() {
+    let code = r#"
+        const a = new Date(2024, 0, 1, 10, 0);
+        const b = new Date(2024, 0, 1, 10, 30);
+        return (b - a) / 1000 / 60;
+    "#;
+    let result = as_num(run(code));
+    assert_eq!(result, 30.0, "30 minut diff");
+}
+
+#[test]
+fn date_parse_iso_date() {
+    let code = r#"return Date.parse("2024-01-01");"#;
+    let result = as_num(run(code));
+    assert!(result > 1700000000000.0, "parse 2024-01-01 -> ms");
+}
+
+#[test]
+fn date_parse_iso_datetime() {
+    let code = r#"return Date.parse("2024-01-01T12:30:45");"#;
+    let result = as_num(run(code));
+    assert!(result > 1700000000000.0);
+}
+
+#[test]
+fn date_utc_static() {
+    let code = "return Date.UTC(2024, 0, 1);";
+    let result = as_num(run(code));
+    assert!(result > 1700000000000.0, "Date.UTC ms");
+}
+
+#[test]
+fn date_string_constructor() {
+    let code = r#"
+        const d = new Date("2024-01-01");
+        return d.getFullYear();
+    "#;
+    let result = as_num(run(code));
+    assert_eq!(result, 2024.0);
+}

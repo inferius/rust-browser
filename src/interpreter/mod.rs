@@ -390,9 +390,29 @@ impl JsValue {
             JsValue::Bool(false)  => 0.0,
             JsValue::Null         => 0.0,
             JsValue::Undefined    => f64::NAN,
-            JsValue::Str(s)       => s.trim().parse().unwrap_or(f64::NAN),
+            JsValue::Str(s)       => {
+                let t = s.trim();
+                if t.is_empty() { return 0.0; }
+                t.parse().unwrap_or(f64::NAN)
+            }
             JsValue::BigNumber(n) => n.to_f64().unwrap_or(f64::NAN),
             JsValue::BigInt(n)    => n.to_f64().unwrap_or(f64::NAN),
+            // Date objekt - valueOf vrati __date_ms__ epoch ms
+            JsValue::Object(o) => {
+                let b = o.borrow();
+                if let Some(JsValue::Number(ms)) = b.props.get("__date_ms__") {
+                    return *ms;
+                }
+                // Pole-like Object s "valueOf" custom override - skip pro jednoduchost
+                f64::NAN
+            }
+            // Pole jednou hodnotou se chova jako tato (ale to delame primary loose_eq)
+            JsValue::Array(a) => {
+                let arr = a.borrow();
+                if arr.is_empty() { return 0.0; }
+                if arr.len() == 1 { return arr[0].to_number(); }
+                f64::NAN
+            }
             _                     => f64::NAN,
         }
     }
@@ -657,6 +677,11 @@ pub struct Interpreter {
     pub custom_elements: Rc<RefCell<HashMap<String, JsValue>>>,
     /// CustomElements instances: DomNode ptr -> JS instance JsValue.
     pub custom_element_instances: Rc<RefCell<HashMap<usize, JsValue>>>,
+    /// MutationObserver registry: (target node ptr, callback JsValue, opts JsValue, subtree bool).
+    /// Pri DOM mutaci se dispatchnou records.
+    pub mutation_observers: Rc<RefCell<Vec<(usize, JsValue, JsValue, bool)>>>,
+    /// Pending mutation records pro batched delivery (microtask queue).
+    pub pending_mutation_records: Rc<RefCell<Vec<(usize, JsValue, JsValue)>>>,
 }
 
 // ─── Pomocne funkce ──────────────────────────────────────────────────────────
@@ -679,9 +704,12 @@ impl Interpreter {
         let network_log: Rc<RefCell<Vec<(String, u16)>>> = Rc::new(RefCell::new(Vec::new()));
         let custom_elements: Rc<RefCell<HashMap<String, JsValue>>> =
             Rc::new(RefCell::new(HashMap::new()));
+        let mutation_observers: Rc<RefCell<Vec<(usize, JsValue, JsValue, bool)>>> =
+            Rc::new(RefCell::new(Vec::new()));
         setup_builtins(
             &global, &task_queue, &next_timer_id, &workers, &next_worker_id,
             &document, &console_log, &network_log, &custom_elements,
+            &mutation_observers,
         );
         Interpreter {
             global, yield_buffer: None, task_queue, next_timer_id,
@@ -699,12 +727,66 @@ impl Interpreter {
             webgl_states: Rc::new(RefCell::new(std::collections::HashMap::new())),
             custom_elements,
             custom_element_instances: Rc::new(RefCell::new(std::collections::HashMap::new())),
+            mutation_observers,
+            pending_mutation_records: Rc::new(RefCell::new(Vec::new())),
         }
     }
 
     /// Nahradi DOM document novym (po parsu HTML).
     pub fn set_document(&self, doc: crate::browser::dom::Document) {
         *self.document.borrow_mut() = doc;
+    }
+
+    /// Dispatch MutationObserver records pro mutation na danem nodu.
+    /// Pro kazdeho observera s matching target (nebo ancestor pri subtree=true)
+    /// zavolame callback se [{type, target, addedNodes, removedNodes, attributeName, oldValue}].
+    pub fn dispatch_mutation(
+        &mut self,
+        target: &Rc<crate::browser::dom::NodeData>,
+        record_type: &str,
+        attribute_name: Option<String>,
+        old_value: Option<String>,
+    ) {
+        let target_ptr = Rc::as_ptr(target) as usize;
+        // Najit observers co matchuji target nebo (pri subtree) ancestor target.
+        let observers: Vec<(JsValue, JsValue)> = self.mutation_observers.borrow().iter()
+            .filter(|(obs_ptr, _, _, subtree)| {
+                if *obs_ptr == target_ptr { return true; }
+                if !subtree { return false; }
+                // Subtree: kontroluj zda je obs_ptr ancestor target
+                let mut current = target.parent.borrow().upgrade();
+                while let Some(n) = current {
+                    if Rc::as_ptr(&n) as usize == *obs_ptr { return true; }
+                    current = n.parent.borrow().upgrade();
+                }
+                false
+            })
+            .map(|(_, cb, opts, _)| (cb.clone(), opts.clone()))
+            .collect();
+
+        for (cb, _opts) in observers {
+            // Postav MutationRecord objekt
+            let mut record = JsObject::new();
+            record.set("type".into(), JsValue::Str(record_type.into()));
+            record.set("target".into(), JsValue::DomNode(Rc::clone(target)));
+            record.set("addedNodes".into(), JsValue::Array(Rc::new(RefCell::new(Vec::new()))));
+            record.set("removedNodes".into(), JsValue::Array(Rc::new(RefCell::new(Vec::new()))));
+            if let Some(name) = &attribute_name {
+                record.set("attributeName".into(), JsValue::Str(name.clone()));
+            } else {
+                record.set("attributeName".into(), JsValue::Null);
+            }
+            if let Some(old) = &old_value {
+                record.set("oldValue".into(), JsValue::Str(old.clone()));
+            } else {
+                record.set("oldValue".into(), JsValue::Null);
+            }
+            let records = JsValue::Array(Rc::new(RefCell::new(vec![
+                JsValue::Object(Rc::new(RefCell::new(record)))
+            ])));
+            // Callback s [records, observer]
+            let _ = self.call_function(cb, vec![records], None);
+        }
     }
 
     /// Pomocnik pro render - dispatch event na konkretni DOM node z external code.
@@ -2484,6 +2566,40 @@ impl Interpreter {
                     "checked" => {
                         return Ok(JsValue::Bool(n.has_attr("checked")));
                     }
+                    "files" if n.tag_name().as_deref() == Some("input")
+                            && n.attr("type").as_deref() == Some("file") => {
+                        // FileList - empty array-like ze atributu data-files (test seed)
+                        let mut obj = JsObject::new();
+                        obj.set("__filelist__".into(), JsValue::Bool(true));
+                        obj.set("length".into(), JsValue::Number(0.0));
+                        obj.set("item".into(), native("FileList.item", |_| Ok(JsValue::Null)));
+                        return Ok(JsValue::Object(Rc::new(RefCell::new(obj))));
+                    }
+                    // HTMLFormElement.elements - kolekce form controls
+                    "elements" if n.tag_name().as_deref() == Some("form") => {
+                        let mut elements: Vec<JsValue> = Vec::new();
+                        n.walk(&mut |node| {
+                            if Rc::ptr_eq(node, &n) { return; }
+                            if let Some(t) = node.tag_name() {
+                                if matches!(t.as_str(), "input" | "select" | "textarea" | "button" | "fieldset") {
+                                    elements.push(JsValue::DomNode(Rc::clone(node)));
+                                }
+                            }
+                        });
+                        return Ok(JsValue::Array(Rc::new(RefCell::new(elements))));
+                    }
+                    "length" if n.tag_name().as_deref() == Some("form") => {
+                        let mut count = 0;
+                        n.walk(&mut |node| {
+                            if Rc::ptr_eq(node, &n) { return; }
+                            if let Some(t) = node.tag_name() {
+                                if matches!(t.as_str(), "input" | "select" | "textarea" | "button") {
+                                    count += 1;
+                                }
+                            }
+                        });
+                        return Ok(JsValue::Number(count as f64));
+                    }
                     // HTMLImageElement / canvas - rozmery
                     "naturalWidth" if n.tag_name().as_deref() == Some("img") => {
                         let w = n.attr("width").and_then(|w| w.parse::<f64>().ok()).unwrap_or(0.0);
@@ -3936,6 +4052,9 @@ impl Interpreter {
                             let attr_val = iter.next().map(|v| v.to_string()).unwrap_or_default();
                             let old_val = n.attr(&attr_name).unwrap_or_default();
                             n.set_attr(&attr_name, &attr_val);
+                            // MutationObserver dispatch
+                            self.dispatch_mutation(&n, "attributes",
+                                Some(attr_name.clone()), Some(old_val.clone()));
                             // Lifecycle: attributeChangedCallback pro custom elements
                             let node_ptr = Rc::as_ptr(&n) as usize;
                             let instance = self.custom_element_instances.borrow().get(&node_ptr).cloned();
@@ -3966,6 +4085,8 @@ impl Interpreter {
                             let child = arg_vals.into_iter().next().unwrap_or(JsValue::Undefined);
                             if let JsValue::DomNode(c) = &child {
                                 n.append_child(Rc::clone(c));
+                                // MutationObserver dispatch on parent
+                                self.dispatch_mutation(&n, "childList", None, None);
                                 // Lifecycle: connectedCallback
                                 let child_ptr = Rc::as_ptr(c) as usize;
                                 let instance = self.custom_element_instances.borrow().get(&child_ptr).cloned();
@@ -3995,6 +4116,8 @@ impl Interpreter {
                                     }
                                 }
                                 n.children.borrow_mut().retain(|x| !Rc::ptr_eq(x, c));
+                                // MutationObserver dispatch
+                                self.dispatch_mutation(&n, "childList", None, None);
                             }
                             return Ok(child);
                         }
@@ -4017,6 +4140,34 @@ impl Interpreter {
                             return Ok(JsValue::Null);
                         }
                         "submit" if n.tag_name().as_deref() == Some("form") => {
+                            // Dispatch 'submit' SubmitEvent na form pred actual fetch
+                            // Pokud listener zavola preventDefault, fetch neproveden.
+                            let mut event_obj = JsObject::new();
+                            event_obj.set("type".into(), JsValue::Str("submit".into()));
+                            event_obj.set("target".into(), JsValue::DomNode(Rc::clone(&n)));
+                            event_obj.set("currentTarget".into(), JsValue::DomNode(Rc::clone(&n)));
+                            event_obj.set("bubbles".into(), JsValue::Bool(true));
+                            event_obj.set("cancelable".into(), JsValue::Bool(true));
+                            let prevented = Rc::new(RefCell::new(false));
+                            let prevented_clone = Rc::clone(&prevented);
+                            event_obj.set("preventDefault".into(),
+                                native("preventDefault", move |_| {
+                                    *prevented_clone.borrow_mut() = true;
+                                    Ok(JsValue::Undefined)
+                                }));
+                            event_obj.set("stopPropagation".into(),
+                                native("stopPropagation", |_| Ok(JsValue::Undefined)));
+                            event_obj.set("defaultPrevented".into(), JsValue::Bool(false));
+                            let event_val = JsValue::Object(Rc::new(RefCell::new(event_obj)));
+                            // Volat listenery pres existing dispatch
+                            let _ = self.dispatch_event(&n, "submit", event_val);
+                            if *prevented.borrow() {
+                                self.console_log.borrow_mut().push((
+                                    "log".into(),
+                                    "[form submit] prevented by listener".into(),
+                                ));
+                                return Ok(JsValue::Undefined);
+                            }
                             // Collect form data (name=value pairs from inputs)
                             let action = n.attr("action").unwrap_or_else(|| "/".to_string());
                             let method = n.attr("method").unwrap_or_else(|| "GET".to_string()).to_uppercase();
@@ -4463,8 +4614,20 @@ impl Interpreter {
                         // Date staticke metody
                         ("Date", "now") => return Ok(JsValue::Number(now_ms())),
                         ("Date", "parse") => {
-                            // Stub - vratime NaN pro neznamy format
-                            return Ok(JsValue::Number(f64::NAN));
+                            let s = arg_vals.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+                            return Ok(JsValue::Number(crate::interpreter::helpers::parse_date_string(&s)));
+                        }
+                        ("Date", "UTC") => {
+                            // Date.UTC(year, month, day?, hours?, minutes?, seconds?, ms?) - UTC ms
+                            let year = arg_vals.get(0).map(|v| v.to_number() as i64).unwrap_or(1970);
+                            let month = arg_vals.get(1).map(|v| v.to_number() as u32).unwrap_or(0);
+                            let day = arg_vals.get(2).map(|v| v.to_number() as u32).unwrap_or(1);
+                            let hours = arg_vals.get(3).map(|v| v.to_number() as u32).unwrap_or(0);
+                            let minutes = arg_vals.get(4).map(|v| v.to_number() as u32).unwrap_or(0);
+                            let seconds = arg_vals.get(5).map(|v| v.to_number() as u32).unwrap_or(0);
+                            let ms_part = arg_vals.get(6).map(|v| v.to_number() as u32).unwrap_or(0);
+                            let ms = crate::interpreter::helpers::parts_to_ms(year, month, day, hours, minutes, seconds, ms_part);
+                            return Ok(JsValue::Number(ms));
                         }
                         // Promise staticke metody
                         ("Promise", "resolve") => {
@@ -4822,14 +4985,31 @@ impl Interpreter {
         Ok(JsValue::Set(Rc::new(RefCell::new(s))))
     }
 
-    /// Konstruktor `new Date()`, `new Date(ms)`, `new Date("iso-string")`.
+    /// Konstruktor `new Date()`, `new Date(ms)`, `new Date("iso-string")`,
+    /// `new Date(year, month, day?, hours?, minutes?, seconds?, ms?)`.
     fn construct_date(&mut self, args: Vec<JsValue>) -> EvalResult {
+        if args.len() >= 2 {
+            // Multi-arg form: year, month, day, hours, minutes, seconds, ms
+            let year = args[0].to_number() as i64;
+            let month = args[1].to_number() as u32;
+            let day = args.get(2).map(|v| v.to_number() as u32).unwrap_or(1);
+            let hours = args.get(3).map(|v| v.to_number() as u32).unwrap_or(0);
+            let minutes = args.get(4).map(|v| v.to_number() as u32).unwrap_or(0);
+            let seconds = args.get(5).map(|v| v.to_number() as u32).unwrap_or(0);
+            let ms_part = args.get(6).map(|v| v.to_number() as u32).unwrap_or(0);
+            let ms = crate::interpreter::helpers::parts_to_ms(year, month, day, hours, minutes, seconds, ms_part);
+            return Ok(make_date_object(ms));
+        }
         let ms = match args.into_iter().next() {
             None                       => now_ms(),
             Some(JsValue::Number(n))   => n,
-            Some(JsValue::Str(_s))     => now_ms(), // TODO: parse date string
+            Some(JsValue::Str(s))      => crate::interpreter::helpers::parse_date_string(&s),
             Some(JsValue::Undefined)   => now_ms(),
-            _                          => f64::NAN,
+            Some(other) => {
+                // Date kopirovani: new Date(other_date) -> uses valueOf
+                let n = other.to_number();
+                if n.is_nan() { now_ms() } else { n }
+            }
         };
         Ok(make_date_object(ms))
     }

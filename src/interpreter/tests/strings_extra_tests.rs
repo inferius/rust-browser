@@ -410,3 +410,14 @@ fn string_substr_negative_start() {
 fn string_code_point_at() {
     assert_eq!(as_num(eval(r#""A".codePointAt(0)"#)), 65.0);
 }
+
+#[test]
+fn string_is_well_formed_basic() {
+    assert_eq!(as_bool(eval(r#""hello".isWellFormed()"#)), true);
+    assert_eq!(as_bool(eval(r#""café".isWellFormed()"#)), true);
+}
+
+#[test]
+fn string_to_well_formed_basic() {
+    assert_eq!(as_str(eval(r#""hello".toWellFormed()"#)), "hello");
+}

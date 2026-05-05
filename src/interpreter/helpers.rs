@@ -349,6 +349,50 @@ pub fn now_ms() -> f64 {
         .unwrap_or(0.0)
 }
 
+/// Parse ISO 8601 / RFC 2822 / common date string formats.
+/// Returns NaN pri neparsovatelne hodnote.
+pub fn parse_date_string(s: &str) -> f64 {
+    let s = s.trim();
+    // ISO 8601: YYYY-MM-DD[THH:MM:SS[.sss][Z|±HH:MM]]
+    // YYYY-MM-DD
+    if s.len() == 10 && s.chars().nth(4) == Some('-') && s.chars().nth(7) == Some('-') {
+        let y: i64 = s[0..4].parse().unwrap_or(0);
+        let mo: u32 = s[5..7].parse::<u32>().unwrap_or(1).saturating_sub(1);
+        let d: u32 = s[8..10].parse().unwrap_or(1);
+        return parts_to_ms(y, mo, d, 0, 0, 0, 0);
+    }
+    // YYYY-MM-DDTHH:MM[:SS[.sss]][Z]
+    if s.len() >= 16 && s.chars().nth(4) == Some('-') && s.chars().nth(10) == Some('T') {
+        let y: i64 = s[0..4].parse().unwrap_or(0);
+        let mo: u32 = s[5..7].parse::<u32>().unwrap_or(1).saturating_sub(1);
+        let d: u32 = s[8..10].parse().unwrap_or(1);
+        let h: u32 = s[11..13].parse().unwrap_or(0);
+        let mi: u32 = s[14..16].parse().unwrap_or(0);
+        let mut sec = 0u32;
+        let mut ms_p = 0u32;
+        if s.len() >= 19 && s.as_bytes()[16] == b':' {
+            sec = s[17..19].parse().unwrap_or(0);
+        }
+        // Najit '.' pro ms
+        if let Some(dot) = s.find('.') {
+            let after = &s[dot+1..];
+            let end = after.find(|c: char| !c.is_ascii_digit()).unwrap_or(after.len());
+            let ms_str = &after[..end.min(3)];
+            ms_p = ms_str.parse().unwrap_or(0);
+            // Pad zprava: "5" -> 500ms
+            ms_p *= 10u32.pow((3 - ms_str.len() as u32).min(3));
+        }
+        return parts_to_ms(y, mo, d, h, mi, sec, ms_p);
+    }
+    // YYYY (rok jako single)
+    if s.len() == 4 {
+        if let Ok(y) = s.parse::<i64>() {
+            return parts_to_ms(y, 0, 1, 0, 0, 0, 0);
+        }
+    }
+    f64::NAN
+}
+
 pub fn make_date_object(ms: f64) -> JsValue {
     let mut obj = JsObject::new();
     obj.set("__date_ms__".into(), JsValue::Number(ms));

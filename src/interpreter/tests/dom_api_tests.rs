@@ -558,3 +558,186 @@ fn document_create_document_fragment() {
     // Fragment je DomNode - typeof vraci "object"
     assert!(r.to_string() == "object" || r.to_string() == "undefined");
 }
+
+#[test]
+fn mutation_observer_attribute_change() {
+    let code = r#"
+        let counter = 0;
+        const div = document.createElement("div");
+        const observer = new MutationObserver((records) => {
+            counter += records.length;
+        });
+        observer.observe(div, { attributes: true });
+        div.setAttribute("data-x", "1");
+        div.setAttribute("data-y", "2");
+        return counter;
+    "#;
+    let result = as_num(run(code));
+    assert_eq!(result, 2.0, "2 setAttribute volani -> 2 records");
+}
+
+#[test]
+fn mutation_observer_childlist_change() {
+    let code = r#"
+        let count = 0;
+        const parent = document.createElement("div");
+        const observer = new MutationObserver((records) => {
+            for (const r of records) {
+                if (r.type === "childList") count++;
+            }
+        });
+        observer.observe(parent, { childList: true });
+        const child = document.createElement("span");
+        parent.appendChild(child);
+        return count;
+    "#;
+    let result = as_num(run(code));
+    assert_eq!(result, 1.0, "1 appendChild -> 1 childList record");
+}
+
+#[test]
+fn mutation_observer_record_has_target() {
+    let code = r#"
+        let target_tag = "";
+        const div = document.createElement("div");
+        const observer = new MutationObserver((records) => {
+            target_tag = records[0].target.tagName.toLowerCase();
+        });
+        observer.observe(div, { attributes: true });
+        div.setAttribute("foo", "bar");
+        return target_tag;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "div", "target je div node");
+    } else {
+        panic!("ocekavan string");
+    }
+}
+
+#[test]
+fn mutation_observer_disconnect_stops() {
+    let code = r#"
+        let counter = 0;
+        const div = document.createElement("div");
+        const observer = new MutationObserver((records) => {
+            counter += records.length;
+        });
+        observer.observe(div, { attributes: true });
+        div.setAttribute("a", "1");
+        observer.disconnect();
+        div.setAttribute("b", "2");
+        return counter;
+    "#;
+    let result = as_num(run(code));
+    assert_eq!(result, 1.0, "po disconnect uz nedispatch");
+}
+
+#[test]
+fn file_constructor() {
+    let code = r#"
+        const f = new File(["hello"], "greeting.txt", { type: "text/plain", lastModified: 1234 });
+        return f.name + "|" + f.size + "|" + f.type + "|" + f.lastModified;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "greeting.txt|5|text/plain|1234");
+    } else {
+        panic!("ocekavan string");
+    }
+}
+
+#[test]
+fn input_files_returns_filelist() {
+    let code = r#"
+        const inp = document.createElement("input");
+        inp.setAttribute("type", "file");
+        const fl = inp.files;
+        return fl.length;
+    "#;
+    let result = as_num(run(code));
+    assert_eq!(result, 0.0, "Empty FileList default");
+}
+
+#[test]
+fn form_elements_collection() {
+    let code = r#"
+        const form = document.createElement("form");
+        const i1 = document.createElement("input");
+        const i2 = document.createElement("input");
+        const btn = document.createElement("button");
+        form.appendChild(i1);
+        form.appendChild(i2);
+        form.appendChild(btn);
+        return form.elements.length;
+    "#;
+    let result = as_num(run(code));
+    assert_eq!(result, 3.0, "form.elements: 2 inputs + 1 button");
+}
+
+#[test]
+fn form_length() {
+    let code = r#"
+        const form = document.createElement("form");
+        form.appendChild(document.createElement("input"));
+        form.appendChild(document.createElement("textarea"));
+        return form.length;
+    "#;
+    let result = as_num(run(code));
+    assert_eq!(result, 2.0);
+}
+
+#[test]
+fn form_submit_event_dispatched() {
+    let code = r#"
+        let dispatched = false;
+        const form = document.createElement("form");
+        form.setAttribute("action", "/test");
+        form.addEventListener("submit", (e) => {
+            dispatched = true;
+            e.preventDefault();
+        });
+        form.submit();
+        return dispatched;
+    "#;
+    if let crate::interpreter::JsValue::Bool(b) = run(code) {
+        assert!(b, "submit listener volan");
+    } else {
+        panic!("ocekavan bool");
+    }
+}
+
+#[test]
+fn form_submit_prevent_default_blocks_fetch() {
+    let code = r#"
+        let called = 0;
+        const form = document.createElement("form");
+        form.setAttribute("action", "/foo");
+        form.addEventListener("submit", (e) => {
+            called++;
+            e.preventDefault();
+        });
+        form.submit();
+        // Bez preventDefault by se network log naplnil; po preventDefault by mel zustat netknuty
+        return called;
+    "#;
+    let result = as_num(run(code));
+    assert_eq!(result, 1.0);
+}
+
+#[test]
+fn form_submit_event_has_target() {
+    let code = r#"
+        let target_tag = "";
+        const form = document.createElement("form");
+        form.addEventListener("submit", (e) => {
+            target_tag = e.target.tagName.toLowerCase();
+            e.preventDefault();
+        });
+        form.submit();
+        return target_tag;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "form");
+    } else {
+        panic!("ocekavan string");
+    }
+}

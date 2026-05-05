@@ -245,6 +245,34 @@ pub fn call_string_method(
             // Plna normalizace vyzaduje unicode-normalization crate; vracime original (NFC approx).
             Ok(Some(JsValue::Str(s.to_string())))
         }
+        "isWellFormed" => {
+            // ES2024 - test zda string ma jen valid UTF-16 (zadne lone surrogates).
+            // Nase Rust strings jsou UTF-8 -> vsechny well-formed.
+            // Edge case: simulujeme failure pri \uD800-\uDFFF range bez par.
+            let chars: Vec<char> = s.chars().collect();
+            let mut well_formed = true;
+            for c in chars {
+                let cp = c as u32;
+                if (0xD800..=0xDFFF).contains(&cp) {
+                    well_formed = false;
+                    break;
+                }
+            }
+            Ok(Some(JsValue::Bool(well_formed)))
+        }
+        "toWellFormed" => {
+            // ES2024 - replace lone surrogates s U+FFFD.
+            let mut out = String::new();
+            for c in s.chars() {
+                let cp = c as u32;
+                if (0xD800..=0xDFFF).contains(&cp) {
+                    out.push('\u{FFFD}');
+                } else {
+                    out.push(c);
+                }
+            }
+            Ok(Some(JsValue::Str(out)))
+        }
         _ => Ok(None),
     }
 }

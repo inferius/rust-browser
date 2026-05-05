@@ -196,6 +196,7 @@ pub fn setup_builtins(
     console_log: &Rc<RefCell<Vec<(String, String)>>>,
     network_log: &Rc<RefCell<Vec<(String, u16)>>>,
     custom_elements_registry: &Rc<RefCell<HashMap<String, super::JsValue>>>,
+    mutation_observers: &Rc<RefCell<Vec<(usize, super::JsValue, super::JsValue, bool)>>>,
 ) {
     let mut e = env.borrow_mut();
 
@@ -2174,6 +2175,56 @@ pub fn setup_builtins(
         Ok(JsValue::Object(obj))
     }));
 
+    // File - extends Blob, name + lastModified
+    e.define("File", native("File", |args| {
+        let mut size: f64 = 0.0;
+        let mut text_concat = String::new();
+        let mut it = args.into_iter();
+        if let Some(parts) = it.next() {
+            if let JsValue::Array(arr) = &parts {
+                for p in arr.borrow().iter() {
+                    match p {
+                        JsValue::Str(s) => { size += s.len() as f64; text_concat.push_str(s); }
+                        JsValue::Array(bytes) => { size += bytes.borrow().len() as f64; }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        let name = it.next().map(|v| v.to_string()).unwrap_or_else(|| "file".into());
+        let mut mime = String::new();
+        let mut last_modified = 0.0;
+        if let Some(opts) = it.next() {
+            if let JsValue::Object(o) = &opts {
+                if let Some(JsValue::Str(t)) = o.borrow().props.get("type") { mime = t.clone(); }
+                if let Some(JsValue::Number(n)) = o.borrow().props.get("lastModified") { last_modified = *n; }
+            }
+        }
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        obj.borrow_mut().set("name".into(), JsValue::Str(name));
+        obj.borrow_mut().set("size".into(), JsValue::Number(size));
+        obj.borrow_mut().set("type".into(), JsValue::Str(mime));
+        obj.borrow_mut().set("lastModified".into(), JsValue::Number(last_modified));
+        obj.borrow_mut().set("__file__".into(), JsValue::Bool(true));
+        let text = text_concat.clone();
+        obj.borrow_mut().set("text".into(), native("File.text", move |_| {
+            Ok(make_settled_promise("fulfilled", JsValue::Str(text.clone())))
+        }));
+        obj.borrow_mut().set("arrayBuffer".into(), native("File.arrayBuffer", |_|
+            Ok(make_settled_promise("fulfilled", JsValue::Array(Rc::new(RefCell::new(Vec::new())))))));
+        obj.borrow_mut().set("slice".into(), native("File.slice", |_| Ok(JsValue::Undefined)));
+        Ok(JsValue::Object(obj))
+    }));
+
+    // FileList - array-like collection s length / item(i) / iterator
+    e.define("FileList", native("FileList", |_| {
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        obj.borrow_mut().set("length".into(), JsValue::Number(0.0));
+        obj.borrow_mut().set("__filelist__".into(), JsValue::Bool(true));
+        obj.borrow_mut().set("item".into(), native("FileList.item", |_| Ok(JsValue::Null)));
+        Ok(JsValue::Object(obj))
+    }));
+
     // Blob - shrnuje size z parts[0..] + type z options.type
     e.define("Blob", native("Blob", |args| {
         let mut size: f64 = 0.0;
@@ -2219,8 +2270,46 @@ pub fn setup_builtins(
 
     e.define("ResizeObserver", make_observer("ResizeObserver"));
     e.define("IntersectionObserver", make_observer("IntersectionObserver"));
-    e.define("MutationObserver", make_observer("MutationObserver"));
     e.define("PerformanceObserver", make_observer("PerformanceObserver"));
+
+    // MutationObserver - real implementation s shared registry
+    {
+        let mo_reg = Rc::clone(mutation_observers);
+        e.define("MutationObserver", native("MutationObserver", move |args| {
+            let cb = args.into_iter().next().unwrap_or(JsValue::Undefined);
+            let cb_for_observe = cb.clone();
+            let cb_for_disconnect = cb.clone();
+            let mo_observe = Rc::clone(&mo_reg);
+            let mo_disconnect = Rc::clone(&mo_reg);
+            let obj = std::rc::Rc::new(std::cell::RefCell::new(JsObject::new()));
+            obj.borrow_mut().set("__observer_kind__".into(), JsValue::Str("MutationObserver".into()));
+            obj.borrow_mut().set("__mo_callback__".into(), cb);
+            // observe(target, options)
+            obj.borrow_mut().set("observe".into(), native("observe", move |a| {
+                let mut it = a.into_iter();
+                let target = it.next().unwrap_or(JsValue::Undefined);
+                let options = it.next().unwrap_or(JsValue::Undefined);
+                let subtree = if let JsValue::Object(o) = &options {
+                    matches!(o.borrow().props.get("subtree"), Some(JsValue::Bool(true)))
+                } else { false };
+                if let JsValue::DomNode(n) = &target {
+                    let ptr = std::rc::Rc::as_ptr(n) as usize;
+                    mo_observe.borrow_mut().push((ptr, cb_for_observe.clone(), options.clone(), subtree));
+                }
+                Ok(JsValue::Undefined)
+            }));
+            // disconnect() - odstrani vsechny observers s touto callback identitou
+            obj.borrow_mut().set("disconnect".into(), native("disconnect", move |_| {
+                let cb_id = format!("{:?}", cb_for_disconnect);
+                mo_disconnect.borrow_mut().retain(|(_, c, _, _)| format!("{:?}", c) != cb_id);
+                Ok(JsValue::Undefined)
+            }));
+            obj.borrow_mut().set("takeRecords".into(), native("takeRecords", |_| {
+                Ok(JsValue::Array(std::rc::Rc::new(std::cell::RefCell::new(Vec::new()))))
+            }));
+            Ok(JsValue::Object(obj))
+        }));
+    }
 
     // requestAnimationFrame / cancelAnimationFrame - stub via setTimeout
     {
