@@ -136,6 +136,23 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         }
     }
 
+    // Pre-pass: pre items bez explicit size, recursivne layout pro intrinsic.
+    for &i in &in_flow {
+        let ch = &mut bx.children[i];
+        if ch.explicit_width.is_some() && ch.explicit_height.is_some() { continue; }
+        if ch.children.is_empty() { continue; }
+        let saved_x = ch.rect.x; let saved_y = ch.rect.y;
+        ch.rect.x = 0.0; ch.rect.y = 0.0;
+        if ch.explicit_width.is_none() { ch.rect.width = 0.0; }
+        if ch.explicit_height.is_none() { ch.rect.height = 0.0; }
+        match ch.display {
+            super::super::layout::Display::Flex => super::flex::layout_flex(ch),
+            super::super::layout::Display::Grid => super::grid::layout_grid(ch),
+            _ => {}
+        }
+        ch.rect.x = saved_x; ch.rect.y = saved_y;
+    }
+
     // Place items - explicit (grid-row-start/grid-column-start) i auto-flow row major.
     // Track occupied cells.
     let mut occupied: Vec<bool> = vec![false; rows.max(1) * cols.max(1)];
