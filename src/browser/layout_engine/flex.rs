@@ -418,16 +418,18 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             } else {
                 cross_size
             };
-            let cross_offset_align = compute_align_offset(item_align, align_box, item_cross_size + it.margin_cross_start + it.margin_cross_end);
-            let mut cross_offset = cross_offset_align + it.margin_cross_start;
-            // Auto cross margin absorb
-            let cross_free = (cross_size - item_cross_size - it.margin_cross_start - it.margin_cross_end).max(0.0);
+            // Auto cross margin override align: pri auto cross margin se align-items ignoruje.
             let auto_cross_count = (it.auto_cross_start as usize) + (it.auto_cross_end as usize);
+            let cross_free = (cross_size - item_cross_size - it.margin_cross_start - it.margin_cross_end).max(0.0);
+            let mut cross_offset;
             if auto_cross_count > 0 {
                 let share = cross_free / auto_cross_count as f32;
+                cross_offset = it.margin_cross_start;
                 if it.auto_cross_start { cross_offset += share; }
-                // auto_cross_end neovlivni offset, jen zabere sve mismi
-                let _ = share;
+                // auto_cross_end neovlivni offset, jen zabere zbylou plochu
+            } else {
+                let cross_offset_align = compute_align_offset(item_align, align_box, item_cross_size + it.margin_cross_start + it.margin_cross_end);
+                cross_offset = cross_offset_align + it.margin_cross_start;
             }
 
             // Apply to child (item_idx je do in_flow, prevest na real index)
