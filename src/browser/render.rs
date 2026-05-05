@@ -1696,6 +1696,73 @@ impl GlyphAtlas {
 /// Velikost RGBA atlasu - 2048x2048 = 16 MB. Dost pro typickou stranku.
 const IMAGE_ATLAS_SIZE: u32 = 2048;
 
+/// Fetch image bytes - podporuje http(s)://, data: URI, FS path.
+/// Vrati None pri chybe (timeout, neplatny format, IO error).
+pub fn fetch_image_bytes(src: &str) -> Option<Vec<u8>> {
+    if src.starts_with("http://") || src.starts_with("https://") {
+        // HTTP fetch pres ureq sync
+        match ureq::get(src).timeout(std::time::Duration::from_secs(10)).call() {
+            Ok(resp) => {
+                let mut buf = Vec::new();
+                if resp.into_reader().read_to_end(&mut buf).is_ok() {
+                    return Some(buf);
+                }
+                None
+            }
+            Err(_) => None,
+        }
+    } else if let Some(rest) = src.strip_prefix("data:") {
+        // data:[<mime>][;base64],<payload>
+        let comma = rest.find(',')?;
+        let header = &rest[..comma];
+        let payload = &rest[comma+1..];
+        if header.contains(";base64") {
+            decode_base64(payload)
+        } else {
+            // URL-encoded text - vratit bytes (image neni typicky raw text)
+            Some(payload.as_bytes().to_vec())
+        }
+    } else {
+        // FS path
+        let path = if src.starts_with('/') {
+            src.to_string()
+        } else {
+            format!("static/{src}")
+        };
+        std::fs::read(&path).ok()
+    }
+}
+
+/// Decode base64 string -> bytes. Self-contained, bez external crate.
+fn decode_base64(s: &str) -> Option<Vec<u8>> {
+    let s: String = s.chars().filter(|c| !c.is_whitespace()).collect();
+    let mut out = Vec::with_capacity(s.len() * 3 / 4);
+    let chars: Vec<char> = s.chars().collect();
+    let val = |c: char| -> Option<u8> {
+        match c {
+            'A'..='Z' => Some(c as u8 - b'A'),
+            'a'..='z' => Some(c as u8 - b'a' + 26),
+            '0'..='9' => Some(c as u8 - b'0' + 52),
+            '+' | '-' => Some(62),
+            '/' | '_' => Some(63),
+            '=' => Some(0),
+            _ => None,
+        }
+    };
+    let mut i = 0;
+    while i + 3 < chars.len() {
+        let a = val(chars[i])?;
+        let b = val(chars[i+1])?;
+        let c = val(chars[i+2])?;
+        let d = val(chars[i+3])?;
+        out.push((a << 2) | (b >> 4));
+        if chars[i+2] != '=' { out.push(((b & 0xF) << 4) | (c >> 2)); }
+        if chars[i+3] != '=' { out.push(((c & 0x3) << 6) | d); }
+        i += 4;
+    }
+    Some(out)
+}
+
 #[derive(Clone, Copy)]
 struct ImageInfo {
     /// UV coords v atlasu (0..1)
@@ -1705,9 +1772,9 @@ struct ImageInfo {
     height: f32,
 }
 
-struct ImageAtlas {
+pub struct ImageAtlas {
     /// RGBA pixely (4 byte per pixel)
-    pixels: Vec<u8>,
+    pub pixels: Vec<u8>,
     /// src URL/path -> ImageInfo
     cache: std::collections::HashMap<String, ImageInfo>,
     /// Shelf packing kurzor
@@ -1715,11 +1782,11 @@ struct ImageAtlas {
     cursor_y: u32,
     row_height: u32,
     /// Dirty flag - byly pridany nove obrazky -> potreba upload
-    dirty: bool,
+    pub dirty: bool,
 }
 
 impl ImageAtlas {
-    fn new() -> Self {
+    pub fn new() -> Self {
         ImageAtlas {
             pixels: vec![0u8; (IMAGE_ATLAS_SIZE * IMAGE_ATLAS_SIZE * 4) as usize],
             cache: std::collections::HashMap::new(),
@@ -1734,8 +1801,19 @@ impl ImageAtlas {
         self.cache.get(src)
     }
 
+    /// Test helper: count cached images.
+    pub fn cache_size(&self) -> usize { self.cache.len() }
+
+    /// Test helper: get UV bounds for src - (uv0, uv1) v 0..1 atlas range.
+    pub fn uv_bounds(&self, src: &str) -> Option<([f32; 2], [f32; 2])> {
+        self.cache.get(src).map(|i| (i.uv0, i.uv1))
+    }
+
+    /// Test helper: check if src is in cache.
+    pub fn contains(&self, src: &str) -> bool { self.cache.contains_key(src) }
+
     /// Vlozi RGBA bitmap do atlasu. Pri overflow vrati false.
-    fn add(&mut self, src: &str, w: u32, h: u32, rgba: &[u8]) -> bool {
+    pub fn add(&mut self, src: &str, w: u32, h: u32, rgba: &[u8]) -> bool {
         if self.cache.contains_key(src) { return true; }
         if w == 0 || h == 0 { return false; }
         // Obrazek vetsi nez cely atlas - nelze
@@ -3508,37 +3586,30 @@ impl Renderer {
         }
     }
 
-    /// Nacte image ze souboru a vlozi do RGBA atlasu (pokud neni jiz cached).
+    /// Nacte image ze souboru / HTTP / data URI a vlozi do RGBA atlasu.
+    /// HTTP fetch pres ureq (sync). Data URI dekodovani base64.
     fn load_image(&mut self, src: &str) {
         if self.image_atlas.cache.contains_key(src) { return; }
-        // FS load (HTTP zatim skip)
-        let path = if src.starts_with("http://") || src.starts_with("https://") {
-            return;
-        } else if src.starts_with('/') {
-            src.to_string()
-        } else {
-            format!("static/{src}")
-        };
-        if let Ok(bytes) = std::fs::read(&path) {
-            if let Ok(img) = image::load_from_memory(&bytes) {
-                let rgba = img.to_rgba8();
-                let (w, h) = (rgba.width(), rgba.height());
-                let raw = rgba.into_raw();
-                // Velke obrazky downscalujem aby se vesly do atlasu
-                if w > IMAGE_ATLAS_SIZE / 2 || h > IMAGE_ATLAS_SIZE / 2 {
-                    let max = IMAGE_ATLAS_SIZE / 2;
-                    let scale = (max as f32 / w.max(h) as f32).min(1.0);
-                    let new_w = (w as f32 * scale) as u32;
-                    let new_h = (h as f32 * scale) as u32;
-                    if let Ok(decoded) = image::load_from_memory(&bytes) {
-                        let small = decoded.resize_exact(new_w, new_h, image::imageops::FilterType::Triangle);
-                        let small_rgba = small.to_rgba8();
-                        self.image_atlas.add(src, new_w, new_h, &small_rgba.into_raw());
-                        return;
-                    }
+        let bytes_opt = fetch_image_bytes(src);
+        let bytes = match bytes_opt { Some(b) => b, None => return };
+        if let Ok(img) = image::load_from_memory(&bytes) {
+            let rgba = img.to_rgba8();
+            let (w, h) = (rgba.width(), rgba.height());
+            let raw = rgba.into_raw();
+            // Velke obrazky downscalujem aby se vesly do atlasu
+            if w > IMAGE_ATLAS_SIZE / 2 || h > IMAGE_ATLAS_SIZE / 2 {
+                let max = IMAGE_ATLAS_SIZE / 2;
+                let scale = (max as f32 / w.max(h) as f32).min(1.0);
+                let new_w = (w as f32 * scale) as u32;
+                let new_h = (h as f32 * scale) as u32;
+                if let Ok(decoded) = image::load_from_memory(&bytes) {
+                    let small = decoded.resize_exact(new_w, new_h, image::imageops::FilterType::Triangle);
+                    let small_rgba = small.to_rgba8();
+                    self.image_atlas.add(src, new_w, new_h, &small_rgba.into_raw());
+                    return;
                 }
-                self.image_atlas.add(src, w, h, &raw);
             }
+            self.image_atlas.add(src, w, h, &raw);
         }
     }
 

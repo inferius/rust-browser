@@ -1624,3 +1624,90 @@ fn dirty_region_contained_rect_expands_to_outer() {
     assert_eq!(r[2], 250.0); // w = 300-50
     assert_eq!(r[3], 250.0); // h = 300-50
 }
+
+// ─── Image atlas / fetch tests ─────────────────────────────────────────
+
+#[test]
+fn image_atlas_empty() {
+    let atlas = crate::browser::render::ImageAtlas::new();
+    assert_eq!(atlas.cache_size(), 0);
+    assert!(!atlas.contains("foo.png"));
+}
+
+#[test]
+fn image_atlas_add_basic() {
+    let mut atlas = crate::browser::render::ImageAtlas::new();
+    let pixels = vec![255u8; 4 * 4 * 4]; // 4x4 RGBA
+    let added = atlas.add("test.png", 4, 4, &pixels);
+    assert!(added);
+    assert!(atlas.contains("test.png"));
+    assert_eq!(atlas.cache_size(), 1);
+}
+
+#[test]
+fn image_atlas_uv_bounds() {
+    let mut atlas = crate::browser::render::ImageAtlas::new();
+    let pixels = vec![255u8; 8 * 8 * 4];
+    atlas.add("a.png", 8, 8, &pixels);
+    let (uv0, uv1) = atlas.uv_bounds("a.png").unwrap();
+    assert_eq!(uv0, [0.0, 0.0]);
+    // 8/2048 = 0.00390625
+    assert!((uv1[0] - 8.0 / 2048.0).abs() < 1e-5);
+    assert!((uv1[1] - 8.0 / 2048.0).abs() < 1e-5);
+}
+
+#[test]
+fn image_atlas_dedupe_same_src() {
+    let mut atlas = crate::browser::render::ImageAtlas::new();
+    let pixels = vec![0u8; 4 * 4 * 4];
+    atlas.add("dup.png", 4, 4, &pixels);
+    atlas.add("dup.png", 4, 4, &pixels);
+    assert_eq!(atlas.cache_size(), 1, "second add stejneho src nepridava");
+}
+
+#[test]
+fn image_atlas_shelf_packing_horizontal() {
+    let mut atlas = crate::browser::render::ImageAtlas::new();
+    let pixels = vec![0u8; 16 * 16 * 4];
+    atlas.add("a.png", 16, 16, &pixels);
+    atlas.add("b.png", 16, 16, &pixels);
+    let (uv0_a, _) = atlas.uv_bounds("a.png").unwrap();
+    let (uv0_b, _) = atlas.uv_bounds("b.png").unwrap();
+    assert_eq!(uv0_a, [0.0, 0.0]);
+    // b je vpravo od a (cursor_x posunut o 16+1)
+    assert!(uv0_b[0] > 0.0);
+    assert_eq!(uv0_b[1], 0.0);
+}
+
+#[test]
+fn image_atlas_overflow_too_large() {
+    let mut atlas = crate::browser::render::ImageAtlas::new();
+    let pixels = vec![0u8; 4]; // 1x1 RGBA, ale rekneme ze je velky
+    let added = atlas.add("huge.png", 4096, 4096, &pixels);
+    assert!(!added, "obrazek vetsi nez atlas se odmitne");
+}
+
+#[test]
+fn fetch_image_data_uri_base64_png() {
+    use crate::browser::render::fetch_image_bytes;
+    // 1x1 PNG transparent base64
+    let data_uri = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkAAIAAAoAAv/lxKUAAAAASUVORK5CYII=";
+    let bytes = fetch_image_bytes(data_uri).expect("base64 decode");
+    // PNG signature: 89 50 4E 47
+    assert_eq!(&bytes[0..4], &[0x89, 0x50, 0x4E, 0x47]);
+}
+
+#[test]
+fn fetch_image_data_uri_invalid_returns_none() {
+    use crate::browser::render::fetch_image_bytes;
+    // Bez carky -> invalid format
+    let bytes = fetch_image_bytes("data:image/png;base64");
+    assert!(bytes.is_none());
+}
+
+#[test]
+fn fetch_image_fs_nonexistent() {
+    use crate::browser::render::fetch_image_bytes;
+    let bytes = fetch_image_bytes("nonexistent_xxx_yyy.png");
+    assert!(bytes.is_none());
+}
