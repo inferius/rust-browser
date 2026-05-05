@@ -192,6 +192,7 @@ mod tests {
                 "align-items" => bx.align_items = v.clone(),
                 "flex-grow" => bx.flex_grow = v.parse().unwrap_or(0.0),
                 "flex-shrink" => bx.flex_shrink = v.parse().unwrap_or(1.0),
+                "flex-basis" => bx.flex_basis = v.clone(),
                 "row-gap" => bx.row_gap = parse_dim(v, container_h).unwrap_or(0.0),
                 "column-gap" => bx.column_gap = parse_dim(v, container_w).unwrap_or(0.0),
                 "gap" => {

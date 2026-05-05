@@ -107,6 +107,21 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         let mut est_h = ch.explicit_height.unwrap_or_else(|| {
             if ch.text.is_some() { ch.font_size * 1.4 } else { 0.0 }
         });
+        // flex-basis override main size kdyz nastaveno (a neni "auto")
+        let basis_v = ch.flex_basis.trim();
+        if !basis_v.is_empty() && basis_v != "auto" && basis_v != "content" {
+            let basis = if let Some(num) = basis_v.strip_suffix("px") {
+                num.parse::<f32>().ok()
+            } else if let Some(num) = basis_v.strip_suffix('%') {
+                num.parse::<f32>().ok().map(|p| {
+                    let cont = if direction.is_row() { inner_w } else { (bx.rect.height - pad_t - pad_b - 2.0 * bx.margin).max(0.0) };
+                    cont * p / 100.0
+                })
+            } else { basis_v.parse::<f32>().ok() };
+            if let Some(b) = basis {
+                if direction.is_row() { est_w = b; } else { est_h = b; }
+            }
+        }
         // Aspect-ratio dopocet
         if let Some(ar) = ch.aspect_ratio {
             if ar > 0.0 {
@@ -409,11 +424,12 @@ fn parse_justify_content(s: &str) -> JustifyContent {
 
 fn parse_align_items(s: &str) -> AlignItems {
     match s {
+        "flex-start" | "start" => AlignItems::FlexStart,
         "flex-end" | "end" => AlignItems::FlexEnd,
         "center" => AlignItems::Center,
         "stretch" => AlignItems::Stretch,
         "baseline" => AlignItems::Baseline,
-        _ => AlignItems::FlexStart,
+        _ => AlignItems::Stretch, // CSS default
     }
 }
 
