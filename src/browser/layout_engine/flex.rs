@@ -168,10 +168,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                 })
             } else { basis_v.parse::<f32>().ok() };
             if let Some(b) = basis {
-                // Min-content floor: pokud item ma intrinsic > basis, take max.
-                let intrinsic = if direction.is_row() { ch.rect.width } else { ch.rect.height };
-                let final_b = b.max(intrinsic);
-                if direction.is_row() { est_w = final_b; } else { est_h = final_b; }
+                if direction.is_row() { est_w = b; } else { est_h = b; }
             }
         }
         // Apply min-w/h pred aspect ratio dopoctem
@@ -256,13 +253,14 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         } else {
             (ch_min, ch_max, cw_min, cw_max)
         };
-        items[i].min_main = min_m;
+        // Min-main floor: max(specified min, intrinsic content z pre-pass).
+        let intrinsic_main = if direction.is_row() { ch.rect.width } else { ch.rect.height };
+        let min_m_with_intrinsic = min_m.max(intrinsic_main);
+        items[i].min_main = min_m_with_intrinsic;
         items[i].max_main = max_m;
-        // Clamp cross size na cross min/max ihned (cross neresolvuje grow/shrink)
         if min_c > 0.0 { items[i].cross_size = items[i].cross_size.max(min_c); }
         items[i].cross_size = items[i].cross_size.min(max_c);
-        // Initial main clamp jen pro respektovani min (max nepouzivat dokud nedistribuji)
-        // - to je konzistentni se spec: hypothetical = clamped(flex-basis)
+        // Initial main_size NEMA zahrnovat intrinsic - jen specified min.
         if min_m > 0.0 { items[i].main_size = items[i].main_size.max(min_m); }
         items[i].main_size = items[i].main_size.min(max_m);
     }
