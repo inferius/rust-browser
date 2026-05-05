@@ -490,19 +490,15 @@ mod tests {
                           else if auto_l { free_x }
                           else { 0.0 };
             let w = base_w;
-            // Sibling margin collapse: pokud prev m_b + curr m_t pozitivni, take max,
-            // odecist soucet co uz cursor_y obsahuje.
-            // cursor_y po prev: += prev.height + prev.m_t + prev.m_b. We want
-            // next.y = prev.bottom + max(prev.m_b, curr.m_t).
-            // Currently: child.y = cursor_y + m_t. cursor_y - prev.m_b is "true" cursor.
-            // adjusted_y = (cursor_y - prev_m_b) + max(prev_m_b, m_t).
+            // Sibling margin collapse: pokud prev m_b + curr m_t pozitivni, take max.
             let collapsed = if prev_m_b >= 0.0 && m_t >= 0.0 {
                 prev_m_b.max(m_t)
             } else {
                 prev_m_b + m_t
             };
             child.rect.x = inner_x + m_l + extra_l;
-            child.rect.y = (cursor_y - prev_m_b) + collapsed;
+            let natural_y = (cursor_y - prev_m_b) + collapsed;
+            child.rect.y = natural_y;
             child.rect.width = w;
             // Relative position offset (top/left/right/bottom): top wins nad bottom, left nad right.
             // V CSS jen pri position:relative; v taffy fixturach se aplikuje vzdy kdyz set.
@@ -513,6 +509,8 @@ mod tests {
                         else if let Some(b) = child.offset_bottom { -b }
                         else { 0.0 };
             child.rect.x += off_x;
+            // Pozn: offset_y aplikujeme na rect.y, ale cursor_y nasledne pocitame z
+            // natural_y (ne posunute) aby relativni offset neovlivnil flow.
             child.rect.y += off_y;
             // Aspect-ratio: dopocet height z width
             let has_explicit_h = child.explicit_height.is_some();
@@ -592,22 +590,18 @@ mod tests {
                     child.rect.height = new_h_clamped;
                 }
             }
-            // cursor_y se pohne na child.bottom + child.m_b
+            // cursor_y advance pouzij natural_y (bez offsetu) aby relativni position
+            // neovlivnil flow.
             let m_b = child.margin_bottom.unwrap_or(child.margin);
-            // Margin collapse through: empty block s 0h a no pad/border collapsuje
-            // svou m_t + m_b s sourozenci. Misto child.bottom+m_b uchovavame max margin.
             let pad_t_c = child.padding_top.unwrap_or(child.padding) + child.border_top_width.unwrap_or(child.border_width);
             let pad_b_c = child.padding_bottom.unwrap_or(child.padding) + child.border_bottom_width.unwrap_or(child.border_width);
             let is_empty_passthrough = child.rect.height == 0.0 && pad_t_c == 0.0 && pad_b_c == 0.0;
             if is_empty_passthrough {
-                // Effective margin = max(prev_collapsed, m_t, m_b). Pozice child stejna.
-                // Ulozime jako prev_m_b: combined = max(collapsed (uz aplikovano), m_b).
-                // Reduce cursor advance: cursor zustane v misto child.y, prev_m_b = max(collapsed, m_b).
-                cursor_y = child.rect.y;
+                cursor_y = natural_y;
                 let combined = collapsed.max(m_b);
                 prev_m_b = combined;
             } else {
-                cursor_y = child.rect.y + child.rect.height + m_b;
+                cursor_y = natural_y + child.rect.height + m_b;
                 prev_m_b = m_b;
             }
         }
