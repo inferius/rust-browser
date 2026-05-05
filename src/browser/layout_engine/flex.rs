@@ -486,6 +486,14 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             } else {
                 let cross_offset_align = compute_align_offset(item_align, align_box, item_cross_size + it.margin_cross_start + it.margin_cross_end);
                 cross_offset = cross_offset_align + it.margin_cross_start;
+                // Pri wrap-reverse: cross axis se prevracije, takze align FlexStart/FlexEnd
+                // tahaji item z opacne strany line. flip cross_offset.
+                if matches!(wrap, FlexWrap::WrapReverse) {
+                    let item_total = item_cross_size + it.margin_cross_start + it.margin_cross_end;
+                    let from_end_align = compute_align_offset(item_align, align_box, item_total);
+                    let flipped = align_box - item_total - from_end_align;
+                    cross_offset = flipped + it.margin_cross_start;
+                }
             }
 
             // Apply to child (item_idx je do in_flow, prevest na real index)

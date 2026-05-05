@@ -2222,6 +2222,9 @@ pub fn layout_block(bx: &mut LayoutBox) {
         layout_block_vertical(bx);
         return;
     }
+    // V taffy_mode: pamatuj puvodni height (uz nastaveny rodicem). Pak po vypoctu
+    // content_h NEpresahnout puvodni hodnotu (parent height = constraint).
+    let preset_height_taffy = if bx.taffy_mode { bx.rect.height } else { 0.0 };
 
     let inner_x = bx.rect.x + bx.padding + bx.margin + bx.border_width;
     let inner_y = bx.rect.y + bx.padding + bx.margin + bx.border_width;
@@ -2324,6 +2327,11 @@ pub fn layout_block(bx: &mut LayoutBox) {
     let content_h = cursor_y - inner_y;
     if bx.rect.height < content_h + 2.0 * (bx.padding + bx.border_width) {
         bx.rect.height = content_h + 2.0 * (bx.padding + bx.border_width);
+    }
+    // V taffy_mode: pokud rodic ji uz nastavil (preset > 0), nepresahnout (parent
+    // constraint - flex/grid item v constrained kontextu nesmi rust nad parent).
+    if bx.taffy_mode && preset_height_taffy > 0.0 {
+        bx.rect.height = preset_height_taffy;
     }
 }
 

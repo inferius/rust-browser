@@ -451,9 +451,34 @@ mod tests {
         stats
     }
 
+    /// Walk first in-flow descendant chain to find collapsed margin-top per CSS spec:
+    /// final = max(positive_margins) + min(negative_margins).
+    fn chain_collapsed_m_t(child: &LayoutBox) -> f32 {
+        let mut max_pos = 0.0_f32;
+        let mut min_neg = 0.0_f32;
+        chain_walk(child, &mut max_pos, &mut min_neg);
+        max_pos + min_neg
+    }
+    fn chain_walk(child: &LayoutBox, max_pos: &mut f32, min_neg: &mut f32) {
+        let m_t = child.margin_top.unwrap_or(child.margin);
+        if m_t > 0.0 { if m_t > *max_pos { *max_pos = m_t; } }
+        else if m_t < 0.0 { if m_t < *min_neg { *min_neg = m_t; } }
+        let pb_t = child.padding_top.unwrap_or(child.padding) + child.border_top_width.unwrap_or(child.border_width);
+        if pb_t > 0.0 { return; }
+        for ch in &child.children {
+            if matches!(ch.position, Position::Absolute | Position::Fixed) { continue; }
+            if matches!(ch.display, Display::None) { continue; }
+            chain_walk(ch, max_pos, min_neg);
+            return;
+        }
+    }
     /// Jednoduchy block layout - stackuj children vertikalne, kazdy plnou sirku.
     /// Position absolute/fixed children jdou mimo flow - relativne k padding boxu parenta.
     fn block_layout_simple(bx: &mut LayoutBox) {
+        block_layout_simple_impl(bx, false)
+    }
+    /// Block layout s flagem zda first in-flow ma byt jeho m_t suppressed (collapsed up).
+    fn block_layout_simple_impl(bx: &mut LayoutBox, suppress_first_m_t: bool) {
         let bw_l = bx.border_left_width.unwrap_or(bx.border_width);
         let bw_r = bx.border_right_width.unwrap_or(bx.border_width);
         let bw_t = bx.border_top_width.unwrap_or(bx.border_width);
@@ -474,6 +499,12 @@ mod tests {
         // First pass: layout in-flow + record static y pro abs (vc. margin-top).
         let mut static_y_for: std::collections::HashMap<usize, f32> = std::collections::HashMap::new();
         let mut prev_m_b = 0.0_f32; // sibling margin collapse: prev child's margin-bottom
+        // Pre-spocti first in-flow index pro chain margin collapse.
+        let first_in_flow_idx: Option<usize> = bx.children.iter().enumerate()
+            .find(|(_, c)| !matches!(c.position, Position::Absolute | Position::Fixed) && !matches!(c.display, Display::None))
+            .map(|(idx, _)| idx);
+        // Pad/border-top vlastniho boxu - rozhoduje zda first child collapsuje.
+        let bx_pad_t = pad_t;
         for (i, child) in bx.children.iter_mut().enumerate() {
             if matches!(child.position, Position::Absolute | Position::Fixed) {
                 let m_t = child.margin_top.unwrap_or(child.margin);
@@ -489,8 +520,28 @@ mod tests {
                 continue;
             }
             let m_l = child.margin_left.unwrap_or(child.margin);
-            let m_t = child.margin_top.unwrap_or(child.margin);
+            let original_m_t = child.margin_top.unwrap_or(child.margin);
+            let mut m_t = original_m_t;
             let m_r = child.margin_right.unwrap_or(child.margin);
+            // Suppress first child m_t (collapsed up do parent chain).
+            let is_first = first_in_flow_idx == Some(i);
+            if is_first && suppress_first_m_t {
+                m_t = 0.0;
+                // Tez aktualizovat field tak aby compute_h to videlo a nesubraktoval znovu.
+                child.margin_top = Some(0.0);
+            }
+            // Chain margin collapse: pri first in-flow + parent pad/border-top = 0,
+            // m_t collapsuje s first grandchild's m_t. Pouzij max chain.
+            let mut child_will_suppress_first = false;
+            if is_first && bx_pad_t == 0.0 {
+                let pad_t_c_pre = child.padding_top.unwrap_or(child.padding) + child.border_top_width.unwrap_or(child.border_width);
+                if pad_t_c_pre == 0.0 {
+                    let chained = chain_collapsed_m_t(child);
+                    m_t = chained;
+                    child.margin_top = Some(chained);
+                    child_will_suppress_first = true;
+                }
+            }
             let auto_l = child.margin_left_auto;
             let auto_r = child.margin_right_auto;
             let mut base_w = if let Some(w) = child.explicit_width { w }
@@ -514,12 +565,10 @@ mod tests {
                           else if auto_l { free_x }
                           else { 0.0 };
             let w = base_w;
-            // Sibling margin collapse: pokud prev m_b + curr m_t pozitivni, take max.
-            let collapsed = if prev_m_b >= 0.0 && m_t >= 0.0 {
-                prev_m_b.max(m_t)
-            } else {
-                prev_m_b + m_t
-            };
+            // Sibling margin collapse per CSS spec: collapsed = max(positives) + min(negatives).
+            let max_pos = prev_m_b.max(m_t).max(0.0);
+            let min_neg = prev_m_b.min(m_t).min(0.0);
+            let collapsed = max_pos + min_neg;
             child.rect.x = inner_x + m_l + extra_l;
             let natural_y = (cursor_y - prev_m_b) + collapsed;
             child.rect.y = natural_y;
@@ -570,7 +619,7 @@ mod tests {
             match child.display {
                 Display::Flex => layout_flex(child),
                 Display::Grid => layout_grid(child),
-                Display::Block | Display::None => block_layout_simple(child),
+                Display::Block | Display::None => block_layout_simple_impl(child, child_will_suppress_first),
                 _ => {}
             }
             // Po recursivnim layoutu: kdyz nemel explicit_height, dopocti z content.
