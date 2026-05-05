@@ -258,14 +258,32 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         } else {
             (ch_min, ch_max, cw_min, cw_max)
         };
-        // Min-main floor: max(specified min, intrinsic content z pre-pass).
+        // Min-main floor: max(specified min, intrinsic content z pre-pass, pad+border).
         let intrinsic_main = if direction.is_row() { ch.rect.width } else { ch.rect.height };
-        let min_m_with_intrinsic = min_m.max(intrinsic_main);
+        let pb_main = if direction.is_row() {
+            ch.padding_left.unwrap_or(ch.padding) + ch.padding_right.unwrap_or(ch.padding)
+                + ch.border_left_width.unwrap_or(ch.border_width) + ch.border_right_width.unwrap_or(ch.border_width)
+        } else {
+            ch.padding_top.unwrap_or(ch.padding) + ch.padding_bottom.unwrap_or(ch.padding)
+                + ch.border_top_width.unwrap_or(ch.border_width) + ch.border_bottom_width.unwrap_or(ch.border_width)
+        };
+        let min_m_with_intrinsic = min_m.max(intrinsic_main).max(pb_main);
         items[i].min_main = min_m_with_intrinsic;
         items[i].max_main = max_m;
-        if min_c > 0.0 { items[i].cross_size = items[i].cross_size.max(min_c); }
+        // Cross floor: pad+border + intrinsic.
+        let intrinsic_cross = if direction.is_row() { ch.rect.height } else { ch.rect.width };
+        let pb_cross = if direction.is_row() {
+            ch.padding_top.unwrap_or(ch.padding) + ch.padding_bottom.unwrap_or(ch.padding)
+                + ch.border_top_width.unwrap_or(ch.border_width) + ch.border_bottom_width.unwrap_or(ch.border_width)
+        } else {
+            ch.padding_left.unwrap_or(ch.padding) + ch.padding_right.unwrap_or(ch.padding)
+                + ch.border_left_width.unwrap_or(ch.border_width) + ch.border_right_width.unwrap_or(ch.border_width)
+        };
+        let min_c_total = min_c.max(intrinsic_cross).max(pb_cross);
+        if min_c_total > 0.0 { items[i].cross_size = items[i].cross_size.max(min_c_total); }
         items[i].cross_size = items[i].cross_size.min(max_c);
-        // Initial main_size = base size (flex-basis). Min/max se aplikuje v resolve step.
+        // Re-apply min po max - min wins.
+        if min_c_total > 0.0 { items[i].cross_size = items[i].cross_size.max(min_c_total); }
         items[i].main_size = items[i].main_size.min(max_m);
     }
 
@@ -435,11 +453,15 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             // Apply to child (item_idx je do in_flow, prevest na real index)
             let real_idx = in_flow[item_idx];
             let child = &mut bx.children[real_idx];
-            // Pre-load child max/min cross
+            // Pre-load child max/min cross + pad/border floor
             let cw_max_c = if child.max_width_v.is_empty() { f32::INFINITY } else { super::super::layout::parse_length(&child.max_width_v) };
             let ch_max_c = if child.max_height_v.is_empty() { f32::INFINITY } else { super::super::layout::parse_length(&child.max_height_v) };
             let cw_min_c = super::super::layout::parse_length(&child.min_width_v);
             let ch_min_c = super::super::layout::parse_length(&child.min_height_v);
+            let pb_w = child.padding_left.unwrap_or(child.padding) + child.padding_right.unwrap_or(child.padding)
+                + child.border_left_width.unwrap_or(child.border_width) + child.border_right_width.unwrap_or(child.border_width);
+            let pb_h = child.padding_top.unwrap_or(child.padding) + child.padding_bottom.unwrap_or(child.padding)
+                + child.border_top_width.unwrap_or(child.border_width) + child.border_bottom_width.unwrap_or(child.border_width);
             if direction.is_row() {
                 child.rect.x = inner_x + main_cursor;
                 child.rect.y = inner_y + cross_cursor + cross_offset;
@@ -458,8 +480,10 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                 }
                 w = w.min(cw_max_c);
                 if cw_min_c > 0.0 { w = w.max(cw_min_c); }
+                w = w.max(pb_w);
+                let h_final = h.max(pb_h);
                 child.rect.width = w;
-                child.rect.height = h;
+                child.rect.height = h_final;
             } else {
                 child.rect.x = inner_x + cross_cursor + cross_offset;
                 child.rect.y = inner_y + main_cursor;
@@ -478,8 +502,8 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                 }
                 h = h.min(ch_max_c);
                 if ch_min_c > 0.0 { h = h.max(ch_min_c); }
-                child.rect.height = h;
-                child.rect.width = w;
+                child.rect.height = h.max(pb_h);
+                child.rect.width = w.max(pb_w);
             }
 
             main_cursor += main_size + it.margin_main_end;
