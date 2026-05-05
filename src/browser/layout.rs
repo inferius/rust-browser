@@ -427,6 +427,10 @@ pub struct LayoutBox {
     pub flex_wrap: String,
     pub justify_content: String,
     pub align_items: String,
+    /// align-self per-item (override align-items): auto/start/end/center/stretch/baseline
+    pub align_self: String,
+    /// justify-self per-item (grid): auto/start/end/center/stretch
+    pub justify_self: String,
     pub align_content: String,
     pub flex_grow: f32,
     pub flex_shrink: f32,
@@ -746,6 +750,8 @@ impl LayoutBox {
             flex_wrap: String::new(),
             justify_content: String::new(),
             align_items: String::new(),
+            align_self: String::new(),
+            justify_self: String::new(),
             align_content: String::new(),
             flex_grow: 0.0,
             flex_shrink: 1.0,
