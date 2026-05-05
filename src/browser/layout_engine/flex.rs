@@ -258,8 +258,10 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         } else {
             (ch_min, ch_max, cw_min, cw_max)
         };
-        // Min-main floor: max(specified min, intrinsic content z pre-pass, pad+border).
-        let intrinsic_main = if direction.is_row() { ch.rect.width } else { ch.rect.height };
+        // Min-main floor: max(specified min, intrinsic content z pre-pass jen kdyz no explicit, pad+border).
+        let intrinsic_main = if ch.explicit_width.is_some() && direction.is_row() { 0.0 }
+                            else if ch.explicit_height.is_some() && !direction.is_row() { 0.0 }
+                            else if direction.is_row() { ch.rect.width } else { ch.rect.height };
         let pb_main = if direction.is_row() {
             ch.padding_left.unwrap_or(ch.padding) + ch.padding_right.unwrap_or(ch.padding)
                 + ch.border_left_width.unwrap_or(ch.border_width) + ch.border_right_width.unwrap_or(ch.border_width)
