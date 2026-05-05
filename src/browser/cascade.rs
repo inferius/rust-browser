@@ -690,6 +690,13 @@ pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
         for (_, decl) in matched_decls {
             let resolved = resolve_value(&decl.value, &variables);
             let resolved = resolve_attr_in_value(&resolved, node);
+            // revert / revert-layer / unset / initial: odstranit prop z computed map
+            // (ucinne resetuje na UA/inherited default). Vymazeme pokud jiz v map je.
+            let kw = resolved.trim();
+            if matches!(kw, "unset" | "initial" | "revert" | "revert-layer") {
+                styles.remove(&decl.property);
+                continue;
+            }
             expand_shorthand(&decl.property, &resolved, &mut styles);
         }
 
@@ -702,6 +709,11 @@ pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
                     if !prop.is_empty() && !val.is_empty() {
                         let resolved = resolve_value(&val, &variables);
                         let resolved = resolve_attr_in_value(&resolved, node);
+                        let kw = resolved.trim();
+                        if matches!(kw, "unset" | "initial" | "revert" | "revert-layer") {
+                            styles.remove(&prop);
+                            continue;
+                        }
                         expand_shorthand(&prop, &resolved, &mut styles);
                     }
                 }

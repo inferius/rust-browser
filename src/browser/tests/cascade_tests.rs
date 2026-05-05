@@ -1156,3 +1156,50 @@ fn named_color_full_set_parsed() {
     assert_eq!(parse_color("teal"), Some([0, 128, 128, 255]));
     assert_eq!(parse_color("olive"), Some([128, 128, 0, 255]));
 }
+
+#[test]
+fn unset_removes_property() {
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade};
+    let doc = parse_html(r#"<html><body><div></div></body></html>"#, "");
+    // Prvni pravidlo nastavi barvu, druhe ji unset-uje
+    let css = parse_stylesheet("div { color: red; } div { color: unset; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let styles = cascade::get_styles(&map, &div);
+    // Po unset by color nemela byt v computed stylech
+    assert!(styles.and_then(|s| s.get("color")).is_none(), "unset odstranil color");
+}
+
+#[test]
+fn initial_removes_property() {
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade};
+    let doc = parse_html(r#"<html><body><p></p></body></html>"#, "");
+    let css = parse_stylesheet("p { color: blue; } p { color: initial; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let p = doc.root.find(|n| n.tag_name().as_deref() == Some("p")).unwrap();
+    let styles = cascade::get_styles(&map, &p);
+    assert!(styles.and_then(|s| s.get("color")).is_none(), "initial resetuje color");
+}
+
+#[test]
+fn revert_removes_property() {
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade};
+    let doc = parse_html(r#"<html><body><span></span></body></html>"#, "");
+    let css = parse_stylesheet("span { font-weight: bold; } span { font-weight: revert; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let span = doc.root.find(|n| n.tag_name().as_deref() == Some("span")).unwrap();
+    let styles = cascade::get_styles(&map, &span);
+    assert!(styles.and_then(|s| s.get("font-weight")).is_none(), "revert resetuje font-weight");
+}
+
+#[test]
+fn unset_inline_style() {
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade};
+    // Inline style "color: unset" smaže barvu nastazenou pravidlem
+    let doc = parse_html(r#"<html><body><div style="color: unset;"></div></body></html>"#, "");
+    let css = parse_stylesheet("div { color: red; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let styles = cascade::get_styles(&map, &div);
+    assert!(styles.and_then(|s| s.get("color")).is_none(), "inline unset smazel color");
+}
