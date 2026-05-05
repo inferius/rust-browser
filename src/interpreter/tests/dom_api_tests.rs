@@ -2025,3 +2025,95 @@ fn console_assert_no_throw() {
         assert_eq!(s, "ok");
     }
 }
+
+// ─── DOMException + ImageData + OffscreenCanvas + Path2D ──────────────
+
+#[test]
+fn dom_exception_with_name() {
+    let code = r#"
+        const e = new DOMException("Not found", "NotFoundError");
+        return e.name + "|" + e.message + "|" + e.code;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "NotFoundError|Not found|8");
+    }
+}
+
+#[test]
+fn dom_exception_default_error() {
+    let code = r#"
+        const e = new DOMException("test");
+        return e.name + "|" + e.code;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "Error|0");
+    }
+}
+
+#[test]
+fn dom_exception_quota_exceeded() {
+    let code = r#"
+        return new DOMException("full", "QuotaExceededError").code;
+    "#;
+    if let crate::interpreter::JsValue::Number(n) = run(code) {
+        assert_eq!(n, 22.0);
+    }
+}
+
+#[test]
+fn image_data_construct_dimensions() {
+    let code = r#"
+        const id = new ImageData(10, 5);
+        return id.width + "|" + id.height + "|" + id.data.length;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "10|5|200"); // 10*5*4 = 200
+    }
+}
+
+#[test]
+fn image_data_color_space() {
+    let code = r#"
+        const id = new ImageData(2, 2);
+        return id.colorSpace;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "srgb");
+    }
+}
+
+#[test]
+fn offscreen_canvas_dimensions() {
+    let code = r#"
+        const oc = new OffscreenCanvas(200, 150);
+        return oc.width + "|" + oc.height;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "200|150");
+    }
+}
+
+#[test]
+fn path_2d_methods_exist() {
+    let code = r#"
+        const p = new Path2D();
+        p.moveTo(0, 0);
+        p.lineTo(10, 10);
+        p.arc(50, 50, 30, 0, Math.PI * 2);
+        return typeof p.closePath;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "function");
+    }
+}
+
+#[test]
+fn create_image_bitmap_returns_promise() {
+    let code = r#"
+        const p = createImageBitmap();
+        return p.__promise_state__;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "fulfilled");
+    }
+}

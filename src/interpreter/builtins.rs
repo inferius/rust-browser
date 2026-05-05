@@ -2684,6 +2684,111 @@ pub fn setup_builtins(
             Ok(make_settled_promise("fulfilled", JsValue::Object(access)))
         }));
 
+    // ─── DOMException ─────────────────────────────────────────────────────
+    e.define("DOMException", native("DOMException", |args| {
+        let mut it = args.into_iter();
+        let message = it.next().map(|v| v.to_string()).unwrap_or_default();
+        let name = it.next().map(|v| v.to_string()).unwrap_or_else(|| "Error".into());
+        let code: u16 = match name.as_str() {
+            "IndexSizeError" => 1,
+            "HierarchyRequestError" => 3,
+            "WrongDocumentError" => 4,
+            "InvalidCharacterError" => 5,
+            "NoModificationAllowedError" => 7,
+            "NotFoundError" => 8,
+            "NotSupportedError" => 9,
+            "InUseAttributeError" => 10,
+            "InvalidStateError" => 11,
+            "SyntaxError" => 12,
+            "InvalidModificationError" => 13,
+            "NamespaceError" => 14,
+            "InvalidAccessError" => 15,
+            "TypeMismatchError" => 17,
+            "SecurityError" => 18,
+            "NetworkError" => 19,
+            "AbortError" => 20,
+            "URLMismatchError" => 21,
+            "QuotaExceededError" => 22,
+            "TimeoutError" => 23,
+            "InvalidNodeTypeError" => 24,
+            "DataCloneError" => 25,
+            _ => 0,
+        };
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        obj.borrow_mut().set("name".into(), JsValue::Str(name));
+        obj.borrow_mut().set("message".into(), JsValue::Str(message));
+        obj.borrow_mut().set("code".into(), JsValue::Number(code as f64));
+        Ok(JsValue::Object(obj))
+    }));
+
+    // ─── ImageData constructor ────────────────────────────────────────────
+    e.define("ImageData", native("ImageData", |args| {
+        let mut it = args.into_iter();
+        let first = it.next().unwrap_or(JsValue::Undefined);
+        let (data, w, h) = match first {
+            JsValue::Number(width) => {
+                let height = it.next().map(|v| v.to_number()).unwrap_or(1.0);
+                let len = (width * height * 4.0) as usize;
+                let data: Vec<JsValue> = vec![JsValue::Number(0.0); len];
+                (data, width, height)
+            }
+            JsValue::Array(arr) => {
+                let width = it.next().map(|v| v.to_number()).unwrap_or(1.0);
+                let data = arr.borrow().clone();
+                let height = (data.len() as f64 / 4.0 / width).max(1.0);
+                (data, width, height)
+            }
+            _ => (Vec::new(), 0.0, 0.0),
+        };
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        obj.borrow_mut().set("width".into(), JsValue::Number(w));
+        obj.borrow_mut().set("height".into(), JsValue::Number(h));
+        obj.borrow_mut().set("data".into(), JsValue::Array(Rc::new(RefCell::new(data))));
+        obj.borrow_mut().set("colorSpace".into(), JsValue::Str("srgb".into()));
+        Ok(JsValue::Object(obj))
+    }));
+
+    // ─── OffscreenCanvas stub ─────────────────────────────────────────────
+    e.define("OffscreenCanvas", native("OffscreenCanvas", |args| {
+        let mut it = args.into_iter();
+        let w = it.next().map(|v| v.to_number()).unwrap_or(300.0);
+        let h = it.next().map(|v| v.to_number()).unwrap_or(150.0);
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        obj.borrow_mut().set("width".into(), JsValue::Number(w));
+        obj.borrow_mut().set("height".into(), JsValue::Number(h));
+        obj.borrow_mut().set("getContext".into(), native("getContext", |_| {
+            Ok(JsValue::Object(Rc::new(RefCell::new(JsObject::new()))))
+        }));
+        obj.borrow_mut().set("transferToImageBitmap".into(), native("transferToImageBitmap", |_| {
+            Ok(JsValue::Object(Rc::new(RefCell::new(JsObject::new()))))
+        }));
+        obj.borrow_mut().set("convertToBlob".into(), native("convertToBlob", |_| {
+            Ok(make_settled_promise("fulfilled", JsValue::Object(Rc::new(RefCell::new(JsObject::new())))))
+        }));
+        Ok(JsValue::Object(obj))
+    }));
+
+    // ─── ImageBitmap (createImageBitmap funkce) ───────────────────────────
+    e.define("createImageBitmap", native("createImageBitmap", |_| {
+        let bitmap = Rc::new(RefCell::new(JsObject::new()));
+        bitmap.borrow_mut().set("width".into(), JsValue::Number(0.0));
+        bitmap.borrow_mut().set("height".into(), JsValue::Number(0.0));
+        bitmap.borrow_mut().set("close".into(),
+            native("close", |_| Ok(JsValue::Undefined)));
+        Ok(make_settled_promise("fulfilled", JsValue::Object(bitmap)))
+    }));
+
+    // ─── Path2D stub - canvas paths ───────────────────────────────────────
+    e.define("Path2D", native("Path2D", |_| {
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        obj.borrow_mut().set("__path2d__".into(), JsValue::Bool(true));
+        for m in &["addPath", "closePath", "moveTo", "lineTo", "bezierCurveTo",
+                   "quadraticCurveTo", "arc", "arcTo", "ellipse", "rect", "roundRect"] {
+            obj.borrow_mut().set(m.to_string(), native(m, |_| Ok(JsValue::Undefined)));
+        }
+        Ok(JsValue::Object(obj))
+    }));
+
     // ─── DOM Geometry: DOMRect / DOMPoint / DOMMatrix ─────────────────────
     let make_dom_rect = |args: Vec<JsValue>, read_only: bool| -> JsValue {
         let mut it = args.into_iter();
