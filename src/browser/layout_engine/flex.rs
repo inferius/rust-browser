@@ -158,7 +158,10 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                 })
             } else { basis_v.parse::<f32>().ok() };
             if let Some(b) = basis {
-                if direction.is_row() { est_w = b; } else { est_h = b; }
+                // Min-content floor: pokud item ma intrinsic > basis, take max.
+                let intrinsic = if direction.is_row() { ch.rect.width } else { ch.rect.height };
+                let final_b = b.max(intrinsic);
+                if direction.is_row() { est_w = final_b; } else { est_h = final_b; }
             }
         }
         // Apply min-w/h pred aspect ratio dopoctem
