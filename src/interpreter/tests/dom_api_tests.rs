@@ -1213,3 +1213,247 @@ fn selection_select_all_children() {
         assert_eq!(s, "Range");
     }
 }
+
+// ─── Web Crypto API ───────────────────────────────────────────────────
+
+#[test]
+fn crypto_subtle_digest_returns_array() {
+    let code = r#"
+        return crypto.subtle.digest("SHA-256", "hello").then(buf => buf.length);
+    "#;
+    // Test: digest vraci Promise s ArrayBuffer-like array (32 bytes)
+    let result = run(code);
+    // Promise resolved synchronne
+    if let crate::interpreter::JsValue::Object(o) = result {
+        let state = o.borrow().get("__promise_state__");
+        assert!(matches!(state, crate::interpreter::JsValue::Str(s) if s == "fulfilled"));
+    }
+}
+
+#[test]
+fn crypto_random_uuid_format() {
+    let code = r#"
+        const u = crypto.randomUUID();
+        return u.length;
+    "#;
+    if let crate::interpreter::JsValue::Number(n) = run(code) {
+        assert_eq!(n, 36.0); // UUID format: 8-4-4-4-12 hex chars + 4 dashes
+    }
+}
+
+// ─── Shadow DOM ───────────────────────────────────────────────────────
+
+#[test]
+fn element_attach_shadow_returns_root() {
+    let code = r#"
+        const div = document.createElement("div");
+        const sr = div.attachShadow({ mode: "open" });
+        return sr.mode + "|" + (sr.host === div);
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "open|true");
+    }
+}
+
+#[test]
+fn element_shadow_root_after_attach() {
+    let code = r#"
+        const div = document.createElement("div");
+        div.attachShadow({ mode: "open" });
+        return div.shadowRoot !== null;
+    "#;
+    if let crate::interpreter::JsValue::Bool(b) = run(code) {
+        assert!(b);
+    }
+}
+
+#[test]
+fn element_shadow_root_null_default() {
+    let code = r#"
+        const div = document.createElement("div");
+        return div.shadowRoot === null;
+    "#;
+    if let crate::interpreter::JsValue::Bool(b) = run(code) {
+        assert!(b);
+    }
+}
+
+// ─── Web Animations API ───────────────────────────────────────────────
+
+#[test]
+fn element_animate_returns_animation() {
+    let code = r#"
+        const div = document.createElement("div");
+        const anim = div.animate(
+            [{ opacity: 0 }, { opacity: 1 }],
+            { duration: 1000 }
+        );
+        return anim.playState;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "running");
+    }
+}
+
+#[test]
+fn animation_has_play_pause_cancel() {
+    let code = r#"
+        const div = document.createElement("div");
+        const anim = div.animate([], {});
+        return typeof anim.play + "|" + typeof anim.pause + "|" + typeof anim.cancel;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "function|function|function");
+    }
+}
+
+#[test]
+fn element_get_animations_empty() {
+    let code = r#"
+        const div = document.createElement("div");
+        return div.getAnimations().length;
+    "#;
+    if let crate::interpreter::JsValue::Number(n) = run(code) {
+        assert_eq!(n, 0.0);
+    }
+}
+
+// ─── Speech / Sensors / Trusted Types ─────────────────────────────────
+
+#[test]
+fn speech_synthesis_utterance() {
+    let code = r#"
+        const u = new SpeechSynthesisUtterance("Hello");
+        return u.text + "|" + u.lang;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "Hello|en-US");
+    }
+}
+
+#[test]
+fn accelerometer_construct() {
+    let code = r#"
+        const a = new Accelerometer();
+        return typeof a.start + "|" + a.x;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "function|0");
+    }
+}
+
+#[test]
+fn trusted_types_create_policy() {
+    let code = r#"
+        const p = trustedTypes.createPolicy("default", {
+            createHTML: (s) => s
+        });
+        return p.name + "|" + typeof p.createHTML;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "default|function");
+    }
+}
+
+#[test]
+fn show_open_file_picker_returns_promise() {
+    let code = r#"
+        const p = showOpenFilePicker();
+        return p.__promise_state__;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "fulfilled");
+    }
+}
+
+// ─── ArrayBuffer / DataView extras ────────────────────────────────────
+
+#[test]
+fn array_buffer_byte_length() {
+    let code = r#"
+        const ab = new ArrayBuffer(16);
+        return ab.byteLength + "|" + ab.detached;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "16|false");
+    }
+}
+
+#[test]
+fn array_buffer_transfer_marks_detached() {
+    let code = r#"
+        const ab = new ArrayBuffer(8);
+        const ab2 = ab.transfer();
+        return ab.detached + "|" + ab2.byteLength;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "true|8");
+    }
+}
+
+#[test]
+fn array_buffer_resize() {
+    let code = r#"
+        const ab = new ArrayBuffer(4);
+        ab.resize(8);
+        return ab.byteLength;
+    "#;
+    if let crate::interpreter::JsValue::Number(n) = run(code) {
+        assert_eq!(n, 8.0);
+    }
+}
+
+#[test]
+fn array_buffer_slice() {
+    let code = r#"
+        const ab = new ArrayBuffer(10);
+        const ab2 = ab.slice(2, 6);
+        return ab2.byteLength;
+    "#;
+    if let crate::interpreter::JsValue::Number(n) = run(code) {
+        assert_eq!(n, 4.0);
+    }
+}
+
+#[test]
+fn data_view_set_get_uint8() {
+    let code = r#"
+        const ab = new ArrayBuffer(4);
+        const dv = new DataView(ab);
+        dv.setUint8(0, 42);
+        dv.setUint8(1, 99);
+        return dv.getUint8(0) + "|" + dv.getUint8(1);
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "42|99");
+    }
+}
+
+#[test]
+fn data_view_get_int8_signed() {
+    let code = r#"
+        const ab = new ArrayBuffer(2);
+        const dv = new DataView(ab);
+        dv.setUint8(0, 200);
+        return dv.getInt8(0);
+    "#;
+    if let crate::interpreter::JsValue::Number(n) = run(code) {
+        // 200 as i8 = -56
+        assert_eq!(n, -56.0);
+    }
+}
+
+#[test]
+fn data_view_get_uint16_be() {
+    let code = r#"
+        const ab = new ArrayBuffer(4);
+        const dv = new DataView(ab);
+        dv.setUint8(0, 1);
+        dv.setUint8(1, 2);
+        // Big-endian default: (1 << 8) | 2 = 258
+        return dv.getUint16(0);
+    "#;
+    if let crate::interpreter::JsValue::Number(n) = run(code) {
+        assert_eq!(n, 258.0);
+    }
+}

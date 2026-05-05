@@ -904,15 +904,146 @@ pub fn setup_builtins(
         Ok(JsValue::Object(Rc::new(RefCell::new(obj))))
     }));
 
-    // ArrayBuffer - alias k SharedArrayBuffer v sync runtime
+    // ArrayBuffer - alias k SharedArrayBuffer v sync runtime + transfer/resize methods
     e.define("ArrayBuffer", native("ArrayBuffer", |a| {
-        let len = a.into_iter().next().map(|v| v.to_number() as usize).unwrap_or(0);
-        let mut obj = JsObject::new();
-        obj.set("__buffer__".into(), JsValue::Bool(true));
-        obj.set("byteLength".into(), JsValue::Number(len as f64));
+        let mut it = a.into_iter();
+        let len = it.next().map(|v| v.to_number() as usize).unwrap_or(0);
+        let _max_byte_length = it.next().and_then(|v| {
+            if let JsValue::Object(o) = v {
+                Some(o.borrow().get("maxByteLength").to_number() as usize)
+            } else { None }
+        }).unwrap_or(len);
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        obj.borrow_mut().set("__buffer__".into(), JsValue::Bool(true));
+        obj.borrow_mut().set("byteLength".into(), JsValue::Number(len as f64));
+        obj.borrow_mut().set("maxByteLength".into(), JsValue::Number(len as f64));
+        obj.borrow_mut().set("resizable".into(), JsValue::Bool(false));
+        obj.borrow_mut().set("detached".into(), JsValue::Bool(false));
         let bytes: Vec<JsValue> = vec![JsValue::Number(0.0); len];
-        obj.set("__bytes__".into(), JsValue::Array(Rc::new(RefCell::new(bytes))));
-        Ok(JsValue::Object(Rc::new(RefCell::new(obj))))
+        obj.borrow_mut().set("__bytes__".into(), JsValue::Array(Rc::new(RefCell::new(bytes))));
+        // ES2024 - transfer() / transferToFixedLength()
+        let obj_t = Rc::clone(&obj);
+        obj.borrow_mut().set("transfer".into(), native("transfer", move |args| {
+            let new_len = args.into_iter().next().map(|v| v.to_number() as usize);
+            let old_bytes = obj_t.borrow().get("__bytes__");
+            let new_buf = Rc::new(RefCell::new(JsObject::new()));
+            new_buf.borrow_mut().set("__buffer__".into(), JsValue::Bool(true));
+            let copied: Vec<JsValue> = if let JsValue::Array(a) = old_bytes {
+                let src = a.borrow().clone();
+                if let Some(nl) = new_len {
+                    let mut out = src;
+                    out.resize(nl, JsValue::Number(0.0));
+                    out
+                } else { src }
+            } else { Vec::new() };
+            new_buf.borrow_mut().set("byteLength".into(), JsValue::Number(copied.len() as f64));
+            new_buf.borrow_mut().set("__bytes__".into(),
+                JsValue::Array(Rc::new(RefCell::new(copied))));
+            // Mark old as detached
+            obj_t.borrow_mut().set("detached".into(), JsValue::Bool(true));
+            obj_t.borrow_mut().set("byteLength".into(), JsValue::Number(0.0));
+            Ok(JsValue::Object(new_buf))
+        }));
+        let obj_r = Rc::clone(&obj);
+        obj.borrow_mut().set("resize".into(), native("resize", move |args| {
+            let new_len = args.into_iter().next().map(|v| v.to_number() as usize).unwrap_or(0);
+            let old_bytes = obj_r.borrow().get("__bytes__");
+            if let JsValue::Array(a) = old_bytes {
+                a.borrow_mut().resize(new_len, JsValue::Number(0.0));
+            }
+            obj_r.borrow_mut().set("byteLength".into(), JsValue::Number(new_len as f64));
+            Ok(JsValue::Undefined)
+        }));
+        let obj_s = Rc::clone(&obj);
+        obj.borrow_mut().set("slice".into(), native("slice", move |args| {
+            let mut it = args.into_iter();
+            let start = it.next().map(|v| v.to_number() as usize).unwrap_or(0);
+            let end = it.next().map(|v| v.to_number() as usize);
+            let bytes_v = obj_s.borrow().get("__bytes__");
+            let sliced = if let JsValue::Array(a) = bytes_v {
+                let src = a.borrow();
+                let e = end.unwrap_or(src.len()).min(src.len());
+                if start < e { src[start..e].to_vec() } else { Vec::new() }
+            } else { Vec::new() };
+            let new_buf = Rc::new(RefCell::new(JsObject::new()));
+            new_buf.borrow_mut().set("__buffer__".into(), JsValue::Bool(true));
+            new_buf.borrow_mut().set("byteLength".into(), JsValue::Number(sliced.len() as f64));
+            new_buf.borrow_mut().set("__bytes__".into(),
+                JsValue::Array(Rc::new(RefCell::new(sliced))));
+            Ok(JsValue::Object(new_buf))
+        }));
+        Ok(JsValue::Object(obj))
+    }));
+
+    // DataView - view do ArrayBuffer s typed read/write
+    e.define("DataView", native("DataView", |args| {
+        let mut it = args.into_iter();
+        let buffer = it.next().unwrap_or(JsValue::Undefined);
+        let byte_offset = it.next().map(|v| v.to_number() as usize).unwrap_or(0);
+        let byte_length = it.next().map(|v| v.to_number() as usize);
+        let bytes_arr = if let JsValue::Object(o) = &buffer {
+            o.borrow().get("__bytes__")
+        } else { JsValue::Undefined };
+        let len = if let JsValue::Array(a) = &bytes_arr {
+            byte_length.unwrap_or(a.borrow().len() - byte_offset)
+        } else { 0 };
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        obj.borrow_mut().set("__data_view__".into(), JsValue::Bool(true));
+        obj.borrow_mut().set("buffer".into(), buffer.clone());
+        obj.borrow_mut().set("byteOffset".into(), JsValue::Number(byte_offset as f64));
+        obj.borrow_mut().set("byteLength".into(), JsValue::Number(len as f64));
+        // getUint8 / getInt8 / getUint16 / getInt16 / getUint32 / getInt32 / getFloat32 / getFloat64
+        // setUint8 / setInt8 / atd.
+        let bytes_get = bytes_arr.clone();
+        obj.borrow_mut().set("getUint8".into(), native("getUint8", move |a| {
+            let off = a.into_iter().next().map(|v| v.to_number() as usize).unwrap_or(0);
+            if let JsValue::Array(arr) = &bytes_get {
+                if let Some(JsValue::Number(n)) = arr.borrow().get(byte_offset + off) {
+                    return Ok(JsValue::Number(*n));
+                }
+            }
+            Ok(JsValue::Number(0.0))
+        }));
+        let bytes_set = bytes_arr.clone();
+        obj.borrow_mut().set("setUint8".into(), native("setUint8", move |a| {
+            let mut it = a.into_iter();
+            let off = it.next().map(|v| v.to_number() as usize).unwrap_or(0);
+            let val = it.next().map(|v| v.to_number() as u8).unwrap_or(0);
+            if let JsValue::Array(arr) = &bytes_set {
+                if let Some(slot) = arr.borrow_mut().get_mut(byte_offset + off) {
+                    *slot = JsValue::Number(val as f64);
+                }
+            }
+            Ok(JsValue::Undefined)
+        }));
+        // getInt8 - signed byte
+        let bytes_i8 = bytes_arr.clone();
+        obj.borrow_mut().set("getInt8".into(), native("getInt8", move |a| {
+            let off = a.into_iter().next().map(|v| v.to_number() as usize).unwrap_or(0);
+            if let JsValue::Array(arr) = &bytes_i8 {
+                if let Some(JsValue::Number(n)) = arr.borrow().get(byte_offset + off) {
+                    let byte_val = (*n as u32 & 0xFF) as u8;
+                    return Ok(JsValue::Number(byte_val as i8 as f64));
+                }
+            }
+            Ok(JsValue::Number(0.0))
+        }));
+        // getUint16 little-endian (default big = false)
+        let bytes_u16 = bytes_arr.clone();
+        obj.borrow_mut().set("getUint16".into(), native("getUint16", move |a| {
+            let mut it = a.into_iter();
+            let off = it.next().map(|v| v.to_number() as usize).unwrap_or(0);
+            let little_endian = it.next().map(|v| v.is_truthy()).unwrap_or(false);
+            if let JsValue::Array(arr) = &bytes_u16 {
+                let b = arr.borrow();
+                let b0 = b.get(byte_offset + off).and_then(|v| if let JsValue::Number(n) = v { Some(*n as u16) } else { None }).unwrap_or(0);
+                let b1 = b.get(byte_offset + off + 1).and_then(|v| if let JsValue::Number(n) = v { Some(*n as u16) } else { None }).unwrap_or(0);
+                let n = if little_endian { (b1 << 8) | b0 } else { (b0 << 8) | b1 };
+                return Ok(JsValue::Number(n as f64));
+            }
+            Ok(JsValue::Number(0.0))
+        }));
+        Ok(JsValue::Object(obj))
     }));
 
     // Typed Arrays - jen Uint8Array stub
@@ -2069,9 +2200,32 @@ pub fn setup_builtins(
             }
             Ok(arr)
         }));
-        // Subtle stub
+        // SubtleCrypto - real digest impl (SHA-256 zatim FNV approximation), ostatni stub
         let subtle = Rc::new(RefCell::new(JsObject::new()));
-        for m in &["digest", "encrypt", "decrypt", "sign", "verify", "generateKey", "importKey", "exportKey", "deriveKey", "deriveBits", "wrapKey", "unwrapKey"] {
+        // digest(algorithm, data) -> Promise<ArrayBuffer>
+        subtle.borrow_mut().set("digest".into(), native("digest", |args| {
+            let mut it = args.into_iter();
+            let _algo = it.next().map(|v| v.to_string()).unwrap_or_default();
+            let data = it.next().unwrap_or(JsValue::Undefined);
+            let bytes: Vec<u8> = if let JsValue::Array(a) = &data {
+                a.borrow().iter().map(|v| v.to_number() as u8).collect()
+            } else if let JsValue::Str(s) = &data {
+                s.bytes().collect()
+            } else { Vec::new() };
+            // FNV-1a 64-bit hash, repeated 4x pro 256 bit output (approximation)
+            let mut digest_bytes = Vec::new();
+            for seed in 0..4u64 {
+                let mut hash: u64 = 14695981039346656037u64.wrapping_add(seed);
+                for b in &bytes {
+                    hash ^= *b as u64;
+                    hash = hash.wrapping_mul(1099511628211u64);
+                }
+                digest_bytes.extend_from_slice(&hash.to_le_bytes());
+            }
+            let arr: Vec<JsValue> = digest_bytes.into_iter().map(|b| JsValue::Number(b as f64)).collect();
+            Ok(make_settled_promise("fulfilled", JsValue::Array(Rc::new(RefCell::new(arr)))))
+        }));
+        for m in &["encrypt", "decrypt", "sign", "verify", "generateKey", "importKey", "exportKey", "deriveKey", "deriveBits", "wrapKey", "unwrapKey"] {
             let name = m.to_string();
             subtle.borrow_mut().set(name, native(m, |_| {
                 Ok(make_settled_promise("fulfilled", JsValue::Undefined))
@@ -2080,6 +2234,235 @@ pub fn setup_builtins(
         crypto.borrow_mut().set("subtle".into(), JsValue::Object(subtle));
         e.define("crypto", JsValue::Object(crypto));
     }
+
+    // ─── Modern Web APIs - Permissions / WakeLock / Vibration / Gamepad / Sensors ───
+    // Permissions API
+    {
+        let perms = Rc::new(RefCell::new(JsObject::new()));
+        perms.borrow_mut().set("query".into(), native("permissions.query", |args| {
+            let arg = args.into_iter().next().unwrap_or(JsValue::Undefined);
+            let name = if let JsValue::Object(o) = &arg {
+                o.borrow().get("name").to_string()
+            } else { "unknown".into() };
+            let status = Rc::new(RefCell::new(JsObject::new()));
+            status.borrow_mut().set("name".into(), JsValue::Str(name));
+            status.borrow_mut().set("state".into(), JsValue::Str("granted".into()));
+            status.borrow_mut().set("addEventListener".into(),
+                native("addEventListener", |_| Ok(JsValue::Undefined)));
+            Ok(make_settled_promise("fulfilled", JsValue::Object(status)))
+        }));
+        e.define("__permissions__", JsValue::Object(perms));
+    }
+    // WakeLock API - navigator.wakeLock.request("screen")
+    {
+        let wl = Rc::new(RefCell::new(JsObject::new()));
+        wl.borrow_mut().set("request".into(), native("wakeLock.request", |_| {
+            let sentinel = Rc::new(RefCell::new(JsObject::new()));
+            sentinel.borrow_mut().set("type".into(), JsValue::Str("screen".into()));
+            sentinel.borrow_mut().set("released".into(), JsValue::Bool(false));
+            sentinel.borrow_mut().set("release".into(),
+                native("release", |_| Ok(make_settled_promise("fulfilled", JsValue::Undefined))));
+            sentinel.borrow_mut().set("addEventListener".into(),
+                native("addEventListener", |_| Ok(JsValue::Undefined)));
+            Ok(make_settled_promise("fulfilled", JsValue::Object(sentinel)))
+        }));
+        e.define("__wake_lock__", JsValue::Object(wl));
+    }
+    // Vibration API stub - navigator.vibrate(pattern)
+    e.define("__navigator_vibrate__", native("navigator.vibrate", |_| Ok(JsValue::Bool(true))));
+    // Gamepad API stub - navigator.getGamepads()
+    e.define("__navigator_get_gamepads__", native("navigator.getGamepads", |_| {
+        Ok(JsValue::Array(Rc::new(RefCell::new(Vec::new()))))
+    }));
+    // Battery API stub - navigator.getBattery()
+    e.define("__navigator_get_battery__", native("navigator.getBattery", |_| {
+        let bat = Rc::new(RefCell::new(JsObject::new()));
+        bat.borrow_mut().set("charging".into(), JsValue::Bool(true));
+        bat.borrow_mut().set("level".into(), JsValue::Number(1.0));
+        bat.borrow_mut().set("chargingTime".into(), JsValue::Number(0.0));
+        bat.borrow_mut().set("dischargingTime".into(), JsValue::Number(f64::INFINITY));
+        bat.borrow_mut().set("addEventListener".into(),
+            native("addEventListener", |_| Ok(JsValue::Undefined)));
+        Ok(make_settled_promise("fulfilled", JsValue::Object(bat)))
+    }));
+    // Sensor APIs - Accelerometer / Gyroscope / OrientationSensor / LinearAccelerationSensor
+    let make_sensor_stub = |name: &str| {
+        let n = name.to_string();
+        let n_for_native = n.clone();
+        native(&n_for_native, move |_| {
+            let s = Rc::new(RefCell::new(JsObject::new()));
+            s.borrow_mut().set("__sensor__".into(), JsValue::Str(n.clone()));
+            s.borrow_mut().set("activated".into(), JsValue::Bool(false));
+            s.borrow_mut().set("x".into(), JsValue::Number(0.0));
+            s.borrow_mut().set("y".into(), JsValue::Number(0.0));
+            s.borrow_mut().set("z".into(), JsValue::Number(0.0));
+            s.borrow_mut().set("start".into(), native("start", |_| Ok(JsValue::Undefined)));
+            s.borrow_mut().set("stop".into(), native("stop", |_| Ok(JsValue::Undefined)));
+            s.borrow_mut().set("addEventListener".into(),
+                native("addEventListener", |_| Ok(JsValue::Undefined)));
+            Ok(JsValue::Object(s))
+        })
+    };
+    e.define("Accelerometer", make_sensor_stub("Accelerometer"));
+    e.define("LinearAccelerationSensor", make_sensor_stub("LinearAccelerationSensor"));
+    e.define("Gyroscope", make_sensor_stub("Gyroscope"));
+    e.define("OrientationSensor", make_sensor_stub("OrientationSensor"));
+    e.define("AbsoluteOrientationSensor", make_sensor_stub("AbsoluteOrientationSensor"));
+    e.define("RelativeOrientationSensor", make_sensor_stub("RelativeOrientationSensor"));
+    e.define("Magnetometer", make_sensor_stub("Magnetometer"));
+    e.define("AmbientLightSensor", make_sensor_stub("AmbientLightSensor"));
+
+    // ─── WebAuthn stub - navigator.credentials ───────────────────────────
+    {
+        let creds = Rc::new(RefCell::new(JsObject::new()));
+        creds.borrow_mut().set("create".into(), native("credentials.create", |_| {
+            Ok(make_settled_promise("fulfilled", JsValue::Null))
+        }));
+        creds.borrow_mut().set("get".into(), native("credentials.get", |_| {
+            Ok(make_settled_promise("fulfilled", JsValue::Null))
+        }));
+        creds.borrow_mut().set("preventSilentAccess".into(),
+            native("preventSilentAccess", |_| Ok(make_settled_promise("fulfilled", JsValue::Undefined))));
+        creds.borrow_mut().set("store".into(),
+            native("store", |_| Ok(make_settled_promise("fulfilled", JsValue::Undefined))));
+        e.define("__navigator_credentials__", JsValue::Object(creds));
+    }
+    // PublicKeyCredential stub
+    e.define("PublicKeyCredential", native("PublicKeyCredential", |_| {
+        Ok(JsValue::Object(Rc::new(RefCell::new(JsObject::new()))))
+    }));
+
+    // ─── Trusted Types stub ───────────────────────────────────────────────
+    {
+        let tt = Rc::new(RefCell::new(JsObject::new()));
+        tt.borrow_mut().set("createPolicy".into(), native("trustedTypes.createPolicy", |args| {
+            let mut it = args.into_iter();
+            let name = it.next().map(|v| v.to_string()).unwrap_or_default();
+            let policy_init = it.next().unwrap_or(JsValue::Undefined);
+            let policy = Rc::new(RefCell::new(JsObject::new()));
+            policy.borrow_mut().set("name".into(), JsValue::Str(name));
+            // Pass-through createHTML / createScript / createScriptURL
+            for k in &["createHTML", "createScript", "createScriptURL"] {
+                let init_clone = policy_init.clone();
+                let k_owned = k.to_string();
+                let k_for_native = k_owned.clone();
+                policy.borrow_mut().set(k_owned.clone(), native(&k_for_native, move |a| {
+                    let _ = &init_clone;
+                    Ok(a.into_iter().next().unwrap_or(JsValue::Str(String::new())))
+                }));
+            }
+            Ok(JsValue::Object(policy))
+        }));
+        tt.borrow_mut().set("isHTML".into(), native("isHTML", |_| Ok(JsValue::Bool(false))));
+        tt.borrow_mut().set("isScript".into(), native("isScript", |_| Ok(JsValue::Bool(false))));
+        tt.borrow_mut().set("isScriptURL".into(), native("isScriptURL", |_| Ok(JsValue::Bool(false))));
+        tt.borrow_mut().set("emptyHTML".into(), JsValue::Str(String::new()));
+        tt.borrow_mut().set("emptyScript".into(), JsValue::Str(String::new()));
+        tt.borrow_mut().set("defaultPolicy".into(), JsValue::Null);
+        e.define("trustedTypes", JsValue::Object(tt));
+    }
+
+    // ─── File System Access API stub ──────────────────────────────────────
+    e.define("showOpenFilePicker", native("showOpenFilePicker", |_| {
+        Ok(make_settled_promise("fulfilled", JsValue::Array(Rc::new(RefCell::new(Vec::new())))))
+    }));
+    e.define("showSaveFilePicker", native("showSaveFilePicker", |_| {
+        let handle = Rc::new(RefCell::new(JsObject::new()));
+        handle.borrow_mut().set("kind".into(), JsValue::Str("file".into()));
+        handle.borrow_mut().set("name".into(), JsValue::Str("untitled".into()));
+        handle.borrow_mut().set("createWritable".into(), native("createWritable", |_|
+            Ok(make_settled_promise("fulfilled", JsValue::Object(Rc::new(RefCell::new(JsObject::new())))))));
+        Ok(make_settled_promise("fulfilled", JsValue::Object(handle)))
+    }));
+    e.define("showDirectoryPicker", native("showDirectoryPicker", |_| {
+        Ok(make_settled_promise("fulfilled", JsValue::Object(Rc::new(RefCell::new(JsObject::new())))))
+    }));
+
+    // ─── Web MIDI API stub ────────────────────────────────────────────────
+    e.define("__navigator_request_midi_access__",
+        native("requestMIDIAccess", |_| {
+            let access = Rc::new(RefCell::new(JsObject::new()));
+            access.borrow_mut().set("inputs".into(),
+                JsValue::Object(Rc::new(RefCell::new(JsObject::new()))));
+            access.borrow_mut().set("outputs".into(),
+                JsValue::Object(Rc::new(RefCell::new(JsObject::new()))));
+            access.borrow_mut().set("sysexEnabled".into(), JsValue::Bool(false));
+            Ok(make_settled_promise("fulfilled", JsValue::Object(access)))
+        }));
+
+    // ─── Speech Synthesis / Recognition stub ──────────────────────────────
+    {
+        let synth = Rc::new(RefCell::new(JsObject::new()));
+        synth.borrow_mut().set("speak".into(), native("speechSynthesis.speak", |_| Ok(JsValue::Undefined)));
+        synth.borrow_mut().set("cancel".into(), native("cancel", |_| Ok(JsValue::Undefined)));
+        synth.borrow_mut().set("pause".into(), native("pause", |_| Ok(JsValue::Undefined)));
+        synth.borrow_mut().set("resume".into(), native("resume", |_| Ok(JsValue::Undefined)));
+        synth.borrow_mut().set("getVoices".into(), native("getVoices", |_|
+            Ok(JsValue::Array(Rc::new(RefCell::new(Vec::new()))))));
+        synth.borrow_mut().set("speaking".into(), JsValue::Bool(false));
+        synth.borrow_mut().set("paused".into(), JsValue::Bool(false));
+        synth.borrow_mut().set("pending".into(), JsValue::Bool(false));
+        e.define("speechSynthesis", JsValue::Object(synth));
+    }
+    e.define("SpeechSynthesisUtterance", native("SpeechSynthesisUtterance", |args| {
+        let text = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        obj.borrow_mut().set("text".into(), JsValue::Str(text));
+        obj.borrow_mut().set("lang".into(), JsValue::Str("en-US".into()));
+        obj.borrow_mut().set("rate".into(), JsValue::Number(1.0));
+        obj.borrow_mut().set("pitch".into(), JsValue::Number(1.0));
+        obj.borrow_mut().set("volume".into(), JsValue::Number(1.0));
+        obj.borrow_mut().set("voice".into(), JsValue::Null);
+        obj.borrow_mut().set("addEventListener".into(),
+            native("addEventListener", |_| Ok(JsValue::Undefined)));
+        Ok(JsValue::Object(obj))
+    }));
+    e.define("SpeechRecognition", native("SpeechRecognition", |_| {
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        obj.borrow_mut().set("continuous".into(), JsValue::Bool(false));
+        obj.borrow_mut().set("interimResults".into(), JsValue::Bool(false));
+        obj.borrow_mut().set("lang".into(), JsValue::Str("en-US".into()));
+        obj.borrow_mut().set("start".into(), native("start", |_| Ok(JsValue::Undefined)));
+        obj.borrow_mut().set("stop".into(), native("stop", |_| Ok(JsValue::Undefined)));
+        obj.borrow_mut().set("abort".into(), native("abort", |_| Ok(JsValue::Undefined)));
+        obj.borrow_mut().set("addEventListener".into(),
+            native("addEventListener", |_| Ok(JsValue::Undefined)));
+        Ok(JsValue::Object(obj))
+    }));
+
+    // ─── Web Bluetooth / USB / HID / Serial stubs ─────────────────────────
+    e.define("__navigator_bluetooth__", {
+        let bt = Rc::new(RefCell::new(JsObject::new()));
+        bt.borrow_mut().set("requestDevice".into(), native("requestDevice", |_|
+            Ok(make_settled_promise("rejected", JsValue::Str("NotFoundError: No devices".into())))));
+        bt.borrow_mut().set("getAvailability".into(), native("getAvailability", |_|
+            Ok(make_settled_promise("fulfilled", JsValue::Bool(false)))));
+        JsValue::Object(bt)
+    });
+    e.define("__navigator_usb__", {
+        let usb = Rc::new(RefCell::new(JsObject::new()));
+        usb.borrow_mut().set("requestDevice".into(), native("requestDevice", |_|
+            Ok(make_settled_promise("rejected", JsValue::Str("NotFoundError".into())))));
+        usb.borrow_mut().set("getDevices".into(), native("getDevices", |_|
+            Ok(make_settled_promise("fulfilled", JsValue::Array(Rc::new(RefCell::new(Vec::new())))))));
+        JsValue::Object(usb)
+    });
+    e.define("__navigator_hid__", {
+        let hid = Rc::new(RefCell::new(JsObject::new()));
+        hid.borrow_mut().set("requestDevice".into(), native("requestDevice", |_|
+            Ok(make_settled_promise("fulfilled", JsValue::Array(Rc::new(RefCell::new(Vec::new())))))));
+        hid.borrow_mut().set("getDevices".into(), native("getDevices", |_|
+            Ok(make_settled_promise("fulfilled", JsValue::Array(Rc::new(RefCell::new(Vec::new())))))));
+        JsValue::Object(hid)
+    });
+    e.define("__navigator_serial__", {
+        let serial = Rc::new(RefCell::new(JsObject::new()));
+        serial.borrow_mut().set("requestPort".into(), native("requestPort", |_|
+            Ok(make_settled_promise("rejected", JsValue::Str("NotFoundError".into())))));
+        serial.borrow_mut().set("getPorts".into(), native("getPorts", |_|
+            Ok(make_settled_promise("fulfilled", JsValue::Array(Rc::new(RefCell::new(Vec::new())))))));
+        JsValue::Object(serial)
+    });
 
     // performance.now() + performance.timeOrigin
     {

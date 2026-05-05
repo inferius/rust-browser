@@ -2563,6 +2563,31 @@ impl Interpreter {
                         // Form input value
                         return Ok(JsValue::Str(n.attr("value").unwrap_or_default()));
                     }
+                    "shadowRoot" => {
+                        // Bez attachShadow vraci null. Po attachShadow ulozeno v atributu.
+                        if n.has_attr("data-shadow-root") {
+                            // Vraci empty shadow root prepointer (state se nedrzi mezi calls)
+                            let sr = Rc::new(RefCell::new(JsObject::new()));
+                            sr.borrow_mut().set("__shadow_root__".into(), JsValue::Bool(true));
+                            sr.borrow_mut().set("mode".into(), JsValue::Str("open".into()));
+                            sr.borrow_mut().set("host".into(), JsValue::DomNode(Rc::clone(&n)));
+                            return Ok(JsValue::Object(sr));
+                        }
+                        return Ok(JsValue::Null);
+                    }
+                    "ariaHidden" | "ariaLabel" | "ariaDescribedBy" | "ariaLabelledBy" => {
+                        let attr = match key {
+                            "ariaHidden" => "aria-hidden",
+                            "ariaLabel" => "aria-label",
+                            "ariaDescribedBy" => "aria-describedby",
+                            "ariaLabelledBy" => "aria-labelledby",
+                            _ => "",
+                        };
+                        return Ok(match n.attr(attr) {
+                            Some(v) => JsValue::Str(v),
+                            None => JsValue::Null,
+                        });
+                    }
                     "checked" => {
                         return Ok(JsValue::Bool(n.has_attr("checked")));
                     }
@@ -4245,6 +4270,74 @@ impl Interpreter {
                             => {
                             // No-op
                             return Ok(JsValue::Undefined);
+                        }
+                        // ─── Shadow DOM (attachShadow + shadowRoot) ────────
+                        "attachShadow" => {
+                            let init = arg_vals.into_iter().next().unwrap_or(JsValue::Undefined);
+                            let mode = if let JsValue::Object(o) = &init {
+                                o.borrow().get("mode").to_string()
+                            } else { "open".into() };
+                            // Shadow root - separe DOM strom (zatim plain JsObject simulace)
+                            let shadow = Rc::new(RefCell::new(JsObject::new()));
+                            shadow.borrow_mut().set("__shadow_root__".into(), JsValue::Bool(true));
+                            shadow.borrow_mut().set("mode".into(), JsValue::Str(mode));
+                            shadow.borrow_mut().set("host".into(), JsValue::DomNode(Rc::clone(&n)));
+                            shadow.borrow_mut().set("childNodes".into(),
+                                JsValue::Array(Rc::new(RefCell::new(Vec::new()))));
+                            shadow.borrow_mut().set("innerHTML".into(), JsValue::Str(String::new()));
+                            shadow.borrow_mut().set("appendChild".into(),
+                                native("appendChild", |args| Ok(args.into_iter().next().unwrap_or(JsValue::Undefined))));
+                            shadow.borrow_mut().set("querySelector".into(),
+                                native("querySelector", |_| Ok(JsValue::Null)));
+                            shadow.borrow_mut().set("querySelectorAll".into(),
+                                native("querySelectorAll", |_| Ok(JsValue::Array(Rc::new(RefCell::new(Vec::new()))))));
+                            shadow.borrow_mut().set("getElementById".into(),
+                                native("getElementById", |_| Ok(JsValue::Null)));
+                            shadow.borrow_mut().set("adoptedStyleSheets".into(),
+                                JsValue::Array(Rc::new(RefCell::new(Vec::new()))));
+                            // Ulozit shadow root ID na node atribut
+                            n.set_attr("data-shadow-root", "true");
+                            return Ok(JsValue::Object(shadow));
+                        }
+                        // ─── Web Animations API: Element.animate(keyframes, options) ──
+                        "animate" => {
+                            let mut it = arg_vals.into_iter();
+                            let keyframes = it.next().unwrap_or(JsValue::Undefined);
+                            let options = it.next().unwrap_or(JsValue::Undefined);
+                            let anim = Rc::new(RefCell::new(JsObject::new()));
+                            anim.borrow_mut().set("__animation__".into(), JsValue::Bool(true));
+                            anim.borrow_mut().set("playState".into(), JsValue::Str("running".into()));
+                            anim.borrow_mut().set("currentTime".into(), JsValue::Number(0.0));
+                            anim.borrow_mut().set("startTime".into(), JsValue::Number(now_ms()));
+                            anim.borrow_mut().set("playbackRate".into(), JsValue::Number(1.0));
+                            anim.borrow_mut().set("effect".into(), JsValue::Object({
+                                let eff = Rc::new(RefCell::new(JsObject::new()));
+                                eff.borrow_mut().set("target".into(), JsValue::DomNode(Rc::clone(&n)));
+                                eff.borrow_mut().set("keyframes".into(), keyframes);
+                                eff.borrow_mut().set("timing".into(), options);
+                                eff
+                            }));
+                            anim.borrow_mut().set("play".into(),
+                                native("play", |_| Ok(JsValue::Undefined)));
+                            anim.borrow_mut().set("pause".into(),
+                                native("pause", |_| Ok(JsValue::Undefined)));
+                            anim.borrow_mut().set("cancel".into(),
+                                native("cancel", |_| Ok(JsValue::Undefined)));
+                            anim.borrow_mut().set("finish".into(),
+                                native("finish", |_| Ok(JsValue::Undefined)));
+                            anim.borrow_mut().set("reverse".into(),
+                                native("reverse", |_| Ok(JsValue::Undefined)));
+                            // Promise-like .finished / .ready
+                            anim.borrow_mut().set("finished".into(),
+                                make_settled_promise("fulfilled", JsValue::Undefined));
+                            anim.borrow_mut().set("ready".into(),
+                                make_settled_promise("fulfilled", JsValue::Undefined));
+                            anim.borrow_mut().set("addEventListener".into(),
+                                native("addEventListener", |_| Ok(JsValue::Undefined)));
+                            return Ok(JsValue::Object(anim));
+                        }
+                        "getAnimations" => {
+                            return Ok(JsValue::Array(Rc::new(RefCell::new(Vec::new()))));
                         }
                         // HTMLDialogElement
                         "show" if n.tag_name().as_deref() == Some("dialog") => {
