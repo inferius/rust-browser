@@ -465,6 +465,32 @@ pub fn parts_to_ms(yr: i64, mo: u32, day: u32, hr: u32, min: u32, sec: u32, ms_p
 
 // ─── Promise ─────────────────────────────────────────────────────────────
 
+/// Vyrobi iterator object z pred-vypocitanych hodnot - s next() / Symbol.iterator
+/// + __iterator_helpers__ markerem pro Iterator.prototype.* helpers.
+pub fn make_iterator_from_values(values: Vec<JsValue>) -> JsValue {
+    let values_rc: Rc<RefCell<Vec<JsValue>>> = Rc::new(RefCell::new(values));
+    let index: Rc<RefCell<usize>> = Rc::new(RefCell::new(0));
+    let mut iter_obj = JsObject::new();
+    iter_obj.set("__iterator_helpers__".into(), JsValue::Bool(true));
+    let v1 = Rc::clone(&values_rc);
+    let i1 = Rc::clone(&index);
+    iter_obj.set("next".into(), native("next", move |_| {
+        let i = *i1.borrow();
+        let vals = v1.borrow();
+        let mut r = JsObject::new();
+        if i < vals.len() {
+            *i1.borrow_mut() = i + 1;
+            r.set("value".into(), vals[i].clone());
+            r.set("done".into(), JsValue::Bool(false));
+        } else {
+            r.set("value".into(), JsValue::Undefined);
+            r.set("done".into(), JsValue::Bool(true));
+        }
+        Ok(JsValue::Object(Rc::new(RefCell::new(r))))
+    }));
+    JsValue::Object(Rc::new(RefCell::new(iter_obj)))
+}
+
 pub fn make_settled_promise(state: &str, value: JsValue) -> JsValue {
     let mut obj = JsObject::new();
     obj.set("__promise_state__".into(), JsValue::Str(state.into()));

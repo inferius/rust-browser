@@ -913,3 +913,190 @@ fn document_adopted_stylesheets_array() {
         assert!(b);
     }
 }
+
+// ─── Temporal API ──────────────────────────────────────────────────────
+
+#[test]
+fn temporal_now_plain_date() {
+    let code = r#"
+        const d = Temporal.Now.plainDateISO();
+        return typeof d.year + "|" + typeof d.month + "|" + typeof d.day;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "number|number|number");
+    }
+}
+
+#[test]
+fn temporal_now_plain_time() {
+    let code = r#"
+        const t = Temporal.Now.plainTimeISO();
+        return typeof t.hour;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "number");
+    }
+}
+
+#[test]
+fn temporal_now_instant() {
+    let code = r#"
+        const i = Temporal.Now.instant();
+        return typeof i.epochMilliseconds;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "number");
+    }
+}
+
+#[test]
+fn temporal_plain_date_from_string() {
+    let code = r#"
+        const d = Temporal.PlainDate.from("2024-06-15");
+        return d.year + "|" + d.month + "|" + d.day;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "2024|6|15");
+    }
+}
+
+#[test]
+fn temporal_duration_from_object() {
+    let code = r#"
+        const dur = Temporal.Duration.from({ days: 5, hours: 12 });
+        return dur.days + "|" + dur.hours;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "5|12");
+    }
+}
+
+#[test]
+fn temporal_instant_from_epoch_ms() {
+    let code = r#"
+        const i = Temporal.Instant.fromEpochMilliseconds(1700000000000);
+        return i.epochMilliseconds;
+    "#;
+    if let crate::interpreter::JsValue::Number(n) = run(code) {
+        assert_eq!(n, 1700000000000.0);
+    }
+}
+
+// ─── Dialog events ─────────────────────────────────────────────────────
+
+#[test]
+fn dialog_close_with_return_value() {
+    let code = r#"
+        const dlg = document.createElement("dialog");
+        dlg.showModal();
+        dlg.close("ok");
+        return dlg.getAttribute("returnValue") + "|" + dlg.hasAttribute("open");
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "ok|false");
+    }
+}
+
+#[test]
+fn dialog_close_event_fires() {
+    let code = r#"
+        let fired = false;
+        const dlg = document.createElement("dialog");
+        dlg.addEventListener("close", () => { fired = true; });
+        dlg.showModal();
+        dlg.close();
+        return fired;
+    "#;
+    if let crate::interpreter::JsValue::Bool(b) = run(code) {
+        assert!(b);
+    }
+}
+
+// ─── Event classes ─────────────────────────────────────────────────────
+
+#[test]
+fn event_constructor_default_type() {
+    let code = r#"
+        const e = new Event("custom-thing");
+        return e.type;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "custom-thing");
+    }
+}
+
+#[test]
+fn custom_event_with_detail() {
+    let code = r#"
+        const e = new CustomEvent("click", { detail: { foo: "bar" } });
+        return e.detail.foo;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "bar");
+    }
+}
+
+#[test]
+fn pointer_event_constructor() {
+    let code = r#"
+        const e = new PointerEvent("pointerdown", { clientX: 100, clientY: 50 });
+        return e.clientX + "|" + e.clientY;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "100|50");
+    }
+}
+
+#[test]
+fn keyboard_event_key_property() {
+    let code = r#"
+        const e = new KeyboardEvent("keydown", { key: "Enter", code: "Enter" });
+        return e.key;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "Enter");
+    }
+}
+
+#[test]
+fn event_prevent_default_method() {
+    let code = r#"
+        const e = new Event("test");
+        e.preventDefault();
+        return typeof e.preventDefault;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "function");
+    }
+}
+
+#[test]
+fn event_classes_registered() {
+    let code = r#"
+        return [
+            typeof Event,
+            typeof CustomEvent,
+            typeof MouseEvent,
+            typeof KeyboardEvent,
+            typeof PointerEvent,
+            typeof TouchEvent,
+            typeof WheelEvent,
+            typeof InputEvent,
+            typeof FocusEvent,
+            typeof DragEvent,
+            typeof SubmitEvent,
+            typeof ProgressEvent,
+            typeof MessageEvent,
+            typeof ErrorEvent,
+            typeof HashChangeEvent,
+            typeof PopStateEvent,
+            typeof StorageEvent,
+            typeof AnimationEvent,
+            typeof TransitionEvent,
+            typeof ClipboardEvent
+        ].every(t => t === "function");
+    "#;
+    if let crate::interpreter::JsValue::Bool(b) = run(code) {
+        assert!(b);
+    }
+}

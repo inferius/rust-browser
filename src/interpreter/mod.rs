@@ -3281,6 +3281,15 @@ impl Interpreter {
                 }
                 JsValue::Object(obj_rc) => {
                     let obj_rc2 = Rc::clone(obj_rc);
+                    // ─── Iterator helpers (ES2025) ────────────────────────
+                    if matches!(obj_rc2.borrow().props.get("__iterator_helpers__"), Some(JsValue::Bool(true))) {
+                        let helper_methods = ["toArray", "map", "filter", "take", "drop",
+                            "reduce", "forEach", "some", "every", "find", "flatMap"];
+                        if helper_methods.contains(&key.as_str()) {
+                            let arg_vals = self.eval_args(args, env)?;
+                            return self.iterator_helper_method(JsValue::Object(obj_rc2), &key, arg_vals);
+                        }
+                    }
                     // ─── document metody s pristupem k interpretu ──────────
                     if matches!(obj_rc2.borrow().props.get("__document__"), Some(JsValue::Bool(true))) {
                         if key == "createElement" {
@@ -4245,10 +4254,31 @@ impl Interpreter {
                         "showModal" if n.tag_name().as_deref() == Some("dialog") => {
                             n.set_attr("open", "");
                             n.set_attr("aria-modal", "true");
+                            // Dispatch 'show' event (custom)
+                            let mut event = JsObject::new();
+                            event.set("type".into(), JsValue::Str("show".into()));
+                            event.set("target".into(), JsValue::DomNode(Rc::clone(&n)));
+                            let _ = self.dispatch_event(&n, "show",
+                                JsValue::Object(Rc::new(RefCell::new(event))));
                             return Ok(JsValue::Undefined);
                         }
                         "close" if n.tag_name().as_deref() == Some("dialog") => {
+                            // Optional return value
+                            let return_val = arg_vals.into_iter().next().map(|v| v.to_string());
                             n.remove_attr("open");
+                            n.remove_attr("aria-modal");
+                            if let Some(rv) = &return_val {
+                                n.set_attr("returnValue", rv);
+                            }
+                            // Dispatch 'close' event
+                            let mut event = JsObject::new();
+                            event.set("type".into(), JsValue::Str("close".into()));
+                            event.set("target".into(), JsValue::DomNode(Rc::clone(&n)));
+                            if let Some(rv) = return_val {
+                                event.set("returnValue".into(), JsValue::Str(rv));
+                            }
+                            let _ = self.dispatch_event(&n, "close",
+                                JsValue::Object(Rc::new(RefCell::new(event))));
                             return Ok(JsValue::Undefined);
                         }
                         // HTMLMediaElement (video / audio)
@@ -5168,11 +5198,115 @@ impl Interpreter {
             Ok(JsValue::Object(Rc::new(RefCell::new(obj))))
         });
         iter_obj.set("Symbol.iterator".into(), sym_iter_fn);
+        // Iterator helpers (ES2025) - marker pres call_method special-case dispatch.
+        iter_obj.set("__iterator_helpers__".into(), JsValue::Bool(true));
 
         Ok(JsValue::Object(Rc::new(RefCell::new(iter_obj))))
     }
 
-    /// Sbira vsechny hodnoty z iteratoru nebo iterovatelneho objektu.
+    /// Iterator.prototype.toArray, map, filter, take, drop, reduce, forEach,
+    /// some, every, find, flatMap. ES2025 Iterator helpers.
+    /// Volane z call_method pres fast path pro iteratory.
+    pub fn iterator_helper_method(
+        &mut self,
+        iter: JsValue,
+        method: &str,
+        args: Vec<JsValue>,
+    ) -> Result<JsValue, JsError> {
+        let values = self.collect_iterable(iter)?;
+        match method {
+            "toArray" => Ok(JsValue::Array(Rc::new(RefCell::new(values)))),
+            "map" => {
+                let f = args.into_iter().next().unwrap_or(JsValue::Undefined);
+                let mut out = Vec::with_capacity(values.len());
+                for v in values {
+                    out.push(self.call_function(f.clone(), vec![v], None)?);
+                }
+                Ok(make_iterator_from_values(out))
+            }
+            "filter" => {
+                let f = args.into_iter().next().unwrap_or(JsValue::Undefined);
+                let mut out = Vec::new();
+                for v in values {
+                    let keep = self.call_function(f.clone(), vec![v.clone()], None)?;
+                    if keep.is_truthy() { out.push(v); }
+                }
+                Ok(make_iterator_from_values(out))
+            }
+            "take" => {
+                let n = args.into_iter().next().map(|v| v.to_number() as usize).unwrap_or(0);
+                Ok(make_iterator_from_values(values.into_iter().take(n).collect()))
+            }
+            "drop" => {
+                let n = args.into_iter().next().map(|v| v.to_number() as usize).unwrap_or(0);
+                Ok(make_iterator_from_values(values.into_iter().skip(n).collect()))
+            }
+            "reduce" => {
+                let mut it = args.into_iter();
+                let f = it.next().unwrap_or(JsValue::Undefined);
+                let init = it.next();
+                let has_init = init.is_some();
+                let mut acc = match init {
+                    Some(v) => v,
+                    None => {
+                        if values.is_empty() {
+                            return Err(JsError::Runtime("TypeError: Reduce of empty iterator with no initial value".into()));
+                        }
+                        values[0].clone()
+                    }
+                };
+                let start = if has_init { 0 } else { 1 };
+                for v in &values[start..] {
+                    acc = self.call_function(f.clone(), vec![acc, v.clone()], None)?;
+                }
+                Ok(acc)
+            }
+            "forEach" => {
+                let f = args.into_iter().next().unwrap_or(JsValue::Undefined);
+                for v in values {
+                    self.call_function(f.clone(), vec![v], None)?;
+                }
+                Ok(JsValue::Undefined)
+            }
+            "some" => {
+                let f = args.into_iter().next().unwrap_or(JsValue::Undefined);
+                for v in values {
+                    let r = self.call_function(f.clone(), vec![v], None)?;
+                    if r.is_truthy() { return Ok(JsValue::Bool(true)); }
+                }
+                Ok(JsValue::Bool(false))
+            }
+            "every" => {
+                let f = args.into_iter().next().unwrap_or(JsValue::Undefined);
+                for v in values {
+                    let r = self.call_function(f.clone(), vec![v], None)?;
+                    if !r.is_truthy() { return Ok(JsValue::Bool(false)); }
+                }
+                Ok(JsValue::Bool(true))
+            }
+            "find" => {
+                let f = args.into_iter().next().unwrap_or(JsValue::Undefined);
+                for v in values {
+                    let r = self.call_function(f.clone(), vec![v.clone()], None)?;
+                    if r.is_truthy() { return Ok(v); }
+                }
+                Ok(JsValue::Undefined)
+            }
+            "flatMap" => {
+                let f = args.into_iter().next().unwrap_or(JsValue::Undefined);
+                let mut out = Vec::new();
+                for v in values {
+                    let mapped = self.call_function(f.clone(), vec![v], None)?;
+                    let inner = self.collect_iterable(mapped).unwrap_or_default();
+                    out.extend(inner);
+                }
+                Ok(make_iterator_from_values(out))
+            }
+            _ => Ok(JsValue::Undefined),
+        }
+    }
+
+    /// Sbira vsechny hodnoty z iteratoru nebo iterovatelneho objektu (interni).
     ///
     /// Pouzivane v `for...of` pro custom iterables a `yield*`.
     fn collect_iterable(&mut self, val: JsValue) -> Result<Vec<JsValue>, JsError> {
@@ -5195,6 +5329,11 @@ impl Interpreter {
             if !matches!(sym_iter_fn, JsValue::Undefined) {
                 let iterator = self.call_function(sym_iter_fn, vec![], Some(val.clone()))?;
                 return self.drain_iterator(iterator);
+            }
+            // Iterator helper objekt - rovnou drainni
+            let next_fn = o.borrow().get("next");
+            if !matches!(next_fn, JsValue::Undefined) {
+                return self.drain_iterator(val.clone());
             }
         }
         Err(JsError::Runtime("for...of: hodnota neni iterovatelna".into()))

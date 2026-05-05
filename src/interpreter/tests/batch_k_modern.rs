@@ -3,6 +3,7 @@
 /// Promise.withResolvers/try, Error.cause.
 
 use super::helpers::*;
+use crate::interpreter::JsValue;
 
 // ─── ES2023 immutable Array varianty ────────────────────────────
 
@@ -235,4 +236,149 @@ fn error_cause_optional() {
         return e.cause === undefined;
     "#);
     assert_eq!(as_bool(v), true);
+}
+
+// ─── Iterator helpers (ES2025) ─────────────────────────────────────────
+
+#[test]
+fn iterator_to_array() {
+    let code = r#"
+        function* gen() { yield 1; yield 2; yield 3; }
+        return gen().toArray();
+    "#;
+    if let JsValue::Array(a) = run(code) {
+        let arr = a.borrow();
+        assert_eq!(arr.len(), 3);
+    } else {
+        panic!("expected Array");
+    }
+}
+
+#[test]
+fn iterator_map() {
+    let code = r#"
+        function* gen() { yield 1; yield 2; yield 3; }
+        return gen().map(x => x * 2).toArray();
+    "#;
+    if let JsValue::Array(a) = run(code) {
+        let arr = a.borrow();
+        assert_eq!(arr.len(), 3);
+        if let JsValue::Number(n) = &arr[0] { assert_eq!(*n, 2.0); }
+        if let JsValue::Number(n) = &arr[2] { assert_eq!(*n, 6.0); }
+    }
+}
+
+#[test]
+fn iterator_filter() {
+    let code = r#"
+        function* gen() { yield 1; yield 2; yield 3; yield 4; }
+        return gen().filter(x => x % 2 === 0).toArray();
+    "#;
+    if let JsValue::Array(a) = run(code) {
+        let arr = a.borrow();
+        assert_eq!(arr.len(), 2);
+    }
+}
+
+#[test]
+fn iterator_take() {
+    let code = r#"
+        function* gen() { yield 1; yield 2; yield 3; yield 4; yield 5; }
+        return gen().take(3).toArray();
+    "#;
+    if let JsValue::Array(a) = run(code) {
+        assert_eq!(a.borrow().len(), 3);
+    }
+}
+
+#[test]
+fn iterator_drop() {
+    let code = r#"
+        function* gen() { yield 1; yield 2; yield 3; yield 4; yield 5; }
+        return gen().drop(2).toArray();
+    "#;
+    if let JsValue::Array(a) = run(code) {
+        let arr = a.borrow();
+        assert_eq!(arr.len(), 3);
+        if let JsValue::Number(n) = &arr[0] { assert_eq!(*n, 3.0); }
+    }
+}
+
+#[test]
+fn iterator_reduce_with_init() {
+    let code = r#"
+        function* gen() { yield 1; yield 2; yield 3; }
+        return gen().reduce((acc, x) => acc + x, 10);
+    "#;
+    if let JsValue::Number(n) = run(code) {
+        assert_eq!(n, 16.0);
+    }
+}
+
+#[test]
+fn iterator_reduce_no_init() {
+    let code = r#"
+        function* gen() { yield 1; yield 2; yield 3; yield 4; }
+        return gen().reduce((acc, x) => acc * x);
+    "#;
+    if let JsValue::Number(n) = run(code) {
+        assert_eq!(n, 24.0);
+    }
+}
+
+#[test]
+fn iterator_some_true() {
+    let code = r#"
+        function* gen() { yield 1; yield 2; yield 3; }
+        return gen().some(x => x === 2);
+    "#;
+    if let JsValue::Bool(b) = run(code) {
+        assert!(b);
+    }
+}
+
+#[test]
+fn iterator_every_true() {
+    let code = r#"
+        function* gen() { yield 2; yield 4; yield 6; }
+        return gen().every(x => x % 2 === 0);
+    "#;
+    if let JsValue::Bool(b) = run(code) {
+        assert!(b);
+    }
+}
+
+#[test]
+fn iterator_find() {
+    let code = r#"
+        function* gen() { yield 1; yield 2; yield 3; }
+        return gen().find(x => x > 1);
+    "#;
+    if let JsValue::Number(n) = run(code) {
+        assert_eq!(n, 2.0);
+    }
+}
+
+#[test]
+fn iterator_flat_map() {
+    let code = r#"
+        function* gen() { yield 1; yield 2; yield 3; }
+        return gen().flatMap(x => [x, x * 10]).toArray();
+    "#;
+    if let JsValue::Array(a) = run(code) {
+        assert_eq!(a.borrow().len(), 6);
+    }
+}
+
+#[test]
+fn iterator_for_each_side_effect() {
+    let code = r#"
+        let sum = 0;
+        function* gen() { yield 1; yield 2; yield 3; }
+        gen().forEach(x => sum += x);
+        return sum;
+    "#;
+    if let JsValue::Number(n) = run(code) {
+        assert_eq!(n, 6.0);
+    }
 }

@@ -1435,6 +1435,102 @@ pub fn setup_builtins(
     // Date konstruktor (logika v call_new)
     e.define("Date", native("Date", |_| Ok(JsValue::Undefined)));
 
+    // ─── Temporal API stub (TC39 Stage 3) ────────────────────────────────
+    // Temporal.Now / PlainDate / PlainTime / Duration / Instant
+    {
+        let temporal = Rc::new(RefCell::new(JsObject::new()));
+        // Temporal.Now
+        let now_obj = Rc::new(RefCell::new(JsObject::new()));
+        now_obj.borrow_mut().set("instant".into(), native("Temporal.Now.instant", |_| {
+            let inst = Rc::new(RefCell::new(JsObject::new()));
+            let ms = super::helpers::now_ms();
+            inst.borrow_mut().set("__instant_ms__".into(), JsValue::Number(ms));
+            inst.borrow_mut().set("epochMilliseconds".into(), JsValue::Number(ms));
+            inst.borrow_mut().set("epochNanoseconds".into(), JsValue::Number(ms * 1_000_000.0));
+            Ok(JsValue::Object(inst))
+        }));
+        now_obj.borrow_mut().set("plainDateISO".into(), native("Temporal.Now.plainDateISO", |_| {
+            let ms = super::helpers::now_ms();
+            let (yr, mo, day, _, _, _, _) = super::helpers::ms_to_parts(ms);
+            let pd = Rc::new(RefCell::new(JsObject::new()));
+            pd.borrow_mut().set("year".into(), JsValue::Number(yr as f64));
+            pd.borrow_mut().set("month".into(), JsValue::Number((mo + 1) as f64));
+            pd.borrow_mut().set("day".into(), JsValue::Number(day as f64));
+            pd.borrow_mut().set("__plain_date__".into(), JsValue::Bool(true));
+            Ok(JsValue::Object(pd))
+        }));
+        now_obj.borrow_mut().set("plainTimeISO".into(), native("Temporal.Now.plainTimeISO", |_| {
+            let ms = super::helpers::now_ms();
+            let (_, _, _, hr, mi, sec, ms_p) = super::helpers::ms_to_parts(ms);
+            let pt = Rc::new(RefCell::new(JsObject::new()));
+            pt.borrow_mut().set("hour".into(), JsValue::Number(hr as f64));
+            pt.borrow_mut().set("minute".into(), JsValue::Number(mi as f64));
+            pt.borrow_mut().set("second".into(), JsValue::Number(sec as f64));
+            pt.borrow_mut().set("millisecond".into(), JsValue::Number(ms_p as f64));
+            Ok(JsValue::Object(pt))
+        }));
+        now_obj.borrow_mut().set("zonedDateTimeISO".into(), native("Temporal.Now.zonedDateTimeISO", |_| {
+            let ms = super::helpers::now_ms();
+            let zdt = Rc::new(RefCell::new(JsObject::new()));
+            zdt.borrow_mut().set("epochMilliseconds".into(), JsValue::Number(ms));
+            zdt.borrow_mut().set("timeZoneId".into(), JsValue::Str("UTC".into()));
+            Ok(JsValue::Object(zdt))
+        }));
+        temporal.borrow_mut().set("Now".into(), JsValue::Object(now_obj));
+        // Temporal.PlainDate (constructor)
+        let plain_date = Rc::new(RefCell::new(JsObject::new()));
+        plain_date.borrow_mut().set("from".into(), native("Temporal.PlainDate.from", |args| {
+            let arg = args.into_iter().next().unwrap_or(JsValue::Undefined);
+            let pd = Rc::new(RefCell::new(JsObject::new()));
+            if let JsValue::Object(o) = &arg {
+                let b = o.borrow();
+                pd.borrow_mut().set("year".into(), b.props.get("year").cloned().unwrap_or(JsValue::Number(1970.0)));
+                pd.borrow_mut().set("month".into(), b.props.get("month").cloned().unwrap_or(JsValue::Number(1.0)));
+                pd.borrow_mut().set("day".into(), b.props.get("day").cloned().unwrap_or(JsValue::Number(1.0)));
+            } else if let JsValue::Str(s) = &arg {
+                // ISO date string "2024-01-15"
+                let parts: Vec<&str> = s.split('-').collect();
+                pd.borrow_mut().set("year".into(),
+                    JsValue::Number(parts.first().and_then(|p| p.parse().ok()).unwrap_or(1970.0)));
+                pd.borrow_mut().set("month".into(),
+                    JsValue::Number(parts.get(1).and_then(|p| p.parse().ok()).unwrap_or(1.0)));
+                pd.borrow_mut().set("day".into(),
+                    JsValue::Number(parts.get(2).and_then(|p| p.parse().ok()).unwrap_or(1.0)));
+            }
+            pd.borrow_mut().set("__plain_date__".into(), JsValue::Bool(true));
+            Ok(JsValue::Object(pd))
+        }));
+        temporal.borrow_mut().set("PlainDate".into(), JsValue::Object(plain_date));
+        // Temporal.Duration
+        let duration = Rc::new(RefCell::new(JsObject::new()));
+        duration.borrow_mut().set("from".into(), native("Temporal.Duration.from", |args| {
+            let arg = args.into_iter().next().unwrap_or(JsValue::Undefined);
+            let dur = Rc::new(RefCell::new(JsObject::new()));
+            if let JsValue::Object(o) = &arg {
+                let b = o.borrow();
+                for k in &["years", "months", "weeks", "days", "hours", "minutes", "seconds", "milliseconds"] {
+                    let v = b.props.get(*k).cloned().unwrap_or(JsValue::Number(0.0));
+                    dur.borrow_mut().set((*k).into(), v);
+                }
+            }
+            dur.borrow_mut().set("__duration__".into(), JsValue::Bool(true));
+            Ok(JsValue::Object(dur))
+        }));
+        temporal.borrow_mut().set("Duration".into(), JsValue::Object(duration));
+        // Temporal.Instant
+        let instant = Rc::new(RefCell::new(JsObject::new()));
+        instant.borrow_mut().set("fromEpochMilliseconds".into(), native("Temporal.Instant.fromEpochMilliseconds", |args| {
+            let ms = args.into_iter().next().map(|v| v.to_number()).unwrap_or(0.0);
+            let inst = Rc::new(RefCell::new(JsObject::new()));
+            inst.borrow_mut().set("epochMilliseconds".into(), JsValue::Number(ms));
+            inst.borrow_mut().set("epochNanoseconds".into(), JsValue::Number(ms * 1_000_000.0));
+            inst.borrow_mut().set("__instant_ms__".into(), JsValue::Number(ms));
+            Ok(JsValue::Object(inst))
+        }));
+        temporal.borrow_mut().set("Instant".into(), JsValue::Object(instant));
+        e.define("Temporal", JsValue::Object(temporal));
+    }
+
     // Error typy
     for name in &["Error", "TypeError", "RangeError", "SyntaxError",
                    "ReferenceError", "URIError", "EvalError"] {
@@ -2180,6 +2276,110 @@ pub fn setup_builtins(
             native("EventSource.addEventListener", |_| Ok(JsValue::Undefined)));
         Ok(JsValue::Object(obj))
     }));
+
+    // ─── Event classes (constructors) ─────────────────────────────────────
+    // Event / CustomEvent / PointerEvent / MouseEvent / KeyboardEvent / TouchEvent / WheelEvent
+    let make_event_constructor = |default_type: &str| {
+        let dt = default_type.to_string();
+        native(default_type, move |args| {
+            let mut it = args.into_iter();
+            let evt_type = it.next().map(|v| v.to_string()).unwrap_or_else(|| dt.clone());
+            let init = it.next();
+            let obj = Rc::new(RefCell::new(JsObject::new()));
+            obj.borrow_mut().set("type".into(), JsValue::Str(evt_type));
+            obj.borrow_mut().set("bubbles".into(), JsValue::Bool(false));
+            obj.borrow_mut().set("cancelable".into(), JsValue::Bool(false));
+            obj.borrow_mut().set("composed".into(), JsValue::Bool(false));
+            obj.borrow_mut().set("defaultPrevented".into(), JsValue::Bool(false));
+            obj.borrow_mut().set("target".into(), JsValue::Null);
+            obj.borrow_mut().set("currentTarget".into(), JsValue::Null);
+            obj.borrow_mut().set("timeStamp".into(), JsValue::Number(super::helpers::now_ms()));
+            // Apply init dict
+            if let Some(JsValue::Object(o)) = init {
+                let b = o.borrow();
+                for (k, v) in &b.props {
+                    obj.borrow_mut().set(k.clone(), v.clone());
+                }
+            }
+            let obj_pd = Rc::clone(&obj);
+            obj.borrow_mut().set("preventDefault".into(),
+                native("preventDefault", move |_| {
+                    obj_pd.borrow_mut().set("defaultPrevented".into(), JsValue::Bool(true));
+                    Ok(JsValue::Undefined)
+                }));
+            let obj_sp = Rc::clone(&obj);
+            obj.borrow_mut().set("stopPropagation".into(),
+                native("stopPropagation", move |_| {
+                    obj_sp.borrow_mut().set("__stop_propagation__".into(), JsValue::Bool(true));
+                    Ok(JsValue::Undefined)
+                }));
+            obj.borrow_mut().set("stopImmediatePropagation".into(),
+                native("stopImmediatePropagation", |_| Ok(JsValue::Undefined)));
+            Ok(JsValue::Object(obj))
+        })
+    };
+    e.define("Event", make_event_constructor("event"));
+    e.define("CustomEvent", make_event_constructor("custom"));
+    e.define("MouseEvent", make_event_constructor("click"));
+    e.define("PointerEvent", make_event_constructor("pointerdown"));
+    e.define("KeyboardEvent", make_event_constructor("keydown"));
+    e.define("TouchEvent", make_event_constructor("touchstart"));
+    e.define("WheelEvent", make_event_constructor("wheel"));
+    e.define("InputEvent", make_event_constructor("input"));
+    e.define("FocusEvent", make_event_constructor("focus"));
+    e.define("DragEvent", make_event_constructor("drag"));
+    e.define("SubmitEvent", make_event_constructor("submit"));
+    e.define("ProgressEvent", make_event_constructor("progress"));
+    e.define("MessageEvent", make_event_constructor("message"));
+    e.define("ErrorEvent", make_event_constructor("error"));
+    e.define("BeforeUnloadEvent", make_event_constructor("beforeunload"));
+    e.define("PageTransitionEvent", make_event_constructor("pageshow"));
+    e.define("HashChangeEvent", make_event_constructor("hashchange"));
+    e.define("PopStateEvent", make_event_constructor("popstate"));
+    e.define("StorageEvent", make_event_constructor("storage"));
+    e.define("AnimationEvent", make_event_constructor("animationstart"));
+    e.define("TransitionEvent", make_event_constructor("transitionend"));
+    e.define("ClipboardEvent", make_event_constructor("copy"));
+
+    // ─── Clipboard API stub - navigator.clipboard.* ──────────────────────
+    {
+        let clip = Rc::new(RefCell::new(JsObject::new()));
+        let storage: Rc<RefCell<String>> = Rc::new(RefCell::new(String::new()));
+        let s1 = Rc::clone(&storage);
+        clip.borrow_mut().set("writeText".into(), native("clipboard.writeText", move |args| {
+            let text = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+            *s1.borrow_mut() = text;
+            Ok(make_settled_promise("fulfilled", JsValue::Undefined))
+        }));
+        let s2 = Rc::clone(&storage);
+        clip.borrow_mut().set("readText".into(), native("clipboard.readText", move |_| {
+            Ok(make_settled_promise("fulfilled", JsValue::Str(s2.borrow().clone())))
+        }));
+        clip.borrow_mut().set("write".into(),
+            native("clipboard.write", |_| Ok(make_settled_promise("fulfilled", JsValue::Undefined))));
+        clip.borrow_mut().set("read".into(),
+            native("clipboard.read", |_| Ok(make_settled_promise("fulfilled",
+                JsValue::Array(Rc::new(RefCell::new(Vec::new())))))));
+        e.define("__clipboard__", JsValue::Object(clip));
+    }
+
+    // ─── Geolocation API stub - navigator.geolocation ────────────────────
+    {
+        let geo = Rc::new(RefCell::new(JsObject::new()));
+        geo.borrow_mut().set("getCurrentPosition".into(),
+            native("geolocation.getCurrentPosition", |args| {
+                let mut it = args.into_iter();
+                let success = it.next().unwrap_or(JsValue::Undefined);
+                // Stub: nemame skutecny geolocation - vratime mock data
+                let _ = success;
+                Ok(JsValue::Undefined)
+            }));
+        geo.borrow_mut().set("watchPosition".into(),
+            native("geolocation.watchPosition", |_| Ok(JsValue::Number(1.0))));
+        geo.borrow_mut().set("clearWatch".into(),
+            native("geolocation.clearWatch", |_| Ok(JsValue::Undefined)));
+        e.define("__geolocation__", JsValue::Object(geo));
+    }
 
     // EventTarget constructor - obecny emitter s addEventListener / removeEventListener / dispatchEvent
     e.define("EventTarget", native("EventTarget", |_| {
