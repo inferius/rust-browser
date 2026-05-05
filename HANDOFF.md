@@ -5,8 +5,8 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 ## Stav
 
 - Build: **OK**, 0 errors, 0 warnings.
-- Tests: **2004 passed, 0 failed, 3 ignored**.
-- Posledni commit: `70ecc68 CSS Color L5 contrast() / contrast-color() / light-dark()`.
+- Tests: **2009 passed, 0 failed, 3 ignored**.
+- Posledni commit: `09c1831 DataView extras + Subgrid skip`.
 - Tree: ciste.
 - Branch master, ~290 commitu pred origin/master (NEPUSHOVAT bez vyzvy).
 - **WebGL pipeline DOKONCEN** + **CSS L4-L6 KOMPLET** + **JS DOM kompletni**:
@@ -118,6 +118,9 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
     reverse/join + buffer view + byteOffset.
   - CSS Color L5: contrast(<bg> vs <list>) / contrast-color() s relative luminance,
     light-dark() function.
+  - DataView complete: getUint16/getInt16/getUint32/getInt32/getFloat32/getFloat64 +
+    setUint16/setUint32/setFloat32/setFloat64 (little/big endian).
+  - Refactor: dom_api_tests.rs split do dom_api_tests + dom_api_modern_tests.
 
 ## Test runner
 
