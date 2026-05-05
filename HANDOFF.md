@@ -5,8 +5,8 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 ## Stav
 
 - Build: **OK**, 0 errors, 0 warnings.
-- Tests: **1983 passed, 0 failed, 3 ignored**.
-- Posledni commit: `fe7f337 Symbols + Reflect tests + 12 well-known symbols`.
+- Tests: **2004 passed, 0 failed, 3 ignored**.
+- Posledni commit: `70ecc68 CSS Color L5 contrast() / contrast-color() / light-dark()`.
 - Tree: ciste.
 - Branch master, ~290 commitu pred origin/master (NEPUSHOVAT bez vyzvy).
 - **WebGL pipeline DOKONCEN** + **CSS L4-L6 KOMPLET** + **JS DOM kompletni**:
@@ -112,6 +112,12 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
     isConcatSpreadable/match/matchAll/replace/search/split/species/toStringTag/
     unscopables/dispose/asyncDispose/metadata.
   - call_new fix: native ctors mohou vratit DomNode/Array/Map/Set (ne jen Object).
+  - Crypto SHA-1 / SHA-256 real Rust impl (FIPS 180-4) + SHA-384 / SHA-512 derived.
+    crypto.subtle.digest("SHA-256", data) -> ArrayBuffer real.
+  - Typed Array methods: subarray/set/fill/slice/copyWithin/indexOf/includes/
+    reverse/join + buffer view + byteOffset.
+  - CSS Color L5: contrast(<bg> vs <list>) / contrast-color() s relative luminance,
+    light-dark() function.
 
 ## Test runner
 
