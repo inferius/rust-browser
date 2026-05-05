@@ -606,6 +606,12 @@ pub fn layout_flex(bx: &mut LayoutBox) {
     let cb_h = (bx.rect.height - bw_t - bw_b).max(0.0);
     for ch in bx.children.iter_mut() {
         if super::is_out_of_flow(ch) {
+            // display:none na abs - zero out a skip.
+            if matches!(ch.display, super::super::layout::Display::None) {
+                ch.rect.x = 0.0; ch.rect.y = 0.0;
+                ch.rect.width = 0.0; ch.rect.height = 0.0;
+                continue;
+            }
             // Pre-layout: pokud abs nema inset v dane ose, pouzij flex-container
             // alignment (justify-content / align-items) pro static position.
             super::layout_absolute_child(ch, cb_x, cb_y, cb_w, cb_h);

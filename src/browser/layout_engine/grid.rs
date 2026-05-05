@@ -600,6 +600,12 @@ pub fn layout_grid(bx: &mut LayoutBox) {
     let parent_justify = bx.justify_items.clone();
     for ch in bx.children.iter_mut() {
         if super::is_out_of_flow(ch) {
+            // display:none na abs - zero out a skip.
+            if matches!(ch.display, super::super::layout::Display::None) {
+                ch.rect.x = 0.0; ch.rect.y = 0.0;
+                ch.rect.width = 0.0; ch.rect.height = 0.0;
+                continue;
+            }
             // Pri grid-row/col placement, CB v dane axe vychazi z grid track positions.
             let mut ab_cb_x = cb_x;
             let mut ab_cb_y = cb_y;
@@ -858,7 +864,25 @@ fn pre_compute_fixed(s: &str, container: f32) -> f32 {
             buf.push(cc); chars.next();
         }
         if buf.is_empty() { continue; }
-        if buf.starts_with("repeat(") { continue; }
+        if let Some(rest) = buf.strip_prefix("repeat(") {
+            if let Some(inner) = rest.strip_suffix(')') {
+                let comma_idx = inner.find(',').unwrap_or(0);
+                let count_str = inner[..comma_idx].trim();
+                let inner_tracks = inner[comma_idx+1..].trim();
+                // Auto-fill/fit nemuze byt pri pre-compute (potrebujeme container size).
+                if count_str == "auto-fill" || count_str == "auto-fit" { continue; }
+                if let Ok(count) = count_str.parse::<usize>() {
+                    let sub_tokens = parse_track_tokens(inner_tracks);
+                    let sub_size: f32 = sub_tokens.iter().map(|t| match t {
+                        Track::Fixed(p) => *p,
+                        Track::Percent(p) => container * p / 100.0,
+                        _ => 0.0,
+                    }).sum();
+                    total += sub_size * count as f32;
+                }
+            }
+            continue;
+        }
         match parse_single_track(&buf) {
             Track::Fixed(p) => total += p,
             Track::Percent(p) => total += container * p / 100.0,
