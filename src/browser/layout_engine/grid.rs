@@ -201,13 +201,13 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         let final_w = if stretch_w { cw_avail } else { item_w };
         let final_h = if stretch_h { ch_avail } else { item_h };
         let off_x = if stretch_w { 0.0 } else { match js.as_str() {
-            "end" | "flex-end" => (cw_avail - final_w).max(0.0),
-            "center" => ((cw_avail - final_w) / 2.0).max(0.0),
+            "end" | "flex-end" => cw_avail - final_w,
+            "center" => (cw_avail - final_w) / 2.0,
             _ => 0.0,
         }};
         let off_y = if stretch_h { 0.0 } else { match als.as_str() {
-            "end" | "flex-end" => (ch_avail - final_h).max(0.0),
-            "center" => ((ch_avail - final_h) / 2.0).max(0.0),
+            "end" | "flex-end" => ch_avail - final_h,
+            "center" => (ch_avail - final_h) / 2.0,
             _ => 0.0,
         }};
         child.rect.x = inner_x + cx + m_l + off_x;
