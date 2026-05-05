@@ -407,6 +407,17 @@ pub struct LayoutBox {
     pub explicit_width: Option<f32>,
     /// Explicitni CSS height (None = auto / neparsovano).
     pub explicit_height: Option<f32>,
+    /// Flex properties (CSS Flexbox L1)
+    pub flex_direction: String,
+    pub flex_wrap: String,
+    pub justify_content: String,
+    pub align_items: String,
+    pub align_content: String,
+    pub flex_grow: f32,
+    pub flex_shrink: f32,
+    pub flex_basis: String,
+    pub row_gap: f32,
+    pub column_gap: f32,
     /// CSS Logical Properties continued
     pub block_size_v: String,
     pub inline_size_v: String,
@@ -704,6 +715,16 @@ impl LayoutBox {
             max_height_v: String::new(),
             explicit_width: None,
             explicit_height: None,
+            flex_direction: String::new(),
+            flex_wrap: String::new(),
+            justify_content: String::new(),
+            align_items: String::new(),
+            align_content: String::new(),
+            flex_grow: 0.0,
+            flex_shrink: 1.0,
+            flex_basis: String::new(),
+            row_gap: 0.0,
+            column_gap: 0.0,
             block_size_v: String::new(),
             inline_size_v: String::new(),
             table_layout: String::new(),
@@ -986,7 +1007,8 @@ fn layout_dispatch(bx: &mut LayoutBox) {
 
 fn layout_dispatch_inner(bx: &mut LayoutBox) {
     match bx.display {
-        Display::Flex | Display::Grid => layout_flex(bx),
+        Display::Flex => layout_flex(bx),
+        Display::Grid => super::layout_engine::grid::layout_grid(bx),
         _ => layout_block(bx),
     }
 }
@@ -1352,6 +1374,47 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(tb) = s.get("transition-behavior") { bx.transition_behavior = tb.trim().to_string(); }
     if let Some(ac) = s.get("animation-composition") { bx.animation_composition = ac.trim().to_string(); }
     if let Some(ci) = s.get("color-interpolation") { bx.color_interpolation = ci.trim().to_string(); }
+    // CSS Flexbox L1 properties
+    if let Some(v) = s.get("flex-direction") { bx.flex_direction = v.trim().to_string(); }
+    if let Some(v) = s.get("flex-wrap") { bx.flex_wrap = v.trim().to_string(); }
+    if let Some(v) = s.get("justify-content") { bx.justify_content = v.trim().to_string(); }
+    if let Some(v) = s.get("align-items") { bx.align_items = v.trim().to_string(); }
+    if let Some(v) = s.get("align-content") { bx.align_content = v.trim().to_string(); }
+    if let Some(v) = s.get("flex-grow") { bx.flex_grow = v.trim().parse().unwrap_or(0.0); }
+    if let Some(v) = s.get("flex-shrink") { bx.flex_shrink = v.trim().parse().unwrap_or(1.0); }
+    if let Some(v) = s.get("flex-basis") { bx.flex_basis = v.trim().to_string(); }
+    if let Some(v) = s.get("row-gap") { bx.row_gap = parse_length(v); }
+    if let Some(v) = s.get("column-gap") { bx.column_gap = parse_length(v); }
+    if let Some(v) = s.get("gap") {
+        let parts: Vec<&str> = v.split_whitespace().collect();
+        if parts.len() == 1 {
+            let g = parse_length(parts[0]);
+            bx.row_gap = g; bx.column_gap = g;
+        } else if parts.len() >= 2 {
+            bx.row_gap = parse_length(parts[0]);
+            bx.column_gap = parse_length(parts[1]);
+        }
+    }
+    if let Some(v) = s.get("flex") {
+        let v = v.trim();
+        match v {
+            "none" => { bx.flex_grow = 0.0; bx.flex_shrink = 0.0; bx.flex_basis = "auto".into(); }
+            "auto" => { bx.flex_grow = 1.0; bx.flex_shrink = 1.0; bx.flex_basis = "auto".into(); }
+            _ => {
+                let parts: Vec<&str> = v.split_whitespace().collect();
+                if let Some(p0) = parts.first() {
+                    if let Ok(g) = p0.parse::<f32>() { bx.flex_grow = g; }
+                }
+                if let Some(p1) = parts.get(1) {
+                    if let Ok(sh) = p1.parse::<f32>() { bx.flex_shrink = sh; }
+                    else { bx.flex_basis = p1.to_string(); }
+                }
+                if let Some(p2) = parts.get(2) {
+                    bx.flex_basis = p2.to_string();
+                }
+            }
+        }
+    }
     // CSS Scroll-Driven Animations L1 extras
     if let Some(v) = s.get("timeline-scope") { bx.timeline_scope = v.trim().to_string(); }
     if let Some(v) = s.get("animation-range-start") { bx.animation_range_start = v.trim().to_string(); }
@@ -2035,72 +2098,10 @@ fn parse_content_value(raw: &str, parent: &Rc<Node>, counters: &HashMap<String, 
     Some(raw.to_string())
 }
 
-/// Flex layout pres taffy crate.
+/// Flex layout - vlastni implementace (taffy-inspired, MIT).
+/// Dispatchuje do `super::layout_engine::flex::layout_flex`.
 fn layout_flex(bx: &mut LayoutBox) {
-    use taffy::prelude::*;
-
-    let inner_x = bx.rect.x + bx.padding + bx.margin + bx.border_width;
-    let inner_y = bx.rect.y + bx.padding + bx.margin + bx.border_width;
-    let inner_w = bx.rect.width - 2.0 * (bx.padding + bx.margin + bx.border_width);
-
-    let mut taffy: TaffyTree<()> = TaffyTree::new();
-    let mut child_nodes: Vec<NodeId> = Vec::new();
-
-    // Vytvor child nodes
-    for ch in bx.children.iter() {
-        let est_w = if let Some(t) = &ch.text {
-            measure_text_width(t, ch.font_size)
-        } else { 100.0 };
-        let est_h = if ch.text.is_some() { ch.font_size * 1.4 } else { 50.0 };
-        let style = Style {
-            size: Size { width: length(est_w), height: length(est_h) },
-            margin: taffy::geometry::Rect::length(ch.margin),
-            padding: taffy::geometry::Rect::length(ch.padding),
-            ..Default::default()
-        };
-        if let Ok(node) = taffy.new_leaf(style) {
-            child_nodes.push(node);
-        }
-    }
-
-    let parent_style = Style {
-        display: taffy::Display::Flex,
-        size: Size { width: length(inner_w), height: auto() },
-        flex_wrap: FlexWrap::Wrap,
-        gap: Size { width: length(8.0), height: length(8.0) },
-        ..Default::default()
-    };
-
-    let root = match taffy.new_with_children(parent_style, &child_nodes) {
-        Ok(r) => r,
-        Err(_) => return,
-    };
-
-    let _ = taffy.compute_layout(root, Size {
-        width: AvailableSpace::Definite(inner_w),
-        height: AvailableSpace::MinContent,
-    });
-
-    // Aplikuj layout zpet do bx.children
-    for (i, node) in child_nodes.iter().enumerate() {
-        if let Ok(layout) = taffy.layout(*node) {
-            let child = &mut bx.children[i];
-            child.rect.x = inner_x + layout.location.x;
-            child.rect.y = inner_y + layout.location.y;
-            child.rect.width = layout.size.width;
-            child.rect.height = layout.size.height;
-            // Recursive layout uvnitr child boxu
-            layout_block(child);
-        }
-    }
-
-    // Update parent height na zaklade celkove vysky deti
-    if let Ok(layout) = taffy.layout(root) {
-        let needed_h = layout.size.height + 2.0 * (bx.padding + bx.border_width);
-        if bx.rect.height < needed_h {
-            bx.rect.height = needed_h;
-        }
-    }
+    super::layout_engine::flex::layout_flex(bx);
 }
 
 /// Block layout: kazdy block dite je vlastni radek, sirka = parent.
@@ -2148,7 +2149,7 @@ fn layout_block_vertical(bx: &mut LayoutBox) {
     }
 }
 
-fn layout_block(bx: &mut LayoutBox) {
+pub fn layout_block(bx: &mut LayoutBox) {
     // writing-mode: vertical-rl / vertical-lr - block axis zmena na X
     let vertical = matches!(bx.writing_mode.as_str(), "vertical-rl" | "vertical-lr");
     if vertical {

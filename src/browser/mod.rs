@@ -13,6 +13,7 @@ pub mod html_parser;
 pub mod css_parser;
 pub mod cascade;
 pub mod layout;
+pub mod layout_engine;
 pub mod paint;
 pub mod render;
 
