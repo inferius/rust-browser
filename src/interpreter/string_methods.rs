@@ -245,6 +245,37 @@ pub fn call_string_method(
             // Plna normalizace vyzaduje unicode-normalization crate; vracime original (NFC approx).
             Ok(Some(JsValue::Str(s.to_string())))
         }
+        "matchAll" => {
+            // String.prototype.matchAll(regex) - vraci iterator nad pres vsech zacatku.
+            let arg = args.into_iter().next().unwrap_or(JsValue::Undefined);
+            let mut pattern = String::new();
+            if let JsValue::Object(o) = &arg {
+                let b = o.borrow();
+                if let Some(JsValue::Str(p)) = b.props.get("__regex_pattern__") {
+                    pattern = p.clone();
+                }
+            } else if let JsValue::Str(p) = &arg {
+                pattern = p.clone();
+            }
+            let mut matches: Vec<JsValue> = Vec::new();
+            if !pattern.is_empty() {
+                if let Ok(re) = fancy_regex::Regex::new(&pattern) {
+                    let mut start = 0usize;
+                    while start <= s.len() {
+                        match re.find_from_pos(s, start) {
+                            Ok(Some(mat)) => {
+                                let m_str = mat.as_str().to_string();
+                                let arr = vec![JsValue::Str(m_str)];
+                                matches.push(JsValue::Array(Rc::new(RefCell::new(arr))));
+                                start = if mat.end() == mat.start() { mat.end() + 1 } else { mat.end() };
+                            }
+                            _ => break,
+                        }
+                    }
+                }
+            }
+            Ok(Some(crate::interpreter::helpers::make_iterator_from_values(matches)))
+        }
         "isWellFormed" => {
             // ES2024 - test zda string ma jen valid UTF-16 (zadne lone surrogates).
             // Nase Rust strings jsou UTF-8 -> vsechny well-formed.

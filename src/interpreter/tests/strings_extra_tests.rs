@@ -421,3 +421,21 @@ fn string_is_well_formed_basic() {
 fn string_to_well_formed_basic() {
     assert_eq!(as_str(eval(r#""hello".toWellFormed()"#)), "hello");
 }
+
+#[test]
+fn string_match_all_basic() {
+    let result = eval(r#""hello world hello".matchAll(/hello/g).toArray().length"#);
+    assert_eq!(as_num(result), 2.0);
+}
+
+#[test]
+fn string_match_all_no_match() {
+    let result = eval(r#""abc".matchAll(/xyz/g).toArray().length"#);
+    assert_eq!(as_num(result), 0.0);
+}
+
+#[test]
+fn string_match_all_string_arg() {
+    let result = eval(r#""ababab".matchAll("ab").toArray().length"#);
+    assert_eq!(as_num(result), 3.0);
+}
