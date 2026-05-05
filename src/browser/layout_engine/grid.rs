@@ -224,9 +224,38 @@ pub fn layout_grid(bx: &mut LayoutBox) {
     let cb_y = bx.rect.y + bw_t;
     let cb_w = (bx.rect.width - bw_l - bw_r).max(0.0);
     let cb_h = (bx.rect.height - bw_t - bw_b).max(0.0);
+    let parent_align = bx.align_items.clone();
+    let parent_justify = bx.justify_items.clone();
     for ch in bx.children.iter_mut() {
         if super::is_out_of_flow(ch) {
             super::layout_absolute_child(ch, cb_x, cb_y, cb_w, cb_h);
+            // Override pri zadnem insetu: respektuj justify-self / align-self.
+            let no_inset_x = ch.offset_left.is_none() && ch.offset_right.is_none();
+            let no_inset_y = ch.offset_top.is_none() && ch.offset_bottom.is_none();
+            let m_l_c = ch.margin_left.unwrap_or(ch.margin);
+            let m_t_c = ch.margin_top.unwrap_or(ch.margin);
+            let m_r_c = ch.margin_right.unwrap_or(ch.margin);
+            let m_b_c = ch.margin_bottom.unwrap_or(ch.margin);
+            let js = if !ch.justify_self.is_empty() { ch.justify_self.clone() } else { parent_justify.clone() };
+            let als = if !ch.align_self.is_empty() { ch.align_self.clone() } else { parent_align.clone() };
+            if no_inset_x {
+                let free = (cb_w - ch.rect.width - m_l_c - m_r_c).max(0.0);
+                let off = match js.as_str() {
+                    "end" | "flex-end" => free,
+                    "center" => free / 2.0,
+                    _ => 0.0,
+                };
+                ch.rect.x = cb_x + m_l_c + off;
+            }
+            if no_inset_y {
+                let free = (cb_h - ch.rect.height - m_t_c - m_b_c).max(0.0);
+                let off = match als.as_str() {
+                    "end" | "flex-end" => free,
+                    "center" => free / 2.0,
+                    _ => 0.0,
+                };
+                ch.rect.y = cb_y + m_t_c + off;
+            }
         }
     }
 }

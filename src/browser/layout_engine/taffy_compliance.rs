@@ -193,6 +193,7 @@ mod tests {
                 "align-content" => bx.align_content = v.clone(),
                 "align-self" => bx.align_self = v.clone(),
                 "justify-self" => bx.justify_self = v.clone(),
+                "justify-items" => bx.justify_items = v.clone(),
                 "box-sizing" => bx.box_sizing = v.clone(),
                 "grid-row-start" => {
                     if let Some(rest) = v.trim().strip_prefix("span ") {

@@ -438,6 +438,8 @@ pub struct LayoutBox {
     pub align_self: String,
     /// justify-self per-item (grid): auto/start/end/center/stretch
     pub justify_self: String,
+    /// justify-items pro grid container (default pro children).
+    pub justify_items: String,
     /// grid-row-start: 1-based line, 0 = auto.
     pub grid_row_start: i32,
     pub grid_row_end: i32,
@@ -772,6 +774,7 @@ impl LayoutBox {
             align_items: String::new(),
             align_self: String::new(),
             justify_self: String::new(),
+            justify_items: String::new(),
             grid_row_start: 0,
             grid_row_end: 0,
             grid_column_start: 0,
