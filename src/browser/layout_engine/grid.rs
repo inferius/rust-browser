@@ -36,14 +36,17 @@ pub fn layout_grid(bx: &mut LayoutBox) {
     if col_tracks.is_empty() { col_tracks = vec![inner_w]; }
     let cols = col_tracks.len();
 
-    let item_count = bx.children.len();
+    // In-flow item count (abs/fixed/display:none vyradit pri vypoctu rows).
+    let in_flow_count = bx.children.iter()
+        .filter(|c| !super::is_out_of_flow(c) && !matches!(c.display, super::super::layout::Display::None))
+        .count();
     let rows_explicit_str = bx.grid_template_rows.clone();
     let rows = if !rows_explicit_str.is_empty() {
         super::super::layout::parse_length(&rows_explicit_str).max(0.0) as usize;
         let count = parse_track_count(&rows_explicit_str);
-        if count > 0 { count } else { item_count.div_ceil(cols) }
+        if count > 0 { count } else { in_flow_count.div_ceil(cols) }
     } else {
-        item_count.div_ceil(cols)
+        in_flow_count.div_ceil(cols.max(1))
     };
 
     // Resolve row tracks (s default_row_h pro auto)
@@ -88,8 +91,8 @@ pub fn layout_grid(bx: &mut LayoutBox) {
     let total_col: f32 = col_tracks.iter().sum::<f32>() + col_gap * (cols.saturating_sub(1) as f32);
     let total_row: f32 = row_tracks.iter().sum::<f32>() + row_gap * (rows.saturating_sub(1) as f32);
     // justify-content (inline = column axis) + align-content (block = row axis)
-    let (jc_start, jc_between) = grid_distribute(&bx.justify_content, (inner_w - total_col).max(0.0), cols);
-    let (ac_start, ac_between) = grid_distribute(&bx.align_content, (inner_h - total_row).max(0.0), rows);
+    let (jc_start, jc_between) = grid_distribute(&bx.justify_content, inner_w - total_col, cols);
+    let (ac_start, ac_between) = grid_distribute(&bx.align_content, inner_h - total_row, rows);
 
     // Compute x positions per col + y positions per row
     let mut col_positions: Vec<f32> = Vec::with_capacity(cols);
@@ -208,10 +211,12 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         super::super::layout::layout_block(child);
     }
 
-    // Update parent height
-    let total_h = y_cursor + pad_t + pad_b;
-    if bx.rect.height < total_h {
-        bx.rect.height = total_h;
+    // Update parent height jen kdyz neni explicit set (auto height grow z obsahu).
+    if bx.explicit_height.is_none() {
+        let total_h = y_cursor + pad_t + pad_b;
+        if bx.rect.height < total_h {
+            bx.rect.height = total_h;
+        }
     }
 
     // Position absolute/fixed children (CB = padding-box parenta)
@@ -228,22 +233,23 @@ pub fn layout_grid(bx: &mut LayoutBox) {
 
 /// Distribuce free space pro justify/align-content v gridu.
 /// Vraci (start_offset, between_extra) - mezi tracky se pak prida `between_extra` (krome gap).
+/// Pro negativni free, end/center muze produkovat negativni offset (overflow).
 fn grid_distribute(value: &str, free: f32, count: usize) -> (f32, f32) {
-    if free <= 0.0 || count == 0 { return (0.0, 0.0); }
+    if count == 0 { return (0.0, 0.0); }
     match value.trim() {
         "end" | "flex-end" => (free, 0.0),
         "center" => (free / 2.0, 0.0),
         "space-between" => {
-            if count <= 1 { (0.0, 0.0) }
+            if count <= 1 || free <= 0.0 { (0.0, 0.0) }
             else { (0.0, free / (count - 1) as f32) }
         }
         "space-around" => {
-            let g = free / count as f32;
-            (g / 2.0, g)
+            if free <= 0.0 { (0.0, 0.0) }
+            else { let g = free / count as f32; (g / 2.0, g) }
         }
         "space-evenly" => {
-            let g = free / (count + 1) as f32;
-            (g, g)
+            if free <= 0.0 { (0.0, 0.0) }
+            else { let g = free / (count + 1) as f32; (g, g) }
         }
         _ => (0.0, 0.0), // start (default)
     }
