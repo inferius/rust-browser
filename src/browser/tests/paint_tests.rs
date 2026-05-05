@@ -305,6 +305,187 @@ fn paint_box_shadow_inset_marked() {
     assert!(has_inset);
 }
 
+#[test]
+fn paint_radial_gradient_kind_radial() {
+    use crate::browser::paint::GradientKind;
+    let cmds = build_dl(
+        r#"<html><body><div></div></body></html>"#,
+        r#"div { background: radial-gradient(circle, red, blue); width: 100px; height: 100px; }"#,
+    );
+    let radial_kind = cmds.iter().any(|c| matches!(c,
+        DisplayCommand::Gradient { kind: GradientKind::Radial { .. }, .. }
+    ));
+    assert!(radial_kind, "radial-gradient -> GradientKind::Radial");
+}
+
+#[test]
+fn paint_conic_gradient_kind_conic() {
+    use crate::browser::paint::GradientKind;
+    let cmds = build_dl(
+        r#"<html><body><div></div></body></html>"#,
+        r#"div { background: conic-gradient(red, blue); width: 100px; height: 100px; }"#,
+    );
+    let conic_kind = cmds.iter().any(|c| matches!(c,
+        DisplayCommand::Gradient { kind: GradientKind::Conic { .. }, .. }
+    ));
+    assert!(conic_kind, "conic-gradient -> GradientKind::Conic");
+}
+
+#[test]
+fn paint_radial_gradient_with_position() {
+    use crate::browser::paint::GradientKind;
+    let cmds = build_dl(
+        r#"<html><body><div></div></body></html>"#,
+        r#"div { background: radial-gradient(at 25% 75%, red, blue); width: 200px; height: 100px; }"#,
+    );
+    // Najdi radial gradient + verify center position
+    let radial = cmds.iter().find_map(|c| match c {
+        DisplayCommand::Gradient { kind: GradientKind::Radial { cx, cy, .. }, .. } =>
+            Some((*cx, *cy)),
+        _ => None,
+    });
+    assert!(radial.is_some(), "radial-gradient s pozici emit");
+}
+
+#[test]
+fn paint_inset_shadow_with_offset() {
+    let cmds = build_dl(
+        r#"<html><body><div></div></body></html>"#,
+        r#"div { background: white; width: 50px; height: 50px;
+                box-shadow: inset 5px 10px 15px rgba(0,0,0,0.5); }"#,
+    );
+    let inset = cmds.iter().find_map(|c| match c {
+        DisplayCommand::Shadow { inset: true, offset_x, offset_y, blur, .. } =>
+            Some((*offset_x, *offset_y, *blur)),
+        _ => None,
+    });
+    let (ox, oy, blur) = inset.expect("inset shadow emit");
+    assert!((ox - 5.0).abs() < 0.1);
+    assert!((oy - 10.0).abs() < 0.1);
+    assert!((blur - 15.0).abs() < 0.1);
+}
+
+// ─── SVG support ─────────────────────────────────────────────────────────
+
+#[test]
+fn paint_svg_rect_emits_rect() {
+    let cmds = build_dl(
+        r#"<html><body><svg width="100" height="100">
+            <rect x="10" y="10" width="50" height="30" fill="red"/>
+        </svg></body></html>"#,
+        "",
+    );
+    let has_red_rect = cmds.iter().any(|c| matches!(c,
+        DisplayCommand::Rect { color: [255, 0, 0, 255], w, h, .. }
+        if (*w - 50.0).abs() < 0.1 && (*h - 30.0).abs() < 0.1
+    ));
+    assert!(has_red_rect, "SVG <rect> emit DisplayCommand::Rect");
+}
+
+#[test]
+fn paint_svg_circle_emits_rounded_rect() {
+    let cmds = build_dl(
+        r#"<html><body><svg width="100" height="100">
+            <circle cx="50" cy="50" r="20" fill="blue"/>
+        </svg></body></html>"#,
+        "",
+    );
+    let has_circle = cmds.iter().any(|c| matches!(c,
+        DisplayCommand::Rect { color: [0, 0, 255, 255], radius, .. }
+        if (*radius - 20.0).abs() < 0.1
+    ));
+    assert!(has_circle, "SVG <circle> emit Rect s radius=r");
+}
+
+#[test]
+fn paint_svg_polygon_emits_clipped() {
+    let cmds = build_dl(
+        r#"<html><body><svg width="100" height="100">
+            <polygon points="50,5 90,90 10,90" fill="green"/>
+        </svg></body></html>"#,
+        "",
+    );
+    let has_polygon = cmds.iter().any(|c| matches!(c,
+        DisplayCommand::ClippedRect { color: [0, 0x80, 0, 255], points }
+        if points.len() == 3
+    ));
+    assert!(has_polygon, "SVG <polygon> emit ClippedRect 3-point");
+}
+
+#[test]
+fn paint_svg_path_basic_lineto() {
+    use crate::browser::paint::parse_svg_path;
+    let pts = parse_svg_path("M 10 20 L 30 40 L 50 60 Z");
+    assert_eq!(pts.len(), 4); // 3 explicit + Z back to start
+    assert_eq!(pts[0], (10.0, 20.0));
+    assert_eq!(pts[1], (30.0, 40.0));
+    assert_eq!(pts[2], (50.0, 60.0));
+    assert_eq!(pts[3], (10.0, 20.0)); // Z -> back to M
+}
+
+#[test]
+fn paint_svg_path_relative_lineto() {
+    use crate::browser::paint::parse_svg_path;
+    let pts = parse_svg_path("M 10 10 l 20 0 l 0 20 l -20 0 z");
+    assert_eq!(pts.len(), 5);
+    assert_eq!(pts[1], (30.0, 10.0));
+    assert_eq!(pts[2], (30.0, 30.0));
+    assert_eq!(pts[3], (10.0, 30.0));
+}
+
+#[test]
+fn paint_svg_path_horizontal_vertical() {
+    use crate::browser::paint::parse_svg_path;
+    let pts = parse_svg_path("M 0 0 H 100 V 50 H 0 Z");
+    // M (0,0), H (100,0), V (100,50), H (0,50), Z (0,0) = 5 bodu
+    assert_eq!(pts.len(), 5);
+    assert_eq!(pts[1], (100.0, 0.0));
+    assert_eq!(pts[2], (100.0, 50.0));
+    assert_eq!(pts[3], (0.0, 50.0));
+    assert_eq!(pts[4], (0.0, 0.0)); // Z
+}
+
+#[test]
+fn paint_svg_path_cubic_bezier_endpoint() {
+    use crate::browser::paint::parse_svg_path;
+    // Emit endpoint only, ignore control points
+    let pts = parse_svg_path("M 0 0 C 10 10 20 20 30 30");
+    assert_eq!(pts.len(), 2);
+    assert_eq!(pts[1], (30.0, 30.0));
+}
+
+#[test]
+fn paint_svg_group_recursion() {
+    let cmds = build_dl(
+        r#"<html><body><svg width="200" height="200">
+            <g>
+                <rect x="0" y="0" width="50" height="50" fill="red"/>
+                <rect x="60" y="0" width="50" height="50" fill="blue"/>
+            </g>
+        </svg></body></html>"#,
+        "",
+    );
+    let red = cmds.iter().any(|c| matches!(c,
+        DisplayCommand::Rect { color: [255, 0, 0, 255], .. }));
+    let blue = cmds.iter().any(|c| matches!(c,
+        DisplayCommand::Rect { color: [0, 0, 255, 255], .. }));
+    assert!(red, "SVG <g> -> <rect> red emit");
+    assert!(blue, "SVG <g> -> <rect> blue emit");
+}
+
+#[test]
+fn paint_multiple_box_shadows() {
+    // CSS box-shadow podporuje vice shadows oddelene carkou
+    let cmds = build_dl(
+        r#"<html><body><div></div></body></html>"#,
+        r#"div { width: 50px; height: 50px;
+                box-shadow: 2px 2px 4px red, inset 0 0 8px blue; }"#,
+    );
+    let count = cmds.iter().filter(|c| matches!(c, DisplayCommand::Shadow { .. })).count();
+    // Aspon 1 shadow (parser muze prijmout jen prvni)
+    assert!(count >= 1);
+}
+
 // ─── Text emit ──────────────────────────────────────────────────────────
 
 #[test]

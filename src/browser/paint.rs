@@ -1,6 +1,7 @@
 /// Painting - z LayoutBox tree generuje display list (commands).
 /// Display list je sekvence primitiv ktere wgpu rendered pak vykresli.
 
+use std::rc::Rc;
 use super::layout::{LayoutBox, TextAlign, measure_text_width, BgPosition, BgSize};
 
 /// Vypocti final rozmer background image podle bg-size.
@@ -397,9 +398,148 @@ fn emit_svg_children(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>) {
                     });
                 }
             }
+            "polygon" => {
+                let points_str = child.attr("points").unwrap_or_default();
+                let pts = parse_svg_points(&points_str);
+                if pts.len() >= 3 {
+                    let fill = attr_color("fill", [0, 0, 0, 255]);
+                    let abs_pts: Vec<(f32, f32)> = pts.iter()
+                        .map(|(x, y)| (bx.rect.x + x, bx.rect.y + y)).collect();
+                    cmds.push(DisplayCommand::ClippedRect { color: fill, points: abs_pts });
+                }
+            }
+            "polyline" => {
+                // Polyline = sequence ax-aligned line segments (zjednoduseni)
+                let points_str = child.attr("points").unwrap_or_default();
+                let pts = parse_svg_points(&points_str);
+                let stroke_c = attr_color("stroke", [0, 0, 0, 255]);
+                let stroke_w = attr_f("stroke-width", 1.0);
+                for w in pts.windows(2) {
+                    let (x1, y1) = (bx.rect.x + w[0].0, bx.rect.y + w[0].1);
+                    let (x2, y2) = (bx.rect.x + w[1].0, bx.rect.y + w[1].1);
+                    if (y1 - y2).abs() < 0.5 {
+                        cmds.push(DisplayCommand::Rect {
+                            x: x1.min(x2), y: y1 - stroke_w / 2.0,
+                            w: (x1 - x2).abs(), h: stroke_w,
+                            color: stroke_c, radius: 0.0,
+                        });
+                    } else if (x1 - x2).abs() < 0.5 {
+                        cmds.push(DisplayCommand::Rect {
+                            x: x1 - stroke_w / 2.0, y: y1.min(y2),
+                            w: stroke_w, h: (y1 - y2).abs(),
+                            color: stroke_c, radius: 0.0,
+                        });
+                    }
+                }
+            }
+            "path" => {
+                let d = child.attr("d").unwrap_or_default();
+                let pts = parse_svg_path(&d);
+                let fill = attr_color("fill", [0, 0, 0, 255]);
+                if pts.len() >= 3 {
+                    let abs_pts: Vec<(f32, f32)> = pts.iter()
+                        .map(|(x, y)| (bx.rect.x + x, bx.rect.y + y)).collect();
+                    cmds.push(DisplayCommand::ClippedRect { color: fill, points: abs_pts });
+                }
+            }
+            "g" => {
+                // Group - rekurzivne emit children. Vyrobime virtual LayoutBox s tymto child as node.
+                let mut virt = LayoutBox::new();
+                virt.rect = bx.rect;
+                virt.node = Some(Rc::clone(child));
+                emit_svg_children(&virt, cmds);
+            }
             _ => {}
         }
     }
+}
+
+/// Parsuje SVG points attribute: "x1,y1 x2,y2 x3 y3" -> Vec<(f32, f32)>.
+fn parse_svg_points(s: &str) -> Vec<(f32, f32)> {
+    let nums: Vec<f32> = s.split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|p| !p.is_empty())
+        .filter_map(|p| p.parse::<f32>().ok())
+        .collect();
+    nums.chunks(2).filter(|c| c.len() == 2).map(|c| (c[0], c[1])).collect()
+}
+
+/// Parsuje SVG path d attribute - basic: M, L, H, V, Z (uppercase = absolute).
+/// Pro Bezier (C, Q) emit endpoint (approximace).
+pub fn parse_svg_path(d: &str) -> Vec<(f32, f32)> {
+    let mut pts = Vec::new();
+    let mut x = 0.0_f32;
+    let mut y = 0.0_f32;
+    let mut start = (0.0_f32, 0.0_f32);
+    let bytes = d.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i] as char;
+        if !c.is_ascii_alphabetic() { i += 1; continue; }
+        i += 1;
+        // Skip whitespace
+        while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t' || bytes[i] == b'\n' || bytes[i] == b',') { i += 1; }
+        // Sber numericke args
+        let mut nums: Vec<f32> = Vec::new();
+        while i < bytes.len() && !(bytes[i] as char).is_ascii_alphabetic() {
+            let start_idx = i;
+            // Sign + digits + . + e?
+            if bytes[i] == b'-' || bytes[i] == b'+' { i += 1; }
+            while i < bytes.len() && ((bytes[i] as char).is_ascii_digit() || bytes[i] == b'.' || bytes[i] == b'e' || bytes[i] == b'E') {
+                i += 1;
+            }
+            if start_idx < i {
+                if let Ok(n) = d[start_idx..i].parse::<f32>() {
+                    nums.push(n);
+                }
+            }
+            // Skip separator
+            while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t' || bytes[i] == b'\n' || bytes[i] == b',') { i += 1; }
+            if i >= bytes.len() || (bytes[i] as char).is_ascii_alphabetic() { break; }
+        }
+        match c {
+            'M' => {
+                if nums.len() >= 2 { x = nums[0]; y = nums[1]; pts.push((x, y)); start = (x, y); }
+            }
+            'm' => {
+                if nums.len() >= 2 { x += nums[0]; y += nums[1]; pts.push((x, y)); start = (x, y); }
+            }
+            'L' => {
+                let mut k = 0;
+                while k + 1 < nums.len() { x = nums[k]; y = nums[k+1]; pts.push((x, y)); k += 2; }
+            }
+            'l' => {
+                let mut k = 0;
+                while k + 1 < nums.len() { x += nums[k]; y += nums[k+1]; pts.push((x, y)); k += 2; }
+            }
+            'H' => { for n in nums { x = n; pts.push((x, y)); } }
+            'h' => { for n in nums { x += n; pts.push((x, y)); } }
+            'V' => { for n in nums { y = n; pts.push((x, y)); } }
+            'v' => { for n in nums { y += n; pts.push((x, y)); } }
+            'Z' | 'z' => { pts.push(start); }
+            'C' | 'c' => {
+                // Cubic Bezier - emit endpoint (ignore control points)
+                let mut k = 0;
+                while k + 5 < nums.len() {
+                    if c == 'C' { x = nums[k+4]; y = nums[k+5]; }
+                    else { x += nums[k+4]; y += nums[k+5]; }
+                    pts.push((x, y));
+                    k += 6;
+                }
+            }
+            'Q' | 'q' => {
+                // Quadratic Bezier - emit endpoint
+                let mut k = 0;
+                while k + 3 < nums.len() {
+                    if c == 'Q' { x = nums[k+2]; y = nums[k+3]; }
+                    else { x += nums[k+2]; y += nums[k+3]; }
+                    pts.push((x, y));
+                    k += 4;
+                }
+            }
+            _ => {}
+        }
+    }
+    pts
 }
 
 fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective: Option<f32>) {
