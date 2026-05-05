@@ -167,6 +167,13 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         let max_h_pre = if ch.max_height_v.is_empty() { f32::INFINITY } else { super::super::layout::parse_length(&ch.max_height_v) };
         if min_w_pre > 0.0 { est_w = est_w.max(min_w_pre); }
         if min_h_pre > 0.0 { est_h = est_h.max(min_h_pre); }
+        // Padding+border floor
+        let ch_pb_l = ch.padding_left.unwrap_or(ch.padding) + ch.border_left_width.unwrap_or(ch.border_width);
+        let ch_pb_r = ch.padding_right.unwrap_or(ch.padding) + ch.border_right_width.unwrap_or(ch.border_width);
+        let ch_pb_t = ch.padding_top.unwrap_or(ch.padding) + ch.border_top_width.unwrap_or(ch.border_width);
+        let ch_pb_b = ch.padding_bottom.unwrap_or(ch.padding) + ch.border_bottom_width.unwrap_or(ch.border_width);
+        est_w = est_w.max(ch_pb_l + ch_pb_r);
+        est_h = est_h.max(ch_pb_t + ch_pb_b);
         // Aspect-ratio dopocet
         if let Some(ar) = ch.aspect_ratio {
             if ar > 0.0 {
