@@ -456,10 +456,10 @@ mod tests {
     fn chain_collapsed_m_t(child: &LayoutBox) -> f32 {
         let mut max_pos = 0.0_f32;
         let mut min_neg = 0.0_f32;
-        chain_walk(child, &mut max_pos, &mut min_neg);
+        chain_walk_top(child, &mut max_pos, &mut min_neg);
         max_pos + min_neg
     }
-    fn chain_walk(child: &LayoutBox, max_pos: &mut f32, min_neg: &mut f32) {
+    fn chain_walk_top(child: &LayoutBox, max_pos: &mut f32, min_neg: &mut f32) {
         let m_t = child.margin_top.unwrap_or(child.margin);
         if m_t > 0.0 { if m_t > *max_pos { *max_pos = m_t; } }
         else if m_t < 0.0 { if m_t < *min_neg { *min_neg = m_t; } }
@@ -468,7 +468,28 @@ mod tests {
         for ch in &child.children {
             if matches!(ch.position, Position::Absolute | Position::Fixed) { continue; }
             if matches!(ch.display, Display::None) { continue; }
-            chain_walk(ch, max_pos, min_neg);
+            chain_walk_top(ch, max_pos, min_neg);
+            return;
+        }
+    }
+    /// Walk last in-flow descendant chain pro margin-bottom collapse.
+    fn chain_collapsed_m_b(child: &LayoutBox) -> f32 {
+        let mut max_pos = 0.0_f32;
+        let mut min_neg = 0.0_f32;
+        chain_walk_bottom(child, &mut max_pos, &mut min_neg);
+        max_pos + min_neg
+    }
+    fn chain_walk_bottom(child: &LayoutBox, max_pos: &mut f32, min_neg: &mut f32) {
+        let m_b = child.margin_bottom.unwrap_or(child.margin);
+        if m_b > 0.0 { if m_b > *max_pos { *max_pos = m_b; } }
+        else if m_b < 0.0 { if m_b < *min_neg { *min_neg = m_b; } }
+        let pb_b = child.padding_bottom.unwrap_or(child.padding) + child.border_bottom_width.unwrap_or(child.border_width);
+        if pb_b > 0.0 { return; }
+        // Walk last in-flow grandchild.
+        for ch in child.children.iter().rev() {
+            if matches!(ch.position, Position::Absolute | Position::Fixed) { continue; }
+            if matches!(ch.display, Display::None) { continue; }
+            chain_walk_bottom(ch, max_pos, min_neg);
             return;
         }
     }
@@ -527,16 +548,16 @@ mod tests {
             let is_first = first_in_flow_idx == Some(i);
             if is_first && suppress_first_m_t {
                 m_t = 0.0;
-                // Tez aktualizovat field tak aby compute_h to videlo a nesubraktoval znovu.
                 child.margin_top = Some(0.0);
             }
-            // Chain margin collapse: pri first in-flow + parent pad/border-top = 0,
-            // m_t collapsuje s first grandchild's m_t. Pouzij max chain.
+            // Chain margin collapse: pri pad/border-top=0 child collapsuje s first
+            // grandchild m_t. Pouzij chain (CSS spec: max_pos + min_neg pres celou retez).
+            // Pri first child + parent pad/border-top=0 chain bubbles up.
             let mut child_will_suppress_first = false;
-            if is_first && bx_pad_t == 0.0 {
-                let pad_t_c_pre = child.padding_top.unwrap_or(child.padding) + child.border_top_width.unwrap_or(child.border_width);
-                if pad_t_c_pre == 0.0 {
-                    let chained = chain_collapsed_m_t(child);
+            let pad_t_c_pre = child.padding_top.unwrap_or(child.padding) + child.border_top_width.unwrap_or(child.border_width);
+            if pad_t_c_pre == 0.0 {
+                let chained = chain_collapsed_m_t(child);
+                if (chained - m_t).abs() > 0.01 {
                     m_t = chained;
                     child.margin_top = Some(chained);
                     child_will_suppress_first = true;
