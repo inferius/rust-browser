@@ -56,7 +56,7 @@ mod tests {
                     tag.push(cc);
                     chars.next();
                 }
-                if in_input && (tag == "div" || tag == "node") {
+                if in_input && (tag == "div" || tag == "node" || tag == "text") {
                     if let Some(top) = node_stack.pop() {
                         if let Some(parent) = node_stack.last_mut() {
                             parent.children.push(top);
@@ -116,7 +116,7 @@ mod tests {
                 }
                 "input" => { in_input = true; }
                 "expectations" => { in_expectations = true; }
-                "div" | "node" if in_input => {
+                "div" | "node" | "text" if in_input => {
                     let n = TestNode { attrs, children: Vec::new() };
                     if self_closing {
                         if let Some(parent) = node_stack.last_mut() {
@@ -339,14 +339,16 @@ mod tests {
         failed_examples: Vec<(String, String)>,
     }
     fn describe_diff(actual: &LayoutBox, expected: &ExpectedNode) -> String {
-        let mut s = format!("root: actual {}x{} vs expected {}x{}", actual.rect.width, actual.rect.height, expected.width, expected.height);
+        let mut s = format!("root: actual {:.0}x{:.0} vs expected {:.0}x{:.0}, ch={}/{}",
+            actual.rect.width, actual.rect.height, expected.width, expected.height,
+            actual.children.len(), expected.children.len());
         let parent_x = actual.rect.x;
         let parent_y = actual.rect.y;
         for (i, (a, e)) in actual.children.iter().zip(expected.children.iter()).enumerate() {
             let ax = a.rect.x - parent_x;
             let ay = a.rect.y - parent_y;
             if (ax - e.x).abs() > 1.0 || (ay - e.y).abs() > 1.0 || (a.rect.width - e.width).abs() > 1.0 || (a.rect.height - e.height).abs() > 1.0 {
-                s.push_str(&format!(" | child{}: actual {},{} {}x{} vs expected {},{} {}x{}", i, ax, ay, a.rect.width, a.rect.height, e.x, e.y, e.width, e.height));
+                s.push_str(&format!(" | c{}: act {:.0},{:.0} {:.0}x{:.0} vs exp {:.0},{:.0} {:.0}x{:.0}", i, ax, ay, a.rect.width, a.rect.height, e.x, e.y, e.width, e.height));
             }
         }
         s
@@ -541,6 +543,9 @@ mod tests {
             100.0 * stats.pass as f32 / stats.total.max(1) as f32,
             stats.fail, stats.skip
         );
+        for (n, d) in stats.failed_examples.iter().take(3) {
+            println!("  FAIL {}: {}", n, d);
+        }
         assert!(stats.total > 0);
     }
 
