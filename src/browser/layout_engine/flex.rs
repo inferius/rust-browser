@@ -126,10 +126,20 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         match ch.display {
             super::super::layout::Display::Flex => super::flex::layout_flex(ch),
             super::super::layout::Display::Grid => super::grid::layout_grid(ch),
-            _ => {}
+            _ => {
+                // Block-like: aproximace - max child explicit_width, sum explicit_heights.
+                let mut max_w = 0.0_f32;
+                let mut sum_h = 0.0_f32;
+                for gc in &ch.children {
+                    if matches!(gc.position, super::super::layout::Position::Absolute | super::super::layout::Position::Fixed) { continue; }
+                    if matches!(gc.display, super::super::layout::Display::None) { continue; }
+                    if let Some(w) = gc.explicit_width { max_w = max_w.max(w); }
+                    if let Some(h) = gc.explicit_height { sum_h += h; }
+                }
+                if ch.explicit_width.is_none() && max_w > 0.0 { ch.rect.width = max_w; }
+                if ch.explicit_height.is_none() && sum_h > 0.0 { ch.rect.height = sum_h; }
+            }
         }
-        // Po layoutu: rect.width/height muze byt rozsiren z content (auto-grow).
-        // Restore rect.x/y, zachovaj nove width/height jako "intrinsic" pro nasledny ze.
         ch.rect.x = saved_rect.x;
         ch.rect.y = saved_rect.y;
     }
