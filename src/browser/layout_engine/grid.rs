@@ -198,8 +198,15 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         let als = if !child.align_self.is_empty() { child.align_self.clone() } else { parent_align_items };
         let stretch_w = !has_w && (js.is_empty() || js == "stretch" || js == "normal");
         let stretch_h = !has_h && (als.is_empty() || als == "stretch" || als == "normal");
-        let final_w = if stretch_w { cw_avail } else { item_w };
-        let final_h = if stretch_h { ch_avail } else { item_h };
+        let mut final_w = if stretch_w { cw_avail } else { item_w };
+        let mut final_h = if stretch_h { ch_avail } else { item_h };
+        // Aspect-ratio override pri stretch + jeden explicit rozmer
+        if let Some(ar) = child.aspect_ratio {
+            if ar > 0.0 {
+                if has_w && !has_h && stretch_h { final_h = final_w / ar; }
+                else if has_h && !has_w && stretch_w { final_w = final_h * ar; }
+            }
+        }
         let off_x = if stretch_w { 0.0 } else { match js.as_str() {
             "end" | "flex-end" => cw_avail - final_w,
             "center" => (cw_avail - final_w) / 2.0,
