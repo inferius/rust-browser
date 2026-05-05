@@ -653,21 +653,23 @@ fn resolve_flexible_lengths(items: &[FlexItem], indices: &[usize], container_mai
 fn compute_justify_offsets(justify: JustifyContent, free: f32, count: usize, gap: f32) -> (f32, f32) {
     let _ = gap;
     if count == 0 { return (0.0, 0.0); }
+    // Pri negativni free fallback na start (CSS spec pro space-* a center mimo overflow-position).
+    let neg = free < 0.0;
     match justify {
         JustifyContent::FlexStart => (0.0, 0.0),
         JustifyContent::FlexEnd => (free, 0.0),
         JustifyContent::Center => (free / 2.0, 0.0),
         JustifyContent::SpaceBetween => {
-            if count == 1 { (0.0, 0.0) }
+            if neg || count == 1 { (0.0, 0.0) }
             else { (0.0, free / (count - 1) as f32) }
         }
         JustifyContent::SpaceAround => {
-            let g = free / count as f32;
-            (g / 2.0, g)
+            if neg { (0.0, 0.0) }
+            else { let g = free / count as f32; (g / 2.0, g) }
         }
         JustifyContent::SpaceEvenly => {
-            let g = free / (count + 1) as f32;
-            (g, g)
+            if neg { (0.0, 0.0) }
+            else { let g = free / (count + 1) as f32; (g, g) }
         }
     }
 }
