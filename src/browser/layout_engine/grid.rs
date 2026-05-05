@@ -145,12 +145,18 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         // Resolve placement: 1-based start lines -> 0-based cell index
         let explicit_col = if child.grid_column_start > 0 { Some((child.grid_column_start - 1) as usize) } else { None };
         let explicit_row = if child.grid_row_start > 0 { Some((child.grid_row_start - 1) as usize) } else { None };
-        let span_col = if child.grid_column_span > 0 { child.grid_column_span as usize }
-                       else if child.grid_column_end > 0 && child.grid_column_start > 0 { (child.grid_column_end - child.grid_column_start).max(1) as usize }
-                       else { 1 };
-        let span_row = if child.grid_row_span > 0 { child.grid_row_span as usize }
-                       else if child.grid_row_end > 0 && child.grid_row_start > 0 { (child.grid_row_end - child.grid_row_start).max(1) as usize }
-                       else { 1 };
+        // grid-column/row-end < 0 = pocita od konce. -1 = posledni linie = posledni track end.
+        let resolve_end = |start: i32, end: i32, span: i32, count: usize| -> usize {
+            if span > 0 { return span as usize; }
+            if end < 0 && start > 0 {
+                let end_line = (count as i32 + 1 + end + 1).max(start + 1);
+                ((end_line - start).max(1)) as usize
+            } else if end > 0 && start > 0 {
+                ((end - start).max(1)) as usize
+            } else { 1 }
+        };
+        let span_col = resolve_end(child.grid_column_start, child.grid_column_end, child.grid_column_span, cols);
+        let span_row = resolve_end(child.grid_row_start, child.grid_row_end, child.grid_row_span, rows);
         let (row, col) = if let (Some(r), Some(c)) = (explicit_row, explicit_col) {
             (r, c)
         } else if let Some(c) = explicit_col {
