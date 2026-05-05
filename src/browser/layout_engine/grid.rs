@@ -226,8 +226,19 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                 else if !has_w && has_h { final_w = final_h * ar; }
             }
         }
+        let h_before = final_h;
         final_h = final_h.min(ch_max);
         if ch_min > 0.0 { final_h = final_h.max(ch_min); }
+        // Pokud max/min-h zmenil h a aspect-ratio set + w neni explicit, prepocti w.
+        if !has_w && (final_h - h_before).abs() > 0.01 {
+            if let Some(ar) = child.aspect_ratio {
+                if ar > 0.0 {
+                    final_w = final_h * ar;
+                    final_w = final_w.min(cw_max);
+                    if cw_min > 0.0 { final_w = final_w.max(cw_min); }
+                }
+            }
+        }
         let off_x = if stretch_w { 0.0 } else { match js.as_str() {
             "end" | "flex-end" => cw_avail - final_w,
             "center" => (cw_avail - final_w) / 2.0,
