@@ -388,20 +388,40 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             if direction.is_row() {
                 child.rect.x = inner_x + main_cursor;
                 child.rect.y = inner_y + cross_cursor + cross_offset;
-                child.rect.width = main_size;
+                let mut w = main_size;
                 let mut h = if matches!(item_align, AlignItems::Stretch) && child.explicit_height.is_none() {
                     (cross_size - it.margin_cross_start - it.margin_cross_end).max(0.0)
                 } else { item_cross_size };
+                // Pri aspect-ratio + stretch + bez explicit: dopocti main z stretched cross
+                if let Some(ar) = child.aspect_ratio {
+                    if ar > 0.0 && matches!(item_align, AlignItems::Stretch) && child.explicit_width.is_none() && child.explicit_height.is_none() {
+                        // Row direction, h stretched. w = h * ar, ale clamp na main_size kdyz neni stretched.
+                        if h > 0.0 { w = (h * ar).min(main_size.max(h * ar)); }
+                    }
+                }
                 h = h.min(ch_max_c);
                 if ch_min_c > 0.0 { h = h.max(ch_min_c); }
+                w = w.min(cw_max_c);
+                if cw_min_c > 0.0 { w = w.max(cw_min_c); }
+                child.rect.width = w;
                 child.rect.height = h;
             } else {
                 child.rect.x = inner_x + cross_cursor + cross_offset;
                 child.rect.y = inner_y + main_cursor;
-                child.rect.height = main_size;
+                let mut h = main_size;
                 let mut w = if matches!(item_align, AlignItems::Stretch) && child.explicit_width.is_none() {
                     (cross_size - it.margin_cross_start - it.margin_cross_end).max(0.0)
                 } else { item_cross_size };
+                // Pri aspect-ratio + stretch column: h dopocti z w pak clamp max-h.
+                if let Some(ar) = child.aspect_ratio {
+                    if ar > 0.0 && matches!(item_align, AlignItems::Stretch) && child.explicit_height.is_none() && child.explicit_width.is_none() {
+                        if w > 0.0 { h = w / ar; }
+                    }
+                }
+                h = h.min(ch_max_c);
+                if ch_min_c > 0.0 { h = h.max(ch_min_c); }
+                child.rect.height = h;
+                let _orig_w = w;
                 w = w.min(cw_max_c);
                 if cw_min_c > 0.0 { w = w.max(cw_min_c); }
                 child.rect.width = w;
