@@ -5,8 +5,8 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 ## Stav
 
 - Build: **OK**, 0 errors, 0 warnings.
-- Tests: **1845 passed, 0 failed, 3 ignored**.
-- Posledni commit: `ed872bc DOM/JS modern APIs - EventTarget, MessageChannel, Notification, ServiceWorker, locks, idle, AbortSignal extras, adoptedStyleSheets`.
+- Tests: **1882 passed, 0 failed, 3 ignored**.
+- Posledni commit: `e0d97af String.prototype.matchAll`.
 - Tree: ciste.
 - Branch master, ~290 commitu pred origin/master (NEPUSHOVAT bez vyzvy).
 - **WebGL pipeline DOKONCEN** + **CSS L4-L6 KOMPLET** + **JS DOM kompletni**:
@@ -38,6 +38,25 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
     Notification + permission, ServiceWorker container stub, navigator.locks,
     requestIdleCallback + IdleDeadline, AbortSignal.timeout/any/abort statics,
     document.adoptedStyleSheets pool.
+  - JS Iterator helpers (ES2025): Iterator.prototype.toArray/map/filter/take/
+    drop/reduce/forEach/some/every/find/flatMap pres __iterator_helpers__ flag.
+  - JS Temporal API stub (TC39 Stage 3): Temporal.Now (instant/plainDateISO/
+    plainTimeISO/zonedDateTimeISO), PlainDate.from, Duration.from,
+    Instant.fromEpochMilliseconds.
+  - DOM Event classes (22): Event/CustomEvent/MouseEvent/PointerEvent/
+    KeyboardEvent/TouchEvent/WheelEvent/InputEvent/FocusEvent/DragEvent/
+    SubmitEvent/ProgressEvent/MessageEvent/ErrorEvent/HashChangeEvent/
+    PopStateEvent/StorageEvent/AnimationEvent/TransitionEvent/ClipboardEvent/
+    BeforeUnloadEvent/PageTransitionEvent. preventDefault skutecne nastavi
+    defaultPrevented=true.
+  - DOM HTMLDialogElement.close(returnValue) + dispatch close event.
+  - DOM Range API real: setStart/setEnd ulozi state, collapse/cloneRange/
+    selectNode/selectNodeContents real impl.
+  - DOM Selection API real: addRange/removeRange/removeAllRanges/collapse/
+    selectAllChildren state tracking.
+  - DOM Clipboard API stub: writeText/readText (in-memory) Promise-based.
+  - DOM Geolocation API stub: getCurrentPosition/watchPosition/clearWatch.
+  - JS String.matchAll(regex) -> iterator nad matches.
 
 ## Test runner
 
