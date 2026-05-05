@@ -98,13 +98,14 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         .filter(|(_, c)| !super::is_out_of_flow(c) && !matches!(c.display, super::super::layout::Display::None))
         .map(|(i, _)| i)
         .collect();
-    // display:none -> 0x0
+    // display:none -> 0x0 vc. descendants
+    fn zero_out(bx: &mut LayoutBox) {
+        bx.rect.x = 0.0; bx.rect.y = 0.0; bx.rect.width = 0.0; bx.rect.height = 0.0;
+        for c in bx.children.iter_mut() { zero_out(c); }
+    }
     for ch in bx.children.iter_mut() {
         if matches!(ch.display, super::super::layout::Display::None) {
-            ch.rect.x = 0.0;
-            ch.rect.y = 0.0;
-            ch.rect.width = 0.0;
-            ch.rect.height = 0.0;
+            zero_out(ch);
         }
     }
 
