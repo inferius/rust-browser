@@ -346,8 +346,8 @@ pub fn resolve_tracks(s: &str, container_size: f32, gap: f32) -> Vec<f32> {
     }
 
     let free = (container_size - fixed_total - total_gap).max(0.0);
-    // fr base
-    let fr_base = if fr_total > 0.0 { free / fr_total } else { 0.0 };
+    // fr base: kdyz fr_total < 1, divisor je 1 (CSS spec).
+    let fr_base = if fr_total > 0.0 { free / fr_total.max(1.0) } else { 0.0 };
     // auto base (po fr distribuci)
     let after_fr = (free - fr_base * fr_total).max(0.0);
     let auto_base = if auto_count > 0 { after_fr / auto_count as f32 } else { 0.0 };
