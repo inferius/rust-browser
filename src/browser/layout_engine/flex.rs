@@ -310,9 +310,29 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             (ch_min, ch_max, cw_min, cw_max)
         };
         // Min-main floor: max(specified min, intrinsic content z pre-pass jen kdyz no explicit, pad+border).
+        // Pri text item v taffy_mode: min-content text intrinsic = nejdelsi nelomitelny
+        // fragment * 10 (mezi ZWS / mezerou / newline jsou break opportunities).
+        let text_min_content = if ch.taffy_mode {
+            if let Some(t) = &ch.text {
+                if direction.is_row() {
+                    let mut max_segment = 0usize;
+                    let mut cur = 0usize;
+                    for c in t.chars() {
+                        if matches!(c, '\u{200B}' | ' ' | '\n' | '\t') {
+                            if cur > max_segment { max_segment = cur; }
+                            cur = 0;
+                        } else {
+                            cur += 1;
+                        }
+                    }
+                    if cur > max_segment { max_segment = cur; }
+                    max_segment as f32 * 10.0
+                } else { 10.0 }
+            } else { 0.0 }
+        } else { 0.0 };
         let intrinsic_main = if ch.explicit_width.is_some() && direction.is_row() { 0.0 }
                             else if ch.explicit_height.is_some() && !direction.is_row() { 0.0 }
-                            else if direction.is_row() { ch.rect.width } else { ch.rect.height };
+                            else if direction.is_row() { ch.rect.width.max(text_min_content) } else { ch.rect.height.max(text_min_content) };
         let pb_main = if direction.is_row() {
             ch.padding_left.unwrap_or(ch.padding) + ch.padding_right.unwrap_or(ch.padding)
                 + ch.border_left_width.unwrap_or(ch.border_width) + ch.border_right_width.unwrap_or(ch.border_width)
