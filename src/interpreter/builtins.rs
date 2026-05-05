@@ -2684,6 +2684,151 @@ pub fn setup_builtins(
             Ok(make_settled_promise("fulfilled", JsValue::Object(access)))
         }));
 
+    // ─── DOM Node constructors (interface objects) ───────────────────────
+    e.define("DocumentFragment", native("DocumentFragment", |_| {
+        let frag = Rc::new(RefCell::new(JsObject::new()));
+        frag.borrow_mut().set("__doc_fragment__".into(), JsValue::Bool(true));
+        frag.borrow_mut().set("nodeType".into(), JsValue::Number(11.0));
+        frag.borrow_mut().set("nodeName".into(), JsValue::Str("#document-fragment".into()));
+        frag.borrow_mut().set("childNodes".into(),
+            JsValue::Array(Rc::new(RefCell::new(Vec::new()))));
+        frag.borrow_mut().set("childElementCount".into(), JsValue::Number(0.0));
+        frag.borrow_mut().set("appendChild".into(),
+            native("appendChild", |args| Ok(args.into_iter().next().unwrap_or(JsValue::Undefined))));
+        frag.borrow_mut().set("querySelector".into(),
+            native("querySelector", |_| Ok(JsValue::Null)));
+        frag.borrow_mut().set("querySelectorAll".into(),
+            native("querySelectorAll", |_| Ok(JsValue::Array(Rc::new(RefCell::new(Vec::new()))))));
+        Ok(JsValue::Object(frag))
+    }));
+
+    // Comment / Text / CDATASection / ProcessingInstruction constructors
+    let make_text_node_ctor = |kind: &str, node_type: f64| {
+        let kind_s = kind.to_string();
+        native(kind, move |args| {
+            let data = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+            let obj = Rc::new(RefCell::new(JsObject::new()));
+            obj.borrow_mut().set("nodeType".into(), JsValue::Number(node_type));
+            obj.borrow_mut().set("nodeName".into(), JsValue::Str(kind_s.clone()));
+            obj.borrow_mut().set("data".into(), JsValue::Str(data.clone()));
+            obj.borrow_mut().set("textContent".into(), JsValue::Str(data.clone()));
+            obj.borrow_mut().set("nodeValue".into(), JsValue::Str(data.clone()));
+            obj.borrow_mut().set("length".into(), JsValue::Number(data.chars().count() as f64));
+            Ok(JsValue::Object(obj))
+        })
+    };
+    e.define("Text", make_text_node_ctor("#text", 3.0));
+    e.define("Comment", make_text_node_ctor("#comment", 8.0));
+    e.define("CDATASection", make_text_node_ctor("#cdata-section", 4.0));
+
+    // Node interface object - constants
+    {
+        let node_obj = Rc::new(RefCell::new(JsObject::new()));
+        node_obj.borrow_mut().set("ELEMENT_NODE".into(), JsValue::Number(1.0));
+        node_obj.borrow_mut().set("ATTRIBUTE_NODE".into(), JsValue::Number(2.0));
+        node_obj.borrow_mut().set("TEXT_NODE".into(), JsValue::Number(3.0));
+        node_obj.borrow_mut().set("CDATA_SECTION_NODE".into(), JsValue::Number(4.0));
+        node_obj.borrow_mut().set("PROCESSING_INSTRUCTION_NODE".into(), JsValue::Number(7.0));
+        node_obj.borrow_mut().set("COMMENT_NODE".into(), JsValue::Number(8.0));
+        node_obj.borrow_mut().set("DOCUMENT_NODE".into(), JsValue::Number(9.0));
+        node_obj.borrow_mut().set("DOCUMENT_TYPE_NODE".into(), JsValue::Number(10.0));
+        node_obj.borrow_mut().set("DOCUMENT_FRAGMENT_NODE".into(), JsValue::Number(11.0));
+        node_obj.borrow_mut().set("DOCUMENT_POSITION_DISCONNECTED".into(), JsValue::Number(1.0));
+        node_obj.borrow_mut().set("DOCUMENT_POSITION_PRECEDING".into(), JsValue::Number(2.0));
+        node_obj.borrow_mut().set("DOCUMENT_POSITION_FOLLOWING".into(), JsValue::Number(4.0));
+        node_obj.borrow_mut().set("DOCUMENT_POSITION_CONTAINS".into(), JsValue::Number(8.0));
+        node_obj.borrow_mut().set("DOCUMENT_POSITION_CONTAINED_BY".into(), JsValue::Number(16.0));
+        e.define("Node", JsValue::Object(node_obj));
+    }
+
+    // ─── MutationRecord / ResizeObserverEntry / IntersectionObserverEntry ─
+    e.define("MutationRecord", native("MutationRecord", |_| {
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        obj.borrow_mut().set("type".into(), JsValue::Str("childList".into()));
+        obj.borrow_mut().set("target".into(), JsValue::Null);
+        obj.borrow_mut().set("addedNodes".into(), JsValue::Array(Rc::new(RefCell::new(Vec::new()))));
+        obj.borrow_mut().set("removedNodes".into(), JsValue::Array(Rc::new(RefCell::new(Vec::new()))));
+        obj.borrow_mut().set("previousSibling".into(), JsValue::Null);
+        obj.borrow_mut().set("nextSibling".into(), JsValue::Null);
+        obj.borrow_mut().set("attributeName".into(), JsValue::Null);
+        obj.borrow_mut().set("attributeNamespace".into(), JsValue::Null);
+        obj.borrow_mut().set("oldValue".into(), JsValue::Null);
+        Ok(JsValue::Object(obj))
+    }));
+
+    // ─── HTMLCollection constructor (read-only) ───────────────────────────
+    e.define("HTMLCollection", native("HTMLCollection", |_| {
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        obj.borrow_mut().set("__html_collection__".into(), JsValue::Bool(true));
+        obj.borrow_mut().set("length".into(), JsValue::Number(0.0));
+        obj.borrow_mut().set("item".into(), native("item", |_| Ok(JsValue::Null)));
+        obj.borrow_mut().set("namedItem".into(), native("namedItem", |_| Ok(JsValue::Null)));
+        Ok(JsValue::Object(obj))
+    }));
+
+    // ─── NodeList constructor ─────────────────────────────────────────────
+    e.define("NodeList", native("NodeList", |_| {
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        obj.borrow_mut().set("__node_list__".into(), JsValue::Bool(true));
+        obj.borrow_mut().set("length".into(), JsValue::Number(0.0));
+        obj.borrow_mut().set("item".into(), native("item", |_| Ok(JsValue::Null)));
+        obj.borrow_mut().set("forEach".into(), native("forEach", |_| Ok(JsValue::Undefined)));
+        Ok(JsValue::Object(obj))
+    }));
+
+    // ─── DOMTokenList constructor ─────────────────────────────────────────
+    e.define("DOMTokenList", native("DOMTokenList", |_| {
+        let tokens: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        obj.borrow_mut().set("__token_list__".into(), JsValue::Bool(true));
+        obj.borrow_mut().set("length".into(), JsValue::Number(0.0));
+        let t1 = Rc::clone(&tokens);
+        obj.borrow_mut().set("contains".into(), native("contains", move |args| {
+            let s = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+            Ok(JsValue::Bool(t1.borrow().iter().any(|t| t == &s)))
+        }));
+        let t2 = Rc::clone(&tokens);
+        let o2 = Rc::clone(&obj);
+        obj.borrow_mut().set("add".into(), native("add", move |args| {
+            for arg in args {
+                let s = arg.to_string();
+                if !t2.borrow().iter().any(|t| t == &s) {
+                    t2.borrow_mut().push(s);
+                }
+            }
+            o2.borrow_mut().set("length".into(), JsValue::Number(t2.borrow().len() as f64));
+            Ok(JsValue::Undefined)
+        }));
+        let t3 = Rc::clone(&tokens);
+        let o3 = Rc::clone(&obj);
+        obj.borrow_mut().set("remove".into(), native("remove", move |args| {
+            for arg in args {
+                let s = arg.to_string();
+                t3.borrow_mut().retain(|t| t != &s);
+            }
+            o3.borrow_mut().set("length".into(), JsValue::Number(t3.borrow().len() as f64));
+            Ok(JsValue::Undefined)
+        }));
+        let t4 = Rc::clone(&tokens);
+        let o4 = Rc::clone(&obj);
+        obj.borrow_mut().set("toggle".into(), native("toggle", move |args| {
+            let s = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+            let result = {
+                let mut b = t4.borrow_mut();
+                if let Some(pos) = b.iter().position(|t| t == &s) {
+                    b.remove(pos);
+                    false
+                } else {
+                    b.push(s);
+                    true
+                }
+            };
+            o4.borrow_mut().set("length".into(), JsValue::Number(t4.borrow().len() as f64));
+            Ok(JsValue::Bool(result))
+        }));
+        Ok(JsValue::Object(obj))
+    }));
+
     // ─── DOMException ─────────────────────────────────────────────────────
     e.define("DOMException", native("DOMException", |args| {
         let mut it = args.into_iter();
@@ -2897,6 +3042,109 @@ pub fn setup_builtins(
             pt.borrow_mut().set("y".into(), JsValue::Number(0.0));
             obj.borrow_mut().set(p.to_string(), JsValue::Object(pt));
         }
+        Ok(JsValue::Object(obj))
+    }));
+
+    // ─── Visual Viewport API ──────────────────────────────────────────────
+    {
+        let vv = Rc::new(RefCell::new(JsObject::new()));
+        vv.borrow_mut().set("offsetLeft".into(), JsValue::Number(0.0));
+        vv.borrow_mut().set("offsetTop".into(), JsValue::Number(0.0));
+        vv.borrow_mut().set("pageLeft".into(), JsValue::Number(0.0));
+        vv.borrow_mut().set("pageTop".into(), JsValue::Number(0.0));
+        vv.borrow_mut().set("width".into(), JsValue::Number(1024.0));
+        vv.borrow_mut().set("height".into(), JsValue::Number(768.0));
+        vv.borrow_mut().set("scale".into(), JsValue::Number(1.0));
+        vv.borrow_mut().set("addEventListener".into(),
+            native("addEventListener", |_| Ok(JsValue::Undefined)));
+        vv.borrow_mut().set("removeEventListener".into(),
+            native("removeEventListener", |_| Ok(JsValue::Undefined)));
+        e.define("__visual_viewport__", JsValue::Object(vv));
+    }
+
+    // ─── navigator.share / canShare (Web Share API) ───────────────────────
+    e.define("__navigator_share__", native("navigator.share", |_|
+        Ok(make_settled_promise("fulfilled", JsValue::Undefined))));
+    e.define("__navigator_can_share__", native("navigator.canShare", |_| Ok(JsValue::Bool(true))));
+
+    // ─── Badging API - navigator.setAppBadge / clearAppBadge ──────────────
+    e.define("__navigator_set_app_badge__", native("setAppBadge", |_|
+        Ok(make_settled_promise("fulfilled", JsValue::Undefined))));
+    e.define("__navigator_clear_app_badge__", native("clearAppBadge", |_|
+        Ok(make_settled_promise("fulfilled", JsValue::Undefined))));
+
+    // ─── ContactsManager - navigator.contacts ─────────────────────────────
+    {
+        let cm = Rc::new(RefCell::new(JsObject::new()));
+        cm.borrow_mut().set("select".into(), native("contacts.select", |_|
+            Ok(make_settled_promise("fulfilled", JsValue::Array(Rc::new(RefCell::new(Vec::new())))))));
+        cm.borrow_mut().set("getProperties".into(), native("contacts.getProperties", |_|
+            Ok(make_settled_promise("fulfilled", JsValue::Array(Rc::new(RefCell::new(vec![
+                JsValue::Str("name".into()),
+                JsValue::Str("email".into()),
+                JsValue::Str("tel".into()),
+            ])))))));
+        e.define("__navigator_contacts__", JsValue::Object(cm));
+    }
+
+    // ─── Background Sync stub - registration.sync ─────────────────────────
+    {
+        let sync = Rc::new(RefCell::new(JsObject::new()));
+        sync.borrow_mut().set("register".into(), native("sync.register", |_|
+            Ok(make_settled_promise("fulfilled", JsValue::Undefined))));
+        sync.borrow_mut().set("getTags".into(), native("sync.getTags", |_|
+            Ok(make_settled_promise("fulfilled", JsValue::Array(Rc::new(RefCell::new(Vec::new())))))));
+        e.define("__background_sync__", JsValue::Object(sync));
+    }
+
+    // ─── Push API - registration.pushManager ──────────────────────────────
+    {
+        let pm = Rc::new(RefCell::new(JsObject::new()));
+        pm.borrow_mut().set("subscribe".into(), native("pushManager.subscribe", |_| {
+            let sub = Rc::new(RefCell::new(JsObject::new()));
+            sub.borrow_mut().set("endpoint".into(), JsValue::Str("https://example.com/push".into()));
+            sub.borrow_mut().set("expirationTime".into(), JsValue::Null);
+            sub.borrow_mut().set("unsubscribe".into(), native("unsubscribe", |_|
+                Ok(make_settled_promise("fulfilled", JsValue::Bool(true)))));
+            sub.borrow_mut().set("toJSON".into(), native("toJSON", |_|
+                Ok(JsValue::Object(Rc::new(RefCell::new(JsObject::new()))))));
+            sub.borrow_mut().set("getKey".into(), native("getKey", |_| Ok(JsValue::Null)));
+            Ok(make_settled_promise("fulfilled", JsValue::Object(sub)))
+        }));
+        pm.borrow_mut().set("getSubscription".into(), native("pushManager.getSubscription", |_|
+            Ok(make_settled_promise("fulfilled", JsValue::Null))));
+        pm.borrow_mut().set("permissionState".into(), native("pushManager.permissionState", |_|
+            Ok(make_settled_promise("fulfilled", JsValue::Str("granted".into())))));
+        e.define("__push_manager__", JsValue::Object(pm));
+    }
+
+    // ─── Reporting API ────────────────────────────────────────────────────
+    e.define("ReportingObserver", native("ReportingObserver", |_| {
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        obj.borrow_mut().set("observe".into(), native("observe", |_| Ok(JsValue::Undefined)));
+        obj.borrow_mut().set("disconnect".into(), native("disconnect", |_| Ok(JsValue::Undefined)));
+        obj.borrow_mut().set("takeRecords".into(), native("takeRecords", |_|
+            Ok(JsValue::Array(Rc::new(RefCell::new(Vec::new()))))));
+        Ok(JsValue::Object(obj))
+    }));
+
+    // ─── WebTransport stub ────────────────────────────────────────────────
+    e.define("WebTransport", native("WebTransport", |args| {
+        let url = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        obj.borrow_mut().set("url".into(), JsValue::Str(url));
+        obj.borrow_mut().set("ready".into(),
+            make_settled_promise("fulfilled", JsValue::Undefined));
+        obj.borrow_mut().set("closed".into(),
+            make_settled_promise("fulfilled", JsValue::Object(Rc::new(RefCell::new(JsObject::new())))));
+        obj.borrow_mut().set("incomingBidirectionalStreams".into(),
+            JsValue::Object(Rc::new(RefCell::new(JsObject::new()))));
+        obj.borrow_mut().set("incomingUnidirectionalStreams".into(),
+            JsValue::Object(Rc::new(RefCell::new(JsObject::new()))));
+        obj.borrow_mut().set("datagrams".into(),
+            JsValue::Object(Rc::new(RefCell::new(JsObject::new()))));
+        obj.borrow_mut().set("close".into(),
+            native("close", |_| Ok(JsValue::Undefined)));
         Ok(JsValue::Object(obj))
     }));
 

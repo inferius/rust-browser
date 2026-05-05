@@ -2117,3 +2117,192 @@ fn create_image_bitmap_returns_promise() {
         assert_eq!(s, "fulfilled");
     }
 }
+
+// ─── Element extras + APIs batch ──────────────────────────────────────
+
+#[test]
+fn element_check_visibility_default_true() {
+    let code = r#"
+        const div = document.createElement("div");
+        return div.checkVisibility();
+    "#;
+    if let crate::interpreter::JsValue::Bool(b) = run(code) {
+        assert!(b);
+    }
+}
+
+#[test]
+fn element_check_visibility_display_none() {
+    let code = r#"
+        const div = document.createElement("div");
+        div.setAttribute("style", "display:none");
+        return div.checkVisibility();
+    "#;
+    if let crate::interpreter::JsValue::Bool(b) = run(code) {
+        assert!(!b);
+    }
+}
+
+#[test]
+fn element_request_fullscreen_returns_promise() {
+    let code = r#"
+        const div = document.createElement("div");
+        const p = div.requestFullscreen();
+        return p.__promise_state__;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "fulfilled");
+    }
+}
+
+#[test]
+fn element_attach_internals() {
+    let code = r#"
+        const div = document.createElement("div");
+        const i = div.attachInternals();
+        return typeof i.setFormValue + "|" + i.checkValidity();
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "function|true");
+    }
+}
+
+#[test]
+fn element_computed_style_map_stub() {
+    let code = r#"
+        const div = document.createElement("div");
+        const m = div.computedStyleMap();
+        return typeof m.get + "|" + m.size;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "function|0");
+    }
+}
+
+#[test]
+fn web_transport_constructor() {
+    let code = r#"
+        const wt = new WebTransport("https://example.com/wt");
+        return wt.url;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "https://example.com/wt");
+    }
+}
+
+#[test]
+fn reporting_observer_methods() {
+    let code = r#"
+        const ro = new ReportingObserver(() => {});
+        ro.observe();
+        ro.disconnect();
+        return typeof ro.takeRecords;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "function");
+    }
+}
+
+// ─── DOM constructors batch ───────────────────────────────────────────
+
+#[test]
+fn document_fragment_construct() {
+    let code = r#"
+        const f = new DocumentFragment();
+        return f.nodeType + "|" + f.nodeName;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "11|#document-fragment");
+    }
+}
+
+#[test]
+fn comment_construct_with_data() {
+    let code = r#"
+        const c = new Comment("hello");
+        return c.nodeType + "|" + c.data + "|" + c.length;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "8|hello|5");
+    }
+}
+
+#[test]
+fn text_construct_data() {
+    let code = r#"
+        const t = new Text("World");
+        return t.nodeType + "|" + t.data;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "3|World");
+    }
+}
+
+#[test]
+fn node_constants() {
+    let code = r#"
+        return Node.ELEMENT_NODE + "|" + Node.TEXT_NODE + "|" + Node.COMMENT_NODE;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "1|3|8");
+    }
+}
+
+#[test]
+fn node_document_position_constants() {
+    let code = r#"
+        return Node.DOCUMENT_POSITION_CONTAINS + "|" + Node.DOCUMENT_POSITION_CONTAINED_BY;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "8|16");
+    }
+}
+
+#[test]
+fn dom_token_list_add_remove_toggle() {
+    let code = r#"
+        const tl = new DOMTokenList();
+        tl.add("a", "b", "c");
+        const has_b = tl.contains("b");
+        tl.remove("b");
+        const has_b_after = tl.contains("b");
+        const toggled = tl.toggle("d");
+        return has_b + "|" + has_b_after + "|" + toggled + "|" + tl.length;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "true|false|true|3"); // a c d
+    }
+}
+
+#[test]
+fn html_collection_constructor() {
+    let code = r#"
+        const c = new HTMLCollection();
+        return c.length + "|" + typeof c.item;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "0|function");
+    }
+}
+
+#[test]
+fn node_list_constructor() {
+    let code = r#"
+        const nl = new NodeList();
+        return nl.length + "|" + typeof nl.forEach;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "0|function");
+    }
+}
+
+#[test]
+fn mutation_record_default_props() {
+    let code = r#"
+        const m = new MutationRecord();
+        return m.type + "|" + (m.target === null);
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "childList|true");
+    }
+}

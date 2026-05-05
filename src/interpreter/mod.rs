@@ -4333,6 +4333,68 @@ impl Interpreter {
                             // No-op
                             return Ok(JsValue::Undefined);
                         }
+                        // ─── Element extras ─────────────────────────────────
+                        "checkVisibility" => {
+                            // CSS Display L4 - kontrola visibility (display:none, visibility:hidden, opacity:0)
+                            let opts = arg_vals.into_iter().next().unwrap_or(JsValue::Undefined);
+                            let check_opacity = if let JsValue::Object(o) = &opts {
+                                matches!(o.borrow().get("checkOpacity"), JsValue::Bool(true))
+                            } else { false };
+                            let check_visibility_css = if let JsValue::Object(o) = &opts {
+                                matches!(o.borrow().get("checkVisibilityCSS"), JsValue::Bool(true))
+                            } else { false };
+                            let style = n.attr("style").unwrap_or_default();
+                            if style.contains("display:none") || style.contains("display: none") {
+                                return Ok(JsValue::Bool(false));
+                            }
+                            if check_visibility_css && (style.contains("visibility:hidden") || style.contains("visibility: hidden")) {
+                                return Ok(JsValue::Bool(false));
+                            }
+                            if check_opacity && style.contains("opacity:0") {
+                                return Ok(JsValue::Bool(false));
+                            }
+                            return Ok(JsValue::Bool(true));
+                        }
+                        "requestFullscreen" => {
+                            n.set_attr("data-fullscreen", "true");
+                            return Ok(make_settled_promise("fulfilled", JsValue::Undefined));
+                        }
+                        "requestPointerLock" => {
+                            n.set_attr("data-pointer-lock", "true");
+                            return Ok(JsValue::Undefined);
+                        }
+                        "computedStyleMap" => {
+                            // CSS Typed OM stub - vrati objekt s get/has/set
+                            let map = Rc::new(RefCell::new(JsObject::new()));
+                            map.borrow_mut().set("get".into(), native("get", |_| Ok(JsValue::Undefined)));
+                            map.borrow_mut().set("has".into(), native("has", |_| Ok(JsValue::Bool(false))));
+                            map.borrow_mut().set("set".into(), native("set", |_| Ok(JsValue::Undefined)));
+                            map.borrow_mut().set("size".into(), JsValue::Number(0.0));
+                            return Ok(JsValue::Object(map));
+                        }
+                        "attachInternals" => {
+                            // ElementInternals - pro custom elements form participation
+                            let internals = Rc::new(RefCell::new(JsObject::new()));
+                            internals.borrow_mut().set("__element_internals__".into(), JsValue::Bool(true));
+                            internals.borrow_mut().set("form".into(), JsValue::Null);
+                            internals.borrow_mut().set("labels".into(), JsValue::Array(Rc::new(RefCell::new(Vec::new()))));
+                            internals.borrow_mut().set("validity".into(), {
+                                let v = Rc::new(RefCell::new(JsObject::new()));
+                                v.borrow_mut().set("valid".into(), JsValue::Bool(true));
+                                v.borrow_mut().set("valueMissing".into(), JsValue::Bool(false));
+                                v.borrow_mut().set("typeMismatch".into(), JsValue::Bool(false));
+                                JsValue::Object(v)
+                            });
+                            internals.borrow_mut().set("setFormValue".into(),
+                                native("setFormValue", |_| Ok(JsValue::Undefined)));
+                            internals.borrow_mut().set("setValidity".into(),
+                                native("setValidity", |_| Ok(JsValue::Undefined)));
+                            internals.borrow_mut().set("checkValidity".into(),
+                                native("checkValidity", |_| Ok(JsValue::Bool(true))));
+                            internals.borrow_mut().set("reportValidity".into(),
+                                native("reportValidity", |_| Ok(JsValue::Bool(true))));
+                            return Ok(JsValue::Object(internals));
+                        }
                         // ─── Popover API (HTML L1) ─────────────────────────
                         "showPopover" => {
                             n.set_attr("data-popover-open", "true");
