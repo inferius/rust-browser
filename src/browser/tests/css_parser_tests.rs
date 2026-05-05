@@ -370,3 +370,45 @@ fn parse_at_property_no_initial() {
     assert_eq!(s.registered_properties.len(), 1);
     assert!(s.registered_properties[0].initial_value.is_none());
 }
+
+#[test]
+fn parse_at_scope_basic() {
+    let s = parse_stylesheet("@scope (.card) { p { color: red; } }");
+    assert_eq!(s.scopes.len(), 1);
+    assert_eq!(s.scopes[0].root_selector, ".card");
+    assert!(s.scopes[0].limit_selector.is_none());
+    assert_eq!(s.scopes[0].rules.len(), 1);
+}
+
+#[test]
+fn parse_at_scope_with_limit() {
+    let s = parse_stylesheet("@scope (.card) to (.divider) { p { color: red; } }");
+    assert_eq!(s.scopes.len(), 1);
+    assert_eq!(s.scopes[0].root_selector, ".card");
+    assert_eq!(s.scopes[0].limit_selector.as_deref(), Some(".divider"));
+}
+
+#[test]
+fn parse_at_starting_style() {
+    let s = parse_stylesheet("@starting-style { div { opacity: 0; } }");
+    assert_eq!(s.starting_style_rules.len(), 1);
+    let prop = &s.starting_style_rules[0].declarations[0];
+    assert_eq!(prop.property, "opacity");
+    assert_eq!(prop.value.trim(), "0");
+}
+
+#[test]
+fn parse_scope_header_no_paren() {
+    use crate::browser::css_parser::parse_scope_header;
+    let (root, limit) = parse_scope_header("(.foo)");
+    assert_eq!(root, ".foo");
+    assert!(limit.is_none());
+}
+
+#[test]
+fn parse_scope_header_with_to() {
+    use crate::browser::css_parser::parse_scope_header;
+    let (root, limit) = parse_scope_header("(.foo) to (.bar)");
+    assert_eq!(root, ".foo");
+    assert_eq!(limit.as_deref(), Some(".bar"));
+}

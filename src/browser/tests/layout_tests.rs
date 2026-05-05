@@ -84,6 +84,194 @@ fn parse_relative_hsl_identity() {
 }
 
 #[test]
+fn parse_color_srgb() {
+    assert_eq!(layout::parse_color("color(srgb 1 0 0)"), Some([255, 0, 0, 255]));
+}
+
+#[test]
+fn parse_color_display_p3() {
+    let c = layout::parse_color("color(display-p3 0 1 0)").unwrap();
+    assert_eq!(c[1], 255);
+}
+
+#[test]
+fn parse_color_xyz() {
+    // XYZ d65 (0.95, 1.0, 1.09) ~ white
+    let c = layout::parse_color("color(xyz 0.95 1.0 1.09)").unwrap();
+    assert!(c[0] > 240 && c[1] > 240 && c[2] > 240);
+}
+
+#[test]
+fn parse_color_with_alpha() {
+    let c = layout::parse_color("color(srgb 1 0 0 / 0.5)").unwrap();
+    assert_eq!(c[0], 255);
+    assert!((c[3] as i32 - 127).abs() <= 1);
+}
+
+#[test]
+fn parse_length_dvw_dvh() {
+    assert!((layout::parse_length_ctx("50dvw", 1000.0, 800.0, 0.0) - 500.0).abs() < 0.1);
+    assert!((layout::parse_length_ctx("25dvh", 1000.0, 800.0, 0.0) - 200.0).abs() < 0.1);
+}
+
+#[test]
+fn parse_length_svw_lvh() {
+    assert!((layout::parse_length_ctx("100svw", 1000.0, 800.0, 0.0) - 1000.0).abs() < 0.1);
+    assert!((layout::parse_length_ctx("100lvh", 1000.0, 800.0, 0.0) - 800.0).abs() < 0.1);
+}
+
+#[test]
+fn parse_length_ch_lh() {
+    let ch = layout::parse_length("10ch");
+    assert!(ch > 0.0);
+    let lh = layout::parse_length("2lh");
+    assert!(lh > 0.0);
+}
+
+#[test]
+fn parse_length_absolute_units() {
+    let cm = layout::parse_length("1cm");
+    assert!((cm - 37.795).abs() < 0.1);
+    let mm = layout::parse_length("10mm");
+    assert!((mm - 37.795).abs() < 0.1);
+    let inch = layout::parse_length("1in");
+    assert!((inch - 96.0).abs() < 0.1);
+    let pc = layout::parse_length("1pc");
+    assert!((pc - 16.0).abs() < 0.1);
+}
+
+// CSS Backgrounds L3 - border-image
+#[test]
+fn border_image_source_parsed() {
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade, layout};
+    let doc = parse_html(r#"<html><body><div></div></body></html>"#, "");
+    let css = parse_stylesheet(r#"
+        div {
+            border-image-source: url(border.png);
+            border-image-slice: 30 fill;
+            border-image-width: 2;
+            border-image-repeat: round;
+        }
+    "#);
+    let map = cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+    let d = find_box_by_tag(&root, "div").unwrap();
+    assert_eq!(d.border_image_source.as_deref(), Some("border.png"));
+    assert_eq!(d.border_image_slice, [30.0, 30.0, 30.0, 30.0]);
+    assert_eq!(d.border_image_width, [2.0, 2.0, 2.0, 2.0]);
+    assert_eq!(d.border_image_repeat, "round");
+}
+
+// Text emphasis (Text Decor L4)
+#[test]
+fn text_emphasis_shorthand() {
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade, layout};
+    let doc = parse_html(r#"<html><body><p>x</p></body></html>"#, "");
+    let css = parse_stylesheet("p { text-emphasis: filled red; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+    let p = find_box_by_tag(&root, "p").unwrap();
+    assert_eq!(p.text_emphasis_style, "filled");
+    assert_eq!(p.text_emphasis_color, Some([255, 0, 0, 255]));
+}
+
+#[test]
+fn text_decoration_skip_ink_parsed() {
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade, layout};
+    let doc = parse_html(r#"<html><body><a></a></body></html>"#, "");
+    let css = parse_stylesheet("a { text-decoration-skip-ink: none; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+    let a = find_box_by_tag(&root, "a").unwrap();
+    assert_eq!(a.text_decoration_skip_ink, "none");
+}
+
+#[test]
+fn field_sizing_content() {
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade, layout};
+    let doc = parse_html(r#"<html><body><input /></body></html>"#, "");
+    let css = parse_stylesheet("input { field-sizing: content; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+    let inp = find_box_by_tag(&root, "input").unwrap();
+    assert_eq!(inp.field_sizing, "content");
+}
+
+#[test]
+fn interpolate_size_keywords() {
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade, layout};
+    let doc = parse_html(r#"<html><body><div></div></body></html>"#, "");
+    let css = parse_stylesheet("div { interpolate-size: allow-keywords; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+    let d = find_box_by_tag(&root, "div").unwrap();
+    assert_eq!(d.interpolate_size, "allow-keywords");
+}
+
+#[test]
+fn mix_blend_mode_parsed() {
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade, layout};
+    let doc = parse_html(r#"<html><body><div></div></body></html>"#, "");
+    let css = parse_stylesheet("div { mix-blend-mode: multiply; background-blend-mode: screen; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+    let d = find_box_by_tag(&root, "div").unwrap();
+    assert_eq!(d.mix_blend_mode, "multiply");
+    assert_eq!(d.background_blend_mode, "screen");
+}
+
+#[test]
+fn grid_template_columns_named_lines() {
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade, layout};
+    let doc = parse_html(r#"<html><body><div></div></body></html>"#, "");
+    let css = parse_stylesheet("div { grid-template-columns: [start] 1fr [middle] 2fr [end]; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+    let d = find_box_by_tag(&root, "div").unwrap();
+    assert!(d.grid_template_columns.contains("[start]"));
+    assert!(d.grid_template_columns.contains("[middle]"));
+    assert!(d.grid_template_columns.contains("[end]"));
+}
+
+#[test]
+fn grid_template_areas_parsed() {
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade, layout};
+    let doc = parse_html(r#"<html><body><div></div></body></html>"#, "");
+    let css = parse_stylesheet(r#"div { grid-template-areas: "header header" "nav main"; }"#);
+    let map = cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+    let d = find_box_by_tag(&root, "div").unwrap();
+    assert!(d.grid_template_areas.contains("header"));
+    assert!(d.grid_template_areas.contains("nav"));
+}
+
+#[test]
+fn grid_area_assignment() {
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade, layout};
+    let doc = parse_html(r#"<html><body><div></div></body></html>"#, "");
+    let css = parse_stylesheet("div { grid-area: header; grid-column: 1 / 3; grid-row: 2; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+    let d = find_box_by_tag(&root, "div").unwrap();
+    assert_eq!(d.grid_area, "header");
+    assert_eq!(d.grid_column, "1 / 3");
+    assert_eq!(d.grid_row, "2");
+}
+
+#[test]
+fn shape_outside_circle() {
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade, layout};
+    let doc = parse_html(r#"<html><body><div></div></body></html>"#, "");
+    let css = parse_stylesheet("div { shape-outside: circle(50%); shape-margin: 10px; shape-image-threshold: 0.5; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+    let d = find_box_by_tag(&root, "div").unwrap();
+    assert_eq!(d.shape_outside.as_deref(), Some("circle(50%)"));
+    assert!((d.shape_margin - 10.0).abs() < 0.1);
+    assert!((d.shape_image_threshold - 0.5).abs() < 0.001);
+}
+
+#[test]
 fn parse_color_modern_rgb_space_syntax() {
     // Modern syntax: mezery + lomitko alpha
     assert_eq!(layout::parse_color("rgb(255 0 0)"), Some([255, 0, 0, 255]));

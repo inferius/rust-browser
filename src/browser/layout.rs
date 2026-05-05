@@ -421,6 +421,38 @@ pub struct LayoutBox {
     /// CSS Backgrounds L4
     pub background_origin_v: String,
     pub background_clip_v: String,
+    /// CSS Backgrounds L3 - border-image source URL.
+    pub border_image_source: Option<String>,
+    /// border-image-slice: top right bottom left (procenta nebo cisla).
+    pub border_image_slice: [f32; 4],
+    /// border-image-width: top right bottom left (px nebo numbers = multiplier).
+    pub border_image_width: [f32; 4],
+    /// border-image-repeat: stretch (default) | repeat | round | space (per axis).
+    pub border_image_repeat: String,
+    /// CSS Text Decor L4 - text-emphasis: <style> <color>.
+    pub text_emphasis_style: String,
+    pub text_emphasis_color: Option<[u8; 4]>,
+    /// CSS Text Decor L3 - text-decoration-skip-ink: auto | none | all.
+    pub text_decoration_skip_ink: String,
+    /// CSS Forms L1 - field-sizing: fixed (default) | content.
+    pub field_sizing: String,
+    /// CSS Animations L2 - interpolate-size: numeric-only (default) | allow-keywords.
+    pub interpolate_size: String,
+    /// CSS Grid L1/L2 - grid-template-columns/rows raw string (parser-only zatim).
+    /// Format: "<line-name>? <track-size> <line-name>? ..." napr. "[start] 1fr [mid] 2fr [end]".
+    pub grid_template_columns: String,
+    pub grid_template_rows: String,
+    /// grid-template-areas: ASCII art layout per row.
+    pub grid_template_areas: String,
+    /// grid-area / grid-column / grid-row positioning string.
+    pub grid_area: String,
+    pub grid_column: String,
+    pub grid_row: String,
+    pub grid_auto_columns: String,
+    pub grid_auto_rows: String,
+    pub grid_auto_flow: String,
+    pub shape_margin: f32,
+    pub shape_image_threshold: f32,
     /// Box shadow: (offset_x, offset_y, blur, spread, color)
     /// (offset_x, offset_y, blur, spread, color, inset)
     pub box_shadow: Option<(f32, f32, f32, f32, [u8; 4], bool)>,
@@ -610,6 +642,26 @@ impl LayoutBox {
             vertical_align: String::new(),
             background_origin_v: String::new(),
             background_clip_v: String::new(),
+            border_image_source: None,
+            border_image_slice: [0.0; 4],
+            border_image_width: [1.0; 4],
+            border_image_repeat: String::new(),
+            text_emphasis_style: String::new(),
+            text_emphasis_color: None,
+            text_decoration_skip_ink: String::new(),
+            field_sizing: String::new(),
+            interpolate_size: String::new(),
+            grid_template_columns: String::new(),
+            grid_template_rows: String::new(),
+            grid_template_areas: String::new(),
+            grid_area: String::new(),
+            grid_column: String::new(),
+            grid_row: String::new(),
+            grid_auto_columns: String::new(),
+            grid_auto_rows: String::new(),
+            grid_auto_flow: String::new(),
+            shape_margin: 0.0,
+            shape_image_threshold: 0.0,
             box_shadow: None,
             transform: None,
             transforms: Vec::new(),
@@ -1042,6 +1094,116 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         if ac.trim() != "auto" {
             bx.accent_color = parse_color(ac);
         }
+    }
+    // border-image: url(...) <slice> / <width> [/ <outset>] <repeat>
+    if let Some(src) = s.get("border-image-source") {
+        let v = src.trim();
+        if v != "none" {
+            // strip url(...) -> URL
+            let url = v.strip_prefix("url(").and_then(|x| x.strip_suffix(')'))
+                .map(|u| u.trim_matches('"').trim_matches('\'').to_string())
+                .unwrap_or_else(|| v.to_string());
+            bx.border_image_source = Some(url);
+        }
+    }
+    if let Some(sl) = s.get("border-image-slice") {
+        let parts: Vec<&str> = sl.split_whitespace().filter(|p| *p != "fill").collect();
+        let nums: Vec<f32> = parts.iter().map(|p| {
+            p.trim_end_matches('%').parse::<f32>().unwrap_or(0.0)
+        }).collect();
+        bx.border_image_slice = match nums.len() {
+            1 => [nums[0]; 4],
+            2 => [nums[0], nums[1], nums[0], nums[1]],
+            3 => [nums[0], nums[1], nums[2], nums[1]],
+            _ if nums.len() >= 4 => [nums[0], nums[1], nums[2], nums[3]],
+            _ => [0.0; 4],
+        };
+    }
+    if let Some(bw) = s.get("border-image-width") {
+        let nums: Vec<f32> = bw.split_whitespace()
+            .map(|p| p.trim_end_matches("px").parse::<f32>().unwrap_or(1.0))
+            .collect();
+        bx.border_image_width = match nums.len() {
+            1 => [nums[0]; 4],
+            2 => [nums[0], nums[1], nums[0], nums[1]],
+            3 => [nums[0], nums[1], nums[2], nums[1]],
+            _ if nums.len() >= 4 => [nums[0], nums[1], nums[2], nums[3]],
+            _ => [1.0; 4],
+        };
+    }
+    if let Some(br) = s.get("border-image-repeat") {
+        bx.border_image_repeat = br.trim().to_string();
+    }
+    // CSS Compositing L1
+    if let Some(mbm) = s.get("mix-blend-mode") {
+        bx.mix_blend_mode = mbm.trim().to_string();
+    }
+    if let Some(bbm) = s.get("background-blend-mode") {
+        bx.background_blend_mode = bbm.trim().to_string();
+    }
+    // text-emphasis
+    if let Some(tes) = s.get("text-emphasis-style") {
+        bx.text_emphasis_style = tes.trim().to_string();
+    }
+    if let Some(tec) = s.get("text-emphasis-color") {
+        bx.text_emphasis_color = parse_color(tec);
+    }
+    if let Some(te) = s.get("text-emphasis") {
+        // Shorthand "<style> <color>"
+        let parts: Vec<&str> = te.split_whitespace().collect();
+        if !parts.is_empty() { bx.text_emphasis_style = parts[0].to_string(); }
+        if parts.len() >= 2 { bx.text_emphasis_color = parse_color(parts[1]); }
+    }
+    // text-decoration-skip-ink
+    if let Some(tdsi) = s.get("text-decoration-skip-ink") {
+        bx.text_decoration_skip_ink = tdsi.trim().to_string();
+    }
+    // field-sizing (CSS Forms L1)
+    if let Some(fs) = s.get("field-sizing") {
+        bx.field_sizing = fs.trim().to_string();
+    }
+    // interpolate-size (CSS Animations L2)
+    if let Some(is_) = s.get("interpolate-size") {
+        bx.interpolate_size = is_.trim().to_string();
+    }
+    // CSS Grid L2 - named lines / areas (parser-only, taffy resolvuje track sizes)
+    if let Some(gtc) = s.get("grid-template-columns") {
+        bx.grid_template_columns = gtc.trim().to_string();
+    }
+    if let Some(gtr) = s.get("grid-template-rows") {
+        bx.grid_template_rows = gtr.trim().to_string();
+    }
+    if let Some(gta) = s.get("grid-template-areas") {
+        bx.grid_template_areas = gta.trim().to_string();
+    }
+    if let Some(ga) = s.get("grid-area") {
+        bx.grid_area = ga.trim().to_string();
+    }
+    if let Some(gc) = s.get("grid-column") {
+        bx.grid_column = gc.trim().to_string();
+    }
+    if let Some(gr) = s.get("grid-row") {
+        bx.grid_row = gr.trim().to_string();
+    }
+    if let Some(gac) = s.get("grid-auto-columns") {
+        bx.grid_auto_columns = gac.trim().to_string();
+    }
+    if let Some(gar) = s.get("grid-auto-rows") {
+        bx.grid_auto_rows = gar.trim().to_string();
+    }
+    if let Some(gaf) = s.get("grid-auto-flow") {
+        bx.grid_auto_flow = gaf.trim().to_string();
+    }
+    // CSS Shapes L1
+    if let Some(so) = s.get("shape-outside") {
+        let v = so.trim();
+        if v != "none" { bx.shape_outside = Some(v.to_string()); }
+    }
+    if let Some(sm) = s.get("shape-margin") {
+        bx.shape_margin = parse_length(sm);
+    }
+    if let Some(sit) = s.get("shape-image-threshold") {
+        bx.shape_image_threshold = sit.trim().parse().unwrap_or(0.0);
     }
     // scroll-behavior
     if let Some(sb) = s.get("scroll-behavior") {
@@ -2032,6 +2194,14 @@ pub fn parse_color(s: &str) -> Option<[u8; 4]> {
         }
     }
 
+    // CSS Color L4 - color() function s namespace
+    // color(srgb r g b [/ a]), color(display-p3 r g b), color(rec2020 r g b), atd.
+    // Pro nase ucely vsechny ColorSpace mapujeme primo na sRGB (pro rec2020/p3 by se mela
+    // udelat gamut mapping, ale to je out-of-scope - vetsina renderer fallbackuje stejne).
+    if let Some(inner) = s.strip_prefix("color(").and_then(|s| s.strip_suffix(')')) {
+        return parse_color_function(inner);
+    }
+
     // CSS Color L5 - relative color: rgb(from <color> r g b [/ alpha])
     // Vyhodnoti zdrojovou barvu, jeji slozky pristupne jako r/g/b/alpha keywordy.
     if let Some(inner) = s.strip_prefix("rgb(from ").and_then(|s| s.strip_suffix(')'))
@@ -2332,6 +2502,50 @@ fn parse_alpha(s: &str) -> Option<u8> {
     }
     let v: f32 = s.parse().ok()?;
     Some((v.clamp(0.0, 1.0) * 255.0).round() as u8)
+}
+
+/// CSS Color L4 - color() function s namespace.
+/// Format: `color(<colorspace> <c1> <c2> <c3> [/ <alpha>])`.
+/// Podporovane spaces: srgb, srgb-linear, display-p3, rec2020, a98-rgb, prophoto-rgb,
+/// xyz, xyz-d50, xyz-d65. Pro rasterizaci vsechny mapovane primo do sRGB byte (clamp).
+fn parse_color_function(inner: &str) -> Option<[u8; 4]> {
+    let trimmed = inner.trim();
+    let (space, rest) = split_first_color_token(trimmed)?;
+    let (parts, alpha) = split_balanced_args(rest);
+    if parts.len() < 3 { return None; }
+    // V default 0..1 range pro vsechny color spaces. Procenta = 0..100%.
+    let parse_chan = |s: &str| -> Option<f32> {
+        let s = s.trim();
+        if s == "none" { return Some(0.0); }
+        if let Some(p) = s.strip_suffix('%') { return p.trim().parse::<f32>().ok().map(|v| v / 100.0); }
+        s.parse::<f32>().ok()
+    };
+    let c1 = parse_chan(parts[0])?;
+    let c2 = parse_chan(parts[1])?;
+    let c3 = parse_chan(parts[2])?;
+    // Pro display-p3 / rec2020 / a98-rgb proste pouzijeme hodnoty jako sRGB
+    // (gamut mapping nedelame - vetsina cili je v sRGB ranged).
+    let (r, g, b) = match space {
+        "srgb-linear" | "srgb" | "display-p3" | "a98-rgb" | "prophoto-rgb" | "rec2020" => {
+            ((c1 * 255.0).round() as u8, (c2 * 255.0).round() as u8, (c3 * 255.0).round() as u8)
+        }
+        "xyz" | "xyz-d50" | "xyz-d65" => {
+            // XYZ -> sRGB matrix (D65)
+            let r = 3.2404542 * c1 - 1.5371385 * c2 - 0.4985314 * c3;
+            let g = -0.9692660 * c1 + 1.8760108 * c2 + 0.0415560 * c3;
+            let b = 0.0556434 * c1 - 0.2040259 * c2 + 1.0572252 * c3;
+            ((r.clamp(0.0, 1.0) * 255.0).round() as u8,
+             (g.clamp(0.0, 1.0) * 255.0).round() as u8,
+             (b.clamp(0.0, 1.0) * 255.0).round() as u8)
+        }
+        _ => return None,
+    };
+    let a = if let Some(byte) = alpha {
+        byte
+    } else if let Some(s) = parts.get(3) {
+        parse_alpha(s.trim()).unwrap_or(255)
+    } else { 255 };
+    Some([r, g, b, a])
 }
 
 /// CSS Color L5 relative color: rgb(from <color> r g b [/ a]).
@@ -3979,6 +4193,31 @@ pub fn parse_length_ctx(s: &str, vw: f32, vh: f32, parent_size: f32) -> f32 {
         let v: f32 = num.trim().parse().unwrap_or(0.0);
         return v * 16.0;
     }
+    // Dynamic / small / large viewport units - musi byt PRED vw/vh aby suffix match
+    if let Some(num) = s.strip_suffix("dvw").or_else(|| s.strip_suffix("svw")).or_else(|| s.strip_suffix("lvw")) {
+        let v: f32 = num.trim().parse().unwrap_or(0.0);
+        return v * vw / 100.0;
+    }
+    if let Some(num) = s.strip_suffix("dvh").or_else(|| s.strip_suffix("svh")).or_else(|| s.strip_suffix("lvh")) {
+        let v: f32 = num.trim().parse().unwrap_or(0.0);
+        return v * vh / 100.0;
+    }
+    if let Some(num) = s.strip_suffix("dvi").or_else(|| s.strip_suffix("svi")).or_else(|| s.strip_suffix("lvi")) {
+        let v: f32 = num.trim().parse().unwrap_or(0.0);
+        return v * vw / 100.0;
+    }
+    if let Some(num) = s.strip_suffix("dvb").or_else(|| s.strip_suffix("svb")).or_else(|| s.strip_suffix("lvb")) {
+        let v: f32 = num.trim().parse().unwrap_or(0.0);
+        return v * vh / 100.0;
+    }
+    if let Some(num) = s.strip_suffix("vi") {
+        let v: f32 = num.trim().parse().unwrap_or(0.0);
+        return v * vw / 100.0;
+    }
+    if let Some(num) = s.strip_suffix("vb") {
+        let v: f32 = num.trim().parse().unwrap_or(0.0);
+        return v * vh / 100.0;
+    }
     if let Some(num) = s.strip_suffix("vw") {
         let v: f32 = num.trim().parse().unwrap_or(0.0);
         return v * vw / 100.0;
@@ -4018,6 +4257,53 @@ pub fn parse_length_ctx(s: &str, vw: f32, vh: f32, parent_size: f32) -> f32 {
         // 1pt = 1.333px
         let v: f32 = num.trim().parse().unwrap_or(0.0);
         return v * 1.333;
+    }
+    // Character / line-height units
+    // ch = sirka 0 (zero glyph) - aproximace 0.5 * font-size (default 16px)
+    // lh = line-height current element - aproximace 1.2 * font-size
+    // rlh = root lh
+    if let Some(num) = s.strip_suffix("rlh") {
+        let v: f32 = num.trim().parse().unwrap_or(0.0);
+        return v * 16.0 * 1.2;
+    }
+    if let Some(num) = s.strip_suffix("lh") {
+        let v: f32 = num.trim().parse().unwrap_or(0.0);
+        return v * 16.0 * 1.2;
+    }
+    if let Some(num) = s.strip_suffix("ch") {
+        let v: f32 = num.trim().parse().unwrap_or(0.0);
+        return v * 16.0 * 0.5;
+    }
+    if let Some(num) = s.strip_suffix("ex") {
+        // ex = vyska x-height - aproximace 0.5 * font-size
+        let v: f32 = num.trim().parse().unwrap_or(0.0);
+        return v * 16.0 * 0.5;
+    }
+    // Absolutni jednotky
+    if let Some(num) = s.strip_suffix("cm") {
+        // 1cm = 96/2.54 px ~ 37.795
+        let v: f32 = num.trim().parse().unwrap_or(0.0);
+        return v * 37.795;
+    }
+    if let Some(num) = s.strip_suffix("mm") {
+        // 1mm = 1cm/10
+        let v: f32 = num.trim().parse().unwrap_or(0.0);
+        return v * 3.7795;
+    }
+    if let Some(num) = s.strip_suffix("Q") {
+        // 1Q = 0.25mm
+        let v: f32 = num.trim().parse().unwrap_or(0.0);
+        return v * 0.9449;
+    }
+    if let Some(num) = s.strip_suffix("in") {
+        // 1in = 96px
+        let v: f32 = num.trim().parse().unwrap_or(0.0);
+        return v * 96.0;
+    }
+    if let Some(num) = s.strip_suffix("pc") {
+        // 1pc = 12pt = 16px
+        let v: f32 = num.trim().parse().unwrap_or(0.0);
+        return v * 16.0;
     }
     if let Some(num) = s.strip_suffix('%') {
         let v: f32 = num.trim().parse().unwrap_or(0.0);

@@ -24,6 +24,22 @@ pub struct Stylesheet {
     pub layered_rules: Vec<(String, Vec<Rule>)>,
     /// @property --name registrace - meta info pro custom properties.
     pub registered_properties: Vec<RegisteredProperty>,
+    /// @scope (root) [to (limit)] { rules } - scoped rules.
+    pub scopes: Vec<ScopeRule>,
+    /// @starting-style { rules } - styly aplikovane na zacatku transition.
+    pub starting_style_rules: Vec<Rule>,
+}
+
+/// CSS @scope at-rule - root + optional limit.
+/// `@scope (.card) to (.divider) { ... }`
+#[derive(Debug, Clone, Default)]
+pub struct ScopeRule {
+    /// Selector pro root - element musi byt potomkem.
+    pub root_selector: String,
+    /// Optional limit selector - scope konci na techto elementech.
+    pub limit_selector: Option<String>,
+    /// Rules platici uvnitr scope.
+    pub rules: Vec<Rule>,
 }
 
 /// CSS @property registrace pro custom properties (var(--foo)).
@@ -185,6 +201,39 @@ pub fn specificity(sel: &Selector) -> (u32, u32, u32) {
     (id_count, class_count, type_count)
 }
 
+/// Parsuje @scope header: "(root_sel) [to (limit_sel)]" -> (root, optional limit).
+pub fn parse_scope_header(header: &str) -> (String, Option<String>) {
+    let h = header.trim();
+    // Najdi prvni (...) blok pro root, pak optional " to (...)" pro limit.
+    let bytes = h.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() && bytes[i] != b'(' { i += 1; }
+    if i >= bytes.len() { return (String::new(), None); }
+    let mut depth = 1i32; let start = i + 1;
+    let mut j = start;
+    while j < bytes.len() && depth > 0 {
+        match bytes[j] { b'(' => depth += 1, b')' => depth -= 1, _ => {} }
+        if depth == 0 { break; }
+        j += 1;
+    }
+    let root = h[start..j].trim().to_string();
+    let rest = if j + 1 < bytes.len() { h[j+1..].trim() } else { "" };
+    let limit = if let Some(rest) = rest.strip_prefix("to") {
+        let r = rest.trim();
+        if let Some(open) = r.find('(') {
+            let mut d = 1i32; let st = open + 1;
+            let mut e = st; let rb = r.as_bytes();
+            while e < rb.len() && d > 0 {
+                match rb[e] { b'(' => d += 1, b')' => d -= 1, _ => {} }
+                if d == 0 { break; }
+                e += 1;
+            }
+            Some(r[st..e].trim().to_string())
+        } else { None }
+    } else { None };
+    (root, limit)
+}
+
 /// Parsuje CSS stylesheet (lite parser, hand-rolled).
 pub fn parse_stylesheet(source: &str) -> Stylesheet {
     let mut rules = Vec::new();
@@ -195,6 +244,8 @@ pub fn parse_stylesheet(source: &str) -> Stylesheet {
     let mut layer_order: Vec<String> = Vec::new();
     let mut layered_rules: Vec<(String, Vec<Rule>)> = Vec::new();
     let mut registered_properties: Vec<RegisteredProperty> = Vec::new();
+    let mut scopes: Vec<ScopeRule> = Vec::new();
+    let mut starting_style_rules: Vec<Rule> = Vec::new();
     let mut chars = source.chars().peekable();
 
     while chars.peek().is_some() {
@@ -285,12 +336,19 @@ pub fn parse_stylesheet(source: &str) -> Stylesheet {
             let nested = parse_stylesheet(&block_str);
             rules.extend(nested.rules);
         } else if selectors_str.starts_with("@scope") {
-            // @scope (selector) { rules } - rules s scope (zatim ignorujem scope, jen unwrap)
+            // @scope (root_selector) [to (limit_selector)] { rules }
+            let header = selectors_str.trim_start_matches("@scope").trim();
+            let (root_sel, limit_sel) = parse_scope_header(header);
             let nested = parse_stylesheet(&block_str);
-            rules.extend(nested.rules);
+            scopes.push(ScopeRule {
+                root_selector: root_sel,
+                limit_selector: limit_sel,
+                rules: nested.rules,
+            });
         } else if selectors_str.starts_with("@starting-style") {
-            // @starting-style { rules } - drives transition starting state, zatim no-op
-            let _ = block_str;
+            // @starting-style { rules } - styly pro transition start state
+            let nested = parse_stylesheet(&block_str);
+            starting_style_rules.extend(nested.rules);
         } else if selectors_str.starts_with("@page") {
             // @page rules - pro print, zatim no-op
             let _ = block_str;
@@ -352,6 +410,7 @@ pub fn parse_stylesheet(source: &str) -> Stylesheet {
     Stylesheet {
         rules, media_queries, keyframes, container_queries, font_faces,
         layer_order, layered_rules, registered_properties,
+        scopes, starting_style_rules,
     }
 }
 

@@ -596,6 +596,66 @@ pub fn cascade_with_viewport(root: &Rc<Node>, stylesheets: &[Stylesheet],
     cascade(root, &effective)
 }
 
+/// Per-element container query evaluation: container_sizes je mapa
+/// node ptr (Rc::as_ptr) -> (width, height). Pri matchingu @container
+/// rule najde nejblizsiho ancestora s container-type a pouzije jeho velikost.
+/// Pokud nenajdeme, fallback na viewport.
+pub fn cascade_with_container_sizes(
+    root: &Rc<Node>,
+    stylesheets: &[Stylesheet],
+    viewport_w: f32, viewport_h: f32,
+    container_sizes: &HashMap<usize, (f32, f32)>,
+) -> StyleMap {
+    let mut style_map = cascade_with_viewport(root, stylesheets, viewport_w, viewport_h);
+    // Druhy pruchod: per-element pro @container rules co potrebuji ancestor lookup.
+    root.walk(&mut |node| {
+        if !matches!(node.kind, NodeKind::Element { .. }) { return; }
+        // Najdi ancestora co je container (ma container-type/container-name).
+        let (cw, ch) = find_container_size(node, container_sizes).unwrap_or((viewport_w, viewport_h));
+        for sheet in stylesheets {
+            for cq in &sheet.container_queries {
+                if super::css_parser::evaluate_container_query(&cq.condition, cw, ch) {
+                    // Aplikuj kazde pravidlo co matchne tento node.
+                    for rule in &cq.rules {
+                        for sel in &rule.selectors {
+                            if matches_selector(node, sel) {
+                                let entry = style_map.entry(node_id(node)).or_default();
+                                let mut variables: HashMap<String, String> = HashMap::new();
+                                for d in &rule.declarations {
+                                    if d.property.starts_with("--") {
+                                        variables.insert(d.property.clone(), d.value.clone());
+                                    }
+                                }
+                                for d in &rule.declarations {
+                                    let resolved = resolve_value(&d.value, &variables);
+                                    let resolved = resolve_attr_in_value(&resolved, node);
+                                    expand_shorthand(&d.property, &resolved, entry);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    });
+    style_map
+}
+
+/// Najde nejblizsi container ancestor a vrati jeho rozmery.
+fn find_container_size(
+    node: &Rc<Node>,
+    container_sizes: &HashMap<usize, (f32, f32)>,
+) -> Option<(f32, f32)> {
+    let mut current = node.parent.borrow().upgrade();
+    while let Some(parent) = current {
+        if container_sizes.contains_key(&(Rc::as_ptr(&parent) as usize)) {
+            return container_sizes.get(&(Rc::as_ptr(&parent) as usize)).copied();
+        }
+        current = parent.parent.borrow().upgrade();
+    }
+    None
+}
+
 /// Aplikuje stylesheet na DOM strom, vrati StyleMap.
 pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
     let mut style_map: StyleMap = HashMap::new();
@@ -1072,6 +1132,30 @@ pub fn matches_simple(node: &Rc<Node>, sel: &SimpleSelector) -> bool {
                 let has_placeholder = node.attr("placeholder").is_some();
                 let value_empty = node.attr("value").map(|v| v.is_empty()).unwrap_or(true);
                 if !has_placeholder || !value_empty { return false; }
+            }
+            "user-valid" => {
+                // Selectors L5: :user-valid - prvek byl uzivatelem zmenen + je validni
+                // Aproximace: pokud ma data-user-valid="true" attribute, OR same logic jako :valid
+                let is_form = matches!(tag.as_str(), "input" | "select" | "textarea");
+                if !is_form { return false; }
+                if node.attr("data-user-valid").as_deref() != Some("true") {
+                    if node.attr("required").is_some() {
+                        let val = node.attr("value").unwrap_or_default();
+                        if val.is_empty() { return false; }
+                    }
+                }
+            }
+            "user-invalid" => {
+                let is_form = matches!(tag.as_str(), "input" | "select" | "textarea");
+                if !is_form { return false; }
+                if node.attr("data-user-invalid").as_deref() != Some("true") {
+                    let mut is_invalid = false;
+                    if node.attr("required").is_some() {
+                        let val = node.attr("value").unwrap_or_default();
+                        if val.is_empty() { is_invalid = true; }
+                    }
+                    if !is_invalid { return false; }
+                }
             }
             "valid" => {
                 // :valid match pokud form input s required ma neprazdnou hodnotu
