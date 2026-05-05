@@ -2788,12 +2788,15 @@ pub fn setup_builtins(
         JsValue::Object(serial)
     });
 
-    // performance.now() + performance.timeOrigin
+    // performance.now() + performance.timeOrigin + real mark/measure entries
     {
         let perf = Rc::new(RefCell::new(JsObject::new()));
         let start = std::time::Instant::now();
+        let entries: Rc<RefCell<Vec<JsValue>>> = Rc::new(RefCell::new(Vec::new()));
+        let marks: Rc<RefCell<HashMap<String, f64>>> = Rc::new(RefCell::new(HashMap::new()));
+        let start_clone = start;
         perf.borrow_mut().set("now".into(), native("performance.now", move |_| {
-            Ok(JsValue::Number(start.elapsed().as_secs_f64() * 1000.0))
+            Ok(JsValue::Number(start_clone.elapsed().as_secs_f64() * 1000.0))
         }));
         perf.borrow_mut().set("timeOrigin".into(), JsValue::Number(
             std::time::SystemTime::now()
@@ -2801,53 +2804,295 @@ pub fn setup_builtins(
                 .map(|d| d.as_secs_f64() * 1000.0)
                 .unwrap_or(0.0)
         ));
-        perf.borrow_mut().set("mark".into(), native("performance.mark", |_| Ok(JsValue::Undefined)));
-        perf.borrow_mut().set("measure".into(), native("performance.measure", |_| Ok(JsValue::Undefined)));
-        perf.borrow_mut().set("clearMarks".into(), native("performance.clearMarks", |_| Ok(JsValue::Undefined)));
-        perf.borrow_mut().set("clearMeasures".into(), native("performance.clearMeasures", |_| Ok(JsValue::Undefined)));
-        perf.borrow_mut().set("getEntries".into(), native("performance.getEntries", |_| {
-            Ok(JsValue::Array(Rc::new(RefCell::new(Vec::new()))))
+        let m1 = Rc::clone(&marks);
+        let e1 = Rc::clone(&entries);
+        perf.borrow_mut().set("mark".into(), native("performance.mark", move |args| {
+            let name = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+            let now = start.elapsed().as_secs_f64() * 1000.0;
+            m1.borrow_mut().insert(name.clone(), now);
+            // PerformanceMark entry
+            let entry = Rc::new(RefCell::new(JsObject::new()));
+            entry.borrow_mut().set("name".into(), JsValue::Str(name.clone()));
+            entry.borrow_mut().set("entryType".into(), JsValue::Str("mark".into()));
+            entry.borrow_mut().set("startTime".into(), JsValue::Number(now));
+            entry.borrow_mut().set("duration".into(), JsValue::Number(0.0));
+            e1.borrow_mut().push(JsValue::Object(entry.clone()));
+            Ok(JsValue::Object(entry))
+        }));
+        let m2 = Rc::clone(&marks);
+        let e2 = Rc::clone(&entries);
+        perf.borrow_mut().set("measure".into(), native("performance.measure", move |args| {
+            let mut it = args.into_iter();
+            let name = it.next().map(|v| v.to_string()).unwrap_or_default();
+            let start_mark = it.next().map(|v| v.to_string()).unwrap_or_default();
+            let end_mark = it.next().map(|v| v.to_string()).unwrap_or_default();
+            let marks_b = m2.borrow();
+            let s = marks_b.get(&start_mark).copied().unwrap_or(0.0);
+            let en = marks_b.get(&end_mark).copied()
+                .unwrap_or_else(|| start.elapsed().as_secs_f64() * 1000.0);
+            let entry = Rc::new(RefCell::new(JsObject::new()));
+            entry.borrow_mut().set("name".into(), JsValue::Str(name));
+            entry.borrow_mut().set("entryType".into(), JsValue::Str("measure".into()));
+            entry.borrow_mut().set("startTime".into(), JsValue::Number(s));
+            entry.borrow_mut().set("duration".into(), JsValue::Number((en - s).max(0.0)));
+            e2.borrow_mut().push(JsValue::Object(entry.clone()));
+            Ok(JsValue::Object(entry))
+        }));
+        let m3 = Rc::clone(&marks);
+        let e3 = Rc::clone(&entries);
+        perf.borrow_mut().set("clearMarks".into(), native("performance.clearMarks", move |args| {
+            let name = args.into_iter().next().map(|v| v.to_string());
+            if let Some(n) = name {
+                m3.borrow_mut().remove(&n);
+                e3.borrow_mut().retain(|v| {
+                    if let JsValue::Object(o) = v {
+                        let b = o.borrow();
+                        let entry_name = b.get("name").to_string();
+                        let entry_type = b.get("entryType").to_string();
+                        !(entry_type == "mark" && entry_name == n)
+                    } else { true }
+                });
+            } else {
+                m3.borrow_mut().clear();
+                e3.borrow_mut().retain(|v| {
+                    if let JsValue::Object(o) = v {
+                        o.borrow().get("entryType").to_string() != "mark"
+                    } else { true }
+                });
+            }
+            Ok(JsValue::Undefined)
+        }));
+        let e4 = Rc::clone(&entries);
+        perf.borrow_mut().set("clearMeasures".into(), native("performance.clearMeasures", move |args| {
+            let name = args.into_iter().next().map(|v| v.to_string());
+            if let Some(n) = name {
+                e4.borrow_mut().retain(|v| {
+                    if let JsValue::Object(o) = v {
+                        let b = o.borrow();
+                        let en = b.get("name").to_string();
+                        let et = b.get("entryType").to_string();
+                        !(et == "measure" && en == n)
+                    } else { true }
+                });
+            } else {
+                e4.borrow_mut().retain(|v| {
+                    if let JsValue::Object(o) = v {
+                        o.borrow().get("entryType").to_string() != "measure"
+                    } else { true }
+                });
+            }
+            Ok(JsValue::Undefined)
+        }));
+        let e5 = Rc::clone(&entries);
+        perf.borrow_mut().set("getEntries".into(), native("performance.getEntries", move |_| {
+            Ok(JsValue::Array(Rc::new(RefCell::new(e5.borrow().clone()))))
+        }));
+        let e6 = Rc::clone(&entries);
+        perf.borrow_mut().set("getEntriesByType".into(), native("performance.getEntriesByType", move |args| {
+            let t = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+            let filtered: Vec<JsValue> = e6.borrow().iter()
+                .filter(|v| if let JsValue::Object(o) = v {
+                    o.borrow().get("entryType").to_string() == t
+                } else { false })
+                .cloned().collect();
+            Ok(JsValue::Array(Rc::new(RefCell::new(filtered))))
+        }));
+        let e7 = Rc::clone(&entries);
+        perf.borrow_mut().set("getEntriesByName".into(), native("performance.getEntriesByName", move |args| {
+            let n = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+            let filtered: Vec<JsValue> = e7.borrow().iter()
+                .filter(|v| if let JsValue::Object(o) = v {
+                    o.borrow().get("name").to_string() == n
+                } else { false })
+                .cloned().collect();
+            Ok(JsValue::Array(Rc::new(RefCell::new(filtered))))
         }));
         e.define("performance", JsValue::Object(perf));
     }
 
-    // FormData stub
-    e.define("FormData", native("FormData", |_| {
+    // FormData real impl - vc. set/getAll/keys/values/entries
+    e.define("FormData", native("FormData", |args| {
         let pairs: Rc<RefCell<Vec<(String, String)>>> = Rc::new(RefCell::new(Vec::new()));
+        // Optional argument: form element - extract input/select/textarea
+        if let Some(JsValue::DomNode(form)) = args.into_iter().next() {
+            form.walk(&mut |node| {
+                if let Some(t) = node.tag_name() {
+                    if matches!(t.as_str(), "input" | "select" | "textarea") {
+                        if let Some(name) = node.attr("name") {
+                            let value = node.attr("value").unwrap_or_default();
+                            pairs.borrow_mut().push((name, value));
+                        }
+                    }
+                }
+            });
+        }
         let obj = Rc::new(RefCell::new(JsObject::new()));
-        {
-            let p = Rc::clone(&pairs);
-            obj.borrow_mut().set("append".into(), native("FormData.append", move |args| {
-                let mut it = args.into_iter();
-                let k = it.next().map(|v| v.to_string()).unwrap_or_default();
-                let v = it.next().map(|v| v.to_string()).unwrap_or_default();
-                p.borrow_mut().push((k, v));
-                Ok(JsValue::Undefined)
-            }));
+        let p1 = Rc::clone(&pairs);
+        obj.borrow_mut().set("append".into(), native("FormData.append", move |args| {
+            let mut it = args.into_iter();
+            let k = it.next().map(|v| v.to_string()).unwrap_or_default();
+            let v = it.next().map(|v| v.to_string()).unwrap_or_default();
+            p1.borrow_mut().push((k, v));
+            Ok(JsValue::Undefined)
+        }));
+        let p2 = Rc::clone(&pairs);
+        obj.borrow_mut().set("set".into(), native("FormData.set", move |args| {
+            let mut it = args.into_iter();
+            let k = it.next().map(|v| v.to_string()).unwrap_or_default();
+            let v = it.next().map(|v| v.to_string()).unwrap_or_default();
+            // Replace all existing s tymto klicem
+            p2.borrow_mut().retain(|(kk, _)| kk != &k);
+            p2.borrow_mut().push((k, v));
+            Ok(JsValue::Undefined)
+        }));
+        let p3 = Rc::clone(&pairs);
+        obj.borrow_mut().set("get".into(), native("FormData.get", move |args| {
+            let k = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+            Ok(p3.borrow().iter().find(|(kk, _)| kk == &k)
+                .map(|(_, v)| JsValue::Str(v.clone())).unwrap_or(JsValue::Null))
+        }));
+        let p4 = Rc::clone(&pairs);
+        obj.borrow_mut().set("getAll".into(), native("FormData.getAll", move |args| {
+            let k = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+            let arr: Vec<JsValue> = p4.borrow().iter()
+                .filter(|(kk, _)| kk == &k)
+                .map(|(_, v)| JsValue::Str(v.clone()))
+                .collect();
+            Ok(JsValue::Array(Rc::new(RefCell::new(arr))))
+        }));
+        let p5 = Rc::clone(&pairs);
+        obj.borrow_mut().set("has".into(), native("FormData.has", move |args| {
+            let k = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+            Ok(JsValue::Bool(p5.borrow().iter().any(|(kk, _)| kk == &k)))
+        }));
+        let p6 = Rc::clone(&pairs);
+        obj.borrow_mut().set("delete".into(), native("FormData.delete", move |args| {
+            let k = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+            p6.borrow_mut().retain(|(kk, _)| kk != &k);
+            Ok(JsValue::Undefined)
+        }));
+        let p7 = Rc::clone(&pairs);
+        obj.borrow_mut().set("keys".into(), native("FormData.keys", move |_| {
+            let arr: Vec<JsValue> = p7.borrow().iter()
+                .map(|(k, _)| JsValue::Str(k.clone())).collect();
+            Ok(super::helpers::make_iterator_from_values(arr))
+        }));
+        let p8 = Rc::clone(&pairs);
+        obj.borrow_mut().set("values".into(), native("FormData.values", move |_| {
+            let arr: Vec<JsValue> = p8.borrow().iter()
+                .map(|(_, v)| JsValue::Str(v.clone())).collect();
+            Ok(super::helpers::make_iterator_from_values(arr))
+        }));
+        let p9 = Rc::clone(&pairs);
+        obj.borrow_mut().set("entries".into(), native("FormData.entries", move |_| {
+            let arr: Vec<JsValue> = p9.borrow().iter().map(|(k, v)| {
+                JsValue::Array(Rc::new(RefCell::new(vec![
+                    JsValue::Str(k.clone()),
+                    JsValue::Str(v.clone()),
+                ])))
+            }).collect();
+            Ok(super::helpers::make_iterator_from_values(arr))
+        }));
+        let p10 = Rc::clone(&pairs);
+        obj.borrow_mut().set("forEach".into(), native("FormData.forEach", move |args| {
+            let cb = args.into_iter().next().unwrap_or(JsValue::Undefined);
+            let _ = (cb, &p10); // bez interpret access neumime callback volat zde
+            Ok(JsValue::Undefined)
+        }));
+        Ok(JsValue::Object(obj))
+    }));
+
+    // Headers - HTTP headers map
+    e.define("Headers", native("Headers", |args| {
+        let pairs: Rc<RefCell<Vec<(String, String)>>> = Rc::new(RefCell::new(Vec::new()));
+        if let Some(init) = args.into_iter().next() {
+            if let JsValue::Array(arr) = &init {
+                for v in arr.borrow().iter() {
+                    if let JsValue::Array(pair) = v {
+                        let p = pair.borrow();
+                        if p.len() >= 2 {
+                            pairs.borrow_mut().push((p[0].to_string().to_lowercase(), p[1].to_string()));
+                        }
+                    }
+                }
+            } else if let JsValue::Object(o) = &init {
+                for (k, v) in &o.borrow().props {
+                    pairs.borrow_mut().push((k.to_lowercase(), v.to_string()));
+                }
+            }
         }
-        {
-            let p = Rc::clone(&pairs);
-            obj.borrow_mut().set("get".into(), native("FormData.get", move |args| {
-                let k = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
-                Ok(p.borrow().iter().find(|(kk, _)| kk == &k)
-                    .map(|(_, v)| JsValue::Str(v.clone())).unwrap_or(JsValue::Null))
-            }));
-        }
-        {
-            let p = Rc::clone(&pairs);
-            obj.borrow_mut().set("has".into(), native("FormData.has", move |args| {
-                let k = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
-                Ok(JsValue::Bool(p.borrow().iter().any(|(kk, _)| kk == &k)))
-            }));
-        }
-        {
-            let p = Rc::clone(&pairs);
-            obj.borrow_mut().set("delete".into(), native("FormData.delete", move |args| {
-                let k = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
-                p.borrow_mut().retain(|(kk, _)| kk != &k);
-                Ok(JsValue::Undefined)
-            }));
-        }
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        let p1 = Rc::clone(&pairs);
+        obj.borrow_mut().set("get".into(), native("Headers.get", move |args| {
+            let k = args.into_iter().next().map(|v| v.to_string().to_lowercase()).unwrap_or_default();
+            let result: Vec<String> = p1.borrow().iter()
+                .filter(|(kk, _)| kk == &k)
+                .map(|(_, v)| v.clone()).collect();
+            if result.is_empty() { Ok(JsValue::Null) }
+            else { Ok(JsValue::Str(result.join(", "))) }
+        }));
+        let p2 = Rc::clone(&pairs);
+        obj.borrow_mut().set("set".into(), native("Headers.set", move |args| {
+            let mut it = args.into_iter();
+            let k = it.next().map(|v| v.to_string().to_lowercase()).unwrap_or_default();
+            let v = it.next().map(|v| v.to_string()).unwrap_or_default();
+            p2.borrow_mut().retain(|(kk, _)| kk != &k);
+            p2.borrow_mut().push((k, v));
+            Ok(JsValue::Undefined)
+        }));
+        let p3 = Rc::clone(&pairs);
+        obj.borrow_mut().set("append".into(), native("Headers.append", move |args| {
+            let mut it = args.into_iter();
+            let k = it.next().map(|v| v.to_string().to_lowercase()).unwrap_or_default();
+            let v = it.next().map(|v| v.to_string()).unwrap_or_default();
+            p3.borrow_mut().push((k, v));
+            Ok(JsValue::Undefined)
+        }));
+        let p4 = Rc::clone(&pairs);
+        obj.borrow_mut().set("has".into(), native("Headers.has", move |args| {
+            let k = args.into_iter().next().map(|v| v.to_string().to_lowercase()).unwrap_or_default();
+            Ok(JsValue::Bool(p4.borrow().iter().any(|(kk, _)| kk == &k)))
+        }));
+        let p5 = Rc::clone(&pairs);
+        obj.borrow_mut().set("delete".into(), native("Headers.delete", move |args| {
+            let k = args.into_iter().next().map(|v| v.to_string().to_lowercase()).unwrap_or_default();
+            p5.borrow_mut().retain(|(kk, _)| kk != &k);
+            Ok(JsValue::Undefined)
+        }));
+        let p6 = Rc::clone(&pairs);
+        obj.borrow_mut().set("entries".into(), native("Headers.entries", move |_| {
+            let arr: Vec<JsValue> = p6.borrow().iter().map(|(k, v)|
+                JsValue::Array(Rc::new(RefCell::new(vec![
+                    JsValue::Str(k.clone()), JsValue::Str(v.clone())])))
+            ).collect();
+            Ok(super::helpers::make_iterator_from_values(arr))
+        }));
+        Ok(JsValue::Object(obj))
+    }));
+
+    // Request - fetch input wrapper
+    e.define("Request", native("Request", |args| {
+        let mut it = args.into_iter();
+        let url = it.next().map(|v| v.to_string()).unwrap_or_default();
+        let init = it.next();
+        let method = if let Some(JsValue::Object(o)) = &init {
+            o.borrow().get("method").to_string()
+        } else { "GET".into() };
+        let body = if let Some(JsValue::Object(o)) = &init {
+            o.borrow().get("body").to_string()
+        } else { String::new() };
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        obj.borrow_mut().set("url".into(), JsValue::Str(url));
+        obj.borrow_mut().set("method".into(), JsValue::Str(method));
+        obj.borrow_mut().set("__body__".into(), JsValue::Str(body));
+        obj.borrow_mut().set("cache".into(), JsValue::Str("default".into()));
+        obj.borrow_mut().set("credentials".into(), JsValue::Str("same-origin".into()));
+        obj.borrow_mut().set("mode".into(), JsValue::Str("cors".into()));
+        obj.borrow_mut().set("redirect".into(), JsValue::Str("follow".into()));
+        obj.borrow_mut().set("referrer".into(), JsValue::Str(String::new()));
+        obj.borrow_mut().set("integrity".into(), JsValue::Str(String::new()));
+        obj.borrow_mut().set("clone".into(), native("clone", |_|
+            Ok(JsValue::Object(Rc::new(RefCell::new(JsObject::new()))))));
         Ok(JsValue::Object(obj))
     }));
 

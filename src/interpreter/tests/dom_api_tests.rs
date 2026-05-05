@@ -1713,3 +1713,197 @@ fn text_encoder_stream_constructor() {
         assert_eq!(s, "utf-8");
     }
 }
+
+// ─── Performance API real ─────────────────────────────────────────────
+
+#[test]
+fn performance_mark_creates_entry() {
+    let code = r#"
+        performance.mark("start");
+        return performance.getEntries().length;
+    "#;
+    let r = run(code);
+    if let crate::interpreter::JsValue::Number(n) = r {
+        assert!(n >= 1.0);
+    }
+}
+
+#[test]
+fn performance_measure_between_marks() {
+    let code = r#"
+        performance.mark("a");
+        performance.mark("b");
+        performance.measure("ab", "a", "b");
+        const measures = performance.getEntriesByType("measure");
+        return measures.length + "|" + measures[0].name;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "1|ab");
+    }
+}
+
+#[test]
+fn performance_get_entries_by_type() {
+    let code = r#"
+        performance.clearMarks();
+        performance.clearMeasures();
+        performance.mark("m1");
+        performance.mark("m2");
+        return performance.getEntriesByType("mark").length;
+    "#;
+    if let crate::interpreter::JsValue::Number(n) = run(code) {
+        assert_eq!(n, 2.0);
+    }
+}
+
+#[test]
+fn performance_get_entries_by_name() {
+    let code = r#"
+        performance.clearMarks();
+        performance.mark("findme");
+        performance.mark("other");
+        return performance.getEntriesByName("findme").length;
+    "#;
+    if let crate::interpreter::JsValue::Number(n) = run(code) {
+        assert_eq!(n, 1.0);
+    }
+}
+
+#[test]
+fn performance_clear_marks_specific() {
+    let code = r#"
+        performance.clearMarks();
+        performance.mark("a");
+        performance.mark("b");
+        performance.clearMarks("a");
+        return performance.getEntriesByType("mark").length;
+    "#;
+    if let crate::interpreter::JsValue::Number(n) = run(code) {
+        assert_eq!(n, 1.0);
+    }
+}
+
+// ─── FormData + Headers + Request ─────────────────────────────────────
+
+#[test]
+fn formdata_append_get_getall() {
+    let code = r#"
+        const fd = new FormData();
+        fd.append("name", "Alice");
+        fd.append("name", "Bob");
+        fd.append("age", "30");
+        return fd.get("name") + "|" + fd.getAll("name").length + "|" + fd.has("age");
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "Alice|2|true");
+    }
+}
+
+#[test]
+fn formdata_set_replaces() {
+    let code = r#"
+        const fd = new FormData();
+        fd.append("k", "1");
+        fd.append("k", "2");
+        fd.set("k", "3");
+        return fd.getAll("k").join(",");
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "3");
+    }
+}
+
+#[test]
+fn formdata_delete() {
+    let code = r#"
+        const fd = new FormData();
+        fd.append("a", "1");
+        fd.append("b", "2");
+        fd.delete("a");
+        return fd.has("a") + "|" + fd.has("b");
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "false|true");
+    }
+}
+
+#[test]
+fn formdata_entries_iterator() {
+    let code = r#"
+        const fd = new FormData();
+        fd.append("a", "1");
+        fd.append("b", "2");
+        return fd.entries().toArray().length;
+    "#;
+    if let crate::interpreter::JsValue::Number(n) = run(code) {
+        assert_eq!(n, 2.0);
+    }
+}
+
+#[test]
+fn headers_set_get() {
+    let code = r#"
+        const h = new Headers();
+        h.set("Content-Type", "application/json");
+        return h.get("content-type");
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "application/json");
+    }
+}
+
+#[test]
+fn headers_append_combine() {
+    let code = r#"
+        const h = new Headers();
+        h.append("Set-Cookie", "a=1");
+        h.append("Set-Cookie", "b=2");
+        return h.get("set-cookie");
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "a=1, b=2");
+    }
+}
+
+#[test]
+fn headers_has_delete() {
+    let code = r#"
+        const h = new Headers();
+        h.set("X-Foo", "bar");
+        h.delete("X-Foo");
+        return h.has("x-foo");
+    "#;
+    if let crate::interpreter::JsValue::Bool(b) = run(code) {
+        assert!(!b);
+    }
+}
+
+#[test]
+fn request_constructor_method() {
+    let code = r#"
+        const r = new Request("/api", { method: "POST", body: "test" });
+        return r.url + "|" + r.method;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "/api|POST");
+    }
+}
+
+#[test]
+fn url_can_parse_via_helper() {
+    let code = r#"
+        return __url_can_parse__("https://example.com");
+    "#;
+    if let crate::interpreter::JsValue::Bool(b) = run(code) {
+        assert!(b);
+    }
+}
+
+#[test]
+fn url_parse_invalid_returns_null() {
+    let code = r#"
+        return __url_parse__("invalid");
+    "#;
+    let r = run(code);
+    assert!(matches!(r, crate::interpreter::JsValue::Null));
+}
