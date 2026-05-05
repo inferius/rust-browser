@@ -168,6 +168,13 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         let max_h_pre = if ch.max_height_v.is_empty() { f32::INFINITY } else { super::super::layout::parse_length(&ch.max_height_v) };
         if min_w_pre > 0.0 { est_w = est_w.max(min_w_pre); }
         if min_h_pre > 0.0 { est_h = est_h.max(min_h_pre); }
+        // Pri zadnem est_w + max-width finite, preferuj max-width (pro aspect dopocet).
+        if est_w == 0.0 && max_w_pre.is_finite() && ch.aspect_ratio.is_some() {
+            est_w = max_w_pre;
+        }
+        if est_h == 0.0 && max_h_pre.is_finite() && ch.aspect_ratio.is_some() {
+            est_h = max_h_pre;
+        }
         // Padding+border floor
         let ch_pb_l = ch.padding_left.unwrap_or(ch.padding) + ch.border_left_width.unwrap_or(ch.border_width);
         let ch_pb_r = ch.padding_right.unwrap_or(ch.padding) + ch.border_right_width.unwrap_or(ch.border_width);
