@@ -5,8 +5,8 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 ## Stav
 
 - Build: **OK**, 0 errors, 0 warnings.
-- Tests: **1836 passed, 0 failed, 3 ignored**.
-- Posledni commit: `31eb2b3 GPU image: HTTP fetch + data URI base64 + atlas tests`.
+- Tests: **1845 passed, 0 failed, 3 ignored**.
+- Posledni commit: `ed872bc DOM/JS modern APIs - EventTarget, MessageChannel, Notification, ServiceWorker, locks, idle, AbortSignal extras, adoptedStyleSheets`.
 - Tree: ciste.
 - Branch master, ~290 commitu pred origin/master (NEPUSHOVAT bez vyzvy).
 - **WebGL pipeline DOKONCEN** + **CSS L4-L6 KOMPLET** + **JS DOM kompletni**:
@@ -34,6 +34,10 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
     HTTP fetch pres ureq sync (10s timeout), data: URI base64 dekoder
     (self-contained), FS fallback. WGSL mode 4 sample image_tex.
     push_image emit + UV bounds tracking.
+  - DOM/JS modern APIs: EventTarget constructor, MessageChannel/MessagePort,
+    Notification + permission, ServiceWorker container stub, navigator.locks,
+    requestIdleCallback + IdleDeadline, AbortSignal.timeout/any/abort statics,
+    document.adoptedStyleSheets pool.
 
 ## Test runner
 
