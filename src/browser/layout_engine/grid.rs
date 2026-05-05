@@ -297,8 +297,10 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                 }}
                 item_placements.push((row, col, span_row, span_col));
             }
+            // Track ktere col_tracks byly item-driven (single-span req nebo multispan distribution)
+            // - tyto neoverwritnout pri redistribute.
+            let mut item_driven: Vec<bool> = vec![false; cols];
             // Pro kazdy item span 1 col, kdyz fr a explicit_width > current track, expand.
-            // Iterate vicekrat, protoze expansion v jednom col snizi zbyle pro ostatni fr.
             for _iter in 0..3 {
                 let mut changed = false;
                 let fixed_total: f32 = (0..cols).map(|i| if !is_fr_track[i] { col_tracks[i] } else { 0.0 }).sum();
@@ -316,7 +318,6 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                             if let Some(w) = item.explicit_width {
                                 if w > req { req = w; }
                             }
-                            // Text intrinsic max-content (fr roste do max-content).
                             if item.taffy_mode {
                                 if let Some(t) = &item.text {
                                     let tw = t.chars().filter(|c| !matches!(*c, '\u{200B}' | ' ' | '\n' | '\t')).count() as f32 * 10.0;
@@ -329,11 +330,15 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                         col_tracks[c_idx] = req;
                         available_for_fr -= req;
                         active_fr_total -= fr_factors[c_idx];
+                        item_driven[c_idx] = true;
                         changed = true;
+                    } else if item_driven[c_idx] {
+                        // Mark cols already exempt z redistribute (vc. predchozich iterations).
+                        available_for_fr -= col_tracks[c_idx];
+                        active_fr_total -= fr_factors[c_idx];
                     }
                 }
-                // Multi-span items: kdyz item span > 1 a explicit_width > suma tracku v spanu,
-                // distribute extra mezi fr tracky v spanu (proporc. fr factoru, equal pri sum=0).
+                // Multi-span items.
                 for (i, &real_idx) in in_flow.iter().enumerate() {
                     let (_, col, _, span_col) = item_placements[i];
                     if span_col <= 1 { continue; }
@@ -342,37 +347,37 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                         let span_gap = col_gap * (span_col.saturating_sub(1) as f32);
                         let needed = w - span_sum - span_gap;
                         if needed > 0.0 {
-                            // Najdi fr tracky v spanu.
                             let fr_in_span: Vec<usize> = (col..(col+span_col)).filter(|&c| is_fr_track.get(c).copied().unwrap_or(false)).collect();
                             if !fr_in_span.is_empty() {
                                 let fr_sum_span: f32 = fr_in_span.iter().map(|&c| fr_factors[c]).sum();
                                 if fr_sum_span > 0.0 {
                                     for &c in &fr_in_span {
                                         col_tracks[c] += needed * fr_factors[c] / fr_sum_span;
+                                        item_driven[c] = true;
                                     }
                                 } else {
-                                    // 0fr - rozdel rovnomerne.
                                     let share = needed / fr_in_span.len() as f32;
-                                    for &c in &fr_in_span { col_tracks[c] += share; }
+                                    for &c in &fr_in_span {
+                                        col_tracks[c] += share;
+                                        item_driven[c] = true;
+                                    }
                                 }
                                 changed = true;
                             }
                         }
                     }
                 }
-                // Redistribute zbytek mezi fr tracky, ktere jeste nejsou expanded nad ratio.
+                // Redistribute zbytek mezi non-item-driven fr tracky.
                 if active_fr_total > 0.0 && available_for_fr >= 0.0 {
-                    let fr_size = available_for_fr / active_fr_total;
+                    let fr_size = available_for_fr / active_fr_total.max(1.0);
                     for c_idx in 0..cols {
+                        if item_driven[c_idx] { continue; }
                         let f = fr_factors[c_idx];
                         if f > 0.0 {
                             let new_size = fr_size * f;
-                            // Jen nastav, pokud item-driven expansion neni vetsi.
-                            if (col_tracks[c_idx] - new_size).abs() > 0.01 && new_size > col_tracks[c_idx] {
+                            if (col_tracks[c_idx] - new_size).abs() > 0.01 {
                                 col_tracks[c_idx] = new_size;
                                 changed = true;
-                            } else if !changed && (col_tracks[c_idx] - new_size).abs() > 0.01 {
-                                col_tracks[c_idx] = new_size;
                             }
                         }
                     }
