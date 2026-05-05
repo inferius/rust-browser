@@ -459,50 +459,77 @@ fn resolve_flexible_lengths(items: &[FlexItem], indices: &[usize], container_mai
     let mut frozen: Vec<bool> = vec![false; count];
     let growing = total_free > 0.0;
 
-    // Iterativne distribuovat free a freeze min/max violators
+    // Iterativne distribuovat free a freeze min/max violators per CSS Flexbox §9.7.4
     for _ in 0..count + 1 {
-        // Free space = container - frozen sizes - flexible base sizes - margin - gap
-        let used: f32 = indices.iter().enumerate()
-            .map(|(k, &i)| if frozen[k] { sizes[k] } else { items[i].main_size })
+        let frozen_sum: f32 = indices.iter().enumerate()
+            .filter(|(k, _)| frozen[*k])
+            .map(|(k, _)| sizes[k])
             .sum();
-        let free = container_main - used - total_gap - total_margins;
+        let unfrozen_base: f32 = indices.iter().enumerate()
+            .filter(|(k, _)| !frozen[*k])
+            .map(|(_, &i)| items[i].main_size)
+            .sum();
+        let free = container_main - frozen_sum - unfrozen_base - total_gap - total_margins;
         let total_factor: f32 = indices.iter().enumerate()
             .filter(|(k, _)| !frozen[*k])
             .map(|(_, &i)| if growing { items[i].flex_grow } else { items[i].flex_shrink * items[i].main_size })
             .sum();
 
-        if total_factor <= 0.0 || (free.abs() < 0.01 && !sizes.iter().enumerate().any(|(k, &s)| !frozen[k] && (s < items[indices[k]].min_main || s > items[indices[k]].max_main))) {
-            // No more flexing
+        if total_factor <= 0.0 {
+            // Nothing flexible - freeze all unfrozen at base
+            for (k, _) in indices.iter().enumerate() {
+                if !frozen[k] {
+                    sizes[k] = items[indices[k]].main_size;
+                    frozen[k] = true;
+                }
+            }
             break;
         }
 
-        // Distribute na ne-frozen
+        // Distribute free na ne-frozen
         for (k, &i) in indices.iter().enumerate() {
             if frozen[k] { continue; }
             let factor = if growing { items[i].flex_grow } else { items[i].flex_shrink * items[i].main_size };
-            if total_factor > 0.0 {
-                sizes[k] = items[i].main_size + free * (factor / total_factor);
-            }
+            sizes[k] = items[i].main_size + free * (factor / total_factor);
         }
 
-        // Clamp + freeze violators (min > max safely)
-        let mut any_violation = false;
+        // Compute violations + clamp
+        let mut violation_sum: f32 = 0.0;
+        let mut violations: Vec<(usize, f32)> = Vec::new(); // (k, clamped_size)
         for (k, &i) in indices.iter().enumerate() {
             if frozen[k] { continue; }
             let original = sizes[k];
             let lo = items[i].min_main.max(0.0);
             let hi = items[i].max_main.max(lo);
             let clamped = original.clamp(lo, hi);
-            if (clamped - original).abs() > 0.01 {
-                sizes[k] = clamped;
-                frozen[k] = true;
-                any_violation = true;
-            }
+            let diff = clamped - original;
+            violation_sum += diff;
+            sizes[k] = clamped;
+            violations.push((k, clamped));
         }
-        if !any_violation {
-            // Vsechny ne-frozen passed clamp, freeze them all
-            for f in &mut frozen { *f = true; }
+
+        if violations.is_empty() { break; }
+
+        if violation_sum.abs() < 0.01 {
+            // No net violation - freeze all
+            for (k, _) in &violations { frozen[*k] = true; }
             break;
+        } else if violation_sum > 0.0 {
+            // Positive = min violators (clamped UP) - freeze those
+            for (k, _) in &violations {
+                let i = indices[*k];
+                if items[i].min_main.max(0.0) > 0.0 && (sizes[*k] - items[i].min_main).abs() < 0.01 {
+                    frozen[*k] = true;
+                }
+            }
+        } else {
+            // Negative = max violators (clamped DOWN) - freeze those
+            for (k, _) in &violations {
+                let i = indices[*k];
+                if items[i].max_main.is_finite() && (sizes[*k] - items[i].max_main).abs() < 0.01 {
+                    frozen[*k] = true;
+                }
+            }
         }
     }
 
