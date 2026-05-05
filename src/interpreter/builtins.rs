@@ -2268,8 +2268,88 @@ pub fn setup_builtins(
         Ok(JsValue::Object(obj))
     }));
 
-    e.define("ResizeObserver", make_observer("ResizeObserver"));
-    e.define("IntersectionObserver", make_observer("IntersectionObserver"));
+    // ResizeObserver - stub s seznamem observed targets, callback invokovana
+    // pri manualnim trigger() (testovaci helper).
+    e.define("ResizeObserver", native("ResizeObserver", move |args| {
+        let cb = args.into_iter().next().unwrap_or(JsValue::Undefined);
+        let targets: Rc<RefCell<Vec<JsValue>>> = Rc::new(RefCell::new(Vec::new()));
+        let obj = std::rc::Rc::new(std::cell::RefCell::new(JsObject::new()));
+        obj.borrow_mut().set("__observer_kind__".into(), JsValue::Str("ResizeObserver".into()));
+        obj.borrow_mut().set("__ro_callback__".into(), cb);
+        let t1 = Rc::clone(&targets);
+        obj.borrow_mut().set("observe".into(), native("observe", move |a| {
+            let target = a.into_iter().next().unwrap_or(JsValue::Undefined);
+            t1.borrow_mut().push(target);
+            Ok(JsValue::Undefined)
+        }));
+        let t2 = Rc::clone(&targets);
+        obj.borrow_mut().set("unobserve".into(), native("unobserve", move |a| {
+            let target = a.into_iter().next().unwrap_or(JsValue::Undefined);
+            t2.borrow_mut().retain(|x| {
+                match (x, &target) {
+                    (JsValue::DomNode(a), JsValue::DomNode(b)) => !Rc::ptr_eq(a, b),
+                    _ => true,
+                }
+            });
+            Ok(JsValue::Undefined)
+        }));
+        let t3 = Rc::clone(&targets);
+        obj.borrow_mut().set("disconnect".into(), native("disconnect", move |_| {
+            t3.borrow_mut().clear();
+            Ok(JsValue::Undefined)
+        }));
+        // Test helper: observer.targets - array of observed elements
+        obj.borrow_mut().set("__targets__".into(), JsValue::Array(Rc::clone(&targets)));
+        obj.borrow_mut().set("takeRecords".into(), native("takeRecords", |_|
+            Ok(JsValue::Array(Rc::new(RefCell::new(Vec::new()))))));
+        Ok(JsValue::Object(obj))
+    }));
+    e.define("IntersectionObserver", native("IntersectionObserver", move |args| {
+        let mut it = args.into_iter();
+        let cb = it.next().unwrap_or(JsValue::Undefined);
+        let opts = it.next().unwrap_or(JsValue::Undefined);
+        let targets: Rc<RefCell<Vec<JsValue>>> = Rc::new(RefCell::new(Vec::new()));
+        let obj = std::rc::Rc::new(std::cell::RefCell::new(JsObject::new()));
+        obj.borrow_mut().set("__observer_kind__".into(), JsValue::Str("IntersectionObserver".into()));
+        obj.borrow_mut().set("__io_callback__".into(), cb);
+        obj.borrow_mut().set("root".into(),
+            if let JsValue::Object(o) = &opts {
+                o.borrow().props.get("root").cloned().unwrap_or(JsValue::Null)
+            } else { JsValue::Null });
+        obj.borrow_mut().set("rootMargin".into(),
+            if let JsValue::Object(o) = &opts {
+                o.borrow().props.get("rootMargin").cloned()
+                    .unwrap_or(JsValue::Str("0px".into()))
+            } else { JsValue::Str("0px".into()) });
+        obj.borrow_mut().set("thresholds".into(),
+            JsValue::Array(Rc::new(RefCell::new(vec![JsValue::Number(0.0)]))));
+        let t1 = Rc::clone(&targets);
+        obj.borrow_mut().set("observe".into(), native("observe", move |a| {
+            let target = a.into_iter().next().unwrap_or(JsValue::Undefined);
+            t1.borrow_mut().push(target);
+            Ok(JsValue::Undefined)
+        }));
+        let t2 = Rc::clone(&targets);
+        obj.borrow_mut().set("unobserve".into(), native("unobserve", move |a| {
+            let target = a.into_iter().next().unwrap_or(JsValue::Undefined);
+            t2.borrow_mut().retain(|x| {
+                match (x, &target) {
+                    (JsValue::DomNode(a), JsValue::DomNode(b)) => !Rc::ptr_eq(a, b),
+                    _ => true,
+                }
+            });
+            Ok(JsValue::Undefined)
+        }));
+        let t3 = Rc::clone(&targets);
+        obj.borrow_mut().set("disconnect".into(), native("disconnect", move |_| {
+            t3.borrow_mut().clear();
+            Ok(JsValue::Undefined)
+        }));
+        obj.borrow_mut().set("__targets__".into(), JsValue::Array(Rc::clone(&targets)));
+        obj.borrow_mut().set("takeRecords".into(), native("takeRecords", |_|
+            Ok(JsValue::Array(Rc::new(RefCell::new(Vec::new()))))));
+        Ok(JsValue::Object(obj))
+    }));
     e.define("PerformanceObserver", make_observer("PerformanceObserver"));
 
     // MutationObserver - real implementation s shared registry

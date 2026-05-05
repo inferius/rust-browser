@@ -741,3 +741,64 @@ fn form_submit_event_has_target() {
         panic!("ocekavan string");
     }
 }
+
+#[test]
+fn resize_observer_observes_targets() {
+    let code = r#"
+        const ro = new ResizeObserver(() => {});
+        const a = document.createElement("div");
+        const b = document.createElement("div");
+        ro.observe(a);
+        ro.observe(b);
+        return ro.__targets__.length;
+    "#;
+    assert_eq!(as_num(run(code)), 2.0);
+}
+
+#[test]
+fn resize_observer_unobserve_removes() {
+    let code = r#"
+        const ro = new ResizeObserver(() => {});
+        const a = document.createElement("div");
+        const b = document.createElement("div");
+        ro.observe(a);
+        ro.observe(b);
+        ro.unobserve(a);
+        return ro.__targets__.length;
+    "#;
+    assert_eq!(as_num(run(code)), 1.0);
+}
+
+#[test]
+fn resize_observer_disconnect_clears() {
+    let code = r#"
+        const ro = new ResizeObserver(() => {});
+        ro.observe(document.createElement("div"));
+        ro.observe(document.createElement("div"));
+        ro.disconnect();
+        return ro.__targets__.length;
+    "#;
+    assert_eq!(as_num(run(code)), 0.0);
+}
+
+#[test]
+fn intersection_observer_options_stored() {
+    let code = r#"
+        const io = new IntersectionObserver(() => {}, { rootMargin: "10px" });
+        return io.rootMargin;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "10px");
+    } else {
+        panic!("ocekavan string");
+    }
+}
+
+#[test]
+fn intersection_observer_thresholds_default() {
+    let code = r#"
+        const io = new IntersectionObserver(() => {});
+        return io.thresholds.length;
+    "#;
+    assert_eq!(as_num(run(code)), 1.0);
+}
