@@ -398,6 +398,16 @@ mod tests {
             child.rect.x = inner_x + m_l;
             child.rect.y = cursor_y + m_t;
             child.rect.width = w;
+            // Relative position offset (top/left/right/bottom): top wins nad bottom, left nad right.
+            // V CSS jen pri position:relative; v taffy fixturach se aplikuje vzdy kdyz set.
+            let off_x = if let Some(l) = child.offset_left { l }
+                        else if let Some(r) = child.offset_right { -r }
+                        else { 0.0 };
+            let off_y = if let Some(t) = child.offset_top { t }
+                        else if let Some(b) = child.offset_bottom { -b }
+                        else { 0.0 };
+            child.rect.x += off_x;
+            child.rect.y += off_y;
             // Aspect-ratio: dopocet height z width
             child.rect.height = if let Some(h) = child.explicit_height {
                 h
