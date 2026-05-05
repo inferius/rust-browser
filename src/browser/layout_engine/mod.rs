@@ -37,8 +37,6 @@ pub fn layout_absolute_child(child: &mut LayoutBox, parent_x: f32, parent_y: f32
         if ar > 0.0 { w / ar } else { 0.0 }
     } else { 0.0 };
     // Aspect ratio override pri "fill" sizing (inset bez explicit dimensi).
-    // Spec: aspect-ratio override height kdyz width explicit/inset, naopak.
-    // Pri obou inset bez explicit -> aspect ratio aplikuje na width (drz width z insetu, h dopocitaj).
     if let Some(ar) = child.aspect_ratio {
         if ar > 0.0 {
             let has_explicit_w = child.explicit_width.is_some();
@@ -48,7 +46,6 @@ pub fn layout_absolute_child(child: &mut LayoutBox, parent_x: f32, parent_y: f32
             } else if has_explicit_h && !has_explicit_w {
                 w = h * ar;
             } else if !has_explicit_w && !has_explicit_h {
-                // Bez explicit: bere width z insetu (mainly), h = w/ar.
                 if w > 0.0 {
                     h = w / ar;
                 } else if h > 0.0 {
@@ -57,6 +54,30 @@ pub fn layout_absolute_child(child: &mut LayoutBox, parent_x: f32, parent_y: f32
             }
         }
     }
+    // Apply min/max width/height + dopocet drugeho rozmeru z aspect-ratio kdyz min/max active
+    let cw_min = crate::browser::layout::parse_length(&child.min_width_v);
+    let cw_max = if child.max_width_v.is_empty() { f32::INFINITY } else { crate::browser::layout::parse_length(&child.max_width_v) };
+    let ch_min = crate::browser::layout::parse_length(&child.min_height_v);
+    let ch_max = if child.max_height_v.is_empty() { f32::INFINITY } else { crate::browser::layout::parse_length(&child.max_height_v) };
+    if cw_min > 0.0 { w = w.max(cw_min); }
+    if ch_min > 0.0 { h = h.max(ch_min); }
+    w = w.min(cw_max);
+    h = h.min(ch_max);
+    // Pokud ar set a jen jeden rozmer ma min/max-effect, dopocet drugeho.
+    if let Some(ar) = child.aspect_ratio {
+        if ar > 0.0 {
+            let has_explicit_w = child.explicit_width.is_some();
+            let has_explicit_h = child.explicit_height.is_some();
+            // Pokud min-height vynutil h ale w je 0 a nema explicit, dopocti w
+            if !has_explicit_w && w == 0.0 && h > 0.0 { w = h * ar; }
+            if !has_explicit_h && h == 0.0 && w > 0.0 { h = w / ar; }
+        }
+    }
+    // Druhe kolo min/max po aspect ratio dopoctu
+    if cw_min > 0.0 { w = w.max(cw_min); }
+    if ch_min > 0.0 { h = h.max(ch_min); }
+    w = w.min(cw_max);
+    h = h.min(ch_max);
     child.rect.width = w;
     child.rect.height = h;
     let m_l = child.margin_left.unwrap_or(child.margin);

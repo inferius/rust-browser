@@ -397,7 +397,7 @@ mod tests {
                 stats.pass += 1;
             } else {
                 stats.fail += 1;
-                if stats.failed_examples.len() < 3 {
+                if stats.failed_examples.len() < 30 {
                     stats.failed_examples.push((fname.clone(), describe_diff(&input_box, &exp)));
                 }
             }
@@ -543,7 +543,7 @@ mod tests {
             100.0 * stats.pass as f32 / stats.total.max(1) as f32,
             stats.fail, stats.skip
         );
-        for (n, d) in stats.failed_examples.iter().take(3) {
+        for (n, d) in stats.failed_examples.iter().take(20) {
             println!("  FAIL {}: {}", n, d);
         }
         assert!(stats.total > 0);
