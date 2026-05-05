@@ -479,11 +479,16 @@ mod tests {
                                  if ar > 0.0 { h * ar } else { (inner_w - m_l - m_r).max(0.0) }
                              }
                              else { (inner_w - m_l - m_r).max(0.0) };
-            // Apply min/max width
+            // Apply min/max width + padding+border floor
             let cw_min = crate::browser::layout::parse_length(&child.min_width_v);
             let cw_max = if child.max_width_v.is_empty() { f32::INFINITY } else { crate::browser::layout::parse_length(&child.max_width_v) };
+            let pb_lc = child.padding_left.unwrap_or(child.padding) + child.border_left_width.unwrap_or(child.border_width);
+            let pb_rc = child.padding_right.unwrap_or(child.padding) + child.border_right_width.unwrap_or(child.border_width);
+            let pb_tc = child.padding_top.unwrap_or(child.padding) + child.border_top_width.unwrap_or(child.border_width);
+            let pb_bc = child.padding_bottom.unwrap_or(child.padding) + child.border_bottom_width.unwrap_or(child.border_width);
             base_w = base_w.min(cw_max);
             if cw_min > 0.0 { base_w = base_w.max(cw_min); }
+            base_w = base_w.max(pb_lc + pb_rc);
             // margin auto centruje (a/a) nebo posune k jedne strane
             let free_x = (inner_w - base_w - m_l - m_r).max(0.0);
             let extra_l = if auto_l && auto_r { free_x / 2.0 }
@@ -525,6 +530,7 @@ mod tests {
             let h_before = h_val;
             h_val = h_val.min(ch_max);
             if ch_min > 0.0 { h_val = h_val.max(ch_min); }
+            h_val = h_val.max(pb_tc + pb_bc);
             // Pokud aspect-ratio + max/min-height zmenila h, prepocti w aby zachovavalo ratio
             // (jen kdyz w neni explicit a w byl odvozen z fill nebo aspect).
             if !has_explicit_h && child.aspect_ratio.is_some() && (h_val - h_before).abs() > 0.01 {

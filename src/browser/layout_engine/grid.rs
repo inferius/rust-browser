@@ -343,13 +343,20 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         let stretch_h = !has_h && (als.is_empty() || als == "stretch" || als == "normal");
         let mut final_w = if stretch_w { cw_avail } else { item_w };
         let mut final_h = if stretch_h { ch_avail } else { item_h };
-        // Apply min/max
+        // Apply min/max + padding+border floor (item nemuze byt mensi nez padding+border).
         let cw_min = super::super::layout::parse_length(&child.min_width_v);
         let cw_max = if child.max_width_v.is_empty() { f32::INFINITY } else { super::super::layout::parse_length(&child.max_width_v) };
         let ch_min = super::super::layout::parse_length(&child.min_height_v);
         let ch_max = if child.max_height_v.is_empty() { f32::INFINITY } else { super::super::layout::parse_length(&child.max_height_v) };
+        let pb_l = child.padding_left.unwrap_or(child.padding) + child.border_left_width.unwrap_or(child.border_width);
+        let pb_r = child.padding_right.unwrap_or(child.padding) + child.border_right_width.unwrap_or(child.border_width);
+        let pb_t = child.padding_top.unwrap_or(child.padding) + child.border_top_width.unwrap_or(child.border_width);
+        let pb_b = child.padding_bottom.unwrap_or(child.padding) + child.border_bottom_width.unwrap_or(child.border_width);
+        let min_w_floor = pb_l + pb_r;
+        let min_h_floor = pb_t + pb_b;
         final_w = final_w.min(cw_max);
         if cw_min > 0.0 { final_w = final_w.max(cw_min); }
+        final_w = final_w.max(min_w_floor);
         // Aspect-ratio override pri stretch + jeden explicit rozmer
         if let Some(ar) = child.aspect_ratio {
             if ar > 0.0 {
@@ -360,6 +367,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         let h_before = final_h;
         final_h = final_h.min(ch_max);
         if ch_min > 0.0 { final_h = final_h.max(ch_min); }
+        final_h = final_h.max(min_h_floor);
         // Pokud max/min-h zmenil h a aspect-ratio set + w neni explicit, prepocti w.
         if !has_w && (final_h - h_before).abs() > 0.01 {
             if let Some(ar) = child.aspect_ratio {
