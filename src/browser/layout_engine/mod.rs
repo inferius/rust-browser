@@ -134,9 +134,11 @@ fn layout_absolute_child_inner(child: &mut LayoutBox, parent_x: f32, parent_y: f
             if !has_explicit_h && h == 0.0 && w > 0.0 { h = w / ar; }
         }
     }
-    // Druhe kolo (po ar) - opet max, pak min.
+    // Druhe kolo (po ar) - opet max, pak min, pak pad+border floor.
     w = w.min(cw_max);
     h = h.min(ch_max);
+    w = w.max(pb_l + pb_r);
+    h = h.max(pb_t + pb_b);
     if cw_min > 0.0 { w = w.max(cw_min); }
     if ch_min > 0.0 { h = h.max(ch_min); }
     child.rect.width = w;
