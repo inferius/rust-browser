@@ -406,8 +406,16 @@ mod tests {
             let m_l = child.margin_left.unwrap_or(child.margin);
             let m_t = child.margin_top.unwrap_or(child.margin);
             let m_r = child.margin_right.unwrap_or(child.margin);
-            let w = child.explicit_width.unwrap_or((inner_w - m_l - m_r).max(0.0));
-            child.rect.x = inner_x + m_l;
+            let auto_l = child.margin_left_auto;
+            let auto_r = child.margin_right_auto;
+            let base_w = child.explicit_width.unwrap_or((inner_w - m_l - m_r).max(0.0));
+            // margin auto centruje (a/a) nebo posune k jedne strane
+            let free_x = (inner_w - base_w - m_l - m_r).max(0.0);
+            let extra_l = if auto_l && auto_r { free_x / 2.0 }
+                          else if auto_l { free_x }
+                          else { 0.0 };
+            let w = base_w;
+            child.rect.x = inner_x + m_l + extra_l;
             child.rect.y = cursor_y + m_t;
             child.rect.width = w;
             // Relative position offset (top/left/right/bottom): top wins nad bottom, left nad right.
