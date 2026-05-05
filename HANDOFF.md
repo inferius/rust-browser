@@ -13,12 +13,31 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 - **Compliance harness** v src/browser/layout_engine/taffy_compliance.rs:
   - XML parser + LayoutBox converter + run_directory + compare_layout
   - 4 testy spousteji vsechny fixtury, vypocitavaji pass-rate
-  - **Aktualni pass-rate: 1492/1988 (75.0%)**
-    * BLOCK:  298/392 (76.0%)
-    * GRID:   325/512 (63.5%)
-    * FLEX:   869/1084 (80.2%)
-  - Iterace 0-99 progress: 18 -> 1017 (50%) -> 1392 (70%) -> 1490 (74.9%) ->
-    1492 (75.0%)
+  - **Aktualni pass-rate: 1566/1988 (78.8%)**
+    * BLOCK:  322/392 (82.1%)
+    * GRID:   335/512 (65.4%)
+    * FLEX:   909/1084 (83.9%)
+  - Iterace 0-118 progress: 18 -> 1017 (50%) -> 1392 (70%) -> 1490 (74.9%) ->
+    1492 (75.0%) -> 1516 (76.3%) -> 1548 (77.9%) -> 1566 (78.8%)
+  - Iter 100-118 wins:
+    * inset percent top/bottom = 0 pri auto parent height
+    * abs auto margin LTR over-constrained: left=0
+    * block intrinsic v abs pre-pass: max child w, sum heights
+    * taffy_mode flag: skip 20px default v leaf empty divech
+    * grid fr-track expansion (item explicit_w > track -> expand)
+    * grid fr multi-span items (distribute extra)
+    * grid 0fr s span items (equal split)
+    * grid auto margins v gridu (center/push override)
+    * flex pre-pass block fallback recurzy (gc flex/grid/block)
+    * flex wrap-reverse cross axis flip
+    * taffy_mode block: nepresahnout pre-set parent height
+    * block sibling margin collapse: max(pos)+min(neg)
+    * block first/all-children chain margin collapse
+    * flex abs static wrap-reverse cross flip
+    * flex abs default cross Stretch -> FlexStart
+    * grid pre_compute_fixed: handle repeat(N,...)
+    * abs display:none -> zero out (flex + grid)
+    * grid-auto-rows/columns/flow parsed
   - Implementovano:
     * Position absolute/fixed (CB padding-box, top/left/right/bottom + inset)
     * Asymmetric padding/border/margin per side
