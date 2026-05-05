@@ -540,15 +540,33 @@ mod tests {
             }
             // Po recursivnim layoutu: kdyz nemel explicit_height, dopocti z content.
             if !has_explicit_h && child.aspect_ratio.is_none() {
-                // Najit max y+h z in-flow children
                 let pad_t_c = child.padding_top.unwrap_or(child.padding) + child.border_top_width.unwrap_or(child.border_width);
                 let pad_b_c = child.padding_bottom.unwrap_or(child.padding) + child.border_bottom_width.unwrap_or(child.border_width);
+                // Margin collapsing: pri no padding/border-top, margin-top prvniho
+                // in-flow grandchildu collapsuje s parent's; podobne bottom.
+                let collapse_top = pad_t_c == 0.0;
+                let collapse_bottom = pad_b_c == 0.0;
+                let mut first_in_flow: Option<usize> = None;
+                let mut last_in_flow: Option<usize> = None;
+                for (gi, gc) in child.children.iter().enumerate() {
+                    if matches!(gc.position, Position::Absolute | Position::Fixed) { continue; }
+                    if matches!(gc.display, Display::None) { continue; }
+                    if first_in_flow.is_none() { first_in_flow = Some(gi); }
+                    last_in_flow = Some(gi);
+                }
                 let mut content_bottom = child.rect.y + pad_t_c;
-                for grandchild in &child.children {
-                    if matches!(grandchild.position, Position::Absolute | Position::Fixed) { continue; }
-                    if matches!(grandchild.display, Display::None) { continue; }
-                    let m_b_g = grandchild.margin_bottom.unwrap_or(grandchild.margin);
-                    let bottom = grandchild.rect.y + grandchild.rect.height + m_b_g;
+                for (gi, gc) in child.children.iter().enumerate() {
+                    if matches!(gc.position, Position::Absolute | Position::Fixed) { continue; }
+                    if matches!(gc.display, Display::None) { continue; }
+                    let m_t_g = gc.margin_top.unwrap_or(gc.margin);
+                    let m_b_g = gc.margin_bottom.unwrap_or(gc.margin);
+                    let mut bottom = gc.rect.y + gc.rect.height;
+                    if collapse_top && first_in_flow == Some(gi) {
+                        bottom -= m_t_g;
+                    }
+                    if !(collapse_bottom && last_in_flow == Some(gi)) {
+                        bottom += m_b_g;
+                    }
                     if bottom > content_bottom { content_bottom = bottom; }
                 }
                 let new_h = content_bottom - child.rect.y + pad_b_c;
