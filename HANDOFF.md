@@ -13,12 +13,12 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 - **Compliance harness** v src/browser/layout_engine/taffy_compliance.rs:
   - XML parser + LayoutBox converter + run_directory + compare_layout
   - 4 testy spousteji vsechny fixtury, vypocitavaji pass-rate
-  - **Aktualni pass-rate: 1360/1988 (68.4%)**
-    * BLOCK:  286/392 (73.0%)
-    * GRID:   277/512 (54.1%)
-    * FLEX:   797/1084 (73.5%)
-  - Iterace 0-71 progress: 18 -> ... -> 1017 (50%) -> 1216 (61%) -> 1293 (65%) ->
-    1338 (67.3%) -> 1354 (68.1%) -> 1360 (68.4%)
+  - **Aktualni pass-rate: 1392/1988 (70.0%)**
+    * BLOCK:  294/392 (75.0%)
+    * GRID:   281/512 (54.9%)
+    * FLEX:   817/1084 (75.4%)
+  - Iterace 0-79 progress: 18 -> ... -> 1017 (50%) -> 1293 (65%) -> 1338 (67.3%) ->
+    1354 (68.1%) -> 1373 (69.1%) -> 1382 (69.5%) -> 1390 (69.9%) -> 1392 (70.0%)
   - Implementovano:
     * Position absolute/fixed (CB padding-box, top/left/right/bottom + inset)
     * Asymmetric padding/border/margin per side
