@@ -44,5 +44,5 @@ winit = "0.30"
 pollster = "0.3"  # block_on bez tokio
 bytemuck = { version = "1.16", features = ["derive"] }  # vertex bytes
 fontdue = "0.9"  # font rasterizer pro glyph atlas
-taffy = "0.5"  # flex/grid layout engine (Servo-grade)
+taffy = "0.10"  # flex/grid layout engine + named grid lines + floats + RTL
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp"] }  # image decoder
