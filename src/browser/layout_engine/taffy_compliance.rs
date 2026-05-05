@@ -447,7 +447,12 @@ mod tests {
             let m_r = child.margin_right.unwrap_or(child.margin);
             let auto_l = child.margin_left_auto;
             let auto_r = child.margin_right_auto;
-            let base_w = child.explicit_width.unwrap_or((inner_w - m_l - m_r).max(0.0));
+            let mut base_w = child.explicit_width.unwrap_or((inner_w - m_l - m_r).max(0.0));
+            // Apply min/max width
+            let cw_min = crate::browser::layout::parse_length(&child.min_width_v);
+            let cw_max = if child.max_width_v.is_empty() { f32::INFINITY } else { crate::browser::layout::parse_length(&child.max_width_v) };
+            base_w = base_w.min(cw_max);
+            if cw_min > 0.0 { base_w = base_w.max(cw_min); }
             // margin auto centruje (a/a) nebo posune k jedne strane
             let free_x = (inner_w - base_w - m_l - m_r).max(0.0);
             let extra_l = if auto_l && auto_r { free_x / 2.0 }
@@ -468,11 +473,17 @@ mod tests {
             child.rect.x += off_x;
             child.rect.y += off_y;
             // Aspect-ratio: dopocet height z width
-            child.rect.height = if let Some(h) = child.explicit_height {
+            let mut h_val = if let Some(h) = child.explicit_height {
                 h
             } else if let Some(ar) = child.aspect_ratio {
                 if ar > 0.0 { child.rect.width / ar } else { 0.0 }
             } else { 0.0 };
+            // Apply min/max height
+            let ch_min = crate::browser::layout::parse_length(&child.min_height_v);
+            let ch_max = if child.max_height_v.is_empty() { f32::INFINITY } else { crate::browser::layout::parse_length(&child.max_height_v) };
+            h_val = h_val.min(ch_max);
+            if ch_min > 0.0 { h_val = h_val.max(ch_min); }
+            child.rect.height = h_val;
             // Recursive
             match child.display {
                 Display::Flex => layout_flex(child),
