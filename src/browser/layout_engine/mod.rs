@@ -38,21 +38,40 @@ fn layout_absolute_child_inner(child: &mut LayoutBox, parent_x: f32, parent_y: f
     let cb_y = parent_y;
     let cb_w = parent_w;
     let cb_h = parent_h;
-    // Width: explicit nebo (right-left) nebo z aspect-ratio nebo 0
+    // Pre-pass intrinsic: pri abs item bez explicit size (a bez plne sady inset) + has children.
+    let needs_w = child.explicit_width.is_none() && !(child.offset_left.is_some() && child.offset_right.is_some());
+    let needs_h = child.explicit_height.is_none() && !(child.offset_top.is_some() && child.offset_bottom.is_some());
+    if (needs_w || needs_h) && !child.children.is_empty() {
+        let saved = child.rect.clone();
+        child.rect.x = 0.0; child.rect.y = 0.0;
+        if needs_w { child.rect.width = 0.0; }
+        if needs_h { child.rect.height = 0.0; }
+        match child.display {
+            Display::Flex => flex::layout_flex(child),
+            Display::Grid => grid::layout_grid(child),
+            _ => {}
+        }
+        let intrinsic_w = if needs_w { child.rect.width } else { saved.width };
+        let intrinsic_h = if needs_h { child.rect.height } else { saved.height };
+        child.rect = saved;
+        if needs_w && intrinsic_w > 0.0 { child.rect.width = intrinsic_w; }
+        if needs_h && intrinsic_h > 0.0 { child.rect.height = intrinsic_h; }
+    }
+    // Width: explicit nebo (right-left) nebo intrinsic z pre-pass nebo aspect-ratio nebo 0
     let mut w = if let Some(w) = child.explicit_width {
         w
     } else if let (Some(l), Some(r)) = (child.offset_left, child.offset_right) {
         (cb_w - l - r).max(0.0)
     } else if let Some(ar) = child.aspect_ratio {
         if let Some(h) = child.explicit_height { if ar > 0.0 { h * ar } else { 0.0 } } else { 0.0 }
-    } else { 0.0 };
+    } else if child.rect.width > 0.0 { child.rect.width } else { 0.0 };
     let mut h = if let Some(h) = child.explicit_height {
         h
     } else if let (Some(t), Some(b)) = (child.offset_top, child.offset_bottom) {
         (cb_h - t - b).max(0.0)
     } else if let Some(ar) = child.aspect_ratio {
         if ar > 0.0 { w / ar } else { 0.0 }
-    } else { 0.0 };
+    } else if child.rect.height > 0.0 { child.rect.height } else { 0.0 };
     // Aspect ratio override pri "fill" sizing (inset bez explicit dimensi).
     if let Some(ar) = child.aspect_ratio {
         if ar > 0.0 {

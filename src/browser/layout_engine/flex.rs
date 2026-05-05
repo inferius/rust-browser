@@ -452,6 +452,23 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         cross_cursor += resolved.cross_size + line_gap + ac_between;
     }
 
+    // 7. Update parent width jen kdyz neni explicit + rect.width = 0 (pre-pass intrinsic).
+    if bx.explicit_width.is_none() && bx.rect.width == 0.0 {
+        let needed_w = if direction.is_row() {
+            let main_used: f32 = resolved_lines.iter()
+                .map(|l| l.main_sizes.iter().enumerate()
+                    .map(|(k, s)| s + items[l.main_sizes.iter().nth(0).map(|_| k).unwrap_or(0)].margin_main_start
+                        + items[l.main_sizes.iter().nth(0).map(|_| k).unwrap_or(0)].margin_main_end)
+                    .sum::<f32>()
+                    + main_gap * (l.main_sizes.len().saturating_sub(1) as f32))
+                .fold(0.0_f32, f32::max);
+            main_used + pad_l + pad_r
+        } else {
+            // Column: cross axis = width
+            total_cross + pad_l + pad_r
+        };
+        bx.rect.width = needed_w;
+    }
     // 7. Update parent height jen kdyz neni explicit set.
     if bx.explicit_height.is_none() {
         let needed = if direction.is_row() {
