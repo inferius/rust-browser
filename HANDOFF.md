@@ -13,14 +13,41 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 - **Compliance harness** v src/browser/layout_engine/taffy_compliance.rs:
   - XML parser + LayoutBox converter + run_directory + compare_layout
   - 4 testy spousteji vsechny fixtury, vypocitavaji pass-rate
-  - **Aktualni pass-rate: 139/1988 (7.0%)** baseline:
-    * BLOCK:   8/392 (2.0%)
-    * GRID:   44/512 (8.6%)
-    * FLEX:   87/1084 (8.0%)
-  - Pass progresion: 18 -> 41 -> 45 -> 69 -> 139 (across 4 iterations)
-  - Cil: postupne zvedat. Pro >50% pass-rate potreba: real abs position,
-    asymmetric padding/margin, content-box vs border-box, percent v all
-    contexts, RTL direction, intrinsic content sizes, baseline alignment.
+  - **Aktualni pass-rate: 1017/1988 (51.2%)** PRES 50%!
+    * BLOCK:  186/392 (47.4%)
+    * GRID:   184/512 (35.9%)
+    * FLEX:   647/1084 (59.7%)
+  - Iterace 0-33 progress: 18 -> 41 -> 45 -> 69 -> 139 -> 194 -> 282 -> 322
+    -> 397 -> 413 -> 427 -> 473 -> 519 -> 529 -> 776 -> 792 -> 810 -> 812 ->
+    837 -> 859 -> 883 -> 893 -> 895 -> 901 -> 943 -> 959 -> 971 -> 991 ->
+    999 -> 1011 -> 1013 -> 1011 -> 1017
+  - Implementovano:
+    * Position absolute/fixed (CB padding-box, top/left/right/bottom + inset)
+    * Asymmetric padding/border/margin per side
+    * Aspect-ratio override v abs sizing
+    * Min/max width/height v abs (min wins nad max)
+    * Margin auto v block + flex (centrovani)
+    * Flex flex-grow/shrink CSS spec algoritmus (freeze violators)
+    * Flex flex-basis (px/percent/auto/content)
+    * Flex align-items default Stretch (CSS spec)
+    * Flex single-line cross = container_cross
+    * Flex multi-line align-content stretch + packing
+    * Flex align-self per item override
+    * Flex item margins (main + cross axis)
+    * Flex abs static position podle justify/align/align-self
+    * Grid track sizing s explicit + implicit rows
+    * Grid placement (grid-row/column-start/end + span)
+    * Grid auto-flow row order s tracking occupied cells
+    * Grid item self alignment (justify-self, align-self)
+    * Grid abs s self alignment
+    * Grid negative free space (overflow rendering)
+    * Box-sizing content-box (default) vs border-box
+    * <text> tag jako node v parseru
+    * Display:none -> 0x0
+    * Default display per directory (taffy_flex/grid/block)
+  - Co zbyva pro >70%: intrinsic content sizes (shrink-to-fit pro abs bez size),
+    baseline alignment, RTL direction, percent v all contexts (margin %),
+    flex item shrink se vsemi spec edge cases, text measurement.
 - Tree: ciste.
 - Branch master, ~290 commitu pred origin/master (NEPUSHOVAT bez vyzvy).
 - **WebGL pipeline DOKONCEN** + **CSS L4-L6 KOMPLET** + **JS DOM kompletni**:
