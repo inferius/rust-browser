@@ -453,6 +453,31 @@ pub struct LayoutBox {
     pub grid_auto_flow: String,
     pub shape_margin: f32,
     pub shape_image_threshold: f32,
+    /// CSS Overflow L4 - scrollbar-gutter: auto | stable [both-edges].
+    pub scrollbar_gutter: String,
+    /// CSS SVG markers - marker-start/mid/end (SVG paths).
+    pub marker_start: String,
+    pub marker_mid: String,
+    pub marker_end: String,
+    /// CSS Backgrounds L4 - background-position-x / -y separately.
+    pub background_position_x: String,
+    pub background_position_y: String,
+    /// CSS Images L3 - image-orientation: from-image | none | <angle>.
+    pub image_orientation: String,
+    /// CSS Text L4 - hyphenate-character / hyphenate-limit-chars.
+    pub hyphenate_character: String,
+    pub hyphenate_limit_chars: String,
+    /// CSS Inline L3 - text-box-trim / text-box-edge.
+    pub text_box_trim: String,
+    pub text_box_edge: String,
+    /// CSS Logical Props L1 - inset shorthand (top right bottom left).
+    pub inset: [Option<f32>; 4],
+    /// CSS Pseudo L4 - dialog / popover anchor positioning extensions
+    pub anchor_default: String,
+    /// CSS Position L3 - position-area: top, top-left, ...
+    pub position_area: String,
+    /// CSS Position L4 - position-try-fallbacks: a, b, c.
+    pub position_try_fallbacks: String,
     /// Box shadow: (offset_x, offset_y, blur, spread, color)
     /// (offset_x, offset_y, blur, spread, color, inset)
     pub box_shadow: Option<(f32, f32, f32, f32, [u8; 4], bool)>,
@@ -662,6 +687,21 @@ impl LayoutBox {
             grid_auto_flow: String::new(),
             shape_margin: 0.0,
             shape_image_threshold: 0.0,
+            scrollbar_gutter: String::new(),
+            marker_start: String::new(),
+            marker_mid: String::new(),
+            marker_end: String::new(),
+            background_position_x: String::new(),
+            background_position_y: String::new(),
+            image_orientation: String::new(),
+            hyphenate_character: String::new(),
+            hyphenate_limit_chars: String::new(),
+            text_box_trim: String::new(),
+            text_box_edge: String::new(),
+            inset: [None; 4],
+            anchor_default: String::new(),
+            position_area: String::new(),
+            position_try_fallbacks: String::new(),
             box_shadow: None,
             transform: None,
             transforms: Vec::new(),
@@ -1204,6 +1244,47 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     }
     if let Some(sit) = s.get("shape-image-threshold") {
         bx.shape_image_threshold = sit.trim().parse().unwrap_or(0.0);
+    }
+    // CSS Overflow L4
+    if let Some(sg) = s.get("scrollbar-gutter") { bx.scrollbar_gutter = sg.trim().to_string(); }
+    // SVG markers
+    if let Some(m) = s.get("marker-start") { bx.marker_start = m.trim().to_string(); }
+    if let Some(m) = s.get("marker-mid") { bx.marker_mid = m.trim().to_string(); }
+    if let Some(m) = s.get("marker-end") { bx.marker_end = m.trim().to_string(); }
+    // CSS Backgrounds L4 - position-x / -y
+    if let Some(bpx) = s.get("background-position-x") { bx.background_position_x = bpx.trim().to_string(); }
+    if let Some(bpy) = s.get("background-position-y") { bx.background_position_y = bpy.trim().to_string(); }
+    // CSS Images L3
+    if let Some(io) = s.get("image-orientation") { bx.image_orientation = io.trim().to_string(); }
+    // hyphenate-* (Text L4)
+    if let Some(hc) = s.get("hyphenate-character") { bx.hyphenate_character = hc.trim().trim_matches('"').trim_matches('\'').to_string(); }
+    if let Some(hlc) = s.get("hyphenate-limit-chars") { bx.hyphenate_limit_chars = hlc.trim().to_string(); }
+    // CSS Inline L3
+    if let Some(t) = s.get("text-box-trim") { bx.text_box_trim = t.trim().to_string(); }
+    if let Some(t) = s.get("text-box-edge") { bx.text_box_edge = t.trim().to_string(); }
+    // CSS Position L3 - position-area / try-fallbacks
+    if let Some(pa) = s.get("position-area") { bx.position_area = pa.trim().to_string(); }
+    if let Some(ptf) = s.get("position-try-fallbacks") { bx.position_try_fallbacks = ptf.trim().to_string(); }
+    if let Some(ad) = s.get("anchor-default") { bx.anchor_default = ad.trim().to_string(); }
+    // inset shorthand: top right bottom left
+    if let Some(ins) = s.get("inset") {
+        let parts: Vec<&str> = ins.split_whitespace().collect();
+        let parse_one = |p: &str| -> Option<f32> {
+            if p == "auto" { return None; }
+            Some(parse_length(p))
+        };
+        match parts.len() {
+            1 => { let v = parse_one(parts[0]); bx.inset = [v, v, v, v]; }
+            2 => { let a = parse_one(parts[0]); let b = parse_one(parts[1]); bx.inset = [a, b, a, b]; }
+            3 => {
+                let a = parse_one(parts[0]); let b = parse_one(parts[1]); let c = parse_one(parts[2]);
+                bx.inset = [a, b, c, b];
+            }
+            _ if parts.len() >= 4 => {
+                bx.inset = [parse_one(parts[0]), parse_one(parts[1]), parse_one(parts[2]), parse_one(parts[3])];
+            }
+            _ => {}
+        }
     }
     // scroll-behavior
     if let Some(sb) = s.get("scroll-behavior") {

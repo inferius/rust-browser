@@ -28,6 +28,35 @@ pub struct Stylesheet {
     pub scopes: Vec<ScopeRule>,
     /// @starting-style { rules } - styly aplikovane na zacatku transition.
     pub starting_style_rules: Vec<Rule>,
+    /// @font-palette-values --name { font-family / base-palette / override-colors }.
+    pub font_palettes: Vec<FontPalette>,
+    /// @counter-style name { ... } - custom counter.
+    pub counter_styles: Vec<CounterStyle>,
+    /// @view-transition { navigation: auto } - global config.
+    pub view_transition_navigation: Option<String>,
+    /// @page rules - per-page declarations pro print.
+    pub page_rules: Vec<Rule>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct FontPalette {
+    pub name: String,
+    pub font_family: String,
+    pub base_palette: String,
+    pub override_colors: Vec<(u32, String)>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct CounterStyle {
+    pub name: String,
+    pub system: String,
+    pub symbols: String,
+    pub suffix: String,
+    pub prefix: String,
+    pub range: String,
+    pub pad: String,
+    pub fallback: String,
+    pub negative: String,
 }
 
 /// CSS @scope at-rule - root + optional limit.
@@ -246,6 +275,10 @@ pub fn parse_stylesheet(source: &str) -> Stylesheet {
     let mut registered_properties: Vec<RegisteredProperty> = Vec::new();
     let mut scopes: Vec<ScopeRule> = Vec::new();
     let mut starting_style_rules: Vec<Rule> = Vec::new();
+    let mut font_palettes: Vec<FontPalette> = Vec::new();
+    let mut counter_styles: Vec<CounterStyle> = Vec::new();
+    let mut view_transition_navigation: Option<String> = None;
+    let mut page_rules: Vec<Rule> = Vec::new();
     let mut chars = source.chars().peekable();
 
     while chars.peek().is_some() {
@@ -349,19 +382,64 @@ pub fn parse_stylesheet(source: &str) -> Stylesheet {
             // @starting-style { rules } - styly pro transition start state
             let nested = parse_stylesheet(&block_str);
             starting_style_rules.extend(nested.rules);
-        } else if selectors_str.starts_with("@page") {
-            // @page rules - pro print, zatim no-op
-            let _ = block_str;
         } else if selectors_str.starts_with("@document") {
             // Mozilla @document - rules unwrap (treat as if matched)
             let nested = parse_stylesheet(&block_str);
             rules.extend(nested.rules);
         } else if selectors_str.starts_with("@view-transition") {
-            // @view-transition { navigation: auto } - parsing only zatim
-            let _ = block_str;
+            // @view-transition { navigation: auto }
+            for d in parse_decls_str(&block_str) {
+                if d.property == "navigation" {
+                    view_transition_navigation = Some(d.value.trim().to_string());
+                }
+            }
         } else if selectors_str.starts_with("@counter-style") {
-            // @counter-style name { system, symbols, ... } - parse only zatim
-            let _ = block_str;
+            let name = selectors_str.trim_start_matches("@counter-style").trim().to_string();
+            let mut cs = CounterStyle { name, ..Default::default() };
+            for d in parse_decls_str(&block_str) {
+                match d.property.as_str() {
+                    "system" => cs.system = d.value.trim().to_string(),
+                    "symbols" => cs.symbols = d.value.trim().to_string(),
+                    "suffix" => cs.suffix = d.value.trim().to_string(),
+                    "prefix" => cs.prefix = d.value.trim().to_string(),
+                    "range" => cs.range = d.value.trim().to_string(),
+                    "pad" => cs.pad = d.value.trim().to_string(),
+                    "fallback" => cs.fallback = d.value.trim().to_string(),
+                    "negative" => cs.negative = d.value.trim().to_string(),
+                    _ => {}
+                }
+            }
+            counter_styles.push(cs);
+        } else if selectors_str.starts_with("@font-palette-values") {
+            // @font-palette-values --name { font-family / base-palette / override-colors }
+            let name = selectors_str.trim_start_matches("@font-palette-values").trim().to_string();
+            let mut fp = FontPalette { name, ..Default::default() };
+            for d in parse_decls_str(&block_str) {
+                match d.property.as_str() {
+                    "font-family" => fp.font_family = d.value.trim().to_string(),
+                    "base-palette" => fp.base_palette = d.value.trim().to_string(),
+                    "override-colors" => {
+                        // "0 red, 1 blue, 2 green" -> parsuje pairs
+                        for part in d.value.split(',') {
+                            let part = part.trim();
+                            if let Some(idx) = part.find(' ') {
+                                let (n, c) = part.split_at(idx);
+                                if let Ok(num) = n.parse::<u32>() {
+                                    fp.override_colors.push((num, c.trim().to_string()));
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            font_palettes.push(fp);
+        } else if selectors_str.starts_with("@page") {
+            let decls = parse_decls_str(&block_str);
+            page_rules.push(Rule {
+                selectors: vec![],
+                declarations: decls,
+            });
         } else if selectors_str.starts_with("@font-feature-values") {
             // @font-feature-values FontName { @styleset {} ... } - parse only
             let _ = block_str;
@@ -411,6 +489,7 @@ pub fn parse_stylesheet(source: &str) -> Stylesheet {
         rules, media_queries, keyframes, container_queries, font_faces,
         layer_order, layered_rules, registered_properties,
         scopes, starting_style_rules,
+        font_palettes, counter_styles, view_transition_navigation, page_rules,
     }
 }
 

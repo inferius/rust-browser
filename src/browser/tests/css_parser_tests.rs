@@ -412,3 +412,43 @@ fn parse_scope_header_with_to() {
     assert_eq!(root, ".foo");
     assert_eq!(limit.as_deref(), Some(".bar"));
 }
+
+#[test]
+fn parse_at_font_palette_values() {
+    let s = parse_stylesheet(
+        "@font-palette-values --my { font-family: Foo; base-palette: 0; override-colors: 0 red, 1 blue; }"
+    );
+    assert_eq!(s.font_palettes.len(), 1);
+    let fp = &s.font_palettes[0];
+    assert_eq!(fp.name, "--my");
+    assert_eq!(fp.font_family, "Foo");
+    assert_eq!(fp.base_palette, "0");
+    assert_eq!(fp.override_colors.len(), 2);
+    assert_eq!(fp.override_colors[0], (0, "red".to_string()));
+    assert_eq!(fp.override_colors[1], (1, "blue".to_string()));
+}
+
+#[test]
+fn parse_at_counter_style() {
+    let s = parse_stylesheet(
+        "@counter-style thumbs { system: cyclic; symbols: \"\\1F44D\"; suffix: \" \"; }"
+    );
+    assert_eq!(s.counter_styles.len(), 1);
+    let cs = &s.counter_styles[0];
+    assert_eq!(cs.name, "thumbs");
+    assert_eq!(cs.system, "cyclic");
+    assert!(cs.symbols.contains("1F44D"));
+}
+
+#[test]
+fn parse_at_view_transition_navigation() {
+    let s = parse_stylesheet("@view-transition { navigation: auto; }");
+    assert_eq!(s.view_transition_navigation.as_deref(), Some("auto"));
+}
+
+#[test]
+fn parse_at_page_basic() {
+    let s = parse_stylesheet("@page { margin: 1cm; size: A4; }");
+    assert_eq!(s.page_rules.len(), 1);
+    assert!(s.page_rules[0].declarations.iter().any(|d| d.property == "margin"));
+}

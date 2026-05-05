@@ -272,6 +272,113 @@ fn shape_outside_circle() {
 }
 
 #[test]
+fn scrollbar_gutter_stable() {
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade, layout};
+    let doc = parse_html(r#"<html><body><div></div></body></html>"#, "");
+    let css = parse_stylesheet("div { scrollbar-gutter: stable both-edges; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+    let d = find_box_by_tag(&root, "div").unwrap();
+    assert_eq!(d.scrollbar_gutter, "stable both-edges");
+}
+
+#[test]
+fn svg_markers_parsed() {
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade, layout};
+    let doc = parse_html(r#"<html><body><div></div></body></html>"#, "");
+    let css = parse_stylesheet(r#"div { marker-start: url(#start); marker-mid: url(#mid); marker-end: url(#end); }"#);
+    let map = cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+    let d = find_box_by_tag(&root, "div").unwrap();
+    assert!(d.marker_start.contains("start"));
+    assert!(d.marker_mid.contains("mid"));
+    assert!(d.marker_end.contains("end"));
+}
+
+#[test]
+fn background_position_xy_split() {
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade, layout};
+    let doc = parse_html(r#"<html><body><div></div></body></html>"#, "");
+    let css = parse_stylesheet("div { background-position-x: right; background-position-y: top; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+    let d = find_box_by_tag(&root, "div").unwrap();
+    assert_eq!(d.background_position_x, "right");
+    assert_eq!(d.background_position_y, "top");
+}
+
+#[test]
+fn image_orientation_from_image() {
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade, layout};
+    let doc = parse_html(r#"<html><body><img></body></html>"#, "");
+    let css = parse_stylesheet("img { image-orientation: from-image; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+    let img = find_box_by_tag(&root, "img").unwrap();
+    assert_eq!(img.image_orientation, "from-image");
+}
+
+#[test]
+fn hyphenate_character_quoted() {
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade, layout};
+    let doc = parse_html(r#"<html><body><p></p></body></html>"#, "");
+    let css = parse_stylesheet(r#"p { hyphenate-character: "-"; hyphenate-limit-chars: 6 3 3; }"#);
+    let map = cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+    let p = find_box_by_tag(&root, "p").unwrap();
+    assert_eq!(p.hyphenate_character, "-");
+    assert_eq!(p.hyphenate_limit_chars, "6 3 3");
+}
+
+#[test]
+fn text_box_trim_edge() {
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade, layout};
+    let doc = parse_html(r#"<html><body><span></span></body></html>"#, "");
+    let css = parse_stylesheet("span { text-box-trim: trim-both; text-box-edge: cap alphabetic; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+    let s = find_box_by_tag(&root, "span").unwrap();
+    assert_eq!(s.text_box_trim, "trim-both");
+    assert_eq!(s.text_box_edge, "cap alphabetic");
+}
+
+#[test]
+fn position_area_keyword() {
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade, layout};
+    let doc = parse_html(r#"<html><body><div></div></body></html>"#, "");
+    let css = parse_stylesheet("div { position-area: top-left; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+    let d = find_box_by_tag(&root, "div").unwrap();
+    assert_eq!(d.position_area, "top-left");
+}
+
+#[test]
+fn inset_shorthand_4_values() {
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade, layout};
+    let doc = parse_html(r#"<html><body><div></div></body></html>"#, "");
+    let css = parse_stylesheet("div { inset: 10px 20px 30px 40px; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+    let d = find_box_by_tag(&root, "div").unwrap();
+    assert_eq!(d.inset[0], Some(10.0));
+    assert_eq!(d.inset[1], Some(20.0));
+    assert_eq!(d.inset[2], Some(30.0));
+    assert_eq!(d.inset[3], Some(40.0));
+}
+
+#[test]
+fn inset_shorthand_auto() {
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade, layout};
+    let doc = parse_html(r#"<html><body><div></div></body></html>"#, "");
+    let css = parse_stylesheet("div { inset: auto; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+    let d = find_box_by_tag(&root, "div").unwrap();
+    assert!(d.inset.iter().all(|i| i.is_none()));
+}
+
+#[test]
 fn parse_color_modern_rgb_space_syntax() {
     // Modern syntax: mezery + lomitko alpha
     assert_eq!(layout::parse_color("rgb(255 0 0)"), Some([255, 0, 0, 255]));
