@@ -5,8 +5,8 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 ## Stav
 
 - Build: **OK**, 0 errors, 0 warnings.
-- Tests: **1953 passed, 0 failed, 3 ignored**.
-- Posledni commit: `992cfdb DOMException + ImageData + OffscreenCanvas + Path2D`.
+- Tests: **1983 passed, 0 failed, 3 ignored**.
+- Posledni commit: `fe7f337 Symbols + Reflect tests + 12 well-known symbols`.
 - Tree: ciste.
 - Branch master, ~290 commitu pred origin/master (NEPUSHOVAT bez vyzvy).
 - **WebGL pipeline DOKONCEN** + **CSS L4-L6 KOMPLET** + **JS DOM kompletni**:
@@ -96,6 +96,22 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
     count/countReset/assert/dir/dirxml/clear/profile/timeStamp s real timer + counter state.
   - DOMException: name/message/code mapping (NotFoundError=8, QuotaExceededError=22, atd.).
   - ImageData/OffscreenCanvas/createImageBitmap/Path2D constructors.
+  - Element extras: checkVisibility/requestFullscreen/requestPointerLock/
+    attachInternals (ElementInternals s validity)/computedStyleMap.
+  - Visual Viewport / Web Share / Badging / Contacts / Background Sync /
+    Push Manager / ReportingObserver / WebTransport stubs.
+  - DOM constructors: DocumentFragment / Comment / Text / CDATASection /
+    Node interface (13 NODE_TYPE constants), MutationRecord / HTMLCollection /
+    NodeList / DOMTokenList (real add/remove/toggle/contains state).
+  - SharedWorker constructor s port (MessagePort-like).
+  - DOM Element ctors: Image (width, height) / Audio (src) / Option (text, value).
+  - DataTransfer (drag-drop): setData/getData/clearData/types/files.
+  - StorageManager: estimate/persist/persisted Promise.
+  - PerformanceObserver / PerformanceEntry constructors.
+  - Symbol well-known: iterator/asyncIterator/toPrimitive/hasInstance/
+    isConcatSpreadable/match/matchAll/replace/search/split/species/toStringTag/
+    unscopables/dispose/asyncDispose/metadata.
+  - call_new fix: native ctors mohou vratit DomNode/Array/Map/Set (ne jen Object).
 
 ## Test runner
 
