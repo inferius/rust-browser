@@ -1571,3 +1571,145 @@ fn typed_array_byte_length() {
         assert_eq!(s, "40|10"); // 10 elem * 4 bytes
     }
 }
+
+// ─── HTML elements + popover + Atomics extras ─────────────────────────
+
+#[test]
+fn html_progress_value_max() {
+    let r = run_with_doc(
+        r#"<html><body><progress value="3" max="10"></progress></body></html>"#,
+        r#"
+            const p = document.getElementsByTagName("progress")[0];
+            return p.value + "|" + p.max + "|" + p.position;
+        "#,
+    );
+    assert_eq!(r.to_string(), "3|10|0.3");
+}
+
+#[test]
+fn html_meter_value_min_max() {
+    let r = run_with_doc(
+        r#"<html><body><meter value="60" min="0" max="100" low="30" high="80"></meter></body></html>"#,
+        r#"
+            const m = document.getElementsByTagName("meter")[0];
+            return m.value + "|" + m.min + "|" + m.max + "|" + m.low + "|" + m.high;
+        "#,
+    );
+    assert_eq!(r.to_string(), "60|0|100|30|80");
+}
+
+#[test]
+fn html_datalist_options() {
+    let r = run_with_doc(
+        r#"<html><body><datalist><option>a</option><option>b</option><option>c</option></datalist></body></html>"#,
+        r#"
+            const dl = document.getElementsByTagName("datalist")[0];
+            return dl.options.length;
+        "#,
+    );
+    assert_eq!(as_num(r), 3.0);
+}
+
+#[test]
+fn html_anchor_rel_list() {
+    let r = run_with_doc(
+        r#"<html><body><a rel="noopener noreferrer external"></a></body></html>"#,
+        r#"
+            const a = document.getElementsByTagName("a")[0];
+            return a.relList.length + "|" + a.relList[0];
+        "#,
+    );
+    assert_eq!(r.to_string(), "3|noopener");
+}
+
+#[test]
+fn element_popover_show_hide_toggle() {
+    let code = r#"
+        const div = document.createElement("div");
+        div.setAttribute("popover", "");
+        div.showPopover();
+        const after_show = div.getAttribute("data-popover-open");
+        div.hidePopover();
+        const after_hide = div.hasAttribute("data-popover-open");
+        const toggled = div.togglePopover();
+        return after_show + "|" + after_hide + "|" + toggled;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "true|false|true");
+    }
+}
+
+#[test]
+fn atomics_load_store() {
+    let code = r#"
+        const sab = new SharedArrayBuffer(4);
+        Atomics.store(sab, 0, 42);
+        return Atomics.load(sab, 0);
+    "#;
+    if let crate::interpreter::JsValue::Number(n) = run(code) {
+        assert_eq!(n, 42.0);
+    }
+}
+
+#[test]
+fn atomics_compare_exchange() {
+    let code = r#"
+        const sab = new SharedArrayBuffer(4);
+        Atomics.store(sab, 0, 5);
+        Atomics.compareExchange(sab, 0, 5, 10);
+        return Atomics.load(sab, 0);
+    "#;
+    if let crate::interpreter::JsValue::Number(n) = run(code) {
+        assert_eq!(n, 10.0);
+    }
+}
+
+#[test]
+fn atomics_is_lock_free() {
+    let code = r#"
+        return [
+            Atomics.isLockFree(1),
+            Atomics.isLockFree(4),
+            Atomics.isLockFree(8),
+            Atomics.isLockFree(7)
+        ].map(b => b ? "1" : "0").join("");
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "1110");
+    }
+}
+
+#[test]
+fn atomics_bitwise() {
+    let code = r#"
+        const sab = new SharedArrayBuffer(4);
+        Atomics.store(sab, 0, 12);
+        Atomics.and(sab, 0, 10);
+        return Atomics.load(sab, 0);
+    "#;
+    if let crate::interpreter::JsValue::Number(n) = run(code) {
+        assert_eq!(n, 8.0); // 12 & 10 = 8
+    }
+}
+
+#[test]
+fn text_decoder_options() {
+    let code = r#"
+        const td = new TextDecoder("utf-8");
+        return td.encoding + "|" + td.fatal + "|" + td.ignoreBOM;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "utf-8|false|false");
+    }
+}
+
+#[test]
+fn text_encoder_stream_constructor() {
+    let code = r#"
+        const tes = new TextEncoderStream();
+        return tes.encoding;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "utf-8");
+    }
+}

@@ -1159,6 +1159,110 @@ pub fn setup_builtins(
         }
         Ok(JsValue::Number(0.0))
     }));
+    // Atomics extras
+    atomics.set("wait".into(), native("Atomics.wait", |_| {
+        // Sync implementation - vrati "ok" nebo "timed-out". V single-thread sync vraci "not-equal".
+        Ok(JsValue::Str("not-equal".into()))
+    }));
+    atomics.set("waitAsync".into(), native("Atomics.waitAsync", |_| {
+        // Vraci { async: false, value: "not-equal" } nebo { async: true, value: Promise }
+        let result = Rc::new(RefCell::new(JsObject::new()));
+        result.borrow_mut().set("async".into(), JsValue::Bool(false));
+        result.borrow_mut().set("value".into(), JsValue::Str("not-equal".into()));
+        Ok(JsValue::Object(result))
+    }));
+    atomics.set("notify".into(), native("Atomics.notify", |_| Ok(JsValue::Number(0.0))));
+    atomics.set("isLockFree".into(), native("Atomics.isLockFree", |a| {
+        let size = a.into_iter().next().map(|v| v.to_number() as i64).unwrap_or(0);
+        Ok(JsValue::Bool(matches!(size, 1 | 2 | 4 | 8)))
+    }));
+    atomics.set("pause".into(), native("Atomics.pause", |_| Ok(JsValue::Undefined)));
+    atomics.set("load".into(), native("Atomics.load", |a| {
+        let arr = a.first().cloned().unwrap_or(JsValue::Undefined);
+        let i = a.get(1).map(|v| v.to_number() as usize).unwrap_or(0);
+        if let JsValue::Object(o) = arr {
+            if let Some(JsValue::Array(bytes)) = o.borrow().props.get("__bytes__") {
+                if let Some(JsValue::Number(n)) = bytes.borrow().get(i) {
+                    return Ok(JsValue::Number(*n));
+                }
+            }
+        }
+        Ok(JsValue::Number(0.0))
+    }));
+    atomics.set("store".into(), native("Atomics.store", |a| {
+        let arr = a.first().cloned().unwrap_or(JsValue::Undefined);
+        let i = a.get(1).map(|v| v.to_number() as usize).unwrap_or(0);
+        let val = a.get(2).map(|v| v.to_number()).unwrap_or(0.0);
+        if let JsValue::Object(o) = arr {
+            if let Some(JsValue::Array(bytes)) = o.borrow().props.get("__bytes__") {
+                let mut b = bytes.borrow_mut();
+                while b.len() <= i { b.push(JsValue::Number(0.0)); }
+                b[i] = JsValue::Number(val);
+                return Ok(JsValue::Number(val));
+            }
+        }
+        Ok(JsValue::Number(0.0))
+    }));
+    atomics.set("exchange".into(), native("Atomics.exchange", |a| {
+        let arr = a.first().cloned().unwrap_or(JsValue::Undefined);
+        let i = a.get(1).map(|v| v.to_number() as usize).unwrap_or(0);
+        let new_val = a.get(2).map(|v| v.to_number()).unwrap_or(0.0);
+        if let JsValue::Object(o) = arr {
+            if let Some(JsValue::Array(bytes)) = o.borrow().props.get("__bytes__") {
+                let mut b = bytes.borrow_mut();
+                let old = b.get(i).map(|v| v.to_number()).unwrap_or(0.0);
+                while b.len() <= i { b.push(JsValue::Number(0.0)); }
+                b[i] = JsValue::Number(new_val);
+                return Ok(JsValue::Number(old));
+            }
+        }
+        Ok(JsValue::Number(0.0))
+    }));
+    atomics.set("and".into(), native("Atomics.and", |a| {
+        let arr = a.first().cloned().unwrap_or(JsValue::Undefined);
+        let i = a.get(1).map(|v| v.to_number() as usize).unwrap_or(0);
+        let mask = a.get(2).map(|v| v.to_number() as i64).unwrap_or(0);
+        if let JsValue::Object(o) = arr {
+            if let Some(JsValue::Array(bytes)) = o.borrow().props.get("__bytes__") {
+                let mut b = bytes.borrow_mut();
+                let old = b.get(i).map(|v| v.to_number() as i64).unwrap_or(0);
+                while b.len() <= i { b.push(JsValue::Number(0.0)); }
+                b[i] = JsValue::Number((old & mask) as f64);
+                return Ok(JsValue::Number(old as f64));
+            }
+        }
+        Ok(JsValue::Number(0.0))
+    }));
+    atomics.set("or".into(), native("Atomics.or", |a| {
+        let arr = a.first().cloned().unwrap_or(JsValue::Undefined);
+        let i = a.get(1).map(|v| v.to_number() as usize).unwrap_or(0);
+        let mask = a.get(2).map(|v| v.to_number() as i64).unwrap_or(0);
+        if let JsValue::Object(o) = arr {
+            if let Some(JsValue::Array(bytes)) = o.borrow().props.get("__bytes__") {
+                let mut b = bytes.borrow_mut();
+                let old = b.get(i).map(|v| v.to_number() as i64).unwrap_or(0);
+                while b.len() <= i { b.push(JsValue::Number(0.0)); }
+                b[i] = JsValue::Number((old | mask) as f64);
+                return Ok(JsValue::Number(old as f64));
+            }
+        }
+        Ok(JsValue::Number(0.0))
+    }));
+    atomics.set("xor".into(), native("Atomics.xor", |a| {
+        let arr = a.first().cloned().unwrap_or(JsValue::Undefined);
+        let i = a.get(1).map(|v| v.to_number() as usize).unwrap_or(0);
+        let mask = a.get(2).map(|v| v.to_number() as i64).unwrap_or(0);
+        if let JsValue::Object(o) = arr {
+            if let Some(JsValue::Array(bytes)) = o.borrow().props.get("__bytes__") {
+                let mut b = bytes.borrow_mut();
+                let old = b.get(i).map(|v| v.to_number() as i64).unwrap_or(0);
+                while b.len() <= i { b.push(JsValue::Number(0.0)); }
+                b[i] = JsValue::Number((old ^ mask) as f64);
+                return Ok(JsValue::Number(old as f64));
+            }
+        }
+        Ok(JsValue::Number(0.0))
+    }));
     e.define("Atomics", JsValue::Object(Rc::new(RefCell::new(atomics))));
 
     // ─── DOM bridge - real propojeni s browser::dom ─────────────────────────
@@ -1929,6 +2033,45 @@ pub fn setup_builtins(
         Ok(JsValue::Object(obj))
     }));
 
+    // URL.canParse(str) / URL.parse(str) (ES2024+)
+    e.define("__url_can_parse__", native("URL.canParse", |args| {
+        let s = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+        // Velmi loose - oba contain ":" + nejaky obsah
+        let valid = s.contains(':') && s.len() > 2;
+        Ok(JsValue::Bool(valid))
+    }));
+    e.define("__url_parse__", native("URL.parse", |args| {
+        let s = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+        if !s.contains(':') { return Ok(JsValue::Null); }
+        // Same parsing as URL constructor (zjednodusena verze)
+        let url = s;
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        let (proto, rest) = if let Some(idx) = url.find("://") {
+            (url[..idx + 1].to_string(), url[idx + 3..].to_string())
+        } else { return Ok(JsValue::Null); };
+        let (host_path, hash) = match rest.split_once('#') {
+            Some((a, b)) => (a.to_string(), format!("#{b}")),
+            None => (rest, String::new()),
+        };
+        let (host_path, search) = match host_path.split_once('?') {
+            Some((a, b)) => (a.to_string(), format!("?{b}")),
+            None => (host_path, String::new()),
+        };
+        let (host, pathname) = match host_path.find('/') {
+            Some(i) => (host_path[..i].to_string(), host_path[i..].to_string()),
+            None => (host_path, "/".to_string()),
+        };
+        obj.borrow_mut().set("href".into(), JsValue::Str(url));
+        obj.borrow_mut().set("protocol".into(), JsValue::Str(proto.clone()));
+        obj.borrow_mut().set("host".into(), JsValue::Str(host.clone()));
+        obj.borrow_mut().set("hostname".into(), JsValue::Str(host.clone()));
+        obj.borrow_mut().set("pathname".into(), JsValue::Str(pathname));
+        obj.borrow_mut().set("search".into(), JsValue::Str(search));
+        obj.borrow_mut().set("hash".into(), JsValue::Str(hash));
+        obj.borrow_mut().set("origin".into(), JsValue::Str(format!("{proto}//{host}")));
+        Ok(JsValue::Object(obj))
+    }));
+
     e.define("URLSearchParams", native("URLSearchParams", |args| {
         let s = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
         let s = s.trim_start_matches('?');
@@ -2168,19 +2311,40 @@ pub fn setup_builtins(
         }));
         Ok(JsValue::Object(obj))
     }));
-    e.define("TextDecoder", native("TextDecoder", |_| {
+    e.define("TextDecoder", native("TextDecoder", |a| {
+        let label = a.into_iter().next().map(|v| v.to_string()).unwrap_or_else(|| "utf-8".into());
         let obj = Rc::new(RefCell::new(JsObject::new()));
-        obj.borrow_mut().set("encoding".into(), JsValue::Str("utf-8".into()));
+        obj.borrow_mut().set("encoding".into(), JsValue::Str(label));
+        obj.borrow_mut().set("fatal".into(), JsValue::Bool(false));
+        obj.borrow_mut().set("ignoreBOM".into(), JsValue::Bool(false));
         obj.borrow_mut().set("decode".into(), native("TextDecoder.decode", |args| {
             let arr = args.into_iter().next().unwrap_or(JsValue::Undefined);
-            if let JsValue::Array(a) = arr {
-                let bytes: Vec<u8> = a.borrow().iter()
-                    .map(|v| v.to_number() as u8).collect();
-                Ok(JsValue::Str(String::from_utf8_lossy(&bytes).into_owned()))
-            } else {
-                Ok(JsValue::Str(String::new()))
-            }
+            let bytes: Vec<u8> = match arr {
+                JsValue::Array(a) => a.borrow().iter().map(|v| v.to_number() as u8).collect(),
+                JsValue::Object(o) => {
+                    if let JsValue::Array(a) = o.borrow().get("__bytes__") {
+                        a.borrow().iter().map(|v| v.to_number() as u8).collect()
+                    } else { Vec::new() }
+                }
+                _ => Vec::new(),
+            };
+            Ok(JsValue::Str(String::from_utf8_lossy(&bytes).into_owned()))
         }));
+        Ok(JsValue::Object(obj))
+    }));
+    // TextEncoderStream / TextDecoderStream - prom encoder pres TransformStream API
+    e.define("TextEncoderStream", native("TextEncoderStream", |_| {
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        obj.borrow_mut().set("encoding".into(), JsValue::Str("utf-8".into()));
+        obj.borrow_mut().set("readable".into(), JsValue::Object(Rc::new(RefCell::new(JsObject::new()))));
+        obj.borrow_mut().set("writable".into(), JsValue::Object(Rc::new(RefCell::new(JsObject::new()))));
+        Ok(JsValue::Object(obj))
+    }));
+    e.define("TextDecoderStream", native("TextDecoderStream", |_| {
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        obj.borrow_mut().set("encoding".into(), JsValue::Str("utf-8".into()));
+        obj.borrow_mut().set("readable".into(), JsValue::Object(Rc::new(RefCell::new(JsObject::new()))));
+        obj.borrow_mut().set("writable".into(), JsValue::Object(Rc::new(RefCell::new(JsObject::new()))));
         Ok(JsValue::Object(obj))
     }));
 

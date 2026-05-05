@@ -2559,8 +2559,8 @@ impl Interpreter {
                     "className" => {
                         return Ok(JsValue::Str(n.attr("class").unwrap_or_default()));
                     }
-                    "value" => {
-                        // Form input value
+                    "value" if !matches!(n.tag_name().as_deref(), Some("progress") | Some("meter")) => {
+                        // Form input value (progress/meter handled below)
                         return Ok(JsValue::Str(n.attr("value").unwrap_or_default()));
                     }
                     "shadowRoot" => {
@@ -2590,6 +2590,68 @@ impl Interpreter {
                     }
                     "checked" => {
                         return Ok(JsValue::Bool(n.has_attr("checked")));
+                    }
+                    // HTMLProgressElement
+                    "value" if n.tag_name().as_deref() == Some("progress")
+                            || n.tag_name().as_deref() == Some("meter") => {
+                        let v = n.attr("value").and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
+                        return Ok(JsValue::Number(v));
+                    }
+                    "max" if n.tag_name().as_deref() == Some("progress")
+                            || n.tag_name().as_deref() == Some("meter") => {
+                        let m = n.attr("max").and_then(|s| s.parse::<f64>().ok()).unwrap_or(1.0);
+                        return Ok(JsValue::Number(m));
+                    }
+                    "min" if n.tag_name().as_deref() == Some("meter") => {
+                        let m = n.attr("min").and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
+                        return Ok(JsValue::Number(m));
+                    }
+                    "low" | "high" | "optimum" if n.tag_name().as_deref() == Some("meter") => {
+                        let v = n.attr(key).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
+                        return Ok(JsValue::Number(v));
+                    }
+                    "position" if n.tag_name().as_deref() == Some("progress") => {
+                        // Indeterminate -> -1, jinak value/max
+                        if !n.has_attr("value") { return Ok(JsValue::Number(-1.0)); }
+                        let v = n.attr("value").and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
+                        let m = n.attr("max").and_then(|s| s.parse::<f64>().ok()).unwrap_or(1.0);
+                        return Ok(JsValue::Number(if m > 0.0 { v / m } else { 0.0 }));
+                    }
+                    // HTMLDataListElement.options - <option> children
+                    "options" if n.tag_name().as_deref() == Some("datalist")
+                            || n.tag_name().as_deref() == Some("select") => {
+                        let mut opts: Vec<JsValue> = Vec::new();
+                        n.walk(&mut |node| {
+                            if node.tag_name().as_deref() == Some("option") {
+                                opts.push(JsValue::DomNode(Rc::clone(node)));
+                            }
+                        });
+                        return Ok(JsValue::Array(Rc::new(RefCell::new(opts))));
+                    }
+                    "selectedIndex" if n.tag_name().as_deref() == Some("select") => {
+                        let mut idx = -1i64;
+                        let mut i = 0i64;
+                        n.walk(&mut |node| {
+                            if node.tag_name().as_deref() == Some("option") {
+                                if node.has_attr("selected") && idx == -1 { idx = i; }
+                                i += 1;
+                            }
+                        });
+                        return Ok(JsValue::Number(idx as f64));
+                    }
+                    // HTMLAnchorElement extras - relList
+                    "relList" if matches!(n.tag_name().as_deref(), Some("a") | Some("area") | Some("link")) => {
+                        let rels = n.attr("rel").unwrap_or_default();
+                        let arr: Vec<JsValue> = rels.split_whitespace()
+                            .map(|s| JsValue::Str(s.to_string())).collect();
+                        return Ok(JsValue::Array(Rc::new(RefCell::new(arr))));
+                    }
+                    // Element popover state
+                    "popover" => {
+                        return Ok(match n.attr("popover") {
+                            Some(v) => JsValue::Str(v),
+                            None => JsValue::Null,
+                        });
                     }
                     "files" if n.tag_name().as_deref() == Some("input")
                             && n.attr("type").as_deref() == Some("file") => {
@@ -4270,6 +4332,24 @@ impl Interpreter {
                             => {
                             // No-op
                             return Ok(JsValue::Undefined);
+                        }
+                        // ─── Popover API (HTML L1) ─────────────────────────
+                        "showPopover" => {
+                            n.set_attr("data-popover-open", "true");
+                            return Ok(JsValue::Undefined);
+                        }
+                        "hidePopover" => {
+                            n.remove_attr("data-popover-open");
+                            return Ok(JsValue::Undefined);
+                        }
+                        "togglePopover" => {
+                            if n.has_attr("data-popover-open") {
+                                n.remove_attr("data-popover-open");
+                                return Ok(JsValue::Bool(false));
+                            } else {
+                                n.set_attr("data-popover-open", "true");
+                                return Ok(JsValue::Bool(true));
+                            }
                         }
                         // ─── Shadow DOM (attachShadow + shadowRoot) ────────
                         "attachShadow" => {
