@@ -15,7 +15,7 @@ Konvence stavu:
 
 ### Batch 1 - dotazeni stavajicich modulu (highest ROI)
 - [x] Selectors L4: `:is()`, `:where()`, `:not()`, `:has()`, `~` general sibling, `:nth-child/-of-type`, `:nth-last-*`, `:empty`, `:first/last/only-of-type`, `:only-child` (`:focus-visible/-within` zatim no-op kvuli runtime stavu)
-- [/] Values L4: `min()`, `max()`, `clamp()`, `env()` hotovo, `attr()` chybi, math funkce (round/sin/cos/...) chybi
+- [/] Values L4: `min()`, `max()`, `clamp()`, `env()` hotovo, `attr(name <type>, fallback)` hotovo, math funkce (round/sin/cos/...) hotovo
 - [/] Color L4: `oklch`, `oklab`, `lab`, `lch`, `hsl`, `hwb`, `color-mix(in srgb|oklab|oklch)`, modern rgb syntax, hex 4/8 hotovo. Relative color syntax + `color()` namespace + system colors zatim chybi.
 - [/] Backgrounds L3: position/size/repeat/clip/origin/attachment parser hotovy. Multiple backgrounds (carkove) + paint integrace TODO.
 - [x] Animations L1: `animation-fill-mode` (none/forwards/backwards/both), `animation-play-state` (running/paused), arbitrary `cubic-bezier(...)`, `steps(n, jump-*)`
@@ -29,7 +29,7 @@ Konvence stavu:
 
 ### Batch 3 - dalsi
 - [x] @font-face (CSS Fonts L4) - FS load, FontFace API, document.fonts
-- [/] Cascade Layers (`@layer`) - parser hotov, runtime layer ordering TODO
+- [x] Cascade Layers (`@layer`) - parser hotov, runtime layer ordering hotovo
 - [x] Position L3: `sticky` (apply_sticky post-pass pri scroll)
 - [x] Masking L1: `clip-path` (inset/circle/ellipse hotove, polygon ear-clipping triangulace)
 - [ ] Subgrid L2
@@ -95,7 +95,7 @@ Konvence stavu:
 - [x] `min(a, b, ...)`
 - [x] `max(a, b, ...)`
 - [x] `clamp(min, val, max)`
-- [ ] `attr(name <type>, fallback)`
+- [x] `attr(name <type>, fallback)` - typed attr resolution v kaskade
 - [x] `env(name, fallback)` (no-op s fallback)
 - [x] Math fci L4: `round`, `floor`, `ceil`, `mod`, `rem`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `pow`, `sqrt`, `hypot`, `log`, `exp`, `abs`, `sign`
 - [ ] Container queries units: `cqw`, `cqh`, `cqi`, `cqb`, `cqmin`, `cqmax`
@@ -118,7 +118,7 @@ Konvence stavu:
 - [x] `background-image: url(...)`
 - [x] `border-width`, `border-style`, `border-color`, `border-radius`
 - [x] `box-shadow` (drop)
-- [x] Multiple backgrounds (kazdy oddelen carkou) - vsechny props comma-split, layery v Vec<BgLayer>
+- [x] Multiple backgrounds (kazdy oddelen carkou) - vsechny props comma-split, layery v Vec<BgLayer> - parser hotov, paint integrace TODO
 - [x] `background-position` (parser - keywords/length/% mix)
 - [x] `background-size: cover|contain|<length>|<%>` (parser)
 - [x] `background-repeat: repeat/-x/-y/no-repeat/space/round` (parser)
@@ -232,7 +232,7 @@ Konvence stavu:
 - [x] Specificita selektoru
 - [x] `!important`
 - [x] User-agent default styly per tag
-- [x] `@layer name { ... }` cascade layers (parser + cascade prio)
+- [x] `@layer name { ... }` cascade layers (parser + cascade prio + runtime ordering)
 - [x] `@layer name1, name2;` order declaration
 - [ ] `@import url(...) layer(name);` - vyzaduje @import support
 - [ ] `revert`, `revert-layer`, `unset` keywords
@@ -298,7 +298,7 @@ Konvence stavu:
 - [x] `filter: sepia(<%>)` - color matrix shader (W3C sepia coefs)
 - [x] `filter: drop-shadow(...)` - shadow command emit pred bg
 - [x] Vice filtru chained: `filter: blur(2px) brightness(1.2) hue-rotate(45deg)` - parser + RT pipeline subtree
-- [ ] `backdrop-filter` (samples scene background za elementem)
+- [x] `backdrop-filter` (samples scene background za elementem - main_rt snapshot + blur + compose)
 - **Pristup**: subtree filter pres FilterBegin/End markery v paint, render
   capture inner do offscreen RT, blur 2-pass + color matrix compose, composit RT
   do swap chain pres scissor.
@@ -401,4 +401,4 @@ allocations / frame time.
 
 ---
 
-Last updated: 2026-05-04
+Last updated: 2026-05-05

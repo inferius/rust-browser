@@ -2070,3 +2070,72 @@ fn color_matrix_brightness_zero_blackens_rgb() {
     assert!(m[12].abs() < 1e-5);
     assert!((m[18] - 1.0).abs() < 1e-5, "alpha kanal preserved");
 }
+
+#[test]
+fn pseudo_placeholder_default_color() {
+    let doc = parse_html(r#"<html><body><input placeholder="typ neco"></body></html>"#, "");
+    let css = parse_stylesheet("");
+    let style_map = cascade::cascade(&doc.root, &[css.clone()]);
+    let pseudo_map = cascade::cascade_pseudo(&doc.root, &[css]);
+    let root = layout::layout_tree_with_pseudo(&doc.root, &style_map, &pseudo_map, 1024.0, 768.0);
+    let input = find_box_by_tag(&root, "input").unwrap();
+    // placeholder_color nastaven na darkgray default
+    assert!(input.placeholder_color.is_some());
+    // child ::placeholder existuje s textem
+    let ph = input.children.iter().find(|c| c.tag.as_deref() == Some("::placeholder"));
+    assert!(ph.is_some());
+    assert_eq!(ph.unwrap().text.as_deref(), Some("typ neco"));
+}
+
+#[test]
+fn pseudo_placeholder_custom_color() {
+    let doc = parse_html(r#"<html><body><input placeholder="hint"></body></html>"#, "");
+    let css = parse_stylesheet("input::placeholder { color: red; }");
+    let style_map = cascade::cascade(&doc.root, &[css.clone()]);
+    let pseudo_map = cascade::cascade_pseudo(&doc.root, &[css]);
+    let root = layout::layout_tree_with_pseudo(&doc.root, &style_map, &pseudo_map, 1024.0, 768.0);
+    let input = find_box_by_tag(&root, "input").unwrap();
+    assert_eq!(input.placeholder_color, Some([255, 0, 0, 255]));
+    let ph = input.children.iter().find(|c| c.tag.as_deref() == Some("::placeholder")).unwrap();
+    assert_eq!(ph.text_color, Some([255, 0, 0, 255]));
+}
+
+#[test]
+fn pseudo_selection_colors_stored() {
+    let doc = parse_html(r#"<html><body><p>hello</p></body></html>"#, "");
+    let css = parse_stylesheet("p::selection { background-color: blue; color: white; }");
+    let style_map = cascade::cascade(&doc.root, &[css.clone()]);
+    let pseudo_map = cascade::cascade_pseudo(&doc.root, &[css]);
+    let root = layout::layout_tree_with_pseudo(&doc.root, &style_map, &pseudo_map, 1024.0, 768.0);
+    let p = find_box_by_tag(&root, "p").unwrap();
+    assert_eq!(p.selection_bg, Some([0, 0, 255, 255]));
+    assert_eq!(p.selection_color, Some([255, 255, 255, 255]));
+}
+
+#[test]
+fn pseudo_backdrop_dialog_open() {
+    let doc = parse_html(r#"<html><body><dialog open>obsah</dialog></body></html>"#, "");
+    let css = parse_stylesheet("dialog::backdrop { background-color: rgba(0,0,0,0.5); }");
+    let style_map = cascade::cascade(&doc.root, &[css.clone()]);
+    let pseudo_map = cascade::cascade_pseudo(&doc.root, &[css]);
+    let root = layout::layout_tree_with_pseudo(&doc.root, &style_map, &pseudo_map, 1024.0, 768.0);
+    let dialog = find_box_by_tag(&root, "dialog").unwrap();
+    let backdrop = dialog.children.iter().find(|c| c.tag.as_deref() == Some("::backdrop"));
+    assert!(backdrop.is_some(), "::backdrop child existuje pro dialog open");
+    let bd = backdrop.unwrap();
+    assert_eq!(bd.position, layout::Position::Fixed);
+    // bg_color je rgba(0,0,0,128)
+    assert!(bd.bg_color.is_some());
+}
+
+#[test]
+fn pseudo_backdrop_dialog_closed_no_backdrop() {
+    let doc = parse_html(r#"<html><body><dialog>obsah</dialog></body></html>"#, "");
+    let css = parse_stylesheet("dialog::backdrop { background-color: black; }");
+    let style_map = cascade::cascade(&doc.root, &[css.clone()]);
+    let pseudo_map = cascade::cascade_pseudo(&doc.root, &[css]);
+    let root = layout::layout_tree_with_pseudo(&doc.root, &style_map, &pseudo_map, 1024.0, 768.0);
+    let dialog = find_box_by_tag(&root, "dialog").unwrap();
+    let backdrop = dialog.children.iter().find(|c| c.tag.as_deref() == Some("::backdrop"));
+    assert!(backdrop.is_none(), "::backdrop se nevlozi pro dialog bez open");
+}

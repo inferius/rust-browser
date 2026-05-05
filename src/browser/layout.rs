@@ -434,6 +434,12 @@ pub struct LayoutBox {
     pub image_src: Option<String>,
     /// Reference na puvodni DOM node (pro hit test -> events).
     pub node: Option<Rc<Node>>,
+    /// ::placeholder - barva textu pro placeholder (input/textarea).
+    pub placeholder_color: Option<[u8; 4]>,
+    /// ::selection - barva pozadi vybrane oblasti textu.
+    pub selection_bg: Option<[u8; 4]>,
+    /// ::selection - barva textu vybrane oblasti.
+    pub selection_color: Option<[u8; 4]>,
 }
 
 impl LayoutBox {
@@ -603,6 +609,9 @@ impl LayoutBox {
             transforms: Vec::new(),
             image_src: None,
             node: None,
+            placeholder_color: None,
+            selection_bg: None,
+            selection_color: None,
         }
     }
 
@@ -1492,6 +1501,55 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         if let Some(pa) = build_pseudo_box(node, pseudo_styles, counters) {
             bx.children.push(pa);
         }
+    }
+
+    // ::placeholder - pro input/textarea: virtualni text child s placeholder textem
+    let is_input_like = matches!(bx.tag.as_deref(), Some("input") | Some("textarea"));
+    if is_input_like {
+        if let Some(placeholder_text) = node.attr("placeholder") {
+            let ph_styles = super::cascade::get_pseudo_styles(pseudo_map, node, "placeholder");
+            let color = ph_styles
+                .and_then(|s| s.get("color"))
+                .and_then(|c| parse_color(c))
+                .unwrap_or([169, 169, 169, 255]); // darkgray default
+            bx.placeholder_color = Some(color);
+            let mut ph_box = LayoutBox::new();
+            ph_box.display = Display::Inline;
+            ph_box.tag = Some("::placeholder".to_string());
+            ph_box.text = Some(placeholder_text);
+            ph_box.text_color = Some(color);
+            ph_box.font_size = bx.font_size;
+            if let Some(s) = ph_styles {
+                if let Some(fs) = s.get("font-size") { ph_box.font_size = parse_length(fs); }
+                if let Some(fw) = s.get("font-weight") {
+                    ph_box.bold = matches!(fw.trim(), "bold" | "700" | "800" | "900");
+                }
+            }
+            bx.children.push(ph_box);
+        }
+    }
+
+    // ::selection - uloz barvy vyberu z pseudo map (aplikovano za behu pri renderovani)
+    if let Some(sel_styles) = super::cascade::get_pseudo_styles(pseudo_map, node, "selection") {
+        bx.selection_bg = sel_styles.get("background-color").and_then(|c| parse_color(c));
+        bx.selection_color = sel_styles.get("color").and_then(|c| parse_color(c));
+    }
+
+    // ::backdrop - pro <dialog open>: vloz full-viewport backdrop box pred deti
+    if bx.tag.as_deref() == Some("dialog") && node.attr("open").is_some() {
+        let bd_styles = super::cascade::get_pseudo_styles(pseudo_map, node, "backdrop");
+        let bg = bd_styles
+            .and_then(|s| s.get("background-color"))
+            .and_then(|c| parse_color(c))
+            .unwrap_or([0, 0, 0, 128]); // pololpruhledna cerna default
+        let mut backdrop_box = LayoutBox::new();
+        backdrop_box.display = Display::Block;
+        backdrop_box.tag = Some("::backdrop".to_string());
+        backdrop_box.position = Position::Fixed;
+        backdrop_box.offset_top = Some(0.0);
+        backdrop_box.offset_left = Some(0.0);
+        backdrop_box.bg_color = Some(bg);
+        bx.children.insert(0, backdrop_box);
     }
 
     bx
