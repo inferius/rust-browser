@@ -437,7 +437,44 @@ pub fn layout_grid(bx: &mut LayoutBox) {
     let parent_justify = bx.justify_items.clone();
     for ch in bx.children.iter_mut() {
         if super::is_out_of_flow(ch) {
-            super::layout_absolute_child(ch, cb_x, cb_y, cb_w, cb_h);
+            // Pri grid-row/col placement, CB v dane axe vychazi z grid track positions.
+            let mut ab_cb_x = cb_x;
+            let mut ab_cb_y = cb_y;
+            let mut ab_cb_w = cb_w;
+            let mut ab_cb_h = cb_h;
+            // CSS spec: pri grid-col-start ale no end, CB konci na border-box edge.
+            let has_col_end = ch.grid_column_end > 0 || ch.grid_column_span > 0;
+            let has_row_end = ch.grid_row_end > 0 || ch.grid_row_span > 0;
+            if ch.grid_column_start > 0 {
+                let c_idx = ((ch.grid_column_start - 1) as usize).min(cols.saturating_sub(1));
+                let track_x = inner_x + col_positions.get(c_idx).copied().unwrap_or(0.0);
+                ab_cb_x = track_x;
+                if has_col_end {
+                    let span = if ch.grid_column_span > 0 { ch.grid_column_span as usize }
+                              else { ((ch.grid_column_end - ch.grid_column_start).max(1)) as usize };
+                    let track_w: f32 = (0..span).map(|d| col_tracks.get(c_idx + d).copied().unwrap_or(0.0)).sum::<f32>()
+                        + col_gap * (span.saturating_sub(1) as f32);
+                    ab_cb_w = track_w;
+                } else {
+                    // Bez column-end - CB protahnut do border edge.
+                    ab_cb_w = (bx.rect.x + bx.rect.width - track_x).max(0.0);
+                }
+            }
+            if ch.grid_row_start > 0 {
+                let r_idx = ((ch.grid_row_start - 1) as usize).min(rows.saturating_sub(1));
+                let track_y = inner_y + row_positions.get(r_idx).copied().unwrap_or(0.0);
+                ab_cb_y = track_y;
+                if has_row_end {
+                    let span = if ch.grid_row_span > 0 { ch.grid_row_span as usize }
+                              else { ((ch.grid_row_end - ch.grid_row_start).max(1)) as usize };
+                    let track_h: f32 = (0..span).map(|d| row_tracks.get(r_idx + d).copied().unwrap_or(0.0)).sum::<f32>()
+                        + row_gap * (span.saturating_sub(1) as f32);
+                    ab_cb_h = track_h;
+                } else {
+                    ab_cb_h = (bx.rect.y + bx.rect.height - track_y).max(0.0);
+                }
+            }
+            super::layout_absolute_child(ch, ab_cb_x, ab_cb_y, ab_cb_w, ab_cb_h);
             // Override pri zadnem insetu: respektuj justify-self / align-self.
             let no_inset_x = ch.offset_left.is_none() && ch.offset_right.is_none();
             let no_inset_y = ch.offset_top.is_none() && ch.offset_bottom.is_none();
