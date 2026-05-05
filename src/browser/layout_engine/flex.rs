@@ -180,8 +180,9 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         let min_h_pre = super::super::layout::parse_length(&ch.min_height_v);
         let max_w_pre = if ch.max_width_v.is_empty() { f32::INFINITY } else { super::super::layout::parse_length(&ch.max_width_v) };
         let max_h_pre = if ch.max_height_v.is_empty() { f32::INFINITY } else { super::super::layout::parse_length(&ch.max_height_v) };
-        if min_w_pre > 0.0 { est_w = est_w.max(min_w_pre); }
-        if min_h_pre > 0.0 { est_h = est_h.max(min_h_pre); }
+        // Min PRED aspect dopoctem - jen pro aspect-ratio kontext, NE pro est_w/est_h
+        // (base size pro flex algo). Min se aplikuje az v resolve step.
+        let _ = (min_w_pre, min_h_pre); // suppress warning
         // Pri zadnem est_w/h + max/min finite, preferuj jako velikost pro aspect dopocet.
         if est_w == 0.0 && ch.aspect_ratio.is_some() {
             if min_w_pre > 0.0 { est_w = min_w_pre; }
@@ -264,8 +265,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         items[i].max_main = max_m;
         if min_c > 0.0 { items[i].cross_size = items[i].cross_size.max(min_c); }
         items[i].cross_size = items[i].cross_size.min(max_c);
-        // Initial main_size NEMA zahrnovat intrinsic - jen specified min.
-        if min_m > 0.0 { items[i].main_size = items[i].main_size.max(min_m); }
+        // Initial main_size = base size (flex-basis). Min/max se aplikuje v resolve step.
         items[i].main_size = items[i].main_size.min(max_m);
     }
 
