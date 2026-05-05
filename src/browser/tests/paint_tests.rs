@@ -982,3 +982,54 @@ fn paint_bg_image_emits_image_command() {
     let has_img = cmds.iter().any(|c| matches!(c, DisplayCommand::Image { src, .. } if src.contains("bg.png")));
     assert!(has_img);
 }
+
+#[test]
+fn multiple_backgrounds_two_gradients_emitted() {
+    // Dva gradienty: prvni navrchu (cerveny), druhy dole (modry).
+    // Paint renderuje bottom-to-top = modry pak cerveny.
+    let cmds = build_dl(
+        r#"<html><body><div></div></body></html>"#,
+        r#"div {
+            background-image: linear-gradient(red, red), linear-gradient(blue, blue);
+            width: 100px; height: 50px;
+        }"#,
+    );
+    let grads: Vec<_> = cmds.iter().filter(|c| matches!(c, DisplayCommand::Gradient { .. })).collect();
+    assert_eq!(grads.len(), 2, "dva gradienty emitovany");
+}
+
+#[test]
+fn multiple_backgrounds_gradient_over_image() {
+    let cmds = build_dl(
+        r#"<html><body><div></div></body></html>"#,
+        r#"div {
+            background-image: linear-gradient(rgba(0,0,0,0.5), rgba(0,0,0,0.5)), url(photo.jpg);
+            width: 200px; height: 100px;
+        }"#,
+    );
+    let has_img = cmds.iter().any(|c| matches!(c, DisplayCommand::Image { src, .. } if src.contains("photo.jpg")));
+    let has_grad = cmds.iter().any(|c| matches!(c, DisplayCommand::Gradient { .. }));
+    assert!(has_img, "image layer emitovan");
+    assert!(has_grad, "gradient overlay emitovan");
+    // image musi byt pred gradientem v seznamu (bottom first = image pred gradientem)
+    let img_pos = cmds.iter().position(|c| matches!(c, DisplayCommand::Image { .. })).unwrap();
+    let grad_pos = cmds.iter().position(|c| matches!(c, DisplayCommand::Gradient { .. })).unwrap();
+    assert!(img_pos < grad_pos, "image je pred gradientem (bottom-to-top poradi)");
+}
+
+#[test]
+fn multiple_backgrounds_color_on_last_layer() {
+    let cmds = build_dl(
+        r#"<html><body><div></div></body></html>"#,
+        r#"div {
+            background-image: linear-gradient(red, red);
+            background-color: green;
+            width: 100px; height: 50px;
+        }"#,
+    );
+    // Rect pro solid color emitovan (green)
+    let has_rect = cmds.iter().any(|c| matches!(c, DisplayCommand::Rect { color, .. } if color[1] > color[0] && color[1] > color[2]));
+    let has_grad = cmds.iter().any(|c| matches!(c, DisplayCommand::Gradient { .. }));
+    assert!(has_rect, "solid-color rect emitovan");
+    assert!(has_grad, "gradient emitovan");
+}

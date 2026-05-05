@@ -461,32 +461,70 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
         });
     }
 
-    // Background-image: aplikuj BgLayer position/size/repeat (single layer aktualne)
-    if let Some(layer) = bx.backgrounds.first() {
+    // Background layers (Backgrounds L3): renderuj bottom-to-top (reversed).
+    // Kazdy layer muze mit: gradient, image url, solid color (jen posledni layer).
+    // Pouzivame bx.backgrounds (Vec<BgLayer>) - parser uz rozdelil comma-sep do layeru.
+    use crate::browser::layout::BgRepeat;
+    for layer in bx.backgrounds.iter().rev() {
+        // Solid color pozadi (jen na poslednim/spodnim layeru, parser to zajistuje).
+        // Pouziva clip_x/y/w/h/radius stejne jako stara bg_color cesta (circle/ellipse/inset).
+        if let Some(bg) = layer.color {
+            if let Some(crate::browser::layout::ClipPath::Polygon(pct_pts)) = &bx.clip_path {
+                let abs_pts: Vec<(f32, f32)> = pct_pts.iter().map(|(xp, yp)| {
+                    (bx.rect.x + bx.rect.width * xp, bx.rect.y + bx.rect.height * yp)
+                }).collect();
+                if abs_pts.len() >= 3 {
+                    cmds.push(DisplayCommand::ClippedRect { color: with_alpha(bg), points: abs_pts });
+                }
+            } else {
+                cmds.push(DisplayCommand::Rect {
+                    x: clip_x, y: clip_y, w: clip_w, h: clip_h,
+                    color: with_alpha(bg), radius: clip_radius,
+                });
+            }
+        }
+        // Gradient layer
+        if let Some(g) = &layer.gradient {
+            use crate::browser::layout::BgGradientKind;
+            let kind = match g.kind {
+                BgGradientKind::Linear { angle_deg } => GradientKind::Linear { angle_deg },
+                BgGradientKind::Radial { cx_pct, cy_pct, radius_pct } => {
+                    let cx = bx.rect.x + bx.rect.width  * cx_pct;
+                    let cy = bx.rect.y + bx.rect.height * cy_pct;
+                    let half_diag = ((bx.rect.width / 2.0).powi(2) + (bx.rect.height / 2.0).powi(2)).sqrt();
+                    GradientKind::Radial { cx, cy, radius: half_diag * radius_pct }
+                }
+                BgGradientKind::Conic { cx_pct, cy_pct, start_angle_deg } => {
+                    let cx = bx.rect.x + bx.rect.width  * cx_pct;
+                    let cy = bx.rect.y + bx.rect.height * cy_pct;
+                    GradientKind::Conic { cx, cy, start_angle_deg }
+                }
+            };
+            cmds.push(DisplayCommand::Gradient {
+                x: bx.rect.x, y: bx.rect.y, w: bx.rect.width, h: bx.rect.height,
+                kind,
+                stops: g.stops.iter().map(|(o, c)| (*o, with_alpha(*c))).collect(),
+                radius: bx.border_radius,
+            });
+        }
+        // Image url layer
         if let Some(src) = &layer.image_src {
-            // Vypocti vychozi rozmer image podle background-size
             let (img_w, img_h) = compute_bg_size(&layer.size, bx.rect.width, bx.rect.height);
-            // Pozice
             let (img_x, img_y) = compute_bg_position(&layer.position, bx.rect.width, bx.rect.height,
                                                      img_w, img_h, bx.rect.x, bx.rect.y);
-            // Repeat - pri repeat-x emituje vice tilu vodorovne, repeat-y vertikalne, repeat oboji
-            // (no-repeat default - 1 tile)
-            use crate::browser::layout::BgRepeat;
             let (rep_x, rep_y) = match layer.repeat {
                 BgRepeat::NoRepeat => (1, 1),
                 BgRepeat::RepeatX => ((bx.rect.width / img_w).ceil() as i32 + 1, 1),
                 BgRepeat::RepeatY => (1, (bx.rect.height / img_h).ceil() as i32 + 1),
-                _ /* repeat / space / round */ => (
+                _ => (
                     (bx.rect.width / img_w).ceil() as i32 + 1,
                     (bx.rect.height / img_h).ceil() as i32 + 1,
                 ),
             };
-            // Pri >1 tile musime emitvyat vice Image commandu vedle sebe (clip na box)
             for ix in 0..rep_x {
                 for iy in 0..rep_y {
                     let tx = img_x + (ix as f32) * img_w;
                     let ty = img_y + (iy as f32) * img_h;
-                    // Skip kdyz tile mimo box
                     if tx + img_w < bx.rect.x || tx > bx.rect.x + bx.rect.width
                         || ty + img_h < bx.rect.y || ty > bx.rect.y + bx.rect.height {
                         continue;
@@ -500,6 +538,10 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
             }
         }
     }
+
+    // bx.bg_gradient a bx.bg_color: legacy cesta pro background shorthand bez backgrounds vec.
+    // Pokud uz backgrounds loop zpracoval barvu, preskocime bg_color aby nedoslo k dvojimu vykresleni.
+    let bg_color_handled_by_layers = bx.backgrounds.iter().any(|l| l.color.is_some());
 
     // Background gradient ma prioritu pred solid color
     if let Some(g) = &bx.bg_gradient {
@@ -529,7 +571,7 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
             stops: g.stops.iter().map(|(o, c)| (*o, with_alpha(*c))).collect(),
             radius: bx.border_radius,
         });
-    } else if let Some(bg) = bx.bg_color {
+    } else if let Some(bg) = bx.bg_color.filter(|_| !bg_color_handled_by_layers) {
         // Polygon clip-path: emit ClippedRect misto Rect.
         // Renderer aplikuje fan triangulation (convex polygon assumption).
         if let Some(crate::browser::layout::ClipPath::Polygon(pct_pts)) = &bx.clip_path {
