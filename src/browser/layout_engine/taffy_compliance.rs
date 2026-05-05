@@ -204,9 +204,22 @@ mod tests {
                 "position" if v != "static" && v != "relative" => return None,
                 "aspect-ratio" => return None,
                 "min-width" | "min-height" | "max-width" | "max-height" => return None,
-                "padding-left" | "padding-right" | "padding-top" | "padding-bottom" => return None,
-                "margin-left" | "margin-right" | "margin-top" | "margin-bottom" => return None,
-                "border" | "border-left" | "border-right" | "border-top" | "border-bottom" => return None,
+                "padding-left" | "padding-right" => {
+                    let p = parse_dim(v, container_w).unwrap_or(0.0);
+                    bx.padding = bx.padding.max(p);
+                }
+                "padding-top" | "padding-bottom" => {
+                    let p = parse_dim(v, container_h).unwrap_or(0.0);
+                    bx.padding = bx.padding.max(p);
+                }
+                "margin-left" | "margin-right" | "margin-top" | "margin-bottom" => {
+                    // Skip - asymmetric margin nepodporujem
+                    return None;
+                }
+                "border" => {
+                    bx.border_width = parse_dim(v, container_w).unwrap_or(0.0);
+                }
+                "border-left" | "border-right" | "border-top" | "border-bottom" => return None,
                 "top" | "left" | "right" | "bottom" => return None,
                 "inset" => return None,
                 "overflow" | "overflow-x" | "overflow-y" => return None,
@@ -284,9 +297,10 @@ mod tests {
 
     /// Jednoduchy block layout - stackuj children vertikalne, kazdy plnou sirku.
     fn block_layout_simple(bx: &mut LayoutBox) {
-        let inner_x = bx.rect.x;
-        let inner_y = bx.rect.y;
-        let inner_w = bx.rect.width;
+        let pad = bx.padding + bx.border_width;
+        let inner_x = bx.rect.x + pad;
+        let inner_y = bx.rect.y + pad;
+        let inner_w = (bx.rect.width - 2.0 * pad).max(0.0);
         let mut cursor_y = inner_y;
         for child in bx.children.iter_mut() {
             child.rect.x = inner_x;
