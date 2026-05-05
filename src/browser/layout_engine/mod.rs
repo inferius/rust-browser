@@ -81,6 +81,13 @@ fn layout_absolute_child_inner(child: &mut LayoutBox, parent_x: f32, parent_y: f
     h = h.min(ch_max);
     if cw_min > 0.0 { w = w.max(cw_min); }
     if ch_min > 0.0 { h = h.max(ch_min); }
+    // Padding+border floor.
+    let pb_l = child.padding_left.unwrap_or(child.padding) + child.border_left_width.unwrap_or(child.border_width);
+    let pb_r = child.padding_right.unwrap_or(child.padding) + child.border_right_width.unwrap_or(child.border_width);
+    let pb_t = child.padding_top.unwrap_or(child.padding) + child.border_top_width.unwrap_or(child.border_width);
+    let pb_b = child.padding_bottom.unwrap_or(child.padding) + child.border_bottom_width.unwrap_or(child.border_width);
+    w = w.max(pb_l + pb_r);
+    h = h.max(pb_t + pb_b);
     // Pokud ar set a jen jeden rozmer ma min/max-effect, dopocet drugeho.
     if let Some(ar) = child.aspect_ratio {
         if ar > 0.0 {
