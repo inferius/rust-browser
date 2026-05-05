@@ -135,12 +135,25 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                 if direction.is_row() { est_w = b; } else { est_h = b; }
             }
         }
+        // Apply min-w/h pred aspect ratio dopoctem
+        let min_w_pre = super::super::layout::parse_length(&ch.min_width_v);
+        let min_h_pre = super::super::layout::parse_length(&ch.min_height_v);
+        let max_w_pre = if ch.max_width_v.is_empty() { f32::INFINITY } else { super::super::layout::parse_length(&ch.max_width_v) };
+        let max_h_pre = if ch.max_height_v.is_empty() { f32::INFINITY } else { super::super::layout::parse_length(&ch.max_height_v) };
+        if min_w_pre > 0.0 { est_w = est_w.max(min_w_pre); }
+        if min_h_pre > 0.0 { est_h = est_h.max(min_h_pre); }
         // Aspect-ratio dopocet
         if let Some(ar) = ch.aspect_ratio {
             if ar > 0.0 {
-                if ch.explicit_width.is_some() && ch.explicit_height.is_none() {
+                let has_w = ch.explicit_width.is_some() || min_w_pre > 0.0 || max_w_pre.is_finite();
+                let has_h = ch.explicit_height.is_some() || min_h_pre > 0.0 || max_h_pre.is_finite();
+                if has_w && !has_h && est_w > 0.0 {
                     est_h = est_w / ar;
-                } else if ch.explicit_height.is_some() && ch.explicit_width.is_none() {
+                } else if has_h && !has_w && est_h > 0.0 {
+                    est_w = est_h * ar;
+                } else if est_w > 0.0 && est_h == 0.0 {
+                    est_h = est_w / ar;
+                } else if est_h > 0.0 && est_w == 0.0 {
                     est_w = est_h * ar;
                 }
             }
