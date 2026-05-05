@@ -33,8 +33,10 @@ pub fn layout_grid(bx: &mut LayoutBox) {
 
     // Parse + resolve column tracks
     let mut col_tracks = resolve_tracks(&bx.grid_template_columns, inner_w, col_gap);
+    let col_token_kinds = parse_track_tokens_sized(&bx.grid_template_columns, inner_w, col_gap);
     if col_tracks.is_empty() { col_tracks = vec![inner_w]; }
     let cols = col_tracks.len();
+    let col_is_auto: Vec<bool> = (0..cols).map(|i| matches!(col_token_kinds.get(i), Some(Track::Auto))).collect();
 
     // In-flow item count (abs/fixed/display:none vyradit pri vypoctu rows).
     let in_flow_count = bx.children.iter()
@@ -99,29 +101,6 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         row_tracks.push(h);
     }
 
-    // Total tracks delky
-    let total_col: f32 = col_tracks.iter().sum::<f32>() + col_gap * (cols.saturating_sub(1) as f32);
-    let total_row: f32 = row_tracks.iter().sum::<f32>() + row_gap * (rows.saturating_sub(1) as f32);
-    // justify-content (inline = column axis) + align-content (block = row axis)
-    let (jc_start, jc_between) = grid_distribute(&bx.justify_content, inner_w - total_col, cols);
-    let (ac_start, ac_between) = grid_distribute(&bx.align_content, inner_h - total_row, rows);
-
-    // Compute x positions per col + y positions per row
-    let mut col_positions: Vec<f32> = Vec::with_capacity(cols);
-    let mut x_cursor = jc_start;
-    for (i, w) in col_tracks.iter().enumerate() {
-        col_positions.push(x_cursor);
-        x_cursor += *w;
-        if i + 1 < cols { x_cursor += col_gap + jc_between; }
-    }
-    let mut row_positions: Vec<f32> = Vec::with_capacity(rows);
-    let mut y_cursor = ac_start;
-    for (i, h) in row_tracks.iter().enumerate() {
-        row_positions.push(y_cursor);
-        y_cursor += *h;
-        if i + 1 < rows { y_cursor += row_gap + ac_between; }
-    }
-
     // In-flow indices (skip abs/fixed + display:none)
     let in_flow: Vec<usize> = bx.children.iter().enumerate()
         .filter(|(_, c)| !super::is_out_of_flow(c) && !matches!(c.display, super::super::layout::Display::None))
@@ -151,6 +130,135 @@ pub fn layout_grid(bx: &mut LayoutBox) {
             _ => {}
         }
         ch.rect.x = saved_x; ch.rect.y = saved_y;
+    }
+
+    // Auto track sizing: pro auto cols/rows, najdi max item intrinsic width/height a expand track.
+    // Dummy placement: spocti pro kazdy item (row, col, span) a ulozit.
+    let any_auto_col = col_is_auto.iter().any(|&b| b);
+    if any_auto_col && !in_flow.is_empty() {
+        // Dummy placement (jen kvuli zjisteni col placement).
+        let mut occupied_d: Vec<bool> = vec![false; rows.max(1) * cols.max(1)];
+        let mut auto_cursor_d = 0usize;
+        let mut item_placement: Vec<(usize, usize, usize, usize)> = Vec::new(); // (row, col, span_row, span_col)
+        for &real_idx in in_flow.iter() {
+            let child = &bx.children[real_idx];
+            let explicit_col = if child.grid_column_start > 0 { Some((child.grid_column_start - 1) as usize) } else { None };
+            let explicit_row = if child.grid_row_start > 0 { Some((child.grid_row_start - 1) as usize) } else { None };
+            let resolve_end = |start: i32, end: i32, span: i32, count: usize| -> usize {
+                if span > 0 { return span as usize; }
+                if end < 0 && start > 0 {
+                    let end_line = (count as i32 + 1 + end + 1).max(start + 1);
+                    ((end_line - start).max(1)) as usize
+                } else if end > 0 && start > 0 {
+                    ((end - start).max(1)) as usize
+                } else { 1 }
+            };
+            let span_col = resolve_end(child.grid_column_start, child.grid_column_end, child.grid_column_span, cols);
+            let span_row = resolve_end(child.grid_row_start, child.grid_row_end, child.grid_row_span, rows);
+            let (row, col) = if let (Some(r), Some(c)) = (explicit_row, explicit_col) {
+                (r, c)
+            } else if let Some(c) = explicit_col {
+                let mut r = 0;
+                loop {
+                    if r * cols + c >= occupied_d.len() { break; }
+                    if !occupied_d[r * cols + c] { break; }
+                    r += 1;
+                }
+                (r, c)
+            } else if let Some(r) = explicit_row {
+                let mut c = 0;
+                loop {
+                    if r * cols + c >= occupied_d.len() { break; }
+                    if !occupied_d[r * cols + c] { break; }
+                    c += 1;
+                }
+                (r, c)
+            } else {
+                let mut idx = auto_cursor_d;
+                while idx < occupied_d.len() && occupied_d[idx] { idx += 1; }
+                auto_cursor_d = idx + 1;
+                (idx / cols.max(1), idx % cols.max(1))
+            };
+            for dr in 0..span_row {
+                for dc in 0..span_col {
+                    let idx = (row + dr) * cols + (col + dc);
+                    if idx < occupied_d.len() { occupied_d[idx] = true; }
+                }
+            }
+            item_placement.push((row, col, span_row, span_col));
+        }
+        // Pro kazdy auto col, najdi max intrinsic width z items (single col span only - simple).
+        for c_idx in 0..cols {
+            if !col_is_auto[c_idx] { continue; }
+            let mut max_w = col_tracks[c_idx];
+            for (i, &real_idx) in in_flow.iter().enumerate() {
+                let (_, col, _, span_col) = item_placement[i];
+                if col == c_idx && span_col == 1 {
+                    let item = &bx.children[real_idx];
+                    let intrinsic = item.explicit_width.unwrap_or(item.rect.width);
+                    if intrinsic > max_w { max_w = intrinsic; }
+                }
+            }
+            col_tracks[c_idx] = max_w;
+        }
+    }
+    // Auto rows similar.
+    let any_auto_row = rows_explicit_str.is_empty();
+    if any_auto_row && !in_flow.is_empty() {
+        // Pro radky bez template, dej max item explicit_height (uz jsme to delali). Ted jeste rect.height.
+        let mut by_row: std::collections::HashMap<usize, f32> = std::collections::HashMap::new();
+        let mut occupied_d: Vec<bool> = vec![false; rows.max(1) * cols.max(1)];
+        let mut auto_cursor_d = 0usize;
+        for &real_idx in in_flow.iter() {
+            let child = &bx.children[real_idx];
+            let explicit_col = if child.grid_column_start > 0 { Some((child.grid_column_start - 1) as usize) } else { None };
+            let explicit_row = if child.grid_row_start > 0 { Some((child.grid_row_start - 1) as usize) } else { None };
+            let span_col = if child.grid_column_span > 0 { child.grid_column_span as usize }
+                           else if child.grid_column_end > 0 && child.grid_column_start > 0 { (child.grid_column_end - child.grid_column_start).max(1) as usize }
+                           else { 1 };
+            let span_row = if child.grid_row_span > 0 { child.grid_row_span as usize }
+                           else if child.grid_row_end > 0 && child.grid_row_start > 0 { (child.grid_row_end - child.grid_row_start).max(1) as usize }
+                           else { 1 };
+            let (row, col) = if let (Some(r), Some(c)) = (explicit_row, explicit_col) { (r, c) }
+                else if let Some(c) = explicit_col { let mut r = 0; while r * cols + c < occupied_d.len() && occupied_d[r * cols + c] { r += 1; } (r, c) }
+                else if let Some(r) = explicit_row { let mut c = 0; while r * cols + c < occupied_d.len() && occupied_d[r * cols + c] { c += 1; } (r, c) }
+                else { let mut idx = auto_cursor_d; while idx < occupied_d.len() && occupied_d[idx] { idx += 1; } auto_cursor_d = idx + 1; (idx / cols.max(1), idx % cols.max(1)) };
+            for dr in 0..span_row {
+                for dc in 0..span_col {
+                    let idx = (row + dr) * cols + (col + dc);
+                    if idx < occupied_d.len() { occupied_d[idx] = true; }
+                }
+            }
+            if span_row == 1 {
+                let item = &bx.children[real_idx];
+                let h = item.explicit_height.unwrap_or(item.rect.height);
+                let entry = by_row.entry(row).or_insert(0.0);
+                if h > *entry { *entry = h; }
+            }
+        }
+        for (r, h) in by_row {
+            if r < row_tracks.len() && row_tracks[r] < h { row_tracks[r] = h; }
+        }
+    }
+
+    // Total tracks delky (po auto track sizing)
+    let total_col: f32 = col_tracks.iter().sum::<f32>() + col_gap * (cols.saturating_sub(1) as f32);
+    let total_row: f32 = row_tracks.iter().sum::<f32>() + row_gap * (rows.saturating_sub(1) as f32);
+    let (jc_start, jc_between) = grid_distribute(&bx.justify_content, inner_w - total_col, cols);
+    let (ac_start, ac_between) = grid_distribute(&bx.align_content, inner_h - total_row, rows);
+    let mut col_positions: Vec<f32> = Vec::with_capacity(cols);
+    let mut x_cursor = jc_start;
+    for (i, w) in col_tracks.iter().enumerate() {
+        col_positions.push(x_cursor);
+        x_cursor += *w;
+        if i + 1 < cols { x_cursor += col_gap + jc_between; }
+    }
+    let mut row_positions: Vec<f32> = Vec::with_capacity(rows);
+    let mut y_cursor = ac_start;
+    for (i, h) in row_tracks.iter().enumerate() {
+        row_positions.push(y_cursor);
+        y_cursor += *h;
+        if i + 1 < rows { y_cursor += row_gap + ac_between; }
     }
 
     // Place items - explicit (grid-row-start/grid-column-start) i auto-flow row major.
