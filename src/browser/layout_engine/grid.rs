@@ -36,7 +36,11 @@ pub fn layout_grid(bx: &mut LayoutBox) {
     let col_token_kinds = parse_track_tokens_sized(&bx.grid_template_columns, inner_w, col_gap);
     if col_tracks.is_empty() { col_tracks = vec![inner_w]; }
     let cols = col_tracks.len();
-    let col_is_auto: Vec<bool> = (0..cols).map(|i| matches!(col_token_kinds.get(i), Some(Track::Auto))).collect();
+    let col_is_auto: Vec<bool> = (0..cols).map(|i| match col_token_kinds.get(i) {
+        Some(Track::Auto) => true,
+        Some(Track::Minmax(_, max, false)) if !max.is_finite() => true,
+        _ => false,
+    }).collect();
 
     // In-flow item count (abs/fixed/display:none vyradit pri vypoctu rows).
     let in_flow_count = bx.children.iter()
@@ -207,7 +211,13 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         }
     }
     // Auto rows similar.
-    let any_auto_row = rows_explicit_str.is_empty();
+    let row_token_kinds = parse_track_tokens_sized(&rows_explicit_str, inner_h, row_gap);
+    let row_is_auto: Vec<bool> = (0..rows).map(|i| match row_token_kinds.get(i) {
+        Some(Track::Auto) => true,
+        Some(Track::Minmax(_, max, false)) if !max.is_finite() => true,
+        _ => rows_explicit_str.is_empty(),
+    }).collect();
+    let any_auto_row = rows_explicit_str.is_empty() || row_is_auto.iter().any(|&b| b);
     if any_auto_row && !in_flow.is_empty() {
         // Pro radky bez template, dej max item explicit_height (uz jsme to delali). Ted jeste rect.height.
         let mut by_row: std::collections::HashMap<usize, f32> = std::collections::HashMap::new();
