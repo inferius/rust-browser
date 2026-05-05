@@ -5,14 +5,22 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 ## Stav
 
 - Build: **OK**, 0 errors, 0 warnings.
-- Tests: **2177 unit + 8 integration = 2185 testu celkem**, 0 failed, 3 ignored.
+- Tests: **2181 unit testu**, 0 failed, 3 ignored.
 - **Layout engine pod nasi kontrolou** - vlastni flex/grid v `src/browser/layout_engine/`.
-- **168 layout testu** (flex_tests + flex_spec_tests + grid_tests + grid_spec_tests)
-  pokryvajici CSS Flexbox L1 + CSS Grid L1 spec.
+- **168 layout unit testu** (flex_tests + flex_spec_tests + grid_tests + grid_spec_tests).
 - **4108 taffy XML test fixtures** prevzato (MIT licence) v tests/fixtures/taffy_*/:
   - flex: 2212, grid: 1076, block: 820
-  - tests/taffy_xml_runner.rs - XML parser + smoke testy
-  - Fixtury jako reference pro budouci spec compliance harness
+- **Compliance harness** v src/browser/layout_engine/taffy_compliance.rs:
+  - XML parser + LayoutBox converter + run_directory + compare_layout
+  - 4 testy spousteji vsechny fixtury, vypocitavaji pass-rate
+  - **Aktualni pass-rate: 139/1988 (7.0%)** baseline:
+    * BLOCK:   8/392 (2.0%)
+    * GRID:   44/512 (8.6%)
+    * FLEX:   87/1084 (8.0%)
+  - Pass progresion: 18 -> 41 -> 45 -> 69 -> 139 (across 4 iterations)
+  - Cil: postupne zvedat. Pro >50% pass-rate potreba: real abs position,
+    asymmetric padding/margin, content-box vs border-box, percent v all
+    contexts, RTL direction, intrinsic content sizes, baseline alignment.
 - Tree: ciste.
 - Branch master, ~290 commitu pred origin/master (NEPUSHOVAT bez vyzvy).
 - **WebGL pipeline DOKONCEN** + **CSS L4-L6 KOMPLET** + **JS DOM kompletni**:
