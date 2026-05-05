@@ -659,6 +659,21 @@ pub fn setup_builtins(
     sym_obj.set("toPrimitive".into(), JsValue::Str("Symbol.toPrimitive".into()));
     sym_obj.set("hasInstance".into(), JsValue::Str("Symbol.hasInstance".into()));
     sym_obj.set("asyncIterator".into(), JsValue::Str("Symbol.asyncIterator".into()));
+    // ES2015+ well-known symbols
+    sym_obj.set("isConcatSpreadable".into(), JsValue::Str("Symbol.isConcatSpreadable".into()));
+    sym_obj.set("match".into(), JsValue::Str("Symbol.match".into()));
+    sym_obj.set("matchAll".into(), JsValue::Str("Symbol.matchAll".into()));
+    sym_obj.set("replace".into(), JsValue::Str("Symbol.replace".into()));
+    sym_obj.set("search".into(), JsValue::Str("Symbol.search".into()));
+    sym_obj.set("species".into(), JsValue::Str("Symbol.species".into()));
+    sym_obj.set("split".into(), JsValue::Str("Symbol.split".into()));
+    sym_obj.set("toStringTag".into(), JsValue::Str("Symbol.toStringTag".into()));
+    sym_obj.set("unscopables".into(), JsValue::Str("Symbol.unscopables".into()));
+    // ES2022 - Symbol.dispose / Symbol.asyncDispose (Explicit Resource Management)
+    sym_obj.set("dispose".into(), JsValue::Str("Symbol.dispose".into()));
+    sym_obj.set("asyncDispose".into(), JsValue::Str("Symbol.asyncDispose".into()));
+    // ES2024 - Symbol.metadata (decorators)
+    sym_obj.set("metadata".into(), JsValue::Str("Symbol.metadata".into()));
     // Symbol.for(key) - registry-based symbols (sdilene podle stringu)
     sym_obj.set("for".into(), native("Symbol.for", |a| {
         let key = a.into_iter().next().map(|v| v.to_string()).unwrap_or_default();

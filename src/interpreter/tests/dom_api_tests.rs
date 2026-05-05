@@ -2412,3 +2412,80 @@ fn performance_entry_construct() {
         assert_eq!(s, "string|0");
     }
 }
+
+// ─── Symbols + Reflect ────────────────────────────────────────────────
+
+#[test]
+fn symbol_well_known_extras() {
+    let code = r#"
+        return [
+            typeof Symbol.iterator,
+            typeof Symbol.asyncIterator,
+            typeof Symbol.toPrimitive,
+            typeof Symbol.toStringTag,
+            typeof Symbol.species,
+            typeof Symbol.match,
+            typeof Symbol.matchAll,
+            typeof Symbol.replace,
+            typeof Symbol.search,
+            typeof Symbol.split,
+            typeof Symbol.isConcatSpreadable,
+            typeof Symbol.unscopables,
+            typeof Symbol.hasInstance,
+            typeof Symbol.dispose,
+            typeof Symbol.asyncDispose,
+            typeof Symbol.metadata
+        ].every(t => t === "string");
+    "#;
+    if let crate::interpreter::JsValue::Bool(b) = run(code) {
+        assert!(b);
+    }
+}
+
+#[test]
+fn symbol_for_creates_registry() {
+    let code = r#"
+        const s = Symbol.for("test");
+        return Symbol.keyFor(s);
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "test");
+    }
+}
+
+#[test]
+fn reflect_get_set() {
+    let code = r#"
+        const obj = { x: 5 };
+        Reflect.set(obj, "y", 10);
+        return Reflect.get(obj, "x") + "|" + Reflect.get(obj, "y");
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "5|10");
+    }
+}
+
+#[test]
+fn reflect_has_delete() {
+    let code = r#"
+        const obj = { a: 1, b: 2 };
+        const has_a = Reflect.has(obj, "a");
+        Reflect.deleteProperty(obj, "a");
+        const has_a_after = Reflect.has(obj, "a");
+        return has_a + "|" + has_a_after;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "true|false");
+    }
+}
+
+#[test]
+fn reflect_own_keys() {
+    let code = r#"
+        const obj = { a: 1, b: 2, c: 3 };
+        return Reflect.ownKeys(obj).length;
+    "#;
+    if let crate::interpreter::JsValue::Number(n) = run(code) {
+        assert_eq!(n, 3.0);
+    }
+}
