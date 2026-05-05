@@ -170,9 +170,9 @@ mod tests {
         v.parse().ok()
     }
 
-    fn convert_to_layout(node: &TestNode, container_w: f32, container_h: f32) -> Option<LayoutBox> {
+    fn convert_to_layout(node: &TestNode, container_w: f32, container_h: f32, default_display: Display) -> Option<LayoutBox> {
         let mut bx = LayoutBox::new();
-        let mut display = Display::Block;
+        let mut display = default_display;
         for (k, v) in &node.attrs {
             match k.as_str() {
                 "display" => {
@@ -259,7 +259,10 @@ mod tests {
         for child in &node.children {
             let cw = bx.explicit_width.unwrap_or(container_w);
             let ch = bx.explicit_height.unwrap_or(container_h);
-            let child_box = convert_to_layout(child, cw, ch)?;
+            // Default display pro children: pokud parent je flex/grid, child je block (flex item).
+            // Pokud parent je block, child je tez block. Override v attrs.
+            let child_default = Display::Block;
+            let child_box = convert_to_layout(child, cw, ch, child_default)?;
             bx.children.push(child_box);
         }
         Some(bx)
@@ -273,7 +276,7 @@ mod tests {
         skip: usize,
     }
 
-    fn run_directory(dir: &str) -> Stats {
+    fn run_directory(dir: &str, root_default_display: Display) -> Stats {
         let mut stats = Stats::default();
         let entries = match fs::read_dir(dir) {
             Ok(e) => e,
@@ -295,7 +298,7 @@ mod tests {
                 _ => { stats.skip += 1; continue; }
             };
             let exp = fixture.expected_root.unwrap();
-            let mut input_box = match convert_to_layout(fixture.input_root.as_ref().unwrap(), exp.width, exp.height) {
+            let mut input_box = match convert_to_layout(fixture.input_root.as_ref().unwrap(), exp.width, exp.height, root_default_display) {
                 Some(b) => b,
                 None => { stats.skip += 1; continue; }
             };
@@ -391,7 +394,7 @@ mod tests {
     /// Aktualne nizky pass-rate (5-15%) - postupne zvedat.
     #[test]
     fn taffy_compliance_flex() {
-        let stats = run_directory("tests/fixtures/taffy_flex");
+        let stats = run_directory("tests/fixtures/taffy_flex", Display::Flex);
         println!(
             "[FLEX] {}/{} pass ({:.1}%), {} fail, {} skip",
             stats.pass, stats.total,
@@ -403,7 +406,7 @@ mod tests {
 
     #[test]
     fn taffy_compliance_grid() {
-        let stats = run_directory("tests/fixtures/taffy_grid");
+        let stats = run_directory("tests/fixtures/taffy_grid", Display::Grid);
         println!(
             "[GRID] {}/{} pass ({:.1}%), {} fail, {} skip",
             stats.pass, stats.total,
@@ -415,7 +418,7 @@ mod tests {
 
     #[test]
     fn taffy_compliance_block() {
-        let stats = run_directory("tests/fixtures/taffy_block");
+        let stats = run_directory("tests/fixtures/taffy_block", Display::Block);
         println!(
             "[BLOCK] {}/{} pass ({:.1}%), {} fail, {} skip",
             stats.pass, stats.total,
@@ -428,9 +431,9 @@ mod tests {
     /// Aspon 1 fixture must pass jako sanity check.
     #[test]
     fn taffy_at_least_one_passes() {
-        let s_flex = run_directory("tests/fixtures/taffy_flex");
-        let s_grid = run_directory("tests/fixtures/taffy_grid");
-        let s_block = run_directory("tests/fixtures/taffy_block");
+        let s_flex = run_directory("tests/fixtures/taffy_flex", Display::Flex);
+        let s_grid = run_directory("tests/fixtures/taffy_grid", Display::Grid);
+        let s_block = run_directory("tests/fixtures/taffy_block", Display::Block);
         let total_pass = s_flex.pass + s_grid.pass + s_block.pass;
         let total_total = s_flex.total + s_grid.total + s_block.total;
         println!("=== TAFFY COMPLIANCE TOTAL: {}/{} pass ===", total_pass, total_total);
