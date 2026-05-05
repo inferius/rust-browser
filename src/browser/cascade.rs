@@ -1133,6 +1133,45 @@ pub fn matches_simple(node: &Rc<Node>, sel: &SimpleSelector) -> bool {
                 let value_empty = node.attr("value").map(|v| v.is_empty()).unwrap_or(true);
                 if !has_placeholder || !value_empty { return false; }
             }
+            "popover-open" => {
+                // :popover-open match elementu s popover atributem co je open.
+                // HTML L1: popover state = "open" / "closed". Aproximace: kdyz ma data-popover-open="true"
+                // OR popover atribut + open atribut.
+                if !node.has_attr("popover") { return false; }
+                let is_open = node.attr("data-popover-open").as_deref() == Some("true")
+                    || node.attr("open").is_some();
+                if !is_open { return false; }
+            }
+            "open" => {
+                // :open - <details>/<dialog>/<select>/<input> co jsou otevrene
+                let tag = tag.as_str();
+                if !matches!(tag, "details" | "dialog" | "select" | "input") { return false; }
+                if node.attr("open").is_none() { return false; }
+            }
+            "closed" => {
+                let tag = tag.as_str();
+                if !matches!(tag, "details" | "dialog") { return false; }
+                if node.attr("open").is_some() { return false; }
+            }
+            "modal" => {
+                // :modal match modaln dialog / fullscreen
+                if tag != "dialog" { return false; }
+                if node.attr("open").is_none() { return false; }
+                // Modal kdyz showModal() volano; aproximace: ma data-modal=true
+                if node.attr("data-modal").as_deref() != Some("true") { return false; }
+            }
+            "fullscreen" => {
+                if node.attr("data-fullscreen").as_deref() != Some("true") { return false; }
+            }
+            "indeterminate" => {
+                // :indeterminate - checkbox/radio s indeterminate=true (nelze HTML, jen JS)
+                if node.attr("data-indeterminate").as_deref() != Some("true") { return false; }
+            }
+            "blank" => {
+                // :blank - empty input
+                let val = node.attr("value").unwrap_or_default();
+                if !val.is_empty() { return false; }
+            }
             "user-valid" => {
                 // Selectors L5: :user-valid - prvek byl uzivatelem zmenen + je validni
                 // Aproximace: pokud ma data-user-valid="true" attribute, OR same logic jako :valid
@@ -1198,7 +1237,7 @@ pub fn matches_simple(node: &Rc<Node>, sel: &SimpleSelector) -> bool {
                 };
                 if !is_default { return false; }
             }
-            "indeterminate" | "in-range" | "out-of-range" => {
+            "in-range" | "out-of-range" => {
                 // Vyzaduje runtime stav - skip
                 return false;
             }

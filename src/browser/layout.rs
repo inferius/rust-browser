@@ -478,6 +478,24 @@ pub struct LayoutBox {
     pub position_area: String,
     /// CSS Position L4 - position-try-fallbacks: a, b, c.
     pub position_try_fallbacks: String,
+    /// CSS Text L4 - text-spacing.
+    pub text_spacing: String,
+    /// CSS Text L4 - text-autospace.
+    pub text_autospace: String,
+    /// CSS Inline L3 - vertical-align extends.
+    pub initial_letter: String,
+    pub ruby_overhang: String,
+    pub ruby_merge: String,
+    /// CSS Math L1 - MathML props.
+    pub math_shift: String,
+    /// CSS Transitions L2 - transition-behavior: normal | allow-discrete.
+    pub transition_behavior: String,
+    /// CSS Animations L2 - animation-composition: replace | add | accumulate.
+    pub animation_composition: String,
+    /// CSS Color L4 - color-interpolation, color-interpolation-filters.
+    pub color_interpolation: String,
+    /// CSS Lists L3 - lazy lookup pres animation-name pak counter manipulation
+    pub lazy_counters: String,
     /// Box shadow: (offset_x, offset_y, blur, spread, color)
     /// (offset_x, offset_y, blur, spread, color, inset)
     pub box_shadow: Option<(f32, f32, f32, f32, [u8; 4], bool)>,
@@ -702,6 +720,16 @@ impl LayoutBox {
             anchor_default: String::new(),
             position_area: String::new(),
             position_try_fallbacks: String::new(),
+            text_spacing: String::new(),
+            text_autospace: String::new(),
+            initial_letter: String::new(),
+            ruby_overhang: String::new(),
+            ruby_merge: String::new(),
+            math_shift: String::new(),
+            transition_behavior: String::new(),
+            animation_composition: String::new(),
+            color_interpolation: String::new(),
+            lazy_counters: String::new(),
             box_shadow: None,
             transform: None,
             transforms: Vec::new(),
@@ -1266,6 +1294,19 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(pa) = s.get("position-area") { bx.position_area = pa.trim().to_string(); }
     if let Some(ptf) = s.get("position-try-fallbacks") { bx.position_try_fallbacks = ptf.trim().to_string(); }
     if let Some(ad) = s.get("anchor-default") { bx.anchor_default = ad.trim().to_string(); }
+    // CSS Text L4 - text-spacing
+    if let Some(ts2) = s.get("text-spacing") { bx.text_spacing = ts2.trim().to_string(); }
+    if let Some(ta) = s.get("text-autospace") { bx.text_autospace = ta.trim().to_string(); }
+    if let Some(il) = s.get("initial-letter") { bx.initial_letter = il.trim().to_string(); }
+    // CSS Ruby L1 (extras)
+    if let Some(ro) = s.get("ruby-overhang") { bx.ruby_overhang = ro.trim().to_string(); }
+    if let Some(rm) = s.get("ruby-merge") { bx.ruby_merge = rm.trim().to_string(); }
+    // CSS Math L1 (extras)
+    if let Some(msh) = s.get("math-shift") { bx.math_shift = msh.trim().to_string(); }
+    // CSS Transitions L2 / Animations L2
+    if let Some(tb) = s.get("transition-behavior") { bx.transition_behavior = tb.trim().to_string(); }
+    if let Some(ac) = s.get("animation-composition") { bx.animation_composition = ac.trim().to_string(); }
+    if let Some(ci) = s.get("color-interpolation") { bx.color_interpolation = ci.trim().to_string(); }
     // inset shorthand: top right bottom left
     if let Some(ins) = s.get("inset") {
         let parts: Vec<&str> = ins.split_whitespace().collect();

@@ -379,6 +379,64 @@ fn inset_shorthand_auto() {
 }
 
 #[test]
+fn text_spacing_extras() {
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade, layout};
+    let doc = parse_html(r#"<html><body><p></p></body></html>"#, "");
+    let css = parse_stylesheet("p { text-spacing: trim-auto; text-autospace: ideograph-alpha; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+    let p = find_box_by_tag(&root, "p").unwrap();
+    assert_eq!(p.text_spacing, "trim-auto");
+    assert_eq!(p.text_autospace, "ideograph-alpha");
+}
+
+#[test]
+fn initial_letter_parsed() {
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade, layout};
+    let doc = parse_html(r#"<html><body><p></p></body></html>"#, "");
+    let css = parse_stylesheet("p { initial-letter: 3 2; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+    let p = find_box_by_tag(&root, "p").unwrap();
+    assert_eq!(p.initial_letter, "3 2");
+}
+
+#[test]
+fn ruby_overhang_merge() {
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade, layout};
+    let doc = parse_html(r#"<html><body><ruby></ruby></body></html>"#, "");
+    let css = parse_stylesheet("ruby { ruby-overhang: auto; ruby-merge: collapse; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+    let r = find_box_by_tag(&root, "ruby").unwrap();
+    assert_eq!(r.ruby_overhang, "auto");
+    assert_eq!(r.ruby_merge, "collapse");
+}
+
+#[test]
+fn math_shift_centered() {
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade, layout};
+    let doc = parse_html(r#"<html><body><math></math></body></html>"#, "");
+    let css = parse_stylesheet("math { math-shift: centered; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+    let m = find_box_by_tag(&root, "math").unwrap();
+    assert_eq!(m.math_shift, "centered");
+}
+
+#[test]
+fn transition_behavior_allow_discrete() {
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade, layout};
+    let doc = parse_html(r#"<html><body><div></div></body></html>"#, "");
+    let css = parse_stylesheet("div { transition-behavior: allow-discrete; animation-composition: add; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+    let d = find_box_by_tag(&root, "div").unwrap();
+    assert_eq!(d.transition_behavior, "allow-discrete");
+    assert_eq!(d.animation_composition, "add");
+}
+
+#[test]
 fn parse_color_modern_rgb_space_syntax() {
     // Modern syntax: mezery + lomitko alpha
     assert_eq!(layout::parse_color("rgb(255 0 0)"), Some([255, 0, 0, 255]));

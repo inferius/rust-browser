@@ -1302,6 +1302,50 @@ fn pseudo_user_valid_match() {
 }
 
 #[test]
+fn pseudo_popover_open_match() {
+    let doc = parse_html(r#"<html><body><div popover data-popover-open="true"></div></body></html>"#, "");
+    let css = parse_stylesheet("div:popover-open { background: yellow; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let styles = cascade::get_styles(&map, &div);
+    let bg = styles.and_then(|s| s.get("background-color")).cloned().unwrap_or_default();
+    assert_eq!(bg.trim(), "yellow", ":popover-open match popover otevreny");
+}
+
+#[test]
+fn pseudo_open_details() {
+    let doc = parse_html(r#"<html><body><details open></details></body></html>"#, "");
+    let css = parse_stylesheet("details:open { color: blue; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("details")).unwrap();
+    let styles = cascade::get_styles(&map, &d);
+    let c = styles.and_then(|s| s.get("color")).cloned().unwrap_or_default();
+    assert_eq!(c.trim(), "blue");
+}
+
+#[test]
+fn pseudo_closed_dialog() {
+    let doc = parse_html(r#"<html><body><dialog></dialog></body></html>"#, "");
+    let css = parse_stylesheet("dialog:closed { display: none; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("dialog")).unwrap();
+    let styles = cascade::get_styles(&map, &d);
+    let dis = styles.and_then(|s| s.get("display")).cloned().unwrap_or_default();
+    assert_eq!(dis.trim(), "none");
+}
+
+#[test]
+fn pseudo_modal_dialog_with_attribute() {
+    let doc = parse_html(r#"<html><body><dialog open data-modal="true"></dialog></body></html>"#, "");
+    let css = parse_stylesheet("dialog:modal { z-index: 9999; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("dialog")).unwrap();
+    let styles = cascade::get_styles(&map, &d);
+    let z = styles.and_then(|s| s.get("z-index")).cloned().unwrap_or_default();
+    assert_eq!(z.trim(), "9999");
+}
+
+#[test]
 fn pseudo_user_invalid_match() {
     let doc = parse_html(r#"<html><body><input type="email" required value="" data-user-invalid="true" /></body></html>"#, "");
     let css = parse_stylesheet("input:user-invalid { border-color: red; }");
