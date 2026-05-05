@@ -48,7 +48,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
 
     // Resolve row tracks (s default_row_h pro auto)
     let default_row_h = 50.0_f32;
-    let row_tracks: Vec<f32> = if !rows_explicit_str.is_empty() {
+    let mut row_tracks: Vec<f32> = if !rows_explicit_str.is_empty() {
         let resolved = resolve_tracks(&rows_explicit_str, inner_h, row_gap);
         if resolved.is_empty() { vec![default_row_h; rows] }
         else { resolved }
@@ -69,6 +69,20 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         }
         out
     };
+    // Implicitni rows: pokud potreba vic nez explicit, doplnit z child explicit_height (jinak 0).
+    while row_tracks.len() < rows {
+        let r = row_tracks.len();
+        let mut h = 0.0_f32;
+        for c in 0..cols {
+            let idx = r * cols + c;
+            if let Some(child) = bx.children.get(idx) {
+                if let Some(eh) = child.explicit_height {
+                    h = h.max(eh);
+                }
+            }
+        }
+        row_tracks.push(h);
+    }
 
     // Total tracks delky
     let total_col: f32 = col_tracks.iter().sum::<f32>() + col_gap * (cols.saturating_sub(1) as f32);

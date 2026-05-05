@@ -336,6 +336,20 @@ mod tests {
         pass: usize,
         fail: usize,
         skip: usize,
+        failed_examples: Vec<(String, String)>,
+    }
+    fn describe_diff(actual: &LayoutBox, expected: &ExpectedNode) -> String {
+        let mut s = format!("root: actual {}x{} vs expected {}x{}", actual.rect.width, actual.rect.height, expected.width, expected.height);
+        let parent_x = actual.rect.x;
+        let parent_y = actual.rect.y;
+        for (i, (a, e)) in actual.children.iter().zip(expected.children.iter()).enumerate() {
+            let ax = a.rect.x - parent_x;
+            let ay = a.rect.y - parent_y;
+            if (ax - e.x).abs() > 1.0 || (ay - e.y).abs() > 1.0 || (a.rect.width - e.width).abs() > 1.0 || (a.rect.height - e.height).abs() > 1.0 {
+                s.push_str(&format!(" | child{}: actual {},{} {}x{} vs expected {},{} {}x{}", i, ax, ay, a.rect.width, a.rect.height, e.x, e.y, e.width, e.height));
+            }
+        }
+        s
     }
 
     fn run_directory(dir: &str, root_default_display: Display) -> Stats {
@@ -381,6 +395,9 @@ mod tests {
                 stats.pass += 1;
             } else {
                 stats.fail += 1;
+                if stats.failed_examples.len() < 3 {
+                    stats.failed_examples.push((fname.clone(), describe_diff(&input_box, &exp)));
+                }
             }
         }
         stats
@@ -494,6 +511,9 @@ mod tests {
             100.0 * stats.pass as f32 / stats.total.max(1) as f32,
             stats.fail, stats.skip
         );
+        for (n, d) in stats.failed_examples.iter().take(3) {
+            println!("  FAIL {}: {}", n, d);
+        }
         assert!(stats.total > 0);
     }
 
@@ -506,6 +526,9 @@ mod tests {
             100.0 * stats.pass as f32 / stats.total.max(1) as f32,
             stats.fail, stats.skip
         );
+        for (n, d) in &stats.failed_examples {
+            println!("  FAIL {}: {}", n, d);
+        }
         assert!(stats.total > 0);
     }
 

@@ -36,11 +36,25 @@ pub fn layout_absolute_child(child: &mut LayoutBox, parent_x: f32, parent_y: f32
     } else if let Some(ar) = child.aspect_ratio {
         if ar > 0.0 { w / ar } else { 0.0 }
     } else { 0.0 };
-    // Aspect ratio dopocet kdyz jen jeden rozmer set
+    // Aspect ratio override pri "fill" sizing (inset bez explicit dimensi).
+    // Spec: aspect-ratio override height kdyz width explicit/inset, naopak.
+    // Pri obou inset bez explicit -> aspect ratio aplikuje na width (drz width z insetu, h dopocitaj).
     if let Some(ar) = child.aspect_ratio {
         if ar > 0.0 {
-            if w > 0.0 && h == 0.0 { h = w / ar; }
-            else if h > 0.0 && w == 0.0 { w = h * ar; }
+            let has_explicit_w = child.explicit_width.is_some();
+            let has_explicit_h = child.explicit_height.is_some();
+            if has_explicit_w && !has_explicit_h {
+                h = w / ar;
+            } else if has_explicit_h && !has_explicit_w {
+                w = h * ar;
+            } else if !has_explicit_w && !has_explicit_h {
+                // Bez explicit: bere width z insetu (mainly), h = w/ar.
+                if w > 0.0 {
+                    h = w / ar;
+                } else if h > 0.0 {
+                    w = h * ar;
+                }
+            }
         }
     }
     child.rect.width = w;
