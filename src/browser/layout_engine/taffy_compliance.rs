@@ -265,6 +265,8 @@ mod tests {
                 "padding-right" => bx.padding_right = parse_dim(v, container_w),
                 "padding-top" => bx.padding_top = parse_dim(v, container_h),
                 "padding-bottom" => bx.padding_bottom = parse_dim(v, container_h),
+                // Pro percent margins: CSS spec resolve proti inline-size CB (= width).
+                // Nepouzivame container_h pro top/bottom percent.
                 "margin-left" => {
                     if v.trim() == "auto" { bx.margin_left_auto = true; }
                     else { bx.margin_left = parse_dim(v, container_w); }
@@ -275,11 +277,11 @@ mod tests {
                 }
                 "margin-top" => {
                     if v.trim() == "auto" { bx.margin_top_auto = true; }
-                    else { bx.margin_top = parse_dim(v, container_h); }
+                    else { bx.margin_top = parse_dim(v, container_w); }
                 }
                 "margin-bottom" => {
                     if v.trim() == "auto" { bx.margin_bottom_auto = true; }
-                    else { bx.margin_bottom = parse_dim(v, container_h); }
+                    else { bx.margin_bottom = parse_dim(v, container_w); }
                 }
                 "border" => {
                     bx.border_width = parse_dim(v, container_w).unwrap_or(0.0);

@@ -320,7 +320,14 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             } else {
                 parse_align_items(&self_str)
             };
-            let cross_offset_align = compute_align_offset(item_align, cross_size, item_cross_size + it.margin_cross_start + it.margin_cross_end);
+            // Pro baseline pouzij natural cross (max bez stretch), ne cross_size kte
+            // muze byt stretchnut na container.
+            let align_box = if matches!(item_align, AlignItems::Baseline) {
+                resolved.natural_cross
+            } else {
+                cross_size
+            };
+            let cross_offset_align = compute_align_offset(item_align, align_box, item_cross_size + it.margin_cross_start + it.margin_cross_end);
             let mut cross_offset = cross_offset_align + it.margin_cross_start;
             // Auto cross margin absorb
             let cross_free = (cross_size - item_cross_size - it.margin_cross_start - it.margin_cross_end).max(0.0);
@@ -494,6 +501,8 @@ struct FlexItem {
 struct ResolvedLine {
     main_sizes: Vec<f32>,
     cross_size: f32,
+    /// Natural max item cross (vc. margin) - pro baseline a stretch reset.
+    natural_cross: f32,
 }
 
 /// Sber items do lines podle wrap policy. Margins se zapocitavaji do velikosti.
@@ -527,7 +536,7 @@ fn collect_lines(items: &[FlexItem], container_main: f32, wrap: FlexWrap, gap: f
 fn resolve_flexible_lengths(items: &[FlexItem], indices: &[usize], container_main: f32, gap: f32) -> ResolvedLine {
     let count = indices.len();
     if count == 0 {
-        return ResolvedLine { main_sizes: Vec::new(), cross_size: 0.0 };
+        return ResolvedLine { main_sizes: Vec::new(), cross_size: 0.0, natural_cross: 0.0 };
     }
     let total_gap = gap * (count.saturating_sub(1) as f32);
     let total_margins: f32 = indices.iter()
@@ -625,7 +634,7 @@ fn resolve_flexible_lengths(items: &[FlexItem], indices: &[usize], container_mai
         .map(|&i| items[i].cross_size + items[i].margin_cross_start + items[i].margin_cross_end)
         .fold(0.0_f32, f32::max);
 
-    ResolvedLine { main_sizes: sizes, cross_size }
+    ResolvedLine { main_sizes: sizes, cross_size, natural_cross: cross_size }
 }
 
 fn compute_justify_offsets(justify: JustifyContent, free: f32, count: usize, gap: f32) -> (f32, f32) {
