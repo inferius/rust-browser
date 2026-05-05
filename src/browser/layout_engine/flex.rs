@@ -440,7 +440,11 @@ pub fn layout_flex(bx: &mut LayoutBox) {
     // 9. Recursive layout uvnitr child boxu (jen non-abs - abs uz layoutnut)
     for ch in bx.children.iter_mut() {
         if super::is_out_of_flow(ch) { continue; }
-        super::super::layout::layout_block(ch);
+        match ch.display {
+            super::super::layout::Display::Flex => super::flex::layout_flex(ch),
+            super::super::layout::Display::Grid => super::grid::layout_grid(ch),
+            _ => super::super::layout::layout_block(ch),
+        }
     }
 }
 

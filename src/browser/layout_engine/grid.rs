@@ -208,7 +208,13 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         child.rect.y = inner_y + cy + off_y;
         child.rect.width = final_w;
         child.rect.height = final_h;
-        super::super::layout::layout_block(child);
+        // Dispatch podle child.display (block/flex/grid) - layout_block jen flowuje
+        // grandchildren, neresi grid/flex inner.
+        match child.display {
+            super::super::layout::Display::Flex => super::flex::layout_flex(child),
+            super::super::layout::Display::Grid => super::grid::layout_grid(child),
+            _ => super::super::layout::layout_block(child),
+        }
     }
 
     // Update parent height jen kdyz neni explicit set (auto height grow z obsahu).
