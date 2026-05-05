@@ -190,6 +190,7 @@ mod tests {
                 "flex-wrap" => bx.flex_wrap = v.clone(),
                 "justify-content" => bx.justify_content = v.clone(),
                 "align-items" => bx.align_items = v.clone(),
+                "align-content" => bx.align_content = v.clone(),
                 "flex-grow" => bx.flex_grow = v.parse().unwrap_or(0.0),
                 "flex-shrink" => bx.flex_shrink = v.parse().unwrap_or(1.0),
                 "flex-basis" => bx.flex_basis = v.clone(),

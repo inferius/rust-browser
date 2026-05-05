@@ -13,9 +13,14 @@ use super::super::layout::LayoutBox;
 /// Pouzije bx.grid_template_columns / bx.grid_template_rows.
 /// Resolve fr units, fixed lengths, auto, percent.
 pub fn layout_grid(bx: &mut LayoutBox) {
-    let inner_x = bx.rect.x + bx.padding + bx.margin + bx.border_width;
-    let inner_y = bx.rect.y + bx.padding + bx.margin + bx.border_width;
-    let inner_w = bx.rect.width - 2.0 * (bx.padding + bx.margin + bx.border_width);
+    let pad_l = bx.padding_left.unwrap_or(bx.padding) + bx.border_width;
+    let pad_r = bx.padding_right.unwrap_or(bx.padding) + bx.border_width;
+    let pad_t = bx.padding_top.unwrap_or(bx.padding) + bx.border_width;
+    let pad_b = bx.padding_bottom.unwrap_or(bx.padding) + bx.border_width;
+    let inner_x = bx.rect.x + pad_l + bx.margin;
+    let inner_y = bx.rect.y + pad_t + bx.margin;
+    let inner_w = (bx.rect.width - pad_l - pad_r - 2.0 * bx.margin).max(0.0);
+    let inner_h = (bx.rect.height - pad_t - pad_b - 2.0 * bx.margin).max(0.0);
 
     if bx.children.is_empty() { return; }
 
@@ -40,8 +45,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
     // Resolve row tracks (s default_row_h pro auto)
     let default_row_h = 50.0_f32;
     let row_tracks: Vec<f32> = if !rows_explicit_str.is_empty() {
-        let inner_h = bx.rect.height - 2.0 * (bx.padding + bx.margin + bx.border_width);
-        let resolved = resolve_tracks(&rows_explicit_str, inner_h.max(0.0), row_gap);
+        let resolved = resolve_tracks(&rows_explicit_str, inner_h, row_gap);
         if resolved.is_empty() { vec![default_row_h; rows] }
         else { resolved }
     } else {
@@ -62,20 +66,27 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         out
     };
 
+    // Total tracks delky
+    let total_col: f32 = col_tracks.iter().sum::<f32>() + col_gap * (cols.saturating_sub(1) as f32);
+    let total_row: f32 = row_tracks.iter().sum::<f32>() + row_gap * (rows.saturating_sub(1) as f32);
+    // justify-content (inline = column axis) + align-content (block = row axis)
+    let (jc_start, jc_between) = grid_distribute(&bx.justify_content, (inner_w - total_col).max(0.0), cols);
+    let (ac_start, ac_between) = grid_distribute(&bx.align_content, (inner_h - total_row).max(0.0), rows);
+
     // Compute x positions per col + y positions per row
     let mut col_positions: Vec<f32> = Vec::with_capacity(cols);
-    let mut x_cursor = 0.0_f32;
+    let mut x_cursor = jc_start;
     for (i, w) in col_tracks.iter().enumerate() {
         col_positions.push(x_cursor);
         x_cursor += *w;
-        if i + 1 < cols { x_cursor += col_gap; }
+        if i + 1 < cols { x_cursor += col_gap + jc_between; }
     }
     let mut row_positions: Vec<f32> = Vec::with_capacity(rows);
-    let mut y_cursor = 0.0_f32;
+    let mut y_cursor = ac_start;
     for (i, h) in row_tracks.iter().enumerate() {
         row_positions.push(y_cursor);
         y_cursor += *h;
-        if i + 1 < rows { y_cursor += row_gap; }
+        if i + 1 < rows { y_cursor += row_gap + ac_between; }
     }
 
     // In-flow indices (skip abs/fixed)
@@ -100,7 +111,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
     }
 
     // Update parent height
-    let total_h = y_cursor + 2.0 * (bx.padding + bx.border_width);
+    let total_h = y_cursor + pad_t + pad_b;
     if bx.rect.height < total_h {
         bx.rect.height = total_h;
     }
@@ -114,6 +125,29 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         if super::is_out_of_flow(ch) {
             super::layout_absolute_child(ch, parent_x, parent_y, parent_w, parent_h);
         }
+    }
+}
+
+/// Distribuce free space pro justify/align-content v gridu.
+/// Vraci (start_offset, between_extra) - mezi tracky se pak prida `between_extra` (krome gap).
+fn grid_distribute(value: &str, free: f32, count: usize) -> (f32, f32) {
+    if free <= 0.0 || count == 0 { return (0.0, 0.0); }
+    match value.trim() {
+        "end" | "flex-end" => (free, 0.0),
+        "center" => (free / 2.0, 0.0),
+        "space-between" => {
+            if count <= 1 { (0.0, 0.0) }
+            else { (0.0, free / (count - 1) as f32) }
+        }
+        "space-around" => {
+            let g = free / count as f32;
+            (g / 2.0, g)
+        }
+        "space-evenly" => {
+            let g = free / (count + 1) as f32;
+            (g, g)
+        }
+        _ => (0.0, 0.0), // start (default)
     }
 }
 
