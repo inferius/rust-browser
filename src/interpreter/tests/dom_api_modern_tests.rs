@@ -1166,3 +1166,74 @@ fn typed_array_copy_within() {
         assert_eq!(s, "4,5,3,4,5");
     }
 }
+
+// ─── DataView extras ──────────────────────────────────────────────────
+
+#[test]
+fn data_view_get_set_uint32() {
+    let code = r#"
+        const ab = new ArrayBuffer(8);
+        const dv = new DataView(ab);
+        dv.setUint32(0, 305419896);
+        return dv.getUint32(0);
+    "#;
+    if let crate::interpreter::JsValue::Number(n) = run(code) {
+        assert_eq!(n, 305419896.0);
+    }
+}
+
+#[test]
+fn data_view_get_int32_negative() {
+    let code = r#"
+        const ab = new ArrayBuffer(4);
+        const dv = new DataView(ab);
+        dv.setUint8(0, 0xFF);
+        dv.setUint8(1, 0xFF);
+        dv.setUint8(2, 0xFF);
+        dv.setUint8(3, 0xFF);
+        return dv.getInt32(0);
+    "#;
+    if let crate::interpreter::JsValue::Number(n) = run(code) {
+        assert_eq!(n, -1.0);
+    }
+}
+
+#[test]
+fn data_view_get_set_float32() {
+    let code = r#"
+        const ab = new ArrayBuffer(8);
+        const dv = new DataView(ab);
+        dv.setFloat32(0, 3.14);
+        const result = dv.getFloat32(0);
+        return Math.abs(result - 3.14) < 0.001;
+    "#;
+    if let crate::interpreter::JsValue::Bool(b) = run(code) {
+        assert!(b);
+    }
+}
+
+#[test]
+fn data_view_get_set_float64() {
+    let code = r#"
+        const ab = new ArrayBuffer(8);
+        const dv = new DataView(ab);
+        dv.setFloat64(0, 2.718281828);
+        return dv.getFloat64(0);
+    "#;
+    if let crate::interpreter::JsValue::Number(n) = run(code) {
+        assert!((n - 2.718281828).abs() < 1e-9);
+    }
+}
+
+#[test]
+fn data_view_uint16_little_endian() {
+    let code = r#"
+        const ab = new ArrayBuffer(4);
+        const dv = new DataView(ab);
+        dv.setUint16(0, 258, true); // little-endian: bytes [0x02, 0x01]
+        return dv.getUint8(0) + "|" + dv.getUint8(1);
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "2|1");
+    }
+}

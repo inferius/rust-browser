@@ -1194,6 +1194,186 @@ pub fn setup_builtins(
             }
             Ok(JsValue::Number(0.0))
         }));
+        // getInt16
+        let bytes_i16 = bytes_arr.clone();
+        obj.borrow_mut().set("getInt16".into(), native("getInt16", move |a| {
+            let mut it = a.into_iter();
+            let off = it.next().map(|v| v.to_number() as usize).unwrap_or(0);
+            let little_endian = it.next().map(|v| v.is_truthy()).unwrap_or(false);
+            if let JsValue::Array(arr) = &bytes_i16 {
+                let b = arr.borrow();
+                let b0 = b.get(byte_offset + off).and_then(|v| if let JsValue::Number(n) = v { Some(*n as u16) } else { None }).unwrap_or(0);
+                let b1 = b.get(byte_offset + off + 1).and_then(|v| if let JsValue::Number(n) = v { Some(*n as u16) } else { None }).unwrap_or(0);
+                let n = if little_endian { (b1 << 8) | b0 } else { (b0 << 8) | b1 };
+                return Ok(JsValue::Number(n as i16 as f64));
+            }
+            Ok(JsValue::Number(0.0))
+        }));
+        // getUint32 / getInt32 / getFloat32 / getFloat64
+        let bytes_u32 = bytes_arr.clone();
+        obj.borrow_mut().set("getUint32".into(), native("getUint32", move |a| {
+            let mut it = a.into_iter();
+            let off = it.next().map(|v| v.to_number() as usize).unwrap_or(0);
+            let little_endian = it.next().map(|v| v.is_truthy()).unwrap_or(false);
+            if let JsValue::Array(arr) = &bytes_u32 {
+                let b = arr.borrow();
+                let mut bytes_buf = [0u8; 4];
+                for i in 0..4 {
+                    bytes_buf[i] = b.get(byte_offset + off + i)
+                        .map(|v| v.to_number() as u8).unwrap_or(0);
+                }
+                let n = if little_endian {
+                    u32::from_le_bytes(bytes_buf)
+                } else {
+                    u32::from_be_bytes(bytes_buf)
+                };
+                return Ok(JsValue::Number(n as f64));
+            }
+            Ok(JsValue::Number(0.0))
+        }));
+        let bytes_i32 = bytes_arr.clone();
+        obj.borrow_mut().set("getInt32".into(), native("getInt32", move |a| {
+            let mut it = a.into_iter();
+            let off = it.next().map(|v| v.to_number() as usize).unwrap_or(0);
+            let little_endian = it.next().map(|v| v.is_truthy()).unwrap_or(false);
+            if let JsValue::Array(arr) = &bytes_i32 {
+                let b = arr.borrow();
+                let mut bytes_buf = [0u8; 4];
+                for i in 0..4 {
+                    bytes_buf[i] = b.get(byte_offset + off + i)
+                        .map(|v| v.to_number() as u8).unwrap_or(0);
+                }
+                let n = if little_endian {
+                    i32::from_le_bytes(bytes_buf)
+                } else {
+                    i32::from_be_bytes(bytes_buf)
+                };
+                return Ok(JsValue::Number(n as f64));
+            }
+            Ok(JsValue::Number(0.0))
+        }));
+        let bytes_f32 = bytes_arr.clone();
+        obj.borrow_mut().set("getFloat32".into(), native("getFloat32", move |a| {
+            let mut it = a.into_iter();
+            let off = it.next().map(|v| v.to_number() as usize).unwrap_or(0);
+            let little_endian = it.next().map(|v| v.is_truthy()).unwrap_or(false);
+            if let JsValue::Array(arr) = &bytes_f32 {
+                let b = arr.borrow();
+                let mut bytes_buf = [0u8; 4];
+                for i in 0..4 {
+                    bytes_buf[i] = b.get(byte_offset + off + i)
+                        .map(|v| v.to_number() as u8).unwrap_or(0);
+                }
+                let n = if little_endian {
+                    f32::from_le_bytes(bytes_buf)
+                } else {
+                    f32::from_be_bytes(bytes_buf)
+                };
+                return Ok(JsValue::Number(n as f64));
+            }
+            Ok(JsValue::Number(0.0))
+        }));
+        let bytes_f64 = bytes_arr.clone();
+        obj.borrow_mut().set("getFloat64".into(), native("getFloat64", move |a| {
+            let mut it = a.into_iter();
+            let off = it.next().map(|v| v.to_number() as usize).unwrap_or(0);
+            let little_endian = it.next().map(|v| v.is_truthy()).unwrap_or(false);
+            if let JsValue::Array(arr) = &bytes_f64 {
+                let b = arr.borrow();
+                let mut bytes_buf = [0u8; 8];
+                for i in 0..8 {
+                    bytes_buf[i] = b.get(byte_offset + off + i)
+                        .map(|v| v.to_number() as u8).unwrap_or(0);
+                }
+                let n = if little_endian {
+                    f64::from_le_bytes(bytes_buf)
+                } else {
+                    f64::from_be_bytes(bytes_buf)
+                };
+                return Ok(JsValue::Number(n));
+            }
+            Ok(JsValue::Number(0.0))
+        }));
+        // setUint16 / setUint32 / setInt16 / setInt32 / setFloat32 / setFloat64
+        let bytes_set16 = bytes_arr.clone();
+        obj.borrow_mut().set("setUint16".into(), native("setUint16", move |a| {
+            let mut it = a.into_iter();
+            let off = it.next().map(|v| v.to_number() as usize).unwrap_or(0);
+            let val = it.next().map(|v| v.to_number() as u16).unwrap_or(0);
+            let little_endian = it.next().map(|v| v.is_truthy()).unwrap_or(false);
+            if let JsValue::Array(arr) = &bytes_set16 {
+                let bytes_buf = if little_endian {
+                    val.to_le_bytes()
+                } else {
+                    val.to_be_bytes()
+                };
+                let mut a_mut = arr.borrow_mut();
+                while a_mut.len() < byte_offset + off + 2 { a_mut.push(JsValue::Number(0.0)); }
+                a_mut[byte_offset + off]     = JsValue::Number(bytes_buf[0] as f64);
+                a_mut[byte_offset + off + 1] = JsValue::Number(bytes_buf[1] as f64);
+            }
+            Ok(JsValue::Undefined)
+        }));
+        let bytes_set32 = bytes_arr.clone();
+        obj.borrow_mut().set("setUint32".into(), native("setUint32", move |a| {
+            let mut it = a.into_iter();
+            let off = it.next().map(|v| v.to_number() as usize).unwrap_or(0);
+            let val = it.next().map(|v| v.to_number() as u32).unwrap_or(0);
+            let little_endian = it.next().map(|v| v.is_truthy()).unwrap_or(false);
+            if let JsValue::Array(arr) = &bytes_set32 {
+                let bytes_buf = if little_endian {
+                    val.to_le_bytes()
+                } else {
+                    val.to_be_bytes()
+                };
+                let mut a_mut = arr.borrow_mut();
+                while a_mut.len() < byte_offset + off + 4 { a_mut.push(JsValue::Number(0.0)); }
+                for i in 0..4 {
+                    a_mut[byte_offset + off + i] = JsValue::Number(bytes_buf[i] as f64);
+                }
+            }
+            Ok(JsValue::Undefined)
+        }));
+        let bytes_setf32 = bytes_arr.clone();
+        obj.borrow_mut().set("setFloat32".into(), native("setFloat32", move |a| {
+            let mut it = a.into_iter();
+            let off = it.next().map(|v| v.to_number() as usize).unwrap_or(0);
+            let val = it.next().map(|v| v.to_number() as f32).unwrap_or(0.0);
+            let little_endian = it.next().map(|v| v.is_truthy()).unwrap_or(false);
+            if let JsValue::Array(arr) = &bytes_setf32 {
+                let bytes_buf = if little_endian {
+                    val.to_le_bytes()
+                } else {
+                    val.to_be_bytes()
+                };
+                let mut a_mut = arr.borrow_mut();
+                while a_mut.len() < byte_offset + off + 4 { a_mut.push(JsValue::Number(0.0)); }
+                for i in 0..4 {
+                    a_mut[byte_offset + off + i] = JsValue::Number(bytes_buf[i] as f64);
+                }
+            }
+            Ok(JsValue::Undefined)
+        }));
+        let bytes_setf64 = bytes_arr.clone();
+        obj.borrow_mut().set("setFloat64".into(), native("setFloat64", move |a| {
+            let mut it = a.into_iter();
+            let off = it.next().map(|v| v.to_number() as usize).unwrap_or(0);
+            let val = it.next().map(|v| v.to_number()).unwrap_or(0.0);
+            let little_endian = it.next().map(|v| v.is_truthy()).unwrap_or(false);
+            if let JsValue::Array(arr) = &bytes_setf64 {
+                let bytes_buf = if little_endian {
+                    val.to_le_bytes()
+                } else {
+                    val.to_be_bytes()
+                };
+                let mut a_mut = arr.borrow_mut();
+                while a_mut.len() < byte_offset + off + 8 { a_mut.push(JsValue::Number(0.0)); }
+                for i in 0..8 {
+                    a_mut[byte_offset + off + i] = JsValue::Number(bytes_buf[i] as f64);
+                }
+            }
+            Ok(JsValue::Undefined)
+        }));
         Ok(JsValue::Object(obj))
     }));
 
