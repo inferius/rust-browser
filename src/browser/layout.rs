@@ -180,6 +180,11 @@ pub struct LayoutBox {
     pub margin_right: Option<f32>,
     pub margin_bottom: Option<f32>,
     pub margin_left: Option<f32>,
+    /// margin-*: auto flagy (absorbuji free space, CSS Margin auto).
+    pub margin_top_auto: bool,
+    pub margin_right_auto: bool,
+    pub margin_bottom_auto: bool,
+    pub margin_left_auto: bool,
     pub margin: f32,
     pub border_width: f32,
     /// Per-side border width (None = use border_width). CSS Backgrounds L3.
@@ -607,6 +612,10 @@ impl LayoutBox {
             margin_right: None,
             margin_bottom: None,
             margin_left: None,
+            margin_top_auto: false,
+            margin_right_auto: false,
+            margin_bottom_auto: false,
+            margin_left_auto: false,
             margin: 0.0,
             border_width: 0.0,
             border_top_width: None,

@@ -263,10 +263,22 @@ mod tests {
                 "padding-right" => bx.padding_right = parse_dim(v, container_w),
                 "padding-top" => bx.padding_top = parse_dim(v, container_h),
                 "padding-bottom" => bx.padding_bottom = parse_dim(v, container_h),
-                "margin-left" => bx.margin_left = parse_dim(v, container_w),
-                "margin-right" => bx.margin_right = parse_dim(v, container_w),
-                "margin-top" => bx.margin_top = parse_dim(v, container_h),
-                "margin-bottom" => bx.margin_bottom = parse_dim(v, container_h),
+                "margin-left" => {
+                    if v.trim() == "auto" { bx.margin_left_auto = true; }
+                    else { bx.margin_left = parse_dim(v, container_w); }
+                }
+                "margin-right" => {
+                    if v.trim() == "auto" { bx.margin_right_auto = true; }
+                    else { bx.margin_right = parse_dim(v, container_w); }
+                }
+                "margin-top" => {
+                    if v.trim() == "auto" { bx.margin_top_auto = true; }
+                    else { bx.margin_top = parse_dim(v, container_h); }
+                }
+                "margin-bottom" => {
+                    if v.trim() == "auto" { bx.margin_bottom_auto = true; }
+                    else { bx.margin_bottom = parse_dim(v, container_h); }
+                }
                 "border" => {
                     bx.border_width = parse_dim(v, container_w).unwrap_or(0.0);
                 }

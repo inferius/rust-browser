@@ -149,10 +149,10 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         let m_r = ch.margin_right.unwrap_or(ch.margin);
         let m_t = ch.margin_top.unwrap_or(ch.margin);
         let m_b = ch.margin_bottom.unwrap_or(ch.margin);
-        let (mm_s, mm_e, mc_s, mc_e) = if direction.is_row() {
-            (m_l, m_r, m_t, m_b)
+        let (mm_s, mm_e, mc_s, mc_e, am_s, am_e, ac_s, ac_e) = if direction.is_row() {
+            (m_l, m_r, m_t, m_b, ch.margin_left_auto, ch.margin_right_auto, ch.margin_top_auto, ch.margin_bottom_auto)
         } else {
-            (m_t, m_b, m_l, m_r)
+            (m_t, m_b, m_l, m_r, ch.margin_top_auto, ch.margin_bottom_auto, ch.margin_left_auto, ch.margin_right_auto)
         };
         items.push(FlexItem {
             main_size: if direction.is_row() { est_w } else { est_h },
@@ -165,6 +165,10 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             margin_cross_end: mc_e,
             min_main: 0.0,
             max_main: f32::INFINITY,
+            auto_main_start: am_s,
+            auto_main_end: am_e,
+            auto_cross_start: ac_s,
+            auto_cross_end: ac_e,
         });
     }
 
@@ -276,7 +280,13 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             .sum::<f32>()
             + main_gap * (resolved.main_sizes.len().saturating_sub(1) as f32);
         let free_main = (container_main - used_main).max(0.0);
-        let (start_main, between_main) = compute_justify_offsets(justify, free_main, resolved.main_sizes.len(), main_gap);
+        // Spocti auto margin slots v main axis - kazdy dostane equal share free.
+        let auto_main_count: usize = line_indices.iter()
+            .map(|&i| (items[i].auto_main_start as usize) + (items[i].auto_main_end as usize))
+            .sum();
+        let auto_main_share = if auto_main_count > 0 { free_main / auto_main_count as f32 } else { 0.0 };
+        let effective_free = if auto_main_count > 0 { 0.0 } else { free_main };
+        let (start_main, between_main) = compute_justify_offsets(justify, effective_free, resolved.main_sizes.len(), main_gap);
 
         let main_iter: Box<dyn Iterator<Item = (usize, &usize)>> = if direction.is_reverse() {
             Box::new(line_indices.iter().enumerate().rev())
@@ -296,8 +306,9 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                 main_cursor += main_gap + between_main;
             }
             first = false;
-            // Margin pred itemem (start)
+            // Margin pred itemem (start) + auto absorbed share
             main_cursor += it.margin_main_start;
+            if it.auto_main_start { main_cursor += auto_main_share; }
 
             let item_cross_size = it.cross_size;
             // align-self per item (override align-items)
@@ -309,7 +320,16 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                 parse_align_items(&self_str)
             };
             let cross_offset_align = compute_align_offset(item_align, cross_size, item_cross_size + it.margin_cross_start + it.margin_cross_end);
-            let cross_offset = cross_offset_align + it.margin_cross_start;
+            let mut cross_offset = cross_offset_align + it.margin_cross_start;
+            // Auto cross margin absorb
+            let cross_free = (cross_size - item_cross_size - it.margin_cross_start - it.margin_cross_end).max(0.0);
+            let auto_cross_count = (it.auto_cross_start as usize) + (it.auto_cross_end as usize);
+            if auto_cross_count > 0 {
+                let share = cross_free / auto_cross_count as f32;
+                if it.auto_cross_start { cross_offset += share; }
+                // auto_cross_end neovlivni offset, jen zabere sve mismi
+                let _ = share;
+            }
 
             // Apply to child (item_idx je do in_flow, prevest na real index)
             let real_idx = in_flow[item_idx];
@@ -331,6 +351,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             }
 
             main_cursor += main_size + it.margin_main_end;
+            if it.auto_main_end { main_cursor += auto_main_share; }
         }
 
         cross_cursor += resolved.cross_size + line_gap + ac_between;
@@ -383,6 +404,11 @@ struct FlexItem {
     /// Min/max main axis pro proper flex resolve (CSS Flex L1 9.7).
     min_main: f32,
     max_main: f32,
+    /// auto flagy - absorbuji free space.
+    auto_main_start: bool,
+    auto_main_end: bool,
+    auto_cross_start: bool,
+    auto_cross_end: bool,
 }
 
 struct ResolvedLine {
@@ -621,7 +647,7 @@ mod tests {
     #[test]
     fn collect_lines_no_wrap() {
         let items = vec![
-            FlexItem { main_size: 50.0, cross_size: 30.0, flex_grow: 0.0, flex_shrink: 1.0, margin_main_start: 0.0, margin_main_end: 0.0, margin_cross_start: 0.0, margin_cross_end: 0.0, min_main: 0.0, max_main: f32::INFINITY };
+            FlexItem { main_size: 50.0, cross_size: 30.0, flex_grow: 0.0, flex_shrink: 1.0, margin_main_start: 0.0, margin_main_end: 0.0, margin_cross_start: 0.0, margin_cross_end: 0.0, min_main: 0.0, max_main: f32::INFINITY, auto_main_start: false, auto_main_end: false, auto_cross_start: false, auto_cross_end: false };
             5
         ];
         let lines = collect_lines(&items, 100.0, FlexWrap::NoWrap, 0.0);
@@ -632,7 +658,7 @@ mod tests {
     #[test]
     fn collect_lines_wrap_overflow() {
         let items = vec![
-            FlexItem { main_size: 60.0, cross_size: 30.0, flex_grow: 0.0, flex_shrink: 1.0, margin_main_start: 0.0, margin_main_end: 0.0, margin_cross_start: 0.0, margin_cross_end: 0.0, min_main: 0.0, max_main: f32::INFINITY };
+            FlexItem { main_size: 60.0, cross_size: 30.0, flex_grow: 0.0, flex_shrink: 1.0, margin_main_start: 0.0, margin_main_end: 0.0, margin_cross_start: 0.0, margin_cross_end: 0.0, min_main: 0.0, max_main: f32::INFINITY, auto_main_start: false, auto_main_end: false, auto_cross_start: false, auto_cross_end: false };
             3
         ];
         let lines = collect_lines(&items, 100.0, FlexWrap::Wrap, 0.0);
@@ -643,8 +669,8 @@ mod tests {
     #[test]
     fn resolve_grow_distributes_free_space() {
         let items = vec![
-            FlexItem { main_size: 50.0, cross_size: 30.0, flex_grow: 1.0, flex_shrink: 1.0, margin_main_start: 0.0, margin_main_end: 0.0, margin_cross_start: 0.0, margin_cross_end: 0.0, min_main: 0.0, max_main: f32::INFINITY },
-            FlexItem { main_size: 50.0, cross_size: 30.0, flex_grow: 1.0, flex_shrink: 1.0, margin_main_start: 0.0, margin_main_end: 0.0, margin_cross_start: 0.0, margin_cross_end: 0.0, min_main: 0.0, max_main: f32::INFINITY },
+            FlexItem { main_size: 50.0, cross_size: 30.0, flex_grow: 1.0, flex_shrink: 1.0, margin_main_start: 0.0, margin_main_end: 0.0, margin_cross_start: 0.0, margin_cross_end: 0.0, min_main: 0.0, max_main: f32::INFINITY, auto_main_start: false, auto_main_end: false, auto_cross_start: false, auto_cross_end: false },
+            FlexItem { main_size: 50.0, cross_size: 30.0, flex_grow: 1.0, flex_shrink: 1.0, margin_main_start: 0.0, margin_main_end: 0.0, margin_cross_start: 0.0, margin_cross_end: 0.0, min_main: 0.0, max_main: f32::INFINITY, auto_main_start: false, auto_main_end: false, auto_cross_start: false, auto_cross_end: false },
         ];
         let resolved = resolve_flexible_lengths(&items, &[0, 1], 200.0, 0.0);
         // Free = 200 - 100 = 100, dist 50/50
