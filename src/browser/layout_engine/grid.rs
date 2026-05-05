@@ -193,7 +193,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         let cy = row_positions.get(row).copied().unwrap_or(0.0);
         // Resolve item size + alignment v grid area
         let parent_align_items = bx.align_items.clone();
-        let parent_justify_items = bx.justify_content.clone(); // (justify-items)
+        let parent_justify_items = bx.justify_items.clone();
         let child = &mut bx.children[real_idx];
         let m_l = child.margin_left.unwrap_or(child.margin);
         let m_r = child.margin_right.unwrap_or(child.margin);
