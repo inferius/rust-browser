@@ -5,8 +5,8 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 ## Stav
 
 - Build: **OK**, 0 errors, 0 warnings.
-- Tests: **1882 passed, 0 failed, 3 ignored**.
-- Posledni commit: `e0d97af String.prototype.matchAll`.
+- Tests: **1909 passed, 0 failed, 3 ignored**.
+- Posledni commit: `a093bc5 Web Streams + Compression + Cookie Store + Typed Arrays`.
 - Tree: ciste.
 - Branch master, ~290 commitu pred origin/master (NEPUSHOVAT bez vyzvy).
 - **WebGL pipeline DOKONCEN** + **CSS L4-L6 KOMPLET** + **JS DOM kompletni**:
@@ -57,6 +57,25 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
   - DOM Clipboard API stub: writeText/readText (in-memory) Promise-based.
   - DOM Geolocation API stub: getCurrentPosition/watchPosition/clearWatch.
   - JS String.matchAll(regex) -> iterator nad matches.
+  - Web Crypto SubtleCrypto: digest (FNV-1a x4), encrypt/decrypt/sign/verify/
+    generate/import/export/derive/wrap/unwrap stuby.
+  - Shadow DOM: element.attachShadow({mode}) + shadowRoot getter.
+  - Web Animations API: element.animate(keyframes, options) -> Animation s
+    play/pause/cancel/finish/reverse + finished/ready Promise.
+  - Web Platform APIs: Permissions / WakeLock / Vibration / Gamepad /
+    Battery / Sensors (Accelerometer/Gyroscope/Orientation/Magnetometer/
+    AmbientLightSensor) / WebAuthn (PublicKeyCredential, credentials) /
+    TrustedTypes / FileSystemAccess (showOpenFilePicker/showSaveFilePicker/
+    showDirectoryPicker) / WebMIDI / SpeechSynthesis + Recognition /
+    Bluetooth/USB/HID/Serial requestDevice.
+  - JS ArrayBuffer ES2024: transfer / resize / slice / detached / maxByteLength.
+  - JS DataView: getUint8/setUint8/getInt8/getUint16(LE+BE).
+  - Web Streams: ReadableStream/WritableStream/TransformStream s reader/writer
+    lifecycle + pipeTo/pipeThrough/tee.
+  - Compression Streams: CompressionStream/DecompressionStream stuby.
+  - Cookie Store API real: get/set/delete/getAll s in-memory storage.
+  - Typed Arrays kompletni: Uint8/Int8/Uint8Clamped/Uint16/Int16/Uint32/Int32/
+    Float32/Float64/BigInt64/BigUint64 s BYTES_PER_ELEMENT + byteLength.
 
 ## Test runner
 
