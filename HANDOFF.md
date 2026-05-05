@@ -5,9 +5,11 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 ## Stav
 
 - Build: **OK**, 0 errors, 0 warnings.
-- Tests: **2021 passed, 0 failed, 3 ignored**.
-- Posledni commit: `<vlastni layout_engine - taffy ODSTRANEN>`.
+- Tests: **2177 passed, 0 failed, 3 ignored**.
 - **Layout engine pod nasi kontrolou** - vlastni flex/grid v `src/browser/layout_engine/`.
+- **168 layout testu** (flex_tests + flex_spec_tests + grid_tests + grid_spec_tests)
+  pokryvajici CSS Flexbox L1 + CSS Grid L1 spec.
+- Grid resolve_tracks: real fr/percent/auto/repeat()/minmax() distribution.
 - Tree: ciste.
 - Branch master, ~290 commitu pred origin/master (NEPUSHOVAT bez vyzvy).
 - **WebGL pipeline DOKONCEN** + **CSS L4-L6 KOMPLET** + **JS DOM kompletni**:
