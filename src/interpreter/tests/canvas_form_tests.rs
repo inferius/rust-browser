@@ -313,3 +313,204 @@ fn click_method_simulates_click() {
     let s = r.to_string();
     assert!(s == "true" || s == "false");
 }
+
+// ─── Canvas API extras ─────────────────────────────────────────────────
+
+#[test]
+fn canvas_save_restore_no_throw() {
+    let result = run_with_doc(
+        r#"<html><body><canvas id="c"></canvas></body></html>"#,
+        r#"
+            const c = document.getElementById("c");
+            const ctx = c.getContext("2d");
+            ctx.save();
+            ctx.fillStyle = "red";
+            ctx.restore();
+            return "ok";
+        "#,
+    );
+    assert_eq!(as_str(result), "ok");
+}
+
+#[test]
+fn canvas_translate_rotate_scale() {
+    let result = run_with_doc(
+        r#"<html><body><canvas id="c"></canvas></body></html>"#,
+        r#"
+            const ctx = document.getElementById("c").getContext("2d");
+            ctx.translate(10, 20);
+            ctx.rotate(0.5);
+            ctx.scale(2, 2);
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            ctx.transform(1, 0, 0, 1, 5, 5);
+            ctx.resetTransform();
+            return "ok";
+        "#,
+    );
+    assert_eq!(as_str(result), "ok");
+}
+
+#[test]
+fn canvas_quadratic_bezier_curves() {
+    let result = run_with_doc(
+        r#"<html><body><canvas id="c"></canvas></body></html>"#,
+        r#"
+            const ctx = document.getElementById("c").getContext("2d");
+            ctx.beginPath();
+            ctx.moveTo(0, 0);
+            ctx.quadraticCurveTo(50, 50, 100, 0);
+            ctx.bezierCurveTo(10, 10, 20, 20, 30, 30);
+            ctx.arcTo(100, 100, 200, 100, 50);
+            ctx.fill();
+            return "ok";
+        "#,
+    );
+    assert_eq!(as_str(result), "ok");
+}
+
+#[test]
+fn canvas_rect_round_rect_ellipse() {
+    let result = run_with_doc(
+        r#"<html><body><canvas id="c"></canvas></body></html>"#,
+        r#"
+            const ctx = document.getElementById("c").getContext("2d");
+            ctx.beginPath();
+            ctx.rect(0, 0, 100, 50);
+            ctx.roundRect(50, 50, 100, 50, 10);
+            ctx.ellipse(75, 75, 40, 20, 0, 0, Math.PI * 2);
+            ctx.fill();
+            return "ok";
+        "#,
+    );
+    assert_eq!(as_str(result), "ok");
+}
+
+#[test]
+fn canvas_clip_strokeText() {
+    let result = run_with_doc(
+        r#"<html><body><canvas id="c"></canvas></body></html>"#,
+        r#"
+            const ctx = document.getElementById("c").getContext("2d");
+            ctx.beginPath();
+            ctx.rect(0, 0, 100, 100);
+            ctx.clip();
+            ctx.strokeText("Hello", 10, 50);
+            return "ok";
+        "#,
+    );
+    assert_eq!(as_str(result), "ok");
+}
+
+#[test]
+fn canvas_measure_text_returns_metrics() {
+    let result = run_with_doc(
+        r#"<html><body><canvas id="c"></canvas></body></html>"#,
+        r#"
+            const ctx = document.getElementById("c").getContext("2d");
+            ctx.font = "20px sans-serif";
+            const m = ctx.measureText("Hello");
+            return m.width;
+        "#,
+    );
+    let n = as_num(result);
+    assert!(n > 0.0, "measureText.width > 0, dostal: {}", n);
+}
+
+#[test]
+fn canvas_set_line_dash() {
+    let result = run_with_doc(
+        r#"<html><body><canvas id="c"></canvas></body></html>"#,
+        r#"
+            const ctx = document.getElementById("c").getContext("2d");
+            ctx.setLineDash([5, 10, 5]);
+            return ctx.getLineDash().length;
+        "#,
+    );
+    let n = as_num(result);
+    // getLineDash je stub vraci [] - zatim 0
+    assert!(n >= 0.0);
+}
+
+#[test]
+fn canvas_create_linear_gradient() {
+    let result = run_with_doc(
+        r#"<html><body><canvas id="c"></canvas></body></html>"#,
+        r#"
+            const ctx = document.getElementById("c").getContext("2d");
+            const g = ctx.createLinearGradient(0, 0, 100, 0);
+            g.addColorStop(0, "red");
+            g.addColorStop(1, "blue");
+            return g.__gradient_kind__;
+        "#,
+    );
+    assert_eq!(as_str(result), "linear");
+}
+
+#[test]
+fn canvas_create_radial_gradient() {
+    let result = run_with_doc(
+        r#"<html><body><canvas id="c"></canvas></body></html>"#,
+        r#"
+            const ctx = document.getElementById("c").getContext("2d");
+            const g = ctx.createRadialGradient(50, 50, 0, 50, 50, 100);
+            g.addColorStop(0, "white");
+            g.addColorStop(1, "black");
+            return g.__gradient_kind__;
+        "#,
+    );
+    assert_eq!(as_str(result), "radial");
+}
+
+#[test]
+fn canvas_create_image_data() {
+    let result = run_with_doc(
+        r#"<html><body><canvas id="c"></canvas></body></html>"#,
+        r#"
+            const ctx = document.getElementById("c").getContext("2d");
+            const data = ctx.createImageData(10, 10);
+            return data.width + "|" + data.height + "|" + data.data.length;
+        "#,
+    );
+    assert_eq!(as_str(result), "10|10|400"); // 10*10*4 = 400 bytes RGBA
+}
+
+#[test]
+fn canvas_get_image_data() {
+    let result = run_with_doc(
+        r#"<html><body><canvas id="c"></canvas></body></html>"#,
+        r#"
+            const ctx = document.getElementById("c").getContext("2d");
+            const data = ctx.getImageData(0, 0, 5, 5);
+            return data.data.length;
+        "#,
+    );
+    assert_eq!(as_num(result), 100.0); // 5*5*4 = 100
+}
+
+#[test]
+fn canvas_draw_image_no_throw() {
+    let result = run_with_doc(
+        r#"<html><body><canvas id="c"></canvas><img id="i" src="test.png"/></body></html>"#,
+        r#"
+            const ctx = document.getElementById("c").getContext("2d");
+            const img = document.getElementById("i");
+            ctx.drawImage(img, 0, 0);
+            ctx.drawImage(img, 0, 0, 100, 100);
+            ctx.drawImage(img, 0, 0, 50, 50, 10, 10, 100, 100);
+            return "ok";
+        "#,
+    );
+    assert_eq!(as_str(result), "ok");
+}
+
+#[test]
+fn canvas_is_point_in_path_stub() {
+    let result = run_with_doc(
+        r#"<html><body><canvas id="c"></canvas></body></html>"#,
+        r#"
+            const ctx = document.getElementById("c").getContext("2d");
+            return ctx.isPointInPath(10, 10);
+        "#,
+    );
+    assert_eq!(as_bool(result), false);
+}

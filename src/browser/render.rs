@@ -579,6 +579,83 @@ fn paint_canvas_ops(
                                 font_family: String::new(),
                             });
                         }
+                        // Nove operace - paint stub (state pres apply uvnitr render pipeline TODO)
+                        CanvasOp::DrawImage { src, dx, dy, dw, dh } => {
+                            cmds.push(DisplayCommand::Image {
+                                x: bx.rect.x + dx, y: bx.rect.y + dy,
+                                w: *dw, h: *dh,
+                                src: src.clone(),
+                                radius: 0.0,
+                            });
+                        }
+                        CanvasOp::DrawImageSrc { src, dx, dy, dw, dh, .. } => {
+                            // Sub-rect varianta - zatim ignorujeme src crop, kresleme cely image do dest
+                            cmds.push(DisplayCommand::Image {
+                                x: bx.rect.x + dx, y: bx.rect.y + dy,
+                                w: *dw, h: *dh,
+                                src: src.clone(),
+                                radius: 0.0,
+                            });
+                        }
+                        CanvasOp::PathRect { x, y, w, h } => {
+                            // Pridame 4 body do path (alternativa k MoveTo/LineTo)
+                            path_points.push((bx.rect.x + x, bx.rect.y + y));
+                            path_points.push((bx.rect.x + x + w, bx.rect.y + y));
+                            path_points.push((bx.rect.x + x + w, bx.rect.y + y + h));
+                            path_points.push((bx.rect.x + x, bx.rect.y + y + h));
+                            path_points.push((bx.rect.x + x, bx.rect.y + y));
+                        }
+                        CanvasOp::RoundRect { x, y, w, h, radius: _ } => {
+                            // Approximace bez radius zatim
+                            path_points.push((bx.rect.x + x, bx.rect.y + y));
+                            path_points.push((bx.rect.x + x + w, bx.rect.y + y));
+                            path_points.push((bx.rect.x + x + w, bx.rect.y + y + h));
+                            path_points.push((bx.rect.x + x, bx.rect.y + y + h));
+                            path_points.push((bx.rect.x + x, bx.rect.y + y));
+                        }
+                        CanvasOp::Ellipse { cx, cy, rx, ry, .. } => {
+                            // Approximace 16 bodu
+                            for i in 0..=16 {
+                                let t = (i as f32) * std::f32::consts::TAU / 16.0;
+                                let px = bx.rect.x + cx + rx * t.cos();
+                                let py = bx.rect.y + cy + ry * t.sin();
+                                path_points.push((px, py));
+                            }
+                        }
+                        CanvasOp::QuadraticCurveTo { x, y, .. }
+                        | CanvasOp::BezierCurveTo { x, y, .. }
+                        | CanvasOp::ArcTo { x2: x, y2: y, .. } => {
+                            // Approximace - end point only (TODO: skutecna interpolace)
+                            path_points.push((bx.rect.x + x, bx.rect.y + y));
+                        }
+                        CanvasOp::StrokeText { text, x, y } => {
+                            cmds.push(DisplayCommand::Text {
+                                x: bx.rect.x + x,
+                                y: bx.rect.y + y,
+                                content: text.clone(),
+                                color: current_stroke,
+                                font_size: current_font_size,
+                                bold: false,
+                                font_family: String::new(),
+                            });
+                        }
+                        // State / transform / styling ops - state-only, render je read-only zatim
+                        CanvasOp::Save | CanvasOp::Restore
+                        | CanvasOp::Translate { .. } | CanvasOp::Rotate { .. }
+                        | CanvasOp::Scale { .. } | CanvasOp::SetTransform { .. }
+                        | CanvasOp::Transform { .. } | CanvasOp::ResetTransform
+                        | CanvasOp::GlobalAlpha(_) | CanvasOp::GlobalCompositeOperation(_)
+                        | CanvasOp::Clip
+                        | CanvasOp::LineCap(_) | CanvasOp::LineJoin(_)
+                        | CanvasOp::MiterLimit(_) | CanvasOp::LineDash(_)
+                        | CanvasOp::LineDashOffset(_)
+                        | CanvasOp::TextAlign(_) | CanvasOp::TextBaseline(_)
+                        | CanvasOp::ShadowColor(_) | CanvasOp::ShadowBlur(_)
+                        | CanvasOp::ShadowOffsetX(_) | CanvasOp::ShadowOffsetY(_)
+                        | CanvasOp::FillStyleLinearGradient { .. }
+                        | CanvasOp::FillStyleRadialGradient { .. } => {
+                            // No-op v render-stub. Plna impl by drzela state per-op.
+                        }
                     }
                 }
             }

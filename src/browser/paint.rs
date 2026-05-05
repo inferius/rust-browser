@@ -78,6 +78,75 @@ pub enum CanvasOp {
     Stroke,
     /// fill - vyplni path
     Fill,
+    /// save() - push state stack
+    Save,
+    /// restore() - pop state stack
+    Restore,
+    /// translate(dx, dy)
+    Translate { dx: f32, dy: f32 },
+    /// rotate(rad)
+    Rotate { rad: f32 },
+    /// scale(sx, sy)
+    Scale { sx: f32, sy: f32 },
+    /// setTransform(a, b, c, d, e, f)
+    SetTransform { a: f32, b: f32, c: f32, d: f32, e: f32, f: f32 },
+    /// transform(a, b, c, d, e, f) - kompozice na soucasnu transform
+    Transform { a: f32, b: f32, c: f32, d: f32, e: f32, f: f32 },
+    /// resetTransform - identity
+    ResetTransform,
+    /// globalAlpha (0..1)
+    GlobalAlpha(f32),
+    /// globalCompositeOperation - source-over | multiply | screen | ...
+    GlobalCompositeOperation(String),
+    /// quadraticCurveTo(cpx, cpy, x, y)
+    QuadraticCurveTo { cpx: f32, cpy: f32, x: f32, y: f32 },
+    /// bezierCurveTo(cp1x, cp1y, cp2x, cp2y, x, y)
+    BezierCurveTo { cp1x: f32, cp1y: f32, cp2x: f32, cp2y: f32, x: f32, y: f32 },
+    /// rect(x, y, w, h) - prida obdelnik do current path
+    PathRect { x: f32, y: f32, w: f32, h: f32 },
+    /// roundRect(x, y, w, h, radius)
+    RoundRect { x: f32, y: f32, w: f32, h: f32, radius: f32 },
+    /// ellipse(cx, cy, rx, ry, rotation, startAngle, endAngle, anticlockwise)
+    Ellipse { cx: f32, cy: f32, rx: f32, ry: f32, rotation: f32,
+              start_angle: f32, end_angle: f32, anticlockwise: bool },
+    /// arcTo(x1, y1, x2, y2, radius)
+    ArcTo { x1: f32, y1: f32, x2: f32, y2: f32, radius: f32 },
+    /// clip() - clip path do region
+    Clip,
+    /// strokeText(text, x, y)
+    StrokeText { text: String, x: f32, y: f32 },
+    /// lineCap: butt | round | square
+    LineCap(String),
+    /// lineJoin: bevel | round | miter
+    LineJoin(String),
+    /// miterLimit
+    MiterLimit(f32),
+    /// setLineDash([dash1, dash2, ...])
+    LineDash(Vec<f32>),
+    /// lineDashOffset
+    LineDashOffset(f32),
+    /// textAlign: left | right | center | start | end
+    TextAlign(String),
+    /// textBaseline: top | hanging | middle | alphabetic | ideographic | bottom
+    TextBaseline(String),
+    /// shadowColor
+    ShadowColor([u8; 4]),
+    /// shadowBlur (px)
+    ShadowBlur(f32),
+    /// shadowOffsetX
+    ShadowOffsetX(f32),
+    /// shadowOffsetY
+    ShadowOffsetY(f32),
+    /// drawImage(src, dx, dy, dw, dh) - cely obrazek
+    DrawImage { src: String, dx: f32, dy: f32, dw: f32, dh: f32 },
+    /// drawImage(src, sx, sy, sw, sh, dx, dy, dw, dh) - sub-rect varianta
+    DrawImageSrc { src: String, sx: f32, sy: f32, sw: f32, sh: f32,
+                   dx: f32, dy: f32, dw: f32, dh: f32 },
+    /// fillStyleGradient - linearni gradient (x0, y0, x1, y1) + stops
+    FillStyleLinearGradient { x0: f32, y0: f32, x1: f32, y1: f32, stops: Vec<(f32, [u8; 4])> },
+    /// fillStyleRadialGradient
+    FillStyleRadialGradient { x0: f32, y0: f32, r0: f32, x1: f32, y1: f32, r1: f32,
+                              stops: Vec<(f32, [u8; 4])> },
 }
 
 /// Typ gradientu - linear / radial / conic.
