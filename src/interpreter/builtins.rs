@@ -1046,22 +1046,44 @@ pub fn setup_builtins(
         Ok(JsValue::Object(obj))
     }));
 
-    // Typed Arrays - jen Uint8Array stub
-    e.define("Uint8Array", native("Uint8Array", |a| {
-        let val = a.into_iter().next().unwrap_or(JsValue::Number(0.0));
-        let bytes = match val {
-            JsValue::Number(n) => vec![JsValue::Number(0.0); n as usize],
-            JsValue::Array(arr) => arr.borrow().clone(),
-            _ => vec![],
-        };
-        let len = bytes.len() as f64;
-        let mut obj = JsObject::new();
-        obj.set("__typed_array__".into(), JsValue::Str("Uint8Array".into()));
-        obj.set("length".into(), JsValue::Number(len));
-        obj.set("byteLength".into(), JsValue::Number(len));
-        obj.set("__bytes__".into(), JsValue::Array(Rc::new(RefCell::new(bytes))));
-        Ok(JsValue::Object(Rc::new(RefCell::new(obj))))
-    }));
+    // Typed Arrays - vsechny varianty (Uint8Array, Int8Array, Uint16Array, ...)
+    let make_typed_array = |name: &str, bytes_per_element: usize| {
+        let n = name.to_string();
+        let n_clone = n.clone();
+        native(&n_clone, move |a| {
+            let val = a.into_iter().next().unwrap_or(JsValue::Number(0.0));
+            let bytes = match val {
+                JsValue::Number(num) => vec![JsValue::Number(0.0); num as usize],
+                JsValue::Array(arr) => arr.borrow().clone(),
+                JsValue::Object(o) => {
+                    // From ArrayBuffer
+                    if let JsValue::Array(b) = o.borrow().get("__bytes__") {
+                        b.borrow().clone()
+                    } else { vec![] }
+                }
+                _ => vec![],
+            };
+            let len = bytes.len() as f64;
+            let mut obj = JsObject::new();
+            obj.set("__typed_array__".into(), JsValue::Str(n.clone()));
+            obj.set("length".into(), JsValue::Number(len));
+            obj.set("byteLength".into(), JsValue::Number(len * bytes_per_element as f64));
+            obj.set("BYTES_PER_ELEMENT".into(), JsValue::Number(bytes_per_element as f64));
+            obj.set("__bytes__".into(), JsValue::Array(Rc::new(RefCell::new(bytes))));
+            Ok(JsValue::Object(Rc::new(RefCell::new(obj))))
+        })
+    };
+    e.define("Uint8Array", make_typed_array("Uint8Array", 1));
+    e.define("Int8Array", make_typed_array("Int8Array", 1));
+    e.define("Uint8ClampedArray", make_typed_array("Uint8ClampedArray", 1));
+    e.define("Uint16Array", make_typed_array("Uint16Array", 2));
+    e.define("Int16Array", make_typed_array("Int16Array", 2));
+    e.define("Uint32Array", make_typed_array("Uint32Array", 4));
+    e.define("Int32Array", make_typed_array("Int32Array", 4));
+    e.define("Float32Array", make_typed_array("Float32Array", 4));
+    e.define("Float64Array", make_typed_array("Float64Array", 8));
+    e.define("BigInt64Array", make_typed_array("BigInt64Array", 8));
+    e.define("BigUint64Array", make_typed_array("BigUint64Array", 8));
 
     // ─── Atomics ─────────────────────────────────────────────────────────────
     // V sync runtime jsou to bezne operace (zadna konkurence).
@@ -2389,6 +2411,144 @@ pub fn setup_builtins(
             access.borrow_mut().set("sysexEnabled".into(), JsValue::Bool(false));
             Ok(make_settled_promise("fulfilled", JsValue::Object(access)))
         }));
+
+    // ─── Compression Streams API ──────────────────────────────────────────
+    e.define("CompressionStream", native("CompressionStream", |args| {
+        let format = args.into_iter().next().map(|v| v.to_string()).unwrap_or_else(|| "deflate".into());
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        obj.borrow_mut().set("__compression_stream__".into(), JsValue::Str(format));
+        obj.borrow_mut().set("readable".into(), JsValue::Object(Rc::new(RefCell::new(JsObject::new()))));
+        obj.borrow_mut().set("writable".into(), JsValue::Object(Rc::new(RefCell::new(JsObject::new()))));
+        Ok(JsValue::Object(obj))
+    }));
+    e.define("DecompressionStream", native("DecompressionStream", |args| {
+        let format = args.into_iter().next().map(|v| v.to_string()).unwrap_or_else(|| "deflate".into());
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        obj.borrow_mut().set("__decompression_stream__".into(), JsValue::Str(format));
+        obj.borrow_mut().set("readable".into(), JsValue::Object(Rc::new(RefCell::new(JsObject::new()))));
+        obj.borrow_mut().set("writable".into(), JsValue::Object(Rc::new(RefCell::new(JsObject::new()))));
+        Ok(JsValue::Object(obj))
+    }));
+
+    // ─── Web Streams API ──────────────────────────────────────────────────
+    e.define("ReadableStream", native("ReadableStream", |args| {
+        let _underlying = args.into_iter().next();
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        obj.borrow_mut().set("__readable_stream__".into(), JsValue::Bool(true));
+        obj.borrow_mut().set("locked".into(), JsValue::Bool(false));
+        obj.borrow_mut().set("cancel".into(), native("cancel", |_|
+            Ok(make_settled_promise("fulfilled", JsValue::Undefined))));
+        obj.borrow_mut().set("getReader".into(), native("getReader", |_| {
+            let reader = Rc::new(RefCell::new(JsObject::new()));
+            reader.borrow_mut().set("read".into(), native("read", |_| {
+                let result = Rc::new(RefCell::new(JsObject::new()));
+                result.borrow_mut().set("value".into(), JsValue::Undefined);
+                result.borrow_mut().set("done".into(), JsValue::Bool(true));
+                Ok(make_settled_promise("fulfilled", JsValue::Object(result)))
+            }));
+            reader.borrow_mut().set("releaseLock".into(), native("releaseLock", |_| Ok(JsValue::Undefined)));
+            reader.borrow_mut().set("cancel".into(), native("cancel", |_|
+                Ok(make_settled_promise("fulfilled", JsValue::Undefined))));
+            reader.borrow_mut().set("closed".into(),
+                make_settled_promise("fulfilled", JsValue::Undefined));
+            Ok(JsValue::Object(reader))
+        }));
+        obj.borrow_mut().set("pipeTo".into(), native("pipeTo", |_|
+            Ok(make_settled_promise("fulfilled", JsValue::Undefined))));
+        obj.borrow_mut().set("pipeThrough".into(), native("pipeThrough", |args|
+            Ok(args.into_iter().next().unwrap_or(JsValue::Undefined))));
+        obj.borrow_mut().set("tee".into(), native("tee", |_|
+            Ok(JsValue::Array(Rc::new(RefCell::new(Vec::new()))))));
+        Ok(JsValue::Object(obj))
+    }));
+    e.define("WritableStream", native("WritableStream", |_| {
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        obj.borrow_mut().set("__writable_stream__".into(), JsValue::Bool(true));
+        obj.borrow_mut().set("locked".into(), JsValue::Bool(false));
+        obj.borrow_mut().set("close".into(), native("close", |_|
+            Ok(make_settled_promise("fulfilled", JsValue::Undefined))));
+        obj.borrow_mut().set("abort".into(), native("abort", |_|
+            Ok(make_settled_promise("fulfilled", JsValue::Undefined))));
+        obj.borrow_mut().set("getWriter".into(), native("getWriter", |_| {
+            let writer = Rc::new(RefCell::new(JsObject::new()));
+            writer.borrow_mut().set("write".into(), native("write", |_|
+                Ok(make_settled_promise("fulfilled", JsValue::Undefined))));
+            writer.borrow_mut().set("close".into(), native("close", |_|
+                Ok(make_settled_promise("fulfilled", JsValue::Undefined))));
+            writer.borrow_mut().set("releaseLock".into(),
+                native("releaseLock", |_| Ok(JsValue::Undefined)));
+            Ok(JsValue::Object(writer))
+        }));
+        Ok(JsValue::Object(obj))
+    }));
+    e.define("TransformStream", native("TransformStream", |_| {
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        obj.borrow_mut().set("__transform_stream__".into(), JsValue::Bool(true));
+        obj.borrow_mut().set("readable".into(),
+            JsValue::Object(Rc::new(RefCell::new(JsObject::new()))));
+        obj.borrow_mut().set("writable".into(),
+            JsValue::Object(Rc::new(RefCell::new(JsObject::new()))));
+        Ok(JsValue::Object(obj))
+    }));
+    e.define("ByteLengthQueuingStrategy", native("ByteLengthQueuingStrategy", |_| {
+        Ok(JsValue::Object(Rc::new(RefCell::new(JsObject::new()))))
+    }));
+    e.define("CountQueuingStrategy", native("CountQueuingStrategy", |_| {
+        Ok(JsValue::Object(Rc::new(RefCell::new(JsObject::new()))))
+    }));
+
+    // ─── Cookie Store API ─────────────────────────────────────────────────
+    {
+        let cs = Rc::new(RefCell::new(JsObject::new()));
+        let cookies: Rc<RefCell<HashMap<String, String>>> = Rc::new(RefCell::new(HashMap::new()));
+        let c1 = Rc::clone(&cookies);
+        cs.borrow_mut().set("get".into(), native("cookieStore.get", move |args| {
+            let name = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+            let val = c1.borrow().get(&name).cloned();
+            let result = match val {
+                Some(v) => {
+                    let obj = Rc::new(RefCell::new(JsObject::new()));
+                    obj.borrow_mut().set("name".into(), JsValue::Str(name));
+                    obj.borrow_mut().set("value".into(), JsValue::Str(v));
+                    JsValue::Object(obj)
+                }
+                None => JsValue::Null,
+            };
+            Ok(make_settled_promise("fulfilled", result))
+        }));
+        let c2 = Rc::clone(&cookies);
+        cs.borrow_mut().set("set".into(), native("cookieStore.set", move |args| {
+            let mut it = args.into_iter();
+            let first = it.next().unwrap_or(JsValue::Undefined);
+            let (name, value) = if let JsValue::Object(o) = &first {
+                let b = o.borrow();
+                (b.get("name").to_string(), b.get("value").to_string())
+            } else {
+                let n = first.to_string();
+                let v = it.next().map(|v| v.to_string()).unwrap_or_default();
+                (n, v)
+            };
+            c2.borrow_mut().insert(name, value);
+            Ok(make_settled_promise("fulfilled", JsValue::Undefined))
+        }));
+        let c3 = Rc::clone(&cookies);
+        cs.borrow_mut().set("delete".into(), native("cookieStore.delete", move |args| {
+            let name = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+            c3.borrow_mut().remove(&name);
+            Ok(make_settled_promise("fulfilled", JsValue::Undefined))
+        }));
+        let c4 = Rc::clone(&cookies);
+        cs.borrow_mut().set("getAll".into(), native("cookieStore.getAll", move |_| {
+            let arr: Vec<JsValue> = c4.borrow().iter().map(|(k, v)| {
+                let obj = Rc::new(RefCell::new(JsObject::new()));
+                obj.borrow_mut().set("name".into(), JsValue::Str(k.clone()));
+                obj.borrow_mut().set("value".into(), JsValue::Str(v.clone()));
+                JsValue::Object(obj)
+            }).collect();
+            Ok(make_settled_promise("fulfilled", JsValue::Array(Rc::new(RefCell::new(arr)))))
+        }));
+        e.define("cookieStore", JsValue::Object(cs));
+    }
 
     // ─── Speech Synthesis / Recognition stub ──────────────────────────────
     {

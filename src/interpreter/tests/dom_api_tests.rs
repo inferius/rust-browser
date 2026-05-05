@@ -1457,3 +1457,117 @@ fn data_view_get_uint16_be() {
         assert_eq!(n, 258.0);
     }
 }
+
+// ─── Web Streams + Compression + Cookie Store ─────────────────────────
+
+#[test]
+fn readable_stream_get_reader() {
+    let code = r#"
+        const rs = new ReadableStream();
+        const reader = rs.getReader();
+        return typeof reader.read + "|" + typeof reader.releaseLock;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "function|function");
+    }
+}
+
+#[test]
+fn writable_stream_get_writer() {
+    let code = r#"
+        const ws = new WritableStream();
+        const w = ws.getWriter();
+        return typeof w.write;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "function");
+    }
+}
+
+#[test]
+fn transform_stream_has_readable_writable() {
+    let code = r#"
+        const ts = new TransformStream();
+        return typeof ts.readable + "|" + typeof ts.writable;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "object|object");
+    }
+}
+
+#[test]
+fn compression_stream_format() {
+    let code = r#"
+        const cs = new CompressionStream("gzip");
+        return cs.__compression_stream__;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "gzip");
+    }
+}
+
+#[test]
+fn cookie_store_set_and_get() {
+    let code = r#"
+        cookieStore.set("test", "value123");
+        return cookieStore.get("test");
+    "#;
+    let result = run(code);
+    if let crate::interpreter::JsValue::Object(o) = result {
+        if let crate::interpreter::JsValue::Object(inner) =
+            o.borrow().get("__promise_value__") {
+            let val = inner.borrow().get("value");
+            assert!(matches!(val, crate::interpreter::JsValue::Str(s) if s == "value123"));
+        }
+    }
+}
+
+#[test]
+fn cookie_store_delete() {
+    let code = r#"
+        cookieStore.set("delete-me", "x");
+        cookieStore.delete("delete-me");
+        return cookieStore.get("delete-me");
+    "#;
+    let result = run(code);
+    if let crate::interpreter::JsValue::Object(o) = result {
+        let val = o.borrow().get("__promise_value__");
+        assert!(matches!(val, crate::interpreter::JsValue::Null));
+    }
+}
+
+// ─── Typed Arrays variants ────────────────────────────────────────────
+
+#[test]
+fn typed_arrays_all_variants() {
+    let code = r#"
+        const checks = [
+            new Uint8Array(4).BYTES_PER_ELEMENT === 1,
+            new Int8Array(4).BYTES_PER_ELEMENT === 1,
+            new Uint16Array(4).BYTES_PER_ELEMENT === 2,
+            new Int16Array(4).BYTES_PER_ELEMENT === 2,
+            new Uint32Array(4).BYTES_PER_ELEMENT === 4,
+            new Int32Array(4).BYTES_PER_ELEMENT === 4,
+            new Float32Array(4).BYTES_PER_ELEMENT === 4,
+            new Float64Array(4).BYTES_PER_ELEMENT === 8,
+            new BigInt64Array(4).BYTES_PER_ELEMENT === 8,
+            new BigUint64Array(4).BYTES_PER_ELEMENT === 8,
+            new Uint8ClampedArray(4).BYTES_PER_ELEMENT === 1
+        ];
+        return checks.every(c => c);
+    "#;
+    if let crate::interpreter::JsValue::Bool(b) = run(code) {
+        assert!(b);
+    }
+}
+
+#[test]
+fn typed_array_byte_length() {
+    let code = r#"
+        const arr = new Float32Array(10);
+        return arr.byteLength + "|" + arr.length;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "40|10"); // 10 elem * 4 bytes
+    }
+}
