@@ -357,19 +357,20 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         cross_cursor += resolved.cross_size + line_gap + ac_between;
     }
 
-    // 7. Update parent height
-    let needed = if direction.is_row() {
-        total_cross + pad_t + pad_b
-    } else {
-        // V column direction main axis je vertical -> potreba content height
-        let main_used: f32 = resolved_lines.iter()
-            .map(|l| l.main_sizes.iter().sum::<f32>()
-                + main_gap * (l.main_sizes.len().saturating_sub(1) as f32))
-            .fold(0.0_f32, f32::max);
-        main_used + pad_t + pad_b
-    };
-    if bx.rect.height < needed {
-        bx.rect.height = needed;
+    // 7. Update parent height jen kdyz neni explicit set.
+    if bx.explicit_height.is_none() {
+        let needed = if direction.is_row() {
+            total_cross + pad_t + pad_b
+        } else {
+            let main_used: f32 = resolved_lines.iter()
+                .map(|l| l.main_sizes.iter().sum::<f32>()
+                    + main_gap * (l.main_sizes.len().saturating_sub(1) as f32))
+                .fold(0.0_f32, f32::max);
+            main_used + pad_t + pad_b
+        };
+        if bx.rect.height < needed {
+            bx.rect.height = needed;
+        }
     }
 
     // 8. Position absolute/fixed children (CB = padding-box parenta)
