@@ -594,8 +594,22 @@ mod tests {
             }
             // cursor_y se pohne na child.bottom + child.m_b
             let m_b = child.margin_bottom.unwrap_or(child.margin);
-            cursor_y = child.rect.y + child.rect.height + m_b;
-            prev_m_b = m_b;
+            // Margin collapse through: empty block s 0h a no pad/border collapsuje
+            // svou m_t + m_b s sourozenci. Misto child.bottom+m_b uchovavame max margin.
+            let pad_t_c = child.padding_top.unwrap_or(child.padding) + child.border_top_width.unwrap_or(child.border_width);
+            let pad_b_c = child.padding_bottom.unwrap_or(child.padding) + child.border_bottom_width.unwrap_or(child.border_width);
+            let is_empty_passthrough = child.rect.height == 0.0 && pad_t_c == 0.0 && pad_b_c == 0.0;
+            if is_empty_passthrough {
+                // Effective margin = max(prev_collapsed, m_t, m_b). Pozice child stejna.
+                // Ulozime jako prev_m_b: combined = max(collapsed (uz aplikovano), m_b).
+                // Reduce cursor advance: cursor zustane v misto child.y, prev_m_b = max(collapsed, m_b).
+                cursor_y = child.rect.y;
+                let combined = collapsed.max(m_b);
+                prev_m_b = combined;
+            } else {
+                cursor_y = child.rect.y + child.rect.height + m_b;
+                prev_m_b = m_b;
+            }
         }
         // Abs/fixed children - pouzij static y kdyz nemaji top/bottom inset.
         for (i, child) in bx.children.iter_mut().enumerate() {
