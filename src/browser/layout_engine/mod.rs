@@ -14,9 +14,26 @@ pub mod grid;
 
 use crate::browser::layout::{LayoutBox, Position, Display};
 
-/// Layout absolute/fixed positioned child relativne k containing block (parent rect).
-/// CSS Position L3: top/left/right/bottom + width/height + aspect-ratio + margins.
+/// Layout absolute/fixed positioned child relativne k containing block.
+/// CB = padding-box parenta = border-box minus border (CSS Position L3).
+pub fn layout_absolute_child_with_parent(child: &mut LayoutBox, parent: &LayoutBox) {
+    let bw_l = parent.border_left_width.unwrap_or(parent.border_width);
+    let bw_r = parent.border_right_width.unwrap_or(parent.border_width);
+    let bw_t = parent.border_top_width.unwrap_or(parent.border_width);
+    let bw_b = parent.border_bottom_width.unwrap_or(parent.border_width);
+    let cb_x = parent.rect.x + bw_l;
+    let cb_y = parent.rect.y + bw_t;
+    let cb_w = (parent.rect.width - bw_l - bw_r).max(0.0);
+    let cb_h = (parent.rect.height - bw_t - bw_b).max(0.0);
+    layout_absolute_child_inner(child, cb_x, cb_y, cb_w, cb_h);
+}
+
+/// Backward compat - parent_x/y/w/h vetsinou rect (bez border odecet).
 pub fn layout_absolute_child(child: &mut LayoutBox, parent_x: f32, parent_y: f32, parent_w: f32, parent_h: f32) {
+    layout_absolute_child_inner(child, parent_x, parent_y, parent_w, parent_h);
+}
+
+fn layout_absolute_child_inner(child: &mut LayoutBox, parent_x: f32, parent_y: f32, parent_w: f32, parent_h: f32) {
     let cb_x = parent_x;
     let cb_y = parent_y;
     let cb_w = parent_w;
@@ -84,17 +101,36 @@ pub fn layout_absolute_child(child: &mut LayoutBox, parent_x: f32, parent_y: f32
     let m_t = child.margin_top.unwrap_or(child.margin);
     let m_r = child.margin_right.unwrap_or(child.margin);
     let m_b = child.margin_bottom.unwrap_or(child.margin);
+    let auto_l = child.margin_left_auto;
+    let auto_r = child.margin_right_auto;
+    let auto_t = child.margin_top_auto;
+    let auto_b = child.margin_bottom_auto;
+    // Auto margin pro abs s oboustrannym insetem rozdeli free space.
+    let (extra_l, extra_r) = if let (Some(l), Some(r)) = (child.offset_left, child.offset_right) {
+        let free = (cb_w - w - l - r - m_l - m_r).max(0.0);
+        if auto_l && auto_r { (free / 2.0, free / 2.0) }
+        else if auto_l { (free, 0.0) }
+        else if auto_r { (0.0, free) }
+        else { (0.0, 0.0) }
+    } else { (0.0, 0.0) };
+    let (extra_t, extra_b) = if let (Some(t), Some(b)) = (child.offset_top, child.offset_bottom) {
+        let free = (cb_h - h - t - b - m_t - m_b).max(0.0);
+        if auto_t && auto_b { (free / 2.0, free / 2.0) }
+        else if auto_t { (free, 0.0) }
+        else if auto_b { (0.0, free) }
+        else { (0.0, 0.0) }
+    } else { (0.0, 0.0) };
     child.rect.x = if let Some(l) = child.offset_left {
-        cb_x + l + m_l
+        cb_x + l + m_l + extra_l
     } else if let Some(r) = child.offset_right {
-        cb_x + cb_w - r - w - m_r
+        cb_x + cb_w - r - m_r - extra_r - w
     } else {
         cb_x + m_l
     };
     child.rect.y = if let Some(t) = child.offset_top {
-        cb_y + t + m_t
+        cb_y + t + m_t + extra_t
     } else if let Some(b) = child.offset_bottom {
-        cb_y + cb_h - b - h - m_b
+        cb_y + cb_h - b - m_b - extra_b - h
     } else {
         cb_y + m_t
     };

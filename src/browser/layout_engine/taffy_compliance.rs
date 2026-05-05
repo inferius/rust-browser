@@ -419,10 +419,11 @@ mod tests {
         let inner_x = bx.rect.x + pad_l;
         let inner_y = bx.rect.y + pad_t;
         let inner_w = (bx.rect.width - pad_l - pad_r).max(0.0);
-        let parent_w = bx.rect.width;
-        let parent_h = bx.rect.height;
-        let parent_x = bx.rect.x;
-        let parent_y = bx.rect.y;
+        // Containing block pro abs = padding-box parenta (uvnitr borderu).
+        let parent_w = (bx.rect.width - bw_l - bw_r).max(0.0);
+        let parent_h = (bx.rect.height - bw_t - bw_b).max(0.0);
+        let parent_x = bx.rect.x + bw_l;
+        let parent_y = bx.rect.y + bw_t;
         let mut cursor_y = inner_y;
         // In-flow children jen
         for child in bx.children.iter_mut() {

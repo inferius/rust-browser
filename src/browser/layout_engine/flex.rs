@@ -372,14 +372,14 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         bx.rect.height = needed;
     }
 
-    // 8. Position absolute/fixed children (parent jako CB)
-    let parent_x = bx.rect.x;
-    let parent_y = bx.rect.y;
-    let parent_w = bx.rect.width;
-    let parent_h = bx.rect.height;
+    // 8. Position absolute/fixed children (CB = padding-box parenta)
+    let cb_x = bx.rect.x + bw_l;
+    let cb_y = bx.rect.y + bw_t;
+    let cb_w = (bx.rect.width - bw_l - bw_r).max(0.0);
+    let cb_h = (bx.rect.height - bw_t - bw_b).max(0.0);
     for ch in bx.children.iter_mut() {
         if super::is_out_of_flow(ch) {
-            super::layout_absolute_child(ch, parent_x, parent_y, parent_w, parent_h);
+            super::layout_absolute_child(ch, cb_x, cb_y, cb_w, cb_h);
         }
     }
 
