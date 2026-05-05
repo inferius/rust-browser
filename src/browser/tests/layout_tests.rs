@@ -259,6 +259,65 @@ fn grid_area_assignment() {
 }
 
 #[test]
+fn parse_shape_function_circle() {
+    use crate::browser::layout::{parse_shape_function, ShapeFunction};
+    let s = parse_shape_function("circle(50% at 25% 75%)").unwrap();
+    match s {
+        ShapeFunction::Circle { radius_pct, cx_pct, cy_pct } => {
+            assert!((radius_pct - 0.5).abs() < 1e-3);
+            assert!((cx_pct - 0.25).abs() < 1e-3);
+            assert!((cy_pct - 0.75).abs() < 1e-3);
+        }
+        _ => panic!("ocekavan Circle"),
+    }
+}
+
+#[test]
+fn parse_shape_function_ellipse() {
+    use crate::browser::layout::{parse_shape_function, ShapeFunction};
+    let s = parse_shape_function("ellipse(40% 30% at 50% 50%)").unwrap();
+    match s {
+        ShapeFunction::Ellipse { rx_pct, ry_pct, cx_pct, cy_pct } => {
+            assert!((rx_pct - 0.4).abs() < 1e-3);
+            assert!((ry_pct - 0.3).abs() < 1e-3);
+            assert!((cx_pct - 0.5).abs() < 1e-3);
+            assert!((cy_pct - 0.5).abs() < 1e-3);
+        }
+        _ => panic!("ocekavan Ellipse"),
+    }
+}
+
+#[test]
+fn parse_shape_function_polygon() {
+    use crate::browser::layout::{parse_shape_function, ShapeFunction};
+    let s = parse_shape_function("polygon(0% 0%, 100% 0%, 50% 100%)").unwrap();
+    match s {
+        ShapeFunction::Polygon(pts) => {
+            assert_eq!(pts.len(), 3);
+            assert!((pts[0].0 - 0.0).abs() < 1e-3);
+            assert!((pts[2].1 - 1.0).abs() < 1e-3);
+        }
+        _ => panic!("ocekavan Polygon"),
+    }
+}
+
+#[test]
+fn parse_shape_function_inset_round() {
+    use crate::browser::layout::{parse_shape_function, ShapeFunction};
+    let s = parse_shape_function("inset(10% 20% 30% 40% round 5%)").unwrap();
+    match s {
+        ShapeFunction::Inset { top, right, bottom, left, radius } => {
+            assert!((top - 0.1).abs() < 1e-3);
+            assert!((right - 0.2).abs() < 1e-3);
+            assert!((bottom - 0.3).abs() < 1e-3);
+            assert!((left - 0.4).abs() < 1e-3);
+            assert!((radius - 0.05).abs() < 1e-3);
+        }
+        _ => panic!("ocekavan Inset"),
+    }
+}
+
+#[test]
 fn shape_outside_circle() {
     use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade, layout};
     let doc = parse_html(r#"<html><body><div></div></body></html>"#, "");
@@ -434,6 +493,35 @@ fn transition_behavior_allow_discrete() {
     let d = find_box_by_tag(&root, "div").unwrap();
     assert_eq!(d.transition_behavior, "allow-discrete");
     assert_eq!(d.animation_composition, "add");
+}
+
+#[test]
+fn subgrid_display_recognized() {
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade, layout};
+    use crate::browser::layout::Display;
+    let doc = parse_html(r#"<html><body><div class="grid"><div class="sub">x</div></div></body></html>"#, "");
+    let css = parse_stylesheet(
+        ".grid { display: grid; grid-template-columns: 1fr 1fr 1fr; } \
+         .sub { display: subgrid; grid-template-columns: subgrid; }"
+    );
+    let map = cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+    // 2. div = sub
+    let sub = find_nth_box_by_tag(&root, "div", 2).unwrap();
+    assert!(matches!(sub.display, Display::Subgrid | Display::Grid),
+        "subgrid display rozpoznan");
+}
+
+#[test]
+fn subgrid_template_subgrid_keyword_parsed() {
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade, layout};
+    let doc = parse_html(r#"<html><body><div></div></body></html>"#, "");
+    let css = parse_stylesheet("div { grid-template-rows: subgrid; grid-template-columns: subgrid; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+    let d = find_box_by_tag(&root, "div").unwrap();
+    assert_eq!(d.grid_template_rows, "subgrid");
+    assert_eq!(d.grid_template_columns, "subgrid");
 }
 
 #[test]
@@ -748,6 +836,23 @@ fn find_box_by_tag<'a>(bx: &'a layout::LayoutBox, tag: &str) -> Option<&'a layou
         if let Some(found) = find_box_by_tag(c, tag) { return Some(found); }
     }
     None
+}
+
+/// Najde nested div - vrati Nth div pri DFS (1-indexovano).
+#[allow(dead_code)]
+fn find_nth_box_by_tag<'a>(bx: &'a layout::LayoutBox, tag: &str, n: usize) -> Option<&'a layout::LayoutBox> {
+    let mut count = 0;
+    fn walk<'a>(bx: &'a layout::LayoutBox, tag: &str, n: usize, count: &mut usize) -> Option<&'a layout::LayoutBox> {
+        if bx.tag.as_deref() == Some(tag) {
+            *count += 1;
+            if *count == n { return Some(bx); }
+        }
+        for c in &bx.children {
+            if let Some(found) = walk(c, tag, n, count) { return Some(found); }
+        }
+        None
+    }
+    walk(bx, tag, n, &mut count)
 }
 
 #[test]

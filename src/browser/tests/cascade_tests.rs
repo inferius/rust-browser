@@ -1346,6 +1346,110 @@ fn pseudo_modal_dialog_with_attribute() {
 }
 
 #[test]
+fn at_scope_applies_only_to_descendants() {
+    let doc = parse_html(
+        r#"<html><body><section class="card"><p>in</p></section><p>out</p></body></html>"#, ""
+    );
+    let css = parse_stylesheet("@scope (.card) { p { color: red; } }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let in_p = doc.root.find(|n| {
+        n.tag_name().as_deref() == Some("p")
+        && n.parent.borrow().upgrade().and_then(|p| p.attr("class")).map(|c| c.contains("card")).unwrap_or(false)
+    }).unwrap();
+    let out_p = doc.root.find(|n| {
+        n.tag_name().as_deref() == Some("p")
+        && !n.parent.borrow().upgrade().and_then(|p| p.attr("class")).map(|c| c.contains("card")).unwrap_or(false)
+    }).unwrap();
+    let in_color = cascade::get_styles(&map, &in_p).and_then(|s| s.get("color")).cloned().unwrap_or_default();
+    let out_color = cascade::get_styles(&map, &out_p).and_then(|s| s.get("color")).cloned().unwrap_or_default();
+    assert_eq!(in_color.trim(), "red", "p uvnitr .card dostane @scope styl");
+    assert!(out_color.trim() != "red", "p mimo .card NEMA @scope styl");
+}
+
+#[test]
+fn at_scope_with_limit_excludes_subtree() {
+    let doc = parse_html(
+        r#"<html><body>
+            <section class="card">
+                <p>before</p>
+                <div class="divider"><p>inside-limit</p></div>
+            </section>
+        </body></html>"#, ""
+    );
+    let css = parse_stylesheet("@scope (.card) to (.divider) { p { color: red; } }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    // p pod divider by mel byt mimo scope
+    let p_in_divider = doc.root.find(|n| {
+        n.tag_name().as_deref() == Some("p")
+        && n.parent.borrow().upgrade().and_then(|p| p.attr("class")).map(|c| c.contains("divider")).unwrap_or(false)
+    }).unwrap();
+    let color = cascade::get_styles(&map, &p_in_divider).and_then(|s| s.get("color")).cloned().unwrap_or_default();
+    assert!(color.trim() != "red", "p pod limit element NEMA scope styl");
+}
+
+#[test]
+fn node_in_scope_self_match() {
+    use crate::browser::cascade::node_in_scope;
+    let doc = parse_html(r#"<html><body><div class="card">x</div></body></html>"#, "");
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    assert!(node_in_scope(&div, ".card", None), "self-match: .card sam je v scope");
+}
+
+#[test]
+fn at_starting_style_cascade() {
+    let doc = parse_html(r#"<html><body><div></div></body></html>"#, "");
+    let css = parse_stylesheet("@starting-style { div { opacity: 0; transform: scale(0.5); } }");
+    let map = cascade::cascade_starting_style(&doc.root, &[css]);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let styles = cascade::get_styles(&map, &div);
+    assert!(styles.is_some(), "div ma @starting-style styly");
+    let s = styles.unwrap();
+    assert_eq!(s.get("opacity").map(String::as_str), Some("0"));
+    assert!(s.get("transform").map(|v| v.contains("scale")).unwrap_or(false));
+}
+
+#[test]
+fn at_starting_style_only_matches_relevant() {
+    let doc = parse_html(r#"<html><body><div></div><span></span></body></html>"#, "");
+    let css = parse_stylesheet("@starting-style { div { opacity: 0; } }");
+    let map = cascade::cascade_starting_style(&doc.root, &[css]);
+    let span = doc.root.find(|n| n.tag_name().as_deref() == Some("span")).unwrap();
+    let styles = cascade::get_styles(&map, &span);
+    // span nedostane opacity:0 protoze ho selektor div nematchne
+    assert!(styles.map(|s| s.get("opacity").is_none()).unwrap_or(true));
+}
+
+#[test]
+fn at_function_basic_call() {
+    let doc = parse_html(r#"<html><body><div></div></body></html>"#, "");
+    let css = parse_stylesheet(
+        "@function --double(x) returns <length> { result: calc(var(--x) * 2); } \
+         div { width: --double(50px); }"
+    );
+    let map = cascade::cascade(&doc.root, &[css]);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let styles = cascade::get_styles(&map, &div);
+    let w = styles.and_then(|s| s.get("width")).cloned().unwrap_or_default();
+    // calc(50px * 2) -> 100px
+    assert!(w.trim() == "100px" || w.trim() == "100", "@function --double(50px) -> 100px, dostal: {}", w);
+}
+
+#[test]
+fn at_function_two_args() {
+    let doc = parse_html(r#"<html><body><div></div></body></html>"#, "");
+    let css = parse_stylesheet(
+        "@function --plus(a, b) returns <length> { result: calc(var(--a) + var(--b)); } \
+         div { padding: --plus(10px, 20px); }"
+    );
+    let map = cascade::cascade(&doc.root, &[css]);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let styles = cascade::get_styles(&map, &div);
+    let p = styles.and_then(|s| s.get("padding-top")).cloned()
+        .or_else(|| styles.and_then(|s| s.get("padding")).cloned()).unwrap_or_default();
+    assert!(p.contains("30"), "10 + 20 = 30, dostal: {}", p);
+}
+
+#[test]
 fn css_if_function_true_branch() {
     let doc = parse_html(r#"<html><body><div></div></body></html>"#, "");
     let css = parse_stylesheet(":root { --enabled: true; } div { color: if(var(--enabled), red, blue); }");
@@ -1398,10 +1502,23 @@ fn container_query_too_small_no_match() {
         n.attr("class").map(|c| c.contains("inner")).unwrap_or(false)
     }).unwrap();
     let styles = cascade::get_styles(&map, &inner);
-    // 200px < 400px - container query nematch, ale viewport (1024px) match v cascade_with_viewport,
-    // takze color muze byt red kvuli viewport fallback v prvnim pruchodu. Test overuje per-element logiku.
-    // Kdyz by per-element override fungoval ciste, color by nebyl ze container query.
-    // Aktualne kombinujeme: cascade_with_viewport (viewport 1024 > 400) UZ aplikoval, takze color je red.
-    // Tento test slouzi jen jako zaznam aktualniho chovani.
-    let _ = styles;
+    // 200px < 400px container query NEMATCH - bez viewport fallback contamination.
+    let color = styles.and_then(|s| s.get("color")).cloned().unwrap_or_default();
+    assert!(color.trim() != "red",
+        "@container nematch (200 < 400) - inner NEMA color: red, dostal {}", color);
+}
+
+#[test]
+fn container_query_no_container_skipped() {
+    // Zadny container ancestor - rules se nemaji aplikovat.
+    let doc = parse_html(r#"<html><body><div class="inner">x</div></body></html>"#, "");
+    let css = parse_stylesheet(
+        "@container (min-width: 100px) { .inner { color: red; } }"
+    );
+    let sizes = std::collections::HashMap::new(); // zadny container
+    let map = cascade::cascade_with_container_sizes(&doc.root, &[css], 1024.0, 768.0, &sizes);
+    let inner = doc.root.find(|n| n.attr("class").map(|c| c.contains("inner")).unwrap_or(false)).unwrap();
+    let styles = cascade::get_styles(&map, &inner);
+    let color = styles.and_then(|s| s.get("color")).cloned().unwrap_or_default();
+    assert!(color.trim() != "red", "Bez container ancestor query NEMATCH");
 }

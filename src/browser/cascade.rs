@@ -213,6 +213,27 @@ fn node_id(node: &Rc<Node>) -> usize {
 /// Resolvuje CSS var(--name), env(), calc(), min(), max(), clamp() expressions.
 /// Pri var(--x, fallback): pokud --x v variables, pouzij ho, jinak fallback.
 pub fn resolve_value(value: &str, variables: &HashMap<String, String>) -> String {
+    resolve_value_with_funcs(value, variables, &HashMap::new())
+}
+
+/// Resolvuje CSS hodnoty + uzivatelske @function volani.
+pub fn resolve_value_with_funcs(
+    value: &str,
+    variables: &HashMap<String, String>,
+    functions: &HashMap<String, super::css_parser::CssFunction>,
+) -> String {
+    let mut out = value.to_string();
+    // @function calls: --name(arg1, arg2) -> evaluate body s arg substitution
+    if !functions.is_empty() && out.contains("--") && out.contains('(') {
+        out = resolve_user_functions(&out, variables, functions);
+    }
+    let mut out2 = out.clone();
+    let _ = out;
+    out2 = inner_resolve(&out2, variables);
+    out2
+}
+
+fn inner_resolve(value: &str, variables: &HashMap<String, String>) -> String {
     let mut out = value.to_string();
     // Iterativne resolvujem do fixed pointu (max 10 prochodu).
     // var() muze obsahovat calc(), calc() muze obsahovat min(), atd.
@@ -241,6 +262,71 @@ pub fn resolve_value(value: &str, variables: &HashMap<String, String>) -> String
             out = resolve_calc(&out);
         }
         if out == before { break; }
+    }
+    out
+}
+
+/// CSS Functions L1 - resolve user-defined @function calls.
+/// Format volani: `--name(arg1, arg2)`. Body funkce: `result: <expr>;`.
+/// Args dosadime jako `var(--argname)` -> arg_value v body resolution.
+fn resolve_user_functions(
+    s: &str,
+    variables: &HashMap<String, String>,
+    functions: &HashMap<String, super::css_parser::CssFunction>,
+) -> String {
+    let bytes = s.as_bytes();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        // Detekce `--`
+        if i + 1 < bytes.len() && bytes[i] == b'-' && bytes[i+1] == b'-' {
+            // Najdeme jmeno (-- + ident)
+            let mut j = i + 2;
+            while j < bytes.len() && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'-' || bytes[j] == b'_') {
+                j += 1;
+            }
+            // Pokud nasleduje '(', je to call
+            if j < bytes.len() && bytes[j] == b'(' {
+                let name = &s[i..j];
+                if let Some(func) = functions.get(name) {
+                    // Najit matching ')'
+                    let mut depth = 1i32; let mut k = j + 1;
+                    while k < bytes.len() && depth > 0 {
+                        match bytes[k] { b'(' => depth += 1, b')' => depth -= 1, _ => {} }
+                        if depth == 0 { break; }
+                        k += 1;
+                    }
+                    let args_str = &s[j+1..k];
+                    let arg_vals: Vec<String> = split_top_level_commas(args_str)
+                        .into_iter().map(|a| a.trim().to_string()).collect();
+                    // Build local vars: arg name -> arg value
+                    let mut local_vars = variables.clone();
+                    for (idx, arg_name) in func.args.iter().enumerate() {
+                        if let Some(val) = arg_vals.get(idx) {
+                            local_vars.insert(format!("--{}", arg_name), val.clone());
+                        }
+                    }
+                    // Najit `result: ... ;` v body
+                    let body = &func.body;
+                    if let Some(result_idx) = body.find("result:") {
+                        let after = &body[result_idx + 7..];
+                        let end = after.find(';').unwrap_or(after.len());
+                        let expr = after[..end].trim();
+                        // Resolve expr s local vars
+                        let resolved = inner_resolve(expr, &local_vars);
+                        out.push_str(&resolved);
+                        i = k + 1;
+                        continue;
+                    }
+                }
+            }
+            // Neni call - emituj raw `--name`
+            out.push_str(&s[i..j]);
+            i = j;
+            continue;
+        }
+        out.push(bytes[i] as char);
+        i += 1;
     }
     out
 }
@@ -654,23 +740,38 @@ pub fn cascade_with_viewport(root: &Rc<Node>, stylesheets: &[Stylesheet],
 /// Per-element container query evaluation: container_sizes je mapa
 /// node ptr (Rc::as_ptr) -> (width, height). Pri matchingu @container
 /// rule najde nejblizsiho ancestora s container-type a pouzije jeho velikost.
-/// Pokud nenajdeme, fallback na viewport.
+/// Bez fallbacku na viewport - rules se aplikuji JEN pokud najdem container.
 pub fn cascade_with_container_sizes(
     root: &Rc<Node>,
     stylesheets: &[Stylesheet],
     viewport_w: f32, viewport_h: f32,
     container_sizes: &HashMap<usize, (f32, f32)>,
 ) -> StyleMap {
-    let mut style_map = cascade_with_viewport(root, stylesheets, viewport_w, viewport_h);
-    // Druhy pruchod: per-element pro @container rules co potrebuji ancestor lookup.
+    // Sjednotit jen media queries - container queries vyresime per-element.
+    let mut effective: Vec<Stylesheet> = Vec::new();
+    for sheet in stylesheets {
+        let mut combined = sheet.clone();
+        for mq in &sheet.media_queries {
+            if super::css_parser::evaluate_media_query(&mq.query, viewport_w, viewport_h) {
+                combined.rules.extend(mq.rules.clone());
+            }
+        }
+        combined.media_queries.clear();
+        combined.container_queries.clear(); // vyresime separe pres ancestor lookup
+        effective.push(combined);
+    }
+    let mut style_map = cascade(root, &effective);
+    // Druhy pruchod: per-element pro @container rules - bez double-apply.
     root.walk(&mut |node| {
         if !matches!(node.kind, NodeKind::Element { .. }) { return; }
-        // Najdi ancestora co je container (ma container-type/container-name).
-        let (cw, ch) = find_container_size(node, container_sizes).unwrap_or((viewport_w, viewport_h));
+        // Bez container ancestor (s container-type) -> rules se NEAPLIKUJI.
+        // (Spec: kdyz neni container, query se nevyhodnoti)
+        let container_size = find_container_size(node, container_sizes);
+        if container_size.is_none() { return; }
+        let (cw, ch) = container_size.unwrap();
         for sheet in stylesheets {
             for cq in &sheet.container_queries {
                 if super::css_parser::evaluate_container_query(&cq.condition, cw, ch) {
-                    // Aplikuj kazde pravidlo co matchne tento node.
                     for rule in &cq.rules {
                         for sel in &rule.selectors {
                             if matches_selector(node, sel) {
@@ -696,6 +797,64 @@ pub fn cascade_with_container_sizes(
     style_map
 }
 
+/// CSS Transitions L2 - cascade jen @starting-style rules.
+/// Vraci StyleMap s "from-state" hodnotami pro elementy. Pouziva se pro transition
+/// starting state pri pridanim noveho elementu (nebo display:none -> visible).
+/// Cascade pravidla z `sheet.starting_style_rules` jako kdyby byly nestandardni.
+pub fn cascade_starting_style(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
+    let mut style_map: StyleMap = HashMap::new();
+    let variables: HashMap<String, String> = HashMap::new();
+    root.walk(&mut |node| {
+        if !matches!(node.kind, NodeKind::Element { .. }) { return; }
+        for sheet in stylesheets {
+            for rule in &sheet.starting_style_rules {
+                for sel in &rule.selectors {
+                    if matches_selector(node, sel) {
+                        let entry = style_map.entry(node_id(node)).or_default();
+                        for d in &rule.declarations {
+                            let resolved = resolve_value(&d.value, &variables);
+                            let resolved = resolve_attr_in_value(&resolved, node);
+                            expand_shorthand(&d.property, &resolved, entry);
+                        }
+                    }
+                }
+            }
+        }
+    });
+    style_map
+}
+
+/// Test zda je `node` v scope - tj. je descendant nektereho elementu matchujiciho
+/// `root_sel`, a zaroven NENI descendant limit_sel (pokud limit dany).
+/// Self je tez "descendant" (root sam je v scope).
+pub fn node_in_scope(node: &Rc<Node>, root_sel: &str, limit_sel: Option<&str>) -> bool {
+    let root_parsed = super::css_parser::parse_selectors(root_sel);
+    let limit_parsed = limit_sel.map(super::css_parser::parse_selectors);
+    // Najit ancestor (vc. self) co matchuje root.
+    let mut cur = Some(Rc::clone(node));
+    let mut found_root = false;
+    while let Some(c) = cur {
+        if root_parsed.iter().any(|s| matches_selector(&c, s)) {
+            found_root = true;
+            break;
+        }
+        cur = c.parent.borrow().upgrade();
+    }
+    if !found_root { return false; }
+    // Pokud je dany limit, zjistit zda nejaky ancestor (vc. self) matchuje limit.
+    // Pokud ano, node je MIMO scope (limit je exclusive).
+    if let Some(lim) = limit_parsed {
+        let mut cur = Some(Rc::clone(node));
+        while let Some(c) = cur {
+            if lim.iter().any(|s| matches_selector(&c, s)) {
+                return false;
+            }
+            cur = c.parent.borrow().upgrade();
+        }
+    }
+    true
+}
+
 /// Najde nejblizsi container ancestor a vrati jeho rozmery.
 fn find_container_size(
     node: &Rc<Node>,
@@ -716,6 +875,13 @@ pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
     let mut style_map: StyleMap = HashMap::new();
     // Globalni :root variables - resolved jednou
     let mut variables: HashMap<String, String> = HashMap::new();
+    // Globalni @function registry - vsechny funkce ze vsech stylesheets
+    let mut functions: HashMap<String, super::css_parser::CssFunction> = HashMap::new();
+    for sheet in stylesheets {
+        for f in &sheet.functions {
+            functions.insert(f.name.clone(), f.clone());
+        }
+    }
     // @property initial-value pro registrovane custom properties - aplikovan pred :root values
     for sheet in stylesheets {
         for prop in &sheet.registered_properties {
@@ -804,6 +970,33 @@ pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
                     }
                 }
             }
+            // @scope rules - aplikuje se pokud je node descendant root_selector
+            // a NENI descendant limit_selector.
+            for scope in &sheet.scopes {
+                if !node_in_scope(node, &scope.root_selector, scope.limit_selector.as_deref()) {
+                    continue;
+                }
+                for rule in &scope.rules {
+                    for sel in &rule.selectors {
+                        if sel.parts.last().map(|p| p.pseudo_element.is_some()).unwrap_or(false) {
+                            continue;
+                        }
+                        if matches_selector(node, sel) {
+                            let spec = specificity(sel);
+                            for decl in &rule.declarations {
+                                let key = (
+                                    if decl.important { 1 } else { 0 },
+                                    u32::MAX,
+                                    spec.0 * 1000 + spec.1 + spec.2 + 1, // +1 = lehka prioritizace nad nescoped
+                                    order,
+                                );
+                                matched_decls.push(((key.0, key.1, key.2, key.3), decl));
+                                order += 1;
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         // Sort podle (important, id_count, class+type, order) - vyssi kombinace vyhrava
@@ -811,7 +1004,7 @@ pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
 
         let mut styles = HashMap::new();
         for (_, decl) in matched_decls {
-            let resolved = resolve_value(&decl.value, &variables);
+            let resolved = resolve_value_with_funcs(&decl.value, &variables, &functions);
             let resolved = resolve_attr_in_value(&resolved, node);
             // revert / revert-layer / unset / initial: odstranit prop z computed map
             // (ucinne resetuje na UA/inherited default). Vymazeme pokud jiz v map je.
