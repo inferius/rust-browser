@@ -236,6 +236,7 @@ mod tests {
         let mut parent = make_flex_box(100.0, 300.0);
         parent.flex_wrap = "wrap".into();
         parent.row_gap = 15.0;
+        parent.align_content = "flex-start".into(); // bez stretch
         for _ in 0..3 { parent.children.push(make_child(60.0, 30.0)); }
         layout_flex(&mut parent);
         // 60px item, 100 container -> 1 per line

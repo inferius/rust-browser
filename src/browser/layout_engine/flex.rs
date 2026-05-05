@@ -208,9 +208,19 @@ pub fn layout_flex(bx: &mut LayoutBox) {
 
     // 5. Compute total cross size
     let line_gap = if direction.is_row() { row_gap } else { col_gap };
-    // Pri single-line a definovanem container cross size, line zabira full container cross
     let container_cross = if direction.is_row() { (bx.rect.height - pad_t - pad_b - 2.0 * bx.margin).max(0.0) } else { inner_w };
-    if resolved_lines.len() == 1 && container_cross > 0.0 {
+    let nline = resolved_lines.len();
+    let total_gap_cross = line_gap * nline.saturating_sub(1) as f32;
+    let lines_natural_total: f32 = resolved_lines.iter().map(|l| l.cross_size).sum::<f32>() + total_gap_cross;
+    // align-content: kdyz neset nebo "stretch" -> rozdel container cross rovnomerne mezi lines.
+    let ac = bx.align_content.trim();
+    let stretch_lines = ac.is_empty() || ac == "stretch" || ac == "normal";
+    if container_cross > 0.0 && stretch_lines && lines_natural_total < container_cross && nline > 0 {
+        let extra_per_line = (container_cross - lines_natural_total) / nline as f32;
+        for line in &mut resolved_lines {
+            line.cross_size += extra_per_line;
+        }
+    } else if nline == 1 && container_cross > 0.0 {
         resolved_lines[0].cross_size = resolved_lines[0].cross_size.max(container_cross);
     }
     let line_cross_sizes: Vec<f32> = resolved_lines.iter().map(|l| l.cross_size).collect();

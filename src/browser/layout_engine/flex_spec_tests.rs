@@ -70,7 +70,7 @@ mod tests {
     #[test] fn fs_gap_5() { let mut p = parent(300.0, 100.0); p.column_gap = 5.0; p.children.push(child(50.0, 30.0)); p.children.push(child(50.0, 30.0)); layout_flex(&mut p); assert_eq!(p.children[1].rect.x, 55.0); }
     #[test] fn fs_gap_10() { let mut p = parent(300.0, 100.0); p.column_gap = 10.0; for _ in 0..3 { p.children.push(child(50.0, 30.0)); } layout_flex(&mut p); assert_eq!(p.children[2].rect.x, 120.0); }
     #[test] fn fs_gap_zero_default() { let mut p = parent(300.0, 100.0); p.children.push(child(50.0, 30.0)); p.children.push(child(50.0, 30.0)); layout_flex(&mut p); assert_eq!(p.children[1].rect.x, 50.0); }
-    #[test] fn fs_row_gap_in_wrap() { let mut p = parent(100.0, 300.0); p.flex_wrap = "wrap".into(); p.row_gap = 8.0; for _ in 0..2 { p.children.push(child(60.0, 30.0)); } layout_flex(&mut p); assert_eq!(p.children[1].rect.y, 38.0); }
+    #[test] fn fs_row_gap_in_wrap() { let mut p = parent(100.0, 300.0); p.flex_wrap = "wrap".into(); p.align_content = "flex-start".into(); p.row_gap = 8.0; for _ in 0..2 { p.children.push(child(60.0, 30.0)); } layout_flex(&mut p); assert_eq!(p.children[1].rect.y, 38.0); }
 
     // ─── Flex-grow ───────────────────────────────────────────────────────
     #[test] fn fs_grow_1_distributes_all_free() { let mut p = parent(300.0, 100.0); let mut a = child(50.0, 30.0); a.flex_grow = 1.0; p.children.push(a); layout_flex(&mut p); assert_eq!(p.children[0].rect.width, 300.0); }
@@ -101,7 +101,7 @@ mod tests {
     #[test] fn fs_wrap_parent_height_multiplied() { let mut p = parent(100.0, 0.0); p.flex_wrap = "wrap".into(); for _ in 0..3 { p.children.push(child(60.0, 30.0)); } layout_flex(&mut p); assert!(p.rect.height >= 90.0); }
 
     // ─── Direction-specific edge cases ───────────────────────────────────
-    #[test] fn fs_row_gap_used_in_wrap() { let mut p = parent(100.0, 200.0); p.flex_wrap = "wrap".into(); p.row_gap = 5.0; for _ in 0..3 { p.children.push(child(60.0, 30.0)); } layout_flex(&mut p); let dy = p.children[1].rect.y - p.children[0].rect.y; assert!((dy - 35.0).abs() < 0.5); }
+    #[test] fn fs_row_gap_used_in_wrap() { let mut p = parent(100.0, 200.0); p.flex_wrap = "wrap".into(); p.align_content = "flex-start".into(); p.row_gap = 5.0; for _ in 0..3 { p.children.push(child(60.0, 30.0)); } layout_flex(&mut p); let dy = p.children[1].rect.y - p.children[0].rect.y; assert!((dy - 35.0).abs() < 0.5); }
     #[test] fn fs_col_jc_start_first_at_zero() { let mut p = parent(100.0, 300.0); p.flex_direction = "column".into(); p.justify_content = "flex-start".into(); p.children.push(child(50.0, 30.0)); layout_flex(&mut p); assert_eq!(p.children[0].rect.y, 0.0); }
     #[test] fn fs_col_jc_end() { let mut p = parent(100.0, 300.0); p.flex_direction = "column".into(); p.justify_content = "flex-end".into(); p.children.push(child(50.0, 30.0)); layout_flex(&mut p); assert!((p.children[0].rect.y - 270.0).abs() < 0.5); }
 
