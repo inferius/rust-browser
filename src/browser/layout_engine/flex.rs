@@ -229,7 +229,31 @@ pub fn layout_flex(bx: &mut LayoutBox) {
 
     // 6. Position items
     let main_gap = if direction.is_row() { col_gap } else { row_gap };
-    let mut cross_cursor = 0.0_f32;
+    // align-content positioning of lines podel cross axis (krome stretch ktere uz pripocteno).
+    let (ac_start, ac_between) = if !stretch_lines && container_cross > 0.0 {
+        let used = total_cross;
+        let free = (container_cross - used).max(0.0);
+        match ac {
+            "flex-end" | "end" => (free, 0.0),
+            "center" => (free / 2.0, 0.0),
+            "space-between" => {
+                if nline <= 1 { (0.0, 0.0) }
+                else { (0.0, free / (nline - 1) as f32) }
+            }
+            "space-around" => {
+                let g = free / nline.max(1) as f32;
+                (g / 2.0, g)
+            }
+            "space-evenly" => {
+                let g = free / (nline + 1) as f32;
+                (g, g)
+            }
+            _ => (0.0, 0.0),
+        }
+    } else {
+        (0.0, 0.0)
+    };
+    let mut cross_cursor = ac_start;
 
     let line_iter: Box<dyn Iterator<Item = &Vec<usize>>> = if matches!(wrap, FlexWrap::WrapReverse) {
         Box::new(lines.iter().rev())
@@ -309,7 +333,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             main_cursor += main_size + it.margin_main_end;
         }
 
-        cross_cursor += resolved.cross_size + line_gap;
+        cross_cursor += resolved.cross_size + line_gap + ac_between;
     }
 
     // 7. Update parent height
