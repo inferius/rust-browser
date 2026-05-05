@@ -272,6 +272,44 @@ pub fn setup_builtins(
         let s = S.fetch_add(6364136223846793005, Ordering::Relaxed);
         Ok(JsValue::Number((s >> 11) as f64 / (1u64 << 53) as f64))
     }));
+    // Doplneni chybejicich Math metod (ECMA262 20.3)
+    math.set("sign".into(),  native("sign",  |a| Ok(JsValue::Number({ let v = a.first().map(|x| x.to_number()).unwrap_or(f64::NAN); if v.is_nan() { f64::NAN } else if v == 0.0 { 0.0 } else { v.signum() } }))));
+    math.set("cbrt".into(),  native("cbrt",  |a| Ok(JsValue::Number(a.first().map(|v| v.to_number()).unwrap_or(f64::NAN).cbrt()))));
+    math.set("log2".into(),  native("log2",  |a| Ok(JsValue::Number(a.first().map(|v| v.to_number()).unwrap_or(f64::NAN).log2()))));
+    math.set("log10".into(), native("log10", |a| Ok(JsValue::Number(a.first().map(|v| v.to_number()).unwrap_or(f64::NAN).log10()))));
+    math.set("exp".into(),   native("exp",   |a| Ok(JsValue::Number(a.first().map(|v| v.to_number()).unwrap_or(f64::NAN).exp()))));
+    math.set("expm1".into(), native("expm1", |a| Ok(JsValue::Number(a.first().map(|v| v.to_number()).unwrap_or(f64::NAN).exp_m1()))));
+    math.set("log1p".into(), native("log1p", |a| Ok(JsValue::Number(a.first().map(|v| v.to_number()).unwrap_or(f64::NAN).ln_1p()))));
+    math.set("tan".into(),   native("tan",   |a| Ok(JsValue::Number(a.first().map(|v| v.to_number()).unwrap_or(f64::NAN).tan()))));
+    math.set("asin".into(),  native("asin",  |a| Ok(JsValue::Number(a.first().map(|v| v.to_number()).unwrap_or(f64::NAN).asin()))));
+    math.set("acos".into(),  native("acos",  |a| Ok(JsValue::Number(a.first().map(|v| v.to_number()).unwrap_or(f64::NAN).acos()))));
+    math.set("atan".into(),  native("atan",  |a| Ok(JsValue::Number(a.first().map(|v| v.to_number()).unwrap_or(f64::NAN).atan()))));
+    math.set("atan2".into(), native("atan2", |a| {
+        let y = a.get(0).map(|v| v.to_number()).unwrap_or(f64::NAN);
+        let x = a.get(1).map(|v| v.to_number()).unwrap_or(f64::NAN);
+        Ok(JsValue::Number(y.atan2(x)))
+    }));
+    math.set("trunc".into(), native("trunc", |a| Ok(JsValue::Number(a.first().map(|v| v.to_number()).unwrap_or(f64::NAN).trunc()))));
+    math.set("fround".into(),native("fround",|a| Ok(JsValue::Number((a.first().map(|v| v.to_number()).unwrap_or(f64::NAN) as f32) as f64))));
+    math.set("clz32".into(), native("clz32", |a| {
+        let v = a.first().map(|v| v.to_number()).unwrap_or(0.0) as u32;
+        Ok(JsValue::Number(v.leading_zeros() as f64))
+    }));
+    math.set("imul".into(),  native("imul",  |a| {
+        let x = a.get(0).map(|v| v.to_number()).unwrap_or(0.0) as i32;
+        let y = a.get(1).map(|v| v.to_number()).unwrap_or(0.0) as i32;
+        Ok(JsValue::Number(x.wrapping_mul(y) as f64))
+    }));
+    math.set("hypot".into(), native("hypot", |a| {
+        let sum_sq: f64 = a.iter().map(|v| { let n = v.to_number(); n * n }).sum();
+        Ok(JsValue::Number(sum_sq.sqrt()))
+    }));
+    math.set("LN2".into(),   JsValue::Number(std::f64::consts::LN_2));
+    math.set("LN10".into(),  JsValue::Number(std::f64::consts::LN_10));
+    math.set("LOG2E".into(), JsValue::Number(std::f64::consts::LOG2_E));
+    math.set("LOG10E".into(),JsValue::Number(std::f64::consts::LOG10_E));
+    math.set("SQRT2".into(), JsValue::Number(std::f64::consts::SQRT_2));
+    math.set("SQRT1_2".into(),JsValue::Number(1.0 / std::f64::consts::SQRT_2));
     e.define("Math", JsValue::Object(Rc::new(RefCell::new(math))));
 
     // Globalni funkce

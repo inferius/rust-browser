@@ -294,3 +294,42 @@ fn bigint_huge_value() {
     let r = run("return (9999999999999999999999n).toString();");
     assert!(as_str(r).len() > 15, "BigInt podporuje > Number.MAX_SAFE_INTEGER");
 }
+
+// --- Math nove metody ---
+
+#[test]
+fn math_sign_positive() { assert_eq!(as_num(run("return Math.sign(5);")), 1.0); }
+#[test]
+fn math_sign_negative() { assert_eq!(as_num(run("return Math.sign(-3);")), -1.0); }
+#[test]
+fn math_sign_zero()     { assert_eq!(as_num(run("return Math.sign(0);")), 0.0); }
+#[test]
+fn math_cbrt()          { assert!((as_num(run("return Math.cbrt(27);")) - 3.0).abs() < 1e-10); }
+#[test]
+fn math_log2()          { assert!((as_num(run("return Math.log2(8);")) - 3.0).abs() < 1e-10); }
+#[test]
+fn math_log10()         { assert!((as_num(run("return Math.log10(1000);")) - 3.0).abs() < 1e-10); }
+#[test]
+fn math_exp()           { assert!((as_num(run("return Math.exp(1);")) - std::f64::consts::E).abs() < 1e-10); }
+#[test]
+fn math_tan()           { assert!((as_num(run("return Math.tan(0);")) - 0.0).abs() < 1e-10); }
+#[test]
+fn math_atan2()         { assert!((as_num(run("return Math.atan2(1, 1);")) - std::f64::consts::FRAC_PI_4).abs() < 1e-10); }
+#[test]
+fn math_trunc_positive(){ assert_eq!(as_num(run("return Math.trunc(4.9);")), 4.0); }
+#[test]
+fn math_trunc_negative(){ assert_eq!(as_num(run("return Math.trunc(-4.9);")), -4.0); }
+#[test]
+fn math_hypot()         { assert!((as_num(run("return Math.hypot(3, 4);")) - 5.0).abs() < 1e-10); }
+#[test]
+fn math_hypot_many()    { assert!((as_num(run("return Math.hypot(1, 2, 2);")) - 3.0).abs() < 1e-10); }
+#[test]
+fn math_ln2()           { assert!((as_num(run("return Math.LN2;")) - std::f64::consts::LN_2).abs() < 1e-10); }
+#[test]
+fn math_log10e()        { assert!((as_num(run("return Math.LOG10E;")) - std::f64::consts::LOG10_E).abs() < 1e-10); }
+#[test]
+fn math_imul()          { assert_eq!(as_num(run("return Math.imul(3, 4);")), 12.0); }
+#[test]
+fn math_clz32()         { assert_eq!(as_num(run("return Math.clz32(1);")), 31.0); }
+#[test]
+fn math_floor_negative(){ assert_eq!(as_num(run("return Math.floor(-1.5);")), -2.0); }
