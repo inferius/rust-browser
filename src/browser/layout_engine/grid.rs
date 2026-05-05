@@ -42,9 +42,9 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         .count();
     let rows_explicit_str = bx.grid_template_rows.clone();
     let rows = if !rows_explicit_str.is_empty() {
-        super::super::layout::parse_length(&rows_explicit_str).max(0.0) as usize;
         let count = parse_track_count(&rows_explicit_str);
-        if count > 0 { count } else { in_flow_count.div_ceil(cols) }
+        let needed = in_flow_count.div_ceil(cols.max(1));
+        count.max(needed)
     } else {
         in_flow_count.div_ceil(cols.max(1))
     };
