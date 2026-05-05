@@ -716,11 +716,12 @@ fn resolve_flexible_lengths(items: &[FlexItem], indices: &[usize], container_mai
             break;
         }
 
-        // Distribute free na ne-frozen
+        // Distribute free. CSS spec: sum_grow < 1 -> divisor = 1 (leftover free zustane).
+        let divisor = if growing { total_factor.max(1.0) } else { total_factor };
         for (k, &i) in indices.iter().enumerate() {
             if frozen[k] { continue; }
             let factor = if growing { items[i].flex_grow } else { items[i].flex_shrink * items[i].main_size };
-            sizes[k] = items[i].main_size + free * (factor / total_factor);
+            sizes[k] = items[i].main_size + free * (factor / divisor);
         }
 
         // Compute violations + clamp
