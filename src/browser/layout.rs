@@ -185,6 +185,8 @@ pub struct LayoutBox {
     pub margin_right_auto: bool,
     pub margin_bottom_auto: bool,
     pub margin_left_auto: bool,
+    /// box-sizing: "content-box" (default) | "border-box".
+    pub box_sizing: String,
     pub margin: f32,
     pub border_width: f32,
     /// Per-side border width (None = use border_width). CSS Backgrounds L3.
@@ -616,6 +618,7 @@ impl LayoutBox {
             margin_right_auto: false,
             margin_bottom_auto: false,
             margin_left_auto: false,
+            box_sizing: String::new(),
             margin: 0.0,
             border_width: 0.0,
             border_top_width: None,

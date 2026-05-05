@@ -193,6 +193,7 @@ mod tests {
                 "align-content" => bx.align_content = v.clone(),
                 "align-self" => bx.align_self = v.clone(),
                 "justify-self" => bx.justify_self = v.clone(),
+                "box-sizing" => bx.box_sizing = v.clone(),
                 "grid-row-start" => {
                     if let Some(rest) = v.trim().strip_prefix("span ") {
                         bx.grid_row_span = rest.trim().parse().unwrap_or(1);
@@ -303,6 +304,20 @@ mod tests {
             }
         }
         bx.display = display;
+        // Pri box-sizing = content-box (default v CSS), pripocti padding+border do explicit size,
+        // protoze nas rect je border-box semantics.
+        if bx.box_sizing.is_empty() || bx.box_sizing == "content-box" {
+            let bw_l = bx.border_left_width.unwrap_or(bx.border_width);
+            let bw_r = bx.border_right_width.unwrap_or(bx.border_width);
+            let bw_t = bx.border_top_width.unwrap_or(bx.border_width);
+            let bw_b = bx.border_bottom_width.unwrap_or(bx.border_width);
+            let pl = bx.padding_left.unwrap_or(bx.padding) + bw_l;
+            let pr = bx.padding_right.unwrap_or(bx.padding) + bw_r;
+            let pt = bx.padding_top.unwrap_or(bx.padding) + bw_t;
+            let pb = bx.padding_bottom.unwrap_or(bx.padding) + bw_b;
+            if let Some(w) = bx.explicit_width { bx.explicit_width = Some(w + pl + pr); }
+            if let Some(h) = bx.explicit_height { bx.explicit_height = Some(h + pt + pb); }
+        }
         for child in &node.children {
             let cw = bx.explicit_width.unwrap_or(container_w);
             let ch = bx.explicit_height.unwrap_or(container_h);
