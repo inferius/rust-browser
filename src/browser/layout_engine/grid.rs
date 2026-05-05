@@ -49,25 +49,37 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         in_flow_count.div_ceil(cols.max(1))
     };
 
-    // Resolve row tracks (s default_row_h pro auto)
-    let default_row_h = 50.0_f32;
+    // Resolve row tracks
     let mut row_tracks: Vec<f32> = if !rows_explicit_str.is_empty() {
         let resolved = resolve_tracks(&rows_explicit_str, inner_h, row_gap);
-        if resolved.is_empty() { vec![default_row_h; rows] }
+        if resolved.is_empty() { vec![inner_h.max(0.0).max(50.0)] }
         else { resolved }
     } else {
-        // Per-row: prevezit explicit_height z prvni dite v row, jinak default
+        // Bez template: vezmi explicit_height z dite v row, jinak rozdel inner_h.
         let mut out = Vec::with_capacity(rows);
+        let mut any_explicit = false;
         for r in 0..rows {
-            let mut h = default_row_h;
+            for c in 0..cols {
+                let idx = r * cols + c;
+                if let Some(child) = bx.children.get(idx) {
+                    if child.explicit_height.is_some() { any_explicit = true; }
+                }
+            }
+        }
+        let fallback_h = if any_explicit { 50.0 } else if rows > 0 { (inner_h / rows as f32).max(0.0) } else { inner_h.max(0.0) };
+        for r in 0..rows {
+            let mut h = fallback_h;
+            let mut row_has_explicit = false;
             for c in 0..cols {
                 let idx = r * cols + c;
                 if let Some(child) = bx.children.get(idx) {
                     if let Some(eh) = child.explicit_height {
                         h = h.max(eh);
+                        row_has_explicit = true;
                     }
                 }
             }
+            if !row_has_explicit && any_explicit { h = 50.0; }
             out.push(h);
         }
         out
