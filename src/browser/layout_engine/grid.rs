@@ -355,7 +355,7 @@ pub fn resolve_tracks(s: &str, container_size: f32, gap: f32) -> Vec<f32> {
     let track_count = tokens.len();
     let total_gap = gap * (track_count.saturating_sub(1) as f32);
 
-    // Klasifikuj tokens
+    // Klasifikuj tokens - minmax bere fixed_total z min_px (kdyz max je fr).
     let mut fixed_total = 0.0_f32;
     let mut fr_total = 0.0_f32;
     let mut auto_count = 0;
@@ -365,13 +365,21 @@ pub fn resolve_tracks(s: &str, container_size: f32, gap: f32) -> Vec<f32> {
             Track::Percent(p) => fixed_total += container_size * p / 100.0,
             Track::Fr(f) => fr_total += *f,
             Track::Auto => auto_count += 1,
+            Track::Minmax(min, max, is_fr) => {
+                if *is_fr {
+                    fixed_total += *min; // min jako baseline pro fr
+                    fr_total += *max;
+                } else {
+                    // both fixed (min,max) - chovani jako auto v rozsahu
+                    fixed_total += *min;
+                    auto_count += 1; // distribute remaining v rozsahu
+                }
+            }
         }
     }
 
     let free = (container_size - fixed_total - total_gap).max(0.0);
-    // fr base: kdyz fr_total < 1, divisor je 1 (CSS spec).
     let fr_base = if fr_total > 0.0 { free / fr_total.max(1.0) } else { 0.0 };
-    // auto base (po fr distribuci)
     let after_fr = (free - fr_base * fr_total).max(0.0);
     let auto_base = if auto_count > 0 { after_fr / auto_count as f32 } else { 0.0 };
 
@@ -380,6 +388,16 @@ pub fn resolve_tracks(s: &str, container_size: f32, gap: f32) -> Vec<f32> {
         Track::Percent(p) => container_size * p / 100.0,
         Track::Fr(f) => fr_base * f,
         Track::Auto => auto_base,
+        Track::Minmax(min, max, is_fr) => {
+            if *is_fr {
+                let v = min + fr_base * max;
+                v.max(*min)
+            } else {
+                // fixed min/max: clamp(min + auto_share, min, max)
+                let v = min + auto_base;
+                v.clamp(*min, *max)
+            }
+        }
     }).collect()
 }
 
@@ -389,6 +407,8 @@ enum Track {
     Percent(f32),
     Fr(f32),
     Auto,
+    /// minmax(min_px, max_px or fr) - vlastne flexible s rozsahem.
+    Minmax(f32, f32, bool /* max je fr */),
 }
 
 /// Tokenizace grid-template-columns/rows + expand repeat() s container-aware auto-fill count.
@@ -537,11 +557,31 @@ fn parse_single_track(s: &str) -> Track {
     if let Some(num) = s.strip_suffix('%') {
         return Track::Percent(num.trim().parse().unwrap_or(0.0));
     }
-    // minmax(min, max) - vrati max
+    // minmax(min, max)
     if let Some(rest) = s.strip_prefix("minmax(").and_then(|x| x.strip_suffix(')')) {
         let parts: Vec<&str> = rest.split(',').collect();
-        if let Some(max) = parts.get(1) {
-            return parse_single_track(max.trim());
+        if parts.len() == 2 {
+            let min_s = parts[0].trim();
+            let max_s = parts[1].trim();
+            // Parse min: pouzij px / percent (auto -> 0).
+            let min_v = if min_s == "auto" || min_s == "min-content" || min_s == "max-content" {
+                0.0
+            } else if let Some(num) = min_s.strip_suffix('%') {
+                num.parse::<f32>().unwrap_or(0.0) // percent rozhodneme pozdeji v resolve
+            } else {
+                super::super::layout::parse_length(min_s)
+            };
+            // Parse max
+            if let Some(num) = max_s.strip_suffix("fr") {
+                let max_fr = num.trim().parse().unwrap_or(1.0);
+                return Track::Minmax(min_v, max_fr, true);
+            }
+            let max_v = if max_s == "auto" || max_s == "min-content" || max_s == "max-content" {
+                f32::INFINITY
+            } else {
+                super::super::layout::parse_length(max_s)
+            };
+            return Track::Minmax(min_v, max_v, false);
         }
     }
     // fit-content(<value>) - jako auto
