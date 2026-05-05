@@ -132,12 +132,24 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                 }
             }
         }
+        let m_l = ch.margin_left.unwrap_or(ch.margin);
+        let m_r = ch.margin_right.unwrap_or(ch.margin);
+        let m_t = ch.margin_top.unwrap_or(ch.margin);
+        let m_b = ch.margin_bottom.unwrap_or(ch.margin);
+        let (mm_s, mm_e, mc_s, mc_e) = if direction.is_row() {
+            (m_l, m_r, m_t, m_b)
+        } else {
+            (m_t, m_b, m_l, m_r)
+        };
         items.push(FlexItem {
             main_size: if direction.is_row() { est_w } else { est_h },
             cross_size: if direction.is_row() { est_h } else { est_w },
             flex_grow: ch.flex_grow,
             flex_shrink: ch.flex_shrink,
-            margin: ch.margin,
+            margin_main_start: mm_s,
+            margin_main_end: mm_e,
+            margin_cross_start: mc_s,
+            margin_cross_end: mc_e,
         });
     }
 
@@ -201,8 +213,10 @@ pub fn layout_flex(bx: &mut LayoutBox) {
     for (line_idx, line_indices) in line_iter.enumerate() {
         let resolved = &resolved_iter[line_idx];
 
-        // Justify items v main axis
-        let used_main: f32 = resolved.main_sizes.iter().sum::<f32>()
+        // Justify items v main axis - vc. margin item totalu
+        let used_main: f32 = resolved.main_sizes.iter().enumerate()
+            .map(|(k, s)| s + items[line_indices[k]].margin_main_start + items[line_indices[k]].margin_main_end)
+            .sum::<f32>()
             + main_gap * (resolved.main_sizes.len().saturating_sub(1) as f32);
         let free_main = (container_main - used_main).max(0.0);
         let (start_main, between_main) = compute_justify_offsets(justify, free_main, resolved.main_sizes.len(), main_gap);
@@ -218,15 +232,19 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         for (i_in_line, &item_idx) in main_iter {
             let main_size = resolved.main_sizes[i_in_line];
             let cross_size = resolved.cross_size;
+            let it = items[item_idx];
 
             // Pridat gap + between extra space pred kazdym non-first item
             if !first {
                 main_cursor += main_gap + between_main;
             }
             first = false;
+            // Margin pred itemem (start)
+            main_cursor += it.margin_main_start;
 
-            let item_cross_size = items[item_idx].cross_size;
-            let cross_offset = compute_align_offset(align, cross_size, item_cross_size);
+            let item_cross_size = it.cross_size;
+            let cross_offset_align = compute_align_offset(align, cross_size, item_cross_size + it.margin_cross_start + it.margin_cross_end);
+            let cross_offset = cross_offset_align + it.margin_cross_start;
 
             // Apply to child (item_idx je do in_flow, prevest na real index)
             let real_idx = in_flow[item_idx];
@@ -236,18 +254,18 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                 child.rect.y = inner_y + cross_cursor + cross_offset;
                 child.rect.width = main_size;
                 child.rect.height = if matches!(align, AlignItems::Stretch) && child.explicit_height.is_none() {
-                    cross_size
+                    (cross_size - it.margin_cross_start - it.margin_cross_end).max(0.0)
                 } else { item_cross_size };
             } else {
                 child.rect.x = inner_x + cross_cursor + cross_offset;
                 child.rect.y = inner_y + main_cursor;
                 child.rect.height = main_size;
                 child.rect.width = if matches!(align, AlignItems::Stretch) && child.explicit_width.is_none() {
-                    cross_size
+                    (cross_size - it.margin_cross_start - it.margin_cross_end).max(0.0)
                 } else { item_cross_size };
             }
 
-            main_cursor += main_size;
+            main_cursor += main_size + it.margin_main_end;
         }
 
         cross_cursor += resolved.cross_size + line_gap;
@@ -292,8 +310,11 @@ struct FlexItem {
     cross_size: f32,
     flex_grow: f32,
     flex_shrink: f32,
-    #[allow(dead_code)]
-    margin: f32,
+    /// margin start v main axis (left pro row, top pro column)
+    margin_main_start: f32,
+    margin_main_end: f32,
+    margin_cross_start: f32,
+    margin_cross_end: f32,
 }
 
 struct ResolvedLine {
@@ -301,7 +322,7 @@ struct ResolvedLine {
     cross_size: f32,
 }
 
-/// Sber items do lines podle wrap policy.
+/// Sber items do lines podle wrap policy. Margins se zapocitavaji do velikosti.
 fn collect_lines(items: &[FlexItem], container_main: f32, wrap: FlexWrap, gap: f32) -> Vec<Vec<usize>> {
     if matches!(wrap, FlexWrap::NoWrap) {
         return vec![(0..items.len()).collect()];
@@ -310,12 +331,13 @@ fn collect_lines(items: &[FlexItem], container_main: f32, wrap: FlexWrap, gap: f
     let mut current: Vec<usize> = Vec::new();
     let mut used = 0.0_f32;
     for (i, item) in items.iter().enumerate() {
-        let with_gap = if current.is_empty() { item.main_size } else { item.main_size + gap };
+        let item_total = item.main_size + item.margin_main_start + item.margin_main_end;
+        let with_gap = if current.is_empty() { item_total } else { item_total + gap };
         if !current.is_empty() && used + with_gap > container_main {
             lines.push(current);
             current = Vec::new();
             current.push(i);
-            used = item.main_size;
+            used = item_total;
         } else {
             current.push(i);
             used += with_gap;
@@ -326,14 +348,18 @@ fn collect_lines(items: &[FlexItem], container_main: f32, wrap: FlexWrap, gap: f
 }
 
 /// Resolve flexible lengths per line podle flex-grow / flex-shrink.
+/// Margins se odecitaji od container_main pred vypoctem free space.
 fn resolve_flexible_lengths(items: &[FlexItem], indices: &[usize], container_main: f32, gap: f32) -> ResolvedLine {
     let count = indices.len();
     if count == 0 {
         return ResolvedLine { main_sizes: Vec::new(), cross_size: 0.0 };
     }
     let total_gap = gap * (count.saturating_sub(1) as f32);
+    let total_margins: f32 = indices.iter()
+        .map(|&i| items[i].margin_main_start + items[i].margin_main_end)
+        .sum();
     let initial: f32 = indices.iter().map(|&i| items[i].main_size).sum();
-    let free = container_main - initial - total_gap;
+    let free = container_main - initial - total_gap - total_margins;
     let mut sizes: Vec<f32> = indices.iter().map(|&i| items[i].main_size).collect();
 
     if free > 0.0 {
@@ -358,7 +384,7 @@ fn resolve_flexible_lengths(items: &[FlexItem], indices: &[usize], container_mai
     }
 
     let cross_size = indices.iter()
-        .map(|&i| items[i].cross_size)
+        .map(|&i| items[i].cross_size + items[i].margin_cross_start + items[i].margin_cross_end)
         .fold(0.0_f32, f32::max);
 
     ResolvedLine { main_sizes: sizes, cross_size }
@@ -490,7 +516,7 @@ mod tests {
     #[test]
     fn collect_lines_no_wrap() {
         let items = vec![
-            FlexItem { main_size: 50.0, cross_size: 30.0, flex_grow: 0.0, flex_shrink: 1.0, margin: 0.0 };
+            FlexItem { main_size: 50.0, cross_size: 30.0, flex_grow: 0.0, flex_shrink: 1.0, margin_main_start: 0.0, margin_main_end: 0.0, margin_cross_start: 0.0, margin_cross_end: 0.0 };
             5
         ];
         let lines = collect_lines(&items, 100.0, FlexWrap::NoWrap, 0.0);
@@ -501,7 +527,7 @@ mod tests {
     #[test]
     fn collect_lines_wrap_overflow() {
         let items = vec![
-            FlexItem { main_size: 60.0, cross_size: 30.0, flex_grow: 0.0, flex_shrink: 1.0, margin: 0.0 };
+            FlexItem { main_size: 60.0, cross_size: 30.0, flex_grow: 0.0, flex_shrink: 1.0, margin_main_start: 0.0, margin_main_end: 0.0, margin_cross_start: 0.0, margin_cross_end: 0.0 };
             3
         ];
         let lines = collect_lines(&items, 100.0, FlexWrap::Wrap, 0.0);
@@ -512,8 +538,8 @@ mod tests {
     #[test]
     fn resolve_grow_distributes_free_space() {
         let items = vec![
-            FlexItem { main_size: 50.0, cross_size: 30.0, flex_grow: 1.0, flex_shrink: 1.0, margin: 0.0 },
-            FlexItem { main_size: 50.0, cross_size: 30.0, flex_grow: 1.0, flex_shrink: 1.0, margin: 0.0 },
+            FlexItem { main_size: 50.0, cross_size: 30.0, flex_grow: 1.0, flex_shrink: 1.0, margin_main_start: 0.0, margin_main_end: 0.0, margin_cross_start: 0.0, margin_cross_end: 0.0 },
+            FlexItem { main_size: 50.0, cross_size: 30.0, flex_grow: 1.0, flex_shrink: 1.0, margin_main_start: 0.0, margin_main_end: 0.0, margin_cross_start: 0.0, margin_cross_end: 0.0 },
         ];
         let resolved = resolve_flexible_lengths(&items, &[0, 1], 200.0, 0.0);
         // Free = 200 - 100 = 100, dist 50/50
