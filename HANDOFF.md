@@ -5,11 +5,20 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 ## Stav
 
 - Build: **OK**, 0 errors, 0 warnings.
-- Tests: **1756 passed, 0 failed, 3 ignored**.
-- Posledni commit: `64d12e8 CSS @supports + @function + if() + Scroll-Driven extras`.
+- Tests: **1801 passed, 0 failed, 3 ignored**.
+- Posledni commit: `21b9946 DOM ResizeObserver + IntersectionObserver real`.
 - Tree: ciste.
-- Branch master, ~280 commitu pred origin/master (NEPUSHOVAT bez vyzvy).
-- **WebGL pipeline DOKONCEN** + **CSS L4-L6 vetsina hotove** + **JS DOM CustomElements lifecycle** + **Color L5 relative + L4 color() namespace** + **17 modernich CSS units (dvw/dvh/svw/lvh/vi/vb/ch/lh/rlh/cm/mm/Q/in/pc)**.
+- Branch master, ~290 commitu pred origin/master (NEPUSHOVAT bez vyzvy).
+- **WebGL pipeline DOKONCEN** + **CSS L4-L6 KOMPLET** + **JS DOM kompletni**:
+  - CustomElements lifecycle, MutationObserver real callback
+  - File / FileList / form.elements / form.length
+  - form submit event + preventDefault chain
+  - ResizeObserver / IntersectionObserver real targets tracking
+  - Date arithmetic, Date.UTC, Date.parse, multi-arg constructor
+  - String.isWellFormed / toWellFormed (ES2024)
+  - @scope real scoping, @function runtime, container queries clean
+  - 17 modernich CSS units (dvw/dvh/svw/lvh/vi/vb/ch/lh/rlh/cm/mm/Q/in/pc)
+  - Color L5 relative + L4 color() namespace
 
 ## Test runner
 
