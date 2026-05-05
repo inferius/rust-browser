@@ -107,7 +107,8 @@ pub fn layout_flex(bx: &mut LayoutBox) {
     }
 
     // 2. Container main size
-    let container_main = if direction.is_row() { inner_w } else { f32::INFINITY };
+    let inner_h = bx.rect.height - 2.0 * (bx.padding + bx.margin + bx.border_width);
+    let container_main = if direction.is_row() { inner_w } else { inner_h.max(0.0) };
 
     // 3. Collect lines (wrap)
     let lines = collect_lines(&items, container_main, wrap, if direction.is_row() { col_gap } else { row_gap });
@@ -158,9 +159,16 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         };
 
         let mut main_cursor = start_main;
+        let mut first = true;
         for (i_in_line, &item_idx) in main_iter {
             let main_size = resolved.main_sizes[i_in_line];
             let cross_size = resolved.cross_size;
+
+            // Pridat gap + between extra space pred kazdym non-first item
+            if !first {
+                main_cursor += main_gap + between_main;
+            }
+            first = false;
 
             let item_cross_size = items[item_idx].cross_size;
             let cross_offset = compute_align_offset(align, cross_size, item_cross_size);
@@ -183,7 +191,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                 } else { item_cross_size };
             }
 
-            main_cursor += main_size + between_main;
+            main_cursor += main_size;
         }
 
         cross_cursor += resolved.cross_size + line_gap;

@@ -12,5 +12,14 @@
 pub mod flex;
 pub mod grid;
 
+#[cfg(test)]
+mod flex_tests;
+#[cfg(test)]
+mod grid_tests;
+#[cfg(test)]
+mod flex_spec_tests;
+#[cfg(test)]
+mod grid_spec_tests;
+
 pub use flex::{layout_flex, FlexDirection, FlexWrap, JustifyContent, AlignItems};
 pub use grid::layout_grid;
