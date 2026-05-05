@@ -224,7 +224,8 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         for line in &mut resolved_lines {
             line.cross_size += extra_per_line;
         }
-    } else if nline == 1 && container_cross > 0.0 {
+    } else if matches!(wrap, FlexWrap::NoWrap) && nline == 1 && container_cross > 0.0 {
+        // Single line nowrap: line zabira cely container cross (CSS spec).
         resolved_lines[0].cross_size = resolved_lines[0].cross_size.max(container_cross);
     }
     let line_cross_sizes: Vec<f32> = resolved_lines.iter().map(|l| l.cross_size).collect();
