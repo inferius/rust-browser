@@ -1907,3 +1907,121 @@ fn url_parse_invalid_returns_null() {
     let r = run(code);
     assert!(matches!(r, crate::interpreter::JsValue::Null));
 }
+
+// ─── DOM Geometry + Console extras ────────────────────────────────────
+
+#[test]
+fn dom_rect_construct() {
+    let code = r#"
+        const r = new DOMRect(10, 20, 100, 50);
+        return r.x + "|" + r.y + "|" + r.width + "|" + r.height + "|" + r.right + "|" + r.bottom;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "10|20|100|50|110|70");
+    }
+}
+
+#[test]
+fn dom_point_default() {
+    let code = r#"
+        const p = new DOMPoint(1, 2, 3);
+        return p.x + "|" + p.y + "|" + p.z + "|" + p.w;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "1|2|3|1");
+    }
+}
+
+#[test]
+fn dom_matrix_identity() {
+    let code = r#"
+        const m = new DOMMatrix();
+        return m.isIdentity + "|" + m.is2D + "|" + m.a + "|" + m.d;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "true|true|1|1");
+    }
+}
+
+#[test]
+fn dom_matrix_2d_args() {
+    let code = r#"
+        const m = new DOMMatrix([1, 0, 0, 1, 10, 20]);
+        return m.e + "|" + m.f + "|" + m.is2D;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "10|20|true");
+    }
+}
+
+#[test]
+fn dom_quad_corners() {
+    let code = r#"
+        const q = new DOMQuad();
+        return typeof q.p1 + "|" + typeof q.p2 + "|" + typeof q.p3 + "|" + typeof q.p4;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "object|object|object|object");
+    }
+}
+
+#[test]
+fn console_table_no_throw() {
+    let code = r#"
+        console.table([{a: 1, b: 2}]);
+        return "ok";
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "ok");
+    }
+}
+
+#[test]
+fn console_group_group_end() {
+    let code = r#"
+        console.group("section");
+        console.log("inside");
+        console.groupEnd();
+        return "ok";
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "ok");
+    }
+}
+
+#[test]
+fn console_time_time_end() {
+    let code = r#"
+        console.time("op");
+        console.timeEnd("op");
+        return "ok";
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "ok");
+    }
+}
+
+#[test]
+fn console_count_increments() {
+    let code = r#"
+        console.count("a");
+        console.count("a");
+        console.count("a");
+        return "ok";
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "ok");
+    }
+}
+
+#[test]
+fn console_assert_no_throw() {
+    let code = r#"
+        console.assert(true, "should not log");
+        console.assert(false, "should log");
+        return "ok";
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "ok");
+    }
+}

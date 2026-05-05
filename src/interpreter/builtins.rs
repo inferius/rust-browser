@@ -274,6 +274,114 @@ pub fn setup_builtins(
             Ok(JsValue::Undefined)
         }));
     }
+    // Console extras: trace, table, group, groupEnd, time, timeEnd, count, dir, assert
+    {
+        let log = Rc::clone(console_log);
+        console.set("trace".into(), native("trace", move |args| {
+            let msg = args.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" ");
+            log.borrow_mut().push(("trace".into(), msg));
+            Ok(JsValue::Undefined)
+        }));
+    }
+    {
+        let log = Rc::clone(console_log);
+        console.set("table".into(), native("table", move |args| {
+            // Simply log args jako "table"
+            let data = args.into_iter().next().unwrap_or(JsValue::Undefined);
+            let msg = format!("[table] {}", data.to_string());
+            log.borrow_mut().push(("table".into(), msg));
+            Ok(JsValue::Undefined)
+        }));
+    }
+    {
+        let log = Rc::clone(console_log);
+        console.set("group".into(), native("group", move |args| {
+            let label = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+            log.borrow_mut().push(("group".into(), label));
+            Ok(JsValue::Undefined)
+        }));
+    }
+    {
+        let log = Rc::clone(console_log);
+        console.set("groupCollapsed".into(), native("groupCollapsed", move |args| {
+            let label = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+            log.borrow_mut().push(("groupCollapsed".into(), label));
+            Ok(JsValue::Undefined)
+        }));
+    }
+    console.set("groupEnd".into(), native("groupEnd", |_| Ok(JsValue::Undefined)));
+    console.set("dir".into(), native("dir", |_| Ok(JsValue::Undefined)));
+    console.set("dirxml".into(), native("dirxml", |_| Ok(JsValue::Undefined)));
+    console.set("clear".into(), native("clear", |_| Ok(JsValue::Undefined)));
+    // Time tracking
+    {
+        let timers: Rc<RefCell<HashMap<String, std::time::Instant>>> = Rc::new(RefCell::new(HashMap::new()));
+        let t1 = Rc::clone(&timers);
+        console.set("time".into(), native("time", move |args| {
+            let label = args.into_iter().next().map(|v| v.to_string()).unwrap_or_else(|| "default".into());
+            t1.borrow_mut().insert(label, std::time::Instant::now());
+            Ok(JsValue::Undefined)
+        }));
+        let t2 = Rc::clone(&timers);
+        let log = Rc::clone(console_log);
+        console.set("timeEnd".into(), native("timeEnd", move |args| {
+            let label = args.into_iter().next().map(|v| v.to_string()).unwrap_or_else(|| "default".into());
+            if let Some(start) = t2.borrow_mut().remove(&label) {
+                let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+                let msg = format!("{}: {}ms", label, elapsed);
+                log.borrow_mut().push(("time".into(), msg));
+            }
+            Ok(JsValue::Undefined)
+        }));
+        let t3 = Rc::clone(&timers);
+        let log2 = Rc::clone(console_log);
+        console.set("timeLog".into(), native("timeLog", move |args| {
+            let label = args.into_iter().next().map(|v| v.to_string()).unwrap_or_else(|| "default".into());
+            if let Some(start) = t3.borrow().get(&label) {
+                let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+                log2.borrow_mut().push(("timeLog".into(), format!("{}: {}ms", label, elapsed)));
+            }
+            Ok(JsValue::Undefined)
+        }));
+    }
+    // Count tracking
+    {
+        let counters: Rc<RefCell<HashMap<String, u64>>> = Rc::new(RefCell::new(HashMap::new()));
+        let c1 = Rc::clone(&counters);
+        let log = Rc::clone(console_log);
+        console.set("count".into(), native("count", move |args| {
+            let label = args.into_iter().next().map(|v| v.to_string()).unwrap_or_else(|| "default".into());
+            let count = {
+                let mut b = c1.borrow_mut();
+                *b.entry(label.clone()).or_insert(0) += 1;
+                *b.get(&label).unwrap()
+            };
+            log.borrow_mut().push(("count".into(), format!("{}: {}", label, count)));
+            Ok(JsValue::Undefined)
+        }));
+        let c2 = Rc::clone(&counters);
+        console.set("countReset".into(), native("countReset", move |args| {
+            let label = args.into_iter().next().map(|v| v.to_string()).unwrap_or_else(|| "default".into());
+            c2.borrow_mut().remove(&label);
+            Ok(JsValue::Undefined)
+        }));
+    }
+    // assert
+    {
+        let log = Rc::clone(console_log);
+        console.set("assert".into(), native("assert", move |args| {
+            let mut it = args.into_iter();
+            let cond = it.next().map(|v| v.is_truthy()).unwrap_or(false);
+            if !cond {
+                let msg = it.map(|v| v.to_string()).collect::<Vec<_>>().join(" ");
+                log.borrow_mut().push(("error".into(), format!("Assertion failed: {}", msg)));
+            }
+            Ok(JsValue::Undefined)
+        }));
+    }
+    console.set("profile".into(), native("profile", |_| Ok(JsValue::Undefined)));
+    console.set("profileEnd".into(), native("profileEnd", |_| Ok(JsValue::Undefined)));
+    console.set("timeStamp".into(), native("timeStamp", |_| Ok(JsValue::Undefined)));
     e.define("console", JsValue::Object(Rc::new(RefCell::new(console))));
 
     // Math
@@ -2575,6 +2683,117 @@ pub fn setup_builtins(
             access.borrow_mut().set("sysexEnabled".into(), JsValue::Bool(false));
             Ok(make_settled_promise("fulfilled", JsValue::Object(access)))
         }));
+
+    // ─── DOM Geometry: DOMRect / DOMPoint / DOMMatrix ─────────────────────
+    let make_dom_rect = |args: Vec<JsValue>, read_only: bool| -> JsValue {
+        let mut it = args.into_iter();
+        let x = it.next().map(|v| v.to_number()).unwrap_or(0.0);
+        let y = it.next().map(|v| v.to_number()).unwrap_or(0.0);
+        let w = it.next().map(|v| v.to_number()).unwrap_or(0.0);
+        let h = it.next().map(|v| v.to_number()).unwrap_or(0.0);
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        obj.borrow_mut().set("x".into(), JsValue::Number(x));
+        obj.borrow_mut().set("y".into(), JsValue::Number(y));
+        obj.borrow_mut().set("width".into(), JsValue::Number(w));
+        obj.borrow_mut().set("height".into(), JsValue::Number(h));
+        obj.borrow_mut().set("top".into(), JsValue::Number(y));
+        obj.borrow_mut().set("left".into(), JsValue::Number(x));
+        obj.borrow_mut().set("right".into(), JsValue::Number(x + w));
+        obj.borrow_mut().set("bottom".into(), JsValue::Number(y + h));
+        obj.borrow_mut().set("__read_only__".into(), JsValue::Bool(read_only));
+        JsValue::Object(obj)
+    };
+    e.define("DOMRect", native("DOMRect", move |args| Ok(make_dom_rect(args, false))));
+    e.define("DOMRectReadOnly", native("DOMRectReadOnly",
+        move |args| Ok(make_dom_rect(args, true))));
+
+    let make_dom_point = |args: Vec<JsValue>, read_only: bool| -> JsValue {
+        let mut it = args.into_iter();
+        let x = it.next().map(|v| v.to_number()).unwrap_or(0.0);
+        let y = it.next().map(|v| v.to_number()).unwrap_or(0.0);
+        let z = it.next().map(|v| v.to_number()).unwrap_or(0.0);
+        let w = it.next().map(|v| v.to_number()).unwrap_or(1.0);
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        obj.borrow_mut().set("x".into(), JsValue::Number(x));
+        obj.borrow_mut().set("y".into(), JsValue::Number(y));
+        obj.borrow_mut().set("z".into(), JsValue::Number(z));
+        obj.borrow_mut().set("w".into(), JsValue::Number(w));
+        obj.borrow_mut().set("__read_only__".into(), JsValue::Bool(read_only));
+        JsValue::Object(obj)
+    };
+    e.define("DOMPoint", native("DOMPoint", move |args| Ok(make_dom_point(args, false))));
+    e.define("DOMPointReadOnly", native("DOMPointReadOnly",
+        move |args| Ok(make_dom_point(args, true))));
+
+    // DOMMatrix - 4x4 matrix s identity default
+    let make_dom_matrix = |args: Vec<JsValue>, read_only: bool| -> JsValue {
+        // Args: bud Array [m11, m12, ...] nebo prazdne
+        let nums: Vec<f64> = match args.into_iter().next() {
+            Some(JsValue::Array(arr)) => arr.borrow().iter().map(|v| v.to_number()).collect(),
+            _ => Vec::new(),
+        };
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        // 4x4 identity default
+        let mut m = [
+            1.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0,
+            0.0, 0.0, 0.0, 1.0,
+        ];
+        if nums.len() == 6 {
+            // 2D: [a, b, c, d, e, f] -> m11=a m12=b m21=c m22=d m41=e m42=f
+            m[0] = nums[0]; m[1] = nums[1];
+            m[4] = nums[2]; m[5] = nums[3];
+            m[12] = nums[4]; m[13] = nums[5];
+        } else if nums.len() == 16 {
+            for i in 0..16 { m[i] = nums[i]; }
+        }
+        obj.borrow_mut().set("a".into(), JsValue::Number(m[0]));
+        obj.borrow_mut().set("b".into(), JsValue::Number(m[1]));
+        obj.borrow_mut().set("c".into(), JsValue::Number(m[4]));
+        obj.borrow_mut().set("d".into(), JsValue::Number(m[5]));
+        obj.borrow_mut().set("e".into(), JsValue::Number(m[12]));
+        obj.borrow_mut().set("f".into(), JsValue::Number(m[13]));
+        for (i, v) in m.iter().enumerate() {
+            let row = i / 4 + 1;
+            let col = i % 4 + 1;
+            obj.borrow_mut().set(format!("m{}{}", col, row), JsValue::Number(*v));
+        }
+        obj.borrow_mut().set("is2D".into(), JsValue::Bool(nums.len() == 6 || nums.is_empty()));
+        obj.borrow_mut().set("isIdentity".into(), JsValue::Bool(nums.is_empty()));
+        obj.borrow_mut().set("__read_only__".into(), JsValue::Bool(read_only));
+        // multiply / inverse / translate / scale / rotate stuby
+        obj.borrow_mut().set("multiply".into(),
+            native("multiply", |_| Ok(JsValue::Object(Rc::new(RefCell::new(JsObject::new()))))));
+        obj.borrow_mut().set("inverse".into(),
+            native("inverse", |_| Ok(JsValue::Object(Rc::new(RefCell::new(JsObject::new()))))));
+        obj.borrow_mut().set("translate".into(),
+            native("translate", |_| Ok(JsValue::Object(Rc::new(RefCell::new(JsObject::new()))))));
+        obj.borrow_mut().set("scale".into(),
+            native("scale", |_| Ok(JsValue::Object(Rc::new(RefCell::new(JsObject::new()))))));
+        obj.borrow_mut().set("rotate".into(),
+            native("rotate", |_| Ok(JsValue::Object(Rc::new(RefCell::new(JsObject::new()))))));
+        obj.borrow_mut().set("toFloat32Array".into(),
+            native("toFloat32Array", |_| Ok(JsValue::Array(Rc::new(RefCell::new(Vec::new()))))));
+        obj.borrow_mut().set("toFloat64Array".into(),
+            native("toFloat64Array", |_| Ok(JsValue::Array(Rc::new(RefCell::new(Vec::new()))))));
+        JsValue::Object(obj)
+    };
+    e.define("DOMMatrix", native("DOMMatrix", move |args| Ok(make_dom_matrix(args, false))));
+    e.define("DOMMatrixReadOnly", native("DOMMatrixReadOnly",
+        move |args| Ok(make_dom_matrix(args, true))));
+
+    // DOMQuad - 4 corner points (DOMPoint p1, p2, p3, p4)
+    e.define("DOMQuad", native("DOMQuad", |_args| {
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        for p in &["p1", "p2", "p3", "p4"] {
+            let pt = Rc::new(RefCell::new(JsObject::new()));
+            pt.borrow_mut().set("x".into(), JsValue::Number(0.0));
+            pt.borrow_mut().set("y".into(), JsValue::Number(0.0));
+            obj.borrow_mut().set(p.to_string(), JsValue::Object(pt));
+        }
+        Ok(JsValue::Object(obj))
+    }));
 
     // ─── Compression Streams API ──────────────────────────────────────────
     e.define("CompressionStream", native("CompressionStream", |args| {
