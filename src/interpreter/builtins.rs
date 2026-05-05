@@ -2839,22 +2839,99 @@ pub fn setup_builtins(
         let obj = Rc::new(RefCell::new(JsObject::new()));
         {
             let mut o = obj.borrow_mut();
+            o.set("__range__".into(), JsValue::Bool(true));
             o.set("startContainer".into(), JsValue::Null);
             o.set("endContainer".into(), JsValue::Null);
             o.set("startOffset".into(), JsValue::Number(0.0));
             o.set("endOffset".into(), JsValue::Number(0.0));
             o.set("collapsed".into(), JsValue::Bool(true));
             o.set("commonAncestorContainer".into(), JsValue::Null);
-            o.set("setStart".into(), native("setStart", |_| Ok(JsValue::Undefined)));
-            o.set("setEnd".into(), native("setEnd", |_| Ok(JsValue::Undefined)));
+        }
+        // setStart / setEnd ulozi node + offset + update collapsed
+        let r1 = Rc::clone(&obj);
+        obj.borrow_mut().set("setStart".into(), native("setStart", move |args| {
+            let mut it = args.into_iter();
+            let node = it.next().unwrap_or(JsValue::Null);
+            let offset = it.next().map(|v| v.to_number()).unwrap_or(0.0);
+            let mut b = r1.borrow_mut();
+            b.set("startContainer".into(), node);
+            b.set("startOffset".into(), JsValue::Number(offset));
+            // Update collapsed
+            let end_off = b.props.get("endOffset").map(|v| v.to_number()).unwrap_or(0.0);
+            b.set("collapsed".into(), JsValue::Bool((offset - end_off).abs() < 0.001));
+            Ok(JsValue::Undefined)
+        }));
+        let r2 = Rc::clone(&obj);
+        obj.borrow_mut().set("setEnd".into(), native("setEnd", move |args| {
+            let mut it = args.into_iter();
+            let node = it.next().unwrap_or(JsValue::Null);
+            let offset = it.next().map(|v| v.to_number()).unwrap_or(0.0);
+            let mut b = r2.borrow_mut();
+            b.set("endContainer".into(), node);
+            b.set("endOffset".into(), JsValue::Number(offset));
+            let start_off = b.props.get("startOffset").map(|v| v.to_number()).unwrap_or(0.0);
+            b.set("collapsed".into(), JsValue::Bool((offset - start_off).abs() < 0.001));
+            Ok(JsValue::Undefined)
+        }));
+        let r3 = Rc::clone(&obj);
+        obj.borrow_mut().set("collapse".into(), native("collapse", move |args| {
+            let to_start = args.into_iter().next().map(|v| v.is_truthy()).unwrap_or(false);
+            let mut b = r3.borrow_mut();
+            if to_start {
+                let so = b.props.get("startOffset").cloned().unwrap_or(JsValue::Number(0.0));
+                let sc = b.props.get("startContainer").cloned().unwrap_or(JsValue::Null);
+                b.set("endOffset".into(), so);
+                b.set("endContainer".into(), sc);
+            } else {
+                let eo = b.props.get("endOffset").cloned().unwrap_or(JsValue::Number(0.0));
+                let ec = b.props.get("endContainer").cloned().unwrap_or(JsValue::Null);
+                b.set("startOffset".into(), eo);
+                b.set("startContainer".into(), ec);
+            }
+            b.set("collapsed".into(), JsValue::Bool(true));
+            Ok(JsValue::Undefined)
+        }));
+        let r4 = Rc::clone(&obj);
+        obj.borrow_mut().set("selectNode".into(), native("selectNode", move |args| {
+            let node = args.into_iter().next().unwrap_or(JsValue::Null);
+            let mut b = r4.borrow_mut();
+            b.set("startContainer".into(), node.clone());
+            b.set("endContainer".into(), node);
+            b.set("startOffset".into(), JsValue::Number(0.0));
+            b.set("endOffset".into(), JsValue::Number(1.0));
+            b.set("collapsed".into(), JsValue::Bool(false));
+            Ok(JsValue::Undefined)
+        }));
+        let r5 = Rc::clone(&obj);
+        obj.borrow_mut().set("selectNodeContents".into(), native("selectNodeContents", move |args| {
+            let node = args.into_iter().next().unwrap_or(JsValue::Null);
+            let mut b = r5.borrow_mut();
+            b.set("startContainer".into(), node.clone());
+            b.set("endContainer".into(), node);
+            b.set("startOffset".into(), JsValue::Number(0.0));
+            b.set("collapsed".into(), JsValue::Bool(false));
+            Ok(JsValue::Undefined)
+        }));
+        let r6 = Rc::clone(&obj);
+        obj.borrow_mut().set("cloneRange".into(), native("cloneRange", move |_| {
+            let new_range = make_range();
+            if let JsValue::Object(nr) = &new_range {
+                let src = r6.borrow();
+                let mut dst = nr.borrow_mut();
+                for k in &["startContainer", "endContainer", "startOffset", "endOffset", "collapsed"] {
+                    if let Some(v) = src.props.get(*k) {
+                        dst.set((*k).into(), v.clone());
+                    }
+                }
+            }
+            Ok(new_range)
+        }));
+        {
+            let mut o = obj.borrow_mut();
             o.set("setStartBefore".into(), native("setStartBefore", |_| Ok(JsValue::Undefined)));
             o.set("setStartAfter".into(), native("setStartAfter", |_| Ok(JsValue::Undefined)));
             o.set("setEndBefore".into(), native("setEndBefore", |_| Ok(JsValue::Undefined)));
             o.set("setEndAfter".into(), native("setEndAfter", |_| Ok(JsValue::Undefined)));
-            o.set("collapse".into(), native("collapse", |_| Ok(JsValue::Undefined)));
-            o.set("selectNode".into(), native("selectNode", |_| Ok(JsValue::Undefined)));
-            o.set("selectNodeContents".into(), native("selectNodeContents", |_| Ok(JsValue::Undefined)));
-            o.set("cloneRange".into(), native("cloneRange", |_| Ok(make_range())));
             o.set("cloneContents".into(), native("cloneContents", |_| {
                 let frag = Rc::new(RefCell::new(JsObject::new()));
                 frag.borrow_mut().set("__doc_fragment__".into(), JsValue::Bool(true));
@@ -2880,9 +2957,11 @@ pub fn setup_builtins(
     }
 
     fn make_selection() -> JsValue {
+        let ranges: Rc<RefCell<Vec<JsValue>>> = Rc::new(RefCell::new(Vec::new()));
         let obj = Rc::new(RefCell::new(JsObject::new()));
         {
             let mut o = obj.borrow_mut();
+            o.set("__selection__".into(), JsValue::Bool(true));
             o.set("rangeCount".into(), JsValue::Number(0.0));
             o.set("type".into(), JsValue::Str("None".into()));
             o.set("anchorNode".into(), JsValue::Null);
@@ -2890,19 +2969,70 @@ pub fn setup_builtins(
             o.set("focusNode".into(), JsValue::Null);
             o.set("focusOffset".into(), JsValue::Number(0.0));
             o.set("isCollapsed".into(), JsValue::Bool(true));
-            o.set("getRangeAt".into(), native("getRangeAt", |_| Ok(make_range())));
-            o.set("addRange".into(), native("addRange", |_| Ok(JsValue::Undefined)));
-            o.set("removeRange".into(), native("removeRange", |_| Ok(JsValue::Undefined)));
-            o.set("removeAllRanges".into(), native("removeAllRanges", |_| Ok(JsValue::Undefined)));
-            o.set("collapse".into(), native("collapse", |_| Ok(JsValue::Undefined)));
-            o.set("collapseToStart".into(), native("collapseToStart", |_| Ok(JsValue::Undefined)));
-            o.set("collapseToEnd".into(), native("collapseToEnd", |_| Ok(JsValue::Undefined)));
-            o.set("selectAllChildren".into(), native("selectAllChildren", |_| Ok(JsValue::Undefined)));
-            o.set("extend".into(), native("extend", |_| Ok(JsValue::Undefined)));
-            o.set("containsNode".into(), native("containsNode", |_| Ok(JsValue::Bool(false))));
-            o.set("toString".into(), native("toString", |_| Ok(JsValue::Str(String::new()))));
-            o.set("deleteFromDocument".into(), native("deleteFromDocument", |_| Ok(JsValue::Undefined)));
         }
+        let r1 = Rc::clone(&ranges);
+        obj.borrow_mut().set("getRangeAt".into(), native("getRangeAt", move |args| {
+            let idx = args.into_iter().next().map(|v| v.to_number() as usize).unwrap_or(0);
+            Ok(r1.borrow().get(idx).cloned().unwrap_or_else(make_range))
+        }));
+        let r2 = Rc::clone(&ranges);
+        let o2 = Rc::clone(&obj);
+        obj.borrow_mut().set("addRange".into(), native("addRange", move |args| {
+            let range = args.into_iter().next().unwrap_or(JsValue::Undefined);
+            r2.borrow_mut().push(range);
+            o2.borrow_mut().set("rangeCount".into(), JsValue::Number(r2.borrow().len() as f64));
+            o2.borrow_mut().set("type".into(), JsValue::Str("Range".into()));
+            o2.borrow_mut().set("isCollapsed".into(), JsValue::Bool(false));
+            Ok(JsValue::Undefined)
+        }));
+        let r3 = Rc::clone(&ranges);
+        let o3 = Rc::clone(&obj);
+        obj.borrow_mut().set("removeAllRanges".into(), native("removeAllRanges", move |_| {
+            r3.borrow_mut().clear();
+            o3.borrow_mut().set("rangeCount".into(), JsValue::Number(0.0));
+            o3.borrow_mut().set("type".into(), JsValue::Str("None".into()));
+            o3.borrow_mut().set("isCollapsed".into(), JsValue::Bool(true));
+            Ok(JsValue::Undefined)
+        }));
+        let r4 = Rc::clone(&ranges);
+        let o4 = Rc::clone(&obj);
+        obj.borrow_mut().set("removeRange".into(), native("removeRange", move |args| {
+            let target = args.into_iter().next().unwrap_or(JsValue::Undefined);
+            let target_id = format!("{:?}", target);
+            r4.borrow_mut().retain(|r| format!("{:?}", r) != target_id);
+            o4.borrow_mut().set("rangeCount".into(), JsValue::Number(r4.borrow().len() as f64));
+            Ok(JsValue::Undefined)
+        }));
+        let o5 = Rc::clone(&obj);
+        obj.borrow_mut().set("collapse".into(), native("collapse", move |args| {
+            let mut it = args.into_iter();
+            let node = it.next().unwrap_or(JsValue::Null);
+            let offset = it.next().map(|v| v.to_number()).unwrap_or(0.0);
+            let mut b = o5.borrow_mut();
+            b.set("anchorNode".into(), node.clone());
+            b.set("focusNode".into(), node);
+            b.set("anchorOffset".into(), JsValue::Number(offset));
+            b.set("focusOffset".into(), JsValue::Number(offset));
+            b.set("isCollapsed".into(), JsValue::Bool(true));
+            Ok(JsValue::Undefined)
+        }));
+        obj.borrow_mut().set("collapseToStart".into(), native("collapseToStart", |_| Ok(JsValue::Undefined)));
+        obj.borrow_mut().set("collapseToEnd".into(), native("collapseToEnd", |_| Ok(JsValue::Undefined)));
+        let o6 = Rc::clone(&obj);
+        obj.borrow_mut().set("selectAllChildren".into(), native("selectAllChildren", move |args| {
+            let node = args.into_iter().next().unwrap_or(JsValue::Null);
+            let mut b = o6.borrow_mut();
+            b.set("anchorNode".into(), node.clone());
+            b.set("focusNode".into(), node);
+            b.set("isCollapsed".into(), JsValue::Bool(false));
+            b.set("type".into(), JsValue::Str("Range".into()));
+            Ok(JsValue::Undefined)
+        }));
+        obj.borrow_mut().set("extend".into(), native("extend", |_| Ok(JsValue::Undefined)));
+        obj.borrow_mut().set("containsNode".into(), native("containsNode", |_| Ok(JsValue::Bool(false))));
+        obj.borrow_mut().set("toString".into(), native("toString", |_| Ok(JsValue::Str(String::new()))));
+        obj.borrow_mut().set("deleteFromDocument".into(), native("deleteFromDocument", |_| Ok(JsValue::Undefined)));
+        obj.borrow_mut().set("empty".into(), native("empty", |_| Ok(JsValue::Undefined)));
         JsValue::Object(obj)
     }
 

@@ -1100,3 +1100,116 @@ fn event_classes_registered() {
         assert!(b);
     }
 }
+
+// ─── Range / Selection real ────────────────────────────────────────────
+
+#[test]
+fn range_set_start_end_updates_collapsed() {
+    let code = r#"
+        const r = document.createRange();
+        const node = document.createElement("div");
+        r.setStart(node, 0);
+        r.setEnd(node, 5);
+        return r.collapsed;
+    "#;
+    if let crate::interpreter::JsValue::Bool(b) = run(code) {
+        assert!(!b, "setStart 0 / setEnd 5 -> not collapsed");
+    }
+}
+
+#[test]
+fn range_collapse_to_start() {
+    let code = r#"
+        const r = document.createRange();
+        const node = document.createElement("div");
+        r.setStart(node, 0);
+        r.setEnd(node, 5);
+        r.collapse(true);
+        return r.collapsed + "|" + r.endOffset;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "true|0");
+    }
+}
+
+#[test]
+fn range_select_node() {
+    let code = r#"
+        const r = document.createRange();
+        const node = document.createElement("p");
+        r.selectNode(node);
+        return r.endOffset;
+    "#;
+    if let crate::interpreter::JsValue::Number(n) = run(code) {
+        assert_eq!(n, 1.0);
+    }
+}
+
+#[test]
+fn range_clone_copies_state() {
+    let code = r#"
+        const r = document.createRange();
+        const node = document.createElement("div");
+        r.setStart(node, 3);
+        r.setEnd(node, 7);
+        const r2 = r.cloneRange();
+        return r2.startOffset + "|" + r2.endOffset;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "3|7");
+    }
+}
+
+#[test]
+fn selection_add_range_increments_count() {
+    let code = r#"
+        const sel = document.getSelection();
+        sel.removeAllRanges();
+        const r = document.createRange();
+        sel.addRange(r);
+        return sel.rangeCount;
+    "#;
+    if let crate::interpreter::JsValue::Number(n) = run(code) {
+        assert_eq!(n, 1.0);
+    }
+}
+
+#[test]
+fn selection_remove_all_ranges_clears() {
+    let code = r#"
+        const sel = document.getSelection();
+        sel.addRange(document.createRange());
+        sel.addRange(document.createRange());
+        sel.removeAllRanges();
+        return sel.rangeCount;
+    "#;
+    if let crate::interpreter::JsValue::Number(n) = run(code) {
+        assert_eq!(n, 0.0);
+    }
+}
+
+#[test]
+fn selection_collapse_sets_anchor() {
+    let code = r#"
+        const sel = document.getSelection();
+        const node = document.createElement("p");
+        sel.collapse(node, 5);
+        return sel.anchorOffset + "|" + sel.isCollapsed;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "5|true");
+    }
+}
+
+#[test]
+fn selection_select_all_children() {
+    let code = r#"
+        const sel = document.getSelection();
+        const node = document.createElement("div");
+        sel.selectAllChildren(node);
+        return sel.type;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "Range");
+    }
+}
