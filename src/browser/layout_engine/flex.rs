@@ -263,8 +263,18 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             line.cross_size += extra_per_line;
         }
     } else if matches!(wrap, FlexWrap::NoWrap) && nline == 1 && container_cross > 0.0 {
-        // Single line nowrap: line zabira cely container cross (CSS spec).
-        resolved_lines[0].cross_size = resolved_lines[0].cross_size.max(container_cross);
+        // Single line nowrap: line zabira container cross.
+        // Pri explicit/max-bound cross je line PRESNE container (items overflow).
+        let has_bound_cross = if direction.is_row() {
+            bx.explicit_height.is_some() || !bx.max_height_v.is_empty()
+        } else {
+            bx.explicit_width.is_some() || !bx.max_width_v.is_empty()
+        };
+        if has_bound_cross {
+            resolved_lines[0].cross_size = container_cross;
+        } else {
+            resolved_lines[0].cross_size = resolved_lines[0].cross_size.max(container_cross);
+        }
     }
     let line_cross_sizes: Vec<f32> = resolved_lines.iter().map(|l| l.cross_size).collect();
     let total_cross = line_cross_sizes.iter().sum::<f32>()
