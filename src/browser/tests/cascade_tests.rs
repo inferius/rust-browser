@@ -1131,3 +1131,28 @@ fn cascade_var_chain_resolves() {
     let p = cascade::get_styles(&map, &div).and_then(|s| s.get("padding").cloned());
     assert_eq!(p.as_deref(), Some("10px"));
 }
+
+#[test]
+fn system_color_canvas_parsed() {
+    use crate::browser::layout::parse_color;
+    // canvas = bily pozadi (light mode default)
+    assert_eq!(parse_color("canvas"), Some([255, 255, 255, 255]));
+    assert_eq!(parse_color("canvastext"), Some([0, 0, 0, 255]));
+    assert_eq!(parse_color("buttonface"), Some([240, 240, 240, 255]));
+    assert_eq!(parse_color("highlight"), Some([0, 120, 215, 255]));
+    assert_eq!(parse_color("graytext"), Some([109, 109, 109, 255]));
+}
+
+#[test]
+fn named_color_full_set_parsed() {
+    use crate::browser::layout::parse_color;
+    assert_eq!(parse_color("rebeccapurple"), Some([102, 51, 153, 255]));
+    assert_eq!(parse_color("aqua"), Some([0, 255, 255, 255]));
+    assert_eq!(parse_color("fuchsia"), Some([255, 0, 255, 255]));
+    assert_eq!(parse_color("lime"), Some([0, 255, 0, 255]));
+    assert_eq!(parse_color("silver"), Some([192, 192, 192, 255]));
+    assert_eq!(parse_color("navy"), Some([0, 0, 128, 255]));
+    assert_eq!(parse_color("maroon"), Some([128, 0, 0, 255]));
+    assert_eq!(parse_color("teal"), Some([0, 128, 128, 255]));
+    assert_eq!(parse_color("olive"), Some([128, 128, 0, 255]));
+}
