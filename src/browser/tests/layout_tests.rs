@@ -2139,3 +2139,48 @@ fn pseudo_backdrop_dialog_closed_no_backdrop() {
     let backdrop = dialog.children.iter().find(|c| c.tag.as_deref() == Some("::backdrop"));
     assert!(backdrop.is_none(), "::backdrop se nevlozi pro dialog bez open");
 }
+
+#[test]
+fn explicit_width_applied() {
+    let doc = parse_html(r#"<html><body><div></div></body></html>"#, "");
+    let css = parse_stylesheet("div { width: 200px; height: 80px; }");
+    let style_map = cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &style_map, 1024.0, 768.0);
+    let d = find_box_by_tag(&root, "div").unwrap();
+    assert_eq!(d.explicit_width, Some(200.0));
+    assert_eq!(d.explicit_height, Some(80.0));
+    assert_eq!(d.rect.width, 200.0, "rect.width respektuje explicit CSS width");
+    assert_eq!(d.rect.height, 80.0, "rect.height respektuje explicit CSS height");
+}
+
+#[test]
+fn min_max_width_clamping() {
+    let doc = parse_html(r#"<html><body><div></div></body></html>"#, "");
+    let css = parse_stylesheet("div { width: 50px; min-width: 100px; max-width: 300px; }");
+    let style_map = cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &style_map, 1024.0, 768.0);
+    let d = find_box_by_tag(&root, "div").unwrap();
+    // min-width 100px klampuje width 50px nahoru
+    assert!(d.rect.width >= 100.0, "min-width klampuje sirku nahoru, dostali jsme {}", d.rect.width);
+}
+
+#[test]
+fn max_width_clamping() {
+    let doc = parse_html(r#"<html><body><div></div></body></html>"#, "");
+    let css = parse_stylesheet("div { width: 500px; max-width: 200px; }");
+    let style_map = cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &style_map, 1024.0, 768.0);
+    let d = find_box_by_tag(&root, "div").unwrap();
+    assert!(d.rect.width <= 200.0, "max-width klampuje sirku dolu, dostali jsme {}", d.rect.width);
+}
+
+#[test]
+fn min_content_width_keyword() {
+    let doc = parse_html(r#"<html><body><div>hello</div></body></html>"#, "");
+    let css = parse_stylesheet("div { width: min-content; }");
+    let style_map = cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &style_map, 1024.0, 768.0);
+    let d = find_box_by_tag(&root, "div").unwrap();
+    // min-content nastavi explicit_width na odhadovou text sirku
+    assert!(d.explicit_width.is_some(), "min-content nastavi explicit_width");
+}

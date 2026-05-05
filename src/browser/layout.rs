@@ -403,6 +403,10 @@ pub struct LayoutBox {
     pub max_width_v: String,
     pub min_height_v: String,
     pub max_height_v: String,
+    /// Explicitni CSS width (None = auto / neparsovano).
+    pub explicit_width: Option<f32>,
+    /// Explicitni CSS height (None = auto / neparsovano).
+    pub explicit_height: Option<f32>,
     /// CSS Logical Properties continued
     pub block_size_v: String,
     pub inline_size_v: String,
@@ -594,6 +598,8 @@ impl LayoutBox {
             max_width_v: String::new(),
             min_height_v: String::new(),
             max_height_v: String::new(),
+            explicit_width: None,
+            explicit_height: None,
             block_size_v: String::new(),
             inline_size_v: String::new(),
             table_layout: String::new(),
@@ -1275,6 +1281,47 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(br) = s.get("border-radius") {
         bx.border_radius = parse_length(br);
     }
+    // Explicit width / height z CSS (auto = None, min/max-content = special).
+    // min-content: shrink-to-fit odhadem z textu. max-content: max-intrinsic.
+    // fit-content: clamp na dostupnou sirku.
+    if let Some(w) = s.get("width") {
+        let v = w.trim();
+        match v {
+            "auto" => {}
+            "min-content" | "max-content" | "fit-content" => {
+                // Keyword ulozena pro layout_block - odhadneme per content
+                let text_w = bx.text.as_deref().map(|t| measure_text_width(t, bx.font_size)).unwrap_or(0.0);
+                bx.explicit_width = Some(text_w + 2.0 * bx.padding);
+            }
+            _ => {
+                let px = parse_length(v);
+                if px > 0.0 { bx.explicit_width = Some(px); }
+            }
+        }
+    }
+    if let Some(h) = s.get("height") {
+        let v = h.trim();
+        if v != "auto" {
+            let px = parse_length(v);
+            if px > 0.0 { bx.explicit_height = Some(px); }
+        }
+    }
+    if let Some(v) = s.get("min-width") {
+        let pv = v.trim();
+        bx.min_width_v = pv.to_string();
+    }
+    if let Some(v) = s.get("max-width") {
+        let pv = v.trim();
+        bx.max_width_v = pv.to_string();
+    }
+    if let Some(v) = s.get("min-height") {
+        let pv = v.trim();
+        bx.min_height_v = pv.to_string();
+    }
+    if let Some(v) = s.get("max-height") {
+        let pv = v.trim();
+        bx.max_height_v = pv.to_string();
+    }
     // Line-height: cislo (multiplier) nebo length (px)
     if let Some(lh) = s.get("line-height") {
         let trimmed = lh.trim();
@@ -1729,13 +1776,35 @@ fn layout_block(bx: &mut LayoutBox) {
                 let child = &mut bx.children[i];
                 child.rect.x = inner_x + child.margin;
                 child.rect.y = cursor_y + child.margin;
-                child.rect.width = inner_w - 2.0 * child.margin;
-                if child.rect.height == 0.0 {
+                // explicit_width z CSS width prop; jinak fill parent
+                child.rect.width = child.explicit_width.unwrap_or(inner_w - 2.0 * child.margin);
+                // Clamp dle min-width / max-width
+                if !child.min_width_v.is_empty() && child.min_width_v != "none" {
+                    let mn = parse_length(&child.min_width_v.clone());
+                    if mn > 0.0 { child.rect.width = child.rect.width.max(mn); }
+                }
+                if !child.max_width_v.is_empty() && child.max_width_v != "none" {
+                    let mx = parse_length(&child.max_width_v.clone());
+                    if mx > 0.0 { child.rect.width = child.rect.width.min(mx); }
+                }
+                // explicit_height z CSS height prop; jinak auto (content-based)
+                if let Some(eh) = child.explicit_height {
+                    child.rect.height = eh;
+                } else if child.rect.height == 0.0 {
                     child.rect.height = if child.text.is_some() {
                         child.font_size * child.line_height + child.padding * 2.0
                     } else {
                         20.0
                     };
+                }
+                // Clamp dle min-height / max-height
+                if !child.min_height_v.is_empty() && child.min_height_v != "none" {
+                    let mn = parse_length(&child.min_height_v.clone());
+                    if mn > 0.0 { child.rect.height = child.rect.height.max(mn); }
+                }
+                if !child.max_height_v.is_empty() && child.max_height_v != "none" {
+                    let mx = parse_length(&child.max_height_v.clone());
+                    if mx > 0.0 { child.rect.height = child.rect.height.min(mx); }
                 }
                 layout_dispatch(child);
 
