@@ -270,6 +270,15 @@ mod tests {
                 "grid-auto-columns" => bx.grid_auto_columns = v.clone(),
                 "grid-auto-rows" => bx.grid_auto_rows = v.clone(),
                 "grid-auto-flow" => bx.grid_auto_flow = v.clone(),
+                "text-align" => {
+                    bx.text_align = match v.as_str() {
+                        "-webkit-center" | "center" => crate::browser::layout::TextAlign::Center,
+                        "-webkit-right" | "right" => crate::browser::layout::TextAlign::Right,
+                        "-webkit-left" | "left" => crate::browser::layout::TextAlign::Left,
+                        "justify" => crate::browser::layout::TextAlign::Justify,
+                        _ => crate::browser::layout::TextAlign::Left,
+                    };
+                }
                 "padding" => bx.padding = parse_dim(v, container_w).unwrap_or(0.0),
                 "margin" => bx.margin = parse_dim(v, container_w).unwrap_or(0.0),
                 "position" => {
@@ -614,11 +623,19 @@ mod tests {
                           else if auto_l { free_x }
                           else { 0.0 };
             let w = base_w;
+            // Pri parent text-align != Left, posun child v inline ose.
+            let text_align_offset = if !auto_l && !auto_r {
+                match bx.text_align {
+                    crate::browser::layout::TextAlign::Right => free_x,
+                    crate::browser::layout::TextAlign::Center => free_x / 2.0,
+                    _ => 0.0,
+                }
+            } else { 0.0 };
             // Sibling margin collapse per CSS spec: collapsed = max(positives) + min(negatives).
             let max_pos = prev_m_b.max(m_t).max(0.0);
             let min_neg = prev_m_b.min(m_t).min(0.0);
             let collapsed = max_pos + min_neg;
-            child.rect.x = inner_x + m_l + extra_l;
+            child.rect.x = inner_x + m_l + extra_l + text_align_offset;
             let natural_y = (cursor_y - prev_m_b) + collapsed;
             child.rect.y = natural_y;
             child.rect.width = w;
