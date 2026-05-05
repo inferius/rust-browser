@@ -105,16 +105,16 @@ fn layout_absolute_child_inner(child: &mut LayoutBox, parent_x: f32, parent_y: f
     let auto_r = child.margin_right_auto;
     let auto_t = child.margin_top_auto;
     let auto_b = child.margin_bottom_auto;
-    // Auto margin pro abs s oboustrannym insetem rozdeli free space.
+    // Auto margin pro abs s oboustrannym insetem rozdeli free space (i negativni).
     let (extra_l, extra_r) = if let (Some(l), Some(r)) = (child.offset_left, child.offset_right) {
-        let free = (cb_w - w - l - r - m_l - m_r).max(0.0);
+        let free = cb_w - w - l - r - m_l - m_r;
         if auto_l && auto_r { (free / 2.0, free / 2.0) }
         else if auto_l { (free, 0.0) }
         else if auto_r { (0.0, free) }
         else { (0.0, 0.0) }
     } else { (0.0, 0.0) };
     let (extra_t, extra_b) = if let (Some(t), Some(b)) = (child.offset_top, child.offset_bottom) {
-        let free = (cb_h - h - t - b - m_t - m_b).max(0.0);
+        let free = cb_h - h - t - b - m_t - m_b;
         if auto_t && auto_b { (free / 2.0, free / 2.0) }
         else if auto_t { (free, 0.0) }
         else if auto_b { (0.0, free) }
