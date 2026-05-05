@@ -327,7 +327,7 @@ fn grid_distribute(value: &str, free: f32, count: usize) -> (f32, f32) {
 /// 5. Compute fr unit base = (free_space) / total_fr
 /// 6. Auto = average remaining
 pub fn resolve_tracks(s: &str, container_size: f32, gap: f32) -> Vec<f32> {
-    let tokens = parse_track_tokens(s);
+    let tokens = parse_track_tokens_sized(s, container_size, gap);
     if tokens.is_empty() { return Vec::new(); }
     let track_count = tokens.len();
     let total_gap = gap * (track_count.saturating_sub(1) as f32);
@@ -368,7 +368,95 @@ enum Track {
     Auto,
 }
 
-/// Tokenizace grid-template-columns/rows + expand repeat().
+/// Tokenizace grid-template-columns/rows + expand repeat() s container-aware auto-fill count.
+fn parse_track_tokens_sized(s: &str, container: f32, gap: f32) -> Vec<Track> {
+    // Spocti delku non-repeat fixed tokens pro auto-fill kalkulaci.
+    let total_fixed_outside = pre_compute_fixed(s, container);
+    let s = s.trim();
+    if s.is_empty() { return Vec::new(); }
+    let mut tokens: Vec<Track> = Vec::new();
+    let mut chars = s.chars().peekable();
+    while let Some(&c) = chars.peek() {
+        if c.is_whitespace() { chars.next(); continue; }
+        if c == '[' { chars.next(); for cc in chars.by_ref() { if cc == ']' { break; } } continue; }
+        let mut buf = String::new();
+        let mut depth = 0i32;
+        while let Some(&cc) = chars.peek() {
+            if cc == '(' { depth += 1; buf.push(cc); chars.next(); continue; }
+            if cc == ')' { depth -= 1; buf.push(cc); chars.next(); continue; }
+            if depth == 0 && (cc.is_whitespace() || cc == '[') { break; }
+            buf.push(cc); chars.next();
+        }
+        if buf.is_empty() { continue; }
+        if let Some(rest) = buf.strip_prefix("repeat(") {
+            if let Some(inner) = rest.strip_suffix(')') {
+                let comma_idx = inner.find(',').unwrap_or(0);
+                let count_str = inner[..comma_idx].trim();
+                let inner_tracks = inner[comma_idx+1..].trim();
+                let sub_tokens = parse_track_tokens(inner_tracks);
+                let sub_size: f32 = sub_tokens.iter().map(|t| match t {
+                    Track::Fixed(p) => *p,
+                    Track::Percent(p) => container * p / 100.0,
+                    _ => 0.0,
+                }).sum();
+                let count: usize = match count_str {
+                    "auto-fill" | "auto-fit" => {
+                        if sub_size > 0.0 {
+                            let avail = (container - total_fixed_outside).max(0.0);
+                            // Pocet kompletnich opakovani co se vejdou (pocita gap mezi)
+                            let pattern_len = sub_tokens.len();
+                            if pattern_len == 0 { 1 } else {
+                                let mut n = 0usize;
+                                let mut used = 0.0_f32;
+                                loop {
+                                    let next = used + sub_size + if n > 0 { gap * pattern_len as f32 } else { 0.0 };
+                                    if next > avail + 0.01 { break; }
+                                    used = next; n += 1;
+                                    if n > 1000 { break; }
+                                }
+                                n.max(1)
+                            }
+                        } else { 1 }
+                    }
+                    _ => count_str.parse().unwrap_or(1),
+                };
+                for _ in 0..count { tokens.extend(sub_tokens.clone()); }
+                continue;
+            }
+        }
+        tokens.push(parse_single_track(&buf));
+    }
+    tokens
+}
+
+/// Soucet fixed/percent tokens MIMO repeat (pro auto-fill kalkulaci).
+fn pre_compute_fixed(s: &str, container: f32) -> f32 {
+    let mut total = 0.0f32;
+    let s = s.trim();
+    let mut chars = s.chars().peekable();
+    while let Some(&c) = chars.peek() {
+        if c.is_whitespace() { chars.next(); continue; }
+        if c == '[' { chars.next(); for cc in chars.by_ref() { if cc == ']' { break; } } continue; }
+        let mut buf = String::new();
+        let mut depth = 0i32;
+        while let Some(&cc) = chars.peek() {
+            if cc == '(' { depth += 1; buf.push(cc); chars.next(); continue; }
+            if cc == ')' { depth -= 1; buf.push(cc); chars.next(); continue; }
+            if depth == 0 && (cc.is_whitespace() || cc == '[') { break; }
+            buf.push(cc); chars.next();
+        }
+        if buf.is_empty() { continue; }
+        if buf.starts_with("repeat(") { continue; }
+        match parse_single_track(&buf) {
+            Track::Fixed(p) => total += p,
+            Track::Percent(p) => total += container * p / 100.0,
+            _ => {}
+        }
+    }
+    total
+}
+
+/// Tokenizace grid-template-columns/rows + expand repeat() (bez container - count = 1 pro auto-fill).
 fn parse_track_tokens(s: &str) -> Vec<Track> {
     let s = s.trim();
     if s.is_empty() { return Vec::new(); }
