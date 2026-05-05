@@ -425,9 +425,12 @@ mod tests {
         let parent_x = bx.rect.x + bw_l;
         let parent_y = bx.rect.y + bw_t;
         let mut cursor_y = inner_y;
-        // In-flow children jen
-        for child in bx.children.iter_mut() {
+        // First pass: layout in-flow + record static y pro abs.
+        // Static y pro abs = cursor_y v ramci flow.
+        let mut static_y_for: std::collections::HashMap<usize, f32> = std::collections::HashMap::new();
+        for (i, child) in bx.children.iter_mut().enumerate() {
             if matches!(child.position, Position::Absolute | Position::Fixed) {
+                static_y_for.insert(i, cursor_y);
                 continue;
             }
             // display:none -> 0x0, neposunouva cursor
@@ -480,10 +483,16 @@ mod tests {
             let m_b = child.margin_bottom.unwrap_or(child.margin);
             cursor_y += m_b;
         }
-        // Abs/fixed children
-        for child in bx.children.iter_mut() {
+        // Abs/fixed children - pouzij static y kdyz nemaji top/bottom inset.
+        for (i, child) in bx.children.iter_mut().enumerate() {
             if matches!(child.position, Position::Absolute | Position::Fixed) {
+                let no_y_inset = child.offset_top.is_none() && child.offset_bottom.is_none();
                 layout_absolute_child(child, parent_x, parent_y, parent_w, parent_h);
+                if no_y_inset {
+                    if let Some(static_y) = static_y_for.get(&i) {
+                        child.rect.y = *static_y;
+                    }
+                }
             }
         }
     }
