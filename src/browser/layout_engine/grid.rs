@@ -220,7 +220,20 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                 let (_, col, _, span_col) = item_placement[i];
                 if col == c_idx && span_col == 1 {
                     let item = &bx.children[real_idx];
-                    let intrinsic = item.explicit_width.unwrap_or(item.rect.width);
+                    // Text intrinsic min-content: longest unbreakable segment.
+                    let text_min = if item.taffy_mode {
+                        if let Some(t) = &item.text {
+                            let mut max_seg = 0usize; let mut cur = 0usize;
+                            for c in t.chars() {
+                                if matches!(c, '\u{200B}' | ' ' | '\n' | '\t') {
+                                    if cur > max_seg { max_seg = cur; } cur = 0;
+                                } else { cur += 1; }
+                            }
+                            if cur > max_seg { max_seg = cur; }
+                            max_seg as f32 * 10.0
+                        } else { 0.0 }
+                    } else { 0.0 };
+                    let intrinsic = item.explicit_width.unwrap_or(item.rect.width).max(text_min);
                     let pb_l = item.padding_left.unwrap_or(item.padding) + item.border_left_width.unwrap_or(item.border_width);
                     let pb_r = item.padding_right.unwrap_or(item.padding) + item.border_right_width.unwrap_or(item.border_width);
                     let cw_min_p = super::super::layout::parse_length(&item.min_width_v);
@@ -299,8 +312,16 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                     for (i, &real_idx) in in_flow.iter().enumerate() {
                         let (_, col, _, span_col) = item_placements[i];
                         if col == c_idx && span_col == 1 {
-                            if let Some(w) = bx.children[real_idx].explicit_width {
+                            let item = &bx.children[real_idx];
+                            if let Some(w) = item.explicit_width {
                                 if w > req { req = w; }
+                            }
+                            // Text intrinsic max-content (fr roste do max-content).
+                            if item.taffy_mode {
+                                if let Some(t) = &item.text {
+                                    let tw = t.chars().filter(|c| !matches!(*c, '\u{200B}' | ' ' | '\n' | '\t')).count() as f32 * 10.0;
+                                    if tw > req { req = tw; }
+                                }
                             }
                         }
                     }
@@ -395,7 +416,11 @@ pub fn layout_grid(bx: &mut LayoutBox) {
             }
             if span_row == 1 {
                 let item = &bx.children[real_idx];
-                let h = item.explicit_height.unwrap_or(item.rect.height);
+                let mut h = item.explicit_height.unwrap_or(item.rect.height);
+                // Text intrinsic height v taffy_mode = 10 per visible line (estimate by ZWS/whitespace breaks not done).
+                if item.taffy_mode && item.text.is_some() && h == 0.0 {
+                    h = 10.0;
+                }
                 let entry = by_row.entry(row).or_insert(0.0);
                 if h > *entry { *entry = h; }
             }
