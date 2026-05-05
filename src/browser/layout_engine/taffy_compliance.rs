@@ -454,6 +454,7 @@ mod tests {
         let mut cursor_y = inner_y;
         // First pass: layout in-flow + record static y pro abs (vc. margin-top).
         let mut static_y_for: std::collections::HashMap<usize, f32> = std::collections::HashMap::new();
+        let mut prev_m_b = 0.0_f32; // sibling margin collapse: prev child's margin-bottom
         for (i, child) in bx.children.iter_mut().enumerate() {
             if matches!(child.position, Position::Absolute | Position::Fixed) {
                 let m_t = child.margin_top.unwrap_or(child.margin);
@@ -489,8 +490,19 @@ mod tests {
                           else if auto_l { free_x }
                           else { 0.0 };
             let w = base_w;
+            // Sibling margin collapse: pokud prev m_b + curr m_t pozitivni, take max,
+            // odecist soucet co uz cursor_y obsahuje.
+            // cursor_y po prev: += prev.height + prev.m_t + prev.m_b. We want
+            // next.y = prev.bottom + max(prev.m_b, curr.m_t).
+            // Currently: child.y = cursor_y + m_t. cursor_y - prev.m_b is "true" cursor.
+            // adjusted_y = (cursor_y - prev_m_b) + max(prev_m_b, m_t).
+            let collapsed = if prev_m_b >= 0.0 && m_t >= 0.0 {
+                prev_m_b.max(m_t)
+            } else {
+                prev_m_b + m_t
+            };
             child.rect.x = inner_x + m_l + extra_l;
-            child.rect.y = cursor_y + m_t;
+            child.rect.y = (cursor_y - prev_m_b) + collapsed;
             child.rect.width = w;
             // Relative position offset (top/left/right/bottom): top wins nad bottom, left nad right.
             // V CSS jen pri position:relative; v taffy fixturach se aplikuje vzdy kdyz set.
@@ -580,9 +592,10 @@ mod tests {
                     child.rect.height = new_h_clamped;
                 }
             }
-            cursor_y += child.rect.height + m_t;
+            // cursor_y se pohne na child.bottom + child.m_b
             let m_b = child.margin_bottom.unwrap_or(child.margin);
-            cursor_y += m_b;
+            cursor_y = child.rect.y + child.rect.height + m_b;
+            prev_m_b = m_b;
         }
         // Abs/fixed children - pouzij static y kdyz nemaji top/bottom inset.
         for (i, child) in bx.children.iter_mut().enumerate() {
