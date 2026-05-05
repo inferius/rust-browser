@@ -217,18 +217,14 @@ mod tests {
                 "min-height" => bx.min_height_v = v.clone(),
                 "max-width" => bx.max_width_v = v.clone(),
                 "max-height" => bx.max_height_v = v.clone(),
-                "padding-left" | "padding-right" => {
-                    let p = parse_dim(v, container_w).unwrap_or(0.0);
-                    bx.padding = bx.padding.max(p);
-                }
-                "padding-top" | "padding-bottom" => {
-                    let p = parse_dim(v, container_h).unwrap_or(0.0);
-                    bx.padding = bx.padding.max(p);
-                }
-                "margin-left" | "margin-right" | "margin-top" | "margin-bottom" => {
-                    // Skip - asymmetric margin nepodporujem
-                    return None;
-                }
+                "padding-left" => bx.padding_left = parse_dim(v, container_w),
+                "padding-right" => bx.padding_right = parse_dim(v, container_w),
+                "padding-top" => bx.padding_top = parse_dim(v, container_h),
+                "padding-bottom" => bx.padding_bottom = parse_dim(v, container_h),
+                "margin-left" => bx.margin_left = parse_dim(v, container_w),
+                "margin-right" => bx.margin_right = parse_dim(v, container_w),
+                "margin-top" => bx.margin_top = parse_dim(v, container_h),
+                "margin-bottom" => bx.margin_bottom = parse_dim(v, container_h),
                 "border" => {
                     bx.border_width = parse_dim(v, container_w).unwrap_or(0.0);
                 }
@@ -310,14 +306,18 @@ mod tests {
 
     /// Jednoduchy block layout - stackuj children vertikalne, kazdy plnou sirku.
     fn block_layout_simple(bx: &mut LayoutBox) {
-        let pad = bx.padding + bx.border_width;
-        let inner_x = bx.rect.x + pad;
-        let inner_y = bx.rect.y + pad;
-        let inner_w = (bx.rect.width - 2.0 * pad).max(0.0);
+        let pad_l = bx.padding_left.unwrap_or(bx.padding) + bx.border_width;
+        let pad_r = bx.padding_right.unwrap_or(bx.padding) + bx.border_width;
+        let pad_t = bx.padding_top.unwrap_or(bx.padding) + bx.border_width;
+        let inner_x = bx.rect.x + pad_l;
+        let inner_y = bx.rect.y + pad_t;
+        let inner_w = (bx.rect.width - pad_l - pad_r).max(0.0);
         let mut cursor_y = inner_y;
         for child in bx.children.iter_mut() {
-            child.rect.x = inner_x;
-            child.rect.y = cursor_y;
+            let m_l = child.margin_left.unwrap_or(child.margin);
+            let m_t = child.margin_top.unwrap_or(child.margin);
+            child.rect.x = inner_x + m_l;
+            child.rect.y = cursor_y + m_t;
             child.rect.width = child.explicit_width.unwrap_or(inner_w);
             // Aspect-ratio: dopocet height z width
             child.rect.height = if let Some(h) = child.explicit_height {
