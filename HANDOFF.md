@@ -13,13 +13,14 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 - **Compliance harness** v src/browser/layout_engine/taffy_compliance.rs:
   - XML parser + LayoutBox converter + run_directory + compare_layout
   - 4 testy spousteji vsechny fixtury, vypocitavaji pass-rate
-  - **Aktualni pass-rate: 1566/1988 (78.8%)**
-    * BLOCK:  322/392 (82.1%)
-    * GRID:   335/512 (65.4%)
-    * FLEX:   909/1084 (83.9%)
-  - Iterace 0-118 progress: 18 -> 1017 (50%) -> 1392 (70%) -> 1490 (74.9%) ->
-    1492 (75.0%) -> 1516 (76.3%) -> 1548 (77.9%) -> 1566 (78.8%)
-  - Iter 100-118 wins:
+  - **Aktualni pass-rate: 1592/1988 (80.1%)** *80% milestone reached*
+    * BLOCK:  326/392 (83.2%)
+    * GRID:   333/512 (65.0%)
+    * FLEX:   933/1084 (86.1%)
+  - Iterace 0-123 progress: 18 -> 1017 (50%) -> 1392 (70%) -> 1490 (74.9%) ->
+    1492 (75.0%) -> 1516 (76.3%) -> 1548 (77.9%) -> 1566 (78.8%) ->
+    1578 (79.4%) -> 1588 (79.9%) -> 1592 (80.1%)
+  - Iter 100-123 wins:
     * inset percent top/bottom = 0 pri auto parent height
     * abs auto margin LTR over-constrained: left=0
     * block intrinsic v abs pre-pass: max child w, sum heights
@@ -38,6 +39,10 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
     * grid pre_compute_fixed: handle repeat(N,...)
     * abs display:none -> zero out (flex + grid)
     * grid-auto-rows/columns/flow parsed
+    * Text intrinsic v taffy_mode: 10px/char (parser sbira text content)
+    * Flex est_w/est_h pres text bx.text + 10/char
+    * Flex min_main floor: longest unbreakable segment z text (CSS auto-min-content)
+    * text-align na block children: Right -> free_x, Center -> free_x/2
   - Implementovano:
     * Position absolute/fixed (CB padding-box, top/left/right/bottom + inset)
     * Asymmetric padding/border/margin per side
