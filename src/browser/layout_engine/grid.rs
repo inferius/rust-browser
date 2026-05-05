@@ -694,7 +694,7 @@ fn parse_track_tokens(s: &str) -> Vec<Track> {
 
 fn parse_single_track(s: &str) -> Track {
     let s = s.trim();
-    if s == "auto" { return Track::Auto; }
+    if s == "auto" || s == "min-content" || s == "max-content" { return Track::Auto; }
     if let Some(num) = s.strip_suffix("fr") {
         return Track::Fr(num.trim().parse().unwrap_or(1.0));
     }
