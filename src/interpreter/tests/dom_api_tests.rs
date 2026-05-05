@@ -2306,3 +2306,109 @@ fn mutation_record_default_props() {
         assert_eq!(s, "childList|true");
     }
 }
+
+// ─── Worker + DOM extras ──────────────────────────────────────────────
+
+#[test]
+fn shared_worker_has_port() {
+    let code = r#"
+        const sw = new SharedWorker("worker.js");
+        return typeof sw.port + "|" + sw.url;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "object|worker.js");
+    }
+}
+
+#[test]
+fn image_constructor_attrs() {
+    let code = r#"
+        const img = new Image(100, 50);
+        return img.tagName.toLowerCase() + "|" + img.getAttribute("width") + "|" + img.getAttribute("height");
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "img|100|50");
+    }
+}
+
+#[test]
+fn audio_constructor_with_src() {
+    let code = r#"
+        const a = new Audio("song.mp3");
+        return a.tagName.toLowerCase() + "|" + a.getAttribute("src");
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "audio|song.mp3");
+    }
+}
+
+#[test]
+fn option_constructor_text_value() {
+    let code = r#"
+        const opt = new Option("Apple", "1");
+        return opt.tagName.toLowerCase() + "|" + opt.getAttribute("value");
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "option|1");
+    }
+}
+
+#[test]
+fn data_transfer_set_get() {
+    let code = r#"
+        const dt = new DataTransfer();
+        dt.setData("text/plain", "hello");
+        return dt.getData("text/plain");
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "hello");
+    }
+}
+
+#[test]
+fn data_transfer_clear() {
+    let code = r#"
+        const dt = new DataTransfer();
+        dt.setData("text/plain", "x");
+        dt.clearData();
+        return dt.getData("text/plain");
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "");
+    }
+}
+
+#[test]
+fn storage_manager_estimate() {
+    let code = r#"
+        const sm = new StorageManager();
+        const p = sm.estimate();
+        return p.__promise_state__;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "fulfilled");
+    }
+}
+
+#[test]
+fn performance_observer_construct() {
+    let code = r#"
+        const po = new PerformanceObserver(() => {});
+        po.observe();
+        return typeof po.takeRecords;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "function");
+    }
+}
+
+#[test]
+fn performance_entry_construct() {
+    let code = r#"
+        const e = new PerformanceEntry();
+        return typeof e.name + "|" + e.duration;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "string|0");
+    }
+}

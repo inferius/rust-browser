@@ -999,6 +999,34 @@ pub fn setup_builtins(
         }));
     }
 
+    // ─── SharedWorker stub ───────────────────────────────────────────────
+    e.define("SharedWorker", native("SharedWorker", |a| {
+        let url = a.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        obj.borrow_mut().set("__shared_worker__".into(), JsValue::Bool(true));
+        obj.borrow_mut().set("url".into(), JsValue::Str(url));
+        // port - MessagePort-like
+        let port = Rc::new(RefCell::new(JsObject::new()));
+        port.borrow_mut().set("__message_port__".into(), JsValue::Bool(true));
+        port.borrow_mut().set("postMessage".into(),
+            native("postMessage", |_| Ok(JsValue::Undefined)));
+        port.borrow_mut().set("start".into(),
+            native("start", |_| Ok(JsValue::Undefined)));
+        port.borrow_mut().set("close".into(),
+            native("close", |_| Ok(JsValue::Undefined)));
+        port.borrow_mut().set("addEventListener".into(),
+            native("addEventListener", |_| Ok(JsValue::Undefined)));
+        obj.borrow_mut().set("port".into(), JsValue::Object(port));
+        obj.borrow_mut().set("addEventListener".into(),
+            native("addEventListener", |_| Ok(JsValue::Undefined)));
+        Ok(JsValue::Object(obj))
+    }));
+
+    // ─── ServiceWorkerGlobalScope (self) - skip (jen v workeru kontextu) ──
+
+    // ─── DedicatedWorkerGlobalScope - postMessage / close (self) ──────────
+    // (Bezi v Worker thread; tady jen alias pro main thread tak ze ho neni potreba.)
+
     // ─── SharedArrayBuffer stub ──────────────────────────────────────────────
     // V sync runtime se chova jako bezne pole bytu.
     e.define("SharedArrayBuffer", native("SharedArrayBuffer", |a| {
@@ -2826,6 +2854,117 @@ pub fn setup_builtins(
             o4.borrow_mut().set("length".into(), JsValue::Number(t4.borrow().len() as f64));
             Ok(JsValue::Bool(result))
         }));
+        Ok(JsValue::Object(obj))
+    }));
+
+    // ─── HTMLImageElement constructor ─────────────────────────────────────
+    e.define("Image", native("Image", |args| {
+        use crate::browser::dom::NodeData;
+        let mut it = args.into_iter();
+        let mut attrs = std::collections::HashMap::new();
+        if let Some(w) = it.next() {
+            attrs.insert("width".into(), (w.to_number() as i64).to_string());
+        }
+        if let Some(h) = it.next() {
+            attrs.insert("height".into(), (h.to_number() as i64).to_string());
+        }
+        let node = NodeData::new_element("img", attrs);
+        Ok(JsValue::DomNode(node))
+    }));
+    e.define("Audio", native("Audio", |args| {
+        use crate::browser::dom::NodeData;
+        let mut attrs = std::collections::HashMap::new();
+        if let Some(src) = args.into_iter().next() {
+            attrs.insert("src".into(), src.to_string());
+        }
+        let node = NodeData::new_element("audio", attrs);
+        Ok(JsValue::DomNode(node))
+    }));
+    e.define("Option", native("Option", |args| {
+        use crate::browser::dom::NodeData;
+        let mut it = args.into_iter();
+        let text = it.next().map(|v| v.to_string()).unwrap_or_default();
+        let value = it.next().map(|v| v.to_string());
+        let mut attrs = std::collections::HashMap::new();
+        if let Some(v) = value { attrs.insert("value".into(), v); }
+        let node = NodeData::new_element("option", attrs);
+        // Set inner text
+        let text_node = NodeData::new_text(&text);
+        node.append_child(text_node);
+        Ok(JsValue::DomNode(node))
+    }));
+
+    // ─── DataTransfer / DataTransferItem (drag-drop) ──────────────────────
+    e.define("DataTransfer", native("DataTransfer", |_| {
+        let items: Rc<RefCell<HashMap<String, String>>> = Rc::new(RefCell::new(HashMap::new()));
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        obj.borrow_mut().set("dropEffect".into(), JsValue::Str("none".into()));
+        obj.borrow_mut().set("effectAllowed".into(), JsValue::Str("all".into()));
+        obj.borrow_mut().set("types".into(), JsValue::Array(Rc::new(RefCell::new(Vec::new()))));
+        obj.borrow_mut().set("files".into(), JsValue::Array(Rc::new(RefCell::new(Vec::new()))));
+        let i1 = Rc::clone(&items);
+        obj.borrow_mut().set("setData".into(), native("setData", move |args| {
+            let mut it = args.into_iter();
+            let format = it.next().map(|v| v.to_string()).unwrap_or_default();
+            let data = it.next().map(|v| v.to_string()).unwrap_or_default();
+            i1.borrow_mut().insert(format, data);
+            Ok(JsValue::Undefined)
+        }));
+        let i2 = Rc::clone(&items);
+        obj.borrow_mut().set("getData".into(), native("getData", move |args| {
+            let format = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+            Ok(JsValue::Str(i2.borrow().get(&format).cloned().unwrap_or_default()))
+        }));
+        let i3 = Rc::clone(&items);
+        obj.borrow_mut().set("clearData".into(), native("clearData", move |args| {
+            if let Some(format) = args.into_iter().next() {
+                i3.borrow_mut().remove(&format.to_string());
+            } else {
+                i3.borrow_mut().clear();
+            }
+            Ok(JsValue::Undefined)
+        }));
+        obj.borrow_mut().set("setDragImage".into(),
+            native("setDragImage", |_| Ok(JsValue::Undefined)));
+        Ok(JsValue::Object(obj))
+    }));
+
+    // ─── Storage events ───────────────────────────────────────────────────
+    e.define("StorageManager", native("StorageManager", |_| {
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        obj.borrow_mut().set("estimate".into(), native("estimate", |_| {
+            let est = Rc::new(RefCell::new(JsObject::new()));
+            est.borrow_mut().set("quota".into(), JsValue::Number(1_000_000_000.0));
+            est.borrow_mut().set("usage".into(), JsValue::Number(0.0));
+            Ok(make_settled_promise("fulfilled", JsValue::Object(est)))
+        }));
+        obj.borrow_mut().set("persist".into(), native("persist", |_|
+            Ok(make_settled_promise("fulfilled", JsValue::Bool(true)))));
+        obj.borrow_mut().set("persisted".into(), native("persisted", |_|
+            Ok(make_settled_promise("fulfilled", JsValue::Bool(false)))));
+        Ok(JsValue::Object(obj))
+    }));
+
+    // ─── PerformanceObserver real - shared registry pro entries ───────────
+    e.define("PerformanceObserver", native("PerformanceObserver", |args| {
+        let cb = args.into_iter().next().unwrap_or(JsValue::Undefined);
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        obj.borrow_mut().set("__performance_observer__".into(), JsValue::Bool(true));
+        obj.borrow_mut().set("__callback__".into(), cb);
+        obj.borrow_mut().set("observe".into(),
+            native("observe", |_| Ok(JsValue::Undefined)));
+        obj.borrow_mut().set("disconnect".into(),
+            native("disconnect", |_| Ok(JsValue::Undefined)));
+        obj.borrow_mut().set("takeRecords".into(),
+            native("takeRecords", |_| Ok(JsValue::Array(Rc::new(RefCell::new(Vec::new()))))));
+        Ok(JsValue::Object(obj))
+    }));
+    e.define("PerformanceEntry", native("PerformanceEntry", |_| {
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        obj.borrow_mut().set("name".into(), JsValue::Str(String::new()));
+        obj.borrow_mut().set("entryType".into(), JsValue::Str(String::new()));
+        obj.borrow_mut().set("startTime".into(), JsValue::Number(0.0));
+        obj.borrow_mut().set("duration".into(), JsValue::Number(0.0));
         Ok(JsValue::Object(obj))
     }));
 

@@ -5213,12 +5213,14 @@ impl Interpreter {
             }
         }
         // `new FunctionConstructor()` - stary styl
-        // Pro Native funkce: kdyz vrati Object, pouzij jeho return value
+        // Pro Native funkce: kdyz vrati Object/DomNode/Array, pouzij jeho return value
         // (umoznuje natnivnim konstruktorum vratit objekt vlastniho typu)
         let is_native = matches!(&func, JsValue::Function(JsFunc::Native(_, _)));
         let obj = JsValue::Object(Rc::new(RefCell::new(JsObject::new())));
         let result = self.call_function(func, args, Some(obj.clone()))?;
-        if is_native && matches!(&result, JsValue::Object(_)) {
+        if is_native && matches!(&result,
+            JsValue::Object(_) | JsValue::DomNode(_) | JsValue::Array(_)
+            | JsValue::Map(_) | JsValue::Set(_)) {
             return Ok(result);
         }
         Ok(obj)
