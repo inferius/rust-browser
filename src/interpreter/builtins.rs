@@ -2537,30 +2537,57 @@ pub fn setup_builtins(
             }
             Ok(arr)
         }));
-        // SubtleCrypto - real digest impl (SHA-256 zatim FNV approximation), ostatni stub
+        // SubtleCrypto - real digest impl (SHA-1 / SHA-256 z helpers), ostatni stub
         let subtle = Rc::new(RefCell::new(JsObject::new()));
         // digest(algorithm, data) -> Promise<ArrayBuffer>
         subtle.borrow_mut().set("digest".into(), native("digest", |args| {
             let mut it = args.into_iter();
-            let _algo = it.next().map(|v| v.to_string()).unwrap_or_default();
+            let algo = it.next().map(|v| v.to_string()).unwrap_or_default();
             let data = it.next().unwrap_or(JsValue::Undefined);
-            let bytes: Vec<u8> = if let JsValue::Array(a) = &data {
-                a.borrow().iter().map(|v| v.to_number() as u8).collect()
-            } else if let JsValue::Str(s) = &data {
-                s.bytes().collect()
-            } else { Vec::new() };
-            // FNV-1a 64-bit hash, repeated 4x pro 256 bit output (approximation)
-            let mut digest_bytes = Vec::new();
-            for seed in 0..4u64 {
-                let mut hash: u64 = 14695981039346656037u64.wrapping_add(seed);
-                for b in &bytes {
-                    hash ^= *b as u64;
-                    hash = hash.wrapping_mul(1099511628211u64);
+            let bytes: Vec<u8> = match &data {
+                JsValue::Array(a) => a.borrow().iter().map(|v| v.to_number() as u8).collect(),
+                JsValue::Str(s) => s.bytes().collect(),
+                JsValue::Object(o) => {
+                    if let JsValue::Array(b) = o.borrow().get("__bytes__") {
+                        b.borrow().iter().map(|v| v.to_number() as u8).collect()
+                    } else { Vec::new() }
                 }
-                digest_bytes.extend_from_slice(&hash.to_le_bytes());
-            }
+                _ => Vec::new(),
+            };
+            let normalized = algo.to_uppercase().replace("-", "");
+            let digest_bytes: Vec<u8> = match normalized.as_str() {
+                "SHA1" | "SHA" => super::helpers::sha1(&bytes).to_vec(),
+                "SHA256" => super::helpers::sha256(&bytes).to_vec(),
+                "SHA384" => {
+                    // SHA-384 - aproximace pres SHA-256 dvojnasob (simplified pro stub)
+                    let h1 = super::helpers::sha256(&bytes);
+                    let h2 = super::helpers::sha256(&h1);
+                    let mut combined = Vec::with_capacity(48);
+                    combined.extend_from_slice(&h1);
+                    combined.extend_from_slice(&h2[..16]);
+                    combined
+                }
+                "SHA512" => {
+                    // SHA-512 - aproximace pres double SHA-256
+                    let h1 = super::helpers::sha256(&bytes);
+                    let h2 = super::helpers::sha256(&h1);
+                    let mut combined = Vec::with_capacity(64);
+                    combined.extend_from_slice(&h1);
+                    combined.extend_from_slice(&h2);
+                    combined
+                }
+                _ => {
+                    return Ok(make_settled_promise("rejected",
+                        JsValue::Str(format!("NotSupportedError: {algo}"))));
+                }
+            };
             let arr: Vec<JsValue> = digest_bytes.into_iter().map(|b| JsValue::Number(b as f64)).collect();
-            Ok(make_settled_promise("fulfilled", JsValue::Array(Rc::new(RefCell::new(arr)))))
+            // Vrat ArrayBuffer-like { __bytes__, byteLength }
+            let buf = Rc::new(RefCell::new(JsObject::new()));
+            buf.borrow_mut().set("__buffer__".into(), JsValue::Bool(true));
+            buf.borrow_mut().set("byteLength".into(), JsValue::Number(arr.len() as f64));
+            buf.borrow_mut().set("__bytes__".into(), JsValue::Array(Rc::new(RefCell::new(arr))));
+            Ok(make_settled_promise("fulfilled", JsValue::Object(buf)))
         }));
         for m in &["encrypt", "decrypt", "sign", "verify", "generateKey", "importKey", "exportKey", "deriveKey", "deriveBits", "wrapKey", "unwrapKey"] {
             let name = m.to_string();

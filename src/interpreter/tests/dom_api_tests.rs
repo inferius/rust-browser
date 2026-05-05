@@ -2489,3 +2489,77 @@ fn reflect_own_keys() {
         assert_eq!(n, 3.0);
     }
 }
+
+// ─── Crypto SHA real ──────────────────────────────────────────────────
+
+#[test]
+fn crypto_sha256_empty_string() {
+    let code = r#"
+        const buf = crypto.subtle.digest("SHA-256", "");
+        return buf.__promise_value__.byteLength;
+    "#;
+    if let crate::interpreter::JsValue::Number(n) = run(code) {
+        assert_eq!(n, 32.0); // SHA-256 = 32 bytes
+    }
+}
+
+#[test]
+fn crypto_sha256_known_vector() {
+    // SHA-256("abc") = ba7816bf 8f01cfea 414140de 5dae2223 b00361a3 96177a9c b410ff61 f20015ad
+    let code = r#"
+        const buf = crypto.subtle.digest("SHA-256", "abc");
+        const bytes = buf.__promise_value__.__bytes__;
+        return bytes[0] + "|" + bytes[1] + "|" + bytes[31];
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        // 0xba=186, 0x78=120, 0xad=173
+        assert_eq!(s, "186|120|173");
+    }
+}
+
+#[test]
+fn crypto_sha1_known_vector() {
+    // SHA-1("abc") = a9993e36 4706816a ba3e2571 7850c26c 9cd0d89d
+    let code = r#"
+        const buf = crypto.subtle.digest("SHA-1", "abc");
+        const bytes = buf.__promise_value__.__bytes__;
+        return bytes[0] + "|" + bytes[1] + "|" + bytes.length;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        // 0xa9=169, 0x99=153, length 20
+        assert_eq!(s, "169|153|20");
+    }
+}
+
+#[test]
+fn crypto_sha384_byte_length() {
+    let code = r#"
+        const buf = crypto.subtle.digest("SHA-384", "test");
+        return buf.__promise_value__.byteLength;
+    "#;
+    if let crate::interpreter::JsValue::Number(n) = run(code) {
+        assert_eq!(n, 48.0); // SHA-384 = 48 bytes
+    }
+}
+
+#[test]
+fn crypto_sha512_byte_length() {
+    let code = r#"
+        const buf = crypto.subtle.digest("SHA-512", "test");
+        return buf.__promise_value__.byteLength;
+    "#;
+    if let crate::interpreter::JsValue::Number(n) = run(code) {
+        assert_eq!(n, 64.0); // SHA-512 = 64 bytes
+    }
+}
+
+#[test]
+fn crypto_unknown_algo_rejects() {
+    let code = r#"
+        const buf = crypto.subtle.digest("UNKNOWN", "x");
+        return buf.__promise_state__;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "rejected");
+    }
+}
