@@ -183,29 +183,35 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         let parent_align_items = bx.align_items.clone();
         let parent_justify_items = bx.justify_content.clone(); // (justify-items)
         let child = &mut bx.children[real_idx];
+        let m_l = child.margin_left.unwrap_or(child.margin);
+        let m_r = child.margin_right.unwrap_or(child.margin);
+        let m_t = child.margin_top.unwrap_or(child.margin);
+        let m_b = child.margin_bottom.unwrap_or(child.margin);
+        let cw_avail = (cw - m_l - m_r).max(0.0);
+        let ch_avail = (ch_h - m_t - m_b).max(0.0);
         let has_w = child.explicit_width.is_some();
         let has_h = child.explicit_height.is_some();
-        let item_w = child.explicit_width.unwrap_or(cw);
-        let item_h = child.explicit_height.unwrap_or(ch_h);
+        let item_w = child.explicit_width.unwrap_or(cw_avail);
+        let item_h = child.explicit_height.unwrap_or(ch_avail);
         // justify-self na inline (cols), align-self na block (rows). Default = stretch.
         let js = if !child.justify_self.is_empty() { child.justify_self.clone() } else { parent_justify_items };
         let als = if !child.align_self.is_empty() { child.align_self.clone() } else { parent_align_items };
         let stretch_w = !has_w && (js.is_empty() || js == "stretch" || js == "normal");
         let stretch_h = !has_h && (als.is_empty() || als == "stretch" || als == "normal");
-        let final_w = if stretch_w { cw } else { item_w };
-        let final_h = if stretch_h { ch_h } else { item_h };
+        let final_w = if stretch_w { cw_avail } else { item_w };
+        let final_h = if stretch_h { ch_avail } else { item_h };
         let off_x = if stretch_w { 0.0 } else { match js.as_str() {
-            "end" | "flex-end" => (cw - final_w).max(0.0),
-            "center" => ((cw - final_w) / 2.0).max(0.0),
-            _ => 0.0, // start (default for !stretch)
-        }};
-        let off_y = if stretch_h { 0.0 } else { match als.as_str() {
-            "end" | "flex-end" => (ch_h - final_h).max(0.0),
-            "center" => ((ch_h - final_h) / 2.0).max(0.0),
+            "end" | "flex-end" => (cw_avail - final_w).max(0.0),
+            "center" => ((cw_avail - final_w) / 2.0).max(0.0),
             _ => 0.0,
         }};
-        child.rect.x = inner_x + cx + off_x;
-        child.rect.y = inner_y + cy + off_y;
+        let off_y = if stretch_h { 0.0 } else { match als.as_str() {
+            "end" | "flex-end" => (ch_avail - final_h).max(0.0),
+            "center" => ((ch_avail - final_h) / 2.0).max(0.0),
+            _ => 0.0,
+        }};
+        child.rect.x = inner_x + cx + m_l + off_x;
+        child.rect.y = inner_y + cy + m_t + off_y;
         child.rect.width = final_w;
         child.rect.height = final_h;
         // Dispatch podle child.display (block/flex/grid) - layout_block jen flowuje
