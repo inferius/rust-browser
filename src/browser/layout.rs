@@ -2503,6 +2503,32 @@ pub fn parse_color(s: &str) -> Option<[u8; 4]> {
         return parse_color_mix(inner);
     }
 
+    // CSS Color L5 - contrast(<color> vs <list>) - vrati nejvic kontrast color
+    if let Some(inner) = s.strip_prefix("contrast(").and_then(|s| s.strip_suffix(')')) {
+        return parse_contrast(inner);
+    }
+
+    // CSS Color L5 - contrast-color(<color>) - vrati black/white podle pozadi
+    if let Some(inner) = s.strip_prefix("contrast-color(").and_then(|s| s.strip_suffix(')')) {
+        // Vyhodnoti zda bg je svetly nebo tmavy a vrati opacny
+        let bg = parse_color(inner.trim())?;
+        let luma = (0.2126 * bg[0] as f32 + 0.7152 * bg[1] as f32 + 0.0722 * bg[2] as f32) / 255.0;
+        return Some(if luma > 0.5 {
+            [0, 0, 0, 255]   // tmavy text na svetlem bg
+        } else {
+            [255, 255, 255, 255]  // svetly text na tmavem bg
+        });
+    }
+
+    // CSS Color L5 - light-dark(<light>, <dark>) - vrati prvni v light mode, druhy v dark
+    // (Bez color scheme detekci - vraci prvni)
+    if let Some(inner) = s.strip_prefix("light-dark(").and_then(|s| s.strip_suffix(')')) {
+        let parts: Vec<&str> = inner.splitn(2, ',').collect();
+        if let Some(first) = parts.first() {
+            return parse_color(first.trim());
+        }
+    }
+
     // Named colors (subset)
     match s.as_str() {
         "black"   => Some([0, 0, 0, 255]),
@@ -3099,6 +3125,38 @@ fn rgb_to_oklab(r: u8, g: u8, b: u8) -> (f32, f32, f32) {
 
 /// color-mix(in <space>, color1 [<%>], color2 [<%>]).
 /// Podpora space: srgb, oklab, oklch, lab, lch, hsl, hwb.
+/// CSS Color L5 contrast() function - vyhrava pres comparing colory s background.
+/// Format: contrast(<bg> vs <c1>, <c2>, ...) - vrati color s nejvyssim contrast vs bg.
+/// Pouziva relative luminance.
+fn parse_contrast(inner: &str) -> Option<[u8; 4]> {
+    let trimmed = inner.trim();
+    let (bg_str, candidates_str) = if let Some(idx) = trimmed.find(" vs ") {
+        (&trimmed[..idx], &trimmed[idx+4..])
+    } else {
+        // Forma "contrast(bg)" -> vrati black/white podle bg luma
+        let bg = parse_color(trimmed)?;
+        let luma = (0.2126 * bg[0] as f32 + 0.7152 * bg[1] as f32 + 0.0722 * bg[2] as f32) / 255.0;
+        return Some(if luma > 0.5 { [0, 0, 0, 255] } else { [255, 255, 255, 255] });
+    };
+    let bg = parse_color(bg_str.trim())?;
+    let bg_luma = (0.2126 * bg[0] as f32 + 0.7152 * bg[1] as f32 + 0.0722 * bg[2] as f32) / 255.0;
+    let mut best: Option<[u8; 4]> = None;
+    let mut best_contrast = -1.0_f32;
+    for cand_str in candidates_str.split(',') {
+        if let Some(c) = parse_color(cand_str.trim()) {
+            let cl = (0.2126 * c[0] as f32 + 0.7152 * c[1] as f32 + 0.0722 * c[2] as f32) / 255.0;
+            let l1 = bg_luma.max(cl);
+            let l2 = bg_luma.min(cl);
+            let contrast = (l1 + 0.05) / (l2 + 0.05);
+            if contrast > best_contrast {
+                best_contrast = contrast;
+                best = Some(c);
+            }
+        }
+    }
+    best
+}
+
 fn parse_color_mix(inner: &str) -> Option<[u8; 4]> {
     // Format: "in <space>, c1 [<%>], c2 [<%>]"
     let parts = split_top_level_commas(inner);

@@ -76,6 +76,39 @@ fn parse_relative_rgb_alpha_override() {
 }
 
 #[test]
+fn parse_contrast_color_dark_bg_returns_white() {
+    let c = layout::parse_color("contrast-color(black)").unwrap();
+    assert_eq!(c, [255, 255, 255, 255]);
+}
+
+#[test]
+fn parse_contrast_color_light_bg_returns_black() {
+    let c = layout::parse_color("contrast-color(white)").unwrap();
+    assert_eq!(c, [0, 0, 0, 255]);
+}
+
+#[test]
+fn parse_contrast_picks_best_candidate() {
+    // bg=white vs red,black -> black ma nejvyssi kontrast
+    let c = layout::parse_color("contrast(white vs red, black)").unwrap();
+    assert_eq!(c, [0, 0, 0, 255]);
+}
+
+#[test]
+fn parse_contrast_single_arg_returns_inverse() {
+    // contrast(white) -> black
+    let c = layout::parse_color("contrast(white)").unwrap();
+    assert_eq!(c, [0, 0, 0, 255]);
+}
+
+#[test]
+fn parse_light_dark_returns_first() {
+    // light-dark(red, blue) -> v light mode = red
+    let c = layout::parse_color("light-dark(red, blue)").unwrap();
+    assert_eq!(c, [255, 0, 0, 255]);
+}
+
+#[test]
 fn parse_relative_hsl_identity() {
     let c = layout::parse_color("hsl(from red h s l)").unwrap();
     assert_eq!(c[0], 255);
