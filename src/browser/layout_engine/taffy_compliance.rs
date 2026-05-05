@@ -305,9 +305,11 @@ mod tests {
             }
         }
         bx.display = display;
-        // Pri box-sizing = content-box (default v CSS), pripocti padding+border do explicit size,
-        // protoze nas rect je border-box semantics.
-        if bx.box_sizing.is_empty() || bx.box_sizing == "content-box" {
+        // Pri box-sizing = content-box pripocti padding+border do explicit size.
+        // Taffy default je border-box (jejich fixtures `_border_box_ltr` predpokladaji
+        // width = total). My rect je border-box semantics, takze pridavame jen pri
+        // explicit content-box.
+        if bx.box_sizing == "content-box" {
             let bw_l = bx.border_left_width.unwrap_or(bx.border_width);
             let bw_r = bx.border_right_width.unwrap_or(bx.border_width);
             let bw_t = bx.border_top_width.unwrap_or(bx.border_width);
