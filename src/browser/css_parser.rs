@@ -22,6 +22,21 @@ pub struct Stylesheet {
     /// Rules patrici do layer: layer_name -> Vec<Rule>.
     /// Layered rules maji nizsi prio nez unlayered (per CSS Cascade Layers spec L5).
     pub layered_rules: Vec<(String, Vec<Rule>)>,
+    /// @property --name registrace - meta info pro custom properties.
+    pub registered_properties: Vec<RegisteredProperty>,
+}
+
+/// CSS @property registrace pro custom properties (var(--foo)).
+#[derive(Debug, Clone, Default)]
+pub struct RegisteredProperty {
+    /// Jmeno vc. -- prefix, napr. "--my-color".
+    pub name: String,
+    /// syntax descriptor (jen storage): "<color>", "<length>", "*"
+    pub syntax: String,
+    /// Inherits flag.
+    pub inherits: bool,
+    /// initial-value (volitelny).
+    pub initial_value: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -179,6 +194,7 @@ pub fn parse_stylesheet(source: &str) -> Stylesheet {
     let mut font_faces = Vec::new();
     let mut layer_order: Vec<String> = Vec::new();
     let mut layered_rules: Vec<(String, Vec<Rule>)> = Vec::new();
+    let mut registered_properties: Vec<RegisteredProperty> = Vec::new();
     let mut chars = source.chars().peekable();
 
     while chars.peek().is_some() {
@@ -292,8 +308,18 @@ pub fn parse_stylesheet(source: &str) -> Stylesheet {
             // @font-feature-values FontName { @styleset {} ... } - parse only
             let _ = block_str;
         } else if selectors_str.starts_with("@property") {
-            // @property --name { syntax/inherits/initial-value } - registrace, zatim no-op
-            let _ = block_str;
+            // @property --name { syntax/inherits/initial-value }
+            let name = selectors_str.trim_start_matches("@property").trim().to_string();
+            let mut prop = RegisteredProperty { name, ..Default::default() };
+            for d in parse_decls_str(&block_str) {
+                match d.property.as_str() {
+                    "syntax" => prop.syntax = d.value.trim().trim_matches('"').trim_matches('\'').to_string(),
+                    "inherits" => prop.inherits = matches!(d.value.trim(), "true"),
+                    "initial-value" => prop.initial_value = Some(d.value.clone()),
+                    _ => {}
+                }
+            }
+            registered_properties.push(prop);
         } else if selectors_str.starts_with("@font-face") {
             let mut ff = FontFace::default();
             let decls = parse_decls_str(&block_str);
@@ -325,7 +351,7 @@ pub fn parse_stylesheet(source: &str) -> Stylesheet {
 
     Stylesheet {
         rules, media_queries, keyframes, container_queries, font_faces,
-        layer_order, layered_rules,
+        layer_order, layered_rules, registered_properties,
     }
 }
 

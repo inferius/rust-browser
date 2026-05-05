@@ -427,7 +427,8 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: 
             }
             DisplayCommand::FilterBegin { .. } | DisplayCommand::FilterEnd
             | DisplayCommand::BackdropFilterBegin { .. } | DisplayCommand::BackdropFilterEnd
-            | DisplayCommand::TransformBegin { .. } | DisplayCommand::TransformEnd => {
+            | DisplayCommand::TransformBegin { .. } | DisplayCommand::TransformEnd
+            | DisplayCommand::MaskBegin { .. } | DisplayCommand::MaskEnd => {
                 // Markers - zpracovava se v render flow, ne ve vertex builderu.
             }
             DisplayCommand::ClippedRect { color, points } => {
@@ -926,6 +927,12 @@ pub enum Seg<'a> {
         radius: f32,
         color_matrix: [f32; 20],
     },
+    /// mask-image subtree: render content do RT, aplikuj alpha mask, composit.
+    Mask {
+        inner: &'a [DisplayCommand],
+        x: f32, y: f32, w: f32, h: f32,
+        mask_src: String,
+    },
 }
 
 /// Rozdeli display list na Main + Filter + Transform3D segmenty pres
@@ -935,7 +942,7 @@ pub enum Seg<'a> {
 /// Symetricnost markeru je predpokladana.
 pub fn partition_filter_segments(cmds: &[DisplayCommand]) -> Vec<Seg<'_>> {
     #[derive(Clone, Copy, PartialEq)]
-    enum Kind { Filter, Transform, Backdrop }
+    enum Kind { Filter, Transform, Backdrop, Mask }
     let mut segments: Vec<Seg> = Vec::new();
     let mut depth: i32 = 0;
     let mut active_kind: Option<Kind> = None;
@@ -947,6 +954,8 @@ pub fn partition_filter_segments(cmds: &[DisplayCommand]) -> Vec<Seg<'_>> {
         (0.0, 0.0, 0.0, 0.0, [0.0; 16]);
     let mut backdrop_params: (f32, f32, f32, f32, f32, [f32; 20]) =
         (0.0, 0.0, 0.0, 0.0, 0.0, [0.0; 20]);
+    let mut mask_params: (f32, f32, f32, f32, String) =
+        (0.0, 0.0, 0.0, 0.0, String::new());
     for i in 0..cmds.len() {
         match &cmds[i] {
             DisplayCommand::FilterBegin { x, y, w, h, blur_radius, color_matrix } => {
@@ -1018,6 +1027,29 @@ pub fn partition_filter_segments(cmds: &[DisplayCommand]) -> Vec<Seg<'_>> {
                     }
                 }
             }
+            DisplayCommand::MaskBegin { x, y, w, h, mask_src } => {
+                if depth == 0 {
+                    if cursor < i { segments.push(Seg::Main(&cmds[cursor..i])); }
+                    seg_start = i + 1;
+                    mask_params = (*x, *y, *w, *h, mask_src.clone());
+                    active_kind = Some(Kind::Mask);
+                }
+                if active_kind == Some(Kind::Mask) { depth += 1; }
+            }
+            DisplayCommand::MaskEnd => {
+                if active_kind == Some(Kind::Mask) {
+                    depth -= 1;
+                    if depth == 0 {
+                        let (x, y, w, h, ref src) = mask_params;
+                        segments.push(Seg::Mask {
+                            inner: &cmds[seg_start..i],
+                            x, y, w, h, mask_src: src.clone(),
+                        });
+                        cursor = i + 1;
+                        active_kind = None;
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -1039,13 +1071,14 @@ fn shift_command_y(cmd: &mut DisplayCommand, dy: f32) {
         | DisplayCommand::BlurredRect { y, .. }
         | DisplayCommand::FilterBegin { y, .. }
         | DisplayCommand::BackdropFilterBegin { y, .. }
-        | DisplayCommand::TransformBegin { y, .. } => *y += dy,
+        | DisplayCommand::TransformBegin { y, .. }
+        | DisplayCommand::MaskBegin { y, .. } => *y += dy,
         DisplayCommand::ClippedRect { points, .. } => {
             for (_, py) in points.iter_mut() {
                 *py += dy;
             }
         }
-        DisplayCommand::FilterEnd | DisplayCommand::BackdropFilterEnd | DisplayCommand::TransformEnd => {}
+        DisplayCommand::FilterEnd | DisplayCommand::BackdropFilterEnd | DisplayCommand::TransformEnd | DisplayCommand::MaskEnd => {}
     }
 }
 
@@ -2042,6 +2075,46 @@ pub fn run_window_with_html(html: String, css: String) -> Result<(), String> {
     Ok(())
 }
 
+// ─── Dirty rect tracking ────────────────────────────────────────────────
+
+/// Sleduje obdelnikovou oblast ktera potrebuje prekresleni.
+/// `None` = vse ciste (zadna zmena). `Some([x,y,w,h])` = dirty oblast.
+/// Slucovani: unionem s novou dirty oblast.
+#[derive(Debug, Clone, Default)]
+pub struct DirtyRegion {
+    pub rect: Option<[f32; 4]>,
+}
+
+impl DirtyRegion {
+    pub fn new() -> Self { DirtyRegion { rect: None } }
+
+    /// Oznaci oblast jako dirty. Slucuje s existujici dirty oblasti (union).
+    pub fn mark(&mut self, x: f32, y: f32, w: f32, h: f32) {
+        self.rect = Some(match self.rect {
+            None => [x, y, w, h],
+            Some([ox, oy, ow, oh]) => {
+                let nx = ox.min(x);
+                let ny = oy.min(y);
+                let nw = (ox + ow).max(x + w) - nx;
+                let nh = (oy + oh).max(y + h) - ny;
+                [nx, ny, nw, nh]
+            }
+        });
+    }
+
+    /// Vymaze dirty stav. Vraci oblast ktera byla dirty (pro render).
+    pub fn take(&mut self) -> Option<[f32; 4]> {
+        self.rect.take()
+    }
+
+    pub fn is_dirty(&self) -> bool { self.rect.is_some() }
+
+    /// Nastavi dirty na cele viewport.
+    pub fn mark_all(&mut self, w: f32, h: f32) {
+        self.mark(0.0, 0.0, w, h);
+    }
+}
+
 // ─── Renderer ───────────────────────────────────────────────────────────
 
 struct Renderer {
@@ -2108,6 +2181,9 @@ struct Renderer {
     transform_bind_group_layout: wgpu::BindGroupLayout,
     /// Uniform pro transform matrix + center + viewport + uv_box (8x vec4 = 128 bytes)
     transform_uniform_buf: wgpu::Buffer,
+    /// Dirty region tracker - oblast ktera potrebuje prekresleni.
+    /// Pouzivano pro budouci incremental rendering optimalizaci.
+    pub dirty_region: DirtyRegion,
 }
 
 impl Renderer {
@@ -2537,6 +2613,7 @@ impl Renderer {
             webgl_uniform_bgls: std::collections::HashMap::new(),
             webgl_textures: std::collections::HashMap::new(),
             webgl_default_sampler: None,
+            dirty_region: DirtyRegion::new(),
         }
     }
 
@@ -3481,6 +3558,10 @@ impl Renderer {
         let vp = [self.config.width as f32, self.config.height as f32, 0.0, 0.0];
         self.queue.write_buffer(&self.uniform_buf, 0, bytemuck::cast_slice(&vp));
 
+        // Dirty rect: cely frame je dirty (aktualne full-redraw)
+        self.dirty_region.mark_all(self.config.width as f32, self.config.height as f32);
+        let _dirty = self.dirty_region.take(); // reserved pro future incremental render
+
         // Acquire frame
         let frame = match self.surface.get_current_texture() {
             Ok(f) => f,
@@ -3558,6 +3639,23 @@ impl Renderer {
                     self.compose_transform(view, x, y, w, h, &matrix, first_pass);
                     first_pass = false;
                 }
+                Seg::Mask { inner, x, y, w, h, mask_src } => {
+                    // 1. Render obsah do offscreen RT
+                    let inner_verts = build_vertices(inner, &self.atlas, &self.image_atlas);
+                    self.draw_to_offscreen(&inner_verts);
+                    // 2. Compose offscreen -> view s identity color matrix
+                    // Pro gradient masku by bylo treba druhy RT s maskovanim;
+                    // zatim composit bez modifikace (mask parsing TODO).
+                    let identity = [
+                        1.0, 0.0, 0.0, 0.0, 0.0,
+                        0.0, 1.0, 0.0, 0.0, 0.0,
+                        0.0, 0.0, 1.0, 0.0, 0.0,
+                        0.0, 0.0, 0.0, 1.0, 0.0,
+                    ];
+                    self.compose_offscreen(view, x, y, w, h, &identity, first_pass);
+                    let _ = mask_src;
+                    first_pass = false;
+                }
                 Seg::BackdropFilter { inner, x, y, w, h, radius, color_matrix } => {
                     // 1. Snapshot main_rt -> offscreen_tex (scena za elementem)
                     let mut enc = self.device.create_command_encoder(&Default::default());
@@ -3610,8 +3708,8 @@ impl Renderer {
                                 self.draw_to_offscreen(&iv);
                                 self.compose_transform(view, tx, ty, tw, th, &tm, false);
                             }
-                            Seg::BackdropFilter { .. } => {
-                                // Nested backdrop-filter uvnitr backdrop-filter: skip (nepodporovano)
+                            Seg::BackdropFilter { .. } | Seg::Mask { .. } => {
+                                // Nested backdrop/mask uvnitr backdrop-filter: skip (nepodporovano)
                             }
                         }
                     }

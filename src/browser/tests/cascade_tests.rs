@@ -1203,3 +1203,32 @@ fn unset_inline_style() {
     let styles = cascade::get_styles(&map, &div);
     assert!(styles.and_then(|s| s.get("color")).is_none(), "inline unset smazel color");
 }
+
+#[test]
+fn at_property_initial_value_used_when_var_undefined() {
+    let doc = parse_html(r#"<html><body><div></div></body></html>"#, "");
+    let css = parse_stylesheet(
+        "@property --my-bg { syntax: \"<color>\"; inherits: false; initial-value: red; } \
+         div { background-color: var(--my-bg); }"
+    );
+    let map = cascade::cascade(&doc.root, &[css]);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let styles = cascade::get_styles(&map, &div);
+    let bg = styles.and_then(|s| s.get("background-color")).cloned().unwrap_or_default();
+    assert_eq!(bg.trim(), "red", "@property initial-value pouzit pri undefined var");
+}
+
+#[test]
+fn at_property_root_overrides_initial() {
+    let doc = parse_html(r#"<html><body><div></div></body></html>"#, "");
+    let css = parse_stylesheet(
+        "@property --c { syntax: \"<color>\"; inherits: true; initial-value: red; } \
+         :root { --c: blue; } \
+         div { color: var(--c); }"
+    );
+    let map = cascade::cascade(&doc.root, &[css]);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let styles = cascade::get_styles(&map, &div);
+    let c = styles.and_then(|s| s.get("color")).cloned().unwrap_or_default();
+    assert_eq!(c.trim(), "blue", ":root prebije initial-value");
+}

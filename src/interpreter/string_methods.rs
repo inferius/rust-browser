@@ -220,6 +220,31 @@ pub fn call_string_method(
             Ok(Some(JsValue::Array(Rc::new(RefCell::new(parts)))))
         }
         "toString" | "valueOf" => Ok(Some(JsValue::Str(s.to_string()))),
+        "concat" => {
+            let mut result = s.to_string();
+            for arg in args { result.push_str(&arg.to_string()); }
+            Ok(Some(JsValue::Str(result)))
+        }
+        "substr" => {
+            // substr(start[, length]) - start moze byt negativni
+            let len = chars.len() as i64;
+            let start = args.get(0).map(|v| v.to_number() as i64).unwrap_or(0);
+            let s2 = if start < 0 { (len + start).max(0) } else { start.min(len) } as usize;
+            let count = args.get(1).map(|v| v.to_number() as usize).unwrap_or(chars.len() - s2);
+            let e2 = (s2 + count).min(chars.len());
+            Ok(Some(JsValue::Str(chars[s2..e2].iter().collect())))
+        }
+        "codePointAt" => {
+            let i = args.first().map(|v| v.to_number() as usize).unwrap_or(0);
+            Ok(Some(match chars.get(i) {
+                Some(c) => JsValue::Number(*c as u32 as f64),
+                None    => JsValue::Undefined,
+            }))
+        }
+        "normalize" => {
+            // Plna normalizace vyzaduje unicode-normalization crate; vracime original (NFC approx).
+            Ok(Some(JsValue::Str(s.to_string())))
+        }
         _ => Ok(None),
     }
 }

@@ -1752,7 +1752,57 @@ fn layout_flex(bx: &mut LayoutBox) {
 
 /// Block layout: kazdy block dite je vlastni radek, sirka = parent.
 /// Inline deti se sbiraji do "line boxu" a wrappuji.
+/// Vertical writing-mode layout: deti se stackuji po ose X (lr = leva->prava, rl = prava->leva).
+/// Inline (text) deti se take layoutuji svisle.
+fn layout_block_vertical(bx: &mut LayoutBox) {
+    let inner_x = bx.rect.x + bx.padding + bx.border_width;
+    let inner_y = bx.rect.y + bx.padding + bx.border_width;
+    let inner_h = bx.rect.height - 2.0 * (bx.padding + bx.border_width);
+    // Pro vertical-rl startujeme od prava; pro lr od leva.
+    let right_to_left = bx.writing_mode == "vertical-rl";
+
+    let mut cursor_x = if right_to_left {
+        inner_x + (bx.rect.width - 2.0 * (bx.padding + bx.border_width))
+    } else {
+        inner_x
+    };
+
+    for child in bx.children.iter_mut() {
+        if matches!(child.display, Display::None) { continue; }
+        let child_w = child.explicit_width.unwrap_or(20.0);
+        let child_h = child.explicit_height.unwrap_or(inner_h);
+        child.rect.height = child_h;
+        child.rect.width  = child_w;
+        if right_to_left {
+            cursor_x -= child_w;
+            child.rect.x = cursor_x;
+        } else {
+            child.rect.x = cursor_x;
+            cursor_x += child_w;
+        }
+        child.rect.y = inner_y;
+        layout_dispatch(child);
+    }
+
+    // Auto-vypocet sirky podle children
+    let used_w = if right_to_left {
+        (inner_x + bx.rect.width - 2.0 * (bx.padding + bx.border_width)) - cursor_x
+    } else {
+        cursor_x - inner_x
+    };
+    if bx.rect.width < used_w + 2.0 * (bx.padding + bx.border_width) {
+        bx.rect.width = used_w + 2.0 * (bx.padding + bx.border_width);
+    }
+}
+
 fn layout_block(bx: &mut LayoutBox) {
+    // writing-mode: vertical-rl / vertical-lr - block axis zmena na X
+    let vertical = matches!(bx.writing_mode.as_str(), "vertical-rl" | "vertical-lr");
+    if vertical {
+        layout_block_vertical(bx);
+        return;
+    }
+
     let inner_x = bx.rect.x + bx.padding + bx.margin + bx.border_width;
     let inner_y = bx.rect.y + bx.padding + bx.margin + bx.border_width;
     let inner_w = bx.rect.width - 2.0 * (bx.padding + bx.margin + bx.border_width);
@@ -1980,6 +2030,17 @@ pub fn parse_color(s: &str) -> Option<[u8; 4]> {
             let a = u8::from_str_radix(&hex[6..8], 16).ok()?;
             return Some([r, g, b, a]);
         }
+    }
+
+    // CSS Color L5 - relative color: rgb(from <color> r g b [/ alpha])
+    // Vyhodnoti zdrojovou barvu, jeji slozky pristupne jako r/g/b/alpha keywordy.
+    if let Some(inner) = s.strip_prefix("rgb(from ").and_then(|s| s.strip_suffix(')'))
+        .or_else(|| s.strip_prefix("rgba(from ").and_then(|s| s.strip_suffix(')'))) {
+        return parse_relative_rgb(inner);
+    }
+    if let Some(inner) = s.strip_prefix("hsl(from ").and_then(|s| s.strip_suffix(')'))
+        .or_else(|| s.strip_prefix("hsla(from ").and_then(|s| s.strip_suffix(')'))) {
+        return parse_relative_hsl(inner);
     }
 
     // rgb()/rgba() - legacy (carky) i modern (mezery + lomitko alpha)
@@ -2271,6 +2332,146 @@ fn parse_alpha(s: &str) -> Option<u8> {
     }
     let v: f32 = s.parse().ok()?;
     Some((v.clamp(0.0, 1.0) * 255.0).round() as u8)
+}
+
+/// CSS Color L5 relative color: rgb(from <color> r g b [/ a]).
+/// Slozky source barvy dostupne jako r/g/b/alpha keywordy (0..255 / 0..1).
+/// Podporuje cisla, procenta, none, calc(r * 0.5).
+fn parse_relative_rgb(inner: &str) -> Option<[u8; 4]> {
+    let trimmed = inner.trim();
+    let (src_str, rest) = split_first_color_token(trimmed)?;
+    let src = parse_color(src_str)?;
+    let rs = src[0] as f32; let gs = src[1] as f32; let bs = src[2] as f32;
+    let alpha_s = src[3] as f32 / 255.0;
+    let (parts, explicit_alpha) = split_balanced_args(rest);
+    if parts.len() < 3 { return None; }
+    let r = eval_color_component(parts[0], &[("r", rs), ("g", gs), ("b", bs), ("alpha", alpha_s * 255.0)], 255.0)?;
+    let g = eval_color_component(parts[1], &[("r", rs), ("g", gs), ("b", bs), ("alpha", alpha_s * 255.0)], 255.0)?;
+    let b = eval_color_component(parts[2], &[("r", rs), ("g", gs), ("b", bs), ("alpha", alpha_s * 255.0)], 255.0)?;
+    let a: u8 = if let Some(byte) = explicit_alpha {
+        byte
+    } else if let Some(alpha_str) = parts.get(3) {
+        let val = eval_color_component(alpha_str, &[("r", rs), ("g", gs), ("b", bs), ("alpha", alpha_s)], 1.0)?;
+        (val.clamp(0.0, 1.0) * 255.0).round() as u8
+    } else { src[3] };
+    Some([r as u8, g as u8, b as u8, a])
+}
+
+/// CSS Color L5 relative HSL: hsl(from <color> h s l [/ a]).
+fn parse_relative_hsl(inner: &str) -> Option<[u8; 4]> {
+    let trimmed = inner.trim();
+    let (src_str, rest) = split_first_color_token(trimmed)?;
+    let src = parse_color(src_str)?;
+    let (h, sat, lit) = rgb_to_hsl(src[0], src[1], src[2]);
+    let alpha_s = src[3] as f32;
+    let (parts, explicit_alpha) = split_balanced_args(rest);
+    if parts.len() < 3 { return None; }
+    let new_h = eval_color_component(parts[0], &[("h", h), ("s", sat * 100.0), ("l", lit * 100.0), ("alpha", alpha_s)], 360.0)?;
+    let new_s = eval_color_component(parts[1], &[("h", h), ("s", sat * 100.0), ("l", lit * 100.0), ("alpha", alpha_s)], 100.0)?;
+    let new_l = eval_color_component(parts[2], &[("h", h), ("s", sat * 100.0), ("l", lit * 100.0), ("alpha", alpha_s)], 100.0)?;
+    let (r, g, b) = hsl_to_rgb(new_h, new_s / 100.0, new_l / 100.0);
+    let a = if let Some(byte) = explicit_alpha { byte } else { src[3] };
+    Some([r, g, b, a])
+}
+
+/// Vyhodnoti slozku barvy v relative color: cislo, "none", procento,
+/// keyword (r/g/b/h/s/l/alpha), calc(<keyword> * 0.5).
+fn eval_color_component(s: &str, vars: &[(&str, f32)], scale: f32) -> Option<f32> {
+    let s = s.trim();
+    if s == "none" { return Some(0.0); }
+    // Keyword substituce
+    for (name, val) in vars {
+        if s == *name { return Some(*val); }
+    }
+    // calc(...) - jednoduchy: keyword * num nebo num * keyword
+    if let Some(inner) = s.strip_prefix("calc(").and_then(|x| x.strip_suffix(')')) {
+        return eval_simple_calc(inner.trim(), vars);
+    }
+    if let Some(p) = s.strip_suffix('%') {
+        let v: f32 = p.trim().parse().ok()?;
+        return Some(v / 100.0 * scale);
+    }
+    s.parse::<f32>().ok()
+}
+
+/// Mini-calc pro relative color: <a> <op> <b> kde a/b muze byt keyword nebo cislo.
+fn eval_simple_calc(s: &str, vars: &[(&str, f32)]) -> Option<f32> {
+    for op in ['+', '-', '*', '/'] {
+        if let Some(idx) = s.rfind(op) {
+            let (l, r) = s.split_at(idx);
+            let r = &r[1..];
+            let lv = eval_color_component(l.trim(), vars, 255.0)?;
+            let rv = eval_color_component(r.trim(), vars, 255.0)?;
+            return Some(match op {
+                '+' => lv + rv, '-' => lv - rv,
+                '*' => lv * rv, '/' => lv / rv,
+                _ => return None,
+            });
+        }
+    }
+    eval_color_component(s, vars, 255.0)
+}
+
+/// Split argumentu pro relative color - respektuje zavorky (calc(...)).
+/// Vrati (positional, optional_alpha_byte). Splituje na top-level mezerach.
+fn split_balanced_args(inner: &str) -> (Vec<&str>, Option<u8>) {
+    let bytes = inner.as_bytes();
+    let mut depth = 0i32;
+    let mut parts: Vec<&str> = Vec::new();
+    let mut start = 0usize;
+    let mut alpha_split: Option<usize> = None;
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        match b {
+            b'(' => depth += 1,
+            b')' => depth -= 1,
+            b'/' if depth == 0 => { alpha_split = Some(i); break; }
+            b' ' | b'\t' if depth == 0 => {
+                if start < i { parts.push(inner[start..i].trim()); }
+                start = i + 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    let main_end = alpha_split.unwrap_or(inner.len());
+    if start < main_end { parts.push(inner[start..main_end].trim()); }
+    parts.retain(|p| !p.is_empty());
+    let alpha = alpha_split.and_then(|idx| parse_alpha(inner[idx+1..].trim()));
+    (parts, alpha)
+}
+
+/// Vrati (color_token, zbytek) - color je prvni token (mozna funkcni s zavorkami).
+fn split_first_color_token(s: &str) -> Option<(&str, &str)> {
+    let s = s.trim();
+    let mut depth = 0i32;
+    for (i, ch) in s.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            ' ' | '\t' if depth == 0 => return Some((&s[..i], s[i..].trim())),
+            _ => {}
+        }
+    }
+    Some((s, ""))
+}
+
+/// RGB -> HSL: H 0..360, S 0..1, L 0..1.
+fn rgb_to_hsl(r: u8, g: u8, b: u8) -> (f32, f32, f32) {
+    let rf = r as f32 / 255.0;
+    let gf = g as f32 / 255.0;
+    let bf = b as f32 / 255.0;
+    let max = rf.max(gf).max(bf);
+    let min = rf.min(gf).min(bf);
+    let l = (max + min) / 2.0;
+    if (max - min).abs() < 1e-6 { return (0.0, 0.0, l); }
+    let d = max - min;
+    let s = if l > 0.5 { d / (2.0 - max - min) } else { d / (max + min) };
+    let h = if max == rf { ((gf - bf) / d) + (if gf < bf { 6.0 } else { 0.0 }) }
+            else if max == gf { ((bf - rf) / d) + 2.0 }
+            else { ((rf - gf) / d) + 4.0 };
+    (h * 60.0, s, l)
 }
 
 fn parse_angle_deg(s: &str) -> Option<f32> {
@@ -2700,6 +2901,8 @@ pub enum BgBox {
     BorderBox,
     PaddingBox,
     ContentBox,
+    /// background-clip: text - bg renderovan jen pres glyfy textu.
+    Text,
 }
 impl Default for BgBox {
     fn default() -> Self { BgBox::BorderBox }
@@ -2797,6 +3000,7 @@ pub fn parse_bg_box(s: &str) -> BgBox {
     match s.trim() {
         "padding-box" => BgBox::PaddingBox,
         "content-box" => BgBox::ContentBox,
+        "text"        => BgBox::Text,
         _ => BgBox::BorderBox,
     }
 }

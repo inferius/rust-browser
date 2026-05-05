@@ -373,3 +373,40 @@ fn array_flat_map() {
     let s = as_str(r);
     assert!(s == "1,2,2,4,3,6", "got {s}");
 }
+
+// --- String.concat + substr ---
+
+#[test]
+fn string_concat_basic() {
+    assert_eq!(as_str(eval(r#""hello".concat(" ", "world")"#)), "hello world");
+}
+
+#[test]
+fn string_concat_empty() {
+    assert_eq!(as_str(eval(r#""abc".concat()"#)), "abc");
+}
+
+#[test]
+fn string_concat_numbers() {
+    assert_eq!(as_str(eval(r#""n=".concat(42)"#)), "n=42");
+}
+
+#[test]
+fn string_substr_basic() {
+    assert_eq!(as_str(eval(r#""hello world".substr(6)"#)), "world");
+}
+
+#[test]
+fn string_substr_with_length() {
+    assert_eq!(as_str(eval(r#""hello world".substr(0, 5)"#)), "hello");
+}
+
+#[test]
+fn string_substr_negative_start() {
+    assert_eq!(as_str(eval(r#""hello world".substr(-5)"#)), "world");
+}
+
+#[test]
+fn string_code_point_at() {
+    assert_eq!(as_num(eval(r#""A".codePointAt(0)"#)), 65.0);
+}

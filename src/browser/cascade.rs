@@ -601,6 +601,14 @@ pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
     let mut style_map: StyleMap = HashMap::new();
     // Globalni :root variables - resolved jednou
     let mut variables: HashMap<String, String> = HashMap::new();
+    // @property initial-value pro registrovane custom properties - aplikovan pred :root values
+    for sheet in stylesheets {
+        for prop in &sheet.registered_properties {
+            if let Some(init) = &prop.initial_value {
+                variables.entry(prop.name.clone()).or_insert_with(|| init.clone());
+            }
+        }
+    }
     for sheet in stylesheets {
         for rule in &sheet.rules {
             for sel in &rule.selectors {

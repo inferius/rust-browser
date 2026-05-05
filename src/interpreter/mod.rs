@@ -653,6 +653,10 @@ pub struct Interpreter {
     pub webgl_states: Rc<RefCell<std::collections::HashMap<usize, Rc<RefCell<WebGLState>>>>>,
     /// Network log capture: (url, status).
     pub network_log: Rc<RefCell<Vec<(String, u16)>>>,
+    /// CustomElements registry: tag-name -> constructor JsValue.
+    pub custom_elements: Rc<RefCell<HashMap<String, JsValue>>>,
+    /// CustomElements instances: DomNode ptr -> JS instance JsValue.
+    pub custom_element_instances: Rc<RefCell<HashMap<usize, JsValue>>>,
 }
 
 // ─── Pomocne funkce ──────────────────────────────────────────────────────────
@@ -673,9 +677,11 @@ impl Interpreter {
         ));
         let console_log: Rc<RefCell<Vec<(String, String)>>> = Rc::new(RefCell::new(Vec::new()));
         let network_log: Rc<RefCell<Vec<(String, u16)>>> = Rc::new(RefCell::new(Vec::new()));
+        let custom_elements: Rc<RefCell<HashMap<String, JsValue>>> =
+            Rc::new(RefCell::new(HashMap::new()));
         setup_builtins(
             &global, &task_queue, &next_timer_id, &workers, &next_worker_id,
-            &document, &console_log, &network_log,
+            &document, &console_log, &network_log, &custom_elements,
         );
         Interpreter {
             global, yield_buffer: None, task_queue, next_timer_id,
@@ -691,6 +697,8 @@ impl Interpreter {
             network_log,
             canvas_ops: Rc::new(RefCell::new(std::collections::HashMap::new())),
             webgl_states: Rc::new(RefCell::new(std::collections::HashMap::new())),
+            custom_elements,
+            custom_element_instances: Rc::new(RefCell::new(std::collections::HashMap::new())),
         }
     }
 
@@ -1158,7 +1166,23 @@ impl Interpreter {
             Stmt::ForIn { kind: _, target, iter, body } => {
                 let obj_val = self.eval(iter, env)?;
                 let keys = match &obj_val {
-                    JsValue::Object(o) => o.borrow().props.keys().cloned().collect::<Vec<_>>(),
+                    JsValue::Object(o) => {
+                        let mut raw: Vec<String> = o.borrow().props.keys()
+                            .filter(|k| !is_internal_key(k))
+                            .cloned().collect();
+                        // JS spec: integer-index keys ascending, then remaining keys
+                        raw.sort_by(|a, b| {
+                            let ai = a.parse::<u64>().ok();
+                            let bi = b.parse::<u64>().ok();
+                            match (ai, bi) {
+                                (Some(x), Some(y)) => x.cmp(&y),
+                                (Some(_), None)    => std::cmp::Ordering::Less,
+                                (None, Some(_))    => std::cmp::Ordering::Greater,
+                                (None, None)       => std::cmp::Ordering::Equal,
+                            }
+                        });
+                        raw
+                    }
                     _ => vec![],
                 };
                 for key in keys {
@@ -1829,7 +1853,12 @@ impl Interpreter {
                         Ok(())
                     }
                     JsValue::Array(a) => {
-                        if let Ok(idx) = key.parse::<usize>() {
+                        if key == "length" {
+                            let new_len = val.to_number() as usize;
+                            let mut arr = a.borrow_mut();
+                            if new_len < arr.len() { arr.truncate(new_len); }
+                            else { while arr.len() < new_len { arr.push(JsValue::Undefined); } }
+                        } else if let Ok(idx) = key.parse::<usize>() {
                             let mut arr = a.borrow_mut();
                             while arr.len() <= idx { arr.push(JsValue::Undefined); }
                             arr[idx] = val;
@@ -2221,6 +2250,8 @@ impl Interpreter {
                 }
                 Ok(())
             }
+            // Native funkce jako super (napr. HTMLElement) - no-op, zadny stav neni treba prenest
+            JsValue::Function(JsFunc::Native(..)) => Ok(()),
             _ => Err(JsError::Runtime("super(): rodicovska hodnota neni trida".into()))
         }
     }
@@ -3134,6 +3165,30 @@ impl Interpreter {
                 }
                 JsValue::Object(obj_rc) => {
                     let obj_rc2 = Rc::clone(obj_rc);
+                    // ─── document metody s pristupem k interpretu ──────────
+                    if matches!(obj_rc2.borrow().props.get("__document__"), Some(JsValue::Bool(true))) {
+                        if key == "createElement" {
+                            let arg_vals = self.eval_args(args, env)?;
+                            let tag = arg_vals.into_iter().next()
+                                .map(|v| v.to_string()).unwrap_or_else(|| "div".into());
+                            let node = crate::browser::dom::NodeData::new_element(
+                                &tag, std::collections::HashMap::new()
+                            );
+                            let node_ptr = Rc::as_ptr(&node) as usize;
+                            // Pokud je tag registrovany jako custom element, zavolej konstruktor
+                            let ctor = self.custom_elements.borrow().get(&tag).cloned();
+                            if let Some(ctor_val) = ctor {
+                                match self.call_new(ctor_val, vec![]) {
+                                    Ok(instance) => {
+                                        self.custom_element_instances.borrow_mut()
+                                            .insert(node_ptr, instance);
+                                    }
+                                    Err(_) => {}
+                                }
+                            }
+                            return Ok(JsValue::DomNode(node));
+                        }
+                    }
                     // ─── DOM Element metody ─────────────────────────────
                     if matches!(obj_rc2.borrow().props.get("__element__"), Some(JsValue::Bool(true))) {
                         let arg_vals = self.eval_args(args, env)?;
@@ -3437,7 +3492,9 @@ impl Interpreter {
                         }
                     }
                     // ─── Date instance metody ──────────────────────────────
-                    if let JsValue::Number(ms) = obj_rc2.borrow().props.get("__date_ms__").cloned().unwrap_or(JsValue::Undefined) {
+                    // Extrahujeme ms pred if-blokem, aby obj_rc2 nebyl borrowed pri borrow_mut() uvnitr.
+                    let date_ms_val = { let b = obj_rc2.borrow(); b.props.get("__date_ms__").and_then(|v| if let JsValue::Number(n) = v { Some(*n) } else { None }) };
+                    if let Some(ms) = date_ms_val {
                         let arg_vals = self.eval_args(args, env)?;
                         let (yr, mo, day, hr, min, sec, ms_part) = ms_to_parts(ms);
                         match key.as_str() {
@@ -3451,6 +3508,18 @@ impl Interpreter {
                             "getMilliseconds"   => return Ok(JsValue::Number(ms_part as f64)),
                             "getDay"            => {
                                 // Den tydne: 0=Sun,...,6=Sat
+                                let days = (ms / 86_400_000.0) as i64;
+                                return Ok(JsValue::Number(((days + 4) % 7).rem_euclid(7) as f64));
+                            }
+                            // UTC gettery - nase implementace uz pouziva UTC, takze identicky
+                            "getUTCFullYear"    => return Ok(JsValue::Number(yr as f64)),
+                            "getUTCMonth"       => return Ok(JsValue::Number(mo as f64)),
+                            "getUTCDate"        => return Ok(JsValue::Number(day as f64)),
+                            "getUTCHours"       => return Ok(JsValue::Number(hr as f64)),
+                            "getUTCMinutes"     => return Ok(JsValue::Number(min as f64)),
+                            "getUTCSeconds"     => return Ok(JsValue::Number(sec as f64)),
+                            "getUTCMilliseconds"=> return Ok(JsValue::Number(ms_part as f64)),
+                            "getUTCDay"         => {
                                 let days = (ms / 86_400_000.0) as i64;
                                 return Ok(JsValue::Number(((days + 4) % 7).rem_euclid(7) as f64));
                             }
@@ -3479,6 +3548,62 @@ impl Interpreter {
                             "setTime" => {
                                 let new_ms = arg_vals.into_iter().next()
                                     .map(|v| v.to_number()).unwrap_or(f64::NAN);
+                                obj_rc2.borrow_mut().props.insert("__date_ms__".into(), JsValue::Number(new_ms));
+                                return Ok(JsValue::Number(new_ms));
+                            }
+                            "setFullYear" => {
+                                let mut it = arg_vals.into_iter();
+                                let ny = it.next().map(|v| v.to_number() as i64).unwrap_or(yr);
+                                let nm = it.next().map(|v| v.to_number() as u32).unwrap_or(mo);
+                                let nd = it.next().map(|v| v.to_number() as u32).unwrap_or(day);
+                                let new_ms = parts_to_ms(ny, nm, nd, hr, min, sec, ms_part);
+                                obj_rc2.borrow_mut().props.insert("__date_ms__".into(), JsValue::Number(new_ms));
+                                return Ok(JsValue::Number(new_ms));
+                            }
+                            "setMonth" => {
+                                let mut it = arg_vals.into_iter();
+                                let nm = it.next().map(|v| v.to_number() as u32).unwrap_or(mo);
+                                let nd = it.next().map(|v| v.to_number() as u32).unwrap_or(day);
+                                let new_ms = parts_to_ms(yr, nm, nd, hr, min, sec, ms_part);
+                                obj_rc2.borrow_mut().props.insert("__date_ms__".into(), JsValue::Number(new_ms));
+                                return Ok(JsValue::Number(new_ms));
+                            }
+                            "setDate" => {
+                                let nd = arg_vals.into_iter().next().map(|v| v.to_number() as u32).unwrap_or(day);
+                                let new_ms = parts_to_ms(yr, mo, nd, hr, min, sec, ms_part);
+                                obj_rc2.borrow_mut().props.insert("__date_ms__".into(), JsValue::Number(new_ms));
+                                return Ok(JsValue::Number(new_ms));
+                            }
+                            "setHours" => {
+                                let mut it = arg_vals.into_iter();
+                                let nh = it.next().map(|v| v.to_number() as u32).unwrap_or(hr);
+                                let nm = it.next().map(|v| v.to_number() as u32).unwrap_or(min);
+                                let ns = it.next().map(|v| v.to_number() as u32).unwrap_or(sec);
+                                let nms = it.next().map(|v| v.to_number() as u32).unwrap_or(ms_part);
+                                let new_ms = parts_to_ms(yr, mo, day, nh, nm, ns, nms);
+                                obj_rc2.borrow_mut().props.insert("__date_ms__".into(), JsValue::Number(new_ms));
+                                return Ok(JsValue::Number(new_ms));
+                            }
+                            "setMinutes" => {
+                                let mut it = arg_vals.into_iter();
+                                let nm = it.next().map(|v| v.to_number() as u32).unwrap_or(min);
+                                let ns = it.next().map(|v| v.to_number() as u32).unwrap_or(sec);
+                                let nms = it.next().map(|v| v.to_number() as u32).unwrap_or(ms_part);
+                                let new_ms = parts_to_ms(yr, mo, day, hr, nm, ns, nms);
+                                obj_rc2.borrow_mut().props.insert("__date_ms__".into(), JsValue::Number(new_ms));
+                                return Ok(JsValue::Number(new_ms));
+                            }
+                            "setSeconds" => {
+                                let mut it = arg_vals.into_iter();
+                                let ns = it.next().map(|v| v.to_number() as u32).unwrap_or(sec);
+                                let nms = it.next().map(|v| v.to_number() as u32).unwrap_or(ms_part);
+                                let new_ms = parts_to_ms(yr, mo, day, hr, min, ns, nms);
+                                obj_rc2.borrow_mut().props.insert("__date_ms__".into(), JsValue::Number(new_ms));
+                                return Ok(JsValue::Number(new_ms));
+                            }
+                            "setMilliseconds" => {
+                                let nms = arg_vals.into_iter().next().map(|v| v.to_number() as u32).unwrap_or(ms_part);
+                                let new_ms = parts_to_ms(yr, mo, day, hr, min, sec, nms);
                                 obj_rc2.borrow_mut().props.insert("__date_ms__".into(), JsValue::Number(new_ms));
                                 return Ok(JsValue::Number(new_ms));
                             }
@@ -3626,7 +3751,14 @@ impl Interpreter {
                             let is_enum = obj_rc2.borrow().has_own(&k) && !is_internal_key(&k);
                             return Ok(JsValue::Bool(is_enum));
                         }
-                        "toString" => return Ok(JsValue::Str("[object Object]".into())),
+                        "toString" => {
+                            // Zkontroluj vlastni toString v props; jinak fallback
+                            let custom = obj_rc2.borrow().props.get("toString").cloned();
+                            if let Some(f) = custom {
+                                return self.call_function(f, arg_vals, Some(this));
+                            }
+                            return Ok(JsValue::Str("[object Object]".into()));
+                        }
                         "valueOf"  => return Ok(JsValue::Object(Rc::clone(&obj_rc2))),
                         _ => {
                             // Normalni method call
@@ -3800,9 +3932,25 @@ impl Interpreter {
                         }
                         "setAttribute" => {
                             let mut iter = arg_vals.into_iter();
-                            let name = iter.next().map(|v| v.to_string()).unwrap_or_default();
-                            let val = iter.next().map(|v| v.to_string()).unwrap_or_default();
-                            n.set_attr(&name, &val);
+                            let attr_name = iter.next().map(|v| v.to_string()).unwrap_or_default();
+                            let attr_val = iter.next().map(|v| v.to_string()).unwrap_or_default();
+                            let old_val = n.attr(&attr_name).unwrap_or_default();
+                            n.set_attr(&attr_name, &attr_val);
+                            // Lifecycle: attributeChangedCallback pro custom elements
+                            let node_ptr = Rc::as_ptr(&n) as usize;
+                            let instance = self.custom_element_instances.borrow().get(&node_ptr).cloned();
+                            if let Some(inst) = instance {
+                                let cb = if let JsValue::Object(o) = &inst {
+                                    o.borrow().props.get("attributeChangedCallback").cloned()
+                                } else { None };
+                                if let Some(f) = cb {
+                                    let _ = self.call_function(f, vec![
+                                        JsValue::Str(attr_name),
+                                        JsValue::Str(old_val),
+                                        JsValue::Str(attr_val),
+                                    ], Some(inst));
+                                }
+                            }
                             return Ok(JsValue::Undefined);
                         }
                         "removeAttribute" => {
@@ -3818,12 +3966,34 @@ impl Interpreter {
                             let child = arg_vals.into_iter().next().unwrap_or(JsValue::Undefined);
                             if let JsValue::DomNode(c) = &child {
                                 n.append_child(Rc::clone(c));
+                                // Lifecycle: connectedCallback
+                                let child_ptr = Rc::as_ptr(c) as usize;
+                                let instance = self.custom_element_instances.borrow().get(&child_ptr).cloned();
+                                if let Some(inst) = instance {
+                                    let cb = if let JsValue::Object(o) = &inst {
+                                        o.borrow().props.get("connectedCallback").cloned()
+                                    } else { None };
+                                    if let Some(f) = cb {
+                                        let _ = self.call_function(f, vec![], Some(inst));
+                                    }
+                                }
                             }
                             return Ok(child);
                         }
                         "removeChild" => {
                             let child = arg_vals.into_iter().next().unwrap_or(JsValue::Undefined);
                             if let JsValue::DomNode(c) = &child {
+                                // Lifecycle: disconnectedCallback
+                                let child_ptr = Rc::as_ptr(c) as usize;
+                                let instance = self.custom_element_instances.borrow().get(&child_ptr).cloned();
+                                if let Some(inst) = instance {
+                                    let cb = if let JsValue::Object(o) = &inst {
+                                        o.borrow().props.get("disconnectedCallback").cloned()
+                                    } else { None };
+                                    if let Some(f) = cb {
+                                        let _ = self.call_function(f, vec![], Some(inst));
+                                    }
+                                }
                                 n.children.borrow_mut().retain(|x| !Rc::ptr_eq(x, c));
                             }
                             return Ok(child);

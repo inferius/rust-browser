@@ -439,3 +439,55 @@ fn set_values_iterator() {
         return sum;
     "#)), 30.0);
 }
+
+// --- Object.isExtensible / isSealed / preventExtensions ---
+
+#[test]
+fn object_is_extensible_default() {
+    assert_eq!(as_bool(run(r#"
+        const obj = { x: 1 };
+        return Object.isExtensible(obj);
+    "#)), true);
+}
+
+#[test]
+fn object_is_extensible_after_freeze() {
+    assert_eq!(as_bool(run(r#"
+        const obj = { x: 1 };
+        Object.freeze(obj);
+        return Object.isExtensible(obj);
+    "#)), false);
+}
+
+#[test]
+fn object_is_extensible_after_prevent() {
+    assert_eq!(as_bool(run(r#"
+        const obj = { x: 1 };
+        Object.preventExtensions(obj);
+        return Object.isExtensible(obj);
+    "#)), false);
+}
+
+#[test]
+fn object_is_sealed_after_freeze() {
+    assert_eq!(as_bool(run(r#"
+        const obj = {};
+        Object.freeze(obj);
+        return Object.isSealed(obj);
+    "#)), true);
+}
+
+#[test]
+fn for_in_integer_keys_first() {
+    let r = run(r#"
+        const obj = {};
+        obj.b = 1;
+        obj[2] = 2;
+        obj.a = 3;
+        obj[0] = 4;
+        const keys = [];
+        for (const k in obj) { keys.push(k); }
+        return keys[0] + "," + keys[1];
+    "#);
+    assert_eq!(as_str(r), "0,2");
+}

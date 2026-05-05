@@ -46,6 +46,44 @@ fn parse_color_named() {
 }
 
 #[test]
+fn parse_relative_rgb_identity() {
+    assert_eq!(layout::parse_color("rgb(from red r g b)"), Some([255, 0, 0, 255]));
+}
+
+#[test]
+fn parse_relative_rgb_swap() {
+    assert_eq!(layout::parse_color("rgb(from #102040 b g r)"), Some([0x40, 0x20, 0x10, 255]));
+}
+
+#[test]
+fn parse_relative_rgb_calc_half() {
+    let c = layout::parse_color("rgb(from #ff0000 calc(r * 0.5) g b)").unwrap();
+    assert!((c[0] as i32 - 127).abs() <= 1);
+    assert_eq!(c[1], 0);
+    assert_eq!(c[2], 0);
+}
+
+#[test]
+fn parse_relative_rgb_explicit_zero() {
+    assert_eq!(layout::parse_color("rgb(from red 0 g b)"), Some([0, 0, 0, 255]));
+}
+
+#[test]
+fn parse_relative_rgb_alpha_override() {
+    let c = layout::parse_color("rgb(from red r g b / 0.5)").unwrap();
+    assert_eq!(c[0], 255);
+    assert!((c[3] as i32 - 127).abs() <= 1);
+}
+
+#[test]
+fn parse_relative_hsl_identity() {
+    let c = layout::parse_color("hsl(from red h s l)").unwrap();
+    assert_eq!(c[0], 255);
+    assert!(c[1] <= 5);
+    assert!(c[2] <= 5);
+}
+
+#[test]
 fn parse_color_modern_rgb_space_syntax() {
     // Modern syntax: mezery + lomitko alpha
     assert_eq!(layout::parse_color("rgb(255 0 0)"), Some([255, 0, 0, 255]));
@@ -2183,4 +2221,59 @@ fn min_content_width_keyword() {
     let d = find_box_by_tag(&root, "div").unwrap();
     // min-content nastavi explicit_width na odhadovou text sirku
     assert!(d.explicit_width.is_some(), "min-content nastavi explicit_width");
+}
+
+// --- writing-mode ---
+
+fn make_layout(html: &str, css: &str) -> layout::LayoutBox {
+    let doc = parse_html(html, "");
+    let sheet = parse_stylesheet(css);
+    let map = cascade::cascade(&doc.root, &[sheet]);
+    layout::layout_tree(&doc.root, &map, 800.0, 600.0)
+}
+
+fn find_body(root: &layout::LayoutBox) -> Option<&layout::LayoutBox> {
+    if root.tag.as_deref() == Some("body") { return Some(root); }
+    for c in &root.children {
+        if let Some(b) = find_body(c) { return Some(b); }
+    }
+    None
+}
+
+#[test]
+fn writing_mode_vertical_lr_children_stack_x() {
+    let root = make_layout(
+        r#"<html><body><div><div></div><div></div></div></body></html>"#,
+        r#"
+        body > div { writing-mode: vertical-lr; width: 200px; height: 100px; }
+        body > div > div { width: 40px; height: 80px; background: blue; }
+        "#,
+    );
+    let body = find_body(&root).expect("body");
+    let outer = body.children.first().expect("outer div");
+    let children: Vec<&layout::LayoutBox> = outer.children.iter().collect();
+    assert!(children.len() >= 2, "outer div musi mit 2 deti, has {}", children.len());
+    // V vertical-lr: deti jdou zleva doprava
+    assert!(children[0].rect.x < children[1].rect.x,
+        "child[0].x={} musi byt < child[1].x={}", children[0].rect.x, children[1].rect.x);
+    assert!((children[0].rect.y - children[1].rect.y).abs() < 5.0,
+        "oba deti maji podobne y");
+}
+
+#[test]
+fn writing_mode_horizontal_tb_normal() {
+    let root = make_layout(
+        r#"<html><body><div><div></div><div></div></div></body></html>"#,
+        r#"
+        body > div { width: 200px; }
+        body > div > div { height: 30px; background: red; }
+        "#,
+    );
+    let body = find_body(&root).expect("body");
+    let outer = body.children.first().expect("outer div");
+    let children: Vec<&layout::LayoutBox> = outer.children.iter().collect();
+    assert!(children.len() >= 2, "outer div musi mit 2 deti");
+    // Normalni block layout: druhy div je pod prvnim
+    assert!(children[1].rect.y > children[0].rect.y,
+        "child[1].y={} musi byt > child[0].y={}", children[1].rect.y, children[0].rect.y);
 }

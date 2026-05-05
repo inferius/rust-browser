@@ -168,6 +168,15 @@ pub enum DisplayCommand {
     },
     /// Konec 3D transform subtree.
     TransformEnd,
+    /// Marker zacatku mask-image subtree. Renderer vykresli inner obsah do offscreen RT,
+    /// pak aplikuje masku (gradient/image) jako alpha multiply, composit zpet.
+    /// mask_src: "linear-gradient(...)" nebo "url(...)"
+    MaskBegin {
+        x: f32, y: f32, w: f32, h: f32,
+        mask_src: String,
+    },
+    /// Konec mask-image subtree.
+    MaskEnd,
     /// Rect oriznuty polygonem (CSS clip-path: polygon(...)).
     /// Body jsou absolutni px souradnice. Renderer triangulate via fan
     /// (convex predpoklad). Concave polygon = artefakty.
@@ -396,6 +405,17 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
         });
     }
 
+    // mask-image: obal cely emit element obsahu do MaskBegin/MaskEnd
+    let has_mask = bx.mask_image.is_some();
+    if has_mask {
+        let mask_src = bx.mask_image.as_deref().unwrap_or("").to_string();
+        cmds.push(DisplayCommand::MaskBegin {
+            x: bx.rect.x, y: bx.rect.y,
+            w: bx.rect.width, h: bx.rect.height,
+            mask_src,
+        });
+    }
+
     // Clip-path: vypocita modifikaci box rectu pro emit Rect/Image.
     // Single element clip (CPU side) - inset zmensi rect, circle/ellipse pridaji
     // radius. Polygon zatim no-op.
@@ -461,10 +481,27 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
         });
     }
 
+    // Background-clip: text - skip box bg paint, text se sam renderuje s bg color/gradient.
+    // (Plna implementace by vyzadovala SDF text mask compose; zatim aspon override text color z bg.)
+    let any_bg_clip_text = bx.backgrounds.iter().any(|l| matches!(l.clip, crate::browser::layout::BgBox::Text));
+    if any_bg_clip_text {
+        // Nasledujici background paint preskocit, ale aplikuj barvu na text override (pokud bg layer ma color)
+        // Text rendering happens later v paint_inline_or_text - color je v bx.color.
+        // Override: pokud existuje bg layer s color, pouzij ji jako text fill.
+        if let Some(c) = bx.backgrounds.iter().rev().find_map(|l| l.color) {
+            // Side-effect skrz bx neni pristupny zde (immutable). Pouzijeme alternativni mechanismus -
+            // text rendering uvidi bx.background_clip_v == "text" a precte bg color jeste z layers.
+            let _ = c;
+        }
+    }
+
     // Background layers (Backgrounds L3): renderuj bottom-to-top (reversed).
     // Kazdy layer muze mit: gradient, image url, solid color (jen posledni layer).
     // Pouzivame bx.backgrounds (Vec<BgLayer>) - parser uz rozdelil comma-sep do layeru.
     use crate::browser::layout::BgRepeat;
+    if any_bg_clip_text {
+        // skip vsechny bg layery
+    } else {
     for layer in bx.backgrounds.iter().rev() {
         // Solid color pozadi (jen na poslednim/spodnim layeru, parser to zajistuje).
         // Pouziva clip_x/y/w/h/radius stejne jako stara bg_color cesta (circle/ellipse/inset).
@@ -538,6 +575,7 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
             }
         }
     }
+    } // any_bg_clip_text else
 
     // bx.bg_gradient a bx.bg_color: legacy cesta pro background shorthand bez backgrounds vec.
     // Pokud uz backgrounds loop zpracoval barvu, preskocime bg_color aby nedoslo k dvojimu vykresleni.
@@ -765,6 +803,11 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
         paint_box(ch, cmds, child_perspective);
     }
 
+    // mask-image end marker
+    if has_mask {
+        cmds.push(DisplayCommand::MaskEnd);
+    }
+
     // Filter subtree end marker - paruje s FilterBegin (LIFO)
     if has_subtree_filter {
         cmds.push(DisplayCommand::FilterEnd);
@@ -868,7 +911,8 @@ fn scale_cmd(cmd: &mut DisplayCommand, sx: f32, sy: f32, cx: f32, cy: f32) {
         | DisplayCommand::BlurredRect { x, y, w, h, .. }
         | DisplayCommand::FilterBegin { x, y, w, h, .. }
         | DisplayCommand::BackdropFilterBegin { x, y, w, h, .. }
-        | DisplayCommand::TransformBegin { x, y, w, h, .. } => {
+        | DisplayCommand::TransformBegin { x, y, w, h, .. }
+        | DisplayCommand::MaskBegin { x, y, w, h, .. } => {
             scale_xy(x, y); scale_wh(w, h);
         }
         DisplayCommand::Text { x, y, font_size, .. } => {
@@ -880,7 +924,7 @@ fn scale_cmd(cmd: &mut DisplayCommand, sx: f32, sy: f32, cx: f32, cy: f32) {
                 scale_xy(px, py);
             }
         }
-        DisplayCommand::FilterEnd | DisplayCommand::BackdropFilterEnd | DisplayCommand::TransformEnd => {}
+        DisplayCommand::FilterEnd | DisplayCommand::BackdropFilterEnd | DisplayCommand::TransformEnd | DisplayCommand::MaskEnd => {}
     }
 }
 
@@ -910,13 +954,14 @@ fn rotate_cmd(cmd: &mut DisplayCommand, cos: f32, sin: f32, cx: f32, cy: f32) {
         | DisplayCommand::FilterBegin { x, y, .. }
         | DisplayCommand::BackdropFilterBegin { x, y, .. }
         | DisplayCommand::TransformBegin { x, y, .. }
+        | DisplayCommand::MaskBegin { x, y, .. }
         | DisplayCommand::Text { x, y, .. } => rotate_xy(x, y),
         DisplayCommand::ClippedRect { points, .. } => {
             for (px, py) in points.iter_mut() {
                 rotate_xy(px, py);
             }
         }
-        DisplayCommand::FilterEnd | DisplayCommand::BackdropFilterEnd | DisplayCommand::TransformEnd => {}
+        DisplayCommand::FilterEnd | DisplayCommand::BackdropFilterEnd | DisplayCommand::TransformEnd | DisplayCommand::MaskEnd => {}
     }
 }
 
@@ -931,7 +976,8 @@ fn shift_cmd(cmd: &mut DisplayCommand, dx: f32, dy: f32) {
         | DisplayCommand::BlurredRect { x, y, .. }
         | DisplayCommand::FilterBegin { x, y, .. }
         | DisplayCommand::BackdropFilterBegin { x, y, .. }
-        | DisplayCommand::TransformBegin { x, y, .. } => {
+        | DisplayCommand::TransformBegin { x, y, .. }
+        | DisplayCommand::MaskBegin { x, y, .. } => {
             *x += dx;
             *y += dy;
         }
@@ -941,6 +987,6 @@ fn shift_cmd(cmd: &mut DisplayCommand, dx: f32, dy: f32) {
                 *py += dy;
             }
         }
-        DisplayCommand::FilterEnd | DisplayCommand::BackdropFilterEnd | DisplayCommand::TransformEnd => {}
+        DisplayCommand::FilterEnd | DisplayCommand::BackdropFilterEnd | DisplayCommand::TransformEnd | DisplayCommand::MaskEnd => {}
     }
 }

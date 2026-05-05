@@ -195,6 +195,7 @@ pub fn setup_builtins(
     document: &Rc<RefCell<crate::browser::dom::Document>>,
     console_log: &Rc<RefCell<Vec<(String, String)>>>,
     network_log: &Rc<RefCell<Vec<(String, u16)>>>,
+    custom_elements_registry: &Rc<RefCell<HashMap<String, super::JsValue>>>,
 ) {
     let mut e = env.borrow_mut();
 
@@ -405,8 +406,26 @@ pub fn setup_builtins(
     obj_ctor.set("isFrozen".into(), native("Object.isFrozen", |a| {
         match a.into_iter().next() {
             Some(JsValue::Object(o)) => Ok(JsValue::Bool(o.borrow().frozen)),
-            _                        => Ok(JsValue::Bool(false)),
+            _                        => Ok(JsValue::Bool(true)), // primitives are "frozen" per spec
         }
+    }));
+    obj_ctor.set("isExtensible".into(), native("Object.isExtensible", |a| {
+        match a.into_iter().next() {
+            Some(JsValue::Object(o)) => Ok(JsValue::Bool(!o.borrow().frozen)),
+            _ => Ok(JsValue::Bool(false)), // primitives are non-extensible per spec
+        }
+    }));
+    obj_ctor.set("isSealed".into(), native("Object.isSealed", |a| {
+        // Plna implementace by testovala "non-configurable" props; tady pouzivame frozen jako proxy.
+        match a.into_iter().next() {
+            Some(JsValue::Object(o)) => Ok(JsValue::Bool(o.borrow().frozen)),
+            _ => Ok(JsValue::Bool(true)),
+        }
+    }));
+    obj_ctor.set("preventExtensions".into(), native("Object.preventExtensions", |a| {
+        let obj = a.into_iter().next().unwrap_or(JsValue::Undefined);
+        if let JsValue::Object(o) = &obj { o.borrow_mut().frozen = true; }
+        Ok(obj)
     }));
     obj_ctor.set("create".into(), native("Object.create", |a| {
         let proto = a.into_iter().next().unwrap_or(JsValue::Null);
@@ -982,6 +1001,22 @@ pub fn setup_builtins(
         Ok(JsValue::DomNode(NodeData::new_text(&text)))
     }));
 
+    // document.createRange()
+    doc_obj.set("createRange".into(), native("document.createRange", |_| Ok(make_range())));
+
+    // document.getSelection()
+    {
+        let sel = make_selection();
+        doc_obj.set("getSelection".into(), native("document.getSelection", move |_| Ok(sel.clone())));
+    }
+
+    // document.createDocumentFragment()
+    doc_obj.set("createDocumentFragment".into(), native("document.createDocumentFragment", |_| {
+        use crate::browser::dom::NodeData;
+        let node = NodeData::new_element("fragment", std::collections::HashMap::new());
+        Ok(JsValue::DomNode(node))
+    }));
+
     // document.getElementById(id) - real walk skrz DOM tree
     {
         let doc = Rc::clone(document);
@@ -1352,9 +1387,10 @@ pub fn setup_builtins(
             JsValue::Str(s) if !s.is_empty() => s.len(),
             _ => 0,
         };
-        match json_stringify(&val, indent, 0) {
-            Some(s) => Ok(JsValue::Str(s)),
-            None    => Ok(JsValue::Undefined),
+        match json_stringify_checked(&val, indent, 0) {
+            Ok(Some(s)) => Ok(JsValue::Str(s)),
+            Ok(None)    => Ok(JsValue::Undefined),
+            Err(e)      => Err(e),
         }
     }));
     json_obj.set("parse".into(), native("JSON.parse", |a| {
@@ -1529,25 +1565,23 @@ pub fn setup_builtins(
             Ok(JsValue::Object(obj))
         })
     };
-    // customElements registry stub
+    // customElements registry - sdileny s Interpreter pro lifecycle callbacky
     {
         let registry = Rc::new(RefCell::new(JsObject::new()));
-        let r = Rc::clone(&registry);
+        let ce_map = Rc::clone(custom_elements_registry);
+        let ce_map2 = Rc::clone(custom_elements_registry);
         registry.borrow_mut().set("define".into(), native("customElements.define", move |args| {
             let mut it = args.into_iter();
             let name = it.next().map(|v| v.to_string()).unwrap_or_default();
             let ctor = it.next().unwrap_or(JsValue::Undefined);
-            // Ulozim registry: name -> constructor
-            r.borrow_mut().set(name, ctor);
+            ce_map.borrow_mut().insert(name, ctor);
             Ok(JsValue::Undefined)
         }));
-        let r2 = Rc::clone(&registry);
         registry.borrow_mut().set("get".into(), native("customElements.get", move |args| {
             let name = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
-            Ok(r2.borrow().props.get(&name).cloned().unwrap_or(JsValue::Undefined))
+            Ok(ce_map2.borrow().get(&name).cloned().unwrap_or(JsValue::Undefined))
         }));
         registry.borrow_mut().set("whenDefined".into(), native("customElements.whenDefined", |_| {
-            // Vraci resolved Promise (Promise.resolve())
             Ok(JsValue::Undefined)
         }));
         registry.borrow_mut().set("upgrade".into(), native("customElements.upgrade", |_| Ok(JsValue::Undefined)));
@@ -2219,5 +2253,81 @@ pub fn setup_builtins(
             Ok(JsValue::Undefined)
         }));
     }
+
+    // ─── Selection / Range API ────────────────────────────────────────────
+    fn make_range() -> JsValue {
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        {
+            let mut o = obj.borrow_mut();
+            o.set("startContainer".into(), JsValue::Null);
+            o.set("endContainer".into(), JsValue::Null);
+            o.set("startOffset".into(), JsValue::Number(0.0));
+            o.set("endOffset".into(), JsValue::Number(0.0));
+            o.set("collapsed".into(), JsValue::Bool(true));
+            o.set("commonAncestorContainer".into(), JsValue::Null);
+            o.set("setStart".into(), native("setStart", |_| Ok(JsValue::Undefined)));
+            o.set("setEnd".into(), native("setEnd", |_| Ok(JsValue::Undefined)));
+            o.set("setStartBefore".into(), native("setStartBefore", |_| Ok(JsValue::Undefined)));
+            o.set("setStartAfter".into(), native("setStartAfter", |_| Ok(JsValue::Undefined)));
+            o.set("setEndBefore".into(), native("setEndBefore", |_| Ok(JsValue::Undefined)));
+            o.set("setEndAfter".into(), native("setEndAfter", |_| Ok(JsValue::Undefined)));
+            o.set("collapse".into(), native("collapse", |_| Ok(JsValue::Undefined)));
+            o.set("selectNode".into(), native("selectNode", |_| Ok(JsValue::Undefined)));
+            o.set("selectNodeContents".into(), native("selectNodeContents", |_| Ok(JsValue::Undefined)));
+            o.set("cloneRange".into(), native("cloneRange", |_| Ok(make_range())));
+            o.set("cloneContents".into(), native("cloneContents", |_| {
+                let frag = Rc::new(RefCell::new(JsObject::new()));
+                frag.borrow_mut().set("__doc_fragment__".into(), JsValue::Bool(true));
+                Ok(JsValue::Object(frag))
+            }));
+            o.set("extractContents".into(), native("extractContents", |_| {
+                let frag = Rc::new(RefCell::new(JsObject::new()));
+                Ok(JsValue::Object(frag))
+            }));
+            o.set("deleteContents".into(), native("deleteContents", |_| Ok(JsValue::Undefined)));
+            o.set("insertNode".into(), native("insertNode", |_| Ok(JsValue::Undefined)));
+            o.set("surroundContents".into(), native("surroundContents", |_| Ok(JsValue::Undefined)));
+            o.set("toString".into(), native("toString", |_| Ok(JsValue::Str(String::new()))));
+            o.set("getBoundingClientRect".into(), native("getBoundingClientRect", |_| {
+                let r = Rc::new(RefCell::new(JsObject::new()));
+                for k in &["top","left","bottom","right","width","height","x","y"] {
+                    r.borrow_mut().set(k.to_string(), JsValue::Number(0.0));
+                }
+                Ok(JsValue::Object(r))
+            }));
+        }
+        JsValue::Object(obj)
+    }
+
+    fn make_selection() -> JsValue {
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        {
+            let mut o = obj.borrow_mut();
+            o.set("rangeCount".into(), JsValue::Number(0.0));
+            o.set("type".into(), JsValue::Str("None".into()));
+            o.set("anchorNode".into(), JsValue::Null);
+            o.set("anchorOffset".into(), JsValue::Number(0.0));
+            o.set("focusNode".into(), JsValue::Null);
+            o.set("focusOffset".into(), JsValue::Number(0.0));
+            o.set("isCollapsed".into(), JsValue::Bool(true));
+            o.set("getRangeAt".into(), native("getRangeAt", |_| Ok(make_range())));
+            o.set("addRange".into(), native("addRange", |_| Ok(JsValue::Undefined)));
+            o.set("removeRange".into(), native("removeRange", |_| Ok(JsValue::Undefined)));
+            o.set("removeAllRanges".into(), native("removeAllRanges", |_| Ok(JsValue::Undefined)));
+            o.set("collapse".into(), native("collapse", |_| Ok(JsValue::Undefined)));
+            o.set("collapseToStart".into(), native("collapseToStart", |_| Ok(JsValue::Undefined)));
+            o.set("collapseToEnd".into(), native("collapseToEnd", |_| Ok(JsValue::Undefined)));
+            o.set("selectAllChildren".into(), native("selectAllChildren", |_| Ok(JsValue::Undefined)));
+            o.set("extend".into(), native("extend", |_| Ok(JsValue::Undefined)));
+            o.set("containsNode".into(), native("containsNode", |_| Ok(JsValue::Bool(false))));
+            o.set("toString".into(), native("toString", |_| Ok(JsValue::Str(String::new()))));
+            o.set("deleteFromDocument".into(), native("deleteFromDocument", |_| Ok(JsValue::Undefined)));
+        }
+        JsValue::Object(obj)
+    }
+
+    let sel = make_selection();
+    e.define("getSelection", native("getSelection", move |_| Ok(sel.clone())));
+    e.define("Range", native("Range", |_| Ok(make_range())));
 
 }

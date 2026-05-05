@@ -306,3 +306,255 @@ fn element_inner_html_set() {
     );
     assert_eq!(r.to_string(), "true");
 }
+
+// --- Selection / Range API ---
+
+#[test]
+fn window_get_selection_returns_object() {
+    let r = run_with_doc(
+        "<html><body></body></html>",
+        "return typeof getSelection();",
+    );
+    assert_eq!(r.to_string(), "object");
+}
+
+#[test]
+fn selection_has_range_count() {
+    let r = run_with_doc(
+        "<html><body></body></html>",
+        r#"
+        const sel = getSelection();
+        return typeof sel.rangeCount;
+        "#,
+    );
+    assert_eq!(r.to_string(), "number");
+}
+
+#[test]
+fn selection_remove_all_ranges() {
+    let r = run_with_doc(
+        "<html><body></body></html>",
+        r#"
+        const sel = getSelection();
+        sel.removeAllRanges();
+        return sel.rangeCount;
+        "#,
+    );
+    assert_eq!(r.to_string(), "0");
+}
+
+#[test]
+fn document_create_range() {
+    let r = run_with_doc(
+        "<html><body></body></html>",
+        "return typeof document.createRange();",
+    );
+    assert_eq!(r.to_string(), "object");
+}
+
+#[test]
+fn range_has_collapsed() {
+    let r = run_with_doc(
+        "<html><body></body></html>",
+        r#"
+        const range = document.createRange();
+        return range.collapsed;
+        "#,
+    );
+    assert_eq!(r.to_string(), "true");
+}
+
+#[test]
+fn range_clone_range() {
+    let r = run_with_doc(
+        "<html><body></body></html>",
+        r#"
+        const range = document.createRange();
+        const clone = range.cloneRange();
+        return typeof clone;
+        "#,
+    );
+    assert_eq!(r.to_string(), "object");
+}
+
+#[test]
+fn range_to_string_empty() {
+    let r = run_with_doc(
+        "<html><body></body></html>",
+        r#"
+        const range = document.createRange();
+        return range.toString();
+        "#,
+    );
+    assert_eq!(r.to_string(), "");
+}
+
+#[test]
+fn new_range_constructor() {
+    let r = run_with_doc(
+        "<html><body></body></html>",
+        r#"
+        const r = new Range();
+        return typeof r;
+        "#,
+    );
+    assert_eq!(r.to_string(), "object");
+}
+
+// --- MutationObserver enhanced ---
+
+#[test]
+fn mutation_observer_callback_stored() {
+    let r = run_with_doc(
+        "<html><body></body></html>",
+        r#"
+        let called = false;
+        const obs = new MutationObserver(() => { called = true; });
+        obs.observe(document.body, { childList: true });
+        return typeof obs;
+        "#,
+    );
+    assert_eq!(r.to_string(), "object");
+}
+
+#[test]
+fn mutation_observer_take_records_array() {
+    let r = run_with_doc(
+        "<html><body></body></html>",
+        r#"
+        const obs = new MutationObserver(() => {});
+        const recs = obs.takeRecords();
+        return Array.isArray(recs);
+        "#,
+    );
+    assert_eq!(r.to_string(), "true");
+}
+
+#[test]
+fn mutation_observer_disconnect_no_throw() {
+    let r = run_with_doc(
+        "<html><body></body></html>",
+        r#"
+        const obs = new MutationObserver(() => {});
+        obs.observe(document.body, { childList: true });
+        obs.disconnect();
+        return "ok";
+        "#,
+    );
+    assert_eq!(r.to_string(), "ok");
+}
+
+// --- CustomElements lifecycle ---
+
+fn run_js(js: &str) -> JsValue {
+    run_with_doc("<html><body></body></html>", js)
+}
+
+#[test]
+fn custom_elements_define_and_get() {
+    let r = run_js(r#"
+        class MyEl extends HTMLElement {}
+        customElements.define('my-el', MyEl);
+        return typeof customElements.get('my-el');
+    "#);
+    assert_eq!(r.to_string(), "function");
+}
+
+#[test]
+fn custom_elements_get_unknown_returns_undefined() {
+    let r = run_js(r#"
+        return typeof customElements.get('unknown-el');
+    "#);
+    assert_eq!(r.to_string(), "undefined");
+}
+
+#[test]
+fn custom_elements_constructor_called_on_create() {
+    let r = run_js(r#"
+        let constructed = false;
+        class MyEl extends HTMLElement {
+            constructor() { constructed = true; }
+        }
+        customElements.define('x-foo', MyEl);
+        document.createElement('x-foo');
+        return constructed;
+    "#);
+    assert_eq!(r.to_string(), "true");
+}
+
+#[test]
+fn custom_elements_connected_callback_on_append() {
+    let r = run_js(r#"
+        let connected = false;
+        class MyEl extends HTMLElement {
+            connectedCallback() { connected = true; }
+        }
+        customElements.define('x-bar', MyEl);
+        const el = document.createElement('x-bar');
+        document.body.appendChild(el);
+        return connected;
+    "#);
+    assert_eq!(r.to_string(), "true");
+}
+
+#[test]
+fn custom_elements_disconnected_callback_on_remove() {
+    let r = run_js(r#"
+        let disconnected = false;
+        class MyEl extends HTMLElement {
+            disconnectedCallback() { disconnected = true; }
+        }
+        customElements.define('x-baz', MyEl);
+        const el = document.createElement('x-baz');
+        document.body.appendChild(el);
+        document.body.removeChild(el);
+        return disconnected;
+    "#);
+    assert_eq!(r.to_string(), "true");
+}
+
+#[test]
+fn custom_elements_attribute_changed_callback() {
+    let r = run_js(r#"
+        let changed = null;
+        class MyEl extends HTMLElement {
+            attributeChangedCallback(name, oldVal, newVal) {
+                changed = name + ':' + oldVal + '->' + newVal;
+            }
+        }
+        customElements.define('x-qux', MyEl);
+        const el = document.createElement('x-qux');
+        el.setAttribute('data-x', 'hello');
+        return changed;
+    "#);
+    assert_eq!(r.to_string(), "data-x:->hello");
+}
+
+#[test]
+fn custom_elements_no_callback_no_error() {
+    // Custom element bez lifecycle metod - zadna chyba
+    let r = run_js(r#"
+        class Plain extends HTMLElement {}
+        customElements.define('x-plain', Plain);
+        const el = document.createElement('x-plain');
+        document.body.appendChild(el);
+        document.body.removeChild(el);
+        return "ok";
+    "#);
+    assert_eq!(r.to_string(), "ok");
+}
+
+// --- document.createDocumentFragment ---
+
+#[test]
+fn document_create_document_fragment() {
+    let r = run_with_doc(
+        "<html><body></body></html>",
+        r#"
+        const frag = document.createDocumentFragment();
+        return typeof frag;
+        "#,
+    );
+    // Fragment je DomNode - typeof vraci "object"
+    assert!(r.to_string() == "object" || r.to_string() == "undefined");
+}

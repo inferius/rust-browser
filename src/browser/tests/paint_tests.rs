@@ -1033,3 +1033,61 @@ fn multiple_backgrounds_color_on_last_layer() {
     assert!(has_rect, "solid-color rect emitovan");
     assert!(has_grad, "gradient emitovan");
 }
+
+// --- mask-image ---
+
+#[test]
+fn mask_image_emits_begin_end_markers() {
+    let cmds = build_dl(
+        r#"<html><body><div></div></body></html>"#,
+        r#"div { width: 100px; height: 100px; mask-image: linear-gradient(to bottom, black, transparent); }"#,
+    );
+    let begins = cmds.iter().filter(|c| matches!(c, crate::browser::paint::DisplayCommand::MaskBegin { .. })).count();
+    let ends   = cmds.iter().filter(|c| matches!(c, crate::browser::paint::DisplayCommand::MaskEnd)).count();
+    assert!(begins >= 1, "MaskBegin musi byt emitovan");
+    assert_eq!(begins, ends, "MaskBegin a MaskEnd museji byt sprovany");
+}
+
+#[test]
+fn no_mask_image_no_markers() {
+    let cmds = build_dl(
+        r#"<html><body><div></div></body></html>"#,
+        r#"div { width: 100px; height: 100px; background: red; }"#,
+    );
+    let begins = cmds.iter().filter(|c| matches!(c, crate::browser::paint::DisplayCommand::MaskBegin { .. })).count();
+    assert_eq!(begins, 0, "Bez mask-image nema byt zadny MaskBegin");
+}
+
+#[test]
+fn mask_image_none_no_markers() {
+    let cmds = build_dl(
+        r#"<html><body><div></div></body></html>"#,
+        r#"div { width: 100px; height: 100px; mask-image: none; }"#,
+    );
+    let begins = cmds.iter().filter(|c| matches!(c, crate::browser::paint::DisplayCommand::MaskBegin { .. })).count();
+    assert_eq!(begins, 0);
+}
+
+#[test]
+fn background_clip_text_skips_bg_paint() {
+    let cmds = build_dl(
+        r#"<html><body><div>Hello</div></body></html>"#,
+        r#"div { width: 100px; height: 50px; background: red; background-clip: text; color: transparent; }"#,
+    );
+    let red_rect = cmds.iter().any(|c| matches!(c,
+        crate::browser::paint::DisplayCommand::Rect { color: [255, 0, 0, 255], .. }
+    ));
+    assert!(!red_rect, "background-clip:text potlaci box bg fill");
+}
+
+#[test]
+fn background_clip_default_bg_painted() {
+    let cmds = build_dl(
+        r#"<html><body><div></div></body></html>"#,
+        r#"div { width: 100px; height: 50px; background: red; }"#,
+    );
+    let red_rect = cmds.iter().any(|c| matches!(c,
+        crate::browser::paint::DisplayCommand::Rect { color: [255, 0, 0, 255], .. }
+    ));
+    assert!(red_rect, "Bezny background renderuje Rect");
+}

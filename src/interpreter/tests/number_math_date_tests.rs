@@ -250,7 +250,106 @@ fn date_to_iso_string_format() {
     assert!(s.contains("T"));
 }
 
-// getUTCFullYear / Date arithmetic neimplementovane plne - skip.
+// ─── Date getUTC* + set* ───────────────────────────────────────────────
+
+#[test]
+fn date_get_utc_full_year() {
+    let r = run("const d = new Date(0); return d.getUTCFullYear();");
+    assert_eq!(as_num(r), 1970.0);
+}
+
+#[test]
+fn date_get_utc_month() {
+    let r = run("const d = new Date(0); return d.getUTCMonth();");
+    assert_eq!(as_num(r), 0.0);
+}
+
+#[test]
+fn date_get_utc_date() {
+    let r = run("const d = new Date(0); return d.getUTCDate();");
+    assert_eq!(as_num(r), 1.0);
+}
+
+#[test]
+fn date_get_utc_hours() {
+    let r = run("const d = new Date(0); return d.getUTCHours();");
+    assert_eq!(as_num(r), 0.0);
+}
+
+#[test]
+fn date_get_utc_minutes() {
+    let r = run("const d = new Date(0); return d.getUTCMinutes();");
+    assert_eq!(as_num(r), 0.0);
+}
+
+#[test]
+fn date_get_utc_seconds() {
+    let r = run("const d = new Date(0); return d.getUTCSeconds();");
+    assert_eq!(as_num(r), 0.0);
+}
+
+#[test]
+fn date_get_utc_milliseconds() {
+    let r = run("const d = new Date(1500); return d.getUTCMilliseconds();");
+    assert_eq!(as_num(r), 500.0);
+}
+
+#[test]
+fn date_get_utc_day_epoch() {
+    // 1970-01-01 = Thursday = 4
+    let r = run("const d = new Date(0); return d.getUTCDay();");
+    assert_eq!(as_num(r), 4.0);
+}
+
+#[test]
+fn date_set_full_year() {
+    let r = run(r#"
+        const d = new Date(0);
+        d.setFullYear(2000);
+        return d.getUTCFullYear();
+    "#);
+    assert_eq!(as_num(r), 2000.0);
+}
+
+#[test]
+fn date_set_month() {
+    let r = run(r#"
+        const d = new Date(0);
+        d.setMonth(5);
+        return d.getUTCMonth();
+    "#);
+    assert_eq!(as_num(r), 5.0);
+}
+
+#[test]
+fn date_set_hours() {
+    let r = run(r#"
+        const d = new Date(0);
+        d.setHours(12);
+        return d.getUTCHours();
+    "#);
+    assert_eq!(as_num(r), 12.0);
+}
+
+#[test]
+fn date_set_milliseconds() {
+    let r = run(r#"
+        const d = new Date(0);
+        d.setMilliseconds(999);
+        return d.getUTCMilliseconds();
+    "#);
+    assert_eq!(as_num(r), 999.0);
+}
+
+#[test]
+fn date_set_time_roundtrip() {
+    let r = run(r#"
+        const d = new Date(0);
+        d.setTime(86400000);
+        return d.getTime();
+    "#);
+    assert_eq!(as_num(r), 86400000.0);
+}
 
 // ─── BigInt ────────────────────────────────────────────────────────────
 

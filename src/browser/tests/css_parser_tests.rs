@@ -345,3 +345,28 @@ fn parse_value_with_commas() {
     let s = parse_stylesheet("div { font-family: Arial, sans-serif; }");
     assert!(s.rules[0].declarations[0].value.contains(","));
 }
+
+#[test]
+fn parse_at_property_basic() {
+    let s = parse_stylesheet("@property --my-color { syntax: \"<color>\"; inherits: false; initial-value: red; }");
+    assert_eq!(s.registered_properties.len(), 1);
+    let p = &s.registered_properties[0];
+    assert_eq!(p.name, "--my-color");
+    assert_eq!(p.syntax, "<color>");
+    assert_eq!(p.inherits, false);
+    assert_eq!(p.initial_value.as_deref(), Some("red"));
+}
+
+#[test]
+fn parse_at_property_inherits_true() {
+    let s = parse_stylesheet("@property --foo { syntax: \"<length>\"; inherits: true; initial-value: 10px; }");
+    assert_eq!(s.registered_properties.len(), 1);
+    assert!(s.registered_properties[0].inherits);
+}
+
+#[test]
+fn parse_at_property_no_initial() {
+    let s = parse_stylesheet("@property --bar { syntax: \"*\"; inherits: false; }");
+    assert_eq!(s.registered_properties.len(), 1);
+    assert!(s.registered_properties[0].initial_value.is_none());
+}

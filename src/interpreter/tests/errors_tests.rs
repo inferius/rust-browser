@@ -307,3 +307,47 @@ fn json_parse_invalid_throws() {
     "#);
     assert_eq!(as_str(r), "caught");
 }
+
+// --- JSON.stringify circular reference ---
+
+#[test]
+fn json_stringify_circular_throws() {
+    let r = run(r#"
+        try {
+            const obj = {};
+            obj.self = obj;
+            JSON.stringify(obj);
+            return "no_throw";
+        } catch (e) {
+            return "circular";
+        }
+    "#);
+    assert_eq!(as_str(r), "circular");
+}
+
+#[test]
+fn json_stringify_circular_array() {
+    let r = run(r#"
+        try {
+            const a = [1, 2];
+            a.push(a);
+            JSON.stringify(a);
+            return "no_throw";
+        } catch (e) {
+            return "circular";
+        }
+    "#);
+    assert_eq!(as_str(r), "circular");
+}
+
+#[test]
+fn json_stringify_non_circular_nested_ok() {
+    let r = run(r#"
+        const shared = { x: 1 };
+        const obj = { a: shared, b: shared };
+        return JSON.stringify(obj);
+    "#);
+    // Shared reference (ne circular) musi projit
+    let s = as_str(r);
+    assert!(s.contains("\"x\""), "got: {s}");
+}

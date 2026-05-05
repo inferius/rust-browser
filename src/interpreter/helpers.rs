@@ -120,52 +120,75 @@ pub fn collect_iterable_values(val: &JsValue) -> Vec<JsValue> {
 
 // ─── JSON ────────────────────────────────────────────────────────────────
 
-/// Serializuje JsValue do JSON retezce.
+/// Serializuje JsValue do JSON retezce. Vyhazuje chybu pri cyklicke referenci.
 pub fn json_stringify(val: &JsValue, indent: usize, depth: usize) -> Option<String> {
+    let mut seen = std::collections::HashSet::new();
+    json_stringify_inner(val, indent, depth, &mut seen).ok().flatten()
+}
+
+/// Jako json_stringify, ale vraci Err pri detekci cyklicke reference (pro JSON.stringify).
+pub fn json_stringify_checked(val: &JsValue, indent: usize, depth: usize) -> Result<Option<String>, String> {
+    let mut seen = std::collections::HashSet::new();
+    json_stringify_inner(val, indent, depth, &mut seen)
+}
+
+fn json_stringify_inner(val: &JsValue, indent: usize, depth: usize, seen: &mut std::collections::HashSet<usize>) -> Result<Option<String>, String> {
     match val {
-        JsValue::Null             => Some("null".into()),
-        JsValue::Bool(b)          => Some(b.to_string()),
-        JsValue::Number(n) if n.is_nan() || n.is_infinite() => Some("null".into()),
+        JsValue::Null             => Ok(Some("null".into())),
+        JsValue::Bool(b)          => Ok(Some(b.to_string())),
+        JsValue::Number(n) if n.is_nan() || n.is_infinite() => Ok(Some("null".into())),
         JsValue::Number(n) => {
-            if *n == n.trunc() && n.abs() < 1e15 { Some(format!("{}", *n as i64)) }
-            else { Some(format!("{n}")) }
+            if *n == n.trunc() && n.abs() < 1e15 { Ok(Some(format!("{}", *n as i64))) }
+            else { Ok(Some(format!("{n}"))) }
         }
-        JsValue::Str(s) => Some(json_escape_str(s)),
+        JsValue::Str(s) => Ok(Some(json_escape_str(s))),
         JsValue::Array(a) => {
-            let items: Vec<String> = a.borrow().iter()
-                .map(|v| json_stringify(v, indent, depth + 1).unwrap_or_else(|| "null".into()))
-                .collect();
+            let ptr = Rc::as_ptr(a) as usize;
+            if !seen.insert(ptr) {
+                return Err("TypeError: Converting circular structure to JSON".into());
+            }
+            let mut items: Vec<String> = Vec::new();
+            for v in a.borrow().iter() {
+                items.push(json_stringify_inner(v, indent, depth + 1, seen)?.unwrap_or_else(|| "null".into()));
+            }
+            seen.remove(&ptr);
             if indent == 0 || items.is_empty() {
-                Some(format!("[{}]", items.join(",")))
+                Ok(Some(format!("[{}]", items.join(","))))
             } else {
                 let pad = " ".repeat(indent * (depth + 1));
                 let close_pad = " ".repeat(indent * depth);
-                Some(format!("[\n{}{}\n{}]",
-                    pad, items.join(&format!(",\n{pad}")), close_pad))
+                Ok(Some(format!("[\n{}{}\n{}]", pad, items.join(&format!(",\n{pad}")), close_pad)))
             }
         }
         JsValue::Object(o) => {
+            let ptr = Rc::as_ptr(o) as usize;
+            if !seen.insert(ptr) {
+                return Err("TypeError: Converting circular structure to JSON".into());
+            }
             let mut pairs: Vec<String> = Vec::new();
-            let borrowed = o.borrow();
-            let mut keys: Vec<&String> = borrowed.props.keys()
-                .filter(|k| !is_internal_key(k)).collect();
-            keys.sort();
-            for k in keys {
-                let v = borrowed.props.get(k).unwrap();
-                if let Some(serialized) = json_stringify(v, indent, depth + 1) {
+            let keys: Vec<String> = {
+                let borrowed = o.borrow();
+                let mut ks: Vec<String> = borrowed.props.keys()
+                    .filter(|k| !is_internal_key(k)).cloned().collect();
+                ks.sort();
+                ks
+            };
+            for k in &keys {
+                let v = o.borrow().props.get(k).cloned().unwrap_or(JsValue::Undefined);
+                if let Some(serialized) = json_stringify_inner(&v, indent, depth + 1, seen)? {
                     pairs.push(format!("{}:{}", json_escape_str(k), serialized));
                 }
             }
+            seen.remove(&ptr);
             if indent == 0 || pairs.is_empty() {
-                Some(format!("{{{}}}", pairs.join(",")))
+                Ok(Some(format!("{{{}}}", pairs.join(","))))
             } else {
                 let pad = " ".repeat(indent * (depth + 1));
                 let close_pad = " ".repeat(indent * depth);
-                Some(format!("{{\n{}{}\n{}}}", pad,
-                    pairs.join(&format!(",\n{pad}")), close_pad))
+                Ok(Some(format!("{{\n{}{}\n{}}}", pad, pairs.join(&format!(",\n{pad}")), close_pad)))
             }
         }
-        _ => None,
+        _ => Ok(None),
     }
 }
 
@@ -374,6 +397,26 @@ pub fn days_to_date(mut days: i64) -> (i64, u32, u32) {
 
 pub fn is_leap(y: i64) -> bool {
     (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
+}
+
+pub fn parts_to_ms(yr: i64, mo: u32, day: u32, hr: u32, min: u32, sec: u32, ms_part: u32) -> f64 {
+    let mut days: i64 = 0;
+    if yr >= 1970 {
+        for y in 1970..yr { days += if is_leap(y) { 366 } else { 365 }; }
+    } else {
+        for y in yr..1970 { days -= if is_leap(y) { 366 } else { 365 }; }
+    }
+    let month_days = [31u32, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    for m in 0..mo {
+        let md = if m == 1 && is_leap(yr) { 29 } else { month_days[m as usize] };
+        days += md as i64;
+    }
+    days += (day as i64) - 1;
+    days as f64 * 86_400_000.0
+        + hr as f64 * 3_600_000.0
+        + min as f64 * 60_000.0
+        + sec as f64 * 1_000.0
+        + ms_part as f64
 }
 
 // ─── Promise ─────────────────────────────────────────────────────────────

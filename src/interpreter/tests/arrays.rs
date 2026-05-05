@@ -171,3 +171,45 @@ fn array_from_set() {
         return a.length;
     "#)), 3.0);
 }
+
+// --- Array.length truncation ---
+
+#[test]
+fn array_length_truncation() {
+    let r = run(r#"
+        const a = [1, 2, 3, 4, 5];
+        a.length = 3;
+        return a.length;
+    "#);
+    assert_eq!(as_num(r), 3.0);
+}
+
+#[test]
+fn array_length_truncation_elements_gone() {
+    let r = run(r#"
+        const a = [1, 2, 3, 4, 5];
+        a.length = 2;
+        return a[3] === undefined;
+    "#);
+    assert_eq!(as_bool(r), true);
+}
+
+#[test]
+fn array_length_extend() {
+    let r = run(r#"
+        const a = [1, 2];
+        a.length = 4;
+        return a.length;
+    "#);
+    assert_eq!(as_num(r), 4.0);
+}
+
+#[test]
+fn array_length_zero() {
+    let r = run(r#"
+        const a = [1, 2, 3];
+        a.length = 0;
+        return a.length;
+    "#);
+    assert_eq!(as_num(r), 0.0);
+}
