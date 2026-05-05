@@ -346,10 +346,19 @@ mod tests {
             if let Some(h) = bx.explicit_height { bx.explicit_height = Some(h + pt + pb); }
         }
         for child in &node.children {
-            let cw = bx.explicit_width.unwrap_or(container_w);
-            let ch = bx.explicit_height.unwrap_or(container_h);
-            // Default display pro children: pokud parent je flex/grid, child je block (flex item).
-            // Pokud parent je block, child je tez block. Override v attrs.
+            // Pass inner width (minus padding+border) jako container_w pro percent.
+            let bw_l = bx.border_left_width.unwrap_or(bx.border_width);
+            let bw_r = bx.border_right_width.unwrap_or(bx.border_width);
+            let bw_t = bx.border_top_width.unwrap_or(bx.border_width);
+            let bw_b = bx.border_bottom_width.unwrap_or(bx.border_width);
+            let pl = bx.padding_left.unwrap_or(bx.padding) + bw_l;
+            let pr = bx.padding_right.unwrap_or(bx.padding) + bw_r;
+            let pt = bx.padding_top.unwrap_or(bx.padding) + bw_t;
+            let pb = bx.padding_bottom.unwrap_or(bx.padding) + bw_b;
+            let cw_total = bx.explicit_width.unwrap_or(container_w);
+            let ch_total = bx.explicit_height.unwrap_or(container_h);
+            let cw = (cw_total - pl - pr).max(0.0);
+            let ch = (ch_total - pt - pb).max(0.0);
             let child_default = Display::Block;
             let child_box = convert_to_layout(child, cw, ch, child_default)?;
             bx.children.push(child_box);
