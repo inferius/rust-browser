@@ -77,6 +77,19 @@ fn layout_absolute_child_inner(child: &mut LayoutBox, parent_x: f32, parent_y: f
         if ar > 0.0 {
             let has_explicit_w = child.explicit_width.is_some();
             let has_explicit_h = child.explicit_height.is_some();
+            // Min/max jako preferred pri zadnem w/h.
+            if w == 0.0 && !has_explicit_w {
+                let cw_max_p = if child.max_width_v.is_empty() { 0.0 } else { crate::browser::layout::parse_length(&child.max_width_v) };
+                let cw_min_p = crate::browser::layout::parse_length(&child.min_width_v);
+                if cw_min_p > 0.0 { w = cw_min_p; }
+                else if cw_max_p > 0.0 { w = cw_max_p; }
+            }
+            if h == 0.0 && !has_explicit_h {
+                let ch_max_p = if child.max_height_v.is_empty() { 0.0 } else { crate::browser::layout::parse_length(&child.max_height_v) };
+                let ch_min_p = crate::browser::layout::parse_length(&child.min_height_v);
+                if ch_min_p > 0.0 { h = ch_min_p; }
+                else if ch_max_p > 0.0 { h = ch_max_p; }
+            }
             if has_explicit_w && !has_explicit_h {
                 h = w / ar;
             } else if has_explicit_h && !has_explicit_w {
