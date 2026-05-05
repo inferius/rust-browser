@@ -461,6 +461,53 @@ fn scroll_marker_group_parsed() {
 }
 
 #[test]
+fn anchor_scope_position_visibility() {
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade, layout};
+    let doc = parse_html(r#"<html><body><div></div></body></html>"#, "");
+    let css = parse_stylesheet("div { anchor-scope: --my; position-visibility: anchors-visible; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+    let d = find_box_by_tag(&root, "div").unwrap();
+    assert_eq!(d.anchor_scope, "--my");
+    assert_eq!(d.position_visibility, "anchors-visible");
+}
+
+#[test]
+fn reading_flow_grid() {
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade, layout};
+    let doc = parse_html(r#"<html><body><div></div></body></html>"#, "");
+    let css = parse_stylesheet("div { reading-flow: grid-rows; reading-order: 5; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+    let d = find_box_by_tag(&root, "div").unwrap();
+    assert_eq!(d.reading_flow, "grid-rows");
+    assert_eq!(d.reading_order, "5");
+}
+
+#[test]
+fn list_style_position_resize() {
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade, layout};
+    let doc = parse_html(r#"<html><body><ul></ul></body></html>"#, "");
+    let css = parse_stylesheet("ul { list-style-position: inside; resize: both; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+    let u = find_box_by_tag(&root, "ul").unwrap();
+    assert_eq!(u.list_style_position_v, "inside");
+    assert_eq!(u.resize_v, "both");
+}
+
+#[test]
+fn voice_family_speech() {
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade, layout};
+    let doc = parse_html(r#"<html><body><p></p></body></html>"#, "");
+    let css = parse_stylesheet("p { voice-family: female; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let root = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+    let p = find_box_by_tag(&root, "p").unwrap();
+    assert_eq!(p.voice_family, "female");
+}
+
+#[test]
 fn contain_intrinsic_size_axes() {
     use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade, layout};
     let doc = parse_html(r#"<html><body><div></div></body></html>"#, "");

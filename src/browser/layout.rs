@@ -507,6 +507,24 @@ pub struct LayoutBox {
     /// CSS Containment L2 - contain-intrinsic-block-size / contain-intrinsic-inline-size.
     pub contain_intrinsic_block_size: f32,
     pub contain_intrinsic_inline_size: f32,
+    /// CSS Anchor L1 - anchor-scope: <name> | none | all.
+    pub anchor_scope: String,
+    /// CSS Position L4 - position-visibility: always | anchors-visible | no-overflow.
+    pub position_visibility: String,
+    /// CSS Display L4 - reading-flow: normal | flex-visual | flex-flow | grid-rows | grid-columns | grid-order.
+    pub reading_flow: String,
+    /// CSS Display L4 - reading-order.
+    pub reading_order: String,
+    /// CSS Filter Effects L1 - filter-tagged composite output.
+    pub composite_op: String,
+    /// CSS UI L4 - cursor advanced (uz hotov pro keywords; pridame zoom-in/out).
+    pub cursor_extra: String,
+    /// CSS Lists L3 - list-style-position: outside (default) | inside.
+    pub list_style_position_v: String,
+    /// CSS UI L4 - resize: none | both | horizontal | vertical | block | inline.
+    pub resize_v: String,
+    /// CSS Speech L1 - voice-family.
+    pub voice_family: String,
     /// Box shadow: (offset_x, offset_y, blur, spread, color)
     /// (offset_x, offset_y, blur, spread, color, inset)
     pub box_shadow: Option<(f32, f32, f32, f32, [u8; 4], bool)>,
@@ -748,6 +766,15 @@ impl LayoutBox {
             backdrop_filter_string: String::new(),
             contain_intrinsic_block_size: 0.0,
             contain_intrinsic_inline_size: 0.0,
+            anchor_scope: String::new(),
+            position_visibility: String::new(),
+            reading_flow: String::new(),
+            reading_order: String::new(),
+            composite_op: String::new(),
+            cursor_extra: String::new(),
+            list_style_position_v: String::new(),
+            resize_v: String::new(),
+            voice_family: String::new(),
             box_shadow: None,
             transform: None,
             transforms: Vec::new(),
@@ -1336,6 +1363,19 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     // CSS Containment intrinsic sizes
     if let Some(v) = s.get("contain-intrinsic-block-size") { bx.contain_intrinsic_block_size = parse_length(v); }
     if let Some(v) = s.get("contain-intrinsic-inline-size") { bx.contain_intrinsic_inline_size = parse_length(v); }
+    // CSS Anchor L1 / Position L4
+    if let Some(v) = s.get("anchor-scope") { bx.anchor_scope = v.trim().to_string(); }
+    if let Some(v) = s.get("position-visibility") { bx.position_visibility = v.trim().to_string(); }
+    // CSS Display L4 - reading flow / order
+    if let Some(v) = s.get("reading-flow") { bx.reading_flow = v.trim().to_string(); }
+    if let Some(v) = s.get("reading-order") { bx.reading_order = v.trim().to_string(); }
+    // CSS Compositing L1 - composite-op
+    if let Some(v) = s.get("composite") { bx.composite_op = v.trim().to_string(); }
+    // CSS UI L4 - resize / list-style-position
+    if let Some(v) = s.get("resize") { bx.resize_v = v.trim().to_string(); }
+    if let Some(v) = s.get("list-style-position") { bx.list_style_position_v = v.trim().to_string(); }
+    // CSS Speech L1 (voice-family extra)
+    if let Some(v) = s.get("voice-family") { bx.voice_family = v.trim().to_string(); }
     // inset shorthand: top right bottom left
     if let Some(ins) = s.get("inset") {
         let parts: Vec<&str> = ins.split_whitespace().collect();
