@@ -78,17 +78,24 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         if i + 1 < rows { y_cursor += row_gap; }
     }
 
-    // Place items v auto-flow row order
-    for (i, child) in bx.children.iter_mut().enumerate() {
-        let row = i / cols;
-        let col = i % cols;
+    // In-flow indices (skip abs/fixed)
+    let in_flow: Vec<usize> = bx.children.iter().enumerate()
+        .filter(|(_, c)| !super::is_out_of_flow(c))
+        .map(|(i, _)| i)
+        .collect();
+
+    // Place items v auto-flow row order (jen in-flow)
+    for (k, &real_idx) in in_flow.iter().enumerate() {
+        let row = k / cols;
+        let col = k % cols;
         if row >= rows { break; }
         let cw = col_tracks.get(col).copied().unwrap_or(default_row_h);
-        let ch = row_tracks.get(row).copied().unwrap_or(default_row_h);
+        let ch_h = row_tracks.get(row).copied().unwrap_or(default_row_h);
+        let child = &mut bx.children[real_idx];
         child.rect.x = inner_x + col_positions[col];
         child.rect.y = inner_y + row_positions[row];
         child.rect.width = child.explicit_width.unwrap_or(cw);
-        child.rect.height = child.explicit_height.unwrap_or(ch);
+        child.rect.height = child.explicit_height.unwrap_or(ch_h);
         super::super::layout::layout_block(child);
     }
 
@@ -96,6 +103,17 @@ pub fn layout_grid(bx: &mut LayoutBox) {
     let total_h = y_cursor + 2.0 * (bx.padding + bx.border_width);
     if bx.rect.height < total_h {
         bx.rect.height = total_h;
+    }
+
+    // Position absolute/fixed children
+    let parent_x = bx.rect.x;
+    let parent_y = bx.rect.y;
+    let parent_w = bx.rect.width;
+    let parent_h = bx.rect.height;
+    for ch in bx.children.iter_mut() {
+        if super::is_out_of_flow(ch) {
+            super::layout_absolute_child(ch, parent_x, parent_y, parent_w, parent_h);
+        }
     }
 }
 

@@ -71,9 +71,13 @@ pub enum AlignItems {
 /// Layoutuje `bx.children` v ramci `bx`.
 /// Pouziva CSS props: flex-direction, flex-wrap, justify-content, align-items, gap.
 pub fn layout_flex(bx: &mut LayoutBox) {
-    let inner_x = bx.rect.x + bx.padding + bx.margin + bx.border_width;
-    let inner_y = bx.rect.y + bx.padding + bx.margin + bx.border_width;
-    let inner_w = bx.rect.width - 2.0 * (bx.padding + bx.margin + bx.border_width);
+    let pad_l = bx.padding_left.unwrap_or(bx.padding) + bx.border_width;
+    let pad_r = bx.padding_right.unwrap_or(bx.padding) + bx.border_width;
+    let pad_t = bx.padding_top.unwrap_or(bx.padding) + bx.border_width;
+    let pad_b = bx.padding_bottom.unwrap_or(bx.padding) + bx.border_width;
+    let inner_x = bx.rect.x + pad_l + bx.margin;
+    let inner_y = bx.rect.y + pad_t + bx.margin;
+    let inner_w = (bx.rect.width - pad_l - pad_r - 2.0 * bx.margin).max(0.0);
 
     // Parse CSS props
     let direction = parse_flex_direction(&bx.flex_direction);
@@ -85,17 +89,23 @@ pub fn layout_flex(bx: &mut LayoutBox) {
 
     if bx.children.is_empty() { return; }
 
+    // 0. Collect in-flow indices (abs/fixed jdou mimo flex flow)
+    let in_flow: Vec<usize> = bx.children.iter().enumerate()
+        .filter(|(_, c)| !super::is_out_of_flow(c))
+        .map(|(i, _)| i)
+        .collect();
+
     // 1. Estimate item sizes (flex-basis or content)
-    let item_count = bx.children.len();
-    let mut items: Vec<FlexItem> = Vec::with_capacity(item_count);
-    for ch in bx.children.iter() {
+    let mut items: Vec<FlexItem> = Vec::with_capacity(in_flow.len());
+    for &i in &in_flow {
+        let ch = &bx.children[i];
         let mut est_w = ch.explicit_width.unwrap_or_else(|| {
             if let Some(t) = &ch.text {
                 super::super::layout::measure_text_width(t, ch.font_size)
-            } else { 100.0 }
+            } else { 0.0 }
         });
         let mut est_h = ch.explicit_height.unwrap_or_else(|| {
-            if ch.text.is_some() { ch.font_size * 1.4 } else { 50.0 }
+            if ch.text.is_some() { ch.font_size * 1.4 } else { 0.0 }
         });
         // Aspect-ratio dopocet
         if let Some(ar) = ch.aspect_ratio {
@@ -117,12 +127,12 @@ pub fn layout_flex(bx: &mut LayoutBox) {
     }
 
     // 2. Container main size
-    let inner_h = bx.rect.height - 2.0 * (bx.padding + bx.margin + bx.border_width);
-    let container_main = if direction.is_row() { inner_w } else { inner_h.max(0.0) };
+    let inner_h = (bx.rect.height - pad_t - pad_b - 2.0 * bx.margin).max(0.0);
+    let container_main = if direction.is_row() { inner_w } else { inner_h };
 
     // Apply min/max width/height na items (z bx props - to nas zdrojuje)
-    for (i, ch) in bx.children.iter().enumerate() {
-        if i >= items.len() { break; }
+    for (i, &real_idx) in in_flow.iter().enumerate() {
+        let ch = &bx.children[real_idx];
         let cw_min = super::super::layout::parse_length(&ch.min_width_v);
         let cw_max = if ch.max_width_v.is_empty() { f32::INFINITY } else { super::super::layout::parse_length(&ch.max_width_v) };
         let ch_min = super::super::layout::parse_length(&ch.min_height_v);
@@ -203,8 +213,9 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             let item_cross_size = items[item_idx].cross_size;
             let cross_offset = compute_align_offset(align, cross_size, item_cross_size);
 
-            // Apply to child
-            let child = &mut bx.children[item_idx];
+            // Apply to child (item_idx je do in_flow, prevest na real index)
+            let real_idx = in_flow[item_idx];
+            let child = &mut bx.children[real_idx];
             if direction.is_row() {
                 child.rect.x = inner_x + main_cursor;
                 child.rect.y = inner_y + cross_cursor + cross_offset;
@@ -229,21 +240,33 @@ pub fn layout_flex(bx: &mut LayoutBox) {
 
     // 7. Update parent height
     let needed = if direction.is_row() {
-        total_cross + 2.0 * (bx.padding + bx.border_width)
+        total_cross + pad_t + pad_b
     } else {
         // V column direction main axis je vertical -> potreba content height
         let main_used: f32 = resolved_lines.iter()
             .map(|l| l.main_sizes.iter().sum::<f32>()
                 + main_gap * (l.main_sizes.len().saturating_sub(1) as f32))
             .fold(0.0_f32, f32::max);
-        main_used + 2.0 * (bx.padding + bx.border_width)
+        main_used + pad_t + pad_b
     };
     if bx.rect.height < needed {
         bx.rect.height = needed;
     }
 
-    // 8. Recursive layout uvnitr child boxu
+    // 8. Position absolute/fixed children (parent jako CB)
+    let parent_x = bx.rect.x;
+    let parent_y = bx.rect.y;
+    let parent_w = bx.rect.width;
+    let parent_h = bx.rect.height;
     for ch in bx.children.iter_mut() {
+        if super::is_out_of_flow(ch) {
+            super::layout_absolute_child(ch, parent_x, parent_y, parent_w, parent_h);
+        }
+    }
+
+    // 9. Recursive layout uvnitr child boxu (jen non-abs - abs uz layoutnut)
+    for ch in bx.children.iter_mut() {
+        if super::is_out_of_flow(ch) { continue; }
         super::super::layout::layout_block(ch);
     }
 }

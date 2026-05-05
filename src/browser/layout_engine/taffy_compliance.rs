@@ -9,6 +9,7 @@
 #[cfg(test)]
 mod tests {
     use crate::browser::layout::{Display, LayoutBox, Position};
+    use crate::browser::layout_engine::layout_absolute_child;
     use crate::browser::layout_engine::flex::layout_flex;
     use crate::browser::layout_engine::grid::layout_grid;
     use std::fs;
@@ -326,75 +327,26 @@ mod tests {
         let pad_l = bx.padding_left.unwrap_or(bx.padding) + bx.border_width;
         let pad_r = bx.padding_right.unwrap_or(bx.padding) + bx.border_width;
         let pad_t = bx.padding_top.unwrap_or(bx.padding) + bx.border_width;
-        let pad_b = bx.padding_bottom.unwrap_or(bx.padding) + bx.border_width;
         let inner_x = bx.rect.x + pad_l;
         let inner_y = bx.rect.y + pad_t;
         let inner_w = (bx.rect.width - pad_l - pad_r).max(0.0);
-        let inner_h = (bx.rect.height - pad_t - pad_b).max(0.0);
         let parent_w = bx.rect.width;
         let parent_h = bx.rect.height;
         let parent_x = bx.rect.x;
         let parent_y = bx.rect.y;
         let mut cursor_y = inner_y;
+        // In-flow children jen
         for child in bx.children.iter_mut() {
-            let is_abs = matches!(child.position, Position::Absolute | Position::Fixed);
-            if is_abs {
-                // Containing block = parent's padding box (border box pro abs).
-                // Pro absolute beru tady padding box parenta jako CB - zjednoduseni.
-                // CB je vlastne celej rect parenta minus border, ale border_width=0 vetsinou.
-                let cb_x = parent_x;
-                let cb_y = parent_y;
-                let cb_w = parent_w;
-                let cb_h = parent_h;
-                // Width: explicit nebo (right - left) nebo 0
-                let w = if let Some(w) = child.explicit_width {
-                    w
-                } else if let (Some(l), Some(r)) = (child.offset_left, child.offset_right) {
-                    (cb_w - l - r).max(0.0)
-                } else if let Some(ar) = child.aspect_ratio {
-                    if let Some(h) = child.explicit_height { if ar > 0.0 { h * ar } else { 0.0 } } else { 0.0 }
-                } else { 0.0 };
-                let h = if let Some(h) = child.explicit_height {
-                    h
-                } else if let (Some(t), Some(b)) = (child.offset_top, child.offset_bottom) {
-                    (cb_h - t - b).max(0.0)
-                } else if let Some(ar) = child.aspect_ratio {
-                    if ar > 0.0 { w / ar } else { 0.0 }
-                } else { 0.0 };
-                child.rect.width = w;
-                child.rect.height = h;
-                let m_l = child.margin_left.unwrap_or(child.margin);
-                let m_t = child.margin_top.unwrap_or(child.margin);
-                let m_r = child.margin_right.unwrap_or(child.margin);
-                let m_b = child.margin_bottom.unwrap_or(child.margin);
-                // X
-                child.rect.x = if let Some(l) = child.offset_left {
-                    cb_x + l + m_l
-                } else if let Some(r) = child.offset_right {
-                    cb_x + cb_w - r - w - m_r
-                } else {
-                    cb_x + m_l
-                };
-                child.rect.y = if let Some(t) = child.offset_top {
-                    cb_y + t + m_t
-                } else if let Some(b) = child.offset_bottom {
-                    cb_y + cb_h - b - h - m_b
-                } else {
-                    cb_y + m_t
-                };
-                match child.display {
-                    Display::Flex => layout_flex(child),
-                    Display::Grid => layout_grid(child),
-                    Display::Block | Display::None => block_layout_simple(child),
-                    _ => {}
-                }
+            if matches!(child.position, Position::Absolute | Position::Fixed) {
                 continue;
             }
             let m_l = child.margin_left.unwrap_or(child.margin);
             let m_t = child.margin_top.unwrap_or(child.margin);
+            let m_r = child.margin_right.unwrap_or(child.margin);
+            let w = child.explicit_width.unwrap_or((inner_w - m_l - m_r).max(0.0));
             child.rect.x = inner_x + m_l;
             child.rect.y = cursor_y + m_t;
-            child.rect.width = child.explicit_width.unwrap_or(inner_w);
+            child.rect.width = w;
             // Aspect-ratio: dopocet height z width
             child.rect.height = if let Some(h) = child.explicit_height {
                 h
@@ -408,9 +360,16 @@ mod tests {
                 Display::Block | Display::None => block_layout_simple(child),
                 _ => {}
             }
-            cursor_y += child.rect.height;
+            cursor_y += child.rect.height + m_t;
+            let m_b = child.margin_bottom.unwrap_or(child.margin);
+            cursor_y += m_b;
         }
-        let _ = inner_h;
+        // Abs/fixed children
+        for child in bx.children.iter_mut() {
+            if matches!(child.position, Position::Absolute | Position::Fixed) {
+                layout_absolute_child(child, parent_x, parent_y, parent_w, parent_h);
+            }
+        }
     }
 
     fn compare_layout(actual: &LayoutBox, expected: &ExpectedNode) -> bool {
