@@ -5,11 +5,14 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 ## Stav
 
 - Build: **OK**, 0 errors, 0 warnings.
-- Tests: **2177 passed, 0 failed, 3 ignored**.
+- Tests: **2177 unit + 8 integration = 2185 testu celkem**, 0 failed, 3 ignored.
 - **Layout engine pod nasi kontrolou** - vlastni flex/grid v `src/browser/layout_engine/`.
 - **168 layout testu** (flex_tests + flex_spec_tests + grid_tests + grid_spec_tests)
   pokryvajici CSS Flexbox L1 + CSS Grid L1 spec.
-- Grid resolve_tracks: real fr/percent/auto/repeat()/minmax() distribution.
+- **4108 taffy XML test fixtures** prevzato (MIT licence) v tests/fixtures/taffy_*/:
+  - flex: 2212, grid: 1076, block: 820
+  - tests/taffy_xml_runner.rs - XML parser + smoke testy
+  - Fixtury jako reference pro budouci spec compliance harness
 - Tree: ciste.
 - Branch master, ~290 commitu pred origin/master (NEPUSHOVAT bez vyzvy).
 - **WebGL pipeline DOKONCEN** + **CSS L4-L6 KOMPLET** + **JS DOM kompletni**:
