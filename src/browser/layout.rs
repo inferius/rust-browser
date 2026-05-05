@@ -431,6 +431,14 @@ pub struct LayoutBox {
     pub align_self: String,
     /// justify-self per-item (grid): auto/start/end/center/stretch
     pub justify_self: String,
+    /// grid-row-start: 1-based line, 0 = auto.
+    pub grid_row_start: i32,
+    pub grid_row_end: i32,
+    pub grid_column_start: i32,
+    pub grid_column_end: i32,
+    /// grid-row-span / grid-column-span (alternativni k start/end).
+    pub grid_row_span: i32,
+    pub grid_column_span: i32,
     pub align_content: String,
     pub flex_grow: f32,
     pub flex_shrink: f32,
@@ -752,6 +760,12 @@ impl LayoutBox {
             align_items: String::new(),
             align_self: String::new(),
             justify_self: String::new(),
+            grid_row_start: 0,
+            grid_row_end: 0,
+            grid_column_start: 0,
+            grid_column_end: 0,
+            grid_row_span: 0,
+            grid_column_span: 0,
             align_content: String::new(),
             flex_grow: 0.0,
             flex_shrink: 1.0,

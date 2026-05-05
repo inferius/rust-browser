@@ -107,16 +107,64 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         }
     }
 
-    // Place items v auto-flow row order (jen in-flow)
-    for (k, &real_idx) in in_flow.iter().enumerate() {
-        let row = k / cols;
-        let col = k % cols;
-        if row >= rows { break; }
-        let cw = col_tracks.get(col).copied().unwrap_or(default_row_h);
-        let ch_h = row_tracks.get(row).copied().unwrap_or(default_row_h);
+    // Place items - explicit (grid-row-start/grid-column-start) i auto-flow row major.
+    // Track occupied cells.
+    let mut occupied: Vec<bool> = vec![false; rows.max(1) * cols.max(1)];
+    let mut auto_cursor = 0usize;
+    for &real_idx in in_flow.iter() {
+        let child = &bx.children[real_idx];
+        // Resolve placement: 1-based start lines -> 0-based cell index
+        let explicit_col = if child.grid_column_start > 0 { Some((child.grid_column_start - 1) as usize) } else { None };
+        let explicit_row = if child.grid_row_start > 0 { Some((child.grid_row_start - 1) as usize) } else { None };
+        let span_col = if child.grid_column_span > 0 { child.grid_column_span as usize }
+                       else if child.grid_column_end > 0 && child.grid_column_start > 0 { (child.grid_column_end - child.grid_column_start).max(1) as usize }
+                       else { 1 };
+        let span_row = if child.grid_row_span > 0 { child.grid_row_span as usize }
+                       else if child.grid_row_end > 0 && child.grid_row_start > 0 { (child.grid_row_end - child.grid_row_start).max(1) as usize }
+                       else { 1 };
+        let (row, col) = if let (Some(r), Some(c)) = (explicit_row, explicit_col) {
+            (r, c)
+        } else if let Some(c) = explicit_col {
+            // Find first auto row with c free
+            let mut r = 0;
+            loop {
+                if r * cols + c >= occupied.len() { break; }
+                if !occupied[r * cols + c] { break; }
+                r += 1;
+            }
+            (r, c)
+        } else if let Some(r) = explicit_row {
+            let mut c = 0;
+            loop {
+                if r * cols + c >= occupied.len() { break; }
+                if !occupied[r * cols + c] { break; }
+                c += 1;
+            }
+            (r, c)
+        } else {
+            // Auto - najit prvni volnou bunku od auto_cursor
+            let mut idx = auto_cursor;
+            while idx < occupied.len() && occupied[idx] { idx += 1; }
+            auto_cursor = idx + 1;
+            (idx / cols, idx % cols)
+        };
+        // Mark span cells occupied
+        for dr in 0..span_row {
+            for dc in 0..span_col {
+                let idx = (row + dr) * cols + (col + dc);
+                if idx < occupied.len() { occupied[idx] = true; }
+            }
+        }
+        // Compute size from spanned tracks
+        let cw: f32 = (0..span_col).map(|d| col_tracks.get(col + d).copied().unwrap_or(0.0)).sum::<f32>()
+            + col_gap * (span_col.saturating_sub(1) as f32);
+        let ch_h: f32 = (0..span_row).map(|d| row_tracks.get(row + d).copied().unwrap_or(0.0)).sum::<f32>()
+            + row_gap * (span_row.saturating_sub(1) as f32);
+        let cx = col_positions.get(col).copied().unwrap_or(0.0);
+        let cy = row_positions.get(row).copied().unwrap_or(0.0);
         let child = &mut bx.children[real_idx];
-        child.rect.x = inner_x + col_positions[col];
-        child.rect.y = inner_y + row_positions[row];
+        child.rect.x = inner_x + cx;
+        child.rect.y = inner_y + cy;
         child.rect.width = child.explicit_width.unwrap_or(cw);
         child.rect.height = child.explicit_height.unwrap_or(ch_h);
         super::super::layout::layout_block(child);

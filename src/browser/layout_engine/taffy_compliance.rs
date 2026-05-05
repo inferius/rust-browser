@@ -193,6 +193,34 @@ mod tests {
                 "align-content" => bx.align_content = v.clone(),
                 "align-self" => bx.align_self = v.clone(),
                 "justify-self" => bx.justify_self = v.clone(),
+                "grid-row-start" => {
+                    if let Some(rest) = v.trim().strip_prefix("span ") {
+                        bx.grid_row_span = rest.trim().parse().unwrap_or(1);
+                    } else {
+                        bx.grid_row_start = v.trim().parse().unwrap_or(0);
+                    }
+                }
+                "grid-row-end" => {
+                    if let Some(rest) = v.trim().strip_prefix("span ") {
+                        bx.grid_row_span = rest.trim().parse().unwrap_or(1);
+                    } else {
+                        bx.grid_row_end = v.trim().parse().unwrap_or(0);
+                    }
+                }
+                "grid-column-start" => {
+                    if let Some(rest) = v.trim().strip_prefix("span ") {
+                        bx.grid_column_span = rest.trim().parse().unwrap_or(1);
+                    } else {
+                        bx.grid_column_start = v.trim().parse().unwrap_or(0);
+                    }
+                }
+                "grid-column-end" => {
+                    if let Some(rest) = v.trim().strip_prefix("span ") {
+                        bx.grid_column_span = rest.trim().parse().unwrap_or(1);
+                    } else {
+                        bx.grid_column_end = v.trim().parse().unwrap_or(0);
+                    }
+                }
                 "flex-grow" => bx.flex_grow = v.parse().unwrap_or(0.0),
                 "flex-shrink" => bx.flex_shrink = v.parse().unwrap_or(1.0),
                 "flex-basis" => bx.flex_basis = v.clone(),
