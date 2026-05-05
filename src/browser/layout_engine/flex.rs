@@ -428,6 +428,13 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         if bx.rect.height < needed {
             bx.rect.height = needed;
         }
+        // Apply max/min-height clamp na container kdyz auto.
+        if !bx.max_height_v.is_empty() {
+            let mh = super::super::layout::parse_length(&bx.max_height_v);
+            if mh > 0.0 && bx.rect.height > mh { bx.rect.height = mh; }
+        }
+        let mnh = super::super::layout::parse_length(&bx.min_height_v);
+        if mnh > 0.0 && bx.rect.height < mnh { bx.rect.height = mnh; }
     }
 
     // 8. Position absolute/fixed children (CB = padding-box parenta)
