@@ -486,8 +486,24 @@ mod tests {
             // Apply min/max height
             let ch_min = crate::browser::layout::parse_length(&child.min_height_v);
             let ch_max = if child.max_height_v.is_empty() { f32::INFINITY } else { crate::browser::layout::parse_length(&child.max_height_v) };
+            let h_before = h_val;
             h_val = h_val.min(ch_max);
             if ch_min > 0.0 { h_val = h_val.max(ch_min); }
+            // Pokud aspect-ratio + max/min-height zmenila h, prepocti w aby zachovavalo ratio
+            // (jen kdyz w neni explicit a w byl odvozen z fill nebo aspect).
+            if !has_explicit_h && child.aspect_ratio.is_some() && (h_val - h_before).abs() > 0.01 {
+                if let Some(ar) = child.aspect_ratio {
+                    if ar > 0.0 && child.explicit_width.is_none() {
+                        let new_w = h_val * ar;
+                        // Re-clamp na max-width
+                        let cw_max2 = if child.max_width_v.is_empty() { f32::INFINITY } else { crate::browser::layout::parse_length(&child.max_width_v) };
+                        let cw_min2 = crate::browser::layout::parse_length(&child.min_width_v);
+                        let mut w2 = new_w.min(cw_max2);
+                        if cw_min2 > 0.0 { w2 = w2.max(cw_min2); }
+                        child.rect.width = w2;
+                    }
+                }
+            }
             child.rect.height = h_val;
             // Recursive
             match child.display {
