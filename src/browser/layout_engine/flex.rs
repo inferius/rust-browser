@@ -202,8 +202,13 @@ pub fn layout_flex(bx: &mut LayoutBox) {
     }
 
     // 5. Compute total cross size
-    let line_cross_sizes: Vec<f32> = resolved_lines.iter().map(|l| l.cross_size).collect();
     let line_gap = if direction.is_row() { row_gap } else { col_gap };
+    // Pri single-line a definovanem container cross size, line zabira full container cross
+    let container_cross = if direction.is_row() { (bx.rect.height - pad_t - pad_b - 2.0 * bx.margin).max(0.0) } else { inner_w };
+    if resolved_lines.len() == 1 && container_cross > 0.0 {
+        resolved_lines[0].cross_size = resolved_lines[0].cross_size.max(container_cross);
+    }
+    let line_cross_sizes: Vec<f32> = resolved_lines.iter().map(|l| l.cross_size).collect();
     let total_cross = line_cross_sizes.iter().sum::<f32>()
         + line_gap * (line_cross_sizes.len().saturating_sub(1) as f32);
 
