@@ -5,8 +5,8 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 ## Stav
 
 - Build: **OK**, 0 errors, 0 warnings.
-- Tests: **1801 passed, 0 failed, 3 ignored**.
-- Posledni commit: `21b9946 DOM ResizeObserver + IntersectionObserver real`.
+- Tests: **1814 passed, 0 failed, 3 ignored**.
+- Posledni commit: `ce7747d Canvas 2D API rozsireni`.
 - Tree: ciste.
 - Branch master, ~290 commitu pred origin/master (NEPUSHOVAT bez vyzvy).
 - **WebGL pipeline DOKONCEN** + **CSS L4-L6 KOMPLET** + **JS DOM kompletni**:
@@ -19,6 +19,12 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
   - @scope real scoping, @function runtime, container queries clean
   - 17 modernich CSS units (dvw/dvh/svw/lvh/vi/vb/ch/lh/rlh/cm/mm/Q/in/pc)
   - Color L5 relative + L4 color() namespace
+  - Canvas 2D API rozsireni: save/restore + transforms (translate/rotate/scale/
+    setTransform/transform/resetTransform) + curves (quadraticCurveTo/bezierCurveTo/
+    arcTo) + paths (rect/roundRect/ellipse) + clip/strokeText/measureText +
+    setLineDash/getLineDash + drawImage (3/5/9-arg) + createLinearGradient/
+    createRadialGradient s addColorStop + createImageData/getImageData/putImageData +
+    isPointInPath/isPointInStroke. CanvasOp enum + render paint_canvas_ops update.
 
 ## Test runner
 
