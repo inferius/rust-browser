@@ -352,13 +352,31 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             .sum();
         let auto_main_share = if auto_main_count > 0 { free_main / auto_main_count as f32 } else { 0.0 };
         let effective_free = if auto_main_count > 0 { 0.0 } else { free_main };
-        let (start_main, between_main) = compute_justify_offsets(justify, effective_free, resolved.main_sizes.len(), main_gap);
+        let (mut start_main, between_main) = compute_justify_offsets(justify, effective_free, resolved.main_sizes.len(), main_gap);
 
         let main_iter: Box<dyn Iterator<Item = (usize, &usize)>> = if direction.is_reverse() {
             Box::new(line_indices.iter().enumerate().rev())
         } else {
             Box::new(line_indices.iter().enumerate())
         };
+        // Pri reverse, posuneme start_main aby items skoncily na konci main axis.
+        if direction.is_reverse() {
+            start_main = (container_main - used_main - effective_free).max(0.0) + free_main;
+            // Vlastne: items v reverse iter postupne klesaji od start_main + total_used.
+            // Jednodussi: posunout start na (container_main - total_used).
+            start_main = container_main - used_main + effective_free - free_main;
+            // Hmm, drz original justify pak overlay bottom-pack.
+            start_main = container_main - used_main + (compute_justify_offsets(justify, effective_free, resolved.main_sizes.len(), main_gap).0);
+            // Simplest: pri reverse, uchylne zacit od konce.
+            start_main = container_main - used_main - between_main * resolved.main_sizes.len().saturating_sub(1) as f32 - effective_free;
+            if matches!(justify, JustifyContent::FlexStart) {
+                start_main = container_main - used_main;
+            } else if matches!(justify, JustifyContent::FlexEnd) {
+                start_main = 0.0;
+            } else {
+                start_main = compute_justify_offsets(justify, effective_free, resolved.main_sizes.len(), main_gap).0;
+            }
+        }
 
         let mut main_cursor = start_main;
         let mut first = true;
