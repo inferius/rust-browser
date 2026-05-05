@@ -240,7 +240,10 @@ mod tests {
                 "border" => {
                     bx.border_width = parse_dim(v, container_w).unwrap_or(0.0);
                 }
-                "border-left" | "border-right" | "border-top" | "border-bottom" => return None,
+                "border-left" => bx.border_left_width = parse_dim(v, container_w),
+                "border-right" => bx.border_right_width = parse_dim(v, container_w),
+                "border-top" => bx.border_top_width = parse_dim(v, container_h),
+                "border-bottom" => bx.border_bottom_width = parse_dim(v, container_h),
                 "top" => bx.offset_top = parse_dim(v, container_h),
                 "bottom" => bx.offset_bottom = parse_dim(v, container_h),
                 "left" => bx.offset_left = parse_dim(v, container_w),
@@ -329,9 +332,14 @@ mod tests {
     /// Jednoduchy block layout - stackuj children vertikalne, kazdy plnou sirku.
     /// Position absolute/fixed children jdou mimo flow - relativne k padding boxu parenta.
     fn block_layout_simple(bx: &mut LayoutBox) {
-        let pad_l = bx.padding_left.unwrap_or(bx.padding) + bx.border_width;
-        let pad_r = bx.padding_right.unwrap_or(bx.padding) + bx.border_width;
-        let pad_t = bx.padding_top.unwrap_or(bx.padding) + bx.border_width;
+        let bw_l = bx.border_left_width.unwrap_or(bx.border_width);
+        let bw_r = bx.border_right_width.unwrap_or(bx.border_width);
+        let bw_t = bx.border_top_width.unwrap_or(bx.border_width);
+        let bw_b = bx.border_bottom_width.unwrap_or(bx.border_width);
+        let pad_l = bx.padding_left.unwrap_or(bx.padding) + bw_l;
+        let pad_r = bx.padding_right.unwrap_or(bx.padding) + bw_r;
+        let pad_t = bx.padding_top.unwrap_or(bx.padding) + bw_t;
+        let _pad_b = bx.padding_bottom.unwrap_or(bx.padding) + bw_b;
         let inner_x = bx.rect.x + pad_l;
         let inner_y = bx.rect.y + pad_t;
         let inner_w = (bx.rect.width - pad_l - pad_r).max(0.0);

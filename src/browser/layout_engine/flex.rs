@@ -71,10 +71,14 @@ pub enum AlignItems {
 /// Layoutuje `bx.children` v ramci `bx`.
 /// Pouziva CSS props: flex-direction, flex-wrap, justify-content, align-items, gap.
 pub fn layout_flex(bx: &mut LayoutBox) {
-    let pad_l = bx.padding_left.unwrap_or(bx.padding) + bx.border_width;
-    let pad_r = bx.padding_right.unwrap_or(bx.padding) + bx.border_width;
-    let pad_t = bx.padding_top.unwrap_or(bx.padding) + bx.border_width;
-    let pad_b = bx.padding_bottom.unwrap_or(bx.padding) + bx.border_width;
+    let bw_l = bx.border_left_width.unwrap_or(bx.border_width);
+    let bw_r = bx.border_right_width.unwrap_or(bx.border_width);
+    let bw_t = bx.border_top_width.unwrap_or(bx.border_width);
+    let bw_b = bx.border_bottom_width.unwrap_or(bx.border_width);
+    let pad_l = bx.padding_left.unwrap_or(bx.padding) + bw_l;
+    let pad_r = bx.padding_right.unwrap_or(bx.padding) + bw_r;
+    let pad_t = bx.padding_top.unwrap_or(bx.padding) + bw_t;
+    let pad_b = bx.padding_bottom.unwrap_or(bx.padding) + bw_b;
     let inner_x = bx.rect.x + pad_l + bx.margin;
     let inner_y = bx.rect.y + pad_t + bx.margin;
     let inner_w = (bx.rect.width - pad_l - pad_r - 2.0 * bx.margin).max(0.0);
