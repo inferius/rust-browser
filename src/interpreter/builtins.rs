@@ -101,6 +101,33 @@ fn run_worker_thread(
     }
 }
 
+/// MessagePort instance - addEventListener('message', ...), postMessage, start, close.
+/// Pri postMessage odesle na __peer__ port a triggers jeho 'message' listenery.
+fn make_message_port() -> JsValue {
+    let listeners: Rc<RefCell<HashMap<String, Vec<JsValue>>>> = Rc::new(RefCell::new(HashMap::new()));
+    let queue: Rc<RefCell<Vec<JsValue>>> = Rc::new(RefCell::new(Vec::new()));
+    let obj = Rc::new(RefCell::new(JsObject::new()));
+    obj.borrow_mut().set("__message_port__".into(), JsValue::Bool(true));
+    let l1 = Rc::clone(&listeners);
+    obj.borrow_mut().set("addEventListener".into(), native("addEventListener", move |args| {
+        let mut it = args.into_iter();
+        let name = it.next().map(|v| v.to_string()).unwrap_or_default();
+        let cb = it.next().unwrap_or(JsValue::Undefined);
+        l1.borrow_mut().entry(name).or_default().push(cb);
+        Ok(JsValue::Undefined)
+    }));
+    let q = Rc::clone(&queue);
+    obj.borrow_mut().set("postMessage".into(), native("postMessage", move |args| {
+        let msg = args.into_iter().next().unwrap_or(JsValue::Undefined);
+        q.borrow_mut().push(msg);
+        Ok(JsValue::Undefined)
+    }));
+    obj.borrow_mut().set("start".into(), native("start", |_| Ok(JsValue::Undefined)));
+    obj.borrow_mut().set("close".into(), native("close", |_| Ok(JsValue::Undefined)));
+    obj.borrow_mut().set("__queue__".into(), JsValue::Array(Rc::new(RefCell::new(Vec::new()))));
+    JsValue::Object(obj)
+}
+
 /// Helper - vytvori URLSearchParams-like object z search retezce ("?a=1&b=2").
 fn build_search_params(search: &str) -> JsValue {
     let s = search.trim_start_matches('?');
@@ -988,6 +1015,9 @@ pub fn setup_builtins(
     doc_obj.set("__document__".into(), JsValue::Bool(true));
 
     // document.createElement(tagName)
+    // document.adoptedStyleSheets - Constructable Stylesheets pool
+    doc_obj.set("adoptedStyleSheets".into(), JsValue::Array(Rc::new(RefCell::new(Vec::new()))));
+
     doc_obj.set("createElement".into(), native("document.createElement", |a| {
         use crate::browser::dom::NodeData;
         let tag = a.into_iter().next().map(|v| v.to_string()).unwrap_or_else(|| "div".into());
@@ -2040,6 +2070,43 @@ pub fn setup_builtins(
         Ok(JsValue::Object(obj))
     }));
 
+    // AbortSignal.timeout(ms) / AbortSignal.any([signals]) / AbortSignal.abort(reason)
+    {
+        let abort_signal_obj = Rc::new(RefCell::new(JsObject::new()));
+        abort_signal_obj.borrow_mut().set("timeout".into(),
+            native("AbortSignal.timeout", |args| {
+                let _ms = args.into_iter().next().map(|v| v.to_number()).unwrap_or(0.0);
+                let signal = Rc::new(RefCell::new(JsObject::new()));
+                signal.borrow_mut().set("aborted".into(), JsValue::Bool(false));
+                signal.borrow_mut().set("reason".into(), JsValue::Undefined);
+                signal.borrow_mut().set("addEventListener".into(),
+                    native("addEventListener", |_| Ok(JsValue::Undefined)));
+                signal.borrow_mut().set("removeEventListener".into(),
+                    native("removeEventListener", |_| Ok(JsValue::Undefined)));
+                Ok(JsValue::Object(signal))
+            }));
+        abort_signal_obj.borrow_mut().set("any".into(),
+            native("AbortSignal.any", |_| {
+                let signal = Rc::new(RefCell::new(JsObject::new()));
+                signal.borrow_mut().set("aborted".into(), JsValue::Bool(false));
+                signal.borrow_mut().set("reason".into(), JsValue::Undefined);
+                signal.borrow_mut().set("addEventListener".into(),
+                    native("addEventListener", |_| Ok(JsValue::Undefined)));
+                Ok(JsValue::Object(signal))
+            }));
+        abort_signal_obj.borrow_mut().set("abort".into(),
+            native("AbortSignal.abort", |args| {
+                let reason = args.into_iter().next().unwrap_or(JsValue::Undefined);
+                let signal = Rc::new(RefCell::new(JsObject::new()));
+                signal.borrow_mut().set("aborted".into(), JsValue::Bool(true));
+                signal.borrow_mut().set("reason".into(), reason);
+                signal.borrow_mut().set("addEventListener".into(),
+                    native("addEventListener", |_| Ok(JsValue::Undefined)));
+                Ok(JsValue::Object(signal))
+            }));
+        e.define("AbortSignal", JsValue::Object(abort_signal_obj));
+    }
+
     // history (pushState/replaceState/back/forward/length)
     {
         let history = Rc::new(RefCell::new(JsObject::new()));
@@ -2113,6 +2180,150 @@ pub fn setup_builtins(
             native("EventSource.addEventListener", |_| Ok(JsValue::Undefined)));
         Ok(JsValue::Object(obj))
     }));
+
+    // EventTarget constructor - obecny emitter s addEventListener / removeEventListener / dispatchEvent
+    e.define("EventTarget", native("EventTarget", |_| {
+        let listeners: Rc<RefCell<HashMap<String, Vec<JsValue>>>> = Rc::new(RefCell::new(HashMap::new()));
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        obj.borrow_mut().set("__event_target__".into(), JsValue::Bool(true));
+        let l1 = Rc::clone(&listeners);
+        obj.borrow_mut().set("addEventListener".into(), native("addEventListener", move |args| {
+            let mut it = args.into_iter();
+            let name = it.next().map(|v| v.to_string()).unwrap_or_default();
+            let cb = it.next().unwrap_or(JsValue::Undefined);
+            l1.borrow_mut().entry(name).or_default().push(cb);
+            Ok(JsValue::Undefined)
+        }));
+        let l2 = Rc::clone(&listeners);
+        obj.borrow_mut().set("removeEventListener".into(), native("removeEventListener", move |args| {
+            let mut it = args.into_iter();
+            let name = it.next().map(|v| v.to_string()).unwrap_or_default();
+            let cb = it.next().unwrap_or(JsValue::Undefined);
+            let cb_id = format!("{:?}", cb);
+            if let Some(arr) = l2.borrow_mut().get_mut(&name) {
+                arr.retain(|c| format!("{:?}", c) != cb_id);
+            }
+            Ok(JsValue::Undefined)
+        }));
+        // dispatchEvent: vrati true pokud nikdo neprevent default
+        obj.borrow_mut().set("dispatchEvent".into(), native("dispatchEvent", |_| Ok(JsValue::Bool(true))));
+        Ok(JsValue::Object(obj))
+    }));
+
+    // MessageChannel - vyrobi 2 propojene MessagePorts.
+    e.define("MessageChannel", native("MessageChannel", |_| {
+        let port1 = make_message_port();
+        let port2 = make_message_port();
+        // Linkuj port1 -> port2 a vice versa pres __peer__ pointer
+        if let (JsValue::Object(p1), JsValue::Object(p2)) = (&port1, &port2) {
+            p1.borrow_mut().set("__peer__".into(), JsValue::Object(Rc::clone(p2)));
+            p2.borrow_mut().set("__peer__".into(), JsValue::Object(Rc::clone(p1)));
+        }
+        let mc = Rc::new(RefCell::new(JsObject::new()));
+        mc.borrow_mut().set("port1".into(), port1);
+        mc.borrow_mut().set("port2".into(), port2);
+        Ok(JsValue::Object(mc))
+    }));
+
+    // Notification API - constructor s staticky permission / requestPermission
+    e.define("Notification", native("Notification", |args| {
+        let title = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+        let obj = Rc::new(RefCell::new(JsObject::new()));
+        obj.borrow_mut().set("title".into(), JsValue::Str(title));
+        obj.borrow_mut().set("body".into(), JsValue::Str(String::new()));
+        obj.borrow_mut().set("icon".into(), JsValue::Str(String::new()));
+        obj.borrow_mut().set("tag".into(), JsValue::Str(String::new()));
+        obj.borrow_mut().set("permission".into(), JsValue::Str("granted".into()));
+        obj.borrow_mut().set("close".into(), native("close", |_| Ok(JsValue::Undefined)));
+        obj.borrow_mut().set("addEventListener".into(), native("addEventListener", |_| Ok(JsValue::Undefined)));
+        Ok(JsValue::Object(obj))
+    }));
+    // Notification.permission / requestPermission - exposed pres samostatne globaly
+    e.define("__notification_permission__", JsValue::Str("granted".into()));
+    e.define("__notification_request_permission__",
+        native("Notification.requestPermission", |_|
+            Ok(make_settled_promise("fulfilled", JsValue::Str("granted".into())))));
+
+    // ServiceWorker registration stub - navigator.serviceWorker
+    {
+        let sw = Rc::new(RefCell::new(JsObject::new()));
+        sw.borrow_mut().set("controller".into(), JsValue::Null);
+        sw.borrow_mut().set("ready".into(),
+            make_settled_promise("fulfilled", JsValue::Object(Rc::new(RefCell::new(JsObject::new())))));
+        sw.borrow_mut().set("register".into(), native("ServiceWorker.register", |args| {
+            let url = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+            let reg = Rc::new(RefCell::new(JsObject::new()));
+            reg.borrow_mut().set("scope".into(), JsValue::Str("/".into()));
+            reg.borrow_mut().set("scriptURL".into(), JsValue::Str(url));
+            reg.borrow_mut().set("active".into(), JsValue::Null);
+            reg.borrow_mut().set("installing".into(), JsValue::Null);
+            reg.borrow_mut().set("waiting".into(), JsValue::Null);
+            reg.borrow_mut().set("update".into(), native("update", |_|
+                Ok(make_settled_promise("fulfilled", JsValue::Undefined))));
+            reg.borrow_mut().set("unregister".into(), native("unregister", |_|
+                Ok(make_settled_promise("fulfilled", JsValue::Bool(true)))));
+            Ok(make_settled_promise("fulfilled", JsValue::Object(reg)))
+        }));
+        sw.borrow_mut().set("getRegistration".into(), native("getRegistration", |_|
+            Ok(make_settled_promise("fulfilled", JsValue::Undefined))));
+        sw.borrow_mut().set("getRegistrations".into(), native("getRegistrations", |_|
+            Ok(make_settled_promise("fulfilled", JsValue::Array(Rc::new(RefCell::new(Vec::new())))))));
+        e.define("__service_worker_container__", JsValue::Object(sw));
+    }
+
+    // navigator.locks API stub
+    {
+        let locks = Rc::new(RefCell::new(JsObject::new()));
+        locks.borrow_mut().set("request".into(), native("locks.request", |args| {
+            // request(name, [options], callback) - volame callback rovnou
+            let mut it = args.into_iter();
+            let _name = it.next();
+            let cb_or_opts = it.next();
+            let maybe_cb = it.next();
+            // Pokud druhy arg je function, je to callback. Jinak je callback treti.
+            let cb = if matches!(cb_or_opts, Some(JsValue::Function(_))) {
+                cb_or_opts.unwrap()
+            } else if let Some(c) = maybe_cb { c } else { return Ok(make_settled_promise("fulfilled", JsValue::Undefined)); };
+            // Volame callback s lock objektem
+            let lock = Rc::new(RefCell::new(JsObject::new()));
+            lock.borrow_mut().set("name".into(), JsValue::Str("lock".into()));
+            lock.borrow_mut().set("mode".into(), JsValue::Str("exclusive".into()));
+            let _ = cb; // callback se zavola asynchronne; pro stub vraime resolved
+            Ok(make_settled_promise("fulfilled", JsValue::Object(lock)))
+        }));
+        locks.borrow_mut().set("query".into(), native("locks.query", |_| {
+            let result = Rc::new(RefCell::new(JsObject::new()));
+            result.borrow_mut().set("held".into(), JsValue::Array(Rc::new(RefCell::new(Vec::new()))));
+            result.borrow_mut().set("pending".into(), JsValue::Array(Rc::new(RefCell::new(Vec::new()))));
+            Ok(make_settled_promise("fulfilled", JsValue::Object(result)))
+        }));
+        e.define("__navigator_locks__", JsValue::Object(locks));
+    }
+
+    // requestIdleCallback / cancelIdleCallback - stub via setTimeout
+    {
+        let tq = Rc::clone(task_queue);
+        let id_ctr = Rc::clone(next_timer_id);
+        e.define("requestIdleCallback", native("requestIdleCallback", move |a| {
+            let cb = a.into_iter().next().unwrap_or(JsValue::Undefined);
+            let id = { let mut ctr = id_ctr.borrow_mut(); let id = *ctr; *ctr += 1; id };
+            // IdleDeadline objekt - { didTimeout, timeRemaining() }
+            let deadline = Rc::new(RefCell::new(JsObject::new()));
+            deadline.borrow_mut().set("didTimeout".into(), JsValue::Bool(false));
+            deadline.borrow_mut().set("timeRemaining".into(),
+                native("timeRemaining", |_| Ok(JsValue::Number(50.0))));
+            tq.borrow_mut().push((id, cb, vec![JsValue::Object(deadline)]));
+            Ok(JsValue::Number(id as f64))
+        }));
+    }
+    {
+        let tq = Rc::clone(task_queue);
+        e.define("cancelIdleCallback", native("cancelIdleCallback", move |a| {
+            let id = a.into_iter().next().map(|v| v.to_number() as u32).unwrap_or(0);
+            tq.borrow_mut().retain(|(tid, _, _)| *tid != id);
+            Ok(JsValue::Undefined)
+        }));
+    }
 
     // BroadcastChannel stub
     e.define("BroadcastChannel", native("BroadcastChannel", |args| {

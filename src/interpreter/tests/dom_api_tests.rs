@@ -802,3 +802,114 @@ fn intersection_observer_thresholds_default() {
     "#;
     assert_eq!(as_num(run(code)), 1.0);
 }
+
+// ─── New DOM/JS APIs ───────────────────────────────────────────────────
+
+#[test]
+fn event_target_construct() {
+    let code = r#"
+        const t = new EventTarget();
+        let called = 0;
+        t.addEventListener("test", () => { called++; });
+        return typeof t.addEventListener;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "function");
+    } else {
+        panic!("ocekavan string");
+    }
+}
+
+#[test]
+fn message_channel_two_ports() {
+    let code = r#"
+        const mc = new MessageChannel();
+        return typeof mc.port1.postMessage + "|" + typeof mc.port2.postMessage;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "function|function");
+    } else {
+        panic!("ocekavan string");
+    }
+}
+
+#[test]
+fn notification_constructor() {
+    let code = r#"
+        const n = new Notification("Hello", { body: "World" });
+        return n.title;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "Hello");
+    } else {
+        panic!("ocekavan string");
+    }
+}
+
+#[test]
+fn request_idle_callback_returns_id() {
+    let code = r#"
+        const id = requestIdleCallback(() => {});
+        return typeof id;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "number");
+    } else {
+        panic!("ocekavan string");
+    }
+}
+
+#[test]
+fn cancel_idle_callback_no_throw() {
+    let code = r#"
+        const id = requestIdleCallback(() => {});
+        cancelIdleCallback(id);
+        return "ok";
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "ok");
+    }
+}
+
+#[test]
+fn abort_signal_timeout() {
+    let code = r#"
+        const s = AbortSignal.timeout(1000);
+        return s.aborted;
+    "#;
+    if let crate::interpreter::JsValue::Bool(b) = run(code) {
+        assert!(!b, "fresh timeout signal not aborted");
+    }
+}
+
+#[test]
+fn abort_signal_abort_static() {
+    let code = r#"
+        const s = AbortSignal.abort("test reason");
+        return s.aborted;
+    "#;
+    if let crate::interpreter::JsValue::Bool(b) = run(code) {
+        assert!(b, "AbortSignal.abort vraci aborted=true");
+    }
+}
+
+#[test]
+fn abort_signal_any() {
+    let code = r#"
+        const s = AbortSignal.any([]);
+        return typeof s.addEventListener;
+    "#;
+    if let crate::interpreter::JsValue::Str(s) = run(code) {
+        assert_eq!(s, "function");
+    }
+}
+
+#[test]
+fn document_adopted_stylesheets_array() {
+    let code = r#"
+        return Array.isArray(document.adoptedStyleSheets);
+    "#;
+    if let crate::interpreter::JsValue::Bool(b) = run(code) {
+        assert!(b);
+    }
+}
