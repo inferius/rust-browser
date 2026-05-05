@@ -132,13 +132,49 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             super::super::layout::Display::Grid => super::grid::layout_grid(ch),
             _ => {
                 // Block-like: aproximace - max child explicit_width, sum explicit_heights.
+                // Pri flex/grid grandchild: recursive intrinsic, vezme rect po layoutu.
                 let mut max_w = 0.0_f32;
                 let mut sum_h = 0.0_f32;
-                for gc in &ch.children {
+                for gc in ch.children.iter_mut() {
                     if matches!(gc.position, super::super::layout::Position::Absolute | super::super::layout::Position::Fixed) { continue; }
                     if matches!(gc.display, super::super::layout::Display::None) { continue; }
-                    if let Some(w) = gc.explicit_width { max_w = max_w.max(w); }
-                    if let Some(h) = gc.explicit_height { sum_h += h; }
+                    let mut gc_w = gc.explicit_width.unwrap_or(0.0);
+                    let mut gc_h = gc.explicit_height.unwrap_or(0.0);
+                    // Pri grandchild bez explicit, recursive intrinsic (flex/grid recursive layout,
+                    // block sum z ggchild).
+                    if (gc_w == 0.0 || gc_h == 0.0) && !gc.children.is_empty() {
+                        match gc.display {
+                            super::super::layout::Display::Flex | super::super::layout::Display::Grid => {
+                                let saved_gc_rect = gc.rect.clone();
+                                gc.rect.x = 0.0; gc.rect.y = 0.0;
+                                if gc.explicit_width.is_none() { gc.rect.width = 0.0; }
+                                if gc.explicit_height.is_none() { gc.rect.height = 0.0; }
+                                match gc.display {
+                                    super::super::layout::Display::Flex => super::flex::layout_flex(gc),
+                                    super::super::layout::Display::Grid => super::grid::layout_grid(gc),
+                                    _ => {}
+                                }
+                                if gc.explicit_width.is_none() { gc_w = gc.rect.width; }
+                                if gc.explicit_height.is_none() { gc_h = gc.rect.height; }
+                                gc.rect = saved_gc_rect;
+                            }
+                            _ => {
+                                // Block grandchild: sum ggchild explicit heights, max ggchild widths.
+                                let mut ggw = 0.0_f32;
+                                let mut ggh = 0.0_f32;
+                                for ggc in &gc.children {
+                                    if matches!(ggc.position, super::super::layout::Position::Absolute | super::super::layout::Position::Fixed) { continue; }
+                                    if matches!(ggc.display, super::super::layout::Display::None) { continue; }
+                                    if let Some(w) = ggc.explicit_width { if w > ggw { ggw = w; } }
+                                    if let Some(h) = ggc.explicit_height { ggh += h; }
+                                }
+                                if gc_w == 0.0 { gc_w = ggw; }
+                                if gc_h == 0.0 { gc_h = ggh; }
+                            }
+                        }
+                    }
+                    max_w = max_w.max(gc_w);
+                    sum_h += gc_h;
                 }
                 if ch.explicit_width.is_none() && max_w > 0.0 { ch.rect.width = max_w; }
                 if ch.explicit_height.is_none() && sum_h > 0.0 { ch.rect.height = sum_h; }

@@ -171,7 +171,15 @@ mod tests {
     }
 
     fn convert_to_layout(node: &TestNode, container_w: f32, container_h: f32, default_display: Display) -> Option<LayoutBox> {
+        // Pomoc: pri parsovani top/bottom percent musime znat zda parent ma explicit
+        // height. CSS spec: pri auto CB height percent inset top/bottom = 0.
+        // Tady volame se s container_h_for_inset = container_h pokud parent ma
+        // explicit, jinak 0. Kvuli zachovani API delegujeme do _impl.
+        convert_to_layout_impl(node, container_w, container_h, container_h, default_display)
+    }
+    fn convert_to_layout_impl(node: &TestNode, container_w: f32, container_h: f32, container_h_for_inset: f32, default_display: Display) -> Option<LayoutBox> {
         let mut bx = LayoutBox::new();
+        bx.taffy_mode = true;
         let mut display = default_display;
         for (k, v) in &node.attrs {
             match k.as_str() {
@@ -312,8 +320,8 @@ mod tests {
                 "border-right" => bx.border_right_width = parse_dim(v, container_w),
                 "border-top" => bx.border_top_width = parse_dim(v, container_h),
                 "border-bottom" => bx.border_bottom_width = parse_dim(v, container_h),
-                "top" => bx.offset_top = parse_dim(v, container_h),
-                "bottom" => bx.offset_bottom = parse_dim(v, container_h),
+                "top" => bx.offset_top = parse_dim(v, container_h_for_inset),
+                "bottom" => bx.offset_bottom = parse_dim(v, container_h_for_inset),
                 "left" => bx.offset_left = parse_dim(v, container_w),
                 "right" => bx.offset_right = parse_dim(v, container_w),
                 "inset" => {
@@ -359,8 +367,10 @@ mod tests {
             let ch_total = bx.explicit_height.unwrap_or(container_h);
             let cw = (cw_total - pl - pr).max(0.0);
             let ch = (ch_total - pt - pb).max(0.0);
+            // Pro inset top/bottom: pokud parent NEMA explicit height, percent = 0.
+            let ch_inset = if bx.explicit_height.is_some() { ch } else { 0.0 };
             let child_default = Display::Block;
-            let child_box = convert_to_layout(child, cw, ch, child_default)?;
+            let child_box = convert_to_layout_impl(child, cw, ch, ch_inset, child_default)?;
             bx.children.push(child_box);
         }
         Some(bx)

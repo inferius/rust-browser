@@ -227,6 +227,123 @@ pub fn layout_grid(bx: &mut LayoutBox) {
             }
         }
     }
+    // Fr-track expansion: pri item spanu 1 fr-only col s explicit_width vetsim nez
+    // current track size, expand track na item width a redistribute zbytek mezi
+    // ostatnimi fr tracky podle jejich fr factor.
+    if inner_w > 0.0 && !in_flow.is_empty() {
+        // Najdi fr cols (Track::Fr nebo Minmax(_, fr, true))
+        let fr_factors: Vec<f32> = (0..cols).map(|i| match col_token_kinds.get(i) {
+            Some(Track::Fr(f)) => *f,
+            Some(Track::Minmax(_, f, true)) => *f,
+            _ => 0.0,
+        }).collect();
+        // is_fr_track = jakkoliv fr (vc. 0fr).
+        let is_fr_track: Vec<bool> = (0..cols).map(|i| matches!(
+            col_token_kinds.get(i),
+            Some(Track::Fr(_)) | Some(Track::Minmax(_, _, true))
+        )).collect();
+        let any_fr = is_fr_track.iter().any(|&b| b);
+        if any_fr {
+            // Replicovat dummy placement (stejne jako auto-col, ale i kdyz any_auto_col=false)
+            let mut occupied_d: Vec<bool> = vec![false; rows.max(1) * cols.max(1)];
+            let mut auto_cursor_d = 0usize;
+            let mut item_placements: Vec<(usize, usize, usize, usize)> = Vec::new();
+            for &real_idx in in_flow.iter() {
+                let child = &bx.children[real_idx];
+                let explicit_col = if child.grid_column_start > 0 { Some((child.grid_column_start - 1) as usize) } else { None };
+                let explicit_row = if child.grid_row_start > 0 { Some((child.grid_row_start - 1) as usize) } else { None };
+                let span_col = if child.grid_column_span > 0 { child.grid_column_span as usize }
+                               else if child.grid_column_end > 0 && child.grid_column_start > 0 { (child.grid_column_end - child.grid_column_start).max(1) as usize }
+                               else { 1 };
+                let span_row = if child.grid_row_span > 0 { child.grid_row_span as usize }
+                               else if child.grid_row_end > 0 && child.grid_row_start > 0 { (child.grid_row_end - child.grid_row_start).max(1) as usize }
+                               else { 1 };
+                let (row, col) = if let (Some(r), Some(c)) = (explicit_row, explicit_col) { (r, c) }
+                    else if let Some(c) = explicit_col { let mut r = 0; while r * cols + c < occupied_d.len() && occupied_d[r * cols + c] { r += 1; } (r, c) }
+                    else if let Some(r) = explicit_row { let mut c = 0; while r * cols + c < occupied_d.len() && occupied_d[r * cols + c] { c += 1; } (r, c) }
+                    else { let mut idx = auto_cursor_d; while idx < occupied_d.len() && occupied_d[idx] { idx += 1; } auto_cursor_d = idx + 1; (idx / cols.max(1), idx % cols.max(1)) };
+                for dr in 0..span_row { for dc in 0..span_col {
+                    let idx = (row + dr) * cols + (col + dc);
+                    if idx < occupied_d.len() { occupied_d[idx] = true; }
+                }}
+                item_placements.push((row, col, span_row, span_col));
+            }
+            // Pro kazdy item span 1 col, kdyz fr a explicit_width > current track, expand.
+            // Iterate vicekrat, protoze expansion v jednom col snizi zbyle pro ostatni fr.
+            for _iter in 0..3 {
+                let mut changed = false;
+                let fixed_total: f32 = (0..cols).map(|i| if !is_fr_track[i] { col_tracks[i] } else { 0.0 }).sum();
+                let total_gap_w = col_gap * (cols.saturating_sub(1) as f32);
+                let mut available_for_fr = (inner_w - fixed_total - total_gap_w).max(0.0);
+                let mut active_fr_total: f32 = fr_factors.iter().sum();
+                // Najdi nejvyssi requested expansion u fr cols (single-span).
+                for c_idx in 0..cols {
+                    if !is_fr_track[c_idx] { continue; }
+                    let mut req = 0.0_f32;
+                    for (i, &real_idx) in in_flow.iter().enumerate() {
+                        let (_, col, _, span_col) = item_placements[i];
+                        if col == c_idx && span_col == 1 {
+                            if let Some(w) = bx.children[real_idx].explicit_width {
+                                if w > req { req = w; }
+                            }
+                        }
+                    }
+                    if req > col_tracks[c_idx] {
+                        col_tracks[c_idx] = req;
+                        available_for_fr -= req;
+                        active_fr_total -= fr_factors[c_idx];
+                        changed = true;
+                    }
+                }
+                // Multi-span items: kdyz item span > 1 a explicit_width > suma tracku v spanu,
+                // distribute extra mezi fr tracky v spanu (proporc. fr factoru, equal pri sum=0).
+                for (i, &real_idx) in in_flow.iter().enumerate() {
+                    let (_, col, _, span_col) = item_placements[i];
+                    if span_col <= 1 { continue; }
+                    if let Some(w) = bx.children[real_idx].explicit_width {
+                        let span_sum: f32 = (col..(col+span_col)).map(|c| col_tracks.get(c).copied().unwrap_or(0.0)).sum();
+                        let span_gap = col_gap * (span_col.saturating_sub(1) as f32);
+                        let needed = w - span_sum - span_gap;
+                        if needed > 0.0 {
+                            // Najdi fr tracky v spanu.
+                            let fr_in_span: Vec<usize> = (col..(col+span_col)).filter(|&c| is_fr_track.get(c).copied().unwrap_or(false)).collect();
+                            if !fr_in_span.is_empty() {
+                                let fr_sum_span: f32 = fr_in_span.iter().map(|&c| fr_factors[c]).sum();
+                                if fr_sum_span > 0.0 {
+                                    for &c in &fr_in_span {
+                                        col_tracks[c] += needed * fr_factors[c] / fr_sum_span;
+                                    }
+                                } else {
+                                    // 0fr - rozdel rovnomerne.
+                                    let share = needed / fr_in_span.len() as f32;
+                                    for &c in &fr_in_span { col_tracks[c] += share; }
+                                }
+                                changed = true;
+                            }
+                        }
+                    }
+                }
+                // Redistribute zbytek mezi fr tracky, ktere jeste nejsou expanded nad ratio.
+                if active_fr_total > 0.0 && available_for_fr >= 0.0 {
+                    let fr_size = available_for_fr / active_fr_total;
+                    for c_idx in 0..cols {
+                        let f = fr_factors[c_idx];
+                        if f > 0.0 {
+                            let new_size = fr_size * f;
+                            // Jen nastav, pokud item-driven expansion neni vetsi.
+                            if (col_tracks[c_idx] - new_size).abs() > 0.01 && new_size > col_tracks[c_idx] {
+                                col_tracks[c_idx] = new_size;
+                                changed = true;
+                            } else if !changed && (col_tracks[c_idx] - new_size).abs() > 0.01 {
+                                col_tracks[c_idx] = new_size;
+                            }
+                        }
+                    }
+                }
+                if !changed { break; }
+            }
+        }
+    }
     // Auto rows similar.
     let row_token_kinds = parse_track_tokens_sized(&rows_explicit_str, inner_h, row_gap);
     let row_is_auto: Vec<bool> = (0..rows).map(|i| match row_token_kinds.get(i) {
@@ -419,8 +536,37 @@ pub fn layout_grid(bx: &mut LayoutBox) {
             "center" => (ch_avail - final_h) / 2.0,
             _ => 0.0,
         }};
-        child.rect.x = inner_x + cx + m_l + off_x;
-        child.rect.y = inner_y + cy + m_t + off_y;
+        // Auto margin override: pri stretch nebo non-stretch mlze auto margin
+        // posunout/centrovat item v gridu cell.
+        let auto_l_g = child.margin_left_auto;
+        let auto_r_g = child.margin_right_auto;
+        let auto_t_g = child.margin_top_auto;
+        let auto_b_g = child.margin_bottom_auto;
+        let cell_free_x = (cw - final_w).max(0.0);
+        let cell_free_y = (ch_h - final_h).max(0.0);
+        let (auto_off_x, auto_off_y);
+        let mut use_auto_x = false;
+        let mut use_auto_y = false;
+        if auto_l_g && auto_r_g {
+            auto_off_x = cell_free_x / 2.0; use_auto_x = true;
+        } else if auto_l_g {
+            auto_off_x = cell_free_x; use_auto_x = true;
+        } else if auto_r_g {
+            auto_off_x = 0.0; use_auto_x = true;
+        } else { auto_off_x = 0.0; }
+        if auto_t_g && auto_b_g {
+            auto_off_y = cell_free_y / 2.0; use_auto_y = true;
+        } else if auto_t_g {
+            auto_off_y = cell_free_y; use_auto_y = true;
+        } else if auto_b_g {
+            auto_off_y = 0.0; use_auto_y = true;
+        } else { auto_off_y = 0.0; }
+        let final_off_x = if use_auto_x { auto_off_x } else { off_x };
+        let final_off_y = if use_auto_y { auto_off_y } else { off_y };
+        let m_l_pos = if auto_l_g { 0.0 } else { m_l };
+        let m_t_pos = if auto_t_g { 0.0 } else { m_t };
+        child.rect.x = inner_x + cx + m_l_pos + final_off_x;
+        child.rect.y = inner_y + cy + m_t_pos + final_off_y;
         // Relative position offset (top/left/bottom/right)
         if let Some(l) = child.offset_left { child.rect.x += l; }
         else if let Some(r) = child.offset_right { child.rect.x -= r; }
@@ -599,6 +745,8 @@ pub fn resolve_tracks(s: &str, container_size: f32, gap: f32) -> Vec<f32> {
     }
 
     let free = (container_size - fixed_total - total_gap).max(0.0);
+    // CSS Grid spec: fr_size = leftover / max(1, sum_fr). Pri sum < 1 fr_size = leftover
+    // a tracky berou jen sve fr*leftover (zbyle prostor neabsorbujou).
     let fr_base = if fr_total > 0.0 { free / fr_total.max(1.0) } else { 0.0 };
     let after_fr = (free - fr_base * fr_total).max(0.0);
     let auto_base = if auto_count > 0 { after_fr / auto_count as f32 } else { 0.0 };

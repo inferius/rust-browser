@@ -595,6 +595,9 @@ pub struct LayoutBox {
     pub selection_bg: Option<[u8; 4]>,
     /// ::selection - barva textu vybrane oblasti.
     pub selection_color: Option<[u8; 4]>,
+    /// Taffy compliance mode: skip default 20px height for empty leaf divs.
+    /// Set true u boxu pochazejicich z taffy fixture parser.
+    pub taffy_mode: bool,
 }
 
 impl LayoutBox {
@@ -866,6 +869,7 @@ impl LayoutBox {
             placeholder_color: None,
             selection_bg: None,
             selection_color: None,
+            taffy_mode: false,
         }
     }
 
@@ -2259,6 +2263,9 @@ pub fn layout_block(bx: &mut LayoutBox) {
                 } else if child.rect.height == 0.0 {
                     child.rect.height = if child.text.is_some() {
                         child.font_size * child.line_height + child.padding * 2.0
+                    } else if child.taffy_mode && child.children.is_empty() {
+                        // Taffy mode: prazdny leaf div ma 0 vysku (CSS spec).
+                        0.0
                     } else {
                         20.0
                     };

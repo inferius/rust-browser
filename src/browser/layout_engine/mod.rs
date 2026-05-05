@@ -49,6 +49,27 @@ fn layout_absolute_child_inner(child: &mut LayoutBox, parent_x: f32, parent_y: f
         match child.display {
             Display::Flex => flex::layout_flex(child),
             Display::Grid => grid::layout_grid(child),
+            Display::Block => {
+                // Block intrinsic: max child explicit_width pro w, sum heights+margins pro h.
+                let mut max_w = 0.0_f32;
+                let mut total_h = 0.0_f32;
+                let mut prev_m_b = 0.0_f32;
+                for gc in &child.children {
+                    if matches!(gc.position, Position::Absolute | Position::Fixed) { continue; }
+                    if matches!(gc.display, Display::None) { continue; }
+                    let gw = gc.explicit_width.unwrap_or(0.0);
+                    if gw > max_w { max_w = gw; }
+                    let gh = gc.explicit_height.unwrap_or(0.0);
+                    let gm_t = gc.margin_top.unwrap_or(gc.margin);
+                    let gm_b = gc.margin_bottom.unwrap_or(gc.margin);
+                    let collapsed = if prev_m_b >= 0.0 && gm_t >= 0.0 { prev_m_b.max(gm_t) } else { prev_m_b + gm_t };
+                    total_h += collapsed + gh;
+                    prev_m_b = gm_b;
+                }
+                total_h += prev_m_b;
+                if needs_w { child.rect.width = max_w; }
+                if needs_h { child.rect.height = total_h; }
+            }
             _ => {}
         }
         let intrinsic_w = if needs_w { child.rect.width } else { saved.width };
@@ -152,16 +173,23 @@ fn layout_absolute_child_inner(child: &mut LayoutBox, parent_x: f32, parent_y: f
     let auto_t = child.margin_top_auto;
     let auto_b = child.margin_bottom_auto;
     // Auto margin pro abs s oboustrannym insetem rozdeli free space (i negativni).
+    // CSS spec: pri over-constrained (free<0) v LTR margin-left=0, margin-right absorbs.
     let (extra_l, extra_r) = if let (Some(l), Some(r)) = (child.offset_left, child.offset_right) {
         let free = cb_w - w - l - r - m_l - m_r;
-        if auto_l && auto_r { (free / 2.0, free / 2.0) }
+        if auto_l && auto_r {
+            if free >= 0.0 { (free / 2.0, free / 2.0) }
+            else { (0.0, free) } // LTR: left=0, right absorb
+        }
         else if auto_l { (free, 0.0) }
         else if auto_r { (0.0, free) }
         else { (0.0, 0.0) }
     } else { (0.0, 0.0) };
     let (extra_t, extra_b) = if let (Some(t), Some(b)) = (child.offset_top, child.offset_bottom) {
         let free = cb_h - h - t - b - m_t - m_b;
-        if auto_t && auto_b { (free / 2.0, free / 2.0) }
+        if auto_t && auto_b {
+            if free >= 0.0 { (free / 2.0, free / 2.0) }
+            else { (0.0, free) }
+        }
         else if auto_t { (free, 0.0) }
         else if auto_b { (0.0, free) }
         else { (0.0, 0.0) }
