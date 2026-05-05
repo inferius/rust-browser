@@ -613,6 +613,11 @@ mod tests {
         }
         // Abs/fixed children - pouzij static y kdyz nemaji top/bottom inset.
         for (i, child) in bx.children.iter_mut().enumerate() {
+            if matches!(child.display, Display::None) {
+                child.rect.x = 0.0; child.rect.y = 0.0;
+                child.rect.width = 0.0; child.rect.height = 0.0;
+                continue;
+            }
             if matches!(child.position, Position::Absolute | Position::Fixed) {
                 let no_y_inset = child.offset_top.is_none() && child.offset_bottom.is_none();
                 layout_absolute_child(child, parent_x, parent_y, parent_w, parent_h);
