@@ -4,13 +4,12 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 
 ## Stav
 
-- Build: **OK**, 0 errors.
-- Tests: **1578 passed, 0 failed, 3 ignored**.
-- Posledni commit: `fb57962 HANDOFF.md update - WebGL pipeline DOKONCEN`.
+- Build: **OK**, 0 errors, 0 warnings.
+- Tests: **1756 passed, 0 failed, 3 ignored**.
+- Posledni commit: `64d12e8 CSS @supports + @function + if() + Scroll-Driven extras`.
 - Tree: ciste.
-- Branch master, ~273 commitu pred origin/master (NEPUSHOVAT bez vyzvy).
-- **WebGL pipeline DOKONCEN** - kompletni JS-to-GPU flow vc texture sampling
-  + uniform buffers + 3D transforms + filter blur RT.
+- Branch master, ~280 commitu pred origin/master (NEPUSHOVAT bez vyzvy).
+- **WebGL pipeline DOKONCEN** + **CSS L4-L6 vetsina hotove** + **JS DOM CustomElements lifecycle** + **Color L5 relative + L4 color() namespace** + **17 modernich CSS units (dvw/dvh/svw/lvh/vi/vb/ch/lh/rlh/cm/mm/Q/in/pc)**.
 
 ## Test runner
 
@@ -30,7 +29,77 @@ cargo run -- devtools stranka.html out.html     # DevTools panel HTML
 cargo run -- debug skript.js out.html           # Token+AST viewer
 ```
 
-## Posledni dokoncene faze
+## Posledni dokoncene faze (recent batch CSS L4-L6 + JS DOM)
+
+### Commit b7dec02 -> 64d12e8: CSS L4-L6 hromadne + DOM CustomElements lifecycle (+178 testu)
+
+**JS DOM CustomElements lifecycle** (b7dec02):
+- `connectedCallback / disconnectedCallback / attributeChangedCallback`
+- shared `custom_elements` registry, instances per node ptr
+- `document.createElement` volá konstruktor, ulozi instance
+- `appendChild / removeChild / setAttribute` spousti lifecycle metody
+- run_super_constructor: native funkce (HTMLElement) jako super = no-op
+
+**CSS Color L5 relative + L4 color() namespace** (b7dec02):
+- `rgb(from c r g b)` / `hsl(from c h s l)` s keyword substitution
+- calc(r * 0.5), proenta, none podpora
+- `color(srgb r g b)` / display-p3 / rec2020 / a98-rgb / prophoto-rgb / xyz / xyz-d50 / xyz-d65
+- XYZ -> sRGB matice transformace
+
+**CSS Units L4** (714e72d):
+- dvw/dvh, svw/svh, lvw/lvh dynamic viewport
+- vi/vb logical viewport
+- ch/lh/rlh/ex character/line-height
+- cm/mm/Q/in/pc absolutni jednotky
+
+**CSS at-rules** (714e72d, f8c2bc7, 4e8279c, 64d12e8):
+- @scope (root) [to (limit)] { rules } - ScopeRule struct
+- @starting-style { rules } - parsovan do starting_style_rules
+- @property --name { syntax/inherits/initial-value } + cascade integrace
+- @font-palette-values --name { font-family/base-palette/override-colors }
+- @counter-style name { system/symbols/suffix/prefix/range/pad/fallback/negative }
+- @view-transition { navigation } global config
+- @page { ... } per-page declarations
+- @function --name(<args>) returns <type> { ... } (CSS Functions L1)
+- @supports condition: selector(...), font-tech(...), font-format(...),
+  not, and, or operatory s top-level paren handling
+
+**CSS pseudo-classes** (b7dec02, 4e8279c):
+- :user-valid / :user-invalid (Selectors L5) s data-* attribute
+- :popover-open / :open / :closed / :modal / :fullscreen / :blank
+- ::placeholder / ::selection / ::backdrop matching tests
+
+**CSS values + functions** (64d12e8):
+- if(<test>, <if-true>, <if-false>) (Values L5) - literal test
+- attr(name <type>, fallback) typed (uz drive)
+
+**CSS properties batch** (714e72d, f8c2bc7, 4e8279c, 64d12e8):
+- background-clip: text (paint potlaci box bg)
+- border-image-source/slice/width/repeat
+- mix-blend-mode / background-blend-mode
+- text-emphasis style/color shorthand
+- text-decoration-skip-ink, text-spacing, text-autospace, initial-letter
+- field-sizing (Forms L1), interpolate-size (Animations L2)
+- grid-template-columns/rows s named lines, grid-template-areas
+- grid-area / grid-column / grid-row / grid-auto-*
+- shape-outside / shape-margin / shape-image-threshold
+- scrollbar-gutter, marker-start/mid/end (SVG)
+- background-position-x/y, image-orientation
+- hyphenate-character, hyphenate-limit-chars, text-box-trim/edge
+- inset shorthand 1/2/3/4 hodnot
+- position-area, position-try-fallbacks, anchor-default
+- ruby-overhang, ruby-merge, math-shift
+- transition-behavior: allow-discrete
+- animation-composition: replace/add/accumulate
+- color-interpolation
+- timeline-scope, animation-range-start/end, scroll-marker-group
+- contain-intrinsic-block-size / -inline-size
+
+**Container Queries L1** (b7dec02):
+- cascade_with_container_sizes pro per-element ancestor lookup
+- container_sizes mapa node ptr -> (w, h)
+
+## Posledni dokoncene faze (predchozi)
 
 ### WebGL kompletni pipeline (phases 1-3c9)
 JS gl.* calls -> WebGLState -> execute_webgl_canvas extract -> upload
