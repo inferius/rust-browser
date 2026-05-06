@@ -1070,6 +1070,71 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
             color: [255, 255, 255, 200], points: pts,
         });
     }
+    // <select> dropdown: rounded box + selected text uvnitr + chevron arrow vpravo.
+    if bx.tag.as_deref() == Some("select") {
+        cmds.push(DisplayCommand::Rect {
+            x: bx.rect.x, y: bx.rect.y, w: bx.rect.width, h: bx.rect.height,
+            color: [255, 255, 255, 255], radius: 4.0,
+        });
+        cmds.push(DisplayCommand::Border {
+            x: bx.rect.x, y: bx.rect.y, w: bx.rect.width, h: bx.rect.height,
+            width: 1.0, color: [160, 160, 170, 255],
+        });
+        // Chevron triangle vpravo.
+        let cx = bx.rect.x + bx.rect.width - 12.0;
+        let cy = bx.rect.y + bx.rect.height * 0.5;
+        let s = 4.0;
+        let pts = vec![
+            (cx - s, cy - s * 0.5),
+            (cx + s, cy - s * 0.5),
+            (cx, cy + s * 0.7),
+        ];
+        cmds.push(DisplayCommand::ClippedRect {
+            color: [80, 80, 90, 255], points: pts,
+        });
+    }
+    // <progress>: pozadi + fill dle value/max attrs.
+    if bx.tag.as_deref() == Some("progress") {
+        let value = bx.node.as_ref().and_then(|n| n.attr("value")).and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0);
+        let max = bx.node.as_ref().and_then(|n| n.attr("max")).and_then(|v| v.parse::<f32>().ok()).unwrap_or(1.0).max(0.0001);
+        let frac = (value / max).clamp(0.0, 1.0);
+        cmds.push(DisplayCommand::Rect {
+            x: bx.rect.x, y: bx.rect.y, w: bx.rect.width, h: bx.rect.height,
+            color: [220, 220, 225, 255], radius: bx.rect.height * 0.3,
+        });
+        if frac > 0.0 {
+            cmds.push(DisplayCommand::Rect {
+                x: bx.rect.x, y: bx.rect.y, w: bx.rect.width * frac, h: bx.rect.height,
+                color: [80, 130, 240, 255], radius: bx.rect.height * 0.3,
+            });
+        }
+    }
+    // <meter>: pozadi + fill dle value/min/max. Color zalezi na low/high/optimum.
+    if bx.tag.as_deref() == Some("meter") {
+        let value = bx.node.as_ref().and_then(|n| n.attr("value")).and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0);
+        let min_v = bx.node.as_ref().and_then(|n| n.attr("min")).and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0);
+        let max_v = bx.node.as_ref().and_then(|n| n.attr("max")).and_then(|v| v.parse::<f32>().ok()).unwrap_or(1.0);
+        let low = bx.node.as_ref().and_then(|n| n.attr("low")).and_then(|v| v.parse::<f32>().ok()).unwrap_or(min_v);
+        let high = bx.node.as_ref().and_then(|n| n.attr("high")).and_then(|v| v.parse::<f32>().ok()).unwrap_or(max_v);
+        let range = (max_v - min_v).max(0.0001);
+        let frac = ((value - min_v) / range).clamp(0.0, 1.0);
+        // Barva: cervena pri value < low nebo > high, jinak zelena.
+        let fill_color = if value < low || value > high {
+            [240, 80, 80, 255]
+        } else {
+            [80, 200, 100, 255]
+        };
+        cmds.push(DisplayCommand::Rect {
+            x: bx.rect.x, y: bx.rect.y, w: bx.rect.width, h: bx.rect.height,
+            color: [220, 220, 225, 255], radius: bx.rect.height * 0.3,
+        });
+        if frac > 0.0 {
+            cmds.push(DisplayCommand::Rect {
+                x: bx.rect.x, y: bx.rect.y, w: bx.rect.width * frac, h: bx.rect.height,
+                color: fill_color, radius: bx.rect.height * 0.3,
+            });
+        }
+    }
     // <audio> placeholder controls bar.
     if bx.tag.as_deref() == Some("audio") {
         // Bar pozadi.

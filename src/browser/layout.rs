@@ -1207,6 +1207,42 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         if bx.rect.width == 0.0 { bx.rect.width = 300.0; }
         if bx.rect.height == 0.0 { bx.rect.height = 40.0; }
     }
+    // <select>: dropdown closed. Vyber selected <option> a renderuj jako text.
+    // Default size: 120x24.
+    if bx.tag.as_deref() == Some("select") {
+        if bx.rect.width == 0.0 { bx.rect.width = 120.0; }
+        if bx.rect.height == 0.0 { bx.rect.height = 24.0; }
+        // Najdi selected option (nebo first).
+        let options = node.children.borrow();
+        let mut selected_text: Option<String> = None;
+        let mut first_text: Option<String> = None;
+        for ch in options.iter() {
+            if ch.tag_name().as_deref() == Some("option") {
+                let txt = ch.text_content();
+                if first_text.is_none() { first_text = Some(txt.clone()); }
+                if ch.attr("selected").is_some() {
+                    selected_text = Some(txt);
+                    break;
+                }
+            }
+        }
+        bx.text = selected_text.or(first_text);
+    }
+    // <textarea>: multi-line input. Default 200x50.
+    if bx.tag.as_deref() == Some("textarea") {
+        if bx.rect.width == 0.0 { bx.rect.width = 200.0; }
+        if bx.rect.height == 0.0 { bx.rect.height = 60.0; }
+    }
+    // <progress>: progress bar.
+    if bx.tag.as_deref() == Some("progress") {
+        if bx.rect.width == 0.0 { bx.rect.width = 160.0; }
+        if bx.rect.height == 0.0 { bx.rect.height = 14.0; }
+    }
+    // <meter>: meter bar.
+    if bx.tag.as_deref() == Some("meter") {
+        if bx.rect.width == 0.0 { bx.rect.width = 80.0; }
+        if bx.rect.height == 0.0 { bx.rect.height = 14.0; }
+    }
 
     if matches!(node.kind, NodeKind::Text(_)) {
         bx.display = Display::Inline;
