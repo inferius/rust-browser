@@ -528,13 +528,22 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         let ch_avail = (ch_h - m_t - m_b).max(0.0);
         let has_w = child.explicit_width.is_some();
         let has_h = child.explicit_height.is_some();
-        let item_w = child.explicit_width.unwrap_or(cw_avail);
-        let item_h = child.explicit_height.unwrap_or(ch_avail);
+        // Text intrinsic v taffy_mode pri auto margin override (overrides stretch).
+        let any_auto_x = child.margin_left_auto || child.margin_right_auto;
+        let any_auto_y = child.margin_top_auto || child.margin_bottom_auto;
+        let (text_w, text_h) = if child.taffy_mode {
+            if let Some(t) = &child.text {
+                let tw = t.chars().filter(|c| !matches!(*c, '\u{200B}' | ' ' | '\n' | '\t')).count() as f32 * 10.0;
+                (tw, 10.0)
+            } else { (0.0, 0.0) }
+        } else { (0.0, 0.0) };
+        let item_w = child.explicit_width.unwrap_or_else(|| if any_auto_x && text_w > 0.0 { text_w } else { cw_avail });
+        let item_h = child.explicit_height.unwrap_or_else(|| if any_auto_y && text_h > 0.0 { text_h } else { ch_avail });
         // justify-self na inline (cols), align-self na block (rows). Default = stretch.
         let js = if !child.justify_self.is_empty() { child.justify_self.clone() } else { parent_justify_items };
         let als = if !child.align_self.is_empty() { child.align_self.clone() } else { parent_align_items };
-        let stretch_w = !has_w && (js.is_empty() || js == "stretch" || js == "normal");
-        let stretch_h = !has_h && (als.is_empty() || als == "stretch" || als == "normal");
+        let stretch_w = !has_w && !any_auto_x && (js.is_empty() || js == "stretch" || js == "normal");
+        let stretch_h = !has_h && !any_auto_y && (als.is_empty() || als == "stretch" || als == "normal");
         let mut final_w = if stretch_w { cw_avail } else { item_w };
         let mut final_h = if stretch_h { ch_avail } else { item_h };
         // Apply min/max + padding+border floor (item nemuze byt mensi nez padding+border).
