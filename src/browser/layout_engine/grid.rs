@@ -38,9 +38,59 @@ pub fn layout_grid(bx: &mut LayoutBox) {
 
     // Parse + resolve column tracks
     let mut col_tracks = resolve_tracks(&bx.grid_template_columns, inner_w, col_gap);
-    let (col_token_kinds, col_is_autofit) = parse_track_tokens_with_autofit(&bx.grid_template_columns, inner_w, col_gap);
+    let (mut col_token_kinds, mut col_is_autofit) = parse_track_tokens_with_autofit(&bx.grid_template_columns, inner_w, col_gap);
     if col_tracks.is_empty() { col_tracks = vec![inner_w]; }
+    let mut cols_explicit = col_tracks.len();
+    // Detekce negativnich grid-column-start beyond -cols-1: musi pridat implicit cols PRED explicit grid.
+    let mut col_prepend: usize = 0;
+    for ch in bx.children.iter() {
+        if super::is_out_of_flow(ch) || matches!(ch.display, super::super::layout::Display::None) { continue; }
+        if ch.grid_column_start < 0 {
+            let k = (-ch.grid_column_start) as usize;
+            if k > cols_explicit + 1 {
+                let need = k - cols_explicit - 1;
+                if need > col_prepend { col_prepend = need; }
+            }
+        }
+        if ch.grid_column_end < 0 {
+            let k = (-ch.grid_column_end) as usize;
+            if k > cols_explicit + 1 {
+                let need = k - cols_explicit - 1;
+                if need > col_prepend { col_prepend = need; }
+            }
+        }
+    }
+    if col_prepend > 0 {
+        // Prepend implicit cols (size auto). grid-auto-columns cycle, default Auto.
+        let auto_col_resolved: Vec<f32> = if !bx.grid_auto_columns.is_empty() {
+            resolve_tracks(&bx.grid_auto_columns, inner_w, col_gap)
+        } else { Vec::new() };
+        for i in 0..col_prepend {
+            let h = if !auto_col_resolved.is_empty() {
+                auto_col_resolved[(col_prepend - 1 - i) % auto_col_resolved.len()]
+            } else { 0.0 };
+            col_tracks.insert(0, h);
+            col_token_kinds.insert(0, Track::Auto);
+            col_is_autofit.insert(0, false);
+        }
+        cols_explicit += col_prepend;
+    }
     let cols = col_tracks.len();
+    // Helper: resolve grid-column-start s prepend offsetem.
+    let resolve_col_start = |start: i32| -> Option<usize> {
+        if start > 0 {
+            // Positive: 1-based explicit -> 0-based + prepend.
+            Some(((start - 1) as usize) + col_prepend)
+        } else if start < 0 {
+            // Negative: -1 = last line = cols+1. -k = line cols+2-k.
+            let k = (-start) as usize;
+            if k <= cols + 1 {
+                Some(cols + 1 - k) // line idx, 0-based
+            } else { Some(0) } // shouldn't happen po prepend
+        } else {
+            None
+        }
+    };
     let col_is_auto: Vec<bool> = (0..cols).map(|i| match col_token_kinds.get(i) {
         Some(Track::Auto) => true,
         Some(Track::MaxContent) => true,
@@ -67,7 +117,9 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         let mut auto_cur = 0usize;
         for child in bx.children.iter() {
             if super::is_out_of_flow(child) || matches!(child.display, super::super::layout::Display::None) { continue; }
-            let exp_col = if child.grid_column_start > 0 { Some((child.grid_column_start - 1) as usize) } else { None };
+            let exp_col = if child.grid_column_start > 0 { Some(((child.grid_column_start - 1) as usize) + col_prepend) }
+                          else if child.grid_column_start < 0 { let k = (-child.grid_column_start) as usize; if k <= cols + 1 { Some(cols + 1 - k) } else { Some(0) } }
+                          else { None };
             let exp_row = if child.grid_row_start > 0 { Some((child.grid_row_start - 1) as usize) } else { None };
             let span_col = if child.grid_column_span > 0 { child.grid_column_span as usize }
                            else if child.grid_column_end > 0 && child.grid_column_start > 0 { (child.grid_column_end - child.grid_column_start).max(1) as usize }
@@ -257,7 +309,9 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         let mut item_placement: Vec<(usize, usize, usize, usize)> = Vec::new(); // (row, col, span_row, span_col)
         for &real_idx in in_flow.iter() {
             let child = &bx.children[real_idx];
-            let explicit_col = if child.grid_column_start > 0 { Some((child.grid_column_start - 1) as usize) } else { None };
+            let explicit_col = if child.grid_column_start > 0 { Some(((child.grid_column_start - 1) as usize) + col_prepend) }
+                              else if child.grid_column_start < 0 { let k = (-child.grid_column_start) as usize; if k <= cols + 1 { Some(cols + 1 - k) } else { Some(0) } }
+                              else { None };
             let explicit_row = if child.grid_row_start > 0 { Some((child.grid_row_start - 1) as usize) } else { None };
             let resolve_end = |start: i32, end: i32, span: i32, count: usize| -> usize {
                 if span > 0 { return span as usize; }
@@ -510,7 +564,9 @@ pub fn layout_grid(bx: &mut LayoutBox) {
             let mut item_placements: Vec<(usize, usize, usize, usize)> = Vec::new();
             for &real_idx in in_flow.iter() {
                 let child = &bx.children[real_idx];
-                let explicit_col = if child.grid_column_start > 0 { Some((child.grid_column_start - 1) as usize) } else { None };
+                let explicit_col = if child.grid_column_start > 0 { Some(((child.grid_column_start - 1) as usize) + col_prepend) }
+                              else if child.grid_column_start < 0 { let k = (-child.grid_column_start) as usize; if k <= cols + 1 { Some(cols + 1 - k) } else { Some(0) } }
+                              else { None };
                 let explicit_row = if child.grid_row_start > 0 { Some((child.grid_row_start - 1) as usize) } else { None };
                 let span_col = if child.grid_column_span > 0 { child.grid_column_span as usize }
                                else if child.grid_column_end > 0 && child.grid_column_start > 0 { (child.grid_column_end - child.grid_column_start).max(1) as usize }
@@ -660,7 +716,9 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         let mut auto_cursor_d = 0usize;
         for &real_idx in in_flow.iter() {
             let child = &bx.children[real_idx];
-            let explicit_col = if child.grid_column_start > 0 { Some((child.grid_column_start - 1) as usize) } else { None };
+            let explicit_col = if child.grid_column_start > 0 { Some(((child.grid_column_start - 1) as usize) + col_prepend) }
+                              else if child.grid_column_start < 0 { let k = (-child.grid_column_start) as usize; if k <= cols + 1 { Some(cols + 1 - k) } else { Some(0) } }
+                              else { None };
             let explicit_row = if child.grid_row_start > 0 { Some((child.grid_row_start - 1) as usize) } else { None };
             let span_col = if child.grid_column_span > 0 { child.grid_column_span as usize }
                            else if child.grid_column_end > 0 && child.grid_column_start > 0 { (child.grid_column_end - child.grid_column_start).max(1) as usize }
@@ -716,7 +774,9 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         let mut auto_cursor_d2 = 0usize;
         for &real_idx in in_flow.iter() {
             let child = &bx.children[real_idx];
-            let explicit_col = if child.grid_column_start > 0 { Some((child.grid_column_start - 1) as usize) } else { None };
+            let explicit_col = if child.grid_column_start > 0 { Some(((child.grid_column_start - 1) as usize) + col_prepend) }
+                              else if child.grid_column_start < 0 { let k = (-child.grid_column_start) as usize; if k <= cols + 1 { Some(cols + 1 - k) } else { Some(0) } }
+                              else { None };
             let explicit_row = if child.grid_row_start > 0 { Some((child.grid_row_start - 1) as usize) } else { None };
             let span_col = if child.grid_column_span > 0 { child.grid_column_span as usize }
                            else if child.grid_column_end > 0 && child.grid_column_start > 0 { (child.grid_column_end - child.grid_column_start).max(1) as usize }
@@ -770,7 +830,9 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         let mut auto_cur = 0usize;
         for &real_idx in in_flow.iter() {
             let child = &bx.children[real_idx];
-            let explicit_col = if child.grid_column_start > 0 { Some((child.grid_column_start - 1) as usize) } else { None };
+            let explicit_col = if child.grid_column_start > 0 { Some(((child.grid_column_start - 1) as usize) + col_prepend) }
+                              else if child.grid_column_start < 0 { let k = (-child.grid_column_start) as usize; if k <= cols + 1 { Some(cols + 1 - k) } else { Some(0) } }
+                              else { None };
             let explicit_row = if child.grid_row_start > 0 { Some((child.grid_row_start - 1) as usize) } else { None };
             let span_col = if child.grid_column_span > 0 { child.grid_column_span as usize }
                            else if child.grid_column_end > 0 && child.grid_column_start > 0 { (child.grid_column_end - child.grid_column_start).max(1) as usize }
@@ -834,54 +896,141 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         if i + 1 < rows { y_cursor += row_gap + ac_between; }
     }
 
-    // Place items - explicit (grid-row-start/grid-column-start) i auto-flow row major.
-    // Track occupied cells.
+    // Place items - multi-pass podle CSS Grid §8.5 auto-placement algoritmu:
+    // Pass 1: items s definite row + col (oba explicitni)
+    // Pass 2: items s definite row, auto col (row-locked)
+    // Pass 3: items s definite col, auto row (col-locked)
+    // Pass 4: full auto items
     let mut occupied: Vec<bool> = vec![false; rows.max(1) * cols.max(1)];
     let mut auto_cursor = 0usize;
-    // Per-item placement info pro baseline pass.
-    let mut item_row_info: Vec<(usize, usize, f32)> = Vec::new(); // (real_idx, row, cy)
+    let mut item_row_info: Vec<(usize, usize, f32)> = Vec::new();
+    // Precompute placements: pre kazdy real_idx (row, col, span_row, span_col).
+    let mut placements: std::collections::HashMap<usize, (usize, usize, usize, usize)> = std::collections::HashMap::new();
+    let resolve_end_fn = |start: i32, end: i32, span: i32, count: usize| -> usize {
+        if span > 0 { return span as usize; }
+        if end < 0 && start > 0 {
+            let end_line = (count as i32 + 1 + end + 1).max(start + 1);
+            ((end_line - start).max(1)) as usize
+        } else if end > 0 && start > 0 {
+            ((end - start).max(1)) as usize
+        } else { 1 }
+    };
+    // Klasifikace items per CSS Grid §8.5:
+    //   pass 1: oba osy definite
+    //   pass 2: row-locked (only row definite, doc order)
+    //   pass 3: col-locked + auto (doc order combined)
+    let mut both_definite: Vec<usize> = Vec::new();
+    let mut row_locked: Vec<usize> = Vec::new();
+    let mut col_or_auto: Vec<usize> = Vec::new(); // col-locked + plne auto, v doc order
     for &real_idx in in_flow.iter() {
         let child = &bx.children[real_idx];
-        // Resolve placement: 1-based start lines -> 0-based cell index
-        let explicit_col = if child.grid_column_start > 0 { Some((child.grid_column_start - 1) as usize) } else { None };
-        let explicit_row = if child.grid_row_start > 0 { Some((child.grid_row_start - 1) as usize) } else { None };
-        // grid-column/row-end < 0 = pocita od konce. -1 = posledni linie = posledni track end.
-        let resolve_end = |start: i32, end: i32, span: i32, count: usize| -> usize {
-            if span > 0 { return span as usize; }
-            if end < 0 && start > 0 {
-                let end_line = (count as i32 + 1 + end + 1).max(start + 1);
-                ((end_line - start).max(1)) as usize
-            } else if end > 0 && start > 0 {
-                ((end - start).max(1)) as usize
-            } else { 1 }
-        };
-        let span_col = resolve_end(child.grid_column_start, child.grid_column_end, child.grid_column_span, cols);
-        let span_row = resolve_end(child.grid_row_start, child.grid_row_end, child.grid_row_span, rows);
-        let (row, col) = if let (Some(r), Some(c)) = (explicit_row, explicit_col) {
-            (r, c)
-        } else if let Some(c) = explicit_col {
-            // Find first auto row with c free
-            let mut r = 0;
-            loop {
-                if r * cols + c >= occupied.len() { break; }
-                if !occupied[r * cols + c] { break; }
-                r += 1;
+        let has_col = child.grid_column_start != 0;
+        let has_row = child.grid_row_start != 0;
+        if has_col && has_row { both_definite.push(real_idx); }
+        else if has_row { row_locked.push(real_idx); }
+        else { col_or_auto.push(real_idx); }
+    }
+    let resolve_col = |start: i32| -> Option<usize> {
+        if start > 0 { Some(((start - 1) as usize) + col_prepend) }
+        else if start < 0 { let k = (-start) as usize; if k <= cols + 1 { Some(cols + 1 - k) } else { Some(0) } }
+        else { None }
+    };
+    let mark_occupied = |occupied: &mut Vec<bool>, row: usize, col: usize, span_row: usize, span_col: usize| {
+        for dr in 0..span_row {
+            for dc in 0..span_col {
+                let idx = (row + dr) * cols + (col + dc);
+                if idx < occupied.len() { occupied[idx] = true; }
             }
-            (r, c)
-        } else if let Some(r) = explicit_row {
-            let mut c = 0;
-            loop {
-                if r * cols + c >= occupied.len() { break; }
-                if !occupied[r * cols + c] { break; }
-                c += 1;
+        }
+    };
+    // Pass 1: both definite.
+    for &real_idx in &both_definite {
+        let child = &bx.children[real_idx];
+        let col = resolve_col(child.grid_column_start).unwrap_or(0);
+        let row = if child.grid_row_start > 0 { (child.grid_row_start - 1) as usize } else { 0 };
+        let span_col = resolve_end_fn(child.grid_column_start, child.grid_column_end, child.grid_column_span, cols);
+        let span_row = resolve_end_fn(child.grid_row_start, child.grid_row_end, child.grid_row_span, rows);
+        mark_occupied(&mut occupied, row, col, span_row, span_col);
+        placements.insert(real_idx, (row, col, span_row, span_col));
+    }
+    // Pass 2: row-locked.
+    for &real_idx in &row_locked {
+        let child = &bx.children[real_idx];
+        let row = (child.grid_row_start - 1) as usize;
+        let span_col = resolve_end_fn(child.grid_column_start, child.grid_column_end, child.grid_column_span, cols);
+        let span_row = resolve_end_fn(child.grid_row_start, child.grid_row_end, child.grid_row_span, rows);
+        let mut c = 0;
+        loop {
+            if c + span_col > cols { break; }
+            let mut blocked = false;
+            for dc in 0..span_col {
+                let idx = row * cols + (c + dc);
+                if idx < occupied.len() && occupied[idx] { blocked = true; break; }
             }
-            (r, c)
+            if !blocked { break; }
+            c += 1;
+        }
+        mark_occupied(&mut occupied, row, c, span_row, span_col);
+        placements.insert(real_idx, (row, c, span_row, span_col));
+    }
+    // Pass 3+4: col-locked + auto v doc order.
+    for &real_idx in &col_or_auto {
+        let child = &bx.children[real_idx];
+        let span_col = resolve_end_fn(child.grid_column_start, child.grid_column_end, child.grid_column_span, cols);
+        let span_row = resolve_end_fn(child.grid_row_start, child.grid_row_end, child.grid_row_span, rows);
+        let has_col = child.grid_column_start != 0;
+        let (r, c) = if has_col {
+            // Col-locked: find first free row v fixed col.
+            let col = resolve_col(child.grid_column_start).unwrap_or(0);
+            let mut rr = 0;
+            loop {
+                let mut blocked = false;
+                for dr in 0..span_row {
+                    for dc in 0..span_col {
+                        let idx = (rr + dr) * cols + (col + dc);
+                        if idx < occupied.len() && occupied[idx] { blocked = true; break; }
+                    }
+                    if blocked { break; }
+                }
+                if !blocked { break; }
+                rr += 1;
+                if rr > rows + 100 { break; }
+            }
+            (rr, col)
         } else {
-            // Auto - najit prvni volnou bunku od auto_cursor
+            // Auto: posun cursorem.
             let mut idx = auto_cursor;
-            while idx < occupied.len() && occupied[idx] { idx += 1; }
-            auto_cursor = idx + 1;
-            (idx / cols, idx % cols)
+            let result;
+            loop {
+                let rr = idx / cols.max(1);
+                let cc = idx % cols.max(1);
+                if cc + span_col > cols { idx = (rr + 1) * cols.max(1); continue; }
+                let mut blocked = false;
+                for dr in 0..span_row {
+                    for dc in 0..span_col {
+                        let i = (rr + dr) * cols + (cc + dc);
+                        if i < occupied.len() && occupied[i] { blocked = true; break; }
+                    }
+                    if blocked { break; }
+                }
+                if !blocked {
+                    auto_cursor = idx + 1;
+                    result = (rr, cc);
+                    break;
+                }
+                idx += 1;
+                if idx > occupied.len() + 100 { result = (0, 0); break; }
+            }
+            result
+        };
+        mark_occupied(&mut occupied, r, c, span_row, span_col);
+        placements.insert(real_idx, (r, c, span_row, span_col));
+    }
+    // Apply placements v document order.
+    for &real_idx in in_flow.iter() {
+        let (row, col, span_row, span_col) = match placements.get(&real_idx) {
+            Some(&p) => p,
+            None => continue,
         };
         // Mark span cells occupied
         for dr in 0..span_row {
