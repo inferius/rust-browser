@@ -675,15 +675,17 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                 let tier1: Vec<usize> = span_indices.iter().copied().filter(|&c| matches!(col_token_kinds.get(c), Some(Track::MaxContent))).collect();
                 let tier2: Vec<usize> = span_indices.iter().copied().filter(|&c| matches!(col_token_kinds.get(c), Some(Track::FitContent(_)))).collect();
                 let tier3: Vec<usize> = span_indices.iter().copied().filter(|&c| matches!(col_token_kinds.get(c), Some(Track::Auto))).collect();
-                // Pri overflow hidden item + no tier1/tier2: distribute to ALL auto-class.
+                // Pri overflow hidden item: distribute to ALL auto-class tracks (drive
+                // jen MaxContent/FitContent). Bez MaxContent v spanu: tier_all kdykoliv.
                 let tier_all: Vec<usize> = span_indices.iter().copied().filter(|&c| matches!(col_token_kinds.get(c),
                     Some(Track::Auto) | Some(Track::MaxContent) | Some(Track::MinContent) | Some(Track::FitContent(_)))).collect();
-                let recipients = if !tier1.is_empty() {
+                let recipients = if inline_overflow_blocks_span && tier1.is_empty() && !tier_all.is_empty() {
+                    // Overflow hidden + no MaxContent: distribute to ALL.
+                    tier_all
+                } else if !tier1.is_empty() {
                     tier1
                 } else if !tier2.is_empty() {
                     tier2
-                } else if inline_overflow_blocks_span && !tier_all.is_empty() {
-                    tier_all
                 } else {
                     tier3
                 };
