@@ -13,10 +13,16 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 - **Compliance harness** v src/browser/layout_engine/taffy_compliance.rs:
   - XML parser + LayoutBox converter + run_directory + compare_layout
   - 4 testy spousteji vsechny fixtury, vypocitavaji pass-rate
-  - **Aktualni pass-rate: 1956/1988 (98.4%)**
-    * BLOCK:  385/392 (98.2%)
-    * GRID:   491/512 (95.9%)
-    * FLEX:   1068/1084 (98.5%)
+  - **Aktualni pass-rate: 1968/1988 (99.0%)**
+    * BLOCK:  392/392 (100.0%)
+    * GRID:   502/512 (98.0%)
+    * FLEX:   1074/1084 (99.1%)
+  - Iter 222 win: grid item intrinsic h measurement pass + iterativni fr clamp re-resolution (+2)
+  - Iter 221 wins:
+    * Block margin chain (max_pos, min_neg) pair tracking pro collapse-through (+4)
+    * Root flex heuristic: when no explicit display + multi children all have display: promote root to Flex (+4 abs_resolved_insets)
+    * Content-box width=100% clamp na container_w (overflow prevent) (+1 auto_fit)
+    * Block chain_walk_bottom: stop pri explicit_height (zachovava taffy compat)
   - Iter 209 win: flex basis=0 + min-h set: intrinsic_main=0 (+2)
   - Iter 208 win: pre-pass: block s flex-direction treat as flex (+2 flex)
   - Iter 195-207 wins:
