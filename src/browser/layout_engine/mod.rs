@@ -97,20 +97,31 @@ fn layout_absolute_child_inner(child: &mut LayoutBox, parent_x: f32, parent_y: f
     let m_r_pre = child.margin_right.unwrap_or(child.margin);
     let m_t_pre = child.margin_top.unwrap_or(child.margin);
     let m_b_pre = child.margin_bottom.unwrap_or(child.margin);
+    // Text intrinsic v taffy_mode pro abs.
+    let (text_w_int, text_h_int) = if child.taffy_mode {
+        if let Some(t) = &child.text {
+            let w = t.chars().filter(|c| !matches!(*c, '\u{200B}' | ' ' | '\n' | '\t')).count() as f32 * 10.0;
+            (w, 10.0)
+        } else { (0.0, 0.0) }
+    } else { (0.0, 0.0) };
     let mut w = if let Some(w) = child.explicit_width {
         w
     } else if let (Some(l), Some(r)) = (child.offset_left, child.offset_right) {
         (cb_w - l - r - m_l_pre - m_r_pre).max(0.0)
     } else if let Some(ar) = child.aspect_ratio {
         if let Some(h) = child.explicit_height { if ar > 0.0 { h * ar } else { 0.0 } } else { 0.0 }
-    } else if child.rect.width > 0.0 { child.rect.width } else { 0.0 };
+    } else if child.rect.width > 0.0 { child.rect.width }
+    else if text_w_int > 0.0 { text_w_int }
+    else { 0.0 };
     let mut h = if let Some(h) = child.explicit_height {
         h
     } else if let (Some(t), Some(b)) = (child.offset_top, child.offset_bottom) {
         (cb_h - t - b - m_t_pre - m_b_pre).max(0.0)
     } else if let Some(ar) = child.aspect_ratio {
         if ar > 0.0 { w / ar } else { 0.0 }
-    } else if child.rect.height > 0.0 { child.rect.height } else { 0.0 };
+    } else if child.rect.height > 0.0 { child.rect.height }
+    else if text_h_int > 0.0 { text_h_int }
+    else { 0.0 };
     // Aspect ratio override pri "fill" sizing (inset bez explicit dimensi).
     if let Some(ar) = child.aspect_ratio {
         if ar > 0.0 {
