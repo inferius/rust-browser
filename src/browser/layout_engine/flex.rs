@@ -916,6 +916,32 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                         if w > 0.0 { h = w / ar; }
                     }
                 }
+                // Text wrap: pri text item + final w < text natural, dopocti pocet linek.
+                if child.taffy_mode && child.text.is_some() && child.explicit_height.is_none() && child.aspect_ratio.is_none() {
+                    if let Some(t) = &child.text {
+                        let total_text_w = t.chars().filter(|c| !matches!(*c, '\u{200B}' | ' ' | '\n' | '\t')).count() as f32 * 10.0;
+                        if w > 0.0 && total_text_w > w {
+                            let mut lines = 1usize;
+                            let mut cur_w = 0.0_f32;
+                            let mut seg_w = 0.0_f32;
+                            for c in t.chars() {
+                                if matches!(c, '\u{200B}' | ' ' | '\n' | '\t') {
+                                    if cur_w + seg_w <= w + 0.01 {
+                                        cur_w += seg_w;
+                                    } else {
+                                        lines += 1;
+                                        cur_w = seg_w;
+                                    }
+                                    seg_w = 0.0;
+                                } else {
+                                    seg_w += 10.0;
+                                }
+                            }
+                            if seg_w > 0.0 && cur_w + seg_w > w + 0.01 { lines += 1; }
+                            h = (lines as f32 * 10.0).max(h);
+                        }
+                    }
+                }
                 h = h.min(ch_max_c);
                 if ch_min_c > 0.0 { h = h.max(ch_min_c); }
                 child.rect.height = h.max(pb_h);

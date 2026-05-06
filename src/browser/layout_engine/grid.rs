@@ -695,13 +695,48 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         } else { (0.0, 0.0) };
         let item_w = child.explicit_width.unwrap_or_else(|| if any_auto_x && text_w > 0.0 { text_w } else { cw_avail });
         let item_h = child.explicit_height.unwrap_or_else(|| if any_auto_y && text_h > 0.0 { text_h } else { ch_avail });
+        // Text wrap: pri non-stretch align-self + text width > available, dopocti
+        // pocet linek pro height intrinsic.
+        let wrapped_text_h = if child.taffy_mode && child.text.is_some() {
+            if let Some(t) = &child.text {
+                let avail_w = child.explicit_width.unwrap_or(cw_avail);
+                let max_w = if !child.max_width_v.is_empty() {
+                    let mw = super::super::layout::parse_length(&child.max_width_v);
+                    avail_w.min(mw)
+                } else { avail_w };
+                if max_w > 0.0 && text_w > max_w {
+                    // Spocti pocet linek: greedy - kazda linka prijima segments dokud
+                    // se vejdou. Segment = chars mezi ZWS/space/newline.
+                    let mut lines = 1usize;
+                    let mut cur_w = 0.0_f32;
+                    let mut seg_w = 0.0_f32;
+                    for c in t.chars() {
+                        if matches!(c, '\u{200B}' | ' ' | '\n' | '\t') {
+                            if cur_w + seg_w <= max_w + 0.01 {
+                                cur_w += seg_w;
+                            } else {
+                                lines += 1;
+                                cur_w = seg_w;
+                            }
+                            seg_w = 0.0;
+                        } else {
+                            seg_w += 10.0;
+                        }
+                    }
+                    if seg_w > 0.0 {
+                        if cur_w + seg_w > max_w + 0.01 { lines += 1; }
+                    }
+                    Some(lines as f32 * 10.0)
+                } else { None }
+            } else { None }
+        } else { None };
         // justify-self na inline (cols), align-self na block (rows). Default = stretch.
         let js = if !child.justify_self.is_empty() { child.justify_self.clone() } else { parent_justify_items };
         let als = if !child.align_self.is_empty() { child.align_self.clone() } else { parent_align_items };
         let stretch_w = !has_w && !any_auto_x && (js.is_empty() || js == "stretch" || js == "normal");
         let stretch_h = !has_h && !any_auto_y && (als.is_empty() || als == "stretch" || als == "normal");
         let mut final_w = if stretch_w { cw_avail } else { item_w };
-        let mut final_h = if stretch_h { ch_avail } else { item_h };
+        let mut final_h = if stretch_h { ch_avail } else if let Some(wh) = wrapped_text_h { wh } else { item_h };
         // Apply min/max + padding+border floor (item nemuze byt mensi nez padding+border).
         let cw_min = super::super::layout::parse_length(&child.min_width_v);
         let cw_max = if child.max_width_v.is_empty() { f32::INFINITY } else { super::super::layout::parse_length(&child.max_width_v) };

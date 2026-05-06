@@ -739,8 +739,43 @@ mod tests {
             // Aspect-ratio: dopocet height z width
             let has_explicit_h = child.explicit_height.is_some();
             let text_h_intrinsic = if child.taffy_mode && child.text.is_some() { 10.0 } else { 0.0 };
+            // Text wrap pri max-width nebo final w < text natural width: pocet linek.
+            let wrapped_text_h = if child.taffy_mode && child.text.is_some() {
+                if let Some(t) = &child.text {
+                    let avail_w = child.explicit_width.unwrap_or(w);
+                    let mw = if !child.max_width_v.is_empty() {
+                        let m = crate::browser::layout::parse_length(&child.max_width_v);
+                        avail_w.min(m)
+                    } else { avail_w };
+                    let total_text_w = t.chars().filter(|c| !matches!(*c, '\u{200B}' | ' ' | '\n' | '\t')).count() as f32 * 10.0;
+                    if mw > 0.0 && total_text_w > mw {
+                        let mut lines = 1usize;
+                        let mut cur_w = 0.0_f32;
+                        let mut seg_w = 0.0_f32;
+                        for c in t.chars() {
+                            if matches!(c, '\u{200B}' | ' ' | '\n' | '\t') {
+                                if cur_w + seg_w <= mw + 0.01 {
+                                    cur_w += seg_w;
+                                } else {
+                                    lines += 1;
+                                    cur_w = seg_w;
+                                }
+                                seg_w = 0.0;
+                            } else {
+                                seg_w += 10.0;
+                            }
+                        }
+                        if seg_w > 0.0 {
+                            if cur_w + seg_w > mw + 0.01 { lines += 1; }
+                        }
+                        Some(lines as f32 * 10.0)
+                    } else { None }
+                } else { None }
+            } else { None };
             let mut h_val = if let Some(h) = child.explicit_height {
                 h
+            } else if let Some(wh) = wrapped_text_h {
+                wh
             } else if let Some(ar) = child.aspect_ratio {
                 if ar > 0.0 { child.rect.width / ar } else { 0.0 }
             } else if text_h_intrinsic > 0.0 { text_h_intrinsic }
