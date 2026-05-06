@@ -1065,7 +1065,8 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         bx.rect.width = needed_w;
     }
     // 7. Update parent height jen kdyz neni explicit set.
-    if bx.explicit_height.is_none() {
+    let height_is_pct_intrinsic = bx.taffy_intrinsic_mode && bx.height_pct.is_some();
+    if bx.explicit_height.is_none() || height_is_pct_intrinsic {
         let needed = if direction.is_row() {
             total_cross + pad_t + pad_b
         } else {
