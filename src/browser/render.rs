@@ -2000,6 +2000,8 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         /// Push pri navigate. Alt+Left = back (idx-=1), Alt+Right = forward (idx+=1).
         history: Vec<String>,
         history_idx: usize,
+        /// Otevreny <select> dropdown - hodnota = (node ptr, anchor x/y/w).
+        open_select: Option<(usize, f32, f32, f32)>,
         /// Po startu otevri devtools.html v default browseru.
         auto_devtools: bool,
         window: Option<std::sync::Arc<Window>>,
@@ -2252,6 +2254,41 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         }
 
         fn handle_click(&mut self, x: f32, y: f32) {
+            // Hit-test pres open dropdown popup PRED layout hit_test.
+            if let Some((select_id, anchor_x, anchor_y, anchor_w)) = self.open_select {
+                let popup_x = anchor_x;
+                let popup_y = anchor_y + 24.0; // y v page-space (bez -scroll); klik je page-space.
+                let opt_h = 24.0_f32;
+                if let Some(interp) = &self.interpreter {
+                    let doc_root = std::rc::Rc::clone(&interp.document.borrow().root);
+                    if let Some(select_node) = find_node_by_ptr(&doc_root, select_id) {
+                        let options: Vec<std::rc::Rc<crate::browser::dom::Node>> = select_node.children.borrow()
+                            .iter().filter(|c| c.tag_name().as_deref() == Some("option")).cloned().collect();
+                        let popup_h = opt_h * options.len() as f32;
+                        // Klik mimo popup -> close.
+                        let in_popup = x >= popup_x && x < popup_x + anchor_w
+                            && y >= popup_y && y < popup_y + popup_h;
+                        if in_popup {
+                            let idx = ((y - popup_y) / opt_h) as usize;
+                            if let Some(opt) = options.get(idx) {
+                                for ch in select_node.children.borrow().iter() {
+                                    if ch.tag_name().as_deref() == Some("option") {
+                                        ch.attributes.borrow_mut().remove("selected");
+                                    }
+                                }
+                                opt.attributes.borrow_mut().insert("selected".to_string(), "selected".to_string());
+                            }
+                            self.open_select = None;
+                            self.render();
+                            return;
+                        } else {
+                            self.open_select = None;
+                            self.render();
+                            // Pokracuj normalne s hit-test.
+                        }
+                    }
+                }
+            }
             let layout_root = match &self.layout_root { Some(l) => l, None => return };
             let interp = match &mut self.interpreter { Some(i) => i, None => return };
 
@@ -2299,6 +2336,18 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                                 return;
                             }
                         }
+                    }
+                    // <select> click: toggle open dropdown.
+                    if tag.as_deref() == Some("select") {
+                        let id = std::rc::Rc::as_ptr(node) as usize;
+                        let same = self.open_select.map(|(t, ..)| t == id).unwrap_or(false);
+                        if same {
+                            self.open_select = None;
+                        } else {
+                            self.open_select = Some((id, target.rect.x, target.rect.y, target.rect.width));
+                        }
+                        self.render();
+                        return;
                     }
                     // <a href="..."> click -> navigate.
                     if tag.as_deref() == Some("a") {
@@ -2550,6 +2599,64 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                 shift_command_y(cmd, -self.scroll_y);
             }
 
+            // <select> open dropdown overlay - emit popup s options pri open_select.
+            if let Some((select_id, anchor_x, anchor_y, anchor_w)) = self.open_select {
+                if let Some(interp) = &self.interpreter {
+                    let doc_root = std::rc::Rc::clone(&interp.document.borrow().root);
+                    if let Some(select_node) = find_node_by_ptr(&doc_root, select_id) {
+                        let opt_h = 24.0_f32;
+                        let pad_l = 8.0_f32;
+                        let mut idx = 0_usize;
+                        let popup_x = anchor_x;
+                        // Pod selectem.
+                        let popup_y = anchor_y + 24.0 - self.scroll_y;
+                        // Background podklad celeho dropdownu.
+                        let options: Vec<std::rc::Rc<crate::browser::dom::Node>> = select_node.children.borrow()
+                            .iter().filter(|c| c.tag_name().as_deref() == Some("option")).cloned().collect();
+                        let popup_h = opt_h * options.len() as f32;
+                        if popup_h > 0.0 {
+                            display_list.push(DisplayCommand::Shadow {
+                                x: popup_x, y: popup_y, w: anchor_w, h: popup_h,
+                                offset_x: 0.0, offset_y: 2.0, blur: 8.0, spread: 0.0,
+                                color: [0, 0, 0, 80], radius: 4.0, inset: false,
+                            });
+                            display_list.push(DisplayCommand::Rect {
+                                x: popup_x, y: popup_y, w: anchor_w, h: popup_h,
+                                color: [255, 255, 255, 255], radius: 4.0,
+                            });
+                            display_list.push(DisplayCommand::Border {
+                                x: popup_x, y: popup_y, w: anchor_w, h: popup_h,
+                                width: 1.0, color: [200, 200, 210, 255],
+                            });
+                        }
+                        for opt in &options {
+                            let opt_y = popup_y + (idx as f32) * opt_h;
+                            // Hover detect - mouse_y v range.
+                            let hovered = self.mouse_x >= popup_x && self.mouse_x < popup_x + anchor_w
+                                && (self.mouse_y - self.scroll_y) >= opt_y && (self.mouse_y - self.scroll_y) < opt_y + opt_h;
+                            if hovered {
+                                display_list.push(DisplayCommand::Rect {
+                                    x: popup_x, y: opt_y, w: anchor_w, h: opt_h,
+                                    color: [230, 240, 255, 255], radius: 0.0,
+                                });
+                            }
+                            let txt = opt.text_content().trim().to_string();
+                            display_list.push(DisplayCommand::Text {
+                                x: popup_x + pad_l, y: opt_y + 6.0,
+                                content: txt,
+                                color: [40, 40, 50, 255],
+                                font_size: 14.0, bold: false,
+                                font_family: String::new(),
+                            });
+                            idx += 1;
+                        }
+                        // Save options + popup rect pro hit-test.
+                        // (Hit-test po render: handle_click najde option pres ranges.)
+                        // Implementacni shortcut: pri kliku najdeme option index z mouse_y.
+                    }
+                }
+            }
+
             // Scrollbar rendering: pri page content overflow Y emituj track + thumb.
             let viewport_w = r.config.width as f32;
             let viewport_h = r.config.height as f32;
@@ -2617,6 +2724,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         base_url,
         history: initial_url.into_iter().collect(),
         history_idx: 0,
+        open_select: None,
         auto_devtools,
         window: None,
         renderer: None,
