@@ -1996,6 +1996,10 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         current_path: Option<std::path::PathBuf>,
         /// Page URL (http(s)://... nebo file:///...) pro relative URL resolution.
         base_url: Option<String>,
+        /// Browser history: stack URLs + aktualni index.
+        /// Push pri navigate. Alt+Left = back (idx-=1), Alt+Right = forward (idx+=1).
+        history: Vec<String>,
+        history_idx: usize,
         /// Po startu otevri devtools.html v default browseru.
         auto_devtools: bool,
         window: Option<std::sync::Arc<Window>>,
@@ -2104,6 +2108,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                 }
                 // F12 = regenerace devtools.html + open v default browseru.
                 // F5 / Ctrl+R = reload current file.
+                // Alt+Left = back, Alt+Right = forward (browser history).
                 WindowEvent::KeyboardInput { event: key_event, .. } => {
                     if key_event.state != ElementState::Pressed { return; }
                     match key_event.logical_key {
@@ -2115,6 +2120,26 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                                 println!("[F5 reload] {}", p.display());
                                 self.load_path(&p);
                                 self.render();
+                            } else if let Some(url) = self.base_url.clone() {
+                                println!("[F5 reload] {url}");
+                                self.navigate_url_no_history(&url);
+                            }
+                        }
+                        Key::Named(NamedKey::ArrowLeft) => {
+                            // Alt+Left back. Bez modifier check zatim - winit ma KeyEvent.modifiers.
+                            if self.history_idx > 0 {
+                                self.history_idx -= 1;
+                                let url = self.history[self.history_idx].clone();
+                                println!("[history back] {url}");
+                                self.navigate_url_no_history(&url);
+                            }
+                        }
+                        Key::Named(NamedKey::ArrowRight) => {
+                            if self.history_idx + 1 < self.history.len() {
+                                self.history_idx += 1;
+                                let url = self.history[self.history_idx].clone();
+                                println!("[history forward] {url}");
+                                self.navigate_url_no_history(&url);
                             }
                         }
                         _ => {}
@@ -2315,9 +2340,17 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
             }
         }
 
-        /// Navigate na novou URL: pokud http(s):// fetchne pres ureq, jinak FS path.
-        /// Resetuje interpreter podobne jako load_path.
+        /// Navigate s history push (smaze forward history pri navigaci).
         fn navigate_url(&mut self, url: &str) {
+            // Truncate forward history.
+            self.history.truncate(self.history_idx + 1);
+            self.history.push(url.to_string());
+            self.history_idx = self.history.len() - 1;
+            self.navigate_url_no_history(url);
+        }
+
+        /// Navigate bez modifikace history (back/forward use this).
+        fn navigate_url_no_history(&mut self, url: &str) {
             let is_url = url.starts_with("http://") || url.starts_with("https://");
             if is_url {
                 let html = match fetch_text_url(url) { Some(s) => s, None => return };
@@ -2577,10 +2610,13 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
     }
 
     let event_loop = EventLoop::new().map_err(|e| e.to_string())?;
+    let initial_url = base_url.clone();
     let mut app = App {
         html, css,
         current_path: current_html_path,
         base_url,
+        history: initial_url.into_iter().collect(),
+        history_idx: 0,
         auto_devtools,
         window: None,
         renderer: None,
