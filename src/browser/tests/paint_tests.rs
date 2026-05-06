@@ -448,10 +448,12 @@ fn paint_svg_path_horizontal_vertical() {
 #[test]
 fn paint_svg_path_cubic_bezier_endpoint() {
     use crate::browser::paint::parse_svg_path;
-    // Emit endpoint only, ignore control points
+    // Cubic bezier ted tessellated (16 segmenty + start). Posledni bod = endpoint.
     let pts = parse_svg_path("M 0 0 C 10 10 20 20 30 30");
-    assert_eq!(pts.len(), 2);
-    assert_eq!(pts[1], (30.0, 30.0));
+    assert!(pts.len() >= 2, "alespon start + endpoint");
+    let last = *pts.last().unwrap();
+    assert!((last.0 - 30.0).abs() < 0.5 && (last.1 - 30.0).abs() < 0.5,
+        "endpoint = (30,30), got {:?}", last);
 }
 
 #[test]

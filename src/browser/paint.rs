@@ -313,10 +313,16 @@ fn capitalize_words(s: &str) -> String {
     out
 }
 
-/// Emituje SVG shape z child <rect>, <circle>, <ellipse>, <line>.
-/// Pri SVG <svg> tagu projde direktni children a emit native shapes.
+/// Emituje SVG shape z child <rect>, <circle>, <ellipse>, <line>, <polygon>,
+/// <polyline>, <path>, <text>, <g>. Podporuje fill, stroke, transform attribute.
 fn emit_svg_children(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>) {
+    let identity = [1.0_f32, 0.0, 0.0, 1.0, 0.0, 0.0];
+    emit_svg_children_xform(bx, &identity, cmds);
+}
+
+fn emit_svg_children_xform(bx: &LayoutBox, parent_xform: &[f32; 6], cmds: &mut Vec<DisplayCommand>) {
     let node = match &bx.node { Some(n) => n, None => return };
+    let origin = (bx.rect.x, bx.rect.y);
     for child in node.children.borrow().iter() {
         let tag = match child.tag_name() { Some(t) => t, None => continue };
         let attr_f = |name: &str, default: f32| -> f32 {
@@ -325,74 +331,130 @@ fn emit_svg_children(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>) {
         let attr_color = |name: &str, default: [u8;4]| -> [u8;4] {
             child.attr(name).and_then(|v| super::layout::parse_color(&v)).unwrap_or(default)
         };
+        // Local transform from "transform" attr.
+        let local_xform = child.attr("transform").map(|s| parse_svg_transform(&s)).unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+        let xform = compose_svg_transform(parent_xform, &local_xform);
+        // Transform helper: local SVG-space point -> render-space px.
+        let xf = |x: f32, y: f32| {
+            let (tx, ty) = apply_svg_transform(&xform, (x, y));
+            (origin.0 + tx, origin.1 + ty)
+        };
+        // "none" znamena nezadno (ne barva). Default fill = black, stroke = none.
+        let fill_attr = child.attr("fill");
+        let fill_none = fill_attr.as_deref().map(|v| v.trim() == "none").unwrap_or(false);
+        let fill = if fill_none { [0; 4] } else {
+            fill_attr.as_deref().and_then(|v| super::layout::parse_color(v)).unwrap_or([0, 0, 0, 255])
+        };
+        let stroke_attr = child.attr("stroke");
+        let stroke_none = stroke_attr.as_deref().map(|v| v.trim() == "none").unwrap_or(true); // default stroke=none
+        let stroke_c = stroke_attr.as_deref().and_then(|v| super::layout::parse_color(v)).unwrap_or([0, 0, 0, 255]);
+        let stroke_w = attr_f("stroke-width", 1.0);
         match tag.as_str() {
             "rect" => {
-                let x = bx.rect.x + attr_f("x", 0.0);
-                let y = bx.rect.y + attr_f("y", 0.0);
+                let x = attr_f("x", 0.0);
+                let y = attr_f("y", 0.0);
                 let w = attr_f("width", 0.0);
                 let h = attr_f("height", 0.0);
                 let rx = attr_f("rx", 0.0);
-                let fill = attr_color("fill", [0, 0, 0, 255]);
-                cmds.push(DisplayCommand::Rect { x, y, w, h, color: fill, radius: rx });
-                let stroke_w = attr_f("stroke-width", 0.0);
-                if stroke_w > 0.0 {
-                    let stroke_c = attr_color("stroke", [0,0,0,255]);
-                    cmds.push(DisplayCommand::Border { x, y, w, h, width: stroke_w, color: stroke_c });
+                // Rectangle pri identity xform: emit native Rect; jinak polygon.
+                let is_identity = (xform[0] - 1.0).abs() < 0.001 && xform[1].abs() < 0.001
+                    && xform[2].abs() < 0.001 && (xform[3] - 1.0).abs() < 0.001;
+                if is_identity {
+                    let (ax, ay) = xf(x, y);
+                    if !fill_none {
+                        cmds.push(DisplayCommand::Rect { x: ax, y: ay, w, h, color: fill, radius: rx });
+                    }
+                    if !stroke_none && stroke_w > 0.0 {
+                        cmds.push(DisplayCommand::Border { x: ax, y: ay, w, h, width: stroke_w, color: stroke_c });
+                    }
+                } else {
+                    let pts = vec![xf(x, y), xf(x+w, y), xf(x+w, y+h), xf(x, y+h)];
+                    if !fill_none {
+                        cmds.push(DisplayCommand::ClippedRect { color: fill, points: pts.clone() });
+                    }
+                    if !stroke_none && stroke_w > 0.0 {
+                        emit_stroked_polyline(&pts, stroke_w, stroke_c, true, cmds);
+                    }
                 }
             }
             "circle" => {
-                let cx = bx.rect.x + attr_f("cx", 0.0);
-                let cy = bx.rect.y + attr_f("cy", 0.0);
+                let cx = attr_f("cx", 0.0);
+                let cy = attr_f("cy", 0.0);
                 let r = attr_f("r", 0.0);
-                let fill = attr_color("fill", [0,0,0,255]);
-                cmds.push(DisplayCommand::Rect {
-                    x: cx - r, y: cy - r, w: 2.0*r, h: 2.0*r,
-                    color: fill, radius: r,
-                });
+                let is_identity = (xform[0] - 1.0).abs() < 0.001 && xform[1].abs() < 0.001
+                    && xform[2].abs() < 0.001 && (xform[3] - 1.0).abs() < 0.001;
+                if is_identity {
+                    let (acx, acy) = xf(cx, cy);
+                    if !fill_none {
+                        cmds.push(DisplayCommand::Rect {
+                            x: acx - r, y: acy - r, w: 2.0*r, h: 2.0*r,
+                            color: fill, radius: r,
+                        });
+                    }
+                    if !stroke_none && stroke_w > 0.0 {
+                        // Border na rounded rect, taky aproximace.
+                        cmds.push(DisplayCommand::Border {
+                            x: acx - r, y: acy - r, w: 2.0*r, h: 2.0*r,
+                            width: stroke_w, color: stroke_c,
+                        });
+                    }
+                } else {
+                    // Rotated/scaled circle -> aproximace polygon 32 vertices.
+                    let mut pts = Vec::with_capacity(32);
+                    for i in 0..32 {
+                        let a = i as f32 / 32.0 * std::f32::consts::TAU;
+                        pts.push(xf(cx + r * a.cos(), cy + r * a.sin()));
+                    }
+                    if !fill_none {
+                        cmds.push(DisplayCommand::ClippedRect { color: fill, points: pts.clone() });
+                    }
+                    if !stroke_none && stroke_w > 0.0 {
+                        emit_stroked_polyline(&pts, stroke_w, stroke_c, true, cmds);
+                    }
+                }
             }
             "ellipse" => {
-                let cx = bx.rect.x + attr_f("cx", 0.0);
-                let cy = bx.rect.y + attr_f("cy", 0.0);
+                let cx = attr_f("cx", 0.0);
+                let cy = attr_f("cy", 0.0);
                 let rx = attr_f("rx", 0.0);
                 let ry = attr_f("ry", 0.0);
-                let fill = attr_color("fill", [0,0,0,255]);
-                cmds.push(DisplayCommand::Rect {
-                    x: cx - rx, y: cy - ry, w: 2.0*rx, h: 2.0*ry,
-                    color: fill, radius: rx.min(ry),
-                });
+                // Tessellate ellipse jako polygon.
+                let mut pts = Vec::with_capacity(32);
+                for i in 0..32 {
+                    let a = i as f32 / 32.0 * std::f32::consts::TAU;
+                    pts.push(xf(cx + rx * a.cos(), cy + ry * a.sin()));
+                }
+                if !fill_none {
+                    cmds.push(DisplayCommand::ClippedRect { color: fill, points: pts.clone() });
+                }
+                if !stroke_none && stroke_w > 0.0 {
+                    emit_stroked_polyline(&pts, stroke_w, stroke_c, true, cmds);
+                }
             }
             "line" => {
-                let x1 = bx.rect.x + attr_f("x1", 0.0);
-                let y1 = bx.rect.y + attr_f("y1", 0.0);
-                let x2 = bx.rect.x + attr_f("x2", 0.0);
-                let y2 = bx.rect.y + attr_f("y2", 0.0);
-                let stroke_c = attr_color("stroke", [0,0,0,255]);
-                let stroke_w = attr_f("stroke-width", 1.0);
-                // Line approx: thin rect od (x1,y1) k (x2,y2) - axis-aligned only.
-                // Pro horizontal: stejny y, ruzny x.
-                if (y1 - y2).abs() < 0.5 {
-                    cmds.push(DisplayCommand::Rect {
-                        x: x1.min(x2), y: y1 - stroke_w / 2.0,
-                        w: (x1 - x2).abs(), h: stroke_w,
-                        color: stroke_c, radius: 0.0,
-                    });
-                } else if (x1 - x2).abs() < 0.5 {
-                    cmds.push(DisplayCommand::Rect {
-                        x: x1 - stroke_w / 2.0, y: y1.min(y2),
-                        w: stroke_w, h: (y1 - y2).abs(),
-                        color: stroke_c, radius: 0.0,
-                    });
+                let x1 = attr_f("x1", 0.0);
+                let y1 = attr_f("y1", 0.0);
+                let x2 = attr_f("x2", 0.0);
+                let y2 = attr_f("y2", 0.0);
+                let p1 = xf(x1, y1);
+                let p2 = xf(x2, y2);
+                // Line ma stroke default cerny i bez stroke attr (SVG spec).
+                let line_stroke = if stroke_none && stroke_attr.is_none() { false } else { !stroke_none };
+                if line_stroke && stroke_w > 0.0 {
+                    emit_stroked_segment(p1, p2, stroke_w, stroke_c, cmds);
                 }
             }
             "text" => {
-                let x = bx.rect.x + attr_f("x", 0.0);
-                let y = bx.rect.y + attr_f("y", 0.0);
-                let fill = attr_color("fill", [0,0,0,255]);
+                // Note: text transform pres render je out of scope - identity xform OK,
+                // jinak placement OK ale glyf neotacime.
+                let x = attr_f("x", 0.0);
+                let y = attr_f("y", 0.0);
+                let (ax, ay) = xf(x, y);
                 let font_size = attr_f("font-size", 14.0);
                 let content = child.text_content();
                 if !content.trim().is_empty() {
                     cmds.push(DisplayCommand::Text {
-                        x, y: y - font_size, content,
+                        x: ax, y: ay - font_size, content,
                         color: fill, font_size, bold: false,
                         font_family: String::new(),
                     });
@@ -400,58 +462,183 @@ fn emit_svg_children(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>) {
             }
             "polygon" => {
                 let points_str = child.attr("points").unwrap_or_default();
-                let pts = parse_svg_points(&points_str);
-                if pts.len() >= 3 {
-                    let fill = attr_color("fill", [0, 0, 0, 255]);
-                    let abs_pts: Vec<(f32, f32)> = pts.iter()
-                        .map(|(x, y)| (bx.rect.x + x, bx.rect.y + y)).collect();
-                    cmds.push(DisplayCommand::ClippedRect { color: fill, points: abs_pts });
+                let raw = parse_svg_points(&points_str);
+                if raw.len() >= 3 {
+                    let pts: Vec<(f32, f32)> = raw.iter().map(|(x, y)| xf(*x, *y)).collect();
+                    if !fill_none {
+                        cmds.push(DisplayCommand::ClippedRect { color: fill, points: pts.clone() });
+                    }
+                    if !stroke_none && stroke_w > 0.0 {
+                        emit_stroked_polyline(&pts, stroke_w, stroke_c, true, cmds);
+                    }
                 }
             }
             "polyline" => {
-                // Polyline = sequence ax-aligned line segments (zjednoduseni)
                 let points_str = child.attr("points").unwrap_or_default();
-                let pts = parse_svg_points(&points_str);
-                let stroke_c = attr_color("stroke", [0, 0, 0, 255]);
-                let stroke_w = attr_f("stroke-width", 1.0);
-                for w in pts.windows(2) {
-                    let (x1, y1) = (bx.rect.x + w[0].0, bx.rect.y + w[0].1);
-                    let (x2, y2) = (bx.rect.x + w[1].0, bx.rect.y + w[1].1);
-                    if (y1 - y2).abs() < 0.5 {
-                        cmds.push(DisplayCommand::Rect {
-                            x: x1.min(x2), y: y1 - stroke_w / 2.0,
-                            w: (x1 - x2).abs(), h: stroke_w,
-                            color: stroke_c, radius: 0.0,
-                        });
-                    } else if (x1 - x2).abs() < 0.5 {
-                        cmds.push(DisplayCommand::Rect {
-                            x: x1 - stroke_w / 2.0, y: y1.min(y2),
-                            w: stroke_w, h: (y1 - y2).abs(),
-                            color: stroke_c, radius: 0.0,
-                        });
-                    }
+                let raw = parse_svg_points(&points_str);
+                let pts: Vec<(f32, f32)> = raw.iter().map(|(x, y)| xf(*x, *y)).collect();
+                // Polyline default fill je black (nepovolovany ale spec). Pokud chce uzivatel ne,
+                // zada fill=none. Tady kdyz fill_none nebo neni explicitne -> jen stroke.
+                if !fill_none && fill_attr.is_some() && pts.len() >= 3 {
+                    cmds.push(DisplayCommand::ClippedRect { color: fill, points: pts.clone() });
+                }
+                let line_stroke = if stroke_none && stroke_attr.is_none() { false } else { !stroke_none };
+                if line_stroke && stroke_w > 0.0 {
+                    emit_stroked_polyline(&pts, stroke_w, stroke_c, false, cmds);
                 }
             }
             "path" => {
                 let d = child.attr("d").unwrap_or_default();
-                let pts = parse_svg_path(&d);
-                let fill = attr_color("fill", [0, 0, 0, 255]);
-                if pts.len() >= 3 {
-                    let abs_pts: Vec<(f32, f32)> = pts.iter()
-                        .map(|(x, y)| (bx.rect.x + x, bx.rect.y + y)).collect();
-                    cmds.push(DisplayCommand::ClippedRect { color: fill, points: abs_pts });
+                let raw = parse_svg_path(&d);
+                if !raw.is_empty() {
+                    let pts: Vec<(f32, f32)> = raw.iter().map(|(x, y)| xf(*x, *y)).collect();
+                    if !fill_none && pts.len() >= 3 {
+                        cmds.push(DisplayCommand::ClippedRect { color: fill, points: pts.clone() });
+                    }
+                    if !stroke_none && stroke_w > 0.0 {
+                        emit_stroked_polyline(&pts, stroke_w, stroke_c, false, cmds);
+                    }
                 }
             }
             "g" => {
-                // Group - rekurzivne emit children. Vyrobime virtual LayoutBox s tymto child as node.
+                // Group - rekurzivne emit children s vlastnim transform. Atributy fill/stroke
+                // by se mely inheritnout, ale to vyzaduje samostatny inheritance walk - skip.
                 let mut virt = LayoutBox::new();
                 virt.rect = bx.rect;
                 virt.node = Some(Rc::clone(child));
-                emit_svg_children(&virt, cmds);
+                emit_svg_children_xform(&virt, &xform, cmds);
             }
             _ => {}
         }
     }
+}
+
+/// Stroke segment (p1,p2) jako rotated quad (4-point ClippedRect).
+/// Pro polyline: zavolej per segment + push do cmds. Negarantuje join continuity
+/// (mitre/round joins out of scope).
+fn emit_stroked_segment(p1: (f32, f32), p2: (f32, f32), width: f32, color: [u8; 4], cmds: &mut Vec<DisplayCommand>) {
+    let dx = p2.0 - p1.0;
+    let dy = p2.1 - p1.1;
+    let len = (dx*dx + dy*dy).sqrt();
+    if len < 0.001 { return; }
+    let half = width * 0.5;
+    // Perpendicular normalized.
+    let px = -dy / len * half;
+    let py =  dx / len * half;
+    let pts = vec![
+        (p1.0 + px, p1.1 + py),
+        (p2.0 + px, p2.1 + py),
+        (p2.0 - px, p2.1 - py),
+        (p1.0 - px, p1.1 - py),
+    ];
+    cmds.push(DisplayCommand::ClippedRect { color, points: pts });
+}
+
+/// Stroke uzavrene/otevrene polyline. closed=true append (last->first).
+fn emit_stroked_polyline(pts: &[(f32, f32)], width: f32, color: [u8; 4], closed: bool, cmds: &mut Vec<DisplayCommand>) {
+    if pts.len() < 2 { return; }
+    for w in pts.windows(2) {
+        emit_stroked_segment(w[0], w[1], width, color, cmds);
+    }
+    if closed && pts.len() >= 3 {
+        emit_stroked_segment(*pts.last().unwrap(), pts[0], width, color, cmds);
+    }
+}
+
+/// Parsuje "transform" SVG attribute (translate/rotate/scale/matrix). Vrati
+/// 2D affine matice [a b c d e f] (row-major: x' = a*x + c*y + e, y' = b*x + d*y + f).
+fn parse_svg_transform(s: &str) -> [f32; 6] {
+    let mut m = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]; // identity
+    let mut i = 0;
+    let bytes = s.as_bytes();
+    while i < bytes.len() {
+        // Skip whitespace + commas
+        while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b',' || bytes[i] == b'\t') { i += 1; }
+        if i >= bytes.len() { break; }
+        // Read function name
+        let name_start = i;
+        while i < bytes.len() && (bytes[i] as char).is_ascii_alphabetic() { i += 1; }
+        let name = &s[name_start..i];
+        if name.is_empty() { break; }
+        // Skip to '('
+        while i < bytes.len() && bytes[i] != b'(' { i += 1; }
+        if i >= bytes.len() { break; }
+        i += 1;
+        // Read args
+        let args_start = i;
+        while i < bytes.len() && bytes[i] != b')' { i += 1; }
+        let args_str = &s[args_start..i];
+        let nums: Vec<f32> = args_str.split(|c: char| c == ',' || c.is_whitespace())
+            .filter(|p| !p.is_empty())
+            .filter_map(|p| p.parse::<f32>().ok())
+            .collect();
+        if i < bytes.len() { i += 1; } // skip ')'
+        // Compose s prev m.
+        let local = match name {
+            "translate" => {
+                let tx = *nums.first().unwrap_or(&0.0);
+                let ty = *nums.get(1).unwrap_or(&0.0);
+                [1.0, 0.0, 0.0, 1.0, tx, ty]
+            }
+            "scale" => {
+                let sx = *nums.first().unwrap_or(&1.0);
+                let sy = *nums.get(1).unwrap_or(&sx);
+                [sx, 0.0, 0.0, sy, 0.0, 0.0]
+            }
+            "rotate" => {
+                let ang = nums.first().copied().unwrap_or(0.0).to_radians();
+                let (s, c) = ang.sin_cos();
+                if let (Some(&cx), Some(&cy)) = (nums.get(1), nums.get(2)) {
+                    // rotate(angle, cx, cy) = T(cx,cy) * R(angle) * T(-cx,-cy)
+                    // Pre-compose into single matrix.
+                    let tx = cx - c*cx + s*cy;
+                    let ty = cy - s*cx - c*cy;
+                    [c, s, -s, c, tx, ty]
+                } else {
+                    [c, s, -s, c, 0.0, 0.0]
+                }
+            }
+            "skewX" => {
+                let ang = nums.first().copied().unwrap_or(0.0).to_radians();
+                [1.0, 0.0, ang.tan(), 1.0, 0.0, 0.0]
+            }
+            "skewY" => {
+                let ang = nums.first().copied().unwrap_or(0.0).to_radians();
+                [1.0, ang.tan(), 0.0, 1.0, 0.0, 0.0]
+            }
+            "matrix" => {
+                if nums.len() >= 6 { [nums[0], nums[1], nums[2], nums[3], nums[4], nums[5]] }
+                else { [1.0, 0.0, 0.0, 1.0, 0.0, 0.0] }
+            }
+            _ => [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        };
+        // m = m * local
+        let a = m[0]*local[0] + m[2]*local[1];
+        let b = m[1]*local[0] + m[3]*local[1];
+        let c = m[0]*local[2] + m[2]*local[3];
+        let d = m[1]*local[2] + m[3]*local[3];
+        let e = m[0]*local[4] + m[2]*local[5] + m[4];
+        let f = m[1]*local[4] + m[3]*local[5] + m[5];
+        m = [a, b, c, d, e, f];
+    }
+    m
+}
+
+/// Aplikuje 2D affine matrix na bod.
+fn apply_svg_transform(m: &[f32; 6], p: (f32, f32)) -> (f32, f32) {
+    (m[0]*p.0 + m[2]*p.1 + m[4], m[1]*p.0 + m[3]*p.1 + m[5])
+}
+
+/// Komponuj dve 2D affine matice: a * b.
+fn compose_svg_transform(a: &[f32; 6], b: &[f32; 6]) -> [f32; 6] {
+    [
+        a[0]*b[0] + a[2]*b[1],
+        a[1]*b[0] + a[3]*b[1],
+        a[0]*b[2] + a[2]*b[3],
+        a[1]*b[2] + a[3]*b[3],
+        a[0]*b[4] + a[2]*b[5] + a[4],
+        a[1]*b[4] + a[3]*b[5] + a[5],
+    ]
 }
 
 /// Parsuje SVG points attribute: "x1,y1 x2,y2 x3 y3" -> Vec<(f32, f32)>.
@@ -463,28 +650,120 @@ fn parse_svg_points(s: &str) -> Vec<(f32, f32)> {
     nums.chunks(2).filter(|c| c.len() == 2).map(|c| (c[0], c[1])).collect()
 }
 
-/// Parsuje SVG path d attribute - basic: M, L, H, V, Z (uppercase = absolute).
-/// Pro Bezier (C, Q) emit endpoint (approximace).
+/// Parsuje SVG path `d` attribut a tesseluje krivky (Bezier, arc) na polyline.
+/// Podporovane prikazy:
+/// - `M`/`m` move-to (absolute/relative)
+/// - `L`/`l` line-to
+/// - `H`/`h` horizontal line
+/// - `V`/`v` vertical line
+/// - `Z`/`z` close path
+/// - `C`/`c` cubic Bezier (3 control points)
+/// - `S`/`s` smooth cubic (control1 reflection)
+/// - `Q`/`q` quadratic Bezier (1 control point)
+/// - `T`/`t` smooth quadratic
+/// - `A`/`a` elliptical arc (rx ry x-rot large-arc sweep x y)
 pub fn parse_svg_path(d: &str) -> Vec<(f32, f32)> {
-    let mut pts = Vec::new();
+    /// Subdivide cubic bezier - 16 segmenty (linearne casovane).
+    fn cubic_tessellate(p0: (f32,f32), p1: (f32,f32), p2: (f32,f32), p3: (f32,f32), out: &mut Vec<(f32,f32)>) {
+        const N: u32 = 16;
+        for i in 1..=N {
+            let t = i as f32 / N as f32;
+            let mt = 1.0 - t;
+            let x = mt*mt*mt*p0.0 + 3.0*mt*mt*t*p1.0 + 3.0*mt*t*t*p2.0 + t*t*t*p3.0;
+            let y = mt*mt*mt*p0.1 + 3.0*mt*mt*t*p1.1 + 3.0*mt*t*t*p2.1 + t*t*t*p3.1;
+            out.push((x, y));
+        }
+    }
+    /// Subdivide quadratic bezier - 12 segmenty.
+    fn quad_tessellate(p0: (f32,f32), p1: (f32,f32), p2: (f32,f32), out: &mut Vec<(f32,f32)>) {
+        const N: u32 = 12;
+        for i in 1..=N {
+            let t = i as f32 / N as f32;
+            let mt = 1.0 - t;
+            let x = mt*mt*p0.0 + 2.0*mt*t*p1.0 + t*t*p2.0;
+            let y = mt*mt*p0.1 + 2.0*mt*t*p1.1 + t*t*p2.1;
+            out.push((x, y));
+        }
+    }
+    /// Tessellate elliptic arc per SVG implementation notes (W3C SVG 1.1 F.6).
+    fn arc_tessellate(p0: (f32,f32), rx: f32, ry: f32, x_rot_deg: f32, large_arc: bool, sweep: bool, p1: (f32,f32), out: &mut Vec<(f32,f32)>) {
+        let rx = rx.abs();
+        let ry = ry.abs();
+        if rx == 0.0 || ry == 0.0 || (p0.0 == p1.0 && p0.1 == p1.1) {
+            out.push(p1);
+            return;
+        }
+        let phi = x_rot_deg.to_radians();
+        let cos_p = phi.cos();
+        let sin_p = phi.sin();
+        // Step 1: compute (x1', y1')
+        let dx2 = (p0.0 - p1.0) / 2.0;
+        let dy2 = (p0.1 - p1.1) / 2.0;
+        let x1p =  cos_p * dx2 + sin_p * dy2;
+        let y1p = -sin_p * dx2 + cos_p * dy2;
+        // Correction of out-of-range radii
+        let mut rx = rx;
+        let mut ry = ry;
+        let lambda = (x1p*x1p) / (rx*rx) + (y1p*y1p) / (ry*ry);
+        if lambda > 1.0 {
+            let s = lambda.sqrt();
+            rx *= s;
+            ry *= s;
+        }
+        // Step 2: compute (cx', cy')
+        let sign = if large_arc == sweep { -1.0 } else { 1.0 };
+        let sq = ((rx*rx*ry*ry - rx*rx*y1p*y1p - ry*ry*x1p*x1p) / (rx*rx*y1p*y1p + ry*ry*x1p*x1p)).max(0.0);
+        let coef = sign * sq.sqrt();
+        let cxp = coef * (rx * y1p / ry);
+        let cyp = coef * -(ry * x1p / rx);
+        // Step 3: compute (cx, cy)
+        let cx = cos_p * cxp - sin_p * cyp + (p0.0 + p1.0) / 2.0;
+        let cy = sin_p * cxp + cos_p * cyp + (p0.1 + p1.1) / 2.0;
+        // Step 4: compute angles
+        let ang = |ux: f32, uy: f32, vx: f32, vy: f32| -> f32 {
+            let dot = ux*vx + uy*vy;
+            let len = (ux*ux+uy*uy).sqrt() * (vx*vx+vy*vy).sqrt();
+            let mut a = (dot / len).clamp(-1.0, 1.0).acos();
+            if ux*vy - uy*vx < 0.0 { a = -a; }
+            a
+        };
+        let theta1 = ang(1.0, 0.0, (x1p - cxp)/rx, (y1p - cyp)/ry);
+        let mut delta_theta = ang((x1p - cxp)/rx, (y1p - cyp)/ry, (-x1p - cxp)/rx, (-y1p - cyp)/ry);
+        if !sweep && delta_theta > 0.0 { delta_theta -= 2.0 * std::f32::consts::PI; }
+        if sweep && delta_theta < 0.0 { delta_theta += 2.0 * std::f32::consts::PI; }
+        // Tessellate - 24 segmenty po 360 stupnich.
+        let n = ((delta_theta.abs() / (std::f32::consts::PI / 12.0)).ceil() as u32).max(1);
+        for i in 1..=n {
+            let t = i as f32 / n as f32;
+            let theta = theta1 + delta_theta * t;
+            let cos_t = theta.cos();
+            let sin_t = theta.sin();
+            let x = cos_p * (rx * cos_t) - sin_p * (ry * sin_t) + cx;
+            let y = sin_p * (rx * cos_t) + cos_p * (ry * sin_t) + cy;
+            out.push((x, y));
+        }
+    }
+
+    let mut pts: Vec<(f32, f32)> = Vec::new();
     let mut x = 0.0_f32;
     let mut y = 0.0_f32;
     let mut start = (0.0_f32, 0.0_f32);
+    // Last control point pro smooth bezier (S, T).
+    let mut last_cubic_ctrl: Option<(f32, f32)> = None;
+    let mut last_quad_ctrl: Option<(f32, f32)> = None;
     let bytes = d.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
         let c = bytes[i] as char;
         if !c.is_ascii_alphabetic() { i += 1; continue; }
         i += 1;
-        // Skip whitespace
         while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t' || bytes[i] == b'\n' || bytes[i] == b',') { i += 1; }
-        // Sber numericke args
         let mut nums: Vec<f32> = Vec::new();
         while i < bytes.len() && !(bytes[i] as char).is_ascii_alphabetic() {
             let start_idx = i;
-            // Sign + digits + . + e?
             if bytes[i] == b'-' || bytes[i] == b'+' { i += 1; }
-            while i < bytes.len() && ((bytes[i] as char).is_ascii_digit() || bytes[i] == b'.' || bytes[i] == b'e' || bytes[i] == b'E') {
+            while i < bytes.len() && ((bytes[i] as char).is_ascii_digit() || bytes[i] == b'.' || bytes[i] == b'e' || bytes[i] == b'E'
+                                       || ((bytes[i] == b'-' || bytes[i] == b'+') && i > start_idx && (bytes[i-1] == b'e' || bytes[i-1] == b'E'))) {
                 i += 1;
             }
             if start_idx < i {
@@ -492,48 +771,130 @@ pub fn parse_svg_path(d: &str) -> Vec<(f32, f32)> {
                     nums.push(n);
                 }
             }
-            // Skip separator
             while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t' || bytes[i] == b'\n' || bytes[i] == b',') { i += 1; }
             if i >= bytes.len() || (bytes[i] as char).is_ascii_alphabetic() { break; }
         }
         match c {
             'M' => {
-                if nums.len() >= 2 { x = nums[0]; y = nums[1]; pts.push((x, y)); start = (x, y); }
+                let mut k = 0;
+                if nums.len() >= 2 { x = nums[0]; y = nums[1]; pts.push((x, y)); start = (x, y); k = 2; }
+                while k + 1 < nums.len() { x = nums[k]; y = nums[k+1]; pts.push((x, y)); k += 2; }
+                last_cubic_ctrl = None; last_quad_ctrl = None;
             }
             'm' => {
-                if nums.len() >= 2 { x += nums[0]; y += nums[1]; pts.push((x, y)); start = (x, y); }
+                let mut k = 0;
+                if nums.len() >= 2 { x += nums[0]; y += nums[1]; pts.push((x, y)); start = (x, y); k = 2; }
+                while k + 1 < nums.len() { x += nums[k]; y += nums[k+1]; pts.push((x, y)); k += 2; }
+                last_cubic_ctrl = None; last_quad_ctrl = None;
             }
             'L' => {
                 let mut k = 0;
                 while k + 1 < nums.len() { x = nums[k]; y = nums[k+1]; pts.push((x, y)); k += 2; }
+                last_cubic_ctrl = None; last_quad_ctrl = None;
             }
             'l' => {
                 let mut k = 0;
                 while k + 1 < nums.len() { x += nums[k]; y += nums[k+1]; pts.push((x, y)); k += 2; }
+                last_cubic_ctrl = None; last_quad_ctrl = None;
             }
-            'H' => { for n in nums { x = n; pts.push((x, y)); } }
-            'h' => { for n in nums { x += n; pts.push((x, y)); } }
-            'V' => { for n in nums { y = n; pts.push((x, y)); } }
-            'v' => { for n in nums { y += n; pts.push((x, y)); } }
-            'Z' | 'z' => { pts.push(start); }
+            'H' => { for n in nums { x = n; pts.push((x, y)); } last_cubic_ctrl = None; last_quad_ctrl = None; }
+            'h' => { for n in nums { x += n; pts.push((x, y)); } last_cubic_ctrl = None; last_quad_ctrl = None; }
+            'V' => { for n in nums { y = n; pts.push((x, y)); } last_cubic_ctrl = None; last_quad_ctrl = None; }
+            'v' => { for n in nums { y += n; pts.push((x, y)); } last_cubic_ctrl = None; last_quad_ctrl = None; }
+            'Z' | 'z' => { pts.push(start); x = start.0; y = start.1; }
             'C' | 'c' => {
-                // Cubic Bezier - emit endpoint (ignore control points)
                 let mut k = 0;
                 while k + 5 < nums.len() {
-                    if c == 'C' { x = nums[k+4]; y = nums[k+5]; }
-                    else { x += nums[k+4]; y += nums[k+5]; }
-                    pts.push((x, y));
+                    let p0 = (x, y);
+                    let (c1, c2, p3) = if c == 'C' {
+                        ((nums[k], nums[k+1]), (nums[k+2], nums[k+3]), (nums[k+4], nums[k+5]))
+                    } else {
+                        ((x+nums[k], y+nums[k+1]), (x+nums[k+2], y+nums[k+3]), (x+nums[k+4], y+nums[k+5]))
+                    };
+                    cubic_tessellate(p0, c1, c2, p3, &mut pts);
+                    x = p3.0; y = p3.1;
+                    last_cubic_ctrl = Some(c2);
+                    last_quad_ctrl = None;
                     k += 6;
                 }
             }
-            'Q' | 'q' => {
-                // Quadratic Bezier - emit endpoint
+            'S' | 's' => {
+                // Smooth cubic - control1 = reflection of last cubic ctrl through current point.
                 let mut k = 0;
                 while k + 3 < nums.len() {
-                    if c == 'Q' { x = nums[k+2]; y = nums[k+3]; }
-                    else { x += nums[k+2]; y += nums[k+3]; }
-                    pts.push((x, y));
+                    let p0 = (x, y);
+                    let c1 = match last_cubic_ctrl {
+                        Some(prev) => (2.0*x - prev.0, 2.0*y - prev.1),
+                        None => p0,
+                    };
+                    let (c2, p3) = if c == 'S' {
+                        ((nums[k], nums[k+1]), (nums[k+2], nums[k+3]))
+                    } else {
+                        ((x+nums[k], y+nums[k+1]), (x+nums[k+2], y+nums[k+3]))
+                    };
+                    cubic_tessellate(p0, c1, c2, p3, &mut pts);
+                    x = p3.0; y = p3.1;
+                    last_cubic_ctrl = Some(c2);
+                    last_quad_ctrl = None;
                     k += 4;
+                }
+            }
+            'Q' | 'q' => {
+                let mut k = 0;
+                while k + 3 < nums.len() {
+                    let p0 = (x, y);
+                    let (c1, p2) = if c == 'Q' {
+                        ((nums[k], nums[k+1]), (nums[k+2], nums[k+3]))
+                    } else {
+                        ((x+nums[k], y+nums[k+1]), (x+nums[k+2], y+nums[k+3]))
+                    };
+                    quad_tessellate(p0, c1, p2, &mut pts);
+                    x = p2.0; y = p2.1;
+                    last_quad_ctrl = Some(c1);
+                    last_cubic_ctrl = None;
+                    k += 4;
+                }
+            }
+            'T' | 't' => {
+                // Smooth quadratic - control = reflection of last quad ctrl.
+                let mut k = 0;
+                while k + 1 < nums.len() {
+                    let p0 = (x, y);
+                    let c1 = match last_quad_ctrl {
+                        Some(prev) => (2.0*x - prev.0, 2.0*y - prev.1),
+                        None => p0,
+                    };
+                    let p2 = if c == 'T' {
+                        (nums[k], nums[k+1])
+                    } else {
+                        (x+nums[k], y+nums[k+1])
+                    };
+                    quad_tessellate(p0, c1, p2, &mut pts);
+                    x = p2.0; y = p2.1;
+                    last_quad_ctrl = Some(c1);
+                    last_cubic_ctrl = None;
+                    k += 2;
+                }
+            }
+            'A' | 'a' => {
+                // Elliptic arc: rx ry x-axis-rotation large-arc-flag sweep-flag x y
+                let mut k = 0;
+                while k + 6 < nums.len() {
+                    let rx = nums[k];
+                    let ry = nums[k+1];
+                    let xrot = nums[k+2];
+                    let large = nums[k+3] != 0.0;
+                    let sweep = nums[k+4] != 0.0;
+                    let p0 = (x, y);
+                    let p1 = if c == 'A' {
+                        (nums[k+5], nums[k+6])
+                    } else {
+                        (x + nums[k+5], y + nums[k+6])
+                    };
+                    arc_tessellate(p0, rx, ry, xrot, large, sweep, p1, &mut pts);
+                    x = p1.0; y = p1.1;
+                    last_cubic_ctrl = None; last_quad_ctrl = None;
+                    k += 7;
                 }
             }
             _ => {}
