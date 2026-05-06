@@ -462,6 +462,9 @@ pub struct LayoutBox {
     pub flex_basis: String,
     pub row_gap: f32,
     pub column_gap: f32,
+    /// Percent gap (0..1) - pri Some, resolve proti container content size.
+    pub row_gap_pct: Option<f32>,
+    pub column_gap_pct: Option<f32>,
     /// CSS Logical Properties continued
     pub block_size_v: String,
     pub inline_size_v: String,
@@ -804,6 +807,8 @@ impl LayoutBox {
             flex_basis: String::new(),
             row_gap: 0.0,
             column_gap: 0.0,
+            row_gap_pct: None,
+            column_gap_pct: None,
             block_size_v: String::new(),
             inline_size_v: String::new(),
             table_layout: String::new(),

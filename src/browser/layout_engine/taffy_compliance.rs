@@ -272,14 +272,25 @@ mod tests {
                 "flex-shrink" => bx.flex_shrink = v.parse().unwrap_or(1.0),
                 "flex-basis" => bx.flex_basis = v.clone(),
                 "row-gap" => {
-                    // CSS spec: percent row-gap pri indefinite (no explicit) parent height = 0.
-                    if v.trim().ends_with('%') && bx.explicit_height.is_none() {
-                        bx.row_gap = 0.0;
+                    if let Some(num) = v.trim().strip_suffix('%') {
+                        let p: f32 = num.parse().unwrap_or(0.0);
+                        bx.row_gap_pct = Some(p / 100.0);
+                        // Pri indefinite parent = 0, jinak fallback px (resolve later).
+                        if bx.explicit_height.is_none() { bx.row_gap = 0.0; }
+                        else { bx.row_gap = container_h * p / 100.0; }
                     } else {
                         bx.row_gap = parse_dim(v, container_h).unwrap_or(0.0);
                     }
                 }
-                "column-gap" => bx.column_gap = parse_dim(v, container_w).unwrap_or(0.0),
+                "column-gap" => {
+                    if let Some(num) = v.trim().strip_suffix('%') {
+                        let p: f32 = num.parse().unwrap_or(0.0);
+                        bx.column_gap_pct = Some(p / 100.0);
+                        bx.column_gap = container_w * p / 100.0;
+                    } else {
+                        bx.column_gap = parse_dim(v, container_w).unwrap_or(0.0);
+                    }
+                }
                 "gap" => {
                     let g = parse_dim(v, container_w).unwrap_or(0.0);
                     bx.row_gap = g; bx.column_gap = g;
