@@ -46,4 +46,8 @@ bytemuck = { version = "1.16", features = ["derive"] }  # vertex bytes
 fontdue = "0.9"  # font rasterizer pro glyph atlas
 # taffy odstraneno - vlastni layout_engine v src/browser/layout_engine/
 # (inspirovano taffy MIT licence; mame plnou kontrolu nad layoutem)
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp"] }  # image decoder
+# Image formaty: pure-Rust co image crate nabizi.
+# AVIF DEKODER vyzaduje "avif-native" feature ktery linkuje C dav1d (NASM build).
+# To je out-of-scope pro pure-Rust projekt. AVIF DECODE je TODO (separate crate
+# nebo system dav1d).
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "webp", "tiff", "ico", "tga", "exr", "qoi", "ff", "hdr", "pnm", "dds"] }
