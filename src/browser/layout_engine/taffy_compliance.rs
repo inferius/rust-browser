@@ -886,7 +886,10 @@ mod tests {
             let _ = pad_b_c;
             // Text content blocks empty passthrough (line box drives layout).
             let has_text_content = child.text.is_some();
-            let is_empty_passthrough = child.rect.height == 0.0 && pad_t_c == 0.0 && pad_b_c == 0.0 && !has_text_content;
+            // BFC (overflow != visible) prevents collapse-through.
+            let bfc_blocks_passthrough = matches!(child.overflow_x.as_str(), "hidden" | "scroll" | "auto" | "clip")
+                || matches!(child.overflow_y.as_str(), "hidden" | "scroll" | "auto" | "clip");
+            let is_empty_passthrough = child.rect.height == 0.0 && pad_t_c == 0.0 && pad_b_c == 0.0 && !has_text_content && !bfc_blocks_passthrough;
             if is_empty_passthrough {
                 cursor_y = natural_y;
                 let combined = collapsed.max(m_b);
