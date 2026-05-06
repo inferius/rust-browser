@@ -90,26 +90,59 @@ Vsechny moduly viz `TODO_CSS.md`. Hlavni chybejici:
 - [ ] **CSS Shapes L1**: `shape-outside`, `shape-margin`, `shape-image-threshold`.
   Float-aware text wrap. Bez flow text wrap (nas inline jen line boxes).
 - [ ] **CSS Color L5** - advanced color manipulation, color-mix variants.
-- [ ] **CSS Masking L1**: `mask-image`, `mask-mode`, `mask-position/size/repeat/composite`.
+- [/] **CSS Masking L1**: `mask-image` integrovany pres MaskBegin/End + render
+  pipeline. Mask-mode/repeat/position/size/composite TODO.
 - [ ] **CSS writing-mode L4**: `vertical-lr`, `vertical-rl`, `sideways-lr/-rl`.
   Swap main/cross axes ve flex/grid. 10 taffy fixtures je kvuli tomu skip.
-- [ ] **CSS Pseudo-Elements L4**: `::placeholder`, `::file-selector-button`,
-  `::backdrop`, `::selection`, `::target-text`.
+- [/] **CSS Pseudo-Elements L4**: ::placeholder hotovy, ::backdrop / ::selection /
+  ::file-selector-button / ::target-text TODO.
 - [ ] **CSS Forms L4**: form validation `:valid`/`:invalid` runtime.
 - [ ] **CSS Tables L3**: `||` column combinator (table cell selektor).
 
 ### Drobnosti
-- [ ] `:lang()`, `:dir()`
-- [ ] `:focus-visible`, `:focus-within` runtime state (parser hotov).
-- [ ] `forced-color-adjust`
-- [ ] `scrollbar-gutter`
+- [x] `:lang()` (BCP 47 prefix match), `:dir()` (ltr/rtl)
+- [x] `:hover`, `:active`, `:focus`, `:focus-visible`, `:focus-within` runtime state
+  (thread-local hovered/active/focused id, render loop sets v handle_click + update_hover).
+- [/] `forced-color-adjust` (parser only)
+- [/] `scrollbar-gutter` (parser only - reserve space TODO)
 - [ ] `overflow-clip-margin`
-- [ ] Multiple backgrounds (carkova syntax + paint integrace).
+- [x] Multiple backgrounds (carkova syntax + paint integrace - bg layers loop).
+- [/] Multi-stop gradient: vertex shader bere jen 2 stops (first/last). 3+ stops
+  TODO (vyzaduje rozsireni Vertex struktury color3/color4 + WGSL update).
 - [ ] Relative color syntax + `color()` namespace + system colors.
 - [ ] Container Queries: per-element ancestor lookup (zatim viewport).
 - [ ] Anchor Positioning: `inset-area`.
 - [ ] Scroll-driven Animations: `animation-timeline: view()`.
 - [ ] View Transitions: `::view-transition*` pseudo-elements.
+
+### SVG (improved)
+- [x] `<rect>`, `<circle>`, `<ellipse>`, `<line>`, `<text>`, `<polygon>`, `<polyline>`, `<path>`, `<g>`
+- [x] Path tessellation: M/L/H/V/Z + C/c/S/s/Q/q/T/t Bezier (16/12 segments)
+- [x] Path arc A/a (W3C SVG 1.1 F.6 elliptic arc)
+- [x] Per-element transform attribute (translate/rotate/scale/skew/matrix)
+- [x] viewBox + preserveAspectRatio (xMin/Mid/Max + meet/slice variants)
+- [x] Stroke pres rotated quads na vsechny shapes
+- [ ] SVG gradients (`<linearGradient>`, `<radialGradient>`)
+- [ ] SVG `<defs>` + `<use>` (template/clone)
+- [ ] SVG `<clipPath>` + `<mask>` (SVG-specific)
+- [ ] SVG filter primitives (`<filter>`, `<feGaussianBlur>`, `<feColorMatrix>`)
+- [ ] Inheritance fill/stroke v `<g>` na children
+- [ ] External `<img src=".svg">` loading
+
+### Form elementy
+- [x] `<input>` (text/checkbox/radio/button) - layout + value sync
+- [x] `<select>` dropdown closed (rounded box + chevron + selected option text)
+- [x] `<textarea>` - layout box default 200x60
+- [x] `<progress>` - bar + fill dle value/max
+- [x] `<meter>` - bar + fill (zelena/cervena dle low-high range)
+- [x] `<video>` - placeholder (poster image nebo dark+play triangle)
+- [x] `<audio>` - placeholder controls bar (kruh play + progress track)
+- [ ] `<select>` open dropdown (klik -> popup s options)
+- [ ] `<input type="file">` file picker
+- [ ] `<input type="date|time|month|week|color|range">` native pickers
+- [ ] `<datalist>` autocomplete
+- [ ] Form submit handling (value sync je, navigation submit ne)
+- [ ] Real video/audio decode (vyzaduje C deps - ffmpeg/symphonia)
 
 ### Out of scope
 - [-] Houdini (Paint/Layout/Properties API).
