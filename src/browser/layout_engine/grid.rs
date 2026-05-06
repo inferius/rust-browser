@@ -1450,7 +1450,23 @@ pub fn layout_grid(bx: &mut LayoutBox) {
     // Update parent height jen kdyz neni explicit set (auto height grow z obsahu).
     if bx.explicit_height.is_none() {
         let total_h = y_cursor + pad_t + pad_b;
-        if bx.rect.height < total_h {
+        // Pri percent rows v indefinite container: nepritahuj container na sum
+        // tracks - container = intrinsic (max item content height).
+        let has_percent_row = !rows_explicit_str.is_empty() && rows_explicit_str.contains('%');
+        if has_percent_row {
+            // Najdi max item explicit_height (intrinsic).
+            let mut max_item_h = 0.0_f32;
+            for ch in bx.children.iter() {
+                if super::is_out_of_flow(ch) || matches!(ch.display, super::super::layout::Display::None) { continue; }
+                if let Some(h) = ch.explicit_height {
+                    if h > max_item_h { max_item_h = h; }
+                }
+            }
+            let intrinsic_h = max_item_h + pad_t + pad_b;
+            if bx.rect.height < intrinsic_h {
+                bx.rect.height = intrinsic_h;
+            }
+        } else if bx.rect.height < total_h {
             bx.rect.height = total_h;
         }
     }
