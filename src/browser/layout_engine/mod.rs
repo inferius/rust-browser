@@ -46,6 +46,9 @@ fn layout_absolute_child_inner(child: &mut LayoutBox, parent_x: f32, parent_y: f
         child.rect.x = 0.0; child.rect.y = 0.0;
         if needs_w { child.rect.width = 0.0; }
         if needs_h { child.rect.height = 0.0; }
+        // Pre-pass intrinsic mode marker: rect = 0 v constrained axis.
+        // Pri Flex: preserve item basis (no shrink).
+        let saved_intrinsic_mode = std::mem::replace(&mut child.taffy_intrinsic_mode, true);
         match child.display {
             Display::Flex => flex::layout_flex(child),
             Display::Grid => grid::layout_grid(child),
@@ -75,6 +78,7 @@ fn layout_absolute_child_inner(child: &mut LayoutBox, parent_x: f32, parent_y: f
         let intrinsic_w = if needs_w { child.rect.width } else { saved.width };
         let intrinsic_h = if needs_h { child.rect.height } else { saved.height };
         child.rect = saved;
+        child.taffy_intrinsic_mode = saved_intrinsic_mode;
         if needs_w && intrinsic_w > 0.0 { child.rect.width = intrinsic_w; }
         if needs_h && intrinsic_h > 0.0 { child.rect.height = intrinsic_h; }
     }

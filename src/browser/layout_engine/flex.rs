@@ -415,10 +415,15 @@ pub fn layout_flex(bx: &mut LayoutBox) {
     // 3. Collect lines (wrap)
     let lines = collect_lines(&items, container_main, wrap, if direction.is_row() { col_gap } else { row_gap });
 
-    // 4. Resolve flexible lengths per line
+    // 4. Resolve flexible lengths per line. V intrinsic_mode pouzij max-content (no shrink).
     let mut resolved_lines: Vec<ResolvedLine> = Vec::new();
     for line_indices in &lines {
-        let resolved = resolve_flexible_lengths(&items, line_indices, container_main,
+        let effective_container_main = if bx.taffy_intrinsic_mode {
+            let total: f32 = line_indices.iter().map(|&i| items[i].main_size).sum();
+            let gaps = (line_indices.len().saturating_sub(1) as f32) * if direction.is_row() { col_gap } else { row_gap };
+            total + gaps
+        } else { container_main };
+        let resolved = resolve_flexible_lengths(&items, line_indices, effective_container_main,
             if direction.is_row() { col_gap } else { row_gap });
         resolved_lines.push(resolved);
     }

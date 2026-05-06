@@ -612,6 +612,8 @@ pub struct LayoutBox {
     /// Pseudo-flex: byl Block, ale heuristika ho zmenila na Flex (align-items=baseline).
     /// Pri baseline calc pak pouzij synth (block) baseline misto first-child.
     pub pseudo_flex: bool,
+    /// Intrinsic mode marker (pre-pass). Pri Flex: skip shrink (preserve max-content).
+    pub taffy_intrinsic_mode: bool,
 }
 
 impl LayoutBox {
@@ -893,6 +895,7 @@ impl LayoutBox {
             selection_color: None,
             taffy_mode: false,
             pseudo_flex: false,
+            taffy_intrinsic_mode: false,
         }
     }
 
