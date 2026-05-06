@@ -57,12 +57,89 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         .filter(|c| !super::is_out_of_flow(c) && !matches!(c.display, super::super::layout::Display::None))
         .count();
     let rows_explicit_str = bx.grid_template_rows.clone();
+    // Spocti needed_rows simulaci placement (vc. spans) - drive jen ceil(items/cols).
+    let needed_from_placement = {
+        let cols_n = cols.max(1);
+        let mut occupied: Vec<bool> = Vec::new();
+        let mut max_row_used: usize = 0;
+        let mut auto_cur = 0usize;
+        for child in bx.children.iter() {
+            if super::is_out_of_flow(child) || matches!(child.display, super::super::layout::Display::None) { continue; }
+            let exp_col = if child.grid_column_start > 0 { Some((child.grid_column_start - 1) as usize) } else { None };
+            let exp_row = if child.grid_row_start > 0 { Some((child.grid_row_start - 1) as usize) } else { None };
+            let span_col = if child.grid_column_span > 0 { child.grid_column_span as usize }
+                           else if child.grid_column_end > 0 && child.grid_column_start > 0 { (child.grid_column_end - child.grid_column_start).max(1) as usize }
+                           else { 1 }.min(cols_n);
+            let span_row = if child.grid_row_span > 0 { child.grid_row_span as usize }
+                           else if child.grid_row_end > 0 && child.grid_row_start > 0 { (child.grid_row_end - child.grid_row_start).max(1) as usize }
+                           else { 1 };
+            let (row, col) = if let (Some(r), Some(c)) = (exp_row, exp_col) { (r, c) }
+                else if let Some(c) = exp_col {
+                    let mut r = 0;
+                    while occupied.len() <= (r + span_row) * cols_n { occupied.resize(((r + span_row + 1) * cols_n).max(1), false); }
+                    while {
+                        let mut blocked = false;
+                        for dr in 0..span_row {
+                            for dc in 0..span_col {
+                                let i = (r + dr) * cols_n + (c + dc);
+                                if i < occupied.len() && occupied[i] { blocked = true; break; }
+                            }
+                            if blocked { break; }
+                        }
+                        blocked
+                    } { r += 1; while occupied.len() <= (r + span_row) * cols_n { occupied.resize(((r + span_row + 1) * cols_n).max(1), false); } }
+                    (r, c)
+                }
+                else if let Some(r) = exp_row {
+                    while occupied.len() <= (r + span_row) * cols_n { occupied.resize(((r + span_row + 1) * cols_n).max(1), false); }
+                    let mut c = 0;
+                    while {
+                        let mut blocked = false;
+                        for dr in 0..span_row {
+                            for dc in 0..span_col {
+                                let i = (r + dr) * cols_n + (c + dc);
+                                if i < occupied.len() && occupied[i] { blocked = true; break; }
+                            }
+                            if blocked { break; }
+                        }
+                        blocked && c + span_col <= cols_n
+                    } { c += 1; }
+                    (r, c)
+                }
+                else {
+                    let mut idx = auto_cur;
+                    loop {
+                        let r = idx / cols_n; let c = idx % cols_n;
+                        if c + span_col > cols_n { idx = (r + 1) * cols_n; continue; }
+                        while occupied.len() <= (r + span_row) * cols_n { occupied.resize(((r + span_row + 1) * cols_n).max(1), false); }
+                        let mut blocked = false;
+                        for dr in 0..span_row {
+                            for dc in 0..span_col {
+                                let i = (r + dr) * cols_n + (c + dc);
+                                if i < occupied.len() && occupied[i] { blocked = true; break; }
+                            }
+                            if blocked { break; }
+                        }
+                        if !blocked { auto_cur = idx + 1; break (r, c); }
+                        idx += 1;
+                    }
+                };
+            for dr in 0..span_row {
+                for dc in 0..span_col {
+                    let i = (row + dr) * cols_n + (col + dc);
+                    while occupied.len() <= i { occupied.push(false); }
+                    if i < occupied.len() { occupied[i] = true; }
+                }
+            }
+            if row + span_row > max_row_used { max_row_used = row + span_row; }
+        }
+        max_row_used
+    };
     let rows = if !rows_explicit_str.is_empty() {
         let count = parse_track_count(&rows_explicit_str);
-        let needed = in_flow_count.div_ceil(cols.max(1));
-        count.max(needed)
+        count.max(needed_from_placement)
     } else {
-        in_flow_count.div_ceil(cols.max(1))
+        needed_from_placement.max(1)
     };
 
     // Resolve row tracks
