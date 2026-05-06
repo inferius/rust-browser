@@ -804,13 +804,14 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                 if bsl > *entry { *entry = bsl; }
             }
         }
-        // Adjust y per item.
+        // Adjust y per item, preserve margin-top offset.
         for &(real_idx, row, cy) in &item_row_info {
             if let (Some(&own_bsl), Some(&row_max)) = (item_baselines.get(&real_idx), row_max_baseline.get(&row)) {
                 let offset = row_max - own_bsl;
                 if offset.abs() > 0.01 {
                     let item = &mut bx.children[real_idx];
-                    item.rect.y = bx.rect.y + bw_t + cy + offset;
+                    let m_t = item.margin_top.unwrap_or(item.margin);
+                    item.rect.y = bx.rect.y + bw_t + cy + m_t + offset;
                 }
             }
         }
