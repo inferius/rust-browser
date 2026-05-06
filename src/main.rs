@@ -18,6 +18,28 @@ use parser::Parser;
 use interpreter::Interpreter;
 use tokens::TokenKind;
 
+/// Extract <link rel="stylesheet" href="..."> hrefs z HTML.
+fn extract_stylesheet_hrefs(html: &str) -> Vec<String> {
+    let document = browser::html_parser::parse_html(html, "about:blank");
+    let mut out = Vec::new();
+    for link in document.root.get_elements_by_tag("link") {
+        let rel = link.attr("rel").unwrap_or_default().to_lowercase();
+        if rel.contains("stylesheet") {
+            if let Some(href) = link.attr("href") {
+                out.push(href);
+            }
+        }
+    }
+    out
+}
+
+/// Extract inline <style> ... </style> blocky.
+fn extract_inline_styles(html: &str) -> Vec<String> {
+    let document = browser::html_parser::parse_html(html, "about:blank");
+    document.root.get_elements_by_tag("style")
+        .iter().map(|s| s.text_content()).collect()
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
@@ -112,32 +134,59 @@ console.log(greeting, result);
         return;
     }
 
-    // Browser mode: cargo run -- browser nebo cargo run -- window [path/to/file.html] [--devtools]
+    // Browser mode: cargo run -- browser [path nebo URL] [--devtools]
+    // Path muze byt:
+    //   - http(s):// URL    -> fetch HTML pres ureq, extract <link> CSS taky pres HTTP
+    //   - file system path  -> read local
+    //   - default static/test.html
     if args.len() > 1 && (args[1] == "browser" || args[1] == "window") {
-        // Parse args: prvni non-flag = path, --devtools flag = auto-open devtools.
-        let mut html_path: Option<String> = None;
+        let mut target: Option<String> = None;
         let mut auto_devtools = false;
         for a in &args[2..] {
             if a == "--devtools" || a == "-d" { auto_devtools = true; }
-            else if !a.starts_with('-') && html_path.is_none() { html_path = Some(a.clone()); }
+            else if !a.starts_with('-') && target.is_none() { target = Some(a.clone()); }
         }
-        let html_path = html_path.unwrap_or_else(|| "static/test.html".to_string());
-        let html = match std::fs::read_to_string(&html_path) {
-            Ok(s) => s,
-            Err(e) => { eprintln!("Nelze nacist {html_path}: {e}"); return; }
+        let target = target.unwrap_or_else(|| "static/test.html".to_string());
+
+        // URL mode: http://, https://
+        let is_url = target.starts_with("http://") || target.starts_with("https://");
+        let (html, css, base_url, current_path) = if is_url {
+            println!("[fetch] {target}");
+            let html = match browser::render::fetch_text_url(&target) {
+                Some(s) => s,
+                None => { eprintln!("Nelze fetchnout {target}"); return; }
+            };
+            // Extract <link rel="stylesheet" href="..."> + fetch each.
+            let mut css_combined = String::new();
+            for href in extract_stylesheet_hrefs(&html) {
+                let resolved = browser::render::resolve_url(&target, &href);
+                println!("[fetch css] {resolved}");
+                if let Some(c) = browser::render::fetch_text_url(&resolved) {
+                    css_combined.push('\n');
+                    css_combined.push_str(&c);
+                }
+            }
+            // <style> inline blocks taky pridat.
+            for inline in extract_inline_styles(&html) {
+                css_combined.push('\n');
+                css_combined.push_str(&inline);
+            }
+            (html, css_combined, Some(target.clone()), None)
+        } else {
+            let html = match std::fs::read_to_string(&target) {
+                Ok(s) => s,
+                Err(e) => { eprintln!("Nelze nacist {target}: {e}"); return; }
+            };
+            let css_path = target.replace(".html", ".css");
+            let css = std::fs::read_to_string(&css_path).unwrap_or_default();
+            let path_buf = std::path::PathBuf::from(&target);
+            let abs_path = std::fs::canonicalize(&path_buf).unwrap_or(path_buf);
+            let base = format!("file:///{}", abs_path.display().to_string().replace('\\', "/"));
+            (html, css, Some(base), Some(abs_path))
         };
 
-        // CSS: nacti z <link> nebo z .css souboru se stejnym nazvem
-        let css_path = html_path.replace(".html", ".css");
-        let css = std::fs::read_to_string(&css_path).unwrap_or_default();
-
-        if args[1] == "window" || args[1] == "browser" {
-            // Oba aliasy ted vedou na okno (drive 'browser' jen text-mode dump).
-            let path_buf = std::path::PathBuf::from(&html_path);
-            let abs_path = std::fs::canonicalize(&path_buf).unwrap_or(path_buf);
-            if let Err(e) = browser::render::run_window_with_options(html, css, Some(abs_path), auto_devtools) {
-                eprintln!("Chyba okna: {e}");
-            }
+        if let Err(e) = browser::render::run_window_with_options(html, css, current_path, auto_devtools, base_url) {
+            eprintln!("Chyba okna: {e}");
         }
         return;
     }

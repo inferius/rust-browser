@@ -1708,6 +1708,86 @@ impl GlyphAtlas {
 /// Velikost RGBA atlasu - 2048x2048 = 16 MB. Dost pro typickou stranku.
 const IMAGE_ATLAS_SIZE: u32 = 2048;
 
+/// Fetch text resource (HTML/CSS) z URL nebo FS path.
+/// Pro http(s):// pres ureq, jinak std::fs::read_to_string.
+/// Default User-Agent identifikuje engine.
+pub fn fetch_text_url(url: &str) -> Option<String> {
+    if url.starts_with("http://") || url.starts_with("https://") {
+        match ureq::get(url)
+            .set("User-Agent", "Mozilla/5.0 RustWebEngine/0.1 (custom layout + JS interpreter)")
+            .set("Accept", "text/html,application/xhtml+xml,application/xml,text/css,*/*;q=0.8")
+            .set("Accept-Language", "en-US,en;q=0.9,cs;q=0.8")
+            .timeout(std::time::Duration::from_secs(15))
+            .call()
+        {
+            Ok(resp) => resp.into_string().ok(),
+            Err(e) => {
+                eprintln!("[fetch] {url}: {e}");
+                None
+            }
+        }
+    } else if let Some(rest) = url.strip_prefix("file:///") {
+        std::fs::read_to_string(rest.replace('/', std::path::MAIN_SEPARATOR_STR)).ok()
+    } else {
+        std::fs::read_to_string(url).ok()
+    }
+}
+
+/// Resolve relative URL proti base URL. Vraci absolutni URL.
+/// `base` muze byt http(s)://... nebo file:///....
+pub fn resolve_url(base: &str, relative: &str) -> String {
+    // Absolute URL/data uri - return as-is.
+    if relative.starts_with("http://") || relative.starts_with("https://")
+        || relative.starts_with("data:") || relative.starts_with("file:") {
+        return relative.to_string();
+    }
+    // Protocol-relative: //example.com/path
+    if let Some(stripped) = relative.strip_prefix("//") {
+        let scheme = if base.starts_with("https://") { "https:" } else { "http:" };
+        return format!("{scheme}//{stripped}");
+    }
+    // Find base scheme + host root.
+    let (scheme_host, base_path) = if let Some(rest) = base.strip_prefix("https://") {
+        let path_pos = rest.find('/').unwrap_or(rest.len());
+        (format!("https://{}", &rest[..path_pos]), rest[path_pos..].to_string())
+    } else if let Some(rest) = base.strip_prefix("http://") {
+        let path_pos = rest.find('/').unwrap_or(rest.len());
+        (format!("http://{}", &rest[..path_pos]), rest[path_pos..].to_string())
+    } else if let Some(rest) = base.strip_prefix("file:///") {
+        // file path - relative se resolvuje proti dir.
+        let last_slash = rest.rfind('/').unwrap_or(0);
+        let dir = &rest[..last_slash];
+        if relative.starts_with('/') {
+            return format!("file:///{relative}");
+        }
+        return format!("file:///{dir}/{relative}");
+    } else {
+        // Neznamy base - return relative as-is.
+        return relative.to_string();
+    };
+    // Absolute path: /foo/bar
+    if relative.starts_with('/') {
+        return format!("{scheme_host}{relative}");
+    }
+    // Relative path: resolve proti directory v base_path.
+    let last_slash = base_path.rfind('/').unwrap_or(0);
+    let base_dir = &base_path[..=last_slash.min(base_path.len().saturating_sub(1))];
+    let mut combined = format!("{scheme_host}{base_dir}{relative}");
+    // Resolve .. and . segments.
+    if combined.contains("/../") || combined.contains("/./") {
+        let scheme_end = combined.find("://").map(|p| p + 3).unwrap_or(0);
+        let (prefix, path_part) = combined.split_at(scheme_end + combined[scheme_end..].find('/').unwrap_or(0));
+        let mut segs: Vec<&str> = Vec::new();
+        for s in path_part.split('/') {
+            if s == ".." { segs.pop(); }
+            else if s == "." || s.is_empty() { /* skip empty */ }
+            else { segs.push(s); }
+        }
+        combined = format!("{prefix}/{}", segs.join("/"));
+    }
+    combined
+}
+
 /// Fetch image bytes - podporuje http(s)://, data: URI, FS path.
 /// Vrati None pri chybe (timeout, neplatny format, IO error).
 pub fn fetch_image_bytes(src: &str) -> Option<Vec<u8>> {
@@ -1894,13 +1974,15 @@ pub fn run_browser(html: &str, css: &str) {
 
 /// Real GUI okno s wgpu rendering + JS event integrace.
 pub fn run_window_with_html(html: String, css: String) -> Result<(), String> {
-    run_window_with_options(html, css, None, false)
+    run_window_with_options(html, css, None, false, None)
 }
 
 /// Spusti okno s dodatecnymi options.
 /// - `current_html_path`: pri Some umozni reload pres drag-drop (relativni paths v HTML)
 /// - `auto_devtools`: pri true vygeneruje devtools.html a otevre v OS default browser
-pub fn run_window_with_options(html: String, css: String, current_html_path: Option<std::path::PathBuf>, auto_devtools: bool) -> Result<(), String> {
+/// - `base_url`: page URL pro relative resolution (http(s)://... nebo file:///...).
+///   Pri None se odvodi z `current_html_path`.
+pub fn run_window_with_options(html: String, css: String, current_html_path: Option<std::path::PathBuf>, auto_devtools: bool, base_url: Option<String>) -> Result<(), String> {
     use winit::application::ApplicationHandler;
     use winit::event::{WindowEvent, MouseButton, ElementState};
     use winit::event_loop::{ActiveEventLoop, EventLoop};
@@ -1912,6 +1994,8 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         css: String,
         /// Cesta k aktualne nactenemu HTML souboru (pro reload + relativni paths).
         current_path: Option<std::path::PathBuf>,
+        /// Page URL (http(s)://... nebo file:///...) pro relative URL resolution.
+        base_url: Option<String>,
         /// Po startu otevri devtools.html v default browseru.
         auto_devtools: bool,
         window: Option<std::sync::Arc<Window>>,
@@ -2346,7 +2430,12 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                         }
                     }
                     DisplayCommand::Image { src, .. } => {
-                        r.load_image(src);
+                        // Resolve relative URL proti base_url (pri http(s) nebo file:// page).
+                        let resolved = match &self.base_url {
+                            Some(base) => resolve_url(base, src),
+                            None => src.clone(),
+                        };
+                        r.load_image_as(src, &resolved);
                     }
                     _ => {}
                 }
@@ -2372,6 +2461,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
     let mut app = App {
         html, css,
         current_path: current_html_path,
+        base_url,
         auto_devtools,
         window: None,
         renderer: None,
@@ -3766,8 +3856,12 @@ impl Renderer {
     /// Nacte image ze souboru / HTTP / data URI a vlozi do RGBA atlasu.
     /// HTTP fetch pres ureq (sync). Data URI dekodovani base64.
     fn load_image(&mut self, src: &str) {
-        if self.image_atlas.cache.contains_key(src) { return; }
-        let bytes_opt = fetch_image_bytes(src);
+        self.load_image_as(src, src);
+    }
+    /// Stejne ale fetch_url se lisi od cache key (pro relative URL resolution).
+    fn load_image_as(&mut self, cache_key: &str, fetch_url: &str) {
+        if self.image_atlas.cache.contains_key(cache_key) { return; }
+        let bytes_opt = fetch_image_bytes(fetch_url);
         let bytes = match bytes_opt { Some(b) => b, None => return };
         if let Ok(img) = image::load_from_memory(&bytes) {
             let rgba = img.to_rgba8();
@@ -3782,11 +3876,11 @@ impl Renderer {
                 if let Ok(decoded) = image::load_from_memory(&bytes) {
                     let small = decoded.resize_exact(new_w, new_h, image::imageops::FilterType::Triangle);
                     let small_rgba = small.to_rgba8();
-                    self.image_atlas.add(src, new_w, new_h, &small_rgba.into_raw());
+                    self.image_atlas.add(cache_key, new_w, new_h, &small_rgba.into_raw());
                     return;
                 }
             }
-            self.image_atlas.add(src, w, h, &raw);
+            self.image_atlas.add(cache_key, w, h, &raw);
         }
     }
 
