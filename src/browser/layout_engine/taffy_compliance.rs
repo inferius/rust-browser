@@ -715,11 +715,13 @@ mod tests {
             child.rect.y += off_y;
             // Aspect-ratio: dopocet height z width
             let has_explicit_h = child.explicit_height.is_some();
+            let text_h_intrinsic = if child.taffy_mode && child.text.is_some() { 10.0 } else { 0.0 };
             let mut h_val = if let Some(h) = child.explicit_height {
                 h
             } else if let Some(ar) = child.aspect_ratio {
                 if ar > 0.0 { child.rect.width / ar } else { 0.0 }
-            } else { 0.0 };
+            } else if text_h_intrinsic > 0.0 { text_h_intrinsic }
+            else { 0.0 };
             // Apply min/max height
             let ch_min = crate::browser::layout::parse_length(&child.min_height_v);
             let ch_max = if child.max_height_v.is_empty() { f32::INFINITY } else { crate::browser::layout::parse_length(&child.max_height_v) };
