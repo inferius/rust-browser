@@ -699,6 +699,28 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                         col_tracks[c] = (col_tracks[c] + share).min(cap.max(col_tracks[c]));
                     }
                 }
+                // Pri overflow:hidden span s MinContent + MaxContent obema v spanu:
+                // taffy posune text_min/N_intrinsic_tracks share na MinContent, ostatni
+                // odecte z MaxContent (visualni rozdeleni text na 2 tracky).
+                if inline_overflow_blocks_span && text_min > 0.0 {
+                    let mc_cols: Vec<usize> = span_indices.iter().copied().filter(|&c| matches!(col_token_kinds.get(c), Some(Track::MinContent))).collect();
+                    let mcc_cols: Vec<usize> = span_indices.iter().copied().filter(|&c| matches!(col_token_kinds.get(c), Some(Track::MaxContent))).collect();
+                    let intrinsic_count = span_indices.iter().filter(|&&c| matches!(col_token_kinds.get(c),
+                        Some(Track::Auto) | Some(Track::MaxContent) | Some(Track::MinContent) | Some(Track::FitContent(_)))).count();
+                    if !mc_cols.is_empty() && !mcc_cols.is_empty() && intrinsic_count > 0 {
+                        let share_per_mc = text_min / intrinsic_count as f32;
+                        for &mc in &mc_cols {
+                            let add = share_per_mc - col_tracks[mc];
+                            if add > 0.0 {
+                                col_tracks[mc] += add;
+                                // Steal from first MaxContent.
+                                if let Some(&mcc) = mcc_cols.first() {
+                                    col_tracks[mcc] = (col_tracks[mcc] - add).max(0.0);
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
         // Distribute leftover free space rovnomerne mezi auto cols (NE FitContent).
