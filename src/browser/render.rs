@@ -2072,6 +2072,10 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                     self.mouse_x = position.x as f32;
                     self.mouse_y = position.y as f32 + self.scroll_y;
                     self.update_hover();
+                    // Pri otevrenem select dropdownu redraw fluid hover highlight.
+                    if self.open_select.is_some() {
+                        self.render();
+                    }
                 }
                 WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } => {
                     self.handle_click(self.mouse_x, self.mouse_y);
