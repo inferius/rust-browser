@@ -592,6 +592,12 @@ pub struct LayoutBox {
     pub transforms: Vec<TransformOp>,
     /// Overflow: hidden/scroll/visible/auto
     pub overflow_hidden: bool,
+    /// overflow-x value (string - "visible"/"hidden"/"scroll"/"auto")
+    pub overflow_x: String,
+    /// overflow-y value
+    pub overflow_y: String,
+    /// scrollbar-width numericky (px) z taffy fixture (drive ignorovany).
+    pub scrollbar_size: f32,
     /// White-space: nowrap zachazi text jako jeden radek
     pub white_space_nowrap: bool,
     /// Cursor (jen string - real impl pres OS cursor)
@@ -667,6 +673,9 @@ impl LayoutBox {
             text_underline: false,
             text_strikethrough: false,
             overflow_hidden: false,
+            overflow_x: String::new(),
+            overflow_y: String::new(),
+            scrollbar_size: 0.0,
             white_space_nowrap: false,
             cursor: None,
             bg_gradient: None,

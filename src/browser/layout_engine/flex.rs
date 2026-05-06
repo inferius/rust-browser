@@ -91,7 +91,14 @@ pub fn layout_flex(bx: &mut LayoutBox) {
     let bx_min_h = super::super::layout::parse_length(&bx.min_height_v);
     let effective_w = if bx.rect.width == 0.0 && bx_min_w > 0.0 { bx_min_w } else { bx.rect.width };
     let effective_h = if bx.rect.height == 0.0 && bx_min_h > 0.0 { bx_min_h } else { bx.rect.height };
-    let inner_w = (effective_w - pad_l - pad_r - 2.0 * bx.margin).max(0.0);
+    // Scrollbar takes space: overflow-y scroll/auto -> right scrollbar reduces inner_w.
+    // overflow-x scroll/auto -> bottom scrollbar reduces inner_h.
+    let scrollbar_size = bx.scrollbar_size;
+    let scrollbar_y_takes = scrollbar_size > 0.0 && (bx.overflow_y == "scroll" || bx.overflow_y == "auto");
+    let scrollbar_x_takes = scrollbar_size > 0.0 && (bx.overflow_x == "scroll" || bx.overflow_x == "auto");
+    let scrollbar_w = if scrollbar_y_takes { scrollbar_size } else { 0.0 };
+    let scrollbar_h = if scrollbar_x_takes { scrollbar_size } else { 0.0 };
+    let inner_w = (effective_w - pad_l - pad_r - 2.0 * bx.margin - scrollbar_w).max(0.0);
 
     // Parse CSS props
     let direction = parse_flex_direction(&bx.flex_direction);
@@ -99,7 +106,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
     let justify = parse_justify_content(&bx.justify_content);
     let align = parse_align_items(&bx.align_items);
     // Re-resolve gap pct proti inner_w/inner_h (po vypoctu pad+border).
-    let inner_h_for_gap = (bx.rect.height - pad_t - pad_b - 2.0 * bx.margin).max(0.0);
+    let inner_h_for_gap = (bx.rect.height - pad_t - pad_b - 2.0 * bx.margin - scrollbar_h).max(0.0);
     let row_gap = if let Some(p) = bx.row_gap_pct {
         // Indefinite height -> 0.
         if bx.explicit_height.is_none() { 0.0 } else { inner_h_for_gap * p }
@@ -369,7 +376,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
     }
 
     // 2. Container main size
-    let inner_h = (effective_h - pad_t - pad_b - 2.0 * bx.margin).max(0.0);
+    let inner_h = (effective_h - pad_t - pad_b - 2.0 * bx.margin - scrollbar_h).max(0.0);
     let container_main = if direction.is_row() { inner_w } else { inner_h };
 
     // Apply min/max width/height na items - ulozit pro resolve_flexible_lengths.

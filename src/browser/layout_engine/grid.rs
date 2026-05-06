@@ -23,8 +23,12 @@ pub fn layout_grid(bx: &mut LayoutBox) {
     let pad_b = bx.padding_bottom.unwrap_or(bx.padding) + bw_b;
     let inner_x = bx.rect.x + pad_l + bx.margin;
     let inner_y = bx.rect.y + pad_t + bx.margin;
-    let inner_w = (bx.rect.width - pad_l - pad_r - 2.0 * bx.margin).max(0.0);
-    let inner_h = (bx.rect.height - pad_t - pad_b - 2.0 * bx.margin).max(0.0);
+    // Scrollbar takes space.
+    let scrollbar_size = bx.scrollbar_size;
+    let scrollbar_w = if scrollbar_size > 0.0 && (bx.overflow_y == "scroll" || bx.overflow_y == "auto") { scrollbar_size } else { 0.0 };
+    let scrollbar_h = if scrollbar_size > 0.0 && (bx.overflow_x == "scroll" || bx.overflow_x == "auto") { scrollbar_size } else { 0.0 };
+    let inner_w = (bx.rect.width - pad_l - pad_r - 2.0 * bx.margin - scrollbar_w).max(0.0);
+    let inner_h = (bx.rect.height - pad_t - pad_b - 2.0 * bx.margin - scrollbar_h).max(0.0);
 
     if bx.children.is_empty() { return; }
 

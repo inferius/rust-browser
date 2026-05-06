@@ -417,7 +417,15 @@ mod tests {
                     bx.offset_top = val; bx.offset_bottom = val;
                     bx.offset_left = val; bx.offset_right = val;
                 }
-                "overflow" | "overflow-x" | "overflow-y" => { /* ignore - layout not affected */ }
+                "overflow" => { bx.overflow_x = v.clone(); bx.overflow_y = v.clone(); }
+                "overflow-x" => { bx.overflow_x = v.clone(); }
+                "overflow-y" => { bx.overflow_y = v.clone(); }
+                "scrollbar-width" => {
+                    // V taffy fixturach numericka hodnota (npr. "15"). V realnem CSS
+                    // jen "auto"/"thin"/"none". Detekuj numerickou.
+                    if let Ok(n) = v.trim().parse::<f32>() { bx.scrollbar_size = n; }
+                    else { bx.scrollbar_width = v.clone(); }
+                }
                 "writing-mode" => return None,
                 "direction" if v == "rtl" => return None,
                 "direction" => {}
@@ -626,7 +634,10 @@ mod tests {
         let _pad_b = bx.padding_bottom.unwrap_or(bx.padding) + bw_b;
         let inner_x = bx.rect.x + pad_l;
         let inner_y = bx.rect.y + pad_t;
-        let inner_w = (bx.rect.width - pad_l - pad_r).max(0.0);
+        // Scrollbar takes space.
+        let scrollbar_size = bx.scrollbar_size;
+        let scrollbar_w = if scrollbar_size > 0.0 && (bx.overflow_y == "scroll" || bx.overflow_y == "auto") { scrollbar_size } else { 0.0 };
+        let inner_w = (bx.rect.width - pad_l - pad_r - scrollbar_w).max(0.0);
         // Containing block pro abs = padding-box parenta (uvnitr borderu).
         let parent_w = (bx.rect.width - bw_l - bw_r).max(0.0);
         let parent_h = (bx.rect.height - bw_t - bw_b).max(0.0);
