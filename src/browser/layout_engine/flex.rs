@@ -139,8 +139,14 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                     if matches!(gc.position, super::super::layout::Position::Absolute | super::super::layout::Position::Fixed) { continue; }
                     if matches!(gc.display, super::super::layout::Display::None) { continue; }
                     // Skip percent-derived widths/heights (nepropagovat jako parent intrinsic).
-                    let mut gc_w = if gc.width_pct.is_some() { 0.0 } else { gc.explicit_width.unwrap_or(0.0) };
-                    let mut gc_h = if gc.height_pct.is_some() { 0.0 } else { gc.explicit_height.unwrap_or(0.0) };
+                    let gc_m_l = gc.margin_left.unwrap_or(gc.margin);
+                    let gc_m_r = gc.margin_right.unwrap_or(gc.margin);
+                    let gc_m_t = gc.margin_top.unwrap_or(gc.margin);
+                    let gc_m_b = gc.margin_bottom.unwrap_or(gc.margin);
+                    let mut gc_w = if gc.width_pct.is_some() { 0.0 }
+                                   else { gc.explicit_width.map(|w| w + gc_m_l + gc_m_r).unwrap_or(0.0) };
+                    let mut gc_h = if gc.height_pct.is_some() { 0.0 }
+                                   else { gc.explicit_height.map(|h| h + gc_m_t + gc_m_b).unwrap_or(0.0) };
                     // Text intrinsic v taffy_mode: 10/char.
                     if gc.taffy_mode {
                         if let Some(t) = &gc.text {
