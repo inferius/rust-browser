@@ -243,6 +243,11 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             if min_h_pre > 0.0 { est_h = min_h_pre; }
             else if max_h_pre.is_finite() { est_h = max_h_pre; }
         }
+        // Pri aspect-ratio: clamp est_w/h pred aspect dopoctem (max wins).
+        if ch.aspect_ratio.is_some() {
+            est_w = est_w.min(max_w_pre);
+            est_h = est_h.min(max_h_pre);
+        }
         // Padding+border floor
         let ch_pb_l = ch.padding_left.unwrap_or(ch.padding) + ch.border_left_width.unwrap_or(ch.border_width);
         let ch_pb_r = ch.padding_right.unwrap_or(ch.padding) + ch.border_right_width.unwrap_or(ch.border_width);
