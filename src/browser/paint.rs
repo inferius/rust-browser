@@ -314,10 +314,52 @@ fn capitalize_words(s: &str) -> String {
 }
 
 /// Emituje SVG shape z child <rect>, <circle>, <ellipse>, <line>, <polygon>,
-/// <polyline>, <path>, <text>, <g>. Podporuje fill, stroke, transform attribute.
+/// <polyline>, <path>, <text>, <g>. Podporuje fill, stroke, transform attribute,
+/// viewBox a preserveAspectRatio na root <svg>.
 fn emit_svg_children(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>) {
-    let identity = [1.0_f32, 0.0, 0.0, 1.0, 0.0, 0.0];
-    emit_svg_children_xform(bx, &identity, cmds);
+    // ViewBox parse: "min-x min-y width height".
+    let mut xform = [1.0_f32, 0.0, 0.0, 1.0, 0.0, 0.0];
+    if let Some(node) = &bx.node {
+        if let Some(vb_str) = node.attr("viewBox") {
+            let nums: Vec<f32> = vb_str.split(|c: char| c == ',' || c.is_whitespace())
+                .filter(|p| !p.is_empty())
+                .filter_map(|p| p.parse::<f32>().ok())
+                .collect();
+            if nums.len() >= 4 && nums[2] > 0.0 && nums[3] > 0.0 {
+                let (vx, vy, vw, vh) = (nums[0], nums[1], nums[2], nums[3]);
+                let sx = bx.rect.width / vw;
+                let sy = bx.rect.height / vh;
+                // preserveAspectRatio: default "xMidYMid meet" - uniform scale + center.
+                let par = node.attr("preserveAspectRatio").unwrap_or_else(|| "xMidYMid meet".to_string());
+                let par = par.trim().to_lowercase();
+                let is_none = par.starts_with("none");
+                if is_none {
+                    // Stretch (non-uniform).
+                    xform = [sx, 0.0, 0.0, sy, -vx * sx, -vy * sy];
+                } else {
+                    let slice = par.contains("slice");
+                    let s = if slice { sx.max(sy) } else { sx.min(sy) };
+                    // Center alignment (xMidYMid). xMin/xMax + yMin/yMax variants.
+                    let aligned_w = vw * s;
+                    let aligned_h = vh * s;
+                    let mut tx = -vx * s;
+                    let mut ty = -vy * s;
+                    if par.contains("xmin") {} else if par.contains("xmax") {
+                        tx += bx.rect.width - aligned_w;
+                    } else { // xmid (default)
+                        tx += (bx.rect.width - aligned_w) * 0.5;
+                    }
+                    if par.contains("ymin") {} else if par.contains("ymax") {
+                        ty += bx.rect.height - aligned_h;
+                    } else { // ymid
+                        ty += (bx.rect.height - aligned_h) * 0.5;
+                    }
+                    xform = [s, 0.0, 0.0, s, tx, ty];
+                }
+            }
+        }
+    }
+    emit_svg_children_xform(bx, &xform, cmds);
 }
 
 fn emit_svg_children_xform(bx: &LayoutBox, parent_xform: &[f32; 6], cmds: &mut Vec<DisplayCommand>) {
