@@ -470,7 +470,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             .map(|(k, s)| s + items[line_indices[k]].margin_main_start + items[line_indices[k]].margin_main_end)
             .sum::<f32>()
             + main_gap * (resolved.main_sizes.len().saturating_sub(1) as f32);
-        let free_main = (container_main - used_main).max(0.0);
+        let free_main = container_main - used_main; // muze byt negativni (overflow)
         // Spocti auto margin slots v main axis - kazdy dostane equal share free.
         let auto_main_count: usize = line_indices.iter()
             .map(|&i| (items[i].auto_main_start as usize) + (items[i].auto_main_end as usize))
