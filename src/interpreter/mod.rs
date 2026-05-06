@@ -632,6 +632,35 @@ pub struct WorkerState {
     pub on_message: Option<JsValue>,
 }
 
+/// WebSocket state - background thread cte z connection + posila incoming pres
+/// outgoing channel. Main interpreter posila send-message pres sender.
+pub struct WebSocketState {
+    pub sender: std::sync::mpsc::Sender<WebSocketCommand>,
+    pub incoming: std::sync::mpsc::Receiver<WebSocketEvent>,
+    pub handle: Option<std::thread::JoinHandle<()>>,
+    /// readyState: 0=CONNECTING, 1=OPEN, 2=CLOSING, 3=CLOSED.
+    pub ready_state: u8,
+    /// Event handlers from JS (onopen/onmessage/onerror/onclose).
+    pub on_open: Option<JsValue>,
+    pub on_message: Option<JsValue>,
+    pub on_error: Option<JsValue>,
+    pub on_close: Option<JsValue>,
+}
+
+#[derive(Debug)]
+pub enum WebSocketCommand {
+    Send(String),
+    Close,
+}
+
+#[derive(Debug)]
+pub enum WebSocketEvent {
+    Open,
+    Message(String),
+    Error(String),
+    Closed,
+}
+
 pub struct Interpreter {
     /// Globalni scope - obsahuje vestavene funkce (Math, console, atd.)
     pub global: Rc<RefCell<Environment>>,
@@ -657,6 +686,9 @@ pub struct Interpreter {
     pub workers: Rc<RefCell<HashMap<u32, WorkerState>>>,
     /// Pocitadlo Worker ID
     pub next_worker_id: Rc<RefCell<u32>>,
+    /// WebSocket state registry - WebSocket ID -> WebSocketState.
+    pub websockets: Rc<RefCell<HashMap<u32, WebSocketState>>>,
+    pub next_ws_id: Rc<RefCell<u32>>,
     /// DOM Document - sdileny mezi browser engine a JS interpreterem.
     /// Pri startu prazdny; muze byt nahrazen z parsed HTML.
     pub document: Rc<RefCell<crate::browser::dom::Document>>,
@@ -697,6 +729,9 @@ impl Interpreter {
         let workers: Rc<RefCell<HashMap<u32, WorkerState>>> =
             Rc::new(RefCell::new(HashMap::new()));
         let next_worker_id: Rc<RefCell<u32>> = Rc::new(RefCell::new(1));
+        let websockets: Rc<RefCell<HashMap<u32, WebSocketState>>> =
+            Rc::new(RefCell::new(HashMap::new()));
+        let next_ws_id: Rc<RefCell<u32>> = Rc::new(RefCell::new(1));
         let document = Rc::new(RefCell::new(
             crate::browser::dom::Document::new("about:blank".to_string())
         ));
@@ -709,7 +744,7 @@ impl Interpreter {
         setup_builtins(
             &global, &task_queue, &next_timer_id, &workers, &next_worker_id,
             &document, &console_log, &network_log, &custom_elements,
-            &mutation_observers,
+            &mutation_observers, &websockets, &next_ws_id,
         );
         Interpreter {
             global, yield_buffer: None, task_queue, next_timer_id,
@@ -718,6 +753,7 @@ impl Interpreter {
             current_exports: None,
             base_dir:        Rc::new(RefCell::new(".".to_string())),
             workers, next_worker_id,
+            websockets, next_ws_id,
             document,
             event_callbacks: Rc::new(RefCell::new(HashMap::new())),
             next_callback_id: Rc::new(RefCell::new(1)),
@@ -803,6 +839,61 @@ impl Interpreter {
             let cb = self.event_callbacks.borrow().get(&id).cloned();
             if let Some(cb) = cb {
                 self.call_function(cb, vec![event_val.clone()], None)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Drainuje WebSocket events z bg threadu a vola registrovane callbacky.
+    pub fn drain_websockets(&mut self) -> Result<(), JsError> {
+        // Sber events z vsech sockets.
+        let pending: Vec<(u32, WebSocketEvent)> = {
+            let map = self.websockets.borrow();
+            let mut out = Vec::new();
+            for (id, state) in map.iter() {
+                while let Ok(evt) = state.incoming.try_recv() {
+                    out.push((*id, evt));
+                }
+            }
+            out
+        };
+        for (id, evt) in pending {
+            let (cb, ready_state_after) = {
+                let map = self.websockets.borrow();
+                let state = match map.get(&id) { Some(s) => s, None => continue };
+                let cb = match &evt {
+                    WebSocketEvent::Open => state.on_open.clone(),
+                    WebSocketEvent::Message(_) => state.on_message.clone(),
+                    WebSocketEvent::Error(_) => state.on_error.clone(),
+                    WebSocketEvent::Closed => state.on_close.clone(),
+                };
+                let new_state = match &evt {
+                    WebSocketEvent::Open => 1u8,
+                    WebSocketEvent::Closed => 3u8,
+                    _ => state.ready_state,
+                };
+                (cb, new_state)
+            };
+            // Update ready_state.
+            if let Some(s) = self.websockets.borrow_mut().get_mut(&id) {
+                s.ready_state = ready_state_after;
+            }
+            if let Some(cb) = cb {
+                let mut event = JsObject::new();
+                let evt_type = match &evt {
+                    WebSocketEvent::Open => "open",
+                    WebSocketEvent::Message(_) => "message",
+                    WebSocketEvent::Error(_) => "error",
+                    WebSocketEvent::Closed => "close",
+                };
+                event.set("type".into(), JsValue::Str(evt_type.to_string()));
+                if let WebSocketEvent::Message(t) = &evt {
+                    event.set("data".into(), JsValue::Str(t.clone()));
+                }
+                if let WebSocketEvent::Error(e) = &evt {
+                    event.set("message".into(), JsValue::Str(e.clone()));
+                }
+                self.call_function(cb, vec![JsValue::Object(Rc::new(RefCell::new(event)))], None)?;
             }
         }
         Ok(())
@@ -920,6 +1011,7 @@ impl Interpreter {
         // Krate cekani na worker zpravy (max 100ms) + drain
         std::thread::sleep(std::time::Duration::from_millis(50));
         self.drain_workers()?;
+        self.drain_websockets()?;
         // Terminate vsechny workery (drop senderu -> threadu signal)
         let ids: Vec<u32> = self.workers.borrow().keys().cloned().collect();
         for id in ids {

@@ -224,6 +224,8 @@ pub fn setup_builtins(
     network_log: &Rc<RefCell<Vec<(String, u16)>>>,
     custom_elements_registry: &Rc<RefCell<HashMap<String, super::JsValue>>>,
     mutation_observers: &Rc<RefCell<Vec<(usize, super::JsValue, super::JsValue, bool)>>>,
+    websockets: &Rc<RefCell<HashMap<u32, super::WebSocketState>>>,
+    next_ws_id: &Rc<RefCell<u32>>,
 ) {
     let mut e = env.borrow_mut();
 
@@ -5001,5 +5003,161 @@ pub fn setup_builtins(
     let sel = make_selection();
     e.define("getSelection", native("getSelection", move |_| Ok(sel.clone())));
     e.define("Range", native("Range", |_| Ok(make_range())));
+
+    // ─── WebSocket ─────────────────────────────────────────────────────────
+    // new WebSocket(url) - synchronni constructor, asynchronni read pres bg thread.
+    // Send pres channel command; incoming messages drain v event loop main threadu.
+    let websockets_c = Rc::clone(websockets);
+    let next_ws_id_c = Rc::clone(next_ws_id);
+    e.define("WebSocket", native("WebSocket", move |args| {
+        let url = match args.into_iter().next() {
+            Some(v) => v.to_string(),
+            None => return Err("WebSocket: missing url argument".into()),
+        };
+        // Spawn background thread - tungstenite::connect (blocking handshake).
+        let id = {
+            let mut idg = next_ws_id_c.borrow_mut();
+            let id = *idg;
+            *idg += 1;
+            id
+        };
+        let (cmd_tx, cmd_rx) = std::sync::mpsc::channel::<super::WebSocketCommand>();
+        let (evt_tx, evt_rx) = std::sync::mpsc::channel::<super::WebSocketEvent>();
+        let url_clone = url.clone();
+        let handle = std::thread::Builder::new()
+            .name(format!("websocket-{id}"))
+            .stack_size(2 * 1024 * 1024)
+            .spawn(move || {
+                use tungstenite::Message;
+                let connect_result = tungstenite::connect(&url_clone);
+                let mut socket = match connect_result {
+                    Ok((s, _resp)) => s,
+                    Err(e) => {
+                        let _ = evt_tx.send(super::WebSocketEvent::Error(format!("connect: {e}")));
+                        let _ = evt_tx.send(super::WebSocketEvent::Closed);
+                        return;
+                    }
+                };
+                let _ = evt_tx.send(super::WebSocketEvent::Open);
+                // Loop: priorita = drain commands, pak read socket.
+                loop {
+                    // Non-blocking command check.
+                    match cmd_rx.try_recv() {
+                        Ok(super::WebSocketCommand::Send(text)) => {
+                            if let Err(e) = socket.send(Message::Text(text.into())) {
+                                let _ = evt_tx.send(super::WebSocketEvent::Error(format!("send: {e}")));
+                                break;
+                            }
+                        }
+                        Ok(super::WebSocketCommand::Close) => {
+                            let _ = socket.close(None);
+                            break;
+                        }
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+                        Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                    }
+                    // Read socket (blocking - timeout pres set_read_timeout).
+                    match socket.read() {
+                        Ok(Message::Text(t)) => { let _ = evt_tx.send(super::WebSocketEvent::Message(t.to_string())); }
+                        Ok(Message::Binary(b)) => {
+                            let s = String::from_utf8_lossy(&b).to_string();
+                            let _ = evt_tx.send(super::WebSocketEvent::Message(s));
+                        }
+                        Ok(Message::Close(_)) => break,
+                        Ok(_) => {} // Ping/Pong/Frame internal
+                        Err(tungstenite::Error::Io(e)) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                            // Cooperative - small sleep.
+                            std::thread::sleep(std::time::Duration::from_millis(10));
+                        }
+                        Err(e) => {
+                            let _ = evt_tx.send(super::WebSocketEvent::Error(format!("read: {e}")));
+                            break;
+                        }
+                    }
+                }
+                let _ = evt_tx.send(super::WebSocketEvent::Closed);
+            })
+            .map_err(|e| format!("WebSocket spawn: {e}"))?;
+        websockets_c.borrow_mut().insert(id, super::WebSocketState {
+            sender: cmd_tx,
+            incoming: evt_rx,
+            handle: Some(handle),
+            ready_state: 0, // CONNECTING
+            on_open: None,
+            on_message: None,
+            on_error: None,
+            on_close: None,
+        });
+        let mut obj = JsObject::new();
+        obj.set("__ws_id__".into(), JsValue::Number(id as f64));
+        obj.set("url".into(), JsValue::Str(url));
+        obj.set("readyState".into(), JsValue::Number(0.0));
+        // CONNECTING=0, OPEN=1, CLOSING=2, CLOSED=3.
+        let send_websockets = Rc::clone(&websockets_c);
+        let send_id = id;
+        obj.set("send".into(), native("WebSocket.send", move |args| {
+            let data = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+            if let Some(state) = send_websockets.borrow().get(&send_id) {
+                let _ = state.sender.send(super::WebSocketCommand::Send(data));
+            }
+            Ok(JsValue::Undefined)
+        }));
+        let close_websockets = Rc::clone(&websockets_c);
+        let close_id = id;
+        obj.set("close".into(), native("WebSocket.close", move |_args| {
+            if let Some(state) = close_websockets.borrow().get(&close_id) {
+                let _ = state.sender.send(super::WebSocketCommand::Close);
+            }
+            Ok(JsValue::Undefined)
+        }));
+        // Custom on(name, fn) - place callback do WsState (drain_websockets ho zavola).
+        // (Standard ws.onmessage = fn potreba setter dispatch - skip.)
+        let on_websockets = Rc::clone(&websockets_c);
+        let on_id = id;
+        obj.set("on".into(), native("WebSocket.on", move |args| {
+            let mut it = args.into_iter();
+            let name = it.next().map(|v| v.to_string()).unwrap_or_default();
+            let cb = it.next().unwrap_or(JsValue::Undefined);
+            if let Some(state) = on_websockets.borrow_mut().get_mut(&on_id) {
+                match name.as_str() {
+                    "open" => state.on_open = Some(cb),
+                    "message" => state.on_message = Some(cb),
+                    "error" => state.on_error = Some(cb),
+                    "close" => state.on_close = Some(cb),
+                    _ => {}
+                }
+            }
+            Ok(JsValue::Undefined)
+        }));
+        // addEventListener alias.
+        let ael_websockets = Rc::clone(&websockets_c);
+        let ael_id = id;
+        obj.set("addEventListener".into(), native("WebSocket.addEventListener", move |args| {
+            let mut it = args.into_iter();
+            let name = it.next().map(|v| v.to_string()).unwrap_or_default();
+            let cb = it.next().unwrap_or(JsValue::Undefined);
+            if let Some(state) = ael_websockets.borrow_mut().get_mut(&ael_id) {
+                match name.as_str() {
+                    "open" => state.on_open = Some(cb),
+                    "message" => state.on_message = Some(cb),
+                    "error" => state.on_error = Some(cb),
+                    "close" => state.on_close = Some(cb),
+                    _ => {}
+                }
+            }
+            Ok(JsValue::Undefined)
+        }));
+        Ok(JsValue::Object(Rc::new(RefCell::new(obj))))
+    }));
+    // Konstanty WebSocket.CONNECTING, .OPEN, ...
+    {
+        let mut ws_cls = JsObject::new();
+        ws_cls.set("CONNECTING".into(), JsValue::Number(0.0));
+        ws_cls.set("OPEN".into(), JsValue::Number(1.0));
+        ws_cls.set("CLOSING".into(), JsValue::Number(2.0));
+        ws_cls.set("CLOSED".into(), JsValue::Number(3.0));
+        // Note: konstanty by mely byt na konstruktoru samem, ne separate. Skipping pro ted.
+        let _ = ws_cls;
+    }
 
 }

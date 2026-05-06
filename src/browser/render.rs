@@ -2480,6 +2480,11 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
 
             let elapsed = self.start_time.elapsed().as_secs_f32();
 
+            // Drainuj WebSocket events kazdy frame (dispatch onopen/onmessage/onerror/onclose).
+            if let Some(interp) = &mut self.interpreter {
+                let _ = interp.drain_websockets();
+            }
+
             // CSS Transitions: detekuj zmeny vs prev_style_map a vyrob aktivni transitions.
             let mut ended_transitions: Vec<(usize, String)> = Vec::new();
             if let Some(prev) = &self.prev_style_map {
