@@ -477,11 +477,36 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             }
         }
 
-        // Pre-spocti max baseline napric items na line aligned by baseline.
-        // Synth baseline = item_cross_size + margin_cross_start (bottom margin edge in cross).
-        let mut line_max_baseline: f32 = 0.0;
-        for &item_idx in line_indices.iter() {
+        // Per-item baseline: pri flex/grid item nebo block s flex-direction (taffy fixture
+        // treats jako flex), baseline = first child bottom. Jinak synth (item bottom).
+        let item_baselines: Vec<f32> = line_indices.iter().map(|&item_idx| {
             let it_b = items[item_idx];
+            let real_idx_b = in_flow[item_idx];
+            let item_box = &bx.children[real_idx_b];
+            let synth = it_b.cross_size + it_b.margin_cross_start;
+            let is_flex_or_grid = matches!(item_box.display,
+                super::super::layout::Display::Flex | super::super::layout::Display::Grid);
+            // Taffy heuristika: block s flex-direction se chova jako flex.
+            let has_flex_attr = !item_box.flex_direction.is_empty();
+            if !is_flex_or_grid && !has_flex_attr {
+                return synth;
+            }
+            let first_child = item_box.children.iter().find(|c|
+                !matches!(c.position, super::super::layout::Position::Absolute | super::super::layout::Position::Fixed)
+                && !matches!(c.display, super::super::layout::Display::None));
+            match first_child {
+                Some(c) => {
+                    let c_h = c.explicit_height.unwrap_or(c.rect.height);
+                    let c_m_t = c.margin_top.unwrap_or(c.margin);
+                    let pad_t = item_box.padding_top.unwrap_or(item_box.padding) + item_box.border_top_width.unwrap_or(item_box.border_width);
+                    pad_t + c_m_t + c_h + it_b.margin_cross_start
+                }
+                None => synth,
+            }
+        }).collect();
+        // Pre-spocti max baseline napric items na line aligned by baseline.
+        let mut line_max_baseline: f32 = 0.0;
+        for (k, &item_idx) in line_indices.iter().enumerate() {
             let real_idx_b = in_flow[item_idx];
             let self_str_b = bx.children[real_idx_b].align_self.clone();
             let parent_align_b = align;
@@ -491,8 +516,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                 parse_align_items(&self_str_b)
             };
             if matches!(item_align_b, AlignItems::Baseline) {
-                let baseline = it_b.cross_size + it_b.margin_cross_start;
-                if baseline > line_max_baseline { line_max_baseline = baseline; }
+                if item_baselines[k] > line_max_baseline { line_max_baseline = item_baselines[k]; }
             }
         }
 
@@ -538,9 +562,8 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                 if it.auto_cross_start { cross_offset += share; }
                 // auto_cross_end neovlivni offset, jen zabere zbylou plochu
             } else if matches!(item_align, AlignItems::Baseline) {
-                // Baseline alignment: own_baseline = cross_size + margin_cross_start (synth bottom).
-                // cross_offset = line_max_baseline - own_baseline + margin_cross_start.
-                let own_baseline = it.cross_size + it.margin_cross_start;
+                // Baseline alignment: own_baseline z item_baselines (first child bottom or synth).
+                let own_baseline = item_baselines[i_in_line];
                 cross_offset = line_max_baseline - own_baseline + it.margin_cross_start;
             } else {
                 let cross_offset_align = compute_align_offset(item_align, align_box, item_cross_size + it.margin_cross_start + it.margin_cross_end);

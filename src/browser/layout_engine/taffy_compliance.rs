@@ -375,7 +375,6 @@ mod tests {
         }
         bx.display = display;
         // Heuristika: taffy block fixtures s align-items=baseline ocekavaji flex layout.
-        // Spec-wise nesmyslne, ale tak je to testovano.
         if matches!(bx.display, Display::Block) && bx.align_items.as_str() == "baseline" {
             bx.display = Display::Flex;
         }
