@@ -273,11 +273,17 @@ thread_local! {
 /// Boxy mimo (scroll_y - 200, scroll_y + viewport_h + 200) se preskocej.
 /// Sticky/Fixed/Absolute pozice elementy nikdy nepreskoceny (mohou byt jinde).
 pub fn build_display_list_culled(root: &LayoutBox, scroll_y: f32, viewport_h: f32) -> Vec<DisplayCommand> {
-    VIEWPORT_CULL.with(|c| c.set(Some((scroll_y, scroll_y + viewport_h))));
     let mut commands = Vec::new();
-    paint_box(root, &mut commands, None);
-    VIEWPORT_CULL.with(|c| c.set(None));
+    build_display_list_culled_into(root, scroll_y, viewport_h, &mut commands);
     commands
+}
+
+/// Reuse buffer variant - clear + fill misto alocace.
+pub fn build_display_list_culled_into(root: &LayoutBox, scroll_y: f32, viewport_h: f32, commands: &mut Vec<DisplayCommand>) {
+    VIEWPORT_CULL.with(|c| c.set(Some((scroll_y, scroll_y + viewport_h))));
+    commands.clear();
+    paint_box(root, commands, None);
+    VIEWPORT_CULL.with(|c| c.set(None));
 }
 
 fn culled_out(bx: &LayoutBox) -> bool {

@@ -1995,6 +1995,8 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         /// Cache parsed stylesheets (css string hash -> Vec<Stylesheet>).
         cached_stylesheets_hash: u64,
         cached_stylesheets: Option<Vec<super::css_parser::Stylesheet>>,
+        /// Reuse display list buffer napric frames (alloc-free).
+        display_list_buffer: Vec<super::paint::DisplayCommand>,
         /// Cache cascade output (DOM root ptr hash -> StyleMap).
         cached_cascade_hash: u64,
         cached_style_map: Option<super::cascade::StyleMap>,
@@ -2536,8 +2538,10 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                     ended_transitions.push(k.clone());
                 }
             }
-            // Aplikuj transitions na current style map (override hodnoty)
-            cascade::apply_transitions(&mut style_map, &self.active_transitions, elapsed);
+            // Aplikuj transitions jen kdyz nejake aktivni (skip cely walk pri prazdnem).
+            if !self.active_transitions.is_empty() {
+                cascade::apply_transitions(&mut style_map, &self.active_transitions, elapsed);
+            }
 
             // Dispatch transitionend events
             for (node_id, prop) in &ended_transitions {
@@ -2558,29 +2562,33 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                 }
             }
 
-            // Runtime CSS animation: aplikuj @keyframes na elementy s `animation: ...`
-            let _animating = cascade::apply_animations(&mut style_map, &stylesheets, elapsed);
-            // Scroll-driven animations - pri animation-timeline: scroll() pouzij scroll progress
-            let max_scroll = (style_map.len() as f32).max(1.0); // approx; lepsi z layout
-            let scroll_progress = if max_scroll > 1.0 { self.scroll_y / max_scroll.max(1.0) } else { 0.0 };
-            let _ = cascade::apply_scroll_animations(&mut style_map, &stylesheets, scroll_progress);
+            // Runtime CSS animation: skip cely walk pokud zadne keyframes neexistuji.
+            let has_keyframes = stylesheets.iter().any(|s| !s.keyframes.is_empty());
+            if has_keyframes {
+                let _animating = cascade::apply_animations(&mut style_map, stylesheets, elapsed);
+                let max_scroll = (style_map.len() as f32).max(1.0);
+                let scroll_progress = if max_scroll > 1.0 { self.scroll_y / max_scroll.max(1.0) } else { 0.0 };
+                let _ = cascade::apply_scroll_animations(&mut style_map, stylesheets, scroll_progress);
+            }
 
-            // Detect animation start/end + iteration events
+            // Detect animation start/end + iteration events.
+            // Skip cely walk pri zadnych keyframes - test na to ze stranka vubec nema animations.
             let mut current_anims: std::collections::HashSet<(usize, String)> = std::collections::HashSet::new();
             let mut iter_events: Vec<(usize, String, i32)> = Vec::new();
-            for (node_id, styles) in &style_map {
-                if let Some(spec) = cascade::AnimationSpec::from_styles(styles) {
-                    let t = elapsed - spec.delay_secs;
-                    if t >= 0.0 && (spec.iteration_count.is_infinite() || t / spec.duration_secs < spec.iteration_count) {
-                        let key = (*node_id, spec.name.clone());
-                        current_anims.insert(key.clone());
-                        // Iteration count
-                        let cur_iter = (t / spec.duration_secs).floor() as i32;
-                        let prev_iter = self.animation_iterations.get(&key).copied().unwrap_or(-1);
-                        if cur_iter > prev_iter && cur_iter > 0 {
-                            iter_events.push((*node_id, spec.name.clone(), cur_iter));
+            if has_keyframes {
+                for (node_id, styles) in &style_map {
+                    if let Some(spec) = cascade::AnimationSpec::from_styles(styles) {
+                        let t = elapsed - spec.delay_secs;
+                        if t >= 0.0 && (spec.iteration_count.is_infinite() || t / spec.duration_secs < spec.iteration_count) {
+                            let key = (*node_id, spec.name.clone());
+                            current_anims.insert(key.clone());
+                            let cur_iter = (t / spec.duration_secs).floor() as i32;
+                            let prev_iter = self.animation_iterations.get(&key).copied().unwrap_or(-1);
+                            if cur_iter > prev_iter && cur_iter > 0 {
+                                iter_events.push((*node_id, spec.name.clone(), cur_iter));
+                            }
+                            self.animation_iterations.insert(key, cur_iter);
                         }
-                        self.animation_iterations.insert(key, cur_iter);
                     }
                 }
             }
@@ -2632,7 +2640,9 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
             layout::apply_sticky(&mut layout_root, self.scroll_y);
             // Viewport culling: vyrad off-screen elementy z paint walku
             // (test stranka 7000 px, viewport 900 px = 8x mensi paint cost).
-            let mut display_list = paint::build_display_list_culled(&layout_root, self.scroll_y, viewport_h);
+            // Reuse buffer pres frames - alloc-free.
+            let mut display_list = std::mem::take(&mut self.display_list_buffer);
+            paint::build_display_list_culled_into(&layout_root, self.scroll_y, viewport_h, &mut display_list);
 
             // Canvas API: emit canvas ops jako DisplayCommands.
             if let Some(interp) = &self.interpreter {
@@ -2760,8 +2770,9 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                 r.draw_segments(&display_list);
             }
 
-            // Ulozim layout pro hit test
+            // Ulozim layout pro hit test + vrat display_list buffer pro priste.
             self.layout_root = Some(layout_root);
+            self.display_list_buffer = display_list;
             let frame_ms = frame_start.elapsed().as_secs_f32() * 1000.0;
             if frame_ms > 50.0 {
                 eprintln!("[slow frame] {:.1} ms", frame_ms);
@@ -2786,6 +2797,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         cached_cascade_hash: 0,
         cached_style_map: None,
         cached_pseudo_map: None,
+        display_list_buffer: Vec::with_capacity(2048),
         current_path: current_html_path,
         base_url,
         history: initial_url.into_iter().collect(),
