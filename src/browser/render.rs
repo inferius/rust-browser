@@ -2030,7 +2030,8 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
             };
             let attrs = Window::default_attributes()
                 .with_title(title)
-                .with_inner_size(winit::dpi::LogicalSize::new(1024.0, 768.0));
+                .with_inner_size(winit::dpi::LogicalSize::new(1280.0, 900.0))
+                .with_min_inner_size(winit::dpi::LogicalSize::new(400.0, 300.0));
             let window = std::sync::Arc::new(event_loop.create_window(attrs).unwrap());
             self.window = Some(window.clone());
             self.renderer = Some(Renderer::new(window.clone()));
@@ -3102,11 +3103,14 @@ impl Renderer {
         )).expect("device");
         let size = window.inner_size();
         let surface_caps = surface.get_capabilities(&adapter);
+        // Pokud winit jeste nedostal WM_SIZE na Windows, inner_size = 0. Fallback na rozumny default.
+        let init_w = if size.width > 0 { size.width } else { 1280 };
+        let init_h = if size.height > 0 { size.height } else { 900 };
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_caps.formats[0],
-            width: size.width.max(1),
-            height: size.height.max(1),
+            width: init_w,
+            height: init_h,
             present_mode: wgpu::PresentMode::Fifo,
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
