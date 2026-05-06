@@ -2244,6 +2244,33 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                     } else {
                         super::cascade::set_focused_node(None);
                     }
+                    // Form submit: <button type=submit> / <input type=submit> klik nebo
+                    // <a href> klik -> navigate.
+                    let is_submit_button = matches!(tag.as_deref(), Some("button") | Some("input"))
+                        && node.attr("type").as_deref().map(|t| t.eq_ignore_ascii_case("submit")).unwrap_or(matches!(tag.as_deref(), Some("button")));
+                    if is_submit_button {
+                        if let Some(form) = find_ancestor_form(node) {
+                            if let Some(url) = build_form_get_url(&form, self.base_url.as_deref()) {
+                                println!("[form submit] {url}");
+                                self.navigate_url(&url);
+                                return;
+                            }
+                        }
+                    }
+                    // <a href="..."> click -> navigate.
+                    if tag.as_deref() == Some("a") {
+                        if let Some(href) = node.attr("href") {
+                            if !href.starts_with('#') {
+                                let url = match &self.base_url {
+                                    Some(b) => resolve_url(b, &href),
+                                    None => href.clone(),
+                                };
+                                println!("[link] {url}");
+                                self.navigate_url(&url);
+                                return;
+                            }
+                        }
+                    }
                     // Vyvolej click listeners na node
                     let ids: Vec<usize> = node.listeners.borrow().get("click")
                         .cloned().unwrap_or_default();
@@ -2267,6 +2294,57 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
             } else {
                 // Klik mimo - clear focus.
                 super::cascade::set_focused_node(None);
+            }
+        }
+
+        /// Navigate na novou URL: pokud http(s):// fetchne pres ureq, jinak FS path.
+        /// Resetuje interpreter podobne jako load_path.
+        fn navigate_url(&mut self, url: &str) {
+            let is_url = url.starts_with("http://") || url.starts_with("https://");
+            if is_url {
+                let html = match fetch_text_url(url) { Some(s) => s, None => return };
+                // Extract <link> CSS + inline <style>.
+                let document = super::html_parser::parse_html(&html, url);
+                let mut css = String::new();
+                for link in document.root.get_elements_by_tag("link") {
+                    let rel = link.attr("rel").unwrap_or_default().to_lowercase();
+                    if rel.contains("stylesheet") {
+                        if let Some(href) = link.attr("href") {
+                            let resolved = resolve_url(url, &href);
+                            if let Some(c) = fetch_text_url(&resolved) { css.push('\n'); css.push_str(&c); }
+                        }
+                    }
+                }
+                for style in document.root.get_elements_by_tag("style") {
+                    css.push('\n'); css.push_str(&style.text_content());
+                }
+                self.html = html;
+                self.css = css;
+                self.base_url = Some(url.to_string());
+                self.current_path = None;
+                self.scroll_y = 0.0;
+                self.start_time = std::time::Instant::now();
+                self.prev_style_map = None;
+                self.active_animations.clear();
+                self.animation_iterations.clear();
+                self.active_transitions.clear();
+                let mut interp = crate::interpreter::Interpreter::new();
+                let doc = super::html_parser::parse_html(&self.html, url);
+                interp.set_document(doc);
+                self.run_inline_scripts(&mut interp);
+                self.interpreter = Some(interp);
+                if let Some(w) = &self.window {
+                    w.set_title(&format!("Rust Web Engine - {url}"));
+                }
+                self.render();
+            } else if let Some(rest) = url.strip_prefix("file:///") {
+                let path = std::path::PathBuf::from(rest.replace('/', std::path::MAIN_SEPARATOR_STR));
+                self.load_path(&path);
+                self.render();
+            } else {
+                let path = std::path::PathBuf::from(url);
+                self.load_path(&path);
+                self.render();
             }
         }
 
@@ -2501,6 +2579,108 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
     };
     event_loop.run_app(&mut app).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Najde nejblizsi <form> ancestor.
+fn find_ancestor_form(node: &std::rc::Rc<crate::browser::dom::Node>) -> Option<std::rc::Rc<crate::browser::dom::Node>> {
+    let mut current = Some(std::rc::Rc::clone(node));
+    while let Some(n) = current {
+        if n.tag_name().as_deref() == Some("form") { return Some(n); }
+        current = n.parent.borrow().upgrade();
+    }
+    None
+}
+
+/// Build URL z form action + querystring z input/select/textarea values.
+/// Pri method=get pripoji ?k1=v1&k2=v2. POST zatim TODO.
+fn build_form_get_url(form: &std::rc::Rc<crate::browser::dom::Node>, base_url: Option<&str>) -> Option<String> {
+    let action = form.attr("action").unwrap_or_default();
+    let method = form.attr("method").unwrap_or_default().to_lowercase();
+    if method == "post" {
+        eprintln!("[form] POST submit zatim neimplementovano - skip");
+        return None;
+    }
+    // Resolve action proti base.
+    let action_resolved = if action.is_empty() {
+        // Default = current page URL.
+        base_url.unwrap_or("").to_string()
+    } else if let Some(b) = base_url {
+        resolve_url(b, &action)
+    } else {
+        action
+    };
+    // Collect form fields (input/select/textarea) descendants.
+    let mut params: Vec<(String, String)> = Vec::new();
+    fn collect(node: &std::rc::Rc<crate::browser::dom::Node>, out: &mut Vec<(String, String)>) {
+        if matches!(node.kind, crate::browser::dom::NodeKind::Element(_)) {
+            if let Some(tag) = node.tag_name() {
+                let is_input = matches!(tag.as_str(), "input" | "select" | "textarea");
+                if is_input {
+                    let name = node.attr("name").unwrap_or_default();
+                    if !name.is_empty() {
+                        let val = match tag.as_str() {
+                            "input" => {
+                                let t = node.attr("type").unwrap_or_default().to_lowercase();
+                                if t == "checkbox" || t == "radio" {
+                                    if node.attr("checked").is_some() {
+                                        node.attr("value").unwrap_or_else(|| "on".to_string())
+                                    } else {
+                                        return;
+                                    }
+                                } else {
+                                    node.attr("value").unwrap_or_default()
+                                }
+                            }
+                            "select" => {
+                                // Najdi selected option value.
+                                let mut selected: Option<String> = None;
+                                let mut first: Option<String> = None;
+                                for ch in node.children.borrow().iter() {
+                                    if ch.tag_name().as_deref() == Some("option") {
+                                        let v = ch.attr("value").unwrap_or_else(|| ch.text_content().trim().to_string());
+                                        if first.is_none() { first = Some(v.clone()); }
+                                        if ch.attr("selected").is_some() { selected = Some(v); break; }
+                                    }
+                                }
+                                selected.or(first).unwrap_or_default()
+                            }
+                            "textarea" => node.text_content().trim().to_string(),
+                            _ => String::new(),
+                        };
+                        out.push((name, val));
+                    }
+                }
+            }
+        }
+        for ch in node.children.borrow().iter() {
+            collect(ch, out);
+        }
+    }
+    collect(form, &mut params);
+    // URL encode params + concat.
+    let qs: Vec<String> = params.into_iter().map(|(k, v)| {
+        format!("{}={}", url_encode(&k), url_encode(&v))
+    }).collect();
+    let qs_joined = qs.join("&");
+    let separator = if action_resolved.contains('?') { "&" } else { "?" };
+    if qs_joined.is_empty() {
+        Some(action_resolved)
+    } else {
+        Some(format!("{action_resolved}{separator}{qs_joined}"))
+    }
+}
+
+/// Minimal URL encoder - escape non-ASCII + reserved chars.
+fn url_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+            b' ' => out.push('+'),
+            _ => out.push_str(&format!("%{:02X}", b)),
+        }
+    }
+    out
 }
 
 /// Otevri soubor (HTML/PDF/...) v default OS browseru/aplikaci.
