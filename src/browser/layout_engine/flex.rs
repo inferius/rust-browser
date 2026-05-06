@@ -257,6 +257,11 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             if min_h_pre > 0.0 { est_h = min_h_pre; }
             else if max_h_pre.is_finite() { est_h = max_h_pre; }
         }
+        // Pri aspect-ratio + text item: max-h/w wins over text intrinsic.
+        if ch.aspect_ratio.is_some() && ch.text.is_some() {
+            if max_w_pre.is_finite() && max_w_pre > 0.0 { est_w = max_w_pre; }
+            if max_h_pre.is_finite() && max_h_pre > 0.0 { est_h = max_h_pre; }
+        }
         // Pri aspect-ratio: clamp est_w/h pred aspect dopoctem (max wins).
         if ch.aspect_ratio.is_some() {
             est_w = est_w.min(max_w_pre);
