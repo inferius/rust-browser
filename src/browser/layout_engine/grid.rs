@@ -38,6 +38,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
     let cols = col_tracks.len();
     let col_is_auto: Vec<bool> = (0..cols).map(|i| match col_token_kinds.get(i) {
         Some(Track::Auto) => true,
+        Some(Track::FitContent(_)) => true,
         Some(Track::Minmax(_, max, false)) if !max.is_finite() => true,
         Some(Track::Minmax(min, _, false)) if min.is_nan() => true,
         _ => false,
@@ -212,16 +213,16 @@ pub fn layout_grid(bx: &mut LayoutBox) {
             }
             item_placement.push((row, col, span_row, span_col));
         }
-        // Pro kazdy auto col, najdi max intrinsic width z items (min-content).
-        // Reset auto cols na min-content (z items) misto auto_base.
+        // Pro kazdy auto col, najdi intrinsic width z items.
+        // FitContent track aplikuje clamp(min-content, max(min-content, arg), max-content).
         for c_idx in 0..cols {
             if !col_is_auto[c_idx] { continue; }
-            let mut max_w = 0.0_f32;
+            let mut max_content = 0.0_f32;
+            let mut min_content = 0.0_f32;
             for (i, &real_idx) in in_flow.iter().enumerate() {
                 let (_, col, _, span_col) = item_placement[i];
                 if col == c_idx && span_col == 1 {
                     let item = &bx.children[real_idx];
-                    // Text intrinsic min-content: longest unbreakable segment.
                     let text_min = if item.taffy_mode {
                         if let Some(t) = &item.text {
                             let mut max_seg = 0usize; let mut cur = 0usize;
@@ -234,26 +235,44 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                             max_seg as f32 * 10.0
                         } else { 0.0 }
                     } else { 0.0 };
-                    let intrinsic = item.explicit_width.unwrap_or(item.rect.width).max(text_min);
+                    let text_max = if item.taffy_mode {
+                        if let Some(t) = &item.text {
+                            t.chars().filter(|c| !matches!(*c, '\u{200B}' | ' ' | '\n' | '\t')).count() as f32 * 10.0
+                        } else { 0.0 }
+                    } else { 0.0 };
                     let pb_l = item.padding_left.unwrap_or(item.padding) + item.border_left_width.unwrap_or(item.border_width);
                     let pb_r = item.padding_right.unwrap_or(item.padding) + item.border_right_width.unwrap_or(item.border_width);
                     let cw_min_p = super::super::layout::parse_length(&item.min_width_v);
-                    let real_intrinsic = intrinsic.max(pb_l + pb_r).max(cw_min_p);
-                    if real_intrinsic > max_w { max_w = real_intrinsic; }
+                    let item_max = item.explicit_width.unwrap_or(item.rect.width).max(text_max).max(pb_l + pb_r).max(cw_min_p);
+                    let item_min = item.explicit_width.unwrap_or(item.rect.width).max(text_min).max(pb_l + pb_r).max(cw_min_p);
+                    if item_max > max_content { max_content = item_max; }
+                    if item_min > min_content { min_content = item_min; }
                 }
             }
-            col_tracks[c_idx] = max_w;
+            // Pri FitContent: clamp(min-content, max(min-content, arg), max-content).
+            // Pri Auto: pouzij min-content (puvodni chovani - explicit width nebo min-content).
+            let track_size = if let Some(Track::FitContent(arg)) = col_token_kinds.get(c_idx) {
+                let arg_resolved = if *arg < 0.0 { inner_w * (-arg) } else { *arg };
+                max_content.min(arg_resolved.max(min_content))
+            } else {
+                min_content
+            };
+            col_tracks[c_idx] = track_size;
         }
-        // Distribute leftover free space rovnomerne mezi auto cols.
+        // Distribute leftover free space rovnomerne mezi auto cols (NE FitContent).
+        // FitContent jiz ma fixed velikost dle arg.
         if inner_w > 0.0 {
             let total_used: f32 = col_tracks.iter().sum::<f32>() + col_gap * (cols.saturating_sub(1) as f32);
             let leftover = inner_w - total_used;
-            let auto_count = col_is_auto.iter().filter(|&&b| b).count();
-            if leftover > 0.0 && auto_count > 0 {
-                let share = leftover / auto_count as f32;
-                for c_idx in 0..cols {
-                    if col_is_auto[c_idx] { col_tracks[c_idx] += share; }
-                }
+            let mut redistributable_cols: Vec<usize> = Vec::new();
+            for c_idx in 0..cols {
+                if !col_is_auto[c_idx] { continue; }
+                if matches!(col_token_kinds.get(c_idx), Some(Track::FitContent(_))) { continue; }
+                redistributable_cols.push(c_idx);
+            }
+            if leftover > 0.0 && !redistributable_cols.is_empty() {
+                let share = leftover / redistributable_cols.len() as f32;
+                for &c_idx in &redistributable_cols { col_tracks[c_idx] += share; }
             }
         }
     }
@@ -832,6 +851,7 @@ pub fn resolve_tracks(s: &str, container_size: f32, gap: f32) -> Vec<f32> {
             Track::Percent(p) => fixed_total += container_size * p / 100.0,
             Track::Fr(f) => fr_total += *f,
             Track::Auto => auto_count += 1,
+            Track::FitContent(_) => auto_count += 1,
             Track::Minmax(min, max, is_fr) => {
                 let min_resolved = if min.is_nan() { 0.0 }
                                    else if *min < 0.0 { container_size * (-min) }
@@ -859,6 +879,7 @@ pub fn resolve_tracks(s: &str, container_size: f32, gap: f32) -> Vec<f32> {
         Track::Percent(p) => container_size * p / 100.0,
         Track::Fr(f) => fr_base * f,
         Track::Auto => auto_base,
+        Track::FitContent(_) => auto_base,
         Track::Minmax(min, max, is_fr) => {
             let min_r = if min.is_nan() { 0.0 }
                         else if *min < 0.0 { container_size * (-min) }
@@ -885,6 +906,9 @@ enum Track {
     Auto,
     /// minmax(min_px, max_px or fr) - vlastne flexible s rozsahem.
     Minmax(f32, f32, bool /* max je fr */),
+    /// fit-content(<value>): clamp(min-content, max(min-content, arg), max-content).
+    /// arg ulozeno: kladne = px, zaporne = -percent (0..-1).
+    FitContent(f32),
 }
 
 /// Vraci (tokens, is_auto_fit_per_token).
@@ -1154,8 +1178,15 @@ fn parse_single_track(s: &str) -> Track {
             return Track::Minmax(min_v, max_v, false);
         }
     }
-    // fit-content(<value>) - jako auto
-    if s.starts_with("fit-content(") { return Track::Auto; }
+    // fit-content(<value>): parse arg.
+    if let Some(rest) = s.strip_prefix("fit-content(").and_then(|x| x.strip_suffix(')')) {
+        let v = rest.trim();
+        if let Some(num) = v.strip_suffix('%') {
+            let p: f32 = num.trim().parse().unwrap_or(0.0);
+            return Track::FitContent(-(p / 100.0));
+        }
+        return Track::FitContent(super::super::layout::parse_length(v));
+    }
     // px / em / rem / cm / in / pc / pt - parse_length
     Track::Fixed(super::super::layout::parse_length(s))
 }
