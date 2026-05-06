@@ -33,7 +33,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
 
     // Parse + resolve column tracks
     let mut col_tracks = resolve_tracks(&bx.grid_template_columns, inner_w, col_gap);
-    let col_token_kinds = parse_track_tokens_sized(&bx.grid_template_columns, inner_w, col_gap);
+    let (col_token_kinds, col_is_autofit) = parse_track_tokens_with_autofit(&bx.grid_template_columns, inner_w, col_gap);
     if col_tracks.is_empty() { col_tracks = vec![inner_w]; }
     let cols = col_tracks.len();
     let col_is_auto: Vec<bool> = (0..cols).map(|i| match col_token_kinds.get(i) {
@@ -435,17 +435,56 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         }
     }
 
-    // Total tracks delky (po auto track sizing)
-    let total_col: f32 = col_tracks.iter().sum::<f32>() + col_gap * (cols.saturating_sub(1) as f32);
+    // Auto-fit collapse: tracky bez items collapsuji na 0 (vc. gap mezi nimi).
+    let any_autofit = col_is_autofit.iter().any(|&b| b);
+    let mut col_collapsed: Vec<bool> = vec![false; cols];
+    if any_autofit && !in_flow.is_empty() {
+        // Re-compute placement pro detekci occupied cols.
+        let mut occupied_cols: Vec<bool> = vec![false; cols];
+        let mut occupied_grid: Vec<bool> = vec![false; rows.max(1) * cols.max(1)];
+        let mut auto_cur = 0usize;
+        for &real_idx in in_flow.iter() {
+            let child = &bx.children[real_idx];
+            let explicit_col = if child.grid_column_start > 0 { Some((child.grid_column_start - 1) as usize) } else { None };
+            let explicit_row = if child.grid_row_start > 0 { Some((child.grid_row_start - 1) as usize) } else { None };
+            let span_col = if child.grid_column_span > 0 { child.grid_column_span as usize }
+                           else if child.grid_column_end > 0 && child.grid_column_start > 0 { (child.grid_column_end - child.grid_column_start).max(1) as usize }
+                           else { 1 };
+            let span_row = if child.grid_row_span > 0 { child.grid_row_span as usize }
+                           else if child.grid_row_end > 0 && child.grid_row_start > 0 { (child.grid_row_end - child.grid_row_start).max(1) as usize }
+                           else { 1 };
+            let (row, col) = if let (Some(r), Some(c)) = (explicit_row, explicit_col) { (r, c) }
+                else if let Some(c) = explicit_col { let mut r = 0; while r * cols + c < occupied_grid.len() && occupied_grid[r * cols + c] { r += 1; } (r, c) }
+                else if let Some(r) = explicit_row { let mut c = 0; while r * cols + c < occupied_grid.len() && occupied_grid[r * cols + c] { c += 1; } (r, c) }
+                else { let mut idx = auto_cur; while idx < occupied_grid.len() && occupied_grid[idx] { idx += 1; } auto_cur = idx + 1; (idx / cols.max(1), idx % cols.max(1)) };
+            for dr in 0..span_row { for dc in 0..span_col {
+                let idx = (row + dr) * cols + (col + dc);
+                if idx < occupied_grid.len() { occupied_grid[idx] = true; }
+                if col + dc < cols { occupied_cols[col + dc] = true; }
+            }}
+        }
+        for c_idx in 0..cols {
+            if col_is_autofit[c_idx] && !occupied_cols[c_idx] {
+                col_tracks[c_idx] = 0.0;
+                col_collapsed[c_idx] = true;
+            }
+        }
+    }
+    let collapsed_count = col_collapsed.iter().filter(|&&b| b).count();
+    let active_cols = cols.saturating_sub(collapsed_count);
+    let total_col: f32 = col_tracks.iter().sum::<f32>() + col_gap * (active_cols.saturating_sub(1) as f32);
     let total_row: f32 = row_tracks.iter().sum::<f32>() + row_gap * (rows.saturating_sub(1) as f32);
-    let (jc_start, jc_between) = grid_distribute(&bx.justify_content, inner_w - total_col, cols);
+    let (jc_start, jc_between) = grid_distribute(&bx.justify_content, inner_w - total_col, active_cols.max(1));
     let (ac_start, ac_between) = grid_distribute(&bx.align_content, inner_h - total_row, rows);
     let mut col_positions: Vec<f32> = Vec::with_capacity(cols);
     let mut x_cursor = jc_start;
     for (i, w) in col_tracks.iter().enumerate() {
         col_positions.push(x_cursor);
         x_cursor += *w;
-        if i + 1 < cols { x_cursor += col_gap + jc_between; }
+        // Gap+between jen mezi non-collapsed adjacent tracks.
+        if i + 1 < cols && !col_collapsed[i] && !col_collapsed[i + 1] {
+            x_cursor += col_gap + jc_between;
+        }
     }
     let mut row_positions: Vec<f32> = Vec::with_capacity(rows);
     let mut y_cursor = ac_start;
@@ -839,6 +878,73 @@ enum Track {
     Auto,
     /// minmax(min_px, max_px or fr) - vlastne flexible s rozsahem.
     Minmax(f32, f32, bool /* max je fr */),
+}
+
+/// Vraci (tokens, is_auto_fit_per_token).
+fn parse_track_tokens_with_autofit(s: &str, container: f32, gap: f32) -> (Vec<Track>, Vec<bool>) {
+    let total_fixed_outside = pre_compute_fixed(s, container);
+    let s = s.trim();
+    if s.is_empty() { return (Vec::new(), Vec::new()); }
+    let mut tokens: Vec<Track> = Vec::new();
+    let mut is_autofit: Vec<bool> = Vec::new();
+    let mut chars = s.chars().peekable();
+    while let Some(&c) = chars.peek() {
+        if c.is_whitespace() { chars.next(); continue; }
+        if c == '[' { chars.next(); for cc in chars.by_ref() { if cc == ']' { break; } } continue; }
+        let mut buf = String::new();
+        let mut depth = 0i32;
+        while let Some(&cc) = chars.peek() {
+            if cc == '(' { depth += 1; buf.push(cc); chars.next(); continue; }
+            if cc == ')' { depth -= 1; buf.push(cc); chars.next(); continue; }
+            if depth == 0 && (cc.is_whitespace() || cc == '[') { break; }
+            buf.push(cc); chars.next();
+        }
+        if buf.is_empty() { continue; }
+        if let Some(rest) = buf.strip_prefix("repeat(") {
+            if let Some(inner) = rest.strip_suffix(')') {
+                let comma_idx = inner.find(',').unwrap_or(0);
+                let count_str = inner[..comma_idx].trim();
+                let inner_tracks = inner[comma_idx+1..].trim();
+                let sub_tokens = parse_track_tokens(inner_tracks);
+                let sub_size: f32 = sub_tokens.iter().map(|t| match t {
+                    Track::Fixed(p) => *p,
+                    Track::Percent(p) => container * p / 100.0,
+                    _ => 0.0,
+                }).sum();
+                let is_af = count_str == "auto-fit";
+                let count: usize = match count_str {
+                    "auto-fill" | "auto-fit" => {
+                        if sub_size > 0.0 {
+                            let avail = (container - total_fixed_outside).max(0.0);
+                            let pattern_len = sub_tokens.len();
+                            if pattern_len == 0 { 1 } else {
+                                let mut n = 0usize;
+                                let mut used = 0.0_f32;
+                                loop {
+                                    let next = used + sub_size + if n > 0 { gap * pattern_len as f32 } else { 0.0 };
+                                    if next > avail + 0.01 { break; }
+                                    used = next; n += 1;
+                                    if n > 1000 { break; }
+                                }
+                                n.max(1)
+                            }
+                        } else { 1 }
+                    }
+                    _ => count_str.parse().unwrap_or(1),
+                };
+                for _ in 0..count {
+                    for t in &sub_tokens {
+                        tokens.push(*t);
+                        is_autofit.push(is_af);
+                    }
+                }
+                continue;
+            }
+        }
+        tokens.push(parse_single_track(&buf));
+        is_autofit.push(false);
+    }
+    (tokens, is_autofit)
 }
 
 /// Tokenizace grid-template-columns/rows + expand repeat() s container-aware auto-fill count.
