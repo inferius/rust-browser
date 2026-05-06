@@ -1137,7 +1137,8 @@ pub fn layout_grid(bx: &mut LayoutBox) {
             } else { (0.0, 0.0) }
         } else { (0.0, 0.0) };
         let item_w = child.explicit_width.unwrap_or_else(|| if any_auto_x && text_w > 0.0 { text_w } else { cw_avail });
-        let item_h = child.explicit_height.unwrap_or_else(|| if any_auto_y && text_h > 0.0 { text_h } else { ch_avail });
+        // Pri auto margin v ose: pouzij intrinsic (0 nebo text_h), ne ch_avail (ten by stretchnul item).
+        let item_h = child.explicit_height.unwrap_or_else(|| if any_auto_y { text_h } else { ch_avail });
         // Text wrap: pri non-stretch align-self + text width > available, dopocti
         // pocet linek pro height intrinsic.
         let wrapped_text_h = if child.taffy_mode && child.text.is_some() {
