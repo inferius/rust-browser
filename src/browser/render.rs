@@ -2099,9 +2099,13 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                 }
                 WindowEvent::RedrawRequested => {
                     self.render();
-                    // Trigger nasledujici frame (real animation loop)
-                    if let Some(w) = &self.window {
-                        w.request_redraw();
+                    // Continual redraw JEN pri aktivnich animacich/transition (jinak idle).
+                    let has_anim = !self.active_animations.is_empty()
+                        || !self.active_transitions.is_empty();
+                    if has_anim {
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
                     }
                 }
                 // Drag-drop HTML soubor: reload okna s novym souborem.
