@@ -1612,6 +1612,39 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         else if let Some(b) = child.offset_bottom { child.rect.y -= b; }
         child.rect.width = final_w;
         child.rect.height = final_h;
+        // Subgrid (CSS Grid L2): pri grid-template-rows/columns = "subgrid",
+        // misto vlastnich tracku pouzij parent's tracks v ramci grid area item.
+        // Substituce pred recursive layout_grid.
+        if matches!(child.display, super::super::layout::Display::Grid)
+            && (child.grid_template_rows.trim() == "subgrid" || child.grid_template_columns.trim() == "subgrid")
+        {
+            let (row, col, span_row, span_col) = (row, col, span_row, span_col);
+            // Inner padding+border na child - subgrid tracky se aplikuji do inner.
+            let pb_l_c = child.padding_left.unwrap_or(child.padding) + child.border_left_width.unwrap_or(child.border_width);
+            let pb_r_c = child.padding_right.unwrap_or(child.padding) + child.border_right_width.unwrap_or(child.border_width);
+            let pb_t_c = child.padding_top.unwrap_or(child.padding) + child.border_top_width.unwrap_or(child.border_width);
+            let pb_b_c = child.padding_bottom.unwrap_or(child.padding) + child.border_bottom_width.unwrap_or(child.border_width);
+            // Dostupne inner_w/h pro subgrid tracky.
+            let _ = (pb_l_c, pb_r_c, pb_t_c, pb_b_c);
+            if child.grid_template_columns.trim() == "subgrid" {
+                let mut tracks_str = String::new();
+                for d in 0..span_col {
+                    let t = col_tracks.get(col + d).copied().unwrap_or(0.0);
+                    if d > 0 { tracks_str.push(' '); }
+                    tracks_str.push_str(&format!("{}px", t));
+                }
+                child.grid_template_columns = tracks_str;
+            }
+            if child.grid_template_rows.trim() == "subgrid" {
+                let mut tracks_str = String::new();
+                for d in 0..span_row {
+                    let t = row_tracks.get(row + d).copied().unwrap_or(0.0);
+                    if d > 0 { tracks_str.push(' '); }
+                    tracks_str.push_str(&format!("{}px", t));
+                }
+                child.grid_template_rows = tracks_str;
+            }
+        }
         // Dispatch podle child.display (block/flex/grid) - layout_block jen flowuje
         // grandchildren, neresi grid/flex inner.
         match child.display {

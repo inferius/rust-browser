@@ -2421,6 +2421,29 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                 shift_command_y(cmd, -self.scroll_y);
             }
 
+            // Scrollbar rendering: pri page content overflow Y emituj track + thumb.
+            let viewport_w = r.config.width as f32;
+            let viewport_h = r.config.height as f32;
+            let total_h = layout_root.rect.height;
+            if total_h > viewport_h {
+                let bar_w = 12.0_f32;
+                let bar_x = viewport_w - bar_w;
+                // Track (background).
+                display_list.push(DisplayCommand::Rect {
+                    x: bar_x, y: 0.0, w: bar_w, h: viewport_h,
+                    color: [240, 240, 245, 255], radius: 0.0,
+                });
+                // Thumb.
+                let thumb_h = (viewport_h * viewport_h / total_h).max(40.0);
+                let max_scroll = (total_h - viewport_h).max(1.0);
+                let thumb_y = (self.scroll_y / max_scroll) * (viewport_h - thumb_h);
+                display_list.push(DisplayCommand::Rect {
+                    x: bar_x + 2.0, y: thumb_y + 2.0,
+                    w: bar_w - 4.0, h: thumb_h - 4.0,
+                    color: [160, 160, 170, 255], radius: (bar_w - 4.0) * 0.5,
+                });
+            }
+
             // Pre-rasterize vsechny glyfy do atlasu + nacti images
             for cmd in &display_list {
                 match cmd {
