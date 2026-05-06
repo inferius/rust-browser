@@ -13,10 +13,19 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 - **Compliance harness** v src/browser/layout_engine/taffy_compliance.rs:
   - XML parser + LayoutBox converter + run_directory + compare_layout
   - 4 testy spousteji vsechny fixtury, vypocitavaji pass-rate
-  - **Aktualni pass-rate: 1800/1988 (90.5%)** - 90% milestone!
+  - **Aktualni pass-rate: 1826/1988 (91.9%)**
     * BLOCK:  349/392 (89.0%)
-    * GRID:   421/512 (82.2%)
+    * GRID:   447/512 (87.3%)
     * FLEX:   1030/1084 (95.0%)
+  - Iter 186-190 wins:
+    * Track::MaxContent + MinContent variants v parse (rozliseni keywordu)
+    * Span items distribute extra space (CSS §11.5.5):
+      - Step 1: min_content do auto-class tracks
+      - Step 2: max_content extra do tier1 (MaxContent), tier2 (FitContent), tier3 (Auto)
+      - Run PRED redistribute leftover (jinak tracky uz inflated)
+    * Implicit rows (rows nad explicit count) treat jako auto pro sizing
+    * Span row > 1: distribute h do prvni auto recipient row v spanu
+    Total +26 grid (421 -> 447)
   - Iter 162-185 wins (this session):
     * Flex cross intrinsic clamp by max-height (+2)
     * Pre-pass include own padding/border (+2)
