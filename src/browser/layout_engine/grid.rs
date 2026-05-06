@@ -489,6 +489,10 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                 if item.taffy_mode && item.text.is_some() && h == 0.0 {
                     h = 10.0;
                 }
+                // Pripocti vertikalni margins (CSS Grid item margin uvnitr cell).
+                let m_t = item.margin_top.unwrap_or(item.margin);
+                let m_b = item.margin_bottom.unwrap_or(item.margin);
+                h += m_t + m_b;
                 let entry = by_row.entry(row).or_insert(0.0);
                 if h > *entry { *entry = h; }
             }
@@ -774,46 +778,104 @@ pub fn layout_grid(bx: &mut LayoutBox) {
     // Baseline alignment post-pass: per-row max baseline, adjust y v dane row.
     let parent_align_str = bx.align_items.clone();
     if parent_align_str == "baseline" {
-        // Compute per-item baseline.
-        let mut item_baselines: std::collections::HashMap<usize, f32> = std::collections::HashMap::new();
+        // Recursive child_baseline walk pro flex/grid items s flex-direction.
+        fn child_baseline(c: &super::super::layout::LayoutBox) -> f32 {
+            let c_h = c.explicit_height.unwrap_or(c.rect.height);
+            let is_flex_or_grid = matches!(c.display,
+                super::super::layout::Display::Flex | super::super::layout::Display::Grid);
+            let has_flex_attr = !c.flex_direction.is_empty();
+            if is_flex_or_grid || has_flex_attr {
+                if let Some(gc) = c.children.iter().find(|x|
+                    !matches!(x.position, super::super::layout::Position::Absolute | super::super::layout::Position::Fixed)
+                    && !matches!(x.display, super::super::layout::Display::None)) {
+                    let gc_m_t = gc.margin_top.unwrap_or(gc.margin);
+                    let gc_pad_t = c.padding_top.unwrap_or(c.padding) + c.border_top_width.unwrap_or(c.border_width);
+                    return gc_pad_t + gc_m_t + child_baseline(gc);
+                }
+            }
+            c_h
+        }
+        // Compute per-item baseline (above) + below.
+        let mut item_above: std::collections::HashMap<usize, f32> = std::collections::HashMap::new();
+        let mut item_below: std::collections::HashMap<usize, f32> = std::collections::HashMap::new();
         for &(real_idx, _row, _cy) in &item_row_info {
             let item = &bx.children[real_idx];
             let als_str = item.align_self.clone();
             let item_align = if als_str.is_empty() || als_str == "auto" { parent_align_str.clone() } else { als_str };
             if item_align != "baseline" { continue; }
-            // Baseline = first in-flow child bottom or synth (item rect.height).
+            let m_t = item.margin_top.unwrap_or(item.margin);
+            let m_b = item.margin_bottom.unwrap_or(item.margin);
             let first_child = item.children.iter().find(|c|
                 !matches!(c.position, super::super::layout::Position::Absolute | super::super::layout::Position::Fixed)
                 && !matches!(c.display, super::super::layout::Display::None));
-            let baseline = match first_child {
+            let above = match first_child {
                 Some(c) => {
                     let pad_t_i = item.padding_top.unwrap_or(item.padding) + item.border_top_width.unwrap_or(item.border_width);
-                    let c_h = c.explicit_height.unwrap_or(c.rect.height);
                     let c_m_t = c.margin_top.unwrap_or(c.margin);
-                    pad_t_i + c_m_t + c_h
+                    m_t + pad_t_i + c_m_t + child_baseline(c)
                 }
-                None => item.rect.height,
+                None => m_t + item.rect.height,
             };
-            item_baselines.insert(real_idx, baseline);
+            let item_h = item.rect.height + m_t + m_b;
+            let below = (item_h - above).max(0.0);
+            item_above.insert(real_idx, above);
+            item_below.insert(real_idx, below);
         }
-        // Per-row max baseline.
-        let mut row_max_baseline: std::collections::HashMap<usize, f32> = std::collections::HashMap::new();
+        // Per-row max above/below.
+        let mut row_max_above: std::collections::HashMap<usize, f32> = std::collections::HashMap::new();
+        let mut row_max_below: std::collections::HashMap<usize, f32> = std::collections::HashMap::new();
         for &(real_idx, row, _cy) in &item_row_info {
-            if let Some(&bsl) = item_baselines.get(&real_idx) {
-                let entry = row_max_baseline.entry(row).or_insert(0.0);
-                if bsl > *entry { *entry = bsl; }
+            if let Some(&a) = item_above.get(&real_idx) {
+                let entry = row_max_above.entry(row).or_insert(0.0);
+                if a > *entry { *entry = a; }
+            }
+            if let Some(&b) = item_below.get(&real_idx) {
+                let entry = row_max_below.entry(row).or_insert(0.0);
+                if b > *entry { *entry = b; }
             }
         }
-        // Adjust y per item, preserve margin-top offset.
-        for &(real_idx, row, cy) in &item_row_info {
-            if let (Some(&own_bsl), Some(&row_max)) = (item_baselines.get(&real_idx), row_max_baseline.get(&row)) {
-                let offset = row_max - own_bsl;
-                if offset.abs() > 0.01 {
-                    let item = &mut bx.children[real_idx];
-                    let m_t = item.margin_top.unwrap_or(item.margin);
-                    item.rect.y = bx.rect.y + bw_t + cy + m_t + offset;
+        // Expand row_tracks pri baseline rozsireni.
+        let mut row_tracks_new = row_tracks.clone();
+        for r in 0..rows {
+            if let (Some(&a), Some(&b)) = (row_max_above.get(&r), row_max_below.get(&r)) {
+                let needed = a + b;
+                if needed > row_tracks_new[r] {
+                    row_tracks_new[r] = needed;
                 }
             }
+        }
+        // Recompute row positions s expanded tracks.
+        let mut row_positions_new: Vec<f32> = Vec::with_capacity(rows);
+        let mut yc = ac_start;
+        for (i, h) in row_tracks_new.iter().enumerate() {
+            row_positions_new.push(yc);
+            yc += *h;
+            if i + 1 < rows { yc += row_gap + ac_between; }
+        }
+        // Re-position items (no baseline + baseline) per nove row positions.
+        for &(real_idx, row, _old_cy) in &item_row_info {
+            let new_cy = row_positions_new.get(row).copied().unwrap_or(0.0);
+            let item = &mut bx.children[real_idx];
+            let als_str = item.align_self.clone();
+            let item_align = if als_str.is_empty() || als_str == "auto" { parent_align_str.clone() } else { als_str };
+            let m_t = item.margin_top.unwrap_or(item.margin);
+            if item_align == "baseline" {
+                let own_above = item_above.get(&real_idx).copied().unwrap_or(0.0);
+                let row_above = row_max_above.get(&row).copied().unwrap_or(0.0);
+                let offset = row_above - own_above;
+                item.rect.y = bx.rect.y + bw_t + new_cy + m_t + offset;
+            } else {
+                // Non-baseline item zachova start position v ramci nove row.
+                item.rect.y = bx.rect.y + bw_t + new_cy + m_t;
+            }
+        }
+        // Update container height pri auto.
+        if bx.explicit_height.is_none() {
+            let new_total: f32 = row_tracks_new.iter().sum::<f32>() + row_gap * (rows.saturating_sub(1) as f32);
+            let pad_t_total = bx.padding_top.unwrap_or(bx.padding) + bw_t;
+            let pad_b_total = bx.padding_bottom.unwrap_or(bx.padding) + bw_b;
+            let needed_total = new_total + pad_t_total + pad_b_total;
+            if needed_total > bx.rect.height { bx.rect.height = needed_total; }
         }
     }
     let _ = parent_align_str;
