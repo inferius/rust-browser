@@ -28,8 +28,13 @@ pub fn layout_grid(bx: &mut LayoutBox) {
 
     if bx.children.is_empty() { return; }
 
-    let row_gap = bx.row_gap;
-    let col_gap = bx.column_gap;
+    // Re-resolve gap pct proti inner content dimension.
+    let row_gap = if let Some(p) = bx.row_gap_pct {
+        if bx.explicit_height.is_none() { 0.0 } else { inner_h * p }
+    } else { bx.row_gap };
+    let col_gap = if let Some(p) = bx.column_gap_pct {
+        inner_w * p
+    } else { bx.column_gap };
 
     // Parse + resolve column tracks
     let mut col_tracks = resolve_tracks(&bx.grid_template_columns, inner_w, col_gap);
