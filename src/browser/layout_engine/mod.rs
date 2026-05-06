@@ -54,6 +54,8 @@ fn layout_absolute_child_inner(child: &mut LayoutBox, parent_x: f32, parent_y: f
             Display::Grid => grid::layout_grid(child),
             Display::Block => {
                 // Block intrinsic: max child explicit_width pro w, sum heights+margins pro h.
+                // Pri parent flex-direction (column): sum heights z flex-basis nebo height.
+                let parent_is_flex_col = !child.flex_direction.is_empty() && child.flex_direction.contains("column");
                 let mut max_w = 0.0_f32;
                 let mut total_h = 0.0_f32;
                 let mut prev_m_b = 0.0_f32;
@@ -62,7 +64,14 @@ fn layout_absolute_child_inner(child: &mut LayoutBox, parent_x: f32, parent_y: f
                     if matches!(gc.display, Display::None) { continue; }
                     let gw = gc.explicit_width.unwrap_or(0.0);
                     if gw > max_w { max_w = gw; }
-                    let gh = gc.explicit_height.unwrap_or(0.0);
+                    // Height from explicit OR flex-basis (parent column flex).
+                    let basis_h = if parent_is_flex_col {
+                        let bv = gc.flex_basis.trim();
+                        if let Some(num) = bv.strip_suffix("px") {
+                            num.parse::<f32>().unwrap_or(0.0)
+                        } else { 0.0 }
+                    } else { 0.0 };
+                    let gh = gc.explicit_height.unwrap_or(basis_h);
                     let gm_t = gc.margin_top.unwrap_or(gc.margin);
                     let gm_b = gc.margin_bottom.unwrap_or(gc.margin);
                     let collapsed = if prev_m_b >= 0.0 && gm_t >= 0.0 { prev_m_b.max(gm_t) } else { prev_m_b + gm_t };
