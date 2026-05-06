@@ -13,10 +13,15 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 - **Compliance harness** v src/browser/layout_engine/taffy_compliance.rs:
   - XML parser + LayoutBox converter + run_directory + compare_layout
   - 4 testy spousteji vsechny fixtury, vypocitavaji pass-rate
-  - **Aktualni pass-rate: 1970/1988 (99.1%)**
+  - **Aktualni pass-rate: 1974/1988 (99.3%)**
     * BLOCK:  392/392 (100.0%)
-    * GRID:   504/512 (98.4%)
+    * GRID:   508/512 (99.2%)
     * FLEX:   1074/1084 (99.1%)
+  - Iter 224 wins:
+    * Grid span minmax(intrinsic-min, X) tier classification - includes minmax tracks v step1 distribute (+2 span_13)
+    * Grid Mc-min tier (plain Mc + minmax(Mc, X)) priority pro item_max distribution
+    * Grid auto-track sizing minmax fixed-min: track base = min(fixed).max(min_content) instead of just min_content
+    * Grid span overflow:hidden: rewrite redistribute s intrinsic_count (mc-min + Mc-min + minmax-with-intrinsic-min) excludes auto/fc (+2 span_13_hidden)
   - Iter 223 win: grid span overflow:hidden mc/Mc share redistribute (+2 span_6_hidden)
   - Iter 222 win: grid item intrinsic h measurement pass + iterativni fr clamp re-resolution (+2)
   - Iter 221 wins:
