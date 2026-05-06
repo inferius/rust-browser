@@ -401,6 +401,28 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                         }
                     }
                 }
+                // Maximize non-fr minmax tracks PRED fr distribute (CSS Grid §11.5).
+                // Grow minmax(min, max_finite) az do max, beraj z available_for_fr.
+                if available_for_fr > 0.0 {
+                    for c_idx in 0..cols {
+                        if is_fr_track[c_idx] { continue; }
+                        if let Some(Track::Minmax(min_v, max_v, false)) = col_token_kinds.get(c_idx) {
+                            if max_v.is_finite() && !max_v.is_nan() {
+                                let max_r = if *max_v < 0.0 { inner_w * (-max_v) } else { *max_v };
+                                let min_r = if min_v.is_nan() { col_tracks[c_idx] }
+                                            else if *min_v < 0.0 { inner_w * (-min_v) }
+                                            else { *min_v };
+                                let grow_room = (max_r - col_tracks[c_idx].max(min_r)).max(0.0);
+                                let grow = grow_room.min(available_for_fr);
+                                if grow > 0.0 {
+                                    col_tracks[c_idx] += grow;
+                                    available_for_fr -= grow;
+                                    changed = true;
+                                }
+                            }
+                        }
+                    }
+                }
                 // Redistribute zbytek mezi non-item-driven fr tracky.
                 if active_fr_total > 0.0 && available_for_fr >= 0.0 {
                     let fr_size = available_for_fr / active_fr_total.max(1.0);
