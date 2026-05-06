@@ -360,8 +360,9 @@ mod tests {
                 }
                 "padding-left" => bx.padding_left = parse_dim(v, container_w),
                 "padding-right" => bx.padding_right = parse_dim(v, container_w),
-                "padding-top" => bx.padding_top = parse_dim(v, container_h),
-                "padding-bottom" => bx.padding_bottom = parse_dim(v, container_h),
+                // CSS spec: padding pct resolve against inline-size CB = container width.
+                "padding-top" => bx.padding_top = parse_dim(v, container_w),
+                "padding-bottom" => bx.padding_bottom = parse_dim(v, container_w),
                 // Pro percent margins: CSS spec resolve proti inline-size CB (= width).
                 // Nepouzivame container_h pro top/bottom percent.
                 "margin-left" => {
