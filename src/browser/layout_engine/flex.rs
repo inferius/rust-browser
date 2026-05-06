@@ -1055,12 +1055,21 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         // V intrinsic mode (pre-pass) override vzdy. V normal mode pri row
         // direction (cross=height): rect.height = needed (= total_cross), aby
         // wrap container po stretch na sirku spravne shrinkl na content height.
-        // Pri column direction expand jen.
+        // Pri column direction expand jen. Pri overflow non-visible v main axis (= column = height):
+        // bx zustane na rect.height (drive set), neexpanduj na content (overflow clip).
+        let main_overflow_blocks_self = if direction.is_row() {
+            matches!(bx.overflow_x.as_str(), "hidden" | "scroll" | "auto" | "clip")
+        } else {
+            matches!(bx.overflow_y.as_str(), "hidden" | "scroll" | "auto" | "clip")
+        };
         if bx.taffy_intrinsic_mode {
             bx.rect.height = needed;
         } else if direction.is_row() {
-            bx.rect.height = needed;
-        } else if bx.rect.height < needed {
+            // Row direction: needed = total_cross. Pri overflow-y (cross) blocks - skip override.
+            let cross_overflow = matches!(bx.overflow_y.as_str(), "hidden" | "scroll" | "auto" | "clip");
+            if !cross_overflow { bx.rect.height = needed; }
+            else if bx.rect.height < needed { /* keep */ }
+        } else if bx.rect.height < needed && !main_overflow_blocks_self {
             bx.rect.height = needed;
         }
         // Apply max/min-height clamp na container kdyz auto.
