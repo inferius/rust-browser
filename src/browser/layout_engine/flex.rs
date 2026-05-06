@@ -266,6 +266,14 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                 }
             }
         }
+        // Re-resolve percent margins proti inner_w (CSS spec: pct margin v flex resolvuje
+        // proti inline-size CB = flex container width).
+        let ch_mut = &mut bx.children[i];
+        if let Some(p) = ch_mut.margin_left_pct { ch_mut.margin_left = Some(inner_w * p); }
+        if let Some(p) = ch_mut.margin_right_pct { ch_mut.margin_right = Some(inner_w * p); }
+        if let Some(p) = ch_mut.margin_top_pct { ch_mut.margin_top = Some(inner_w * p); }
+        if let Some(p) = ch_mut.margin_bottom_pct { ch_mut.margin_bottom = Some(inner_w * p); }
+        let ch = &bx.children[i];
         let m_l = ch.margin_left.unwrap_or(ch.margin);
         let m_r = ch.margin_right.unwrap_or(ch.margin);
         let m_t = ch.margin_top.unwrap_or(ch.margin);

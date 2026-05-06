@@ -601,6 +601,12 @@ mod tests {
                 child.rect.height = 0.0;
                 continue;
             }
+            // Re-resolve percent margins proti inner_w (CSS spec: pct margin v block
+            // resolvuje proti inline-size CB = parent width).
+            if let Some(p) = child.margin_left_pct { child.margin_left = Some(inner_w * p); }
+            if let Some(p) = child.margin_right_pct { child.margin_right = Some(inner_w * p); }
+            if let Some(p) = child.margin_top_pct { child.margin_top = Some(inner_w * p); }
+            if let Some(p) = child.margin_bottom_pct { child.margin_bottom = Some(inner_w * p); }
             let m_l = child.margin_left.unwrap_or(child.margin);
             let original_m_t = child.margin_top.unwrap_or(child.margin);
             let mut m_t = original_m_t;
