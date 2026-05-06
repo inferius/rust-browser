@@ -1981,6 +1981,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                 WindowEvent::CursorMoved { position, .. } => {
                     self.mouse_x = position.x as f32;
                     self.mouse_y = position.y as f32 + self.scroll_y;
+                    self.update_hover();
                 }
                 WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } => {
                     self.handle_click(self.mouse_x, self.mouse_y);
@@ -2149,6 +2150,16 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
             let target = layout_root.hit_test(x, y);
             if let Some(target) = target {
                 if let Some(node) = &target.node {
+                    // Set focus na klik (HTML interactive elements: input/textarea/select/button/a).
+                    let tag = node.tag_name();
+                    let is_focusable = matches!(tag.as_deref(),
+                        Some("input") | Some("textarea") | Some("select") | Some("button") | Some("a")
+                    ) || node.attr("tabindex").is_some();
+                    if is_focusable {
+                        super::cascade::set_focused_node(Some(std::rc::Rc::as_ptr(node) as usize));
+                    } else {
+                        super::cascade::set_focused_node(None);
+                    }
                     // Vyvolej click listeners na node
                     let ids: Vec<usize> = node.listeners.borrow().get("click")
                         .cloned().unwrap_or_default();
@@ -2169,7 +2180,18 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                         }
                     }
                 }
+            } else {
+                // Klik mimo - clear focus.
+                super::cascade::set_focused_node(None);
             }
+        }
+
+        /// Update :hover na zaklade aktualni mouse position. Vola se z CursorMoved.
+        fn update_hover(&mut self) {
+            let layout_root = match &self.layout_root { Some(l) => l, None => return };
+            let target = layout_root.hit_test(self.mouse_x, self.mouse_y);
+            let id = target.and_then(|t| t.node.as_ref().map(|n| std::rc::Rc::as_ptr(n) as usize));
+            super::cascade::set_hovered_node(id);
         }
 
         fn render(&mut self) {

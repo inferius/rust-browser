@@ -8,6 +8,35 @@ use std::rc::Rc;
 use super::dom::{Node, NodeKind};
 use super::css_parser::{Stylesheet, Selector, SimpleSelector, Combinator, specificity};
 
+// Runtime UI state pres thread-local. Nastavuje render loop pred kazdym
+// cascade pass; matches_selector cte pro :hover / :active / :focus / :focus-within.
+thread_local! {
+    static HOVERED_NODE: std::cell::RefCell<Option<usize>> = std::cell::RefCell::new(None);
+    static ACTIVE_NODE: std::cell::RefCell<Option<usize>> = std::cell::RefCell::new(None);
+    static FOCUSED_NODE: std::cell::RefCell<Option<usize>> = std::cell::RefCell::new(None);
+}
+
+/// Set hovered element (= node id z Rc::as_ptr cast as usize). None = zadny.
+pub fn set_hovered_node(id: Option<usize>) { HOVERED_NODE.with(|c| *c.borrow_mut() = id); }
+pub fn set_active_node(id: Option<usize>) { ACTIVE_NODE.with(|c| *c.borrow_mut() = id); }
+pub fn set_focused_node(id: Option<usize>) { FOCUSED_NODE.with(|c| *c.borrow_mut() = id); }
+
+fn current_node_id(node: &Rc<Node>) -> usize { Rc::as_ptr(node) as usize }
+fn is_node_match(node: &Rc<Node>, cell: &'static std::thread::LocalKey<std::cell::RefCell<Option<usize>>>) -> bool {
+    let id = current_node_id(node);
+    cell.with(|c| c.borrow().map(|x| x == id).unwrap_or(false))
+}
+fn is_node_or_ancestor_match(node: &Rc<Node>, cell: &'static std::thread::LocalKey<std::cell::RefCell<Option<usize>>>) -> bool {
+    let target = cell.with(|c| *c.borrow());
+    let target = match target { Some(t) => t, None => return false };
+    let mut cur: Option<Rc<Node>> = Some(Rc::clone(node));
+    while let Some(n) = cur {
+        if current_node_id(&n) == target { return true; }
+        cur = n.parent.borrow().upgrade();
+    }
+    false
+}
+
 /// Expanduje CSS shorthand props (margin/padding/border) do longhand.
 /// Napr. "margin: 10px 20px;" -> margin-top:10, margin-right:20, margin-bottom:10, margin-left:20.
 /// "border: 1px solid red;" -> border-width:1, border-style:solid, border-color:red.
@@ -1489,9 +1518,20 @@ pub fn matches_simple(node: &Rc<Node>, sel: &SimpleSelector) -> bool {
                 // Vyzaduje runtime stav - skip
                 return false;
             }
-            // hover/active/focus - vyzaduje runtime stav - skip (rule se neaplikuje staticky)
-            "hover" | "active" | "focus" | "focus-visible" | "focus-within"
-            | "visited" | "link" => return false,
+            // hover/active/focus runtime state - thread-local nodes nastaveny render loopem.
+            "hover" => {
+                if !is_node_or_ancestor_match(node, &HOVERED_NODE) { return false; }
+            }
+            "active" => {
+                if !is_node_or_ancestor_match(node, &ACTIVE_NODE) { return false; }
+            }
+            "focus" | "focus-visible" => {
+                if !is_node_match(node, &FOCUSED_NODE) { return false; }
+            }
+            "focus-within" => {
+                if !is_node_or_ancestor_match(node, &FOCUSED_NODE) { return false; }
+            }
+            "visited" | "link" => return false,
             _ => {}
         }
     }
