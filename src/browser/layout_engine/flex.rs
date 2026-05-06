@@ -623,7 +623,16 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                 let own_baseline = item_baselines[i_in_line];
                 cross_offset = line_max_baseline - own_baseline + it.margin_cross_start;
             } else {
-                let cross_offset_align = compute_align_offset(item_align, align_box, item_cross_size + it.margin_cross_start + it.margin_cross_end);
+                // Pri item s flex-wrap: stretch cross => cross_offset = 0 (item zabira plnou cross).
+                let real_idx_off = in_flow[item_idx];
+                let item_has_wrap_off = !bx.children[real_idx_off].flex_wrap.is_empty()
+                    && bx.children[real_idx_off].flex_wrap != "nowrap";
+                let effective_item_cross = if item_has_wrap_off {
+                    cross_size - it.margin_cross_start - it.margin_cross_end
+                } else {
+                    item_cross_size
+                };
+                let cross_offset_align = compute_align_offset(item_align, align_box, effective_item_cross + it.margin_cross_start + it.margin_cross_end);
                 cross_offset = cross_offset_align + it.margin_cross_start;
                 // Pri wrap-reverse: cross axis se prevracije, takze align FlexStart/FlexEnd
                 // tahaji item z opacne strany line. flip cross_offset.
