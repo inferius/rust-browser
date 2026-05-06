@@ -620,7 +620,14 @@ pub fn layout_grid(bx: &mut LayoutBox) {
             } else if let Some(Track::Minmax(min, _, false)) = col_token_kinds.get(c_idx) {
                 if min.is_nan() { max_content }
                 else if (*min - (-1000.0)).abs() < 0.5 { min_content }
-                else { min_content }
+                else if *min < 0.0 && *min > -2.0 {
+                    // percent min
+                    (inner_w * (-min)).max(min_content)
+                }
+                else {
+                    // fixed px min - track base size at least the fixed value.
+                    min.max(min_content)
+                }
             } else {
                 min_content
             };
@@ -657,9 +664,33 @@ pub fn layout_grid(bx: &mut LayoutBox) {
             let span_indices: Vec<usize> = (col..(col+span_col)).collect();
             let total_gap_s = col_gap * (span_col.saturating_sub(1) as f32);
             let cur_sum: f32 = span_indices.iter().map(|&c| col_tracks[c]).sum::<f32>() + total_gap_s;
+            // Helper: track has intrinsic min sizing function?
+            let is_intrinsic_min = |c: usize| -> bool {
+                match col_token_kinds.get(c) {
+                    Some(Track::Auto) | Some(Track::MaxContent) | Some(Track::MinContent) | Some(Track::FitContent(_)) => true,
+                    Some(Track::Minmax(min_v, _, _)) => {
+                        // -1000 = min-content, NaN = max-content, 0 = auto.
+                        min_v.is_nan() || (*min_v - (-1000.0)).abs() < 0.5 || *min_v == 0.0
+                    }
+                    _ => false,
+                }
+            };
+            // Helper: track has Mc (max-content) min sizing function?
+            let is_mc_min = |c: usize| -> bool {
+                match col_token_kinds.get(c) {
+                    Some(Track::MaxContent) => true,
+                    Some(Track::Minmax(min_v, _, _)) => min_v.is_nan(),
+                    _ => false,
+                }
+            };
             if cur_sum < item_min {
-                let recipients: Vec<usize> = span_indices.iter().copied().filter(|&c| matches!(col_token_kinds.get(c),
-                    Some(Track::Auto) | Some(Track::MaxContent) | Some(Track::MinContent) | Some(Track::FitContent(_)))).collect();
+                // Step 1: distribute do all intrinsic-min tracks (vc. minmax s intrinsic min).
+                let mut recipients: Vec<usize> = span_indices.iter().copied().filter(|&c| is_intrinsic_min(c)).collect();
+                // Pri overflow:hidden span: fc a auto excluded z intrinsic-min count.
+                if inline_overflow_blocks_span {
+                    recipients.retain(|&c| !matches!(col_token_kinds.get(c), Some(Track::FitContent(_)) | Some(Track::Auto)));
+                    recipients.retain(|&c| !matches!(col_token_kinds.get(c), Some(Track::Minmax(min_v, _, _)) if *min_v == 0.0));
+                }
                 if !recipients.is_empty() {
                     let deficit = item_min - cur_sum;
                     let share = deficit / recipients.len() as f32;
@@ -668,19 +699,18 @@ pub fn layout_grid(bx: &mut LayoutBox) {
             }
             let cur_sum2: f32 = span_indices.iter().map(|&c| col_tracks[c]).sum::<f32>() + total_gap_s;
             if cur_sum2 < item_max {
-                // Priority tiers (CSS §11.5.5):
-                //  1. MaxContent tracks (highest priority)
-                //  2. FitContent tracks (capped by arg)
-                //  3. Auto tracks (only kdyz tier 1+2 prazdne)
+                // Step 2: distribute (item_max - item_min) to Mc-min tracks (max-content
+                // min sizing function: plain Mc OR minmax(Mc, X)).
+                let mc_min_tracks: Vec<usize> = span_indices.iter().copied().filter(|&c| is_mc_min(c)).collect();
                 let tier1: Vec<usize> = span_indices.iter().copied().filter(|&c| matches!(col_token_kinds.get(c), Some(Track::MaxContent))).collect();
                 let tier2: Vec<usize> = span_indices.iter().copied().filter(|&c| matches!(col_token_kinds.get(c), Some(Track::FitContent(_)))).collect();
                 let tier3: Vec<usize> = span_indices.iter().copied().filter(|&c| matches!(col_token_kinds.get(c), Some(Track::Auto))).collect();
-                // Pri overflow hidden item: distribute to ALL auto-class tracks (drive
-                // jen MaxContent/FitContent). Bez MaxContent v spanu: tier_all kdykoliv.
                 let tier_all: Vec<usize> = span_indices.iter().copied().filter(|&c| matches!(col_token_kinds.get(c),
                     Some(Track::Auto) | Some(Track::MaxContent) | Some(Track::MinContent) | Some(Track::FitContent(_)))).collect();
-                let recipients = if inline_overflow_blocks_span && tier1.is_empty() && !tier_all.is_empty() {
-                    // Overflow hidden + no MaxContent: distribute to ALL.
+                // Pri presence Mc-min tracks (incl minmax(Mc,X)): step 2 = Mc-min only.
+                let recipients = if !mc_min_tracks.is_empty() {
+                    mc_min_tracks
+                } else if inline_overflow_blocks_span && tier1.is_empty() && !tier_all.is_empty() {
                     tier_all
                 } else if !tier1.is_empty() {
                     tier1
@@ -699,25 +729,42 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                         col_tracks[c] = (col_tracks[c] + share).min(cap.max(col_tracks[c]));
                     }
                 }
-                // Pri overflow:hidden span s MinContent + MaxContent obema v spanu:
-                // taffy posune text_min/N_intrinsic_tracks share na MinContent, ostatni
-                // odecte z MaxContent (visualni rozdeleni text na 2 tracky).
+                // Pri overflow:hidden span: aplikuj algoritmus distribution proti final size.
+                // Intrinsic tracks (vc. minmax-with-intrinsic-min) ale exclud fc, auto, minmax(auto,X).
+                // X = (free - text_min) / intrinsic_count.
+                // Mc-min: X + text_min/Mc_count. Other intrinsic: X.
                 if inline_overflow_blocks_span && text_min > 0.0 {
-                    let mc_cols: Vec<usize> = span_indices.iter().copied().filter(|&c| matches!(col_token_kinds.get(c), Some(Track::MinContent))).collect();
-                    let mcc_cols: Vec<usize> = span_indices.iter().copied().filter(|&c| matches!(col_token_kinds.get(c), Some(Track::MaxContent))).collect();
-                    let intrinsic_count = span_indices.iter().filter(|&&c| matches!(col_token_kinds.get(c),
-                        Some(Track::Auto) | Some(Track::MaxContent) | Some(Track::MinContent) | Some(Track::FitContent(_)))).count();
-                    if !mc_cols.is_empty() && !mcc_cols.is_empty() && intrinsic_count > 0 {
-                        let share_per_mc = text_min / intrinsic_count as f32;
-                        for &mc in &mc_cols {
-                            let add = share_per_mc - col_tracks[mc];
-                            if add > 0.0 {
-                                col_tracks[mc] += add;
-                                // Steal from first MaxContent.
-                                if let Some(&mcc) = mcc_cols.first() {
-                                    col_tracks[mcc] = (col_tracks[mcc] - add).max(0.0);
-                                }
+                    let intrinsic_indices: Vec<usize> = span_indices.iter().copied().filter(|&c| {
+                        match col_token_kinds.get(c) {
+                            Some(Track::MinContent) | Some(Track::MaxContent) => true,
+                            Some(Track::Minmax(min_v, _, _)) => {
+                                min_v.is_nan() || (*min_v - (-1000.0)).abs() < 0.5
                             }
+                            _ => false,
+                        }
+                    }).collect();
+                    let mcc_indices: Vec<usize> = span_indices.iter().copied().filter(|&c| {
+                        match col_token_kinds.get(c) {
+                            Some(Track::MaxContent) => true,
+                            Some(Track::Minmax(min_v, _, _)) => min_v.is_nan(),
+                            _ => false,
+                        }
+                    }).collect();
+                    if !intrinsic_indices.is_empty() && !mcc_indices.is_empty() {
+                        // Sum of fixed (non-intrinsic) span tracks.
+                        let intrinsic_set: std::collections::HashSet<usize> = intrinsic_indices.iter().copied().collect();
+                        let fixed_sum: f32 = span_indices.iter().copied().filter(|c| !intrinsic_set.contains(c))
+                            .map(|c| col_tracks[c]).sum();
+                        let free = (item_max - fixed_sum).max(0.0);
+                        let n = intrinsic_indices.len() as f32;
+                        let mcc_n = mcc_indices.len() as f32;
+                        let x = ((free - text_min) / n).max(0.0);
+                        let mc_extra = if mcc_n > 0.0 { text_min / mcc_n } else { 0.0 };
+                        for &c in &intrinsic_indices {
+                            col_tracks[c] = x;
+                        }
+                        for &c in &mcc_indices {
+                            col_tracks[c] = x + mc_extra;
                         }
                     }
                 }
