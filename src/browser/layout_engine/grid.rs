@@ -650,7 +650,8 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                     t.chars().filter(|c| !matches!(*c, '\u{200B}' | ' ' | '\n' | '\t')).count() as f32 * 10.0
                 } else { 0.0 }
             } else { 0.0 };
-            let item_min = text_min;
+            let inline_overflow_blocks_span = matches!(item.overflow_x.as_str(), "hidden" | "scroll" | "auto" | "clip");
+            let item_min = if inline_overflow_blocks_span { 0.0 } else { text_min };
             let item_max = text_max;
             if item_max <= 0.0 && item_min <= 0.0 { continue; }
             let span_indices: Vec<usize> = (col..(col+span_col)).collect();
