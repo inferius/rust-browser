@@ -13,13 +13,23 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 - **Compliance harness** v src/browser/layout_engine/taffy_compliance.rs:
   - XML parser + LayoutBox converter + run_directory + compare_layout
   - 4 testy spousteji vsechny fixtury, vypocitavaji pass-rate
-  - **Aktualni pass-rate: 1596/1988 (80.3%)** *80% milestone reached*
-    * BLOCK:  326/392 (83.2%)
-    * GRID:   337/512 (65.8%)
-    * FLEX:   933/1084 (86.1%)
-  - Iterace 0-123 progress: 18 -> 1017 (50%) -> 1392 (70%) -> 1490 (74.9%) ->
+  - **Aktualni pass-rate: 1628/1988 (81.9%)** *80% milestone passed*
+    * BLOCK:  337/392 (86.0%)
+    * GRID:   355/512 (69.3%)
+    * FLEX:   936/1084 (86.3%)
+  - Iterace 0-133 progress: 18 -> 1017 (50%) -> 1392 (70%) -> 1490 (74.9%) ->
     1492 (75.0%) -> 1516 (76.3%) -> 1548 (77.9%) -> 1566 (78.8%) ->
-    1578 (79.4%) -> 1588 (79.9%) -> 1592 (80.1%)
+    1578 (79.4%) -> 1588 (79.9%) -> 1592 (80.1%) -> 1602 (80.6%) ->
+    1608 (80.9%) -> 1616 (81.3%) -> 1620 (81.5%) -> 1628 (81.9%)
+  - Iter 125-133 wins:
+    * Baseline alignment v flex (synth bottom + first-child fallback heuristika)
+    * Block s align-items=baseline -> implicit flex
+    * Grid auto margin + text intrinsic (centruje text v cell)
+    * Grid auto-fit collapse empty tracks + space-evenly active count
+    * Descendant max-width contributes do flex item min_main
+    * minmax(min-content/max-content, ...) v gridu (NaN sentinel)
+    * fit-content() track sizing s clamp(min, max(min, arg), max)
+    * Minmax leftover redistribute respects item-driven min
   - Iter 100-123 wins:
     * inset percent top/bottom = 0 pri auto parent height
     * abs auto margin LTR over-constrained: left=0
