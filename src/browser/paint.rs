@@ -1051,6 +1051,65 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
         });
     }
 
+    // <video> placeholder pri chybejicim posteru: tmavy box + play triangle.
+    if bx.tag.as_deref() == Some("video") && bx.image_src.is_none() {
+        cmds.push(DisplayCommand::Rect {
+            x: bx.rect.x, y: bx.rect.y, w: bx.rect.width, h: bx.rect.height,
+            color: [16, 16, 20, 255], radius: bx.border_radius,
+        });
+        // Play triangle uprostred - 3-bod polygon.
+        let cx = bx.rect.x + bx.rect.width * 0.5;
+        let cy = bx.rect.y + bx.rect.height * 0.5;
+        let s = bx.rect.width.min(bx.rect.height) * 0.15;
+        let pts = vec![
+            (cx - s * 0.5, cy - s),
+            (cx + s, cy),
+            (cx - s * 0.5, cy + s),
+        ];
+        cmds.push(DisplayCommand::ClippedRect {
+            color: [255, 255, 255, 200], points: pts,
+        });
+    }
+    // <audio> placeholder controls bar.
+    if bx.tag.as_deref() == Some("audio") {
+        // Bar pozadi.
+        cmds.push(DisplayCommand::Rect {
+            x: bx.rect.x, y: bx.rect.y, w: bx.rect.width, h: bx.rect.height,
+            color: [240, 240, 245, 255], radius: bx.rect.height * 0.5,
+        });
+        // Play icon (kruh) na levem konci.
+        let icon_size = bx.rect.height * 0.7;
+        let icon_x = bx.rect.x + bx.rect.height * 0.15;
+        let icon_y = bx.rect.y + (bx.rect.height - icon_size) * 0.5;
+        cmds.push(DisplayCommand::Rect {
+            x: icon_x, y: icon_y, w: icon_size, h: icon_size,
+            color: [80, 80, 90, 255], radius: icon_size * 0.5,
+        });
+        // Play triangle uvnitr kruhu.
+        let cx = icon_x + icon_size * 0.5;
+        let cy = icon_y + icon_size * 0.5;
+        let s = icon_size * 0.25;
+        let pts = vec![
+            (cx - s * 0.4, cy - s),
+            (cx + s * 0.7, cy),
+            (cx - s * 0.4, cy + s),
+        ];
+        cmds.push(DisplayCommand::ClippedRect {
+            color: [255, 255, 255, 255], points: pts,
+        });
+        // Progress track.
+        let track_x = icon_x + icon_size + bx.rect.height * 0.3;
+        let track_y = bx.rect.y + bx.rect.height * 0.45;
+        let track_w = (bx.rect.x + bx.rect.width) - track_x - bx.rect.height * 0.3;
+        let track_h = bx.rect.height * 0.1;
+        if track_w > 0.0 {
+            cmds.push(DisplayCommand::Rect {
+                x: track_x, y: track_y, w: track_w, h: track_h,
+                color: [200, 200, 210, 255], radius: track_h * 0.5,
+            });
+        }
+    }
+
     // Background-clip: text - skip box bg paint, text se sam renderuje s bg color/gradient.
     // (Plna implementace by vyzadovala SDF text mask compose; zatim aspon override text color z bg.)
     let any_bg_clip_text = bx.backgrounds.iter().any(|l| matches!(l.clip, crate::browser::layout::BgBox::Text));

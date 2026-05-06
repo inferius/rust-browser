@@ -1186,6 +1186,27 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
             bx.rect.height = h;
         }
     }
+    // Video tag: replaced element (zatim bez decode - jen layout box + placeholder).
+    // Default 300x150 per HTML spec, ale poster image / controls renderovany v paint.
+    if bx.tag.as_deref() == Some("video") {
+        if let Some(w) = node.attr("width").and_then(|w| w.parse::<f32>().ok()) {
+            bx.rect.width = w;
+        }
+        if let Some(h) = node.attr("height").and_then(|h| h.parse::<f32>().ok()) {
+            bx.rect.height = h;
+        }
+        if bx.rect.width == 0.0 { bx.rect.width = 300.0; }
+        if bx.rect.height == 0.0 { bx.rect.height = 150.0; }
+        // poster atribut - obrazek zobrazeny pred prehravanim. Pouzijeme bg image.
+        if let Some(poster) = node.attr("poster") {
+            bx.image_src = Some(poster);
+        }
+    }
+    // Audio tag: replaced element. Default browser controls bar = 300x40.
+    if bx.tag.as_deref() == Some("audio") {
+        if bx.rect.width == 0.0 { bx.rect.width = 300.0; }
+        if bx.rect.height == 0.0 { bx.rect.height = 40.0; }
+    }
 
     if matches!(node.kind, NodeKind::Text(_)) {
         bx.display = Display::Inline;
