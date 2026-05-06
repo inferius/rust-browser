@@ -178,6 +178,11 @@ pub enum PseudoFunc {
     Has(Vec<Selector>),
     /// `:nth-child(an+b)` / `:nth-last-child(an+b)`
     NthChild { a: i32, b: i32, of_type: bool, last: bool },
+    /// `:lang(<language>)` - matches kdyz element nebo ancestor ma lang="<language>"
+    /// (BCP 47 language tag prefix match: `:lang(en)` matches "en", "en-US", "en-GB").
+    Lang(String),
+    /// `:dir(ltr|rtl)` - matches pri direction attribute / computed direction.
+    Dir(String),
     /// Neznamy / nepodporovany - raw args pro forward-compat
     Unknown { name: String, args: String },
 }
@@ -234,6 +239,8 @@ pub fn specificity(sel: &Selector) -> (u32, u32, u32) {
                 }
                 PseudoFunc::Where(_) => { /* specificita 0 */ }
                 PseudoFunc::NthChild { .. } => { class_count += 1; }
+                PseudoFunc::Lang(_) => { class_count += 1; }
+                PseudoFunc::Dir(_) => { class_count += 1; }
                 PseudoFunc::Unknown { .. } => { class_count += 1; }
             }
         }
@@ -1089,6 +1096,8 @@ fn parse_single_selector(s: &str) -> Selector {
                             "where" => PseudoFunc::Where(parse_selectors(&args)),
                             "not" => PseudoFunc::Not(parse_selectors(&args)),
                             "has" => PseudoFunc::Has(parse_selectors(&args)),
+                            "lang" => PseudoFunc::Lang(args.trim().trim_matches('"').trim_matches('\'').to_string()),
+                            "dir" => PseudoFunc::Dir(args.trim().to_lowercase()),
                             "nth-child" => {
                                 let (a, b) = parse_an_plus_b(&args);
                                 PseudoFunc::NthChild { a, b, of_type: false, last: false }

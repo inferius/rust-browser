@@ -1513,6 +1513,41 @@ pub fn matches_simple(node: &Rc<Node>, sel: &SimpleSelector) -> bool {
             super::css_parser::PseudoFunc::NthChild { a, b, of_type, last } => {
                 if !nth_child_matches(node, *a, *b, *of_type, *last, &tag) { return false; }
             }
+            super::css_parser::PseudoFunc::Lang(lang_arg) => {
+                // :lang(en) matches if element OR ancestor has lang="en" / "en-US" / etc.
+                // BCP 47 prefix match: :lang(en) -> matches "en", "en-US", "en-GB", but not "fr".
+                let arg_lower = lang_arg.to_lowercase();
+                let mut current = Some(Rc::clone(node));
+                let mut found = false;
+                while let Some(n) = current {
+                    if let Some(lang) = n.attr("lang") {
+                        let lang_lower = lang.to_lowercase();
+                        if lang_lower == arg_lower
+                            || lang_lower.starts_with(&format!("{}-", arg_lower)) {
+                            found = true;
+                            break;
+                        }
+                    }
+                    current = n.parent.borrow().upgrade();
+                }
+                if !found { return false; }
+            }
+            super::css_parser::PseudoFunc::Dir(dir_arg) => {
+                // :dir(ltr|rtl) matches dle direction attr / inherited.
+                let mut current = Some(Rc::clone(node));
+                let mut dir_found: Option<String> = None;
+                while let Some(n) = current {
+                    if let Some(d) = n.attr("dir") {
+                        dir_found = Some(d.to_lowercase());
+                        break;
+                    }
+                    current = n.parent.borrow().upgrade();
+                }
+                let actual = dir_found.as_deref().unwrap_or("ltr");
+                // "auto" je ltr (default text flow) - approximace.
+                let resolved = if actual == "auto" { "ltr" } else { actual };
+                if resolved != dir_arg { return false; }
+            }
             super::css_parser::PseudoFunc::Unknown { .. } => {
                 // Neznamy pseudo - nepouzit pravidlo (safe)
                 return false;
