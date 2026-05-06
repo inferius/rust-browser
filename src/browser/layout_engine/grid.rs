@@ -46,6 +46,8 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         Some(Track::FitContent(_)) => true,
         Some(Track::Minmax(_, max, false)) if !max.is_finite() => true,
         Some(Track::Minmax(min, _, false)) if min.is_nan() => true,
+        // Fallback (no template): treat jako auto.
+        None => bx.grid_template_columns.is_empty(),
         _ => false,
     }).collect();
 
