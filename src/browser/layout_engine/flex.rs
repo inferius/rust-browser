@@ -149,8 +149,16 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         let parent_intrinsic = bx.taffy_intrinsic_mode;
         ch.rect.width = if let Some(p) = ch.width_pct {
             if parent_intrinsic { 0.0 } else if bx.rect.width > 0.0 {
-                let inner_w_pct = (bx.rect.width - pad_l - pad_r - 2.0 * bx.margin).max(0.0);
-                inner_w_pct * p
+                // Pri content-box ch + width_pct: explicit_width uz inflated. Pouzij ho.
+                if ch.box_sizing == "content-box" {
+                    ch.explicit_width.unwrap_or_else(|| {
+                        let inner_w_pct = (bx.rect.width - pad_l - pad_r - 2.0 * bx.margin).max(0.0);
+                        inner_w_pct * p
+                    })
+                } else {
+                    let inner_w_pct = (bx.rect.width - pad_l - pad_r - 2.0 * bx.margin).max(0.0);
+                    inner_w_pct * p
+                }
             } else { 0.0 }
         } else { ch.explicit_width.unwrap_or(0.0) };
         ch.rect.height = if let Some(p) = ch.height_pct {

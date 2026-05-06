@@ -460,14 +460,13 @@ mod tests {
             // Pri content-box width=100% (resp height=100%): inflated total by overflow
             // parent inner. Taffy clamps total na parent.inner_width (resp inner_height).
             // Detekce: percent == 1.0 (100%) AND inflated > container.
-            // Clamp pouze kdyz parent display je Block (block parent doesn't allow overflow).
-            // Hint: parent_display tells us. Pri flex/grid parent: child overflow OK.
-            // Trade-off: bevy_issue_9530 ma flex parent, content-box width=100% → 340 (overflows).
-            // grid_auto_fit_definite_percentage: block parent, content-box width=100% → 730 (clamped).
-            let _ = parent_display; // currently unused, kept for future heuristic
-            if let Some(p) = bx.width_pct { if (p - 1.0).abs() < 0.001 {
-                if let Some(w) = bx.explicit_width { if w > container_w { bx.explicit_width = Some(container_w); } }
-            }}
+            // Clamp pouze pri parent block/grid layout (block-like dimension constraint).
+            // Pri flex parent: child overflow OK (per CSS Flex L1 spec).
+            if matches!(parent_display, Display::Block | Display::Grid) {
+                if let Some(p) = bx.width_pct { if (p - 1.0).abs() < 0.001 {
+                    if let Some(w) = bx.explicit_width { if w > container_w { bx.explicit_width = Some(container_w); } }
+                }}
+            }
             // Content-box prepocita i min/max-width/height (CSS spec).
             let pw = pl + pr;
             let ph = pt + pb;
