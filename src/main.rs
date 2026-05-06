@@ -91,6 +91,19 @@ fn extract_inline_styles(html: &str) -> Vec<String> {
 }
 
 fn main() {
+    // Spawn worker thread s 256 MB stack pro main work.
+    // Windows main thread default = 1 MB; v debug buildu (no inline) layout/paint
+    // recursion ma velke frames (30+ KB). Linker /STACK flag dava 64 MB ale
+    // dedicated thread je robustnejsi (vetsi rezerva pro winit + interpreter).
+    let handle = std::thread::Builder::new()
+        .name("rwe-main".into())
+        .stack_size(256 * 1024 * 1024)
+        .spawn(real_main)
+        .expect("nelze spawnout main worker thread");
+    let _ = handle.join();
+}
+
+fn real_main() {
     let args: Vec<String> = std::env::args().collect();
 
     // Debug viewer: cargo run -- debug [file.js] [output.html]

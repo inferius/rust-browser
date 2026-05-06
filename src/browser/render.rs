@@ -2725,6 +2725,14 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         }
     }
 
+    // EventLoop muze byt na non-main thread pres any_thread (Windows specifika).
+    // main.rs spawnne worker thread s 256 MB stack pro robustnost.
+    #[cfg(target_os = "windows")]
+    let event_loop = {
+        use winit::platform::windows::EventLoopBuilderExtWindows;
+        winit::event_loop::EventLoop::builder().with_any_thread(true).build().map_err(|e| e.to_string())?
+    };
+    #[cfg(not(target_os = "windows"))]
     let event_loop = EventLoop::new().map_err(|e| e.to_string())?;
     let initial_url = base_url.clone();
     let mut app = App {
