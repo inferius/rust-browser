@@ -138,8 +138,9 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                 for gc in ch.children.iter_mut() {
                     if matches!(gc.position, super::super::layout::Position::Absolute | super::super::layout::Position::Fixed) { continue; }
                     if matches!(gc.display, super::super::layout::Display::None) { continue; }
-                    let mut gc_w = gc.explicit_width.unwrap_or(0.0);
-                    let mut gc_h = gc.explicit_height.unwrap_or(0.0);
+                    // Skip percent-derived widths/heights (nepropagovat jako parent intrinsic).
+                    let mut gc_w = if gc.width_pct.is_some() { 0.0 } else { gc.explicit_width.unwrap_or(0.0) };
+                    let mut gc_h = if gc.height_pct.is_some() { 0.0 } else { gc.explicit_height.unwrap_or(0.0) };
                     // Text intrinsic v taffy_mode: 10/char.
                     if gc.taffy_mode {
                         if let Some(t) = &gc.text {
@@ -344,12 +345,13 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             } else { 0.0 }
         } else { 0.0 };
         // Descendant max-width prispiva do min_main pri row (CSS auto-min-content):
-        // pri children s explicit_width, item nesmi shrink pod max child width.
+        // pri children s explicit_width (NE percent-derived), item nesmi shrink pod max child width.
         let descendant_min_main = if direction.is_row() && !ch.children.is_empty() {
             let mut max_dc_w = 0.0_f32;
             for dc in &ch.children {
                 if matches!(dc.position, super::super::layout::Position::Absolute | super::super::layout::Position::Fixed) { continue; }
                 if matches!(dc.display, super::super::layout::Display::None) { continue; }
+                if dc.width_pct.is_some() { continue; } // percent shouldn't propagate as min
                 if let Some(w) = dc.explicit_width { if w > max_dc_w { max_dc_w = w; } }
             }
             max_dc_w

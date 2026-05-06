@@ -217,8 +217,20 @@ mod tests {
                         _ => return None,
                     };
                 }
-                "width" => bx.explicit_width = parse_dim(v, container_w),
-                "height" => bx.explicit_height = parse_dim(v, container_h),
+                "width" => {
+                    if let Some(num) = v.trim().strip_suffix('%') {
+                        let p: f32 = num.parse().unwrap_or(0.0);
+                        bx.width_pct = Some(p / 100.0);
+                    }
+                    bx.explicit_width = parse_dim(v, container_w);
+                }
+                "height" => {
+                    if let Some(num) = v.trim().strip_suffix('%') {
+                        let p: f32 = num.parse().unwrap_or(0.0);
+                        bx.height_pct = Some(p / 100.0);
+                    }
+                    bx.explicit_height = parse_dim(v, container_h);
+                }
                 "flex-direction" => bx.flex_direction = v.clone(),
                 "flex-wrap" => bx.flex_wrap = v.clone(),
                 "justify-content" => bx.justify_content = v.clone(),

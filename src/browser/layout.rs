@@ -185,6 +185,9 @@ pub struct LayoutBox {
     pub margin_right_pct: Option<f32>,
     pub margin_bottom_pct: Option<f32>,
     pub margin_left_pct: Option<f32>,
+    /// Explicit width/height pct (0..1) - pri Some, ulozit puvodni percent.
+    pub width_pct: Option<f32>,
+    pub height_pct: Option<f32>,
     /// margin-*: auto flagy (absorbuji free space, CSS Margin auto).
     pub margin_top_auto: bool,
     pub margin_right_auto: bool,
@@ -628,6 +631,8 @@ impl LayoutBox {
             margin_right_pct: None,
             margin_bottom_pct: None,
             margin_left_pct: None,
+            width_pct: None,
+            height_pct: None,
             margin_top_auto: false,
             margin_right_auto: false,
             margin_bottom_auto: false,
