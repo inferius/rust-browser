@@ -257,7 +257,6 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         ch.taffy_intrinsic_mode = saved_intrinsic;
     }
 
-    // 1. Estimate item sizes (flex-basis or content)
     let mut items: Vec<FlexItem> = Vec::with_capacity(in_flow.len());
     for &i in &in_flow {
         let ch = &bx.children[i];
@@ -1047,7 +1046,9 @@ pub fn layout_flex(bx: &mut LayoutBox) {
     }
 
     // 7. Update parent width jen kdyz neni explicit + rect.width = 0 (pre-pass intrinsic).
-    if bx.explicit_width.is_none() && bx.rect.width == 0.0 {
+    // Pri intrinsic mode + width_pct: ignore explicit_width (came from percent pre-resolve).
+    let width_is_pct_intrinsic = bx.taffy_intrinsic_mode && bx.width_pct.is_some();
+    if (bx.explicit_width.is_none() || width_is_pct_intrinsic) && bx.rect.width == 0.0 {
         let needed_w = if direction.is_row() {
             let main_used: f32 = resolved_lines.iter()
                 .map(|l| l.main_sizes.iter().enumerate()
