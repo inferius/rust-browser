@@ -345,15 +345,22 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             } else { 0.0 }
         } else { 0.0 };
         // Descendant max-width prispiva do min_main pri row (CSS auto-min-content):
-        // pri children s explicit_width (NE percent-derived), item nesmi shrink pod max child width.
-        // Apply jen kdyz item nema flex-grow (pri grow CSS spec min=0 pro definite-sized items).
-        let descendant_min_main = if direction.is_row() && !ch.children.is_empty() && ch.flex_grow == 0.0 {
+        // Pouze pri overflow scenariich (parent width < child width). CSS spec: definite
+        // size = min 0, ale taffy ma special case "shrink-to-content" pri padding/baseline.
+        // Heuristika: jen kdyz total items > container (overflow), apply descendant_min.
+        let descendant_min_main = if direction.is_row() && !ch.children.is_empty()
+            && ch.flex_grow == 0.0 {
             let mut max_dc_w = 0.0_f32;
+            let parent_w = ch.explicit_width.unwrap_or(f32::INFINITY);
             for dc in &ch.children {
                 if matches!(dc.position, super::super::layout::Position::Absolute | super::super::layout::Position::Fixed) { continue; }
                 if matches!(dc.display, super::super::layout::Display::None) { continue; }
                 if dc.width_pct.is_some() { continue; }
-                if let Some(w) = dc.explicit_width { if w > max_dc_w { max_dc_w = w; } }
+                if let Some(w) = dc.explicit_width {
+                    // Pri child width > parent explicit, NEPROPAGOVAT (overflow OK).
+                    if w > parent_w { continue; }
+                    if w > max_dc_w { max_dc_w = w; }
+                }
             }
             max_dc_w
         } else { 0.0 };
