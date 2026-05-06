@@ -195,9 +195,9 @@ mod tests {
         // height. CSS spec: pri auto CB height percent inset top/bottom = 0.
         // Tady volame se s container_h_for_inset = container_h pokud parent ma
         // explicit, jinak 0. Kvuli zachovani API delegujeme do _impl.
-        convert_to_layout_impl(node, container_w, container_h, container_h, default_display)
+        convert_to_layout_impl(node, container_w, container_h, container_h, default_display, Display::Block)
     }
-    fn convert_to_layout_impl(node: &TestNode, container_w: f32, container_h: f32, container_h_for_inset: f32, default_display: Display) -> Option<LayoutBox> {
+    fn convert_to_layout_impl(node: &TestNode, container_w: f32, container_h: f32, container_h_for_inset: f32, default_display: Display, parent_display: Display) -> Option<LayoutBox> {
         let mut bx = LayoutBox::new();
         bx.taffy_mode = true;
         if !node.text_content.is_empty() && node.children.is_empty() {
@@ -460,6 +460,11 @@ mod tests {
             // Pri content-box width=100% (resp height=100%): inflated total by overflow
             // parent inner. Taffy clamps total na parent.inner_width (resp inner_height).
             // Detekce: percent == 1.0 (100%) AND inflated > container.
+            // Clamp pouze kdyz parent display je Block (block parent doesn't allow overflow).
+            // Hint: parent_display tells us. Pri flex/grid parent: child overflow OK.
+            // Trade-off: bevy_issue_9530 ma flex parent, content-box width=100% → 340 (overflows).
+            // grid_auto_fit_definite_percentage: block parent, content-box width=100% → 730 (clamped).
+            let _ = parent_display; // currently unused, kept for future heuristic
             if let Some(p) = bx.width_pct { if (p - 1.0).abs() < 0.001 {
                 if let Some(w) = bx.explicit_width { if w > container_w { bx.explicit_width = Some(container_w); } }
             }}
@@ -516,7 +521,7 @@ mod tests {
             // Pro inset top/bottom: pokud parent NEMA explicit height, percent = 0.
             let ch_inset = if bx.explicit_height.is_some() { ch } else { 0.0 };
             let child_default = Display::Block;
-            let child_box = convert_to_layout_impl(child, cw, ch, ch_inset, child_default)?;
+            let child_box = convert_to_layout_impl(child, cw, ch, ch_inset, child_default, bx.display)?;
             bx.children.push(child_box);
         }
         Some(bx)

@@ -1083,18 +1083,20 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         } else {
             // Column main = height. Include item margin_main_start+end (= margin-top+bottom).
             // Pre-pass intrinsic potrebuje znat realny obsah vc. margin pro nadrazene flexy.
+            // Use ACTUAL child.rect.height po sub-layout (text wrap muze h zvetsit).
             let mut main_used_max: f32 = 0.0;
-            for line in resolved_lines.iter() {
-                // Find indices of this line items pres line.main_sizes (items vector je flat).
-                // line.main_sizes[k] mapuje na indice items - pouzij pozici v zalo lines.
-                // Zjednoduseni: sum sizes + sum margins z items.
-                let line_sum: f32 = line.main_sizes.iter().sum();
-                let line_gap_sum = main_gap * (line.main_sizes.len().saturating_sub(1) as f32);
-                main_used_max = main_used_max.max(line_sum + line_gap_sum);
+            for (li, line_indices) in lines.iter().enumerate() {
+                let resolved = &resolved_lines[li];
+                let mut line_actual_sum: f32 = 0.0;
+                for (k, &item_idx) in line_indices.iter().enumerate() {
+                    let real_idx = in_flow[item_idx];
+                    let actual_h = bx.children[real_idx].rect.height;
+                    let assigned = resolved.main_sizes.get(k).copied().unwrap_or(0.0);
+                    line_actual_sum += actual_h.max(assigned);
+                }
+                let line_gap_sum = main_gap * (resolved.main_sizes.len().saturating_sub(1) as f32);
+                main_used_max = main_used_max.max(line_actual_sum + line_gap_sum);
             }
-            // Margins: pridat sum start+end ze vsech items (single-line column case).
-            // Pri multi-line wrap column: kazda line samostatne, ale tady je intrinsic
-            // jen pro pre-pass, akceptujeme jen sum vsech.
             let item_margins: f32 = items.iter().map(|it| it.margin_main_start + it.margin_main_end).sum();
             main_used_max + item_margins + pad_t + pad_b
         };
