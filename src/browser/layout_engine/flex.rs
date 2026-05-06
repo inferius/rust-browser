@@ -147,9 +147,14 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         ch.rect.width = ch.explicit_width.unwrap_or(0.0);
         ch.rect.height = ch.explicit_height.unwrap_or(0.0);
         let saved_intrinsic = std::mem::replace(&mut ch.taffy_intrinsic_mode, true);
+        // Pri block s flex-direction: treat as flex pro pre-pass intrinsic.
+        let has_flex_dir = !ch.flex_direction.is_empty();
+        let pre_pass_as_flex = matches!(ch.display, super::super::layout::Display::Flex)
+            || (matches!(ch.display, super::super::layout::Display::Block) && has_flex_dir);
         // Recursivni layout: nemenime explicit values, jen rect.
-        match ch.display {
-            super::super::layout::Display::Flex => super::flex::layout_flex(ch),
+        if pre_pass_as_flex {
+            super::flex::layout_flex(ch);
+        } else { match ch.display {
             super::super::layout::Display::Grid => super::grid::layout_grid(ch),
             _ => {
                 // Block-like: aproximace - max child explicit_width, sum explicit_heights.
@@ -232,7 +237,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                 if ch.explicit_width.is_none() && max_w > 0.0 { ch.rect.width = max_w + own_pl + own_pr; }
                 if ch.explicit_height.is_none() && sum_h > 0.0 { ch.rect.height = sum_h + own_pt + own_pb; }
             }
-        }
+        }}
         ch.rect.x = saved_rect.x;
         ch.rect.y = saved_rect.y;
         ch.taffy_intrinsic_mode = saved_intrinsic;
