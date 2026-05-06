@@ -477,6 +477,25 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             }
         }
 
+        // Pre-spocti max baseline napric items na line aligned by baseline.
+        // Synth baseline = item_cross_size + margin_cross_start (bottom margin edge in cross).
+        let mut line_max_baseline: f32 = 0.0;
+        for &item_idx in line_indices.iter() {
+            let it_b = items[item_idx];
+            let real_idx_b = in_flow[item_idx];
+            let self_str_b = bx.children[real_idx_b].align_self.clone();
+            let parent_align_b = align;
+            let item_align_b = if self_str_b.is_empty() || self_str_b == "auto" {
+                parent_align_b
+            } else {
+                parse_align_items(&self_str_b)
+            };
+            if matches!(item_align_b, AlignItems::Baseline) {
+                let baseline = it_b.cross_size + it_b.margin_cross_start;
+                if baseline > line_max_baseline { line_max_baseline = baseline; }
+            }
+        }
+
         let mut main_cursor = start_main;
         let mut first = true;
         for (i_in_line, &item_idx) in main_iter {
@@ -518,6 +537,11 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                 cross_offset = it.margin_cross_start;
                 if it.auto_cross_start { cross_offset += share; }
                 // auto_cross_end neovlivni offset, jen zabere zbylou plochu
+            } else if matches!(item_align, AlignItems::Baseline) {
+                // Baseline alignment: own_baseline = cross_size + margin_cross_start (synth bottom).
+                // cross_offset = line_max_baseline - own_baseline + margin_cross_start.
+                let own_baseline = it.cross_size + it.margin_cross_start;
+                cross_offset = line_max_baseline - own_baseline + it.margin_cross_start;
             } else {
                 let cross_offset_align = compute_align_offset(item_align, align_box, item_cross_size + it.margin_cross_start + it.margin_cross_end);
                 cross_offset = cross_offset_align + it.margin_cross_start;
