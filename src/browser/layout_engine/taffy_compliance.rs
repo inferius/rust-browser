@@ -854,9 +854,10 @@ mod tests {
             }
             // cursor_y advance pouzij natural_y (bez offsetu) aby relativni position
             // neovlivnil flow.
-            let m_b = child.margin_bottom.unwrap_or(child.margin);
             let pad_t_c = child.padding_top.unwrap_or(child.padding) + child.border_top_width.unwrap_or(child.border_width);
             let pad_b_c = child.padding_bottom.unwrap_or(child.padding) + child.border_bottom_width.unwrap_or(child.border_width);
+            let m_b = child.margin_bottom.unwrap_or(child.margin);
+            let _ = pad_b_c;
             // Text content blocks empty passthrough (line box drives layout).
             let has_text_content = child.text.is_some();
             let is_empty_passthrough = child.rect.height == 0.0 && pad_t_c == 0.0 && pad_b_c == 0.0 && !has_text_content;
