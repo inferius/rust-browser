@@ -500,6 +500,21 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                 if item.taffy_mode && item.text.is_some() && h == 0.0 {
                     h = 10.0;
                 }
+                // Aspect-ratio: dopocti h z width pri auto height + text item.
+                if let Some(ar) = item.aspect_ratio {
+                    if ar > 0.0 && item.explicit_height.is_none() {
+                        let mut iw = item.explicit_width.unwrap_or(item.rect.width);
+                        if iw == 0.0 && item.taffy_mode && item.text.is_some() {
+                            if let Some(t) = &item.text {
+                                iw = t.chars().filter(|c| !matches!(*c, '\u{200B}' | ' ' | '\n' | '\t')).count() as f32 * 10.0;
+                            }
+                        }
+                        if iw > 0.0 {
+                            let h_ar = iw / ar;
+                            if h_ar > h { h = h_ar; }
+                        }
+                    }
+                }
                 // Pripocti vertikalni margins (CSS Grid item margin uvnitr cell).
                 let m_t = item.margin_top.unwrap_or(item.margin);
                 let m_b = item.margin_bottom.unwrap_or(item.margin);
