@@ -241,12 +241,41 @@ console.log(greeting, result);
                 Ok(s) => s,
                 Err(e) => { eprintln!("Nelze nacist {target}: {e}"); return; }
             };
-            let css_path = target.replace(".html", ".css");
-            let css = std::fs::read_to_string(&css_path).unwrap_or_default();
             let path_buf = std::path::PathBuf::from(&target);
-            let abs_path = std::fs::canonicalize(&path_buf).unwrap_or(path_buf);
+            let abs_path = std::fs::canonicalize(&path_buf).unwrap_or(path_buf.clone());
             let base = format!("file:///{}", abs_path.display().to_string().replace('\\', "/"));
-            (html, css, Some(base), Some(abs_path))
+            // CSS: <link rel=stylesheet href=...> + <style> inline + co-located .css.
+            let mut css_combined = String::new();
+            // Co-located file s same name (legacy support: test.html -> test.css)
+            let css_path = target.replace(".html", ".css");
+            if let Ok(c) = std::fs::read_to_string(&css_path) {
+                css_combined.push('\n');
+                css_combined.push_str(&c);
+            }
+            // <link rel=stylesheet href> hrefs - resolve proti dir HTML.
+            let html_dir = path_buf.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+            for href in extract_stylesheet_hrefs(&html) {
+                // Pokud absolute URL -> fetch HTTP.
+                if href.starts_with("http://") || href.starts_with("https://") {
+                    if let Some(c) = browser::render::fetch_text_url(&href) {
+                        css_combined.push('\n');
+                        css_combined.push_str(&c);
+                    }
+                } else {
+                    // Relative -> resolve proti html_dir.
+                    let css_file = html_dir.join(&href);
+                    if let Ok(c) = std::fs::read_to_string(&css_file) {
+                        css_combined.push('\n');
+                        css_combined.push_str(&c);
+                    }
+                }
+            }
+            // <style> inline blocky.
+            for inline in extract_inline_styles(&html) {
+                css_combined.push('\n');
+                css_combined.push_str(&inline);
+            }
+            (html, css_combined, Some(base), Some(abs_path))
         };
 
         if let Err(e) = browser::render::run_window_with_options(html, css, current_path, auto_devtools, base_url) {
