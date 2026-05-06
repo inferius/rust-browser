@@ -413,11 +413,14 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         if min_c_total > 0.0 { items[i].cross_size = items[i].cross_size.max(min_c_total); }
         items[i].main_size = items[i].main_size.min(max_m);
         // Pri specified min > basis a wrap container: hypothetical = min (CSS Flex L1 §9.3.4).
-        // Pouze pri wrap mode (jinak nezachova kompatibilitu s shrink testy).
-        let basis_v = ch.flex_basis.trim();
-        let has_explicit_basis = !basis_v.is_empty() && basis_v != "auto" && basis_v != "content";
-        if !matches!(wrap, FlexWrap::NoWrap) && !has_explicit_basis && min_m > 0.0 {
-            items[i].main_size = items[i].main_size.max(min_m);
+        // V wrap mode min wins (forces wrap), v nowrap zachovat shrink kompatibilitu.
+        let specified_min = if direction.is_row() {
+            super::super::layout::parse_length(&ch.min_width_v)
+        } else {
+            super::super::layout::parse_length(&ch.min_height_v)
+        };
+        if !matches!(wrap, FlexWrap::NoWrap) && specified_min > items[i].main_size {
+            items[i].main_size = specified_min;
         }
     }
 
