@@ -457,6 +457,12 @@ mod tests {
             let pb = bx.padding_bottom.unwrap_or(bx.padding) + bw_b;
             if let Some(w) = bx.explicit_width { bx.explicit_width = Some(w + pl + pr); }
             if let Some(h) = bx.explicit_height { bx.explicit_height = Some(h + pt + pb); }
+            // Pri content-box width=100% (resp height=100%): inflated total by overflow
+            // parent inner. Taffy clamps total na parent.inner_width (resp inner_height).
+            // Detekce: percent == 1.0 (100%) AND inflated > container.
+            if let Some(p) = bx.width_pct { if (p - 1.0).abs() < 0.001 {
+                if let Some(w) = bx.explicit_width { if w > container_w { bx.explicit_width = Some(container_w); } }
+            }}
             // Content-box prepocita i min/max-width/height (CSS spec).
             let pw = pl + pr;
             let ph = pt + pb;
@@ -546,7 +552,24 @@ mod tests {
                 _ => { stats.skip += 1; continue; }
             };
             let exp = fixture.expected_root.unwrap();
-            let mut input_box = match convert_to_layout(fixture.input_root.as_ref().unwrap(), exp.width, exp.height, root_default_display) {
+            let input_root = fixture.input_root.as_ref().unwrap();
+            // Pri root bez explicit display attr a multi children s explicit display:
+            // taffy framework treats root jako flex wrapper k umisteni multi test cases.
+            let root_has_explicit_display = input_root.attrs.iter().any(|(k, _)| k == "display");
+            // Pri root with align-items=baseline / flex-wrap: nech existing heuristic (line 437)
+            // promote Block->Flex se spravnym pseudo_flex flagem.
+            let root_has_baseline = input_root.attrs.iter().any(|(k, v)| k == "align-items" && v == "baseline");
+            let root_has_flex_wrap = input_root.attrs.iter().any(|(k, v)| k == "flex-wrap" && v != "nowrap");
+            let mut effective_root_default = root_default_display;
+            if !root_has_explicit_display && !root_has_baseline && !root_has_flex_wrap && input_root.children.len() >= 2 {
+                let all_have_display = input_root.children.iter().all(|c| {
+                    c.attrs.iter().any(|(k, _)| k == "display")
+                });
+                if all_have_display {
+                    effective_root_default = Display::Flex;
+                }
+            }
+            let mut input_box = match convert_to_layout(input_root, exp.width, exp.height, effective_root_default) {
                 Some(b) => b,
                 None => { stats.skip += 1; continue; }
             };
@@ -602,10 +625,14 @@ mod tests {
     }
     /// Walk last in-flow descendant chain pro margin-bottom collapse.
     fn chain_collapsed_m_b(child: &LayoutBox) -> f32 {
+        let (pos, neg) = chain_collapsed_m_b_pair(child);
+        pos + neg
+    }
+    fn chain_collapsed_m_b_pair(child: &LayoutBox) -> (f32, f32) {
         let mut max_pos = 0.0_f32;
         let mut min_neg = 0.0_f32;
         chain_walk_bottom(child, &mut max_pos, &mut min_neg);
-        max_pos + min_neg
+        (max_pos, min_neg)
     }
     fn chain_walk_bottom(child: &LayoutBox, max_pos: &mut f32, min_neg: &mut f32) {
         let m_b = child.margin_bottom.unwrap_or(child.margin);
@@ -616,6 +643,10 @@ mod tests {
         let blocks_collapse = matches!(child.overflow_x.as_str(), "hidden" | "scroll" | "auto" | "clip")
             || matches!(child.overflow_y.as_str(), "hidden" | "scroll" | "auto" | "clip");
         if blocks_collapse { return; }
+        // Pri explicit height: parent's bottom edge nemusi adjoinovat last child bottom.
+        // Spec: m_b collapse with descendant jen kdyz parent.bottom adjoins child.bottom.
+        // Aproximace: pri explicit_height set, neprenasime collapse na descendant.
+        if child.explicit_height.is_some() { return; }
         // Walk last in-flow grandchild.
         for ch in child.children.iter().rev() {
             if matches!(ch.position, Position::Absolute | Position::Fixed) { continue; }
@@ -653,7 +684,10 @@ mod tests {
         let mut cursor_y = inner_y;
         // First pass: layout in-flow + record static y pro abs (vc. margin-top).
         let mut static_y_for: std::collections::HashMap<usize, f32> = std::collections::HashMap::new();
-        let mut prev_m_b = 0.0_f32; // sibling margin collapse: prev child's margin-bottom
+        // Sibling margin collapse: track running (max-positive, min-negative) pair
+        // pro spravnou collapse-through chain (CSS spec).
+        let mut prev_m_b_pos = 0.0_f32;
+        let mut prev_m_b_neg = 0.0_f32;
         // Pre-spocti first in-flow index pro chain margin collapse.
         let first_in_flow_idx: Option<usize> = bx.children.iter().enumerate()
             .find(|(_, c)| !matches!(c.position, Position::Absolute | Position::Fixed) && !matches!(c.display, Display::None))
@@ -735,11 +769,16 @@ mod tests {
                 }
             } else { 0.0 };
             // Sibling margin collapse per CSS spec: collapsed = max(positives) + min(negatives).
-            let max_pos = prev_m_b.max(m_t).max(0.0);
-            let min_neg = prev_m_b.min(m_t).min(0.0);
+            // Pri collapse-through pres prev sibling: prev_m_b_pos/neg drzi cumulative.
+            let m_t_pos = m_t.max(0.0);
+            let m_t_neg = m_t.min(0.0);
+            let mut max_pos = prev_m_b_pos.max(m_t_pos);
+            let mut min_neg = prev_m_b_neg.min(m_t_neg);
             let collapsed = max_pos + min_neg;
             child.rect.x = inner_x + m_l + extra_l + text_align_offset;
-            let natural_y = (cursor_y - prev_m_b) + collapsed;
+            // cursor_y drzi y po poslednim non-passthrough child bottom (bez margin).
+            // collapsed je merge prev cumulative pos/neg s child.m_t.
+            let natural_y = cursor_y + collapsed;
             child.rect.y = natural_y;
             child.rect.width = w;
             // Relative position offset (top/left/right/bottom): top wins nad bottom, left nad right.
@@ -891,12 +930,19 @@ mod tests {
                 || matches!(child.overflow_y.as_str(), "hidden" | "scroll" | "auto" | "clip");
             let is_empty_passthrough = child.rect.height == 0.0 && pad_t_c == 0.0 && pad_b_c == 0.0 && !has_text_content && !bfc_blocks_passthrough;
             if is_empty_passthrough {
-                cursor_y = natural_y;
-                let combined = collapsed.max(m_b);
-                prev_m_b = combined;
+                // Passthrough: merge child.m_b do running pair, cursor_y unchanged.
+                let m_b_pos = m_b.max(0.0);
+                let m_b_neg = m_b.min(0.0);
+                max_pos = max_pos.max(m_b_pos);
+                min_neg = min_neg.min(m_b_neg);
+                prev_m_b_pos = max_pos;
+                prev_m_b_neg = min_neg;
             } else {
-                cursor_y = natural_y + child.rect.height + m_b;
-                prev_m_b = m_b;
+                cursor_y = natural_y + child.rect.height;
+                // Chain m_b: walk last in-flow descendant collapse pair (incl child.m_b).
+                let (cp, cn) = chain_collapsed_m_b_pair(child);
+                prev_m_b_pos = cp;
+                prev_m_b_neg = cn;
             }
         }
         // Abs/fixed children - pouzij static y kdyz nemaji top/bottom inset.
