@@ -149,10 +149,11 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         ch.rect.width = if ch.width_pct.is_some() { 0.0 } else { ch.explicit_width.unwrap_or(0.0) };
         ch.rect.height = if ch.height_pct.is_some() { 0.0 } else { ch.explicit_height.unwrap_or(0.0) };
         let saved_intrinsic = std::mem::replace(&mut ch.taffy_intrinsic_mode, true);
-        // Pri block s flex-direction: treat as flex pro pre-pass intrinsic.
+        // Pri block s flex-direction nebo justify-content: treat as flex pro pre-pass intrinsic.
         let has_flex_dir = !ch.flex_direction.is_empty();
+        let has_justify = !ch.justify_content.is_empty();
         let pre_pass_as_flex = matches!(ch.display, super::super::layout::Display::Flex)
-            || (matches!(ch.display, super::super::layout::Display::Block) && has_flex_dir);
+            || (matches!(ch.display, super::super::layout::Display::Block) && (has_flex_dir || has_justify));
         // Recursivni layout: nemenime explicit values, jen rect.
         if pre_pass_as_flex {
             super::flex::layout_flex(ch);
@@ -254,8 +255,6 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         let intrinsic_parent = bx.taffy_intrinsic_mode;
         let pct_w_skip = intrinsic_parent && ch.width_pct.is_some();
         let pct_h_skip = intrinsic_parent && ch.height_pct.is_some();
-        // Pri non-intrinsic mode + child width_pct + parent rect.width == 0 (indefinite):
-        // pouzij intrinsic ne pre-resolved explicit_width.
         let pct_w_indefinite = !intrinsic_parent && ch.width_pct.is_some() && bx.rect.width == 0.0;
         let pct_h_indefinite = !intrinsic_parent && ch.height_pct.is_some() && bx.rect.height == 0.0;
         let mut est_w = if pct_w_skip || pct_w_indefinite {
