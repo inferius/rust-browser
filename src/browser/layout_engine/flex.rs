@@ -1212,9 +1212,12 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                     else { 0.0 };
         ch.rect.x += off_x;
         ch.rect.y += off_y;
+        // Pri block s flex-direction nebo justify-content/align-items: layout as flex.
+        let has_flex_attr = !ch.flex_direction.is_empty() || !ch.justify_content.is_empty();
         match ch.display {
             super::super::layout::Display::Flex => super::flex::layout_flex(ch),
             super::super::layout::Display::Grid => super::grid::layout_grid(ch),
+            super::super::layout::Display::Block if has_flex_attr => super::flex::layout_flex(ch),
             _ => super::super::layout::layout_block(ch),
         }
     }
