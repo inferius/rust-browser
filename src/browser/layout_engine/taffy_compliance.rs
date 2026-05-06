@@ -493,8 +493,24 @@ mod tests {
             let pr = bx.padding_right.unwrap_or(bx.padding) + bw_r;
             let pt = bx.padding_top.unwrap_or(bx.padding) + bw_t;
             let pb = bx.padding_bottom.unwrap_or(bx.padding) + bw_b;
-            let cw_total = bx.explicit_width.unwrap_or(container_w);
-            let ch_total = bx.explicit_height.unwrap_or(container_h);
+            // Pri bx bez explicit_width: bude stretched (grid track / flex stretch) na
+            // container minus margins. CB pro children = container - bx.margin - bx.padding.
+            let bx_m_l = bx.margin_left.unwrap_or(bx.margin);
+            let bx_m_r = bx.margin_right.unwrap_or(bx.margin);
+            let bx_m_t = bx.margin_top.unwrap_or(bx.margin);
+            let bx_m_b = bx.margin_bottom.unwrap_or(bx.margin);
+            let cw_total_raw = if bx.explicit_width.is_some() {
+                bx.explicit_width.unwrap()
+            } else {
+                (container_w - bx_m_l - bx_m_r).max(0.0)
+            };
+            let ch_total_raw = if bx.explicit_height.is_some() {
+                bx.explicit_height.unwrap()
+            } else {
+                (container_h - bx_m_t - bx_m_b).max(0.0)
+            };
+            let cw_total = cw_total_raw;
+            let ch_total = ch_total_raw;
             let cw = (cw_total - pl - pr).max(0.0);
             let ch = (ch_total - pt - pb).max(0.0);
             // Pro inset top/bottom: pokud parent NEMA explicit height, percent = 0.

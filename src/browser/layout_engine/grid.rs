@@ -898,6 +898,8 @@ pub fn layout_grid(bx: &mut LayoutBox) {
     let row_is_auto: Vec<bool> = (0..rows).map(|i| match row_token_kinds.get(i) {
         Some(Track::Auto) => true,
         Some(Track::Minmax(_, max, false)) if !max.is_finite() => true,
+        // Fr tracks have min sizing = auto -> intrinsic content min applies.
+        Some(Track::Fr(_)) => true,
         _ => rows_explicit_str.is_empty(),
     }).collect();
     // Implicit rows (= rows nad explicit count) jsou auto.
@@ -933,6 +935,36 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                 }
             }
             if span_row == 1 {
+                // Intrinsic h measurement pass pro items bez explicit_height ale s children
+                // (deep nested percent layouts). Clone, layout, capture rect.height.
+                let needs_measure = {
+                    let it = &bx.children[real_idx];
+                    it.explicit_height.is_none() && !it.children.is_empty()
+                };
+                if needs_measure {
+                    // Track width: sum spanned col_tracks + gaps - margins.
+                    let m_l = bx.children[real_idx].margin_left.unwrap_or(bx.children[real_idx].margin);
+                    let m_r = bx.children[real_idx].margin_right.unwrap_or(bx.children[real_idx].margin);
+                    let track_w: f32 = (col..(col+span_col)).filter_map(|c| col_tracks.get(c).copied()).sum::<f32>()
+                        + col_gap * (span_col.saturating_sub(1) as f32);
+                    let item_w = (track_w - m_l - m_r).max(0.0);
+                    let mut measured = bx.children[real_idx].clone();
+                    measured.rect.x = 0.0;
+                    measured.rect.y = 0.0;
+                    measured.rect.width = if measured.explicit_width.is_some() { measured.explicit_width.unwrap() } else { item_w };
+                    measured.rect.height = 0.0;
+                    measured.taffy_intrinsic_mode = true;
+                    match measured.display {
+                        super::super::layout::Display::Flex => super::flex::layout_flex(&mut measured),
+                        super::super::layout::Display::Grid => super::grid::layout_grid(&mut measured),
+                        super::super::layout::Display::Block | super::super::layout::Display::None => super::super::layout::layout_block(&mut measured),
+                        _ => {}
+                    }
+                    let intrinsic_h = measured.rect.height;
+                    if intrinsic_h > 0.0 {
+                        bx.children[real_idx].rect.height = intrinsic_h;
+                    }
+                }
                 let item = &bx.children[real_idx];
                 let mut h = item.explicit_height.unwrap_or(item.rect.height);
                 // Text intrinsic height v taffy_mode = 10 per visible line (estimate by ZWS/whitespace breaks not done).
@@ -962,8 +994,79 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                 if h > *entry { *entry = h; }
             }
         }
+        // Snapshot items_intrinsic per row (z by_row) PRED merge do row_tracks.
+        let mut items_intrinsic: Vec<f32> = vec![0.0; rows];
+        for (r, h) in &by_row {
+            if *r < items_intrinsic.len() { items_intrinsic[*r] = *h; }
+        }
         for (r, h) in by_row {
             if r < row_tracks.len() && row_tracks[r] < h { row_tracks[r] = h; }
+        }
+        // Iterativni fr re-resolution: pri intrinsic-min > fr*share, freeze track at
+        // intrinsic_min, redistribute zbytek mezi unfrozen fr (CSS Grid 12.7).
+        if bx.explicit_height.is_some() && !rows_explicit_str.is_empty() && rows_explicit_str.contains("fr") {
+            let fr_factors: Vec<f32> = (0..rows).map(|i| match row_token_kinds.get(i) {
+                Some(Track::Fr(f)) => *f,
+                _ => 0.0,
+            }).collect();
+            // Intrinsic min pro fr tracks = items_intrinsic (NEbere initial fr resolution).
+            // Pro non-fr tracks, current row_tracks (fixed/percent).
+            let intrinsic_min: Vec<f32> = (0..rows).map(|i| {
+                if fr_factors[i] > 0.0 {
+                    items_intrinsic.get(i).copied().unwrap_or(0.0)
+                } else {
+                    row_tracks[i]
+                }
+            }).collect();
+            if fr_factors.iter().any(|&f| f > 0.0) {
+                let mut frozen: Vec<bool> = (0..rows).map(|i| fr_factors[i] <= 0.0).collect();
+                let total_gap = row_gap * (rows.saturating_sub(1) as f32);
+                let mut new_sizes: Vec<f32> = row_tracks.clone();
+                loop {
+                    let frozen_sum: f32 = (0..rows).filter(|&i| frozen[i]).map(|i| new_sizes[i]).sum();
+                    let unfrozen_factor: f32 = (0..rows).filter(|&i| !frozen[i]).map(|i| fr_factors[i]).sum();
+                    if unfrozen_factor <= 0.0 { break; }
+                    let leftover = (inner_h - frozen_sum - total_gap).max(0.0);
+                    let fr_size = leftover / unfrozen_factor;
+                    let mut newly_frozen = false;
+                    // Za prvni: rozhodnout, ktery fr track ma intrinsic > fr_size * factor.
+                    // Tyto frozen na intrinsic. Ostatni dostanou fr_size * factor.
+                    let mut min_ratio = f32::INFINITY;
+                    let mut min_idx: Option<usize> = None;
+                    for i in 0..rows {
+                        if frozen[i] { continue; }
+                        // Pri fr=1, intrinsic=51 - "ratio" intrinsic/factor = 51.
+                        // Vyssi ratio = priorita freeze pri vyssim intrinsic.
+                        let ratio = intrinsic_min[i] / fr_factors[i].max(0.0001);
+                        if ratio > fr_size {
+                            // Tento track potrebuje freeze.
+                            // Kdyz vic, freeze ten s nejvyssim ratio first.
+                            if ratio < min_ratio {
+                                // chceme NEJVYSSI ratio first
+                            }
+                            if min_idx.is_none() || ratio > intrinsic_min[min_idx.unwrap()] / fr_factors[min_idx.unwrap()].max(0.0001) {
+                                min_idx = Some(i);
+                                min_ratio = ratio;
+                            }
+                            newly_frozen = true;
+                        }
+                    }
+                    if newly_frozen {
+                        let i = min_idx.unwrap();
+                        frozen[i] = true;
+                        new_sizes[i] = intrinsic_min[i];
+                    } else {
+                        // Vsechny unfrozen fr take fr_size.
+                        for i in 0..rows {
+                            if !frozen[i] {
+                                new_sizes[i] = fr_size * fr_factors[i];
+                            }
+                        }
+                        break;
+                    }
+                }
+                row_tracks = new_sizes;
+            }
         }
         // Span items rows distribute (CSS §11.5.5): pri item span_row > 1 expand row tracks.
         let mut occupied_d2: Vec<bool> = vec![false; rows.max(1) * cols.max(1)];
