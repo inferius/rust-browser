@@ -13,10 +13,34 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 - **Compliance harness** v src/browser/layout_engine/taffy_compliance.rs:
   - XML parser + LayoutBox converter + run_directory + compare_layout
   - 4 testy spousteji vsechny fixtury, vypocitavaji pass-rate
-  - **Aktualni pass-rate: 1732/1988 (87.1%)**
-    * BLOCK:  345/392 (88.0%)
-    * GRID:   389/512 (76.0%)
-    * FLEX:   998/1084 (92.1%)
+  - **Aktualni pass-rate: 1800/1988 (90.5%)** - 90% milestone!
+    * BLOCK:  349/392 (89.0%)
+    * GRID:   421/512 (82.2%)
+    * FLEX:   1030/1084 (95.0%)
+  - Iter 162-185 wins (this session):
+    * Flex cross intrinsic clamp by max-height (+2)
+    * Pre-pass include own padding/border (+2)
+    * Flex column needed h s margins (+2)
+    * Skip percent-derived intrinsic mode (+6)
+    * Row direction container_h override (+1)
+    * inner_w/h floor by min-w/h v intrinsic (+2)
+    * Recursive child_baseline walk (+2)
+    * Baseline column = FlexStart fallback (+4)
+    * Content-box conversion + min/max-w/h (+5)
+    * Item stretch !pri baseline + line cross expand (+6)
+    * Grid baseline post-pass recursive + row expand (+4)
+    * Grid row track include vert margins (+4)
+    * Grid baseline preserve relative offset (+2)
+    * Grid baseline use pad_t (+2)
+    * Grid minmax max/min-content sentinely (+6)
+    * Grid row aspect-ratio dopocet z width (+2)
+    * Grid text wrap pri non-stretch align-self (+2)
+    * Block text wrap pri max-width (+2)
+    * Flex column text wrap (+2)
+    * Grid recursive deep_min_content (+2)
+    * Grid row 0 fallback fix (+4)
+    * Grid rows count vc. spans (+4)
+    * Flex baseline first-child v line 1 (+2)
   - Iter 156-160 wins:
     * Pre-pass set rect to explicit + intrinsic_mode flag
     * grid no-template col -> auto track sizing (+2)
