@@ -593,6 +593,12 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         let parent_align_items = bx.align_items.clone();
         let parent_justify_items = bx.justify_items.clone();
         let child = &mut bx.children[real_idx];
+        // Resolve margin pct proti grid CELL size (CSS spec: percent margin v gridu
+        // resolvuje proti inline-size CB = cell width).
+        if let Some(p) = child.margin_left_pct { child.margin_left = Some(cw * p); }
+        if let Some(p) = child.margin_right_pct { child.margin_right = Some(cw * p); }
+        if let Some(p) = child.margin_top_pct { child.margin_top = Some(cw * p); }
+        if let Some(p) = child.margin_bottom_pct { child.margin_bottom = Some(cw * p); }
         let m_l = child.margin_left.unwrap_or(child.margin);
         let m_r = child.margin_right.unwrap_or(child.margin);
         let m_t = child.margin_top.unwrap_or(child.margin);

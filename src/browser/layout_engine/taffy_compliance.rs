@@ -336,18 +336,38 @@ mod tests {
                 // Nepouzivame container_h pro top/bottom percent.
                 "margin-left" => {
                     if v.trim() == "auto" { bx.margin_left_auto = true; }
+                    else if let Some(num) = v.trim().strip_suffix('%') {
+                        let p: f32 = num.parse().unwrap_or(0.0);
+                        bx.margin_left_pct = Some(p / 100.0);
+                        bx.margin_left = parse_dim(v, container_w);
+                    }
                     else { bx.margin_left = parse_dim(v, container_w); }
                 }
                 "margin-right" => {
                     if v.trim() == "auto" { bx.margin_right_auto = true; }
+                    else if let Some(num) = v.trim().strip_suffix('%') {
+                        let p: f32 = num.parse().unwrap_or(0.0);
+                        bx.margin_right_pct = Some(p / 100.0);
+                        bx.margin_right = parse_dim(v, container_w);
+                    }
                     else { bx.margin_right = parse_dim(v, container_w); }
                 }
                 "margin-top" => {
                     if v.trim() == "auto" { bx.margin_top_auto = true; }
+                    else if let Some(num) = v.trim().strip_suffix('%') {
+                        let p: f32 = num.parse().unwrap_or(0.0);
+                        bx.margin_top_pct = Some(p / 100.0);
+                        bx.margin_top = parse_dim(v, container_w);
+                    }
                     else { bx.margin_top = parse_dim(v, container_w); }
                 }
                 "margin-bottom" => {
                     if v.trim() == "auto" { bx.margin_bottom_auto = true; }
+                    else if let Some(num) = v.trim().strip_suffix('%') {
+                        let p: f32 = num.parse().unwrap_or(0.0);
+                        bx.margin_bottom_pct = Some(p / 100.0);
+                        bx.margin_bottom = parse_dim(v, container_w);
+                    }
                     else { bx.margin_bottom = parse_dim(v, container_w); }
                 }
                 "border" => {

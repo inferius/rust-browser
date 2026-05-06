@@ -180,6 +180,11 @@ pub struct LayoutBox {
     pub margin_right: Option<f32>,
     pub margin_bottom: Option<f32>,
     pub margin_left: Option<f32>,
+    /// Margin pct (0..1) - pri Some, resolve proti containing block (NE pre-resolved px).
+    pub margin_top_pct: Option<f32>,
+    pub margin_right_pct: Option<f32>,
+    pub margin_bottom_pct: Option<f32>,
+    pub margin_left_pct: Option<f32>,
     /// margin-*: auto flagy (absorbuji free space, CSS Margin auto).
     pub margin_top_auto: bool,
     pub margin_right_auto: bool,
@@ -619,6 +624,10 @@ impl LayoutBox {
             margin_right: None,
             margin_bottom: None,
             margin_left: None,
+            margin_top_pct: None,
+            margin_right_pct: None,
+            margin_bottom_pct: None,
+            margin_left_pct: None,
             margin_top_auto: false,
             margin_right_auto: false,
             margin_bottom_auto: false,
