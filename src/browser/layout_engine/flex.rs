@@ -493,7 +493,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
 
     // 5. Compute total cross size
     let line_gap = if direction.is_row() { row_gap } else { col_gap };
-    let container_cross = if direction.is_row() { (bx.rect.height - pad_t - pad_b - 2.0 * bx.margin).max(0.0) } else { inner_w };
+    let container_cross = if direction.is_row() { (bx.rect.height - pad_t - pad_b - 2.0 * bx.margin - scrollbar_h).max(0.0) } else { inner_w };
     let nline = resolved_lines.len();
     let total_gap_cross = line_gap * nline.saturating_sub(1) as f32;
     let lines_natural_total: f32 = resolved_lines.iter().map(|l| l.cross_size).sum::<f32>() + total_gap_cross;
