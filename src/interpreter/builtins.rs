@@ -2620,62 +2620,8 @@ pub fn setup_builtins(
         Ok(JsValue::Object(obj))
     }));
 
-    // localStorage / sessionStorage - in-memory storage
-    let make_storage = || {
-        let store: Rc<RefCell<std::collections::HashMap<String, String>>> = Rc::new(RefCell::new(std::collections::HashMap::new()));
-        let obj = Rc::new(RefCell::new(JsObject::new()));
-        {
-            let s = Rc::clone(&store);
-            obj.borrow_mut().set("getItem".into(), native("Storage.getItem", move |args| {
-                let key = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
-                Ok(s.borrow().get(&key).cloned().map(JsValue::Str).unwrap_or(JsValue::Null))
-            }));
-        }
-        {
-            let s = Rc::clone(&store);
-            let o = Rc::clone(&obj);
-            obj.borrow_mut().set("setItem".into(), native("Storage.setItem", move |args| {
-                let mut it = args.into_iter();
-                let key = it.next().map(|v| v.to_string()).unwrap_or_default();
-                let val = it.next().map(|v| v.to_string()).unwrap_or_default();
-                s.borrow_mut().insert(key, val);
-                let len = s.borrow().len();
-                o.borrow_mut().set("length".into(), JsValue::Number(len as f64));
-                Ok(JsValue::Undefined)
-            }));
-        }
-        {
-            let s = Rc::clone(&store);
-            let o = Rc::clone(&obj);
-            obj.borrow_mut().set("removeItem".into(), native("Storage.removeItem", move |args| {
-                let key = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
-                s.borrow_mut().remove(&key);
-                let len = s.borrow().len();
-                o.borrow_mut().set("length".into(), JsValue::Number(len as f64));
-                Ok(JsValue::Undefined)
-            }));
-        }
-        {
-            let s = Rc::clone(&store);
-            let o = Rc::clone(&obj);
-            obj.borrow_mut().set("clear".into(), native("Storage.clear", move |_| {
-                s.borrow_mut().clear();
-                o.borrow_mut().set("length".into(), JsValue::Number(0.0));
-                Ok(JsValue::Undefined)
-            }));
-        }
-        {
-            let s = Rc::clone(&store);
-            obj.borrow_mut().set("key".into(), native("Storage.key", move |args| {
-                let n = args.into_iter().next().map(|v| v.to_number() as usize).unwrap_or(0);
-                Ok(s.borrow().keys().nth(n).cloned().map(JsValue::Str).unwrap_or(JsValue::Null))
-            }));
-        }
-        obj.borrow_mut().set("length".into(), JsValue::Number(0.0));
-        JsValue::Object(obj)
-    };
-    e.define("localStorage", make_storage());
-    e.define("sessionStorage", make_storage());
+    // localStorage / sessionStorage uz definovany vyse pri ─── Storage API ───
+    // sekci. Tady ne re-define (dvoji define = override + memory leak/wrong impl).
 
     // Headers stub
     e.define("Headers", native("Headers", |_args| {
