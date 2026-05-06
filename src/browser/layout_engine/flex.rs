@@ -144,8 +144,10 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         let saved_rect = ch.rect.clone();
         ch.rect.x = 0.0; ch.rect.y = 0.0;
         // Pri explicit set rect na explicit hodnotu, jinak 0.
-        ch.rect.width = ch.explicit_width.unwrap_or(0.0);
-        ch.rect.height = ch.explicit_height.unwrap_or(0.0);
+        // Ale pri width_pct/height_pct (percent) v intrinsic mode: use 0
+        // (parent indefinite -> percent = 0).
+        ch.rect.width = if ch.width_pct.is_some() { 0.0 } else { ch.explicit_width.unwrap_or(0.0) };
+        ch.rect.height = if ch.height_pct.is_some() { 0.0 } else { ch.explicit_height.unwrap_or(0.0) };
         let saved_intrinsic = std::mem::replace(&mut ch.taffy_intrinsic_mode, true);
         // Pri block s flex-direction: treat as flex pro pre-pass intrinsic.
         let has_flex_dir = !ch.flex_direction.is_empty();
