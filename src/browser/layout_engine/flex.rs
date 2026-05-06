@@ -330,9 +330,20 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                 } else { 10.0 }
             } else { 0.0 }
         } else { 0.0 };
-        let intrinsic_main = if ch.explicit_width.is_some() && direction.is_row() { 0.0 }
+        // Descendant max-width prispiva do min_main pri row (CSS auto-min-content):
+        // pri children s explicit_width, item nesmi shrink pod max child width.
+        let descendant_min_main = if direction.is_row() && !ch.children.is_empty() {
+            let mut max_dc_w = 0.0_f32;
+            for dc in &ch.children {
+                if matches!(dc.position, super::super::layout::Position::Absolute | super::super::layout::Position::Fixed) { continue; }
+                if matches!(dc.display, super::super::layout::Display::None) { continue; }
+                if let Some(w) = dc.explicit_width { if w > max_dc_w { max_dc_w = w; } }
+            }
+            max_dc_w
+        } else { 0.0 };
+        let intrinsic_main = if ch.explicit_width.is_some() && direction.is_row() { descendant_min_main }
                             else if ch.explicit_height.is_some() && !direction.is_row() { 0.0 }
-                            else if direction.is_row() { ch.rect.width.max(text_min_content) } else { ch.rect.height.max(text_min_content) };
+                            else if direction.is_row() { ch.rect.width.max(text_min_content).max(descendant_min_main) } else { ch.rect.height.max(text_min_content) };
         let pb_main = if direction.is_row() {
             ch.padding_left.unwrap_or(ch.padding) + ch.padding_right.unwrap_or(ch.padding)
                 + ch.border_left_width.unwrap_or(ch.border_width) + ch.border_right_width.unwrap_or(ch.border_width)
