@@ -2536,11 +2536,21 @@ pub fn layout_block(bx: &mut LayoutBox) {
 fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f32, inner_w: f32) -> f32 {
     let mut cursor_x = inner_x;
     let mut cursor_y = start_y;
-    let line_height_default = 19.2; // 16 * 1.2
+    let parent_font_size = bx.font_size;
+    let parent_bold = bx.bold;
+    let line_height_default = parent_font_size * 1.2;
     let mut line_height = line_height_default;
 
     for &idx in indices {
         // Zachyceni boxu cele
+        // Inherit font_size + bold od parentu pri text-only inline elementech
+        // co nemaji explicitne nastaveny font-size (tj. bx.font_size = default 16).
+        if bx.children[idx].font_size <= 16.001 && parent_font_size > 16.0 {
+            bx.children[idx].font_size = parent_font_size;
+        }
+        if !bx.children[idx].bold && parent_bold {
+            bx.children[idx].bold = parent_bold;
+        }
         let bx_clone = bx.children[idx].clone();
         let font_size = bx_clone.font_size;
         let advance_h = (font_size * 1.4).max(line_height_default);
