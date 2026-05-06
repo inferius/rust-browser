@@ -67,15 +67,27 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOut {
 
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
-    // 9-tap Gaussian (sigma ~ radius/3)
-    let weights = array<f32, 5>(0.227027, 0.1945946, 0.1216216, 0.054054, 0.016216);
+    // 9-tap Gaussian (sigma ~ radius/3). Unrolled - WGSL nepovoluje dynamic
+    // indexing var/let array v Naga validation (jen const-indexable v uniform/storage).
+    let w0: f32 = 0.227027;
+    let w1: f32 = 0.1945946;
+    let w2: f32 = 0.1216216;
+    let w3: f32 = 0.054054;
+    let w4: f32 = 0.016216;
     let step = params.direction * params.texel * params.radius * 0.3;
-    var color = textureSample(src_tex, src_smp, in.uv) * weights[0];
-    for (var i = 1; i < 5; i = i + 1) {
-        let off = step * f32(i);
-        color = color + textureSample(src_tex, src_smp, in.uv + off) * weights[i];
-        color = color + textureSample(src_tex, src_smp, in.uv - off) * weights[i];
-    }
+    var color = textureSample(src_tex, src_smp, in.uv) * w0;
+    let off1 = step * 1.0;
+    color = color + textureSample(src_tex, src_smp, in.uv + off1) * w1;
+    color = color + textureSample(src_tex, src_smp, in.uv - off1) * w1;
+    let off2 = step * 2.0;
+    color = color + textureSample(src_tex, src_smp, in.uv + off2) * w2;
+    color = color + textureSample(src_tex, src_smp, in.uv - off2) * w2;
+    let off3 = step * 3.0;
+    color = color + textureSample(src_tex, src_smp, in.uv + off3) * w3;
+    color = color + textureSample(src_tex, src_smp, in.uv - off3) * w3;
+    let off4 = step * 4.0;
+    color = color + textureSample(src_tex, src_smp, in.uv + off4) * w4;
+    color = color + textureSample(src_tex, src_smp, in.uv - off4) * w4;
     return color;
 }
 "#;
