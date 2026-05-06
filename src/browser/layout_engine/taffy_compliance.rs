@@ -862,7 +862,12 @@ mod tests {
                     }
                     if bottom > content_bottom { content_bottom = bottom; }
                 }
-                let new_h = content_bottom - child.rect.y + pad_b_c;
+                // Pri overflow-x=scroll/auto: horizontal scrollbar bere height.
+                let child_scrollbar_h = if child.scrollbar_size > 0.0
+                    && (child.overflow_x == "scroll" || child.overflow_x == "auto") {
+                    child.scrollbar_size
+                } else { 0.0 };
+                let new_h = content_bottom - child.rect.y + pad_b_c + child_scrollbar_h;
                 let new_h_clamped = {
                     let mut v = new_h;
                     v = v.min(ch_max);
