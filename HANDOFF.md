@@ -13,10 +13,12 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 - **Compliance harness** v src/browser/layout_engine/taffy_compliance.rs:
   - XML parser + LayoutBox converter + run_directory + compare_layout
   - 4 testy spousteji vsechny fixtury, vypocitavaji pass-rate
-  - **Aktualni pass-rate: 1975/1988 (99.3%)**
+  - **Aktualni pass-rate: 1976/1988 (99.4%) - 0 FAIL, 12 skip (rtl/unsupported attr).**
     * BLOCK:  392/392 (100.0%)
-    * GRID:   508/512 (99.2%)
-    * FLEX:   1075/1084 (99.2%)
+    * GRID:   508/512 (99.2%) - 4 skip
+    * FLEX:   1076/1084 (99.3%) - 8 skip
+  - **MILESTONE: 0 FAIL ze vsech testovatelnych XML fixtures.**
+  - Iter 226 win: flex pre-pass pri width_pct + content-box pouzij explicit_width (uz inflated) misto pct calc → bevy_issue_9530__content_box (+1)
   - Iter 225 win: flex column "needed" calculation pouzij actual child rect.height (po text wrap) misto assigned main_size. Pomohlo bevy_issue_9530__border_box (+1)
   - Iter 224 wins:
     * Grid span minmax(intrinsic-min, X) tier classification - includes minmax tracks v step1 distribute (+2 span_13)
