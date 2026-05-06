@@ -1882,14 +1882,26 @@ pub fn run_browser(html: &str, css: &str) {
 
 /// Real GUI okno s wgpu rendering + JS event integrace.
 pub fn run_window_with_html(html: String, css: String) -> Result<(), String> {
+    run_window_with_options(html, css, None, false)
+}
+
+/// Spusti okno s dodatecnymi options.
+/// - `current_html_path`: pri Some umozni reload pres drag-drop (relativni paths v HTML)
+/// - `auto_devtools`: pri true vygeneruje devtools.html a otevre v OS default browser
+pub fn run_window_with_options(html: String, css: String, current_html_path: Option<std::path::PathBuf>, auto_devtools: bool) -> Result<(), String> {
     use winit::application::ApplicationHandler;
     use winit::event::{WindowEvent, MouseButton, ElementState};
     use winit::event_loop::{ActiveEventLoop, EventLoop};
     use winit::window::{Window, WindowId};
+    use winit::keyboard::{Key, NamedKey};
 
     struct App {
         html: String,
         css: String,
+        /// Cesta k aktualne nactenemu HTML souboru (pro reload + relativni paths).
+        current_path: Option<std::path::PathBuf>,
+        /// Po startu otevri devtools.html v default browseru.
+        auto_devtools: bool,
         window: Option<std::sync::Arc<Window>>,
         renderer: Option<Renderer>,
         layout_root: Option<super::layout::LayoutBox>,
@@ -1910,8 +1922,12 @@ pub fn run_window_with_html(html: String, css: String) -> Result<(), String> {
 
     impl ApplicationHandler for App {
         fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+            let title = match &self.current_path {
+                Some(p) => format!("Rust Web Engine - {}", p.display()),
+                None => "Rust Web Engine".to_string(),
+            };
             let attrs = Window::default_attributes()
-                .with_title("Rust Web Engine")
+                .with_title(title)
                 .with_inner_size(winit::dpi::LogicalSize::new(1024.0, 768.0));
             let window = std::sync::Arc::new(event_loop.create_window(attrs).unwrap());
             self.window = Some(window.clone());
@@ -1919,7 +1935,11 @@ pub fn run_window_with_html(html: String, css: String) -> Result<(), String> {
 
             // Vytvor interpreter + nacti HTML do jeho document
             let mut interp = crate::interpreter::Interpreter::new();
-            let doc = super::html_parser::parse_html(&self.html, "about:blank");
+            let url = match &self.current_path {
+                Some(p) => format!("file:///{}", p.display().to_string().replace('\\', "/")),
+                None => "about:blank".to_string(),
+            };
+            let doc = super::html_parser::parse_html(&self.html, &url);
             interp.set_document(doc);
 
             // Spust JS uvnitr <script> tagu
@@ -1927,6 +1947,13 @@ pub fn run_window_with_html(html: String, css: String) -> Result<(), String> {
 
             self.interpreter = Some(interp);
             self.render();
+
+            // Auto-open devtools.html po startu
+            if self.auto_devtools {
+                self.regenerate_and_open_devtools();
+            }
+
+            println!("[okno] F12 = otevri/regen DevTools | drag-drop HTML soubor pro reload");
             window.request_redraw();
         }
 
@@ -1969,12 +1996,109 @@ pub fn run_window_with_html(html: String, css: String) -> Result<(), String> {
                         w.request_redraw();
                     }
                 }
+                // Drag-drop HTML soubor: reload okna s novym souborem.
+                WindowEvent::DroppedFile(path) => {
+                    println!("[drop] {}", path.display());
+                    self.load_path(&path);
+                    self.render();
+                }
+                WindowEvent::HoveredFile(_) => {
+                    // Nic - winit jen oznamuje hover.
+                }
+                // F12 = regenerace devtools.html + open v default browseru.
+                // F5 / Ctrl+R = reload current file.
+                WindowEvent::KeyboardInput { event: key_event, .. } => {
+                    if key_event.state != ElementState::Pressed { return; }
+                    match key_event.logical_key {
+                        Key::Named(NamedKey::F12) => {
+                            self.regenerate_and_open_devtools();
+                        }
+                        Key::Named(NamedKey::F5) => {
+                            if let Some(p) = self.current_path.clone() {
+                                println!("[F5 reload] {}", p.display());
+                                self.load_path(&p);
+                                self.render();
+                            }
+                        }
+                        _ => {}
+                    }
+                }
                 _ => {}
             }
         }
     }
 
     impl App {
+        /// Nacti novy HTML soubor (drop / F5 reload). Resetuje interpreter, scroll, animace.
+        fn load_path(&mut self, path: &std::path::Path) {
+            // Akceptuj jen HTML soubory (nebo neznamou priponu).
+            let ext_ok = match path.extension().and_then(|e| e.to_str()) {
+                Some(e) => matches!(e.to_lowercase().as_str(), "html" | "htm" | "xhtml"),
+                None => true,
+            };
+            if !ext_ok {
+                eprintln!("[drop] ignoruji - ne HTML soubor: {}", path.display());
+                return;
+            }
+            let html = match std::fs::read_to_string(path) {
+                Ok(s) => s,
+                Err(e) => { eprintln!("[load] nelze nacist {}: {e}", path.display()); return; }
+            };
+            // Hledej co-located CSS pres .css extenzion.
+            let css_path = path.with_extension("css");
+            let css = std::fs::read_to_string(&css_path).unwrap_or_default();
+            self.html = html;
+            self.css = css;
+            self.current_path = Some(path.to_path_buf());
+            self.scroll_y = 0.0;
+            self.start_time = std::time::Instant::now();
+            self.prev_style_map = None;
+            self.active_animations.clear();
+            self.animation_iterations.clear();
+            self.active_transitions.clear();
+            // Restart interpreter s novym dokumentem.
+            let url = format!("file:///{}", path.display().to_string().replace('\\', "/"));
+            let doc = super::html_parser::parse_html(&self.html, &url);
+            let mut interp = crate::interpreter::Interpreter::new();
+            interp.set_document(doc);
+            self.run_inline_scripts(&mut interp);
+            self.interpreter = Some(interp);
+            // Update window title.
+            if let Some(w) = &self.window {
+                w.set_title(&format!("Rust Web Engine - {}", path.display()));
+            }
+            // Pokud je auto_devtools zaplo, take regen + open po reload.
+            if self.auto_devtools {
+                self.regenerate_and_open_devtools();
+            }
+        }
+
+        /// Regen devtools.html + otevri ho v default OS browseru.
+        fn regenerate_and_open_devtools(&self) {
+            let interp = match &self.interpreter { Some(i) => i, None => return };
+            let stylesheets = vec![super::css_parser::parse_stylesheet(&self.css)];
+            let console_log = interp.console_log.borrow().clone();
+            let network_log = interp.network_log.borrow().clone();
+            // Borrow document, vygeneruj HTML, drop borrow.
+            let html_out = {
+                let doc = interp.document.borrow();
+                let scripts: Vec<String> = doc.root.get_elements_by_tag("script")
+                    .iter().map(|s| s.text_content()).collect();
+                let script_src = scripts.iter().find(|s| !s.trim().is_empty()).cloned();
+                crate::debug_view::devtools::generate_devtools_html(
+                    &doc, &stylesheets, script_src.as_deref(), &console_log, &network_log,
+                )
+            };
+            let out_path = std::env::current_dir().map(|d| d.join("devtools.html"))
+                .unwrap_or_else(|_| std::path::PathBuf::from("devtools.html"));
+            if let Err(e) = std::fs::write(&out_path, &html_out) {
+                eprintln!("[devtools] zapis selhal: {e}");
+                return;
+            }
+            println!("[devtools] {} (console: {}, network: {})", out_path.display(), console_log.len(), network_log.len());
+            open_in_default_browser(&out_path);
+        }
+
         fn run_inline_scripts(&self, interp: &mut crate::interpreter::Interpreter) {
             use crate::lexer::base::Lexer;
             use crate::parser::Parser;
@@ -2213,6 +2337,8 @@ pub fn run_window_with_html(html: String, css: String) -> Result<(), String> {
     let event_loop = EventLoop::new().map_err(|e| e.to_string())?;
     let mut app = App {
         html, css,
+        current_path: current_html_path,
+        auto_devtools,
         window: None,
         renderer: None,
         layout_root: None,
@@ -2228,6 +2354,23 @@ pub fn run_window_with_html(html: String, css: String) -> Result<(), String> {
     };
     event_loop.run_app(&mut app).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Otevri soubor (HTML/PDF/...) v default OS browseru/aplikaci.
+fn open_in_default_browser(path: &std::path::Path) {
+    let p = path.to_string_lossy().to_string();
+    #[cfg(target_os = "windows")]
+    {
+        let _ = std::process::Command::new("cmd").args(["/C", "start", "", &p]).spawn();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("open").arg(&p).spawn();
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let _ = std::process::Command::new("xdg-open").arg(&p).spawn();
+    }
 }
 
 // ─── Dirty rect tracking ────────────────────────────────────────────────

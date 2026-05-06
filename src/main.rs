@@ -112,10 +112,16 @@ console.log(greeting, result);
         return;
     }
 
-    // Browser mode: cargo run -- browser nebo cargo run -- window [path/to/file.html]
+    // Browser mode: cargo run -- browser nebo cargo run -- window [path/to/file.html] [--devtools]
     if args.len() > 1 && (args[1] == "browser" || args[1] == "window") {
-        // Default: static/test.html
-        let html_path = args.get(2).cloned().unwrap_or_else(|| "static/test.html".to_string());
+        // Parse args: prvni non-flag = path, --devtools flag = auto-open devtools.
+        let mut html_path: Option<String> = None;
+        let mut auto_devtools = false;
+        for a in &args[2..] {
+            if a == "--devtools" || a == "-d" { auto_devtools = true; }
+            else if !a.starts_with('-') && html_path.is_none() { html_path = Some(a.clone()); }
+        }
+        let html_path = html_path.unwrap_or_else(|| "static/test.html".to_string());
         let html = match std::fs::read_to_string(&html_path) {
             Ok(s) => s,
             Err(e) => { eprintln!("Nelze nacist {html_path}: {e}"); return; }
@@ -125,12 +131,13 @@ console.log(greeting, result);
         let css_path = html_path.replace(".html", ".css");
         let css = std::fs::read_to_string(&css_path).unwrap_or_default();
 
-        if args[1] == "window" {
-            if let Err(e) = browser::render::run_window_with_html(html, css) {
+        if args[1] == "window" || args[1] == "browser" {
+            // Oba aliasy ted vedou na okno (drive 'browser' jen text-mode dump).
+            let path_buf = std::path::PathBuf::from(&html_path);
+            let abs_path = std::fs::canonicalize(&path_buf).unwrap_or(path_buf);
+            if let Err(e) = browser::render::run_window_with_options(html, css, Some(abs_path), auto_devtools) {
                 eprintln!("Chyba okna: {e}");
             }
-        } else {
-            browser::render::run_browser(&html, &css);
         }
         return;
     }
