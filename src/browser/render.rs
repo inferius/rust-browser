@@ -1992,6 +1992,13 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
     struct App {
         html: String,
         css: String,
+        /// Cache parsed stylesheets (css string hash -> Vec<Stylesheet>).
+        cached_stylesheets_hash: u64,
+        cached_stylesheets: Option<Vec<super::css_parser::Stylesheet>>,
+        /// Cache cascade output (DOM root ptr hash -> StyleMap).
+        cached_cascade_hash: u64,
+        cached_style_map: Option<super::cascade::StyleMap>,
+        cached_pseudo_map: Option<super::cascade::PseudoStyleMap>,
         /// Cesta k aktualne nactenemu HTML souboru (pro reload + relativni paths).
         current_path: Option<std::path::PathBuf>,
         /// Page URL (http(s)://... nebo file:///...) pro relative URL resolution.
@@ -2467,6 +2474,12 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
 
         fn render(&mut self) {
             use super::{css_parser, cascade, layout, paint};
+            let frame_start = std::time::Instant::now();
+            let mut t_css = 0.0;
+            let mut t_cascade = 0.0;
+            let mut t_layout = 0.0;
+            let mut t_paint = 0.0;
+            let mut t_draw = 0.0;
             let r = match &mut self.renderer { Some(r) => r, None => return };
 
             // Pouzij document z interpreteru (po JS modifikacich)
@@ -2475,13 +2488,47 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                 None => return,
             };
 
-            let stylesheets = vec![css_parser::parse_stylesheet(&self.css)];
-            // Nacti @font-face fonty (idempotentni - skip uz loaded)
-            for sheet in &stylesheets {
-                r.load_font_faces(&sheet.font_faces);
+            let t = std::time::Instant::now();
+            // CSS hash pro cache invalidation.
+            let css_hash = {
+                use std::hash::{Hash, Hasher};
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                self.css.hash(&mut h);
+                h.finish()
+            };
+            if self.cached_stylesheets.is_none() || self.cached_stylesheets_hash != css_hash {
+                let parsed = vec![css_parser::parse_stylesheet(&self.css)];
+                for sheet in &parsed {
+                    r.load_font_faces(&sheet.font_faces);
+                }
+                self.cached_stylesheets = Some(parsed);
+                self.cached_stylesheets_hash = css_hash;
+                // Cascade taky invalidovat (zavisi na CSS).
+                self.cached_style_map = None;
+                self.cached_pseudo_map = None;
             }
-            let mut style_map = cascade::cascade(&document_root, &stylesheets);
-            let pseudo_map = cascade::cascade_pseudo(&document_root, &stylesheets);
+            let stylesheets = self.cached_stylesheets.as_ref().unwrap();
+            t_css = t.elapsed().as_secs_f32() * 1000.0;
+
+            // Cascade hash: DOM root pointer + CSS hash.
+            // (DOM mutace by mely invalidovat - zatim simplification: jen root ptr.)
+            let cascade_hash = {
+                use std::hash::{Hash, Hasher};
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                (Rc::as_ptr(&document_root) as usize).hash(&mut h);
+                css_hash.hash(&mut h);
+                h.finish()
+            };
+            let t = std::time::Instant::now();
+            if self.cached_style_map.is_none() || self.cached_cascade_hash != cascade_hash {
+                self.cached_style_map = Some(cascade::cascade(&document_root, stylesheets));
+                self.cached_pseudo_map = Some(cascade::cascade_pseudo(&document_root, stylesheets));
+                self.cached_cascade_hash = cascade_hash;
+            }
+            // Clone cached map (animations modifuji per-frame).
+            let mut style_map = self.cached_style_map.as_ref().unwrap().clone();
+            t_cascade = t.elapsed().as_secs_f32() * 1000.0;
+            let pseudo_map = self.cached_pseudo_map.as_ref().cloned().unwrap_or_default();
 
             let elapsed = self.start_time.elapsed().as_secs_f32();
 
@@ -2594,10 +2641,14 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
 
             let viewport_w = r.config.width as f32;
             let viewport_h = r.config.height as f32;
+            let t = std::time::Instant::now();
             let mut layout_root = layout::layout_tree_with_pseudo(&document_root, &style_map, &pseudo_map, viewport_w, viewport_h);
+            t_layout = t.elapsed().as_secs_f32() * 1000.0;
             // Apply position: sticky pri current scroll
             layout::apply_sticky(&mut layout_root, self.scroll_y);
+            let t = std::time::Instant::now();
             let mut display_list = paint::build_display_list(&layout_root);
+            t_paint = t.elapsed().as_secs_f32() * 1000.0;
 
             // Canvas API: emit canvas ops jako DisplayCommands.
             if let Some(interp) = &self.interpreter {
@@ -2717,6 +2768,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
             r.upload_image_atlas();
 
             // Pri WebGL canvas s pending queue, vyuzij webgl-aware draw flow.
+            let t = std::time::Instant::now();
             let webgl_states_opt = self.interpreter.as_ref().map(|i| i.webgl_states.clone());
             if let Some(states_rc) = &webgl_states_opt {
                 let states = states_rc.borrow();
@@ -2724,9 +2776,17 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
             } else {
                 r.draw_segments(&display_list);
             }
+            t_draw = t.elapsed().as_secs_f32() * 1000.0;
 
             // Ulozim layout pro hit test
             self.layout_root = Some(layout_root);
+            let frame_ms = frame_start.elapsed().as_secs_f32() * 1000.0;
+            // Slow frames log.
+            let _ = (t_css, t_cascade, t_layout, t_paint, t_draw);
+            if frame_ms > 50.0 {
+                eprintln!("[slow frame] total={:.1} css={:.1} cascade={:.1} layout={:.1} paint={:.1} draw={:.1}",
+                    frame_ms, t_css, t_cascade, t_layout, t_paint, t_draw);
+            }
         }
     }
 
@@ -2742,6 +2802,11 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
     let initial_url = base_url.clone();
     let mut app = App {
         html, css,
+        cached_stylesheets_hash: 0,
+        cached_stylesheets: None,
+        cached_cascade_hash: 0,
+        cached_style_map: None,
+        cached_pseudo_map: None,
         current_path: current_html_path,
         base_url,
         history: initial_url.into_iter().collect(),
