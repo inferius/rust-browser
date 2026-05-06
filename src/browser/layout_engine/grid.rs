@@ -556,7 +556,10 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                     let pb_l = item.padding_left.unwrap_or(item.padding) + item.border_left_width.unwrap_or(item.border_width);
                     let pb_r = item.padding_right.unwrap_or(item.padding) + item.border_right_width.unwrap_or(item.border_width);
                     let cw_min_p = super::super::layout::parse_length(&item.min_width_v);
+                    // CSS spec: pri overflow != visible v inline axis, auto min-size = 0.
+                    let inline_overflow_blocks = matches!(item.overflow_x.as_str(), "hidden" | "scroll" | "auto" | "clip");
                     let item_max = item.explicit_width.unwrap_or(item.rect.width).max(text_max).max(pb_l + pb_r).max(cw_min_p);
+                    let _ = inline_overflow_blocks;
                     // Min-content rekurzivne: pri item bez text + children, walk first
                     // descendant chain a najdi nejvetsi child explicit_width nebo
                     // text_min_content. Drive jen rect.width = max-content.
@@ -591,7 +594,11 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                     } else {
                         item.explicit_width.unwrap_or(item.rect.width).max(text_min)
                     };
-                    let item_min = item_min_base.max(pb_l + pb_r).max(cw_min_p);
+                    let item_min = if inline_overflow_blocks {
+                        // CSS overflow != visible v inline axis: auto-min-content = 0,
+                        // pouze padding/border floor + explicit min-width.
+                        (pb_l + pb_r).max(cw_min_p)
+                    } else { item_min_base.max(pb_l + pb_r).max(cw_min_p) };
                     // Margins (jen NON-percent, fixed) prispivaji do track contribution.
                     let has_pct_margin = item.margin_left_pct.is_some() || item.margin_right_pct.is_some();
                     let m_l_g = if has_pct_margin { 0.0 } else { item.margin_left.unwrap_or(item.margin) };
