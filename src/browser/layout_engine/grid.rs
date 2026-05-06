@@ -535,6 +535,21 @@ pub fn layout_grid(bx: &mut LayoutBox) {
     }
     let collapsed_count = col_collapsed.iter().filter(|&&b| b).count();
     let active_cols = cols.saturating_sub(collapsed_count);
+    // Pri align-content default + explicit container_h + no row template: stretch rows do container.
+    // Pri align-items=baseline rows musi byt stretch aby baselines mohly fungovat.
+    let ac = bx.align_content.trim();
+    let ac_stretch = (ac.is_empty() || ac == "normal" || ac == "stretch")
+        && bx.explicit_height.is_some()
+        && rows_explicit_str.is_empty()
+        && bx.align_items == "baseline";
+    if ac_stretch && rows > 0 {
+        let total_row_pre: f32 = row_tracks.iter().sum::<f32>() + row_gap * (rows.saturating_sub(1) as f32);
+        let extra = inner_h - total_row_pre;
+        if extra > 0.0 {
+            let share = extra / rows as f32;
+            for h in row_tracks.iter_mut() { *h += share; }
+        }
+    }
     let total_col: f32 = col_tracks.iter().sum::<f32>() + col_gap * (active_cols.saturating_sub(1) as f32);
     let total_row: f32 = row_tracks.iter().sum::<f32>() + row_gap * (rows.saturating_sub(1) as f32);
     let (jc_start, jc_between) = grid_distribute(&bx.justify_content, inner_w - total_col, active_cols.max(1));
