@@ -5,7 +5,12 @@ edition = "2024"
 
 [profile.dev]
 debug = true  # Generování debug symbolů
-opt-level = 0 # Bez optimalizací
+opt-level = 1 # Mirne opt - nas kod malo deeper, ale frames v debug bezi 5-10x rychleji.
+# Build cargo nepatrne pomalejsi (~5%), ale render frame v debug 30 FPS misto 5 FPS.
+
+# Dependencies vzdy s opt-level 3 - jsou debug-only nepouzitelne (wgpu/icu/image/...)
+[profile.dev.package."*"]
+opt-level = 3
 
 
 [dependencies]
