@@ -646,8 +646,8 @@ mod tests {
         let scrollbar_w = if scrollbar_size > 0.0 && (bx.overflow_y == "scroll" || bx.overflow_y == "auto") { scrollbar_size } else { 0.0 };
         let inner_w = (bx.rect.width - pad_l - pad_r - scrollbar_w).max(0.0);
         // Containing block pro abs = padding-box parenta (uvnitr borderu).
-        let parent_w = (bx.rect.width - bw_l - bw_r).max(0.0);
-        let parent_h = (bx.rect.height - bw_t - bw_b).max(0.0);
+        let parent_w = (bx.rect.width - bw_l - bw_r - scrollbar_w).max(0.0);
+        let parent_h = (bx.rect.height - bw_t - bw_b - if bx.scrollbar_size > 0.0 && (bx.overflow_x == "scroll" || bx.overflow_x == "auto") { bx.scrollbar_size } else { 0.0 }).max(0.0);
         let parent_x = bx.rect.x + bw_l;
         let parent_y = bx.rect.y + bw_t;
         let mut cursor_y = inner_y;

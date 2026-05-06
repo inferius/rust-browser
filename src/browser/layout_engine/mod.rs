@@ -21,10 +21,13 @@ pub fn layout_absolute_child_with_parent(child: &mut LayoutBox, parent: &LayoutB
     let bw_r = parent.border_right_width.unwrap_or(parent.border_width);
     let bw_t = parent.border_top_width.unwrap_or(parent.border_width);
     let bw_b = parent.border_bottom_width.unwrap_or(parent.border_width);
+    // Scrollbar zmenuje containing block pro abs items.
+    let sb_w = if parent.scrollbar_size > 0.0 && (parent.overflow_y == "scroll" || parent.overflow_y == "auto") { parent.scrollbar_size } else { 0.0 };
+    let sb_h = if parent.scrollbar_size > 0.0 && (parent.overflow_x == "scroll" || parent.overflow_x == "auto") { parent.scrollbar_size } else { 0.0 };
     let cb_x = parent.rect.x + bw_l;
     let cb_y = parent.rect.y + bw_t;
-    let cb_w = (parent.rect.width - bw_l - bw_r).max(0.0);
-    let cb_h = (parent.rect.height - bw_t - bw_b).max(0.0);
+    let cb_w = (parent.rect.width - bw_l - bw_r - sb_w).max(0.0);
+    let cb_h = (parent.rect.height - bw_t - bw_b - sb_h).max(0.0);
     layout_absolute_child_inner(child, cb_x, cb_y, cb_w, cb_h);
 }
 
