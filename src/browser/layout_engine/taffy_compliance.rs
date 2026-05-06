@@ -589,6 +589,10 @@ mod tests {
         else if m_t < 0.0 { if m_t < *min_neg { *min_neg = m_t; } }
         let pb_t = child.padding_top.unwrap_or(child.padding) + child.border_top_width.unwrap_or(child.border_width);
         if pb_t > 0.0 { return; }
+        // Pri overflow non-visible: BFC, no margin collapse with descendants.
+        let blocks_collapse = matches!(child.overflow_x.as_str(), "hidden" | "scroll" | "auto" | "clip")
+            || matches!(child.overflow_y.as_str(), "hidden" | "scroll" | "auto" | "clip");
+        if blocks_collapse { return; }
         for ch in &child.children {
             if matches!(ch.position, Position::Absolute | Position::Fixed) { continue; }
             if matches!(ch.display, Display::None) { continue; }
@@ -609,6 +613,9 @@ mod tests {
         else if m_b < 0.0 { if m_b < *min_neg { *min_neg = m_b; } }
         let pb_b = child.padding_bottom.unwrap_or(child.padding) + child.border_bottom_width.unwrap_or(child.border_width);
         if pb_b > 0.0 { return; }
+        let blocks_collapse = matches!(child.overflow_x.as_str(), "hidden" | "scroll" | "auto" | "clip")
+            || matches!(child.overflow_y.as_str(), "hidden" | "scroll" | "auto" | "clip");
+        if blocks_collapse { return; }
         // Walk last in-flow grandchild.
         for ch in child.children.iter().rev() {
             if matches!(ch.position, Position::Absolute | Position::Fixed) { continue; }
@@ -827,8 +834,11 @@ mod tests {
                 let pad_b_c = child.padding_bottom.unwrap_or(child.padding) + child.border_bottom_width.unwrap_or(child.border_width);
                 // Margin collapsing: pri no padding/border-top, margin-top prvniho
                 // in-flow grandchildu collapsuje s parent's; podobne bottom.
-                let collapse_top = pad_t_c == 0.0;
-                let collapse_bottom = pad_b_c == 0.0;
+                // Pri overflow non-visible: BFC, blocks collapse with descendants.
+                let blocks_bfc = matches!(child.overflow_x.as_str(), "hidden" | "scroll" | "auto" | "clip")
+                    || matches!(child.overflow_y.as_str(), "hidden" | "scroll" | "auto" | "clip");
+                let collapse_top = pad_t_c == 0.0 && !blocks_bfc;
+                let collapse_bottom = pad_b_c == 0.0 && !blocks_bfc;
                 let mut first_in_flow: Option<usize> = None;
                 let mut last_in_flow: Option<usize> = None;
                 for (gi, gc) in child.children.iter().enumerate() {
