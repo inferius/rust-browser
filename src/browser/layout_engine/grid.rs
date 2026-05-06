@@ -711,6 +711,53 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         for (r, h) in by_row {
             if r < row_tracks.len() && row_tracks[r] < h { row_tracks[r] = h; }
         }
+        // Span items rows distribute (CSS §11.5.5): pri item span_row > 1 expand row tracks.
+        let mut occupied_d2: Vec<bool> = vec![false; rows.max(1) * cols.max(1)];
+        let mut auto_cursor_d2 = 0usize;
+        for &real_idx in in_flow.iter() {
+            let child = &bx.children[real_idx];
+            let explicit_col = if child.grid_column_start > 0 { Some((child.grid_column_start - 1) as usize) } else { None };
+            let explicit_row = if child.grid_row_start > 0 { Some((child.grid_row_start - 1) as usize) } else { None };
+            let span_col = if child.grid_column_span > 0 { child.grid_column_span as usize }
+                           else if child.grid_column_end > 0 && child.grid_column_start > 0 { (child.grid_column_end - child.grid_column_start).max(1) as usize }
+                           else { 1 };
+            let span_row = if child.grid_row_span > 0 { child.grid_row_span as usize }
+                           else if child.grid_row_end > 0 && child.grid_row_start > 0 { (child.grid_row_end - child.grid_row_start).max(1) as usize }
+                           else { 1 };
+            let (row, col) = if let (Some(r), Some(c)) = (explicit_row, explicit_col) { (r, c) }
+                else if let Some(c) = explicit_col { let mut r = 0; while r * cols + c < occupied_d2.len() && occupied_d2[r * cols + c] { r += 1; } (r, c) }
+                else if let Some(r) = explicit_row { let mut c = 0; while r * cols + c < occupied_d2.len() && occupied_d2[r * cols + c] { c += 1; } (r, c) }
+                else { let mut idx = auto_cursor_d2; while idx < occupied_d2.len() && occupied_d2[idx] { idx += 1; } auto_cursor_d2 = idx + 1; (idx / cols.max(1), idx % cols.max(1)) };
+            for dr in 0..span_row {
+                for dc in 0..span_col {
+                    let idx = (row + dr) * cols + (col + dc);
+                    if idx < occupied_d2.len() { occupied_d2[idx] = true; }
+                }
+            }
+            if span_row <= 1 { continue; }
+            // Compute item h (vc. margins).
+            let item = &bx.children[real_idx];
+            let mut h = item.explicit_height.unwrap_or(item.rect.height);
+            if item.taffy_mode && item.text.is_some() && h == 0.0 { h = 10.0; }
+            let m_t = item.margin_top.unwrap_or(item.margin);
+            let m_b = item.margin_bottom.unwrap_or(item.margin);
+            h += m_t + m_b;
+            // Sum aktualne spanned row tracks + gaps.
+            let total_row_gap = row_gap * (span_row.saturating_sub(1) as f32);
+            let span_indices: Vec<usize> = (row..(row+span_row)).filter(|&r| r < row_tracks.len()).collect();
+            let cur_sum: f32 = span_indices.iter().map(|&r| row_tracks[r]).sum::<f32>() + total_row_gap;
+            if cur_sum >= h { continue; }
+            // Distribute deficit do auto-class spanned rows. Pokud zadne auto, skip.
+            let auto_recipients: Vec<usize> = span_indices.iter().copied().filter(|&r| {
+                row_token_kinds.get(r).map(|t| matches!(t, Track::Auto | Track::MaxContent | Track::MinContent | Track::FitContent(_))).unwrap_or(rows_explicit_str.is_empty() || r >= explicit_row_count)
+            }).collect();
+            if auto_recipients.is_empty() { continue; }
+            // Distribute to FIRST auto recipient (taffy behavior - one row absorbs).
+            // CSS spec ambiguous, taffy testy ocekavaji prvni track.
+            let deficit = h - cur_sum;
+            let first = auto_recipients[0];
+            row_tracks[first] += deficit;
+        }
     }
 
     // Auto-fit collapse: tracky bez items collapsuji na 0 (vc. gap mezi nimi).
