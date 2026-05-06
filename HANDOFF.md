@@ -10,7 +10,7 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
   - HTTP fetch HTML pres ureq + extract <link rel=stylesheet href=...>/<style> CSS.
   - Resolve relative URLs proti page base.
   - <a href> klik a <form> submit (GET + POST) -> navigate.
-- Recent veci (iter 233-245):
+- Recent veci (iter 233-250):
   - Rust 1.95 + stacker auto-grow stack + iterativni Drop NodeData
   - SVG: bezier C/c/S/s/Q/q/T/t + arc A/a tessellation + transform attr +
     viewBox + preserveAspectRatio + stroke pres rotated quads
@@ -21,6 +21,11 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
   - URL loading + form submit (GET + POST urlencoded)
   - Subgrid basic (track substitution z parent's pri grid-template:subgrid)
   - Scrollbar render (track + thumb pri overflow-Y)
+  - Browser history (Alt+Left/Right back/forward)
+  - <a href> click navigation
+  - <select> open dropdown popup s hover highlights
+  - CSS @import recursive fetch (5 levels deep)
+  - WebSocket basic (background thread + event drain) - send/close/on/addEventListener
 - **Layout engine pod nasi kontrolou** - vlastni flex/grid v `src/browser/layout_engine/`.
 - **168 layout unit testu** (flex_tests + flex_spec_tests + grid_tests + grid_spec_tests).
 - **4108 taffy XML test fixtures** prevzato (MIT licence) v tests/fixtures/taffy_*/:
