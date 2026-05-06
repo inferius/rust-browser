@@ -760,6 +760,40 @@ pub fn paint_webgl_canvases(
 }
 
 /// Najdi DOM node v stromu podle Rc::as_ptr hodnoty (use ve cascade).
+/// Aplikuje animation/transition hodnoty z style_map na cached layout boxes.
+/// Pouziva se kdyz cache je valid pro layout struktury, ale paint props
+/// (transform/opacity/color/filter) se menily kazdy frame pres animations.
+fn apply_paint_animations(box_: &mut crate::browser::layout::LayoutBox,
+                           style_map: &crate::browser::cascade::StyleMap) {
+    let node_id = box_.node.as_ref().map(|n| Rc::as_ptr(n) as usize).unwrap_or(0);
+    if let Some(styles) = style_map.get(&node_id) {
+        if let Some(o) = styles.get("opacity") {
+            if let Ok(v) = o.parse::<f32>() {
+                box_.opacity = v;
+            }
+        }
+        if let Some(c) = styles.get("color") {
+            if let Some(rgb) = crate::browser::layout::parse_color(c) {
+                box_.text_color = Some(rgb);
+            }
+        }
+        if let Some(c) = styles.get("background-color") {
+            if let Some(rgb) = crate::browser::layout::parse_color(c) {
+                box_.bg_color = Some(rgb);
+            }
+        }
+        if let Some(t) = styles.get("transform") {
+            box_.transforms = crate::browser::layout::parse_transform_chain(t);
+        }
+        if let Some(f) = styles.get("filter") {
+            box_.filter = crate::browser::layout::parse_filter_chain(f);
+        }
+    }
+    for ch in &mut box_.children {
+        apply_paint_animations(ch, style_map);
+    }
+}
+
 fn find_node_by_ptr(root: &Rc<crate::browser::dom::NodeData>, ptr: usize) -> Option<Rc<crate::browser::dom::NodeData>> {
     if Rc::as_ptr(root) as usize == ptr {
         return Some(Rc::clone(root));
@@ -1997,6 +2031,10 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         cached_stylesheets: Option<Vec<super::css_parser::Stylesheet>>,
         /// Reuse display list buffer napric frames (alloc-free).
         display_list_buffer: Vec<super::paint::DisplayCommand>,
+        /// Cached layout_root - reuse pri ne-layout-affecting animations.
+        cached_layout_root: Option<super::layout::LayoutBox>,
+        /// True kdyz animations modify layout-affecting props.
+        animations_affect_layout: bool,
         /// Cache cascade output (DOM root ptr hash -> StyleMap).
         cached_cascade_hash: u64,
         cached_style_map: Option<super::cascade::StyleMap>,
@@ -2497,10 +2535,27 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                 for sheet in &parsed {
                     r.load_font_faces(&sheet.font_faces);
                 }
+                // Detect if any keyframes animate layout-affecting properties.
+                // Layout-affecting: width/height/padding/margin/border-width/border-radius
+                // /font-size/line-height/gap/flex-*/grid-*/top/left/right/bottom/position/display.
+                let layout_props = ["width", "height", "padding", "margin", "border", "font-size",
+                                    "line-height", "gap", "flex", "grid", "top", "left", "right",
+                                    "bottom", "position", "display", "min-width", "max-width",
+                                    "min-height", "max-height"];
+                self.animations_affect_layout = parsed.iter().any(|sheet| {
+                    sheet.keyframes.iter().any(|kf| {
+                        kf.frames.iter().any(|(_, decls)| {
+                            decls.iter().any(|d| {
+                                layout_props.iter().any(|p| d.property.starts_with(p))
+                            })
+                        })
+                    })
+                });
                 self.cached_stylesheets = Some(parsed);
                 self.cached_stylesheets_hash = css_hash;
                 self.cached_style_map = None;
                 self.cached_pseudo_map = None;
+                self.cached_layout_root = None;
             }
             let stylesheets = self.cached_stylesheets.as_ref().unwrap();
             let cascade_hash = {
@@ -2635,7 +2690,26 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
 
             let viewport_w = r.config.width as f32;
             let viewport_h = r.config.height as f32;
-            let mut layout_root = layout::layout_tree_with_pseudo(&document_root, &style_map, &pseudo_map, viewport_w, viewport_h);
+            // Layout cache: rebuild jen kdyz CSS/DOM/viewport zmenil nebo
+            // animations modifikuji layout-relevant props (width/height/margin/...).
+            let layout_cache_valid = self.cached_layout_root.is_some()
+                && !self.animations_affect_layout
+                && self.cached_layout_root.as_ref().map(|l| {
+                    (l.rect.width - viewport_w).abs() < 0.5 && (l.rect.height - viewport_h).abs() < 0.5
+                }).unwrap_or(false);
+            let mut layout_root = if layout_cache_valid {
+                self.cached_layout_root.as_ref().unwrap().clone()
+            } else {
+                let lr = layout::layout_tree_with_pseudo(&document_root, &style_map, &pseudo_map, viewport_w, viewport_h);
+                self.cached_layout_root = Some(lr.clone());
+                lr
+            };
+            // Post-pass: aplikuj animation values na cached layout boxes
+            // (transforms, opacity, colors, filter - paint-only props ktere se
+            // za zivota cache mohou menit kazdy frame).
+            if layout_cache_valid {
+                apply_paint_animations(&mut layout_root, &style_map);
+            }
             // Apply position: sticky pri current scroll
             layout::apply_sticky(&mut layout_root, self.scroll_y);
             // Viewport culling: vyrad off-screen elementy z paint walku
@@ -2798,6 +2872,8 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         cached_style_map: None,
         cached_pseudo_map: None,
         display_list_buffer: Vec::with_capacity(2048),
+        cached_layout_root: None,
+        animations_affect_layout: false,
         current_path: current_html_path,
         base_url,
         history: initial_url.into_iter().collect(),
