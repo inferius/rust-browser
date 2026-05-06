@@ -261,6 +261,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         }
         // Distribute leftover free space rovnomerne mezi auto cols (NE FitContent).
         // FitContent jiz ma fixed velikost dle arg.
+        // Minmax s finite max: clamp na max.
         if inner_w > 0.0 {
             let total_used: f32 = col_tracks.iter().sum::<f32>() + col_gap * (cols.saturating_sub(1) as f32);
             let leftover = inner_w - total_used;
@@ -272,7 +273,20 @@ pub fn layout_grid(bx: &mut LayoutBox) {
             }
             if leftover > 0.0 && !redistributable_cols.is_empty() {
                 let share = leftover / redistributable_cols.len() as f32;
-                for &c_idx in &redistributable_cols { col_tracks[c_idx] += share; }
+                for &c_idx in &redistributable_cols {
+                    let pre_redist = col_tracks[c_idx];
+                    col_tracks[c_idx] += share;
+                    // Pri Minmax s finite max: clamp na max(item_min, max_r).
+                    if let Some(Track::Minmax(_, max_v, false)) = col_token_kinds.get(c_idx) {
+                        let max_r = if max_v.is_nan() { f32::INFINITY }
+                                    else if *max_v < 0.0 { inner_w * (-max_v) }
+                                    else { *max_v };
+                        if max_r.is_finite() && col_tracks[c_idx] > max_r {
+                            // Pri item_min > max: zachova item_min (CSS spec - min wins).
+                            col_tracks[c_idx] = max_r.max(pre_redist);
+                        }
+                    }
+                }
             }
         }
     }
