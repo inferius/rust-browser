@@ -85,7 +85,13 @@ pub fn layout_flex(bx: &mut LayoutBox) {
     let pad_b = bx.padding_bottom.unwrap_or(bx.padding) + bw_b;
     let inner_x = bx.rect.x + pad_l + bx.margin;
     let inner_y = bx.rect.y + pad_t + bx.margin;
-    let inner_w = (bx.rect.width - pad_l - pad_r - 2.0 * bx.margin).max(0.0);
+    // Pri taffy_intrinsic_mode + rect.width=0 (pre-pass) pouzij min-width jako floor
+    // pro container width - jinak by se items wrapovaly do nul-sirky.
+    let bx_min_w = super::super::layout::parse_length(&bx.min_width_v);
+    let bx_min_h = super::super::layout::parse_length(&bx.min_height_v);
+    let effective_w = if bx.rect.width == 0.0 && bx_min_w > 0.0 { bx_min_w } else { bx.rect.width };
+    let effective_h = if bx.rect.height == 0.0 && bx_min_h > 0.0 { bx_min_h } else { bx.rect.height };
+    let inner_w = (effective_w - pad_l - pad_r - 2.0 * bx.margin).max(0.0);
 
     // Parse CSS props
     let direction = parse_flex_direction(&bx.flex_direction);
@@ -229,7 +235,21 @@ pub fn layout_flex(bx: &mut LayoutBox) {
     let mut items: Vec<FlexItem> = Vec::with_capacity(in_flow.len());
     for &i in &in_flow {
         let ch = &bx.children[i];
-        let mut est_w = ch.explicit_width.unwrap_or_else(|| {
+        // Pri intrinsic mode parenta (taffy_intrinsic_mode): percent-derived size = 0,
+        // child shrink-to-content. (CSS: percent na auto-size parent = indefinite).
+        let intrinsic_parent = bx.taffy_intrinsic_mode;
+        let pct_w_skip = intrinsic_parent && ch.width_pct.is_some();
+        let pct_h_skip = intrinsic_parent && ch.height_pct.is_some();
+        let mut est_w = if pct_w_skip {
+            // Pouzij intrinsic z rect.width nebo content
+            if let Some(t) = &ch.text {
+                if ch.taffy_mode {
+                    t.chars().filter(|c| !matches!(*c, '\u{200B}' | ' ' | '\n' | '\t')).count() as f32 * 10.0
+                } else {
+                    super::super::layout::measure_text_width(t, ch.font_size)
+                }
+            } else if ch.rect.width > 0.0 { ch.rect.width } else { 0.0 }
+        } else { ch.explicit_width.unwrap_or_else(|| {
             if let Some(t) = &ch.text {
                 if ch.taffy_mode {
                     // Taffy fixtures: 10px per visible char (excl. ZWS).
@@ -238,12 +258,16 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                     super::super::layout::measure_text_width(t, ch.font_size)
                 }
             } else if ch.rect.width > 0.0 { ch.rect.width } else { 0.0 }
-        });
-        let mut est_h = ch.explicit_height.unwrap_or_else(|| {
+        }) };
+        let mut est_h = if pct_h_skip {
             if ch.text.is_some() {
                 if ch.taffy_mode { 10.0 } else { ch.font_size * 1.4 }
             } else if ch.rect.height > 0.0 { ch.rect.height } else { 0.0 }
-        });
+        } else { ch.explicit_height.unwrap_or_else(|| {
+            if ch.text.is_some() {
+                if ch.taffy_mode { 10.0 } else { ch.font_size * 1.4 }
+            } else if ch.rect.height > 0.0 { ch.rect.height } else { 0.0 }
+        }) };
         // flex-basis override main size kdyz nastaveno (a neni "auto")
         let basis_v = ch.flex_basis.trim();
         if !basis_v.is_empty() && basis_v != "auto" && basis_v != "content" {
@@ -345,7 +369,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
     }
 
     // 2. Container main size
-    let inner_h = (bx.rect.height - pad_t - pad_b - 2.0 * bx.margin).max(0.0);
+    let inner_h = (effective_h - pad_t - pad_b - 2.0 * bx.margin).max(0.0);
     let container_main = if direction.is_row() { inner_w } else { inner_h };
 
     // Apply min/max width/height na items - ulozit pro resolve_flexible_lengths.
@@ -813,7 +837,15 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             let item_margins: f32 = items.iter().map(|it| it.margin_main_start + it.margin_main_end).sum();
             main_used_max + item_margins + pad_t + pad_b
         };
-        if bx.rect.height < needed {
+        // V intrinsic mode (pre-pass) override vzdy. V normal mode pri row
+        // direction (cross=height): rect.height = needed (= total_cross), aby
+        // wrap container po stretch na sirku spravne shrinkl na content height.
+        // Pri column direction expand jen.
+        if bx.taffy_intrinsic_mode {
+            bx.rect.height = needed;
+        } else if direction.is_row() {
+            bx.rect.height = needed;
+        } else if bx.rect.height < needed {
             bx.rect.height = needed;
         }
         // Apply max/min-height clamp na container kdyz auto.
