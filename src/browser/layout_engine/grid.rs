@@ -650,7 +650,9 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         Some(Track::Minmax(_, max, false)) if !max.is_finite() => true,
         _ => rows_explicit_str.is_empty(),
     }).collect();
-    let any_auto_row = rows_explicit_str.is_empty() || row_is_auto.iter().any(|&b| b);
+    // Implicit rows (= rows nad explicit count) jsou auto.
+    let explicit_row_count = if rows_explicit_str.is_empty() { 0 } else { parse_track_count(&rows_explicit_str) };
+    let any_auto_row = rows_explicit_str.is_empty() || row_is_auto.iter().any(|&b| b) || rows > explicit_row_count;
     if any_auto_row && !in_flow.is_empty() {
         // Pro radky bez template, dej max item explicit_height (uz jsme to delali). Ted jeste rect.height.
         let mut by_row: std::collections::HashMap<usize, f32> = std::collections::HashMap::new();
