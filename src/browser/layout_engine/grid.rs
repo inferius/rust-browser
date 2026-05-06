@@ -99,7 +99,9 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                     }
                 }
             }
-            if !row_has_explicit && any_explicit { h = 50.0; }
+            // Pri row bez explicit + jine rows maji explicit: 0 floor (auto-sizing
+            // dorovna z items). Drive 50 hardcoded - to bylo nesprapne pro aspect-ratio.
+            if !row_has_explicit && any_explicit { h = 0.0; }
             out.push(h);
         }
         out
