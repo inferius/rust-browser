@@ -252,7 +252,11 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         let intrinsic_parent = bx.taffy_intrinsic_mode;
         let pct_w_skip = intrinsic_parent && ch.width_pct.is_some();
         let pct_h_skip = intrinsic_parent && ch.height_pct.is_some();
-        let mut est_w = if pct_w_skip {
+        // Pri non-intrinsic mode + child width_pct + parent rect.width == 0 (indefinite):
+        // pouzij intrinsic ne pre-resolved explicit_width.
+        let pct_w_indefinite = !intrinsic_parent && ch.width_pct.is_some() && bx.rect.width == 0.0;
+        let pct_h_indefinite = !intrinsic_parent && ch.height_pct.is_some() && bx.rect.height == 0.0;
+        let mut est_w = if pct_w_skip || pct_w_indefinite {
             // Pouzij intrinsic z rect.width nebo content
             if let Some(t) = &ch.text {
                 if ch.taffy_mode {
@@ -271,7 +275,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                 }
             } else if ch.rect.width > 0.0 { ch.rect.width } else { 0.0 }
         }) };
-        let mut est_h = if pct_h_skip {
+        let mut est_h = if pct_h_skip || pct_h_indefinite {
             if ch.text.is_some() {
                 if ch.taffy_mode { 10.0 } else { ch.font_size * 1.4 }
             } else if ch.rect.height > 0.0 { ch.rect.height } else { 0.0 }
@@ -457,7 +461,13 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             ch.padding_top.unwrap_or(ch.padding) + ch.padding_bottom.unwrap_or(ch.padding)
                 + ch.border_top_width.unwrap_or(ch.border_width) + ch.border_bottom_width.unwrap_or(ch.border_width)
         };
-        let min_m_with_intrinsic = min_m.max(intrinsic_main).max(pb_main);
+        // Pri box-sizing=content-box: descendant_min + pb_main (auto-min vc. padding).
+        // Pri border-box: descendant_min (padding uz v explicit_width).
+        let min_m_with_intrinsic = if ch.box_sizing == "content-box" && descendant_min_main > 0.0 && pb_main > 0.0 && ch.explicit_width.is_some() && direction.is_row() {
+            min_m.max(intrinsic_main + pb_main)
+        } else {
+            min_m.max(intrinsic_main).max(pb_main)
+        };
         items[i].min_main = min_m_with_intrinsic;
         items[i].max_main = max_m;
         // Cross floor: pad+border + intrinsic.
