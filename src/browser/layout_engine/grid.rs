@@ -36,6 +36,10 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         inner_w * p
     } else { bx.column_gap };
 
+    // grid-auto-flow detect early.
+    let auto_flow_str = bx.grid_auto_flow.trim();
+    let column_flow = auto_flow_str.contains("column");
+    let dense_flow = auto_flow_str.contains("dense");
     // Parse + resolve column tracks
     let mut col_tracks = resolve_tracks(&bx.grid_template_columns, inner_w, col_gap);
     let (mut col_token_kinds, mut col_is_autofit) = parse_track_tokens_with_autofit(&bx.grid_template_columns, inner_w, col_gap);
@@ -61,20 +65,140 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         }
     }
     if col_prepend > 0 {
-        // Prepend implicit cols (size auto). grid-auto-columns cycle, default Auto.
+        // Prepend implicit cols (size auto). grid-auto-columns cycle reverze.
         let auto_col_resolved: Vec<f32> = if !bx.grid_auto_columns.is_empty() {
             resolve_tracks(&bx.grid_auto_columns, inner_w, col_gap)
         } else { Vec::new() };
+        let cycle_len = auto_col_resolved.len();
         for i in 0..col_prepend {
-            let h = if !auto_col_resolved.is_empty() {
-                auto_col_resolved[(col_prepend - 1 - i) % auto_col_resolved.len()]
-            } else { 0.0 };
+            let (h, kind) = if cycle_len > 0 {
+                let v = auto_col_resolved[(cycle_len + i + cycle_len - col_prepend) % cycle_len];
+                (v, Track::Fixed(v))
+            } else { (0.0, Track::Auto) };
             col_tracks.insert(0, h);
-            col_token_kinds.insert(0, Track::Auto);
+            col_token_kinds.insert(0, kind);
             col_is_autofit.insert(0, false);
         }
         cols_explicit += col_prepend;
     }
+    // Pri column-flow: extend col_tracks pro implicit cols po explicit (cycle z grid-auto-columns).
+    if column_flow {
+        let row_count = if bx.grid_template_rows.is_empty() { 1 } else { parse_track_count(&bx.grid_template_rows).max(1) };
+        // Simulace placement column-flow.
+        let cols_n = col_tracks.len().max(1);
+        let _ = cols_n;
+        let mut occupied: Vec<Vec<bool>> = Vec::new();
+        // occupied[col][row]. Resize as needed.
+        let mut needed_cols: usize = col_tracks.len();
+        // Pass 1: definite (skip - not relevant for col extension here)
+        // Use simulate placement column-major.
+        let mut cur_col = 0usize;
+        let mut cur_row = 0usize;
+        for ch in bx.children.iter() {
+            if super::is_out_of_flow(ch) || matches!(ch.display, super::super::layout::Display::None) { continue; }
+            let exp_col = if ch.grid_column_start > 0 { Some(((ch.grid_column_start - 1) as usize) + col_prepend) }
+                          else if ch.grid_column_start < 0 { let k = (-ch.grid_column_start) as usize; let total_lines = col_tracks.len() + 1; if k <= total_lines { Some(total_lines - k) } else { Some(0) } }
+                          else { None };
+            let exp_row = if ch.grid_row_start > 0 { Some((ch.grid_row_start - 1) as usize) } else { None };
+            let span_col = if ch.grid_column_span > 0 { ch.grid_column_span as usize }
+                           else if ch.grid_column_end > 0 && ch.grid_column_start > 0 { (ch.grid_column_end - ch.grid_column_start).max(1) as usize }
+                           else { 1 };
+            let span_row = if ch.grid_row_span > 0 { ch.grid_row_span as usize }
+                           else if ch.grid_row_end > 0 && ch.grid_row_start > 0 { (ch.grid_row_end - ch.grid_row_start).max(1) as usize }
+                           else { 1 };
+            let (col_p, row_p) = match (exp_col, exp_row) {
+                (Some(c), Some(r)) => (c, r),
+                (Some(c), None) => {
+                    // Column-flow + col definite: row auto. First free row in col.
+                    let mut r = 0;
+                    while {
+                        while occupied.len() <= c + span_col { occupied.push(Vec::new()); }
+                        let mut blocked = false;
+                        for dc in 0..span_col {
+                            while occupied[c + dc].len() <= r + span_row { occupied[c + dc].push(false); }
+                            for dr in 0..span_row {
+                                if occupied[c + dc][r + dr] { blocked = true; break; }
+                            }
+                            if blocked { break; }
+                        }
+                        blocked
+                    } { r += 1; if r > 1000 { break; } }
+                    (c, r)
+                }
+                (None, Some(r)) => {
+                    // Column-flow + row definite: find first col with row free.
+                    let mut c = cur_col;
+                    while {
+                        while occupied.len() <= c + span_col { occupied.push(Vec::new()); }
+                        let mut blocked = false;
+                        for dc in 0..span_col {
+                            while occupied[c + dc].len() <= r + span_row { occupied[c + dc].push(false); }
+                            for dr in 0..span_row {
+                                if occupied[c + dc][r + dr] { blocked = true; break; }
+                            }
+                            if blocked { break; }
+                        }
+                        blocked
+                    } { c += 1; if c > 1000 { break; } }
+                    (c, r)
+                }
+                (None, None) => {
+                    // Auto - column-major: advance row first, then col.
+                    let mut c = cur_col;
+                    let mut r = cur_row;
+                    loop {
+                        if r + span_row > row_count {
+                            r = 0;
+                            c += 1;
+                            continue;
+                        }
+                        while occupied.len() <= c + span_col { occupied.push(Vec::new()); }
+                        let mut blocked = false;
+                        for dc in 0..span_col {
+                            while occupied[c + dc].len() <= r + span_row { occupied[c + dc].push(false); }
+                            for dr in 0..span_row {
+                                if occupied[c + dc][r + dr] { blocked = true; break; }
+                            }
+                            if blocked { break; }
+                        }
+                        if !blocked { break; }
+                        r += 1;
+                    }
+                    cur_col = c;
+                    cur_row = r + span_row;
+                    if cur_row >= row_count { cur_col = c + 1; cur_row = 0; }
+                    (c, r)
+                }
+            };
+            // Mark
+            for dc in 0..span_col {
+                while occupied.len() <= col_p + dc { occupied.push(Vec::new()); }
+                while occupied[col_p + dc].len() <= row_p + span_row { occupied[col_p + dc].push(false); }
+                for dr in 0..span_row {
+                    occupied[col_p + dc][row_p + dr] = true;
+                }
+            }
+            if col_p + span_col > needed_cols { needed_cols = col_p + span_col; }
+        }
+        // Extend col_tracks pomoci grid-auto-columns cycle.
+        if needed_cols > col_tracks.len() {
+            let auto_col_resolved: Vec<f32> = if !bx.grid_auto_columns.is_empty() {
+                resolve_tracks(&bx.grid_auto_columns, inner_w, col_gap)
+            } else { Vec::new() };
+            let cycle_len = auto_col_resolved.len();
+            while col_tracks.len() < needed_cols {
+                let i = col_tracks.len() - cols_explicit;
+                let (h, kind) = if cycle_len > 0 {
+                    let v = auto_col_resolved[i % cycle_len];
+                    (v, Track::Fixed(v))
+                } else { (0.0, Track::Auto) };
+                col_tracks.push(h);
+                col_token_kinds.push(kind);
+                col_is_autofit.push(false);
+            }
+        }
+    }
+    let _ = (column_flow, dense_flow);
     let cols = col_tracks.len();
     // Helper: resolve grid-column-start s prepend offsetem.
     let resolve_col_start = |start: i32| -> Option<usize> {
@@ -104,6 +228,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         _ => false,
     }).collect();
 
+    let _ = (column_flow, dense_flow);
     // In-flow item count (abs/fixed/display:none vyradit pri vypoctu rows).
     let in_flow_count = bx.children.iter()
         .filter(|c| !super::is_out_of_flow(c) && !matches!(c.display, super::super::layout::Display::None))
@@ -138,7 +263,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         for child in bx.children.iter() {
             if super::is_out_of_flow(child) || matches!(child.display, super::super::layout::Display::None) { continue; }
             let exp_col = if child.grid_column_start > 0 { Some(((child.grid_column_start - 1) as usize) + col_prepend) }
-                          else if child.grid_column_start < 0 { let k = (-child.grid_column_start) as usize; if k <= cols + 1 { Some(cols + 1 - k) } else { Some(0) } }
+                          else if child.grid_column_start < 0 { let k = (-child.grid_column_start) as usize; if k <= cols_explicit + 1 { Some(cols_explicit + 1 - k) } else { Some(0) } }
                           else { None };
             let exp_row = if child.grid_row_start > 0 { Some(((child.grid_row_start - 1) as usize) + row_prepend) }
                           else if child.grid_row_start < 0 { let k = (-child.grid_row_start) as usize; let total_explicit_lines = row_count_explicit + row_prepend + 1; if k <= total_explicit_lines { Some(total_explicit_lines - k) } else { Some(0) } }
@@ -349,7 +474,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         for &real_idx in in_flow.iter() {
             let child = &bx.children[real_idx];
             let explicit_col = if child.grid_column_start > 0 { Some(((child.grid_column_start - 1) as usize) + col_prepend) }
-                              else if child.grid_column_start < 0 { let k = (-child.grid_column_start) as usize; if k <= cols + 1 { Some(cols + 1 - k) } else { Some(0) } }
+                              else if child.grid_column_start < 0 { let k = (-child.grid_column_start) as usize; if k <= cols_explicit + 1 { Some(cols_explicit + 1 - k) } else { Some(0) } }
                               else { None };
             let explicit_row = if child.grid_row_start > 0 { Some(((child.grid_row_start - 1) as usize) + row_prepend) }
                               else if child.grid_row_start < 0 { let k = (-child.grid_row_start) as usize; let total_explicit_lines = row_count_explicit + row_prepend + 1; if k <= total_explicit_lines { Some(total_explicit_lines - k) } else { Some(0) } }
@@ -613,7 +738,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
             for &real_idx in in_flow.iter() {
                 let child = &bx.children[real_idx];
                 let explicit_col = if child.grid_column_start > 0 { Some(((child.grid_column_start - 1) as usize) + col_prepend) }
-                              else if child.grid_column_start < 0 { let k = (-child.grid_column_start) as usize; if k <= cols + 1 { Some(cols + 1 - k) } else { Some(0) } }
+                              else if child.grid_column_start < 0 { let k = (-child.grid_column_start) as usize; if k <= cols_explicit + 1 { Some(cols_explicit + 1 - k) } else { Some(0) } }
                               else { None };
                 let explicit_row = if child.grid_row_start > 0 { Some(((child.grid_row_start - 1) as usize) + row_prepend) }
                               else if child.grid_row_start < 0 { let k = (-child.grid_row_start) as usize; let total_explicit_lines = row_count_explicit + row_prepend + 1; if k <= total_explicit_lines { Some(total_explicit_lines - k) } else { Some(0) } }
@@ -767,7 +892,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         for &real_idx in in_flow.iter() {
             let child = &bx.children[real_idx];
             let explicit_col = if child.grid_column_start > 0 { Some(((child.grid_column_start - 1) as usize) + col_prepend) }
-                              else if child.grid_column_start < 0 { let k = (-child.grid_column_start) as usize; if k <= cols + 1 { Some(cols + 1 - k) } else { Some(0) } }
+                              else if child.grid_column_start < 0 { let k = (-child.grid_column_start) as usize; if k <= cols_explicit + 1 { Some(cols_explicit + 1 - k) } else { Some(0) } }
                               else { None };
             let explicit_row = if child.grid_row_start > 0 { Some(((child.grid_row_start - 1) as usize) + row_prepend) }
                               else if child.grid_row_start < 0 { let k = (-child.grid_row_start) as usize; let total_explicit_lines = row_count_explicit + row_prepend + 1; if k <= total_explicit_lines { Some(total_explicit_lines - k) } else { Some(0) } }
@@ -827,7 +952,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         for &real_idx in in_flow.iter() {
             let child = &bx.children[real_idx];
             let explicit_col = if child.grid_column_start > 0 { Some(((child.grid_column_start - 1) as usize) + col_prepend) }
-                              else if child.grid_column_start < 0 { let k = (-child.grid_column_start) as usize; if k <= cols + 1 { Some(cols + 1 - k) } else { Some(0) } }
+                              else if child.grid_column_start < 0 { let k = (-child.grid_column_start) as usize; if k <= cols_explicit + 1 { Some(cols_explicit + 1 - k) } else { Some(0) } }
                               else { None };
             let explicit_row = if child.grid_row_start > 0 { Some(((child.grid_row_start - 1) as usize) + row_prepend) }
                               else if child.grid_row_start < 0 { let k = (-child.grid_row_start) as usize; let total_explicit_lines = row_count_explicit + row_prepend + 1; if k <= total_explicit_lines { Some(total_explicit_lines - k) } else { Some(0) } }
@@ -885,7 +1010,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         for &real_idx in in_flow.iter() {
             let child = &bx.children[real_idx];
             let explicit_col = if child.grid_column_start > 0 { Some(((child.grid_column_start - 1) as usize) + col_prepend) }
-                              else if child.grid_column_start < 0 { let k = (-child.grid_column_start) as usize; if k <= cols + 1 { Some(cols + 1 - k) } else { Some(0) } }
+                              else if child.grid_column_start < 0 { let k = (-child.grid_column_start) as usize; if k <= cols_explicit + 1 { Some(cols_explicit + 1 - k) } else { Some(0) } }
                               else { None };
             let explicit_row = if child.grid_row_start > 0 { Some(((child.grid_row_start - 1) as usize) + row_prepend) }
                               else if child.grid_row_start < 0 { let k = (-child.grid_row_start) as usize; let total_explicit_lines = row_count_explicit + row_prepend + 1; if k <= total_explicit_lines { Some(total_explicit_lines - k) } else { Some(0) } }
@@ -988,7 +1113,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
     }
     let resolve_col = |start: i32| -> Option<usize> {
         if start > 0 { Some(((start - 1) as usize) + col_prepend) }
-        else if start < 0 { let k = (-start) as usize; if k <= cols + 1 { Some(cols + 1 - k) } else { Some(0) } }
+        else if start < 0 { let k = (-start) as usize; if k <= cols_explicit + 1 { Some(cols_explicit + 1 - k) } else { Some(0) } }
         else { None }
     };
     let mark_occupied = |occupied: &mut Vec<bool>, row: usize, col: usize, span_row: usize, span_col: usize| {
@@ -1066,8 +1191,33 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                 if rr > rows + 100 { break; }
             }
             (rr, col)
+        } else if column_flow {
+            // Column-flow auto: advance row-first, then col.
+            let mut idx = auto_cursor;
+            let result;
+            loop {
+                let cc = idx / rows.max(1);
+                let rr = idx % rows.max(1);
+                if rr + span_row > rows { idx = (cc + 1) * rows.max(1); continue; }
+                let mut blocked = false;
+                for dr in 0..span_row {
+                    for dc in 0..span_col {
+                        let i = (rr + dr) * cols + (cc + dc);
+                        if i < occupied.len() && occupied[i] { blocked = true; break; }
+                    }
+                    if blocked { break; }
+                }
+                if !blocked {
+                    auto_cursor = idx + 1;
+                    result = (rr, cc);
+                    break;
+                }
+                idx += 1;
+                if idx > occupied.len() + 100 { result = (0, 0); break; }
+            }
+            result
         } else {
-            // Auto: posun cursorem.
+            // Auto: posun cursorem (row-major).
             let mut idx = auto_cursor;
             let result;
             loop {
