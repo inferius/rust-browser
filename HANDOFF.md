@@ -13,10 +13,16 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 - **Compliance harness** v src/browser/layout_engine/taffy_compliance.rs:
   - XML parser + LayoutBox converter + run_directory + compare_layout
   - 4 testy spousteji vsechny fixtury, vypocitavaji pass-rate
-  - **Aktualni pass-rate: 1710/1988 (86.0%)**
+  - **Aktualni pass-rate: 1732/1988 (87.1%)**
     * BLOCK:  345/392 (88.0%)
-    * GRID:   369/512 (72.1%)
-    * FLEX:   996/1084 (91.9%)
+    * GRID:   389/512 (76.0%)
+    * FLEX:   998/1084 (92.1%)
+  - Iter 156-160 wins:
+    * Pre-pass set rect to explicit + intrinsic_mode flag
+    * grid no-template col -> auto track sizing (+2)
+    * specified min applied pred wrap (incl. explicit basis) (+2)
+    * grid baseline alignment per-row (+2)
+    * grid stretch rows pri baseline + definite height (+16!)
   - Iter 148-155 wins:
     * Text intrinsic height v block layout (+2)
     * Aspect-ratio + text: max-h/w wins (+4)
