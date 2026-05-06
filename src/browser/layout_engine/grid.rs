@@ -463,8 +463,15 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                         item.explicit_width.unwrap_or(item.rect.width).max(text_min)
                     };
                     let item_min = item_min_base.max(pb_l + pb_r).max(cw_min_p);
+                    // Margins (jen NON-percent, fixed) prispivaji do track contribution.
+                    let has_pct_margin = item.margin_left_pct.is_some() || item.margin_right_pct.is_some();
+                    let m_l_g = if has_pct_margin { 0.0 } else { item.margin_left.unwrap_or(item.margin) };
+                    let m_r_g = if has_pct_margin { 0.0 } else { item.margin_right.unwrap_or(item.margin) };
+                    let item_min_with_m = if cw_min_p > 0.0 || item.explicit_width.is_some() {
+                        item_min + m_l_g + m_r_g
+                    } else { item_min };
                     if item_max > max_content { max_content = item_max; }
-                    if item_min > min_content { min_content = item_min; }
+                    if item_min_with_m > min_content { min_content = item_min_with_m; }
                 }
             }
             // Pri FitContent: clamp(min-content, max(min-content, arg), max-content).
