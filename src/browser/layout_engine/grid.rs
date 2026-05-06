@@ -46,6 +46,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         Some(Track::FitContent(_)) => true,
         Some(Track::Minmax(_, max, false)) if !max.is_finite() => true,
         Some(Track::Minmax(min, _, false)) if min.is_nan() => true,
+        Some(Track::Minmax(min, _, false)) if (*min - (-1000.0)).abs() < 0.5 => true,
         // Fallback (no template): treat jako auto.
         None => bx.grid_template_columns.is_empty(),
         _ => false,
@@ -257,10 +258,15 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                 }
             }
             // Pri FitContent: clamp(min-content, max(min-content, arg), max-content).
-            // Pri Auto: pouzij min-content (puvodni chovani - explicit width nebo min-content).
+            // Pri Auto: pouzij min-content.
+            // Pri Minmax(max-content, ...) NaN sentinel: pouzij max_content jako base.
             let track_size = if let Some(Track::FitContent(arg)) = col_token_kinds.get(c_idx) {
                 let arg_resolved = if *arg < 0.0 { inner_w * (-arg) } else { *arg };
                 max_content.min(arg_resolved.max(min_content))
+            } else if let Some(Track::Minmax(min, _, false)) = col_token_kinds.get(c_idx) {
+                if min.is_nan() { max_content }
+                else if (*min - (-1000.0)).abs() < 0.5 { min_content }
+                else { min_content }
             } else {
                 min_content
             };
@@ -286,7 +292,8 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                     // Pri Minmax s finite max: clamp na max(item_min, max_r).
                     if let Some(Track::Minmax(_, max_v, false)) = col_token_kinds.get(c_idx) {
                         let max_r = if max_v.is_nan() { f32::INFINITY }
-                                    else if *max_v < 0.0 { inner_w * (-max_v) }
+                                    else if (*max_v - (-1000.0)).abs() < 0.5 { f32::INFINITY }
+                                    else if *max_v < 0.0 && *max_v > -2.0 { inner_w * (-max_v) }
                                     else { *max_v };
                         if max_r.is_finite() && col_tracks[c_idx] > max_r {
                             // Pri item_min > max: zachova item_min (CSS spec - min wins).
@@ -415,9 +422,13 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                         if is_fr_track[c_idx] { continue; }
                         if let Some(Track::Minmax(min_v, max_v, false)) = col_token_kinds.get(c_idx) {
                             if max_v.is_finite() && !max_v.is_nan() {
-                                let max_r = if *max_v < 0.0 { inner_w * (-max_v) } else { *max_v };
+                                // -1000 = min-content sentinel
+                                let is_min_content = (*max_v - (-1000.0)).abs() < 0.5;
+                                if is_min_content { continue; }
+                                let max_r = if *max_v < 0.0 && *max_v > -2.0 { inner_w * (-max_v) } else { *max_v };
                                 let min_r = if min_v.is_nan() { col_tracks[c_idx] }
-                                            else if *min_v < 0.0 { inner_w * (-min_v) }
+                                            else if (*min_v - (-1000.0)).abs() < 0.5 { col_tracks[c_idx] }
+                                            else if *min_v < 0.0 && *min_v > -2.0 { inner_w * (-min_v) }
                                             else { *min_v };
                                 let grow_room = (max_r - col_tracks[c_idx].max(min_r)).max(0.0);
                                 let grow = grow_room.min(available_for_fr);
@@ -859,14 +870,18 @@ pub fn layout_grid(bx: &mut LayoutBox) {
             let als_str = item.align_self.clone();
             let item_align = if als_str.is_empty() || als_str == "auto" { parent_align_str.clone() } else { als_str };
             let m_t = item.margin_top.unwrap_or(item.margin);
+            // Preserve relative offset (top/bottom).
+            let off_y = if let Some(t) = item.offset_top { t }
+                        else if let Some(b) = item.offset_bottom { -b }
+                        else { 0.0 };
             if item_align == "baseline" {
                 let own_above = item_above.get(&real_idx).copied().unwrap_or(0.0);
                 let row_above = row_max_above.get(&row).copied().unwrap_or(0.0);
                 let offset = row_above - own_above;
-                item.rect.y = bx.rect.y + bw_t + new_cy + m_t + offset;
+                item.rect.y = bx.rect.y + pad_t + new_cy + m_t + offset + off_y;
             } else {
                 // Non-baseline item zachova start position v ramci nove row.
-                item.rect.y = bx.rect.y + bw_t + new_cy + m_t;
+                item.rect.y = bx.rect.y + pad_t + new_cy + m_t + off_y;
             }
         }
         // Update container height pri auto.
@@ -1029,7 +1044,8 @@ pub fn resolve_tracks(s: &str, container_size: f32, gap: f32) -> Vec<f32> {
             Track::FitContent(_) => auto_count += 1,
             Track::Minmax(min, max, is_fr) => {
                 let min_resolved = if min.is_nan() { 0.0 }
-                                   else if *min < 0.0 { container_size * (-min) }
+                                   else if (*min - (-1000.0)).abs() < 0.5 { 0.0 }
+                                   else if *min < 0.0 && *min > -2.0 { container_size * (-min) }
                                    else { *min };
                 if *is_fr {
                     fixed_total += min_resolved;
@@ -1057,10 +1073,12 @@ pub fn resolve_tracks(s: &str, container_size: f32, gap: f32) -> Vec<f32> {
         Track::FitContent(_) => auto_base,
         Track::Minmax(min, max, is_fr) => {
             let min_r = if min.is_nan() { 0.0 }
-                        else if *min < 0.0 { container_size * (-min) }
+                        else if (*min - (-1000.0)).abs() < 0.5 { 0.0 }
+                        else if *min < 0.0 && *min > -2.0 { container_size * (-min) }
                         else { *min };
             let max_r = if max.is_nan() { f32::INFINITY }
-                        else if *max < 0.0 { container_size * (-max) }
+                        else if (*max - (-1000.0)).abs() < 0.5 { f32::INFINITY }
+                        else if *max < 0.0 && *max > -2.0 { container_size * (-max) }
                         else { *max };
             if *is_fr {
                 let v = min_r + fr_base * max;
@@ -1331,8 +1349,11 @@ fn parse_single_track(s: &str) -> Track {
             //   0.0 = auto
             let parse_part = |p: &str| -> f32 {
                 if p == "auto" { return 0.0; }
-                // Pro min/max-content vratime f32::NAN; auto_track_sizing to resolve.
-                if p == "max-content" || p == "min-content" { return f32::NAN; }
+                // Sentinely:
+                //   f32::NAN = max-content
+                //   -1000.0 = min-content (mimo percent rozsah -0..-1)
+                if p == "max-content" { return f32::NAN; }
+                if p == "min-content" { return -1000.0; }
                 if let Some(num) = p.strip_suffix('%') {
                     let v: f32 = num.trim().parse().unwrap_or(0.0);
                     return -(v / 100.0); // sentinel
