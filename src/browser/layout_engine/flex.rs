@@ -438,9 +438,15 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             max_dc_w
         } else { 0.0 };
         // CSS Flex L1 §4.5: pri overflow != visible v main axis je auto-min-content = 0.
+        // Pri flex-basis = 0 (definite) + min-height set: auto-min jen padding+min-h, ne content.
         let main_overflow = if direction.is_row() { ch.overflow_x.as_str() } else { ch.overflow_y.as_str() };
         let main_overflow_blocks = matches!(main_overflow, "hidden" | "scroll" | "auto" | "clip");
+        let basis_v_check = ch.flex_basis.trim();
+        let basis_zero = basis_v_check == "0" || basis_v_check == "0px";
+        let main_min_v = if direction.is_row() { ch.min_width_v.as_str() } else { ch.min_height_v.as_str() };
+        let has_main_min = !main_min_v.is_empty();
         let intrinsic_main = if main_overflow_blocks { 0.0 }
+                            else if basis_zero && has_main_min { 0.0 }
                             else if ch.explicit_width.is_some() && direction.is_row() { descendant_min_main }
                             else if ch.explicit_height.is_some() && !direction.is_row() { 0.0 }
                             else if direction.is_row() { ch.rect.width.max(text_min_content).max(descendant_min_main) } else { ch.rect.height.max(text_min_content) };
@@ -1075,7 +1081,13 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             if !cross_overflow { bx.rect.height = needed; }
             else if bx.rect.height < needed { /* keep */ }
         } else if bx.rect.height < needed && !main_overflow_blocks_self {
-            bx.rect.height = needed;
+            // Pri rect.height >= min-height (parent uz set spravnou hodnotu), neexpanduj.
+            let mnh_self = super::super::layout::parse_length(&bx.min_height_v);
+            if mnh_self > 0.0 && bx.rect.height >= mnh_self {
+                // Keep rect.height (parent sized respecting min-height).
+            } else {
+                bx.rect.height = needed;
+            }
         }
         // Apply max/min-height clamp na container kdyz auto.
         if !bx.max_height_v.is_empty() {
