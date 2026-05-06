@@ -18,6 +18,56 @@ use parser::Parser;
 use interpreter::Interpreter;
 use tokens::TokenKind;
 
+/// Resolve @import statements v CSS. Pro kazdy `@import "url";` nebo `@import url("url");`
+/// fetchne externi CSS proti `base_url` a pripoji obsah pred toto pravidlo.
+/// Recursivni - nested @imports v fetched CSS se taky resolvuji (max depth 5).
+fn resolve_css_imports(css: &str, base_url: &str, depth: u32) -> String {
+    if depth > 5 { return css.to_string(); }
+    let mut out = String::with_capacity(css.len());
+    let mut bytes = css.bytes().peekable();
+    let mut buf = String::new();
+    while let Some(b) = bytes.next() {
+        buf.push(b as char);
+        if buf.ends_with("@import") {
+            // Skip @import.
+            buf.truncate(buf.len() - 7);
+            out.push_str(&buf);
+            buf.clear();
+            // Read until ';' (end of @import).
+            let mut rest = String::new();
+            while let Some(b) = bytes.next() {
+                if b == b';' { break; }
+                rest.push(b as char);
+            }
+            // Extract URL from rest. Forms: "url" / 'url' / url("url") / url("url") layer(name) media...
+            let trimmed = rest.trim();
+            let url_part = if let Some(stripped) = trimmed.strip_prefix("url(") {
+                if let Some(end) = stripped.find(')') {
+                    stripped[..end].trim().trim_matches('"').trim_matches('\'').to_string()
+                } else { String::new() }
+            } else if trimmed.starts_with('"') || trimmed.starts_with('\'') {
+                let q = &trimmed[..1];
+                let after = &trimmed[1..];
+                if let Some(end) = after.find(q) {
+                    after[..end].to_string()
+                } else { String::new() }
+            } else { String::new() };
+            if !url_part.is_empty() {
+                let resolved = browser::render::resolve_url(base_url, &url_part);
+                println!("[fetch @import] {resolved}");
+                if let Some(c) = browser::render::fetch_text_url(&resolved) {
+                    let nested = resolve_css_imports(&c, &resolved, depth + 1);
+                    out.push('\n');
+                    out.push_str(&nested);
+                }
+            }
+            // Pokracujem dalsim CSS.
+        }
+    }
+    out.push_str(&buf);
+    out
+}
+
 /// Extract <link rel="stylesheet" href="..."> hrefs z HTML.
 fn extract_stylesheet_hrefs(html: &str) -> Vec<String> {
     let document = browser::html_parser::parse_html(html, "about:blank");
@@ -162,14 +212,15 @@ console.log(greeting, result);
                 let resolved = browser::render::resolve_url(&target, &href);
                 println!("[fetch css] {resolved}");
                 if let Some(c) = browser::render::fetch_text_url(&resolved) {
+                    let imported = resolve_css_imports(&c, &resolved, 0);
                     css_combined.push('\n');
-                    css_combined.push_str(&c);
+                    css_combined.push_str(&imported);
                 }
             }
-            // <style> inline blocks taky pridat.
+            // <style> inline blocks taky pridat (s @import resolution).
             for inline in extract_inline_styles(&html) {
                 css_combined.push('\n');
-                css_combined.push_str(&inline);
+                css_combined.push_str(&resolve_css_imports(&inline, &target, 0));
             }
             (html, css_combined, Some(target.clone()), None)
         } else {
