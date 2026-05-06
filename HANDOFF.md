@@ -13,10 +13,27 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 - **Compliance harness** v src/browser/layout_engine/taffy_compliance.rs:
   - XML parser + LayoutBox converter + run_directory + compare_layout
   - 4 testy spousteji vsechny fixtury, vypocitavaji pass-rate
-  - **Aktualni pass-rate: 1838/1988 (92.5%)**
-    * BLOCK:  349/392 (89.0%)
-    * GRID:   459/512 (89.6%)
-    * FLEX:   1030/1084 (95.0%)
+  - **Aktualni pass-rate: 1940/1988 (97.6%)**
+    * BLOCK:  385/392 (98.2%)
+    * GRID:   491/512 (95.9%)
+    * FLEX:   1064/1084 (98.2%)
+  - Iter 195-207 wins:
+    * Grid auto-flow=column (column-major auto cursor + col extension)
+    * Grid item h pri auto margin: intrinsic
+    * Grid min-content track: pricti fixed margins
+    * Stop skipping overflow tests
+    * overflow-x/y + scrollbar-width parsing
+    * Scrollbar takes space in flex/grid/block inner area
+    * Flex container_cross subtract scrollbar_h
+    * Block content height: pricti scrollbar
+    * Abs item containing block subtract scrollbar
+    * Block BFC blocks margin collapse with descendants
+    * Block scrollbar takes space in auto-height
+    * Flex item overflow!=visible -> auto-min-content=0
+    * Flex container overflow!=visible: neexpanduje na content
+    * Grid auto-track sizing item_min: overflow!=visible -> 0
+    * Grid span item overflow hidden: item_min=0
+    * Block BFC blocks empty-passthrough collapse
   - Iter 191-194 wins:
     * Grid placement negative: implicit cols PRED explicit (col_prepend)
     * Grid placement multi-pass per CSS Grid §8.5
