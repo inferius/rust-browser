@@ -271,7 +271,14 @@ mod tests {
                 "flex-grow" => bx.flex_grow = v.parse().unwrap_or(0.0),
                 "flex-shrink" => bx.flex_shrink = v.parse().unwrap_or(1.0),
                 "flex-basis" => bx.flex_basis = v.clone(),
-                "row-gap" => bx.row_gap = parse_dim(v, container_h).unwrap_or(0.0),
+                "row-gap" => {
+                    // CSS spec: percent row-gap pri indefinite (no explicit) parent height = 0.
+                    if v.trim().ends_with('%') && bx.explicit_height.is_none() {
+                        bx.row_gap = 0.0;
+                    } else {
+                        bx.row_gap = parse_dim(v, container_h).unwrap_or(0.0);
+                    }
+                }
                 "column-gap" => bx.column_gap = parse_dim(v, container_w).unwrap_or(0.0),
                 "gap" => {
                     let g = parse_dim(v, container_w).unwrap_or(0.0);
