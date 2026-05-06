@@ -13,10 +13,18 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 - **Compliance harness** v src/browser/layout_engine/taffy_compliance.rs:
   - XML parser + LayoutBox converter + run_directory + compare_layout
   - 4 testy spousteji vsechny fixtury, vypocitavaji pass-rate
-  - **Aktualni pass-rate: 1826/1988 (91.9%)**
+  - **Aktualni pass-rate: 1838/1988 (92.5%)**
     * BLOCK:  349/392 (89.0%)
-    * GRID:   447/512 (87.3%)
+    * GRID:   459/512 (89.6%)
     * FLEX:   1030/1084 (95.0%)
+  - Iter 191-194 wins:
+    * Grid placement negative: implicit cols PRED explicit (col_prepend)
+    * Grid placement multi-pass per CSS Grid §8.5
+    * Grid row prepend pro negative grid-row-start
+    * Grid impl-before rows cycle order (reverze pres formula)
+    * Grid item h pri auto margin: intrinsic (ne stretch)
+    * Grid min-content track: pricti fixed margins (ne percent)
+    Total +12 grid (447 -> 459), 1826 -> 1838
   - Iter 186-190 wins:
     * Track::MaxContent + MinContent variants v parse (rozliseni keywordu)
     * Span items distribute extra space (CSS §11.5.5):
