@@ -429,12 +429,19 @@ pub fn layout_grid(bx: &mut LayoutBox) {
             }
             let cur_sum2: f32 = span_indices.iter().map(|&c| col_tracks[c]).sum::<f32>() + total_gap_s;
             if cur_sum2 < item_max {
-                let max_recipients: Vec<usize> = span_indices.iter().copied().filter(|&c| matches!(col_token_kinds.get(c),
-                    Some(Track::MaxContent) | Some(Track::FitContent(_)))).collect();
-                let recipients = if !max_recipients.is_empty() {
-                    max_recipients
+                // Priority tiers (CSS §11.5.5):
+                //  1. MaxContent tracks (highest priority)
+                //  2. FitContent tracks (capped by arg)
+                //  3. Auto tracks (only kdyz tier 1+2 prazdne)
+                let tier1: Vec<usize> = span_indices.iter().copied().filter(|&c| matches!(col_token_kinds.get(c), Some(Track::MaxContent))).collect();
+                let tier2: Vec<usize> = span_indices.iter().copied().filter(|&c| matches!(col_token_kinds.get(c), Some(Track::FitContent(_)))).collect();
+                let tier3: Vec<usize> = span_indices.iter().copied().filter(|&c| matches!(col_token_kinds.get(c), Some(Track::Auto))).collect();
+                let recipients = if !tier1.is_empty() {
+                    tier1
+                } else if !tier2.is_empty() {
+                    tier2
                 } else {
-                    span_indices.iter().copied().filter(|&c| matches!(col_token_kinds.get(c), Some(Track::Auto))).collect()
+                    tier3
                 };
                 if !recipients.is_empty() {
                     let deficit = item_max - cur_sum2;
@@ -443,7 +450,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                         let cap = if let Some(Track::FitContent(arg)) = col_token_kinds.get(c) {
                             if *arg < 0.0 { inner_w * (-arg) } else { *arg }
                         } else { f32::INFINITY };
-                        col_tracks[c] = (col_tracks[c] + share).min(cap);
+                        col_tracks[c] = (col_tracks[c] + share).min(cap.max(col_tracks[c]));
                     }
                 }
             }
