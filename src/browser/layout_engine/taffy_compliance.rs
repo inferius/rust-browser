@@ -533,6 +533,7 @@ mod tests {
         fail: usize,
         skip: usize,
         failed_examples: Vec<(String, String)>,
+        skipped_examples: Vec<String>,
     }
     fn describe_diff(actual: &LayoutBox, expected: &ExpectedNode) -> String {
         let mut s = format!("root: actual {:.0}x{:.0} vs expected {:.0}x{:.0}, ch={}/{}",
@@ -565,11 +566,11 @@ mod tests {
             stats.total += 1;
             let content = match fs::read_to_string(&path) {
                 Ok(c) => c,
-                Err(_) => { stats.skip += 1; continue; }
+                Err(_) => { stats.skip += 1; stats.skipped_examples.push(fname.clone()); continue; }
             };
             let fixture = match parse_xml(&content) {
                 Some(f) if f.input_root.is_some() && f.expected_root.is_some() => f,
-                _ => { stats.skip += 1; continue; }
+                _ => { stats.skip += 1; stats.skipped_examples.push(fname.clone()); continue; }
             };
             let exp = fixture.expected_root.unwrap();
             let input_root = fixture.input_root.as_ref().unwrap();
@@ -591,7 +592,7 @@ mod tests {
             }
             let mut input_box = match convert_to_layout(input_root, exp.width, exp.height, effective_root_default) {
                 Some(b) => b,
-                None => { stats.skip += 1; continue; }
+                None => { stats.skip += 1; stats.skipped_examples.push(fname.clone()); continue; }
             };
             input_box.rect.x = 0.0;
             input_box.rect.y = 0.0;
@@ -604,7 +605,12 @@ mod tests {
                     // Block - jednoduchy stack vertikalne s explicit sizes
                     block_layout_simple(&mut input_box);
                 }
-                _ => { stats.skip += 1; continue; }
+                Display::None => {
+                    // display:none root - 0x0 size, no children laid out.
+                    input_box.rect.width = 0.0;
+                    input_box.rect.height = 0.0;
+                }
+                _ => { stats.skip += 1; stats.skipped_examples.push(fname.clone()); continue; }
             }
             if compare_layout(&input_box, &exp) {
                 stats.pass += 1;
@@ -1013,6 +1019,9 @@ mod tests {
         for (n, d) in stats.failed_examples.iter().take(200) {
             println!("  FAIL {}: {}", n, d);
         }
+        for n in stats.skipped_examples.iter().take(50) {
+            println!("  SKIP {}", n);
+        }
         assert!(stats.total > 0);
     }
 
@@ -1027,6 +1036,9 @@ mod tests {
         );
         for (n, d) in &stats.failed_examples {
             println!("  FAIL {}: {}", n, d);
+        }
+        for n in stats.skipped_examples.iter().take(50) {
+            println!("  SKIP {}", n);
         }
         assert!(stats.total > 0);
     }
