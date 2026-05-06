@@ -432,7 +432,11 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             }
             max_dc_w
         } else { 0.0 };
-        let intrinsic_main = if ch.explicit_width.is_some() && direction.is_row() { descendant_min_main }
+        // CSS Flex L1 §4.5: pri overflow != visible v main axis je auto-min-content = 0.
+        let main_overflow = if direction.is_row() { ch.overflow_x.as_str() } else { ch.overflow_y.as_str() };
+        let main_overflow_blocks = matches!(main_overflow, "hidden" | "scroll" | "auto" | "clip");
+        let intrinsic_main = if main_overflow_blocks { 0.0 }
+                            else if ch.explicit_width.is_some() && direction.is_row() { descendant_min_main }
                             else if ch.explicit_height.is_some() && !direction.is_row() { 0.0 }
                             else if direction.is_row() { ch.rect.width.max(text_min_content).max(descendant_min_main) } else { ch.rect.height.max(text_min_content) };
         let pb_main = if direction.is_row() {
