@@ -307,7 +307,18 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                 })
             } else { basis_v.parse::<f32>().ok() };
             if let Some(b) = basis {
-                if direction.is_row() { est_w = b; } else { est_h = b; }
+                // Content-box: basis je content size, pricti padding+border do main basis.
+                let pb_main_for_basis = if direction.is_row() {
+                    ch.padding_left.unwrap_or(ch.padding) + ch.padding_right.unwrap_or(ch.padding)
+                        + ch.border_left_width.unwrap_or(ch.border_width) + ch.border_right_width.unwrap_or(ch.border_width)
+                } else {
+                    ch.padding_top.unwrap_or(ch.padding) + ch.padding_bottom.unwrap_or(ch.padding)
+                        + ch.border_top_width.unwrap_or(ch.border_width) + ch.border_bottom_width.unwrap_or(ch.border_width)
+                };
+                let basis_final = if ch.box_sizing == "content-box" {
+                    b + pb_main_for_basis
+                } else { b };
+                if direction.is_row() { est_w = basis_final; } else { est_h = basis_final; }
             }
         }
         // Apply min-w/h pred aspect ratio dopoctem
