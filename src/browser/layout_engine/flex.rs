@@ -549,9 +549,14 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                             super::super::layout::Display::Flex | super::super::layout::Display::Grid);
                         let has_flex_attr = !c.flex_direction.is_empty();
                         if is_flex_or_grid || has_flex_attr {
-                            if let Some(gc) = c.children.iter().find(|x|
+                            let baseline_first = c.children.iter().find(|x|
                                 !matches!(x.position, super::super::layout::Position::Absolute | super::super::layout::Position::Fixed)
-                                && !matches!(x.display, super::super::layout::Display::None)) {
+                                && !matches!(x.display, super::super::layout::Display::None)
+                                && x.align_self == "baseline");
+                            let gc_opt = baseline_first.or_else(|| c.children.iter().find(|x|
+                                !matches!(x.position, super::super::layout::Position::Absolute | super::super::layout::Position::Fixed)
+                                && !matches!(x.display, super::super::layout::Display::None)));
+                            if let Some(gc) = gc_opt {
                                 let gc_m_t = gc.margin_top.unwrap_or(gc.margin);
                                 let gc_pad_t = c.padding_top.unwrap_or(c.padding) + c.border_top_width.unwrap_or(c.border_width);
                                 return gc_pad_t + gc_m_t + child_baseline(gc);
@@ -559,9 +564,13 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                         }
                         c_h
                     }
-                    let first_child = item_box.children.iter().find(|c|
+                    let first_child_baseline = item_box.children.iter().find(|c|
                         !matches!(c.position, super::super::layout::Position::Absolute | super::super::layout::Position::Fixed)
-                        && !matches!(c.display, super::super::layout::Display::None));
+                        && !matches!(c.display, super::super::layout::Display::None)
+                        && c.align_self == "baseline");
+                    let first_child = first_child_baseline.or_else(|| item_box.children.iter().find(|c|
+                        !matches!(c.position, super::super::layout::Position::Absolute | super::super::layout::Position::Fixed)
+                        && !matches!(c.display, super::super::layout::Display::None)));
                     match first_child {
                         Some(c) => {
                             let c_m_t = c.margin_top.unwrap_or(c.margin);
@@ -710,16 +719,23 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                 return synth;
             }
             // Recursivne walk first-child chain pri flex/grid/flex-direction items.
-            // CSS: first-baseline = top + walk first-child baseline.
+            // CSS: first-baseline = top + walk first-child baseline. Pri multi-line
+            // flex container: prefer first child with align-self=baseline; jinak first.
             fn child_baseline(c: &super::super::layout::LayoutBox) -> f32 {
                 let c_h = c.explicit_height.unwrap_or(c.rect.height);
                 let is_flex_or_grid = matches!(c.display,
                     super::super::layout::Display::Flex | super::super::layout::Display::Grid);
                 let has_flex_attr = !c.flex_direction.is_empty();
                 if is_flex_or_grid || has_flex_attr {
-                    if let Some(gc) = c.children.iter().find(|x|
+                    // Najdi first in-flow child WITH align-self=baseline; fallback first child.
+                    let baseline_first = c.children.iter().find(|x|
                         !matches!(x.position, super::super::layout::Position::Absolute | super::super::layout::Position::Fixed)
-                        && !matches!(x.display, super::super::layout::Display::None)) {
+                        && !matches!(x.display, super::super::layout::Display::None)
+                        && x.align_self == "baseline");
+                    let gc_opt = baseline_first.or_else(|| c.children.iter().find(|x|
+                        !matches!(x.position, super::super::layout::Position::Absolute | super::super::layout::Position::Fixed)
+                        && !matches!(x.display, super::super::layout::Display::None)));
+                    if let Some(gc) = gc_opt {
                         let gc_m_t = gc.margin_top.unwrap_or(gc.margin);
                         let gc_pad_t = c.padding_top.unwrap_or(c.padding) + c.border_top_width.unwrap_or(c.border_width);
                         return gc_pad_t + gc_m_t + child_baseline(gc);
@@ -727,9 +743,40 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                 }
                 c_h
             }
-            let first_child = item_box.children.iter().find(|c|
+            // Prefer first child with align-self=baseline V LINE 1 (CSS spec: container
+            // baseline = first item participating in baseline alignment v first line).
+            // Greedy line 1 detection: items pridavame dokud sum_main_size <= container_main.
+            let item_box_inner_main = if !item_box.flex_direction.is_empty() && (item_box.flex_direction == "column" || item_box.flex_direction == "column-reverse") {
+                // Column - main = height. Drive ne aplikujeme line detection.
+                f32::INFINITY
+            } else {
+                let pad_l_b = item_box.padding_left.unwrap_or(item_box.padding) + item_box.border_left_width.unwrap_or(item_box.border_width);
+                let pad_r_b = item_box.padding_right.unwrap_or(item_box.padding) + item_box.border_right_width.unwrap_or(item_box.border_width);
+                let item_w = item_box.explicit_width.unwrap_or(it_b.cross_size);
+                (item_w - pad_l_b - pad_r_b).max(0.0)
+            };
+            let item_has_wrap = !item_box.flex_wrap.is_empty() && item_box.flex_wrap != "nowrap";
+            let mut line1_indices: Vec<usize> = Vec::new();
+            let mut used = 0.0_f32;
+            for (gi, gc) in item_box.children.iter().enumerate() {
+                if matches!(gc.position, super::super::layout::Position::Absolute | super::super::layout::Position::Fixed) { continue; }
+                if matches!(gc.display, super::super::layout::Display::None) { continue; }
+                let gc_m_l = gc.margin_left.unwrap_or(gc.margin);
+                let gc_m_r = gc.margin_right.unwrap_or(gc.margin);
+                let gc_w = gc.explicit_width.unwrap_or(0.0) + gc_m_l + gc_m_r;
+                if item_has_wrap && !line1_indices.is_empty() && used + gc_w > item_box_inner_main + 0.01 {
+                    break;
+                }
+                line1_indices.push(gi);
+                used += gc_w;
+            }
+            let first_baseline_child = line1_indices.iter().find_map(|&gi| {
+                let c = &item_box.children[gi];
+                if c.align_self == "baseline" { Some(c) } else { None }
+            });
+            let first_child = first_baseline_child.or_else(|| item_box.children.iter().find(|c|
                 !matches!(c.position, super::super::layout::Position::Absolute | super::super::layout::Position::Fixed)
-                && !matches!(c.display, super::super::layout::Display::None));
+                && !matches!(c.display, super::super::layout::Display::None)));
             match first_child {
                 Some(c) => {
                     let c_m_t = c.margin_top.unwrap_or(c.margin);
