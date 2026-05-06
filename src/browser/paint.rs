@@ -946,6 +946,9 @@ pub fn parse_svg_path(d: &str) -> Vec<(f32, f32)> {
 }
 
 fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective: Option<f32>) {
+    // Index PRED jakymkoliv emit pro tento box - transform 2D apply pres
+    // cmds[box_start..] (vse co tento box vyemituje vc. children).
+    let box_start = cmds.len();
     // Detekce 3D transformu - pokud ano, obal cely emit do TransformBegin/End
     // a vynech CPU post-process transformaci (renderer aplikuje matrix shader-side).
     let needs_3d = crate::browser::layout::needs_3d_pipeline(&bx.transforms, parent_perspective);
@@ -1566,7 +1569,7 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
     // Skip kdyz needs_3d - shader pipeline aplikuje cely 4x4 matrix.
     use super::layout::TransformOp;
     if !bx.transforms.is_empty() && !needs_3d {
-        let start = cmds_offset_for_box(bx, cmds);
+        let start = box_start;
         // Vypocet centroid box-u pro rotate/scale relative-origin
         let cx = bx.rect.x + bx.rect.width  * 0.5;
         let cy = bx.rect.y + bx.rect.height * 0.5;
@@ -1625,7 +1628,7 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
             }
         }
     } else if let Some(TransformOp::Translate(tx, ty)) = bx.transform {
-        let start = cmds_offset_for_box(bx, cmds);
+        let start = box_start;
         for cmd in &mut cmds[start..] {
             shift_cmd(cmd, tx, ty);
         }
