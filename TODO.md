@@ -275,6 +275,24 @@ Vsechny moduly viz `TODO_CSS.md`. Hlavni chybejici:
 
 ---
 
+## Engine architectural
+
+### Recursion vs iteration
+- [x] Linker stack 256 MB (Windows main thread default = 1 MB).
+  - Pokryje DOM nesting do ~2500 urovni v debug buildu, vic v release.
+  - Realne weby ~30 urovni nesting, proto OK.
+- [ ] **Stack overflow safety pri pathological HTML** (DOM > 2500 levels):
+  - Konvertovat recursive walk -> iteration s explicitnim stackem (Vec<usize>) v:
+    - dom::walk
+    - layout::build_box_inner
+    - layout::layout_dispatch (flex/grid/block)
+    - paint::paint_box
+  - Alternativa: stacker crate (auto-grow) - vyzaduje Rust >= 1.88 (psm dep MSRV).
+  - Alternativa: spawn worker thread se stackem 1 GB (winit povoluje na Windows).
+- [ ] Depth limit v HTML parseru (max 1000 levels?) s warning misto crash.
+
+---
+
 ## Test coverage
 
 ### Hotove
