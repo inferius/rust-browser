@@ -43,6 +43,7 @@ naga = { version = "0.20", features = ["glsl-in", "wgsl-out"] }
 winit = "0.30"
 pollster = "0.3"  # block_on bez tokio
 bytemuck = { version = "1.16", features = ["derive"] }  # vertex bytes
+stacker = "0.1"  # auto-grow stack pri hluboke rekurzi (DOM walk, layout, paint)
 fontdue = "0.9"  # font rasterizer pro glyph atlas
 # taffy odstraneno - vlastni layout_engine v src/browser/layout_engine/
 # (inspirovano taffy MIT licence; mame plnou kontrolu nad layoutem)

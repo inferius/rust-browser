@@ -1,29 +1,19 @@
-# Main thread stack size = 64 MB.
+# Main thread stack size = 16 MB (Windows default = 1 MB).
 #
-# Default Windows = 1 MB. Vlastni layout engine ma rekurzivni traversal pres
-# flex/grid/block + paint walk + cascade walk. V debug buildu (no inline) frame
-# size je vetsi, deep DOM (e.g. 100+ urovni nestnuti) prepsane stack.
+# Stacker crate auto-grows na hot recursion paths (dom::walk, layout, paint),
+# takze 16 MB primarni stack staci. Pri maybe_grow stacker spawnne worker
+# thread s 8 MB chunk pri detekci red-zone (last 32 KB).
 #
-# 64 MB je virtual reserve - skutecna pamet se commituje az pri pouziti, takze
-# zadny realny memory cost. Pokryje extremne hluboke DOMy (>10k urovni).
-#
-# Stacker crate (auto-grow) by byl elegantnejsi reseni ale jeho psm dep vyzaduje
-# Rust >= 1.88. Az upgrade, mozno prejit zpet.
+# 16 MB primarni navic kvuli winit event handler + interpreter scope chain.
 
 [target.x86_64-pc-windows-msvc]
-rustflags = ["-C", "link-arg=/STACK:268435456"]
+rustflags = ["-C", "link-arg=/STACK:67108864"]
 
 [target.i686-pc-windows-msvc]
-rustflags = ["-C", "link-arg=/STACK:268435456"]
+rustflags = ["-C", "link-arg=/STACK:67108864"]
 
 [target.aarch64-pc-windows-msvc]
-rustflags = ["-C", "link-arg=/STACK:268435456"]
+rustflags = ["-C", "link-arg=/STACK:67108864"]
 
 [target.x86_64-pc-windows-gnu]
-rustflags = ["-C", "link-arg=-Wl,--stack,268435456"]
-
-# macOS / Linux: default stack 8 MB, normalne staci.
-# [target.x86_64-apple-darwin]
-# rustflags = ["-C", "link-arg=-Wl,-stack_size,0x4000000"]
-# [target.aarch64-apple-darwin]
-# rustflags = ["-C", "link-arg=-Wl,-stack_size,0x4000000"]
+rustflags = ["-C", "link-arg=-Wl,--stack,67108864"]

@@ -268,9 +268,22 @@ Vsechny moduly viz `TODO_CSS.md`. Hlavni chybejici:
 - [ ] Find-in-page (Ctrl+F).
 - [ ] Print preview.
 - [ ] Save page as HTML.
-- [ ] DevTools v native window (zatim HTML output otevreny v default browseru).
-- [ ] Right-click context menu (Inspect Element).
-- [ ] Keyboard shortcuts (Ctrl+L address bar, atd.).
+- [ ] **DevTools v NASEM browseru** (zatim HTML otevreny v default OS browseru):
+  - Otvirat devtools jako split-pane v hlavnim okne (resp. side panel).
+  - **Two-way binding** jako Chrome:
+    - Hover element v Elements panelu -> highlight v render area (overlay rect).
+    - Click element v render area -> select v Elements panelu (Inspect Element).
+    - Edit attribut/style v panel -> live update DOM + reflow + redraw.
+    - Edit text content -> propagace do DOM.
+    - Toggle pseudo-class state (`:hover`, `:focus`).
+    - Add/remove classes v classes panel.
+  - Console: live REPL (typed -> eval v interpreter -> output).
+  - Network: real-time stream fetch calls (uz mame log capture).
+  - Performance: frame timing graf.
+  - Sources: edit JS + reload runtime.
+  - Computed styles s links na zdrojovy ruleset.
+- [ ] Right-click context menu (Inspect Element / View Source / Save As).
+- [ ] Keyboard shortcuts (Ctrl+L address bar, Ctrl+T new tab, Ctrl+W close, atd.).
 - [ ] Window-level zoom (Ctrl++ / Ctrl+-).
 
 ---
@@ -278,18 +291,19 @@ Vsechny moduly viz `TODO_CSS.md`. Hlavni chybejici:
 ## Engine architectural
 
 ### Recursion vs iteration
-- [x] Linker stack 256 MB (Windows main thread default = 1 MB).
-  - Pokryje DOM nesting do ~2500 urovni v debug buildu, vic v release.
-  - Realne weby ~30 urovni nesting, proto OK.
-- [ ] **Stack overflow safety pri pathological HTML** (DOM > 2500 levels):
-  - Konvertovat recursive walk -> iteration s explicitnim stackem (Vec<usize>) v:
-    - dom::walk
-    - layout::build_box_inner
-    - layout::layout_dispatch (flex/grid/block)
-    - paint::paint_box
-  - Alternativa: stacker crate (auto-grow) - vyzaduje Rust >= 1.88 (psm dep MSRV).
-  - Alternativa: spawn worker thread se stackem 1 GB (winit povoluje na Windows).
-- [ ] Depth limit v HTML parseru (max 1000 levels?) s warning misto crash.
+- [x] Linker stack 64 MB (Windows main thread default = 1 MB).
+- [x] Stacker crate auto-grow na hot recursion paths (dom::walk, layout::build_box_inner,
+  layout::layout_dispatch_inner, paint::paint_box, html_parser::convert_handle,
+  dom::collect_text, dom::find_inner).
+- [x] Iterativni `Drop` impl na NodeData - prevenci recursive drop chain pri dropnuti
+  hlubokeho DOM tree.
+- [ ] **html5ever RcDom Drop recursion** - externi crate ma vlastni recursive Drop
+  na svuj NodeData. Pri DOMech > ~500 urovni stack overflow pri konci `parse_html`.
+  - Reseni: detach children z RcDom progressively v `convert_handle` (pred drop ujistit
+    ze RcDom strom je prazdny / shallow).
+  - Nebo: fork rcdom + iterativni Drop tam.
+- [ ] Performance: ASM/SIMD pro hot paths (text shaping, layout traversal,
+  paint primitives). Mozno autovektorizace + intrinsic.
 
 ---
 

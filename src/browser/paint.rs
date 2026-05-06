@@ -1007,9 +1007,11 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
         emit_svg_children(bx, cmds);
     }
 
-    // Recursivne deti
+    // Recursivne deti - auto-grow stack pro deep DOMs.
     for ch in &bx.children {
-        paint_box(ch, cmds, child_perspective);
+        stacker::maybe_grow(32 * 1024, 8 * 1024 * 1024, || {
+            paint_box(ch, cmds, child_perspective);
+        });
     }
 
     // mask-image end marker

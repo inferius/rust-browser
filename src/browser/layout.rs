@@ -1107,11 +1107,14 @@ fn layout_dispatch(bx: &mut LayoutBox) {
 }
 
 fn layout_dispatch_inner(bx: &mut LayoutBox) {
-    match bx.display {
-        Display::Flex => layout_flex(bx),
-        Display::Grid => super::layout_engine::grid::layout_grid(bx),
-        _ => layout_block(bx),
-    }
+    // Auto-grow stack (deep DOM nesting -> deep flex/grid/block recursion).
+    stacker::maybe_grow(32 * 1024, 8 * 1024 * 1024, || {
+        match bx.display {
+            Display::Flex => layout_flex(bx),
+            Display::Grid => super::layout_engine::grid::layout_grid(bx),
+            _ => layout_block(bx),
+        }
+    });
 }
 
 /// Wrap pres build_box_with_pseudo s prazdnou pseudo mapou.
@@ -1972,7 +1975,9 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         {
             continue;
         }
-        let cb = build_box_inner(child, style_map, pseudo_map, counters);
+        let cb = stacker::maybe_grow(32 * 1024, 8 * 1024 * 1024, || {
+            build_box_inner(child, style_map, pseudo_map, counters)
+        });
         if cb.display != Display::None {
             // Text bez obsahu - zahodit
             if matches!(child.kind, NodeKind::Text(_)) && cb.text.is_none() {

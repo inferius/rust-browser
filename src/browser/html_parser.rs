@@ -86,8 +86,10 @@ fn convert_handle(handle: &Handle, parent: &Rc<Node>) {
                 }))
             }
             RcNodeData::Document => {
-                // Top-level document - jen recursi do children
-                convert_handle(child, parent);
+                // Top-level document - jen recursi do children (uvnitr stacker grow).
+                stacker::maybe_grow(32 * 1024, 8 * 1024 * 1024, || {
+                    convert_handle(child, parent);
+                });
                 None
             }
             _ => None,
@@ -95,7 +97,12 @@ fn convert_handle(handle: &Handle, parent: &Rc<Node>) {
 
         if let Some(node) = node_opt {
             parent.append_child(Rc::clone(&node));
-            convert_handle(child, &node);
+            // Auto-grow stack pro deep DOM nesting.
+            stacker::maybe_grow(32 * 1024, 8 * 1024 * 1024, || {
+                convert_handle(child, &node);
+            });
+        } else if matches!(child.data, RcNodeData::Document) {
+            // Document case uz volana convert_handle vyse - mit ji v stacker chain.
         }
     }
 }

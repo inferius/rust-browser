@@ -39,6 +39,32 @@ pub struct NodeData {
 
 pub type Node = NodeData;
 
+/// Iterativni drop pres flat queue - default Drop by se rekurzivne zanoril pri
+/// hlubokem DOMu (e.g. 5000 nestnutych <div>) a pretekl stack.
+/// Princip: pred dropnutim uzlu drainujeme jeho children do queue (kdyz mame
+/// jediny owner); takhle se sekvencne uvolnuji listy, az nakonec dropujeme
+/// "holy" root bez children -> zadna recursive drop chain.
+impl Drop for NodeData {
+    fn drop(&mut self) {
+        // Steal children z self - od ted jsou volne v queue, nikoliv pres self.
+        let initial: Vec<Rc<Node>> = std::mem::take(&mut *self.children.borrow_mut());
+        let mut queue: Vec<Rc<Node>> = initial;
+        while let Some(node) = queue.pop() {
+            // Pokud jsme jediny owner, vyboxuj jeho children.
+            if Rc::strong_count(&node) == 1 {
+                if let Ok(mut ch_ref) = node.children.try_borrow_mut() {
+                    let stolen: Vec<Rc<Node>> = std::mem::take(&mut *ch_ref);
+                    drop(ch_ref);
+                    queue.extend(stolen);
+                }
+            }
+            // Drop node Rc - kdyz strong_count byl 1, NodeData drop fire,
+            // ale jeho children uz prazdne -> recursion ends here.
+            drop(node);
+        }
+    }
+}
+
 impl NodeData {
     pub fn new_document() -> Rc<Self> {
         Rc::new(NodeData {
@@ -135,16 +161,22 @@ impl NodeData {
             out.push_str(t);
         }
         for ch in self.children.borrow().iter() {
-            ch.collect_text(out);
+            stacker::maybe_grow(32 * 1024, 8 * 1024 * 1024, || {
+                ch.collect_text(out);
+            });
         }
     }
 
     /// Walk preorder - vola cb pro kazdy uzel.
+    /// Auto-grow stacku pres stacker (red zone 32 KB, chunk 8 MB) - pokryva
+    /// libovolne hluboke DOMy bez stack overflow.
     pub fn walk(self: &Rc<Self>, cb: &mut dyn FnMut(&Rc<Node>)) {
-        cb(self);
-        for ch in self.children.borrow().iter() {
-            ch.walk(cb);
-        }
+        stacker::maybe_grow(32 * 1024, 8 * 1024 * 1024, || {
+            cb(self);
+            for ch in self.children.borrow().iter() {
+                ch.walk(cb);
+            }
+        });
     }
 
     /// Najde prvni element ktery vyhovuje predikatu.
@@ -156,7 +188,8 @@ impl NodeData {
     fn find_inner(self: &Rc<Self>, pred: &dyn Fn(&Rc<Node>) -> bool) -> Option<Rc<Node>> {
         if pred(self) { return Some(Rc::clone(self)); }
         for ch in self.children.borrow().iter() {
-            if let Some(found) = ch.find_inner(pred) { return Some(found); }
+            let r = stacker::maybe_grow(32 * 1024, 8 * 1024 * 1024, || ch.find_inner(pred));
+            if r.is_some() { return r; }
         }
         None
     }
