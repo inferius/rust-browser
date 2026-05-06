@@ -13,10 +13,20 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 - **Compliance harness** v src/browser/layout_engine/taffy_compliance.rs:
   - XML parser + LayoutBox converter + run_directory + compare_layout
   - 4 testy spousteji vsechny fixtury, vypocitavaji pass-rate
-  - **Aktualni pass-rate: 1628/1988 (81.9%)** *80% milestone passed*
+  - **Aktualni pass-rate: 1674/1988 (84.2%)**
     * BLOCK:  337/392 (86.0%)
-    * GRID:   355/512 (69.3%)
-    * FLEX:   936/1084 (86.3%)
+    * GRID:   369/512 (72.1%)
+    * FLEX:   968/1084 (89.3%)
+  - Iter 134-142 wins:
+    * Percent margin re-resolve v gridu (+12)
+    * minmax maximize pred fr distribute (+2)
+    * Justify negative free (overflow center) (+10)
+    * Aspect-ratio clamp est_w/h pred derivation (+4)
+    * Skip percent-derived widths v intrinsic propagation (+6)
+    * Descendant_min jen pri flex-grow=0 (+6)
+    * Descendant_min skip pri overflow (+2)
+    * Percent row-gap = 0 pri indefinite parent (+2)
+    * Flex-wrap item stretch cross axis (+2)
   - Iterace 0-133 progress: 18 -> 1017 (50%) -> 1392 (70%) -> 1490 (74.9%) ->
     1492 (75.0%) -> 1516 (76.3%) -> 1548 (77.9%) -> 1566 (78.8%) ->
     1578 (79.4%) -> 1588 (79.9%) -> 1592 (80.1%) -> 1602 (80.6%) ->
