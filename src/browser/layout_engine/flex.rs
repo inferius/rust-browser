@@ -152,9 +152,9 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                     let gc_m_t = gc.margin_top.unwrap_or(gc.margin);
                     let gc_m_b = gc.margin_bottom.unwrap_or(gc.margin);
                     let mut gc_w = if gc.width_pct.is_some() { 0.0 }
-                                   else { gc.explicit_width.map(|w| w + gc_m_l + gc_m_r).unwrap_or(0.0) };
+                                   else { gc.explicit_width.unwrap_or(0.0) };
                     let mut gc_h = if gc.height_pct.is_some() { 0.0 }
-                                   else { gc.explicit_height.map(|h| h + gc_m_t + gc_m_b).unwrap_or(0.0) };
+                                   else { gc.explicit_height.unwrap_or(0.0) };
                     // Text intrinsic v taffy_mode: 10/char.
                     if gc.taffy_mode {
                         if let Some(t) = &gc.text {
@@ -162,6 +162,15 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                             if gc_w == 0.0 { gc_w = tw; }
                             if gc_h == 0.0 { gc_h = 10.0; }
                         }
+                    }
+                    // Leaf gc: include own padding+border do intrinsic.
+                    if gc.children.is_empty() {
+                        let gc_pl = gc.padding_left.unwrap_or(gc.padding) + gc.border_left_width.unwrap_or(gc.border_width);
+                        let gc_pr = gc.padding_right.unwrap_or(gc.padding) + gc.border_right_width.unwrap_or(gc.border_width);
+                        let gc_pt = gc.padding_top.unwrap_or(gc.padding) + gc.border_top_width.unwrap_or(gc.border_width);
+                        let gc_pb = gc.padding_bottom.unwrap_or(gc.padding) + gc.border_bottom_width.unwrap_or(gc.border_width);
+                        if gc_w < gc_pl + gc_pr { gc_w = gc_pl + gc_pr; }
+                        if gc_h < gc_pt + gc_pb { gc_h = gc_pt + gc_pb; }
                     }
                     // Pri grandchild bez explicit, recursive intrinsic (flex/grid recursive layout,
                     // block sum z ggchild).
@@ -196,11 +205,19 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                             }
                         }
                     }
+                    // Include margins do sum/max kdyz gc neni nulove.
+                    if gc_w > 0.0 { gc_w += gc_m_l + gc_m_r; }
+                    if gc_h > 0.0 { gc_h += gc_m_t + gc_m_b; }
                     max_w = max_w.max(gc_w);
                     sum_h += gc_h;
                 }
-                if ch.explicit_width.is_none() && max_w > 0.0 { ch.rect.width = max_w; }
-                if ch.explicit_height.is_none() && sum_h > 0.0 { ch.rect.height = sum_h; }
+                // Vlastni padding+border pripocist do intrinsic rect (content+pad = total).
+                let own_pl = ch.padding_left.unwrap_or(ch.padding) + ch.border_left_width.unwrap_or(ch.border_width);
+                let own_pr = ch.padding_right.unwrap_or(ch.padding) + ch.border_right_width.unwrap_or(ch.border_width);
+                let own_pt = ch.padding_top.unwrap_or(ch.padding) + ch.border_top_width.unwrap_or(ch.border_width);
+                let own_pb = ch.padding_bottom.unwrap_or(ch.padding) + ch.border_bottom_width.unwrap_or(ch.border_width);
+                if ch.explicit_width.is_none() && max_w > 0.0 { ch.rect.width = max_w + own_pl + own_pr; }
+                if ch.explicit_height.is_none() && sum_h > 0.0 { ch.rect.height = sum_h + own_pt + own_pb; }
             }
         }
         ch.rect.x = saved_rect.x;
@@ -398,7 +415,10 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         items[i].min_main = min_m_with_intrinsic;
         items[i].max_main = max_m;
         // Cross floor: pad+border + intrinsic.
-        let intrinsic_cross = if direction.is_row() { ch.rect.height } else { ch.rect.width };
+        // Intrinsic se musi clamp max_c - element s explicit > max nesmi propagovat
+        // explicit jako "natural", musi jen max.
+        let raw_intrinsic_cross = if direction.is_row() { ch.rect.height } else { ch.rect.width };
+        let intrinsic_cross = raw_intrinsic_cross.min(max_c);
         let pb_cross = if direction.is_row() {
             ch.padding_top.unwrap_or(ch.padding) + ch.padding_bottom.unwrap_or(ch.padding)
                 + ch.border_top_width.unwrap_or(ch.border_width) + ch.border_bottom_width.unwrap_or(ch.border_width)
@@ -776,11 +796,22 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         let needed = if direction.is_row() {
             total_cross + pad_t + pad_b
         } else {
-            let main_used: f32 = resolved_lines.iter()
-                .map(|l| l.main_sizes.iter().sum::<f32>()
-                    + main_gap * (l.main_sizes.len().saturating_sub(1) as f32))
-                .fold(0.0_f32, f32::max);
-            main_used + pad_t + pad_b
+            // Column main = height. Include item margin_main_start+end (= margin-top+bottom).
+            // Pre-pass intrinsic potrebuje znat realny obsah vc. margin pro nadrazene flexy.
+            let mut main_used_max: f32 = 0.0;
+            for line in resolved_lines.iter() {
+                // Find indices of this line items pres line.main_sizes (items vector je flat).
+                // line.main_sizes[k] mapuje na indice items - pouzij pozici v zalo lines.
+                // Zjednoduseni: sum sizes + sum margins z items.
+                let line_sum: f32 = line.main_sizes.iter().sum();
+                let line_gap_sum = main_gap * (line.main_sizes.len().saturating_sub(1) as f32);
+                main_used_max = main_used_max.max(line_sum + line_gap_sum);
+            }
+            // Margins: pridat sum start+end ze vsech items (single-line column case).
+            // Pri multi-line wrap column: kazda line samostatne, ale tady je intrinsic
+            // jen pro pre-pass, akceptujeme jen sum vsech.
+            let item_margins: f32 = items.iter().map(|it| it.margin_main_start + it.margin_main_end).sum();
+            main_used_max + item_margins + pad_t + pad_b
         };
         if bx.rect.height < needed {
             bx.rect.height = needed;
