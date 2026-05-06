@@ -488,8 +488,23 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             }
         }
 
-        // Per-item baseline: pri flex/grid item nebo block s flex-direction (taffy fixture
-        // treats jako flex), baseline = first child bottom. Jinak synth (item bottom).
+        // Baseline policy: pokud VSECHNY items s align=baseline maji children, pouzijeme
+        // first-child baseline (CSS spec). Jinak synth = item bottom margin edge.
+        // Pri flex/grid display nebo flex-direction: vzdy first-child.
+        let baseline_items_idx: Vec<usize> = line_indices.iter().enumerate().filter(|&(_, &item_idx)| {
+            let real_idx = in_flow[item_idx];
+            let self_str = bx.children[real_idx].align_self.clone();
+            let item_align = if self_str.is_empty() || self_str == "auto" {
+                align
+            } else { parse_align_items(&self_str) };
+            matches!(item_align, AlignItems::Baseline)
+        }).map(|(k, _)| k).collect();
+        let all_have_children = !baseline_items_idx.is_empty() && baseline_items_idx.iter().all(|&k| {
+            let real_idx = in_flow[line_indices[k]];
+            bx.children[real_idx].children.iter().any(|c|
+                !matches!(c.position, super::super::layout::Position::Absolute | super::super::layout::Position::Fixed)
+                && !matches!(c.display, super::super::layout::Display::None))
+        });
         let item_baselines: Vec<f32> = line_indices.iter().map(|&item_idx| {
             let it_b = items[item_idx];
             let real_idx_b = in_flow[item_idx];
@@ -497,9 +512,11 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             let synth = it_b.cross_size + it_b.margin_cross_start;
             let is_flex_or_grid = matches!(item_box.display,
                 super::super::layout::Display::Flex | super::super::layout::Display::Grid);
-            // Taffy heuristika: block s flex-direction se chova jako flex.
             let has_flex_attr = !item_box.flex_direction.is_empty();
-            if !is_flex_or_grid && !has_flex_attr {
+            // First-child baseline pri: flex/grid item, flex-direction set, NEBO vsechny
+            // baseline items maji children.
+            let use_first_child = is_flex_or_grid || has_flex_attr || all_have_children;
+            if !use_first_child {
                 return synth;
             }
             let first_child = item_box.children.iter().find(|c|
