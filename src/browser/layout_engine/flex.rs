@@ -512,6 +512,81 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             resolved_lines[0].cross_size = resolved_lines[0].cross_size.max(container_cross);
         }
     }
+    // Pre-spocti per-line baseline (max_above + max_below) - rozsirit cross_size pri
+    // baseline-aligned items v row direction.
+    if direction.is_row() {
+        for (line_idx, line_indices) in lines.iter().enumerate() {
+            let mut max_above: f32 = 0.0;
+            let mut max_below: f32 = 0.0;
+            let mut has_baseline = false;
+            // Spocti baseline kazdeho item (synth nebo first-child).
+            for &item_idx in line_indices.iter() {
+                let real_idx_b = in_flow[item_idx];
+                let self_str_b = bx.children[real_idx_b].align_self.clone();
+                let item_align_b = if self_str_b.is_empty() || self_str_b == "auto" {
+                    align
+                } else { parse_align_items(&self_str_b) };
+                if !matches!(item_align_b, AlignItems::Baseline) { continue; }
+                has_baseline = true;
+                let it_b = items[item_idx];
+                let item_box = &bx.children[real_idx_b];
+                let synth = it_b.cross_size + it_b.margin_cross_start;
+                let is_flex_or_grid = matches!(item_box.display,
+                    super::super::layout::Display::Flex | super::super::layout::Display::Grid);
+                let has_flex_attr = !item_box.flex_direction.is_empty();
+                let item_has_children = item_box.children.iter().any(|c|
+                    !matches!(c.position, super::super::layout::Position::Absolute | super::super::layout::Position::Fixed)
+                    && !matches!(c.display, super::super::layout::Display::None));
+                let parent_is_real_flex = !bx.pseudo_flex;
+                let use_first_child = is_flex_or_grid || has_flex_attr
+                    || (item_has_children && parent_is_real_flex);
+                let own_baseline = if !use_first_child {
+                    synth
+                } else {
+                    fn child_baseline(c: &super::super::layout::LayoutBox) -> f32 {
+                        let c_h = c.explicit_height.unwrap_or(c.rect.height);
+                        let is_flex_or_grid = matches!(c.display,
+                            super::super::layout::Display::Flex | super::super::layout::Display::Grid);
+                        let has_flex_attr = !c.flex_direction.is_empty();
+                        if is_flex_or_grid || has_flex_attr {
+                            if let Some(gc) = c.children.iter().find(|x|
+                                !matches!(x.position, super::super::layout::Position::Absolute | super::super::layout::Position::Fixed)
+                                && !matches!(x.display, super::super::layout::Display::None)) {
+                                let gc_m_t = gc.margin_top.unwrap_or(gc.margin);
+                                let gc_pad_t = c.padding_top.unwrap_or(c.padding) + c.border_top_width.unwrap_or(c.border_width);
+                                return gc_pad_t + gc_m_t + child_baseline(gc);
+                            }
+                        }
+                        c_h
+                    }
+                    let first_child = item_box.children.iter().find(|c|
+                        !matches!(c.position, super::super::layout::Position::Absolute | super::super::layout::Position::Fixed)
+                        && !matches!(c.display, super::super::layout::Display::None));
+                    match first_child {
+                        Some(c) => {
+                            let c_m_t = c.margin_top.unwrap_or(c.margin);
+                            let pad_t = item_box.padding_top.unwrap_or(item_box.padding) + item_box.border_top_width.unwrap_or(item_box.border_width);
+                            pad_t + c_m_t + child_baseline(c) + it_b.margin_cross_start
+                        }
+                        None => synth,
+                    }
+                };
+                let item_full_cross = it_b.cross_size + it_b.margin_cross_start + it_b.margin_cross_end;
+                let above = own_baseline;
+                let below = (item_full_cross - own_baseline).max(0.0);
+                if above > max_above { max_above = above; }
+                if below > max_below { max_below = below; }
+            }
+            if has_baseline {
+                let baseline_cross = max_above + max_below;
+                if baseline_cross > resolved_lines[line_idx].cross_size {
+                    resolved_lines[line_idx].cross_size = baseline_cross;
+                    resolved_lines[line_idx].natural_cross =
+                        resolved_lines[line_idx].natural_cross.max(baseline_cross);
+                }
+            }
+        }
+    }
     let line_cross_sizes: Vec<f32> = resolved_lines.iter().map(|l| l.cross_size).collect();
     let total_cross = line_cross_sizes.iter().sum::<f32>()
         + line_gap * (line_cross_sizes.len().saturating_sub(1) as f32);
@@ -679,6 +754,37 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                 if item_baselines[k] > line_max_baseline { line_max_baseline = item_baselines[k]; }
             }
         }
+        // Pri row direction + baseline aligned items: line cross_size se musi rozsirit
+        // o (max_baseline - own_baseline) extension above baseline + extent below.
+        // Linka cross = max(own_baseline_above) + max(item_size - own_baseline_below).
+        if direction.is_row() {
+            let mut max_above: f32 = 0.0;
+            let mut max_below: f32 = 0.0;
+            let mut has_baseline = false;
+            for (k, &item_idx) in line_indices.iter().enumerate() {
+                let real_idx_b = in_flow[item_idx];
+                let self_str_b = bx.children[real_idx_b].align_self.clone();
+                let item_align_b = if self_str_b.is_empty() || self_str_b == "auto" {
+                    align
+                } else { parse_align_items(&self_str_b) };
+                if matches!(item_align_b, AlignItems::Baseline) {
+                    has_baseline = true;
+                    let it_full = items[item_idx];
+                    let item_full_cross = it_full.cross_size + it_full.margin_cross_start + it_full.margin_cross_end;
+                    let above = item_baselines[k];
+                    let below = (item_full_cross - above).max(0.0);
+                    if above > max_above { max_above = above; }
+                    if below > max_below { max_below = below; }
+                } else {
+                    let it_full = items[item_idx];
+                    let item_full_cross = it_full.cross_size + it_full.margin_cross_start + it_full.margin_cross_end;
+                    if item_full_cross > max_below + max_above {
+                        // Non-baseline item dictate via item full size
+                    }
+                }
+            }
+            let _ = (has_baseline, max_above, max_below); // Pre-pass nepouziva
+        }
 
         let mut main_cursor = start_main;
         let mut first = true;
@@ -769,9 +875,11 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                 child.rect.x = inner_x + main_cursor;
                 child.rect.y = inner_y + cross_cursor + cross_offset;
                 let mut w = main_size;
-                // Pri item s flex-wrap: stretch cross axis (taffy behavior).
+                // Pri item s flex-wrap: stretch cross axis (taffy behavior) - ALE ne pri
+                // baseline-aligned itemu (CSS: baseline neclamp).
                 let item_has_wrap = !child.flex_wrap.is_empty() && child.flex_wrap != "nowrap";
-                let stretch_cross = matches!(item_align, AlignItems::Stretch) || item_has_wrap;
+                let stretch_cross = (matches!(item_align, AlignItems::Stretch) || item_has_wrap)
+                    && !matches!(item_align, AlignItems::Baseline);
                 let mut h = if stretch_cross && child.explicit_height.is_none() {
                     (cross_size - it.margin_cross_start - it.margin_cross_end).max(0.0)
                 } else { item_cross_size };
