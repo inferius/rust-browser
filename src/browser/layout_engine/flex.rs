@@ -634,15 +634,32 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             if !use_first_child {
                 return synth;
             }
+            // Recursivne walk first-child chain pri flex/grid/flex-direction items.
+            // CSS: first-baseline = top + walk first-child baseline.
+            fn child_baseline(c: &super::super::layout::LayoutBox) -> f32 {
+                let c_h = c.explicit_height.unwrap_or(c.rect.height);
+                let is_flex_or_grid = matches!(c.display,
+                    super::super::layout::Display::Flex | super::super::layout::Display::Grid);
+                let has_flex_attr = !c.flex_direction.is_empty();
+                if is_flex_or_grid || has_flex_attr {
+                    if let Some(gc) = c.children.iter().find(|x|
+                        !matches!(x.position, super::super::layout::Position::Absolute | super::super::layout::Position::Fixed)
+                        && !matches!(x.display, super::super::layout::Display::None)) {
+                        let gc_m_t = gc.margin_top.unwrap_or(gc.margin);
+                        let gc_pad_t = c.padding_top.unwrap_or(c.padding) + c.border_top_width.unwrap_or(c.border_width);
+                        return gc_pad_t + gc_m_t + child_baseline(gc);
+                    }
+                }
+                c_h
+            }
             let first_child = item_box.children.iter().find(|c|
                 !matches!(c.position, super::super::layout::Position::Absolute | super::super::layout::Position::Fixed)
                 && !matches!(c.display, super::super::layout::Display::None));
             match first_child {
                 Some(c) => {
-                    let c_h = c.explicit_height.unwrap_or(c.rect.height);
                     let c_m_t = c.margin_top.unwrap_or(c.margin);
                     let pad_t = item_box.padding_top.unwrap_or(item_box.padding) + item_box.border_top_width.unwrap_or(item_box.border_width);
-                    pad_t + c_m_t + c_h + it_b.margin_cross_start
+                    pad_t + c_m_t + child_baseline(c) + it_b.margin_cross_start
                 }
                 None => synth,
             }
@@ -688,6 +705,12 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             } else {
                 parse_align_items(&self_str)
             };
+            // Baseline alignment v column direction = fallback na start (CSS Flex L1
+            // §8.3: "baseline alignment is supported only in row containers; in
+            // columns, treat as start").
+            let item_align = if matches!(item_align, AlignItems::Baseline) && !direction.is_row() {
+                AlignItems::FlexStart
+            } else { item_align };
             // Pro baseline pouzij natural cross (max bez stretch), ne cross_size kte
             // muze byt stretchnut na container.
             let align_box = if matches!(item_align, AlignItems::Baseline) {

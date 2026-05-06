@@ -449,6 +449,25 @@ mod tests {
             let pb = bx.padding_bottom.unwrap_or(bx.padding) + bw_b;
             if let Some(w) = bx.explicit_width { bx.explicit_width = Some(w + pl + pr); }
             if let Some(h) = bx.explicit_height { bx.explicit_height = Some(h + pt + pb); }
+            // Content-box prepocita i min/max-width/height (CSS spec).
+            let pw = pl + pr;
+            let ph = pt + pb;
+            if !bx.min_width_v.is_empty() {
+                let v = crate::browser::layout::parse_length(&bx.min_width_v);
+                bx.min_width_v = format!("{}px", v + pw);
+            }
+            if !bx.max_width_v.is_empty() {
+                let v = crate::browser::layout::parse_length(&bx.max_width_v);
+                bx.max_width_v = format!("{}px", v + pw);
+            }
+            if !bx.min_height_v.is_empty() {
+                let v = crate::browser::layout::parse_length(&bx.min_height_v);
+                bx.min_height_v = format!("{}px", v + ph);
+            }
+            if !bx.max_height_v.is_empty() {
+                let v = crate::browser::layout::parse_length(&bx.max_height_v);
+                bx.max_height_v = format!("{}px", v + ph);
+            }
         }
         for child in &node.children {
             // Pass inner width (minus padding+border) jako container_w pro percent.
