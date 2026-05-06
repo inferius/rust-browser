@@ -561,6 +561,8 @@ pub fn layout_grid(bx: &mut LayoutBox) {
     // Track occupied cells.
     let mut occupied: Vec<bool> = vec![false; rows.max(1) * cols.max(1)];
     let mut auto_cursor = 0usize;
+    // Per-item placement info pro baseline pass.
+    let mut item_row_info: Vec<(usize, usize, f32)> = Vec::new(); // (real_idx, row, cy)
     for &real_idx in in_flow.iter() {
         let child = &bx.children[real_idx];
         // Resolve placement: 1-based start lines -> 0-based cell index
@@ -618,6 +620,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
             + row_gap * (span_row.saturating_sub(1) as f32);
         let cx = col_positions.get(col).copied().unwrap_or(0.0);
         let cy = row_positions.get(row).copied().unwrap_or(0.0);
+        item_row_info.push((real_idx, row, cy));
         // Resolve item size + alignment v grid area
         let parent_align_items = bx.align_items.clone();
         let parent_justify_items = bx.justify_items.clone();
@@ -753,6 +756,51 @@ pub fn layout_grid(bx: &mut LayoutBox) {
             bx.rect.height = total_h;
         }
     }
+    // Baseline alignment post-pass: per-row max baseline, adjust y v dane row.
+    let parent_align_str = bx.align_items.clone();
+    if parent_align_str == "baseline" {
+        // Compute per-item baseline.
+        let mut item_baselines: std::collections::HashMap<usize, f32> = std::collections::HashMap::new();
+        for &(real_idx, _row, _cy) in &item_row_info {
+            let item = &bx.children[real_idx];
+            let als_str = item.align_self.clone();
+            let item_align = if als_str.is_empty() || als_str == "auto" { parent_align_str.clone() } else { als_str };
+            if item_align != "baseline" { continue; }
+            // Baseline = first in-flow child bottom or synth (item rect.height).
+            let first_child = item.children.iter().find(|c|
+                !matches!(c.position, super::super::layout::Position::Absolute | super::super::layout::Position::Fixed)
+                && !matches!(c.display, super::super::layout::Display::None));
+            let baseline = match first_child {
+                Some(c) => {
+                    let pad_t_i = item.padding_top.unwrap_or(item.padding) + item.border_top_width.unwrap_or(item.border_width);
+                    let c_h = c.explicit_height.unwrap_or(c.rect.height);
+                    let c_m_t = c.margin_top.unwrap_or(c.margin);
+                    pad_t_i + c_m_t + c_h
+                }
+                None => item.rect.height,
+            };
+            item_baselines.insert(real_idx, baseline);
+        }
+        // Per-row max baseline.
+        let mut row_max_baseline: std::collections::HashMap<usize, f32> = std::collections::HashMap::new();
+        for &(real_idx, row, _cy) in &item_row_info {
+            if let Some(&bsl) = item_baselines.get(&real_idx) {
+                let entry = row_max_baseline.entry(row).or_insert(0.0);
+                if bsl > *entry { *entry = bsl; }
+            }
+        }
+        // Adjust y per item.
+        for &(real_idx, row, cy) in &item_row_info {
+            if let (Some(&own_bsl), Some(&row_max)) = (item_baselines.get(&real_idx), row_max_baseline.get(&row)) {
+                let offset = row_max - own_bsl;
+                if offset.abs() > 0.01 {
+                    let item = &mut bx.children[real_idx];
+                    item.rect.y = bx.rect.y + bw_t + cy + offset;
+                }
+            }
+        }
+    }
+    let _ = parent_align_str;
 
     // Position absolute/fixed children (CB = padding-box parenta)
     let cb_x = bx.rect.x + bw_l;
