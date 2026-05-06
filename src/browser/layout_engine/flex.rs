@@ -130,9 +130,10 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         // Pre-set rect na 0 pro layout; ulozime puvodni
         let saved_rect = ch.rect.clone();
         ch.rect.x = 0.0; ch.rect.y = 0.0;
-        // Pri unset rozmerech, set na 0 aby vnitrek zjistil natural size.
-        if ch.explicit_width.is_none() { ch.rect.width = 0.0; }
-        if ch.explicit_height.is_none() { ch.rect.height = 0.0; }
+        // Pri explicit set rect na explicit hodnotu, jinak 0.
+        ch.rect.width = ch.explicit_width.unwrap_or(0.0);
+        ch.rect.height = ch.explicit_height.unwrap_or(0.0);
+        let saved_intrinsic = std::mem::replace(&mut ch.taffy_intrinsic_mode, true);
         // Recursivni layout: nemenime explicit values, jen rect.
         match ch.display {
             super::super::layout::Display::Flex => super::flex::layout_flex(ch),
@@ -204,6 +205,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         }
         ch.rect.x = saved_rect.x;
         ch.rect.y = saved_rect.y;
+        ch.taffy_intrinsic_mode = saved_intrinsic;
     }
 
     // 1. Estimate item sizes (flex-basis or content)
