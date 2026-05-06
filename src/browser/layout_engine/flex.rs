@@ -557,11 +557,14 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             let is_flex_or_grid = matches!(item_box.display,
                 super::super::layout::Display::Flex | super::super::layout::Display::Grid);
             let has_flex_attr = !item_box.flex_direction.is_empty();
+            let item_has_children = item_box.children.iter().any(|c|
+                !matches!(c.position, super::super::layout::Position::Absolute | super::super::layout::Position::Fixed)
+                && !matches!(c.display, super::super::layout::Display::None));
             // First-child baseline pri: flex/grid item, flex-direction set, NEBO
-            // (parent je real flex (NE pseudo) AND vsechny items maji children).
+            // (parent je real flex (NE pseudo) AND item ma children).
             let parent_is_real_flex = !bx.pseudo_flex;
             let use_first_child = is_flex_or_grid || has_flex_attr
-                || (all_have_children && parent_is_real_flex);
+                || (item_has_children && parent_is_real_flex);
             if !use_first_child {
                 return synth;
             }
