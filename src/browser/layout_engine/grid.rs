@@ -43,6 +43,8 @@ pub fn layout_grid(bx: &mut LayoutBox) {
     let cols = col_tracks.len();
     let col_is_auto: Vec<bool> = (0..cols).map(|i| match col_token_kinds.get(i) {
         Some(Track::Auto) => true,
+        Some(Track::MaxContent) => true,
+        Some(Track::MinContent) => true,
         Some(Track::FitContent(_)) => true,
         Some(Track::Minmax(_, max, false)) if !max.is_finite() => true,
         Some(Track::Minmax(min, _, false)) if min.is_nan() => true,
@@ -371,8 +373,9 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                 }
             }
             // Pri FitContent: clamp(min-content, max(min-content, arg), max-content).
-            // Pri Auto: pouzij min-content.
-            // Pri Minmax(max-content, ...) NaN sentinel: pouzij max_content jako base.
+            // Pri Auto/MaxContent/MinContent: starting size = min_content.
+            // (Distinction MaxContent vs Auto vyuzita az v span distribute extra space.)
+            // Pri Minmax(max-content, ...) NaN sentinel: pouzij max_content.
             let track_size = if let Some(Track::FitContent(arg)) = col_token_kinds.get(c_idx) {
                 let arg_resolved = if *arg < 0.0 { inner_w * (-arg) } else { *arg };
                 max_content.min(arg_resolved.max(min_content))
@@ -412,6 +415,69 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                             // Pri item_min > max: zachova item_min (CSS spec - min wins).
                             col_tracks[c_idx] = max_r.max(pre_redist);
                         }
+                    }
+                }
+            }
+        }
+        // Span items: distribute min/max content extra space (CSS Grid §11.5.5).
+        for (i, &real_idx) in in_flow.iter().enumerate() {
+            let (_, col, _, span_col) = item_placement[i];
+            if span_col <= 1 { continue; }
+            let item = &bx.children[real_idx];
+            // Skip pri explicit_width (fr expansion handles below).
+            if item.explicit_width.is_some() { continue; }
+            let text_min = if item.taffy_mode {
+                if let Some(t) = &item.text {
+                    let mut max_seg = 0usize; let mut cur = 0usize;
+                    for c in t.chars() {
+                        if matches!(c, '\u{200B}' | ' ' | '\n' | '\t') {
+                            if cur > max_seg { max_seg = cur; } cur = 0;
+                        } else { cur += 1; }
+                    }
+                    if cur > max_seg { max_seg = cur; }
+                    max_seg as f32 * 10.0
+                } else { 0.0 }
+            } else { 0.0 };
+            let text_max = if item.taffy_mode {
+                if let Some(t) = &item.text {
+                    t.chars().filter(|c| !matches!(*c, '\u{200B}' | ' ' | '\n' | '\t')).count() as f32 * 10.0
+                } else { 0.0 }
+            } else { 0.0 };
+            let item_min = text_min;
+            let item_max = text_max;
+            if item_max <= 0.0 && item_min <= 0.0 { continue; }
+            let span_indices: Vec<usize> = (col..(col+span_col)).collect();
+            let total_gap = col_gap * (span_col.saturating_sub(1) as f32);
+            // Step 1: min content distribute (do auto/max-/min-/fit-content tracks).
+            let cur_sum: f32 = span_indices.iter().map(|&c| col_tracks[c]).sum::<f32>() + total_gap;
+            if cur_sum < item_min {
+                let recipients: Vec<usize> = span_indices.iter().copied().filter(|&c| matches!(col_token_kinds.get(c),
+                    Some(Track::Auto) | Some(Track::MaxContent) | Some(Track::MinContent) | Some(Track::FitContent(_)))).collect();
+                if !recipients.is_empty() {
+                    let deficit = item_min - cur_sum;
+                    let share = deficit / recipients.len() as f32;
+                    for &c in &recipients { col_tracks[c] += share; }
+                }
+            }
+            // Step 2: max content extra distribute.
+            let cur_sum2: f32 = span_indices.iter().map(|&c| col_tracks[c]).sum::<f32>() + total_gap;
+            if cur_sum2 < item_max {
+                // Priority: MaxContent + FitContent. Fallback: Auto.
+                let max_recipients: Vec<usize> = span_indices.iter().copied().filter(|&c| matches!(col_token_kinds.get(c),
+                    Some(Track::MaxContent) | Some(Track::FitContent(_)))).collect();
+                let recipients = if !max_recipients.is_empty() {
+                    max_recipients
+                } else {
+                    span_indices.iter().copied().filter(|&c| matches!(col_token_kinds.get(c), Some(Track::Auto))).collect()
+                };
+                if !recipients.is_empty() {
+                    let deficit = item_max - cur_sum2;
+                    let share = deficit / recipients.len() as f32;
+                    for &c in &recipients {
+                        let cap = if let Some(Track::FitContent(arg)) = col_token_kinds.get(c) {
+                            if *arg < 0.0 { inner_w * (-arg) } else { *arg }
+                        } else { f32::INFINITY };
+                        col_tracks[c] = (col_tracks[c] + share).min(cap);
                     }
                 }
             }
@@ -1204,6 +1270,8 @@ pub fn resolve_tracks(s: &str, container_size: f32, gap: f32) -> Vec<f32> {
             Track::Percent(p) => fixed_total += container_size * p / 100.0,
             Track::Fr(f) => fr_total += *f,
             Track::Auto => auto_count += 1,
+            Track::MaxContent => auto_count += 1,
+            Track::MinContent => auto_count += 1,
             Track::FitContent(_) => auto_count += 1,
             Track::Minmax(min, max, is_fr) => {
                 let min_resolved = if min.is_nan() { 0.0 }
@@ -1233,6 +1301,8 @@ pub fn resolve_tracks(s: &str, container_size: f32, gap: f32) -> Vec<f32> {
         Track::Percent(p) => container_size * p / 100.0,
         Track::Fr(f) => fr_base * f,
         Track::Auto => auto_base,
+        Track::MaxContent => auto_base,
+        Track::MinContent => auto_base,
         Track::FitContent(_) => auto_base,
         Track::Minmax(min, max, is_fr) => {
             let min_r = if min.is_nan() { 0.0 }
@@ -1260,6 +1330,10 @@ enum Track {
     Percent(f32),
     Fr(f32),
     Auto,
+    /// max-content keyword (chove se jako Auto, ale pri span distribuci dostane prioritu max).
+    MaxContent,
+    /// min-content keyword.
+    MinContent,
     /// minmax(min_px, max_px or fr) - vlastne flexible s rozsahem.
     Minmax(f32, f32, bool /* max je fr */),
     /// fit-content(<value>): clamp(min-content, max(min-content, arg), max-content).
@@ -1491,7 +1565,9 @@ fn parse_track_tokens(s: &str) -> Vec<Track> {
 
 fn parse_single_track(s: &str) -> Track {
     let s = s.trim();
-    if s == "auto" || s == "min-content" || s == "max-content" { return Track::Auto; }
+    if s == "auto" { return Track::Auto; }
+    if s == "min-content" { return Track::MinContent; }
+    if s == "max-content" { return Track::MaxContent; }
     if let Some(num) = s.strip_suffix("fr") {
         return Track::Fr(num.trim().parse().unwrap_or(1.0));
     }
