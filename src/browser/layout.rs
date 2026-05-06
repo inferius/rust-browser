@@ -103,28 +103,127 @@ impl Display {
 }
 
 /// Aplikuje default styles per tag (browser user-agent stylesheet).
+/// Inspirovano Chrome/Firefox UA stylesheet (margin/padding em-based).
 fn apply_default_tag_styles(bx: &mut LayoutBox, tag: &str) {
+    // Body default margin 8px (Chrome/Firefox).
+    if tag == "body" {
+        if bx.margin_top.is_none() { bx.margin_top = Some(8.0); }
+        if bx.margin_right.is_none() { bx.margin_right = Some(8.0); }
+        if bx.margin_bottom.is_none() { bx.margin_bottom = Some(8.0); }
+        if bx.margin_left.is_none() { bx.margin_left = Some(8.0); }
+        bx.line_height = 1.2;
+        return;
+    }
     match tag {
-        "h1" => { bx.font_size = 32.0; bx.bold = true; bx.margin = 8.0; }
-        "h2" => { bx.font_size = 24.0; bx.bold = true; bx.margin = 8.0; }
-        "h3" => { bx.font_size = 20.0; bx.bold = true; bx.margin = 6.0; }
-        "h4" => { bx.font_size = 16.0; bx.bold = true; bx.margin = 6.0; }
-        "h5" => { bx.font_size = 14.0; bx.bold = true; bx.margin = 4.0; }
-        "h6" => { bx.font_size = 12.0; bx.bold = true; bx.margin = 4.0; }
-        "p" => { bx.margin = 8.0; }
+        // Headings: font-size + margin top/bottom em-based.
+        "h1" => { bx.font_size = 32.0; bx.bold = true;
+                  bx.margin_top = bx.margin_top.or(Some(21.44));   // 0.67em * 32
+                  bx.margin_bottom = bx.margin_bottom.or(Some(21.44)); }
+        "h2" => { bx.font_size = 24.0; bx.bold = true;
+                  bx.margin_top = bx.margin_top.or(Some(19.92));   // 0.83em * 24
+                  bx.margin_bottom = bx.margin_bottom.or(Some(19.92)); }
+        "h3" => { bx.font_size = 18.72; bx.bold = true;
+                  bx.margin_top = bx.margin_top.or(Some(18.72));   // 1em
+                  bx.margin_bottom = bx.margin_bottom.or(Some(18.72)); }
+        "h4" => { bx.font_size = 16.0; bx.bold = true;
+                  bx.margin_top = bx.margin_top.or(Some(21.28));   // 1.33em
+                  bx.margin_bottom = bx.margin_bottom.or(Some(21.28)); }
+        "h5" => { bx.font_size = 13.28; bx.bold = true;
+                  bx.margin_top = bx.margin_top.or(Some(22.18));   // 1.67em
+                  bx.margin_bottom = bx.margin_bottom.or(Some(22.18)); }
+        "h6" => { bx.font_size = 10.72; bx.bold = true;
+                  bx.margin_top = bx.margin_top.or(Some(24.94));   // 2.33em
+                  bx.margin_bottom = bx.margin_bottom.or(Some(24.94)); }
+        "p" => {
+            // 1em top/bottom margin (= 16px default).
+            bx.margin_top = bx.margin_top.or(Some(16.0));
+            bx.margin_bottom = bx.margin_bottom.or(Some(16.0));
+        }
         "b" | "strong" => { bx.bold = true; }
-        "ul" | "ol" => { bx.padding = 16.0; bx.margin = 8.0; }
-        "li" => { bx.margin = 2.0; bx.padding = 4.0; }
-        "blockquote" => { bx.margin = 16.0; bx.padding = 8.0; }
-        "pre" | "code" => { /* monospace by-implication, zatim default */ }
-        "hr" => { bx.border_width = 1.0; bx.border_color = Some([200, 200, 200, 255]); }
-        "a" => { /* color modra typicky pres CSS */ }
+        "i" | "em" => { /* italic - rendering pres font slope, zatim no-op */ }
+        "u" | "ins" => { bx.text_underline = true; }
+        "s" | "strike" | "del" => { /* line-through render TBD */ }
+        "a" => {
+            // Default: color blue + underline.
+            if bx.text_color.is_none() {
+                bx.text_color = Some([0, 0, 238, 255]);
+            }
+            bx.text_underline = true;
+        }
+        "ul" | "ol" => {
+            bx.padding_left = bx.padding_left.or(Some(40.0));
+            bx.margin_top = bx.margin_top.or(Some(16.0));
+            bx.margin_bottom = bx.margin_bottom.or(Some(16.0));
+        }
+        "li" => { /* list-item display */ }
+        "blockquote" => {
+            bx.margin_top = bx.margin_top.or(Some(16.0));
+            bx.margin_bottom = bx.margin_bottom.or(Some(16.0));
+            bx.margin_left = bx.margin_left.or(Some(40.0));
+            bx.margin_right = bx.margin_right.or(Some(40.0));
+        }
+        "pre" => {
+            bx.margin_top = bx.margin_top.or(Some(16.0));
+            bx.margin_bottom = bx.margin_bottom.or(Some(16.0));
+            // Monospace by-implication, zatim default.
+        }
+        "code" | "kbd" | "samp" | "tt" => { /* monospace */ }
+        "hr" => {
+            bx.border_top_width = Some(1.0);
+            bx.border_color = Some([200, 200, 200, 255]);
+            bx.margin_top = bx.margin_top.or(Some(8.0));
+            bx.margin_bottom = bx.margin_bottom.or(Some(8.0));
+        }
+        "button" => {
+            // Default browser button: padding, border, bg gray, rounded.
+            if bx.padding == 0.0 && bx.padding_top.is_none() {
+                bx.padding_top = Some(2.0);
+                bx.padding_bottom = Some(3.0);
+                bx.padding_left = Some(8.0);
+                bx.padding_right = Some(8.0);
+            }
+            bx.border_width = bx.border_width.max(1.0);
+            if bx.border_color.is_none() { bx.border_color = Some([118, 118, 118, 255]); }
+            if bx.bg_color.is_none() { bx.bg_color = Some([239, 239, 239, 255]); }
+        }
+        "input" => {
+            // Default border + light gray bg pro text inputs.
+            let typ = bx.node.as_ref().and_then(|n| n.attr("type")).unwrap_or_else(|| "text".to_string()).to_lowercase();
+            match typ.as_str() {
+                "text" | "email" | "password" | "url" | "tel" | "search" | "number" => {
+                    if bx.padding == 0.0 && bx.padding_top.is_none() {
+                        bx.padding_top = Some(1.0);
+                        bx.padding_bottom = Some(1.0);
+                        bx.padding_left = Some(2.0);
+                        bx.padding_right = Some(2.0);
+                    }
+                    if bx.border_width == 0.0 { bx.border_width = 1.0; }
+                    if bx.border_color.is_none() { bx.border_color = Some([118, 118, 118, 255]); }
+                    if bx.bg_color.is_none() { bx.bg_color = Some([255, 255, 255, 255]); }
+                    if bx.rect.height == 0.0 { bx.rect.height = 21.0; }
+                    if bx.rect.width == 0.0 { bx.rect.width = 154.0; }
+                }
+                _ => {}
+            }
+        }
+        "table" => {
+            bx.border_width = bx.border_width.max(0.0);
+            bx.margin_top = bx.margin_top.or(Some(0.0));
+        }
+        "fieldset" => {
+            bx.padding_top = bx.padding_top.or(Some(8.0));
+            bx.padding_bottom = bx.padding_bottom.or(Some(8.0));
+            bx.padding_left = bx.padding_left.or(Some(8.0));
+            bx.padding_right = bx.padding_right.or(Some(8.0));
+            bx.margin_left = bx.margin_left.or(Some(2.0));
+            bx.margin_right = bx.margin_right.or(Some(2.0));
+            bx.border_width = bx.border_width.max(2.0);
+            if bx.border_color.is_none() { bx.border_color = Some([192, 192, 192, 255]); }
+        }
         "canvas" => {
             // CSS default: 300x150 px (HTML spec)
             if bx.rect.width == 0.0 { bx.rect.width = 300.0; }
             if bx.rect.height == 0.0 { bx.rect.height = 150.0; }
-            // Default bg cerny aby canvas byl viditelny
-            if bx.bg_color.is_none() { bx.bg_color = Some([0, 0, 0, 255]); }
         }
         "svg" => {
             // SVG default 300x150 (jako canvas) pokud nedano viewBox/width/height
