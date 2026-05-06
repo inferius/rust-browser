@@ -252,7 +252,41 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                     let pb_r = item.padding_right.unwrap_or(item.padding) + item.border_right_width.unwrap_or(item.border_width);
                     let cw_min_p = super::super::layout::parse_length(&item.min_width_v);
                     let item_max = item.explicit_width.unwrap_or(item.rect.width).max(text_max).max(pb_l + pb_r).max(cw_min_p);
-                    let item_min = item.explicit_width.unwrap_or(item.rect.width).max(text_min).max(pb_l + pb_r).max(cw_min_p);
+                    // Min-content rekurzivne: pri item bez text + children, walk first
+                    // descendant chain a najdi nejvetsi child explicit_width nebo
+                    // text_min_content. Drive jen rect.width = max-content.
+                    fn deep_min_content(b: &super::super::layout::LayoutBox) -> f32 {
+                        if let Some(w) = b.explicit_width { return w; }
+                        if b.taffy_mode {
+                            if let Some(t) = &b.text {
+                                let mut max_seg = 0usize; let mut cur = 0usize;
+                                for c in t.chars() {
+                                    if matches!(c, '\u{200B}' | ' ' | '\n' | '\t') {
+                                        if cur > max_seg { max_seg = cur; } cur = 0;
+                                    } else { cur += 1; }
+                                }
+                                if cur > max_seg { max_seg = cur; }
+                                return max_seg as f32 * 10.0;
+                            }
+                        }
+                        let mut m = 0.0_f32;
+                        for c in b.children.iter() {
+                            if matches!(c.position, super::super::layout::Position::Absolute | super::super::layout::Position::Fixed) { continue; }
+                            if matches!(c.display, super::super::layout::Display::None) { continue; }
+                            let cm = deep_min_content(c);
+                            if cm > m { m = cm; }
+                        }
+                        m
+                    }
+                    let recursive_min = if item.taffy_mode && item.text.is_none() && !item.children.is_empty() {
+                        deep_min_content(item)
+                    } else { 0.0 };
+                    let item_min_base = if recursive_min > 0.0 {
+                        recursive_min.max(text_min)
+                    } else {
+                        item.explicit_width.unwrap_or(item.rect.width).max(text_min)
+                    };
+                    let item_min = item_min_base.max(pb_l + pb_r).max(cw_min_p);
                     if item_max > max_content { max_content = item_max; }
                     if item_min > min_content { min_content = item_min; }
                 }
