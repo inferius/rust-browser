@@ -417,7 +417,7 @@ mod tests {
                     bx.offset_top = val; bx.offset_bottom = val;
                     bx.offset_left = val; bx.offset_right = val;
                 }
-                "overflow" | "overflow-x" | "overflow-y" => return None,
+                "overflow" | "overflow-x" | "overflow-y" => { /* ignore - layout not affected */ }
                 "writing-mode" => return None,
                 "direction" if v == "rtl" => return None,
                 "direction" => {}
