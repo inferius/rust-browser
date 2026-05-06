@@ -645,7 +645,10 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                 child.rect.x = inner_x + main_cursor;
                 child.rect.y = inner_y + cross_cursor + cross_offset;
                 let mut w = main_size;
-                let mut h = if matches!(item_align, AlignItems::Stretch) && child.explicit_height.is_none() {
+                // Pri item s flex-wrap: stretch cross axis (taffy behavior).
+                let item_has_wrap = !child.flex_wrap.is_empty() && child.flex_wrap != "nowrap";
+                let stretch_cross = matches!(item_align, AlignItems::Stretch) || item_has_wrap;
+                let mut h = if stretch_cross && child.explicit_height.is_none() {
                     (cross_size - it.margin_cross_start - it.margin_cross_end).max(0.0)
                 } else { item_cross_size };
                 // Clamp h max/min PRED aspect dopoctem.
@@ -667,7 +670,9 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                 child.rect.x = inner_x + cross_cursor + cross_offset;
                 child.rect.y = inner_y + main_cursor;
                 let mut h = main_size;
-                let mut w = if matches!(item_align, AlignItems::Stretch) && child.explicit_width.is_none() {
+                let item_has_wrap = !child.flex_wrap.is_empty() && child.flex_wrap != "nowrap";
+                let stretch_cross = matches!(item_align, AlignItems::Stretch) || item_has_wrap;
+                let mut w = if stretch_cross && child.explicit_width.is_none() {
                     (cross_size - it.margin_cross_start - it.margin_cross_end).max(0.0)
                 } else { item_cross_size };
                 // Clamp w max/min PRED aspect dopoctem.
