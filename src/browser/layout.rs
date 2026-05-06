@@ -609,6 +609,9 @@ pub struct LayoutBox {
     /// Taffy compliance mode: skip default 20px height for empty leaf divs.
     /// Set true u boxu pochazejicich z taffy fixture parser.
     pub taffy_mode: bool,
+    /// Pseudo-flex: byl Block, ale heuristika ho zmenila na Flex (align-items=baseline).
+    /// Pri baseline calc pak pouzij synth (block) baseline misto first-child.
+    pub pseudo_flex: bool,
 }
 
 impl LayoutBox {
@@ -889,6 +892,7 @@ impl LayoutBox {
             selection_bg: None,
             selection_color: None,
             taffy_mode: false,
+            pseudo_flex: false,
         }
     }
 

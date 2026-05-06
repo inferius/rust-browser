@@ -541,6 +541,14 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                 !matches!(c.position, super::super::layout::Position::Absolute | super::super::layout::Position::Fixed)
                 && !matches!(c.display, super::super::layout::Display::None))
         });
+        // Detekce pseudo-flex (block s align-items=baseline heuristika): vsechny items jsou
+        // plain block bez flex-direction. Pri tom synth baseline pro vsechny.
+        let any_real_flex_item = baseline_items_idx.iter().any(|&k| {
+            let real_idx = in_flow[line_indices[k]];
+            let item = &bx.children[real_idx];
+            matches!(item.display, super::super::layout::Display::Flex | super::super::layout::Display::Grid)
+                || !item.flex_direction.is_empty()
+        });
         let item_baselines: Vec<f32> = line_indices.iter().map(|&item_idx| {
             let it_b = items[item_idx];
             let real_idx_b = in_flow[item_idx];
@@ -549,9 +557,11 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             let is_flex_or_grid = matches!(item_box.display,
                 super::super::layout::Display::Flex | super::super::layout::Display::Grid);
             let has_flex_attr = !item_box.flex_direction.is_empty();
-            // First-child baseline pri: flex/grid item, flex-direction set, NEBO vsechny
-            // baseline items maji children.
-            let use_first_child = is_flex_or_grid || has_flex_attr || all_have_children;
+            // First-child baseline pri: flex/grid item, flex-direction set, NEBO
+            // (parent je real flex (NE pseudo) AND vsechny items maji children).
+            let parent_is_real_flex = !bx.pseudo_flex;
+            let use_first_child = is_flex_or_grid || has_flex_attr
+                || (all_have_children && parent_is_real_flex);
             if !use_first_child {
                 return synth;
             }

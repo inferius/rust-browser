@@ -427,6 +427,7 @@ mod tests {
         // Heuristika: taffy block fixtures s align-items=baseline ocekavaji flex layout.
         if matches!(bx.display, Display::Block) && bx.align_items.as_str() == "baseline" {
             bx.display = Display::Flex;
+            bx.pseudo_flex = true; // markovat pro baseline calc
         }
         // Pri box-sizing = content-box pripocti padding+border do explicit size.
         // Taffy default je border-box (jejich fixtures `_border_box_ltr` predpokladaji
