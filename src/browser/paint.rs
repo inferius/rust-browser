@@ -263,6 +263,37 @@ pub fn build_display_list(root: &LayoutBox) -> Vec<DisplayCommand> {
     commands
 }
 
+/// Thread-local viewport pro paint culling. Pred build_display_list_culled
+/// se nastavi, paint_box pak preskoci elementy mimo.
+thread_local! {
+    static VIEWPORT_CULL: std::cell::Cell<Option<(f32, f32)>> = const { std::cell::Cell::new(None) };
+}
+
+/// Vrati display list s viewport culling.
+/// Boxy mimo (scroll_y - 200, scroll_y + viewport_h + 200) se preskocej.
+/// Sticky/Fixed/Absolute pozice elementy nikdy nepreskoceny (mohou byt jinde).
+pub fn build_display_list_culled(root: &LayoutBox, scroll_y: f32, viewport_h: f32) -> Vec<DisplayCommand> {
+    VIEWPORT_CULL.with(|c| c.set(Some((scroll_y, scroll_y + viewport_h))));
+    let mut commands = Vec::new();
+    paint_box(root, &mut commands, None);
+    VIEWPORT_CULL.with(|c| c.set(None));
+    commands
+}
+
+fn culled_out(bx: &LayoutBox) -> bool {
+    let bounds = VIEWPORT_CULL.with(|c| c.get());
+    let (vt, vb) = match bounds { Some(b) => b, None => return false };
+    let always_visible = matches!(bx.position,
+        super::layout::Position::Fixed | super::layout::Position::Sticky
+        | super::layout::Position::Absolute);
+    if always_visible { return false; }
+    if !bx.transforms.is_empty() { return false; } // transforms muzou bbox menit
+    let buffer = 200.0;
+    let bx_top = bx.rect.y;
+    let bx_bot = bx.rect.y + bx.rect.height;
+    bx_bot < vt - buffer || bx_top > vb + buffer
+}
+
 /// Vypocita clip-path adjusted rect pro element bg/image.
 /// Vrati (x, y, w, h, radius) - radius vetsi nez box.border_radius pri circle/ellipse.
 fn compute_clip_rect(bx: &LayoutBox) -> (f32, f32, f32, f32, f32) {
@@ -946,6 +977,8 @@ pub fn parse_svg_path(d: &str) -> Vec<(f32, f32)> {
 }
 
 fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective: Option<f32>) {
+    // Viewport culling - skip cely subtree mimo viewport (+ buffer).
+    if culled_out(bx) { return; }
     // Index PRED jakymkoliv emit pro tento box - transform 2D apply pres
     // cmds[box_start..] (vse co tento box vyemituje vc. children).
     let box_start = cmds.len();

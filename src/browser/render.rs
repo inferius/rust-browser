@@ -2630,7 +2630,9 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
             let mut layout_root = layout::layout_tree_with_pseudo(&document_root, &style_map, &pseudo_map, viewport_w, viewport_h);
             // Apply position: sticky pri current scroll
             layout::apply_sticky(&mut layout_root, self.scroll_y);
-            let mut display_list = paint::build_display_list(&layout_root);
+            // Viewport culling: vyrad off-screen elementy z paint walku
+            // (test stranka 7000 px, viewport 900 px = 8x mensi paint cost).
+            let mut display_list = paint::build_display_list_culled(&layout_root, self.scroll_y, viewport_h);
 
             // Canvas API: emit canvas ops jako DisplayCommands.
             if let Some(interp) = &self.interpreter {
@@ -3152,12 +3154,20 @@ impl Renderer {
         // Pokud winit jeste nedostal WM_SIZE na Windows, inner_size = 0. Fallback na rozumny default.
         let init_w = if size.width > 0 { size.width } else { 1280 };
         let init_h = if size.height > 0 { size.height } else { 900 };
+        // Present mode: prefer Mailbox (vsync s drop-old, smoothest na high-Hz monitorech)
+        // > Immediate (uncapped, mozna tearing) > Fifo (klasicky vsync 60Hz na vetsine drivers).
+        // Mailbox/Immediate tracking native monitor refresh (144Hz/165Hz/240Hz).
+        let preferred_modes = [wgpu::PresentMode::Mailbox, wgpu::PresentMode::Immediate, wgpu::PresentMode::Fifo];
+        let present_mode = preferred_modes.iter().copied()
+            .find(|m| surface_caps.present_modes.contains(m))
+            .unwrap_or(wgpu::PresentMode::Fifo);
+        eprintln!("[render] present_mode = {:?} (available: {:?})", present_mode, surface_caps.present_modes);
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_caps.formats[0],
             width: init_w,
             height: init_h,
-            present_mode: wgpu::PresentMode::Fifo,
+            present_mode,
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
