@@ -39,6 +39,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
     let col_is_auto: Vec<bool> = (0..cols).map(|i| match col_token_kinds.get(i) {
         Some(Track::Auto) => true,
         Some(Track::Minmax(_, max, false)) if !max.is_finite() => true,
+        Some(Track::Minmax(min, _, false)) if min.is_nan() => true,
         _ => false,
     }).collect();
 
@@ -832,7 +833,9 @@ pub fn resolve_tracks(s: &str, container_size: f32, gap: f32) -> Vec<f32> {
             Track::Fr(f) => fr_total += *f,
             Track::Auto => auto_count += 1,
             Track::Minmax(min, max, is_fr) => {
-                let min_resolved = if *min < 0.0 { container_size * (-min) } else { *min };
+                let min_resolved = if min.is_nan() { 0.0 }
+                                   else if *min < 0.0 { container_size * (-min) }
+                                   else { *min };
                 if *is_fr {
                     fixed_total += min_resolved;
                     fr_total += *max;
@@ -857,8 +860,12 @@ pub fn resolve_tracks(s: &str, container_size: f32, gap: f32) -> Vec<f32> {
         Track::Fr(f) => fr_base * f,
         Track::Auto => auto_base,
         Track::Minmax(min, max, is_fr) => {
-            let min_r = if *min < 0.0 { container_size * (-min) } else { *min };
-            let max_r = if *max < 0.0 { container_size * (-max) } else { *max };
+            let min_r = if min.is_nan() { 0.0 }
+                        else if *min < 0.0 { container_size * (-min) }
+                        else { *min };
+            let max_r = if max.is_nan() { f32::INFINITY }
+                        else if *max < 0.0 { container_size * (-max) }
+                        else { *max };
             if *is_fr {
                 let v = min_r + fr_base * max;
                 v.max(min_r)
@@ -1119,9 +1126,14 @@ fn parse_single_track(s: &str) -> Track {
             let min_s = parts[0].trim();
             let max_s = parts[1].trim();
             // Pouzijeme negativni sentinel pro percent: -p kde p je 0..1.
-            // Pri resolve to detekuje a vynasobi container.
+            // Sentinely:
+            //   f32::NAN = min-content / max-content (resolve s items)
+            //   -1.0 .. 0.0 = percent (0..100%)
+            //   0.0 = auto
             let parse_part = |p: &str| -> f32 {
-                if p == "auto" || p == "min-content" || p == "max-content" { return 0.0; }
+                if p == "auto" { return 0.0; }
+                // Pro min/max-content vratime f32::NAN; auto_track_sizing to resolve.
+                if p == "max-content" || p == "min-content" { return f32::NAN; }
                 if let Some(num) = p.strip_suffix('%') {
                     let v: f32 = num.trim().parse().unwrap_or(0.0);
                     return -(v / 100.0); // sentinel
