@@ -2039,8 +2039,17 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     // Padding / margin / border-width - prefer expanded shorthand
     let padding_v = s.get("padding-top").or(s.get("padding"));
     if let Some(p) = padding_v { bx.padding = parse_length(p); }
+    // Asymmetricke padding longhands (musime preferovat pred shorthand `padding`).
+    if let Some(p) = s.get("padding-top")    { bx.padding_top    = Some(parse_length(p)); }
+    if let Some(p) = s.get("padding-right")  { bx.padding_right  = Some(parse_length(p)); }
+    if let Some(p) = s.get("padding-bottom") { bx.padding_bottom = Some(parse_length(p)); }
+    if let Some(p) = s.get("padding-left")   { bx.padding_left   = Some(parse_length(p)); }
     let margin_v = s.get("margin-top").or(s.get("margin"));
     if let Some(m) = margin_v { bx.margin = parse_length(m); }
+    if let Some(m) = s.get("margin-top")    { bx.margin_top    = Some(parse_length(m)); }
+    if let Some(m) = s.get("margin-right")  { bx.margin_right  = Some(parse_length(m)); }
+    if let Some(m) = s.get("margin-bottom") { bx.margin_bottom = Some(parse_length(m)); }
+    if let Some(m) = s.get("margin-left")   { bx.margin_left   = Some(parse_length(m)); }
     if let Some(b) = s.get("border-width") { bx.border_width = parse_length(b); }
     if let Some(bc) = s.get("border-color") { bx.border_color = parse_color(bc); }
     if let Some(fs) = s.get("font-size") { bx.font_size = parse_length(fs); }
@@ -2537,9 +2546,16 @@ pub fn layout_block(bx: &mut LayoutBox) {
     // content_h NEpresahnout puvodni hodnotu (parent height = constraint).
     let preset_height_taffy = if bx.taffy_mode { bx.rect.height } else { 0.0 };
 
-    let inner_x = bx.rect.x + bx.padding + bx.margin + bx.border_width;
-    let inner_y = bx.rect.y + bx.padding + bx.margin + bx.border_width;
-    let inner_w = bx.rect.width - 2.0 * (bx.padding + bx.margin + bx.border_width);
+    // Asymmetric padding/margin wins, jinak shorthand `padding`/`margin`.
+    let pad_l = bx.padding_left.unwrap_or(bx.padding);
+    let pad_r = bx.padding_right.unwrap_or(bx.padding);
+    let pad_t = bx.padding_top.unwrap_or(bx.padding);
+    let mar_l = bx.margin_left.unwrap_or(bx.margin);
+    let mar_r = bx.margin_right.unwrap_or(bx.margin);
+    let mar_t = bx.margin_top.unwrap_or(bx.margin);
+    let inner_x = bx.rect.x + pad_l + mar_l + bx.border_width;
+    let inner_y = bx.rect.y + pad_t + mar_t + bx.border_width;
+    let inner_w = bx.rect.width - pad_l - pad_r - mar_l - mar_r - 2.0 * bx.border_width;
 
     let mut cursor_y = inner_y;
     // Inline run - sbiraji se inline boxy do line buffer, flush pri block child nebo konci
@@ -2657,22 +2673,35 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
     let mut cursor_y = start_y;
     let parent_font_size = bx.font_size;
     let parent_bold = bx.bold;
+    let parent_italic = bx.italic;
+    let parent_color = bx.text_color;
+    let parent_underline = bx.text_underline;
+    let parent_font_family = bx.font_family.clone();
     let line_height_default = parent_font_size * 1.2;
     let mut line_height = line_height_default;
     // Tracking whitespace boundary mezi sousednimi inline siblings.
     let mut prev_had_trailing_space = false;
 
     for (sib_idx, &idx) in indices.iter().enumerate() {
-        // Inherit font_size + bold od parentu pri text-only inline elementech
-        // co nemaji explicitne nastaveny font-size (tj. bx.font_size = default 16).
+        // Inherit inheritable CSS props od parentu pri text/inline children co
+        // je nemaji explicit. Inheritable per CSS spec: color, font-*, text-*.
         if bx.children[idx].font_size <= 16.001 && parent_font_size > 16.0 {
             bx.children[idx].font_size = parent_font_size;
         }
         if !bx.children[idx].bold && parent_bold {
             bx.children[idx].bold = parent_bold;
         }
-        if !bx.children[idx].italic && bx.italic {
+        if !bx.children[idx].italic && parent_italic {
             bx.children[idx].italic = true;
+        }
+        if bx.children[idx].text_color.is_none() && parent_color.is_some() {
+            bx.children[idx].text_color = parent_color;
+        }
+        if !bx.children[idx].text_underline && parent_underline {
+            bx.children[idx].text_underline = true;
+        }
+        if bx.children[idx].font_family.is_empty() && !parent_font_family.is_empty() {
+            bx.children[idx].font_family = parent_font_family.clone();
         }
         let bx_clone = bx.children[idx].clone();
         let font_size = bx_clone.font_size;
@@ -2714,11 +2743,19 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
             if sib_idx > 0 && prev_had_trailing_space && cursor_x > inner_x {
                 cursor_x += space_w;
             }
-            let estimated_w = (bx_clone.children.iter()
+            // Inline padding (CSS: <code>, <span class=num> maji padding-left/right).
+            // Asymmetric padding wins, jinak shorthand `padding`.
+            let pad_l = bx_clone.padding_left.unwrap_or(bx_clone.padding);
+            let pad_r = bx_clone.padding_right.unwrap_or(bx_clone.padding);
+            let pad_t = bx_clone.padding_top.unwrap_or(bx_clone.padding);
+            let pad_b = bx_clone.padding_bottom.unwrap_or(bx_clone.padding);
+            let text_w = (bx_clone.children.iter()
                 .filter_map(|c| c.text.as_ref())
                 .map(|t| measure_text_width(t, font_size))
                 .sum::<f32>())
                 .max(font_size);
+            let estimated_w = text_w + pad_l + pad_r;
+            let element_h = advance_h + pad_t + pad_b;
             if cursor_x + estimated_w > inner_x + inner_w && cursor_x > inner_x {
                 cursor_y += line_height;
                 cursor_x = inner_x;
@@ -2726,8 +2763,8 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
             bx.children[idx].rect.x = cursor_x;
             bx.children[idx].rect.y = cursor_y;
             bx.children[idx].rect.width = estimated_w;
-            bx.children[idx].rect.height = advance_h;
-            // Layout vnoreny obsah
+            bx.children[idx].rect.height = element_h;
+            // Layout vnoreny obsah - layout_block pouzije rect + padding.
             layout_block(&mut bx.children[idx]);
             cursor_x += estimated_w;
             // Inline element bez text trailing -> default no trailing space.
