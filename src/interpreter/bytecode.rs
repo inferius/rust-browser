@@ -132,6 +132,12 @@ pub enum Opcode {
                           // v compiled.captures_outer_indices. VM pri LoadFunction snapne
                           // outer locals[idx] do kapture vec a embedne do JsFunc::VmCompiled.
     LoadCapture(u16),     // push captures[u16] - cte z aktualne bezici closure frame.
+
+    // Array spread support pri literal [a, ...b].
+    /// Pop value, append do top-of-stack Array (Array zustane na stacku).
+    AppendItem,
+    /// Pop source Array, iterate jeho elements + append do top-of-stack Array.
+    AppendSpread,
 }
 
 #[derive(Debug, Clone)]
@@ -503,19 +509,38 @@ pub fn compile_expr(e: &Expr, code: &mut CodeBlock) -> Result<(), &'static str> 
             Ok(())
         }
         Expr::Array(items) => {
-            // None hole = undefined.
-            if items.len() > u16::MAX as usize { return Err("array > 65k items"); }
-            for item in items {
-                if let Some(e) = item {
-                    if matches!(e.as_ref(), Expr::Spread(_)) {
-                        return Err("array spread not supported");
+            // Pri pritomnem Spread: builduj inkrementalne pres NewArray(0) + Append*.
+            // Jinak: rychly NewArray(N) z fixed slotu.
+            let has_spread = items.iter().any(|i|
+                matches!(i.as_ref().map(|e| e.as_ref()), Some(Expr::Spread(_))));
+            if !has_spread {
+                if items.len() > u16::MAX as usize { return Err("array > 65k items"); }
+                for item in items {
+                    if let Some(e) = item {
+                        compile_expr(e, code)?;
+                    } else {
+                        code.emit(Opcode::LoadUndefined);
                     }
-                    compile_expr(e, code)?;
-                } else {
-                    code.emit(Opcode::LoadUndefined);
+                }
+                code.emit(Opcode::NewArray(items.len() as u16));
+            } else {
+                // Inkrementalni build.
+                code.emit(Opcode::NewArray(0));
+                for item in items {
+                    if let Some(e) = item {
+                        if let Expr::Spread(inner) = e.as_ref() {
+                            compile_expr(inner, code)?;
+                            code.emit(Opcode::AppendSpread);
+                        } else {
+                            compile_expr(e, code)?;
+                            code.emit(Opcode::AppendItem);
+                        }
+                    } else {
+                        code.emit(Opcode::LoadUndefined);
+                        code.emit(Opcode::AppendItem);
+                    }
                 }
             }
-            code.emit(Opcode::NewArray(items.len() as u16));
             Ok(())
         }
         Expr::Call { callee, args, optional } => {
@@ -1295,6 +1320,27 @@ impl VM {
                         self.stack.push(v);
                     } else {
                         self.stack.push(get_property(&obj, &key_str));
+                    }
+                }
+                Opcode::AppendItem => {
+                    let val = self.pop()?;
+                    if let Some(JsValue::Array(arr)) = self.stack.last() {
+                        arr.borrow_mut().push(val);
+                    } else {
+                        return Err("AppendItem: top of stack not Array".into());
+                    }
+                }
+                Opcode::AppendSpread => {
+                    let src = self.pop()?;
+                    let items: Vec<JsValue> = match src {
+                        JsValue::Array(a) => a.borrow().clone(),
+                        _ => return Err("AppendSpread: source not Array".into()),
+                    };
+                    if let Some(JsValue::Array(arr)) = self.stack.last() {
+                        let mut a = arr.borrow_mut();
+                        for it in items { a.push(it); }
+                    } else {
+                        return Err("AppendSpread: top of stack not Array".into());
                     }
                 }
                 Opcode::NewArray(count) => {
