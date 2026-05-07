@@ -376,6 +376,33 @@ fn vm_call_args_spread_mixed() {
 }
 
 #[test]
+fn vm_method_this_binding() {
+    let r = run_vm(r#"
+        let counter = {
+            n: 0,
+            inc: function() { this.n = this.n + 1; return this.n; }
+        };
+        counter.inc();
+        counter.inc();
+        counter.inc();
+        counter.n
+    "#).unwrap();
+    assert_jv!(r, n(3.0));
+}
+
+#[test]
+fn vm_method_returns_this_field() {
+    let r = run_vm(r#"
+        let obj = {
+            value: 42,
+            getValue: function() { return this.value; }
+        };
+        obj.getValue()
+    "#).unwrap();
+    assert_jv!(r, n(42.0));
+}
+
+#[test]
 fn vm_new_constructor_simple() {
     let r = run_vm(r#"
         function Point(x, y) {

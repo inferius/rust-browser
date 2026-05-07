@@ -144,6 +144,8 @@ pub enum Opcode {
     NewOp(u16),
     /// Push aktualni this hodnotu (Undefined pri nezbalanovanem).
     LoadThis,
+    /// Method call: stack [obj, method, args...]. Calls method s this=obj.
+    CallMethod(u16),
 }
 
 #[derive(Debug, Clone)]
@@ -579,6 +581,44 @@ pub fn compile_expr(e: &Expr, code: &mut CodeBlock) -> Result<(), &'static str> 
         }
         Expr::Call { callee, args, optional } => {
             let opt = *optional;
+            // Detekuj Method call: callee = Member(obj, prop). Emit CallMethod(argc).
+            // Tim ziskame this binding ze obj.
+            // Spread args + Method dohromady - skip CallMethod path (faily).
+            let has_spread_arg_check = args.iter().any(|a| matches!(a, Expr::Spread(_)));
+            if !has_spread_arg_check && !opt {
+                if let Expr::Member { object, prop, optional: false } = callee.as_ref() {
+                    // Compile obj (resolve special globals at top-level via LoadGlobal).
+                    if let Expr::Ident(obj_name) = object.as_ref() {
+                        if let Some(idx) = code.var_names.iter().position(|n| n == obj_name) {
+                            code.emit(Opcode::LoadVar(idx as u16));
+                        } else if let Some(cap_idx) = try_capture(obj_name) {
+                            code.emit(Opcode::LoadCapture(cap_idx));
+                        } else {
+                            let g_idx = code.push_var(obj_name);
+                            code.emit(Opcode::LoadGlobal(g_idx));
+                        }
+                    } else {
+                        compile_expr(object, code)?;
+                    }
+                    code.emit(Opcode::Dup);
+                    match prop {
+                        MemberProp::Ident(name) => {
+                            let key_idx = code.push_var(name);
+                            code.emit(Opcode::GetProp(key_idx));
+                        }
+                        MemberProp::Computed(e) => {
+                            compile_expr(e, code)?;
+                            code.emit(Opcode::GetIndex);
+                        }
+                    }
+                    if args.len() > u16::MAX as usize { return Err("too many args"); }
+                    for arg in args {
+                        compile_expr(arg, code)?;
+                    }
+                    code.emit(Opcode::CallMethod(args.len() as u16));
+                    return Ok(());
+                }
+            }
             // Callee resolution: local var vs global.
             // Pri Ident: pokud existuje v var_names UZ pred timto callem (function decl
             // appears earlier), pouzij LoadVar, jinak LoadGlobal.
@@ -1376,6 +1416,43 @@ impl VM {
                     } else {
                         self.stack.push(get_property(&obj, &key_str));
                     }
+                }
+                Opcode::CallMethod(argc) => {
+                    let argc = argc as usize;
+                    if self.stack.len() < argc + 2 { return Err("stack underflow CallMethod".into()); }
+                    let args: Vec<JsValue> = self.stack.drain(self.stack.len() - argc..).collect();
+                    let method = self.pop()?;
+                    let this_obj = self.pop()?;
+                    let result = match method {
+                        JsValue::Function(super::JsFunc::Native(_, f)) => {
+                            // Native fn dostane args (this is captured pri get_property pres Rc).
+                            f(args).map_err(|e| format!("{:?}", e))?
+                        }
+                        JsValue::Function(super::JsFunc::VmCompiled { compiled, env, name, captures }) => {
+                            let mut nested = VM::new();
+                            nested.env = Some(env.clone());
+                            nested.captures = captures.clone();
+                            nested.this_value = this_obj;
+                            nested.locals.resize(compiled.code.var_names.len(), JsValue::Undefined);
+                            if !compiled.code.var_names.is_empty()
+                                && compiled.code.var_names[0] == name.clone().unwrap_or_default() {
+                                nested.locals[0] = JsValue::Function(super::JsFunc::VmCompiled {
+                                    name: name.clone(),
+                                    compiled: compiled.clone(),
+                                    env: env.clone(),
+                                    captures: captures.clone(),
+                                });
+                            }
+                            for (i, p) in compiled.params.iter().enumerate() {
+                                if let Some(idx) = compiled.code.var_names.iter().position(|n| n == p) {
+                                    nested.locals[idx] = args.get(i).cloned().unwrap_or(JsValue::Undefined);
+                                }
+                            }
+                            nested.run(&compiled.code)?
+                        }
+                        _ => return Err("CallMethod: callee not function".into()),
+                    };
+                    self.stack.push(result);
                 }
                 Opcode::LoadThis => {
                     self.stack.push(self.this_value.clone());
