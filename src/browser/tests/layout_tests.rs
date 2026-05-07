@@ -2872,3 +2872,71 @@ fn writing_mode_horizontal_tb_normal() {
     assert!(children[1].rect.y > children[0].rect.y,
         "child[1].y={} musi byt > child[0].y={}", children[1].rect.y, children[0].rect.y);
 }
+
+// --- Table border-collapse + UA defaults tests ---
+
+#[test]
+fn table_border_collapse_emits_cell_border() {
+    let root = make_layout(
+        r#"<html><body><table><tr><td>A</td><td>B</td></tr></table></body></html>"#,
+        r#"table { border-collapse: collapse; }"#,
+    );
+    fn find_td<'a>(bx: &'a layout::LayoutBox) -> Option<&'a layout::LayoutBox> {
+        if bx.tag.as_deref() == Some("td") { return Some(bx); }
+        for ch in &bx.children { if let Some(f) = find_td(ch) { return Some(f); } }
+        None
+    }
+    let td = find_td(&root).expect("td");
+    assert!(td.border_width > 0.0, "td v border-collapse table musi mit border");
+    assert!(td.border_color.is_some());
+}
+
+#[test]
+fn table_without_collapse_no_default_border() {
+    let root = make_layout(
+        r#"<html><body><table><tr><td>A</td></tr></table></body></html>"#,
+        r#""#,
+    );
+    fn find_td<'a>(bx: &'a layout::LayoutBox) -> Option<&'a layout::LayoutBox> {
+        if bx.tag.as_deref() == Some("td") { return Some(bx); }
+        for ch in &bx.children { if let Some(f) = find_td(ch) { return Some(f); } }
+        None
+    }
+    let td = find_td(&root).expect("td");
+    // Bez border-collapse:collapse, td bez explicitniho border = bez border default.
+    assert_eq!(td.border_width, 0.0);
+}
+
+#[test]
+fn code_tag_gets_inline_bg_and_padding() {
+    let root = make_layout(
+        r#"<html><body><p>Some <code>code</code> here</p></body></html>"#,
+        r#""#,
+    );
+    fn find_code<'a>(bx: &'a layout::LayoutBox) -> Option<&'a layout::LayoutBox> {
+        if bx.tag.as_deref() == Some("code") { return Some(bx); }
+        for ch in &bx.children { if let Some(f) = find_code(ch) { return Some(f); } }
+        None
+    }
+    let code = find_code(&root).expect("code");
+    assert!(code.bg_color.is_some(), "code musi mit default bg");
+    assert!(code.padding_left.unwrap_or(0.0) > 0.0);
+    assert!(code.border_radius > 0.0);
+}
+
+#[test]
+fn mark_tag_yellow_bg_with_padding() {
+    let root = make_layout(
+        r#"<html><body><p>Some <mark>marked</mark> text</p></body></html>"#,
+        r#""#,
+    );
+    fn find_mark<'a>(bx: &'a layout::LayoutBox) -> Option<&'a layout::LayoutBox> {
+        if bx.tag.as_deref() == Some("mark") { return Some(bx); }
+        for ch in &bx.children { if let Some(f) = find_mark(ch) { return Some(f); } }
+        None
+    }
+    let mark = find_mark(&root).expect("mark");
+    let bg = mark.bg_color.expect("mark musi mit bg");
+    assert!(bg[0] > 200 && bg[1] > 200, "mark bg by mela byt zluta-ish ({:?})", bg);
+    assert!(mark.padding_left.unwrap_or(0.0) > 0.0);
+}

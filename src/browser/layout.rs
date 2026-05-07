@@ -170,14 +170,22 @@ fn apply_default_tag_styles(bx: &mut LayoutBox, tag: &str) {
             // Monospace by-implication, zatim default.
         }
         "code" | "kbd" | "samp" | "tt" => {
-            // Light gray bg + monospace look. Inline padding pres pseudo-rect.
-            // (Full bg+padding na inline element vyzaduje line-box per-fragment paint.)
-            // Aspon default bg color je videt na Rect emisi.
+            // Light gray bg + monospace look. Pseudo-padding pres prirazeni padding
+            // (true inline-paint by potreboval line-box-aware paint).
+            if bx.bg_color.is_none() { bx.bg_color = Some([240, 240, 245, 255]); }
+            if bx.text_color.is_none() { bx.text_color = Some([200, 50, 100, 255]); }
+            if bx.border_radius == 0.0 { bx.border_radius = 3.0; }
+            // Padding "vizualni" - vlozi 2px prostor mezi text a bg-rect.
+            if bx.padding_left.is_none() { bx.padding_left = Some(4.0); }
+            if bx.padding_right.is_none() { bx.padding_right = Some(4.0); }
         }
         "mark" => {
             // CSS UA: yellow bg + black text.
-            if bx.bg_color.is_none() { bx.bg_color = Some([255, 255, 0, 255]); }
+            if bx.bg_color.is_none() { bx.bg_color = Some([255, 240, 100, 255]); }
             if bx.text_color.is_none() { bx.text_color = Some([0, 0, 0, 255]); }
+            if bx.border_radius == 0.0 { bx.border_radius = 2.0; }
+            if bx.padding_left.is_none() { bx.padding_left = Some(2.0); }
+            if bx.padding_right.is_none() { bx.padding_right = Some(2.0); }
         }
         "th" => {
             // Table header: bold + center text.
@@ -1102,7 +1110,30 @@ pub fn layout_tree_with_pseudo(
     // Post-pass: anchor positioning resolve
     let anchor_map = collect_anchors(&layout_root);
     apply_anchor_positioning(&mut layout_root, &anchor_map);
+    // Post-pass: table border-collapse - cells dostanou tenkou borderu kdyz table
+    // ma border-collapse:collapse a buncky nemaji explicitni border.
+    apply_table_border_collapse(&mut layout_root, false);
     layout_root
+}
+
+/// Pri border-collapse:collapse na <table> child td/th get 1px border default.
+fn apply_table_border_collapse(bx: &mut LayoutBox, in_collapse_table: bool) {
+    let is_table = matches!(bx.tag.as_deref(), Some("table"));
+    let collapse_here = is_table && bx.border_collapse == "collapse";
+    let inherit = in_collapse_table || collapse_here;
+    let is_cell = matches!(bx.tag.as_deref(), Some("td") | Some("th"));
+    if inherit && is_cell && bx.border_color.is_none() && bx.border_width == 0.0 {
+        bx.border_width = 1.0;
+        bx.border_color = Some([200, 200, 205, 255]);
+    }
+    // Tez table sam: defaultni border 1px na cely table.
+    if collapse_here && bx.border_color.is_none() && bx.border_width == 0.0 {
+        bx.border_width = 1.0;
+        bx.border_color = Some([200, 200, 205, 255]);
+    }
+    for ch in &mut bx.children {
+        apply_table_border_collapse(ch, inherit);
+    }
 }
 
 /// Aplikuje position: sticky pri zadanem scroll offsetu.
