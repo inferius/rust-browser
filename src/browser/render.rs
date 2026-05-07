@@ -414,7 +414,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 
 /// Vrati bytemuck-friendly vertices pro display list.
 /// Pro Rect: 6 vertexu (2 trojuhelniky). Pro text: 6 vertexu per glyph.
-fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: &ImageAtlas) -> Vec<Vertex> {
+fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: &ImageAtlas, zoom: f32) -> Vec<Vertex> {
     let mut verts = Vec::new();
     for cmd in commands {
         match cmd {
@@ -433,15 +433,18 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: 
                 let c = normalize_color(color);
                 let mut pen_x = *x;
                 let pen_y = *y + *font_size;
-                // Italic = fake skew transform na glyph quady (x += y * 0.2).
                 let italic_skew: f32 = if *italic { 0.2 } else { 0.0 };
-                // Bold: pri dostupnem font_bold pouzij real bold variant (atlas
-                // lookup s "__bold__:" prefix) - bold_offset = 0. Pri fallbacku
-                // (no bold font) pouzij fake bold pres 1px smear.
                 let bold_offset: f32 = if *bold && atlas.font_bold.is_none() { 1.0 } else { 0.0 };
                 let start_x = pen_x;
+                // Glyf rasterization na PHYSICAL px (font_size * zoom) -> sharp text
+                // pri zoomu. Atlas lookup klicem physical_size, GlyphInfo metrics
+                // jsou v physical px. Vertex emit deli velikost zoomem -> logical
+                // glyf quad. NDC mapping (vp = window/zoom) pak skaluje zpet na
+                // physical = 1:1 mapping atlas pixelu na obrazovku.
+                let z = zoom.max(0.0001);
+                let physical_size = (*font_size * z).round().max(1.0) as u32;
+                let inv_z = 1.0 / z;
                 for ch in content.chars() {
-                    // Color glyph (COLR) check pres synthetic image_atlas key.
                     let colr_key = format!("__colr:{}:{}:{}", font_family, ch as u32, *font_size as u32);
                     if let Some(info) = image_atlas.get(&colr_key) {
                         let gx = pen_x.round();
@@ -455,35 +458,35 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: 
                     } else {
                         font_family.clone()
                     };
-                    if let Some(g) = atlas.get(&lookup_family, ch, *font_size as u32) {
-                        // Round na integer piksely - sub-pixel pozice + linear
-                        // sampler = blur. Pri integer pozici sampler ctena pres
-                        // texel boundary = crisp.
-                        let gx_raw = pen_x + g.bearing_x;
-                        let gy_raw = pen_y - g.bearing_y;
-                        let gx = gx_raw.round();
-                        let gy = gy_raw.round();
+                    if let Some(g) = atlas.get(&lookup_family, ch, physical_size) {
+                        // Glyf metrics v physical -> dele inv_z na logical.
+                        let g_w = g.width * inv_z;
+                        let g_h = g.height * inv_z;
+                        let g_bx = g.bearing_x * inv_z;
+                        let g_by = g.bearing_y * inv_z;
+                        let g_adv = g.advance * inv_z;
+                        let gx_raw = pen_x + g_bx;
+                        let gy_raw = pen_y - g_by;
+                        // Round na logical-px hranici (pri zoom=1 = integer phys);
+                        // pri zoomu > 1 je krok jemnejsi (1/zoom logical px = 1 phys).
+                        let gx = (gx_raw * z).round() * inv_z;
+                        let gy = (gy_raw * z).round() * inv_z;
                         if italic_skew != 0.0 {
-                            // Italic skew = horni vertices posunute, dolni
-                            // zustanou. Kreslime quad jako 2 trojuhelniky s
-                            // top_x = gx + skew * h, bot_x = gx.
-                            let skew = g.height * italic_skew;
-                            push_skewed_quad(&mut verts, gx, gy, g.width, g.height,
-                                skew, c, g.uv0, g.uv1);
+                            let skew = g_h * italic_skew;
+                            push_skewed_quad(&mut verts, gx, gy, g_w, g_h, skew, c, g.uv0, g.uv1);
                         } else {
-                            push_rect_uv(&mut verts, gx, gy, g.width, g.height, c, g.uv0, g.uv1, 1.0);
+                            push_rect_uv(&mut verts, gx, gy, g_w, g_h, c, g.uv0, g.uv1, 1.0);
                         }
-                        // Bold smear: druhe vykresleni s integer x-offsetem.
                         if bold_offset > 0.0 {
+                            let bo = bold_offset * inv_z;
                             if italic_skew != 0.0 {
-                                let skew = g.height * italic_skew;
-                                push_skewed_quad(&mut verts, gx + bold_offset, gy,
-                                    g.width, g.height, skew, c, g.uv0, g.uv1);
+                                let skew = g_h * italic_skew;
+                                push_skewed_quad(&mut verts, gx + bo, gy, g_w, g_h, skew, c, g.uv0, g.uv1);
                             } else {
-                                push_rect_uv(&mut verts, gx + bold_offset, gy, g.width, g.height, c, g.uv0, g.uv1, 1.0);
+                                push_rect_uv(&mut verts, gx + bo, gy, g_w, g_h, c, g.uv0, g.uv1, 1.0);
                             }
                         }
-                        pen_x += g.advance + bold_offset;
+                        pen_x += g_adv + bold_offset * inv_z;
                     } else {
                         pen_x += font_size * 0.5;
                     }
@@ -2541,11 +2544,13 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                         self.render();
                         return;
                     }
-                    self.scroll_y -= scroll_amount;
+                    // Scroll amount je v physical px ze winit; layout je
+                    // v logical -> dele zoom.
+                    self.scroll_y -= scroll_amount / self.zoom.max(0.0001);
                     if self.scroll_y < 0.0 { self.scroll_y = 0.0; }
-                    // Clamp na max scroll
+                    // Clamp na max scroll. Layout height i viewport_h v logical.
                     if let Some(layout) = &self.layout_root {
-                        let viewport_h = self.renderer.as_ref().map(|r| r.config.height as f32).unwrap_or(768.0);
+                        let viewport_h = self.renderer.as_ref().map(|r| (r.config.height as f32) / self.zoom).unwrap_or(768.0);
                         let max_scroll = (layout.rect.height - viewport_h).max(0.0);
                         if self.scroll_y > max_scroll { self.scroll_y = max_scroll; }
                     }
@@ -3409,7 +3414,9 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                                 } else {
                                     font_family.clone()
                                 };
-                                r.atlas.add(&key_family, ch, *font_size as u32);
+                                // Rasterize na physical px (font_size * zoom) - sharp pri zoomu.
+                                let phys = (*font_size * self.zoom).round().max(1.0) as u32;
+                                r.atlas.add(&key_family, ch, phys);
                             }
                         }
                     }
@@ -5348,12 +5355,12 @@ impl Renderer {
         for seg in segments {
             match seg {
                 Seg::Main(slice) => {
-                    let verts = build_vertices(slice, &self.atlas, &self.image_atlas);
+                    let verts = build_vertices(slice, &self.atlas, &self.image_atlas, self.zoom);
                     self.draw_main_pass(view, &verts, first_pass);
                     first_pass = false;
                 }
                 Seg::Filter { inner, x, y, w, h, radius, color_matrix } => {
-                    let inner_verts = build_vertices(inner, &self.atlas, &self.image_atlas);
+                    let inner_verts = build_vertices(inner, &self.atlas, &self.image_atlas, self.zoom);
                     self.draw_to_offscreen(&inner_verts);
                     if radius >= 0.5 {
                         self.run_blur_passes(radius);
@@ -5362,14 +5369,14 @@ impl Renderer {
                     first_pass = false;
                 }
                 Seg::Transform3D { inner, x, y, w, h, matrix } => {
-                    let inner_verts = build_vertices(inner, &self.atlas, &self.image_atlas);
+                    let inner_verts = build_vertices(inner, &self.atlas, &self.image_atlas, self.zoom);
                     self.draw_to_offscreen(&inner_verts);
                     self.compose_transform(view, x, y, w, h, &matrix, first_pass);
                     first_pass = false;
                 }
                 Seg::Mask { inner, x, y, w, h, mask_src } => {
                     // 1. Render obsah do offscreen RT
-                    let inner_verts = build_vertices(inner, &self.atlas, &self.image_atlas);
+                    let inner_verts = build_vertices(inner, &self.atlas, &self.image_atlas, self.zoom);
                     self.draw_to_offscreen(&inner_verts);
                     // 2. Compose offscreen -> view s identity color matrix
                     // Pro gradient masku by bylo treba druhy RT s maskovanim;
@@ -5422,17 +5429,17 @@ impl Renderer {
                     for iseg in inner_segs {
                         match iseg {
                             Seg::Main(s) => {
-                                let v = build_vertices(s, &self.atlas, &self.image_atlas);
+                                let v = build_vertices(s, &self.atlas, &self.image_atlas, self.zoom);
                                 self.draw_main_pass(view, &v, false);
                             }
                             Seg::Filter { inner: fi, x: fx, y: fy, w: fw, h: fh, radius: fr, color_matrix: fm } => {
-                                let iv = build_vertices(fi, &self.atlas, &self.image_atlas);
+                                let iv = build_vertices(fi, &self.atlas, &self.image_atlas, self.zoom);
                                 self.draw_to_offscreen(&iv);
                                 if fr >= 0.5 { self.run_blur_passes(fr); }
                                 self.compose_offscreen(view, fx, fy, fw, fh, &fm, false);
                             }
                             Seg::Transform3D { inner: ti, x: tx, y: ty, w: tw, h: th, matrix: tm } => {
-                                let iv = build_vertices(ti, &self.atlas, &self.image_atlas);
+                                let iv = build_vertices(ti, &self.atlas, &self.image_atlas, self.zoom);
                                 self.draw_to_offscreen(&iv);
                                 self.compose_transform(view, tx, ty, tw, th, &tm, false);
                             }
@@ -5556,12 +5563,15 @@ impl Renderer {
     /// Pouziva transform_pipeline (samples z source view, mapuje uv 0..1
     /// na canvas rect quad). Source view musi byt config.format.
     pub fn compose_view_to_swap(&self, swap_view: &wgpu::TextureView, source_view: &wgpu::TextureView, x: f32, y: f32, w: f32, h: f32) {
+        // x/y/w/h v logical px - vp uniform v logical (window/zoom) aby NDC
+        // mapping odpovidal hlavnimu pipeline (zoom skalovani v render).
         let cx = x + w * 0.5;
         let cy = y + h * 0.5;
         let hw = w * 0.5;
         let hh = h * 0.5;
-        let vw = self.config.width as f32;
-        let vh = self.config.height as f32;
+        let z = self.zoom.max(0.0001);
+        let vw = self.config.width as f32 / z;
+        let vh = self.config.height as f32 / z;
         // Identity matrix v transform shader format
         let uniform_data: [f32; 32] = [
             1.0, 0.0, 0.0, 0.0,  // row0
