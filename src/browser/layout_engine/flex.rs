@@ -303,6 +303,14 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                 if ch.taffy_mode { 10.0 } else { ch.font_size * 1.4 }
             } else if ch.rect.height > 0.0 { ch.rect.height } else { 0.0 }
         }) };
+        // writing-mode: vertical-lr/rl - osy textu se prohodi.
+        // Inline axis (delka textu) je vertikalni, block axis je horizontalni.
+        // Pro intrinsic sizing text bloku to znamena swap est_w <-> est_h.
+        let ch_vertical_text = ch.taffy_mode && ch.text.is_some()
+            && matches!(ch.writing_mode.as_str(), "vertical-lr" | "vertical-rl");
+        if ch_vertical_text && ch.explicit_width.is_none() && ch.explicit_height.is_none() {
+            std::mem::swap(&mut est_w, &mut est_h);
+        }
         // flex-basis override main size kdyz nastaveno (a neni "auto")
         let basis_v = ch.flex_basis.trim();
         if !basis_v.is_empty() && basis_v != "auto" && basis_v != "content" {

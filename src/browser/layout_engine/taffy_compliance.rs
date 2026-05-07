@@ -426,7 +426,9 @@ mod tests {
                     if let Ok(n) = v.trim().parse::<f32>() { bx.scrollbar_size = n; }
                     else { bx.scrollbar_width = v.clone(); }
                 }
-                "writing-mode" => return None,
+                "writing-mode" => {
+                    bx.writing_mode = v.clone();
+                }
                 "direction" if v == "rtl" => return None,
                 "direction" => {}
                 _ => {}
@@ -821,9 +823,18 @@ mod tests {
             child.rect.y += off_y;
             // Aspect-ratio: dopocet height z width
             let has_explicit_h = child.explicit_height.is_some();
-            let text_h_intrinsic = if child.taffy_mode && child.text.is_some() { 10.0 } else { 0.0 };
+            let is_vertical_text = child.taffy_mode && child.text.is_some()
+                && matches!(child.writing_mode.as_str(), "vertical-lr" | "vertical-rl");
+            let text_h_intrinsic = if child.taffy_mode && child.text.is_some() {
+                if is_vertical_text {
+                    // Vertical: vyska = pocet znaku * 10
+                    if let Some(t) = &child.text {
+                        t.chars().filter(|c| !matches!(*c, '\u{200B}' | ' ' | '\n' | '\t')).count() as f32 * 10.0
+                    } else { 10.0 }
+                } else { 10.0 }
+            } else { 0.0 };
             // Text wrap pri max-width nebo final w < text natural width: pocet linek.
-            let wrapped_text_h = if child.taffy_mode && child.text.is_some() {
+            let wrapped_text_h = if child.taffy_mode && child.text.is_some() && !is_vertical_text {
                 if let Some(t) = &child.text {
                     let avail_w = child.explicit_width.unwrap_or(w);
                     let mw = if !child.max_width_v.is_empty() {

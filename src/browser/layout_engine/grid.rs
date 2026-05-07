@@ -1040,6 +1040,45 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                 if item.taffy_mode && item.text.is_some() && h == 0.0 {
                     h = 10.0;
                 }
+                // Wrap-aware text height: pri text > col_track width spocti pocet linek.
+                // Triggers JEN kdyz je explicit grid template-cols a text > track_w STRICTLY.
+                let cols_str = bx.grid_template_columns.trim().to_lowercase();
+                if item.taffy_mode && item.text.is_some() && item.explicit_height.is_none()
+                    && !cols_str.is_empty() && !cols_str.contains("auto")
+                    && !cols_str.contains("min-content") && !cols_str.contains("max-content")
+                    && !cols_str.contains("fit-content") {
+                    if let Some(t) = &item.text {
+                        let track_w: f32 = (col..(col+span_col)).filter_map(|c| col_tracks.get(c).copied()).sum::<f32>()
+                            + col_gap * (span_col.saturating_sub(1) as f32);
+                        let m_l = item.margin_left.unwrap_or(item.margin);
+                        let m_r = item.margin_right.unwrap_or(item.margin);
+                        let avail_w = (track_w - m_l - m_r).max(0.0);
+                        let total_text_w = t.chars().filter(|c| !matches!(*c, '\u{200B}' | ' ' | '\n' | '\t')).count() as f32 * 10.0;
+                        if avail_w > 0.0 && total_text_w > avail_w + 0.5 {
+                            let mut lines = 1usize;
+                            let mut cur_w = 0.0_f32;
+                            let mut seg_w = 0.0_f32;
+                            for c in t.chars() {
+                                if matches!(c, '\u{200B}' | ' ' | '\n' | '\t') {
+                                    if cur_w + seg_w <= avail_w + 0.01 {
+                                        cur_w += seg_w;
+                                    } else {
+                                        lines += 1;
+                                        cur_w = seg_w;
+                                    }
+                                    seg_w = 0.0;
+                                } else {
+                                    seg_w += 10.0;
+                                }
+                            }
+                            if seg_w > 0.0 {
+                                if cur_w + seg_w > avail_w + 0.01 { lines += 1; }
+                            }
+                            let wh = lines as f32 * 10.0;
+                            if wh > h { h = wh; }
+                        }
+                    }
+                }
                 // Aspect-ratio: dopocti h z width pri auto height + text item.
                 if let Some(ar) = item.aspect_ratio {
                     if ar > 0.0 && item.explicit_height.is_none() {
