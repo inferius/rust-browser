@@ -238,13 +238,22 @@ fn apply_default_tag_styles(bx: &mut LayoutBox, tag: &str) {
 pub fn default_display(tag: &str) -> Display {
     match tag {
         "html" | "body" | "div" | "p" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6"
-        | "ul" | "ol" | "li" | "header" | "footer" | "main" | "section" | "article"
-        | "nav" | "aside" | "form" | "table" | "tr" | "td" | "th" | "blockquote"
+        | "ul" | "ol" | "header" | "footer" | "main" | "section" | "article"
+        | "nav" | "aside" | "form" | "blockquote"
         | "pre" | "hr" | "figure" | "figcaption"
             => Display::Block,
+        "li" => Display::ListItem,
+        // Table tagy: simulate pres flex (tr = flex-row container, td = flex-item).
+        // Pravy table layout je TODO. Tahle aproximace ale dela cells vedle sebe.
+        "table" => Display::Table,
+        "tr" => Display::TableRow,
+        "td" | "th" => Display::TableCell,
+        "thead" | "tbody" | "tfoot" => Display::Block,
+        "caption" => Display::TableCaption,
         "span" | "a" | "em" | "strong" | "b" | "i" | "u" | "code" | "small"
         | "br" | "img" | "input" | "label" | "button" | "select" | "textarea"
-        | "canvas" | "svg"
+        | "canvas" | "svg" | "mark" | "kbd" | "samp" | "var" | "sub" | "sup"
+        | "abbr" | "cite" | "q" | "s" | "del" | "ins" | "time" | "data"
             => Display::Inline,
         _ => Display::Block,
     }
@@ -1183,14 +1192,25 @@ pub fn interpolate_keyframes(
 
 /// Vybira layout algoritmus podle display.
 fn layout_dispatch(bx: &mut LayoutBox) {
-    // Aliases - inline-flex/grid -> flex/grid; subgrid -> grid; ruby -> inline; list-item -> block
+    // Aliases:
+    // - inline-flex/grid -> flex/grid
+    // - subgrid -> grid
+    // - ruby -> inline
+    // - list-item -> block
+    // - table -> block (rows stack vertically)
+    // - table-row -> flex-row (cells horizontalne)
+    // - table-cell -> block (vertical stacking inside)
     let effective = match bx.display {
         Display::InlineFlex => Display::Flex,
         Display::InlineGrid | Display::Subgrid => Display::Grid,
         Display::ListItem => Display::Block,
         Display::Ruby => Display::Inline,
         Display::Table | Display::TableHeader => Display::Block,
-        Display::TableRow => Display::Inline,
+        Display::TableRow => {
+            // Aproximace: tr jako flex-row container, td/th uvnitr jsou flex items.
+            if bx.flex_direction.is_empty() { bx.flex_direction = "row".to_string(); }
+            Display::Flex
+        }
         Display::TableCell | Display::TableHeaderCell | Display::TableCaption => Display::Block,
         Display::Contents => {
             // Element zmizi - layout-time prom contents skip a deti se chovaji jako parent's
@@ -1346,9 +1366,23 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if matches!(node.kind, NodeKind::Text(_)) {
         bx.display = Display::Inline;
         if let NodeKind::Text(t) = &node.kind {
-            let trimmed = t.trim();
-            if !trimmed.is_empty() {
-                bx.text = Some(trimmed.to_string());
+            // CSS white-space: normal - sloucit whitespace runs do single space,
+            // ALE zachovat leading/trailing space (boundary preserve) - jinak inline
+            // text bez deli mezi sousedy.
+            let mut collapsed = String::with_capacity(t.len());
+            let mut prev_ws = false;
+            for c in t.chars() {
+                if c.is_whitespace() {
+                    if !prev_ws { collapsed.push(' '); }
+                    prev_ws = true;
+                } else {
+                    collapsed.push(c);
+                    prev_ws = false;
+                }
+            }
+            // Pokud je collapsed jen samotny space -> empty (whitespace-only node).
+            if !collapsed.trim().is_empty() {
+                bx.text = Some(collapsed);
             }
         }
     }
@@ -2540,9 +2574,10 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
     let parent_bold = bx.bold;
     let line_height_default = parent_font_size * 1.2;
     let mut line_height = line_height_default;
+    // Tracking whitespace boundary mezi sousednimi inline siblings.
+    let mut prev_had_trailing_space = false;
 
-    for &idx in indices {
-        // Zachyceni boxu cele
+    for (sib_idx, &idx) in indices.iter().enumerate() {
         // Inherit font_size + bold od parentu pri text-only inline elementech
         // co nemaji explicitne nastaveny font-size (tj. bx.font_size = default 16).
         if bx.children[idx].font_size <= 16.001 && parent_font_size > 16.0 {
@@ -2555,38 +2590,42 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
         let font_size = bx_clone.font_size;
         let advance_h = (font_size * 1.4).max(line_height_default);
         line_height = line_height.max(advance_h);
+        let space_w = font_size * 0.27;
 
         if let Some(text) = &bx_clone.text {
-            // Rozdel na slova, kazde slovo merit a wrappovat
+            // Detect leading/trailing whitespace pro spravne mezery na hranicich.
+            let leading_ws = text.starts_with(char::is_whitespace);
+            let trailing_ws = text.ends_with(char::is_whitespace);
+            // Pre-pridame mezeru kdyz prev mel trailing OR ja mam leading + nejsem prvni.
+            let need_pre_space = sib_idx > 0 && (prev_had_trailing_space || leading_ws);
+            if need_pre_space && cursor_x > inner_x {
+                cursor_x += space_w;
+            }
+
             let words: Vec<&str> = text.split_whitespace().collect();
             for (wi, word) in words.iter().enumerate() {
                 let w = measure_text_width(word, font_size);
-                let space_w = if wi > 0 { font_size * 0.3 } else { 0.0 };
-                if cursor_x + space_w + w > inner_x + inner_w && cursor_x > inner_x {
+                let inter_word_space = if wi > 0 { space_w } else { 0.0 };
+                if cursor_x + inter_word_space + w > inner_x + inner_w && cursor_x > inner_x {
                     cursor_y += line_height;
                     cursor_x = inner_x;
                 }
-                let x = cursor_x + space_w;
-                // Pridame fragment-style box (jen pro paint - prepiseme child position)
-                // V paint pristupu: bx.children[idx] ma jen jednu pozici - ale my mame N slov
-                // Reseni: prirad bxu prvni pozici slova; pro presnost by potreboval zvlastni lineBox
+                let x = cursor_x + inter_word_space;
                 if wi == 0 {
                     bx.children[idx].rect.x = x;
                     bx.children[idx].rect.y = cursor_y;
                     bx.children[idx].rect.width = w;
                     bx.children[idx].rect.height = advance_h;
-                } else {
-                    // Slovo na novem radku v ramci stejneho elementu - vytvorime virtual fragment
-                    // Pro zjednoduseni zatim slijeme do jedne `text` s preformatted layout
-                    // (correct approach by mela rozdelit na fragmenty)
-                    // Jako workaround: spojeny text na puvodni pozici, wrappuje renderer
-                    // (necelo idealni - ale prijatelne)
                 }
                 cursor_x = x + w;
             }
+            prev_had_trailing_space = trailing_ws;
         } else if !bx_clone.children.is_empty() {
-            // Inline element s childen (napr. <span><em>text</em></span>) - flatten
-            // Aktualne: jen umisti samotny element jako jeden inline blok
+            // Inline element s childen (napr. <span><em>text</em></span>) - flatten.
+            // Pre-pridame mezeru pokud prev sibling mel trailing space.
+            if sib_idx > 0 && prev_had_trailing_space && cursor_x > inner_x {
+                cursor_x += space_w;
+            }
             let estimated_w = (bx_clone.children.iter()
                 .filter_map(|c| c.text.as_ref())
                 .map(|t| measure_text_width(t, font_size))
@@ -2603,6 +2642,8 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
             // Layout vnoreny obsah
             layout_block(&mut bx.children[idx]);
             cursor_x += estimated_w;
+            // Inline element bez text trailing -> default no trailing space.
+            prev_had_trailing_space = false;
         }
     }
     cursor_y + line_height
