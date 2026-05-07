@@ -1383,10 +1383,13 @@ fn push_polygon_edge_aa(verts: &mut Vec<Vertex>, points: &[(f32, f32)], color: [
         let dy = p1.1 - p0.1;
         let len = (dx * dx + dy * dy).sqrt();
         if len < 1e-3 { continue; }
+        // CW polygon v screen-space (y-down): outward normal je VPRAVO od edge
+        // direction. Vector (dx, dy), rotace 90 CW v screen-y-down -> (dy, -dx).
+        // CCW: opacne (-dy, dx).
         let (nx, ny) = if cw {
-            (-dy / len, dx / len)
-        } else {
             (dy / len, -dx / len)
+        } else {
+            (-dy / len, dx / len)
         };
         let p0_out = (p0.0 + nx * feather, p0.1 + ny * feather);
         let p1_out = (p1.0 + nx * feather, p1.1 + ny * feather);
