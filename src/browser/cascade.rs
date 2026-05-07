@@ -139,9 +139,20 @@ pub fn expand_shorthand(prop: &str, value: &str, out: &mut HashMap<String, Strin
             out.insert(prop.into(), value.into());
         }
         "background" => {
-            // Zjednoduseno: pokud je color, ulozit jako background-color
+            // Background shorthand resetuje vsechny longhandy na initial.
+            // Pri color value: nastav background-color a vyresetuj image/gradient
+            // priznak. Pri gradient/image: nastav background-image a vyresetuj
+            // background-color (transparent), aby driv-cascadnuty solid color
+            // neprosakoval skrze gradient (CSS spec: shorthand override).
             if super::layout::parse_color(value).is_some() {
                 out.insert("background-color".into(), value.into());
+                out.insert("background-image".into(), "none".into());
+            } else if value.contains("linear-gradient(")
+                || value.contains("radial-gradient(")
+                || value.contains("conic-gradient(")
+                || value.contains("url(") {
+                out.insert("background-color".into(), "transparent".into());
+                out.insert("background-image".into(), value.into());
             }
             out.insert("background".into(), value.into());
         }
