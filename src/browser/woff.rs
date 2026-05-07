@@ -24,8 +24,13 @@ pub fn maybe_decode_woff(data: &[u8]) -> Vec<u8> {
         }
     }
     if data.len() >= 4 && &data[0..4] == b"wOF2" {
-        // WOFF2 - zatim ne supported. Vrati input (fontdue selze parsovani -> font ne nahran).
-        return data.to_vec();
+        match decode_woff2(data) {
+            Ok(out) => return out,
+            Err(e) => {
+                eprintln!("[woff2] decode failed: {:?} - font wont load", e);
+                return data.to_vec();
+            }
+        }
     }
     data.to_vec()
 }
@@ -45,6 +50,9 @@ pub enum WoffError {
     BadHeader,
     Decompress,
     OutOfBounds,
+    /// WOFF2 vyzaduje glyf transform reversal pro non-default tables.
+    /// Aktualne implementovan jen brotli dekomprese - tabulky jsou raw.
+    TransformNotImplemented,
 }
 
 pub fn decode_woff1(data: &[u8]) -> Result<Vec<u8>, WoffError> {
@@ -138,6 +146,167 @@ pub fn decode_woff1(data: &[u8]) -> Result<Vec<u8>, WoffError> {
     Ok(out)
 }
 
+/// WOFF2 dekompresor - parsuje header, table directory s preset tags +
+/// 255UInt16 lengths, decompressuje brotli stream, splaci tabulky do sfnt.
+///
+/// LIMITS: glyf table transform (form 1) NEN reversed - pri vstupu s glyf
+/// transform vrati TransformNotImplemented. To je vetsina realnych WOFF2
+/// fontu.
+pub fn decode_woff2(data: &[u8]) -> Result<Vec<u8>, WoffError> {
+    if data.len() < 48 || &data[0..4] != b"wOF2" {
+        return Err(WoffError::BadSignature);
+    }
+    let flavor = read_u32(data, 4).ok_or(WoffError::BadHeader)?;
+    let _length = read_u32(data, 8).ok_or(WoffError::BadHeader)?;
+    let num_tables = read_u16(data, 12).ok_or(WoffError::BadHeader)? as usize;
+    // 14: reserved
+    let _total_sfnt_size = read_u32(data, 16).ok_or(WoffError::BadHeader)?;
+    let total_compressed_size = read_u32(data, 20).ok_or(WoffError::BadHeader)? as usize;
+    // 24-25: majorVersion, 26-27: minorVersion
+    // 28..47: meta + priv (5 * uint32)
+
+    if num_tables == 0 || num_tables > 1024 {
+        return Err(WoffError::BadHeader);
+    }
+
+    // Preset table tags per WOFF2 spec.
+    const PRESET_TAGS: [&[u8; 4]; 63] = [
+        b"cmap", b"head", b"hhea", b"hmtx", b"maxp", b"name", b"OS/2", b"post",
+        b"cvt ", b"fpgm", b"glyf", b"loca", b"prep", b"CFF ", b"VORG", b"EBDT",
+        b"EBLC", b"gasp", b"hdmx", b"kern", b"LTSH", b"PCLT", b"VDMX", b"vhea",
+        b"vmtx", b"BASE", b"GDEF", b"GPOS", b"GSUB", b"EBSC", b"JSTF", b"MATH",
+        b"CBDT", b"CBLC", b"COLR", b"CPAL", b"SVG ", b"sbix", b"acnt", b"avar",
+        b"bdat", b"bloc", b"bsln", b"cvar", b"fdsc", b"feat", b"fmtx", b"fvar",
+        b"gvar", b"hsty", b"just", b"lcar", b"mort", b"morx", b"opbd", b"prop",
+        b"trak", b"Zapf", b"Silf", b"Glat", b"Gloc", b"Feat", b"Sill",
+    ];
+
+    // Parse table directory s variable-length encoding.
+    let mut pos = 48usize;
+    let mut entries: Vec<(u32, u32, u32, u8)> = Vec::with_capacity(num_tables); // (tag, orig_len, transform_len, transform_ver)
+    for _ in 0..num_tables {
+        if pos >= data.len() { return Err(WoffError::BadHeader); }
+        let flags = data[pos];
+        pos += 1;
+        let tag_idx = (flags & 0x3F) as usize;
+        let transform_ver = (flags >> 6) & 0x03;
+        let tag = if tag_idx == 63 {
+            // Custom tag: 4 bytes follow.
+            if pos + 4 > data.len() { return Err(WoffError::BadHeader); }
+            let t = read_u32(data, pos).ok_or(WoffError::BadHeader)?;
+            pos += 4;
+            t
+        } else {
+            let bytes = PRESET_TAGS[tag_idx];
+            u32::from_be_bytes(*bytes)
+        };
+        let (orig_len, p) = read_255_uint16(data, pos)?;
+        pos = p;
+        // Transform length only present for glyf/loca with transform_ver == 0
+        // (default transform applied) OR explicit transform.
+        let tag_bytes = tag.to_be_bytes();
+        let is_glyf_or_loca = &tag_bytes == b"glyf" || &tag_bytes == b"loca";
+        let has_transform = if is_glyf_or_loca {
+            transform_ver == 0
+        } else {
+            transform_ver != 0
+        };
+        let transform_len = if has_transform {
+            let (l, p2) = read_255_uint16(data, pos)?;
+            pos = p2;
+            l
+        } else {
+            orig_len
+        };
+        entries.push((tag, orig_len, transform_len, transform_ver));
+    }
+
+    // Compressed data start = pos. Brotli stream of total_compressed_size bytes.
+    let comp_end = pos + total_compressed_size;
+    if comp_end > data.len() { return Err(WoffError::OutOfBounds); }
+    let compressed = &data[pos..comp_end];
+    let mut decompressed: Vec<u8> = Vec::new();
+    {
+        use std::io::Read;
+        let mut reader = brotli::Decompressor::new(compressed, 4096);
+        reader.read_to_end(&mut decompressed).map_err(|_| WoffError::Decompress)?;
+    }
+
+    // Detekce: pokud nejaka tabulka je glyf/loca s transform_ver=0, NELZE
+    // ji bez glyf transform reversal nasloucha. Vrat TransformNotImplemented.
+    for (tag, _, _, transform_ver) in &entries {
+        let tag_bytes = tag.to_be_bytes();
+        let is_glyf_or_loca = &tag_bytes == b"glyf" || &tag_bytes == b"loca";
+        if is_glyf_or_loca && *transform_ver == 0 {
+            return Err(WoffError::TransformNotImplemented);
+        }
+    }
+
+    // Bez glyf transformaci: decompressed obsahuje tables konkatenovane v poradi
+    // dle table directory. Vystup sfnt s table directory + zarovnanimi.
+    let largest_pow2 = {
+        let mut p = 1; while p * 2 <= num_tables { p *= 2; } p
+    };
+    let entry_selector = (largest_pow2 as f32).log2() as u16;
+    let search_range = (largest_pow2 * 16) as u16;
+    let range_shift = (num_tables * 16 - search_range as usize) as u16;
+
+    let mut out = Vec::with_capacity(decompressed.len() + 12 + num_tables * 16);
+    out.extend_from_slice(&flavor.to_be_bytes());
+    out.extend_from_slice(&(num_tables as u16).to_be_bytes());
+    out.extend_from_slice(&search_range.to_be_bytes());
+    out.extend_from_slice(&entry_selector.to_be_bytes());
+    out.extend_from_slice(&range_shift.to_be_bytes());
+
+    let dir_start = out.len();
+    out.resize(dir_start + num_tables * 16, 0);
+
+    let mut data_offset = 0usize;
+    let mut directory: Vec<(u32, u32, u32, u32)> = Vec::new();
+    for (tag, orig_len, transform_len, _) in &entries {
+        let len = *transform_len as usize;
+        if data_offset + len > decompressed.len() { return Err(WoffError::OutOfBounds); }
+        let table_data = &decompressed[data_offset..data_offset + len];
+        data_offset += len;
+        let table_offset = out.len();
+        out.extend_from_slice(table_data);
+        let pad = (4 - (len % 4)) % 4;
+        for _ in 0..pad { out.push(0); }
+        directory.push((*tag, 0u32, table_offset as u32, *orig_len));
+    }
+    directory.sort_by_key(|(tag, _, _, _)| *tag);
+    for (i, (tag, checksum, offset, length)) in directory.iter().enumerate() {
+        let dir_off = dir_start + i * 16;
+        out[dir_off..dir_off + 4].copy_from_slice(&tag.to_be_bytes());
+        out[dir_off + 4..dir_off + 8].copy_from_slice(&checksum.to_be_bytes());
+        out[dir_off + 8..dir_off + 12].copy_from_slice(&offset.to_be_bytes());
+        out[dir_off + 12..dir_off + 16].copy_from_slice(&length.to_be_bytes());
+    }
+    Ok(out)
+}
+
+/// 255UInt16 - WOFF2 variabilni delka uint16 (1-3 bytes).
+fn read_255_uint16(data: &[u8], pos: usize) -> Result<(u32, usize), WoffError> {
+    if pos >= data.len() { return Err(WoffError::OutOfBounds); }
+    let b0 = data[pos];
+    if b0 == 253 {
+        // 2-byte BE follows.
+        if pos + 3 > data.len() { return Err(WoffError::OutOfBounds); }
+        let v = u16::from_be_bytes([data[pos+1], data[pos+2]]) as u32;
+        Ok((v, pos + 3))
+    } else if b0 == 254 {
+        // value = byte + 253*2 = byte + 506
+        if pos + 2 > data.len() { return Err(WoffError::OutOfBounds); }
+        Ok((data[pos+1] as u32 + 506, pos + 2))
+    } else if b0 == 255 {
+        // value = byte + 253
+        if pos + 2 > data.len() { return Err(WoffError::OutOfBounds); }
+        Ok((data[pos+1] as u32 + 253, pos + 2))
+    } else {
+        Ok((b0 as u32, pos + 1))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -210,6 +379,43 @@ mod tests {
         // Raw table data at offset 64
         out.extend_from_slice(&table_data);
         out
+    }
+
+    #[test]
+    fn read_255_uint16_short_form() {
+        let data = [42u8, 0];
+        let (v, p) = read_255_uint16(&data, 0).unwrap();
+        assert_eq!(v, 42);
+        assert_eq!(p, 1);
+    }
+
+    #[test]
+    fn read_255_uint16_two_byte_high_low() {
+        // 253 marker -> next 2 bytes BE = 1000.
+        let data = [253u8, 0x03, 0xE8];
+        let (v, p) = read_255_uint16(&data, 0).unwrap();
+        assert_eq!(v, 1000);
+        assert_eq!(p, 3);
+    }
+
+    #[test]
+    fn read_255_uint16_offset_506() {
+        let data = [254u8, 100];
+        let (v, _) = read_255_uint16(&data, 0).unwrap();
+        assert_eq!(v, 606); // 100 + 506
+    }
+
+    #[test]
+    fn read_255_uint16_offset_253() {
+        let data = [255u8, 100];
+        let (v, _) = read_255_uint16(&data, 0).unwrap();
+        assert_eq!(v, 353); // 100 + 253
+    }
+
+    #[test]
+    fn decode_woff2_rejects_bad_signature() {
+        let data = vec![b'X'; 100];
+        assert!(decode_woff2(&data).is_err());
     }
 
     #[test]

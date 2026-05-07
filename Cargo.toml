@@ -60,3 +60,5 @@ fontdue = "0.9"  # font rasterizer pro glyph atlas
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "webp", "tiff", "ico", "tga", "exr", "qoi", "ff", "hdr", "pnm", "dds"] }
 # WOFF dekomprese (zlib stream per table). Pure-Rust deflate. WOFF2 (brotli + transformations) zatim TODO.
 flate2 = "1.0"
+# WOFF2 brotli decompressor (pure Rust). Glyf transform reverse zatim TODO.
+brotli = { version = "6.0", default-features = false, features = ["std"] }
