@@ -279,6 +279,12 @@ fn apply_default_tag_styles(bx: &mut LayoutBox, tag: &str) {
 /// Default display per tag (HTML semantika).
 pub fn default_display(tag: &str) -> Display {
     match tag {
+        // Hidden tagy - obsah/atributy se nerendruju, jen processing.
+        // <script> / <style> obsah byva extrahovan separatne (JS/CSS), bez
+        // display:none se source kod renderoval jako text v body.
+        "script" | "style" | "head" | "meta" | "title" | "link" | "base"
+        | "noscript" | "template" | "param" | "source" | "track"
+            => Display::None,
         "html" | "body" | "div" | "p" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6"
         | "ul" | "ol" | "header" | "footer" | "main" | "section" | "article"
         | "nav" | "aside" | "form" | "blockquote"
