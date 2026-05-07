@@ -2915,6 +2915,31 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
             cursor_x += estimated_w;
             // Inline element bez text trailing -> default no trailing space.
             prev_had_trailing_space = false;
+        } else {
+            // Replaced inline element bez children + bez text (canvas, img,
+            // video, iframe, input). Pouziva explicit_width/explicit_height
+            // z attributu nebo CSS. Bez teto branch zustane rect 0,0 a element
+            // se renderoval v levem hornim rohu.
+            let w = bx_clone.explicit_width
+                .or_else(|| if bx_clone.rect.width > 0.0 { Some(bx_clone.rect.width) } else { None })
+                .unwrap_or(font_size);
+            let h = bx_clone.explicit_height
+                .or_else(|| if bx_clone.rect.height > 0.0 { Some(bx_clone.rect.height) } else { None })
+                .unwrap_or(advance_h);
+            if sib_idx > 0 && prev_had_trailing_space && cursor_x > inner_x {
+                cursor_x += space_w;
+            }
+            if cursor_x + w > inner_x + inner_w && cursor_x > inner_x {
+                cursor_y += line_height;
+                cursor_x = inner_x;
+            }
+            bx.children[idx].rect.x = cursor_x;
+            bx.children[idx].rect.y = cursor_y;
+            bx.children[idx].rect.width = w;
+            bx.children[idx].rect.height = h;
+            line_height = line_height.max(h);
+            cursor_x += w;
+            prev_had_trailing_space = false;
         }
     }
     cursor_y + line_height
