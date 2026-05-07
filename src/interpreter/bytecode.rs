@@ -149,6 +149,9 @@ pub enum Opcode {
     /// Pop value, await: pri Promise object {__state__, __value__} extract __value__.
     /// Jinak push value bezimo. Sync semantics (instant unwrap).
     Await,
+    /// Pop N values, koncatenuje (jako string) do jednoho. Pro template literals
+    /// efektivnejsi nez chain Add ops (eliminuje intermediate String allocs).
+    BuildString(u16),
     /// Push try frame s catch handler PC. Pri Throw bytecode unwind do catch_pc.
     PushTry(u32),
     /// Pop try frame (normal exit z try body bez throw).
@@ -583,20 +586,25 @@ pub fn compile_expr(e: &Expr, code: &mut CodeBlock) -> Result<(), &'static str> 
             Ok(())
         }
         Expr::Template { quasis, expressions } => {
-            // Compile: quasi[0] + expr[0] + quasi[1] + expr[1] + ... + quasi[n].
-            let first_idx = code.push_const(JsValue::Str(quasis.first().cloned().unwrap_or_default()));
-            code.emit(Opcode::LoadConst(first_idx));
+            // BuildString(N): push vsechny parts, single concat opcode.
+            // Eliminuje intermediate String allocs.
+            let mut count = 0u16;
+            // Quasi[0]
+            let q0_idx = code.push_const(JsValue::Str(quasis.first().cloned().unwrap_or_default()));
+            code.emit(Opcode::LoadConst(q0_idx));
+            count = count.saturating_add(1);
             for (i, expr) in expressions.iter().enumerate() {
                 compile_expr(expr, code)?;
-                code.emit(Opcode::Add);
+                count = count.saturating_add(1);
                 if let Some(quasi) = quasis.get(i + 1) {
                     if !quasi.is_empty() {
                         let q_idx = code.push_const(JsValue::Str(quasi.clone()));
                         code.emit(Opcode::LoadConst(q_idx));
-                        code.emit(Opcode::Add);
+                        count = count.saturating_add(1);
                     }
                 }
             }
+            code.emit(Opcode::BuildString(count));
             Ok(())
         }
         Expr::Member { object, prop, optional } => {
@@ -1740,6 +1748,35 @@ impl VM {
                     } else {
                         self.stack.push(get_property(&obj, &key_str));
                     }
+                }
+                Opcode::BuildString(count) => {
+                    let count = count as usize;
+                    if self.stack.len() < count { return Err("stack underflow BuildString".into()); }
+                    let parts: Vec<JsValue> = self.stack.drain(self.stack.len() - count..).collect();
+                    // Pre-compute total bytes pro alloc-once.
+                    let mut out = String::with_capacity(parts.iter().map(|v| match v {
+                        JsValue::Str(s) => s.len(),
+                        _ => 12,
+                    }).sum::<usize>());
+                    for v in &parts {
+                        match v {
+                            JsValue::Str(s) => out.push_str(s),
+                            JsValue::Number(n) => {
+                                if n.is_nan() { out.push_str("NaN"); }
+                                else if *n == n.trunc() && n.is_finite() && n.abs() < 1e15 {
+                                    out.push_str(&(*n as i64).to_string());
+                                } else {
+                                    out.push_str(&n.to_string());
+                                }
+                            }
+                            JsValue::Bool(true) => out.push_str("true"),
+                            JsValue::Bool(false) => out.push_str("false"),
+                            JsValue::Null => out.push_str("null"),
+                            JsValue::Undefined => out.push_str("undefined"),
+                            other => out.push_str(&format!("{}", other)),
+                        }
+                    }
+                    self.stack.push(JsValue::Str(out));
                 }
                 Opcode::Await => {
                     let v = self.pop()?;
