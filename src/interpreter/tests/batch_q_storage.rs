@@ -75,7 +75,7 @@ fn local_storage_key_by_index() {
 fn indexed_db_open_stub() {
     let v = run(r#"
         const req = indexedDB.open("mydb");
-        return req.name;
+        return req.result.name;
     "#);
     assert_eq!(as_str(v), "mydb");
 }
