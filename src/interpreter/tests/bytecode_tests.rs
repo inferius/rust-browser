@@ -356,6 +356,75 @@ fn vm_user_function_chained_calls() {
 }
 
 #[test]
+fn vm_array_push() {
+    let r = run_vm(r#"
+        let a = [1, 2];
+        a.push(3);
+        a.push(4);
+        a.length
+    "#).unwrap();
+    assert_jv!(r, n(4.0));
+}
+
+#[test]
+fn vm_array_pop() {
+    let r = run_vm(r#"
+        let a = [10, 20, 30];
+        let last = a.pop();
+        last
+    "#).unwrap();
+    assert_jv!(r, n(30.0));
+}
+
+#[test]
+fn vm_array_indexOf() {
+    let r = run_vm(r#"
+        let a = [1, 2, 3, 4, 5];
+        a.indexOf(3)
+    "#).unwrap();
+    assert_jv!(r, n(2.0));
+}
+
+#[test]
+fn vm_array_includes() {
+    let r = run_vm(r#"
+        let a = [1, 2, 3];
+        a.includes(2)
+    "#).unwrap();
+    assert_jv!(r, JsValue::Bool(true));
+}
+
+#[test]
+fn vm_array_join() {
+    let r = run_vm(r#"
+        let a = [1, 2, 3];
+        a.join('-')
+    "#).unwrap();
+    assert_jv!(r, JsValue::Str("1-2-3".to_string()));
+}
+
+#[test]
+fn vm_string_to_upper() {
+    let r = run_vm(r#""hello".toUpperCase()"#).unwrap();
+    assert_jv!(r, JsValue::Str("HELLO".to_string()));
+}
+
+#[test]
+fn vm_string_split() {
+    let r = run_vm(r#"
+        let parts = "a,b,c".split(',');
+        parts.length
+    "#).unwrap();
+    assert_jv!(r, n(3.0));
+}
+
+#[test]
+fn vm_string_includes() {
+    let r = run_vm(r#""hello world".includes("world")"#).unwrap();
+    assert_jv!(r, JsValue::Bool(true));
+}
+
+#[test]
 fn vm_arrow_function_expr_body() {
     let r = run_vm(r#"
         let add = (a, b) => a + b;

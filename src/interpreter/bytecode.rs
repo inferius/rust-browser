@@ -1222,6 +1222,103 @@ fn get_property(obj: &JsValue, key: &str) -> JsValue {
         JsValue::Array(a) => {
             // Array.length
             if key == "length" { return JsValue::Number(a.borrow().len() as f64); }
+            // Built-in methods returning Native fn closures.
+            match key {
+                "push" => {
+                    let arr_ref = std::rc::Rc::clone(a);
+                    return JsValue::Function(super::JsFunc::Native(
+                        "Array.push".into(),
+                        std::rc::Rc::new(move |args| {
+                            let mut v = arr_ref.borrow_mut();
+                            for a in args { v.push(a); }
+                            Ok(JsValue::Number(v.len() as f64))
+                        }),
+                    ));
+                }
+                "pop" => {
+                    let arr_ref = std::rc::Rc::clone(a);
+                    return JsValue::Function(super::JsFunc::Native(
+                        "Array.pop".into(),
+                        std::rc::Rc::new(move |_| {
+                            Ok(arr_ref.borrow_mut().pop().unwrap_or(JsValue::Undefined))
+                        }),
+                    ));
+                }
+                "shift" => {
+                    let arr_ref = std::rc::Rc::clone(a);
+                    return JsValue::Function(super::JsFunc::Native(
+                        "Array.shift".into(),
+                        std::rc::Rc::new(move |_| {
+                            let mut v = arr_ref.borrow_mut();
+                            if v.is_empty() { Ok(JsValue::Undefined) } else { Ok(v.remove(0)) }
+                        }),
+                    ));
+                }
+                "unshift" => {
+                    let arr_ref = std::rc::Rc::clone(a);
+                    return JsValue::Function(super::JsFunc::Native(
+                        "Array.unshift".into(),
+                        std::rc::Rc::new(move |args| {
+                            let mut v = arr_ref.borrow_mut();
+                            for (i, a) in args.into_iter().enumerate() {
+                                v.insert(i, a);
+                            }
+                            Ok(JsValue::Number(v.len() as f64))
+                        }),
+                    ));
+                }
+                "indexOf" => {
+                    let arr_ref = std::rc::Rc::clone(a);
+                    return JsValue::Function(super::JsFunc::Native(
+                        "Array.indexOf".into(),
+                        std::rc::Rc::new(move |args| {
+                            let needle = args.into_iter().next().unwrap_or(JsValue::Undefined);
+                            let v = arr_ref.borrow();
+                            for (i, item) in v.iter().enumerate() {
+                                if values_strict_eq(item, &needle) {
+                                    return Ok(JsValue::Number(i as f64));
+                                }
+                            }
+                            Ok(JsValue::Number(-1.0))
+                        }),
+                    ));
+                }
+                "includes" => {
+                    let arr_ref = std::rc::Rc::clone(a);
+                    return JsValue::Function(super::JsFunc::Native(
+                        "Array.includes".into(),
+                        std::rc::Rc::new(move |args| {
+                            let needle = args.into_iter().next().unwrap_or(JsValue::Undefined);
+                            let v = arr_ref.borrow();
+                            Ok(JsValue::Bool(v.iter().any(|x| values_strict_eq(x, &needle))))
+                        }),
+                    ));
+                }
+                "join" => {
+                    let arr_ref = std::rc::Rc::clone(a);
+                    return JsValue::Function(super::JsFunc::Native(
+                        "Array.join".into(),
+                        std::rc::Rc::new(move |args| {
+                            let sep = args.into_iter().next()
+                                .map(|v| v.to_string()).unwrap_or_else(|| ",".to_string());
+                            let v = arr_ref.borrow();
+                            let parts: Vec<String> = v.iter().map(|x| x.to_string()).collect();
+                            Ok(JsValue::Str(parts.join(&sep)))
+                        }),
+                    ));
+                }
+                "reverse" => {
+                    let arr_ref = std::rc::Rc::clone(a);
+                    return JsValue::Function(super::JsFunc::Native(
+                        "Array.reverse".into(),
+                        std::rc::Rc::new(move |_| {
+                            arr_ref.borrow_mut().reverse();
+                            Ok(JsValue::Array(std::rc::Rc::clone(&arr_ref)))
+                        }),
+                    ));
+                }
+                _ => {}
+            }
             // Numericky index: parse
             if let Ok(idx) = key.parse::<usize>() {
                 return a.borrow().get(idx).cloned().unwrap_or(JsValue::Undefined);
@@ -1233,6 +1330,51 @@ fn get_property(obj: &JsValue, key: &str) -> JsValue {
             if let Ok(idx) = key.parse::<usize>() {
                 return s.chars().nth(idx).map(|c| JsValue::Str(c.to_string()))
                     .unwrap_or(JsValue::Undefined);
+            }
+            // String methods.
+            let s_clone = s.clone();
+            match key {
+                "toUpperCase" => return JsValue::Function(super::JsFunc::Native(
+                    "String.toUpperCase".into(),
+                    std::rc::Rc::new(move |_| Ok(JsValue::Str(s_clone.to_uppercase()))),
+                )),
+                "toLowerCase" => return JsValue::Function(super::JsFunc::Native(
+                    "String.toLowerCase".into(),
+                    std::rc::Rc::new(move |_| Ok(JsValue::Str(s_clone.to_lowercase()))),
+                )),
+                "trim" => return JsValue::Function(super::JsFunc::Native(
+                    "String.trim".into(),
+                    std::rc::Rc::new(move |_| Ok(JsValue::Str(s_clone.trim().to_string()))),
+                )),
+                "split" => return JsValue::Function(super::JsFunc::Native(
+                    "String.split".into(),
+                    std::rc::Rc::new(move |args| {
+                        let sep = args.into_iter().next().map(|v| v.to_string());
+                        let parts: Vec<JsValue> = match sep {
+                            Some(s) if !s.is_empty() => s_clone.split(&s).map(|p| JsValue::Str(p.to_string())).collect(),
+                            _ => s_clone.chars().map(|c| JsValue::Str(c.to_string())).collect(),
+                        };
+                        Ok(JsValue::Array(std::rc::Rc::new(std::cell::RefCell::new(parts))))
+                    }),
+                )),
+                "indexOf" => return JsValue::Function(super::JsFunc::Native(
+                    "String.indexOf".into(),
+                    std::rc::Rc::new(move |args| {
+                        let needle = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+                        match s_clone.find(&needle) {
+                            Some(idx) => Ok(JsValue::Number(idx as f64)),
+                            None => Ok(JsValue::Number(-1.0)),
+                        }
+                    }),
+                )),
+                "includes" => return JsValue::Function(super::JsFunc::Native(
+                    "String.includes".into(),
+                    std::rc::Rc::new(move |args| {
+                        let needle = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+                        Ok(JsValue::Bool(s_clone.contains(&needle)))
+                    }),
+                )),
+                _ => {}
             }
             JsValue::Undefined
         }
