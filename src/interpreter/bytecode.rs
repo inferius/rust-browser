@@ -103,6 +103,10 @@ pub enum Opcode {
     // Member access (obj.prop), pop=obj, push=obj[prop].
     GetProp(u16),         // var_names[u16] = property name (stored jako str)
     GetIndex,             // pop key, pop obj, push obj[key]
+    /// Pop value, pop obj, set obj[var_names[u16]] = value. Push value (assignment vrati v).
+    SetProp(u16),
+    /// Pop value, pop key, pop obj, set obj[key] = value. Push value.
+    SetIndex,
 
     // Array/Object literal construction.
     NewArray(u16),        // pop u16 hodnot ze stacku, push Array<top..bottom>
@@ -354,7 +358,26 @@ pub fn compile_expr(e: &Expr, code: &mut CodeBlock) -> Result<(), &'static str> 
             Ok(())
         }
         Expr::Assign { op, target, value } => {
-            // Jen Ident target v MVP.
+            // Member target: obj.prop = v -> emit obj, value, SetProp.
+            if let Expr::Member { object, prop, optional: _ } = target.as_ref() {
+                if !matches!(op, AssignOp::Assign) {
+                    return Err("compound assign na member not supported");
+                }
+                compile_expr(object, code)?;
+                match prop {
+                    MemberProp::Ident(name) => {
+                        compile_expr(value, code)?;
+                        let key_idx = code.push_var(name);
+                        code.emit(Opcode::SetProp(key_idx));
+                    }
+                    MemberProp::Computed(e) => {
+                        compile_expr(e, code)?;
+                        compile_expr(value, code)?;
+                        code.emit(Opcode::SetIndex);
+                    }
+                }
+                return Ok(());
+            }
             if let Expr::Ident(name) = target.as_ref() {
                 let var_idx = code.push_var(name);
                 match op {
@@ -940,6 +963,35 @@ impl VM {
                     let v = get_property(&obj, &key);
                     self.stack.push(v);
                 }
+                Opcode::SetProp(i) => {
+                    let key = code.var_names.get(i as usize).cloned().unwrap_or_default();
+                    let value = self.pop()?;
+                    let obj = self.pop()?;
+                    set_property(&obj, &key, value.clone());
+                    self.stack.push(value);
+                }
+                Opcode::SetIndex => {
+                    let value = self.pop()?;
+                    let key = self.pop()?;
+                    let obj = self.pop()?;
+                    let key_str = match &key {
+                        JsValue::Str(s) => s.clone(),
+                        JsValue::Number(n) => {
+                            if *n == n.trunc() && n.is_finite() { format!("{}", *n as i64) }
+                            else { format!("{}", n) }
+                        }
+                        _ => key_to_str(&key),
+                    };
+                    if let (JsValue::Array(arr), JsValue::Number(n)) = (&obj, &key) {
+                        let idx = *n as usize;
+                        let mut a = arr.borrow_mut();
+                        while a.len() <= idx { a.push(JsValue::Undefined); }
+                        a[idx] = value.clone();
+                    } else {
+                        set_property(&obj, &key_str, value.clone());
+                    }
+                    self.stack.push(value);
+                }
                 Opcode::GetIndex => {
                     let key = self.pop()?;
                     let obj = self.pop()?;
@@ -1063,6 +1115,21 @@ impl VM {
         let a = self.pop()?;
         self.stack.push(JsValue::Bool(f(a, b)));
         Ok(())
+    }
+}
+
+fn set_property(obj: &JsValue, key: &str, value: JsValue) {
+    match obj {
+        JsValue::Object(o) => { o.borrow_mut().set(key.to_string(), value); }
+        JsValue::Array(a) => {
+            if let Ok(idx) = key.parse::<usize>() {
+                let mut arr = a.borrow_mut();
+                while arr.len() <= idx { arr.push(JsValue::Undefined); }
+                arr[idx] = value;
+            }
+            // length and other - skip for now
+        }
+        _ => {}
     }
 }
 

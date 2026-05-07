@@ -356,6 +356,47 @@ fn vm_user_function_chained_calls() {
 }
 
 #[test]
+fn vm_object_prop_assign() {
+    let r = run_vm(r#"
+        let o = { a: 1 };
+        o.a = 42;
+        o.a
+    "#).unwrap();
+    assert_jv!(r, n(42.0));
+}
+
+#[test]
+fn vm_object_new_prop_assign() {
+    let r = run_vm(r#"
+        let o = {};
+        o.x = 'hello';
+        o.x
+    "#).unwrap();
+    assert_jv!(r, JsValue::Str("hello".to_string()));
+}
+
+#[test]
+fn vm_array_index_assign() {
+    let r = run_vm(r#"
+        let a = [1, 2, 3];
+        a[1] = 99;
+        a[1]
+    "#).unwrap();
+    assert_jv!(r, n(99.0));
+}
+
+#[test]
+fn vm_object_computed_assign() {
+    let r = run_vm(r#"
+        let o = {};
+        let key = 'test';
+        o[key] = 100;
+        o['test']
+    "#).unwrap();
+    assert_jv!(r, n(100.0));
+}
+
+#[test]
 fn vm_closure_captures_outer_var() {
     let r = run_vm(r#"
         let x = 100;
