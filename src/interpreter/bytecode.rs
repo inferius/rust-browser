@@ -386,6 +386,39 @@ pub fn compile_expr(e: &Expr, code: &mut CodeBlock) -> Result<(), &'static str> 
                         code.emit(Opcode::Dup); // hodnota assignmentu = nova hodnota
                         code.emit(Opcode::StoreVar(var_idx));
                     }
+                    AssignOp::LogicalAnd => {
+                        // lhs &&= rhs: pri lhs truthy, lhs = rhs (jinak nech).
+                        code.emit(Opcode::LoadVar(var_idx));
+                        let jmp_skip = code.emit(Opcode::JmpIfFalseKeep(0));
+                        // truthy: pop lhs (uz pushedy), compile rhs, store, dup
+                        code.emit(Opcode::Pop);
+                        compile_expr(value, code)?;
+                        code.emit(Opcode::Dup);
+                        code.emit(Opcode::StoreVar(var_idx));
+                        let target = code.bytecode.len();
+                        code.patch_jmp(jmp_skip, target);
+                        // Pri falsy: lhs (puvodne pushed) zustane na stacku jako result.
+                    }
+                    AssignOp::LogicalOr => {
+                        code.emit(Opcode::LoadVar(var_idx));
+                        let jmp_skip = code.emit(Opcode::JmpIfTrueKeep(0));
+                        code.emit(Opcode::Pop);
+                        compile_expr(value, code)?;
+                        code.emit(Opcode::Dup);
+                        code.emit(Opcode::StoreVar(var_idx));
+                        let target = code.bytecode.len();
+                        code.patch_jmp(jmp_skip, target);
+                    }
+                    AssignOp::NullCoal => {
+                        code.emit(Opcode::LoadVar(var_idx));
+                        let jmp_skip = code.emit(Opcode::JmpIfNotNullishKeep(0));
+                        code.emit(Opcode::Pop);
+                        compile_expr(value, code)?;
+                        code.emit(Opcode::Dup);
+                        code.emit(Opcode::StoreVar(var_idx));
+                        let target = code.bytecode.len();
+                        code.patch_jmp(jmp_skip, target);
+                    }
                     _ => {
                         // Compound: lhs <op>= rhs => lhs = lhs <op> rhs
                         // Stack: load lhs, load rhs, op, dup, store

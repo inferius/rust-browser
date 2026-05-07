@@ -356,6 +356,60 @@ fn vm_user_function_chained_calls() {
 }
 
 #[test]
+fn vm_logical_and_assign() {
+    // Truthy lhs: assign rhs.
+    let r = run_vm(r#"
+        let x = 1;
+        x &&= 99;
+        x
+    "#).unwrap();
+    assert_jv!(r, n(99.0));
+    // Falsy lhs: nech as is.
+    let r = run_vm(r#"
+        let x = 0;
+        x &&= 99;
+        x
+    "#).unwrap();
+    assert_jv!(r, n(0.0));
+}
+
+#[test]
+fn vm_logical_or_assign() {
+    // Falsy lhs: assign rhs.
+    let r = run_vm(r#"
+        let x = 0;
+        x ||= 42;
+        x
+    "#).unwrap();
+    assert_jv!(r, n(42.0));
+    // Truthy lhs: nech as is.
+    let r = run_vm(r#"
+        let x = 5;
+        x ||= 42;
+        x
+    "#).unwrap();
+    assert_jv!(r, n(5.0));
+}
+
+#[test]
+fn vm_null_coalesce_assign() {
+    // null lhs: assign rhs.
+    let r = run_vm(r#"
+        let x = null;
+        x ??= 'default';
+        x
+    "#).unwrap();
+    assert_jv!(r, JsValue::Str("default".to_string()));
+    // Non-null lhs: nech as is.
+    let r = run_vm(r#"
+        let x = 0;
+        x ??= 'default';
+        x
+    "#).unwrap();
+    assert_jv!(r, n(0.0));
+}
+
+#[test]
 fn vm_array_push() {
     let r = run_vm(r#"
         let a = [1, 2];
