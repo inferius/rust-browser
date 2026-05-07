@@ -677,6 +677,8 @@ impl Interpreter {
 
     /// Drainuje WebSocket events z bg threadu a vola registrovane callbacky.
     pub fn drain_websockets(&mut self) -> Result<(), JsError> {
+        // Fast path - prazdny pool.
+        if self.websockets.borrow().is_empty() { return Ok(()); }
         // Sber events z vsech sockets.
         let pending: Vec<(u32, WebSocketEvent)> = {
             let map = self.websockets.borrow();
@@ -732,6 +734,8 @@ impl Interpreter {
 
     /// Drainuje vsechny worker zpravy a zavola onmessage callbacky.
     fn drain_workers(&mut self) -> Result<(), JsError> {
+        // Fast path - prazdny pool.
+        if self.workers.borrow().is_empty() { return Ok(()); }
         // Sber zprav z vsech workeru (ID + msg)
         let pending: Vec<(u32, String)> = {
             let workers = self.workers.borrow();
@@ -858,6 +862,8 @@ impl Interpreter {
 
     /// Spusti vsechny cekajici timer callbacky.
     fn drain_timers(&mut self) -> Result<(), JsError> {
+        // Fast path - prazdne queue, zadny borrow needed.
+        if self.task_queue.borrow().is_empty() { return Ok(()); }
         loop {
             let next = { self.task_queue.borrow().first().cloned() };
             match next {
