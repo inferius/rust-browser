@@ -2912,7 +2912,7 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
                 || bx_clone.overflow_wrap.as_str() == "anywhere"
                 || bx_clone.word_break.as_str() == "break-all";
             for (wi, word) in words.iter().enumerate() {
-                let w = measure_text_width(word, font_size);
+                let w = measure_text_width_styled(word, font_size, bx_clone.bold);
                 let inter_word_space = if wi > 0 { space_w } else { 0.0 };
                 let needs_wrap = cursor_x + inter_word_space + w > inner_x + inner_w
                     && cursor_x > inner_x;
@@ -2930,7 +2930,7 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
                     let mut acc_w = 0.0;
                     let chars: Vec<char> = word.chars().collect();
                     for ch in chars {
-                        let ch_w = measure_text_width(&ch.to_string(), font_size);
+                        let ch_w = measure_text_width_styled(&ch.to_string(), font_size, bx_clone.bold);
                         if cursor_x + acc_w + ch_w > inner_x + inner_w && cursor_x > inner_x {
                             cursor_y += line_height;
                             cursor_x = inner_x;
@@ -2989,9 +2989,10 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
             let explicit_h = bx_clone.explicit_height
                 .or_else(|| if bx_clone.rect.height > 0.0 { Some(bx_clone.rect.height) } else { None });
             let estimated_w = explicit_w.unwrap_or_else(|| {
+                let inherited_bold = bx_clone.bold;
                 let text_w = (bx_clone.children.iter()
                     .filter_map(|c| c.text.as_ref())
-                    .map(|t| measure_text_width(t, font_size))
+                    .map(|t| measure_text_width_styled(t, font_size, inherited_bold))
                     .sum::<f32>())
                     .max(font_size);
                 text_w + pad_l + pad_r
@@ -3048,24 +3049,52 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
 /// Real vypocet sirky textu pres globalni shared font.
 /// Fallback na heuristiku kdyz font neni dostupny.
 pub fn measure_text_width(text: &str, font_size: f32) -> f32 {
+    measure_text_width_styled(text, font_size, false)
+}
+
+pub fn measure_text_width_styled(text: &str, font_size: f32, bold: bool) -> f32 {
     use std::sync::OnceLock;
     static FONT: OnceLock<Option<fontdue::Font>> = OnceLock::new();
+    static FONT_BOLD: OnceLock<Option<fontdue::Font>> = OnceLock::new();
 
     let font_opt = FONT.get_or_init(|| {
         super::render::try_load_default_font()
             .and_then(|data| fontdue::Font::from_bytes(data, fontdue::FontSettings::default()).ok())
     });
+    let font_bold_opt = FONT_BOLD.get_or_init(|| {
+        // Match render-side bold font candidates.
+        let candidates: &[&str] = &[
+            "C:\\Windows\\Fonts\\timesbd.ttf",
+            "C:\\Windows\\Fonts\\segoeuib.ttf",
+            "C:\\Windows\\Fonts\\arialbd.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        ];
+        for path in candidates {
+            if let Ok(d) = std::fs::read(path) {
+                if let Ok(f) = fontdue::Font::from_bytes(d, fontdue::FontSettings::default()) {
+                    return Some(f);
+                }
+            }
+        }
+        None
+    });
 
-    match font_opt {
+    // Pri bold preferuj real bold font; pri jeho neexistenci pricti fake-bold
+    // 1px smear per char (render side dela double-draw +1px).
+    let active_font = if bold { font_bold_opt.as_ref().or(font_opt.as_ref()) } else { font_opt.as_ref() };
+    let fake_bold_pad = if bold && font_bold_opt.is_none() { 1.0 } else { 0.0 };
+
+    match active_font {
         Some(font) => {
             text.chars().map(|ch| {
-                font.metrics(ch, font_size).advance_width
+                font.metrics(ch, font_size).advance_width + fake_bold_pad
             }).sum()
         }
         None => {
-            // Fallback heuristika
             let avg_char_w = font_size * 0.55;
-            text.chars().count() as f32 * avg_char_w
+            text.chars().count() as f32 * (avg_char_w + fake_bold_pad)
         }
     }
 }
