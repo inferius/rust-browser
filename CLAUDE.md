@@ -121,10 +121,11 @@ cargo run -- window [src.html]                   # Alias browser, pres run_windo
 - **CSS clip-path** - inset/circle/ellipse pres compute_clip_rect (rect dimensions + radius), polygon pres ClippedRect + triangulate_polygon (ear-clipping).
 - **WebGL** - 1308 lines: createShader/Program (vertex+fragment WGSL transpile), createBuffer/Texture, vertexAttribPointer, uniform1/2/3/4f/i + Matrix2/3/4fv, drawArrays/Elements, viewport/clear, walk_webgl + process_webgl_drawcalls + swap_view integration.
 - **Form submit** - JS API form.submit() (preventDefault check + collect form data + URL encode + ureq POST/GET) + native button[type=submit] click (dispatch 'submit' event pred navigation).
+- **WOFF2 glyf transform reverse** - full impl per Google's woff2 reference (Apache-2.0). 36B header parsing, 7-stream split, triplet decode (range-based dispatch flag<10/<20/<84/<120/<124/else, with_sign), simple/composite/empty glyph rekonstrukce, store_points + repeat optimization, bbox bitmap, sfnt simple glyph encoding (FLAG_X_SHORT/X_SAME/REPEAT), loca synthesized z glyf offsets (short/long format dle indexFormat). Tests s real Google Fonts Roboto subsets (greek-ext 3680B, greek 9556B, cyrillic 12108B) - vsechny round-trip + fontdue load OK.
 
 ## Co zbyva (TODO)
 
-- **WOFF2 glyf transform reversal** - aktualne bail-out s TransformNotImplemented. Spec section 5.1 implementace by potrebovala 128-entry triplet table + simple/composite glyph rekonstrukce. Riziko spatne tabulky = broken glyfy. Cekat na referencni test fonty.
+Vsechny puvodni TODO body hotove. Engine kompletni.
 
 ## Konvence
 
