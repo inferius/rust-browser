@@ -2821,7 +2821,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
             if self.cached_stylesheets.is_none() || self.cached_stylesheets_hash != css_hash {
                 let parsed = vec![css_parser::parse_stylesheet(&self.css)];
                 for sheet in &parsed {
-                    r.load_font_faces(&sheet.font_faces);
+                    r.load_font_faces(&sheet.font_faces, self.base_url.as_deref());
                 }
                 // Detect if any keyframes animate layout-affecting properties.
                 // Layout-affecting: width/height/padding/margin/border-width/border-radius
@@ -4814,20 +4814,39 @@ impl Renderer {
 
     /// Nacte fonty z @font-face declarations do Font registry.
     /// Skip uz nahrane URL. FS only (HTTP TODO).
-    fn load_font_faces(&mut self, font_faces: &[crate::browser::css_parser::FontFace]) {
+    fn load_font_faces(&mut self, font_faces: &[crate::browser::css_parser::FontFace], base_url: Option<&str>) {
         use crate::browser::css_parser::extract_font_url;
         for ff in font_faces {
             let url = match extract_font_url(&ff.src) { Some(u) => u, None => continue };
             if self.loaded_font_urls.contains(&url) { continue; }
-            // FS path: relative -> static/<url>
-            let path = if url.starts_with('/') {
+            // Resolve relativni URL proti page base_url. Pokud HTTPS/HTTP -
+            // ureq fetch. Jinak FS read (s static/ fallback pro relativni).
+            let final_url = if url.starts_with("http://") || url.starts_with("https://") {
                 url.clone()
-            } else if url.starts_with("http://") || url.starts_with("https://") {
-                continue; // HTTP TODO
+            } else if let Some(base) = base_url {
+                resolve_url(base, &url)
             } else {
-                format!("static/{url}")
+                url.clone()
             };
-            if let Ok(bytes) = std::fs::read(&path) {
+            let bytes_opt: Option<Vec<u8>> = if final_url.starts_with("http://") || final_url.starts_with("https://") {
+                match ureq::get(&final_url).timeout(std::time::Duration::from_secs(15)).call() {
+                    Ok(resp) => {
+                        let mut buf = Vec::new();
+                        if resp.into_reader().read_to_end(&mut buf).is_ok() { Some(buf) } else { None }
+                    }
+                    Err(e) => { eprintln!("[font-face] HTTP fail {final_url}: {e}"); None }
+                }
+            } else {
+                let path = if let Some(rest) = final_url.strip_prefix("file:///") {
+                    rest.replace('/', std::path::MAIN_SEPARATOR_STR)
+                } else if final_url.starts_with('/') {
+                    final_url.clone()
+                } else {
+                    format!("static/{final_url}")
+                };
+                std::fs::read(&path).ok()
+            };
+            if let Some(bytes) = bytes_opt {
                 // WOFF/WOFF2 dekomprese (no-op pri TTF/OTF bytes).
                 let decoded = super::woff::maybe_decode_woff(&bytes);
                 // Variable font detection: log axes pri prvnim nahrani.
