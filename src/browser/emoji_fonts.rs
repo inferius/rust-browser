@@ -49,6 +49,85 @@ pub struct ColrData {
     pub palette: Vec<[u8; 4]>,
 }
 
+/// COLR v0 rasterizer: pro base glyph_id najde jeho layers, rasterizuje
+/// kazdy pres fontdue::rasterize_indexed, tintuje palette barvou + composit
+/// alpha-over do RGBA bufferu.
+///
+/// Vraci (width, height, x_offset, y_offset, RGBA bytes).
+/// Pri base glyph nema layers v COLR vrati None - caller nech rasterize as alpha.
+pub fn rasterize_color_glyph(
+    font: &fontdue::Font,
+    base_glyph_id: u16,
+    px: f32,
+    colr: &ColrData,
+    foreground: [u8; 4],
+) -> Option<(usize, usize, i32, i32, Vec<u8>)> {
+    let layers = colr.base_to_layers.get(&base_glyph_id)?;
+    if layers.is_empty() { return None; }
+
+    // Compute bounding box across all layers (max width/height).
+    let mut max_w = 0i32;
+    let mut max_h = 0i32;
+    let mut min_xmin = i32::MAX;
+    let mut min_ymin = i32::MAX;
+    let mut layer_data: Vec<(fontdue::Metrics, Vec<u8>, [u8; 4])> = Vec::with_capacity(layers.len());
+    for layer in layers {
+        let (m, alpha) = font.rasterize_indexed(layer.glyph_id, px);
+        let color = if layer.palette_idx == 0xFFFF {
+            foreground
+        } else {
+            colr.palette.get(layer.palette_idx as usize).copied().unwrap_or([0, 0, 0, 255])
+        };
+        // Bbox track v "advance space" - xmin/ymin negative-ok.
+        if m.xmin < min_xmin { min_xmin = m.xmin; }
+        if m.ymin < min_ymin { min_ymin = m.ymin; }
+        let right = m.xmin + m.width as i32;
+        let top = m.ymin + m.height as i32;
+        if right > max_w { max_w = right; }
+        if top > max_h { max_h = top; }
+        layer_data.push((m, alpha, color));
+    }
+    if min_xmin == i32::MAX { return None; }
+
+    let out_w = (max_w - min_xmin).max(1) as usize;
+    let out_h = (max_h - min_ymin).max(1) as usize;
+    let mut rgba = vec![0u8; out_w * out_h * 4];
+
+    // Composite each layer alpha-over.
+    for (m, alpha, color) in &layer_data {
+        let dx = (m.xmin - min_xmin) as usize;
+        let dy_top = (max_h - (m.ymin + m.height as i32)) as usize;
+        for ly in 0..m.height {
+            for lx in 0..m.width {
+                let a_idx = ly * m.width + lx;
+                let layer_a = alpha[a_idx];
+                if layer_a == 0 { continue; }
+                let ox = dx + lx;
+                let oy = dy_top + ly;
+                if ox >= out_w || oy >= out_h { continue; }
+                let dst = (oy * out_w + ox) * 4;
+                // Source RGBA premultiplied by layer_a.
+                let s_a = (layer_a as u16 * color[3] as u16 / 255) as u8;
+                let s_r = (color[0] as u16 * s_a as u16 / 255) as u8;
+                let s_g = (color[1] as u16 * s_a as u16 / 255) as u8;
+                let s_b = (color[2] as u16 * s_a as u16 / 255) as u8;
+                // dst already premultiplied (pri 0 init OK).
+                let d_r = rgba[dst];
+                let d_g = rgba[dst + 1];
+                let d_b = rgba[dst + 2];
+                let d_a = rgba[dst + 3];
+                let inv_s_a = 255 - s_a as u16;
+                rgba[dst]     = (s_r as u16 + d_r as u16 * inv_s_a / 255) as u8;
+                rgba[dst + 1] = (s_g as u16 + d_g as u16 * inv_s_a / 255) as u8;
+                rgba[dst + 2] = (s_b as u16 + d_b as u16 * inv_s_a / 255) as u8;
+                rgba[dst + 3] = (s_a as u16 + d_a as u16 * inv_s_a / 255) as u8;
+            }
+        }
+    }
+    // Vrat (width, height, x_offset, y_offset, rgba).
+    Some((out_w, out_h, min_xmin, min_ymin, rgba))
+}
+
 /// Plne parse COLR v0 + CPAL pro rasterization. Vrati None pri non-COLR fonts.
 pub fn parse_colr_full(font_data: &[u8]) -> Option<ColrData> {
     let colr = find_table(font_data, b"COLR")?;
