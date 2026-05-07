@@ -2630,6 +2630,25 @@ pub fn layout_block(bx: &mut LayoutBox) {
                 }
                 layout_dispatch(child);
 
+                // TableRow: cells maji vyssi rect.height nez tr default (20px)
+                // diky padding. Pri rendering vyssi cell prelize do dalsi rady
+                // a borders prochazi pres text. Bubble max child height do tr.
+                if matches!(child.display, Display::TableRow) && child.explicit_height.is_none() {
+                    let max_cell_h = child.children.iter()
+                        .filter(|c| matches!(c.display, Display::TableCell | Display::TableHeaderCell))
+                        .map(|c| c.rect.height)
+                        .fold(0.0f32, f32::max);
+                    if max_cell_h > child.rect.height {
+                        child.rect.height = max_cell_h;
+                        // Cells musia mit stejnou height (align stretch).
+                        for c in child.children.iter_mut() {
+                            if matches!(c.display, Display::TableCell | Display::TableHeaderCell) {
+                                c.rect.height = max_cell_h;
+                            }
+                        }
+                    }
+                }
+
                 // Apply position offsety
                 let is_in_flow = matches!(child.position, Position::Static | Position::Relative);
                 match child.position {

@@ -1476,8 +1476,13 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
             TextAlign::Center => ((inner_w - text_w) * 0.5).max(0.0),
             TextAlign::Right  => (inner_w - text_w).max(0.0),
         };
-        let text_x = bx.rect.x + bx.padding + align_offset;
-        let text_y = bx.rect.y + bx.padding;
+        // Asymmetric padding: padding-left wins pro text x-pozici, padding-top
+        // pro text y-pozici. Pri "padding: 2px 8px" potrebujeme 8 horizontalni
+        // a 2 vertikalni.
+        let pad_l = bx.padding_left.unwrap_or(bx.padding);
+        let pad_t = bx.padding_top.unwrap_or(bx.padding);
+        let text_x = bx.rect.x + pad_l + align_offset;
+        let text_y = bx.rect.y + pad_t;
         let text_color = with_alpha(bx.text_color.unwrap_or([0, 0, 0, 255]));
         // Text shadow - emit pred main text aby byl v pozadi
         if let Some((ox, oy, _blur, color)) = bx.text_shadow {

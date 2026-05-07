@@ -398,30 +398,35 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: 
                 let pen_y = *y + *font_size;
                 // Italic = fake skew transform na glyph quady (x += y * 0.2).
                 let italic_skew: f32 = if *italic { 0.2 } else { 0.0 };
-                // Bold = fake bold pres double draw s 1px x-offsetem (smear).
-                // Pri opravdovem fontu by se mel pouzit bold variant, ale fake
-                // staci pro dostatecny vizualni weight.
-                let bold_offset: f32 = if *bold { (font_size / 16.0).max(0.6).min(1.6) } else { 0.0 };
+                // Bold = fake bold pres double draw s integer 1px x-offsetem.
+                // Real bold font variant by byl crispier, ale fake staci pro
+                // vizualni weight. Bold se NEdraw pri italic/skew (smear by se
+                // sklonil + rozmazaval).
+                let bold_offset: f32 = if *bold { 1.0 } else { 0.0 };
                 let start_x = pen_x;
                 for ch in content.chars() {
                     // Color glyph (COLR) check pres synthetic image_atlas key.
                     let colr_key = format!("__colr:{}:{}:{}", font_family, ch as u32, *font_size as u32);
                     if let Some(info) = image_atlas.get(&colr_key) {
-                        // Place color glyph jako Image quad. Y baseline-aligned.
-                        let gx = pen_x;
-                        let gy = pen_y - info.height;
+                        let gx = pen_x.round();
+                        let gy = (pen_y - info.height).round();
                         push_image(&mut verts, gx, gy, info.width, info.height, info.uv0, info.uv1, 0.0);
                         pen_x += info.width;
                         continue;
                     }
                     if let Some(g) = atlas.get(font_family, ch, *font_size as u32) {
-                        let gx = pen_x + g.bearing_x;
-                        let gy = pen_y - g.bearing_y;
-                        let skew_x = if italic_skew != 0.0 { (pen_y - gy) * italic_skew } else { 0.0 };
-                        push_rect_uv(&mut verts, gx + skew_x, gy, g.width, g.height, c, g.uv0, g.uv1, 1.0);
-                        // Bold smear: druhe vykresleni s x-offsetem.
+                        // Round na integer piksely - sub-pixel pozice + linear
+                        // sampler = blur. Pri integer pozici sampler ctena pres
+                        // texel boundary = crisp.
+                        let gx_raw = pen_x + g.bearing_x;
+                        let gy_raw = pen_y - g.bearing_y;
+                        let skew_x = if italic_skew != 0.0 { (pen_y - gy_raw) * italic_skew } else { 0.0 };
+                        let gx = (gx_raw + skew_x).round();
+                        let gy = gy_raw.round();
+                        push_rect_uv(&mut verts, gx, gy, g.width, g.height, c, g.uv0, g.uv1, 1.0);
+                        // Bold smear: druhe vykresleni s integer x-offsetem.
                         if bold_offset > 0.0 {
-                            push_rect_uv(&mut verts, gx + skew_x + bold_offset, gy, g.width, g.height, c, g.uv0, g.uv1, 1.0);
+                            push_rect_uv(&mut verts, gx + bold_offset, gy, g.width, g.height, c, g.uv0, g.uv1, 1.0);
                         }
                         pen_x += g.advance + bold_offset;
                     } else {
@@ -3636,8 +3641,13 @@ impl Renderer {
             view_formats: &[],
         });
         let atlas_view = atlas_tex.create_view(&Default::default());
+        // Nearest sampler: glyph atlas + image atlas pres tento sampler.
+        // Pri integer pixel pozici quadu + atlas UV na texel boundary linear
+        // sampling vraci blur (interpoluje mezi sousednimi texely). Nearest
+        // pri exact match daji crisp text. Pro images by Linear bylo lepsi -
+        // ale image rendering az pri downscale, jinak Nearest staci.
         let atlas_smp = device.create_sampler(&wgpu::SamplerDescriptor {
-            mag_filter: wgpu::FilterMode::Linear,
+            mag_filter: wgpu::FilterMode::Nearest,
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
