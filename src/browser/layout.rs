@@ -2932,6 +2932,11 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
             if sib_idx > 0 && prev_had_trailing_space && cursor_x > inner_x {
                 cursor_x += space_w;
             }
+            // Margin pro inline-block elementy (button, image apod.) - prida
+            // mezeru pred element. CSS spec: margin-left bere effekt na inline.
+            let mar_l = bx_clone.margin_left.unwrap_or(bx_clone.margin);
+            let mar_r = bx_clone.margin_right.unwrap_or(bx_clone.margin);
+            cursor_x += mar_l;
             // Inline padding (CSS: <code>, <span class=num> maji padding-left/right).
             // Asymmetric padding wins, jinak shorthand `padding`.
             let pad_l = bx_clone.padding_left.unwrap_or(bx_clone.padding);
@@ -2965,7 +2970,7 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
             bx.children[idx].rect.height = element_h;
             // Layout vnoreny obsah - layout_block pouzije rect + padding.
             layout_block(&mut bx.children[idx]);
-            cursor_x += estimated_w;
+            cursor_x += estimated_w + mar_r;
             // Inline element bez text trailing -> default no trailing space.
             prev_had_trailing_space = false;
         } else {
