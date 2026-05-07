@@ -2622,6 +2622,40 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                         && node.attr("type").as_deref().map(|t| t.eq_ignore_ascii_case("submit")).unwrap_or(matches!(tag.as_deref(), Some("button")));
                     if is_submit_button {
                         if let Some(form) = find_ancestor_form(node) {
+                            // Dispatch 'submit' event - browsery to delaji pred navigation.
+                            // Pri preventDefault listener -> skip navigate.
+                            let prevented;
+                            {
+                                let mut event = crate::interpreter::JsObject::new();
+                                event.set("type".into(),
+                                    crate::interpreter::JsValue::Str("submit".into()));
+                                event.set("target".into(),
+                                    crate::interpreter::JsValue::DomNode(std::rc::Rc::clone(&form)));
+                                event.set("currentTarget".into(),
+                                    crate::interpreter::JsValue::DomNode(std::rc::Rc::clone(&form)));
+                                event.set("bubbles".into(), crate::interpreter::JsValue::Bool(true));
+                                event.set("cancelable".into(), crate::interpreter::JsValue::Bool(true));
+                                let prevent_flag = std::rc::Rc::new(std::cell::RefCell::new(false));
+                                let pf = std::rc::Rc::clone(&prevent_flag);
+                                event.set("preventDefault".into(),
+                                    crate::interpreter::helpers::native("preventDefault", move |_| {
+                                        *pf.borrow_mut() = true;
+                                        Ok(crate::interpreter::JsValue::Undefined)
+                                    }));
+                                event.set("stopPropagation".into(),
+                                    crate::interpreter::helpers::native("stopPropagation",
+                                        |_| Ok(crate::interpreter::JsValue::Undefined)));
+                                event.set("defaultPrevented".into(),
+                                    crate::interpreter::JsValue::Bool(false));
+                                let event_val = crate::interpreter::JsValue::Object(
+                                    std::rc::Rc::new(std::cell::RefCell::new(event)));
+                                let _ = interp.dispatch_event(&form, "submit", event_val);
+                                prevented = *prevent_flag.borrow();
+                            }
+                            if prevented {
+                                println!("[form submit] prevented by listener");
+                                return;
+                            }
                             if let Some((url, method, body)) = build_form_request(&form, self.base_url.as_deref()) {
                                 println!("[form {} submit] {url}", method);
                                 if method == "post" {

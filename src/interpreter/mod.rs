@@ -42,7 +42,7 @@ use num_traits::Pow;
 
 // ─── Submoduly ────────────────────────────────────────────────────────────────
 
-mod helpers;
+pub mod helpers;
 mod builtins;
 mod string_methods;
 pub(crate) mod webgl;
