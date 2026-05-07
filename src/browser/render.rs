@@ -4925,7 +4925,9 @@ impl Renderer {
                 format!("static/{url}")
             };
             if let Ok(bytes) = std::fs::read(&path) {
-                if let Ok(font) = fontdue::Font::from_bytes(bytes, fontdue::FontSettings::default()) {
+                // WOFF/WOFF2 dekomprese (no-op pri TTF/OTF bytes).
+                let decoded = super::woff::maybe_decode_woff(&bytes);
+                if let Ok(font) = fontdue::Font::from_bytes(decoded, fontdue::FontSettings::default()) {
                     self.font_registry.insert(ff.family.clone(), font.clone());
                     // Sdilet do atlasu pro rasterize lookup
                     self.atlas.extra_fonts.insert(ff.family.clone(), font);

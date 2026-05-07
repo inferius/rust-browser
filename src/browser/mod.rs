@@ -17,6 +17,7 @@ pub mod layout_engine;
 pub mod paint;
 pub mod render;
 pub mod devtools_panel;
+pub mod woff;
 
 #[cfg(test)]
 mod tests;

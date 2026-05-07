@@ -58,3 +58,5 @@ fontdue = "0.9"  # font rasterizer pro glyph atlas
 # To je out-of-scope pro pure-Rust projekt. AVIF DECODE je TODO (separate crate
 # nebo system dav1d).
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "webp", "tiff", "ico", "tga", "exr", "qoi", "ff", "hdr", "pnm", "dds"] }
+# WOFF dekomprese (zlib stream per table). Pure-Rust deflate. WOFF2 (brotli + transformations) zatim TODO.
+flate2 = "1.0"

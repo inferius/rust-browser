@@ -11,6 +11,7 @@ dependencies = [
  "cssparser 0.34.0",
  "fancy-regex",
  "fixed_decimal",
+ "flate2",
  "fontdue",
  "html5ever",
  "icu",
