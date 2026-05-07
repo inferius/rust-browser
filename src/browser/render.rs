@@ -400,12 +400,20 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: 
                 let italic_skew: f32 = if *italic { 0.2 } else { 0.0 };
                 let start_x = pen_x;
                 for ch in content.chars() {
+                    // Color glyph (COLR) check pres synthetic image_atlas key.
+                    let colr_key = format!("__colr:{}:{}:{}", font_family, ch as u32, *font_size as u32);
+                    if let Some(info) = image_atlas.get(&colr_key) {
+                        // Place color glyph jako Image quad. Y baseline-aligned.
+                        let gx = pen_x;
+                        let gy = pen_y - info.height;
+                        push_image(&mut verts, gx, gy, info.width, info.height, info.uv0, info.uv1, 0.0);
+                        pen_x += info.width;
+                        continue;
+                    }
                     if let Some(g) = atlas.get(font_family, ch, *font_size as u32) {
                         let gx = pen_x + g.bearing_x;
                         let gy = pen_y - g.bearing_y;
                         if italic_skew != 0.0 {
-                            // Per-glyph skew: posun rohu kvadu o (height * skew).
-                            // Approximace: posunout cely glyph rect o offset zalozeny na pozici.
                             let baseline_offset = (pen_y - gy) * italic_skew;
                             push_rect_uv(&mut verts, gx + baseline_offset, gy, g.width, g.height, c, g.uv0, g.uv1, 1.0);
                         } else {
@@ -2035,7 +2043,7 @@ impl ImageAtlas {
         }
     }
 
-    fn get(&self, src: &str) -> Option<&ImageInfo> {
+    pub fn get(&self, src: &str) -> Option<&ImageInfo> {
         self.cache.get(src)
     }
 
@@ -3092,12 +3100,34 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                 });
             }
 
-            // Pre-rasterize vsechny glyfy do atlasu + nacti images
+            // Pre-rasterize vsechny glyfy do atlasu + nacti images.
+            // Pri COLR color font: rasterize char jako RGBA + put do image_atlas
+            // pres synthetic key "__colr:{family}:{ch}:{size}". Render path detekuje.
             for cmd in &display_list {
                 match cmd {
-                    DisplayCommand::Text { content, font_size, font_family, .. } => {
+                    DisplayCommand::Text { content, font_size, font_family, color, .. } => {
                         for ch in content.chars() {
-                            r.atlas.add(font_family, ch, *font_size as u32);
+                            // Pokus o color glyph rasterization.
+                            let mut color_added = false;
+                            if let Some(colr) = r.color_fonts.get(font_family).cloned() {
+                                if let Some(font) = r.font_registry.get(font_family).cloned() {
+                                    let glyph_id = font.lookup_glyph_index(ch);
+                                    if glyph_id != 0 && colr.base_to_layers.contains_key(&glyph_id) {
+                                        let key = format!("__colr:{}:{}:{}", font_family, ch as u32, *font_size as u32);
+                                        if !r.image_atlas.contains(&key) {
+                                            if let Some((w, h, _, _, rgba)) = super::emoji_fonts::rasterize_color_glyph(
+                                                &font, glyph_id, *font_size, &colr, *color,
+                                            ) {
+                                                r.image_atlas.add(&key, w as u32, h as u32, &rgba);
+                                            }
+                                        }
+                                        color_added = true;
+                                    }
+                                }
+                            }
+                            if !color_added {
+                                r.atlas.add(font_family, ch, *font_size as u32);
+                            }
                         }
                     }
                     DisplayCommand::Image { src, .. } => {
@@ -3462,6 +3492,8 @@ struct Renderer {
     font_registry: std::collections::HashMap<String, fontdue::Font>,
     /// Loaded font URLs (skip re-load).
     loaded_font_urls: std::collections::HashSet<String>,
+    /// Color fonts: family -> ColrData (layers + palette pro emoji rasterization).
+    color_fonts: std::collections::HashMap<String, super::emoji_fonts::ColrData>,
     /// Offscreen RT pro filter blur / view-transitions (RGBA8 viewport size).
     offscreen_tex: wgpu::Texture,
     offscreen_view: wgpu::TextureView,
@@ -3934,6 +3966,7 @@ impl Renderer {
             image_atlas, image_tex, image_view,
             font_registry: std::collections::HashMap::new(),
             loaded_font_urls: std::collections::HashSet::new(),
+            color_fonts: std::collections::HashMap::new(),
             offscreen_tex, offscreen_view,
             offscreen_tex_b, offscreen_view_b,
             main_rt,
@@ -4775,6 +4808,13 @@ impl Renderer {
                         ff.family, color_info.format,
                         color_info.colr_base_count, color_info.colr_layer_count,
                         color_info.cpal_palette_count);
+                    // Pri COLR v0: full parse pro rasterization.
+                    if matches!(color_info.format, ColorFormat::ColrV0) {
+                        if let Some(colr) = super::emoji_fonts::parse_colr_full(&decoded) {
+                            self.color_fonts.insert(ff.family.clone(), colr);
+                            println!("[font] {} COLR data ulozeny do color_fonts.", ff.family);
+                        }
+                    }
                 }
                 if let Ok(font) = fontdue::Font::from_bytes(decoded, fontdue::FontSettings::default()) {
                     self.font_registry.insert(ff.family.clone(), font.clone());
