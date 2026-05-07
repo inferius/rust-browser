@@ -13,7 +13,7 @@
 //! Cilem v1: aritmetika, srovnavani, logika, var/let/const decls, assignments,
 //! if/else, while/for, function call (existing JS funkce). Concretne cca 30 opcodes.
 
-use crate::ast::{Expr, BinaryOp, UnaryOp, Stmt, LogicalOp, AssignOp, Pattern, ForInit, MemberProp, PropKey};
+use crate::ast::{Expr, BinaryOp, UnaryOp, Stmt, LogicalOp, AssignOp, Pattern, ForInit, MemberProp, PropKey, ArrowBody};
 
 // Thread-local compile-time scratch:
 // - OUTER_VARS_STACK: stack of outer var_names (push pri vstupu do function body).
@@ -488,6 +488,89 @@ pub fn compile_expr(e: &Expr, code: &mut CodeBlock) -> Result<(), &'static str> 
                 compile_expr(arg, code)?;
             }
             code.emit(Opcode::CallNative(args.len() as u16));
+            Ok(())
+        }
+        Expr::Arrow { params, body } => {
+            // Snapshot outer var_names PRED compile body.
+            let outer_vars_snapshot = code.var_names.clone();
+            let mut fn_code = CodeBlock::new();
+            // Anonymous - no slot 0 self.
+            let mut param_names: Vec<String> = Vec::new();
+            for p in params {
+                if let Pattern::Ident(pn) = &p.pattern {
+                    param_names.push(pn.clone());
+                    fn_code.push_var(pn);
+                } else {
+                    return Err("destructuring arrow param not supported");
+                }
+            }
+            push_outer_scope(outer_vars_snapshot);
+            let body_result = (|| -> Result<(), &'static str> {
+                match body {
+                    ArrowBody::Expr(e) => {
+                        compile_expr(e, &mut fn_code)?;
+                        fn_code.emit(Opcode::Return);
+                    }
+                    ArrowBody::Block(stmts) => {
+                        for s in stmts {
+                            compile_stmt(s, &mut fn_code)?;
+                        }
+                        fn_code.emit(Opcode::LoadUndefined);
+                        fn_code.emit(Opcode::Return);
+                    }
+                }
+                Ok(())
+            })();
+            let captures_outer_indices = pop_outer_scope();
+            body_result?;
+            let compiled = std::rc::Rc::new(CompiledFunction {
+                name: None,
+                params: param_names,
+                code: fn_code,
+                captures_outer_indices,
+            });
+            let fn_idx = code.functions.len() as u16;
+            code.functions.push(compiled);
+            code.emit(Opcode::LoadFunction(fn_idx));
+            Ok(())
+        }
+        Expr::Function { name, params, body } => {
+            // Anonymous nebo named function expression. Stejny postup jako Arrow.
+            let outer_vars_snapshot = code.var_names.clone();
+            let mut fn_code = CodeBlock::new();
+            // Pri named: pre-register self na slot 0.
+            if let Some(n) = name {
+                fn_code.push_var(n);
+            }
+            let mut param_names: Vec<String> = Vec::new();
+            for p in params {
+                if let Pattern::Ident(pn) = &p.pattern {
+                    param_names.push(pn.clone());
+                    fn_code.push_var(pn);
+                } else {
+                    return Err("destructuring fn-expr param not supported");
+                }
+            }
+            push_outer_scope(outer_vars_snapshot);
+            let body_result = (|| -> Result<(), &'static str> {
+                for s in body {
+                    compile_stmt(s, &mut fn_code)?;
+                }
+                fn_code.emit(Opcode::LoadUndefined);
+                fn_code.emit(Opcode::Return);
+                Ok(())
+            })();
+            let captures_outer_indices = pop_outer_scope();
+            body_result?;
+            let compiled = std::rc::Rc::new(CompiledFunction {
+                name: name.clone(),
+                params: param_names,
+                code: fn_code,
+                captures_outer_indices,
+            });
+            let fn_idx = code.functions.len() as u16;
+            code.functions.push(compiled);
+            code.emit(Opcode::LoadFunction(fn_idx));
             Ok(())
         }
         Expr::Object(props) => {

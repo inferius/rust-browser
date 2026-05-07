@@ -356,6 +356,43 @@ fn vm_user_function_chained_calls() {
 }
 
 #[test]
+fn vm_arrow_function_expr_body() {
+    let r = run_vm(r#"
+        let add = (a, b) => a + b;
+        add(7, 8)
+    "#).unwrap();
+    assert_jv!(r, n(15.0));
+}
+
+#[test]
+fn vm_arrow_function_block_body() {
+    let r = run_vm(r#"
+        let mul = (a, b) => { return a * b; };
+        mul(6, 7)
+    "#).unwrap();
+    assert_jv!(r, n(42.0));
+}
+
+#[test]
+fn vm_arrow_captures_outer() {
+    let r = run_vm(r#"
+        let factor = 10;
+        let scale = x => x * factor;
+        scale(5)
+    "#).unwrap();
+    assert_jv!(r, n(50.0));
+}
+
+#[test]
+fn vm_function_expression_anonymous() {
+    let r = run_vm(r#"
+        let f = function(n) { return n + 100; };
+        f(23)
+    "#).unwrap();
+    assert_jv!(r, n(123.0));
+}
+
+#[test]
 fn vm_object_prop_assign() {
     let r = run_vm(r#"
         let o = { a: 1 };
