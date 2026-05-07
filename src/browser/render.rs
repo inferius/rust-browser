@@ -1782,10 +1782,13 @@ pub fn try_load_default_font() -> Option<Vec<u8>> {
     if let Ok(path) = std::env::var("RUST_WEB_ENGINE_FONT_PATH") {
         if let Ok(data) = std::fs::read(&path) { return Some(data); }
     }
+    // Match OS default sans-serif: Chrome/Edge/Firefox na Windows pouzivaji
+    // Segoe UI, na macOS San Francisco / Helvetica, na Linuxu DejaVu/Liberation.
     let candidates: &[&str] = &[
-        "C:\\Windows\\Fonts\\arial.ttf",
-        "C:\\Windows\\Fonts\\segoeui.ttf",
+        "C:\\Windows\\Fonts\\segoeui.ttf",   // Windows default
+        "C:\\Windows\\Fonts\\arial.ttf",     // Windows fallback
         "C:\\Windows\\Fonts\\verdana.ttf",
+        "/System/Library/Fonts/SFNS.ttf",    // macOS SF
         "/System/Library/Fonts/Helvetica.ttc",
         "/System/Library/Fonts/Supplemental/Arial.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
@@ -1855,9 +1858,17 @@ impl GlyphAtlas {
     }
 
     /// Vrati referenci na font dle family. "" nebo neznamy -> default.
+    /// Pri comma-separated seznamu (CSS font-family fallback) iteruje
+    /// kazdy alternative a vraci prvni nalezeny @font-face entry.
     fn font_for(&self, family: &str) -> &fontdue::Font {
         if family.is_empty() { return &self.font; }
-        self.extra_fonts.get(family).unwrap_or(&self.font)
+        if let Some(f) = self.extra_fonts.get(family) { return f; }
+        // CSS font-family seznam: "Roboto", "Arial", sans-serif - try each.
+        for alt in family.split(',') {
+            let trimmed = alt.trim().trim_matches('"').trim_matches('\'');
+            if let Some(f) = self.extra_fonts.get(trimmed) { return f; }
+        }
+        &self.font
     }
 
     fn get(&self, family: &str, ch: char, size: u32) -> Option<&GlyphInfo> {
