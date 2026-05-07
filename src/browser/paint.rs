@@ -503,17 +503,40 @@ fn emit_svg_children_xform(bx: &LayoutBox, parent_xform: &[f32; 6], cmds: &mut V
                 let cy = attr_f("cy", 0.0);
                 let rx = attr_f("rx", 0.0);
                 let ry = attr_f("ry", 0.0);
-                // Tessellate ellipse jako polygon.
-                let mut pts = Vec::with_capacity(32);
-                for i in 0..32 {
-                    let a = i as f32 / 32.0 * std::f32::consts::TAU;
-                    pts.push(xf(cx + rx * a.cos(), cy + ry * a.sin()));
-                }
-                if !fill_none {
-                    cmds.push(DisplayCommand::ClippedRect { color: fill, points: pts.clone() });
-                }
-                if !stroke_none && stroke_w > 0.0 {
-                    emit_stroked_polyline(&pts, stroke_w, stroke_c, true, cmds);
+                let is_identity = (xform[0] - 1.0).abs() < 0.001 && xform[1].abs() < 0.001
+                    && xform[2].abs() < 0.001 && (xform[3] - 1.0).abs() < 0.001;
+                if is_identity {
+                    // Identity transform - emit jako Rect s rounded corners
+                    // (SDF gives crisp AA edges). border_radius = min(rx, ry)
+                    // ne uplne presne pri rx != ry, ale visualne lepsi nez
+                    // 32-vertex polygon bez AA. Pri rx == ry je perfect circle.
+                    let (acx, acy) = xf(cx, cy);
+                    let radius = rx.min(ry);
+                    if !fill_none {
+                        cmds.push(DisplayCommand::Rect {
+                            x: acx - rx, y: acy - ry, w: 2.0*rx, h: 2.0*ry,
+                            color: fill, radius,
+                        });
+                    }
+                    if !stroke_none && stroke_w > 0.0 {
+                        cmds.push(DisplayCommand::Border {
+                            x: acx - rx, y: acy - ry, w: 2.0*rx, h: 2.0*ry,
+                            width: stroke_w, color: stroke_c,
+                        });
+                    }
+                } else {
+                    // Tessellate ellipse jako polygon (transformed).
+                    let mut pts = Vec::with_capacity(32);
+                    for i in 0..32 {
+                        let a = i as f32 / 32.0 * std::f32::consts::TAU;
+                        pts.push(xf(cx + rx * a.cos(), cy + ry * a.sin()));
+                    }
+                    if !fill_none {
+                        cmds.push(DisplayCommand::ClippedRect { color: fill, points: pts.clone() });
+                    }
+                    if !stroke_none && stroke_w > 0.0 {
+                        emit_stroked_polyline(&pts, stroke_w, stroke_c, true, cmds);
+                    }
                 }
             }
             "line" => {
@@ -1481,8 +1504,22 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
         // a 2 vertikalni.
         let pad_l = bx.padding_left.unwrap_or(bx.padding);
         let pad_t = bx.padding_top.unwrap_or(bx.padding);
+        let pad_b = bx.padding_bottom.unwrap_or(bx.padding);
         let text_x = bx.rect.x + pad_l + align_offset;
-        let text_y = bx.rect.y + pad_t;
+        // Vertical centering: pri line-height > font_size se text ma centrovat
+        // v inner_h (CSS line-box leading split). Pri line_height ~= height
+        // boxu = single line vertically centered. line_height v LayoutBox je
+        // multiplier (1.2 default), takze faktor * font_size = realna height.
+        let line_height_px = bx.line_height * bx.font_size;
+        let inner_h = bx.rect.height - pad_t - pad_b;
+        let v_offset = if inner_h > line_height_px && line_height_px > 0.0 {
+            // Pripad: width fixni + line-height matches height -> center
+            ((inner_h - line_height_px) * 0.5).max(0.0)
+        } else if inner_h > bx.font_size && line_height_px > bx.font_size {
+            // CSS line-box leading: mezera se rozdeluje pul nad pul pod glyf.
+            ((line_height_px - bx.font_size) * 0.5).max(0.0)
+        } else { 0.0 };
+        let text_y = bx.rect.y + pad_t + v_offset;
         let text_color = with_alpha(bx.text_color.unwrap_or([0, 0, 0, 255]));
         // Text shadow - emit pred main text aby byl v pozadi
         if let Some((ox, oy, _blur, color)) = bx.text_shadow {

@@ -4626,9 +4626,12 @@ impl Renderer {
             }
         }
 
-        // Composit canvas RT region do swap chain
-        if had_render {
-            // Vyrobit novy view z texture (TextureView neni Clone, ale Texture umi vyrobit dalsi view).
+        // Composit canvas RT region do swap chain. Pri prvnim frame had_render
+        // nastavi true (process clear/draw), na dalsi frame queue prazdny ale
+        // RT obsahuje predchozi clear color - musime composit kazdy frame jinak
+        // canvas vypada jako prazdny po prvnim render.
+        let rt_exists = self.webgl_canvas_rts.contains_key(&canvas_ptr);
+        if rt_exists {
             let new_view = self.webgl_canvas_rts.get(&canvas_ptr).map(|(tex, _, _, _)| {
                 tex.create_view(&Default::default())
             });
@@ -4636,7 +4639,8 @@ impl Renderer {
                 self.compose_view_to_swap(swap_view, &view, bx.rect.x, bx.rect.y, bx.rect.width, bx.rect.height);
             }
         }
-        had_render
+        // Vrat true pokud aspon RT exists (animation loop tick continues).
+        had_render || rt_exists
     }
 
     /// Encode drawElements (indexed draw) do canvas RT.

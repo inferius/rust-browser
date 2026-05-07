@@ -2575,6 +2575,16 @@ fn layout_flex(bx: &mut LayoutBox) {
 /// Inline deti se sbiraji do "line boxu" a wrappuji.
 /// Vertical writing-mode layout: deti se stackuji po ose X (lr = leva->prava, rl = prava->leva).
 /// Inline (text) deti se take layoutuji svisle.
+/// Recursivne posune cely LayoutBox subtree o (dx, dy). Pouziva se pri
+/// Position::Relative offsetech a pri animation tick (left/top keyframes).
+fn shift_subtree(bx: &mut LayoutBox, dx: f32, dy: f32) {
+    bx.rect.x += dx;
+    bx.rect.y += dy;
+    for ch in bx.children.iter_mut() {
+        shift_subtree(ch, dx, dy);
+    }
+}
+
 fn layout_block_vertical(bx: &mut LayoutBox) {
     let inner_x = bx.rect.x + bx.padding + bx.border_width;
     let inner_y = bx.rect.y + bx.padding + bx.border_width;
@@ -2720,8 +2730,16 @@ pub fn layout_block(bx: &mut LayoutBox) {
                 let is_in_flow = matches!(child.position, Position::Static | Position::Relative);
                 match child.position {
                     Position::Relative => {
-                        if let Some(t) = child.offset_top  { child.rect.y += t; }
-                        if let Some(l) = child.offset_left { child.rect.x += l; }
+                        let dy = child.offset_top.unwrap_or(0.0);
+                        let dx = child.offset_left.unwrap_or(0.0);
+                        if dx != 0.0 || dy != 0.0 {
+                            // Shift child + ALL descendants. layout_dispatch
+                            // uz pozicovalo descendants relativne k child.rect,
+                            // takze pri Position::Relative musime cely subtree
+                            // posunout (jinak by text uvnitr animovaneho elem
+                            // zustal staticky).
+                            shift_subtree(child, dx, dy);
+                        }
                     }
                     Position::Absolute | Position::Fixed => {
                         // Pro Absolute/Fixed: prepocitej polohu z parent
@@ -2777,6 +2795,9 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
     let parent_italic = bx.italic;
     let parent_color = bx.text_color;
     let parent_underline = bx.text_underline;
+    let parent_strikethrough = bx.text_strikethrough;
+    let parent_decor_style = bx.text_decoration_style.clone();
+    let parent_decor_color = bx.text_decoration_color;
     let parent_font_family = bx.font_family.clone();
     let line_height_default = parent_font_size * 1.2;
     let mut line_height = line_height_default;
@@ -2807,6 +2828,15 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
         }
         if !bx.children[idx].text_underline && parent_underline {
             bx.children[idx].text_underline = true;
+        }
+        if !bx.children[idx].text_strikethrough && parent_strikethrough {
+            bx.children[idx].text_strikethrough = true;
+        }
+        if bx.children[idx].text_decoration_style.is_empty() && !parent_decor_style.is_empty() {
+            bx.children[idx].text_decoration_style = parent_decor_style.clone();
+        }
+        if bx.children[idx].text_decoration_color.is_none() && parent_decor_color.is_some() {
+            bx.children[idx].text_decoration_color = parent_decor_color;
         }
         if bx.children[idx].font_family.is_empty() && !parent_font_family.is_empty() {
             bx.children[idx].font_family = parent_font_family.clone();
