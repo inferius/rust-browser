@@ -2117,10 +2117,15 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                     self.render();
                 }
                 WindowEvent::CursorMoved { position, .. } => {
-                    self.mouse_x = position.x as f32;
-                    self.mouse_y = position.y as f32 + self.scroll_y;
+                    let new_x = position.x as f32;
+                    let new_y = position.y as f32 + self.scroll_y;
+                    // Skip update kdyz se pozice nezmenila (deduplicate winit spam).
+                    if (new_x - self.mouse_x).abs() < 0.5 && (new_y - self.mouse_y).abs() < 0.5 {
+                        return;
+                    }
+                    self.mouse_x = new_x;
+                    self.mouse_y = new_y;
                     self.update_hover();
-                    // Pri otevrenem select dropdownu redraw fluid hover highlight.
                     if self.open_select.is_some() {
                         self.render();
                     }
