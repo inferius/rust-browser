@@ -1253,6 +1253,12 @@ fn build_box_with_pseudo(
 }
 
 fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::cascade::PseudoStyleMap, counters: &mut HashMap<String, i32>) -> LayoutBox {
+    // Reset list-item counter pri novem ol/ul (CSS spec: kazdy list ma vlastni counter).
+    if let Some(tag) = node.tag_name() {
+        if tag == "ol" || tag == "ul" {
+            counters.insert("list-item".into(), 0);
+        }
+    }
     let mut bx = LayoutBox::new();
     bx.node = Some(Rc::clone(node));
 
@@ -2116,7 +2122,13 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
                 return bx;
             }
         }
-        let style = if bx.list_style_type.is_empty() { "disc" } else { bx.list_style_type.as_str() };
+        // Default list-style-type: ol = decimal, ul = disc (CSS UA stylesheet).
+        let parent_tag = node.parent.borrow().upgrade().and_then(|p| p.tag_name());
+        let default_style = match parent_tag.as_deref() {
+            Some("ol") => "decimal",
+            _ => "disc",
+        };
+        let style = if bx.list_style_type.is_empty() { default_style } else { bx.list_style_type.as_str() };
         let marker_text = match style {
             "none" => String::new(),
             "decimal" => format!("{cur}. "),
@@ -2477,10 +2489,14 @@ pub fn layout_block(bx: &mut LayoutBox) {
                     inline_buffer.clear();
                 }
                 let child = &mut bx.children[i];
-                child.rect.x = inner_x + child.margin;
-                child.rect.y = cursor_y + child.margin;
-                // explicit_width z CSS width prop; jinak fill parent
-                child.rect.width = child.explicit_width.unwrap_or(inner_w - 2.0 * child.margin);
+                // Effective margin: asymmetric (margin_top/right/bottom/left) wins, jinak shorthand `margin`.
+                let m_t = child.margin_top.unwrap_or(child.margin);
+                let m_b = child.margin_bottom.unwrap_or(child.margin);
+                let m_l = child.margin_left.unwrap_or(child.margin);
+                let m_r = child.margin_right.unwrap_or(child.margin);
+                child.rect.x = inner_x + m_l;
+                child.rect.y = cursor_y + m_t;
+                child.rect.width = child.explicit_width.unwrap_or(inner_w - m_l - m_r);
                 // Clamp dle min-width / max-width
                 if !child.min_width_v.is_empty() && child.min_width_v != "none" {
                     let mn = parse_length(&child.min_width_v.clone());
@@ -2536,7 +2552,7 @@ pub fn layout_block(bx: &mut LayoutBox) {
                     _ => {}
                 }
                 if is_in_flow {
-                    cursor_y += child.rect.height + 2.0 * child.margin;
+                    cursor_y += child.rect.height + m_t + m_b;
                 }
                 // Absolute/fixed neposunuji cursor_y - jsou out of flow
             }
