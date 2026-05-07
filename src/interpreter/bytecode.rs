@@ -2123,12 +2123,11 @@ impl VM {
                     let v = self.pop()?;
                     let unwrapped = if let JsValue::Object(o) = &v {
                         let inner = o.borrow();
-                        match inner.get("__state__") {
-                            JsValue::Str(s) if s == "fulfilled" => inner.get("__value__"),
+                        match inner.get("__promise_state__") {
+                            JsValue::Str(s) if s == "fulfilled" => inner.get("__promise_value__"),
                             JsValue::Str(s) if s == "rejected" => {
-                                let err_val = inner.get("__value__");
+                                let err_val = inner.get("__promise_value__");
                                 drop(inner);
-                                // Throw error.
                                 if let Some((catch_pc, depth)) = self.try_stack.pop() {
                                     self.stack.truncate(depth);
                                     self.stack.push(err_val);
@@ -2680,12 +2679,136 @@ fn make_generator(
     JsValue::Object(gen_obj)
 }
 
-/// Wrap value into Promise object {__state__: "fulfilled", __value__: v}.
+/// Wrap value into Promise object {__promise_state__: "fulfilled", __promise_value__: v}.
+/// Pridava .then/.catch/.finally methods s sync semantikou (instant invoke).
 fn wrap_in_promise(v: JsValue) -> JsValue {
+    make_promise("fulfilled", v)
+}
+
+/// Vyrobi Promise object s state + value + then/catch/finally methods.
+fn make_promise(state: &str, value: JsValue) -> JsValue {
     let p = std::rc::Rc::new(std::cell::RefCell::new(super::JsObject::new()));
-    p.borrow_mut().set("__state__".to_string(), JsValue::Str("fulfilled".to_string()));
-    p.borrow_mut().set("__value__".to_string(), v);
+    p.borrow_mut().set("__promise_state__".to_string(), JsValue::Str(state.to_string()));
+    p.borrow_mut().set("__promise_value__".to_string(), value.clone());
+    // .then(onFulfilled, onRejected) - sync invoke + return new promise wrapping result.
+    let p_clone = p.clone();
+    let then_fn = super::helpers::native("Promise.then", move |args| {
+        let mut it = args.into_iter();
+        let on_fulfilled = it.next();
+        let on_rejected = it.next();
+        let inner = p_clone.borrow();
+        let state = inner.get("__promise_state__");
+        let val = inner.get("__promise_value__");
+        drop(inner);
+        let state_str = match &state { JsValue::Str(s) => s.clone(), _ => "fulfilled".to_string() };
+        match state_str.as_str() {
+            "fulfilled" => {
+                if let Some(cb) = on_fulfilled {
+                    let result = invoke_callback(cb, vec![val]);
+                    match result {
+                        Ok(r) => Ok(make_promise_or_unwrap(r, "fulfilled")),
+                        Err(e) => Ok(make_promise(&"rejected", JsValue::Str(e))),
+                    }
+                } else {
+                    Ok(make_promise("fulfilled", val))
+                }
+            }
+            "rejected" => {
+                if let Some(cb) = on_rejected {
+                    let result = invoke_callback(cb, vec![val]);
+                    match result {
+                        Ok(r) => Ok(make_promise_or_unwrap(r, "fulfilled")),
+                        Err(e) => Ok(make_promise(&"rejected", JsValue::Str(e))),
+                    }
+                } else {
+                    Ok(make_promise("rejected", val))
+                }
+            }
+            _ => Ok(make_promise("pending", val)),
+        }
+    });
+    p.borrow_mut().set("then".to_string(), then_fn);
+    let p_clone = p.clone();
+    let catch_fn = super::helpers::native("Promise.catch", move |args| {
+        let on_rejected = args.into_iter().next();
+        let inner = p_clone.borrow();
+        let state = inner.get("__promise_state__");
+        let val = inner.get("__promise_value__");
+        drop(inner);
+        let state_str = match &state { JsValue::Str(s) => s.clone(), _ => "fulfilled".to_string() };
+        if state_str == "rejected" {
+            if let Some(cb) = on_rejected {
+                let result = invoke_callback(cb, vec![val]);
+                match result {
+                    Ok(r) => Ok(make_promise_or_unwrap(r, "fulfilled")),
+                    Err(e) => Ok(make_promise(&"rejected", JsValue::Str(e))),
+                }
+            } else {
+                Ok(make_promise("rejected", val))
+            }
+        } else {
+            Ok(make_promise("fulfilled", val))
+        }
+    });
+    p.borrow_mut().set("catch".to_string(), catch_fn);
+    let p_clone = p.clone();
+    let finally_fn = super::helpers::native("Promise.finally", move |args| {
+        let cb = args.into_iter().next();
+        let inner = p_clone.borrow();
+        let state = inner.get("__promise_state__");
+        let val = inner.get("__promise_value__");
+        drop(inner);
+        let state_str = match &state { JsValue::Str(s) => s.clone(), _ => "fulfilled".to_string() };
+        if let Some(c) = cb {
+            let _ = invoke_callback(c, vec![]);
+        }
+        Ok(make_promise(&state_str, val))
+    });
+    p.borrow_mut().set("finally".to_string(), finally_fn);
     JsValue::Object(p)
+}
+
+/// Pri value je Promise: vrat ho jako-je. Else wrap.
+fn make_promise_or_unwrap(v: JsValue, state: &str) -> JsValue {
+    if let JsValue::Object(o) = &v {
+        let inner = o.borrow();
+        if inner.has_own("__promise_state__") {
+            return v.clone();
+        }
+    }
+    make_promise(state, v)
+}
+
+/// Invoke callback (Native nebo VmCompiled) s args. Vraci Result.
+fn invoke_callback(cb: JsValue, args: Vec<JsValue>) -> Result<JsValue, String> {
+    match cb {
+        JsValue::Function(super::JsFunc::Native(_, f)) => {
+            f(args).map_err(|e| format!("{:?}", e))
+        }
+        JsValue::Function(super::JsFunc::VmCompiled { compiled, env, name, captures }) => {
+            let mut nested = VM::new();
+            nested.env = Some(env.clone());
+            nested.captures = captures.clone();
+            nested.locals.resize(compiled.code.var_names.len(), JsValue::Undefined);
+            if !compiled.code.var_names.is_empty()
+                && compiled.code.var_names[0] == name.clone().unwrap_or_default() {
+                nested.locals[0] = JsValue::Function(super::JsFunc::VmCompiled {
+                    name: name.clone(),
+                    compiled: compiled.clone(),
+                    env: env.clone(),
+                    captures: captures.clone(),
+                });
+            }
+            for (i, p) in compiled.params.iter().enumerate() {
+                if let Some(idx) = compiled.code.var_names.iter().rposition(|n| n == p) {
+                    nested.locals[idx] = args.get(i).cloned().unwrap_or(JsValue::Undefined);
+                }
+            }
+            let raw = nested.run(&compiled.code)?;
+            if compiled.is_async { Ok(wrap_in_promise(raw)) } else { Ok(raw) }
+        }
+        _ => Err("invoke_callback: not function".into()),
+    }
 }
 
 fn op_add(a: JsValue, b: JsValue) -> JsValue {
