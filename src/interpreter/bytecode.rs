@@ -149,6 +149,9 @@ pub enum Opcode {
     /// Pop value, await: pri Promise object {__state__, __value__} extract __value__.
     /// Jinak push value bezimo. Sync semantics (instant unwrap).
     Await,
+    /// Yield (pop value): suspendovat VM, vratit value caller, ulozit pc+state
+    /// pro resume pres Generator.next().
+    Yield,
     /// Pop N values, koncatenuje (jako string) do jednoho. Pro template literals
     /// efektivnejsi nez chain Add ops (eliminuje intermediate String allocs).
     BuildString(u16),
@@ -185,6 +188,9 @@ pub struct CompiledFunction {
     /// Pri true: wrap return value into Promise {__state__: "fulfilled", __value__}.
     /// Pro async funkce sync semantics.
     pub is_async: bool,
+    /// Pri true: pri call vrati Generator object misto bezeniho body. Generator.next()
+    /// resumuje VM az do dalsiho Yield nebo Return.
+    pub is_generator: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -555,6 +561,17 @@ pub fn compile_expr(e: &Expr, code: &mut CodeBlock) -> Result<(), &'static str> 
             code.emit(Opcode::Await);
             Ok(())
         }
+        Expr::Yield { value, delegate: _ } => {
+            // yield value: compile + Yield opcode.
+            // delegate (yield*) zatim ne supported.
+            if let Some(v) = value {
+                compile_expr(v, code)?;
+            } else {
+                code.emit(Opcode::LoadUndefined);
+            }
+            code.emit(Opcode::Yield);
+            Ok(())
+        }
         Expr::AsyncFunc { name, params, body } => {
             // Sync semantics: compile jako Function, ale wrap result v Promise.
             // Return path body emit return: misto plain Return emit MakePromise + Return.
@@ -590,6 +607,7 @@ pub fn compile_expr(e: &Expr, code: &mut CodeBlock) -> Result<(), &'static str> 
                 code: fn_code,
                 captures_outer_indices,
                 is_async: true,  // AsyncFunc - return value bude wrapped v Promise.
+                is_generator: false,
             });
             let fn_idx = code.functions.len() as u16;
             code.functions.push(compiled);
@@ -843,6 +861,7 @@ pub fn compile_expr(e: &Expr, code: &mut CodeBlock) -> Result<(), &'static str> 
                 code: fn_code,
                 captures_outer_indices,
                 is_async: false,
+                is_generator: false,
             });
             let fn_idx = code.functions.len() as u16;
             code.functions.push(compiled);
@@ -883,6 +902,7 @@ pub fn compile_expr(e: &Expr, code: &mut CodeBlock) -> Result<(), &'static str> 
                 code: fn_code,
                 captures_outer_indices,
                 is_async: false,
+                is_generator: false,
             });
             let fn_idx = code.functions.len() as u16;
             code.functions.push(compiled);
@@ -1192,6 +1212,7 @@ pub fn compile_stmt(s: &Stmt, code: &mut CodeBlock) -> Result<(), &'static str> 
                 code: fn_code,
                 captures_outer_indices,
                 is_async: false,
+                is_generator: false,
             });
             let fn_idx = code.functions.len() as u16;
             code.functions.push(compiled);
@@ -1506,6 +1527,46 @@ pub fn compile_stmt(s: &Stmt, code: &mut CodeBlock) -> Result<(), &'static str> 
             }
             Ok(())
         }
+        Stmt::GeneratorFunc { name, params, body } => {
+            // Pre-register name v outer.
+            let var_idx = code.push_local(name);
+            let outer_vars_snapshot = code.var_names.clone();
+            let mut fn_code = CodeBlock::new();
+            fn_code.push_local(name);
+            let mut param_names: Vec<String> = Vec::new();
+            for p in params {
+                if let crate::ast::Pattern::Ident(pn) = &p.pattern {
+                    param_names.push(pn.clone());
+                    fn_code.push_local(pn);
+                } else {
+                    return Err("destructuring gen-param not supported");
+                }
+            }
+            push_outer_scope(outer_vars_snapshot);
+            let body_result = (|| -> Result<(), &'static str> {
+                for s in body {
+                    compile_stmt(s, &mut fn_code)?;
+                }
+                Ok(())
+            })();
+            let captures_outer_indices = pop_outer_scope();
+            body_result?;
+            fn_code.emit(Opcode::LoadUndefined);
+            fn_code.emit(Opcode::Return);
+            let compiled = std::rc::Rc::new(CompiledFunction {
+                name: Some(name.clone()),
+                params: param_names,
+                code: fn_code,
+                captures_outer_indices,
+                is_async: false,
+                is_generator: true,
+            });
+            let fn_idx = code.functions.len() as u16;
+            code.functions.push(compiled);
+            code.emit(Opcode::LoadFunction(fn_idx));
+            code.emit(Opcode::DeclareVar(var_idx));
+            Ok(())
+        }
         Stmt::AsyncFunc { name, params, body } => {
             // Stejne jako Stmt::Function ale s is_async=true (return wrap v Promise).
             let var_idx = code.push_var(name);
@@ -1538,6 +1599,7 @@ pub fn compile_stmt(s: &Stmt, code: &mut CodeBlock) -> Result<(), &'static str> 
                 code: fn_code,
                 captures_outer_indices,
                 is_async: true,
+                is_generator: false,
             });
             let fn_idx = code.functions.len() as u16;
             code.functions.push(compiled);
@@ -1634,6 +1696,8 @@ pub struct VM {
     this_value: JsValue,
     /// Try/catch stack: per nesting (catch_pc, stack_depth_at_push).
     try_stack: Vec<(i32, usize)>,
+    /// Pri Yield op set: yielded value + next pc. Caller (Generator.next) cte.
+    pub yielded: Option<(JsValue, i32)>,
 }
 
 impl VM {
@@ -1645,6 +1709,7 @@ impl VM {
             captures: Vec::new(),
             this_value: JsValue::Undefined,
             try_stack: Vec::new(),
+            yielded: None,
         }
     }
     pub fn with_env(env: std::rc::Rc<std::cell::RefCell<super::Environment>>) -> Self {
@@ -1655,15 +1720,21 @@ impl VM {
             captures: Vec::new(),
             this_value: JsValue::Undefined,
             try_stack: Vec::new(),
+            yielded: None,
         }
     }
 
     pub fn run(&mut self, code: &CodeBlock) -> Result<JsValue, String> {
+        self.run_from(code, 0)
+    }
+
+    /// Run pres bytecode od start_pc. Pouziva se pro generator resume.
+    pub fn run_from(&mut self, code: &CodeBlock, start_pc: i32) -> Result<JsValue, String> {
         // Init locals na velikost var_names.
         if self.locals.len() < code.var_names.len() {
             self.locals.resize(code.var_names.len(), JsValue::Undefined);
         }
-        let mut pc: i32 = 0;
+        let mut pc: i32 = start_pc;
         let bytecode = &code.bytecode;
         while (pc as usize) < bytecode.len() {
             let op = bytecode[pc as usize];
@@ -1811,27 +1882,30 @@ impl VM {
                             f(args).map_err(|e| format!("{:?}", e))?
                         }
                         JsValue::Function(super::JsFunc::VmCompiled { compiled, env, name, captures }) => {
-                            // Nested VM run pro user function.
-                            let mut nested = VM::new();
-                            nested.env = Some(env.clone());
-                            nested.captures = captures.clone();
-                            nested.locals.resize(compiled.code.var_names.len(), JsValue::Undefined);
-                            if !compiled.code.var_names.is_empty()
-                                && compiled.code.var_names[0] == name.clone().unwrap_or_default() {
-                                nested.locals[0] = JsValue::Function(super::JsFunc::VmCompiled {
-                                    name: name.clone(),
-                                    compiled: compiled.clone(),
-                                    env: env.clone(),
-                                    captures: captures.clone(),
-                                });
-                            }
-                            for (i, p) in compiled.params.iter().enumerate() {
-                                if let Some(idx) = compiled.code.var_names.iter().position(|n| n == p) {
-                                    nested.locals[idx] = args.get(i).cloned().unwrap_or(JsValue::Undefined);
+                            if compiled.is_generator {
+                                make_generator(&compiled, &env, &captures, &name, &args, JsValue::Undefined)
+                            } else {
+                                let mut nested = VM::new();
+                                nested.env = Some(env.clone());
+                                nested.captures = captures.clone();
+                                nested.locals.resize(compiled.code.var_names.len(), JsValue::Undefined);
+                                if !compiled.code.var_names.is_empty()
+                                    && compiled.code.var_names[0] == name.clone().unwrap_or_default() {
+                                    nested.locals[0] = JsValue::Function(super::JsFunc::VmCompiled {
+                                        name: name.clone(),
+                                        compiled: compiled.clone(),
+                                        env: env.clone(),
+                                        captures: captures.clone(),
+                                    });
                                 }
+                                for (i, p) in compiled.params.iter().enumerate() {
+                                    if let Some(idx) = compiled.code.var_names.iter().rposition(|n| n == p) {
+                                        nested.locals[idx] = args.get(i).cloned().unwrap_or(JsValue::Undefined);
+                                    }
+                                }
+                                let raw = nested.run(&compiled.code)?;
+                                if compiled.is_async { wrap_in_promise(raw) } else { raw }
                             }
-                            let raw = nested.run(&compiled.code)?;
-                            if compiled.is_async { wrap_in_promise(raw) } else { raw }
                         }
                         _ => return Err("callee not a native function".into()),
                     };
@@ -1891,6 +1965,14 @@ impl VM {
                     } else {
                         self.stack.push(get_property(&obj, &key_str));
                     }
+                }
+                Opcode::Yield => {
+                    let val = self.pop()?;
+                    // Save next pc + yielded value pro Generator next().
+                    self.yielded = Some((val.clone(), pc));
+                    // Push Undefined - yield expr's "sent-in" value (sync semantics).
+                    self.stack.push(JsValue::Undefined);
+                    return Ok(val);
                 }
                 Opcode::BuildString(count) => {
                     let count = count as usize;
@@ -2407,6 +2489,79 @@ fn key_to_str(v: &JsValue) -> String {
         JsValue::Undefined => "undefined".to_string(),
         _ => String::new(),
     }
+}
+
+/// Vyrobi Generator object: { next: fn() -> {value, done}, ... }.
+/// Generator drzi VM state (locals, stack, pc) pres Rc<RefCell<>>.
+/// next() resumuje VM az do nejblizsiho Yield nebo konce body.
+fn make_generator(
+    compiled: &std::rc::Rc<CompiledFunction>,
+    env: &std::rc::Rc<std::cell::RefCell<super::Environment>>,
+    captures: &Vec<JsValue>,
+    name: &Option<String>,
+    args: &Vec<JsValue>,
+    this_value: JsValue,
+) -> JsValue {
+    // Init state: vyrob fresh VM s locals + params.
+    let mut init_vm = VM::new();
+    init_vm.env = Some(env.clone());
+    init_vm.captures = captures.clone();
+    init_vm.this_value = this_value;
+    init_vm.locals.resize(compiled.code.var_names.len(), JsValue::Undefined);
+    if !compiled.code.var_names.is_empty()
+        && compiled.code.var_names[0] == name.clone().unwrap_or_default() {
+        init_vm.locals[0] = JsValue::Function(super::JsFunc::VmCompiled {
+            name: name.clone(),
+            compiled: compiled.clone(),
+            env: env.clone(),
+            captures: captures.clone(),
+        });
+    }
+    for (i, p) in compiled.params.iter().enumerate() {
+        if let Some(idx) = compiled.code.var_names.iter().rposition(|n| n == p) {
+            init_vm.locals[idx] = args.get(i).cloned().unwrap_or(JsValue::Undefined);
+        }
+    }
+    // State: VM + start_pc + done.
+    let state = std::rc::Rc::new(std::cell::RefCell::new((init_vm, 0i32, false)));
+    let compiled_clone = compiled.clone();
+    let next_fn = super::helpers::native("Generator.next", move |_args| {
+        let mut s = state.borrow_mut();
+        if s.2 {
+            // Done.
+            let done_obj = std::rc::Rc::new(std::cell::RefCell::new(super::JsObject::new()));
+            done_obj.borrow_mut().set("value".to_string(), JsValue::Undefined);
+            done_obj.borrow_mut().set("done".to_string(), JsValue::Bool(true));
+            return Ok(JsValue::Object(done_obj));
+        }
+        // Resume from saved pc.
+        let start_pc = s.1;
+        let result = s.0.run_from(&compiled_clone.code, start_pc);
+        match result {
+            Ok(val) => {
+                if let Some((yielded_val, next_pc)) = s.0.yielded.take() {
+                    // Yielded.
+                    s.1 = next_pc;
+                    let obj = std::rc::Rc::new(std::cell::RefCell::new(super::JsObject::new()));
+                    obj.borrow_mut().set("value".to_string(), yielded_val);
+                    obj.borrow_mut().set("done".to_string(), JsValue::Bool(false));
+                    let _ = val;
+                    Ok(JsValue::Object(obj))
+                } else {
+                    // Returned.
+                    s.2 = true;
+                    let obj = std::rc::Rc::new(std::cell::RefCell::new(super::JsObject::new()));
+                    obj.borrow_mut().set("value".to_string(), val);
+                    obj.borrow_mut().set("done".to_string(), JsValue::Bool(true));
+                    Ok(JsValue::Object(obj))
+                }
+            }
+            Err(e) => Err(format!("Generator error: {}", e)),
+        }
+    });
+    let gen_obj = std::rc::Rc::new(std::cell::RefCell::new(super::JsObject::new()));
+    gen_obj.borrow_mut().set("next".to_string(), next_fn);
+    JsValue::Object(gen_obj)
 }
 
 /// Wrap value into Promise object {__state__: "fulfilled", __value__: v}.
