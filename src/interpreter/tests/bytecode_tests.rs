@@ -376,6 +376,33 @@ fn vm_call_args_spread_mixed() {
 }
 
 #[test]
+fn vm_new_constructor_simple() {
+    let r = run_vm(r#"
+        function Point(x, y) {
+            this.x = x;
+            this.y = y;
+        }
+        let p = new Point(3, 4);
+        p.x + p.y
+    "#).unwrap();
+    assert_jv!(r, n(7.0));
+}
+
+#[test]
+fn vm_new_constructor_with_method() {
+    let r = run_vm(r#"
+        function Box(w, h) {
+            this.w = w;
+            this.h = h;
+            this.area = w * h;
+        }
+        let b = new Box(5, 6);
+        b.area
+    "#).unwrap();
+    assert_jv!(r, n(30.0));
+}
+
+#[test]
 fn vm_array_spread_basic() {
     let r = run_vm(r#"
         let a = [1, 2, 3];

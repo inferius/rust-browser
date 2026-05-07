@@ -140,6 +140,10 @@ pub enum Opcode {
     AppendSpread,
     /// Pop Array (args), pop callee, call s array elements jako args.
     CallNativeArgs,
+    /// new Foo(args): vyrobi novy {} jako this, zavola constructor, vrati this.
+    NewOp(u16),
+    /// Push aktualni this hodnotu (Undefined pri nezbalanovanem).
+    LoadThis,
 }
 
 #[derive(Debug, Clone)]
@@ -254,6 +258,11 @@ pub fn compile_expr(e: &Expr, code: &mut CodeBlock) -> Result<(), &'static str> 
         Expr::Null => { code.emit(Opcode::LoadNull); Ok(()) }
         Expr::Undefined => { code.emit(Opcode::LoadUndefined); Ok(()) }
         Expr::Ident(name) => {
+            // Special: "this" -> LoadThis opcode.
+            if name == "this" {
+                code.emit(Opcode::LoadThis);
+                return Ok(());
+            }
             // Lookup order: 1) lokalni var, 2) closure capture, 3) global.
             if let Some(idx) = code.var_names.iter().position(|n| n == name) {
                 code.emit(Opcode::LoadVar(idx as u16));
@@ -456,6 +465,29 @@ pub fn compile_expr(e: &Expr, code: &mut CodeBlock) -> Result<(), &'static str> 
             } else {
                 Err("assign target not ident")
             }
+        }
+        Expr::New { callee, args } => {
+            if args.len() > u16::MAX as usize { return Err("too many args"); }
+            // Compile callee + args, emit NewOp(argc).
+            // Pri Ident callee, normal lookup.
+            match callee.as_ref() {
+                Expr::Ident(name) => {
+                    if let Some(idx) = code.var_names.iter().position(|n| n == name) {
+                        code.emit(Opcode::LoadVar(idx as u16));
+                    } else if let Some(cap_idx) = try_capture(name) {
+                        code.emit(Opcode::LoadCapture(cap_idx));
+                    } else {
+                        let idx = code.push_var(name);
+                        code.emit(Opcode::LoadGlobal(idx));
+                    }
+                }
+                _ => compile_expr(callee, code)?,
+            }
+            for arg in args {
+                compile_expr(arg, code)?;
+            }
+            code.emit(Opcode::NewOp(args.len() as u16));
+            Ok(())
         }
         Expr::Template { quasis, expressions } => {
             // Compile: quasi[0] + expr[0] + quasi[1] + expr[1] + ... + quasi[n].
@@ -1087,6 +1119,8 @@ pub struct VM {
     pub env: Option<std::rc::Rc<std::cell::RefCell<super::Environment>>>,
     /// Closure captures - free var values copied at LoadFunction time.
     captures: Vec<JsValue>,
+    /// `this` binding pri method nebo constructor call.
+    this_value: JsValue,
 }
 
 impl VM {
@@ -1096,6 +1130,7 @@ impl VM {
             locals: Vec::new(),
             env: None,
             captures: Vec::new(),
+            this_value: JsValue::Undefined,
         }
     }
     pub fn with_env(env: std::rc::Rc<std::cell::RefCell<super::Environment>>) -> Self {
@@ -1104,6 +1139,7 @@ impl VM {
             locals: Vec::new(),
             env: Some(env),
             captures: Vec::new(),
+            this_value: JsValue::Undefined,
         }
     }
 
@@ -1340,6 +1376,53 @@ impl VM {
                     } else {
                         self.stack.push(get_property(&obj, &key_str));
                     }
+                }
+                Opcode::LoadThis => {
+                    self.stack.push(self.this_value.clone());
+                }
+                Opcode::NewOp(argc) => {
+                    let argc = argc as usize;
+                    if self.stack.len() < argc + 1 { return Err("stack underflow NewOp".into()); }
+                    let args: Vec<JsValue> = self.stack.drain(self.stack.len() - argc..).collect();
+                    let callee = self.pop()?;
+                    // Vyrobi novy objekt jako this.
+                    let new_obj = std::rc::Rc::new(std::cell::RefCell::new(super::JsObject::new()));
+                    let this_val = JsValue::Object(new_obj.clone());
+                    let result = match callee {
+                        JsValue::Function(super::JsFunc::Native(_, f)) => {
+                            // Native ctor: vola s args; jeji navrat = vysledek (nech as is).
+                            f(args).map_err(|e| format!("{:?}", e))?
+                        }
+                        JsValue::Function(super::JsFunc::VmCompiled { compiled, env, name, captures }) => {
+                            let mut nested = VM::new();
+                            nested.env = Some(env.clone());
+                            nested.captures = captures.clone();
+                            nested.this_value = this_val.clone();
+                            nested.locals.resize(compiled.code.var_names.len(), JsValue::Undefined);
+                            if !compiled.code.var_names.is_empty()
+                                && compiled.code.var_names[0] == name.clone().unwrap_or_default() {
+                                nested.locals[0] = JsValue::Function(super::JsFunc::VmCompiled {
+                                    name: name.clone(),
+                                    compiled: compiled.clone(),
+                                    env: env.clone(),
+                                    captures: captures.clone(),
+                                });
+                            }
+                            for (i, p) in compiled.params.iter().enumerate() {
+                                if let Some(idx) = compiled.code.var_names.iter().position(|n| n == p) {
+                                    nested.locals[idx] = args.get(i).cloned().unwrap_or(JsValue::Undefined);
+                                }
+                            }
+                            let ret = nested.run(&compiled.code)?;
+                            // Pri non-Undefined object navrat: ten misto this. Jinak this.
+                            match ret {
+                                JsValue::Object(_) => ret,
+                                _ => this_val,
+                            }
+                        }
+                        _ => return Err("NewOp: callee not function".into()),
+                    };
+                    self.stack.push(result);
                 }
                 Opcode::CallNativeArgs => {
                     // Pop Array (args), pop callee.
