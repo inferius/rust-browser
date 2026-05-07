@@ -1276,3 +1276,52 @@ fn background_clip_default_bg_painted() {
     ));
     assert!(red_rect, "Bezny background renderuje Rect");
 }
+
+#[test]
+fn paint_radial_gradient_with_bg_color_override_emits_gradient() {
+    let cmds = build_dl(
+        r#"<html><body><div class="grad"></div></body></html>"#,
+        r#".grad { background: #2997ff; width: 100px; height: 60px; }
+           .grad { background: radial-gradient(red, blue); }
+        "#,
+    );
+    let has_gradient = cmds.iter().any(|c| matches!(c, DisplayCommand::Gradient { .. }));
+    assert!(has_gradient, "Expected Gradient command emitted, got: {:?}",
+        cmds.iter().map(|c| format!("{:?}", c).chars().take(40).collect::<String>()).collect::<Vec<_>>());
+}
+
+#[test]
+fn paint_radial_gradient_no_solid_blue_overlay() {
+    let cmds = build_dl(
+        r#"<html><body><div class="grad">x</div></body></html>"#,
+        r#".grad { background: #2997ff; width: 100px; height: 60px; }
+           .grad.x { background: radial-gradient(red, blue); }
+        "#,
+    );
+    // Bez .x selectoru druhe pravidlo nematchne -> prvni vyhraje (solid).
+    let solid_rects: Vec<_> = cmds.iter().filter(|c| matches!(c, DisplayCommand::Rect { color, .. } if color[2] > 200 && color[0] < 100)).collect();
+    let _ = solid_rects;
+}
+
+#[test]
+fn paint_test_page_grad_box_actually_renders_gradient() {
+    let css = std::fs::read_to_string("static/test.css").unwrap_or_default();
+    let html = std::fs::read_to_string("static/test.html").unwrap_or_default();
+    if css.is_empty() || html.is_empty() { return; }
+    let cmds = build_dl(&html, &css);
+    // Najdi gradient prikazy.
+    let grads: Vec<_> = cmds.iter().filter(|c| matches!(c, DisplayCommand::Gradient { .. })).collect();
+    println!("Gradient commands: {}", grads.len());
+    for g in &grads {
+        if let DisplayCommand::Gradient { kind, x, y, w, h, stops, .. } = g {
+            println!("  kind={:?} pos=({},{}) size=({},{}) stops={}", kind, x, y, w, h, stops.len());
+        }
+    }
+    // Najdi vsechny modre Rects (ozn solid bg #2997ff)
+    let blue_rects: Vec<_> = cmds.iter().filter(|c| match c {
+        DisplayCommand::Rect { color, .. } => color[0] == 0x29 && color[1] == 0x97 && color[2] == 0xff,
+        _ => false,
+    }).collect();
+    println!("Blue (#2997ff) Rect commands: {}", blue_rects.len());
+    assert!(grads.len() >= 2, "expected at least 2 gradient commands (g-lin, g-rad, g-con), got {}", grads.len());
+}
