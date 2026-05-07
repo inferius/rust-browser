@@ -2964,8 +2964,13 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
                 cursor_y += line_height;
                 cursor_x = inner_x;
             }
+            // Baseline alignment: pri smaller inline font (<small>, <sub>, <sup>)
+            // posun rect.y dolu o rozdil parent_font_size - element_font_size.
+            // Tim padne baseline elementu na spolecny baseline radky.
+            // (Bez shiftu se text vykresloval s top-aligned line, vypadal raised.)
+            let baseline_shift = (parent_font_size - bx_clone.font_size).max(0.0);
             bx.children[idx].rect.x = cursor_x;
-            bx.children[idx].rect.y = cursor_y;
+            bx.children[idx].rect.y = cursor_y + baseline_shift;
             bx.children[idx].rect.width = estimated_w;
             bx.children[idx].rect.height = element_h;
             // Layout vnoreny obsah - layout_block pouzije rect + padding.
