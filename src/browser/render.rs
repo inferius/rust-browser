@@ -212,14 +212,36 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOut {
     return out;
 }
 
+// CSS filter color matrix (hue-rotate, sepia, saturate, contrast) jsou
+// definovany v sRGB space (NTSC luminance weights pro sRGB displays).
+// Surface format Rgba8UnormSrgb sample auto-converti na LINEAR. Bez gamma
+// kompenzace matrix dava spatny vystup (hue-rotate vraci nespravne barvy).
+// Workflow: linear -> sRGB -> apply matrix -> sRGB -> linear (write surface
+// znovu encoduje na sRGB).
+fn linear_to_srgb(c: vec3<f32>) -> vec3<f32> {
+    let cutoff = vec3<f32>(0.0031308);
+    let lo = c * 12.92;
+    let hi = pow(c, vec3<f32>(1.0/2.4)) * 1.055 - 0.055;
+    return select(hi, lo, c < cutoff);
+}
+fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
+    let cutoff = vec3<f32>(0.04045);
+    let lo = c / 12.92;
+    let hi = pow((c + 0.055) / 1.055, vec3<f32>(2.4));
+    return select(hi, lo, c < cutoff);
+}
+
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
-    let src = textureSample(src_tex, src_smp, in.uv);
+    let src_linear = textureSample(src_tex, src_smp, in.uv);
+    let src_srgb_rgb = linear_to_srgb(src_linear.rgb);
+    let src = vec4<f32>(src_srgb_rgb, src_linear.a);
     let r = dot(params.row0, src) + params.offset.x;
     let g = dot(params.row1, src) + params.offset.y;
     let b = dot(params.row2, src) + params.offset.z;
     let a = dot(params.row3, src) + params.offset.w;
-    return vec4<f32>(r, g, b, a);
+    let out_linear_rgb = srgb_to_linear(vec3<f32>(r, g, b));
+    return vec4<f32>(out_linear_rgb, a);
 }
 "#;
 
