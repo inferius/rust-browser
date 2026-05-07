@@ -383,22 +383,59 @@ pub fn compile_expr(e: &Expr, code: &mut CodeBlock) -> Result<(), &'static str> 
             Ok(())
         }
         Expr::Assign { op, target, value } => {
-            // Member target: obj.prop = v -> emit obj, value, SetProp.
+            // Member target: obj.prop = v / obj.prop OP= v.
             if let Expr::Member { object, prop, optional: _ } = target.as_ref() {
-                if !matches!(op, AssignOp::Assign) {
-                    return Err("compound assign na member not supported");
+                if matches!(op, AssignOp::Assign) {
+                    compile_expr(object, code)?;
+                    match prop {
+                        MemberProp::Ident(name) => {
+                            compile_expr(value, code)?;
+                            let key_idx = code.push_var(name);
+                            code.emit(Opcode::SetProp(key_idx));
+                        }
+                        MemberProp::Computed(e) => {
+                            compile_expr(e, code)?;
+                            compile_expr(value, code)?;
+                            code.emit(Opcode::SetIndex);
+                        }
+                    }
+                    return Ok(());
                 }
-                compile_expr(object, code)?;
+                // Compound assign na member: obj.x += rhs
+                let bin_op = match op {
+                    AssignOp::Add => Opcode::Add,
+                    AssignOp::Sub => Opcode::Sub,
+                    AssignOp::Mul => Opcode::Mul,
+                    AssignOp::Div => Opcode::Div,
+                    AssignOp::Mod => Opcode::Mod,
+                    AssignOp::Exp => Opcode::Exp,
+                    AssignOp::BitAnd => Opcode::BitAnd,
+                    AssignOp::BitOr => Opcode::BitOr,
+                    AssignOp::BitXor => Opcode::BitXor,
+                    AssignOp::Shl => Opcode::Shl,
+                    AssignOp::Shr => Opcode::Shr,
+                    AssignOp::Ushr => Opcode::Ushr,
+                    _ => return Err("compound logical assign na member not supported"),
+                };
                 match prop {
                     MemberProp::Ident(name) => {
-                        compile_expr(value, code)?;
                         let key_idx = code.push_var(name);
-                        code.emit(Opcode::SetProp(key_idx));
+                        compile_expr(object, code)?;       // [obj]
+                        code.emit(Opcode::Dup);             // [obj, obj]
+                        code.emit(Opcode::GetProp(key_idx));// [obj, oldval]
+                        compile_expr(value, code)?;         // [obj, oldval, rhs]
+                        code.emit(bin_op);                  // [obj, newval]
+                        code.emit(Opcode::SetProp(key_idx));// [newval]
                     }
                     MemberProp::Computed(e) => {
-                        compile_expr(e, code)?;
-                        compile_expr(value, code)?;
-                        code.emit(Opcode::SetIndex);
+                        compile_expr(object, code)?;       // [obj]
+                        compile_expr(e, code)?;             // [obj, key]
+                        // Need: [obj, key, oldval, rhs] -> bin_op -> [obj, key, newval]
+                        // GetIndex pops both. Lets emit Dup + Dup pattern? Simpler: re-evaluate key.
+                        // Actually: stack [obj, key]. We need final [obj, key, newval] for SetIndex.
+                        // Steps: dup obj+key (make two copies), GetIndex on one pair, compile value, op,
+                        // then SetIndex. Need careful stack manipulation - skip.
+                        return Err("computed member compound assign not supported");
                     }
                 }
                 return Ok(());

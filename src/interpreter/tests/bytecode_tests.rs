@@ -376,6 +376,26 @@ fn vm_call_args_spread_mixed() {
 }
 
 #[test]
+fn vm_compound_member_add_assign() {
+    let r = run_vm(r#"
+        let o = { count: 10 };
+        o.count += 5;
+        o.count
+    "#).unwrap();
+    assert_jv!(r, n(15.0));
+}
+
+#[test]
+fn vm_compound_member_mul_assign() {
+    let r = run_vm(r#"
+        let o = { x: 4 };
+        o.x *= 3;
+        o.x
+    "#).unwrap();
+    assert_jv!(r, n(12.0));
+}
+
+#[test]
 fn vm_switch_basic() {
     let r = run_vm(r#"
         let x = 2;
