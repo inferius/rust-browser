@@ -3967,12 +3967,12 @@ impl Renderer {
         });
         let atlas_view = atlas_tex.create_view(&Default::default());
         // Nearest sampler: glyph atlas + image atlas pres tento sampler.
-        // Pri integer pixel pozici quadu + atlas UV na texel boundary linear
-        // sampling vraci blur (interpoluje mezi sousednimi texely). Nearest
-        // pri exact match daji crisp text. Pro images by Linear bylo lepsi -
-        // ale image rendering az pri downscale, jinak Nearest staci.
+        // Sampler pouzity pro glyph atlas + image atlas + offscreen RT.
+        // Linear filter pro smooth upscale (images, RT compose). Pro text
+        // glyfy rasterujeme na physical_size = font_size * zoom takze atlas
+        // px = screen px (1:1 mapping) a Linear vs Nearest neda blur.
         let atlas_smp = device.create_sampler(&wgpu::SamplerDescriptor {
-            mag_filter: wgpu::FilterMode::Nearest,
+            mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });

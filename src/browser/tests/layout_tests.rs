@@ -3045,3 +3045,26 @@ fn button_with_padding_has_full_height() {
     assert_eq!(btn.padding_top, Some(8.0));
     assert_eq!(btn.padding_bottom, Some(8.0));
 }
+
+#[test]
+fn h2_heading_wraps_at_narrow_viewport() {
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade, layout};
+    let doc = parse_html(
+        r#"<html><body><section><h2>Polygon clip-path (fan triangulace)</h2></section></body></html>"#,
+        ""
+    );
+    let css = parse_stylesheet(r#"body { font-size: 16px; margin: 0; } section { padding: 0; } h2 { padding: 0; margin: 0; }"#);
+    let map = cascade::cascade(&doc.root, &[css]);
+    // Narrow viewport
+    let lr = layout::layout_tree(&doc.root, &map, 320.0, 768.0);
+    fn find_text(b: &layout::LayoutBox) -> Option<String> {
+        if b.tag.is_none() && b.text.is_some() { return b.text.clone(); }
+        for ch in &b.children {
+            if let Some(t) = find_text(ch) { return Some(t); }
+        }
+        None
+    }
+    let text = find_text(&lr).unwrap_or_default();
+    println!("h2 wrapped text: {:?}", text);
+    assert!(text.contains('\n'), "h2 should wrap at 320px viewport, got: {:?}", text);
+}
