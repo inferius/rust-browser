@@ -386,6 +386,7 @@ fn canvas_rect_round_rect_ellipse() {
 }
 
 #[test]
+#[allow(non_snake_case)]
 fn canvas_clip_strokeText() {
     let result = run_with_doc(
         r#"<html><body><canvas id="c"></canvas></body></html>"#,

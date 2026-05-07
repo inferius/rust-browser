@@ -456,6 +456,7 @@ fn date_to_number_via_unary_plus() {
 }
 
 #[test]
+#[allow(non_snake_case)]
 fn date_valueOf_method() {
     let code = r#"
         const d = new Date(2000, 0, 1);

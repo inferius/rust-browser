@@ -89,6 +89,7 @@ fn caches_delete_removes_storage() {
 }
 
 #[test]
+#[allow(non_snake_case)]
 fn cache_addAll_stores_urls() {
     let r = run(r#"
         let count;

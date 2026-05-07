@@ -307,6 +307,7 @@ fn vm_call_math_abs() {
 }
 
 #[test]
+#[allow(non_snake_case)]
 fn vm_call_global_parseInt() {
     let r = run_vm_with_globals("parseInt('42', 10)").unwrap();
     assert_jv!(r, n(42.0));
