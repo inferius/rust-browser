@@ -1408,7 +1408,7 @@ pub struct VM {
     stack: Vec<JsValue>,
     /// Lokalni promenne (mapping var_name idx -> JsValue).
     /// Misto plnoho scope chain pouzivame plain Vec - var_idx je primy index.
-    locals: Vec<JsValue>,
+    pub locals: Vec<JsValue>,
     /// Volitelny global env hook: pri LoadGlobal vyhleda jmeno v env.
     /// Bez hooku = vrati Undefined.
     pub env: Option<std::rc::Rc<std::cell::RefCell<super::Environment>>>,
