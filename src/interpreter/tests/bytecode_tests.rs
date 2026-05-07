@@ -147,6 +147,30 @@ fn vm_unsupported_returns_err() {
 }
 
 #[test]
+fn vm_nested_function_decl() {
+    let r = run_vm(r#"
+        function outer() {
+            function inner() { return 42; }
+            return inner();
+        }
+        outer()
+    "#).unwrap();
+    assert_jv!(r, n(42.0));
+}
+
+#[test]
+fn vm_nested_function_with_closure() {
+    let r = run_vm(r#"
+        function outer(x) {
+            function inner(y) { return x + y; }
+            return inner(10);
+        }
+        outer(5)
+    "#).unwrap();
+    assert_jv!(r, n(15.0));
+}
+
+#[test]
 fn vm_async_function_compile() {
     // Async fn returns Promise wrapping value. Await unwraps.
     let r = run_vm(r#"
