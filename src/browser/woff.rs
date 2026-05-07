@@ -911,69 +911,85 @@ mod tests {
         assert_eq!(&sfnt[12..16], b"name");
     }
 
-    /// Real WOFF2 z Google Fonts (Roboto greek-ext subset). 3680B input.
-    /// Cely round-trip: brotli decompress + glyf transform reverse + sfnt build.
-    #[test]
-    fn decode_real_woff2_roboto_greek_ext() {
-        let data = match std::fs::read("static/fonts/Roboto-greek-ext.woff2") {
-            Ok(d) => d,
-            Err(_) => { eprintln!("[skip] Roboto-greek-ext.woff2 not present"); return; }
-        };
-        let sfnt = decode_woff2(&data).expect("decode_woff2 selhal");
+    /// Helper: validuje sfnt vystup struktury.
+    fn validate_sfnt(sfnt: &[u8], label: &str) {
         // SFNT magic: 0x00010000 (TTF) nebo 0x4F54544F (OTF).
         assert!(matches!(&sfnt[0..4], [0x00, 0x01, 0x00, 0x00] | [0x4F, 0x54, 0x54, 0x4F]),
-            "spatny sfnt magic: {:?}", &sfnt[0..4]);
+            "{}: spatny sfnt magic: {:?}", label, &sfnt[0..4]);
         let num_tables = u16::from_be_bytes([sfnt[4], sfnt[5]]) as usize;
-        assert!(num_tables > 0 && num_tables < 64, "num_tables = {}", num_tables);
+        assert!(num_tables > 0 && num_tables < 64,
+            "{}: num_tables = {}", label, num_tables);
 
-        // Najdi glyf + loca v directory.
+        // Najdi glyf + loca v directory + over alignment.
         let mut has_glyf = false;
         let mut has_loca = false;
-        let mut glyf_off = 0usize;
-        let mut glyf_len = 0usize;
-        let mut loca_len = 0usize;
         for i in 0..num_tables {
             let off = 12 + i * 16;
             let tag = &sfnt[off..off+4];
             let table_off = u32::from_be_bytes([sfnt[off+8], sfnt[off+9], sfnt[off+10], sfnt[off+11]]) as usize;
             let table_len = u32::from_be_bytes([sfnt[off+12], sfnt[off+13], sfnt[off+14], sfnt[off+15]]) as usize;
-            if tag == b"glyf" { has_glyf = true; glyf_off = table_off; glyf_len = table_len; }
-            if tag == b"loca" { has_loca = true; loca_len = table_len; }
+            assert!(table_off + table_len <= sfnt.len(),
+                "{}: tag {:?} out of bounds (off={}, len={}, sfnt={})",
+                label, tag, table_off, table_len, sfnt.len());
+            if tag == b"glyf" { has_glyf = true; }
+            if tag == b"loca" { has_loca = true; }
         }
-        assert!(has_glyf, "sfnt nema glyf");
-        assert!(has_loca, "sfnt nema loca");
-        assert!(glyf_len > 0, "glyf je prazdny");
-        assert!(loca_len > 0, "loca je prazdny");
-        assert!(glyf_off + glyf_len <= sfnt.len(), "glyf out of bounds");
+        // Glyf+loca only required pri ttf flavor (ne pri CFF/OTF).
+        let is_ttf = sfnt[0..4] == [0x00, 0x01, 0x00, 0x00];
+        if is_ttf {
+            assert!(has_glyf, "{}: TTF sfnt nema glyf", label);
+            assert!(has_loca, "{}: TTF sfnt nema loca", label);
+        }
 
-        // Validuj ze fontdue muze nacist vystup.
-        assert!(fontdue::Font::from_bytes(sfnt.clone(),
-            fontdue::FontSettings::default()).is_ok(),
-            "fontdue nemohl nacist reverzovany sfnt");
-    }
-
-    /// Druhy real WOFF2 (cyrillic subset, 12108 B).
-    #[test]
-    fn decode_real_woff2_roboto_cyrillic() {
-        let data = match std::fs::read("static/fonts/Roboto-cyrillic.woff2") {
-            Ok(d) => d,
-            Err(_) => { eprintln!("[skip] Roboto-cyrillic.woff2 not present"); return; }
-        };
-        let sfnt = decode_woff2(&data).expect("decode_woff2 selhal");
+        // fontdue load test (validuje pres nezavislou implementaci).
         assert!(fontdue::Font::from_bytes(sfnt,
             fontdue::FontSettings::default()).is_ok(),
-            "fontdue nemohl nacist reverzovany sfnt");
+            "{}: fontdue nemohl nacist sfnt", label);
     }
 
-    /// Greek subset (9556 B).
+    /// Iteruje pres vsechny .woff2 v static/fonts/ a otestuje round-trip.
+    /// Pokryva latin, latin-ext, cyrillic, cyrillic-ext, greek, greek-ext,
+    /// vietnamese, math, symbols (Roboto subsets) + Noto Sans skripty:
+    /// arabic, hebrew, devanagari, thai, bengali, japanese, korean, chinese,
+    /// tamil, khmer, georgian, armenian, ethiopic.
     #[test]
-    fn decode_real_woff2_roboto_greek() {
-        let data = match std::fs::read("static/fonts/Roboto-greek.woff2") {
-            Ok(d) => d,
-            Err(_) => { eprintln!("[skip] Roboto-greek.woff2 not present"); return; }
+    fn decode_all_real_woff2_fonts() {
+        let dir = std::path::Path::new("static/fonts");
+        let entries = match std::fs::read_dir(dir) {
+            Ok(e) => e,
+            Err(_) => { eprintln!("[skip] static/fonts neexistuje"); return; }
         };
-        let sfnt = decode_woff2(&data).expect("decode_woff2 selhal");
-        assert!(fontdue::Font::from_bytes(sfnt,
-            fontdue::FontSettings::default()).is_ok());
+        let mut tested = 0;
+        let mut failures = Vec::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("woff2") { continue; }
+            let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("?").to_string();
+            let data = match std::fs::read(&path) {
+                Ok(d) => d, Err(_) => continue,
+            };
+            // Skip non-WOFF2 (404 HTML pages).
+            if data.len() < 4 || &data[0..4] != b"wOF2" {
+                eprintln!("[skip] {}: not WOFF2", name);
+                continue;
+            }
+            tested += 1;
+            match decode_woff2(&data) {
+                Ok(sfnt) => {
+                    if let Err(e) = std::panic::catch_unwind(|| validate_sfnt(&sfnt, &name)) {
+                        failures.push(format!("{}: validate panic {:?}", name, e));
+                    } else {
+                        eprintln!("[ok] {} ({} B -> {} B sfnt)", name, data.len(), sfnt.len());
+                    }
+                }
+                Err(e) => failures.push(format!("{}: decode_woff2 err {:?}", name, e)),
+            }
+        }
+        assert!(tested >= 3, "ocekavany aspon 3 WOFF2 fonty, nalezeno {}", tested);
+        if !failures.is_empty() {
+            panic!("WOFF2 round-trip selhal pro {} z {} fontu:\n{}",
+                failures.len(), tested, failures.join("\n"));
+        }
+        eprintln!("[woff2] {}/{} fontu OK", tested, tested);
     }
 }
