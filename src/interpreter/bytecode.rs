@@ -986,16 +986,81 @@ pub fn compile_stmt(s: &Stmt, code: &mut CodeBlock) -> Result<(), &'static str> 
         Stmt::Empty => Ok(()),
         Stmt::Var { kind: _, decls } => {
             for decl in decls {
-                if let Pattern::Ident(name) = &decl.pattern {
-                    let var_idx = code.push_var(name);
-                    if let Some(init) = &decl.init {
-                        compile_expr(init, code)?;
-                    } else {
-                        code.emit(Opcode::LoadUndefined);
+                match &decl.pattern {
+                    Pattern::Ident(name) => {
+                        let var_idx = code.push_var(name);
+                        if let Some(init) = &decl.init {
+                            compile_expr(init, code)?;
+                        } else {
+                            code.emit(Opcode::LoadUndefined);
+                        }
+                        code.emit(Opcode::DeclareVar(var_idx));
                     }
-                    code.emit(Opcode::DeclareVar(var_idx));
-                } else {
-                    return Err("destructuring var not supported");
+                    Pattern::Object(props) => {
+                        // Compile rhs expr.
+                        if let Some(init) = &decl.init {
+                            compile_expr(init, code)?;
+                        } else {
+                            code.emit(Opcode::LoadUndefined);
+                        }
+                        // Pro kazdou prop: Dup + GetProp + DeclareVar.
+                        for prop in props {
+                            let key_str = match &prop.key {
+                                PropKey::Ident(s) | PropKey::Str(s) => s.clone(),
+                                _ => return Err("computed object pattern key not supported"),
+                            };
+                            let target_name = match &prop.pattern {
+                                Pattern::Ident(n) => n.clone(),
+                                _ => return Err("nested destructuring not supported"),
+                            };
+                            let key_idx = code.push_var(&key_str);
+                            let var_idx = code.push_var(&target_name);
+                            code.emit(Opcode::Dup);
+                            code.emit(Opcode::GetProp(key_idx));
+                            // Default value pri Undefined.
+                            if let Some(default) = &prop.default {
+                                code.emit(Opcode::Dup);
+                                let typeof_idx = code.push_var("__pat_typeof_check__");
+                                let _ = typeof_idx;
+                                // Test: if undefined, replace with default.
+                                code.emit(Opcode::TypeOf);
+                                let undef_idx = code.push_const(JsValue::Str("undefined".to_string()));
+                                code.emit(Opcode::LoadConst(undef_idx));
+                                code.emit(Opcode::StrictEq);
+                                let jmp_skip_default = code.emit(Opcode::JmpIfFalse(0));
+                                code.emit(Opcode::Pop); // discard the original undefined
+                                compile_expr(default, code)?;
+                                let target = code.bytecode.len();
+                                code.patch_jmp(jmp_skip_default, target);
+                            }
+                            code.emit(Opcode::DeclareVar(var_idx));
+                        }
+                        // Pop the source obj.
+                        code.emit(Opcode::Pop);
+                    }
+                    Pattern::Array(elems) => {
+                        if let Some(init) = &decl.init {
+                            compile_expr(init, code)?;
+                        } else {
+                            code.emit(Opcode::LoadUndefined);
+                        }
+                        for (i, elem) in elems.iter().enumerate() {
+                            if elem.rest { return Err("rest in array pattern not supported"); }
+                            if let Some(p) = &elem.pattern {
+                                let target_name = match p {
+                                    Pattern::Ident(n) => n.clone(),
+                                    _ => return Err("nested array destructuring not supported"),
+                                };
+                                let var_idx = code.push_var(&target_name);
+                                code.emit(Opcode::Dup);
+                                let idx_const = code.push_const(JsValue::Number(i as f64));
+                                code.emit(Opcode::LoadConst(idx_const));
+                                code.emit(Opcode::GetIndex);
+                                code.emit(Opcode::DeclareVar(var_idx));
+                            }
+                        }
+                        code.emit(Opcode::Pop);
+                    }
                 }
             }
             Ok(())

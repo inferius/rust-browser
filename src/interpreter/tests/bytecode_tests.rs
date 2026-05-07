@@ -376,6 +376,36 @@ fn vm_call_args_spread_mixed() {
 }
 
 #[test]
+fn vm_destructure_object_basic() {
+    let r = run_vm(r#"
+        let obj = { a: 1, b: 2, c: 3 };
+        let { a, b } = obj;
+        a + b
+    "#).unwrap();
+    assert_jv!(r, n(3.0));
+}
+
+#[test]
+fn vm_destructure_object_with_default() {
+    let r = run_vm(r#"
+        let obj = { a: 1 };
+        let { a, b = 99 } = obj;
+        a + b
+    "#).unwrap();
+    assert_jv!(r, n(100.0));
+}
+
+#[test]
+fn vm_destructure_array() {
+    let r = run_vm(r#"
+        let arr = [10, 20, 30];
+        let [x, y, z] = arr;
+        x + y + z
+    "#).unwrap();
+    assert_jv!(r, n(60.0));
+}
+
+#[test]
 fn vm_compound_member_add_assign() {
     let r = run_vm(r#"
         let o = { count: 10 };
