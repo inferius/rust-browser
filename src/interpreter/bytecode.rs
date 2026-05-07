@@ -42,7 +42,7 @@ fn try_capture(name: &str) -> Option<u16> {
     OUTER_VARS_STACK.with(|stack| {
         let outer_stack = stack.borrow();
         let outer = outer_stack.last()?;
-        let outer_idx = outer.iter().position(|n| n == name)? as u16;
+        let outer_idx = outer.iter().rposition(|n| n == name)? as u16;
         // Pridej do captures (dedupe).
         CAPTURES_STACK.with(|cs| {
             let mut cap_stack = cs.borrow_mut();
@@ -224,6 +224,13 @@ impl CodeBlock {
         self.var_names.push(name.to_string());
         idx as u16
     }
+    /// Always alloc fresh slot - shadowing OK pri block scoping.
+    /// Use pri var/let/const + function declarations.
+    fn push_local(&mut self, name: &str) -> u16 {
+        let idx = self.var_names.len();
+        self.var_names.push(name.to_string());
+        idx as u16
+    }
     fn emit(&mut self, op: Opcode) -> usize {
         let idx = self.bytecode.len();
         self.bytecode.push(op);
@@ -281,7 +288,7 @@ pub fn compile_expr(e: &Expr, code: &mut CodeBlock) -> Result<(), &'static str> 
                 return Ok(());
             }
             // Lookup order: 1) lokalni var, 2) closure capture, 3) global.
-            if let Some(idx) = code.var_names.iter().position(|n| n == name) {
+            if let Some(idx) = code.var_names.iter().rposition(|n| n == name) {
                 code.emit(Opcode::LoadVar(idx as u16));
             } else if let Some(cap_idx) = try_capture(name) {
                 code.emit(Opcode::LoadCapture(cap_idx));
@@ -526,7 +533,7 @@ pub fn compile_expr(e: &Expr, code: &mut CodeBlock) -> Result<(), &'static str> 
             // Pri Ident callee, normal lookup.
             match callee.as_ref() {
                 Expr::Ident(name) => {
-                    if let Some(idx) = code.var_names.iter().position(|n| n == name) {
+                    if let Some(idx) = code.var_names.iter().rposition(|n| n == name) {
                         code.emit(Opcode::LoadVar(idx as u16));
                     } else if let Some(cap_idx) = try_capture(name) {
                         code.emit(Opcode::LoadCapture(cap_idx));
@@ -692,7 +699,7 @@ pub fn compile_expr(e: &Expr, code: &mut CodeBlock) -> Result<(), &'static str> 
                 if let Expr::Member { object, prop, optional: false } = callee.as_ref() {
                     // Compile obj (resolve special globals at top-level via LoadGlobal).
                     if let Expr::Ident(obj_name) = object.as_ref() {
-                        if let Some(idx) = code.var_names.iter().position(|n| n == obj_name) {
+                        if let Some(idx) = code.var_names.iter().rposition(|n| n == obj_name) {
                             code.emit(Opcode::LoadVar(idx as u16));
                         } else if let Some(cap_idx) = try_capture(obj_name) {
                             code.emit(Opcode::LoadCapture(cap_idx));
@@ -727,7 +734,7 @@ pub fn compile_expr(e: &Expr, code: &mut CodeBlock) -> Result<(), &'static str> 
             // appears earlier), pouzij LoadVar, jinak LoadGlobal.
             match callee.as_ref() {
                 Expr::Ident(name) => {
-                    if let Some(idx) = code.var_names.iter().position(|n| n == name) {
+                    if let Some(idx) = code.var_names.iter().rposition(|n| n == name) {
                         code.emit(Opcode::LoadVar(idx as u16));
                     } else {
                         let g_idx = code.push_var(name);
@@ -736,7 +743,7 @@ pub fn compile_expr(e: &Expr, code: &mut CodeBlock) -> Result<(), &'static str> 
                 }
                 Expr::Member { object, prop, optional: _ } => {
                     if let Expr::Ident(obj_name) = object.as_ref() {
-                        if let Some(idx) = code.var_names.iter().position(|n| n == obj_name) {
+                        if let Some(idx) = code.var_names.iter().rposition(|n| n == obj_name) {
                             code.emit(Opcode::LoadVar(idx as u16));
                         } else {
                             let g_idx = code.push_var(obj_name);
@@ -924,9 +931,15 @@ pub fn compile_stmt(s: &Stmt, code: &mut CodeBlock) -> Result<(), &'static str> 
             Ok(())
         }
         Stmt::Block(stmts) => {
+            // Block scope: snapshot var_names.len() pred body, truncate po.
+            // Inner declarations cestou push_local alokuji nove sloty.
+            // Inner refs (rposition) najdou nejnovejsi.
+            // Po block: outer references zaviraji puvodni.
+            let snapshot = code.var_names.len();
             for st in stmts {
                 compile_stmt(st, code)?;
             }
+            code.var_names.truncate(snapshot);
             Ok(())
         }
         Stmt::If { test, yes, no } => {
@@ -1062,7 +1075,8 @@ pub fn compile_stmt(s: &Stmt, code: &mut CodeBlock) -> Result<(), &'static str> 
             for decl in decls {
                 match &decl.pattern {
                     Pattern::Ident(name) => {
-                        let var_idx = code.push_var(name);
+                        // Use push_local pro shadowing semantics (fresh slot per decl).
+                        let var_idx = code.push_local(name);
                         if let Some(init) = &decl.init {
                             compile_expr(init, code)?;
                         } else {

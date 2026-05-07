@@ -431,6 +431,27 @@ fn vm_call_args_spread_mixed() {
 }
 
 #[test]
+fn vm_block_let_shadowing() {
+    let r = run_vm(r#"
+        let x = 1;
+        { let x = 2; }
+        x
+    "#).unwrap();
+    assert_jv!(r, n(1.0));
+}
+
+#[test]
+fn vm_block_let_inner_visible_inside() {
+    let r = run_vm(r#"
+        let x = 1;
+        let result;
+        { let x = 99; result = x; }
+        result
+    "#).unwrap();
+    assert_jv!(r, n(99.0));
+}
+
+#[test]
 fn vm_class_extends() {
     let r = run_vm_with_globals(r#"
         class A {
