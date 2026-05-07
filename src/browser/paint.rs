@@ -1506,18 +1506,15 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
         let pad_t = bx.padding_top.unwrap_or(bx.padding);
         let pad_b = bx.padding_bottom.unwrap_or(bx.padding);
         let text_x = bx.rect.x + pad_l + align_offset;
-        // Vertical centering: pri line-height > font_size se text ma centrovat
-        // v inner_h (CSS line-box leading split). Pri line_height ~= height
-        // boxu = single line vertically centered. line_height v LayoutBox je
-        // multiplier (1.2 default), takze faktor * font_size = realna height.
+        // Vertical centering: jen pri inner_h > line_height_px (CSS technika
+        // "line-height: 60px" matching box height pro single-line vertical
+        // center). Pri normalnim bloku inner_h ~= line_height_px - text se
+        // vykresli na top (pen_y kompenzuje pres bearing_y v render). Branch
+        // pro standardni leading neni - render uz handles glyph baseline.
         let line_height_px = bx.line_height * bx.font_size;
         let inner_h = bx.rect.height - pad_t - pad_b;
-        let v_offset = if inner_h > line_height_px && line_height_px > 0.0 {
-            // Pripad: width fixni + line-height matches height -> center
+        let v_offset = if inner_h > line_height_px + 0.5 && line_height_px > 0.0 {
             ((inner_h - line_height_px) * 0.5).max(0.0)
-        } else if inner_h > bx.font_size && line_height_px > bx.font_size {
-            // CSS line-box leading: mezera se rozdeluje pul nad pul pod glyf.
-            ((line_height_px - bx.font_size) * 0.5).max(0.0)
         } else { 0.0 };
         let text_y = bx.rect.y + pad_t + v_offset;
         let text_color = with_alpha(bx.text_color.unwrap_or([0, 0, 0, 255]));
