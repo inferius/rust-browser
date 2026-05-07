@@ -191,8 +191,13 @@ fn apply_default_tag_styles(bx: &mut LayoutBox, tag: &str) {
             // Table header: bold + center text.
             bx.bold = true;
             if bx.text_align == TextAlign::Left { bx.text_align = TextAlign::Center; }
+            // Cells flex-grow=1 default - bez explicit width se rovnomerne
+            // rozdistribuuji na sirku tabulky (CSS3 auto table layout aproximace).
+            if bx.flex_grow == 0.0 { bx.flex_grow = 1.0; }
         }
-        "td" => { /* default cell, no special styling */ }
+        "td" => {
+            if bx.flex_grow == 0.0 { bx.flex_grow = 1.0; }
+        }
         "tr" => { /* table row, layout pres flex alias */ }
         "small" => {
             // CSS UA: smaller font (0.83em).
@@ -2576,6 +2581,7 @@ pub fn layout_block(bx: &mut LayoutBox) {
         match display {
             Display::Block | Display::Flex | Display::Grid
             | Display::ListItem | Display::Table | Display::TableHeader
+            | Display::TableRow
             | Display::TableCell | Display::TableHeaderCell | Display::TableCaption
             | Display::Subgrid => {
                 if !inline_buffer.is_empty() {

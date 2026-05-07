@@ -944,6 +944,46 @@ mod tests {
         assert!(found, "<.a> element not found");
     }
 
+    /// Test: table layout - cells flex-grow=1 default + tr in block dispatch.
+    #[test]
+    fn table_layout_distributes_cells() {
+        let html = r#"
+            <table>
+                <tr><th>A</th><th>B</th><th>C</th></tr>
+            </table>
+        "#.to_string();
+        let css = String::new();
+        let doc = crate::browser::html_parser::parse_html(&html, "");
+        let sheets = vec![crate::browser::css_parser::parse_stylesheet(&css)];
+        let style_map = crate::browser::cascade::cascade(&doc.root, &sheets);
+        let pseudo_map = crate::browser::cascade::cascade_pseudo(&doc.root, &sheets);
+        let layout = crate::browser::layout::layout_tree_with_pseudo(
+            &doc.root, &style_map, &pseudo_map, 900.0, 600.0);
+
+        // Najdi <tr> a over ze ma 3 cells horizontalne distribuovane.
+        fn find_tr(bx: &crate::browser::layout::LayoutBox)
+            -> Option<&crate::browser::layout::LayoutBox>
+        {
+            if bx.tag.as_deref() == Some("tr") { return Some(bx); }
+            for ch in &bx.children {
+                if let Some(t) = find_tr(ch) { return Some(t); }
+            }
+            None
+        }
+        let tr = find_tr(&layout).expect("tr nenalezen");
+        assert!(tr.rect.width > 100.0, "tr je prilis uzky: {}", tr.rect.width);
+        assert_eq!(tr.children.len(), 3, "tr ma mit 3 buncky");
+        // Cells horizontalne (rect.x ruzne).
+        let xs: Vec<f32> = tr.children.iter().map(|c| c.rect.x).collect();
+        assert!(xs[0] < xs[1] && xs[1] < xs[2],
+            "cells nejsou horizontalne: {:?}", xs);
+        // Kazdy cell aspon ~rovnomerny dil.
+        for c in &tr.children {
+            assert!(c.rect.width > tr.rect.width / 6.0,
+                "cell prilis uzky: {} (tr={})", c.rect.width, tr.rect.width);
+        }
+    }
+
     /// Helper: validuje sfnt vystup struktury.
     fn validate_sfnt(sfnt: &[u8], label: &str) {
         // SFNT magic: 0x00010000 (TTF) nebo 0x4F54544F (OTF).
