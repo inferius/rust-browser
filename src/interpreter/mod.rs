@@ -839,14 +839,19 @@ impl Interpreter {
         };
         // Drain timer queue - spust vsechny setTimeout callbacky
         self.drain_timers()?;
-        // Krate cekani na worker zpravy (max 100ms) + drain
-        std::thread::sleep(std::time::Duration::from_millis(50));
-        self.drain_workers()?;
-        self.drain_websockets()?;
-        // Terminate vsechny workery (drop senderu -> threadu signal)
-        let ids: Vec<u32> = self.workers.borrow().keys().cloned().collect();
-        for id in ids {
-            self.workers.borrow_mut().remove(&id);
+        // Worker + websocket sync: 50ms sleep dava worker threadum cas dorucit
+        // zpravy. Skip pri prazdnych pools - ciste sync programy nemusi cekat.
+        let has_workers = !self.workers.borrow().is_empty();
+        let has_websockets = !self.websockets.borrow().is_empty();
+        if has_workers || has_websockets {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            if has_workers { self.drain_workers()?; }
+            if has_websockets { self.drain_websockets()?; }
+            // Terminate workery (drop senderu -> threadu signal)
+            let ids: Vec<u32> = self.workers.borrow().keys().cloned().collect();
+            for id in ids {
+                self.workers.borrow_mut().remove(&id);
+            }
         }
         Ok(result)
     }
