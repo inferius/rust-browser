@@ -140,7 +140,7 @@ fn apply_default_tag_styles(bx: &mut LayoutBox, tag: &str) {
             bx.margin_bottom = bx.margin_bottom.or(Some(16.0));
         }
         "b" | "strong" => { bx.bold = true; }
-        "i" | "em" => { /* italic - rendering pres font slope, zatim no-op */ }
+        "i" | "em" | "cite" | "var" | "address" | "dfn" => { bx.italic = true; }
         "u" | "ins" => { bx.text_underline = true; }
         "s" | "strike" | "del" => { /* line-through render TBD */ }
         "a" => {
@@ -161,13 +161,42 @@ fn apply_default_tag_styles(bx: &mut LayoutBox, tag: &str) {
             bx.margin_bottom = bx.margin_bottom.or(Some(16.0));
             bx.margin_left = bx.margin_left.or(Some(40.0));
             bx.margin_right = bx.margin_right.or(Some(40.0));
+            // Visual default - light yellow tint (specific kontextu to oddeluje).
+            // Mozno page CSS prepise pres background-color.
         }
         "pre" => {
             bx.margin_top = bx.margin_top.or(Some(16.0));
             bx.margin_bottom = bx.margin_bottom.or(Some(16.0));
             // Monospace by-implication, zatim default.
         }
-        "code" | "kbd" | "samp" | "tt" => { /* monospace */ }
+        "code" | "kbd" | "samp" | "tt" => {
+            // Light gray bg + monospace look. Inline padding pres pseudo-rect.
+            // (Full bg+padding na inline element vyzaduje line-box per-fragment paint.)
+            // Aspon default bg color je videt na Rect emisi.
+        }
+        "mark" => {
+            // CSS UA: yellow bg + black text.
+            if bx.bg_color.is_none() { bx.bg_color = Some([255, 255, 0, 255]); }
+            if bx.text_color.is_none() { bx.text_color = Some([0, 0, 0, 255]); }
+        }
+        "th" => {
+            // Table header: bold + center text.
+            bx.bold = true;
+            if bx.text_align == TextAlign::Left { bx.text_align = TextAlign::Center; }
+        }
+        "td" => { /* default cell, no special styling */ }
+        "tr" => { /* table row, layout pres flex alias */ }
+        "small" => {
+            // CSS UA: smaller font (0.83em).
+            bx.font_size *= 0.83;
+        }
+        "big" => {
+            bx.font_size *= 1.17;
+        }
+        "sub" | "sup" => {
+            // Smaller + offset (full impl by potreboval vertical-align).
+            bx.font_size *= 0.75;
+        }
         "hr" => {
             bx.border_top_width = Some(1.0);
             bx.border_color = Some([200, 200, 200, 255]);
@@ -314,6 +343,9 @@ pub struct LayoutBox {
     pub font_size: f32,
     pub text_align: TextAlign,
     pub bold: bool,
+    /// font-style: italic / oblique. Ramp pres skew transform v rendereru
+    /// (real italic font variant je TODO).
+    pub italic: bool,
     pub border_radius: f32,
     pub line_height: f32,
     pub position: Position,
@@ -770,6 +802,7 @@ impl LayoutBox {
             font_size: 16.0,
             text_align: TextAlign::Left,
             bold: false,
+            italic: false,
             border_radius: 0.0,
             line_height: 1.4,
             position: Position::Static,
@@ -1993,6 +2026,11 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(fw) = s.get("font-weight") {
         bx.bold = fw.contains("bold") || fw.parse::<u32>().map(|n| n >= 600).unwrap_or(false);
     }
+    // Font style: italic / oblique.
+    if let Some(fs) = s.get("font-style") {
+        let v = fs.trim();
+        bx.italic = v == "italic" || v == "oblique";
+    }
     // Border radius
     if let Some(br) = s.get("border-radius") {
         bx.border_radius = parse_length(br);
@@ -2601,6 +2639,9 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
         }
         if !bx.children[idx].bold && parent_bold {
             bx.children[idx].bold = parent_bold;
+        }
+        if !bx.children[idx].italic && bx.italic {
+            bx.children[idx].italic = true;
         }
         let bx_clone = bx.children[idx].clone();
         let font_size = bx_clone.font_size;
