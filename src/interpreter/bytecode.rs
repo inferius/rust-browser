@@ -1122,6 +1122,70 @@ pub fn compile_stmt(s: &Stmt, code: &mut CodeBlock) -> Result<(), &'static str> 
             }
             Ok(())
         }
+        Stmt::Switch { discriminant, cases } => {
+            // Compile discriminant -> hidden var.
+            let disc_var_name = format!("__switch_disc_{}", code.bytecode.len());
+            let disc_var = code.push_var(&disc_var_name);
+            compile_expr(discriminant, code)?;
+            code.emit(Opcode::DeclareVar(disc_var));
+            // Loop frame pro break.
+            code.loop_stack.push(LoopFrame { break_jumps: vec![], continue_jumps: vec![] });
+            // Pro kazdy case (s test): emit test + JmpIfTrue case_body. Sber case_body
+            // start positions. Default fall through.
+            // Strategie: dva pruchody. Prvni pres testy emituj jump table. Druhy pres bodies.
+            let mut case_body_jumps: Vec<Option<usize>> = Vec::with_capacity(cases.len());
+            let mut default_jump: Option<usize> = None;
+            for c in cases {
+                if let Some(test) = &c.test {
+                    code.emit(Opcode::LoadVar(disc_var));
+                    compile_expr(test, code)?;
+                    code.emit(Opcode::StrictEq);
+                    let jmp = code.emit(Opcode::JmpIfTrue(0));
+                    case_body_jumps.push(Some(jmp));
+                } else {
+                    case_body_jumps.push(None);
+                }
+            }
+            // Po vsech testech: jump na default (pokud existuje) jinak na end.
+            for (i, c) in cases.iter().enumerate() {
+                if c.test.is_none() {
+                    default_jump = Some(code.emit(Opcode::Jmp(0)));
+                    let _ = i;
+                    break;
+                }
+            }
+            let jmp_to_end_after_tests = code.emit(Opcode::Jmp(0));
+            // Bodies - kazdy case_body postupne (fall-through).
+            let mut case_starts: Vec<usize> = Vec::with_capacity(cases.len());
+            for c in cases {
+                let start = code.bytecode.len();
+                case_starts.push(start);
+                for s in &c.body {
+                    compile_stmt(s, code)?;
+                }
+            }
+            let end = code.bytecode.len();
+            // Patch case test jumps na body starts.
+            for (i, jmp_opt) in case_body_jumps.iter().enumerate() {
+                if let Some(jmp_idx) = jmp_opt {
+                    code.patch_jmp(*jmp_idx, case_starts[i]);
+                }
+            }
+            // Patch default jump (pokud byl).
+            if let Some(dj) = default_jump {
+                let default_start = cases.iter().position(|c| c.test.is_none())
+                    .map(|i| case_starts[i])
+                    .unwrap_or(end);
+                code.patch_jmp(dj, default_start);
+            }
+            // Patch jmp_to_end_after_tests.
+            code.patch_jmp(jmp_to_end_after_tests, end);
+            let frame = code.loop_stack.pop().unwrap();
+            for bj in &frame.break_jumps {
+                code.patch_jmp(*bj, end);
+            }
+            Ok(())
+        }
         Stmt::Try { body, catch, finally } => {
             // Pri finally: zatim ne supported - emit Err.
             if finally.is_some() { return Err("try/finally not supported"); }

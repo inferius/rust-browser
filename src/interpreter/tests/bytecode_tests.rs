@@ -376,6 +376,54 @@ fn vm_call_args_spread_mixed() {
 }
 
 #[test]
+fn vm_switch_basic() {
+    let r = run_vm(r#"
+        let x = 2;
+        let result = '';
+        switch (x) {
+            case 1: result = 'one'; break;
+            case 2: result = 'two'; break;
+            case 3: result = 'three'; break;
+            default: result = 'other';
+        }
+        result
+    "#).unwrap();
+    assert_jv!(r, JsValue::Str("two".to_string()));
+}
+
+#[test]
+fn vm_switch_default() {
+    let r = run_vm(r#"
+        let x = 99;
+        let result = '';
+        switch (x) {
+            case 1: result = 'one'; break;
+            default: result = 'other';
+        }
+        result
+    "#).unwrap();
+    assert_jv!(r, JsValue::Str("other".to_string()));
+}
+
+#[test]
+fn vm_switch_fall_through() {
+    let r = run_vm(r#"
+        let x = 1;
+        let r = 0;
+        switch (x) {
+            case 1:
+            case 2:
+                r = 12;
+                break;
+            case 3:
+                r = 3;
+        }
+        r
+    "#).unwrap();
+    assert_jv!(r, n(12.0));
+}
+
+#[test]
 fn vm_try_catch_no_throw() {
     let r = run_vm(r#"
         let result = 0;
