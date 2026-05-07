@@ -2795,7 +2795,7 @@ pub fn layout_block(bx: &mut LayoutBox) {
                 // Absolute/fixed neposunuji cursor_y - jsou out of flow
             }
             Display::Inline | Display::InlineBlock | Display::Contents
-            | Display::TableRow | Display::Ruby
+            | Display::Ruby
             | Display::InlineFlex | Display::InlineGrid => {
                 inline_buffer.push(i);
             }

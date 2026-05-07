@@ -564,6 +564,8 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: 
                 for (a, b, d) in triangulate_polygon(points) {
                     push_triangle(&mut verts, a, b, d, c);
                 }
+                // Edge AA: 1px feathered fringe smerem ven pro vyhlazeni hran.
+                push_polygon_edge_aa(&mut verts, points, c);
             }
         }
     }
@@ -1309,6 +1311,55 @@ fn push_triangle(verts: &mut Vec<Vertex>, p0: (f32, f32), p1: (f32, f32), p2: (f
     verts.push(mk(p0));
     verts.push(mk(p1));
     verts.push(mk(p2));
+}
+
+/// Pro polygon hrany emit 1px outward feather strip (alpha 1.0 -> 0.0).
+/// Mode 0 plain color s per-vertex alpha; GPU bilinear interpoluje -> AA edge.
+/// Outward normal smer urceny dle winding (signed area).
+fn push_polygon_edge_aa(verts: &mut Vec<Vertex>, points: &[(f32, f32)], color: [f32; 4]) {
+    if points.len() < 3 { return; }
+    // V screen-space (y down): CW area > 0, CCW < 0.
+    // Outward normal: pro CW edge (p0 -> p1) je vlevo od smeru (-dy, dx).
+    // Pro CCW je vpravo (dy, -dx).
+    let area = polygon_signed_area(points);
+    let cw = area > 0.0;
+    let feather: f32 = 1.0;
+    let mk = |p: (f32, f32), a: f32| -> Vertex {
+        Vertex {
+            pos: [p.0, p.1],
+            color: [color[0], color[1], color[2], color[3] * a],
+            uv: [0.0, 0.0],
+            mode: 0.0,
+            local: [0.0, 0.0],
+            half_size: [0.0, 0.0],
+            radius: 0.0,
+            color2: [0.0; 4],
+            blur: 0.0,
+        }
+    };
+    let n = points.len();
+    for i in 0..n {
+        let p0 = points[i];
+        let p1 = points[(i + 1) % n];
+        let dx = p1.0 - p0.0;
+        let dy = p1.1 - p0.1;
+        let len = (dx * dx + dy * dy).sqrt();
+        if len < 1e-3 { continue; }
+        let (nx, ny) = if cw {
+            (-dy / len, dx / len)
+        } else {
+            (dy / len, -dx / len)
+        };
+        let p0_out = (p0.0 + nx * feather, p0.1 + ny * feather);
+        let p1_out = (p1.0 + nx * feather, p1.1 + ny * feather);
+        // Strip: (p0, p1, p1_out) + (p0, p1_out, p0_out)
+        verts.push(mk(p0, 1.0));
+        verts.push(mk(p1, 1.0));
+        verts.push(mk(p1_out, 0.0));
+        verts.push(mk(p0, 1.0));
+        verts.push(mk(p1_out, 0.0));
+        verts.push(mk(p0_out, 0.0));
+    }
 }
 
 /// Blurred rect: mode 8, solid color s smoothstep blur edge.
@@ -5542,16 +5593,25 @@ impl Renderer {
     fn compose_transform(&self, view: &wgpu::TextureView, x: f32, y: f32, w: f32, h: f32, matrix: &[f32; 16], first: bool) {
         // UV box: jaka cast offscreen RT obsahuje element. Offscreen RT je
         // viewport size, element je v px (x..x+w, y..y+h). UV = px / viewport.
+        // Pro 3D rotace: rozsirime sampling region o 1px na kazde strane, aby
+        // bilinear sampler mel kde brat pri sub-pixel sampling rotovaneho
+        // quadu. Kdybychom samplovali presne na hrane, edge fragmenty by
+        // bledly s prilehlym transparent contentem v offscreen RT a element
+        // by vypadal uzsi nez ma byt.
         let vw = self.config.width as f32;
         let vh = self.config.height as f32;
-        let u0 = (x / vw).clamp(0.0, 1.0);
-        let v0 = (y / vh).clamp(0.0, 1.0);
-        let u1 = ((x + w) / vw).clamp(0.0, 1.0);
-        let v1 = ((y + h) / vh).clamp(0.0, 1.0);
+        let pad: f32 = 1.0;
+        let u0 = ((x - pad) / vw).clamp(0.0, 1.0);
+        let v0 = ((y - pad) / vh).clamp(0.0, 1.0);
+        let u1 = ((x + w + pad) / vw).clamp(0.0, 1.0);
+        let v1 = ((y + h + pad) / vh).clamp(0.0, 1.0);
         let cx = x + w * 0.5;
         let cy = y + h * 0.5;
-        let hw = w * 0.5;
-        let hh = h * 0.5;
+        // Half-size rozsirime o pad - jinak by quad sampling oblast neodpovidala
+        // shader vertex local positions (lx ∈ [-hw, +hw]). Kdyz uv_box pokryva
+        // (x-pad)..(x+w+pad), tak quad musi mit shodne pokryti -> hw' = hw + pad.
+        let hw = w * 0.5 + pad;
+        let hh = h * 0.5 + pad;
 
         // Layout uniformu: 8x vec4 = 128 bytes
         // matrix v WGSL row-major: row0 = [m[0], m[1], m[2], m[3]], etc.
