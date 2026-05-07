@@ -2178,6 +2178,8 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         devtools_inspect_mode: bool,
         /// Console input buffer (typed JS).
         devtools_console_input: String,
+        /// True kdyz user drze LMB na resize grip a tahne.
+        devtools_resizing: bool,
     }
 
     impl ApplicationHandler for App {
@@ -2236,8 +2238,23 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                     }
                     self.mouse_x = new_x;
                     self.mouse_y = new_y;
+                    // Resize drag: aktualizuj devtools_height na zaklade pozice.
+                    if self.devtools_resizing {
+                        let win_h = self.renderer.as_ref().map(|r| r.config.height as f32).unwrap_or(0.0);
+                        let raw_y = new_y - self.scroll_y;
+                        let new_height = (win_h - raw_y).max(60.0).min(win_h * 0.9);
+                        self.devtools_height = new_height;
+                        self.render();
+                        return;
+                    }
                     self.update_hover();
                     if self.open_select.is_some() {
+                        self.render();
+                    }
+                }
+                WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left, .. } => {
+                    if self.devtools_resizing {
+                        self.devtools_resizing = false;
                         self.render();
                     }
                 }
@@ -2257,6 +2274,9 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                                 }
                                 DevtoolsHit::InspectToggle => {
                                     self.devtools_inspect_mode = !self.devtools_inspect_mode;
+                                }
+                                DevtoolsHit::ResizeGrip => {
+                                    self.devtools_resizing = true;
                                 }
                                 DevtoolsHit::None => {}
                             }
@@ -3133,6 +3153,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         devtools_tree_scroll: 0.0,
         devtools_inspect_mode: false,
         devtools_console_input: String::new(),
+        devtools_resizing: false,
     };
     event_loop.run_app(&mut app).map_err(|e| e.to_string())?;
     Ok(())

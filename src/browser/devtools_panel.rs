@@ -29,6 +29,7 @@ const ROW_H: f32 = 18.0;
 const TAB_H: f32 = 28.0;
 const FONT_SIZE: f32 = 12.0;
 const INDENT_PX: f32 = 14.0;
+pub const RESIZE_GRIP_H: f32 = 4.0;
 
 /// Vykresli panel dolu pres celou sirku. Vola se z render flow.
 pub fn paint_devtools_panel(
@@ -53,14 +54,23 @@ pub fn paint_devtools_panel(
         x: 0.0, y: panel_y, w: win_w, h: panel_h,
         color: PANEL_BG, radius: 0.0,
     });
-    // Horni hrana (1px svetlejsi pruh - dolni okraj viewport).
+    // Resize grip - 4px tall draggable area at top edge.
     cmds.push(DisplayCommand::Rect {
-        x: 0.0, y: panel_y, w: win_w, h: 1.0,
-        color: BORDER_COLOR, radius: 0.0,
+        x: 0.0, y: panel_y, w: win_w, h: RESIZE_GRIP_H,
+        color: [80, 84, 96, 255], radius: 0.0,
     });
+    // Hint dots in middle.
+    let dots_x = win_w * 0.5 - 12.0;
+    for i in 0..3 {
+        cmds.push(DisplayCommand::Rect {
+            x: dots_x + (i as f32) * 8.0, y: panel_y + 1.0,
+            w: 4.0, h: 2.0,
+            color: [140, 144, 156, 255], radius: 1.0,
+        });
+    }
 
-    // Toolbar - taby + inspect button.
-    let toolbar_y = panel_y;
+    // Toolbar - taby + inspect button. Posunuto pod resize grip.
+    let toolbar_y = panel_y + RESIZE_GRIP_H;
     cmds.push(DisplayCommand::Rect {
         x: 0.0, y: toolbar_y, w: win_w, h: TAB_H,
         color: PANEL_BG_LIGHT, radius: 0.0,
@@ -446,6 +456,8 @@ pub enum DevtoolsHit {
     TabClick(u8),
     TreeRow(usize),
     InspectToggle,
+    /// Mouse je na resize grip - klient zacne resize drag.
+    ResizeGrip,
     None,
 }
 
@@ -461,7 +473,11 @@ pub fn devtools_hit_test(
     if panel_h <= 0.0 { return DevtoolsHit::None; }
     let panel_y = win_h - panel_h;
     if mouse_y < panel_y { return DevtoolsHit::None; }
-    let toolbar_y = panel_y;
+    // Resize grip detection - prvni 4px panelu.
+    if mouse_y < panel_y + RESIZE_GRIP_H {
+        return DevtoolsHit::ResizeGrip;
+    }
+    let toolbar_y = panel_y + RESIZE_GRIP_H;
     if mouse_y < toolbar_y + TAB_H {
         // Toolbar - tabs nebo inspect.
         let tabs = ["Elements", "Console", "Network"];
