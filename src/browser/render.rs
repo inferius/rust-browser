@@ -2010,12 +2010,12 @@ fn decode_base64(s: &str) -> Option<Vec<u8>> {
 }
 
 #[derive(Clone, Copy)]
-struct ImageInfo {
+pub struct ImageInfo {
     /// UV coords v atlasu (0..1)
-    uv0: [f32; 2],
-    uv1: [f32; 2],
-    width: f32,
-    height: f32,
+    pub uv0: [f32; 2],
+    pub uv1: [f32; 2],
+    pub width: f32,
+    pub height: f32,
 }
 
 pub struct ImageAtlas {

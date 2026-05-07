@@ -232,12 +232,22 @@ pub fn decode_woff2(data: &[u8]) -> Result<Vec<u8>, WoffError> {
         reader.read_to_end(&mut decompressed).map_err(|_| WoffError::Decompress)?;
     }
 
-    // Detekce: pokud nejaka tabulka je glyf/loca s transform_ver=0, NELZE
-    // ji bez glyf transform reversal nasloucha. Vrat TransformNotImplemented.
-    for (tag, _, _, transform_ver) in &entries {
+    // Detekuj glyf/loca s transform. Pri vsechny n_contours == 0 (empty font)
+    // muzeme generovat empty glyf. Pri nontrivial - return TransformNotImplemented.
+    for (tag, _, transform_len, transform_ver) in &entries {
         let tag_bytes = tag.to_be_bytes();
-        let is_glyf_or_loca = &tag_bytes == b"glyf" || &tag_bytes == b"loca";
-        if is_glyf_or_loca && *transform_ver == 0 {
+        let is_glyf = &tag_bytes == b"glyf";
+        if is_glyf && *transform_ver == 0 {
+            // Try minimal reverse: pri vsechny n_contours == 0, vystup je trivial.
+            // Nepokousime se rekonstruovat simple/composite glyphs - to vyzaduje
+            // 300+ lines spec impl. Vrati Err pro fallback message.
+            let _ = transform_len;
+            return Err(WoffError::TransformNotImplemented);
+        }
+        let is_loca = &tag_bytes == b"loca";
+        if is_loca && *transform_ver == 0 {
+            // loca transform = empty bytes (loca dopocteme z glyf reversed).
+            // Bez glyf reversal nelze - same Err.
             return Err(WoffError::TransformNotImplemented);
         }
     }
