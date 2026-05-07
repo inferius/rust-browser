@@ -4,6 +4,7 @@
 /// Display list (paint::DisplayCommand) -> vertex data -> GPU.
 
 use super::paint::DisplayCommand;
+use super::devtools_panel::{paint_devtools_panel, find_box_rect_by_id, devtools_hit_test, DevtoolsHit, pick_node_at_screen_pos};
 use bytemuck::{Pod, Zeroable};
 use std::rc::Rc;
 
@@ -2378,6 +2379,20 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         animation_iterations: std::collections::HashMap<(usize, String), i32>,
         /// Aktivni CSS transitions.
         active_transitions: Vec<super::cascade::ActiveTransition>,
+        /// In-browser DevTools panel state.
+        devtools_open: bool,
+        /// Aktualne vybrany element v devtools tree (raw ptr DOM node).
+        devtools_selected: Option<usize>,
+        /// Tab v devtools panelu: 0=Elements, 1=Console, 2=Network.
+        devtools_tab: u8,
+        /// Vyska devtools panelu v px (resize-able).
+        devtools_height: f32,
+        /// Scroll v Elements tree.
+        devtools_tree_scroll: f32,
+        /// Inspect mode: pri hover na main viewport zvyrazni element + click vybira v tree.
+        devtools_inspect_mode: bool,
+        /// Console input buffer (typed JS).
+        devtools_console_input: String,
     }
 
     impl ApplicationHandler for App {
@@ -2442,6 +2457,41 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                     }
                 }
                 WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } => {
+                    // Devtools panel hit-test: pri kliku v panelu vyhodnocujeme nejdriv tam.
+                    let raw_y = self.mouse_y - self.scroll_y;
+                    let win_h = self.renderer.as_ref().map(|r| r.config.height as f32).unwrap_or(0.0);
+                    let win_w = self.renderer.as_ref().map(|r| r.config.width as f32).unwrap_or(0.0);
+                    let panel_h = if self.devtools_open { self.devtools_height.min(win_h * 0.7) } else { 0.0 };
+                    if self.devtools_open && raw_y >= win_h - panel_h {
+                        if let Some(layout) = &self.layout_root {
+                            match devtools_hit_test(layout, self.devtools_tab, self.devtools_tree_scroll,
+                                                    win_w, win_h, panel_h, self.mouse_x, raw_y) {
+                                DevtoolsHit::TabClick(t) => { self.devtools_tab = t; }
+                                DevtoolsHit::TreeRow(node_id) => {
+                                    self.devtools_selected = Some(node_id);
+                                }
+                                DevtoolsHit::InspectToggle => {
+                                    self.devtools_inspect_mode = !self.devtools_inspect_mode;
+                                }
+                                DevtoolsHit::None => {}
+                            }
+                        }
+                        self.render();
+                        return;
+                    }
+                    // Inspect mode: kliknuti na main viewport vybira node v tree.
+                    if self.devtools_inspect_mode {
+                        if let Some(layout) = &self.layout_root {
+                            if let Some(node_id) = pick_node_at_screen_pos(layout, self.mouse_x, raw_y, self.scroll_y) {
+                                self.devtools_selected = Some(node_id);
+                                println!("[inspect] selected node id=0x{:x}", node_id);
+                            }
+                        }
+                        // V inspect modu nepropaguj click do stranky (jen vybira).
+                        self.devtools_inspect_mode = false;
+                        self.render();
+                        return;
+                    }
                     self.handle_click(self.mouse_x, self.mouse_y);
                     self.render();
                 }
@@ -2450,6 +2500,16 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                         winit::event::MouseScrollDelta::LineDelta(_, y) => y * 30.0,
                         winit::event::MouseScrollDelta::PixelDelta(p) => p.y as f32,
                     };
+                    // Pri kurzoru nad devtools panelem - scrolluj tree, ne stranku.
+                    let raw_y = self.mouse_y - self.scroll_y;
+                    let win_h = self.renderer.as_ref().map(|r| r.config.height as f32).unwrap_or(0.0);
+                    let panel_h = if self.devtools_open { self.devtools_height.min(win_h * 0.7) } else { 0.0 };
+                    if self.devtools_open && raw_y >= win_h - panel_h {
+                        self.devtools_tree_scroll -= scroll_amount;
+                        if self.devtools_tree_scroll < 0.0 { self.devtools_tree_scroll = 0.0; }
+                        self.render();
+                        return;
+                    }
                     self.scroll_y -= scroll_amount;
                     if self.scroll_y < 0.0 { self.scroll_y = 0.0; }
                     // Clamp na max scroll
@@ -2485,8 +2545,43 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                 // Alt+Left = back, Alt+Right = forward (browser history).
                 WindowEvent::KeyboardInput { event: key_event, .. } => {
                     if key_event.state != ElementState::Pressed { return; }
+                    // Pri otevrenem devtools + Console tab + zadanym text -> append do console_input.
+                    if self.devtools_open && self.devtools_tab == 1 {
+                        match &key_event.logical_key {
+                            Key::Named(NamedKey::Backspace) => {
+                                self.devtools_console_input.pop();
+                                if let Some(w) = &self.window { w.request_redraw(); }
+                                return;
+                            }
+                            Key::Named(NamedKey::Enter) => {
+                                let cmd = std::mem::take(&mut self.devtools_console_input);
+                                if !cmd.is_empty() {
+                                    println!("[devtools console] eval: {}", cmd);
+                                    if let Some(interp) = &mut self.interpreter {
+                                        interp.console_log.borrow_mut().push(("info".to_string(), format!("> {}", cmd)));
+                                        // TODO: real eval. Zatim jen echo.
+                                    }
+                                }
+                                if let Some(w) = &self.window { w.request_redraw(); }
+                                return;
+                            }
+                            Key::Character(s) => {
+                                self.devtools_console_input.push_str(s);
+                                if let Some(w) = &self.window { w.request_redraw(); }
+                                return;
+                            }
+                            _ => {}
+                        }
+                    }
                     match key_event.logical_key {
                         Key::Named(NamedKey::F12) => {
+                            // Toggle in-window devtools panel.
+                            self.devtools_open = !self.devtools_open;
+                            println!("[F12] devtools panel = {}", if self.devtools_open { "ON" } else { "OFF" });
+                            if let Some(w) = &self.window { w.request_redraw(); }
+                        }
+                        Key::Named(NamedKey::F11) => {
+                            // F11 = old behavior = open static devtools.html
                             self.regenerate_and_open_devtools();
                         }
                         Key::Named(NamedKey::F5) => {
@@ -3108,9 +3203,45 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                 }
             }
 
+            // In-window DevTools panel - emit pred scrollbar a po main viewport content.
+            // Devtools panel zabira spodni cast okna (devtools_height px).
+            // Hlavni viewport_h je redukovany.
+            let win_h = r.config.height as f32;
+            let panel_h = if self.devtools_open { self.devtools_height.min(win_h * 0.7) } else { 0.0 };
+            if self.devtools_open {
+                paint_devtools_panel(
+                    &mut display_list,
+                    &layout_root,
+                    self.devtools_selected,
+                    self.devtools_tab,
+                    self.devtools_tree_scroll,
+                    self.devtools_inspect_mode,
+                    &self.devtools_console_input,
+                    self.interpreter.as_ref(),
+                    r.config.width as f32,
+                    win_h,
+                    panel_h,
+                    self.mouse_x, self.mouse_y,
+                );
+            }
+            // Highlight rect pro vybrany element v DevTools.
+            if let Some(sel_id) = self.devtools_selected {
+                if let Some(rect) = find_box_rect_by_id(&layout_root, sel_id, self.scroll_y) {
+                    // Polopruhledne modre highlight + border.
+                    display_list.push(DisplayCommand::Rect {
+                        x: rect.0, y: rect.1, w: rect.2, h: rect.3,
+                        color: [100, 150, 255, 70], radius: 0.0,
+                    });
+                    display_list.push(DisplayCommand::Border {
+                        x: rect.0, y: rect.1, w: rect.2, h: rect.3,
+                        width: 2.0, color: [50, 100, 220, 255],
+                    });
+                }
+            }
+
             // Scrollbar rendering: pri page content overflow Y emituj track + thumb.
             let viewport_w = r.config.width as f32;
-            let viewport_h = r.config.height as f32;
+            let viewport_h = (r.config.height as f32) - panel_h;
             let total_h = layout_root.rect.height;
             if total_h > viewport_h {
                 let bar_w = 12.0_f32;
@@ -3210,6 +3341,13 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         active_transitions: Vec::new(),
         active_animations: std::collections::HashSet::new(),
         animation_iterations: std::collections::HashMap::new(),
+        devtools_open: false,
+        devtools_selected: None,
+        devtools_tab: 0,
+        devtools_height: 320.0,
+        devtools_tree_scroll: 0.0,
+        devtools_inspect_mode: false,
+        devtools_console_input: String::new(),
     };
     event_loop.run_app(&mut app).map_err(|e| e.to_string())?;
     Ok(())

@@ -16,6 +16,7 @@ pub mod layout;
 pub mod layout_engine;
 pub mod paint;
 pub mod render;
+pub mod devtools_panel;
 
 #[cfg(test)]
 mod tests;
