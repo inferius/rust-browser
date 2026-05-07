@@ -140,8 +140,8 @@ fn vm_bitwise() {
 
 #[test]
 fn vm_unsupported_returns_err() {
-    // try/catch neimplementovan - musi vratit Err.
-    let stmts = parse_to_stmts("try { x } catch (e) { y }");
+    // async/await neimplementovan - musi vratit Err.
+    let stmts = parse_to_stmts("async function f() { await 1; }");
     let r = compile_program(&stmts);
     assert!(r.is_err());
 }
@@ -373,6 +373,48 @@ fn vm_call_args_spread_mixed() {
         add(1, ...mid, 4)
     "#).unwrap();
     assert_jv!(r, n(10.0));
+}
+
+#[test]
+fn vm_try_catch_no_throw() {
+    let r = run_vm(r#"
+        let result = 0;
+        try {
+            result = 1;
+        } catch (e) {
+            result = -1;
+        }
+        result
+    "#).unwrap();
+    assert_jv!(r, n(1.0));
+}
+
+#[test]
+fn vm_try_catch_throw_string() {
+    let r = run_vm(r#"
+        let msg = '';
+        try {
+            throw 'error!';
+        } catch (e) {
+            msg = e;
+        }
+        msg
+    "#).unwrap();
+    assert_jv!(r, JsValue::Str("error!".to_string()));
+}
+
+#[test]
+fn vm_try_catch_throw_number() {
+    let r = run_vm(r#"
+        let caught = 0;
+        try {
+            throw 42;
+        } catch (e) {
+            caught = e + 8;
+        }
+        caught
+    "#).unwrap();
+    assert_jv!(r, n(50.0));
 }
 
 #[test]

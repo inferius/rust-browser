@@ -146,6 +146,12 @@ pub enum Opcode {
     LoadThis,
     /// Method call: stack [obj, method, args...]. Calls method s this=obj.
     CallMethod(u16),
+    /// Push try frame s catch handler PC. Pri Throw bytecode unwind do catch_pc.
+    PushTry(u32),
+    /// Pop try frame (normal exit z try body bez throw).
+    PopTry,
+    /// Pop value, throw - VM unwind do nejblizsi PushTry catch_pc.
+    Throw,
 }
 
 #[derive(Debug, Clone)]
@@ -1116,6 +1122,48 @@ pub fn compile_stmt(s: &Stmt, code: &mut CodeBlock) -> Result<(), &'static str> 
             }
             Ok(())
         }
+        Stmt::Try { body, catch, finally } => {
+            // Pri finally: zatim ne supported - emit Err.
+            if finally.is_some() { return Err("try/finally not supported"); }
+            let catch_clause = match catch {
+                Some(c) => c,
+                None => return Err("try without catch not supported"),
+            };
+            // Emit PushTry(0) - placeholder pro catch_pc.
+            let push_try_idx = code.emit(Opcode::PushTry(0));
+            // Compile try body.
+            for s in body {
+                compile_stmt(s, code)?;
+            }
+            // PopTry + jump to end.
+            code.emit(Opcode::PopTry);
+            let jmp_end = code.emit(Opcode::Jmp(0));
+            // Catch start - patch PushTry s touto pozici.
+            let catch_pc = code.bytecode.len() as u32;
+            if let Opcode::PushTry(p) = &mut code.bytecode[push_try_idx] {
+                *p = catch_pc;
+            }
+            // Catch param: nastavit do var.
+            if let Some(param_name) = &catch_clause.param {
+                let var_idx = code.push_var(param_name);
+                code.emit(Opcode::DeclareVar(var_idx));
+            } else {
+                // No param: pop error from stack.
+                code.emit(Opcode::Pop);
+            }
+            // Compile catch body.
+            for s in &catch_clause.body {
+                compile_stmt(s, code)?;
+            }
+            let end = code.bytecode.len();
+            code.patch_jmp(jmp_end, end);
+            Ok(())
+        }
+        Stmt::Throw(expr) => {
+            compile_expr(expr, code)?;
+            code.emit(Opcode::Throw);
+            Ok(())
+        }
         Stmt::Return(opt_expr) => {
             if let Some(e) = opt_expr {
                 compile_expr(e, code)?;
@@ -1161,6 +1209,8 @@ pub struct VM {
     captures: Vec<JsValue>,
     /// `this` binding pri method nebo constructor call.
     this_value: JsValue,
+    /// Try/catch stack: per nesting (catch_pc, stack_depth_at_push).
+    try_stack: Vec<(i32, usize)>,
 }
 
 impl VM {
@@ -1171,6 +1221,7 @@ impl VM {
             env: None,
             captures: Vec::new(),
             this_value: JsValue::Undefined,
+            try_stack: Vec::new(),
         }
     }
     pub fn with_env(env: std::rc::Rc<std::cell::RefCell<super::Environment>>) -> Self {
@@ -1180,6 +1231,7 @@ impl VM {
             env: Some(env),
             captures: Vec::new(),
             this_value: JsValue::Undefined,
+            try_stack: Vec::new(),
         }
     }
 
@@ -1416,6 +1468,25 @@ impl VM {
                     } else {
                         self.stack.push(get_property(&obj, &key_str));
                     }
+                }
+                Opcode::PushTry(catch_pc) => {
+                    self.try_stack.push((catch_pc as i32, self.stack.len()));
+                }
+                Opcode::PopTry => {
+                    self.try_stack.pop();
+                }
+                Opcode::Throw => {
+                    let err_val = self.pop()?;
+                    if let Some((catch_pc, stack_depth)) = self.try_stack.pop() {
+                        // Unwind stack na pre-try depth.
+                        self.stack.truncate(stack_depth);
+                        // Push error value pro catch handler.
+                        self.stack.push(err_val);
+                        pc = catch_pc;
+                        continue;
+                    }
+                    // Bez try frame: propagate jako string error.
+                    return Err(format!("uncaught: {}", err_val));
                 }
                 Opcode::CallMethod(argc) => {
                     let argc = argc as usize;
