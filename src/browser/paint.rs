@@ -1442,8 +1442,13 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
         }
     }
 
-    // Border
-    if bx.border_width > 0.0 {
+    // Border - jen pri specifikovanem border-style != "none". CSS UA default
+    // border-style: none -> bez ohledu na width/color border se NEKRESLI.
+    // border shorthand "1px solid red" parsuje style v cascade::expand_shorthand.
+    let border_visible = !bx.border_style.is_empty()
+        && bx.border_style != "none"
+        && bx.border_style != "hidden";
+    if bx.border_width > 0.0 && border_visible {
         if let Some(bc) = bx.border_color {
             cmds.push(DisplayCommand::Border {
                 x: bx.rect.x,

@@ -352,6 +352,9 @@ pub struct LayoutBox {
     /// box-sizing: "content-box" (default) | "border-box".
     pub box_sizing: String,
     pub margin: f32,
+    /// CSS border-style: none (default) | solid | dashed | dotted | double | ...
+    /// "none" = neukreslit border bez ohledu na width/color (CSS UA default).
+    pub border_style: String,
     pub border_width: f32,
     /// Per-side border width (None = use border_width). CSS Backgrounds L3.
     pub border_top_width: Option<f32>,
@@ -812,6 +815,7 @@ impl LayoutBox {
             margin_left_auto: false,
             box_sizing: String::new(),
             margin: 0.0,
+            border_style: String::new(), // empty = ne-vykresleny (CSS spec none)
             border_width: 0.0,
             border_top_width: None,
             border_right_width: None,
@@ -2086,6 +2090,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(m) = s.get("margin-left")   { bx.margin_left   = Some(parse_length(m)); }
     if let Some(b) = s.get("border-width") { bx.border_width = parse_length(b); }
     if let Some(bc) = s.get("border-color") { bx.border_color = parse_color(bc); }
+    if let Some(bs) = s.get("border-style") { bx.border_style = bs.trim().to_string(); }
     if let Some(fs) = s.get("font-size") { bx.font_size = parse_length(fs); }
     // Text align
     if let Some(ta) = s.get("text-align") {
@@ -2668,6 +2673,11 @@ pub fn layout_block(bx: &mut LayoutBox) {
     let mut cursor_y = inner_y;
     // Inline run - sbiraji se inline boxy do line buffer, flush pri block child nebo konci
     let mut inline_buffer: Vec<usize> = Vec::new();
+    // CSS margin collapse: adjacent vertical margins se nesakcaji, ale beru max.
+    // Tracker prev_margin_bottom aby dalsi block child margin_top byl pouzit jen
+    // do max vs prev_m_b.
+    let mut prev_margin_bottom: f32 = 0.0;
+    let mut had_prev_block = false;
 
     let mut i = 0;
     while i < bx.children.len() {
@@ -2681,6 +2691,8 @@ pub fn layout_block(bx: &mut LayoutBox) {
                 if !inline_buffer.is_empty() {
                     cursor_y = flush_inline(bx, &inline_buffer, inner_x, cursor_y, inner_w);
                     inline_buffer.clear();
+                    had_prev_block = false;
+                    prev_margin_bottom = 0.0;
                 }
                 let child = &mut bx.children[i];
                 // Effective margin: asymmetric (margin_top/right/bottom/left) wins, jinak shorthand `margin`.
@@ -2688,8 +2700,11 @@ pub fn layout_block(bx: &mut LayoutBox) {
                 let m_b = child.margin_bottom.unwrap_or(child.margin);
                 let m_l = child.margin_left.unwrap_or(child.margin);
                 let m_r = child.margin_right.unwrap_or(child.margin);
+                // Margin collapse: m_t aplikuje se jen do max(prev_m_b, m_t).
+                // Pokud prev_m_b uz byla pricteta, sktorta o min(prev_m_b, m_t).
+                let collapsed_m_t = if had_prev_block { (m_t - prev_margin_bottom).max(0.0) } else { m_t };
                 child.rect.x = inner_x + m_l;
-                child.rect.y = cursor_y + m_t;
+                child.rect.y = cursor_y + collapsed_m_t;
                 child.rect.width = child.explicit_width.unwrap_or(inner_w - m_l - m_r);
                 // Clamp dle min-width / max-width
                 if !child.min_width_v.is_empty() && child.min_width_v != "none" {
@@ -2773,7 +2788,9 @@ pub fn layout_block(bx: &mut LayoutBox) {
                     _ => {}
                 }
                 if is_in_flow {
-                    cursor_y += child.rect.height + m_t + m_b;
+                    cursor_y += child.rect.height + collapsed_m_t + m_b;
+                    prev_margin_bottom = m_b;
+                    had_prev_block = true;
                 }
                 // Absolute/fixed neposunuji cursor_y - jsou out of flow
             }
@@ -2816,6 +2833,7 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
     let parent_decor_style = bx.text_decoration_style.clone();
     let parent_decor_color = bx.text_decoration_color;
     let parent_font_family = bx.font_family.clone();
+    let parent_line_height = bx.line_height;
     let line_height_default = parent_font_size * 1.2;
     let mut line_height = line_height_default;
     // Tracking whitespace boundary mezi sousednimi inline siblings.
@@ -2857,6 +2875,14 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
         }
         if bx.children[idx].font_family.is_empty() && !parent_font_family.is_empty() {
             bx.children[idx].font_family = parent_font_family.clone();
+        }
+        // line-height inherited (CSS spec). Text node ma default 1.4 nebo 1.2,
+        // pri parentu s explicit line-height (60px na .anim-box / .filter-box)
+        // text uvnitr potrebuje stejnou line-height pro vertical center
+        // (paint v_offset z line_height_px).
+        let is_text_node_lh = bx.children[idx].tag.is_none();
+        if is_text_node_lh || (bx.children[idx].line_height - 1.4).abs() < 0.001 {
+            bx.children[idx].line_height = parent_line_height;
         }
         let bx_clone = bx.children[idx].clone();
         let font_size = bx_clone.font_size;
