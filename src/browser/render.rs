@@ -2301,6 +2301,11 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                                 DevtoolsHit::ResizeGrip => {
                                     self.devtools_resizing = true;
                                 }
+                                DevtoolsHit::ClearConsole => {
+                                    if let Some(interp) = &mut self.interpreter {
+                                        interp.console_log.borrow_mut().clear();
+                                    }
+                                }
                                 DevtoolsHit::None => {}
                             }
                         }

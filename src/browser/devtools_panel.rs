@@ -99,6 +99,23 @@ pub fn paint_devtools_panel(
         tab_x += tab_w + 4.0;
     }
 
+    // Clear button (pri Console tab).
+    if tab == 1 {
+        let clr_x = win_w - 200.0;
+        cmds.push(DisplayCommand::Rect {
+            x: clr_x, y: toolbar_y + 4.0, w: 92.0, h: TAB_H - 4.0,
+            color: PANEL_BG, radius: 4.0,
+        });
+        cmds.push(DisplayCommand::Text {
+            x: clr_x + 18.0, y: toolbar_y + 8.0,
+            content: "Clear".to_string(),
+            color: TEXT_COLOR,
+            font_size: FONT_SIZE, bold: false,
+            italic: false,
+            font_family: String::new(),
+            strikethrough: false, underline: false,
+        });
+    }
     // Inspect mode toggle button (vpravo).
     let insp_x = win_w - 100.0;
     cmds.push(DisplayCommand::Rect {
@@ -458,6 +475,8 @@ pub enum DevtoolsHit {
     InspectToggle,
     /// Mouse je na resize grip - klient zacne resize drag.
     ResizeGrip,
+    /// Clear console button (pri Console tab).
+    ClearConsole,
     None,
 }
 
@@ -488,6 +507,13 @@ pub fn devtools_hit_test(
                 return DevtoolsHit::TabClick(i as u8);
             }
             tab_x += tab_w + 4.0;
+        }
+        // Clear console button (pri Console tab).
+        if tab == 1 {
+            let clr_x = win_w - 200.0;
+            if mouse_x >= clr_x && mouse_x < clr_x + 92.0 {
+                return DevtoolsHit::ClearConsole;
+            }
         }
         // Inspect button (vpravo).
         let insp_x = win_w - 100.0;
