@@ -140,10 +140,30 @@ fn vm_bitwise() {
 
 #[test]
 fn vm_unsupported_returns_err() {
-    // async/await neimplementovan - musi vratit Err.
-    let stmts = parse_to_stmts("async function f() { await 1; }");
+    // Generators neimplementovany - musi vratit Err.
+    let stmts = parse_to_stmts("function* g() { yield 1; }");
     let r = compile_program(&stmts);
     assert!(r.is_err());
+}
+
+#[test]
+fn vm_async_function_compile() {
+    // Async fn compile jako bezna fn (sync semantics).
+    let r = run_vm(r#"
+        async function f(x) { return x + 1; }
+        f(41)
+    "#).unwrap();
+    assert_jv!(r, n(42.0));
+}
+
+#[test]
+fn vm_await_unwraps_promise() {
+    // Pokud value neni Promise, await vraci value bezimo.
+    let r = run_vm(r#"
+        let v = 42;
+        await v
+    "#).unwrap();
+    assert_jv!(r, n(42.0));
 }
 
 #[test]

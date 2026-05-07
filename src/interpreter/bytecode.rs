@@ -146,6 +146,9 @@ pub enum Opcode {
     LoadThis,
     /// Method call: stack [obj, method, args...]. Calls method s this=obj.
     CallMethod(u16),
+    /// Pop value, await: pri Promise object {__state__, __value__} extract __value__.
+    /// Jinak push value bezimo. Sync semantics (instant unwrap).
+    Await,
     /// Push try frame s catch handler PC. Pri Throw bytecode unwind do catch_pc.
     PushTry(u32),
     /// Pop try frame (normal exit z try body bez throw).
@@ -534,6 +537,51 @@ pub fn compile_expr(e: &Expr, code: &mut CodeBlock) -> Result<(), &'static str> 
             code.emit(Opcode::NewOp(args.len() as u16));
             Ok(())
         }
+        Expr::Await { value } => {
+            compile_expr(value, code)?;
+            code.emit(Opcode::Await);
+            Ok(())
+        }
+        Expr::AsyncFunc { name, params, body } => {
+            // Sync semantics: compile jako Function, ale wrap result v Promise.
+            // Return path body emit return: misto plain Return emit MakePromise + Return.
+            // Simplification: just compile jako Function bez wrap. Caller awaitne.
+            let outer_vars_snapshot = code.var_names.clone();
+            let mut fn_code = CodeBlock::new();
+            if let Some(n) = name {
+                fn_code.push_var(n);
+            }
+            let mut param_names: Vec<String> = Vec::new();
+            for p in params {
+                if let Pattern::Ident(pn) = &p.pattern {
+                    param_names.push(pn.clone());
+                    fn_code.push_var(pn);
+                } else {
+                    return Err("destructuring async-fn param not supported");
+                }
+            }
+            push_outer_scope(outer_vars_snapshot);
+            let body_result = (|| -> Result<(), &'static str> {
+                for s in body {
+                    compile_stmt(s, &mut fn_code)?;
+                }
+                fn_code.emit(Opcode::LoadUndefined);
+                fn_code.emit(Opcode::Return);
+                Ok(())
+            })();
+            let captures_outer_indices = pop_outer_scope();
+            body_result?;
+            let compiled = std::rc::Rc::new(CompiledFunction {
+                name: name.clone(),
+                params: param_names,
+                code: fn_code,
+                captures_outer_indices,
+            });
+            let fn_idx = code.functions.len() as u16;
+            code.functions.push(compiled);
+            code.emit(Opcode::LoadFunction(fn_idx));
+            Ok(())
+        }
         Expr::Template { quasis, expressions } => {
             // Compile: quasi[0] + expr[0] + quasi[1] + expr[1] + ... + quasi[n].
             let first_idx = code.push_const(JsValue::Str(quasis.first().cloned().unwrap_or_default()));
@@ -845,6 +893,18 @@ pub fn compile_expr(e: &Expr, code: &mut CodeBlock) -> Result<(), &'static str> 
 pub fn compile_stmt(s: &Stmt, code: &mut CodeBlock) -> Result<(), &'static str> {
     match s {
         Stmt::Expr(e) => {
+            // Special: Stmt::Expr(Function/AsyncFunc s name) = function declaration
+            // (parser bug - top-level `async function f` mapuje na Stmt::Expr).
+            // Bind name do outer scope.
+            match e {
+                Expr::Function { name: Some(n), .. } | Expr::AsyncFunc { name: Some(n), .. } => {
+                    let var_idx = code.push_var(n);
+                    compile_expr(e, code)?;
+                    code.emit(Opcode::DeclareVar(var_idx));
+                    return Ok(());
+                }
+                _ => {}
+            }
             compile_expr(e, code)?;
             code.emit(Opcode::Pop);
             Ok(())
@@ -1329,6 +1389,11 @@ pub fn compile_stmt(s: &Stmt, code: &mut CodeBlock) -> Result<(), &'static str> 
             }
             Ok(())
         }
+        Stmt::AsyncFunc { name, params, body } => {
+            // Stejne jako Stmt::Function - nase async je sync s Promise wrap (TBD).
+            let synth = Stmt::Function { name: name.clone(), params: params.clone(), body: body.clone() };
+            compile_stmt(&synth, code)
+        }
         Stmt::Try { body, catch, finally } => {
             // Pri finally: zatim ne supported - emit Err.
             if finally.is_some() { return Err("try/finally not supported"); }
@@ -1675,6 +1740,29 @@ impl VM {
                     } else {
                         self.stack.push(get_property(&obj, &key_str));
                     }
+                }
+                Opcode::Await => {
+                    let v = self.pop()?;
+                    let unwrapped = if let JsValue::Object(o) = &v {
+                        let inner = o.borrow();
+                        match inner.get("__state__") {
+                            JsValue::Str(s) if s == "fulfilled" => inner.get("__value__"),
+                            JsValue::Str(s) if s == "rejected" => {
+                                let err_val = inner.get("__value__");
+                                drop(inner);
+                                // Throw error.
+                                if let Some((catch_pc, depth)) = self.try_stack.pop() {
+                                    self.stack.truncate(depth);
+                                    self.stack.push(err_val);
+                                    pc = catch_pc;
+                                    continue;
+                                }
+                                return Err(format!("uncaught (await rejected): {}", err_val));
+                            }
+                            _ => v.clone(),
+                        }
+                    } else { v };
+                    self.stack.push(unwrapped);
                 }
                 Opcode::PushTry(catch_pc) => {
                     self.try_stack.push((catch_pc as i32, self.stack.len()));
