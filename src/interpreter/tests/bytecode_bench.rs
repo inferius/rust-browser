@@ -121,6 +121,48 @@ fn bench_user_function_loop() {
 }
 
 #[test]
+fn bench_for_of_iteration() {
+    let src = r#"
+        let arr = [];
+        for (let i = 0; i < 1000; i = i + 1) {
+            arr.push(i);
+        }
+        let total = 0;
+        for (let v of arr) {
+            total = total + v;
+        }
+        total
+    "#;
+    let stmts = parse(src);
+    let vm_time = run_vm(&stmts);
+    let tw_time = run_treewalker(src);
+    let ratio = tw_time.as_nanos() as f64 / vm_time.as_nanos().max(1) as f64;
+    println!("[bench] for_of_1k: VM={:.2}ms, TreeWalker={:.2}ms, speedup={:.2}x",
+        vm_time.as_secs_f64() * 1000.0,
+        tw_time.as_secs_f64() * 1000.0,
+        ratio);
+}
+
+#[test]
+fn bench_template_literal_loop() {
+    let src = r#"
+        let result = '';
+        for (let i = 0; i < 100; i = i + 1) {
+            result = `${result}-${i}`;
+        }
+        result.length
+    "#;
+    let stmts = parse(src);
+    let vm_time = run_vm(&stmts);
+    let tw_time = run_treewalker(src);
+    let ratio = tw_time.as_nanos() as f64 / vm_time.as_nanos().max(1) as f64;
+    println!("[bench] template_literal_100x: VM={:.2}ms, TreeWalker={:.2}ms, speedup={:.2}x",
+        vm_time.as_secs_f64() * 1000.0,
+        tw_time.as_secs_f64() * 1000.0,
+        ratio);
+}
+
+#[test]
 fn bench_member_access() {
     // Member access intenzivni loop.
     let src = r#"
