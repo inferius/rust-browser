@@ -4435,6 +4435,155 @@ pub fn setup_builtins(
         e.define("__service_worker_container__", JsValue::Object(sw));
     }
 
+    // CacheStorage API + Cache - real in-memory implementation s URL -> Response.
+    // V Service Worker scope: caches.open('v1').then(cache => cache.put(req, res)).
+    {
+        // Cache pool: name -> (request_url -> response object).
+        // Sdileny pres Rc<RefCell<>> - kdykoliv otevreny stejny name vrati stejny cache.
+        let cache_pool: Rc<RefCell<std::collections::HashMap<String, Rc<RefCell<std::collections::HashMap<String, JsValue>>>>>> =
+            Rc::new(RefCell::new(std::collections::HashMap::new()));
+        let caches_obj = Rc::new(RefCell::new(JsObject::new()));
+
+        let cp1 = Rc::clone(&cache_pool);
+        caches_obj.borrow_mut().set("open".into(), native("caches.open", move |args| {
+            let name = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+            let cache_data: Rc<RefCell<std::collections::HashMap<String, JsValue>>> = {
+                let mut pool = cp1.borrow_mut();
+                pool.entry(name.clone()).or_insert_with(||
+                    Rc::new(RefCell::new(std::collections::HashMap::new()))
+                ).clone()
+            };
+            let cache_obj = Rc::new(RefCell::new(JsObject::new()));
+            cache_obj.borrow_mut().set("__name__".into(), JsValue::Str(name.clone()));
+
+            // cache.put(request, response)
+            let cd = Rc::clone(&cache_data);
+            cache_obj.borrow_mut().set("put".into(), native("Cache.put", move |args| {
+                let mut it = args.into_iter();
+                let req = it.next().unwrap_or(JsValue::Undefined);
+                let res = it.next().unwrap_or(JsValue::Undefined);
+                let url = match &req {
+                    JsValue::Str(s) => s.clone(),
+                    JsValue::Object(o) => o.borrow().get("url").to_string(),
+                    _ => return Ok(make_settled_promise("rejected", JsValue::Str("invalid request".into()))),
+                };
+                cd.borrow_mut().insert(url, res);
+                Ok(make_settled_promise("fulfilled", JsValue::Undefined))
+            }));
+
+            // cache.match(request) - vrati cached response nebo undefined
+            let cd = Rc::clone(&cache_data);
+            cache_obj.borrow_mut().set("match".into(), native("Cache.match", move |args| {
+                let req = args.into_iter().next().unwrap_or(JsValue::Undefined);
+                let url = match &req {
+                    JsValue::Str(s) => s.clone(),
+                    JsValue::Object(o) => o.borrow().get("url").to_string(),
+                    _ => return Ok(make_settled_promise("fulfilled", JsValue::Undefined)),
+                };
+                let val = cd.borrow().get(&url).cloned().unwrap_or(JsValue::Undefined);
+                Ok(make_settled_promise("fulfilled", val))
+            }));
+
+            // cache.delete(request) - vrati true pokud existoval
+            let cd = Rc::clone(&cache_data);
+            cache_obj.borrow_mut().set("delete".into(), native("Cache.delete", move |args| {
+                let req = args.into_iter().next().unwrap_or(JsValue::Undefined);
+                let url = match &req {
+                    JsValue::Str(s) => s.clone(),
+                    JsValue::Object(o) => o.borrow().get("url").to_string(),
+                    _ => return Ok(make_settled_promise("fulfilled", JsValue::Bool(false))),
+                };
+                let removed = cd.borrow_mut().remove(&url).is_some();
+                Ok(make_settled_promise("fulfilled", JsValue::Bool(removed)))
+            }));
+
+            // cache.keys() - vrati Promise<Array<Request>> (zde Array<String>)
+            let cd = Rc::clone(&cache_data);
+            cache_obj.borrow_mut().set("keys".into(), native("Cache.keys", move |_| {
+                let urls: Vec<JsValue> = cd.borrow().keys().map(|k| JsValue::Str(k.clone())).collect();
+                Ok(make_settled_promise("fulfilled", JsValue::Array(Rc::new(RefCell::new(urls)))))
+            }));
+
+            // cache.addAll(urls) - fetch + put per URL. Stub: ulozime placeholder Response.
+            let cd = Rc::clone(&cache_data);
+            cache_obj.borrow_mut().set("addAll".into(), native("Cache.addAll", move |args| {
+                let urls = args.into_iter().next().unwrap_or(JsValue::Undefined);
+                if let JsValue::Array(arr) = urls {
+                    for url_v in arr.borrow().iter() {
+                        let u = url_v.to_string();
+                        let resp = Rc::new(RefCell::new(JsObject::new()));
+                        resp.borrow_mut().set("url".into(), JsValue::Str(u.clone()));
+                        resp.borrow_mut().set("ok".into(), JsValue::Bool(true));
+                        resp.borrow_mut().set("status".into(), JsValue::Number(200.0));
+                        cd.borrow_mut().insert(u, JsValue::Object(resp));
+                    }
+                }
+                Ok(make_settled_promise("fulfilled", JsValue::Undefined))
+            }));
+
+            // cache.add(url) - jednotliva varianta addAll
+            let cd = Rc::clone(&cache_data);
+            cache_obj.borrow_mut().set("add".into(), native("Cache.add", move |args| {
+                let req = args.into_iter().next().unwrap_or(JsValue::Undefined);
+                let url = match &req {
+                    JsValue::Str(s) => s.clone(),
+                    JsValue::Object(o) => o.borrow().get("url").to_string(),
+                    _ => return Ok(make_settled_promise("rejected", JsValue::Str("invalid request".into()))),
+                };
+                let resp = Rc::new(RefCell::new(JsObject::new()));
+                resp.borrow_mut().set("url".into(), JsValue::Str(url.clone()));
+                resp.borrow_mut().set("ok".into(), JsValue::Bool(true));
+                resp.borrow_mut().set("status".into(), JsValue::Number(200.0));
+                cd.borrow_mut().insert(url, JsValue::Object(resp));
+                Ok(make_settled_promise("fulfilled", JsValue::Undefined))
+            }));
+
+            Ok(make_settled_promise("fulfilled", JsValue::Object(cache_obj)))
+        }));
+
+        // caches.has(name)
+        let cp2 = Rc::clone(&cache_pool);
+        caches_obj.borrow_mut().set("has".into(), native("caches.has", move |args| {
+            let name = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+            let exists = cp2.borrow().contains_key(&name);
+            Ok(make_settled_promise("fulfilled", JsValue::Bool(exists)))
+        }));
+
+        // caches.delete(name)
+        let cp3 = Rc::clone(&cache_pool);
+        caches_obj.borrow_mut().set("delete".into(), native("caches.delete", move |args| {
+            let name = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+            let removed = cp3.borrow_mut().remove(&name).is_some();
+            Ok(make_settled_promise("fulfilled", JsValue::Bool(removed)))
+        }));
+
+        // caches.keys()
+        let cp4 = Rc::clone(&cache_pool);
+        caches_obj.borrow_mut().set("keys".into(), native("caches.keys", move |_| {
+            let names: Vec<JsValue> = cp4.borrow().keys().map(|k| JsValue::Str(k.clone())).collect();
+            Ok(make_settled_promise("fulfilled", JsValue::Array(Rc::new(RefCell::new(names)))))
+        }));
+
+        // caches.match(request) - hleda v vsech caches
+        let cp5 = Rc::clone(&cache_pool);
+        caches_obj.borrow_mut().set("match".into(), native("caches.match", move |args| {
+            let req = args.into_iter().next().unwrap_or(JsValue::Undefined);
+            let url = match &req {
+                JsValue::Str(s) => s.clone(),
+                JsValue::Object(o) => o.borrow().get("url").to_string(),
+                _ => return Ok(make_settled_promise("fulfilled", JsValue::Undefined)),
+            };
+            for cache in cp5.borrow().values() {
+                if let Some(v) = cache.borrow().get(&url).cloned() {
+                    return Ok(make_settled_promise("fulfilled", v));
+                }
+            }
+            Ok(make_settled_promise("fulfilled", JsValue::Undefined))
+        }));
+
+        e.define("caches", JsValue::Object(caches_obj));
+    }
+
     // navigator.locks API stub
     {
         let locks = Rc::new(RefCell::new(JsObject::new()));
