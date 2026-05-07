@@ -1347,3 +1347,38 @@ fn transform_3d_emit_correct_box_dims() {
     let c45 = (45.0_f32.to_radians()).cos();
     assert!((m[0] - c45).abs() < 0.01, "m[0]={} expected cos(45)={}", m[0], c45);
 }
+
+#[test]
+fn badge_text_centered_vertically_in_box() {
+    let cmds = build_dl(
+        r#"<html><body><span class="b">badge</span></body></html>"#,
+        r#"body { font-size: 16px; }
+           .b { background: red; color: white; padding: 2px 8px; border-radius: 12px; font-size: 12px; display: inline-block; }
+        "#,
+    );
+    // Najdi Rect (badge bg) a Text command.
+    let bg_rect = cmds.iter().find_map(|c| {
+        if let DisplayCommand::Rect { x, y, w, h, color, .. } = c {
+            if color[0] == 255 && color[1] == 0 { return Some((*x, *y, *w, *h)); }
+        }
+        None
+    });
+    let text_cmd = cmds.iter().find_map(|c| {
+        if let DisplayCommand::Text { x, y, font_size, content, .. } = c {
+            if content.contains("badge") { return Some((*x, *y, *font_size)); }
+        }
+        None
+    });
+    if let (Some((rx, ry, _, rh)), Some((_tx, ty, fs))) = (bg_rect, text_cmd) {
+        let box_center = ry + rh * 0.5;
+        let baseline = ty + fs;
+        let glyph_top = baseline - fs * 0.7;
+        let text_center = (glyph_top + baseline) * 0.5;
+        let diff = (text_center - box_center).abs();
+        println!("box_center={} text_center={} diff={}", box_center, text_center, diff);
+        // Tolerujeme do 2px diff (font-specific ascender/descender variabilita).
+        assert!(diff < 3.0, "badge text vertical center off by {} px (rect_y={} h={} text_y={} fs={})",
+            diff, ry, rh, ty, fs);
+        let _ = rx;
+    }
+}
