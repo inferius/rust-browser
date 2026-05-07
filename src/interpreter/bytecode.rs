@@ -138,6 +138,8 @@ pub enum Opcode {
     AppendItem,
     /// Pop source Array, iterate jeho elements + append do top-of-stack Array.
     AppendSpread,
+    /// Pop Array (args), pop callee, call s array elements jako args.
+    CallNativeArgs,
 }
 
 #[derive(Debug, Clone)]
@@ -582,6 +584,29 @@ pub fn compile_expr(e: &Expr, code: &mut CodeBlock) -> Result<(), &'static str> 
                 _ => return Err("complex callee not supported"),
             }
             if args.len() > u16::MAX as usize { return Err("too many args"); }
+            let has_spread_arg = args.iter().any(|a| matches!(a, Expr::Spread(_)));
+            let emit_call = |code: &mut CodeBlock, args: &[Expr]| -> Result<(), &'static str> {
+                if has_spread_arg {
+                    // Build args Array via NewArray(0) + AppendItem/AppendSpread.
+                    code.emit(Opcode::NewArray(0));
+                    for arg in args {
+                        if let Expr::Spread(inner) = arg {
+                            compile_expr(inner, code)?;
+                            code.emit(Opcode::AppendSpread);
+                        } else {
+                            compile_expr(arg, code)?;
+                            code.emit(Opcode::AppendItem);
+                        }
+                    }
+                    code.emit(Opcode::CallNativeArgs);
+                } else {
+                    for arg in args {
+                        compile_expr(arg, code)?;
+                    }
+                    code.emit(Opcode::CallNative(args.len() as u16));
+                }
+                Ok(())
+            };
             if opt {
                 let jmp_proceed = code.emit(Opcode::JmpIfNotNullishKeep(0));
                 code.emit(Opcode::Pop);
@@ -589,17 +614,11 @@ pub fn compile_expr(e: &Expr, code: &mut CodeBlock) -> Result<(), &'static str> 
                 let jmp_end = code.emit(Opcode::Jmp(0));
                 let proceed = code.bytecode.len();
                 code.patch_jmp(jmp_proceed, proceed);
-                for arg in args {
-                    compile_expr(arg, code)?;
-                }
-                code.emit(Opcode::CallNative(args.len() as u16));
+                emit_call(code, args)?;
                 let end = code.bytecode.len();
                 code.patch_jmp(jmp_end, end);
             } else {
-                for arg in args {
-                    compile_expr(arg, code)?;
-                }
-                code.emit(Opcode::CallNative(args.len() as u16));
+                emit_call(code, args)?;
             }
             Ok(())
         }
@@ -1321,6 +1340,43 @@ impl VM {
                     } else {
                         self.stack.push(get_property(&obj, &key_str));
                     }
+                }
+                Opcode::CallNativeArgs => {
+                    // Pop Array (args), pop callee.
+                    let args_v = self.pop()?;
+                    let args: Vec<JsValue> = match args_v {
+                        JsValue::Array(a) => a.borrow().clone(),
+                        _ => return Err("CallNativeArgs: args not Array".into()),
+                    };
+                    let callee = self.pop()?;
+                    let result = match callee {
+                        JsValue::Function(super::JsFunc::Native(_, f)) => {
+                            f(args).map_err(|e| format!("{:?}", e))?
+                        }
+                        JsValue::Function(super::JsFunc::VmCompiled { compiled, env, name, captures }) => {
+                            let mut nested = VM::new();
+                            nested.env = Some(env.clone());
+                            nested.captures = captures.clone();
+                            nested.locals.resize(compiled.code.var_names.len(), JsValue::Undefined);
+                            if !compiled.code.var_names.is_empty()
+                                && compiled.code.var_names[0] == name.clone().unwrap_or_default() {
+                                nested.locals[0] = JsValue::Function(super::JsFunc::VmCompiled {
+                                    name: name.clone(),
+                                    compiled: compiled.clone(),
+                                    env: env.clone(),
+                                    captures: captures.clone(),
+                                });
+                            }
+                            for (i, p) in compiled.params.iter().enumerate() {
+                                if let Some(idx) = compiled.code.var_names.iter().position(|n| n == p) {
+                                    nested.locals[idx] = args.get(i).cloned().unwrap_or(JsValue::Undefined);
+                                }
+                            }
+                            nested.run(&compiled.code)?
+                        }
+                        _ => return Err("CallNativeArgs: callee not function".into()),
+                    };
+                    self.stack.push(result);
                 }
                 Opcode::AppendItem => {
                     let val = self.pop()?;

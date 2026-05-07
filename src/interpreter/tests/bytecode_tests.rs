@@ -356,6 +356,26 @@ fn vm_user_function_chained_calls() {
 }
 
 #[test]
+fn vm_call_args_spread() {
+    let r = run_vm(r#"
+        function sum3(a, b, c) { return a + b + c; }
+        let args = [10, 20, 30];
+        sum3(...args)
+    "#).unwrap();
+    assert_jv!(r, n(60.0));
+}
+
+#[test]
+fn vm_call_args_spread_mixed() {
+    let r = run_vm(r#"
+        function add(a, b, c, d) { return a + b + c + d; }
+        let mid = [2, 3];
+        add(1, ...mid, 4)
+    "#).unwrap();
+    assert_jv!(r, n(10.0));
+}
+
+#[test]
 fn vm_array_spread_basic() {
     let r = run_vm(r#"
         let a = [1, 2, 3];
