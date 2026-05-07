@@ -4936,6 +4936,15 @@ impl Renderer {
                             ax.tag, ax.min_value, ax.max_value, ax.default_value);
                     }
                 }
+                // Color font detection: COLR/CBDT/sbix/SVG.
+                let color_info = super::emoji_fonts::detect_color_format(&decoded);
+                use super::emoji_fonts::ColorFormat;
+                if color_info.format != ColorFormat::None {
+                    println!("[font] {} je color font: {:?} (base={}, layers={}, palettes={})",
+                        ff.family, color_info.format,
+                        color_info.colr_base_count, color_info.colr_layer_count,
+                        color_info.cpal_palette_count);
+                }
                 if let Ok(font) = fontdue::Font::from_bytes(decoded, fontdue::FontSettings::default()) {
                     self.font_registry.insert(ff.family.clone(), font.clone());
                     // Sdilet do atlasu pro rasterize lookup

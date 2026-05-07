@@ -19,6 +19,7 @@ pub mod render;
 pub mod devtools_panel;
 pub mod woff;
 pub mod variable_fonts;
+pub mod emoji_fonts;
 
 #[cfg(test)]
 mod tests;
