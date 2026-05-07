@@ -1341,19 +1341,61 @@ pub fn compile_stmt(s: &Stmt, code: &mut CodeBlock) -> Result<(), &'static str> 
             Ok(())
         }
         Stmt::Class { name, super_class, body } => {
-            if super_class.is_some() { return Err("class extends not supported"); }
             // Najdi constructor (nebo pouzij prazdny).
             let ctor_member = body.iter().find(|m| m.name == "constructor" && !m.is_static);
             let ctor_params = ctor_member.map(|m| m.params.clone()).unwrap_or_default();
             let ctor_body = ctor_member.map(|m| m.body.clone()).unwrap_or_default();
-            // Synthetic body: pro kazdou non-static non-constructor non-getter/setter methodu
-            // emit `this.<name> = function(...)`.
+
             let mut synth_body: Vec<Stmt> = Vec::new();
+
+            // Pri extends: prepend `let __super_inst = new SuperClass(args); copy fields`.
+            // args = B's own params (assumes super(args) prototype - common case).
+            // Assumption: super_class evaluates to identifier (constructor function).
+            if let Some(sc) = super_class {
+                // let __super_inst = new <SuperClass>(...params)
+                let args_exprs: Vec<Expr> = ctor_params.iter().filter_map(|p| {
+                    if let crate::ast::Pattern::Ident(n) = &p.pattern {
+                        Some(Expr::Ident(n.clone()))
+                    } else { None }
+                }).collect();
+                let new_super = Expr::New {
+                    callee: sc.clone(),
+                    args: args_exprs,
+                };
+                synth_body.push(Stmt::Var {
+                    kind: crate::ast::VarKind::Let,
+                    decls: vec![crate::ast::VarDecl {
+                        pattern: crate::ast::Pattern::Ident("__super_inst".to_string()),
+                        init: Some(new_super),
+                    }],
+                });
+                // for (let __k in __super_inst) { this[__k] = __super_inst[__k]; }
+                let copy_assign = Expr::Assign {
+                    op: AssignOp::Assign,
+                    target: Box::new(Expr::Member {
+                        object: Box::new(Expr::Ident("this".to_string())),
+                        prop: MemberProp::Computed(Box::new(Expr::Ident("__k".to_string()))),
+                        optional: false,
+                    }),
+                    value: Box::new(Expr::Member {
+                        object: Box::new(Expr::Ident("__super_inst".to_string())),
+                        prop: MemberProp::Computed(Box::new(Expr::Ident("__k".to_string()))),
+                        optional: false,
+                    }),
+                };
+                synth_body.push(Stmt::ForIn {
+                    kind: Some(crate::ast::VarKind::Let),
+                    target: Box::new(Expr::Ident("__k".to_string())),
+                    iter: Expr::Ident("__super_inst".to_string()),
+                    body: Box::new(Stmt::Expr(copy_assign)),
+                });
+            }
+
+            // Add B's methods as instance fields.
             for m in body {
                 if m.name == "constructor" || m.is_static || m.is_getter || m.is_setter {
                     continue;
                 }
-                // Emit Stmt::Expr( Assign (this.<name>) = Function {...} )
                 let assign = Expr::Assign {
                     op: AssignOp::Assign,
                     target: Box::new(Expr::Member {
@@ -1369,11 +1411,16 @@ pub fn compile_stmt(s: &Stmt, code: &mut CodeBlock) -> Result<(), &'static str> 
                 };
                 synth_body.push(Stmt::Expr(assign));
             }
-            // Append ctor body.
+            // Append ctor body. Pri extends, super() volani se ignoruje (uz inlined).
             for s in ctor_body {
+                // Skip explicit super() call - we already initialized via __super_inst.
+                if let Stmt::Expr(Expr::Call { callee, .. }) = &s {
+                    if let Expr::Ident(n) = callee.as_ref() {
+                        if n == "super" { continue; }
+                    }
+                }
                 synth_body.push(s);
             }
-            // Compile jako Stmt::Function s name=class_name, params=ctor_params, body=synth_body.
             let synthetic_fn = Stmt::Function {
                 name: name.clone(),
                 params: ctor_params,

@@ -431,6 +431,40 @@ fn vm_call_args_spread_mixed() {
 }
 
 #[test]
+fn vm_class_extends() {
+    let r = run_vm_with_globals(r#"
+        class A {
+            constructor(x) { this.x = x; }
+            getA() { return this.x; }
+        }
+        class B extends A {
+            constructor(x, y) { super(x); this.y = y; }
+            getB() { return this.y; }
+        }
+        let b = new B(10, 20);
+        b.x + b.y
+    "#).unwrap();
+    assert_jv!(r, n(30.0));
+}
+
+#[test]
+fn vm_class_extends_inherited_method() {
+    // Class extends pouziva for-in pres Object.keys -> potreba globals.
+    let r = run_vm_with_globals(r#"
+        class A {
+            constructor(n) { this.n = n; }
+            double() { return this.n * 2; }
+        }
+        class B extends A {
+            constructor(n) { super(n); }
+        }
+        let b = new B(7);
+        b.double()
+    "#).unwrap();
+    assert_jv!(r, n(14.0));
+}
+
+#[test]
 fn vm_class_basic() {
     let r = run_vm(r#"
         class Counter {
