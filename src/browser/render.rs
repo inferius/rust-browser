@@ -3250,7 +3250,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
             let webgl_states_opt = self.interpreter.as_ref().map(|i| i.webgl_states.clone());
             if let Some(states_rc) = &webgl_states_opt {
                 let states = states_rc.borrow();
-                r.draw_full_frame(&display_list, &layout_root, Some(&*states));
+                r.draw_full_frame(&display_list, &layout_root, Some(&*states), self.scroll_y);
             } else {
                 r.draw_segments(&display_list);
             }
@@ -4491,9 +4491,10 @@ impl Renderer {
         root: &super::layout::LayoutBox,
         swap_view: &wgpu::TextureView,
         webgl_states: &std::collections::HashMap<usize, std::rc::Rc<std::cell::RefCell<crate::interpreter::WebGLState>>>,
+        scroll_y: f32,
     ) -> bool {
         let mut any = false;
-        self.walk_webgl(root, swap_view, webgl_states, &mut any);
+        self.walk_webgl(root, swap_view, webgl_states, &mut any, scroll_y);
         any
     }
 
@@ -4503,19 +4504,20 @@ impl Renderer {
         swap_view: &wgpu::TextureView,
         webgl_states: &std::collections::HashMap<usize, std::rc::Rc<std::cell::RefCell<crate::interpreter::WebGLState>>>,
         any: &mut bool,
+        scroll_y: f32,
     ) {
         if bx.tag.as_deref() == Some("canvas") {
             if let Some(node) = &bx.node {
                 let ptr = std::rc::Rc::as_ptr(node) as usize;
                 if let Some(state_rc) = webgl_states.get(&ptr) {
-                    if self.execute_webgl_canvas(ptr, state_rc, bx, swap_view) {
+                    if self.execute_webgl_canvas(ptr, state_rc, bx, swap_view, scroll_y) {
                         *any = true;
                     }
                 }
             }
         }
         for ch in &bx.children {
-            self.walk_webgl(ch, swap_view, webgl_states, any);
+            self.walk_webgl(ch, swap_view, webgl_states, any, scroll_y);
         }
     }
 
@@ -4525,6 +4527,7 @@ impl Renderer {
         state_rc: &std::rc::Rc<std::cell::RefCell<crate::interpreter::WebGLState>>,
         bx: &super::layout::LayoutBox,
         swap_view: &wgpu::TextureView,
+        scroll_y: f32,
     ) -> bool {
         use crate::interpreter::WebGLDrawCmd;
         let w = (bx.rect.width as u32).max(1);
@@ -4647,7 +4650,11 @@ impl Renderer {
                 tex.create_view(&Default::default())
             });
             if let Some(view) = new_view {
-                self.compose_view_to_swap(swap_view, &view, bx.rect.x, bx.rect.y, bx.rect.width, bx.rect.height);
+                // Canvas screen-space pozice = page rect.y - scroll_y. Predtim
+                // composit pres bx.rect.y (page-space) coz canvas drzelo na
+                // top-levem rohu okna i pri scrollu.
+                let screen_y = bx.rect.y - scroll_y;
+                self.compose_view_to_swap(swap_view, &view, bx.rect.x, screen_y, bx.rect.width, bx.rect.height);
             }
         }
         // Vrat true pokud aspon RT exists (animation loop tick continues).
@@ -4737,6 +4744,13 @@ impl Renderer {
             Some((_, v, _, _)) => v,
             None => return false,
         };
+        // WebGL clearColor je v sRGB display space. WGPU Color pri sRGB surface
+        // format ocekava LINEAR. Pri 0.18 sRGB -> linear ~= 0.025. Bez konverze
+        // surface znova encoduje sRGB -> output appears "vyblite".
+        fn s2l(s: f32) -> f64 {
+            let v = if s <= 0.04045 { s / 12.92 } else { ((s + 0.055) / 1.055).powf(2.4) };
+            v as f64
+        }
         let mut encoder = self.device.create_command_encoder(&Default::default());
         {
             let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -4745,8 +4759,8 @@ impl Renderer {
                     view, resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: color[0] as f64, g: color[1] as f64,
-                            b: color[2] as f64, a: color[3] as f64,
+                            r: s2l(color[0]), g: s2l(color[1]),
+                            b: s2l(color[2]), a: color[3] as f64,
                         }),
                         store: wgpu::StoreOp::Store,
                     },
@@ -5076,6 +5090,7 @@ impl Renderer {
         cmds: &[DisplayCommand],
         layout_root: &super::layout::LayoutBox,
         webgl_states: Option<&std::collections::HashMap<usize, std::rc::Rc<std::cell::RefCell<crate::interpreter::WebGLState>>>>,
+        scroll_y: f32,
     ) {
         // Update viewport uniform pro main pipeline
         let vp = [self.config.width as f32, self.config.height as f32, 0.0, 0.0];
@@ -5101,7 +5116,7 @@ impl Renderer {
         let mut webgl_did_render = false;
         if let Some(states) = webgl_states {
             if !states.is_empty() {
-                webgl_did_render = self.run_webgl_frame(layout_root, &main_rt_view, states);
+                webgl_did_render = self.run_webgl_frame(layout_root, &main_rt_view, states, scroll_y);
             }
         }
 
