@@ -4813,7 +4813,8 @@ impl Renderer {
     }
 
     /// Nacte fonty z @font-face declarations do Font registry.
-    /// Skip uz nahrane URL. FS only (HTTP TODO).
+    /// Podporuje HTTP/HTTPS (ureq sync), file:///, FS path. Resolve relativni
+    /// URL proti page base_url. Skip uz nahrane URL.
     fn load_font_faces(&mut self, font_faces: &[crate::browser::css_parser::FontFace], base_url: Option<&str>) {
         use crate::browser::css_parser::extract_font_url;
         for ff in font_faces {

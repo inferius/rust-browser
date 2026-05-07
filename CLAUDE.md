@@ -143,4 +143,4 @@ cargo test               # Vsechny unit testy (lexer, parser, browser, debug_vie
 cargo run -- browser     # Otevri okno s static/test.html
 ```
 
-Aktualne 1 warning: `suspicious_double_ref_op` v `debug_view/devtools.rs:108` - sort_by_key na &&String. Drobnost, fixnout pri nejblizsim doteku souboru.
+Aktualne 0 warnings.
