@@ -1224,6 +1224,47 @@ pub fn compile_stmt(s: &Stmt, code: &mut CodeBlock) -> Result<(), &'static str> 
             }
             Ok(())
         }
+        Stmt::Class { name, super_class, body } => {
+            if super_class.is_some() { return Err("class extends not supported"); }
+            // Najdi constructor (nebo pouzij prazdny).
+            let ctor_member = body.iter().find(|m| m.name == "constructor" && !m.is_static);
+            let ctor_params = ctor_member.map(|m| m.params.clone()).unwrap_or_default();
+            let ctor_body = ctor_member.map(|m| m.body.clone()).unwrap_or_default();
+            // Synthetic body: pro kazdou non-static non-constructor non-getter/setter methodu
+            // emit `this.<name> = function(...)`.
+            let mut synth_body: Vec<Stmt> = Vec::new();
+            for m in body {
+                if m.name == "constructor" || m.is_static || m.is_getter || m.is_setter {
+                    continue;
+                }
+                // Emit Stmt::Expr( Assign (this.<name>) = Function {...} )
+                let assign = Expr::Assign {
+                    op: AssignOp::Assign,
+                    target: Box::new(Expr::Member {
+                        object: Box::new(Expr::Ident("this".to_string())),
+                        prop: MemberProp::Ident(m.name.clone()),
+                        optional: false,
+                    }),
+                    value: Box::new(Expr::Function {
+                        name: None,
+                        params: m.params.clone(),
+                        body: m.body.clone(),
+                    }),
+                };
+                synth_body.push(Stmt::Expr(assign));
+            }
+            // Append ctor body.
+            for s in ctor_body {
+                synth_body.push(s);
+            }
+            // Compile jako Stmt::Function s name=class_name, params=ctor_params, body=synth_body.
+            let synthetic_fn = Stmt::Function {
+                name: name.clone(),
+                params: ctor_params,
+                body: synth_body,
+            };
+            compile_stmt(&synthetic_fn, code)
+        }
         Stmt::Switch { discriminant, cases } => {
             // Compile discriminant -> hidden var.
             let disc_var_name = format!("__switch_disc_{}", code.bytecode.len());

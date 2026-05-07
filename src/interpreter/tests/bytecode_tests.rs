@@ -376,6 +376,38 @@ fn vm_call_args_spread_mixed() {
 }
 
 #[test]
+fn vm_class_basic() {
+    let r = run_vm(r#"
+        class Counter {
+            constructor() { this.n = 0; }
+            inc() { this.n = this.n + 1; return this.n; }
+        }
+        let c = new Counter();
+        c.inc();
+        c.inc();
+        c.inc();
+        c.n
+    "#).unwrap();
+    assert_jv!(r, n(3.0));
+}
+
+#[test]
+fn vm_class_with_param() {
+    let r = run_vm(r#"
+        class Box {
+            constructor(w, h) {
+                this.w = w;
+                this.h = h;
+            }
+            area() { return this.w * this.h; }
+        }
+        let b = new Box(5, 6);
+        b.area()
+    "#).unwrap();
+    assert_jv!(r, n(30.0));
+}
+
+#[test]
 fn vm_destructure_object_basic() {
     let r = run_vm(r#"
         let obj = { a: 1, b: 2, c: 3 };
