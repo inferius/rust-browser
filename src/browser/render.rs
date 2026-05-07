@@ -1878,15 +1878,20 @@ pub fn try_load_default_font() -> Option<Vec<u8>> {
     if let Ok(path) = std::env::var("RUST_WEB_ENGINE_FONT_PATH") {
         if let Ok(data) = std::fs::read(&path) { return Some(data); }
     }
-    // Match OS default sans-serif: Chrome/Edge/Firefox na Windows pouzivaji
-    // Segoe UI, na macOS San Francisco / Helvetica, na Linuxu DejaVu/Liberation.
+    // Match Chrome default UA font: pri unstyled body Chrome pouziva Times New
+    // Roman (serif). Pri explicit font-family: sans-serif spadne na Arial/Segoe UI.
+    // Defaultne tedy Times New Roman pokud existuje, jinak fallback Segoe UI/Arial.
     let candidates: &[&str] = &[
-        "C:\\Windows\\Fonts\\segoeui.ttf",   // Windows default
-        "C:\\Windows\\Fonts\\arial.ttf",     // Windows fallback
+        "C:\\Windows\\Fonts\\times.ttf",     // Windows Times New Roman (Chrome default)
+        "C:\\Windows\\Fonts\\segoeui.ttf",   // Windows fallback
+        "C:\\Windows\\Fonts\\arial.ttf",
         "C:\\Windows\\Fonts\\verdana.ttf",
-        "/System/Library/Fonts/SFNS.ttf",    // macOS SF
+        "/System/Library/Fonts/Times.ttc",   // macOS Times
+        "/System/Library/Fonts/SFNS.ttf",
         "/System/Library/Fonts/Helvetica.ttc",
         "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
         "/usr/share/fonts/TTF/DejaVuSans.ttf",
@@ -1944,12 +1949,15 @@ impl GlyphAtlas {
         let font_data = load_default_font();
         let font = fontdue::Font::from_bytes(font_data, fontdue::FontSettings::default())
             .expect("font parse failed");
-        // Try Segoe UI Bold / Arial Bold pro real bold rendering. Fake bold
-        // (double-draw smear) je fallback pri None.
+        // Try Times New Roman Bold / Segoe UI Bold / Arial Bold pro real bold
+        // rendering. Fake bold (double-draw smear) je fallback pri None.
         let bold_candidates: &[&str] = &[
+            "C:\\Windows\\Fonts\\timesbd.ttf",   // Times New Roman Bold (Chrome default)
             "C:\\Windows\\Fonts\\segoeuib.ttf",
             "C:\\Windows\\Fonts\\arialbd.ttf",
             "/System/Library/Fonts/SFNSBold.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf",
             "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
             "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
         ];
