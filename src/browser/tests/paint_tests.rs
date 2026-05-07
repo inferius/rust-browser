@@ -1325,3 +1325,25 @@ fn paint_test_page_grad_box_actually_renders_gradient() {
     println!("Blue (#2997ff) Rect commands: {}", blue_rects.len());
     assert!(grads.len() >= 2, "expected at least 2 gradient commands (g-lin, g-rad, g-con), got {}", grads.len());
 }
+
+#[test]
+fn transform_3d_emit_correct_box_dims() {
+    let cmds = build_dl(
+        r#"<html><body><div class="b"></div></body></html>"#,
+        r#".b { width: 80px; height: 60px; transform: rotateY(45deg); display: inline-block; }"#,
+    );
+    let tb = cmds.iter().find_map(|c| {
+        if let DisplayCommand::TransformBegin { x, y, w, h, matrix } = c {
+            Some((*x, *y, *w, *h, *matrix))
+        } else { None }
+    }).expect("TransformBegin not found");
+    let (_, _, w, h, m) = tb;
+    println!("TransformBegin w={} h={}", w, h);
+    assert!((w - 80.0).abs() < 1.0, "width = {}, expected 80", w);
+    assert!((h - 60.0).abs() < 1.0, "height = {}, expected 60", h);
+    // Matrix entries
+    println!("matrix row0: {:?}", &m[0..4]);
+    println!("matrix row3: {:?}", &m[12..16]);
+    let c45 = (45.0_f32.to_radians()).cos();
+    assert!((m[0] - c45).abs() < 0.01, "m[0]={} expected cos(45)={}", m[0], c45);
+}

@@ -438,7 +438,8 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: 
             DisplayCommand::Text { x, y, content, color, font_size, bold, italic, font_family, strikethrough, underline } => {
                 let c = normalize_color(color);
                 let mut pen_x = *x;
-                let pen_y = *y + *font_size;
+                let mut pen_y = *y + *font_size;
+                let line_advance = *font_size * 1.4;
                 let italic_skew: f32 = if *italic { 0.2 } else { 0.0 };
                 let bold_offset: f32 = if *bold && atlas.font_bold.is_none() { 1.0 } else { 0.0 };
                 let start_x = pen_x;
@@ -451,6 +452,11 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: 
                 let physical_size = (*font_size * z).round().max(1.0) as u32;
                 let inv_z = 1.0 / z;
                 for ch in content.chars() {
+                    if ch == '\n' {
+                        pen_y += line_advance;
+                        pen_x = start_x;
+                        continue;
+                    }
                     let colr_key = format!("__colr:{}:{}:{}", font_family, ch as u32, *font_size as u32);
                     if let Some(info) = image_atlas.get(&colr_key) {
                         let gx = pen_x.round();

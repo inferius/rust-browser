@@ -2905,25 +2905,62 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
             // (tag=None). Predtim rendering bx.text=" a " emitoval (mezera + a
             // + mezera) pres rect.x, ale cursor pricital jen "a" - overlap.
             // Pseudo-elementy (::before/::after) si content nesahej.
-            if bx_clone.tag.is_none() {
-                let stripped: String = words.join(" ");
-                bx.children[idx].text = Some(stripped);
-            }
+            // Buduj text se vlozenymi '\n' na wrap pointech. Render-side handle.
+            // Pri single-word > inner_w break na char level (overflow-wrap).
+            let mut wrapped_text = String::new();
+            let break_word = bx_clone.overflow_wrap.as_str() == "break-word"
+                || bx_clone.overflow_wrap.as_str() == "anywhere"
+                || bx_clone.word_break.as_str() == "break-all";
             for (wi, word) in words.iter().enumerate() {
                 let w = measure_text_width(word, font_size);
                 let inter_word_space = if wi > 0 { space_w } else { 0.0 };
-                if cursor_x + inter_word_space + w > inner_x + inner_w && cursor_x > inner_x {
+                let needs_wrap = cursor_x + inter_word_space + w > inner_x + inner_w
+                    && cursor_x > inner_x;
+                if needs_wrap {
                     cursor_y += line_height;
                     cursor_x = inner_x;
+                    if !wrapped_text.is_empty() && !wrapped_text.ends_with('\n') {
+                        wrapped_text.push('\n');
+                    }
+                } else if wi > 0 {
+                    wrapped_text.push(' ');
                 }
-                let x = cursor_x + inter_word_space;
-                if wi == 0 {
-                    bx.children[idx].rect.x = x;
-                    bx.children[idx].rect.y = cursor_y;
-                    bx.children[idx].rect.width = w;
-                    bx.children[idx].rect.height = advance_h;
+                // Single-word overflow: break_word/anywhere -> rozseka slovo na chars.
+                if break_word && w > (inner_x + inner_w - cursor_x) && w > 0.0 {
+                    let mut acc_w = 0.0;
+                    let chars: Vec<char> = word.chars().collect();
+                    for ch in chars {
+                        let ch_w = measure_text_width(&ch.to_string(), font_size);
+                        if cursor_x + acc_w + ch_w > inner_x + inner_w && cursor_x > inner_x {
+                            cursor_y += line_height;
+                            cursor_x = inner_x;
+                            acc_w = 0.0;
+                            wrapped_text.push('\n');
+                        }
+                        wrapped_text.push(ch);
+                        acc_w += ch_w;
+                    }
+                    cursor_x += acc_w;
+                    if wi == 0 {
+                        bx.children[idx].rect.x = inner_x;
+                        bx.children[idx].rect.y = cursor_y;
+                        bx.children[idx].rect.width = w;
+                        bx.children[idx].rect.height = advance_h;
+                    }
+                } else {
+                    let x = cursor_x + inter_word_space;
+                    wrapped_text.push_str(word);
+                    if wi == 0 {
+                        bx.children[idx].rect.x = x;
+                        bx.children[idx].rect.y = cursor_y;
+                        bx.children[idx].rect.width = w;
+                        bx.children[idx].rect.height = advance_h;
+                    }
+                    cursor_x = x + w;
                 }
-                cursor_x = x + w;
+            }
+            if bx_clone.tag.is_none() {
+                bx.children[idx].text = Some(wrapped_text);
             }
             prev_had_trailing_space = trailing_ws;
         } else if !bx_clone.children.is_empty() {

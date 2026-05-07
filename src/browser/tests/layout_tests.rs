@@ -2942,3 +2942,77 @@ fn mark_tag_yellow_bg_with_padding() {
     assert!(bg[0] > 200 && bg[1] > 200, "mark bg by mela byt zluta-ish ({:?})", bg);
     assert!(mark.padding_left.unwrap_or(0.0) > 0.0);
 }
+
+#[test]
+fn transform_matrix_rotate_y_45_produces_expected_corners() {
+    use crate::browser::layout::{compute_transform_matrix, parse_transform_chain};
+    let ops = parse_transform_chain("rotateY(45deg)");
+    assert_eq!(ops.len(), 1);
+    let m = compute_transform_matrix(&ops, None);
+    // Apply matrix to (hw, 0, 0, 1) where hw=40 (box width 80).
+    let hw = 40.0_f32;
+    let lx = hw;
+    let tx = m[0]*lx + m[1]*0.0 + m[2]*0.0 + m[3];
+    let tw = m[12]*lx + m[13]*0.0 + m[14]*0.0 + m[15];
+    let px = tx / tw;
+    // Expected: c*hw / 1 = cos(45)*40 = 28.28
+    let expected = (45.0_f32.to_radians()).cos() * hw;
+    assert!((px - expected).abs() < 0.1, "px={} expected={}", px, expected);
+    // Right edge total width
+    let lx2 = -hw;
+    let tx2 = m[0]*lx2 + m[3];
+    let tw2 = m[12]*lx2 + m[15];
+    let px2 = tx2 / tw2;
+    let width = (px - px2).abs();
+    let expected_width = 2.0 * expected;
+    assert!((width - expected_width).abs() < 0.5, "width={} expected={}", width, expected_width);
+}
+
+#[test]
+fn transform_matrix_perspective_rotate_y_35_width() {
+    use crate::browser::layout::{compute_transform_matrix, parse_transform_chain};
+    let ops = parse_transform_chain("perspective(600px) rotateY(35deg)");
+    let m = compute_transform_matrix(&ops, None);
+    let hw = 40.0_f32;
+    let c = (35.0_f32.to_radians()).cos();
+    let s = (35.0_f32.to_radians()).sin();
+    // After rotate: x'=c*lx, z'=-s*lx. After perspective(d=600):
+    // tw = 1 - z'/d = 1 + s*lx/d. inv_w = 1/tw.
+    let apply = |lx: f32| -> f32 {
+        let tx = m[0]*lx + m[1]*0.0 + m[2]*0.0 + m[3];
+        let tw = m[12]*lx + m[13]*0.0 + m[14]*0.0 + m[15];
+        tx / tw
+    };
+    let pr = apply(hw);
+    let pl = apply(-hw);
+    let width = (pr - pl).abs();
+    // Expected approx
+    let expected_pr = c * hw / (1.0 - (-s * hw)/600.0);
+    let expected_pl = c * (-hw) / (1.0 - (s * hw)/600.0);
+    let expected_width = (expected_pr - expected_pl).abs();
+    println!("width={} expected={}", width, expected_width);
+    assert!((width - expected_width).abs() < 0.5);
+}
+
+#[test]
+fn text_wrap_inserts_newline_at_break() {
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade, layout};
+    let doc = parse_html(
+        r#"<html><body><p>jeden dva tri ctyri pet sest sedm osm devet deset</p></body></html>"#,
+        ""
+    );
+    let css = parse_stylesheet(r#"body { font-size: 16px; } p { width: 100px; padding: 0; margin: 0; }"#);
+    let map = cascade::cascade(&doc.root, &[css]);
+    let lr = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+    // Najdi p > text node
+    fn find_text(b: &layout::LayoutBox) -> Option<String> {
+        if b.tag.is_none() && b.text.is_some() { return b.text.clone(); }
+        for ch in &b.children {
+            if let Some(t) = find_text(ch) { return Some(t); }
+        }
+        None
+    }
+    let text = find_text(&lr).unwrap_or_default();
+    println!("wrapped text: {:?}", text);
+    assert!(text.contains('\n'), "expected newline at wrap, got: {:?}", text);
+}
