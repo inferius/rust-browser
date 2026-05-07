@@ -1518,17 +1518,14 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
         // ktery half-spli nad/pod glyf -> text vertikalne centered v
         // line boxu. Pak pri inner_h matching line-height = single line
         // vertically centered v boxu (CSS technique).
-        let line_height_px = bx.line_height * bx.font_size;
-        let _ = pad_b;
-        // CSS half-leading: line box ma height = line_height_px, em box (font_size
-        // tall) je centered uvnitr. Baseline lezi na ascender od top em boxu.
-        // Render setuje pen_y = text_y + font_size (predpoklada baseline = bottom
-        // em box). Aby skutecny baseline = em_top + ascender_ratio*font_size,
-        // muzeme posunout text_y o -(1 - ascender_ratio)*font_size.
-        // Ascender_ratio ~0.8 pro Segoe UI/Roboto (typografick metric).
-        let half_leading = ((line_height_px - bx.font_size) * 0.5).max(0.0);
+        // Vertical centering: text v inner box (rect.height - pad_t - pad_b).
+        // Driv pouzival line_height_px; ale pri inline elementu s padding (badge
+        // .anim-box, button) je rect.height vypoctena z parent line_height_default,
+        // ne z elementu vlastniho line_height -> mismatch -> text nahore.
+        // Spravne: pen_y na inner_center adjustovany o ascender (~0.8*font_size).
+        let inner_h = (bx.rect.height - pad_t - pad_b).max(bx.font_size);
         let ascent_adj = bx.font_size * 0.2;
-        let v_offset = (half_leading - ascent_adj).max(0.0);
+        let v_offset = ((inner_h - bx.font_size) * 0.5 - ascent_adj).max(0.0);
         let text_y = bx.rect.y + pad_t + v_offset;
         let text_color = with_alpha(bx.text_color.unwrap_or([0, 0, 0, 255]));
         // Text shadow - emit pred main text aby byl v pozadi
