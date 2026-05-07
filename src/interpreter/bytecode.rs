@@ -449,6 +449,23 @@ pub fn compile_expr(e: &Expr, code: &mut CodeBlock) -> Result<(), &'static str> 
                 Err("assign target not ident")
             }
         }
+        Expr::Template { quasis, expressions } => {
+            // Compile: quasi[0] + expr[0] + quasi[1] + expr[1] + ... + quasi[n].
+            let first_idx = code.push_const(JsValue::Str(quasis.first().cloned().unwrap_or_default()));
+            code.emit(Opcode::LoadConst(first_idx));
+            for (i, expr) in expressions.iter().enumerate() {
+                compile_expr(expr, code)?;
+                code.emit(Opcode::Add);
+                if let Some(quasi) = quasis.get(i + 1) {
+                    if !quasi.is_empty() {
+                        let q_idx = code.push_const(JsValue::Str(quasi.clone()));
+                        code.emit(Opcode::LoadConst(q_idx));
+                        code.emit(Opcode::Add);
+                    }
+                }
+            }
+            Ok(())
+        }
         Expr::Member { object, prop, optional: _ } => {
             compile_expr(object, code)?;
             match prop {

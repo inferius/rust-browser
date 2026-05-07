@@ -356,6 +356,31 @@ fn vm_user_function_chained_calls() {
 }
 
 #[test]
+fn vm_template_literal_simple() {
+    let r = run_vm(r#"
+        let name = 'world';
+        `Hello, ${name}!`
+    "#).unwrap();
+    assert_jv!(r, JsValue::Str("Hello, world!".to_string()));
+}
+
+#[test]
+fn vm_template_literal_multiple_exprs() {
+    let r = run_vm(r#"
+        let a = 1;
+        let b = 2;
+        `${a}+${b}=${a+b}`
+    "#).unwrap();
+    assert_jv!(r, JsValue::Str("1+2=3".to_string()));
+}
+
+#[test]
+fn vm_template_literal_only_quasi() {
+    let r = run_vm(r#"`just a string`"#).unwrap();
+    assert_jv!(r, JsValue::Str("just a string".to_string()));
+}
+
+#[test]
 fn vm_logical_and_assign() {
     // Truthy lhs: assign rhs.
     let r = run_vm(r#"
