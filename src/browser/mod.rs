@@ -20,6 +20,7 @@ pub mod devtools_panel;
 pub mod woff;
 pub mod variable_fonts;
 pub mod emoji_fonts;
+pub mod webgl_helpers;
 
 #[cfg(test)]
 mod tests;
