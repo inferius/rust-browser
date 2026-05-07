@@ -612,13 +612,15 @@ fn paint_no_transform_emits_no_markers() {
 }
 
 #[test]
-fn paint_2d_rotate_no_marker() {
-    // 2D rotate Z se zpracovava CPU post-process, nepotrebuje TransformBegin.
+fn paint_2d_rotate_emits_marker() {
+    // 2D rotate Z je teda pres GPU shader pipeline (jako 3D), CPU rotate_cmd
+    // pouze sdouval origin a vizualne nerotoval rect.
     let cmds = build_dl(
         r#"<html><body><div></div></body></html>"#,
         r#"div { background: red; width: 100px; height: 100px; transform: rotate(45deg); }"#,
     );
-    assert_eq!(count_transform_begins(&cmds), 0);
+    assert!(count_transform_begins(&cmds) >= 1);
+    assert_eq!(count_transform_begins(&cmds), count_transform_ends(&cmds));
 }
 
 #[test]

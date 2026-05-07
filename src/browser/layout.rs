@@ -1477,13 +1477,24 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         }
     }
 
-    // Color parsing - if linear-gradient, parse jako gradient, jinak solid color
-    let bg_value = s.get("background-color").or(s.get("background"));
+    // Color parsing - if linear-gradient, parse jako gradient, jinak solid color.
+    // Background shorthand s gradient HODNOTOU musi prepsat puvodni background-color
+    // (nelze pouze fallback - cascade ne-cleartoval background-color pri shorthand
+    // override). Preferujeme "background" pri gradient/image, jinak background-color.
+    let bg_shorthand = s.get("background").map(|v| v.as_str()).unwrap_or("");
+    let bg_is_gradient = bg_shorthand.contains("linear-gradient(")
+        || bg_shorthand.contains("radial-gradient(")
+        || bg_shorthand.contains("conic-gradient(");
+    let bg_value = if bg_is_gradient {
+        Some(bg_shorthand.to_string())
+    } else {
+        s.get("background-color").or(s.get("background")).cloned()
+    };
     if let Some(c) = bg_value {
         if c.contains("linear-gradient(") || c.contains("radial-gradient(") || c.contains("conic-gradient(") {
-            bx.bg_gradient = parse_any_gradient(c);
+            bx.bg_gradient = parse_any_gradient(&c);
         } else {
-            bx.bg_color = parse_color(c);
+            bx.bg_color = parse_color(&c);
         }
     }
     // Backgrounds L3 - multiple layers (oddelene carkou), pole ulozene shora-dolu
@@ -2463,16 +2474,66 @@ fn build_pseudo_box(parent_node: &Rc<Node>, styles: &HashMap<String, String>, co
 /// - attr(name) -> hodnota atributu na parent node
 /// - normal / none -> None
 /// - counter(name) -> placeholder "1" (counters out of scope zatim)
+/// Unescape CSS string literal sequences (\\, \", \', \n, atd).
+/// CSS spec section 4.3.7. Hex escapes \XXXXX (1-6 hex digits) jako Unicode CP.
+fn unescape_css_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            // Hex escape: \XXXXXX optionally space-terminated
+            if let Some(&next) = chars.peek() {
+                if next.is_ascii_hexdigit() {
+                    let mut hex = String::new();
+                    for _ in 0..6 {
+                        if let Some(&h) = chars.peek() {
+                            if h.is_ascii_hexdigit() {
+                                hex.push(h);
+                                chars.next();
+                            } else { break; }
+                        } else { break; }
+                    }
+                    // Optional whitespace terminator
+                    if let Some(&w) = chars.peek() {
+                        if w == ' ' || w == '\t' || w == '\n' { chars.next(); }
+                    }
+                    if let Ok(cp) = u32::from_str_radix(&hex, 16) {
+                        if let Some(ch) = char::from_u32(cp) {
+                            out.push(ch);
+                            continue;
+                        }
+                    }
+                    out.push_str(&hex);
+                    continue;
+                }
+                // Single char escape: \", \', \\, \n, atd.
+                chars.next();
+                match next {
+                    'n' => out.push('\n'),
+                    'r' => out.push('\r'),
+                    't' => out.push('\t'),
+                    other => out.push(other),
+                }
+                continue;
+            }
+            // Trailing \: ignore
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 fn parse_content_value(raw: &str, parent: &Rc<Node>, counters: &HashMap<String, i32>) -> Option<String> {
     let s = raw.trim();
     if s.is_empty() || s == "none" || s == "normal" { return None; }
 
-    // String literal
+    // String literal - unescape \X sequences (\\, \", \', \n, etc).
     if let Some(stripped) = s.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
-        return Some(stripped.to_string());
+        return Some(unescape_css_string(stripped));
     }
     if let Some(stripped) = s.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')) {
-        return Some(stripped.to_string());
+        return Some(unescape_css_string(stripped));
     }
 
     // attr(name)
@@ -4388,6 +4449,11 @@ pub fn needs_3d_pipeline(ops: &[TransformOp], parent_perspective: Option<f32>) -
     }
     for op in ops {
         match op {
+            // 2D Rotate prosly driv pres CPU rotate_cmd ktere ale jen sdouvalo
+            // origin x/y - rect zustal axis-aligned. Real rotace vyzaduje GPU
+            // pipeline. Forceni 3D pipeline pro 2D rotace = boxy se opravdu
+            // otoci.
+            TransformOp::Rotate(rad) if rad.abs() > 1e-3 => return true,
             TransformOp::Rotate3D { x, y, .. } if x.abs() > 1e-3 || y.abs() > 1e-3 => return true,
             TransformOp::Perspective(_) => return true,
             TransformOp::Matrix3D(m) => {

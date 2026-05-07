@@ -2310,8 +2310,10 @@ fn needs_3d_translate_2d_no() {
 }
 
 #[test]
-fn needs_3d_rotate_z_no() {
-    assert!(!layout::needs_3d_pipeline(&[
+fn needs_3d_rotate_z_yes() {
+    // 2D Rotate uz forcuje 3D pipeline (CPU rotate_cmd jen sdouval origin
+    // ale rect zustal axis-aligned - vizualne nerotoval).
+    assert!(layout::needs_3d_pipeline(&[
         layout::TransformOp::Rotate(1.0),
     ], None));
 }

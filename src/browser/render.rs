@@ -420,13 +420,27 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: 
                         // texel boundary = crisp.
                         let gx_raw = pen_x + g.bearing_x;
                         let gy_raw = pen_y - g.bearing_y;
-                        let skew_x = if italic_skew != 0.0 { (pen_y - gy_raw) * italic_skew } else { 0.0 };
-                        let gx = (gx_raw + skew_x).round();
+                        let gx = gx_raw.round();
                         let gy = gy_raw.round();
-                        push_rect_uv(&mut verts, gx, gy, g.width, g.height, c, g.uv0, g.uv1, 1.0);
+                        if italic_skew != 0.0 {
+                            // Italic skew = horni vertices posunute, dolni
+                            // zustanou. Kreslime quad jako 2 trojuhelniky s
+                            // top_x = gx + skew * h, bot_x = gx.
+                            let skew = g.height * italic_skew;
+                            push_skewed_quad(&mut verts, gx, gy, g.width, g.height,
+                                skew, c, g.uv0, g.uv1);
+                        } else {
+                            push_rect_uv(&mut verts, gx, gy, g.width, g.height, c, g.uv0, g.uv1, 1.0);
+                        }
                         // Bold smear: druhe vykresleni s integer x-offsetem.
                         if bold_offset > 0.0 {
-                            push_rect_uv(&mut verts, gx + bold_offset, gy, g.width, g.height, c, g.uv0, g.uv1, 1.0);
+                            if italic_skew != 0.0 {
+                                let skew = g.height * italic_skew;
+                                push_skewed_quad(&mut verts, gx + bold_offset, gy,
+                                    g.width, g.height, skew, c, g.uv0, g.uv1);
+                            } else {
+                                push_rect_uv(&mut verts, gx + bold_offset, gy, g.width, g.height, c, g.uv0, g.uv1, 1.0);
+                            }
                         }
                         pen_x += g.advance + bold_offset;
                     } else {
@@ -1094,6 +1108,26 @@ fn push_rect_rounded(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f32, h: f32,
 fn push_rect(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f32, h: f32,
              color: [f32; 4], uv: [f32; 2], mode: f32) {
     push_rect_uv(verts, x, y, w, h, color, uv, [uv[0], uv[1]], mode);
+}
+
+/// Italic skewed glyph quad - horni 2 vertices x-posunute o `skew`, dolni
+/// zachovavaji puvodni gx. Vysledek = sklonene glyfy (fake italic). UV
+/// stejne ako u rect_uv (texture sample dle puvodnich corners).
+fn push_skewed_quad(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f32, h: f32,
+                     skew: f32, color: [f32; 4], uv0: [f32; 2], uv1: [f32; 2]) {
+    let mk = |px: f32, py: f32, u: f32, v: f32| -> Vertex {
+        Vertex {
+            pos: [px, py], color, uv: [u, v], mode: 1.0,
+            local: [0.0, 0.0], half_size: [0.0, 0.0], radius: 0.0,
+            color2: [0.0; 4], blur: 0.0,
+        }
+    };
+    let tl = mk(x + skew,     y,     uv0[0], uv0[1]);
+    let tr = mk(x + skew + w, y,     uv1[0], uv0[1]);
+    let bl = mk(x,            y + h, uv0[0], uv1[1]);
+    let br = mk(x + w,        y + h, uv1[0], uv1[1]);
+    verts.push(tl); verts.push(tr); verts.push(bl);
+    verts.push(bl); verts.push(tr); verts.push(br);
 }
 
 fn push_rect_uv(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f32, h: f32,
