@@ -301,6 +301,28 @@ fn sdf_rounded_box(p: vec2<f32>, half_size: vec2<f32>, r: f32) -> f32 {
     return min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0, 0.0))) - r;
 }
 
+// Gradient mixing v sRGB space. CSS spec: linear-gradient interpolation v sRGB
+// (legacy) nebo oklab (modern default). Linear-space mix dava prilis svetly mid
+// (red->blue mid je purple bright misto darkish purple per Chrome).
+fn lin_to_srgb_v(c: vec3<f32>) -> vec3<f32> {
+    let cutoff = vec3<f32>(0.0031308);
+    let lo = c * 12.92;
+    let hi = pow(c, vec3<f32>(1.0/2.4)) * 1.055 - 0.055;
+    return select(hi, lo, c < cutoff);
+}
+fn srgb_to_lin_v(c: vec3<f32>) -> vec3<f32> {
+    let cutoff = vec3<f32>(0.04045);
+    let lo = c / 12.92;
+    let hi = pow((c + 0.055) / 1.055, vec3<f32>(2.4));
+    return select(hi, lo, c < cutoff);
+}
+fn mix_srgb(a: vec4<f32>, b: vec4<f32>, t: f32) -> vec4<f32> {
+    let a_srgb = lin_to_srgb_v(a.rgb);
+    let b_srgb = lin_to_srgb_v(b.rgb);
+    let mixed = mix(a_srgb, b_srgb, t);
+    return vec4<f32>(srgb_to_lin_v(mixed), mix(a.a, b.a, t));
+}
+
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     // Mode 1: text - sample atlas
@@ -311,7 +333,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     // Mode 2: linear gradient - lerp color->color2 podle uv.x (pre-rotated)
     if (in.mode > 1.5 && in.mode < 2.5) {
         let t = clamp(in.uv.x, 0.0, 1.0);
-        var rgba = mix(in.color, in.color2, t);
+        var rgba = mix_srgb(in.color, in.color2, t);
         if (in.radius > 0.5) {
             let d = sdf_rounded_box(in.local, in.half_size, in.radius);
             let aa = 1.0 - smoothstep(-1.0, 1.0, d);
@@ -326,21 +348,14 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         let alpha = 1.0 - smoothstep(-blur, blur, d);
         return vec4<f32>(in.color.rgb, in.color.a * alpha);
     }
-    // Mode 6: radial gradient - t = dist(local, grad_center) / grad_radius
+    // Mode 6: radial gradient - t = dist(local, grad_center) / grad_radius.
+    // half_size je reused jako grad_center offset (box_cx -> gcx). Border-radius
+    // SDF nelze tady aplikovat protoze actual box half_size neni dostupna.
+    // Border-radius pri radial gradientu by mela byt resena dodatkovou maskou.
     if (in.mode > 5.5 && in.mode < 6.5) {
         let d = length(in.local - in.half_size);
         let t = clamp(d / max(in.blur, 1.0), 0.0, 1.0);
-        var rgba = mix(in.color, in.color2, t);
-        if (in.radius > 0.5) {
-            // Pro border-radius musim recover pravy half_size - aproximace:
-            // local je relativni k box stredu, takze max abs hodnota je half_size.
-            let bbox = vec2<f32>(abs(in.local.x), abs(in.local.y));
-            let approx_hs = vec2<f32>(max(bbox.x, in.radius * 2.0), max(bbox.y, in.radius * 2.0));
-            let dd = sdf_rounded_box(in.local, approx_hs, in.radius);
-            let aa = 1.0 - smoothstep(-1.0, 1.0, dd);
-            rgba = vec4<f32>(rgba.rgb, rgba.a * aa);
-        }
-        return rgba;
+        return mix_srgb(in.color, in.color2, t);
     }
     // Mode 7: conic gradient - t = (atan2(p.y, p.x) - start) / 2pi
     if (in.mode > 6.5 && in.mode < 7.5) {
@@ -350,7 +365,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         let two_pi = 6.28318530718;
         ang = ang - floor(ang / two_pi) * two_pi;
         let t = clamp(ang / two_pi, 0.0, 1.0);
-        return mix(in.color, in.color2, t);
+        return mix_srgb(in.color, in.color2, t);
     }
     // Mode 5: inset shadow - kresli uvnitr boxu, fade smerem dovnitr od okraju
     if (in.mode > 4.5 && in.mode < 5.5) {
@@ -1664,7 +1679,11 @@ fn push_multi_stop_conic_gradient(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f3
                 blur: 0.0,
             });
         };
-        push_v(verts, p_center, interp_color(0.0));
+        // Center vertex: pouzij midpoint barvy slice (ne fixni 0.0). Konic
+        // gradient = konstantni barva podel radiusu, varies podel uhlu.
+        // Pri fixed center color triangle interpoluje radial->angle = chybne.
+        let c_center = interp_color((frac0 + frac1) * 0.5);
+        push_v(verts, p_center, c_center);
         push_v(verts, p_a, c0);
         push_v(verts, p_b, c1);
     }
