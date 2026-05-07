@@ -283,7 +283,13 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                 } else {
                     super::super::layout::measure_text_width(t, ch.font_size)
                 }
-            } else if ch.rect.width > 0.0 { ch.rect.width } else { 0.0 }
+            } else if ch.rect.width > 0.0 { ch.rect.width } else {
+                // Recursive content width pres descendants (text nodes uvnitr).
+                // Pri flex item bez explicit width + bez vlastniho textu, ale
+                // s child text (napr. <button>Primary</button>) potrebujeme
+                // sirku obsahu + own padding.
+                intrinsic_content_width(ch)
+            }
         } else { ch.explicit_width.unwrap_or_else(|| {
             if let Some(t) = &ch.text {
                 if ch.taffy_mode {
@@ -292,7 +298,9 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                 } else {
                     super::super::layout::measure_text_width(t, ch.font_size)
                 }
-            } else if ch.rect.width > 0.0 { ch.rect.width } else { 0.0 }
+            } else if ch.rect.width > 0.0 { ch.rect.width } else {
+                intrinsic_content_width(ch)
+            }
         }) };
         let mut est_h = if pct_h_skip || pct_h_indefinite {
             if ch.text.is_some() {
@@ -1294,6 +1302,24 @@ struct ResolvedLine {
 }
 
 /// Sber items do lines podle wrap policy. Margins se zapocitavaji do velikosti.
+/// Recursive intrinsic content width pres LayoutBox subtree.
+/// Pri flex item bez explicit width spocte sirku z descendant text + own
+/// padding/margin/border. Pro <button>Primary</button> = "Primary" width
+/// + button.padding * 2 + border * 2.
+fn intrinsic_content_width(bx: &LayoutBox) -> f32 {
+    let pad_l = bx.padding_left.unwrap_or(bx.padding);
+    let pad_r = bx.padding_right.unwrap_or(bx.padding);
+    let chrome = pad_l + pad_r + 2.0 * bx.border_width;
+    if let Some(t) = &bx.text {
+        return super::super::layout::measure_text_width(t, bx.font_size) + chrome;
+    }
+    // Sum descendant max-content widths.
+    let max_child: f32 = bx.children.iter()
+        .map(|c| intrinsic_content_width(c))
+        .fold(0.0_f32, f32::max);
+    if max_child > 0.0 { max_child + chrome } else { chrome }
+}
+
 fn collect_lines(items: &[FlexItem], container_main: f32, wrap: FlexWrap, gap: f32) -> Vec<Vec<usize>> {
     if matches!(wrap, FlexWrap::NoWrap) {
         return vec![(0..items.len()).collect()];

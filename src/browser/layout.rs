@@ -1386,13 +1386,16 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
             bx.rect.height = h;
         }
     }
-    // SVG tag: viewport z width/height
+    // SVG tag: viewport z width/height attrs. explicit_* aby block/flex layout
+    // respektoval SVG dimensions (jinak SVG roztaha na rodicovsky container).
     if bx.tag.as_deref() == Some("svg") {
         if let Some(w) = node.attr("width").and_then(|w| w.parse::<f32>().ok()) {
             bx.rect.width = w;
+            bx.explicit_width = Some(w);
         }
         if let Some(h) = node.attr("height").and_then(|h| h.parse::<f32>().ok()) {
             bx.rect.height = h;
+            bx.explicit_height = Some(h);
         }
     }
     // Video tag: replaced element (zatim bez decode - jen layout box + placeholder).
@@ -2909,13 +2912,23 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
             let pad_r = bx_clone.padding_right.unwrap_or(bx_clone.padding);
             let pad_t = bx_clone.padding_top.unwrap_or(bx_clone.padding);
             let pad_b = bx_clone.padding_bottom.unwrap_or(bx_clone.padding);
-            let text_w = (bx_clone.children.iter()
-                .filter_map(|c| c.text.as_ref())
-                .map(|t| measure_text_width(t, font_size))
-                .sum::<f32>())
-                .max(font_size);
-            let estimated_w = text_w + pad_l + pad_r;
-            let element_h = advance_h + pad_t + pad_b;
+            // Replaced inline elementy s explicit width/height (svg, img, canvas
+            // s width attr nebo CSS width) prefer explicit dimension. Inak by
+            // text_w (sum text children) byl fallback na font_size pri SVG bez
+            // text children -> SVG smrstil se na 16 px misto attr 400.
+            let explicit_w = bx_clone.explicit_width
+                .or_else(|| if bx_clone.rect.width > 0.0 { Some(bx_clone.rect.width) } else { None });
+            let explicit_h = bx_clone.explicit_height
+                .or_else(|| if bx_clone.rect.height > 0.0 { Some(bx_clone.rect.height) } else { None });
+            let estimated_w = explicit_w.unwrap_or_else(|| {
+                let text_w = (bx_clone.children.iter()
+                    .filter_map(|c| c.text.as_ref())
+                    .map(|t| measure_text_width(t, font_size))
+                    .sum::<f32>())
+                    .max(font_size);
+                text_w + pad_l + pad_r
+            });
+            let element_h = explicit_h.unwrap_or(advance_h + pad_t + pad_b);
             if cursor_x + estimated_w > inner_x + inner_w && cursor_x > inner_x {
                 cursor_y += line_height;
                 cursor_x = inner_x;
