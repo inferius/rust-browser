@@ -1952,7 +1952,7 @@ fn load_default_font() -> Vec<u8> {
 
 // ─── Glyph atlas ────────────────────────────────────────────────────────
 
-const ATLAS_SIZE: u32 = 1024;
+const ATLAS_SIZE: u32 = 2048;
 
 struct GlyphInfo {
     /// UV coords v atlasu (0..1)
@@ -2043,14 +2043,19 @@ impl GlyphAtlas {
 
     /// Rasterize glyph and add to atlas.
     /// OVERSAMPLE faktor: rasterize fontdue at OVERSAMPLE * size, store at
-    /// 2x atlas dims, render-side Linear sampler downsampluje 2:1 = box filter
-    /// = vyssi quality AA edges (cleaner nez fontdue 1x AA).
+    /// OVERSAMPLE x atlas dims, render-side Linear sampler downsampluje
+    /// OVERSAMPLE:1 = box filter = vyssi quality AA edges. Pri velkem size
+    /// oversample = atlas full -> oversample = 1 (fontdue uz dela good AA
+    /// pro vetsi sizes).
     fn add(&mut self, family: &str, ch: char, size: u32) {
         let key = (family.to_string(), ch, size);
         if self.cache.contains_key(&key) { return; }
         let font = self.font_for(family);
-        const OVERSAMPLE: u32 = 2;
-        let render_size = size * OVERSAMPLE;
+        // Oversample jen u malych fontu (kde fontdue 1x AA neni dostatecny).
+        // Pri size >= 24 px je raster pixel-perfect dost a 2x oversample by
+        // jen vycerpal atlas.
+        let oversample: u32 = if size < 24 { 2 } else { 1 };
+        let render_size = size * oversample;
         let (metrics, bitmap) = font.rasterize(ch, render_size as f32);
         let w = metrics.width as u32;
         let h = metrics.height as u32;
@@ -2074,10 +2079,10 @@ impl GlyphAtlas {
                 }
             }
         }
-        // Atlas obsahuje 2x oversample; render-side metrics jsou 1x (size).
-        // UV mapuje quad 1x na 2x atlas region -> Linear sampler 2:1 box filter.
-        // Width/height/bearing/advance scale 1/OVERSAMPLE.
-        let inv = 1.0 / OVERSAMPLE as f32;
+        // Atlas obsahuje oversample x render; render-side metrics jsou 1x (size).
+        // UV mapuje quad 1x na oversample x atlas region -> Linear sampler
+        // oversample:1 box filter. Width/height/bearing/advance scale 1/oversample.
+        let inv = 1.0 / oversample as f32;
         let info = GlyphInfo {
             uv0: [self.cursor_x as f32 / ATLAS_SIZE as f32,
                   self.cursor_y as f32 / ATLAS_SIZE as f32],
