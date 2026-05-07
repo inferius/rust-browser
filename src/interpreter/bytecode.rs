@@ -13,7 +13,7 @@
 //! Cilem v1: aritmetika, srovnavani, logika, var/let/const decls, assignments,
 //! if/else, while/for, function call (existing JS funkce). Concretne cca 30 opcodes.
 
-use crate::ast::{Expr, BinaryOp, UnaryOp, Stmt, LogicalOp, AssignOp, Pattern};
+use crate::ast::{Expr, BinaryOp, UnaryOp, Stmt, LogicalOp, AssignOp, Pattern, ForInit};
 use super::{JsValue};
 
 #[derive(Debug, Clone, Copy)]
@@ -51,6 +51,16 @@ pub enum Opcode {
     JmpIfTrueKeep(i32),   // peek, if truthy jump - pro || short-circuit
     JmpIfNotNullishKeep(i32), // peek, if not null/undef jump - pro ?? short-circuit
 
+    // Increment/Decrement (in-place na lokalni var).
+    Inc(u16),             // var_names[u16]++ (pre/post differs)
+    Dec(u16),
+    PostInc(u16),         // push original + locals[u16]+=1
+    PostDec(u16),
+
+    // typeof/void
+    TypeOf,               // pop, push string typeof
+    LoadStrConst(u16),    // alias LoadConst pro strings - same impl
+
     // Returns
     Return,               // return pop()
     Halt,                 // konec compiled bloku
@@ -61,11 +71,22 @@ pub struct CodeBlock {
     pub bytecode: Vec<Opcode>,
     pub constants: Vec<JsValue>,
     pub var_names: Vec<String>,
+    /// Per-loop break/continue jumps stack (transient pri compile).
+    /// Push pri vstupu do loopu, pop pri vystupu. Vrstva = (break_jumps, cont_jumps, cont_target_idx).
+    pub loop_stack: Vec<LoopFrame>,
+}
+
+#[derive(Debug, Clone)]
+pub struct LoopFrame {
+    /// Jump indices co cili na break-target (= konec loopu).
+    pub break_jumps: Vec<usize>,
+    /// Jump indices co cili na continue-target (= test/update v for/while).
+    pub continue_jumps: Vec<usize>,
 }
 
 impl CodeBlock {
     pub fn new() -> Self {
-        Self { bytecode: Vec::new(), constants: Vec::new(), var_names: Vec::new() }
+        Self { bytecode: Vec::new(), constants: Vec::new(), var_names: Vec::new(), loop_stack: Vec::new() }
     }
     fn push_const(&mut self, v: JsValue) -> u16 {
         // Try dedupe na primitivech.
@@ -142,17 +163,50 @@ pub fn compile_expr(e: &Expr, code: &mut CodeBlock) -> Result<(), &'static str> 
             Ok(())
         }
         Expr::Unary { op, arg } => {
+            // Pre-inc/dec na ident: in-place opcode.
+            if matches!(op, UnaryOp::PreInc | UnaryOp::PreDec) {
+                if let Expr::Ident(name) = arg.as_ref() {
+                    let var_idx = code.push_var(name);
+                    code.emit(if matches!(op, UnaryOp::PreInc) { Opcode::Inc(var_idx) } else { Opcode::Dec(var_idx) });
+                    code.emit(Opcode::LoadVar(var_idx)); // push novou hodnotu
+                    return Ok(());
+                }
+                return Err("pre-inc/dec na non-ident");
+            }
+            if matches!(op, UnaryOp::Typeof) {
+                compile_expr(arg, code)?;
+                code.emit(Opcode::TypeOf);
+                return Ok(());
+            }
             compile_expr(arg, code)?;
             match op {
                 UnaryOp::Minus => code.emit(Opcode::Neg),
                 UnaryOp::Plus => code.emit(Opcode::Pos),
                 UnaryOp::Not => code.emit(Opcode::Not),
                 UnaryOp::BitNot => code.emit(Opcode::BitNot),
+                UnaryOp::Void => {
+                    code.emit(Opcode::Pop);
+                    code.emit(Opcode::LoadUndefined);
+                    return Ok(());
+                }
                 _ => return Err("unsupported unary op"),
             };
             Ok(())
         }
         Expr::Binary { op, left, right } => {
+            // Post-inc/dec: BinaryOp varianty PostInc/PostDec na ident.
+            if matches!(op, BinaryOp::PostInc | BinaryOp::PostDec) {
+                if let Expr::Ident(name) = left.as_ref() {
+                    let var_idx = code.push_var(name);
+                    code.emit(if matches!(op, BinaryOp::PostInc) {
+                        Opcode::PostInc(var_idx)
+                    } else {
+                        Opcode::PostDec(var_idx)
+                    });
+                    return Ok(());
+                }
+                return Err("post-inc/dec na non-ident");
+            }
             compile_expr(left, code)?;
             compile_expr(right, code)?;
             let opc = match op {
@@ -281,17 +335,120 @@ pub fn compile_stmt(s: &Stmt, code: &mut CodeBlock) -> Result<(), &'static str> 
             Ok(())
         }
         Stmt::While { test, body } => {
+            code.loop_stack.push(LoopFrame { break_jumps: vec![], continue_jumps: vec![] });
             let loop_start = code.bytecode.len();
             compile_expr(test, code)?;
             let jmp_to_end = code.emit(Opcode::JmpIfFalse(0));
             compile_stmt(body, code)?;
+            // Continue cili na loop_start (re-test).
+            let frame = code.loop_stack.last().cloned().unwrap();
+            for ci in &frame.continue_jumps {
+                code.patch_jmp(*ci, loop_start);
+            }
             // Skoc zpet na test.
             let back = code.emit(Opcode::Jmp(0));
             code.patch_jmp(back, loop_start);
             let end = code.bytecode.len();
             code.patch_jmp(jmp_to_end, end);
+            // Break cili na end.
+            let frame = code.loop_stack.pop().unwrap();
+            for bj in &frame.break_jumps {
+                code.patch_jmp(*bj, end);
+            }
             Ok(())
         }
+        Stmt::DoWhile { body, test } => {
+            code.loop_stack.push(LoopFrame { break_jumps: vec![], continue_jumps: vec![] });
+            let body_start = code.bytecode.len();
+            compile_stmt(body, code)?;
+            let test_target = code.bytecode.len();
+            let frame = code.loop_stack.last().cloned().unwrap();
+            for ci in &frame.continue_jumps {
+                code.patch_jmp(*ci, test_target);
+            }
+            compile_expr(test, code)?;
+            let back = code.emit(Opcode::JmpIfTrue(0));
+            code.patch_jmp(back, body_start);
+            let end = code.bytecode.len();
+            let frame = code.loop_stack.pop().unwrap();
+            for bj in &frame.break_jumps {
+                code.patch_jmp(*bj, end);
+            }
+            Ok(())
+        }
+        Stmt::For { init, test, update, body } => {
+            // init
+            if let Some(init) = init {
+                match init {
+                    ForInit::Var { kind: _, decls } => {
+                        for decl in decls {
+                            if let Pattern::Ident(name) = &decl.pattern {
+                                let var_idx = code.push_var(name);
+                                if let Some(init_e) = &decl.init {
+                                    compile_expr(init_e, code)?;
+                                } else {
+                                    code.emit(Opcode::LoadUndefined);
+                                }
+                                code.emit(Opcode::DeclareVar(var_idx));
+                            } else {
+                                return Err("for-init destructuring not supported");
+                            }
+                        }
+                    }
+                    ForInit::Expr(e) => {
+                        compile_expr(e, code)?;
+                        code.emit(Opcode::Pop);
+                    }
+                }
+            }
+            code.loop_stack.push(LoopFrame { break_jumps: vec![], continue_jumps: vec![] });
+            let test_pos = code.bytecode.len();
+            let mut jmp_to_end = None;
+            if let Some(t) = test {
+                compile_expr(t, code)?;
+                jmp_to_end = Some(code.emit(Opcode::JmpIfFalse(0)));
+            }
+            // Body
+            compile_stmt(body, code)?;
+            // Continue target = update (or test if no update)
+            let cont_target = code.bytecode.len();
+            let frame = code.loop_stack.last().cloned().unwrap();
+            for ci in &frame.continue_jumps {
+                code.patch_jmp(*ci, cont_target);
+            }
+            // Update
+            if let Some(u) = update {
+                compile_expr(u, code)?;
+                code.emit(Opcode::Pop);
+            }
+            // Jump back na test
+            let back = code.emit(Opcode::Jmp(0));
+            code.patch_jmp(back, test_pos);
+            let end = code.bytecode.len();
+            if let Some(je) = jmp_to_end {
+                code.patch_jmp(je, end);
+            }
+            let frame = code.loop_stack.pop().unwrap();
+            for bj in &frame.break_jumps {
+                code.patch_jmp(*bj, end);
+            }
+            Ok(())
+        }
+        Stmt::Break(label) => {
+            if label.is_some() { return Err("labeled break not supported"); }
+            if code.loop_stack.is_empty() { return Err("break outside loop"); }
+            let idx = code.emit(Opcode::Jmp(0));
+            code.loop_stack.last_mut().unwrap().break_jumps.push(idx);
+            Ok(())
+        }
+        Stmt::Continue(label) => {
+            if label.is_some() { return Err("labeled continue not supported"); }
+            if code.loop_stack.is_empty() { return Err("continue outside loop"); }
+            let idx = code.emit(Opcode::Jmp(0));
+            code.loop_stack.last_mut().unwrap().continue_jumps.push(idx);
+            Ok(())
+        }
+        Stmt::Empty => Ok(()),
         Stmt::Var { kind: _, decls } => {
             for decl in decls {
                 if let Pattern::Ident(name) = &decl.pattern {
@@ -447,6 +604,51 @@ impl VM {
                 Opcode::JmpIfNotNullishKeep(o) => {
                     let v = self.peek()?.clone();
                     if !matches!(v, JsValue::Null | JsValue::Undefined) { pc += o; }
+                }
+                Opcode::Inc(i) => {
+                    let cur = self.locals.get(i as usize).cloned().unwrap_or(JsValue::Undefined);
+                    let n = to_number(&cur) + 1.0;
+                    if (i as usize) < self.locals.len() {
+                        self.locals[i as usize] = JsValue::Number(n);
+                    }
+                }
+                Opcode::Dec(i) => {
+                    let cur = self.locals.get(i as usize).cloned().unwrap_or(JsValue::Undefined);
+                    let n = to_number(&cur) - 1.0;
+                    if (i as usize) < self.locals.len() {
+                        self.locals[i as usize] = JsValue::Number(n);
+                    }
+                }
+                Opcode::PostInc(i) => {
+                    let cur = self.locals.get(i as usize).cloned().unwrap_or(JsValue::Undefined);
+                    let orig = to_number(&cur);
+                    if (i as usize) < self.locals.len() {
+                        self.locals[i as usize] = JsValue::Number(orig + 1.0);
+                    }
+                    self.stack.push(JsValue::Number(orig));
+                }
+                Opcode::PostDec(i) => {
+                    let cur = self.locals.get(i as usize).cloned().unwrap_or(JsValue::Undefined);
+                    let orig = to_number(&cur);
+                    if (i as usize) < self.locals.len() {
+                        self.locals[i as usize] = JsValue::Number(orig - 1.0);
+                    }
+                    self.stack.push(JsValue::Number(orig));
+                }
+                Opcode::TypeOf => {
+                    let v = self.pop()?;
+                    let t = match v {
+                        JsValue::Undefined => "undefined",
+                        JsValue::Null => "object",
+                        JsValue::Bool(_) => "boolean",
+                        JsValue::Number(_) => "number",
+                        JsValue::Str(_) => "string",
+                        _ => "object",
+                    };
+                    self.stack.push(JsValue::Str(t.to_string()));
+                }
+                Opcode::LoadStrConst(i) => {
+                    self.stack.push(code.constants[i as usize].clone());
                 }
                 Opcode::Return => {
                     return self.pop();

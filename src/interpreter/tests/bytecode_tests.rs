@@ -136,3 +136,114 @@ fn vm_unsupported_returns_err() {
     let r = compile_program(&stmts);
     assert!(r.is_err());
 }
+
+#[test]
+fn vm_for_loop_sum() {
+    let r = run_vm(r#"
+        let sum = 0;
+        for (let i = 0; i < 10; i = i + 1) {
+            sum = sum + i;
+        }
+        sum
+    "#).unwrap();
+    assert_jv!(r, n(45.0));
+}
+
+#[test]
+fn vm_while_loop_countdown() {
+    let r = run_vm(r#"
+        let x = 10;
+        while (x > 0) {
+            x = x - 1;
+        }
+        x
+    "#).unwrap();
+    assert_jv!(r, n(0.0));
+}
+
+#[test]
+fn vm_do_while_runs_at_least_once() {
+    let r = run_vm(r#"
+        let x = 0;
+        do {
+            x = x + 1;
+        } while (x < 5);
+        x
+    "#).unwrap();
+    assert_jv!(r, n(5.0));
+}
+
+#[test]
+fn vm_break_exits_loop() {
+    let r = run_vm(r#"
+        let x = 0;
+        for (let i = 0; i < 100; i = i + 1) {
+            if (i === 7) break;
+            x = i;
+        }
+        x
+    "#).unwrap();
+    assert_jv!(r, n(6.0));
+}
+
+#[test]
+fn vm_continue_skips_iter() {
+    let r = run_vm(r#"
+        let sum = 0;
+        for (let i = 0; i < 10; i = i + 1) {
+            if (i === 5) continue;
+            sum = sum + i;
+        }
+        sum
+    "#).unwrap();
+    assert_jv!(r, n(40.0));
+}
+
+#[test]
+fn vm_post_increment() {
+    let r = run_vm(r#"
+        let x = 5;
+        let y = x++;
+        y
+    "#).unwrap();
+    assert_jv!(r, n(5.0));
+}
+
+#[test]
+fn vm_pre_increment_returns_new() {
+    let r = run_vm(r#"
+        let x = 5;
+        let y = ++x;
+        y
+    "#).unwrap();
+    assert_jv!(r, n(6.0));
+}
+
+#[test]
+fn vm_typeof_primitives() {
+    assert_jv!(run_vm("typeof 42").unwrap(), JsValue::Str("number".to_string()));
+    assert_jv!(run_vm("typeof 'hello'").unwrap(), JsValue::Str("string".to_string()));
+    assert_jv!(run_vm("typeof true").unwrap(), JsValue::Str("boolean".to_string()));
+    assert_jv!(run_vm("typeof undefined").unwrap(), JsValue::Str("undefined".to_string()));
+    assert_jv!(run_vm("typeof null").unwrap(), JsValue::Str("object".to_string()));
+}
+
+#[test]
+fn vm_void_returns_undefined() {
+    assert_jv!(run_vm("void 0").unwrap(), JsValue::Undefined);
+    assert_jv!(run_vm("void 'x'").unwrap(), JsValue::Undefined);
+}
+
+#[test]
+fn vm_nested_for() {
+    let r = run_vm(r#"
+        let total = 0;
+        for (let i = 1; i <= 3; i = i + 1) {
+            for (let j = 1; j <= 3; j = j + 1) {
+                total = total + i * j;
+            }
+        }
+        total
+    "#).unwrap();
+    assert_jv!(r, n(36.0));
+}
