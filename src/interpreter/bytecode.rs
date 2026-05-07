@@ -848,6 +848,60 @@ pub fn compile_stmt(s: &Stmt, code: &mut CodeBlock) -> Result<(), &'static str> 
             code.emit(Opcode::DeclareVar(var_idx));
             Ok(())
         }
+        Stmt::ForOf { kind: _, target, iter, body } => {
+            // Iterate Array/String pres index. Hidden vars __for_iter_N + __for_idx_N.
+            let iter_name = format!("__for_iter_{}", code.bytecode.len());
+            let idx_name = format!("__for_idx_{}", code.bytecode.len());
+            let iter_var = code.push_var(&iter_name);
+            let idx_var = code.push_var(&idx_name);
+            // iter = expr
+            compile_expr(iter, code)?;
+            code.emit(Opcode::DeclareVar(iter_var));
+            // idx = 0
+            code.emit(Opcode::LoadZero);
+            code.emit(Opcode::DeclareVar(idx_var));
+            // Target var: jen Ident.
+            let target_name = match target.as_ref() {
+                Expr::Ident(n) => n.clone(),
+                _ => return Err("for-of target must be ident"),
+            };
+            let target_var = code.push_var(&target_name);
+
+            code.loop_stack.push(LoopFrame { break_jumps: vec![], continue_jumps: vec![] });
+            let test_pos = code.bytecode.len();
+            // test: idx < iter.length
+            code.emit(Opcode::LoadVar(idx_var));
+            code.emit(Opcode::LoadVar(iter_var));
+            let length_idx = code.push_var("length");
+            code.emit(Opcode::GetProp(length_idx));
+            code.emit(Opcode::Lt);
+            let jmp_to_end = code.emit(Opcode::JmpIfFalse(0));
+            // target = iter[idx]
+            code.emit(Opcode::LoadVar(iter_var));
+            code.emit(Opcode::LoadVar(idx_var));
+            code.emit(Opcode::GetIndex);
+            code.emit(Opcode::DeclareVar(target_var));
+            // body
+            compile_stmt(body, code)?;
+            // continue target = increment
+            let cont_target = code.bytecode.len();
+            let frame = code.loop_stack.last().cloned().unwrap();
+            for ci in &frame.continue_jumps {
+                code.patch_jmp(*ci, cont_target);
+            }
+            // idx++
+            code.emit(Opcode::Inc(idx_var));
+            // jump back na test
+            let back = code.emit(Opcode::Jmp(0));
+            code.patch_jmp(back, test_pos);
+            let end = code.bytecode.len();
+            code.patch_jmp(jmp_to_end, end);
+            let frame = code.loop_stack.pop().unwrap();
+            for bj in &frame.break_jumps {
+                code.patch_jmp(*bj, end);
+            }
+            Ok(())
+        }
         Stmt::Return(opt_expr) => {
             if let Some(e) = opt_expr {
                 compile_expr(e, code)?;

@@ -356,6 +356,43 @@ fn vm_user_function_chained_calls() {
 }
 
 #[test]
+fn vm_for_of_array() {
+    let r = run_vm(r#"
+        let sum = 0;
+        for (let x of [1, 2, 3, 4]) {
+            sum = sum + x;
+        }
+        sum
+    "#).unwrap();
+    assert_jv!(r, n(10.0));
+}
+
+#[test]
+fn vm_for_of_with_break() {
+    let r = run_vm(r#"
+        let result = 0;
+        for (let n of [1, 2, 3, 4, 5]) {
+            if (n === 3) break;
+            result = n;
+        }
+        result
+    "#).unwrap();
+    assert_jv!(r, n(2.0));
+}
+
+#[test]
+fn vm_for_of_string() {
+    let r = run_vm(r#"
+        let count = 0;
+        for (let c of "hello") {
+            count = count + 1;
+        }
+        count
+    "#).unwrap();
+    assert_jv!(r, n(5.0));
+}
+
+#[test]
 fn vm_template_literal_simple() {
     let r = run_vm(r#"
         let name = 'world';
