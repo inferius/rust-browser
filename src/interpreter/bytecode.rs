@@ -65,6 +65,12 @@ pub enum Opcode {
     NewArray(u16),        // pop u16 hodnot ze stacku, push Array<top..bottom>
     NewObject(u16),       // pop 2*u16 (key/value pairs), push Object
 
+    // Global lookup (env-bound) + native function call.
+    // LoadGlobal: vyhleda globalni promennou v Environment (Math, console, ...).
+    // CallNative(argc): pop argc args, pop callee, invoke (must be JsFunc::Native), push result.
+    LoadGlobal(u16),      // var_names[u16]
+    CallNative(u16),      // argc
+
     // typeof/void
     TypeOf,               // pop, push string typeof
     LoadStrConst(u16),    // alias LoadConst pro strings - same impl
@@ -340,6 +346,44 @@ pub fn compile_expr(e: &Expr, code: &mut CodeBlock) -> Result<(), &'static str> 
             code.emit(Opcode::NewArray(items.len() as u16));
             Ok(())
         }
+        Expr::Call { callee, args, optional: _ } => {
+            // Callee: bud Ident (globalni native fn = console.log? ne to je member),
+            // nebo Member (obj.prop()). Push callee, args, CallNative.
+            // Pro `Math.sqrt(x)`: callee=Member(Math, sqrt) -> GetProp + LoadGlobal Math first.
+            // Bez `this` binding pro ted. Member callee: get_property na obj.
+            match callee.as_ref() {
+                Expr::Ident(name) => {
+                    let g_idx = code.push_var(name);
+                    code.emit(Opcode::LoadGlobal(g_idx));
+                }
+                Expr::Member { object, prop, optional: _ } => {
+                    // Obj resolve: ident vs nested.
+                    if let Expr::Ident(obj_name) = object.as_ref() {
+                        let g_idx = code.push_var(obj_name);
+                        code.emit(Opcode::LoadGlobal(g_idx));
+                    } else {
+                        compile_expr(object, code)?;
+                    }
+                    match prop {
+                        MemberProp::Ident(name) => {
+                            let key_idx = code.push_var(name);
+                            code.emit(Opcode::GetProp(key_idx));
+                        }
+                        MemberProp::Computed(e) => {
+                            compile_expr(e, code)?;
+                            code.emit(Opcode::GetIndex);
+                        }
+                    }
+                }
+                _ => return Err("complex callee not supported"),
+            }
+            if args.len() > u16::MAX as usize { return Err("too many args"); }
+            for arg in args {
+                compile_expr(arg, code)?;
+            }
+            code.emit(Opcode::CallNative(args.len() as u16));
+            Ok(())
+        }
         Expr::Object(props) => {
             if props.len() > u16::MAX as usize { return Err("object > 65k props"); }
             for prop in props {
@@ -549,11 +593,17 @@ pub struct VM {
     /// Lokalni promenne (mapping var_name idx -> JsValue).
     /// Misto plnoho scope chain pouzivame plain Vec - var_idx je primy index.
     locals: Vec<JsValue>,
+    /// Volitelny global env hook: pri LoadGlobal vyhleda jmeno v env.
+    /// Bez hooku = vrati Undefined.
+    pub env: Option<std::rc::Rc<std::cell::RefCell<super::Environment>>>,
 }
 
 impl VM {
     pub fn new() -> Self {
-        Self { stack: Vec::with_capacity(64), locals: Vec::new() }
+        Self { stack: Vec::with_capacity(64), locals: Vec::new(), env: None }
+    }
+    pub fn with_env(env: std::rc::Rc<std::cell::RefCell<super::Environment>>) -> Self {
+        Self { stack: Vec::with_capacity(64), locals: Vec::new(), env: Some(env) }
     }
 
     pub fn run(&mut self, code: &CodeBlock) -> Result<JsValue, String> {
@@ -689,6 +739,28 @@ impl VM {
                         self.locals[i as usize] = JsValue::Number(orig - 1.0);
                     }
                     self.stack.push(JsValue::Number(orig));
+                }
+                Opcode::LoadGlobal(i) => {
+                    let name = code.var_names.get(i as usize).cloned().unwrap_or_default();
+                    let v = if let Some(env) = &self.env {
+                        env.borrow().get(&name).unwrap_or(JsValue::Undefined)
+                    } else {
+                        JsValue::Undefined
+                    };
+                    self.stack.push(v);
+                }
+                Opcode::CallNative(argc) => {
+                    let argc = argc as usize;
+                    if self.stack.len() < argc + 1 { return Err("stack underflow CallNative".into()); }
+                    let args: Vec<JsValue> = self.stack.drain(self.stack.len() - argc..).collect();
+                    let callee = self.pop()?;
+                    let result = match callee {
+                        JsValue::Function(super::JsFunc::Native(_, f)) => {
+                            f(args).map_err(|e| format!("{:?}", e))?
+                        }
+                        _ => return Err("callee not a native function".into()),
+                    };
+                    self.stack.push(result);
                 }
                 Opcode::GetProp(i) => {
                     let key = code.var_names.get(i as usize).cloned().unwrap_or_default();

@@ -18,6 +18,15 @@ fn run_vm(src: &str) -> Result<JsValue, String> {
     vm.run(&code)
 }
 
+/// Run VM s priplnenym globalem (Math, console, ...) z plne setup interpreteru.
+fn run_vm_with_globals(src: &str) -> Result<JsValue, String> {
+    let stmts = parse_to_stmts(src);
+    let code = compile_program(&stmts).map_err(|s| s.to_string())?;
+    let interp = crate::interpreter::Interpreter::new();
+    let mut vm = VM::with_env(interp.global.clone());
+    vm.run(&code)
+}
+
 fn jv_eq(a: &JsValue, b: &JsValue) -> bool {
     match (a, b) {
         (JsValue::Number(x), JsValue::Number(y)) => x == y || (x.is_nan() && y.is_nan()),
@@ -131,8 +140,8 @@ fn vm_bitwise() {
 
 #[test]
 fn vm_unsupported_returns_err() {
-    // Function call neimplementovan v MVP - musi vratit Err.
-    let stmts = parse_to_stmts("foo()");
+    // try/catch neimplementovan - musi vratit Err.
+    let stmts = parse_to_stmts("try { x } catch (e) { y }");
     let r = compile_program(&stmts);
     assert!(r.is_err());
 }
@@ -271,6 +280,36 @@ fn vm_string_length() {
 fn vm_string_index() {
     let r = run_vm(r#""abc"[1]"#).unwrap();
     assert_jv!(r, JsValue::Str("b".to_string()));
+}
+
+#[test]
+fn vm_call_math_sqrt() {
+    let r = run_vm_with_globals("Math.sqrt(16)").unwrap();
+    assert_jv!(r, n(4.0));
+}
+
+#[test]
+fn vm_call_math_max() {
+    let r = run_vm_with_globals("Math.max(3, 7, 2, 9, 1)").unwrap();
+    assert_jv!(r, n(9.0));
+}
+
+#[test]
+fn vm_call_math_pow() {
+    let r = run_vm_with_globals("Math.pow(2, 10)").unwrap();
+    assert_jv!(r, n(1024.0));
+}
+
+#[test]
+fn vm_call_math_abs() {
+    let r = run_vm_with_globals("Math.abs(-42)").unwrap();
+    assert_jv!(r, n(42.0));
+}
+
+#[test]
+fn vm_call_global_parseInt() {
+    let r = run_vm_with_globals("parseInt('42', 10)").unwrap();
+    assert_jv!(r, n(42.0));
 }
 
 #[test]
