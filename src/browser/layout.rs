@@ -1238,7 +1238,16 @@ pub fn interpolate_keyframes(
                     let v1 = parse_length(&d1.value);
                     if v0 != 0.0 || v1 != 0.0 {
                         let v = v0 + (v1 - v0) * t;
-                        out.insert(d0.property.clone(), format!("{v}px"));
+                        // Detekuj jednotku ze source values: pokud original mel
+                        // "px"/"em"/"rem"/"%", pouzij stejnou. Unitless props
+                        // (opacity, z-index) zustanou bez jednotky.
+                        let v0_str = d0.value.trim();
+                        let unit = if v0_str.ends_with("px") { "px" }
+                                   else if v0_str.ends_with("rem") { "rem" }
+                                   else if v0_str.ends_with("em") { "em" }
+                                   else if v0_str.ends_with('%') { "%" }
+                                   else { "" };
+                        out.insert(d0.property.clone(), format!("{v}{unit}"));
                     } else {
                         // Non-numeric: vrat starsi (no real interpolace)
                         out.insert(d0.property.clone(),

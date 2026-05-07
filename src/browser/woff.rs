@@ -911,6 +911,39 @@ mod tests {
         assert_eq!(&sfnt[12..16], b"name");
     }
 
+    /// Test ze CSS animations korektne interpoluji unitless (opacity) i px
+    /// hodnoty (left/width). Driv "0.5" interpolovano jako "0.5px" - opacity
+    /// parser fail.
+    #[test]
+    fn animations_unit_preservation() {
+        let html = "<div class='a'></div>".to_string();
+        let css = r#"
+            .a { animation: t 2s linear infinite; }
+            @keyframes t {
+                0% { left: 0px; opacity: 1; }
+                100% { left: 400px; opacity: 0; }
+            }
+        "#.to_string();
+        let doc = crate::browser::html_parser::parse_html(&html, "");
+        let sheets = vec![crate::browser::css_parser::parse_stylesheet(&css)];
+        let mut style_map = crate::browser::cascade::cascade(&doc.root, &sheets);
+        let _ = crate::browser::cascade::apply_animations(&mut style_map, &sheets, 1.0);
+        // Najdi prvni element s class=a.
+        let mut found = false;
+        doc.root.walk(&mut |n: &std::rc::Rc<crate::browser::dom::Node>| {
+            if n.attr("class").as_deref() == Some("a") {
+                found = true;
+                let id = std::rc::Rc::as_ptr(n) as usize;
+                let styles = style_map.get(&id).unwrap();
+                assert_eq!(styles.get("left").map(|s| s.as_str()), Some("200px"),
+                    "left ma byt '200px' got {:?}", styles.get("left"));
+                assert_eq!(styles.get("opacity").map(|s| s.as_str()), Some("0.5"),
+                    "opacity ma byt '0.5' (bez px) got {:?}", styles.get("opacity"));
+            }
+        });
+        assert!(found, "<.a> element not found");
+    }
+
     /// Helper: validuje sfnt vystup struktury.
     fn validate_sfnt(sfnt: &[u8], label: &str) {
         // SFNT magic: 0x00010000 (TTF) nebo 0x4F54544F (OTF).
