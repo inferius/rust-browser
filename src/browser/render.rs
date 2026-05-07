@@ -4927,6 +4927,15 @@ impl Renderer {
             if let Ok(bytes) = std::fs::read(&path) {
                 // WOFF/WOFF2 dekomprese (no-op pri TTF/OTF bytes).
                 let decoded = super::woff::maybe_decode_woff(&bytes);
+                // Variable font detection: log axes pri prvnim nahrani.
+                let axes = super::variable_fonts::parse_axes(&decoded);
+                if !axes.is_empty() {
+                    println!("[font] {} je variable font ({} axes):", ff.family, axes.len());
+                    for ax in &axes {
+                        println!("  {} {:.0}..{:.0} (default {:.0})",
+                            ax.tag, ax.min_value, ax.max_value, ax.default_value);
+                    }
+                }
                 if let Ok(font) = fontdue::Font::from_bytes(decoded, fontdue::FontSettings::default()) {
                     self.font_registry.insert(ff.family.clone(), font.clone());
                     // Sdilet do atlasu pro rasterize lookup

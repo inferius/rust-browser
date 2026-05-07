@@ -18,6 +18,7 @@ pub mod paint;
 pub mod render;
 pub mod devtools_panel;
 pub mod woff;
+pub mod variable_fonts;
 
 #[cfg(test)]
 mod tests;
