@@ -21,6 +21,7 @@ impl std::fmt::Debug for JsFunc {
             JsFunc::Generator { name, .. } => write!(f, "[GeneratorFunction: {}]", name.as_deref().unwrap_or("anonymous")),
             JsFunc::Async { name, .. }     => write!(f, "[AsyncFunction: {}]", name.as_deref().unwrap_or("anonymous")),
             JsFunc::Bound { .. }           => write!(f, "[BoundFunction]"),
+            JsFunc::VmCompiled { name, .. } => write!(f, "[VmCompiled: {}]", name.as_deref().unwrap_or("anonymous")),
         }
     }
 }

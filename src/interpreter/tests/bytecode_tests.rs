@@ -314,6 +314,87 @@ fn vm_call_global_parseInt() {
 }
 
 #[test]
+fn vm_user_function_simple() {
+    let r = run_vm(r#"
+        function add(a, b) { return a + b; }
+        add(3, 4)
+    "#).unwrap();
+    assert_jv!(r, n(7.0));
+}
+
+#[test]
+fn vm_user_function_with_local_vars() {
+    let r = run_vm(r#"
+        function double(x) {
+            let result = x * 2;
+            return result;
+        }
+        double(21)
+    "#).unwrap();
+    assert_jv!(r, n(42.0));
+}
+
+#[test]
+fn vm_user_function_with_branch() {
+    let r = run_vm(r#"
+        function abs(x) {
+            if (x < 0) return -x;
+            return x;
+        }
+        abs(-15)
+    "#).unwrap();
+    assert_jv!(r, n(15.0));
+}
+
+#[test]
+fn vm_user_function_chained_calls() {
+    let r = run_vm(r#"
+        function inc(x) { return x + 1; }
+        inc(inc(inc(10)))
+    "#).unwrap();
+    assert_jv!(r, n(13.0));
+}
+
+#[test]
+fn vm_user_function_recursion() {
+    let r = run_vm(r#"
+        function fact(n) {
+            if (n <= 1) return 1;
+            return n * fact(n - 1);
+        }
+        fact(6)
+    "#).unwrap();
+    assert_jv!(r, n(720.0));
+}
+
+#[test]
+fn vm_user_function_fib_recursive() {
+    let r = run_vm(r#"
+        function fib(n) {
+            if (n < 2) return n;
+            return fib(n - 1) + fib(n - 2);
+        }
+        fib(10)
+    "#).unwrap();
+    assert_jv!(r, n(55.0));
+}
+
+#[test]
+fn vm_user_function_loop_inside() {
+    let r = run_vm(r#"
+        function sumTo(n) {
+            let s = 0;
+            for (let i = 1; i <= n; i = i + 1) {
+                s = s + i;
+            }
+            return s;
+        }
+        sumTo(10)
+    "#).unwrap();
+    assert_jv!(r, n(55.0));
+}
+
+#[test]
 fn vm_nested_for() {
     let r = run_vm(r#"
         let total = 0;

@@ -313,7 +313,15 @@ pub enum JsFunc {
         setters: Vec<ClassMethodDef>,
         /// Uzavreny scope kde byla trida definovana
         env: Rc<RefCell<Env>>,
-    }
+    },
+    /// Bytecode-VM compiled funkce. Pri volani spousti VM s body.
+    /// Closure scope sdileny do native fn pro outer var lookup.
+    VmCompiled {
+        name: Option<String>,
+        compiled: Rc<bytecode::CompiledFunction>,
+        /// Closure env z misto definice (pro outer var lookup z VM).
+        env: Rc<RefCell<Env>>,
+    },
 }
 
 #[derive(Debug, Clone)]

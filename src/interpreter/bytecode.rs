@@ -78,6 +78,9 @@ pub enum Opcode {
     // Returns
     Return,               // return pop()
     Halt,                 // konec compiled bloku
+
+    // User function support.
+    LoadFunction(u16),    // index do CodeBlock.functions, push JsValue::Function(VmCompiled)
 }
 
 #[derive(Debug, Clone)]
@@ -88,6 +91,16 @@ pub struct CodeBlock {
     /// Per-loop break/continue jumps stack (transient pri compile).
     /// Push pri vstupu do loopu, pop pri vystupu. Vrstva = (break_jumps, cont_jumps, cont_target_idx).
     pub loop_stack: Vec<LoopFrame>,
+    /// Vnoreni funkce - LoadFunction(idx) reference.
+    pub functions: Vec<std::rc::Rc<CompiledFunction>>,
+}
+
+/// Compiled user-defined function.
+#[derive(Debug, Clone)]
+pub struct CompiledFunction {
+    pub name: Option<String>,
+    pub params: Vec<String>,
+    pub code: CodeBlock,
 }
 
 #[derive(Debug, Clone)]
@@ -100,7 +113,13 @@ pub struct LoopFrame {
 
 impl CodeBlock {
     pub fn new() -> Self {
-        Self { bytecode: Vec::new(), constants: Vec::new(), var_names: Vec::new(), loop_stack: Vec::new() }
+        Self {
+            bytecode: Vec::new(),
+            constants: Vec::new(),
+            var_names: Vec::new(),
+            loop_stack: Vec::new(),
+            functions: Vec::new(),
+        }
     }
     fn push_const(&mut self, v: JsValue) -> u16 {
         // Try dedupe na primitivech.
@@ -347,20 +366,26 @@ pub fn compile_expr(e: &Expr, code: &mut CodeBlock) -> Result<(), &'static str> 
             Ok(())
         }
         Expr::Call { callee, args, optional: _ } => {
-            // Callee: bud Ident (globalni native fn = console.log? ne to je member),
-            // nebo Member (obj.prop()). Push callee, args, CallNative.
-            // Pro `Math.sqrt(x)`: callee=Member(Math, sqrt) -> GetProp + LoadGlobal Math first.
-            // Bez `this` binding pro ted. Member callee: get_property na obj.
+            // Callee resolution: local var vs global.
+            // Pri Ident: pokud existuje v var_names UZ pred timto callem (function decl
+            // appears earlier), pouzij LoadVar, jinak LoadGlobal.
             match callee.as_ref() {
                 Expr::Ident(name) => {
-                    let g_idx = code.push_var(name);
-                    code.emit(Opcode::LoadGlobal(g_idx));
+                    if let Some(idx) = code.var_names.iter().position(|n| n == name) {
+                        code.emit(Opcode::LoadVar(idx as u16));
+                    } else {
+                        let g_idx = code.push_var(name);
+                        code.emit(Opcode::LoadGlobal(g_idx));
+                    }
                 }
                 Expr::Member { object, prop, optional: _ } => {
-                    // Obj resolve: ident vs nested.
                     if let Expr::Ident(obj_name) = object.as_ref() {
-                        let g_idx = code.push_var(obj_name);
-                        code.emit(Opcode::LoadGlobal(g_idx));
+                        if let Some(idx) = code.var_names.iter().position(|n| n == obj_name) {
+                            code.emit(Opcode::LoadVar(idx as u16));
+                        } else {
+                            let g_idx = code.push_var(obj_name);
+                            code.emit(Opcode::LoadGlobal(g_idx));
+                        }
                     } else {
                         compile_expr(object, code)?;
                     }
@@ -564,6 +589,50 @@ pub fn compile_stmt(s: &Stmt, code: &mut CodeBlock) -> Result<(), &'static str> 
             }
             Ok(())
         }
+        Stmt::Function { name, params, body } => {
+            // Pre-register name v outer var_names pro pripadnou rekurzi.
+            let var_idx = code.push_var(name);
+            // Compile body do nove CompiledFunction.
+            let mut fn_code = CodeBlock::new();
+            // Pre-register function name in body's var_names PRVNI - rekurze cez
+            // LoadVar(0). VM CallNative s VmCompiled inicializuje locals[0] = self.
+            fn_code.push_var(name);
+            let mut param_names: Vec<String> = Vec::new();
+            for p in params {
+                if let crate::ast::Pattern::Ident(pn) = &p.pattern {
+                    param_names.push(pn.clone());
+                    fn_code.push_var(pn);
+                } else {
+                    return Err("destructuring param not supported");
+                }
+            }
+            // Compile body.
+            for s in body {
+                compile_stmt(s, &mut fn_code)?;
+            }
+            // Implicit return undefined po konci body.
+            fn_code.emit(Opcode::LoadUndefined);
+            fn_code.emit(Opcode::Return);
+            let compiled = std::rc::Rc::new(CompiledFunction {
+                name: Some(name.clone()),
+                params: param_names,
+                code: fn_code,
+            });
+            let fn_idx = code.functions.len() as u16;
+            code.functions.push(compiled);
+            code.emit(Opcode::LoadFunction(fn_idx));
+            code.emit(Opcode::DeclareVar(var_idx));
+            Ok(())
+        }
+        Stmt::Return(opt_expr) => {
+            if let Some(e) = opt_expr {
+                compile_expr(e, code)?;
+            } else {
+                code.emit(Opcode::LoadUndefined);
+            }
+            code.emit(Opcode::Return);
+            Ok(())
+        }
         _ => Err("unsupported stmt"),
     }
 }
@@ -758,6 +827,29 @@ impl VM {
                         JsValue::Function(super::JsFunc::Native(_, f)) => {
                             f(args).map_err(|e| format!("{:?}", e))?
                         }
+                        JsValue::Function(super::JsFunc::VmCompiled { compiled, env, name }) => {
+                            // Nested VM run pro user function.
+                            let mut nested = VM::new();
+                            nested.env = Some(env.clone());
+                            nested.locals.resize(compiled.code.var_names.len(), JsValue::Undefined);
+                            // Self-reference pro rekurzi: locals[0] = function value.
+                            // Compile pre-registers name jako var_names[0].
+                            if !compiled.code.var_names.is_empty()
+                                && compiled.code.var_names[0] == name.clone().unwrap_or_default() {
+                                nested.locals[0] = JsValue::Function(super::JsFunc::VmCompiled {
+                                    name: name.clone(),
+                                    compiled: compiled.clone(),
+                                    env: env.clone(),
+                                });
+                            }
+                            // Init param values.
+                            for (i, p) in compiled.params.iter().enumerate() {
+                                if let Some(idx) = compiled.code.var_names.iter().position(|n| n == p) {
+                                    nested.locals[idx] = args.get(i).cloned().unwrap_or(JsValue::Undefined);
+                                }
+                            }
+                            nested.run(&compiled.code)?
+                        }
                         _ => return Err("callee not a native function".into()),
                     };
                     self.stack.push(result);
@@ -832,6 +924,17 @@ impl VM {
                 Opcode::Halt => {
                     // Vrat top stacku nebo Undefined.
                     return Ok(self.stack.pop().unwrap_or(JsValue::Undefined));
+                }
+                Opcode::LoadFunction(idx) => {
+                    let compiled = code.functions.get(idx as usize)
+                        .ok_or("LoadFunction idx out of range")?
+                        .clone();
+                    let env = self.env.clone().unwrap_or_else(|| super::Environment::new_global());
+                    self.stack.push(JsValue::Function(super::JsFunc::VmCompiled {
+                        name: compiled.name.clone(),
+                        compiled,
+                        env,
+                    }));
                 }
             }
         }
