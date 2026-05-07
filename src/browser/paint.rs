@@ -269,8 +269,8 @@ pub fn build_display_list(root: &LayoutBox) -> Vec<DisplayCommand> {
     commands
 }
 
-/// Thread-local viewport pro paint culling. Pred build_display_list_culled
-/// se nastavi, paint_box pak preskoci elementy mimo.
+// Thread-local viewport pro paint culling. Pred build_display_list_culled
+// se nastavi, paint_box pak preskoci elementy mimo.
 thread_local! {
     static VIEWPORT_CULL: std::cell::Cell<Option<(f32, f32)>> = const { std::cell::Cell::new(None) };
 }
