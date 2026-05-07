@@ -2232,12 +2232,26 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
             }
         }
         // Default list-style-type: ol = decimal, ul = disc (CSS UA stylesheet).
-        let parent_tag = node.parent.borrow().upgrade().and_then(|p| p.tag_name());
+        let parent_node = node.parent.borrow().upgrade();
+        let parent_tag = parent_node.as_ref().and_then(|p| p.tag_name());
         let default_style = match parent_tag.as_deref() {
             Some("ol") => "decimal",
             _ => "disc",
         };
-        let style = if bx.list_style_type.is_empty() { default_style } else { bx.list_style_type.as_str() };
+        // CSS list-style-type je inherited - pokud li nema explicit, podivej
+        // se na rodicovsky <ol>/<ul> v style_map. Bez tohoto upper-roman na
+        // ol class neaplikuje na li children.
+        let parent_list_style = parent_node.as_ref().and_then(|p| {
+            let pid = std::rc::Rc::as_ptr(p) as usize;
+            style_map.get(&pid).and_then(|s| s.get("list-style-type")).cloned()
+        });
+        let style = if !bx.list_style_type.is_empty() {
+            bx.list_style_type.as_str()
+        } else if let Some(ref s) = parent_list_style {
+            s.trim()
+        } else {
+            default_style
+        };
         let marker_text = match style {
             "none" => String::new(),
             "decimal" => format!("{cur}. "),
