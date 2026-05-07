@@ -436,15 +436,20 @@ fn vm_call_args_spread_mixed() {
 
 #[test]
 fn vm_yield_delegate() {
-    // yield* delegates - simplified test pri sync semantics.
+    // yield* delegate full test.
     let r = run_vm(r#"
-        function* inner() { yield 1; }
-        function* outer() { yield* inner(); }
+        function* inner() { yield 1; yield 2; }
+        function* outer() { yield 0; yield* inner(); yield 3; }
         let it = outer();
-        it.next().value
-    "#);
-    // Pri error-z-VM: zatim yield* nezfunkcni. Test expects either ok or fall-through.
-    let _ = r;
+        let total = 0;
+        let r = it.next();
+        while (!r.done) {
+            total = total + r.value;
+            r = it.next();
+        }
+        total
+    "#).unwrap();
+    assert_jv!(r, n(6.0));
 }
 
 #[test]

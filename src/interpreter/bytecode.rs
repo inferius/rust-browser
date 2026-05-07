@@ -168,6 +168,10 @@ pub struct CodeBlock {
     pub bytecode: Vec<Opcode>,
     pub constants: Vec<JsValue>,
     pub var_names: Vec<String>,
+    /// Separate string pool pro property names (GetProp/SetProp keys), pro
+    /// LoadGlobal name lookup. Oddeleny od var_names protoze Block truncate
+    /// var_names by jinak korumpovalo property name indexy.
+    pub string_pool: Vec<String>,
     /// Per-loop break/continue jumps stack (transient pri compile).
     /// Push pri vstupu do loopu, pop pri vystupu. Vrstva = (break_jumps, cont_jumps, cont_target_idx).
     pub loop_stack: Vec<LoopFrame>,
@@ -207,9 +211,20 @@ impl CodeBlock {
             bytecode: Vec::new(),
             constants: Vec::new(),
             var_names: Vec::new(),
+            string_pool: Vec::new(),
             loop_stack: Vec::new(),
             functions: Vec::new(),
         }
+    }
+    /// Push string do separate pool pro GetProp/SetProp/LoadGlobal name keys.
+    /// Dedupe.
+    pub fn push_string(&mut self, name: &str) -> u16 {
+        for (i, n) in self.string_pool.iter().enumerate() {
+            if n == name { return i as u16; }
+        }
+        let idx = self.string_pool.len();
+        self.string_pool.push(name.to_string());
+        idx as u16
     }
     fn push_const(&mut self, v: JsValue) -> u16 {
         // Try dedupe na primitivech.
@@ -412,7 +427,7 @@ pub fn compile_expr(e: &Expr, code: &mut CodeBlock) -> Result<(), &'static str> 
                     match prop {
                         MemberProp::Ident(name) => {
                             compile_expr(value, code)?;
-                            let key_idx = code.push_var(name);
+                            let key_idx = code.push_string(name);
                             code.emit(Opcode::SetProp(key_idx));
                         }
                         MemberProp::Computed(e) => {
@@ -441,7 +456,7 @@ pub fn compile_expr(e: &Expr, code: &mut CodeBlock) -> Result<(), &'static str> 
                 };
                 match prop {
                     MemberProp::Ident(name) => {
-                        let key_idx = code.push_var(name);
+                        let key_idx = code.push_string(name);
                         compile_expr(object, code)?;       // [obj]
                         code.emit(Opcode::Dup);             // [obj, obj]
                         code.emit(Opcode::GetProp(key_idx));// [obj, oldval]
@@ -544,7 +559,7 @@ pub fn compile_expr(e: &Expr, code: &mut CodeBlock) -> Result<(), &'static str> 
                     } else if let Some(cap_idx) = try_capture(name) {
                         code.emit(Opcode::LoadCapture(cap_idx));
                     } else {
-                        let idx = code.push_var(name);
+                        let idx = code.push_string(name);
                         code.emit(Opcode::LoadGlobal(idx));
                     }
                 }
@@ -578,18 +593,18 @@ pub fn compile_expr(e: &Expr, code: &mut CodeBlock) -> Result<(), &'static str> 
                     // r = iter.next()
                     code.emit(Opcode::LoadVar(iter_var));
                     code.emit(Opcode::Dup);
-                    let next_idx = code.push_var("next");
+                    let next_idx = code.push_string("next");
                     code.emit(Opcode::GetProp(next_idx));
                     code.emit(Opcode::CallMethod(0));
                     code.emit(Opcode::DeclareVar(r_var));
                     // if (r.done) break (jump to end).
                     code.emit(Opcode::LoadVar(r_var));
-                    let done_idx = code.push_var("done");
+                    let done_idx = code.push_string("done");
                     code.emit(Opcode::GetProp(done_idx));
                     let jmp_to_end = code.emit(Opcode::JmpIfTrue(0));
                     // yield r.value
                     code.emit(Opcode::LoadVar(r_var));
-                    let value_idx = code.push_var("value");
+                    let value_idx = code.push_string("value");
                     code.emit(Opcode::GetProp(value_idx));
                     code.emit(Opcode::Yield);
                     code.emit(Opcode::Pop); // yield expr's sent-in value (Undefined) - discard
@@ -687,7 +702,7 @@ pub fn compile_expr(e: &Expr, code: &mut CodeBlock) -> Result<(), &'static str> 
                 code.patch_jmp(jmp_proceed, proceed);
                 match prop {
                     MemberProp::Ident(name) => {
-                        let key_idx = code.push_var(name);
+                        let key_idx = code.push_string(name);
                         code.emit(Opcode::GetProp(key_idx));
                     }
                     MemberProp::Computed(e) => {
@@ -700,7 +715,7 @@ pub fn compile_expr(e: &Expr, code: &mut CodeBlock) -> Result<(), &'static str> 
             } else {
                 match prop {
                     MemberProp::Ident(name) => {
-                        let key_idx = code.push_var(name);
+                        let key_idx = code.push_string(name);
                         code.emit(Opcode::GetProp(key_idx));
                     }
                     MemberProp::Computed(e) => {
@@ -754,14 +769,14 @@ pub fn compile_expr(e: &Expr, code: &mut CodeBlock) -> Result<(), &'static str> 
             let has_spread_arg_check = args.iter().any(|a| matches!(a, Expr::Spread(_)));
             if !has_spread_arg_check && !opt {
                 if let Expr::Member { object, prop, optional: false } = callee.as_ref() {
-                    // Compile obj (resolve special globals at top-level via LoadGlobal).
+                    // Compile obj (resolve lokalni / capture / global).
                     if let Expr::Ident(obj_name) = object.as_ref() {
                         if let Some(idx) = code.var_names.iter().rposition(|n| n == obj_name) {
                             code.emit(Opcode::LoadVar(idx as u16));
                         } else if let Some(cap_idx) = try_capture(obj_name) {
                             code.emit(Opcode::LoadCapture(cap_idx));
                         } else {
-                            let g_idx = code.push_var(obj_name);
+                            let g_idx = code.push_string(obj_name);
                             code.emit(Opcode::LoadGlobal(g_idx));
                         }
                     } else {
@@ -770,7 +785,7 @@ pub fn compile_expr(e: &Expr, code: &mut CodeBlock) -> Result<(), &'static str> 
                     code.emit(Opcode::Dup);
                     match prop {
                         MemberProp::Ident(name) => {
-                            let key_idx = code.push_var(name);
+                            let key_idx = code.push_string(name);
                             code.emit(Opcode::GetProp(key_idx));
                         }
                         MemberProp::Computed(e) => {
@@ -793,8 +808,10 @@ pub fn compile_expr(e: &Expr, code: &mut CodeBlock) -> Result<(), &'static str> 
                 Expr::Ident(name) => {
                     if let Some(idx) = code.var_names.iter().rposition(|n| n == name) {
                         code.emit(Opcode::LoadVar(idx as u16));
+                    } else if let Some(cap_idx) = try_capture(name) {
+                        code.emit(Opcode::LoadCapture(cap_idx));
                     } else {
-                        let g_idx = code.push_var(name);
+                        let g_idx = code.push_string(name);
                         code.emit(Opcode::LoadGlobal(g_idx));
                     }
                 }
@@ -802,8 +819,10 @@ pub fn compile_expr(e: &Expr, code: &mut CodeBlock) -> Result<(), &'static str> 
                     if let Expr::Ident(obj_name) = object.as_ref() {
                         if let Some(idx) = code.var_names.iter().rposition(|n| n == obj_name) {
                             code.emit(Opcode::LoadVar(idx as u16));
+                        } else if let Some(cap_idx) = try_capture(obj_name) {
+                            code.emit(Opcode::LoadCapture(cap_idx));
                         } else {
-                            let g_idx = code.push_var(obj_name);
+                            let g_idx = code.push_string(obj_name);
                             code.emit(Opcode::LoadGlobal(g_idx));
                         }
                     } else {
@@ -811,7 +830,7 @@ pub fn compile_expr(e: &Expr, code: &mut CodeBlock) -> Result<(), &'static str> 
                     }
                     match prop {
                         MemberProp::Ident(name) => {
-                            let key_idx = code.push_var(name);
+                            let key_idx = code.push_string(name);
                             code.emit(Opcode::GetProp(key_idx));
                         }
                         MemberProp::Computed(e) => {
@@ -1160,8 +1179,8 @@ pub fn compile_stmt(s: &Stmt, code: &mut CodeBlock) -> Result<(), &'static str> 
                                 Pattern::Ident(n) => n.clone(),
                                 _ => return Err("nested destructuring not supported"),
                             };
-                            let key_idx = code.push_var(&key_str);
-                            let var_idx = code.push_var(&target_name);
+                            let key_idx = code.push_string(&key_str);
+                            let var_idx = code.push_local(&target_name);
                             code.emit(Opcode::Dup);
                             code.emit(Opcode::GetProp(key_idx));
                             // Default value pri Undefined.
@@ -1275,9 +1294,9 @@ pub fn compile_stmt(s: &Stmt, code: &mut CodeBlock) -> Result<(), &'static str> 
             // Better: temp store iter, push Object.keys, push iter, call.
             let tmp_iter = code.push_var(&format!("__forin_tmpiter_{}", code.bytecode.len()));
             code.emit(Opcode::DeclareVar(tmp_iter));
-            let object_idx = code.push_var("Object");
+            let object_idx = code.push_string("Object");
             code.emit(Opcode::LoadGlobal(object_idx));
-            let keys_prop = code.push_var("keys");
+            let keys_prop = code.push_string("keys");
             code.emit(Opcode::GetProp(keys_prop));
             code.emit(Opcode::LoadVar(tmp_iter));
             code.emit(Opcode::CallNative(1));
@@ -1294,7 +1313,7 @@ pub fn compile_stmt(s: &Stmt, code: &mut CodeBlock) -> Result<(), &'static str> 
             let test_pos = code.bytecode.len();
             code.emit(Opcode::LoadVar(idx_var));
             code.emit(Opcode::LoadVar(keys_var));
-            let length_idx = code.push_var("length");
+            let length_idx = code.push_string("length");
             code.emit(Opcode::GetProp(length_idx));
             code.emit(Opcode::Lt);
             let jmp_to_end = code.emit(Opcode::JmpIfFalse(0));
@@ -1338,7 +1357,7 @@ pub fn compile_stmt(s: &Stmt, code: &mut CodeBlock) -> Result<(), &'static str> 
             let test_pos = code.bytecode.len();
             code.emit(Opcode::LoadVar(idx_var));
             code.emit(Opcode::LoadVar(iter_var));
-            let length_idx = code.push_var("length");
+            let length_idx = code.push_string("length");
             code.emit(Opcode::GetProp(length_idx));
             code.emit(Opcode::Lt);
             let jmp_to_end = code.emit(Opcode::JmpIfFalse(0));
@@ -1384,7 +1403,7 @@ pub fn compile_stmt(s: &Stmt, code: &mut CodeBlock) -> Result<(), &'static str> 
             // test: idx < iter.length
             code.emit(Opcode::LoadVar(idx_var));
             code.emit(Opcode::LoadVar(iter_var));
-            let length_idx = code.push_var("length");
+            let length_idx = code.push_string("length");
             code.emit(Opcode::GetProp(length_idx));
             code.emit(Opcode::Lt);
             let jmp_to_end = code.emit(Opcode::JmpIfFalse(0));
@@ -1903,7 +1922,7 @@ impl VM {
                     self.stack.push(JsValue::Number(orig));
                 }
                 Opcode::LoadGlobal(i) => {
-                    let name = code.var_names.get(i as usize).cloned().unwrap_or_default();
+                    let name = code.string_pool.get(i as usize).cloned().unwrap_or_default();
                     let v = if let Some(env) = &self.env {
                         env.borrow().get(&name).unwrap_or(JsValue::Undefined)
                     } else {
@@ -1951,13 +1970,13 @@ impl VM {
                     self.stack.push(result);
                 }
                 Opcode::GetProp(i) => {
-                    let key = code.var_names.get(i as usize).cloned().unwrap_or_default();
+                    let key = code.string_pool.get(i as usize).cloned().unwrap_or_default();
                     let obj = self.pop()?;
                     let v = get_property(&obj, &key);
                     self.stack.push(v);
                 }
                 Opcode::SetProp(i) => {
-                    let key = code.var_names.get(i as usize).cloned().unwrap_or_default();
+                    let key = code.string_pool.get(i as usize).cloned().unwrap_or_default();
                     let value = self.pop()?;
                     let obj = self.pop()?;
                     set_property(&obj, &key, value.clone());
