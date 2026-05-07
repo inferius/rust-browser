@@ -379,9 +379,21 @@ impl Environment {
 
     /// Cte promennou - hleda od tohoto scopu az ke globalnimu.
     /// Vraci `None` kdyz promenna neexistuje (nikde v retezci).
+    /// Iterativni misto rekurze - vyhne se borrow chain overhead.
     pub fn get(&self, name: &str) -> Option<JsValue> {
-        self.vars.get(name).cloned()
-            .or_else(|| self.parent.as_ref()?.borrow().get(name))
+        if let Some(v) = self.vars.get(name) {
+            return Some(v.clone());
+        }
+        // Iterate parent chain bez rekurze.
+        let mut cur = self.parent.clone();
+        while let Some(env_rc) = cur {
+            let env = env_rc.borrow();
+            if let Some(v) = env.vars.get(name) {
+                return Some(v.clone());
+            }
+            cur = env.parent.clone();
+        }
+        None
     }
 
     /// Prirazuje hodnotu existujici promenne (hleda ji v retezci scopu).
@@ -389,12 +401,23 @@ impl Environment {
     /// Vraci `true` kdyz promennou nasla a zmenila,
     /// `false` kdyz promenna neexistuje (volajici pak muze rozhodnout co delat).
     pub fn set(&mut self, name: &str, val: JsValue) -> bool {
+        // Self scope first.
         if self.vars.contains_key(name) {
             self.vars.insert(name.to_string(), val);
-            true
-        } else {
-            self.parent.as_ref().map(|p| p.borrow_mut().set(name, val)).unwrap_or(false)
+            return true;
         }
+        // Iterativni walk parent chain.
+        let mut cur = self.parent.clone();
+        while let Some(env_rc) = cur {
+            // Try contains_key first (cheap immutable borrow), then mutable.
+            let has = env_rc.borrow().vars.contains_key(name);
+            if has {
+                env_rc.borrow_mut().vars.insert(name.to_string(), val);
+                return true;
+            }
+            cur = env_rc.borrow().parent.clone();
+        }
+        false
     }
 }
 
