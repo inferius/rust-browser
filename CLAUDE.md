@@ -109,18 +109,22 @@ cargo run -- window [src.html]                   # Alias browser, pres run_windo
 - DevTools panel: Elements / Console (live capture) / Network (live capture) / Performance
 - Form value sync, img tag, animation tick
 
-## Co zbyva (TODO - prioritizovane)
+## Co je hotove navic (od posledni revize)
 
-1. **GPU image rendering** - cache existuje, ale rendering placeholder. Multi-texture binding nebo RGBA atlas.
-2. **CSS animation runtime application** - @keyframes parsuju, interpoluju, ale `animation: name 2s` na elementu se nepouziva pro paint. Time-based redraw pres App.start_time.
-3. **Radial + conic gradient** (linear hotovy)
-4. **Canvas API** - `<canvas>` tag + 2D context (fillRect, fillText, beginPath, ...)
-5. **@font-face** custom fonty
-6. **SVG support** - shapes -> display list
-7. **Box-shadow inset** varianta
-8. **CSS clip-path**
-9. **WebGL** (po canvas)
-10. **Form submit handling** (value sync uz je, submit ne)
+- **GPU image rendering** - mode 4 textureSample z RGBA atlasu (2048x2048 shelf-packed).
+- **CSS animation runtime tick** - apply_animations + apply_paint_animations + request_redraw loop pri active animations/transitions, dispatch animationstart/end/iteration events.
+- **Radial + Conic gradient** - mode 6/7 + multi-stop CPU tesselace.
+- **Canvas 2D API** - 50+ ops: paths (moveTo/lineTo/arc/bezier/quadratic/ellipse/arcTo), fills, strokes (lineWidth/cap/join/dash), state (save/restore + transform stack), gradients (linear+radial), drawImage (full + sub-rect), clip, globalAlpha/CompositeOperation.
+- **@font-face** - HTTP fetch (ureq) + relative URL resolution proti page base_url, FS path fallback. WOFF/WOFF2 dekomprese (WOFF2 jen bez glyf transform), variable font + COLR detection.
+- **SVG support** - emit_svg_children: line/rect/circle/ellipse/polygon/polyline/path/g/text + viewBox + preserveAspectRatio + transform attribute (parse_svg_transform + compose).
+- **Box-shadow inset** - mode 5, fade smerem dovnitr.
+- **CSS clip-path** - inset/circle/ellipse pres compute_clip_rect (rect dimensions + radius), polygon pres ClippedRect + triangulate_polygon (ear-clipping).
+- **WebGL** - 1308 lines: createShader/Program (vertex+fragment WGSL transpile), createBuffer/Texture, vertexAttribPointer, uniform1/2/3/4f/i + Matrix2/3/4fv, drawArrays/Elements, viewport/clear, walk_webgl + process_webgl_drawcalls + swap_view integration.
+- **Form submit** - JS API form.submit() (preventDefault check + collect form data + URL encode + ureq POST/GET) + native button[type=submit] click (dispatch 'submit' event pred navigation).
+
+## Co zbyva (TODO)
+
+- **WOFF2 glyf transform reversal** - aktualne bail-out s TransformNotImplemented. Spec section 5.1 implementace by potrebovala 128-entry triplet table + simple/composite glyph rekonstrukce. Riziko spatne tabulky = broken glyfy. Cekat na referencni test fonty.
 
 ## Konvence
 
