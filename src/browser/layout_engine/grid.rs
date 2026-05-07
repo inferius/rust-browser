@@ -1043,10 +1043,13 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                 // Wrap-aware text height: pri text > col_track width spocti pocet linek.
                 // Triggers JEN kdyz je explicit grid template-cols a text > track_w STRICTLY.
                 let cols_str = bx.grid_template_columns.trim().to_lowercase();
+                let is_vertical_text_item = matches!(item.writing_mode.as_str(),
+                    "vertical-lr" | "vertical-rl");
                 if item.taffy_mode && item.text.is_some() && item.explicit_height.is_none()
                     && !cols_str.is_empty() && !cols_str.contains("auto")
-                    && !cols_str.contains("min-content") && !cols_str.contains("max-content")
-                    && !cols_str.contains("fit-content") {
+                    && !cols_str.contains("max-content")
+                    && !cols_str.contains("fit-content")
+                    && !is_vertical_text_item {
                     if let Some(t) = &item.text {
                         let track_w: f32 = (col..(col+span_col)).filter_map(|c| col_tracks.get(c).copied()).sum::<f32>()
                             + col_gap * (span_col.saturating_sub(1) as f32);
