@@ -561,9 +561,48 @@ pub fn compile_expr(e: &Expr, code: &mut CodeBlock) -> Result<(), &'static str> 
             code.emit(Opcode::Await);
             Ok(())
         }
-        Expr::Yield { value, delegate: _ } => {
+        Expr::Yield { value, delegate } => {
             // yield value: compile + Yield opcode.
-            // delegate (yield*) zatim ne supported.
+            // yield* iter (delegate=true): inline loop pres iter.next() + yield each.
+            if *delegate {
+                if let Some(v) = value {
+                    // Synth: __delegate_iter = expr;
+                    // __delegate_loop: __r = __iter.next(); if __r.done break; yield __r.value;
+                    let iter_var_name = format!("__yield_iter_{}", code.bytecode.len());
+                    let r_var_name = format!("__yield_r_{}", code.bytecode.len());
+                    let iter_var = code.push_local(&iter_var_name);
+                    let r_var = code.push_local(&r_var_name);
+                    compile_expr(v, code)?;
+                    code.emit(Opcode::DeclareVar(iter_var));
+                    let loop_start = code.bytecode.len();
+                    // r = iter.next()
+                    code.emit(Opcode::LoadVar(iter_var));
+                    code.emit(Opcode::Dup);
+                    let next_idx = code.push_var("next");
+                    code.emit(Opcode::GetProp(next_idx));
+                    code.emit(Opcode::CallMethod(0));
+                    code.emit(Opcode::DeclareVar(r_var));
+                    // if (r.done) break (jump to end).
+                    code.emit(Opcode::LoadVar(r_var));
+                    let done_idx = code.push_var("done");
+                    code.emit(Opcode::GetProp(done_idx));
+                    let jmp_to_end = code.emit(Opcode::JmpIfTrue(0));
+                    // yield r.value
+                    code.emit(Opcode::LoadVar(r_var));
+                    let value_idx = code.push_var("value");
+                    code.emit(Opcode::GetProp(value_idx));
+                    code.emit(Opcode::Yield);
+                    code.emit(Opcode::Pop); // yield expr's sent-in value (Undefined) - discard
+                    let back = code.emit(Opcode::Jmp(0));
+                    code.patch_jmp(back, loop_start);
+                    let end = code.bytecode.len();
+                    code.patch_jmp(jmp_to_end, end);
+                    // yield* expr returns last r.value (or undef).
+                    code.emit(Opcode::LoadUndefined);
+                    return Ok(());
+                }
+                return Err("yield* without value");
+            }
             if let Some(v) = value {
                 compile_expr(v, code)?;
             } else {
