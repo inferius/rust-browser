@@ -2681,6 +2681,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                                 "+" | "=" => {
                                     self.zoom = (self.zoom * 1.1).min(5.0);
                                     self.cached_layout_root = None;
+                                    self.clamp_scroll_to_layout();
                                     println!("[zoom] {:.0}%", self.zoom * 100.0);
                                     self.render();
                                     return;
@@ -2688,6 +2689,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                                 "-" | "_" => {
                                     self.zoom = (self.zoom / 1.1).max(0.25);
                                     self.cached_layout_root = None;
+                                    self.clamp_scroll_to_layout();
                                     println!("[zoom] {:.0}%", self.zoom * 100.0);
                                     self.render();
                                     return;
@@ -2695,6 +2697,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                                 "0" => {
                                     self.zoom = 1.0;
                                     self.cached_layout_root = None;
+                                    self.clamp_scroll_to_layout();
                                     println!("[zoom] 100%");
                                     self.render();
                                     return;
@@ -2745,6 +2748,22 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                     }
                 }
                 _ => {}
+            }
+        }
+    }
+
+    impl App {
+        /// Po zoom change: clamp scroll_y/scroll_x do max scrollu pro nove
+        /// layout dimensions. Pri zoomu out se layout zmensi -> overflow muze
+        /// zmizet -> max_scroll = 0. Stara scroll_y > 0 by ukazovala blank.
+        fn clamp_scroll_to_layout(&mut self) {
+            if let (Some(layout), Some(r)) = (&self.layout_root, &self.renderer) {
+                let vw = (r.config.width as f32) / self.zoom;
+                let vh = (r.config.height as f32) / self.zoom;
+                let max_y = (layout.rect.height - vh).max(0.0);
+                let max_x = (layout.rect.width - vw).max(0.0);
+                if self.scroll_y > max_y { self.scroll_y = max_y; }
+                if self.scroll_x > max_x { self.scroll_x = max_x; }
             }
         }
     }
