@@ -356,6 +356,24 @@ fn vm_user_function_chained_calls() {
 }
 
 #[test]
+fn vm_optional_call_null_returns_undefined() {
+    let r = run_vm(r#"
+        let f = null;
+        f?.()
+    "#).unwrap();
+    assert_jv!(r, JsValue::Undefined);
+}
+
+#[test]
+fn vm_optional_call_defined_invokes() {
+    let r = run_vm(r#"
+        function add(a, b) { return a + b; }
+        add?.(3, 4)
+    "#).unwrap();
+    assert_jv!(r, n(7.0));
+}
+
+#[test]
 fn vm_optional_chain_undefined() {
     let r = run_vm(r#"
         let o = null;

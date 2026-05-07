@@ -518,7 +518,8 @@ pub fn compile_expr(e: &Expr, code: &mut CodeBlock) -> Result<(), &'static str> 
             code.emit(Opcode::NewArray(items.len() as u16));
             Ok(())
         }
-        Expr::Call { callee, args, optional: _ } => {
+        Expr::Call { callee, args, optional } => {
+            let opt = *optional;
             // Callee resolution: local var vs global.
             // Pri Ident: pokud existuje v var_names UZ pred timto callem (function decl
             // appears earlier), pouzij LoadVar, jinak LoadGlobal.
@@ -556,10 +557,25 @@ pub fn compile_expr(e: &Expr, code: &mut CodeBlock) -> Result<(), &'static str> 
                 _ => return Err("complex callee not supported"),
             }
             if args.len() > u16::MAX as usize { return Err("too many args"); }
-            for arg in args {
-                compile_expr(arg, code)?;
+            if opt {
+                let jmp_proceed = code.emit(Opcode::JmpIfNotNullishKeep(0));
+                code.emit(Opcode::Pop);
+                code.emit(Opcode::LoadUndefined);
+                let jmp_end = code.emit(Opcode::Jmp(0));
+                let proceed = code.bytecode.len();
+                code.patch_jmp(jmp_proceed, proceed);
+                for arg in args {
+                    compile_expr(arg, code)?;
+                }
+                code.emit(Opcode::CallNative(args.len() as u16));
+                let end = code.bytecode.len();
+                code.patch_jmp(jmp_end, end);
+            } else {
+                for arg in args {
+                    compile_expr(arg, code)?;
+                }
+                code.emit(Opcode::CallNative(args.len() as u16));
             }
-            code.emit(Opcode::CallNative(args.len() as u16));
             Ok(())
         }
         Expr::Arrow { params, body } => {
