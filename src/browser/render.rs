@@ -2391,6 +2391,14 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         devtools_console_input: String,
         /// True kdyz user drze LMB na resize grip a tahne.
         devtools_resizing: bool,
+        /// Browser zoom factor (1.0 = 100%). Ctrl++/Ctrl+- meni v krocich,
+        /// Ctrl+0 reset. Layout viewport pri zoomu = window/zoom (tj. logical
+        /// dimensions mensi -> reflow). Render uniform vp = window/zoom -> px
+        /// padaji do scaled NDC. Glyf rasterization ale na zoom = blur, ale
+        /// browsersko-funkcni.
+        zoom: f32,
+        /// Trackovany state Ctrl/Shift/Alt pro zoom shortcut detection.
+        modifiers: winit::keyboard::ModifiersState,
     }
 
     impl ApplicationHandler for App {
@@ -2441,8 +2449,10 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                     self.render();
                 }
                 WindowEvent::CursorMoved { position, .. } => {
-                    let new_x = position.x as f32;
-                    let new_y = position.y as f32 + self.scroll_y;
+                    // Mouse coords prevedeme z physical px na logical (layout
+                    // space) delenim zoom. scroll_y je uz v logical px.
+                    let new_x = (position.x as f32) / self.zoom;
+                    let new_y = (position.y as f32) / self.zoom + self.scroll_y;
                     // Skip update kdyz se pozice nezmenila (deduplicate winit spam).
                     if (new_x - self.mouse_x).abs() < 0.5 && (new_y - self.mouse_y).abs() < 0.5 {
                         return;
@@ -2561,9 +2571,13 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                 WindowEvent::HoveredFile(_) => {
                     // Nic - winit jen oznamuje hover.
                 }
+                WindowEvent::ModifiersChanged(m) => {
+                    self.modifiers = m.state();
+                }
                 // F12 = regenerace devtools.html + open v default browseru.
                 // F5 / Ctrl+R = reload current file.
                 // Alt+Left = back, Alt+Right = forward (browser history).
+                // Ctrl++ / Ctrl+- / Ctrl+0 = zoom in/out/reset (page reflow).
                 WindowEvent::KeyboardInput { event: key_event, .. } => {
                     if key_event.state != ElementState::Pressed { return; }
                     // Pri otevrenem devtools + Console tab + zadanym text -> append do console_input.
@@ -2602,6 +2616,35 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                                 return;
                             }
                             _ => {}
+                        }
+                    }
+                    // Ctrl+= / Ctrl++ / Ctrl+- / Ctrl+0 = zoom controls.
+                    if self.modifiers.control_key() {
+                        if let Key::Character(s) = &key_event.logical_key {
+                            match s.as_str() {
+                                "+" | "=" => {
+                                    self.zoom = (self.zoom * 1.1).min(5.0);
+                                    self.cached_layout_root = None;
+                                    println!("[zoom] {:.0}%", self.zoom * 100.0);
+                                    self.render();
+                                    return;
+                                }
+                                "-" | "_" => {
+                                    self.zoom = (self.zoom / 1.1).max(0.25);
+                                    self.cached_layout_root = None;
+                                    println!("[zoom] {:.0}%", self.zoom * 100.0);
+                                    self.render();
+                                    return;
+                                }
+                                "0" => {
+                                    self.zoom = 1.0;
+                                    self.cached_layout_root = None;
+                                    println!("[zoom] 100%");
+                                    self.render();
+                                    return;
+                                }
+                                _ => {}
+                            }
                         }
                     }
                     match key_event.logical_key {
@@ -2992,6 +3035,8 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
             use super::{css_parser, cascade, layout, paint};
             let frame_start = std::time::Instant::now();
             let r = match &mut self.renderer { Some(r) => r, None => return };
+            // Push zoom faktor do rendereru pro vp uniform skalovani.
+            r.zoom = self.zoom;
 
             // Pouzij document z interpreteru (po JS modifikacich)
             let document_root = match &self.interpreter {
@@ -3164,8 +3209,11 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
             // Uloz current style_map pro dalsi frame (transition diff source)
             self.prev_style_map = Some(style_map.clone());
 
-            let viewport_w = r.config.width as f32;
-            let viewport_h = r.config.height as f32;
+            // Browser zoom: logical viewport = window / zoom (-> reflow at scaled
+            // size). Render shader uniform = same logical dimensions, takze layout
+            // px se mapuje na scaled NDC (visualni zoom).
+            let viewport_w = (r.config.width as f32) / self.zoom;
+            let viewport_h = (r.config.height as f32) / self.zoom;
             // Layout cache: rebuild jen kdyz CSS/DOM/viewport zmenil nebo
             // animations modifikuji layout-relevant props (width/height/margin/...).
             let layout_cache_valid = self.cached_layout_root.is_some()
@@ -3444,6 +3492,8 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         devtools_inspect_mode: false,
         devtools_console_input: String::new(),
         devtools_resizing: false,
+        zoom: 1.0,
+        modifiers: winit::keyboard::ModifiersState::empty(),
     };
     event_loop.run_app(&mut app).map_err(|e| e.to_string())?;
     Ok(())
@@ -3711,6 +3761,10 @@ struct Renderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
+    /// Browser zoom factor. Vertex px coordinates jsou v logickem px (viewport
+    /// width / zoom). Uniform vp je nastaven na (config.w / zoom, config.h /
+    /// zoom) tak aby NDC mapping render-koval zoom*logical px na physical px.
+    zoom: f32,
     pipeline: wgpu::RenderPipeline,
     uniform_buf: wgpu::Buffer,
     atlas_tex: wgpu::Texture,
@@ -4201,7 +4255,7 @@ impl Renderer {
         });
 
         Renderer {
-            surface, device, queue, config, pipeline, uniform_buf,
+            surface, device, queue, config, zoom: 1.0, pipeline, uniform_buf,
             atlas_tex, atlas_view, atlas_smp, bind_group_layout, bind_group, atlas,
             image_atlas, image_tex, image_view,
             font_registry: std::collections::HashMap::new(),
@@ -5226,7 +5280,10 @@ impl Renderer {
         scroll_y: f32,
     ) {
         // Update viewport uniform pro main pipeline
-        let vp = [self.config.width as f32, self.config.height as f32, 0.0, 0.0];
+        // Browser zoom: vp uniform = logical dims (window/zoom). Vertex px coords
+        // jsou v logical px (layout running at logical viewport). NDC mapping
+        // px/vp pak skaluje obsah o zoom faktor pri compose do framebufferu.
+        let vp = [self.config.width as f32 / self.zoom, self.config.height as f32 / self.zoom, 0.0, 0.0];
         self.queue.write_buffer(&self.uniform_buf, 0, bytemuck::cast_slice(&vp));
 
         // Dirty rect: cely frame je dirty (aktualne full-redraw)
@@ -5394,7 +5451,10 @@ impl Renderer {
     /// Pro App::render se preferuje draw_full_frame ktera handluje WebGL.
     fn draw_segments(&mut self, cmds: &[DisplayCommand]) {
         // Update viewport uniform
-        let vp = [self.config.width as f32, self.config.height as f32, 0.0, 0.0];
+        // Browser zoom: vp uniform = logical dims (window/zoom). Vertex px coords
+        // jsou v logical px (layout running at logical viewport). NDC mapping
+        // px/vp pak skaluje obsah o zoom faktor pri compose do framebufferu.
+        let vp = [self.config.width as f32 / self.zoom, self.config.height as f32 / self.zoom, 0.0, 0.0];
         self.queue.write_buffer(&self.uniform_buf, 0, bytemuck::cast_slice(&vp));
         let frame = match self.surface.get_current_texture() {
             Ok(f) => f,
@@ -5570,13 +5630,17 @@ impl Renderer {
         } else {
             wgpu::LoadOp::Load
         };
-        // Scissor: clamp do swap chain rozmeru, integer pixely
+        // Scissor: clamp do swap chain rozmeru, integer pixely.
+        // x/y/w/h jsou layout (logical) px - prevedeme na physical pres zoom.
+        let z = self.zoom.max(0.0001);
         let vw = self.config.width as i32;
         let vh = self.config.height as i32;
-        let sx = x.max(0.0) as i32;
-        let sy = y.max(0.0) as i32;
-        let sw = ((x + w).min(vw as f32) as i32 - sx).max(0);
-        let sh = ((y + h).min(vh as f32) as i32 - sy).max(0);
+        let sx = (x * z).max(0.0) as i32;
+        let sy = (y * z).max(0.0) as i32;
+        let sw = ((x + w) * z).min(vw as f32) as i32 - sx;
+        let sh = ((y + h) * z).min(vh as f32) as i32 - sy;
+        let sw = sw.max(0);
+        let sh = sh.max(0);
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("compose_pass"),
@@ -5606,13 +5670,15 @@ impl Renderer {
         // quadu. Kdybychom samplovali presne na hrane, edge fragmenty by
         // bledly s prilehlym transparent contentem v offscreen RT a element
         // by vypadal uzsi nez ma byt.
+        // Offscreen RT je v physical px, x/y/w/h v logical px. Prevedeme.
+        let z = self.zoom.max(0.0001);
         let vw = self.config.width as f32;
         let vh = self.config.height as f32;
         let pad: f32 = 1.0;
-        let u0 = ((x - pad) / vw).clamp(0.0, 1.0);
-        let v0 = ((y - pad) / vh).clamp(0.0, 1.0);
-        let u1 = ((x + w + pad) / vw).clamp(0.0, 1.0);
-        let v1 = ((y + h + pad) / vh).clamp(0.0, 1.0);
+        let u0 = ((x * z - pad) / vw).clamp(0.0, 1.0);
+        let v0 = ((y * z - pad) / vh).clamp(0.0, 1.0);
+        let u1 = (((x + w) * z + pad) / vw).clamp(0.0, 1.0);
+        let v1 = (((y + h) * z + pad) / vh).clamp(0.0, 1.0);
         let cx = x + w * 0.5;
         let cy = y + h * 0.5;
         // Half-size rozsirime o pad - jinak by quad sampling oblast neodpovidala
@@ -5633,10 +5699,10 @@ impl Renderer {
             m[8], m[9], m[10], m[11],
             // row3
             m[12], m[13], m[14], m[15],
-            // center (cx, cy, hw, hh)
+            // center (cx, cy, hw, hh) - vsechno v logical px (vp uniform tez logical)
             cx, cy, hw, hh,
-            // viewport
-            vw, vh, 0.0, 0.0,
+            // viewport - logical (window/zoom). NDC = px / logical_vp -> px*zoom/window physical.
+            vw / z, vh / z, 0.0, 0.0,
             // uv_box
             u0, v0, u1, v1,
             // padding
@@ -5677,7 +5743,10 @@ impl Renderer {
 
     fn draw(&self, vertices: &[Vertex]) {
         // Update uniform: viewport
-        let vp = [self.config.width as f32, self.config.height as f32, 0.0, 0.0];
+        // Browser zoom: vp uniform = logical dims (window/zoom). Vertex px coords
+        // jsou v logical px (layout running at logical viewport). NDC mapping
+        // px/vp pak skaluje obsah o zoom faktor pri compose do framebufferu.
+        let vp = [self.config.width as f32 / self.zoom, self.config.height as f32 / self.zoom, 0.0, 0.0];
         self.queue.write_buffer(&self.uniform_buf, 0, bytemuck::cast_slice(&vp));
 
         let frame = match self.surface.get_current_texture() {
