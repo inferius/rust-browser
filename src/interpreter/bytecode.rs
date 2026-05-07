@@ -14,6 +14,49 @@
 //! if/else, while/for, function call (existing JS funkce). Concretne cca 30 opcodes.
 
 use crate::ast::{Expr, BinaryOp, UnaryOp, Stmt, LogicalOp, AssignOp, Pattern, ForInit, MemberProp, PropKey};
+
+// Thread-local compile-time scratch:
+// - OUTER_VARS_STACK: stack of outer var_names (push pri vstupu do function body).
+// - CAPTURES_STACK: stack of captures vec (paralelni s OUTER_VARS_STACK).
+//   Pri free var detection v body, push outer_idx -> aktualni captures Vec.
+thread_local! {
+    static OUTER_VARS_STACK: std::cell::RefCell<Vec<Vec<String>>> = std::cell::RefCell::new(Vec::new());
+    static CAPTURES_STACK: std::cell::RefCell<Vec<Vec<u16>>> = std::cell::RefCell::new(Vec::new());
+}
+
+/// Push outer scope info pred compile body.
+fn push_outer_scope(outer_vars: Vec<String>) {
+    OUTER_VARS_STACK.with(|s| s.borrow_mut().push(outer_vars));
+    CAPTURES_STACK.with(|s| s.borrow_mut().push(Vec::new()));
+}
+
+/// Pop a vrat collected captures pro tuto level.
+fn pop_outer_scope() -> Vec<u16> {
+    OUTER_VARS_STACK.with(|s| { s.borrow_mut().pop(); });
+    CAPTURES_STACK.with(|s| s.borrow_mut().pop().unwrap_or_default())
+}
+
+/// Pri Ident lookup, kdyz neni v locals, zkus capture z outer.
+/// Vrati Some(captures_idx) pokud je capture, jinak None (= LoadGlobal).
+fn try_capture(name: &str) -> Option<u16> {
+    OUTER_VARS_STACK.with(|stack| {
+        let outer_stack = stack.borrow();
+        let outer = outer_stack.last()?;
+        let outer_idx = outer.iter().position(|n| n == name)? as u16;
+        // Pridej do captures (dedupe).
+        CAPTURES_STACK.with(|cs| {
+            let mut cap_stack = cs.borrow_mut();
+            let cap_vec = cap_stack.last_mut()?;
+            // Dedupe.
+            if let Some(i) = cap_vec.iter().position(|&x| x == outer_idx) {
+                return Some(i as u16);
+            }
+            let idx = cap_vec.len() as u16;
+            cap_vec.push(outer_idx);
+            Some(idx)
+        })
+    })
+}
 use super::{JsValue};
 
 #[derive(Debug, Clone, Copy)]
@@ -80,7 +123,11 @@ pub enum Opcode {
     Halt,                 // konec compiled bloku
 
     // User function support.
-    LoadFunction(u16),    // index do CodeBlock.functions, push JsValue::Function(VmCompiled)
+    LoadFunction(u16),    // index do CodeBlock.functions, push JsValue::Function(VmCompiled).
+                          // Pri kompilaci si uchoví indexy outer-locals pro closure capture
+                          // v compiled.captures_outer_indices. VM pri LoadFunction snapne
+                          // outer locals[idx] do kapture vec a embedne do JsFunc::VmCompiled.
+    LoadCapture(u16),     // push captures[u16] - cte z aktualne bezici closure frame.
 }
 
 #[derive(Debug, Clone)]
@@ -101,6 +148,10 @@ pub struct CompiledFunction {
     pub name: Option<String>,
     pub params: Vec<String>,
     pub code: CodeBlock,
+    /// Closure captures: pro kazdy free var v body si pamatujem index v outer
+    /// var_names. Pri LoadFunction VM nacte hodnoty z outer locals[idx] a vlozi
+    /// do JsFunc::VmCompiled.captures vec.
+    pub captures_outer_indices: Vec<u16>,
 }
 
 #[derive(Debug, Clone)]
@@ -191,8 +242,15 @@ pub fn compile_expr(e: &Expr, code: &mut CodeBlock) -> Result<(), &'static str> 
         Expr::Null => { code.emit(Opcode::LoadNull); Ok(()) }
         Expr::Undefined => { code.emit(Opcode::LoadUndefined); Ok(()) }
         Expr::Ident(name) => {
-            let idx = code.push_var(name);
-            code.emit(Opcode::LoadVar(idx));
+            // Lookup order: 1) lokalni var, 2) closure capture, 3) global.
+            if let Some(idx) = code.var_names.iter().position(|n| n == name) {
+                code.emit(Opcode::LoadVar(idx as u16));
+            } else if let Some(cap_idx) = try_capture(name) {
+                code.emit(Opcode::LoadCapture(cap_idx));
+            } else {
+                let idx = code.push_var(name);
+                code.emit(Opcode::LoadVar(idx));
+            }
             Ok(())
         }
         Expr::Unary { op, arg } => {
@@ -592,6 +650,8 @@ pub fn compile_stmt(s: &Stmt, code: &mut CodeBlock) -> Result<(), &'static str> 
         Stmt::Function { name, params, body } => {
             // Pre-register name v outer var_names pro pripadnou rekurzi.
             let var_idx = code.push_var(name);
+            // Snapshot outer var_names PRED compile body (pro closure capture).
+            let outer_vars_snapshot = code.var_names.clone();
             // Compile body do nove CompiledFunction.
             let mut fn_code = CodeBlock::new();
             // Pre-register function name in body's var_names PRVNI - rekurze cez
@@ -606,10 +666,17 @@ pub fn compile_stmt(s: &Stmt, code: &mut CodeBlock) -> Result<(), &'static str> 
                     return Err("destructuring param not supported");
                 }
             }
+            // Push outer scope context pro closure capture detection.
+            push_outer_scope(outer_vars_snapshot);
             // Compile body.
-            for s in body {
-                compile_stmt(s, &mut fn_code)?;
-            }
+            let body_result = (|| -> Result<(), &'static str> {
+                for s in body {
+                    compile_stmt(s, &mut fn_code)?;
+                }
+                Ok(())
+            })();
+            let captures_outer_indices = pop_outer_scope();
+            body_result?;
             // Implicit return undefined po konci body.
             fn_code.emit(Opcode::LoadUndefined);
             fn_code.emit(Opcode::Return);
@@ -617,6 +684,7 @@ pub fn compile_stmt(s: &Stmt, code: &mut CodeBlock) -> Result<(), &'static str> 
                 name: Some(name.clone()),
                 params: param_names,
                 code: fn_code,
+                captures_outer_indices,
             });
             let fn_idx = code.functions.len() as u16;
             code.functions.push(compiled);
@@ -665,14 +733,26 @@ pub struct VM {
     /// Volitelny global env hook: pri LoadGlobal vyhleda jmeno v env.
     /// Bez hooku = vrati Undefined.
     pub env: Option<std::rc::Rc<std::cell::RefCell<super::Environment>>>,
+    /// Closure captures - free var values copied at LoadFunction time.
+    captures: Vec<JsValue>,
 }
 
 impl VM {
     pub fn new() -> Self {
-        Self { stack: Vec::with_capacity(64), locals: Vec::new(), env: None }
+        Self {
+            stack: Vec::with_capacity(64),
+            locals: Vec::new(),
+            env: None,
+            captures: Vec::new(),
+        }
     }
     pub fn with_env(env: std::rc::Rc<std::cell::RefCell<super::Environment>>) -> Self {
-        Self { stack: Vec::with_capacity(64), locals: Vec::new(), env: Some(env) }
+        Self {
+            stack: Vec::with_capacity(64),
+            locals: Vec::new(),
+            env: Some(env),
+            captures: Vec::new(),
+        }
     }
 
     pub fn run(&mut self, code: &CodeBlock) -> Result<JsValue, String> {
@@ -827,22 +907,22 @@ impl VM {
                         JsValue::Function(super::JsFunc::Native(_, f)) => {
                             f(args).map_err(|e| format!("{:?}", e))?
                         }
-                        JsValue::Function(super::JsFunc::VmCompiled { compiled, env, name }) => {
+                        JsValue::Function(super::JsFunc::VmCompiled { compiled, env, name, captures }) => {
                             // Nested VM run pro user function.
                             let mut nested = VM::new();
                             nested.env = Some(env.clone());
+                            nested.captures = captures.clone();
                             nested.locals.resize(compiled.code.var_names.len(), JsValue::Undefined);
                             // Self-reference pro rekurzi: locals[0] = function value.
-                            // Compile pre-registers name jako var_names[0].
                             if !compiled.code.var_names.is_empty()
                                 && compiled.code.var_names[0] == name.clone().unwrap_or_default() {
                                 nested.locals[0] = JsValue::Function(super::JsFunc::VmCompiled {
                                     name: name.clone(),
                                     compiled: compiled.clone(),
                                     env: env.clone(),
+                                    captures: captures.clone(),
                                 });
                             }
-                            // Init param values.
                             for (i, p) in compiled.params.iter().enumerate() {
                                 if let Some(idx) = compiled.code.var_names.iter().position(|n| n == p) {
                                     nested.locals[idx] = args.get(i).cloned().unwrap_or(JsValue::Undefined);
@@ -930,11 +1010,22 @@ impl VM {
                         .ok_or("LoadFunction idx out of range")?
                         .clone();
                     let env = self.env.clone().unwrap_or_else(|| super::Environment::new_global());
+                    // Capture outer locals.
+                    let mut captures: Vec<JsValue> = Vec::with_capacity(compiled.captures_outer_indices.len());
+                    for &outer_idx in &compiled.captures_outer_indices {
+                        let v = self.locals.get(outer_idx as usize).cloned().unwrap_or(JsValue::Undefined);
+                        captures.push(v);
+                    }
                     self.stack.push(JsValue::Function(super::JsFunc::VmCompiled {
                         name: compiled.name.clone(),
                         compiled,
                         env,
+                        captures,
                     }));
+                }
+                Opcode::LoadCapture(i) => {
+                    let v = self.captures.get(i as usize).cloned().unwrap_or(JsValue::Undefined);
+                    self.stack.push(v);
                 }
             }
         }

@@ -321,6 +321,9 @@ pub enum JsFunc {
         compiled: Rc<bytecode::CompiledFunction>,
         /// Closure env z misto definice (pro outer var lookup z VM).
         env: Rc<RefCell<Env>>,
+        /// Closure captures - hodnoty volnych promennych z outer scope at
+        /// LoadFunction time. Indexovane podle CompiledFunction.captures_outer_indices.
+        captures: Vec<JsValue>,
     },
 }
 

@@ -356,6 +356,41 @@ fn vm_user_function_chained_calls() {
 }
 
 #[test]
+fn vm_closure_captures_outer_var() {
+    let r = run_vm(r#"
+        let x = 100;
+        function f() { return x; }
+        f()
+    "#).unwrap();
+    assert_jv!(r, n(100.0));
+}
+
+#[test]
+fn vm_closure_captures_multiple_vars() {
+    let r = run_vm(r#"
+        let a = 10;
+        let b = 20;
+        let c = 30;
+        function sum() { return a + b + c; }
+        sum()
+    "#).unwrap();
+    assert_jv!(r, n(60.0));
+}
+
+#[test]
+fn vm_closure_capture_by_value() {
+    // Closure capturuje hodnotu pri vzniku funkce, ne pozdejsi mutation.
+    let r = run_vm(r#"
+        let x = 5;
+        function readX() { return x; }
+        x = 999;
+        readX()
+    "#).unwrap();
+    // By-value semantics: readX vraci 5 (snapshot pri creation), ne 999.
+    assert_jv!(r, n(5.0));
+}
+
+#[test]
 fn vm_user_function_recursion() {
     let r = run_vm(r#"
         function fact(n) {
