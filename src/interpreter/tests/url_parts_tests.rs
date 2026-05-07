@@ -1,6 +1,7 @@
 /// Testy pro parse_url_parts + url_encode (interpreter URL helpers).
 
-use crate::interpreter::{parse_url_parts, url_encode};
+use crate::interpreter::dom_props::parse_url_parts;
+use crate::interpreter::url_encode;
 
 #[test]
 fn url_parts_full() {

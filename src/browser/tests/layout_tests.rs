@@ -764,6 +764,27 @@ fn parse_linear_gradient_basic() {
 }
 
 #[test]
+fn parse_linear_gradient_multi_stop() {
+    let g = layout::parse_linear_gradient("linear-gradient(90deg, red, yellow 50%, blue)");
+    assert!(g.is_some());
+    let (angle, stops) = g.unwrap();
+    assert_eq!(angle, 90.0);
+    assert_eq!(stops.len(), 3);
+    // Prvni a posledni stop maji default offsety 0.0 a 1.0
+    assert_eq!(stops[0].0, 0.0);
+    assert!((stops[1].0 - 0.5).abs() < 0.01);
+    assert_eq!(stops[2].0, 1.0);
+}
+
+#[test]
+fn parse_linear_gradient_four_stops() {
+    let g = layout::parse_linear_gradient("linear-gradient(180deg, red, green 33%, blue 66%, yellow)");
+    assert!(g.is_some());
+    let (_, stops) = g.unwrap();
+    assert_eq!(stops.len(), 4);
+}
+
+#[test]
 fn svg_rect_emits_display_command() {
     use crate::browser::paint;
     let doc = parse_html(r#"<html><body>

@@ -424,18 +424,32 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: 
             }
             DisplayCommand::Gradient { x, y, w, h, kind, stops, radius } => {
                 if stops.len() >= 2 {
-                    let c0 = normalize_color(&stops[0].1);
-                    let c1 = normalize_color(&stops.last().unwrap().1);
+                    let stops_f: Vec<(f32, [f32; 4])> = stops.iter()
+                        .map(|(o, c)| (*o, normalize_color(c))).collect();
+                    let c0 = stops_f[0].1;
+                    let c1 = stops_f.last().unwrap().1;
                     use crate::browser::paint::GradientKind;
                     match kind {
                         GradientKind::Linear { angle_deg } => {
-                            push_gradient(&mut verts, *x, *y, *w, *h, *angle_deg, c0, c1, *radius);
+                            if stops_f.len() > 2 {
+                                push_multi_stop_linear_gradient(&mut verts, *x, *y, *w, *h, *angle_deg, &stops_f, *radius);
+                            } else {
+                                push_gradient(&mut verts, *x, *y, *w, *h, *angle_deg, c0, c1, *radius);
+                            }
                         }
                         GradientKind::Radial { cx, cy, radius: grad_r } => {
-                            push_radial_gradient(&mut verts, *x, *y, *w, *h, *cx, *cy, *grad_r, c0, c1, *radius);
+                            if stops_f.len() > 2 {
+                                push_multi_stop_radial_gradient(&mut verts, *x, *y, *w, *h, *cx, *cy, *grad_r, &stops_f, *radius);
+                            } else {
+                                push_radial_gradient(&mut verts, *x, *y, *w, *h, *cx, *cy, *grad_r, c0, c1, *radius);
+                            }
                         }
                         GradientKind::Conic { cx, cy, start_angle_deg } => {
-                            push_conic_gradient(&mut verts, *x, *y, *w, *h, *cx, *cy, *start_angle_deg, c0, c1, *radius);
+                            if stops_f.len() > 2 {
+                                push_multi_stop_conic_gradient(&mut verts, *x, *y, *w, *h, *cx, *cy, *start_angle_deg, &stops_f, *radius);
+                            } else {
+                                push_conic_gradient(&mut verts, *x, *y, *w, *h, *cx, *cy, *start_angle_deg, c0, c1, *radius);
+                            }
                         }
                     }
                 }
@@ -1560,6 +1574,277 @@ fn push_conic_gradient(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f32, h: f32,
     let br = mk(x + w, y + h);
     verts.push(tl); verts.push(tr); verts.push(bl);
     verts.push(bl); verts.push(tr); verts.push(br);
+}
+
+/// Multi-stop linear gradient pres CPU tesselaci.
+/// Pro kazdy par stops[i], stops[i+1] orize jednotkovy ctverec [0,1]x[0,1] na region
+/// kde axis-projekce je v [s_a, s_b], a vyplni ho 2-color gradientem c_a->c_b s uv.x lokalizovanou.
+fn push_multi_stop_linear_gradient(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f32, h: f32,
+                                    angle_deg: f32, stops: &[(f32, [f32; 4])], radius: f32) {
+    if stops.len() < 2 { return; }
+    let hw = w * 0.5;
+    let hh = h * 0.5;
+    let cx_full = x + hw;
+    let cy_full = y + hh;
+    let rad = (angle_deg - 90.0).to_radians();
+    let dx = rad.cos();
+    let dy = rad.sin();
+    // Projekce normalizovaneho bodu (nx, ny) v [0,1]^2 na osu - 0.5
+    let proj_centered = |p: (f32, f32)| (p.0 - 0.5) * dx + (p.1 - 0.5) * dy;
+    let project_norm = |p: (f32, f32)| proj_centered(p) + 0.5;
+    let map_to_screen = |np: (f32, f32)| (x + np.0 * w, y + np.1 * h);
+
+    for seg in 0..stops.len() - 1 {
+        let s_a = stops[seg].0.clamp(0.0, 1.0);
+        let s_b = stops[seg + 1].0.clamp(0.0, 1.0);
+        if s_b <= s_a + 1e-6 { continue; }
+        let c_a = stops[seg].1;
+        let c_b = stops[seg + 1].1;
+        let poly = clip_unit_square_to_axis_range(dx, dy, s_a, s_b);
+        if poly.len() < 3 { continue; }
+        // Triangulace fan z poly[0]
+        for i in 1..poly.len() - 1 {
+            let triplet = [poly[0], poly[i], poly[i + 1]];
+            for &np in &triplet {
+                let t_global = project_norm(np);
+                let t_local = ((t_global - s_a) / (s_b - s_a)).clamp(0.0, 1.0);
+                let (px, py) = map_to_screen(np);
+                verts.push(Vertex {
+                    pos: [px, py],
+                    color: c_a,
+                    uv: [t_local, 0.0],
+                    mode: 2.0,
+                    local: [px - cx_full, py - cy_full],
+                    half_size: [hw, hh],
+                    radius,
+                    color2: c_b,
+                    blur: 0.0,
+                });
+            }
+        }
+    }
+}
+
+/// Multi-stop radial gradient pres CPU tesselaci na soustredne mezikruzi.
+/// Pro kazdy par stops[i], stops[i+1] generuje annulus z r_a*grad_r do r_b*grad_r.
+/// K=48 segmentu kolem dokola. Mode 0 (solid s lokalni interpolaci) per-vertex.
+fn push_multi_stop_radial_gradient(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f32, h: f32,
+                                    gcx: f32, gcy: f32, grad_r: f32,
+                                    stops: &[(f32, [f32; 4])], radius: f32) {
+    if stops.len() < 2 { return; }
+    let hw = w * 0.5;
+    let hh = h * 0.5;
+    let box_cx = x + hw;
+    let box_cy = y + hh;
+    const K: usize = 48;
+    // Mix per-vertex: kazdy vertex dostane svoji barvu uz vypoctenou (mode 0 = solid).
+    // Box clip pres SDF radius v shaderu - misto toho clipneme na CPU pres axis-aligned bbox.
+    // Ale annulus muze vyckat za box - to nevadi, framebuffer alpha-overdraw je OK pokud zustaneme
+    // v ramci aktualniho clip rectu. Pouzijem mode 0 a vlozime barvu primo do vertex.color.
+    let interp_color = |t: f32| -> [f32; 4] {
+        let t = t.clamp(0.0, 1.0);
+        // Najdeme segment
+        for i in 0..stops.len() - 1 {
+            let a = stops[i].0;
+            let b = stops[i + 1].0;
+            if t >= a && t <= b + 1e-6 {
+                let local = if b > a { (t - a) / (b - a) } else { 0.0 };
+                let ca = stops[i].1;
+                let cb = stops[i + 1].1;
+                return [
+                    ca[0] + (cb[0] - ca[0]) * local,
+                    ca[1] + (cb[1] - ca[1]) * local,
+                    ca[2] + (cb[2] - ca[2]) * local,
+                    ca[3] + (cb[3] - ca[3]) * local,
+                ];
+            }
+        }
+        stops.last().unwrap().1
+    };
+    // Triangle fan z centra pro prvni stop
+    let center_color = interp_color(0.0);
+    let outer_color = interp_color(1.0);
+    let _ = outer_color;
+    // Stratujeme: mezi dvema sousednimi stop offsety vykreslime mezikruzi K segmentu
+    // + vnitrek prvniho stop offsetu jako disk.
+    let inner_r0 = stops[0].0.clamp(0.0, 1.0) * grad_r;
+    if inner_r0 > 0.001 {
+        // Disk od centra do inner_r0 - cely v c_a barve stops[0].
+        for k in 0..K {
+            let a0 = (k as f32) / (K as f32) * std::f32::consts::TAU;
+            let a1 = ((k + 1) as f32) / (K as f32) * std::f32::consts::TAU;
+            let p_center = (gcx, gcy);
+            let p_a = (gcx + a0.cos() * inner_r0, gcy + a0.sin() * inner_r0);
+            let p_b = (gcx + a1.cos() * inner_r0, gcy + a1.sin() * inner_r0);
+            for &p in &[p_center, p_a, p_b] {
+                verts.push(Vertex {
+                    pos: [p.0, p.1],
+                    color: center_color,
+                    uv: [0.0, 0.0],
+                    mode: 0.0,
+                    local: [p.0 - box_cx, p.1 - box_cy],
+                    half_size: [hw, hh],
+                    radius,
+                    color2: [0.0; 4],
+                    blur: 0.0,
+                });
+            }
+        }
+    }
+    // Annuli mezi stop pary
+    for seg in 0..stops.len() - 1 {
+        let t_a = stops[seg].0.clamp(0.0, 1.0);
+        let t_b = stops[seg + 1].0.clamp(0.0, 1.0);
+        if t_b <= t_a + 1e-6 { continue; }
+        let r_a = t_a * grad_r;
+        let r_b = t_b * grad_r;
+        let c_a = stops[seg].1;
+        let c_b = stops[seg + 1].1;
+        for k in 0..K {
+            let a0 = (k as f32) / (K as f32) * std::f32::consts::TAU;
+            let a1 = ((k + 1) as f32) / (K as f32) * std::f32::consts::TAU;
+            let p_inner_0 = (gcx + a0.cos() * r_a, gcy + a0.sin() * r_a);
+            let p_inner_1 = (gcx + a1.cos() * r_a, gcy + a1.sin() * r_a);
+            let p_outer_0 = (gcx + a0.cos() * r_b, gcy + a0.sin() * r_b);
+            let p_outer_1 = (gcx + a1.cos() * r_b, gcy + a1.sin() * r_b);
+            // 2 trojuhelniky: (inner_0, outer_0, outer_1) a (inner_0, outer_1, inner_1)
+            let push_v = |verts: &mut Vec<Vertex>, p: (f32, f32), c: [f32; 4]| {
+                verts.push(Vertex {
+                    pos: [p.0, p.1],
+                    color: c,
+                    uv: [0.0, 0.0],
+                    mode: 0.0,
+                    local: [p.0 - box_cx, p.1 - box_cy],
+                    half_size: [hw, hh],
+                    radius,
+                    color2: [0.0; 4],
+                    blur: 0.0,
+                });
+            };
+            push_v(verts, p_inner_0, c_a);
+            push_v(verts, p_outer_0, c_b);
+            push_v(verts, p_outer_1, c_b);
+            push_v(verts, p_inner_0, c_a);
+            push_v(verts, p_outer_1, c_b);
+            push_v(verts, p_inner_1, c_a);
+        }
+    }
+}
+
+/// Multi-stop conic gradient: K=128 angularnich slicu, kazdy ma color z interp_color(angle/TAU).
+fn push_multi_stop_conic_gradient(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f32, h: f32,
+                                   gcx: f32, gcy: f32, start_deg: f32,
+                                   stops: &[(f32, [f32; 4])], radius: f32) {
+    if stops.len() < 2 { return; }
+    let hw = w * 0.5;
+    let hh = h * 0.5;
+    let box_cx = x + hw;
+    let box_cy = y + hh;
+    let start_rad = start_deg.to_radians();
+    // Polomer dosahnout vsechny rohy boxu od (gcx, gcy)
+    let r_max = {
+        let dx_max = (gcx - x).abs().max((x + w - gcx).abs());
+        let dy_max = (gcy - y).abs().max((y + h - gcy).abs());
+        (dx_max * dx_max + dy_max * dy_max).sqrt() * 1.2
+    };
+    const K: usize = 128;
+    let interp_color = |t: f32| -> [f32; 4] {
+        let t = t.rem_euclid(1.0);
+        for i in 0..stops.len() - 1 {
+            let a = stops[i].0;
+            let b = stops[i + 1].0;
+            if t >= a && t <= b + 1e-6 {
+                let local = if b > a { (t - a) / (b - a) } else { 0.0 };
+                let ca = stops[i].1;
+                let cb = stops[i + 1].1;
+                return [
+                    ca[0] + (cb[0] - ca[0]) * local,
+                    ca[1] + (cb[1] - ca[1]) * local,
+                    ca[2] + (cb[2] - ca[2]) * local,
+                    ca[3] + (cb[3] - ca[3]) * local,
+                ];
+            }
+        }
+        stops.last().unwrap().1
+    };
+    for k in 0..K {
+        let frac0 = (k as f32) / (K as f32);
+        let frac1 = ((k + 1) as f32) / (K as f32);
+        let a0 = start_rad + frac0 * std::f32::consts::TAU;
+        let a1 = start_rad + frac1 * std::f32::consts::TAU;
+        let c0 = interp_color(frac0);
+        let c1 = interp_color(frac1);
+        let p_center = (gcx, gcy);
+        let p_a = (gcx + a0.cos() * r_max, gcy + a0.sin() * r_max);
+        let p_b = (gcx + a1.cos() * r_max, gcy + a1.sin() * r_max);
+        let push_v = |verts: &mut Vec<Vertex>, p: (f32, f32), c: [f32; 4]| {
+            verts.push(Vertex {
+                pos: [p.0, p.1],
+                color: c,
+                uv: [0.0, 0.0],
+                mode: 0.0,
+                local: [p.0 - box_cx, p.1 - box_cy],
+                half_size: [hw, hh],
+                radius,
+                color2: [0.0; 4],
+                blur: 0.0,
+            });
+        };
+        push_v(verts, p_center, interp_color(0.0));
+        push_v(verts, p_a, c0);
+        push_v(verts, p_b, c1);
+    }
+}
+
+/// Sutherland-Hodgman polygon clip + axis range clip helpers.
+fn clip_unit_square_to_axis_range(dx: f32, dy: f32, t_min: f32, t_max: f32) -> Vec<(f32, f32)> {
+    let mut poly = vec![(0.0_f32, 0.0_f32), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+    let project = move |p: (f32, f32)| (p.0 - 0.5) * dx + (p.1 - 0.5) * dy;
+
+    let thresh_min = t_min - 0.5;
+    poly = clip_polygon(&poly, |p| project(p) >= thresh_min - 1e-6, |a, b| {
+        let pa = project(a) - thresh_min;
+        let pb = project(b) - thresh_min;
+        let denom = pa - pb;
+        let t = if denom.abs() < 1e-9 { 0.0 } else { pa / denom };
+        (a.0 + t * (b.0 - a.0), a.1 + t * (b.1 - a.1))
+    });
+
+    let thresh_max = t_max - 0.5;
+    poly = clip_polygon(&poly, |p| project(p) <= thresh_max + 1e-6, |a, b| {
+        let pa = thresh_max - project(a);
+        let pb = thresh_max - project(b);
+        let denom = pa - pb;
+        let t = if denom.abs() < 1e-9 { 0.0 } else { pa / denom };
+        (a.0 + t * (b.0 - a.0), a.1 + t * (b.1 - a.1))
+    });
+
+    poly
+}
+
+fn clip_polygon<F, G>(poly: &[(f32, f32)], inside: F, intersect: G) -> Vec<(f32, f32)>
+where
+    F: Fn((f32, f32)) -> bool,
+    G: Fn((f32, f32), (f32, f32)) -> (f32, f32),
+{
+    if poly.is_empty() { return vec![]; }
+    let mut out: Vec<(f32, f32)> = Vec::with_capacity(poly.len() + 2);
+    let n = poly.len();
+    for i in 0..n {
+        let cur = poly[i];
+        let prev = poly[(i + n - 1) % n];
+        let cur_in = inside(cur);
+        let prev_in = inside(prev);
+        if cur_in {
+            if !prev_in {
+                out.push(intersect(prev, cur));
+            }
+            out.push(cur);
+        } else if prev_in {
+            out.push(intersect(prev, cur));
+        }
+    }
+    out
 }
 
 fn push_shadow(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f32, h: f32,
