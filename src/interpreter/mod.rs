@@ -49,6 +49,7 @@ pub(crate) mod webgl;
 pub(crate) mod canvas;
 pub(crate) mod serialize;
 pub(crate) mod dom_props;
+pub mod bytecode;
 pub(crate) use webgl::{WebGLState, WebGLShader, WebGLProgram, WebGLDrawCmd, WebGLTexture, WebGLAttribSlot, WebGLUniformValue, UniformSlot, UniformSlotKind};
 pub(crate) use webgl::{extract_uniform_layout, extract_texture_sampler_counts, extract_resource_bindings};
 use helpers::*;

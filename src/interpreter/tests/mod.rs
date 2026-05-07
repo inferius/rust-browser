@@ -42,3 +42,4 @@ mod collections_tests;
 mod strings_extra_tests;
 mod number_math_date_tests;
 mod errors_tests;
+mod bytecode_tests;
