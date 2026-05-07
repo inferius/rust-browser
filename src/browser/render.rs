@@ -337,7 +337,8 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         var rgba = mix_srgb(in.color, in.color2, t);
         if (in.radius > 0.5) {
             let d = sdf_rounded_box(in.local, in.half_size, in.radius);
-            let aa = 1.0 - smoothstep(-1.0, 1.0, d);
+            let aa_range = 1.0 / max(u.viewport.z, 0.0001);
+            let aa = 1.0 - smoothstep(-aa_range, aa_range, d);
             rgba = vec4<f32>(rgba.rgb, rgba.a * aa);
         }
         return rgba;
@@ -379,7 +380,8 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         let alpha = smoothstep(-blur, blur, d);
         // Clip mimo box
         let outer = sdf_rounded_box(in.local, in.half_size, in.radius);
-        let clip = 1.0 - smoothstep(-1.0, 1.0, outer);
+        let aa_range = 1.0 / max(u.viewport.z, 0.0001);
+        let clip = 1.0 - smoothstep(-aa_range, aa_range, outer);
         return vec4<f32>(in.color.rgb, in.color.a * alpha * clip);
     }
     // Mode 8: blurred solid - smoothstep s blur radius na okrajich
@@ -572,7 +574,7 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: 
                     push_triangle(&mut verts, a, b, d, c);
                 }
                 // Edge AA: 1px feathered fringe smerem ven pro vyhlazeni hran.
-                push_polygon_edge_aa(&mut verts, points, c);
+                push_polygon_edge_aa(&mut verts, points, c, zoom);
             }
         }
     }
@@ -1127,6 +1129,28 @@ fn shift_command_y(cmd: &mut DisplayCommand, dy: f32) {
     }
 }
 
+fn shift_command_x(cmd: &mut DisplayCommand, dx: f32) {
+    match cmd {
+        DisplayCommand::Rect { x, .. }
+        | DisplayCommand::Border { x, .. }
+        | DisplayCommand::Text { x, .. }
+        | DisplayCommand::Gradient { x, .. }
+        | DisplayCommand::Shadow { x, .. }
+        | DisplayCommand::Image { x, .. }
+        | DisplayCommand::BlurredRect { x, .. }
+        | DisplayCommand::FilterBegin { x, .. }
+        | DisplayCommand::BackdropFilterBegin { x, .. }
+        | DisplayCommand::TransformBegin { x, .. }
+        | DisplayCommand::MaskBegin { x, .. } => *x += dx,
+        DisplayCommand::ClippedRect { points, .. } => {
+            for (px, _) in points.iter_mut() {
+                *px += dx;
+            }
+        }
+        DisplayCommand::FilterEnd | DisplayCommand::BackdropFilterEnd | DisplayCommand::TransformEnd | DisplayCommand::MaskEnd => {}
+    }
+}
+
 /// Push rect with rounded corners (SDF rendering).
 fn push_rect_rounded(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f32, h: f32,
                      color: [f32; 4], radius: f32) {
@@ -1323,14 +1347,15 @@ fn push_triangle(verts: &mut Vec<Vertex>, p0: (f32, f32), p1: (f32, f32), p2: (f
 /// Pro polygon hrany emit 1px outward feather strip (alpha 1.0 -> 0.0).
 /// Mode 0 plain color s per-vertex alpha; GPU bilinear interpoluje -> AA edge.
 /// Outward normal smer urceny dle winding (signed area).
-fn push_polygon_edge_aa(verts: &mut Vec<Vertex>, points: &[(f32, f32)], color: [f32; 4]) {
+fn push_polygon_edge_aa(verts: &mut Vec<Vertex>, points: &[(f32, f32)], color: [f32; 4], zoom: f32) {
     if points.len() < 3 { return; }
     // V screen-space (y down): CW area > 0, CCW < 0.
     // Outward normal: pro CW edge (p0 -> p1) je vlevo od smeru (-dy, dx).
     // Pro CCW je vpravo (dy, -dx).
     let area = polygon_signed_area(points);
     let cw = area > 0.0;
-    let feather: f32 = 1.0;
+    // Feather = 1 physical px = 1/zoom logical px (sharp at any zoom level).
+    let feather: f32 = 1.0 / zoom.max(0.0001);
     let mk = |p: (f32, f32), a: f32| -> Vertex {
         Vertex {
             pos: [p.0, p.1],
@@ -2373,6 +2398,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         mouse_x: f32,
         mouse_y: f32,
         scroll_y: f32,
+        scroll_x: f32,
         start_time: std::time::Instant,
         /// Predchozi cascaded styles - pro detekci transitions.
         prev_style_map: Option<super::cascade::StyleMap>,
@@ -2458,7 +2484,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                 WindowEvent::CursorMoved { position, .. } => {
                     // Mouse coords prevedeme z physical px na logical (layout
                     // space) delenim zoom. scroll_y je uz v logical px.
-                    let new_x = (position.x as f32) / self.zoom;
+                    let new_x = (position.x as f32) / self.zoom + self.scroll_x;
                     let new_y = (position.y as f32) / self.zoom + self.scroll_y;
                     // Skip update kdyz se pozice nezmenila (deduplicate winit spam).
                     if (new_x - self.mouse_x).abs() < 0.5 && (new_y - self.mouse_y).abs() < 0.5 {
@@ -2550,13 +2576,25 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                     }
                     // Scroll amount je v physical px ze winit; layout je
                     // v logical -> dele zoom.
-                    self.scroll_y -= scroll_amount / self.zoom.max(0.0001);
-                    if self.scroll_y < 0.0 { self.scroll_y = 0.0; }
-                    // Clamp na max scroll. Layout height i viewport_h v logical.
-                    if let Some(layout) = &self.layout_root {
-                        let viewport_h = self.renderer.as_ref().map(|r| (r.config.height as f32) / self.zoom).unwrap_or(768.0);
-                        let max_scroll = (layout.rect.height - viewport_h).max(0.0);
-                        if self.scroll_y > max_scroll { self.scroll_y = max_scroll; }
+                    let logical_scroll = scroll_amount / self.zoom.max(0.0001);
+                    if self.modifiers.shift_key() {
+                        // Shift+wheel = horizontal scroll.
+                        self.scroll_x -= logical_scroll;
+                        if self.scroll_x < 0.0 { self.scroll_x = 0.0; }
+                        if let Some(layout) = &self.layout_root {
+                            let viewport_w = self.renderer.as_ref().map(|r| (r.config.width as f32) / self.zoom).unwrap_or(1280.0);
+                            let max_scroll_x = (layout.rect.width - viewport_w).max(0.0);
+                            if self.scroll_x > max_scroll_x { self.scroll_x = max_scroll_x; }
+                        }
+                    } else {
+                        self.scroll_y -= logical_scroll;
+                        if self.scroll_y < 0.0 { self.scroll_y = 0.0; }
+                        // Clamp na max scroll. Layout height i viewport_h v logical.
+                        if let Some(layout) = &self.layout_root {
+                            let viewport_h = self.renderer.as_ref().map(|r| (r.config.height as f32) / self.zoom).unwrap_or(768.0);
+                            let max_scroll = (layout.rect.height - viewport_h).max(0.0);
+                            if self.scroll_y > max_scroll { self.scroll_y = max_scroll; }
+                        }
                     }
                     self.render();
                 }
@@ -3362,8 +3400,9 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
             }
 
             // Scrollbar rendering: pri page content overflow Y emituj track + thumb.
-            let viewport_w = r.config.width as f32;
-            let viewport_h = (r.config.height as f32) - panel_h;
+            // Logical viewport (window/zoom) - vertices jsou v logical px.
+            let viewport_w = (r.config.width as f32) / self.zoom;
+            let viewport_h = ((r.config.height as f32) - panel_h) / self.zoom;
             let total_h = layout_root.rect.height;
             if total_h > viewport_h {
                 let bar_w = 12.0_f32;
@@ -3382,6 +3421,30 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                     w: bar_w - 4.0, h: thumb_h - 4.0,
                     color: [160, 160, 170, 255], radius: (bar_w - 4.0) * 0.5,
                 });
+            }
+            // Horizontalni scrollbar (kdyz layout_root.rect.width > viewport_w).
+            let total_w = layout_root.rect.width;
+            if total_w > viewport_w {
+                let bar_h = 12.0_f32;
+                let bar_y = viewport_h - bar_h;
+                display_list.push(DisplayCommand::Rect {
+                    x: 0.0, y: bar_y, w: viewport_w, h: bar_h,
+                    color: [240, 240, 245, 255], radius: 0.0,
+                });
+                let thumb_w = (viewport_w * viewport_w / total_w).max(40.0);
+                let max_scroll_x = (total_w - viewport_w).max(1.0);
+                let thumb_x = (self.scroll_x / max_scroll_x) * (viewport_w - thumb_w);
+                display_list.push(DisplayCommand::Rect {
+                    x: thumb_x + 2.0, y: bar_y + 2.0,
+                    w: thumb_w - 4.0, h: bar_h - 4.0,
+                    color: [160, 160, 170, 255], radius: (bar_h - 4.0) * 0.5,
+                });
+            }
+            // Aplikuj horizontalni scroll posun na vsechny commandy.
+            if self.scroll_x.abs() > 0.001 {
+                for cmd in display_list.iter_mut() {
+                    shift_command_x(cmd, -self.scroll_x);
+                }
             }
 
             // Pre-rasterize vsechny glyfy do atlasu + nacti images.
@@ -3490,6 +3553,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         mouse_x: 0.0,
         mouse_y: 0.0,
         scroll_y: 0.0,
+        scroll_x: 0.0,
         start_time: std::time::Instant::now(),
         prev_style_map: None,
         active_transitions: Vec::new(),
