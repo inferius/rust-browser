@@ -80,6 +80,47 @@ fn bench_recursive_fib_native() {
 }
 
 #[test]
+fn bench_user_function_recursion() {
+    let src = r#"
+        function fib(n) {
+            if (n < 2) return n;
+            return fib(n - 1) + fib(n - 2);
+        }
+        fib(20)
+    "#;
+    let stmts = parse(src);
+    let vm_time = run_vm(&stmts);
+    let tw_time = run_treewalker(src);
+    let ratio = tw_time.as_nanos() as f64 / vm_time.as_nanos().max(1) as f64;
+    println!("[bench] fib_recursive_20: VM={:.2}ms, TreeWalker={:.2}ms, speedup={:.2}x",
+        vm_time.as_secs_f64() * 1000.0,
+        tw_time.as_secs_f64() * 1000.0,
+        ratio);
+}
+
+#[test]
+fn bench_user_function_loop() {
+    let src = r#"
+        function sumTo(n) {
+            let s = 0;
+            for (let i = 1; i <= n; i = i + 1) {
+                s = s + i;
+            }
+            return s;
+        }
+        sumTo(50000)
+    "#;
+    let stmts = parse(src);
+    let vm_time = run_vm(&stmts);
+    let tw_time = run_treewalker(src);
+    let ratio = tw_time.as_nanos() as f64 / vm_time.as_nanos().max(1) as f64;
+    println!("[bench] sumTo_50k: VM={:.2}ms, TreeWalker={:.2}ms, speedup={:.2}x",
+        vm_time.as_secs_f64() * 1000.0,
+        tw_time.as_secs_f64() * 1000.0,
+        ratio);
+}
+
+#[test]
 fn bench_member_access() {
     // Member access intenzivni loop.
     let src = r#"
