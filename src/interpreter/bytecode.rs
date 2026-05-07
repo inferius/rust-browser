@@ -182,6 +182,9 @@ pub struct CompiledFunction {
     /// var_names. Pri LoadFunction VM nacte hodnoty z outer locals[idx] a vlozi
     /// do JsFunc::VmCompiled.captures vec.
     pub captures_outer_indices: Vec<u16>,
+    /// Pri true: wrap return value into Promise {__state__: "fulfilled", __value__}.
+    /// Pro async funkce sync semantics.
+    pub is_async: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -579,6 +582,7 @@ pub fn compile_expr(e: &Expr, code: &mut CodeBlock) -> Result<(), &'static str> 
                 params: param_names,
                 code: fn_code,
                 captures_outer_indices,
+                is_async: true,  // AsyncFunc - return value bude wrapped v Promise.
             });
             let fn_idx = code.functions.len() as u16;
             code.functions.push(compiled);
@@ -831,6 +835,7 @@ pub fn compile_expr(e: &Expr, code: &mut CodeBlock) -> Result<(), &'static str> 
                 params: param_names,
                 code: fn_code,
                 captures_outer_indices,
+                is_async: false,
             });
             let fn_idx = code.functions.len() as u16;
             code.functions.push(compiled);
@@ -870,6 +875,7 @@ pub fn compile_expr(e: &Expr, code: &mut CodeBlock) -> Result<(), &'static str> 
                 params: param_names,
                 code: fn_code,
                 captures_outer_indices,
+                is_async: false,
             });
             let fn_idx = code.functions.len() as u16;
             code.functions.push(compiled);
@@ -1171,6 +1177,7 @@ pub fn compile_stmt(s: &Stmt, code: &mut CodeBlock) -> Result<(), &'static str> 
                 params: param_names,
                 code: fn_code,
                 captures_outer_indices,
+                is_async: false,
             });
             let fn_idx = code.functions.len() as u16;
             code.functions.push(compiled);
@@ -1439,9 +1446,43 @@ pub fn compile_stmt(s: &Stmt, code: &mut CodeBlock) -> Result<(), &'static str> 
             Ok(())
         }
         Stmt::AsyncFunc { name, params, body } => {
-            // Stejne jako Stmt::Function - nase async je sync s Promise wrap (TBD).
-            let synth = Stmt::Function { name: name.clone(), params: params.clone(), body: body.clone() };
-            compile_stmt(&synth, code)
+            // Stejne jako Stmt::Function ale s is_async=true (return wrap v Promise).
+            let var_idx = code.push_var(name);
+            let outer_vars_snapshot = code.var_names.clone();
+            let mut fn_code = CodeBlock::new();
+            fn_code.push_var(name);
+            let mut param_names: Vec<String> = Vec::new();
+            for p in params {
+                if let crate::ast::Pattern::Ident(pn) = &p.pattern {
+                    param_names.push(pn.clone());
+                    fn_code.push_var(pn);
+                } else {
+                    return Err("destructuring async-param not supported");
+                }
+            }
+            push_outer_scope(outer_vars_snapshot);
+            let body_result = (|| -> Result<(), &'static str> {
+                for s in body {
+                    compile_stmt(s, &mut fn_code)?;
+                }
+                Ok(())
+            })();
+            let captures_outer_indices = pop_outer_scope();
+            body_result?;
+            fn_code.emit(Opcode::LoadUndefined);
+            fn_code.emit(Opcode::Return);
+            let compiled = std::rc::Rc::new(CompiledFunction {
+                name: Some(name.clone()),
+                params: param_names,
+                code: fn_code,
+                captures_outer_indices,
+                is_async: true,
+            });
+            let fn_idx = code.functions.len() as u16;
+            code.functions.push(compiled);
+            code.emit(Opcode::LoadFunction(fn_idx));
+            code.emit(Opcode::DeclareVar(var_idx));
+            Ok(())
         }
         Stmt::Try { body, catch, finally } => {
             // Pri finally: zatim ne supported - emit Err.
@@ -1714,7 +1755,6 @@ impl VM {
                             nested.env = Some(env.clone());
                             nested.captures = captures.clone();
                             nested.locals.resize(compiled.code.var_names.len(), JsValue::Undefined);
-                            // Self-reference pro rekurzi: locals[0] = function value.
                             if !compiled.code.var_names.is_empty()
                                 && compiled.code.var_names[0] == name.clone().unwrap_or_default() {
                                 nested.locals[0] = JsValue::Function(super::JsFunc::VmCompiled {
@@ -1729,7 +1769,8 @@ impl VM {
                                     nested.locals[idx] = args.get(i).cloned().unwrap_or(JsValue::Undefined);
                                 }
                             }
-                            nested.run(&compiled.code)?
+                            let raw = nested.run(&compiled.code)?;
+                            if compiled.is_async { wrap_in_promise(raw) } else { raw }
                         }
                         _ => return Err("callee not a native function".into()),
                     };
@@ -1892,7 +1933,8 @@ impl VM {
                                     nested.locals[idx] = args.get(i).cloned().unwrap_or(JsValue::Undefined);
                                 }
                             }
-                            nested.run(&compiled.code)?
+                            let raw = nested.run(&compiled.code)?;
+                            if compiled.is_async { wrap_in_promise(raw) } else { raw }
                         }
                         _ => return Err("CallMethod: callee not function".into()),
                     };
@@ -1976,7 +2018,8 @@ impl VM {
                                     nested.locals[idx] = args.get(i).cloned().unwrap_or(JsValue::Undefined);
                                 }
                             }
-                            nested.run(&compiled.code)?
+                            let raw = nested.run(&compiled.code)?;
+                            if compiled.is_async { wrap_in_promise(raw) } else { raw }
                         }
                         _ => return Err("CallNativeArgs: callee not function".into()),
                     };
@@ -2303,6 +2346,14 @@ fn key_to_str(v: &JsValue) -> String {
         JsValue::Undefined => "undefined".to_string(),
         _ => String::new(),
     }
+}
+
+/// Wrap value into Promise object {__state__: "fulfilled", __value__: v}.
+fn wrap_in_promise(v: JsValue) -> JsValue {
+    let p = std::rc::Rc::new(std::cell::RefCell::new(super::JsObject::new()));
+    p.borrow_mut().set("__state__".to_string(), JsValue::Str("fulfilled".to_string()));
+    p.borrow_mut().set("__value__".to_string(), v);
+    JsValue::Object(p)
 }
 
 fn op_add(a: JsValue, b: JsValue) -> JsValue {

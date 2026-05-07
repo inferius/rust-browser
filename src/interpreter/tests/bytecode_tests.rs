@@ -148,12 +148,23 @@ fn vm_unsupported_returns_err() {
 
 #[test]
 fn vm_async_function_compile() {
-    // Async fn compile jako bezna fn (sync semantics).
+    // Async fn returns Promise wrapping value. Await unwraps.
     let r = run_vm(r#"
         async function f(x) { return x + 1; }
-        f(41)
+        await f(41)
     "#).unwrap();
     assert_jv!(r, n(42.0));
+}
+
+#[test]
+fn vm_async_returns_promise_object() {
+    // Bez await: result je Promise object.
+    let r = run_vm(r#"
+        async function f() { return 99; }
+        let p = f();
+        p.__state__
+    "#).unwrap();
+    assert_jv!(r, JsValue::Str("fulfilled".to_string()));
 }
 
 #[test]
