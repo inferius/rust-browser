@@ -232,22 +232,37 @@ pub fn decode_woff2(data: &[u8]) -> Result<Vec<u8>, WoffError> {
         reader.read_to_end(&mut decompressed).map_err(|_| WoffError::Decompress)?;
     }
 
-    // Detekuj glyf/loca s transform. Pri vsechny n_contours == 0 (empty font)
-    // muzeme generovat empty glyf. Pri nontrivial - return TransformNotImplemented.
-    for (tag, _, transform_len, transform_ver) in &entries {
+    // Pre-pass: detekuj glyf/loca transform. Ty vyzaduji full reverse
+    // (parsovani 7 streamu, triplet decode, rekonstrukce sfnt simple/composite
+    // glyphs). Currently NOT implemented - vrat TransformNotImplemented.
+    //
+    // TODO: glyf transform reversal - WOFF2 spec section 5.1.
+    // Layout transformovaneho glyf streamu:
+    //   - 36B header: reserved(u16), optionFlags(u16), numGlyphs(u16),
+    //     indexFormat(u16), nContourStreamSize(u32), nPointsStreamSize(u32),
+    //     flagStreamSize(u32), glyphStreamSize(u32), compositeStreamSize(u32),
+    //     bboxStreamSize(u32), instructionStreamSize(u32)
+    //   - bboxBitmap: ceil(numGlyphs/8) B + padding
+    //   - 7 streams: nContour, nPoints, flag, glyph, composite, bbox, instruction
+    //
+    // Per-glyph reverse:
+    //   nContour == 0:  empty glyph, 0B output
+    //   nContour > 0:   simple - read nPoints[nContour] (255UInt16), pak
+    //                   sum nPoints flagu, pro kazdy flag triplet decode
+    //                   z glyphStream (table 6, 128 schemes po 1-4 bytes),
+    //                   sum_pts dx/dy delta + on-curve flag rekonstrukce
+    //   nContour == -1: composite - copy z compositeStream az do flag
+    //                   bez MORE_COMPONENTS bitu (+ instructions if WE_HAVE_INSTRUCTIONS)
+    //
+    // Triplet table (WOFF2 spec Table 6): 128 entries
+    //   (byteCount, xBits, yBits, deltaX, deltaY, xSign, ySign)
+    // Bezpecne implementovat az s referencni testovaci sadou.
+    for (tag, _, _, transform_ver) in &entries {
         let tag_bytes = tag.to_be_bytes();
-        let is_glyf = &tag_bytes == b"glyf";
-        if is_glyf && *transform_ver == 0 {
-            // Try minimal reverse: pri vsechny n_contours == 0, vystup je trivial.
-            // Nepokousime se rekonstruovat simple/composite glyphs - to vyzaduje
-            // 300+ lines spec impl. Vrati Err pro fallback message.
-            let _ = transform_len;
+        if &tag_bytes == b"glyf" && *transform_ver == 0 {
             return Err(WoffError::TransformNotImplemented);
         }
-        let is_loca = &tag_bytes == b"loca";
-        if is_loca && *transform_ver == 0 {
-            // loca transform = empty bytes (loca dopocteme z glyf reversed).
-            // Bez glyf reversal nelze - same Err.
+        if &tag_bytes == b"loca" && *transform_ver == 0 {
             return Err(WoffError::TransformNotImplemented);
         }
     }
