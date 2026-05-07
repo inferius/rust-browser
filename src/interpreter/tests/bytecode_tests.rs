@@ -356,6 +356,37 @@ fn vm_user_function_chained_calls() {
 }
 
 #[test]
+fn vm_array_spread_basic() {
+    let r = run_vm(r#"
+        let a = [1, 2, 3];
+        let b = [0, ...a, 4];
+        b.length
+    "#).unwrap();
+    assert_jv!(r, n(5.0));
+}
+
+#[test]
+fn vm_array_spread_join() {
+    let r = run_vm(r#"
+        let a = [1, 2];
+        let b = [3, 4];
+        let c = [...a, ...b];
+        c.join('-')
+    "#).unwrap();
+    assert_jv!(r, JsValue::Str("1-2-3-4".to_string()));
+}
+
+#[test]
+fn vm_array_spread_only() {
+    let r = run_vm(r#"
+        let arr = [10, 20, 30];
+        let copy = [...arr];
+        copy[1]
+    "#).unwrap();
+    assert_jv!(r, n(20.0));
+}
+
+#[test]
 fn vm_optional_call_null_returns_undefined() {
     let r = run_vm(r#"
         let f = null;

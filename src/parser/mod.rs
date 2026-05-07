@@ -1220,7 +1220,14 @@ impl Parser {
                     if matches!(self.kind(), TokenKind::Operator(OperatorEnum::Comma)) {
                         self.advance(); items.push(None); continue;
                     }
-                    items.push(Some(Box::new(self.parse_assign_expr()?)));
+                    // Spread: ...expr
+                    if matches!(self.kind(), TokenKind::Operator(OperatorEnum::Ellipsis)) {
+                        self.advance(); self.skip_trivia();
+                        let inner = self.parse_assign_expr()?;
+                        items.push(Some(Box::new(Expr::Spread(Box::new(inner)))));
+                    } else {
+                        items.push(Some(Box::new(self.parse_assign_expr()?)));
+                    }
                     self.skip_trivia();
                     if !self.eat_op(OperatorEnum::Comma) { break; }
                 }
