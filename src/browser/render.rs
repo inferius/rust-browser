@@ -435,11 +435,10 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: 
                 let pen_y = *y + *font_size;
                 // Italic = fake skew transform na glyph quady (x += y * 0.2).
                 let italic_skew: f32 = if *italic { 0.2 } else { 0.0 };
-                // Bold = fake bold pres double draw s integer 1px x-offsetem.
-                // Real bold font variant by byl crispier, ale fake staci pro
-                // vizualni weight. Bold se NEdraw pri italic/skew (smear by se
-                // sklonil + rozmazaval).
-                let bold_offset: f32 = if *bold { 1.0 } else { 0.0 };
+                // Bold: pri dostupnem font_bold pouzij real bold variant (atlas
+                // lookup s "__bold__:" prefix) - bold_offset = 0. Pri fallbacku
+                // (no bold font) pouzij fake bold pres 1px smear.
+                let bold_offset: f32 = if *bold && atlas.font_bold.is_none() { 1.0 } else { 0.0 };
                 let start_x = pen_x;
                 for ch in content.chars() {
                     // Color glyph (COLR) check pres synthetic image_atlas key.
@@ -451,7 +450,12 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: 
                         pen_x += info.width;
                         continue;
                     }
-                    if let Some(g) = atlas.get(font_family, ch, *font_size as u32) {
+                    let lookup_family = if *bold && atlas.font_bold.is_some() {
+                        format!("__bold__:{}", font_family)
+                    } else {
+                        font_family.clone()
+                    };
+                    if let Some(g) = atlas.get(&lookup_family, ch, *font_size as u32) {
                         // Round na integer piksely - sub-pixel pozice + linear
                         // sampler = blur. Pri integer pozici sampler ctena pres
                         // texel boundary = crisp.
@@ -1867,11 +1871,15 @@ struct GlyphInfo {
 struct GlyphAtlas {
     /// Default font (fallback pri family lookup miss)
     font: fontdue::Font,
+    /// Default bold variant (Segoe UI Bold etc.). Pouzity pri bx.bold=true
+    /// pokud k dispozici. Jinak fake bold pres double-draw smear.
+    font_bold: Option<fontdue::Font>,
     /// @font-face loaded fonty: family name -> Font
     extra_fonts: std::collections::HashMap<String, fontdue::Font>,
     /// Atlas pixely (shedy: 0=transparent, 255=opaque)
     pixels: Vec<u8>,
     /// (family, char, font_size) -> glyph info. Family "" = default.
+    /// Pri bold se pouzije family "__bold__" jako klic.
     cache: std::collections::HashMap<(String, char, u32), GlyphInfo>,
     /// Volna pozice pro dalsi glyph
     cursor_x: u32,
@@ -1882,13 +1890,25 @@ struct GlyphAtlas {
 
 impl GlyphAtlas {
     fn new() -> Self {
-        // Loadnuti systemoveho fontu - zkusi standardni umisteni.
-        // Override: env var RUST_WEB_ENGINE_FONT_PATH
         let font_data = load_default_font();
         let font = fontdue::Font::from_bytes(font_data, fontdue::FontSettings::default())
             .expect("font parse failed");
+        // Try Segoe UI Bold / Arial Bold pro real bold rendering. Fake bold
+        // (double-draw smear) je fallback pri None.
+        let bold_candidates: &[&str] = &[
+            "C:\\Windows\\Fonts\\segoeuib.ttf",
+            "C:\\Windows\\Fonts\\arialbd.ttf",
+            "/System/Library/Fonts/SFNSBold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        ];
+        let font_bold = bold_candidates.iter().find_map(|p| {
+            std::fs::read(p).ok()
+                .and_then(|d| fontdue::Font::from_bytes(d, fontdue::FontSettings::default()).ok())
+        });
         GlyphAtlas {
             font,
+            font_bold,
             extra_fonts: std::collections::HashMap::new(),
             pixels: vec![0u8; (ATLAS_SIZE * ATLAS_SIZE) as usize],
             cache: std::collections::HashMap::new(),
@@ -1899,9 +1919,14 @@ impl GlyphAtlas {
     }
 
     /// Vrati referenci na font dle family. "" nebo neznamy -> default.
+    /// Family s prefixem "__bold__:" -> bold variant pokud k dispozici.
     /// Pri comma-separated seznamu (CSS font-family fallback) iteruje
     /// kazdy alternative a vraci prvni nalezeny @font-face entry.
     fn font_for(&self, family: &str) -> &fontdue::Font {
+        if let Some(rest) = family.strip_prefix("__bold__:") {
+            if let Some(b) = &self.font_bold { return b; }
+            return self.font_for(rest);
+        }
         if family.is_empty() { return &self.font; }
         if let Some(f) = self.extra_fonts.get(family) { return f; }
         // CSS font-family seznam: "Roboto", "Arial", sans-serif - try each.
@@ -3248,7 +3273,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
             // pres synthetic key "__colr:{family}:{ch}:{size}". Render path detekuje.
             for cmd in &display_list {
                 match cmd {
-                    DisplayCommand::Text { content, font_size, font_family, color, .. } => {
+                    DisplayCommand::Text { content, font_size, font_family, color, bold, .. } => {
                         for ch in content.chars() {
                             // Pokus o color glyph rasterization.
                             let mut color_added = false;
@@ -3269,7 +3294,15 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                                 }
                             }
                             if !color_added {
-                                r.atlas.add(font_family, ch, *font_size as u32);
+                                // Pri bold + dostupny font_bold variant rasterize
+                                // s prefixem "__bold__:" v atlas key. Render path
+                                // pak lookuje stejnym klicem.
+                                let key_family = if *bold && r.atlas.font_bold.is_some() {
+                                    format!("__bold__:{}", font_family)
+                                } else {
+                                    font_family.clone()
+                                };
+                                r.atlas.add(&key_family, ch, *font_size as u32);
                             }
                         }
                     }
