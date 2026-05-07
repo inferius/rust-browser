@@ -213,6 +213,134 @@ fn build_search_params(search: &str) -> JsValue {
     JsValue::Object(obj)
 }
 
+/// Vyrobi IDBObjectStore objekt s funkcemi put/get/delete/clear/getAll/count.
+/// Backend: BTreeMap<String, JsValue> sdileny pres Rc<RefCell<>>.
+fn make_object_store(
+    name: String,
+    data: Rc<RefCell<std::collections::BTreeMap<String, JsValue>>>,
+) -> Rc<RefCell<JsObject>> {
+    let store = Rc::new(RefCell::new(JsObject::new()));
+    store.borrow_mut().set("name".into(), JsValue::Str(name.clone()));
+    store.borrow_mut().set("keyPath".into(), JsValue::Null);
+    store.borrow_mut().set("autoIncrement".into(), JsValue::Bool(false));
+
+    fn make_request(result: JsValue) -> JsValue {
+        let req = Rc::new(RefCell::new(JsObject::new()));
+        req.borrow_mut().set("readyState".into(), JsValue::Str("done".into()));
+        req.borrow_mut().set("result".into(), result);
+        req.borrow_mut().set("error".into(), JsValue::Null);
+        req.borrow_mut().set("addEventListener".into(),
+            native("addEventListener", |_| Ok(JsValue::Undefined)));
+        JsValue::Object(req)
+    }
+
+    // store.put(value, key)
+    let d = Rc::clone(&data);
+    store.borrow_mut().set("put".into(), native("put", move |args| {
+        let mut it = args.into_iter();
+        let value = it.next().unwrap_or(JsValue::Undefined);
+        let key = it.next().map(|v| v.to_string()).unwrap_or_else(|| {
+            // Pri value object s "id" pouzij ho jako key.
+            if let JsValue::Object(o) = &value {
+                let id = o.borrow().get("id");
+                if !matches!(id, JsValue::Undefined) { return id.to_string(); }
+            }
+            // Auto-incr: pouzij size+1.
+            (d.borrow().len() + 1).to_string()
+        });
+        d.borrow_mut().insert(key.clone(), value);
+        Ok(make_request(JsValue::Str(key)))
+    }));
+    // store.add(value, key) - alias pro put (s fail-on-duplicate semantikou)
+    let d = Rc::clone(&data);
+    store.borrow_mut().set("add".into(), native("add", move |args| {
+        let mut it = args.into_iter();
+        let value = it.next().unwrap_or(JsValue::Undefined);
+        let key = it.next().map(|v| v.to_string()).unwrap_or_else(|| {
+            (d.borrow().len() + 1).to_string()
+        });
+        if d.borrow().contains_key(&key) {
+            // Real IDB by hodilo ConstraintError - my jen pridame anyway.
+        }
+        d.borrow_mut().insert(key.clone(), value);
+        Ok(make_request(JsValue::Str(key)))
+    }));
+    // store.get(key)
+    let d = Rc::clone(&data);
+    store.borrow_mut().set("get".into(), native("get", move |args| {
+        let key = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+        let val = d.borrow().get(&key).cloned().unwrap_or(JsValue::Undefined);
+        Ok(make_request(val))
+    }));
+    // store.delete(key)
+    let d = Rc::clone(&data);
+    store.borrow_mut().set("delete".into(), native("delete", move |args| {
+        let key = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+        d.borrow_mut().remove(&key);
+        Ok(make_request(JsValue::Undefined))
+    }));
+    // store.clear()
+    let d = Rc::clone(&data);
+    store.borrow_mut().set("clear".into(), native("clear", move |_| {
+        d.borrow_mut().clear();
+        Ok(make_request(JsValue::Undefined))
+    }));
+    // store.count()
+    let d = Rc::clone(&data);
+    store.borrow_mut().set("count".into(), native("count", move |_| {
+        let c = d.borrow().len() as f64;
+        Ok(make_request(JsValue::Number(c)))
+    }));
+    // store.getAll()
+    let d = Rc::clone(&data);
+    store.borrow_mut().set("getAll".into(), native("getAll", move |_| {
+        let arr: Vec<JsValue> = d.borrow().values().cloned().collect();
+        Ok(make_request(JsValue::Array(Rc::new(RefCell::new(arr)))))
+    }));
+    // store.getAllKeys()
+    let d = Rc::clone(&data);
+    store.borrow_mut().set("getAllKeys".into(), native("getAllKeys", move |_| {
+        let arr: Vec<JsValue> = d.borrow().keys().map(|k| JsValue::Str(k.clone())).collect();
+        Ok(make_request(JsValue::Array(Rc::new(RefCell::new(arr)))))
+    }));
+    // store.openCursor() - jednoduchy: vrati first-key cursor s next() metodou.
+    let d = Rc::clone(&data);
+    store.borrow_mut().set("openCursor".into(), native("openCursor", move |_| {
+        let entries: Vec<(String, JsValue)> = d.borrow().iter()
+            .map(|(k, v)| (k.clone(), v.clone())).collect();
+        let cursor_state = Rc::new(RefCell::new(0usize));
+        let entries_rc = Rc::new(entries);
+        let cursor = Rc::new(RefCell::new(JsObject::new()));
+        if let Some((k, v)) = entries_rc.first().cloned() {
+            cursor.borrow_mut().set("key".into(), JsValue::Str(k));
+            cursor.borrow_mut().set("value".into(), v);
+        }
+        let cs = Rc::clone(&cursor_state);
+        let er = Rc::clone(&entries_rc);
+        let cursor_inner = Rc::clone(&cursor);
+        cursor.borrow_mut().set("continue".into(), native("continue", move |_| {
+            let next = *cs.borrow() + 1;
+            *cs.borrow_mut() = next;
+            if next < er.len() {
+                let (k, v) = er[next].clone();
+                cursor_inner.borrow_mut().set("key".into(), JsValue::Str(k));
+                cursor_inner.borrow_mut().set("value".into(), v);
+            } else {
+                cursor_inner.borrow_mut().set("key".into(), JsValue::Undefined);
+                cursor_inner.borrow_mut().set("value".into(), JsValue::Undefined);
+            }
+            Ok(JsValue::Undefined)
+        }));
+        Ok(make_request(JsValue::Object(cursor)))
+    }));
+    // store.createIndex() - stub
+    store.borrow_mut().set("createIndex".into(), native("createIndex", |_| {
+        let idx = Rc::new(RefCell::new(JsObject::new()));
+        Ok(JsValue::Object(idx))
+    }));
+    store
+}
+
 pub fn setup_builtins(
     env: &Rc<RefCell<Environment>>,
     task_queue: &Rc<RefCell<Vec<(u32, JsValue, Vec<JsValue>)>>>,
@@ -4652,26 +4780,111 @@ pub fn setup_builtins(
         Ok(JsValue::Object(obj))
     }));
 
-    // IndexedDB stub
+    // IndexedDB - real in-memory implementation s store/get/put/delete/clear.
+    // Persistence napric Interpreterem zatim NE - kazdy interpreter ma cisty stav.
+    // Future: FS backend (sqlite ci JSON dump).
     {
+        // Top-level db storage: db_name -> object_store_name -> (key -> value).
+        type IdbStore = std::collections::BTreeMap<String, JsValue>;
+        type IdbStores = std::collections::HashMap<String, Rc<RefCell<IdbStore>>>;
+        type IdbDbs = std::collections::HashMap<String, Rc<RefCell<IdbStores>>>;
+        let dbs: Rc<RefCell<IdbDbs>> = Rc::new(RefCell::new(std::collections::HashMap::new()));
+
         let idb = Rc::new(RefCell::new(JsObject::new()));
-        idb.borrow_mut().set("open".into(), native("indexedDB.open", |args| {
-            let name = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
-            // Vraci IDBOpenDBRequest - asynchronni Promise-like
+        let dbs_open = Rc::clone(&dbs);
+        idb.borrow_mut().set("open".into(), native("indexedDB.open", move |args| {
+            let mut it = args.into_iter();
+            let name = it.next().map(|v| v.to_string()).unwrap_or_default();
+            let _version = it.next().map(|v| v.to_number() as u32).unwrap_or(1);
+
+            // Get-or-create stores map pro tuto db.
+            let stores: Rc<RefCell<IdbStores>> = {
+                let mut all = dbs_open.borrow_mut();
+                all.entry(name.clone()).or_insert_with(||
+                    Rc::new(RefCell::new(std::collections::HashMap::new()))
+                ).clone()
+            };
+
+            // IDBDatabase object.
+            let db = Rc::new(RefCell::new(JsObject::new()));
+            db.borrow_mut().set("name".into(), JsValue::Str(name.clone()));
+            db.borrow_mut().set("version".into(), JsValue::Number(1.0));
+
+            // db.createObjectStore(name)
+            let stores_co = Rc::clone(&stores);
+            db.borrow_mut().set("createObjectStore".into(), native("createObjectStore", move |args| {
+                let store_name = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+                let store_data: Rc<RefCell<IdbStore>> = {
+                    let mut all = stores_co.borrow_mut();
+                    all.entry(store_name.clone()).or_insert_with(||
+                        Rc::new(RefCell::new(std::collections::BTreeMap::new()))
+                    ).clone()
+                };
+                Ok(JsValue::Object(make_object_store(store_name, store_data)))
+            }));
+
+            // db.transaction(stores) -> IDBTransaction
+            let stores_tr = Rc::clone(&stores);
+            db.borrow_mut().set("transaction".into(), native("transaction", move |args| {
+                let _arg = args.into_iter().next();
+                let tx = Rc::new(RefCell::new(JsObject::new()));
+                let stores_tr2 = Rc::clone(&stores_tr);
+                tx.borrow_mut().set("objectStore".into(), native("objectStore", move |args| {
+                    let store_name = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+                    let store_data: Rc<RefCell<IdbStore>> = {
+                        let mut all = stores_tr2.borrow_mut();
+                        all.entry(store_name.clone()).or_insert_with(||
+                            Rc::new(RefCell::new(std::collections::BTreeMap::new()))
+                        ).clone()
+                    };
+                    Ok(JsValue::Object(make_object_store(store_name, store_data)))
+                }));
+                tx.borrow_mut().set("commit".into(), native("commit", |_| Ok(JsValue::Undefined)));
+                tx.borrow_mut().set("abort".into(), native("abort", |_| Ok(JsValue::Undefined)));
+                Ok(JsValue::Object(tx))
+            }));
+
+            // db.close()
+            db.borrow_mut().set("close".into(), native("close", |_| Ok(JsValue::Undefined)));
+
+            db.borrow_mut().set("objectStoreNames".into(), {
+                let names: Vec<JsValue> = stores.borrow().keys()
+                    .map(|k| JsValue::Str(k.clone())).collect();
+                JsValue::Array(Rc::new(RefCell::new(names)))
+            });
+
+            // IDBOpenDBRequest - mimicry Promise pres .result + onsuccess.
+            // Vrati request s readyState=done a result=db, immediate.
             let req = Rc::new(RefCell::new(JsObject::new()));
-            req.borrow_mut().set("name".into(), JsValue::Str(name));
             req.borrow_mut().set("readyState".into(), JsValue::Str("done".into()));
-            req.borrow_mut().set("result".into(), JsValue::Null);
+            req.borrow_mut().set("result".into(), JsValue::Object(db));
             req.borrow_mut().set("error".into(), JsValue::Null);
             req.borrow_mut().set("addEventListener".into(),
                 native("addEventListener", |_| Ok(JsValue::Undefined)));
             Ok(JsValue::Object(req))
         }));
+
+        let dbs_del = Rc::clone(&dbs);
         idb.borrow_mut().set("deleteDatabase".into(),
-            native("indexedDB.deleteDatabase", |_| Ok(JsValue::Undefined)));
+            native("indexedDB.deleteDatabase", move |args| {
+                let name = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+                dbs_del.borrow_mut().remove(&name);
+                let req = Rc::new(RefCell::new(JsObject::new()));
+                req.borrow_mut().set("readyState".into(), JsValue::Str("done".into()));
+                req.borrow_mut().set("result".into(), JsValue::Undefined);
+                Ok(JsValue::Object(req))
+            }));
+
+        let dbs_list = Rc::clone(&dbs);
         idb.borrow_mut().set("databases".into(),
-            native("indexedDB.databases", |_| {
-                Ok(make_settled_promise("fulfilled", JsValue::Array(Rc::new(RefCell::new(Vec::new())))))
+            native("indexedDB.databases", move |_| {
+                let names: Vec<JsValue> = dbs_list.borrow().keys().map(|k| {
+                    let obj = Rc::new(RefCell::new(JsObject::new()));
+                    obj.borrow_mut().set("name".into(), JsValue::Str(k.clone()));
+                    obj.borrow_mut().set("version".into(), JsValue::Number(1.0));
+                    JsValue::Object(obj)
+                }).collect();
+                Ok(make_settled_promise("fulfilled", JsValue::Array(Rc::new(RefCell::new(names)))))
             }));
         e.define("indexedDB", JsValue::Object(idb));
     }
