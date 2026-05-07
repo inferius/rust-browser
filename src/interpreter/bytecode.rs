@@ -1238,6 +1238,47 @@ pub fn compile_stmt(s: &Stmt, code: &mut CodeBlock) -> Result<(), &'static str> 
             }
             Ok(())
         }
+        Stmt::ForAwaitOf { kind: _, target, iter, body } => {
+            // Same as ForOf, ale kazdy iter value se Await-uje (sync semantics).
+            let iter_name = format!("__forawait_iter_{}", code.bytecode.len());
+            let idx_name = format!("__forawait_idx_{}", code.bytecode.len());
+            let iter_var = code.push_var(&iter_name);
+            let idx_var = code.push_var(&idx_name);
+            compile_expr(iter, code)?;
+            code.emit(Opcode::DeclareVar(iter_var));
+            code.emit(Opcode::LoadZero);
+            code.emit(Opcode::DeclareVar(idx_var));
+            let target_name = match target.as_ref() {
+                Expr::Ident(n) => n.clone(),
+                _ => return Err("for-await-of target must be ident"),
+            };
+            let target_var = code.push_var(&target_name);
+            code.loop_stack.push(LoopFrame { break_jumps: vec![], continue_jumps: vec![] });
+            let test_pos = code.bytecode.len();
+            code.emit(Opcode::LoadVar(idx_var));
+            code.emit(Opcode::LoadVar(iter_var));
+            let length_idx = code.push_var("length");
+            code.emit(Opcode::GetProp(length_idx));
+            code.emit(Opcode::Lt);
+            let jmp_to_end = code.emit(Opcode::JmpIfFalse(0));
+            code.emit(Opcode::LoadVar(iter_var));
+            code.emit(Opcode::LoadVar(idx_var));
+            code.emit(Opcode::GetIndex);
+            code.emit(Opcode::Await); // klicovy rozdil oproti ForOf
+            code.emit(Opcode::DeclareVar(target_var));
+            compile_stmt(body, code)?;
+            let cont_target = code.bytecode.len();
+            let frame = code.loop_stack.last().cloned().unwrap();
+            for ci in &frame.continue_jumps { code.patch_jmp(*ci, cont_target); }
+            code.emit(Opcode::Inc(idx_var));
+            let back = code.emit(Opcode::Jmp(0));
+            code.patch_jmp(back, test_pos);
+            let end = code.bytecode.len();
+            code.patch_jmp(jmp_to_end, end);
+            let frame = code.loop_stack.pop().unwrap();
+            for bj in &frame.break_jumps { code.patch_jmp(*bj, end); }
+            Ok(())
+        }
         Stmt::ForOf { kind: _, target, iter, body } => {
             // Iterate Array/String pres index. Hidden vars __for_iter_N + __for_idx_N.
             let iter_name = format!("__for_iter_{}", code.bytecode.len());
