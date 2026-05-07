@@ -235,6 +235,45 @@ fn vm_void_returns_undefined() {
 }
 
 #[test]
+fn vm_array_literal_and_index() {
+    let r = run_vm("[10, 20, 30][1]").unwrap();
+    assert_jv!(r, n(20.0));
+}
+
+#[test]
+fn vm_array_length() {
+    let r = run_vm("[1, 2, 3, 4].length").unwrap();
+    assert_jv!(r, n(4.0));
+}
+
+#[test]
+fn vm_object_literal_and_member() {
+    let r = run_vm(r#"({ a: 1, b: 2, c: 3 }).b"#).unwrap();
+    assert_jv!(r, n(2.0));
+}
+
+#[test]
+fn vm_object_with_computed_index() {
+    let r = run_vm(r#"
+        let o = { x: 'hello', y: 'world' };
+        o['x']
+    "#).unwrap();
+    assert_jv!(r, JsValue::Str("hello".to_string()));
+}
+
+#[test]
+fn vm_string_length() {
+    let r = run_vm(r#""hello".length"#).unwrap();
+    assert_jv!(r, n(5.0));
+}
+
+#[test]
+fn vm_string_index() {
+    let r = run_vm(r#""abc"[1]"#).unwrap();
+    assert_jv!(r, JsValue::Str("b".to_string()));
+}
+
+#[test]
 fn vm_nested_for() {
     let r = run_vm(r#"
         let total = 0;

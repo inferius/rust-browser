@@ -13,7 +13,7 @@
 //! Cilem v1: aritmetika, srovnavani, logika, var/let/const decls, assignments,
 //! if/else, while/for, function call (existing JS funkce). Concretne cca 30 opcodes.
 
-use crate::ast::{Expr, BinaryOp, UnaryOp, Stmt, LogicalOp, AssignOp, Pattern, ForInit};
+use crate::ast::{Expr, BinaryOp, UnaryOp, Stmt, LogicalOp, AssignOp, Pattern, ForInit, MemberProp, PropKey};
 use super::{JsValue};
 
 #[derive(Debug, Clone, Copy)]
@@ -56,6 +56,14 @@ pub enum Opcode {
     Dec(u16),
     PostInc(u16),         // push original + locals[u16]+=1
     PostDec(u16),
+
+    // Member access (obj.prop), pop=obj, push=obj[prop].
+    GetProp(u16),         // var_names[u16] = property name (stored jako str)
+    GetIndex,             // pop key, pop obj, push obj[key]
+
+    // Array/Object literal construction.
+    NewArray(u16),        // pop u16 hodnot ze stacku, push Array<top..bottom>
+    NewObject(u16),       // pop 2*u16 (key/value pairs), push Object
 
     // typeof/void
     TypeOf,               // pop, push string typeof
@@ -301,6 +309,53 @@ pub fn compile_expr(e: &Expr, code: &mut CodeBlock) -> Result<(), &'static str> 
             } else {
                 Err("assign target not ident")
             }
+        }
+        Expr::Member { object, prop, optional: _ } => {
+            compile_expr(object, code)?;
+            match prop {
+                MemberProp::Ident(name) => {
+                    let key_idx = code.push_var(name);
+                    code.emit(Opcode::GetProp(key_idx));
+                }
+                MemberProp::Computed(e) => {
+                    compile_expr(e, code)?;
+                    code.emit(Opcode::GetIndex);
+                }
+            }
+            Ok(())
+        }
+        Expr::Array(items) => {
+            // None hole = undefined.
+            if items.len() > u16::MAX as usize { return Err("array > 65k items"); }
+            for item in items {
+                if let Some(e) = item {
+                    if matches!(e.as_ref(), Expr::Spread(_)) {
+                        return Err("array spread not supported");
+                    }
+                    compile_expr(e, code)?;
+                } else {
+                    code.emit(Opcode::LoadUndefined);
+                }
+            }
+            code.emit(Opcode::NewArray(items.len() as u16));
+            Ok(())
+        }
+        Expr::Object(props) => {
+            if props.len() > u16::MAX as usize { return Err("object > 65k props"); }
+            for prop in props {
+                if prop.computed { return Err("computed object key not supported"); }
+                let key_str = match &prop.key {
+                    PropKey::Ident(s) => s.clone(),
+                    PropKey::Str(s) => s.clone(),
+                    PropKey::Num(n) => format!("{}", n),
+                    PropKey::Computed(_) => return Err("computed object key not supported"),
+                };
+                let key_idx = code.push_const(JsValue::Str(key_str));
+                code.emit(Opcode::LoadConst(key_idx));
+                compile_expr(&prop.value, code)?;
+            }
+            code.emit(Opcode::NewObject(props.len() as u16));
+            Ok(())
         }
         _ => Err("unsupported expr"),
     }
@@ -635,6 +690,55 @@ impl VM {
                     }
                     self.stack.push(JsValue::Number(orig));
                 }
+                Opcode::GetProp(i) => {
+                    let key = code.var_names.get(i as usize).cloned().unwrap_or_default();
+                    let obj = self.pop()?;
+                    let v = get_property(&obj, &key);
+                    self.stack.push(v);
+                }
+                Opcode::GetIndex => {
+                    let key = self.pop()?;
+                    let obj = self.pop()?;
+                    let key_str = match &key {
+                        JsValue::Str(s) => s.clone(),
+                        JsValue::Number(n) => {
+                            if *n == n.trunc() && n.is_finite() { format!("{}", *n as i64) }
+                            else { format!("{}", n) }
+                        }
+                        _ => format!("{}", key_to_str(&key)),
+                    };
+                    // Pri Array + numeric key: indexed access.
+                    if let (JsValue::Array(arr), JsValue::Number(n)) = (&obj, &key) {
+                        let idx = *n as usize;
+                        let v = arr.borrow().get(idx).cloned().unwrap_or(JsValue::Undefined);
+                        self.stack.push(v);
+                    } else {
+                        self.stack.push(get_property(&obj, &key_str));
+                    }
+                }
+                Opcode::NewArray(count) => {
+                    let count = count as usize;
+                    if self.stack.len() < count { return Err("stack underflow NewArray".into()); }
+                    let items: Vec<JsValue> = self.stack.drain(self.stack.len() - count..).collect();
+                    self.stack.push(JsValue::Array(std::rc::Rc::new(std::cell::RefCell::new(items))));
+                }
+                Opcode::NewObject(count) => {
+                    let count = count as usize;
+                    let need = count * 2;
+                    if self.stack.len() < need { return Err("stack underflow NewObject".into()); }
+                    let drained: Vec<JsValue> = self.stack.drain(self.stack.len() - need..).collect();
+                    let obj = std::rc::Rc::new(std::cell::RefCell::new(super::JsObject::new()));
+                    for chunk in drained.chunks(2) {
+                        if chunk.len() == 2 {
+                            let key_str = match &chunk[0] {
+                                JsValue::Str(s) => s.clone(),
+                                _ => format!("{}", key_to_str(&chunk[0])),
+                            };
+                            obj.borrow_mut().set(key_str, chunk[1].clone());
+                        }
+                    }
+                    self.stack.push(JsValue::Object(obj));
+                }
                 Opcode::TypeOf => {
                     let v = self.pop()?;
                     let t = match v {
@@ -693,6 +797,45 @@ impl VM {
         let a = self.pop()?;
         self.stack.push(JsValue::Bool(f(a, b)));
         Ok(())
+    }
+}
+
+fn get_property(obj: &JsValue, key: &str) -> JsValue {
+    match obj {
+        JsValue::Object(o) => o.borrow().get(key),
+        JsValue::Array(a) => {
+            // Array.length
+            if key == "length" { return JsValue::Number(a.borrow().len() as f64); }
+            // Numericky index: parse
+            if let Ok(idx) = key.parse::<usize>() {
+                return a.borrow().get(idx).cloned().unwrap_or(JsValue::Undefined);
+            }
+            JsValue::Undefined
+        }
+        JsValue::Str(s) => {
+            if key == "length" { return JsValue::Number(s.chars().count() as f64); }
+            if let Ok(idx) = key.parse::<usize>() {
+                return s.chars().nth(idx).map(|c| JsValue::Str(c.to_string()))
+                    .unwrap_or(JsValue::Undefined);
+            }
+            JsValue::Undefined
+        }
+        _ => JsValue::Undefined,
+    }
+}
+
+fn key_to_str(v: &JsValue) -> String {
+    match v {
+        JsValue::Str(s) => s.clone(),
+        JsValue::Number(n) => {
+            if *n == n.trunc() && n.is_finite() { format!("{}", *n as i64) }
+            else { format!("{}", n) }
+        }
+        JsValue::Bool(true) => "true".to_string(),
+        JsValue::Bool(false) => "false".to_string(),
+        JsValue::Null => "null".to_string(),
+        JsValue::Undefined => "undefined".to_string(),
+        _ => String::new(),
     }
 }
 
