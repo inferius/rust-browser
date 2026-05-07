@@ -247,7 +247,8 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 
 const RECT_SHADER: &str = r#"
 struct Uniforms {
-    viewport: vec2<f32>,
+    /// (logical_w, logical_h, zoom, _pad). vp je v logical px (window/zoom).
+    viewport: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var atlas_tex: texture_2d<f32>;
@@ -397,7 +398,9 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         rgba.a = rgba.a * in.color.a;
         if (in.radius > 0.5) {
             let d = sdf_rounded_box(in.local, in.half_size, in.radius);
-            let aa = 1.0 - smoothstep(-1.0, 1.0, d);
+            // AA range = 1 physical px = 1/zoom logical px (smoothstep symetric).
+            let aa_range = 1.0 / max(u.viewport.z, 0.0001);
+            let aa = 1.0 - smoothstep(-aa_range, aa_range, d);
             rgba.a = rgba.a * aa;
         }
         return rgba;
@@ -405,7 +408,8 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     // Mode 0: solid s rounded corners
     if (in.radius > 0.5) {
         let d = sdf_rounded_box(in.local, in.half_size, in.radius);
-        let aa = 1.0 - smoothstep(-1.0, 1.0, d);
+        let aa_range = 1.0 / max(u.viewport.z, 0.0001);
+        let aa = 1.0 - smoothstep(-aa_range, aa_range, d);
         return vec4<f32>(in.color.rgb, in.color.a * aa);
     }
     return in.color;
@@ -3927,7 +3931,7 @@ impl Renderer {
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
@@ -5290,7 +5294,7 @@ impl Renderer {
         // Browser zoom: vp uniform = logical dims (window/zoom). Vertex px coords
         // jsou v logical px (layout running at logical viewport). NDC mapping
         // px/vp pak skaluje obsah o zoom faktor pri compose do framebufferu.
-        let vp = [self.config.width as f32 / self.zoom, self.config.height as f32 / self.zoom, 0.0, 0.0];
+        let vp = [self.config.width as f32 / self.zoom, self.config.height as f32 / self.zoom, self.zoom, 0.0];
         self.queue.write_buffer(&self.uniform_buf, 0, bytemuck::cast_slice(&vp));
 
         // Dirty rect: cely frame je dirty (aktualne full-redraw)
@@ -5461,7 +5465,7 @@ impl Renderer {
         // Browser zoom: vp uniform = logical dims (window/zoom). Vertex px coords
         // jsou v logical px (layout running at logical viewport). NDC mapping
         // px/vp pak skaluje obsah o zoom faktor pri compose do framebufferu.
-        let vp = [self.config.width as f32 / self.zoom, self.config.height as f32 / self.zoom, 0.0, 0.0];
+        let vp = [self.config.width as f32 / self.zoom, self.config.height as f32 / self.zoom, self.zoom, 0.0];
         self.queue.write_buffer(&self.uniform_buf, 0, bytemuck::cast_slice(&vp));
         let frame = match self.surface.get_current_texture() {
             Ok(f) => f,
@@ -5756,7 +5760,7 @@ impl Renderer {
         // Browser zoom: vp uniform = logical dims (window/zoom). Vertex px coords
         // jsou v logical px (layout running at logical viewport). NDC mapping
         // px/vp pak skaluje obsah o zoom faktor pri compose do framebufferu.
-        let vp = [self.config.width as f32 / self.zoom, self.config.height as f32 / self.zoom, 0.0, 0.0];
+        let vp = [self.config.width as f32 / self.zoom, self.config.height as f32 / self.zoom, self.zoom, 0.0];
         self.queue.write_buffer(&self.uniform_buf, 0, bytemuck::cast_slice(&vp));
 
         let frame = match self.surface.get_current_texture() {
