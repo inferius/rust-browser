@@ -2694,7 +2694,14 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
     for (sib_idx, &idx) in indices.iter().enumerate() {
         // Inherit inheritable CSS props od parentu pri text/inline children co
         // je nemaji explicit. Inheritable per CSS spec: color, font-*, text-*.
-        if bx.children[idx].font_size <= 16.001 && parent_font_size > 16.0 {
+        // Text node deti (tag=None) nemaji vlastni cascade entry - vzdy dedi
+        // vse od parentu. Inline elementy maji svoji cascade entry - dedi jen
+        // pokud sami nemaji explicit value.
+        let is_text_node = bx.children[idx].tag.is_none();
+        // Text node: vzdy override font_size z parentu (nema vlastni cascade).
+        // Inline element: jen kdyz nema explicit font-size (heuristic: != 16
+        // znamena ze cascade ho prepsala) - bug edge case pri parent=16.
+        if is_text_node || (bx.children[idx].font_size - 16.0).abs() < 0.001 {
             bx.children[idx].font_size = parent_font_size;
         }
         if !bx.children[idx].bold && parent_bold {
@@ -2729,6 +2736,14 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
             }
 
             let words: Vec<&str> = text.split_whitespace().collect();
+            // Strip leading/trailing whitespace z bx.text JEN pro text nody
+            // (tag=None). Predtim rendering bx.text=" a " emitoval (mezera + a
+            // + mezera) pres rect.x, ale cursor pricital jen "a" - overlap.
+            // Pseudo-elementy (::before/::after) si content nesahej.
+            if bx_clone.tag.is_none() {
+                let stripped: String = words.join(" ");
+                bx.children[idx].text = Some(stripped);
+            }
             for (wi, word) in words.iter().enumerate() {
                 let w = measure_text_width(word, font_size);
                 let inter_word_space = if wi > 0 { space_w } else { 0.0 };

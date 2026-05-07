@@ -392,12 +392,16 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: 
                 push_rect(&mut verts, *x, *y, bw, *h, c, [0.0, 0.0], 0.0);
                 push_rect(&mut verts, *x + *w - bw, *y, bw, *h, c, [0.0, 0.0], 0.0);
             }
-            DisplayCommand::Text { x, y, content, color, font_size, bold: _, italic, font_family, strikethrough, underline } => {
+            DisplayCommand::Text { x, y, content, color, font_size, bold, italic, font_family, strikethrough, underline } => {
                 let c = normalize_color(color);
                 let mut pen_x = *x;
                 let pen_y = *y + *font_size;
                 // Italic = fake skew transform na glyph quady (x += y * 0.2).
                 let italic_skew: f32 = if *italic { 0.2 } else { 0.0 };
+                // Bold = fake bold pres double draw s 1px x-offsetem (smear).
+                // Pri opravdovem fontu by se mel pouzit bold variant, ale fake
+                // staci pro dostatecny vizualni weight.
+                let bold_offset: f32 = if *bold { (font_size / 16.0).max(0.6).min(1.6) } else { 0.0 };
                 let start_x = pen_x;
                 for ch in content.chars() {
                     // Color glyph (COLR) check pres synthetic image_atlas key.
@@ -413,13 +417,13 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: 
                     if let Some(g) = atlas.get(font_family, ch, *font_size as u32) {
                         let gx = pen_x + g.bearing_x;
                         let gy = pen_y - g.bearing_y;
-                        if italic_skew != 0.0 {
-                            let baseline_offset = (pen_y - gy) * italic_skew;
-                            push_rect_uv(&mut verts, gx + baseline_offset, gy, g.width, g.height, c, g.uv0, g.uv1, 1.0);
-                        } else {
-                            push_rect_uv(&mut verts, gx, gy, g.width, g.height, c, g.uv0, g.uv1, 1.0);
+                        let skew_x = if italic_skew != 0.0 { (pen_y - gy) * italic_skew } else { 0.0 };
+                        push_rect_uv(&mut verts, gx + skew_x, gy, g.width, g.height, c, g.uv0, g.uv1, 1.0);
+                        // Bold smear: druhe vykresleni s x-offsetem.
+                        if bold_offset > 0.0 {
+                            push_rect_uv(&mut verts, gx + skew_x + bold_offset, gy, g.width, g.height, c, g.uv0, g.uv1, 1.0);
                         }
-                        pen_x += g.advance;
+                        pen_x += g.advance + bold_offset;
                     } else {
                         pen_x += font_size * 0.5;
                     }
