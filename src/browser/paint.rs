@@ -1519,10 +1519,16 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
         // line boxu. Pak pri inner_h matching line-height = single line
         // vertically centered v boxu (CSS technique).
         let line_height_px = bx.line_height * bx.font_size;
-        let natural_lh = bx.font_size * 1.2;
         let _ = pad_b;
-        let extra_lead = (line_height_px - natural_lh).max(0.0);
-        let v_offset = extra_lead * 0.5;
+        // CSS half-leading: line box ma height = line_height_px, em box (font_size
+        // tall) je centered uvnitr. Baseline lezi na ascender od top em boxu.
+        // Render setuje pen_y = text_y + font_size (predpoklada baseline = bottom
+        // em box). Aby skutecny baseline = em_top + ascender_ratio*font_size,
+        // muzeme posunout text_y o -(1 - ascender_ratio)*font_size.
+        // Ascender_ratio ~0.8 pro Segoe UI/Roboto (typografick metric).
+        let half_leading = ((line_height_px - bx.font_size) * 0.5).max(0.0);
+        let ascent_adj = bx.font_size * 0.2;
+        let v_offset = (half_leading - ascent_adj).max(0.0);
         let text_y = bx.rect.y + pad_t + v_offset;
         let text_color = with_alpha(bx.text_color.unwrap_or([0, 0, 0, 255]));
         // Text shadow - emit pred main text aby byl v pozadi
