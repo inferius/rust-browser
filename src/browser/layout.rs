@@ -2651,16 +2651,16 @@ pub fn layout_block(bx: &mut LayoutBox) {
     // content_h NEpresahnout puvodni hodnotu (parent height = constraint).
     let preset_height_taffy = if bx.taffy_mode { bx.rect.height } else { 0.0 };
 
-    // Asymmetric padding/margin wins, jinak shorthand `padding`/`margin`.
+    // Asymmetric padding wins, jinak shorthand `padding`. Margin je VNEJSI
+    // padding (mezi boxy), neovlivnuje inner content area. inner_w = rect.width
+    // - padding - border_width. Margin uz aplikoval parent layout pri pozicovani
+    // tohoto boxu.
     let pad_l = bx.padding_left.unwrap_or(bx.padding);
     let pad_r = bx.padding_right.unwrap_or(bx.padding);
     let pad_t = bx.padding_top.unwrap_or(bx.padding);
-    let mar_l = bx.margin_left.unwrap_or(bx.margin);
-    let mar_r = bx.margin_right.unwrap_or(bx.margin);
-    let mar_t = bx.margin_top.unwrap_or(bx.margin);
-    let inner_x = bx.rect.x + pad_l + mar_l + bx.border_width;
-    let inner_y = bx.rect.y + pad_t + mar_t + bx.border_width;
-    let inner_w = bx.rect.width - pad_l - pad_r - mar_l - mar_r - 2.0 * bx.border_width;
+    let inner_x = bx.rect.x + pad_l + bx.border_width;
+    let inner_y = bx.rect.y + pad_t + bx.border_width;
+    let inner_w = bx.rect.width - pad_l - pad_r - 2.0 * bx.border_width;
 
     let mut cursor_y = inner_y;
     // Inline run - sbiraji se inline boxy do line buffer, flush pri block child nebo konci
