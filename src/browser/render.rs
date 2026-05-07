@@ -841,6 +841,21 @@ fn apply_paint_animations(box_: &mut crate::browser::layout::LayoutBox,
     }
 }
 
+/// Eval JS via bytecode VM s globals z Interpreter env. Pri compile failure
+/// nebo runtime error vrati Err s message.
+fn console_eval_via_vm(src: &str, interp: &crate::interpreter::Interpreter) -> Result<crate::interpreter::JsValue, String> {
+    use crate::lexer::base::Lexer;
+    use crate::parser::Parser;
+    use crate::interpreter::bytecode::{compile_program, VM};
+
+    let lex = Lexer::parse_str(src, "<console>").map_err(|e| format!("Lexer: {:?}", e))?;
+    let mut parser = Parser::new(lex.tokens.clone());
+    let program = parser.parse().map_err(|e| format!("Parser: {:?}", e))?;
+    let code = compile_program(&program.body).map_err(|e| format!("Compile: {}", e))?;
+    let mut vm = VM::with_env(interp.global.clone());
+    vm.run(&code).map_err(|e| format!("Runtime: {}", e))
+}
+
 fn find_node_by_ptr(root: &Rc<crate::browser::dom::NodeData>, ptr: usize) -> Option<Rc<crate::browser::dom::NodeData>> {
     if Rc::as_ptr(root) as usize == ptr {
         return Some(Rc::clone(root));
@@ -2364,7 +2379,17 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                                     println!("[devtools console] eval: {}", cmd);
                                     if let Some(interp) = &mut self.interpreter {
                                         interp.console_log.borrow_mut().push(("info".to_string(), format!("> {}", cmd)));
-                                        // TODO: real eval. Zatim jen echo.
+                                        // Real eval pres bytecode VM (rychlejsi nez tree-walker pro
+                                        // jednoduche vyrazy + dovoluje rychly pristup k vsem opcodes).
+                                        let result = console_eval_via_vm(&cmd, interp);
+                                        match result {
+                                            Ok(v) => {
+                                                interp.console_log.borrow_mut().push(("info".to_string(), v.to_string()));
+                                            }
+                                            Err(e) => {
+                                                interp.console_log.borrow_mut().push(("error".to_string(), e));
+                                            }
+                                        }
                                     }
                                 }
                                 if let Some(w) = &self.window { w.request_redraw(); }
