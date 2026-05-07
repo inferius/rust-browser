@@ -356,6 +356,33 @@ fn vm_user_function_chained_calls() {
 }
 
 #[test]
+fn vm_optional_chain_undefined() {
+    let r = run_vm(r#"
+        let o = null;
+        o?.foo
+    "#).unwrap();
+    assert_jv!(r, JsValue::Undefined);
+}
+
+#[test]
+fn vm_optional_chain_defined() {
+    let r = run_vm(r#"
+        let o = { foo: 42 };
+        o?.foo
+    "#).unwrap();
+    assert_jv!(r, n(42.0));
+}
+
+#[test]
+fn vm_optional_chain_chained() {
+    let r = run_vm(r#"
+        let o = { a: { b: 7 } };
+        o?.a?.b
+    "#).unwrap();
+    assert_jv!(r, n(7.0));
+}
+
+#[test]
 fn vm_for_in_object_keys() {
     // Pozadujem run_vm_with_globals (Object je global).
     let r = run_vm_with_globals(r#"

@@ -466,16 +466,38 @@ pub fn compile_expr(e: &Expr, code: &mut CodeBlock) -> Result<(), &'static str> 
             }
             Ok(())
         }
-        Expr::Member { object, prop, optional: _ } => {
+        Expr::Member { object, prop, optional } => {
             compile_expr(object, code)?;
-            match prop {
-                MemberProp::Ident(name) => {
-                    let key_idx = code.push_var(name);
-                    code.emit(Opcode::GetProp(key_idx));
+            if *optional {
+                // obj?.prop: pri null/undef vrat undefined.
+                let jmp_proceed = code.emit(Opcode::JmpIfNotNullishKeep(0));
+                code.emit(Opcode::Pop);
+                code.emit(Opcode::LoadUndefined);
+                let jmp_end = code.emit(Opcode::Jmp(0));
+                let proceed = code.bytecode.len();
+                code.patch_jmp(jmp_proceed, proceed);
+                match prop {
+                    MemberProp::Ident(name) => {
+                        let key_idx = code.push_var(name);
+                        code.emit(Opcode::GetProp(key_idx));
+                    }
+                    MemberProp::Computed(e) => {
+                        compile_expr(e, code)?;
+                        code.emit(Opcode::GetIndex);
+                    }
                 }
-                MemberProp::Computed(e) => {
-                    compile_expr(e, code)?;
-                    code.emit(Opcode::GetIndex);
+                let end = code.bytecode.len();
+                code.patch_jmp(jmp_end, end);
+            } else {
+                match prop {
+                    MemberProp::Ident(name) => {
+                        let key_idx = code.push_var(name);
+                        code.emit(Opcode::GetProp(key_idx));
+                    }
+                    MemberProp::Computed(e) => {
+                        compile_expr(e, code)?;
+                        code.emit(Opcode::GetIndex);
+                    }
                 }
             }
             Ok(())
