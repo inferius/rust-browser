@@ -501,6 +501,24 @@ fn vm_block_let_inner_visible_inside() {
 }
 
 #[test]
+fn vm_class_super_method() {
+    let r = run_vm_with_globals(r#"
+        class A {
+            constructor() { this.x = 10; }
+            greet() { return 'A:' + this.x; }
+        }
+        class B extends A {
+            constructor() { super(); }
+            greet() { return 'B:' + this.x; }
+            useSuper() { return super.greet(); }
+        }
+        let b = new B();
+        b.useSuper()
+    "#).unwrap();
+    assert_jv!(r, JsValue::Str("A:10".to_string()));
+}
+
+#[test]
 fn vm_class_extends() {
     let r = run_vm_with_globals(r#"
         class A {

@@ -691,6 +691,25 @@ pub fn compile_expr(e: &Expr, code: &mut CodeBlock) -> Result<(), &'static str> 
             Ok(())
         }
         Expr::Member { object, prop, optional } => {
+            // Special: super.X -> this.__super.X.
+            if let Expr::Ident(n) = object.as_ref() {
+                if n == "super" {
+                    code.emit(Opcode::LoadThis);
+                    let super_idx = code.push_string("__super");
+                    code.emit(Opcode::GetProp(super_idx));
+                    match prop {
+                        MemberProp::Ident(name) => {
+                            let key_idx = code.push_string(name);
+                            code.emit(Opcode::GetProp(key_idx));
+                        }
+                        MemberProp::Computed(e) => {
+                            compile_expr(e, code)?;
+                            code.emit(Opcode::GetIndex);
+                        }
+                    }
+                    return Ok(());
+                }
+            }
             compile_expr(object, code)?;
             if *optional {
                 // obj?.prop: pri null/undef vrat undefined.
@@ -767,6 +786,35 @@ pub fn compile_expr(e: &Expr, code: &mut CodeBlock) -> Result<(), &'static str> 
             // Tim ziskame this binding ze obj.
             // Spread args + Method dohromady - skip CallMethod path (faily).
             let has_spread_arg_check = args.iter().any(|a| matches!(a, Expr::Spread(_)));
+            // Special: super.method(args) - this_value = current this, method via __super.
+            if !has_spread_arg_check && !opt {
+                if let Expr::Member { object, prop, optional: false } = callee.as_ref() {
+                    if let Expr::Ident(o) = object.as_ref() {
+                        if o == "super" {
+                            // Stack: [this, this.__super.method, args] -> CallMethod.
+                            code.emit(Opcode::LoadThis);              // [this]
+                            code.emit(Opcode::LoadThis);              // [this, this]
+                            let super_idx = code.push_string("__super");
+                            code.emit(Opcode::GetProp(super_idx));    // [this, super]
+                            match prop {
+                                MemberProp::Ident(name) => {
+                                    let key_idx = code.push_string(name);
+                                    code.emit(Opcode::GetProp(key_idx));  // [this, method]
+                                }
+                                MemberProp::Computed(e) => {
+                                    compile_expr(e, code)?;
+                                    code.emit(Opcode::GetIndex);
+                                }
+                            }
+                            for arg in args {
+                                compile_expr(arg, code)?;
+                            }
+                            code.emit(Opcode::CallMethod(args.len() as u16));
+                            return Ok(());
+                        }
+                    }
+                }
+            }
             if !has_spread_arg_check && !opt {
                 if let Expr::Member { object, prop, optional: false } = callee.as_ref() {
                     // Compile obj (resolve lokalni / capture / global).
@@ -1482,6 +1530,16 @@ pub fn compile_stmt(s: &Stmt, code: &mut CodeBlock) -> Result<(), &'static str> 
                     iter: Expr::Ident("__super_inst".to_string()),
                     body: Box::new(Stmt::Expr(copy_assign)),
                 });
+                // this.__super = __super_inst (zachova original A's instance pres super.X reference).
+                synth_body.push(Stmt::Expr(Expr::Assign {
+                    op: AssignOp::Assign,
+                    target: Box::new(Expr::Member {
+                        object: Box::new(Expr::Ident("this".to_string())),
+                        prop: MemberProp::Ident("__super".to_string()),
+                        optional: false,
+                    }),
+                    value: Box::new(Expr::Ident("__super_inst".to_string())),
+                }));
             }
 
             // Add B's methods as instance fields.
