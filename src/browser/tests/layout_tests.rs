@@ -3016,3 +3016,32 @@ fn text_wrap_inserts_newline_at_break() {
     println!("wrapped text: {:?}", text);
     assert!(text.contains('\n'), "expected newline at wrap, got: {:?}", text);
 }
+
+#[test]
+fn button_with_padding_has_full_height() {
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade, layout};
+    let doc = parse_html(
+        r#"<html><body><button class="b">Primary</button></body></html>"#,
+        ""
+    );
+    let css = parse_stylesheet(r#"body { font-size: 16px; }
+        .b { padding: 8px 16px; font-size: 14px; border-width: 0; border-radius: 4px; color: white; }
+    "#);
+    let map = cascade::cascade(&doc.root, &[css]);
+    let lr = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+    fn find(b: &layout::LayoutBox) -> Option<&layout::LayoutBox> {
+        if b.tag.as_deref() == Some("button") { return Some(b); }
+        for ch in &b.children {
+            if let Some(r) = find(ch) { return Some(r); }
+        }
+        None
+    }
+    let btn = find(&lr).expect("button not found");
+    println!("button rect h={} pad_t={:?} pad_b={:?} font_size={} line_height={}",
+        btn.rect.height, btn.padding_top, btn.padding_bottom, btn.font_size, btn.line_height);
+    // Pad_t + content + pad_b. Content min font_size (14) ale s line-height obvykle vetsi.
+    // Min button height = 8 + 14 + 8 = 30. Idealne 8 + 19.6 + 8 = 35.6.
+    assert!(btn.rect.height >= 30.0, "button height {} < expected min 30", btn.rect.height);
+    assert_eq!(btn.padding_top, Some(8.0));
+    assert_eq!(btn.padding_bottom, Some(8.0));
+}

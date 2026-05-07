@@ -1382,3 +1382,56 @@ fn badge_text_centered_vertically_in_box() {
         let _ = rx;
     }
 }
+
+#[test]
+fn button_text_position_within_button_box() {
+    let cmds = build_dl(
+        r#"<html><body><button class="b">P</button></body></html>"#,
+        r#"body { font-size: 16px; }
+           .b { padding: 8px 16px; font-size: 14px; }
+        "#,
+    );
+    let btn_rect = cmds.iter().find_map(|c| {
+        if let DisplayCommand::Rect { x, y, w, h, color, radius: _, .. } = c {
+            // Default button bg = [239, 239, 239, 255]
+            if color[0] == 239 { return Some((*x, *y, *w, *h)); }
+        }
+        None
+    });
+    let text_cmd = cmds.iter().find_map(|c| {
+        if let DisplayCommand::Text { x, y, font_size, content, .. } = c {
+            if content.contains('P') { return Some((*x, *y, *font_size)); }
+        }
+        None
+    });
+    if let (Some((_, ry, _, rh)), Some((_, ty, fs))) = (btn_rect, text_cmd) {
+        let baseline = ty + fs;
+        let button_top = ry;
+        let button_bot = ry + rh;
+        let button_center = ry + rh * 0.5;
+        let glyph_top = baseline - fs * 0.7;
+        let glyph_bot = baseline + fs * 0.2;  // s descender
+        let space_above = glyph_top - button_top;
+        let space_below = button_bot - glyph_bot;
+        println!("btn h={} text baseline={} glyph_top={} glyph_bot={} center={}",
+            rh, baseline, glyph_top, glyph_bot, button_center);
+        println!("  space_above={} space_below={} diff={}",
+            space_above, space_below, (space_above - space_below).abs());
+        // Mela by byt asymmetrie max ~3px (descender vs cap height).
+        assert!((space_above - space_below).abs() < 5.0,
+            "asymmetric: above={} below={}", space_above, space_below);
+    }
+}
+
+#[test]
+fn debug_button_all_commands() {
+    let cmds = build_dl(
+        r#"<html><body><button class="b">P</button></body></html>"#,
+        r#"body { font-size: 16px; }
+           .b { padding: 8px 16px; font-size: 14px; }
+        "#,
+    );
+    for c in &cmds {
+        println!("{:?}", c);
+    }
+}

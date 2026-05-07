@@ -827,7 +827,7 @@ impl LayoutBox {
             bold: false,
             italic: false,
             border_radius: 0.0,
-            line_height: 1.4,
+            line_height: 1.2,
             position: Position::Static,
             offset_top: None,
             offset_right: None,
@@ -2807,10 +2807,14 @@ pub fn layout_block(bx: &mut LayoutBox) {
         cursor_y = flush_inline(bx, &inline_buffer, inner_x, cursor_y, inner_w);
     }
 
-    // Auto-vypocet vysky podle children
+    // Auto-vypocet vysky podle children. Asymmetric padding pres _top/_bottom
+    // (jinak shorthand `padding`). border_width pridava na obe strany.
     let content_h = cursor_y - inner_y;
-    if bx.rect.height < content_h + 2.0 * (bx.padding + bx.border_width) {
-        bx.rect.height = content_h + 2.0 * (bx.padding + bx.border_width);
+    let block_pad_t = bx.padding_top.unwrap_or(bx.padding);
+    let block_pad_b = bx.padding_bottom.unwrap_or(bx.padding);
+    let bound = content_h + block_pad_t + block_pad_b + 2.0 * bx.border_width;
+    if bx.rect.height < bound {
+        bx.rect.height = bound;
     }
     // V taffy_mode: pokud rodic ji uz nastavil (preset > 0), nepresahnout (parent
     // constraint - flex/grid item v constrained kontextu nesmi rust nad parent).
@@ -2881,12 +2885,17 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
         // text uvnitr potrebuje stejnou line-height pro vertical center
         // (paint v_offset z line_height_px).
         let is_text_node_lh = bx.children[idx].tag.is_none();
-        if is_text_node_lh || (bx.children[idx].line_height - 1.4).abs() < 0.001 {
+        if is_text_node_lh || (bx.children[idx].line_height - 1.2).abs() < 0.001 {
             bx.children[idx].line_height = parent_line_height;
         }
         let bx_clone = bx.children[idx].clone();
         let font_size = bx_clone.font_size;
-        let advance_h = (font_size * 1.4).max(line_height_default);
+        // CSS normal line-height = 1.2 (browsers convention). 1.4 byl prilis
+        // velky padding -> tlacitka mela visual extra space below text.
+        // Pri smaller-font inline elementu (.btn 14 v body 16) advance_h pouzij
+        // bx_clone vlastni line_height, ne parent default.
+        let own_lh_px = bx_clone.line_height * font_size;
+        let advance_h = own_lh_px.max(font_size * 1.2);
         line_height = line_height.max(advance_h);
         let space_w = font_size * 0.27;
 
