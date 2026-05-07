@@ -385,19 +385,41 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: 
                 push_rect(&mut verts, *x, *y, bw, *h, c, [0.0, 0.0], 0.0);
                 push_rect(&mut verts, *x + *w - bw, *y, bw, *h, c, [0.0, 0.0], 0.0);
             }
-            DisplayCommand::Text { x, y, content, color, font_size, bold: _, font_family } => {
+            DisplayCommand::Text { x, y, content, color, font_size, bold: _, italic, font_family, strikethrough, underline } => {
                 let c = normalize_color(color);
                 let mut pen_x = *x;
                 let pen_y = *y + *font_size;
+                // Italic = fake skew transform na glyph quady (x += y * 0.2).
+                let italic_skew: f32 = if *italic { 0.2 } else { 0.0 };
+                let start_x = pen_x;
                 for ch in content.chars() {
                     if let Some(g) = atlas.get(font_family, ch, *font_size as u32) {
                         let gx = pen_x + g.bearing_x;
                         let gy = pen_y - g.bearing_y;
-                        push_rect_uv(&mut verts, gx, gy, g.width, g.height, c, g.uv0, g.uv1, 1.0);
+                        if italic_skew != 0.0 {
+                            // Per-glyph skew: posun rohu kvadu o (height * skew).
+                            // Approximace: posunout cely glyph rect o offset zalozeny na pozici.
+                            let baseline_offset = (pen_y - gy) * italic_skew;
+                            push_rect_uv(&mut verts, gx + baseline_offset, gy, g.width, g.height, c, g.uv0, g.uv1, 1.0);
+                        } else {
+                            push_rect_uv(&mut verts, gx, gy, g.width, g.height, c, g.uv0, g.uv1, 1.0);
+                        }
                         pen_x += g.advance;
                     } else {
                         pen_x += font_size * 0.5;
                     }
+                }
+                // Strikethrough line cca v 50% font size od top.
+                let text_w = pen_x - start_x;
+                if *strikethrough && text_w > 0.0 {
+                    let line_y = *y + *font_size * 0.5;
+                    let thickness = (font_size * 0.06).max(1.0);
+                    push_rect(&mut verts, start_x, line_y, text_w, thickness, c, [0.0, 0.0], 0.0);
+                }
+                if *underline && text_w > 0.0 {
+                    let line_y = *y + *font_size * 0.95;
+                    let thickness = (font_size * 0.06).max(1.0);
+                    push_rect(&mut verts, start_x, line_y, text_w, thickness, c, [0.0, 0.0], 0.0);
                 }
             }
             DisplayCommand::Gradient { x, y, w, h, kind, stops, radius } => {
@@ -588,7 +610,9 @@ fn paint_canvas_ops(
                                 color: current_fill,
                                 font_size: current_font_size,
                                 bold: false,
+                                italic: false,
                                 font_family: String::new(),
+                                strikethrough: false, underline: false,
                             });
                         }
                         // Nove operace - paint stub (state pres apply uvnitr render pipeline TODO)
@@ -648,7 +672,9 @@ fn paint_canvas_ops(
                                 color: current_stroke,
                                 font_size: current_font_size,
                                 bold: false,
+                                italic: false,
                                 font_family: String::new(),
+                                strikethrough: false, underline: false,
                             });
                         }
                         // State / transform / styling ops - state-only, render je read-only zatim
@@ -2784,7 +2810,9 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                                 content: txt,
                                 color: [40, 40, 50, 255],
                                 font_size: 14.0, bold: false,
+                                italic: false,
                                 font_family: String::new(),
+                                strikethrough: false, underline: false,
                             });
                             idx += 1;
                         }

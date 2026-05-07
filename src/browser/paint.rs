@@ -175,8 +175,14 @@ pub enum DisplayCommand {
         color: [u8; 4],
         font_size: f32,
         bold: bool,
+        /// italic - render pres skew x = 0.2 * y (fake italic).
+        italic: bool,
         /// font-family - "" pro default
         font_family: String,
+        /// text-decoration line-through (s = 1 line strike).
+        strikethrough: bool,
+        /// text-decoration underline (u = 1 line under).
+        underline: bool,
     },
     /// Linear/radial/conic gradient rect.
     Gradient {
@@ -535,7 +541,9 @@ fn emit_svg_children_xform(bx: &LayoutBox, parent_xform: &[f32; 6], cmds: &mut V
                     cmds.push(DisplayCommand::Text {
                         x: ax, y: ay - font_size, content,
                         color: fill, font_size, bold: false,
+                        italic: false,
                         font_family: String::new(),
+                        strikethrough: false, underline: false,
                     });
                 }
             }
@@ -1480,9 +1488,14 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
                 color: with_alpha(color),
                 font_size: bx.font_size,
                 bold: bx.bold,
+                italic: bx.italic,
                 font_family: bx.font_family.clone(),
+                strikethrough: false, underline: false,
             });
         }
+        // Strike-through pri <s>/<del>/<strike> tagu (line-through default).
+        let is_strike_tag = matches!(bx.tag.as_deref(),
+            Some("s") | Some("strike") | Some("del"));
         cmds.push(DisplayCommand::Text {
             x: text_x,
             y: text_y,
@@ -1490,7 +1503,10 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
             color: text_color,
             font_size: bx.font_size,
             bold: bx.bold,
+            italic: bx.italic,
             font_family: bx.font_family.clone(),
+            strikethrough: is_strike_tag,
+            underline: bx.text_underline,
         });
         // Underline / strikethrough s ruznymi styly (solid/double/dotted/dashed/wavy)
         if bx.text_underline {
