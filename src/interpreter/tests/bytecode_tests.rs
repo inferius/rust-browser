@@ -356,6 +356,33 @@ fn vm_user_function_chained_calls() {
 }
 
 #[test]
+fn vm_for_in_object_keys() {
+    // Pozadujem run_vm_with_globals (Object je global).
+    let r = run_vm_with_globals(r#"
+        let obj = { a: 1, b: 2, c: 3 };
+        let count = 0;
+        for (let key in obj) {
+            count = count + 1;
+        }
+        count
+    "#).unwrap();
+    assert_jv!(r, n(3.0));
+}
+
+#[test]
+fn vm_for_in_sum_values() {
+    let r = run_vm_with_globals(r#"
+        let obj = { x: 10, y: 20, z: 30 };
+        let total = 0;
+        for (let k in obj) {
+            total = total + obj[k];
+        }
+        total
+    "#).unwrap();
+    assert_jv!(r, n(60.0));
+}
+
+#[test]
 fn vm_for_of_array() {
     let r = run_vm(r#"
         let sum = 0;

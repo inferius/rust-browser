@@ -848,6 +848,66 @@ pub fn compile_stmt(s: &Stmt, code: &mut CodeBlock) -> Result<(), &'static str> 
             code.emit(Opcode::DeclareVar(var_idx));
             Ok(())
         }
+        Stmt::ForIn { kind: _, target, iter, body } => {
+            // Iterate Object keys / Array indexes pres Vec<String> snapshotted at iter eval.
+            // Hidden var __keys_N + __keys_idx_N + iterable.
+            let keys_name = format!("__forin_keys_{}", code.bytecode.len());
+            let idx_name = format!("__forin_idx_{}", code.bytecode.len());
+            let keys_var = code.push_var(&keys_name);
+            let idx_var = code.push_var(&idx_name);
+            // Vyhodnoceni iter -> push -> for each key emit pres specialni opcode?
+            // Misto toho: pouzij Object.keys() pres LoadGlobal + Call.
+            // Generuj: keys = Object.keys(iter); idx=0; while idx<keys.length: target=keys[idx]; body; idx++.
+            compile_expr(iter, code)?; // push iter (object/array)
+            // Object.keys(iter) - LoadGlobal Object, GetProp keys, CallNative 1 arg.
+            // Reorganize: LoadGlobal Object first then arg. Currently iter is on stack.
+            // Better: temp store iter, push Object.keys, push iter, call.
+            let tmp_iter = code.push_var(&format!("__forin_tmpiter_{}", code.bytecode.len()));
+            code.emit(Opcode::DeclareVar(tmp_iter));
+            let object_idx = code.push_var("Object");
+            code.emit(Opcode::LoadGlobal(object_idx));
+            let keys_prop = code.push_var("keys");
+            code.emit(Opcode::GetProp(keys_prop));
+            code.emit(Opcode::LoadVar(tmp_iter));
+            code.emit(Opcode::CallNative(1));
+            code.emit(Opcode::DeclareVar(keys_var));
+            // idx = 0
+            code.emit(Opcode::LoadZero);
+            code.emit(Opcode::DeclareVar(idx_var));
+            let target_name = match target.as_ref() {
+                Expr::Ident(n) => n.clone(),
+                _ => return Err("for-in target must be ident"),
+            };
+            let target_var = code.push_var(&target_name);
+            code.loop_stack.push(LoopFrame { break_jumps: vec![], continue_jumps: vec![] });
+            let test_pos = code.bytecode.len();
+            code.emit(Opcode::LoadVar(idx_var));
+            code.emit(Opcode::LoadVar(keys_var));
+            let length_idx = code.push_var("length");
+            code.emit(Opcode::GetProp(length_idx));
+            code.emit(Opcode::Lt);
+            let jmp_to_end = code.emit(Opcode::JmpIfFalse(0));
+            code.emit(Opcode::LoadVar(keys_var));
+            code.emit(Opcode::LoadVar(idx_var));
+            code.emit(Opcode::GetIndex);
+            code.emit(Opcode::DeclareVar(target_var));
+            compile_stmt(body, code)?;
+            let cont_target = code.bytecode.len();
+            let frame = code.loop_stack.last().cloned().unwrap();
+            for ci in &frame.continue_jumps {
+                code.patch_jmp(*ci, cont_target);
+            }
+            code.emit(Opcode::Inc(idx_var));
+            let back = code.emit(Opcode::Jmp(0));
+            code.patch_jmp(back, test_pos);
+            let end = code.bytecode.len();
+            code.patch_jmp(jmp_to_end, end);
+            let frame = code.loop_stack.pop().unwrap();
+            for bj in &frame.break_jumps {
+                code.patch_jmp(*bj, end);
+            }
+            Ok(())
+        }
         Stmt::ForOf { kind: _, target, iter, body } => {
             // Iterate Array/String pres index. Hidden vars __for_iter_N + __for_idx_N.
             let iter_name = format!("__for_iter_{}", code.bytecode.len());
