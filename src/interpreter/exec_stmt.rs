@@ -48,14 +48,48 @@ impl Interpreter {
                     (hit, dbg.skip_once_line == Some(*line))
                 };
                 if should_pause && !skip_once {
+                    let locals = capture_locals(env);
+                    // Worker-thread mode: blocking wait pres condvar.
+                    if self.continue_signal.is_some() {
+                        let msg = format!("Breakpoint hit at line {} (waiting for Continue)", line);
+                        self.console_log.borrow_mut().push(("warn".into(), msg));
+                        // Mirror state do shared debugger (UI thread cte).
+                        if let Some(shared) = &self.shared_debugger {
+                            let mut s = shared.lock().unwrap();
+                            s.pause_at(*line);
+                            s.locals = locals.clone();
+                            s.step = None;
+                        }
+                        // Mirror taky do local debugger (pro non-shared paths).
+                        {
+                            let mut dbg = self.debugger.borrow_mut();
+                            dbg.pause_at(*line);
+                            dbg.locals = locals;
+                            dbg.step = None;
+                        }
+                        // Block - vrati se pri Continue/Step button click.
+                        self.block_for_continue();
+                        // Po wake-up: prevezmi state z shared (UI mohlo zmenit BP/step).
+                        if let Some(shared) = &self.shared_debugger {
+                            let s = shared.lock().unwrap();
+                            let mut dbg = self.debugger.borrow_mut();
+                            dbg.breakpoints = s.breakpoints.clone();
+                            dbg.step = s.step;
+                            dbg.step_depth_anchor = s.step_depth_anchor;
+                            dbg.skip_once_line = s.skip_once_line;
+                            dbg.paused_at = None;
+                        } else {
+                            self.debugger.borrow_mut().paused_at = None;
+                        }
+                        return self.exec_stmt(inner, env);
+                    }
+                    // Single-thread mode (test, basic eval): early abort + rerun.
                     let msg = format!("Breakpoint hit at line {} (script aborted; click Continue v devtools)", line);
                     self.console_log.borrow_mut().push(("warn".into(), msg));
-                    let locals = capture_locals(env);
                     let mut dbg = self.debugger.borrow_mut();
                     dbg.pause_at(*line);
                     dbg.locals = locals;
                     dbg.step = None;
-                    // Early abort - propaguj Signal::Paused nahoru.
                     return Ok(Some(Signal::Paused(*line)));
                 }
                 if skip_once {

@@ -9,6 +9,14 @@ use super::webgl_helpers::{webgl_compute_stride, webgl_attrib_to_vertex_format, 
 use bytemuck::{Pod, Zeroable};
 use std::rc::Rc;
 
+// Async worker pro JS exec vyzaduje Interpreter: Send. Aktualne Interpreter ma
+// Rc<RefCell> interne, takze !Send. Wrappers `unsafe impl Send for SendInterp`
+// nestaci protoze closure auto-trait check projde dovnitr Rc pres autoderef.
+// Reseni: Arc<Mutex> rework napric ~30 souboru (Interpreter struct, JsValue,
+// JsObject, NodeData, Document, atd.) - viz HANDOFF Arc rework TODO.
+// Aktualne: shared_debugger + Continue Condvar foundation pripravena, ale
+// scripts beti single-thread (UI). Pause = early-abort + rerun kompromis.
+
 mod url;
 pub use url::{fetch_text_url, fetch_image_bytes, resolve_url};
 
@@ -416,6 +424,11 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         /// Double-click detect: cas posledniho LMB pressed + pozice.
         last_click_time: Option<std::time::Instant>,
         last_click_pos: (f32, f32),
+        /// Sdileny debugger state pres mezi UI a JS worker thread (foundation
+        /// pro budouci Arc rework - aktualne primary path je single-thread).
+        shared_debugger: crate::interpreter::SharedDebugger,
+        /// Continue signal pri pause v worker thread.
+        continue_signal: crate::interpreter::ContinueSignal,
         /// Browser zoom factor (1.0 = 100%). Ctrl++/Ctrl+- meni v krocich,
         /// Ctrl+0 reset. Layout viewport pri zoomu = window/zoom (tj. logical
         /// dimensions mensi -> reflow). Render uniform vp = window/zoom -> px
@@ -1664,6 +1677,16 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
             self.interpreter = Some(tmp);
             self.cached_layout_root = None;
             self.cached_style_map = None;
+        }
+
+        /// Notify worker thread pres Condvar - po klik Continue/Step.
+        /// Pouziva se kdyz Interpreter beti na worker thread s attach_shared_debugger.
+        /// Aktualne nepouziva primarne (interp beti UI thread, viz HANDOFF Arc rework).
+        fn notify_continue(&self) {
+            let (lock, cvar) = &*self.continue_signal;
+            let mut continued = lock.lock().unwrap();
+            *continued = true;
+            cvar.notify_all();
         }
 
         fn run_inline_scripts(&mut self, interp: &mut crate::interpreter::Interpreter) {
@@ -2947,6 +2970,10 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         devtools_resizing: false,
         last_click_time: None,
         last_click_pos: (0.0, 0.0),
+        shared_debugger: std::sync::Arc::new(std::sync::Mutex::new(
+            crate::interpreter::DebuggerState::default())),
+        continue_signal: std::sync::Arc::new((
+            std::sync::Mutex::new(false), std::sync::Condvar::new())),
         zoom: 1.0,
         modifiers: winit::keyboard::ModifiersState::empty(),
         find_open: false,

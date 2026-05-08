@@ -259,6 +259,52 @@ NEXT-LEVEL VYLEPSENI (TODO):
 - [ ] Conditional breakpoints (eval expr na pause check)
 - [ ] Logpoint (log expr namisto pause)
 
+## Phase 12 - Async pause infrastructure (foundation)
+
+PRIDANE FOUNDATION pro real freeze pause (aktivuje se po Arc rework):
+
+interpreter/mod.rs:
+- type SharedDebugger = Arc<Mutex<DebuggerState>>
+- type ContinueSignal = Arc<(Mutex<bool>, Condvar)>
+- Interpreter +shared_debugger: Option<SharedDebugger> +continue_signal: Option<ContinueSignal>
+- Interpreter::attach_shared_debugger(dbg, signal) API
+- Interpreter::block_for_continue() - Condvar wait until UI notify
+- exec_stmt branching:
+  * continue_signal None -> early abort + Signal::Paused (current sync path)
+  * continue_signal Some -> blocking_for_continue() v worker thread (foundation
+    pripravena, AKTIVNI ZATIM NENI - Renderer interp stale UI thread)
+
+browser/render/mod.rs:
+- Renderer +shared_debugger: SharedDebugger +continue_signal: ContinueSignal
+- notify_continue() - UI helper pri Continue button (notify Condvar)
+
+PROC NENI SPAWN WORKER ZAPOJEN:
+Interpreter struct ma 30+ Rc<RefCell<...>> fields (Environment, JsObject, NodeData,
+Document, console_log, ...). std::thread::spawn(move || ... interp ...) failuje
+na Send check kvuli Rc/RefCell uvnitr - i s `unsafe impl Send for SendInterp`
+wrapper, closure auto-trait check projde dovnitr a Rust odmitne.
+
+PRO SKUTECNE ZAPOJENI WORKER THREAD:
+1. Rc -> Arc migrace pres ~2400 lokalit (Interpreter struct, JsValue::Object,
+   JsValue::DomNode, JsObject, JsMap, JsSet, NodeData, Document, Environment,
+   wsl, ws_*, custom_elements, mutation_observers, ...)
+2. RefCell -> Mutex (lock blocking) nebo RwLock (read-optimized DOM)
+3. Vsechny .borrow()/.borrow_mut() -> .lock().unwrap()
+4. Weak<NodeData> -> std::sync::Weak
+
+ALTERNATIVNI CESTY pro real pause:
+A) Continuation-passing eval (rewrite ~30 fn signatures pro re-entry from save)
+B) Bytecode VM jako primary cesta + opcode-level pause (uz existuje partial)
+C) winit::EventLoop::pump_app_events vlozit do exec_stmt pause spinu (vyzaduje
+   cross-trait sharing of EventLoop, !Send/!Sync)
+
+KAZDY z techto vyzaduje samostatny multi-hour session. Foundation v phase 12
+je pripravena pro variantu (A) Arc rework + spawn worker.
+
+AKTUALNI PRIMARY PATH ZUSTAVA: early abort + rerun (Phase 11). Pro idempotent
+JS skripty (read-only, no DOM mutation pred BP) funguje plne korektne. Pro
+mutating skripty: rerun opakuje side effects.
+
 ## Zbyly devtools TODO
 
 Network response body capture:

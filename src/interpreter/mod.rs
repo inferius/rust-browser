@@ -590,9 +590,21 @@ pub struct Interpreter {
     pub pending_mutation_records: Rc<RefCell<Vec<(usize, JsValue, JsValue)>>>,
     /// Aktualni line v exec - update z Stmt::WithLine. 0 pri rucne run.
     pub current_line: u32,
-    /// Sdileny debugger state - breakpoints + pause indicator.
+    /// Sdileny debugger state - breakpoints + pause indicator (single-thread Rc/RefCell).
     pub debugger: Rc<RefCell<DebuggerState>>,
+    /// Volitelny mezi-thread sdileny debugger - kdyz nastaveny, worker thread
+    /// pri pause volaa block_for_continue() namisto early-abort.
+    pub shared_debugger: Option<SharedDebugger>,
+    /// Continue signal pri pause v worker thread.
+    pub continue_signal: Option<ContinueSignal>,
 }
+
+/// Sdileny debugger state pres Arc<Mutex>. UI thread cte/zapisuje set
+/// breakpoints + Continue signal, JS worker thread blocking wait na pause.
+pub type SharedDebugger = std::sync::Arc<std::sync::Mutex<DebuggerState>>;
+
+/// Continue signal pres Condvar - worker wait pri pause, UI notify pri klik.
+pub type ContinueSignal = std::sync::Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>;
 
 /// Debugger state - sdileny mezi Interpreter a UI (Renderer/devtools_panel).
 #[derive(Debug, Default)]
@@ -715,6 +727,28 @@ impl Interpreter {
             pending_mutation_records: Rc::new(RefCell::new(Vec::new())),
             current_line: 0,
             debugger: Rc::new(RefCell::new(DebuggerState::default())),
+            shared_debugger: None,
+            continue_signal: None,
+        }
+    }
+
+    /// Pripoj sdileny debugger state + Continue signal pro worker-thread pause.
+    /// Po set: pri breakpoint hit volaa block_for_continue() namisto early-abort.
+    pub fn attach_shared_debugger(&mut self, dbg: SharedDebugger, signal: ContinueSignal) {
+        self.shared_debugger = Some(dbg);
+        self.continue_signal = Some(signal);
+    }
+
+    /// Blocking wait na continue signal (volat z worker thread pri pause).
+    /// Po notify: continued = true, vrat se a pokracuj v exec.
+    pub fn block_for_continue(&self) {
+        let Some(sig) = &self.continue_signal else { return };
+        let (lock, cvar) = &**sig;
+        let mut continued = lock.lock().unwrap();
+        // Reset to false na vstup, ceka az UI nastavi true.
+        *continued = false;
+        while !*continued {
+            continued = cvar.wait(continued).unwrap();
         }
     }
 
