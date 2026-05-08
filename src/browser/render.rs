@@ -3817,6 +3817,21 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
             // (test stranka 7000 px, viewport 900 px = 8x mensi paint cost).
             // Reuse buffer pres frames - alloc-free.
             let mut display_list = std::mem::take(&mut self.display_list_buffer);
+            // Selection rect emit PRED layout commands - selection bg rendered
+            // POD textem (display_list order = render order, first = bottom).
+            // Coords v document space, shift_command_y posune vsechno o -scroll_y.
+            if let (Some(a), Some(c)) = (self.selection_anchor, self.selection_current) {
+                let x0 = a.0.min(c.0);
+                let y0 = a.1.min(c.1);
+                let x1 = a.0.max(c.0);
+                let y1 = a.1.max(c.1);
+                if x1 > x0 + 1.0 || y1 > y0 + 1.0 {
+                    display_list.push(DisplayCommand::Rect {
+                        x: x0, y: y0, w: x1 - x0, h: y1 - y0,
+                        color: [80, 150, 255, 100], radius: 0.0,
+                    });
+                }
+            }
             paint::build_display_list_culled_into(&layout_root, self.scroll_y, viewport_h, &mut display_list);
 
             // Canvas API: emit canvas ops jako DisplayCommands.
@@ -3914,21 +3929,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                     self.mouse_x, self.mouse_y,
                 );
             }
-            // Text selection: semitransparent blue rect od anchor po current.
-            // Mouse coords v logical px (s scroll_y aplikovany v CursorMoved).
-            // Pred shift_command_y odecten -> nyni transformuj zpet do screen.
-            if let (Some(a), Some(c)) = (self.selection_anchor, self.selection_current) {
-                let x0 = a.0.min(c.0);
-                let y0 = a.1.min(c.1) - self.scroll_y;
-                let x1 = a.0.max(c.0);
-                let y1 = a.1.max(c.1) - self.scroll_y;
-                if x1 > x0 + 1.0 || y1 > y0 + 1.0 {
-                    display_list.push(DisplayCommand::Rect {
-                        x: x0, y: y0, w: x1 - x0, h: y1 - y0,
-                        color: [80, 150, 255, 80], radius: 0.0,
-                    });
-                }
-            }
+            // (Selection rect uz emitnuty PRED build_display_list - rendered POD textem.)
             // Address bar (Ctrl+L) overlay: input top centered.
             if self.addr_open {
                 let vw = (r.config.width as f32) / self.zoom;
