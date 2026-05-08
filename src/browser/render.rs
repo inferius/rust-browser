@@ -2042,21 +2042,11 @@ impl GlyphAtlas {
     }
 
     /// Rasterize glyph and add to atlas.
-    /// OVERSAMPLE faktor: rasterize fontdue at OVERSAMPLE * size, store at
-    /// OVERSAMPLE x atlas dims, render-side Linear sampler downsampluje
-    /// OVERSAMPLE:1 = box filter = vyssi quality AA edges. Pri velkem size
-    /// oversample = atlas full -> oversample = 1 (fontdue uz dela good AA
-    /// pro vetsi sizes).
     fn add(&mut self, family: &str, ch: char, size: u32) {
         let key = (family.to_string(), ch, size);
         if self.cache.contains_key(&key) { return; }
         let font = self.font_for(family);
-        // Oversample jen u malych fontu (kde fontdue 1x AA neni dostatecny).
-        // Pri size >= 24 px je raster pixel-perfect dost a 2x oversample by
-        // jen vycerpal atlas.
-        let oversample: u32 = if size < 24 { 2 } else { 1 };
-        let render_size = size * oversample;
-        let (metrics, bitmap) = font.rasterize(ch, render_size as f32);
+        let (metrics, bitmap) = font.rasterize(ch, size as f32);
         let w = metrics.width as u32;
         let h = metrics.height as u32;
 
@@ -2079,20 +2069,16 @@ impl GlyphAtlas {
                 }
             }
         }
-        // Atlas obsahuje oversample x render; render-side metrics jsou 1x (size).
-        // UV mapuje quad 1x na oversample x atlas region -> Linear sampler
-        // oversample:1 box filter. Width/height/bearing/advance scale 1/oversample.
-        let inv = 1.0 / oversample as f32;
         let info = GlyphInfo {
             uv0: [self.cursor_x as f32 / ATLAS_SIZE as f32,
                   self.cursor_y as f32 / ATLAS_SIZE as f32],
             uv1: [(self.cursor_x + w) as f32 / ATLAS_SIZE as f32,
                   (self.cursor_y + h) as f32 / ATLAS_SIZE as f32],
-            width: w as f32 * inv,
-            height: h as f32 * inv,
-            bearing_x: metrics.xmin as f32 * inv,
-            bearing_y: (metrics.ymin as f32 + h as f32) * inv,
-            advance: metrics.advance_width * inv,
+            width: w as f32,
+            height: h as f32,
+            bearing_x: metrics.xmin as f32,
+            bearing_y: metrics.ymin as f32 + h as f32,
+            advance: metrics.advance_width,
         };
         self.cache.insert(key, info);
         self.cursor_x += w + 1;
