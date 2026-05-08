@@ -1962,7 +1962,7 @@ fn load_default_font() -> Vec<u8> {
 
 // ─── Glyph atlas ────────────────────────────────────────────────────────
 
-const ATLAS_SIZE: u32 = 2048;
+const ATLAS_SIZE: u32 = 4096;
 
 struct GlyphInfo {
     /// UV coords v atlasu (0..1)
