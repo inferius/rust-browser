@@ -326,10 +326,23 @@ fn mix_srgb(a: vec4<f32>, b: vec4<f32>, t: f32) -> vec4<f32> {
 
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
-    // Mode 1: text - sample atlas
+    // Mode 1: text - sample atlas (grayscale alpha)
     if (in.mode > 0.5 && in.mode < 1.5) {
         let alpha = textureSample(atlas_tex, atlas_smp, in.uv).r;
         return vec4<f32>(in.color.rgb, in.color.a * alpha);
+    }
+    // Mode 9: LCD subpixel text - atlas glyph je 3x sirka (R/G/B sub-pixely
+    // swizzled). Sample 3 horizontalni texely per fragment pro per-channel
+    // alpha. Output rgb = color modulovany per sub-pixel, alpha = max RGB.
+    if (in.mode > 8.5 && in.mode < 9.5) {
+        let dims = textureDimensions(atlas_tex);
+        let texel_w = 1.0 / f32(dims.x);
+        let r_a = textureSample(atlas_tex, atlas_smp, in.uv - vec2<f32>(texel_w, 0.0)).r;
+        let g_a = textureSample(atlas_tex, atlas_smp, in.uv).r;
+        let b_a = textureSample(atlas_tex, atlas_smp, in.uv + vec2<f32>(texel_w, 0.0)).r;
+        let rgb = in.color.rgb * vec3<f32>(r_a, g_a, b_a);
+        let avg = (r_a + g_a + b_a) / 3.0;
+        return vec4<f32>(rgb, in.color.a * avg);
     }
     // Mode 2: linear gradient - lerp color->color2 podle uv.x (pre-rotated)
     if (in.mode > 1.5 && in.mode < 2.5) {
@@ -493,11 +506,13 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: 
                         // pri zoomu > 1 je krok jemnejsi (1/zoom logical px = 1 phys).
                         let gx = (gx_raw * z).round() * inv_z;
                         let gy = (gy_raw * z).round() * inv_z;
+                        // Mode 9 = LCD subpixel text (3-tap shader sample), 1 = grayscale.
+                        let text_mode = if g.lcd { 9.0 } else { 1.0 };
                         if italic_skew != 0.0 {
                             let skew = g_h * italic_skew;
                             push_skewed_quad(&mut verts, gx, gy, g_w, g_h, skew, c, g.uv0, g.uv1);
                         } else {
-                            push_rect_uv(&mut verts, gx, gy, g_w, g_h, c, g.uv0, g.uv1, 1.0);
+                            push_rect_uv(&mut verts, gx, gy, g_w, g_h, c, g.uv0, g.uv1, text_mode);
                         }
                         if bold_offset > 0.0 {
                             let bo = bold_offset * inv_z;
@@ -505,7 +520,7 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: 
                                 let skew = g_h * italic_skew;
                                 push_skewed_quad(&mut verts, gx + bo, gy, g_w, g_h, skew, c, g.uv0, g.uv1);
                             } else {
-                                push_rect_uv(&mut verts, gx + bo, gy, g_w, g_h, c, g.uv0, g.uv1, 1.0);
+                                push_rect_uv(&mut verts, gx + bo, gy, g_w, g_h, c, g.uv0, g.uv1, text_mode);
                             }
                         }
                         pen_x += g_adv + bold_offset * inv_z;
@@ -1973,6 +1988,10 @@ struct GlyphInfo {
     bearing_x: f32,
     bearing_y: f32,
     advance: f32,
+    /// LCD subpixel: pri size < threshold rasterujeme pres fontdue
+    /// rasterize_subpixel = 3x sirka swizzled RGB. Render shader pak sample
+    /// 3 horizontal texely per fragment pro R/G/B sub-pixely.
+    lcd: bool,
 }
 
 struct GlyphAtlas {
@@ -2097,16 +2116,27 @@ impl GlyphAtlas {
     }
 
     /// Rasterize glyph and add to atlas.
+    /// Pri size < LCD_THRESHOLD pouzij fontdue rasterize_subpixel = 3x sirka
+    /// swizzled RGB. Render shader 3-tap sample = LCD subpixel rendering
+    /// (ClearType-style, sharp text na maly fonty).
     fn add(&mut self, family: &str, ch: char, size: u32) {
+        const LCD_THRESHOLD: u32 = 24;
         let key = (family.to_string(), ch, size);
         if self.cache.contains_key(&key) { return; }
         let font = self.font_for(family);
-        let (metrics, bitmap) = font.rasterize(ch, size as f32);
+        let lcd = size < LCD_THRESHOLD;
+        let (metrics, bitmap) = if lcd {
+            font.rasterize_subpixel(ch, size as f32)
+        } else {
+            font.rasterize(ch, size as f32)
+        };
         let w = metrics.width as u32;
         let h = metrics.height as u32;
 
+        // Pri LCD je bitmap w*3 sirka swizzled RGB, atlas ma store 3x cols.
+        let atlas_w = if lcd { w * 3 } else { w };
         // Najdi misto v atlasu
-        if self.cursor_x + w > ATLAS_SIZE {
+        if self.cursor_x + atlas_w > ATLAS_SIZE {
             self.cursor_x = 0;
             self.cursor_y += self.row_height;
             self.row_height = 0;
@@ -2114,10 +2144,10 @@ impl GlyphAtlas {
         if self.cursor_y + h > ATLAS_SIZE {
             return; // atlas full
         }
-        // Copy bitmap do atlasu
+        // Copy bitmap do atlasu (bitmap.len() = atlas_w * h)
         for row in 0..h {
-            for col in 0..w {
-                let src = (row * w + col) as usize;
+            for col in 0..atlas_w {
+                let src = (row * atlas_w + col) as usize;
                 let dst = ((self.cursor_y + row) * ATLAS_SIZE + (self.cursor_x + col)) as usize;
                 if let Some(p) = bitmap.get(src) {
                     self.pixels[dst] = *p;
@@ -2127,16 +2157,17 @@ impl GlyphAtlas {
         let info = GlyphInfo {
             uv0: [self.cursor_x as f32 / ATLAS_SIZE as f32,
                   self.cursor_y as f32 / ATLAS_SIZE as f32],
-            uv1: [(self.cursor_x + w) as f32 / ATLAS_SIZE as f32,
+            uv1: [(self.cursor_x + atlas_w) as f32 / ATLAS_SIZE as f32,
                   (self.cursor_y + h) as f32 / ATLAS_SIZE as f32],
             width: w as f32,
             height: h as f32,
             bearing_x: metrics.xmin as f32,
             bearing_y: metrics.ymin as f32 + h as f32,
             advance: metrics.advance_width,
+            lcd,
         };
         self.cache.insert(key, info);
-        self.cursor_x += w + 1;
+        self.cursor_x += atlas_w + 1;
         self.row_height = self.row_height.max(h);
     }
 }
