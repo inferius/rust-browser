@@ -440,8 +440,14 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: 
                 let mut pen_x = *x;
                 let mut pen_y = *y + *font_size;
                 let line_advance = *font_size * 1.4;
-                let italic_skew: f32 = if *italic { 0.2 } else { 0.0 };
-                let bold_offset: f32 = if *bold && atlas.font_bold.is_none() { 1.0 } else { 0.0 };
+                // Italic: pri dostupne italic font variante real italic raster
+                // (skew = 0). Pri fallback fake skew transform.
+                let has_real_italic = *italic && (
+                    (*bold && atlas.font_bold_italic.is_some())
+                    || (!*bold && atlas.font_italic.is_some())
+                );
+                let italic_skew: f32 = if *italic && !has_real_italic { 0.2 } else { 0.0 };
+                let bold_offset: f32 = if *bold && atlas.font_bold.is_none() && atlas.font_bold_italic.is_none() { 1.0 } else { 0.0 };
                 let start_x = pen_x;
                 // Glyf rasterization na PHYSICAL px (font_size * zoom) -> sharp text
                 // pri zoomu. Atlas lookup klicem physical_size, GlyphInfo metrics
@@ -465,10 +471,14 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: 
                         pen_x += info.width;
                         continue;
                     }
-                    let lookup_family = if *bold && atlas.font_bold.is_some() {
-                        format!("__bold__:{}", font_family)
-                    } else {
-                        font_family.clone()
+                    let lookup_family = match (*bold, *italic) {
+                        (true, true) if atlas.font_bold_italic.is_some() =>
+                            format!("__bi__:{}", font_family),
+                        (false, true) if atlas.font_italic.is_some() =>
+                            format!("__italic__:{}", font_family),
+                        (true, _) if atlas.font_bold.is_some() =>
+                            format!("__bold__:{}", font_family),
+                        _ => font_family.clone(),
                     };
                     if let Some(g) = atlas.get(&lookup_family, ch, physical_size) {
                         // Glyf metrics v physical -> dele inv_z na logical.
@@ -1971,6 +1981,11 @@ struct GlyphAtlas {
     /// Default bold variant (Segoe UI Bold etc.). Pouzity pri bx.bold=true
     /// pokud k dispozici. Jinak fake bold pres double-draw smear.
     font_bold: Option<fontdue::Font>,
+    /// Italic variant (Times Italic etc.). Pri bx.italic=true. Jinak fake
+    /// skew transform (predchozi default).
+    font_italic: Option<fontdue::Font>,
+    /// Bold + italic kombinace (timesbi.ttf etc.).
+    font_bold_italic: Option<fontdue::Font>,
     /// @font-face loaded fonty: family name -> Font
     extra_fonts: std::collections::HashMap<String, fontdue::Font>,
     /// Atlas pixely (shedy: 0=transparent, 255=opaque)
@@ -2006,9 +2021,37 @@ impl GlyphAtlas {
             std::fs::read(p).ok()
                 .and_then(|d| fontdue::Font::from_bytes(d, fontdue::FontSettings::default()).ok())
         });
+        // Italic variant (Times Italic / Arial Italic / etc.).
+        let italic_candidates: &[&str] = &[
+            "C:\\Windows\\Fonts\\timesi.ttf",     // Times New Roman Italic
+            "C:\\Windows\\Fonts\\segoeuii.ttf",
+            "C:\\Windows\\Fonts\\ariali.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSerif-Italic.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Italic.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Italic.ttf",
+        ];
+        let font_italic = italic_candidates.iter().find_map(|p| {
+            std::fs::read(p).ok()
+                .and_then(|d| fontdue::Font::from_bytes(d, fontdue::FontSettings::default()).ok())
+        });
+        // Bold italic.
+        let bi_candidates: &[&str] = &[
+            "C:\\Windows\\Fonts\\timesbi.ttf",
+            "C:\\Windows\\Fonts\\segoeuiz.ttf",
+            "C:\\Windows\\Fonts\\arialbi.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSerif-BoldItalic.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSerif-BoldItalic.ttf",
+        ];
+        let font_bold_italic = bi_candidates.iter().find_map(|p| {
+            std::fs::read(p).ok()
+                .and_then(|d| fontdue::Font::from_bytes(d, fontdue::FontSettings::default()).ok())
+        });
         GlyphAtlas {
             font,
             font_bold,
+            font_italic,
+            font_bold_italic,
             extra_fonts: std::collections::HashMap::new(),
             pixels: vec![0u8; (ATLAS_SIZE * ATLAS_SIZE) as usize],
             cache: std::collections::HashMap::new(),
@@ -2023,6 +2066,18 @@ impl GlyphAtlas {
     /// Pri comma-separated seznamu (CSS font-family fallback) iteruje
     /// kazdy alternative a vraci prvni nalezeny @font-face entry.
     fn font_for(&self, family: &str) -> &fontdue::Font {
+        // Combinace bold+italic: __bi__: prefix.
+        if let Some(rest) = family.strip_prefix("__bi__:") {
+            if let Some(f) = &self.font_bold_italic { return f; }
+            // Fallback chain: italic > bold > regular.
+            if let Some(f) = &self.font_italic { return f; }
+            if let Some(f) = &self.font_bold { return f; }
+            return self.font_for(rest);
+        }
+        if let Some(rest) = family.strip_prefix("__italic__:") {
+            if let Some(f) = &self.font_italic { return f; }
+            return self.font_for(rest);
+        }
         if let Some(rest) = family.strip_prefix("__bold__:") {
             if let Some(b) = &self.font_bold { return b; }
             return self.font_for(rest);
@@ -3519,7 +3574,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
             // pres synthetic key "__colr:{family}:{ch}:{size}". Render path detekuje.
             for cmd in &display_list {
                 match cmd {
-                    DisplayCommand::Text { content, font_size, font_family, color, bold, .. } => {
+                    DisplayCommand::Text { content, font_size, font_family, color, bold, italic, .. } => {
                         for ch in content.chars() {
                             // Pokus o color glyph rasterization.
                             let mut color_added = false;
@@ -3540,15 +3595,16 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                                 }
                             }
                             if !color_added {
-                                // Pri bold + dostupny font_bold variant rasterize
-                                // s prefixem "__bold__:" v atlas key. Render path
-                                // pak lookuje stejnym klicem.
-                                let key_family = if *bold && r.atlas.font_bold.is_some() {
-                                    format!("__bold__:{}", font_family)
-                                } else {
-                                    font_family.clone()
+                                // Atlas key prefixovany dle bold/italic kombinace.
+                                let key_family = match (*bold, *italic) {
+                                    (true, true) if r.atlas.font_bold_italic.is_some() =>
+                                        format!("__bi__:{}", font_family),
+                                    (false, true) if r.atlas.font_italic.is_some() =>
+                                        format!("__italic__:{}", font_family),
+                                    (true, _) if r.atlas.font_bold.is_some() =>
+                                        format!("__bold__:{}", font_family),
+                                    _ => font_family.clone(),
                                 };
-                                // Rasterize na physical px (font_size * zoom) - sharp pri zoomu.
                                 let phys = (*font_size * self.zoom).round().max(1.0) as u32;
                                 r.atlas.add(&key_family, ch, phys);
                             }
