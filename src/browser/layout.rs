@@ -1124,17 +1124,77 @@ pub fn layout_tree_with_pseudo(
     viewport_width: f32,
     viewport_height: f32,
 ) -> LayoutBox {
-    let mut layout_root = build_box_with_pseudo(root, style_map, pseudo_map);
+    layout_tree_with_pseudo_cached(root, style_map, pseudo_map, viewport_width, viewport_height, None)
+}
+
+/// Layout s per-element cache: pri opakovanem layoutu (pri animation/hover state
+/// change) muzeme reuznat subtrees ze prev_root pokud jejich style + struct
+/// fingerprint matches. Skip-uje style/struct rebuild na clean uzlech.
+/// layout_dispatch (positioning) stale bezi cely - jen build je cached.
+pub fn layout_tree_with_pseudo_cached(
+    root: &Rc<Node>,
+    style_map: &StyleMap,
+    pseudo_map: &super::cascade::PseudoStyleMap,
+    viewport_width: f32,
+    viewport_height: f32,
+    prev_root: Option<&LayoutBox>,
+) -> LayoutBox {
+    // Build prev_node_map (node_ptr -> LayoutBox subtree) z prev_root.
+    let mut prev_map: HashMap<usize, LayoutBox> = HashMap::new();
+    if let Some(prev) = prev_root {
+        collect_prev_boxes(prev, &mut prev_map);
+    }
+    let cache = if prev_map.is_empty() { None } else { Some(&prev_map) };
+    let mut layout_root = build_box_with_pseudo_cached(root, style_map, pseudo_map, cache);
     layout_root.rect.width = viewport_width;
     layout_root.rect.height = viewport_height;
     layout_dispatch(&mut layout_root);
     // Post-pass: anchor positioning resolve
     let anchor_map = collect_anchors(&layout_root);
     apply_anchor_positioning(&mut layout_root, &anchor_map);
-    // Post-pass: table border-collapse - cells dostanou tenkou borderu kdyz table
-    // ma border-collapse:collapse a buncky nemaji explicitni border.
     apply_table_border_collapse(&mut layout_root, false);
     layout_root
+}
+
+/// Walk prev LayoutBox tree, sber kazdy node_ptr -> LayoutBox subtree.
+fn collect_prev_boxes(bx: &LayoutBox, map: &mut HashMap<usize, LayoutBox>) {
+    if let Some(node) = &bx.node {
+        let id = Rc::as_ptr(node) as usize;
+        map.insert(id, bx.clone());
+    }
+    for ch in &bx.children {
+        collect_prev_boxes(ch, map);
+    }
+}
+
+/// Vypocita subtree hash pres DOM walk + style entries + DOM children pointers.
+/// Pri cache check porovname s prev.fingerprint.
+fn compute_subtree_hash(node: &Rc<Node>, style_map: &StyleMap) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    let id = Rc::as_ptr(node) as usize;
+    id.hash(&mut h);
+    if let Some(tag) = node.tag_name() {
+        tag.hash(&mut h);
+    }
+    // Text node check - hash text obsahu (text uzly nemaji tag).
+    if node.tag_name().is_none() {
+        node.text_content().hash(&mut h);
+    }
+    // Styles (sorted klice pro stable hash)
+    if let Some(styles) = super::cascade::get_styles(style_map, node) {
+        let mut keys: Vec<&String> = styles.keys().collect();
+        keys.sort();
+        for k in keys {
+            k.hash(&mut h);
+            styles.get(k).hash(&mut h);
+        }
+    }
+    // Children subtree hashes (recursive)
+    for child in node.children.borrow().iter() {
+        compute_subtree_hash(child, style_map).hash(&mut h);
+    }
+    h.finish()
 }
 
 /// Pri border-collapse:collapse na <table> child td/th get 1px border default.
@@ -1344,6 +1404,79 @@ fn build_box_with_pseudo(
 ) -> LayoutBox {
     let mut counters: HashMap<String, i32> = HashMap::new();
     build_box_inner(node, style_map, pseudo_map, &mut counters)
+}
+
+/// Cached varianta: pri match fingerprint reuznava prev subtree.
+fn build_box_with_pseudo_cached(
+    node: &Rc<Node>,
+    style_map: &StyleMap,
+    pseudo_map: &super::cascade::PseudoStyleMap,
+    cache: Option<&HashMap<usize, LayoutBox>>,
+) -> LayoutBox {
+    let mut counters: HashMap<String, i32> = HashMap::new();
+    build_box_inner_cached(node, style_map, pseudo_map, &mut counters, cache)
+}
+
+// Thread-local cache pro per-element layout reuse. Nastaveno
+// layout_tree_with_pseudo_cached pred build, vycteno v build_box_inner pri
+// recursive child build. Po dokonceni vraceno na None.
+thread_local! {
+    static LAYOUT_CACHE: std::cell::RefCell<Option<HashMap<usize, LayoutBox>>> =
+        std::cell::RefCell::new(None);
+}
+
+fn build_box_inner_cached(
+    node: &Rc<Node>,
+    style_map: &StyleMap,
+    pseudo_map: &super::cascade::PseudoStyleMap,
+    counters: &mut HashMap<String, i32>,
+    cache: Option<&HashMap<usize, LayoutBox>>,
+) -> LayoutBox {
+    // Set thread-local cache, run cached_inner_lookup, restore.
+    let prev_set = LAYOUT_CACHE.with(|c| c.borrow().is_some());
+    if !prev_set {
+        if let Some(c) = cache {
+            LAYOUT_CACHE.with(|tc| *tc.borrow_mut() = Some(c.clone()));
+        }
+    }
+    // Try cache hit pri root.
+    if let Some(c) = cache {
+        let node_id = Rc::as_ptr(node) as usize;
+        if let Some(prev) = c.get(&node_id) {
+            let h = compute_subtree_hash(node, style_map);
+            if prev.fingerprint == h && h != 0 {
+                if !prev_set {
+                    LAYOUT_CACHE.with(|tc| *tc.borrow_mut() = None);
+                }
+                return prev.clone();
+            }
+        }
+    }
+    let mut bx = build_box_inner(node, style_map, pseudo_map, counters);
+    bx.fingerprint = compute_subtree_hash(node, style_map);
+    if !prev_set {
+        LAYOUT_CACHE.with(|tc| *tc.borrow_mut() = None);
+    }
+    bx
+}
+
+/// Test pres thread-local cache: pri rekurzi v build_box_inner deti zkontroluj
+/// cache. Volano z mista kde build_box_inner rekurzuje na child node.
+fn cache_lookup_subtree(node: &Rc<Node>, style_map: &StyleMap) -> Option<LayoutBox> {
+    LAYOUT_CACHE.with(|tc| {
+        if let Some(cache) = tc.borrow().as_ref() {
+            let node_id = Rc::as_ptr(node) as usize;
+            if let Some(prev) = cache.get(&node_id) {
+                let h = compute_subtree_hash(node, style_map);
+                if prev.fingerprint == h && h != 0 {
+                    let mut clone = prev.clone();
+                    clone.fingerprint = h;
+                    return Some(clone);
+                }
+            }
+        }
+        None
+    })
 }
 
 fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::cascade::PseudoStyleMap, counters: &mut HashMap<String, i32>) -> LayoutBox {
@@ -2355,9 +2488,18 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         {
             continue;
         }
-        let cb = stacker::maybe_grow(32 * 1024, 8 * 1024 * 1024, || {
-            build_box_inner(child, style_map, pseudo_map, counters)
-        });
+        // Per-element layout cache: pokud thread-local cache obsahuje uzel s
+        // matching subtree fingerprint, reuznavame prev subtree (skip style/
+        // struct rebuild). Pozice prepocteny v layout_dispatch.
+        let cb = if let Some(cached) = cache_lookup_subtree(child, style_map) {
+            cached
+        } else {
+            stacker::maybe_grow(32 * 1024, 8 * 1024 * 1024, || {
+                let mut b = build_box_inner(child, style_map, pseudo_map, counters);
+                b.fingerprint = compute_subtree_hash(child, style_map);
+                b
+            })
+        };
         if cb.display != Display::None {
             // Text bez obsahu - zahodit
             if matches!(child.kind, NodeKind::Text(_)) && cb.text.is_none() {

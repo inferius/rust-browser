@@ -3854,7 +3854,14 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
             let mut layout_root = if layout_cache_valid {
                 self.cached_layout_root.as_ref().unwrap().clone()
             } else {
-                let lr = layout::layout_tree_with_pseudo(&document_root, &style_map, &pseudo_map, viewport_w, viewport_h);
+                // Per-element layout cache: pasujeme prev cached_layout_root jako
+                // hint. Pri match fingerprint reuznavaji subtrees (skip style/
+                // struct rebuild). Win pri animation/hover state change kde
+                // vetsina uzlu se nemenila.
+                let prev_root = self.cached_layout_root.as_ref();
+                let lr = layout::layout_tree_with_pseudo_cached(
+                    &document_root, &style_map, &pseudo_map,
+                    viewport_w, viewport_h, prev_root);
                 self.cached_layout_root = Some(lr.clone());
                 lr
             };
