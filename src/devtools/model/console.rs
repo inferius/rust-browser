@@ -277,6 +277,119 @@ impl AutocompleteState {
     }
 }
 
+/// Generate autocomplete suggestions na zaklade textu pred kurzorem.
+/// Vraci (prefix_start_offset, hits) - offset = kde v textu zacit replace.
+///
+/// Strategie:
+/// - Pri `obj.x` -> hits = vsechny vlastnosti `obj` matching prefix `x`
+/// - Pri samotnem `id` -> hits = globaly + JS keywords matching prefix
+pub fn suggest(text: &str, cursor: usize, globals: &[String]) -> Option<(usize, Vec<AutocompleteHit>)> {
+    if cursor == 0 || cursor > text.len() { return None; }
+    let bytes = text.as_bytes();
+
+    // Najdi zacatek aktualniho identifikatoru pred kurzorem.
+    let mut id_start = cursor;
+    while id_start > 0 {
+        let c = bytes[id_start - 1] as char;
+        if c.is_ascii_alphanumeric() || c == '_' || c == '$' {
+            id_start -= 1;
+        } else { break; }
+    }
+    let prefix = &text[id_start..cursor];
+
+    // Detekce member access: pred id_start je '.' ?
+    if id_start > 0 && bytes[id_start - 1] == b'.' {
+        // Najdi base ident pred '.'.
+        let base_end = id_start - 1;
+        let mut base_start = base_end;
+        while base_start > 0 {
+            let c = bytes[base_start - 1] as char;
+            if c.is_ascii_alphanumeric() || c == '_' || c == '$' {
+                base_start -= 1;
+            } else { break; }
+        }
+        let base = &text[base_start..base_end];
+        // Hardcoded base completions pro top-level builtins.
+        let props = base_property_completions(base);
+        let mut hits: Vec<AutocompleteHit> = props.iter()
+            .filter(|p| p.starts_with(prefix))
+            .map(|p| AutocompleteHit {
+                text: p.to_string(),
+                kind: HitKind::Property,
+            })
+            .collect();
+        hits.sort_by(|a, b| a.text.cmp(&b.text));
+        if hits.is_empty() { return None; }
+        return Some((id_start, hits));
+    }
+
+    // Plain identifier - completions z globals + JS keywords.
+    if prefix.is_empty() { return None; }
+    let keywords = &[
+        "let", "const", "var", "function", "return", "if", "else", "for", "while",
+        "do", "switch", "case", "default", "break", "continue", "try", "catch",
+        "finally", "throw", "new", "this", "true", "false", "null", "undefined",
+        "typeof", "instanceof", "in", "of", "async", "await", "yield", "class",
+        "extends", "super", "import", "export", "from", "as",
+    ];
+    let mut hits: Vec<AutocompleteHit> = Vec::new();
+    for g in globals {
+        if g.starts_with(prefix) {
+            hits.push(AutocompleteHit { text: g.clone(), kind: HitKind::Variable });
+        }
+    }
+    for k in keywords {
+        if k.starts_with(prefix) && *k != prefix {
+            hits.push(AutocompleteHit { text: k.to_string(), kind: HitKind::Keyword });
+        }
+    }
+    hits.sort_by(|a, b| a.text.cmp(&b.text));
+    hits.dedup_by(|a, b| a.text == b.text);
+    if hits.is_empty() { return None; }
+    Some((id_start, hits))
+}
+
+fn base_property_completions(base: &str) -> Vec<&'static str> {
+    match base {
+        "console" => vec!["log", "error", "warn", "info", "debug", "trace", "table",
+                          "group", "groupEnd", "time", "timeEnd", "count", "assert",
+                          "clear", "dir"],
+        "Math" => vec!["abs", "ceil", "floor", "round", "max", "min", "pow", "sqrt",
+                       "log", "exp", "sin", "cos", "tan", "asin", "acos", "atan",
+                       "atan2", "random", "sign", "trunc", "PI", "E", "LN2", "LN10",
+                       "LOG2E", "LOG10E", "SQRT2"],
+        "JSON" => vec!["parse", "stringify"],
+        "Object" => vec!["keys", "values", "entries", "assign", "freeze", "create",
+                         "getPrototypeOf", "setPrototypeOf", "defineProperty",
+                         "getOwnPropertyNames", "getOwnPropertyDescriptor", "is"],
+        "Array" => vec!["isArray", "from", "of"],
+        "Number" => vec!["isInteger", "isFinite", "isNaN", "isSafeInteger",
+                         "parseFloat", "parseInt", "MAX_VALUE", "MIN_VALUE",
+                         "MAX_SAFE_INTEGER", "MIN_SAFE_INTEGER", "EPSILON",
+                         "POSITIVE_INFINITY", "NEGATIVE_INFINITY", "NaN"],
+        "String" => vec!["fromCharCode", "fromCodePoint", "raw"],
+        "Date" => vec!["now", "parse", "UTC"],
+        "Promise" => vec!["resolve", "reject", "all", "allSettled", "any", "race"],
+        "Symbol" => vec!["iterator", "asyncIterator", "for", "keyFor", "hasInstance"],
+        "document" => vec!["querySelector", "querySelectorAll", "getElementById",
+                           "getElementsByTagName", "getElementsByClassName",
+                           "createElement", "createTextNode", "addEventListener",
+                           "body", "head", "documentElement", "title", "URL"],
+        "window" => vec!["document", "console", "navigator", "location", "history",
+                         "innerWidth", "innerHeight", "addEventListener", "alert",
+                         "confirm", "prompt", "setTimeout", "clearTimeout",
+                         "setInterval", "clearInterval", "fetch", "localStorage",
+                         "sessionStorage"],
+        "navigator" => vec!["userAgent", "language", "languages", "platform", "online",
+                            "cookieEnabled", "geolocation"],
+        "localStorage" | "sessionStorage" => vec!["getItem", "setItem", "removeItem",
+                                                   "clear", "key", "length"],
+        // Generic object/array prototype props.
+        _ => vec!["toString", "valueOf", "hasOwnProperty", "constructor",
+                  "isPrototypeOf", "propertyIsEnumerable", "length"],
+    }
+}
+
 #[cfg(test)]
 #[path = "../tests/console_input_tests.rs"]
 mod tests;

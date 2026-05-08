@@ -864,7 +864,39 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                         let ctrl = self.modifiers.control_key();
                         let shift = self.modifiers.shift_key();
                         let input = &mut self.devtools.console.input;
+                        // Pri otevrenem autocomplete: Up/Down/Enter/Tab navigate.
+                        let ac_open = self.devtools.console.autocomplete.is_some();
+                        if ac_open {
+                            match &key_event.logical_key {
+                                Key::Named(NamedKey::ArrowUp) => {
+                                    if let Some(ac) = &mut self.devtools.console.autocomplete { ac.move_up(); }
+                                    if let Some(w) = &self.window { w.request_redraw(); }
+                                    return;
+                                }
+                                Key::Named(NamedKey::ArrowDown) => {
+                                    if let Some(ac) = &mut self.devtools.console.autocomplete { ac.move_down(); }
+                                    if let Some(w) = &self.window { w.request_redraw(); }
+                                    return;
+                                }
+                                Key::Named(NamedKey::Tab) | Key::Named(NamedKey::Enter) => {
+                                    self.accept_autocomplete();
+                                    if let Some(w) = &self.window { w.request_redraw(); }
+                                    return;
+                                }
+                                Key::Named(NamedKey::Escape) => {
+                                    self.devtools.console.autocomplete = None;
+                                    if let Some(w) = &self.window { w.request_redraw(); }
+                                    return;
+                                }
+                                _ => {}
+                            }
+                        }
                         match &key_event.logical_key {
+                            Key::Named(NamedKey::Tab) => {
+                                self.trigger_autocomplete();
+                                if let Some(w) = &self.window { w.request_redraw(); }
+                                return;
+                            }
                             Key::Named(NamedKey::Backspace) => { input.backspace(); }
                             Key::Named(NamedKey::Delete) => { input.delete_forward(); }
                             Key::Named(NamedKey::ArrowLeft) => { input.move_left(shift); }
@@ -1575,6 +1607,31 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                     }
                 }
             }
+        }
+
+        fn trigger_autocomplete(&mut self) {
+            use crate::devtools::model::console::{suggest, AutocompleteState};
+            let text = self.devtools.console.input.text.clone();
+            let cursor = self.devtools.console.input.cursor;
+            // Vezmi globals z interpreteru env (top-level vars).
+            let globals: Vec<String> = if let Some(interp) = &self.interpreter {
+                interp.global.borrow().names()
+            } else { Vec::new() };
+            if let Some((start, hits)) = suggest(&text, cursor, &globals) {
+                self.devtools.console.autocomplete = AutocompleteState::open(hits, start);
+            } else {
+                self.devtools.console.autocomplete = None;
+            }
+        }
+
+        fn accept_autocomplete(&mut self) {
+            let Some(ac) = self.devtools.console.autocomplete.take() else { return };
+            let Some(hit) = ac.hits.get(ac.selected).cloned() else { return };
+            let input = &mut self.devtools.console.input;
+            let prefix_start = ac.prefix_start;
+            let cursor = input.cursor;
+            input.text.replace_range(prefix_start..cursor, &hit.text);
+            input.cursor = prefix_start + hit.text.len();
         }
 
         fn start_edit_attribute_value(&mut self, node_id: usize, attr: String) {

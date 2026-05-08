@@ -368,6 +368,11 @@ pub struct Environment {
 }
 
 impl Environment {
+    /// Seznam definovanych jmen v tomto scopu (bez parent walk).
+    pub fn names(&self) -> Vec<String> {
+        self.vars.keys().cloned().collect()
+    }
+
     /// Vytvori novy globalni scope (bez rodice).
     pub fn new_global() -> Rc<RefCell<Self>> {
         Rc::new(RefCell::new(Environment { vars: HashMap::new(), parent: None }))
