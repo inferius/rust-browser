@@ -4,7 +4,7 @@
 /// Display list (paint::DisplayCommand) -> vertex data -> GPU.
 
 use super::paint::DisplayCommand;
-use super::devtools_panel::{paint_devtools_panel, find_box_rect_by_id, devtools_hit_test, DevtoolsHit, pick_node_at_screen_pos};
+use super::devtools_panel::{paint_devtools_panel, devtools_hit_test, pick_node_at_screen_pos};
 use super::webgl_helpers::{webgl_compute_stride, webgl_attrib_to_vertex_format, webgl_serialize_uniforms};
 use bytemuck::{Pod, Zeroable};
 use std::rc::Rc;
@@ -377,20 +377,9 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         animation_iterations: std::collections::HashMap<(usize, String), i32>,
         /// Aktivni CSS transitions.
         active_transitions: Vec<super::cascade::ActiveTransition>,
-        /// In-browser DevTools panel state.
-        devtools_open: bool,
-        /// Aktualne vybrany element v devtools tree (raw ptr DOM node).
-        devtools_selected: Option<usize>,
-        /// Tab v devtools panelu: 0=Elements, 1=Console, 2=Network.
-        devtools_tab: u8,
-        /// Vyska devtools panelu v px (resize-able).
-        devtools_height: f32,
-        /// Scroll v Elements tree.
-        devtools_tree_scroll: f32,
-        /// Inspect mode: pri hover na main viewport zvyrazni element + click vybira v tree.
-        devtools_inspect_mode: bool,
-        /// Console input buffer (typed JS).
-        devtools_console_input: String,
+        /// DevTools state (theme, tab, panel_h, panel_open, elements, console, network,
+        /// sources, performance, focus, context_menu, inspect_mode, frame_counter).
+        devtools: crate::devtools::DevToolsState,
         /// True kdyz user drze LMB na resize grip a tahne.
         devtools_resizing: bool,
         /// Browser zoom factor (1.0 = 100%). Ctrl++/Ctrl+- meni v krocich,
@@ -494,7 +483,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                         let win_h = self.renderer.as_ref().map(|r| r.config.height as f32).unwrap_or(0.0);
                         let raw_y = new_y - self.scroll_y;
                         let new_height = (win_h - raw_y).max(60.0).min(win_h * 0.9);
-                        self.devtools_height = new_height;
+                        self.devtools.panel_h = new_height;
                         self.render();
                         return;
                     }
@@ -533,42 +522,80 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                     let raw_y = self.mouse_y - self.scroll_y;
                     let win_h = self.renderer.as_ref().map(|r| r.config.height as f32).unwrap_or(0.0);
                     let win_w = self.renderer.as_ref().map(|r| r.config.width as f32).unwrap_or(0.0);
-                    let panel_h = if self.devtools_open { self.devtools_height.min(win_h * 0.7) } else { 0.0 };
-                    if self.devtools_open && raw_y >= win_h - panel_h {
+                    let panel_h = if self.devtools.panel_open { self.devtools.panel_h.min(win_h * 0.7) } else { 0.0 };
+                    if self.devtools.panel_open && raw_y >= win_h - panel_h {
                         if let Some(layout) = &self.layout_root {
-                            match devtools_hit_test(layout, self.devtools_tab, self.devtools_tree_scroll,
-                                                    win_w, win_h, panel_h, self.mouse_x, raw_y) {
-                                DevtoolsHit::TabClick(t) => { self.devtools_tab = t; }
+                            let hit = devtools_hit_test(&self.devtools, layout, win_w, win_h, self.mouse_x, raw_y);
+                            use crate::browser::devtools_panel::DevtoolsHit;
+                            match hit {
+                                DevtoolsHit::TabClick(t) => { self.devtools.tab = t; }
                                 DevtoolsHit::TreeRow(node_id) => {
-                                    self.devtools_selected = Some(node_id);
+                                    self.devtools.elements.selected = Some(node_id);
+                                }
+                                DevtoolsHit::TreeCaret(node_id) => {
+                                    if self.devtools.elements.collapsed.contains(&node_id) {
+                                        self.devtools.elements.collapsed.remove(&node_id);
+                                    } else {
+                                        self.devtools.elements.collapsed.insert(node_id);
+                                    }
+                                    if let Some(interp) = &self.interpreter {
+                                        let root = std::rc::Rc::clone(&interp.document.borrow().root);
+                                        crate::browser::devtools_panel::rebuild_tree(&mut self.devtools, &root);
+                                    }
                                 }
                                 DevtoolsHit::InspectToggle => {
-                                    self.devtools_inspect_mode = !self.devtools_inspect_mode;
+                                    self.devtools.inspect_mode = !self.devtools.inspect_mode;
                                 }
                                 DevtoolsHit::ResizeGrip => {
                                     self.devtools_resizing = true;
                                 }
-                                DevtoolsHit::ClearConsole => {
-                                    if let Some(interp) = &mut self.interpreter {
-                                        interp.console_log.borrow_mut().clear();
-                                    }
+                                DevtoolsHit::Close => { self.devtools.panel_open = false; }
+                                DevtoolsHit::ThemeToggle => {
+                                    use crate::devtools::theme::ThemeMode;
+                                    self.devtools.theme.mode = match self.devtools.theme.mode {
+                                        ThemeMode::Auto => ThemeMode::Light,
+                                        ThemeMode::Light => ThemeMode::Dark,
+                                        ThemeMode::Dark => ThemeMode::Auto,
+                                    };
                                 }
-                                DevtoolsHit::None => {}
+                                DevtoolsHit::ThemeChoice(m) => { self.devtools.theme.mode = m; }
+                                DevtoolsHit::FlavorChoice(f) => { self.devtools.theme.flavor = f; }
+                                DevtoolsHit::ConsoleInput => {
+                                    self.devtools.focus = crate::devtools::focus::FocusTarget::DevToolsConsole;
+                                }
+                                DevtoolsHit::ElementsSearchBar => {
+                                    self.devtools.focus = crate::devtools::focus::FocusTarget::DevToolsElementsSearch;
+                                }
+                                DevtoolsHit::SourcesFileRow(id) => {
+                                    self.devtools.sources.selected_id = Some(id);
+                                }
+                                DevtoolsHit::SourcesGutter { file_id, line } => {
+                                    self.devtools.sources.toggle_breakpoint(file_id, line);
+                                }
+                                DevtoolsHit::PanelArea => {
+                                    self.devtools.focus = crate::devtools::focus::FocusTarget::Page;
+                                }
+                                DevtoolsHit::DismissContextMenu => {
+                                    self.devtools.context_menu = None;
+                                }
+                                DevtoolsHit::None | _ => {}
                             }
                         }
                         self.render();
                         return;
+                    } else {
+                        // Klik mimo panel - reset focus na Page.
+                        self.devtools.focus = crate::devtools::focus::FocusTarget::Page;
                     }
                     // Inspect mode: kliknuti na main viewport vybira node v tree.
-                    if self.devtools_inspect_mode {
+                    if self.devtools.inspect_mode {
                         if let Some(layout) = &self.layout_root {
                             if let Some(node_id) = pick_node_at_screen_pos(layout, self.mouse_x, raw_y, self.scroll_y) {
-                                self.devtools_selected = Some(node_id);
+                                self.devtools.elements.selected = Some(node_id);
                                 println!("[inspect] selected node id=0x{:x}", node_id);
                             }
                         }
-                        // V inspect modu nepropaguj click do stranky (jen vybira).
-                        self.devtools_inspect_mode = false;
+                        self.devtools.inspect_mode = false;
                         self.render();
                         return;
                     }
@@ -583,10 +610,23 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                     // Pri kurzoru nad devtools panelem - scrolluj tree, ne stranku.
                     let raw_y = self.mouse_y - self.scroll_y;
                     let win_h = self.renderer.as_ref().map(|r| r.config.height as f32).unwrap_or(0.0);
-                    let panel_h = if self.devtools_open { self.devtools_height.min(win_h * 0.7) } else { 0.0 };
-                    if self.devtools_open && raw_y >= win_h - panel_h {
-                        self.devtools_tree_scroll -= scroll_amount;
-                        if self.devtools_tree_scroll < 0.0 { self.devtools_tree_scroll = 0.0; }
+                    let panel_h = if self.devtools.panel_open { self.devtools.panel_h.min(win_h * 0.7) } else { 0.0 };
+                    if self.devtools.panel_open && raw_y >= win_h - panel_h {
+                        match self.devtools.tab {
+                            crate::devtools::Tab::Elements => {
+                                self.devtools.elements.scroll_y -= scroll_amount;
+                                if self.devtools.elements.scroll_y < 0.0 { self.devtools.elements.scroll_y = 0.0; }
+                            }
+                            crate::devtools::Tab::Sources => {
+                                self.devtools.sources.scroll_y -= scroll_amount;
+                                if self.devtools.sources.scroll_y < 0.0 { self.devtools.sources.scroll_y = 0.0; }
+                            }
+                            crate::devtools::Tab::Console => {
+                                self.devtools.console.scroll_y -= scroll_amount;
+                                if self.devtools.console.scroll_y < 0.0 { self.devtools.console.scroll_y = 0.0; }
+                            }
+                            _ => {}
+                        }
                         self.render();
                         return;
                     }
@@ -637,64 +677,125 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                 // Ctrl++ / Ctrl+- / Ctrl+0 = zoom in/out/reset (page reflow).
                 WindowEvent::KeyboardInput { event: key_event, .. } => {
                     if key_event.state != ElementState::Pressed { return; }
-                    // Pri otevrenem devtools + Console tab + zadanym text -> append do console_input.
-                    if self.devtools_open && self.devtools_tab == 1 {
-                        // Ctrl+V paste z clipboardu.
-                        if self.modifiers.control_key() {
-                            if let Key::Character(s) = &key_event.logical_key {
-                                if s.as_str() == "v" || s.as_str() == "V" {
-                                    if let Ok(mut cb) = arboard::Clipboard::new() {
-                                        if let Ok(text) = cb.get_text() {
-                                            self.devtools_console_input.push_str(&text);
-                                            if let Some(w) = &self.window { w.request_redraw(); }
-                                        }
-                                    }
-                                    return;
-                                }
-                            }
-                        }
+                    // Console input - proper text field s cursor / selection / history / clipboard.
+                    use crate::devtools::focus::FocusTarget;
+                    if self.devtools.panel_open && self.devtools.focus == FocusTarget::DevToolsConsole {
+                        let ctrl = self.modifiers.control_key();
+                        let shift = self.modifiers.shift_key();
+                        let input = &mut self.devtools.console.input;
                         match &key_event.logical_key {
-                            Key::Named(NamedKey::Backspace) => {
-                                self.devtools_console_input.pop();
-                                if let Some(w) = &self.window { w.request_redraw(); }
-                                return;
+                            Key::Named(NamedKey::Backspace) => { input.backspace(); }
+                            Key::Named(NamedKey::Delete) => { input.delete_forward(); }
+                            Key::Named(NamedKey::ArrowLeft) => { input.move_left(shift); }
+                            Key::Named(NamedKey::ArrowRight) => { input.move_right(shift); }
+                            Key::Named(NamedKey::Home) => { input.move_home(shift); }
+                            Key::Named(NamedKey::End) => { input.move_end(shift); }
+                            Key::Named(NamedKey::ArrowUp) => { input.history_prev(); }
+                            Key::Named(NamedKey::ArrowDown) => { input.history_next(); }
+                            Key::Named(NamedKey::Escape) => {
+                                self.devtools.focus = FocusTarget::Page;
                             }
                             Key::Named(NamedKey::Enter) => {
-                                let cmd = std::mem::take(&mut self.devtools_console_input);
-                                if !cmd.is_empty() {
-                                    println!("[devtools console] eval: {}", cmd);
+                                let cmd = self.devtools.console.input.submit();
+                                if !cmd.trim().is_empty() {
+                                    use crate::devtools::model::console::{LogEntry, LogLevel};
+                                    self.devtools.console.push_log(LogEntry {
+                                        level: LogLevel::InputEcho,
+                                        text: cmd.clone(),
+                                    });
                                     if let Some(interp) = &mut self.interpreter {
-                                        interp.console_log.borrow_mut().push(("info".to_string(), format!("> {}", cmd)));
-                                        // Real eval pres bytecode VM (rychlejsi nez tree-walker pro
-                                        // jednoduche vyrazy + dovoluje rychly pristup k vsem opcodes).
                                         let result = console_eval_via_vm(&cmd, interp);
                                         match result {
-                                            Ok(v) => {
-                                                interp.console_log.borrow_mut().push(("info".to_string(), v.to_string()));
-                                            }
-                                            Err(e) => {
-                                                interp.console_log.borrow_mut().push(("error".to_string(), e));
-                                            }
+                                            Ok(v) => self.devtools.console.push_log(LogEntry {
+                                                level: LogLevel::Result,
+                                                text: v.to_string(),
+                                            }),
+                                            Err(e) => self.devtools.console.push_log(LogEntry {
+                                                level: LogLevel::Error,
+                                                text: e,
+                                            }),
                                         }
                                     }
                                 }
-                                if let Some(w) = &self.window { w.request_redraw(); }
-                                return;
+                            }
+                            Key::Character(s) if ctrl => {
+                                match s.as_str() {
+                                    "v" | "V" => {
+                                        if let Ok(mut cb) = arboard::Clipboard::new() {
+                                            if let Ok(text) = cb.get_text() {
+                                                self.devtools.console.input.insert(&text);
+                                            }
+                                        }
+                                    }
+                                    "c" | "C" => {
+                                        if let Some(t) = self.devtools.console.input.selected_text() {
+                                            if let Ok(mut cb) = arboard::Clipboard::new() {
+                                                let _ = cb.set_text(t);
+                                            }
+                                        }
+                                    }
+                                    "x" | "X" => {
+                                        if let Some(t) = self.devtools.console.input.cut() {
+                                            if let Ok(mut cb) = arboard::Clipboard::new() {
+                                                let _ = cb.set_text(t);
+                                            }
+                                        }
+                                    }
+                                    "a" | "A" => { self.devtools.console.input.select_all(); }
+                                    _ => {}
+                                }
                             }
                             Key::Character(s) => {
-                                self.devtools_console_input.push_str(s);
-                                if let Some(w) = &self.window { w.request_redraw(); }
-                                return;
+                                self.devtools.console.input.insert(s);
                             }
                             _ => {}
                         }
+                        if let Some(w) = &self.window { w.request_redraw(); }
+                        return;
+                    }
+                    // Elements search bar input.
+                    if self.devtools.panel_open && self.devtools.focus == FocusTarget::DevToolsElementsSearch {
+                        let shift = self.modifiers.shift_key();
+                        match &key_event.logical_key {
+                            Key::Named(NamedKey::Escape) => {
+                                self.devtools.focus = FocusTarget::Page;
+                                self.devtools.elements.search.open = false;
+                            }
+                            Key::Named(NamedKey::Backspace) => {
+                                self.devtools.elements.search.query.pop();
+                                self.run_elements_search();
+                            }
+                            Key::Named(NamedKey::Enter) => {
+                                if shift {
+                                    if self.devtools.elements.search.current == 0 {
+                                        let n = self.devtools.elements.search.matches.len();
+                                        if n > 0 { self.devtools.elements.search.current = n - 1; }
+                                    } else {
+                                        self.devtools.elements.search.current -= 1;
+                                    }
+                                } else {
+                                    let n = self.devtools.elements.search.matches.len();
+                                    if n > 0 {
+                                        self.devtools.elements.search.current = (self.devtools.elements.search.current + 1) % n;
+                                    }
+                                }
+                                self.jump_to_search_match();
+                            }
+                            Key::Character(s) => {
+                                self.devtools.elements.search.query.push_str(s);
+                                self.run_elements_search();
+                            }
+                            _ => {}
+                        }
+                        if let Some(w) = &self.window { w.request_redraw(); }
+                        return;
                     }
                     // Form input typing: pri focused input/textarea zachyti char.
                     {
                         let focused_id = super::cascade::get_focused_node();
                         if let Some(fid) = focused_id {
                             if !self.find_open && !self.addr_open
-                                && !(self.devtools_open && self.devtools_tab == 1)
+                                && !self.devtools.focus.is_text_input()
                                 && !self.modifiers.control_key()
                             {
                                 if let Some(interp) = &self.interpreter {
@@ -864,8 +965,14 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                     match key_event.logical_key {
                         Key::Named(NamedKey::F12) => {
                             // Toggle in-window devtools panel.
-                            self.devtools_open = !self.devtools_open;
-                            println!("[F12] devtools panel = {}", if self.devtools_open { "ON" } else { "OFF" });
+                            self.devtools.panel_open = !self.devtools.panel_open;
+                            if self.devtools.panel_open {
+                                if let Some(interp) = &self.interpreter {
+                                    let root = std::rc::Rc::clone(&interp.document.borrow().root);
+                                    crate::browser::devtools_panel::rebuild_tree(&mut self.devtools, &root);
+                                }
+                            }
+                            println!("[F12] devtools panel = {}", if self.devtools.panel_open { "ON" } else { "OFF" });
                             if let Some(w) = &self.window { w.request_redraw(); }
                         }
                         Key::Named(NamedKey::F11) => {
@@ -1251,6 +1358,39 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                             eprintln!("[script error] {e}");
                         }
                     }
+                }
+            }
+        }
+
+        fn run_elements_search(&mut self) {
+            let q = self.devtools.elements.search.query.clone();
+            let mode = self.devtools.elements.search.mode;
+            self.devtools.elements.search.matches.clear();
+            self.devtools.elements.search.current = 0;
+            if q.trim().is_empty() { return; }
+            if let Some(interp) = &self.interpreter {
+                let root = std::rc::Rc::clone(&interp.document.borrow().root);
+                let hits = crate::devtools::search::search(&root, &q, mode);
+                self.devtools.elements.search.matches = hits;
+            }
+        }
+
+        fn jump_to_search_match(&mut self) {
+            let s = &self.devtools.elements.search;
+            if let Some(node_id) = s.matches.get(s.current) {
+                self.devtools.elements.selected = Some(*node_id);
+                // Expand vsechny ancestors aby radek byl viditelny.
+                if let Some(interp) = &self.interpreter {
+                    let root = std::rc::Rc::clone(&interp.document.borrow().root);
+                    if let Some(node) = crate::devtools::model::elements::find_node_by_id(&root, *node_id) {
+                        let mut p = node.parent.borrow().upgrade();
+                        while let Some(par) = p {
+                            let pid = std::rc::Rc::as_ptr(&par) as usize;
+                            self.devtools.elements.collapsed.remove(&pid);
+                            p = par.parent.borrow().upgrade();
+                        }
+                    }
+                    crate::browser::devtools_panel::rebuild_tree(&mut self.devtools, &root);
                 }
             }
         }
@@ -1865,27 +2005,28 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                 }
             }
 
+            // Element highlight overlay (Chrome-like padding/margin viz) - vykresli
+            // VZDY pri Some(selected) bez ohledu na panel_open. Zachova selection
+            // visibility napric F12 toggle.
+            crate::browser::devtools_panel::paint_element_highlight(
+                &mut display_list,
+                &layout_root,
+                &self.devtools,
+                self.scroll_y,
+            );
+
             // In-window DevTools panel - emit pred scrollbar a po main viewport content.
-            // Devtools panel zabira spodni cast okna (devtools_height px).
-            // Hlavni viewport_h je redukovany.
             let win_h = r.config.height as f32;
-            let panel_h = if self.devtools_open { self.devtools_height.min(win_h * 0.7) } else { 0.0 };
-            if self.devtools_open {
-                paint_devtools_panel(
-                    &mut display_list,
-                    &layout_root,
-                    self.devtools_selected,
-                    self.devtools_tab,
-                    self.devtools_tree_scroll,
-                    self.devtools_inspect_mode,
-                    &self.devtools_console_input,
-                    self.interpreter.as_ref(),
-                    r.config.width as f32,
-                    win_h,
-                    panel_h,
-                    self.mouse_x, self.mouse_y,
-                );
-            }
+            self.devtools.tick_frame();
+            paint_devtools_panel(
+                &mut display_list,
+                &layout_root,
+                &self.devtools,
+                self.interpreter.as_ref(),
+                r.config.width as f32,
+                win_h,
+                self.mouse_x, self.mouse_y,
+            );
             // (Selection rect uz emitnuty PRED build_display_list - rendered POD textem.)
             // Address bar (Ctrl+L) overlay: input top centered.
             if self.addr_open {
@@ -1941,25 +2082,14 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                     strikethrough: false, underline: false,
                 });
             }
-            // Highlight rect pro vybrany element v DevTools.
-            if let Some(sel_id) = self.devtools_selected {
-                if let Some(rect) = find_box_rect_by_id(&layout_root, sel_id, self.scroll_y) {
-                    // Polopruhledne modre highlight + border.
-                    display_list.push(DisplayCommand::Rect {
-                        x: rect.0, y: rect.1, w: rect.2, h: rect.3,
-                        color: [100, 150, 255, 70], radius: 0.0,
-                    });
-                    display_list.push(DisplayCommand::Border {
-                        x: rect.0, y: rect.1, w: rect.2, h: rect.3,
-                        width: 2.0, color: [50, 100, 220, 255],
-                    });
-                }
-            }
+            // (Highlight rect uz vykreslen pres paint_element_highlight nahore.)
 
             // Scrollbar rendering: pri page content overflow Y emituj track + thumb.
             // Logical viewport (window/zoom) - vertices jsou v logical px.
+            let win_h = r.config.height as f32;
+            let panel_h = if self.devtools.panel_open { self.devtools.panel_h.min(win_h * 0.7) } else { 0.0 };
             let viewport_w = (r.config.width as f32) / (self.zoom * r.scale_factor);
-            let viewport_h = ((r.config.height as f32) - panel_h) / self.zoom;
+            let viewport_h = (win_h - panel_h) / self.zoom;
             let total_h = layout_root.rect.height;
             if total_h > viewport_h {
                 let bar_w = 12.0_f32;
@@ -2123,13 +2253,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         active_transitions: Vec::new(),
         active_animations: std::collections::HashSet::new(),
         animation_iterations: std::collections::HashMap::new(),
-        devtools_open: false,
-        devtools_selected: None,
-        devtools_tab: 0,
-        devtools_height: 320.0,
-        devtools_tree_scroll: 0.0,
-        devtools_inspect_mode: false,
-        devtools_console_input: String::new(),
+        devtools: crate::devtools::DevToolsState::default(),
         devtools_resizing: false,
         zoom: 1.0,
         modifiers: winit::keyboard::ModifiersState::empty(),

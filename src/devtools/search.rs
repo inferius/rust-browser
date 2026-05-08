@@ -99,7 +99,7 @@ fn parse_simple_selector(s: &str) -> Option<CompoundSelector> {
         if c == ' ' || c == '\t' {
             if !cur.is_empty() { parts.push((std::mem::take(&mut cur), next_direct)); next_direct = false; }
         } else if c == '>' {
-            if !cur.is_empty() { parts.push((std::mem::take(&mut cur), next_direct)); next_direct = false; }
+            if !cur.is_empty() { parts.push((std::mem::take(&mut cur), next_direct)); }
             next_direct = true;
         } else {
             cur.push(c);
