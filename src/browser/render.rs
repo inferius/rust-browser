@@ -2503,6 +2503,12 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         /// Smooth scroll target. Render tick interpoluje scroll_y -> target.
         scroll_target_y: f32,
         scroll_target_x: f32,
+        /// Text selection: anchor (mouse down pos), current (mouse drag pos).
+        /// Pri obou Some + dragging = aktivni rect highlight. Ctrl+C extrahuje
+        /// text uvnitr.
+        selection_anchor: Option<(f32, f32)>,
+        selection_current: Option<(f32, f32)>,
+        selection_dragging: bool,
     }
 
     impl ApplicationHandler for App {
@@ -2573,7 +2579,10 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                         return;
                     }
                     self.update_hover();
-                    if self.open_select.is_some() {
+                    if self.selection_dragging {
+                        self.selection_current = Some((self.mouse_x, self.mouse_y));
+                        self.render();
+                    } else if self.open_select.is_some() {
                         self.render();
                     }
                 }
@@ -2582,8 +2591,24 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                         self.devtools_resizing = false;
                         self.render();
                     }
+                    if self.selection_dragging {
+                        self.selection_dragging = false;
+                        // Pokud minimal drag (< 3px), clear selection (= simple click).
+                        if let (Some(a), Some(c)) = (self.selection_anchor, self.selection_current) {
+                            if (a.0 - c.0).abs() < 3.0 && (a.1 - c.1).abs() < 3.0 {
+                                self.selection_anchor = None;
+                                self.selection_current = None;
+                            }
+                        }
+                        self.render();
+                    }
                 }
                 WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } => {
+                    // Selection start: kazdy MouseDown nastavi anchor. Drag move
+                    // updatuje current. Release < 3px diff = clear (simple click).
+                    self.selection_anchor = Some((self.mouse_x, self.mouse_y));
+                    self.selection_current = Some((self.mouse_x, self.mouse_y));
+                    self.selection_dragging = true;
                     // Devtools panel hit-test: pri kliku v panelu vyhodnocujeme nejdriv tam.
                     let raw_y = self.mouse_y - self.scroll_y;
                     let win_h = self.renderer.as_ref().map(|r| r.config.height as f32).unwrap_or(0.0);
@@ -2764,6 +2789,20 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                                 self.render();
                                 return;
                             }
+                            if s.as_str() == "c" || s.as_str() == "C" {
+                                // Ctrl+C: copy text v selection rectu do clipboardu.
+                                self.copy_selection_to_clipboard();
+                                return;
+                            }
+                            if s.as_str() == "a" || s.as_str() == "A" {
+                                // Ctrl+A: select cely document.
+                                if let Some(layout) = &self.layout_root {
+                                    self.selection_anchor = Some((layout.rect.x, layout.rect.y));
+                                    self.selection_current = Some((layout.rect.x + layout.rect.width, layout.rect.y + layout.rect.height));
+                                    self.render();
+                                }
+                                return;
+                            }
                         }
                     }
                     // Ctrl+= / Ctrl++ / Ctrl+- / Ctrl+0 = zoom controls.
@@ -2921,6 +2960,48 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
             self.find_match_idx = ((cur + dir).rem_euclid(n)) as usize;
             self.find_scroll_to_current();
             self.render();
+        }
+        /// Extrahuje text z LayoutBoxu prekryvajicich selection rect, posle do
+        /// system clipboard pres arboard. Selection coords v logical px (uz s
+        /// scroll_y aplikovany na mouse).
+        fn copy_selection_to_clipboard(&mut self) {
+            let (a, c) = match (self.selection_anchor, self.selection_current) {
+                (Some(a), Some(c)) => (a, c),
+                _ => return,
+            };
+            let x0 = a.0.min(c.0);
+            let y0 = a.1.min(c.1);
+            let x1 = a.0.max(c.0);
+            let y1 = a.1.max(c.1);
+            let layout = match &self.layout_root { Some(l) => l, None => return };
+            let mut out = String::new();
+            fn walk(b: &super::layout::LayoutBox, x0: f32, y0: f32, x1: f32, y1: f32, out: &mut String) {
+                if let Some(text) = &b.text {
+                    let by0 = b.rect.y;
+                    let by1 = b.rect.y + b.rect.height;
+                    let bx0 = b.rect.x;
+                    let bx1 = b.rect.x + b.rect.width;
+                    let overlap = bx0 < x1 && bx1 > x0 && by0 < y1 && by1 > y0;
+                    if overlap {
+                        out.push_str(text);
+                        out.push(' ');
+                    }
+                }
+                for ch in &b.children { walk(ch, x0, y0, x1, y1, out); }
+            }
+            walk(layout, x0, y0, x1, y1, &mut out);
+            let trimmed = out.trim().to_string();
+            if trimmed.is_empty() { return; }
+            match arboard::Clipboard::new() {
+                Ok(mut cb) => {
+                    if let Err(e) = cb.set_text(&trimmed) {
+                        eprintln!("[clipboard] set_text fail: {e}");
+                    } else {
+                        println!("[clipboard] copied {} chars", trimmed.len());
+                    }
+                }
+                Err(e) => eprintln!("[clipboard] open fail: {e}"),
+            }
         }
         fn find_scroll_to_current(&mut self) {
             let matches = self.find_collect_matches();
@@ -3629,6 +3710,21 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                     self.mouse_x, self.mouse_y,
                 );
             }
+            // Text selection: semitransparent blue rect od anchor po current.
+            // Mouse coords v logical px (s scroll_y aplikovany v CursorMoved).
+            // Pred shift_command_y odecten -> nyni transformuj zpet do screen.
+            if let (Some(a), Some(c)) = (self.selection_anchor, self.selection_current) {
+                let x0 = a.0.min(c.0);
+                let y0 = a.1.min(c.1) - self.scroll_y;
+                let x1 = a.0.max(c.0);
+                let y1 = a.1.max(c.1) - self.scroll_y;
+                if x1 > x0 + 1.0 || y1 > y0 + 1.0 {
+                    display_list.push(DisplayCommand::Rect {
+                        x: x0, y: y0, w: x1 - x0, h: y1 - y0,
+                        color: [80, 150, 255, 80], radius: 0.0,
+                    });
+                }
+            }
             // Find on page: highlight matches + overlay s query a counter.
             if self.find_open {
                 let matches = find_matches_in(&layout_root, &self.find_query);
@@ -3854,6 +3950,9 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         find_match_idx: 0,
         scroll_target_y: 0.0,
         scroll_target_x: 0.0,
+        selection_anchor: None,
+        selection_current: None,
+        selection_dragging: false,
     };
     event_loop.run_app(&mut app).map_err(|e| e.to_string())?;
     Ok(())
