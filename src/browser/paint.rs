@@ -1523,9 +1523,16 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
         // .anim-box, button) je rect.height vypoctena z parent line_height_default,
         // ne z elementu vlastniho line_height -> mismatch -> text nahore.
         // Spravne: pen_y na inner_center adjustovany o ascender (~0.8*font_size).
-        let inner_h = (bx.rect.height - pad_t - pad_b).max(bx.font_size);
-        let ascent_adj = bx.font_size * 0.2;
-        let v_offset = ((inner_h - bx.font_size) * 0.5 - ascent_adj).max(0.0);
+        // Pro spravne center: visible glyph extent ~0.9*fs (cap_height 0.7 +
+        // descender 0.2). Pro center text v inner_h:
+        //   pen_y = inner_top + (inner_h - 0.9*fs)/2 + cap_height
+        // Render dela pen_y = text_y + fs (text_y = inner_top - shift):
+        //   shift = fs - cap_height - (inner_h - 0.9*fs)/2 = 0.3*fs - (inner_h - 0.9*fs)/2
+        //   v_offset = -shift = (inner_h - 0.9*fs)/2 - 0.3*fs = (inner_h - 1.5*fs)/2
+        // BEZ clampu na 0 - pri inner_h < 1.5*fs negative shift posune text
+        // do pad_t area (badge/highlight maly inner = mensi clam). Akceptace.
+        let inner_h = bx.rect.height - pad_t - pad_b;
+        let v_offset = (inner_h - bx.font_size * 1.5) * 0.5;
         let text_y = bx.rect.y + pad_t + v_offset;
         let text_color = with_alpha(bx.text_color.unwrap_or([0, 0, 0, 255]));
         // Text shadow - emit pred main text aby byl v pozadi

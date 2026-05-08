@@ -331,18 +331,18 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         let alpha = textureSample(atlas_tex, atlas_smp, in.uv).r;
         return vec4<f32>(in.color.rgb, in.color.a * alpha);
     }
-    // Mode 9: LCD subpixel text - atlas glyph je 3x sirka (R/G/B sub-pixely
-    // swizzled). Sample 3 horizontalni texely per fragment pro per-channel
-    // alpha. Output rgb = color modulovany per sub-pixel, alpha = max RGB.
+    // Mode 9: LCD subpixel atlas storage (3x horizontal). Bez dual-source
+    // blendu proper LCD nelze - per-channel modulace v standard alpha blendu
+    // dela barevny artifacts. Pouzivame avg ze 3 sub-pixelu = grayscale
+    // approximation s o trochu lepsi AA nez fontdue 1x raster.
     if (in.mode > 8.5 && in.mode < 9.5) {
         let dims = textureDimensions(atlas_tex);
         let texel_w = 1.0 / f32(dims.x);
         let r_a = textureSample(atlas_tex, atlas_smp, in.uv - vec2<f32>(texel_w, 0.0)).r;
         let g_a = textureSample(atlas_tex, atlas_smp, in.uv).r;
         let b_a = textureSample(atlas_tex, atlas_smp, in.uv + vec2<f32>(texel_w, 0.0)).r;
-        let rgb = in.color.rgb * vec3<f32>(r_a, g_a, b_a);
         let avg = (r_a + g_a + b_a) / 3.0;
-        return vec4<f32>(rgb, in.color.a * avg);
+        return vec4<f32>(in.color.rgb, in.color.a * avg);
     }
     // Mode 2: linear gradient - lerp color->color2 podle uv.x (pre-rotated)
     if (in.mode > 1.5 && in.mode < 2.5) {

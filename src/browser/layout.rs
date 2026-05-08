@@ -3012,6 +3012,14 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
             if bx_clone.tag.is_none() {
                 bx.children[idx].text = Some(wrapped_text);
             }
+            // Update text rect: span vsech words na all lines (ne jen first word)
+            // pro hit-test + cursor I-beam pres cely text.
+            let final_x = bx.children[idx].rect.x;
+            let final_y = bx.children[idx].rect.y;
+            let lines = (cursor_y - final_y) / advance_h.max(1.0) + 1.0;
+            let span_w = (cursor_x - final_x).max(bx.children[idx].rect.width);
+            bx.children[idx].rect.width = span_w;
+            bx.children[idx].rect.height = (advance_h * lines).max(advance_h);
             prev_had_trailing_space = trailing_ws;
         } else if !bx_clone.children.is_empty() {
             // Inline element s childen (napr. <span><em>text</em></span>) - flatten.

@@ -1,0 +1,2713 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Engine Test Suite</title>
+  <style>
+    /* ============================================================
+       CUSTOM PROPERTIES + RESET
+    ============================================================ */
+    :root {
+      --bg: #0a0a0c;
+      --bg2: #111114;
+      --bg3: #1a1a1f;
+      --border: #2a2a30;
+      --text: #e8e6df;
+      --muted: #666660;
+      --a: #e8ff6a;
+      --b: #6affdb;
+      --c: #ff6a9b;
+      --d: #a06aff;
+
+      --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+      --ease-sharp:  cubic-bezier(0.25, 0, 0, 1);
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; font-size: 16px; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Courier New', Courier, monospace;
+      overflow-x: hidden;
+    }
+
+    /* ============================================================
+       STICKY HEADER - position sticky + backdrop-filter
+    ============================================================ */
+    #header {
+      position: sticky;
+      top: 0;
+      z-index: 999;
+      height: 48px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 2rem;
+      background: rgba(10,10,12,0.7);
+      backdrop-filter: blur(16px) saturate(180%);
+      -webkit-backdrop-filter: blur(16px) saturate(180%);
+      border-bottom: 1px solid var(--border);
+    }
+
+    #header .logo {
+      font-size: 0.75rem;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: var(--a);
+    }
+
+    #fps-counter {
+      font-size: 0.7rem;
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* ============================================================
+       LAYOUT - CSS Grid + subgrid
+    ============================================================ */
+    .page {
+      display: grid;
+      grid-template-columns: 200px 1fr;
+      min-height: calc(100vh - 48px);
+    }
+
+    /* ============================================================
+       SIDEBAR - position sticky inside grid
+    ============================================================ */
+    #sidebar {
+      position: sticky;
+      top: 48px;
+      height: calc(100vh - 48px);
+      overflow-y: auto;
+      border-right: 1px solid var(--border);
+      padding: 1.5rem 0;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border) transparent;
+    }
+
+    #sidebar::-webkit-scrollbar { width: 4px; }
+    #sidebar::-webkit-scrollbar-thumb { background: var(--border); }
+
+    .nav-section {
+      padding: 0 1rem 1rem;
+    }
+
+    .nav-section-title {
+      font-size: 0.6rem;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: var(--muted);
+      padding: 0.5rem 0.5rem 0.5rem;
+    }
+
+    .nav-link {
+      display: block;
+      padding: 0.3rem 0.5rem;
+      font-size: 0.75rem;
+      color: var(--muted);
+      text-decoration: none;
+      border-radius: 2px;
+      transition: color 0.15s, background 0.15s;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .nav-link:hover {
+      color: var(--text);
+      background: var(--bg3);
+    }
+
+    .nav-link.active {
+      color: var(--a);
+    }
+
+    /* ============================================================
+       MAIN CONTENT
+    ============================================================ */
+    #main {
+      padding: 2rem;
+      display: flex;
+      flex-direction: column;
+      gap: 3rem;
+    }
+
+    .test-section {
+      border: 1px solid var(--border);
+      background: var(--bg2);
+    }
+
+    .test-header {
+      padding: 0.75rem 1rem;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--bg3);
+    }
+
+    .test-title {
+      font-size: 0.7rem;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      color: var(--b);
+    }
+
+    .test-tag {
+      font-size: 0.6rem;
+      padding: 2px 6px;
+      background: rgba(106,255,219,0.1);
+      color: var(--b);
+      border: 1px solid rgba(106,255,219,0.2);
+    }
+
+    .test-body {
+      padding: 1.5rem;
+    }
+
+    /* ============================================================
+       01 - BOX MODEL
+    ============================================================ */
+    .box-model-demo {
+      display: flex;
+      gap: 1.5rem;
+      flex-wrap: wrap;
+      align-items: flex-end;
+    }
+
+    .box {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.65rem;
+      color: var(--muted);
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      transition: all 0.3s var(--ease-spring);
+    }
+
+    .box:hover { transform: scale(1.05); border-color: var(--a); color: var(--a); }
+
+    .box-1 { width: 40px;  height: 40px; }
+    .box-2 { width: 60px;  height: 60px; }
+    .box-3 { width: 80px;  height: 80px; }
+    .box-4 { width: 100px; height: 100px; }
+    .box-5 { width: 120px; height: 120px; }
+    .box-6 { width: 160px; height: 60px; }
+    .box-7 { width: 60px;  height: 160px; }
+
+    /* border-radius combinations */
+    .box-r1 { border-radius: 50%; }
+    .box-r2 { border-radius: 0 50% 50% 0; }
+    .box-r3 { border-radius: 40% 60% 60% 40% / 40% 40% 60% 60%; }
+    .box-r4 { border-radius: 4px; }
+    .box-r5 { border-top-left-radius: 40px; border-bottom-right-radius: 40px; }
+
+    /* ============================================================
+       02 - FLEXBOX
+    ============================================================ */
+    .flex-demos {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    .flex-row {
+      display: flex;
+      gap: 6px;
+      background: var(--bg3);
+      padding: 6px;
+      border: 1px solid var(--border);
+      min-height: 48px;
+    }
+
+    .flex-item {
+      background: rgba(232,255,106,0.08);
+      border: 1px solid rgba(232,255,106,0.2);
+      color: var(--a);
+      font-size: 0.65rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 4px 8px;
+      min-width: 32px;
+    }
+
+    /* flex-grow tests */
+    .fg1 { flex-grow: 1; }
+    .fg2 { flex-grow: 2; }
+    .fg3 { flex-grow: 3; }
+
+    /* align-self */
+    .as-start    { align-self: flex-start; }
+    .as-end      { align-self: flex-end; }
+    .as-center   { align-self: center; }
+    .as-stretch  { align-self: stretch; }
+    .as-baseline { align-self: baseline; font-size: 0.9rem; }
+
+    /* flex-wrap */
+    .wrap-demo {
+      flex-wrap: wrap;
+    }
+
+    .wrap-demo .flex-item {
+      width: 60px;
+    }
+
+    /* ============================================================
+       03 - GRID
+    ============================================================ */
+    .grid-demos {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    .grid-label {
+      font-size: 0.6rem;
+      color: var(--muted);
+      margin-bottom: 4px;
+      letter-spacing: 0.1em;
+    }
+
+    .g-item {
+      background: rgba(160,106,255,0.08);
+      border: 1px solid rgba(160,106,255,0.2);
+      color: var(--d);
+      font-size: 0.65rem;
+      padding: 0.5rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .grid-auto  { display: grid; grid-template-columns: repeat(auto-fill, minmax(80px, 1fr)); gap: 6px; }
+    .grid-fixed { display: grid; grid-template-columns: 1fr 2fr 1fr; gap: 6px; }
+    .grid-areas {
+      display: grid;
+      grid-template-columns: 100px 1fr 80px;
+      grid-template-rows: 32px 80px 32px;
+      grid-template-areas:
+        "header header header"
+        "sidebar content aside"
+        "footer footer footer";
+      gap: 4px;
+    }
+
+    .ga-header  { grid-area: header; }
+    .ga-sidebar { grid-area: sidebar; }
+    .ga-content { grid-area: content; }
+    .ga-aside   { grid-area: aside; }
+    .ga-footer  { grid-area: footer; }
+
+    .grid-dense {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      grid-auto-rows: 32px;
+      grid-auto-flow: dense;
+      gap: 4px;
+    }
+
+    .gd-wide  { grid-column: span 3; }
+    .gd-tall  { grid-row: span 2; }
+    .gd-big   { grid-column: span 2; grid-row: span 2; }
+
+    /* ============================================================
+       04 - TRANSFORMS
+    ============================================================ */
+    .transform-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+      gap: 1rem;
+    }
+
+    .tf-box {
+      height: 80px;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.6rem;
+      color: var(--muted);
+      transition: transform 0.4s var(--ease-spring), border-color 0.2s;
+      cursor: pointer;
+    }
+
+    .tf-box:hover { border-color: var(--c); color: var(--c); }
+    .tf-box:hover.rotate    { transform: rotate(45deg); }
+    .tf-box:hover.skew      { transform: skewX(20deg) skewY(5deg); }
+    .tf-box:hover.scale     { transform: scale(1.3); }
+    .tf-box:hover.translate { transform: translateX(16px) translateY(-8px); }
+    .tf-box:hover.matrix    { transform: matrix(1.1, 0.2, -0.2, 1.1, 5, 5); }
+    .tf-box:hover.perspective-3d { transform: perspective(200px) rotateY(45deg); }
+    .tf-box:hover.flip-x    { transform: scaleX(-1); }
+    .tf-box:hover.flip-y    { transform: scaleY(-1); }
+
+    /* ============================================================
+       05 - ANIMATIONS & KEYFRAMES
+    ============================================================ */
+    @keyframes spin     { to { transform: rotate(360deg); } }
+    @keyframes pulse    { 0%,100%{ opacity:1; transform:scale(1); } 50%{ opacity:0.5; transform:scale(0.9); } }
+    @keyframes bounce   { 0%,100%{ transform:translateY(0); } 50%{ transform:translateY(-20px); } }
+    @keyframes shake    { 0%,100%{transform:translateX(0)} 20%{transform:translateX(-6px)} 40%{transform:translateX(6px)} 60%{transform:translateX(-4px)} 80%{transform:translateX(4px)} }
+    @keyframes blink    { 0%,100%{ opacity:1 } 50%{ opacity:0 } }
+    @keyframes marquee  { from{ transform:translateX(100%) } to{ transform:translateX(-100%) } }
+    @keyframes colorCycle {
+      0%   { background: rgba(232,255,106,0.15); border-color: rgba(232,255,106,0.4); }
+      33%  { background: rgba(106,255,219,0.15); border-color: rgba(106,255,219,0.4); }
+      66%  { background: rgba(255,106,155,0.15); border-color: rgba(255,106,155,0.4); }
+      100% { background: rgba(232,255,106,0.15); border-color: rgba(232,255,106,0.4); }
+    }
+    @keyframes drawLine { from{ stroke-dashoffset: 500 } to{ stroke-dashoffset: 0 } }
+    @keyframes fadeSlide {
+      from { opacity:0; transform: translateY(12px); }
+      to   { opacity:1; transform: translateY(0); }
+    }
+    @keyframes ripple {
+      0%   { transform: scale(0); opacity: 0.8; }
+      100% { transform: scale(3); opacity: 0; }
+    }
+    @keyframes orbit {
+      from { transform: rotate(0deg) translateX(40px) rotate(0deg); }
+      to   { transform: rotate(360deg) translateX(40px) rotate(-360deg); }
+    }
+    @keyframes typewriter {
+      from { width: 0; }
+      to   { width: 100%; }
+    }
+    @keyframes gradient-shift {
+      0%   { background-position: 0% 50%; }
+      50%  { background-position: 100% 50%; }
+      100% { background-position: 0% 50%; }
+    }
+
+    .anim-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+      gap: 1rem;
+    }
+
+    .anim-box {
+      height: 80px;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.6rem;
+      color: var(--muted);
+    }
+
+    .a-spin     { animation: spin 2s linear infinite; }
+    .a-pulse    { animation: pulse 1.5s ease-in-out infinite; }
+    .a-bounce   { animation: bounce 1s ease-in-out infinite; }
+    .a-shake    { animation: shake 0.6s ease-in-out infinite; }
+    .a-blink    { animation: blink 1s step-end infinite; }
+    .a-color    { animation: colorCycle 3s linear infinite; }
+    .a-orbit-wrap {
+      position: relative;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .a-orbit-center {
+      width: 12px; height: 12px;
+      background: var(--d);
+      border-radius: 50%;
+    }
+    .a-orbit-planet {
+      position: absolute;
+      width: 8px; height: 8px;
+      background: var(--c);
+      border-radius: 50%;
+      animation: orbit 2s linear infinite;
+    }
+
+    /* animation-fill-mode, delay, iteration */
+    .stagger-row {
+      display: flex;
+      gap: 8px;
+    }
+
+    .stagger-item {
+      width: 32px; height: 32px;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      animation: bounce 1s ease-in-out infinite;
+    }
+
+    .stagger-item:nth-child(1) { animation-delay: 0s;    border-color: var(--a); }
+    .stagger-item:nth-child(2) { animation-delay: 0.1s;  border-color: var(--b); }
+    .stagger-item:nth-child(3) { animation-delay: 0.2s;  border-color: var(--c); }
+    .stagger-item:nth-child(4) { animation-delay: 0.3s;  border-color: var(--d); }
+    .stagger-item:nth-child(5) { animation-delay: 0.4s;  border-color: var(--a); }
+    .stagger-item:nth-child(6) { animation-delay: 0.5s;  border-color: var(--b); }
+    .stagger-item:nth-child(7) { animation-delay: 0.6s;  border-color: var(--c); }
+    .stagger-item:nth-child(8) { animation-delay: 0.7s;  border-color: var(--d); }
+
+    /* ============================================================
+       06 - PSEUDO-ELEMENTS & SELECTORS
+    ============================================================ */
+    .pseudo-demo {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    /* ::before / ::after content */
+    .before-after-item {
+      position: relative;
+      padding: 0.75rem 1rem;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      font-size: 0.8rem;
+    }
+
+    .before-after-item::before {
+      content: '>>>';
+      position: absolute;
+      left: -28px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--a);
+      font-size: 0.7rem;
+    }
+
+    .before-after-item::after {
+      content: attr(data-label);
+      position: absolute;
+      top: -10px;
+      right: 8px;
+      background: var(--bg);
+      padding: 0 6px;
+      font-size: 0.6rem;
+      color: var(--b);
+      border: 1px solid var(--b);
+    }
+
+    /* :nth-child, :not, :has */
+    .nth-list {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .nth-list span {
+      width: 32px; height: 32px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.65rem;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+    }
+
+    .nth-list span:nth-child(odd)      { border-color: var(--a); color: var(--a); }
+    .nth-list span:nth-child(3n)       { background: rgba(106,255,219,0.1); }
+    .nth-list span:nth-child(4n+1)     { transform: rotate(5deg); }
+    .nth-list span:last-child          { border-color: var(--c); color: var(--c); }
+    .nth-list span:not(:nth-child(5))  { opacity: 1; }
+    .nth-list span:nth-child(5)        { opacity: 0.3; }
+    .nth-list span:first-of-type       { border-width: 2px; }
+
+    /* ::selection */
+    .selection-demo {
+      padding: 0.5rem;
+      background: var(--bg3);
+      font-size: 0.875rem;
+      user-select: text;
+      cursor: text;
+    }
+
+    .selection-demo::selection, .selection-demo *::selection {
+      background: var(--a);
+      color: #000;
+    }
+
+    /* :focus-visible */
+    .focus-demo {
+      display: flex;
+      gap: 0.5rem;
+    }
+
+    .focus-btn {
+      padding: 6px 12px;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-family: inherit;
+      font-size: 0.75rem;
+      cursor: pointer;
+      outline: none;
+    }
+
+    .focus-btn:focus-visible {
+      outline: 2px solid var(--b);
+      outline-offset: 2px;
+    }
+
+    .focus-btn:hover { border-color: var(--muted); }
+    .focus-btn:active { transform: scale(0.97); }
+
+    /* ============================================================
+       07 - GRADIENTS
+    ============================================================ */
+    .gradient-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+      gap: 0.75rem;
+    }
+
+    .grad-box {
+      height: 80px;
+      display: flex;
+      align-items: flex-end;
+      padding: 0.5rem;
+      font-size: 0.6rem;
+      color: rgba(255,255,255,0.6);
+    }
+
+    .g-linear-1  { background: linear-gradient(135deg, #e8ff6a, #6affdb); }
+    .g-linear-2  { background: linear-gradient(to right, #ff6a9b, #a06aff, #6affdb); }
+    .g-linear-3  { background: linear-gradient(to bottom, transparent, #0a0a0c); }
+    .g-radial-1  { background: radial-gradient(circle at 30% 30%, #e8ff6a, transparent); }
+    .g-radial-2  { background: radial-gradient(ellipse at center, #a06aff 0%, transparent 70%); }
+    .g-conic-1   { background: conic-gradient(from 0deg, #e8ff6a, #6affdb, #ff6a9b, #a06aff, #e8ff6a); }
+    .g-conic-2   { background: conic-gradient(var(--a) 90deg, var(--bg3) 90deg 180deg, var(--b) 180deg 270deg, var(--bg3) 270deg); }
+    .g-multi     { background: linear-gradient(135deg, rgba(232,255,106,0.3) 0%, transparent 50%), radial-gradient(circle at 80% 20%, rgba(106,255,219,0.3), transparent 50%); background-color: var(--bg3); }
+    .g-anim      { background: linear-gradient(270deg, var(--a), var(--b), var(--c), var(--d)); background-size: 400% 400%; animation: gradient-shift 4s ease infinite; }
+    .g-hard-stop { background: linear-gradient(to right, var(--a) 33%, var(--b) 33% 66%, var(--c) 66%); }
+    .g-repeating { background: repeating-linear-gradient(45deg, var(--bg3) 0px, var(--bg3) 8px, rgba(232,255,106,0.15) 8px, rgba(232,255,106,0.15) 16px); }
+    .g-repeating-r { background: repeating-radial-gradient(circle, rgba(160,106,255,0.15) 0px, rgba(160,106,255,0.15) 4px, transparent 4px, transparent 12px); }
+
+    /* ============================================================
+       08 - FILTERS & EFFECTS
+    ============================================================ */
+    .filter-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+      gap: 0.75rem;
+    }
+
+    .filter-box {
+      height: 80px;
+      background: linear-gradient(135deg, var(--a), var(--b));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.6rem;
+      color: #000;
+      transition: filter 0.3s;
+    }
+
+    .f-none       { filter: none; }
+    .f-blur       { filter: blur(4px); }
+    .f-brightness { filter: brightness(1.8); }
+    .f-contrast   { filter: contrast(2); }
+    .f-saturate   { filter: saturate(0); }
+    .f-hue        { filter: hue-rotate(180deg); }
+    .f-invert     { filter: invert(1); }
+    .f-sepia      { filter: sepia(1); }
+    .f-drop-shad  { filter: drop-shadow(0 0 12px var(--a)); }
+    .f-multi      { filter: contrast(1.4) saturate(1.6) brightness(0.9); }
+
+    /* mix-blend-mode */
+    .blend-wrap {
+      position: relative;
+      height: 80px;
+      background: linear-gradient(to right, var(--a), var(--b));
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .blend-overlay {
+      position: absolute;
+      inset: 0;
+      background: rgba(255,106,155,0.6);
+    }
+
+    .blend-multiply   { mix-blend-mode: multiply; }
+    .blend-screen     { mix-blend-mode: screen; }
+    .blend-overlay-bm { mix-blend-mode: overlay; }
+    .blend-difference { mix-blend-mode: difference; }
+    .blend-exclusion  { mix-blend-mode: exclusion; }
+
+    .blend-text {
+      position: relative;
+      z-index: 1;
+      font-size: 0.6rem;
+    }
+
+    /* ============================================================
+       09 - CLIP-PATH & MASKING
+    ============================================================ */
+    .clip-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+      gap: 1rem;
+    }
+
+    .clip-box {
+      height: 80px;
+      background: linear-gradient(135deg, var(--a), var(--c));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.6rem;
+      color: #000;
+    }
+
+    .cp-circle   { clip-path: circle(40%); }
+    .cp-ellipse  { clip-path: ellipse(45% 35% at 50% 50%); }
+    .cp-triangle { clip-path: polygon(50% 0%, 0% 100%, 100% 100%); }
+    .cp-diamond  { clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%); }
+    .cp-star     { clip-path: polygon(50% 0%,61% 35%,98% 35%,68% 57%,79% 91%,50% 70%,21% 91%,32% 57%,2% 35%,39% 35%); }
+    .cp-arrow    { clip-path: polygon(0 25%,60% 25%,60% 0%,100% 50%,60% 100%,60% 75%,0 75%); }
+    .cp-chevron  { clip-path: polygon(0% 0%,75% 0%,100% 50%,75% 100%,0% 100%,25% 50%); }
+    .cp-custom   { clip-path: path('M50,0 C70,0 80,20 80,40 C80,60 70,80 50,80 C30,80 20,60 20,40 C20,20 30,0 50,0'); }
+
+    /* ============================================================
+       10 - CSS VARIABLES & CALC
+    ============================================================ */
+    .calc-demo {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    .calc-bar {
+      height: 28px;
+      display: flex;
+      align-items: center;
+      padding: 0 8px;
+      font-size: 0.65rem;
+      color: #000;
+      font-weight: 500;
+    }
+
+    /* calc() kombinace */
+    .cb1 { width: calc(100% - 40px);         background: var(--a); }
+    .cb2 { width: calc(50% + 20px);          background: var(--b); }
+    .cb3 { width: calc(33.33% - 8px);        background: var(--c); }
+    .cb4 { width: clamp(80px, 30%, 200px);   background: var(--d); color: #fff; }
+    .cb5 { width: min(60%, 240px);           background: linear-gradient(to right, var(--a), var(--b)); }
+    .cb6 { width: max(100px, 25%);           background: linear-gradient(to right, var(--c), var(--d)); color: #fff; }
+
+    /* CSS custom properties math */
+    :root {
+      --cols: 4;
+      --gap: 8px;
+    }
+
+    .var-grid {
+      display: grid;
+      grid-template-columns: repeat(var(--cols), 1fr);
+      gap: var(--gap);
+    }
+
+    .var-item {
+      height: calc(80px / var(--cols) * 2);
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.6rem;
+      color: var(--muted);
+    }
+
+    /* ============================================================
+       11 - SCROLL & OVERFLOW
+    ============================================================ */
+    .overflow-demos {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 1rem;
+    }
+
+    .overflow-box {
+      height: 120px;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      font-size: 0.75rem;
+      color: var(--muted);
+      line-height: 1.6;
+      padding: 0.5rem;
+    }
+
+    .ov-hidden   { overflow: hidden; }
+    .ov-scroll   { overflow: scroll; scrollbar-width: thin; scrollbar-color: var(--a) var(--bg); }
+    .ov-auto     { overflow: auto; }
+    .ov-clip     { overflow: clip; }
+    .ov-x-scroll { overflow-x: scroll; overflow-y: hidden; white-space: nowrap; scrollbar-width: thin; }
+
+    /* scroll-snap */
+    .snap-container {
+      display: flex;
+      overflow-x: scroll;
+      scroll-snap-type: x mandatory;
+      gap: 8px;
+      padding-bottom: 4px;
+      scrollbar-width: thin;
+      scrollbar-color: var(--b) transparent;
+    }
+
+    .snap-item {
+      flex: 0 0 160px;
+      height: 80px;
+      scroll-snap-align: start;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.65rem;
+      color: var(--muted);
+    }
+
+    /* ============================================================
+       12 - TEXT & TYPOGRAPHY
+    ============================================================ */
+    .text-demos {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    .td-row {
+      padding: 0.5rem;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+    }
+
+    /* writing-mode */
+    .writing-wrap {
+      display: flex;
+      gap: 1rem;
+      height: 120px;
+    }
+
+    .wr-horizontal { writing-mode: horizontal-tb; }
+    .wr-vertical-rl { writing-mode: vertical-rl; font-size: 0.75rem; color: var(--b); }
+    .wr-vertical-lr { writing-mode: vertical-lr; font-size: 0.75rem; color: var(--c); }
+
+    /* text decoration */
+    .tx-underline   { text-decoration: underline wavy var(--a) 2px; }
+    .tx-overline    { text-decoration: overline double var(--b) 2px; }
+    .tx-through     { text-decoration: line-through solid var(--c); }
+    .tx-deco-skip   { text-decoration: underline; text-decoration-skip-ink: none; }
+
+    /* font features */
+    .tx-smallcaps   { font-variant-caps: small-caps; letter-spacing: 0.1em; }
+    .tx-tabular     { font-variant-numeric: tabular-nums; }
+    .tx-oldstyle    { font-variant-numeric: oldstyle-nums; }
+
+    /* text-shadow */
+    .tx-shadow-1 { text-shadow: 0 0 10px var(--a); color: var(--a); }
+    .tx-shadow-2 { text-shadow: 2px 2px 0 var(--c), 4px 4px 0 var(--d); color: var(--text); }
+    .tx-shadow-3 { text-shadow: 0 0 4px var(--b), 0 0 16px var(--b), 0 0 32px var(--b); color: var(--b); }
+
+    /* column layout */
+    .tx-columns {
+      column-count: 3;
+      column-gap: 1rem;
+      column-rule: 1px solid var(--border);
+      font-size: 0.75rem;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+
+    /* text overflow */
+    .tx-ellipsis {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* word-break */
+    .tx-break {
+      word-break: break-all;
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
+
+    /* ============================================================
+       13 - POSITION
+    ============================================================ */
+    .position-demo {
+      position: relative;
+      height: 200px;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      overflow: hidden;
+    }
+
+    .pos-item {
+      padding: 4px 8px;
+      font-size: 0.65rem;
+      border: 1px solid;
+    }
+
+    .pos-tl  { position: absolute; top: 8px;    left: 8px;    border-color: var(--a); color: var(--a); }
+    .pos-tr  { position: absolute; top: 8px;    right: 8px;   border-color: var(--b); color: var(--b); }
+    .pos-bl  { position: absolute; bottom: 8px; left: 8px;    border-color: var(--c); color: var(--c); }
+    .pos-br  { position: absolute; bottom: 8px; right: 8px;   border-color: var(--d); color: var(--d); }
+    .pos-ctr {
+      position: absolute;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      border-color: var(--text); color: var(--text);
+      white-space: nowrap;
+    }
+    .pos-z1  { position: absolute; top: 40px; left: 40px; width: 80px; height: 80px; background: rgba(232,255,106,0.15); border: 1px solid var(--a); z-index: 1; display: flex; align-items: center; justify-content: center; font-size: 0.6rem; color: var(--a); }
+    .pos-z2  { position: absolute; top: 60px; left: 60px; width: 80px; height: 80px; background: rgba(106,255,219,0.15); border: 1px solid var(--b); z-index: 2; display: flex; align-items: center; justify-content: center; font-size: 0.6rem; color: var(--b); }
+    .pos-z3  { position: absolute; top: 80px; left: 80px; width: 80px; height: 80px; background: rgba(255,106,155,0.15); border: 1px solid var(--c); z-index: 3; display: flex; align-items: center; justify-content: center; font-size: 0.6rem; color: var(--c); }
+
+    /* ============================================================
+       14 - SVG (inline)
+    ============================================================ */
+    .svg-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+      gap: 1rem;
+    }
+
+    .svg-box {
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      padding: 0.5rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    /* ============================================================
+       15 - FORMS
+    ============================================================ */
+    .form-demo {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+    }
+
+    .fd-group {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .fd-group.full { grid-column: 1 / -1; }
+
+    .fd-label {
+      font-size: 0.65rem;
+      color: var(--muted);
+      letter-spacing: 0.1em;
+    }
+
+    .fd-input, .fd-select, .fd-textarea {
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 6px 10px;
+      font-family: inherit;
+      font-size: 0.8rem;
+      outline: none;
+      transition: border-color 0.15s;
+      width: 100%;
+      appearance: none;
+      -webkit-appearance: none;
+    }
+
+    .fd-input:focus, .fd-select:focus, .fd-textarea:focus {
+      border-color: var(--b);
+    }
+
+    .fd-input:invalid      { border-color: var(--c); }
+    .fd-input:valid        { border-color: rgba(82,255,160,0.4); }
+    .fd-input:placeholder-shown { border-color: var(--border); }
+
+    .fd-textarea { resize: vertical; min-height: 80px; }
+
+    /* custom range */
+    .fd-range {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 100%;
+      height: 4px;
+      background: var(--bg3);
+      border-radius: 0;
+      outline: none;
+      border: 1px solid var(--border);
+    }
+
+    .fd-range::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 16px; height: 16px;
+      background: var(--a);
+      cursor: pointer;
+      border-radius: 0;
+    }
+
+    .fd-range::-moz-range-thumb {
+      width: 16px; height: 16px;
+      background: var(--a);
+      cursor: pointer;
+      border-radius: 0;
+      border: none;
+    }
+
+    /* custom checkbox */
+    .fd-checkbox-wrap {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      font-size: 0.8rem;
+    }
+
+    .fd-checkbox {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 16px; height: 16px;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      cursor: pointer;
+      position: relative;
+      flex-shrink: 0;
+    }
+
+    .fd-checkbox:checked {
+      background: var(--a);
+      border-color: var(--a);
+    }
+
+    .fd-checkbox:checked::after {
+      content: '';
+      position: absolute;
+      left: 4px; top: 1px;
+      width: 5px; height: 9px;
+      border: 2px solid #000;
+      border-top: none;
+      border-left: none;
+      transform: rotate(45deg);
+    }
+
+    /* custom radio */
+    .fd-radio {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 16px; height: 16px;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      border-radius: 50%;
+      cursor: pointer;
+      position: relative;
+    }
+
+    .fd-radio:checked {
+      border-color: var(--b);
+    }
+
+    .fd-radio:checked::after {
+      content: '';
+      position: absolute;
+      inset: 3px;
+      background: var(--b);
+      border-radius: 50%;
+    }
+
+    /* ============================================================
+       16 - TABLE
+    ============================================================ */
+    .table-wrap { overflow-x: auto; }
+
+    .styled-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.75rem;
+    }
+
+    .styled-table thead tr {
+      background: var(--bg3);
+    }
+
+    .styled-table th {
+      padding: 8px 12px;
+      text-align: left;
+      color: var(--muted);
+      font-weight: normal;
+      letter-spacing: 0.1em;
+      font-size: 0.65rem;
+      text-transform: uppercase;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .styled-table td {
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .styled-table tbody tr:hover {
+      background: rgba(255,255,255,0.03);
+    }
+
+    /* nth-child striping */
+    .styled-table tbody tr:nth-child(even) {
+      background: rgba(255,255,255,0.015);
+    }
+
+    .styled-table tbody tr:nth-child(even):hover {
+      background: rgba(255,255,255,0.05);
+    }
+
+    .cell-num { font-variant-numeric: tabular-nums; text-align: right; color: var(--b); }
+    .cell-pos { color: var(--success, #52ffa0); }
+    .cell-neg { color: var(--c); }
+
+    /* ============================================================
+       17 - SCROLL-DRIVEN ANIMATIONS (nativni CSS)
+    ============================================================ */
+    @supports (animation-timeline: scroll()) {
+      @keyframes reveal-bar {
+        from { opacity: 0; transform: scaleX(0); transform-origin: left; }
+        to   { opacity: 1; transform: scaleX(1); transform-origin: left; }
+      }
+
+      .scroll-reveal {
+        animation: reveal-bar linear;
+        animation-timeline: view();
+        animation-range: entry 0% entry 100%;
+      }
+    }
+
+    /* ============================================================
+       18 - MISC OBSKURNICH CSS
+    ============================================================ */
+
+    /* contain */
+    .contain-box {
+      contain: layout style paint;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      padding: 0.75rem;
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
+
+    /* isolation */
+    .isolation-wrap {
+      isolation: isolate;
+      background: linear-gradient(to right, var(--a), var(--b));
+      padding: 0.5rem;
+    }
+
+    /* aspect-ratio */
+    .aspect-demos {
+      display: flex;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+
+    .aspect-box {
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.6rem;
+      color: var(--muted);
+      width: 80px;
+    }
+
+    .ar-1x1  { aspect-ratio: 1 / 1; }
+    .ar-16x9 { aspect-ratio: 16 / 9; width: 120px; }
+    .ar-4x3  { aspect-ratio: 4 / 3; }
+    .ar-9x16 { aspect-ratio: 9 / 16; width: 40px; }
+    .ar-gold { aspect-ratio: 1.618 / 1; width: 100px; }
+
+    /* object-fit */
+    .obj-fit-wrap {
+      display: flex;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+
+    .obj-item {
+      width: 100px;
+      height: 80px;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      overflow: hidden;
+      position: relative;
+    }
+
+    .obj-inner {
+      width: 100%; height: 100%;
+      background: linear-gradient(135deg, var(--a), var(--b), var(--c));
+      object-fit: cover;
+    }
+
+    .obj-stretch .obj-inner { object-fit: fill; transform: scaleX(1.5) scaleY(0.6); }
+    .obj-cover   .obj-inner { object-fit: cover; }
+    .obj-contain .obj-inner { object-fit: contain; background-color: var(--bg3); }
+
+    /* pointer-events */
+    .ptr-none { pointer-events: none; opacity: 0.4; cursor: not-allowed; }
+
+    /* user-select */
+    .us-none   { user-select: none; }
+    .us-all    { user-select: all; }
+    .us-text   { user-select: text; }
+
+    /* will-change */
+    .will-change-gpu {
+      will-change: transform;
+      animation: spin 4s linear infinite;
+    }
+
+    /* shape-outside (ve floatu) */
+    .float-shape-wrap { min-height: 120px; font-size: 0.75rem; color: var(--muted); line-height: 1.6; }
+    .float-circle {
+      float: left;
+      width: 80px;
+      height: 80px;
+      shape-outside: circle(50%);
+      background: radial-gradient(circle, var(--a), var(--b));
+      border-radius: 50%;
+      margin-right: 1rem;
+    }
+
+    /* counter */
+    .counter-list {
+      counter-reset: my-counter;
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .counter-list li {
+      counter-increment: my-counter;
+      padding: 4px 8px;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
+
+    .counter-list li::before {
+      content: counter(my-counter, decimal-leading-zero) ' ';
+      color: var(--a);
+      font-weight: 700;
+      margin-right: 8px;
+    }
+
+    /* env() */
+    .env-box {
+      padding-top: env(safe-area-inset-top, 0px);
+      padding-bottom: env(safe-area-inset-bottom, 0px);
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      padding-left: 0.75rem;
+      padding-right: 0.75rem;
+      font-size: 0.75rem;
+      color: var(--muted);
+      min-height: 40px;
+      display: flex;
+      align-items: center;
+    }
+
+    /* overscroll-behavior */
+    .overscroll-box {
+      height: 100px;
+      overflow-y: scroll;
+      overscroll-behavior-y: contain;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      padding: 8px;
+      font-size: 0.75rem;
+      color: var(--muted);
+      line-height: 2;
+      scrollbar-width: thin;
+    }
+
+    /* accent-color */
+    .accent-demo {
+      accent-color: var(--a);
+      display: flex;
+      gap: 1rem;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    /* color-scheme */
+    .color-scheme-demo {
+      color-scheme: dark;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      padding: 0.5rem;
+      font-size: 0.75rem;
+    }
+
+    /* ============================================================
+       19 - CSS CUSTOM PROPERTIES ADVANCED
+    ============================================================ */
+    .token-demo {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+      gap: 4px;
+    }
+
+    .tok {
+      height: 40px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.55rem;
+      color: #000;
+    }
+
+    /* ============================================================
+       20 - JS INTERACTIVITY SECTION
+    ============================================================ */
+    #canvas-section canvas {
+      display: block;
+      width: 100%;
+      height: 200px;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+    }
+
+    .js-controls {
+      display: flex;
+      gap: 0.75rem;
+      margin-top: 0.75rem;
+      flex-wrap: wrap;
+    }
+
+    .js-btn {
+      padding: 6px 14px;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-family: inherit;
+      font-size: 0.75rem;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .js-btn:hover { border-color: var(--a); color: var(--a); }
+    .js-btn:active { transform: scale(0.97); }
+    .js-btn.active { border-color: var(--b); color: var(--b); background: rgba(106,255,219,0.08); }
+
+    .event-log {
+      height: 120px;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      overflow-y: auto;
+      padding: 8px;
+      font-size: 0.7rem;
+      color: var(--muted);
+      line-height: 1.8;
+      scrollbar-width: thin;
+    }
+
+    .log-entry { border-bottom: 1px solid rgba(255,255,255,0.04); padding: 2px 0; }
+    .log-ts    { color: var(--muted); margin-right: 8px; }
+    .log-evt   { color: var(--b); }
+    .log-val   { color: var(--a); }
+
+    .drag-zone {
+      height: 80px;
+      border: 2px dashed var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.75rem;
+      color: var(--muted);
+      transition: border-color 0.15s, background 0.15s;
+      cursor: grab;
+    }
+
+    .drag-zone.over {
+      border-color: var(--a);
+      background: rgba(232,255,106,0.05);
+      color: var(--a);
+    }
+
+    .draggable {
+      display: inline-block;
+      padding: 6px 14px;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      font-size: 0.75rem;
+      cursor: grab;
+      user-select: none;
+    }
+
+    .draggable:active { cursor: grabbing; opacity: 0.6; }
+
+    /* ============================================================
+       RESIZE OBSERVER DEMO
+    ============================================================ */
+    .resize-demo {
+      resize: horizontal;
+      overflow: hidden;
+      min-width: 200px;
+      max-width: 100%;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      padding: 1rem;
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
+
+    #resize-info { color: var(--b); font-size: 0.7rem; margin-top: 4px; }
+
+    /* ============================================================
+       INTERSECTION OBSERVER
+    ============================================================ */
+    .io-row {
+      display: flex;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+
+    .io-box {
+      width: 100px;
+      height: 60px;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.65rem;
+      color: var(--muted);
+      transition: border-color 0.3s, background 0.3s;
+    }
+
+    .io-box.visible {
+      border-color: var(--a);
+      background: rgba(232,255,106,0.05);
+      color: var(--a);
+    }
+
+    /* ============================================================
+       CANVAS
+    ============================================================ */
+    #main-canvas {
+      width: 100%;
+      height: 200px;
+      display: block;
+      cursor: crosshair;
+    }
+
+    /* ============================================================
+       INPUT EVENTS
+    ============================================================ */
+    .input-events-demo {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+    }
+
+    .ied-box {
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      padding: 1rem;
+      font-size: 0.75rem;
+      color: var(--muted);
+      min-height: 80px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .ied-val { color: var(--a); font-variant-numeric: tabular-nums; }
+
+    /* ============================================================
+       MISC
+    ============================================================ */
+    .marquee-wrap {
+      overflow: hidden;
+      white-space: nowrap;
+      border: 1px solid var(--border);
+      background: var(--bg3);
+      height: 36px;
+      display: flex;
+      align-items: center;
+    }
+
+    .marquee-inner {
+      display: inline-block;
+      animation: marquee 12s linear infinite;
+      font-size: 0.75rem;
+      color: var(--muted);
+      padding-left: 100%;
+    }
+
+    .marquee-inner span { color: var(--a); margin: 0 16px; }
+
+    .typewriter-line {
+      overflow: hidden;
+      white-space: nowrap;
+      border-right: 2px solid var(--a);
+      font-size: 0.875rem;
+      color: var(--a);
+      width: 0;
+      animation: typewriter 3s steps(40) 0.5s forwards, blink 0.75s step-end infinite;
+    }
+
+    /* ============================================================
+       MEDIA QUERIES
+    ============================================================ */
+    @media (max-width: 768px) {
+      .page { grid-template-columns: 1fr; }
+      #sidebar { display: none; }
+      .form-demo { grid-template-columns: 1fr; }
+      .overflow-demos { grid-template-columns: 1fr; }
+      .input-events-demo { grid-template-columns: 1fr; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+
+    @media print {
+      body { background: white; color: black; }
+      #sidebar, #header, .anim-grid { display: none; }
+    }
+
+    /* container queries (pokud je podporovano) */
+    .cq-container {
+      container-type: inline-size;
+      container-name: card-cq;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      padding: 1rem;
+      resize: horizontal;
+      overflow: hidden;
+      min-width: 200px;
+      max-width: 100%;
+    }
+
+    @container card-cq (min-width: 400px) {
+      .cq-inner {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0.5rem;
+      }
+    }
+
+    .cq-item {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      padding: 0.5rem;
+      font-size: 0.7rem;
+      color: var(--muted);
+    }
+
+    /* @layer */
+    @layer base, components, utilities;
+
+    @layer base {
+      .layer-demo { color: var(--muted); }
+    }
+
+    @layer components {
+      .layer-demo { font-weight: 500; }
+    }
+
+    @layer utilities {
+      .layer-demo { font-size: 0.8rem; letter-spacing: 0.05em; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- HEADER -->
+  <div id="header">
+    <span class="logo">CSS / JS Engine Test Suite</span>
+    <span id="fps-counter">FPS: --</span>
+  </div>
+
+  <div class="page">
+
+    <!-- SIDEBAR -->
+    <nav id="sidebar">
+      <div class="nav-section">
+        <div class="nav-section-title">Layout</div>
+        <a class="nav-link" href="#s-boxmodel">01 Box model</a>
+        <a class="nav-link" href="#s-flexbox">02 Flexbox</a>
+        <a class="nav-link" href="#s-grid">03 Grid</a>
+        <a class="nav-link" href="#s-position">13 Position + z-index</a>
+      </div>
+      <div class="nav-section">
+        <div class="nav-section-title">Vizualni</div>
+        <a class="nav-link" href="#s-transforms">04 Transforms</a>
+        <a class="nav-link" href="#s-animations">05 Keyframe animace</a>
+        <a class="nav-link" href="#s-gradients">07 Gradienty</a>
+        <a class="nav-link" href="#s-filters">08 Filtry + blend</a>
+        <a class="nav-link" href="#s-clip">09 Clip-path</a>
+      </div>
+      <div class="nav-section">
+        <div class="nav-section-title">CSS</div>
+        <a class="nav-link" href="#s-pseudo">06 Pseudo el.</a>
+        <a class="nav-link" href="#s-calc">10 calc / clamp</a>
+        <a class="nav-link" href="#s-overflow">11 Scroll + overflow</a>
+        <a class="nav-link" href="#s-text">12 Typografie</a>
+        <a class="nav-link" href="#s-svg">14 SVG inline</a>
+        <a class="nav-link" href="#s-forms">15 Formulare</a>
+        <a class="nav-link" href="#s-table">16 Tabulka</a>
+        <a class="nav-link" href="#s-misc">18 Obskurni CSS</a>
+        <a class="nav-link" href="#s-modern">19 Modern CSS</a>
+      </div>
+      <div class="nav-section">
+        <div class="nav-section-title">JavaScript</div>
+        <a class="nav-link" href="#s-canvas">Canvas 2D</a>
+        <a class="nav-link" href="#s-events">Events</a>
+        <a class="nav-link" href="#s-observers">Observers</a>
+        <a class="nav-link" href="#s-drag">Drag & Drop</a>
+      </div>
+    </nav>
+
+    <!-- MAIN -->
+    <main id="main">
+
+      <!-- 01 BOX MODEL -->
+      <div class="test-section" id="s-boxmodel">
+        <div class="test-header">
+          <span class="test-title">01 - Box model</span>
+          <span class="test-tag">width / height / border-radius</span>
+        </div>
+        <div class="test-body">
+          <p style="font-size:0.65rem; color:var(--muted); margin-bottom:1rem;">Ruzne rozmery + tvarove border-radius. Hover = scale.</p>
+          <div class="box-model-demo">
+            <div class="box box-1">40</div>
+            <div class="box box-2">60</div>
+            <div class="box box-3">80</div>
+            <div class="box box-4">100</div>
+            <div class="box box-5">120</div>
+            <div class="box box-6">160x60</div>
+            <div class="box box-7" style="height:80px;">60x80</div>
+            <div class="box box-3 box-r1">circle</div>
+            <div class="box box-3 box-r2">half</div>
+            <div class="box box-3 box-r3">blob</div>
+            <div class="box box-3 box-r4">4px</div>
+            <div class="box box-3 box-r5">asym</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 02 FLEXBOX -->
+      <div class="test-section" id="s-flexbox">
+        <div class="test-header">
+          <span class="test-title">02 - Flexbox</span>
+          <span class="test-tag">flex-grow / align-self / wrap</span>
+        </div>
+        <div class="test-body">
+          <div class="flex-demos">
+            <div class="grid-label">flex-grow: 1 / 2 / 3</div>
+            <div class="flex-row">
+              <div class="flex-item fg1">grow:1</div>
+              <div class="flex-item fg2">grow:2</div>
+              <div class="flex-item fg3">grow:3</div>
+            </div>
+
+            <div class="grid-label">align-self</div>
+            <div class="flex-row" style="height:80px;">
+              <div class="flex-item as-start">start</div>
+              <div class="flex-item as-end">end</div>
+              <div class="flex-item as-center">center</div>
+              <div class="flex-item as-stretch">stretch</div>
+              <div class="flex-item as-baseline">baseline</div>
+            </div>
+
+            <div class="grid-label">flex-direction: row-reverse</div>
+            <div class="flex-row" style="flex-direction: row-reverse;">
+              <div class="flex-item">A</div>
+              <div class="flex-item">B</div>
+              <div class="flex-item">C</div>
+              <div class="flex-item">D</div>
+            </div>
+
+            <div class="grid-label">flex-wrap + justify-content: space-between</div>
+            <div class="flex-row wrap-demo" style="justify-content: space-between;">
+              <div class="flex-item">1</div><div class="flex-item">2</div>
+              <div class="flex-item">3</div><div class="flex-item">4</div>
+              <div class="flex-item">5</div><div class="flex-item">6</div>
+              <div class="flex-item">7</div><div class="flex-item">8</div>
+            </div>
+
+            <div class="grid-label">gap + flex-shrink: 0</div>
+            <div class="flex-row" style="gap: 16px; overflow-x: auto;">
+              <div class="flex-item" style="flex-shrink:0; width:80px;">shrink:0</div>
+              <div class="flex-item" style="flex-shrink:0; width:80px;">shrink:0</div>
+              <div class="flex-item" style="flex-shrink:0; width:80px;">shrink:0</div>
+              <div class="flex-item" style="flex-shrink:0; width:80px;">shrink:0</div>
+              <div class="flex-item" style="flex-shrink:0; width:80px;">shrink:0</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 03 GRID -->
+      <div class="test-section" id="s-grid">
+        <div class="test-header">
+          <span class="test-title">03 - CSS Grid</span>
+          <span class="test-tag">template-areas / dense / auto-fill</span>
+        </div>
+        <div class="test-body">
+          <div class="grid-demos">
+            <div class="grid-label">auto-fill minmax(80px, 1fr)</div>
+            <div class="grid-auto">
+              <div class="g-item">A</div><div class="g-item">B</div>
+              <div class="g-item">C</div><div class="g-item">D</div>
+              <div class="g-item">E</div><div class="g-item">F</div>
+            </div>
+
+            <div class="grid-label">template-columns: 1fr 2fr 1fr</div>
+            <div class="grid-fixed">
+              <div class="g-item">1fr</div>
+              <div class="g-item">2fr</div>
+              <div class="g-item">1fr</div>
+            </div>
+
+            <div class="grid-label">template-areas (header / sidebar / content / aside / footer)</div>
+            <div class="grid-areas">
+              <div class="g-item ga-header">header</div>
+              <div class="g-item ga-sidebar">sidebar</div>
+              <div class="g-item ga-content">content</div>
+              <div class="g-item ga-aside">aside</div>
+              <div class="g-item ga-footer">footer</div>
+            </div>
+
+            <div class="grid-label">auto-flow: dense + span</div>
+            <div class="grid-dense">
+              <div class="g-item">1</div>
+              <div class="g-item gd-wide">wide (span 3)</div>
+              <div class="g-item">3</div>
+              <div class="g-item gd-tall">tall (span 2)</div>
+              <div class="g-item gd-big">big (2x2)</div>
+              <div class="g-item">6</div>
+              <div class="g-item">7</div>
+              <div class="g-item">8</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 04 TRANSFORMS -->
+      <div class="test-section" id="s-transforms">
+        <div class="test-header">
+          <span class="test-title">04 - Transforms</span>
+          <span class="test-tag">hover pro zobrazeni</span>
+        </div>
+        <div class="test-body">
+          <div class="transform-grid">
+            <div class="tf-box rotate">rotate(45deg)</div>
+            <div class="tf-box skew">skewX+Y</div>
+            <div class="tf-box scale">scale(1.3)</div>
+            <div class="tf-box translate">translate X+Y</div>
+            <div class="tf-box matrix">matrix()</div>
+            <div class="tf-box perspective-3d">perspective rotateY</div>
+            <div class="tf-box flip-x">scaleX(-1)</div>
+            <div class="tf-box flip-y">scaleY(-1)</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 05 ANIMATIONS -->
+      <div class="test-section" id="s-animations">
+        <div class="test-header">
+          <span class="test-title">05 - Keyframe animace</span>
+          <span class="test-tag">timing / delay / stagger / orbit</span>
+        </div>
+        <div class="test-body">
+          <div class="anim-grid">
+            <div class="anim-box"><div class="a-spin" style="width:32px;height:32px;border:2px solid var(--a);display:flex;align-items:center;justify-content:center;font-size:0.6rem;color:var(--a);">spin</div></div>
+            <div class="anim-box"><div class="a-pulse" style="width:40px;height:40px;background:rgba(232,255,106,0.2);border:1px solid var(--a);display:flex;align-items:center;justify-content:center;font-size:0.6rem;color:var(--a);">pulse</div></div>
+            <div class="anim-box a-orbit-wrap"><div class="a-orbit-center"></div><div class="a-orbit-planet"></div></div>
+            <div class="anim-box" style="display:flex;align-items:center;justify-content:center;"><div style="font-size:1.5rem;" class="a-bounce">&#8593;</div></div>
+            <div class="anim-box" style="display:flex;align-items:center;justify-content:center;"><div style="font-size:0.8rem;color:var(--c);" class="a-shake">SHAKE</div></div>
+            <div class="anim-box" style="display:flex;align-items:center;justify-content:center;"><div style="font-size:0.8rem;color:var(--b);" class="a-blink">BLINK</div></div>
+            <div class="anim-box a-color" style="display:flex;align-items:center;justify-content:center;font-size:0.6rem;color:var(--muted);">color cycle</div>
+            <div class="anim-box" style="display:flex;align-items:center;justify-content:center;"><div class="will-change-gpu" style="width:32px;height:32px;border:2px solid var(--d);display:flex;align-items:center;justify-content:center;font-size:0.5rem;color:var(--d);">GPU</div></div>
+          </div>
+          <div style="margin-top:1rem;">
+            <div class="grid-label" style="margin-bottom:8px;">stagger (animation-delay per nth-child)</div>
+            <div class="stagger-row">
+              <div class="stagger-item"></div><div class="stagger-item"></div>
+              <div class="stagger-item"></div><div class="stagger-item"></div>
+              <div class="stagger-item"></div><div class="stagger-item"></div>
+              <div class="stagger-item"></div><div class="stagger-item"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 06 PSEUDO -->
+      <div class="test-section" id="s-pseudo">
+        <div class="test-header">
+          <span class="test-title">06 - Pseudo-elementy a selektory</span>
+          <span class="test-tag">::before ::after :nth-child :not ::selection</span>
+        </div>
+        <div class="test-body">
+          <div class="pseudo-demo">
+            <div class="grid-label">::before content + ::after attr(data-label)</div>
+            <div style="padding-left: 2rem;">
+              <div class="before-after-item" data-label="::after">Prvni polozka</div>
+              <div style="height:8px;"></div>
+              <div class="before-after-item" data-label="attr">Druha polozka</div>
+            </div>
+
+            <div class="grid-label">:nth-child(odd) + :nth-child(3n) + :nth-child(4n+1) + :not(:nth-child(5))</div>
+            <div class="nth-list">
+              <span>1</span><span>2</span><span>3</span><span>4</span>
+              <span>5</span><span>6</span><span>7</span><span>8</span>
+              <span>9</span><span>10</span><span>11</span><span>12</span>
+            </div>
+
+            <div class="grid-label">::selection (oznac text)</div>
+            <div class="selection-demo">Oznac tento text myssi a uvidis vlastni barvu selectu. Lorem ipsum dolor sit amet.</div>
+
+            <div class="grid-label">:focus-visible (Tab pro navigaci)</div>
+            <div class="focus-demo">
+              <button class="focus-btn">Tlacitko A</button>
+              <button class="focus-btn">Tlacitko B</button>
+              <button class="focus-btn">Tlacitko C</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 07 GRADIENTS -->
+      <div class="test-section" id="s-gradients">
+        <div class="test-header">
+          <span class="test-title">07 - Gradienty</span>
+          <span class="test-tag">linear / radial / conic / repeating / animated</span>
+        </div>
+        <div class="test-body">
+          <div class="gradient-grid">
+            <div class="grad-box g-linear-1">linear 135deg</div>
+            <div class="grad-box g-linear-2">linear 3-stop</div>
+            <div class="grad-box g-linear-3">fade to bg</div>
+            <div class="grad-box g-radial-1">radial circle</div>
+            <div class="grad-box g-radial-2">radial ellipse</div>
+            <div class="grad-box g-conic-1">conic</div>
+            <div class="grad-box g-conic-2">conic quadrant</div>
+            <div class="grad-box g-multi">multi-layer</div>
+            <div class="grad-box g-anim">animated</div>
+            <div class="grad-box g-hard-stop">hard stop</div>
+            <div class="grad-box g-repeating">repeating-linear</div>
+            <div class="grad-box g-repeating-r" style="color:var(--d);">repeating-radial</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 08 FILTERS -->
+      <div class="test-section" id="s-filters">
+        <div class="test-header">
+          <span class="test-title">08 - CSS filter + mix-blend-mode</span>
+          <span class="test-tag">blur / contrast / hue-rotate / drop-shadow</span>
+        </div>
+        <div class="test-body">
+          <div class="grid-label" style="margin-bottom:0.5rem;">filter()</div>
+          <div class="filter-grid">
+            <div class="filter-box f-none">none</div>
+            <div class="filter-box f-blur">blur(4px)</div>
+            <div class="filter-box f-brightness">brightness</div>
+            <div class="filter-box f-contrast">contrast</div>
+            <div class="filter-box f-saturate">saturate(0)</div>
+            <div class="filter-box f-hue">hue-rotate</div>
+            <div class="filter-box f-invert">invert(1)</div>
+            <div class="filter-box f-sepia">sepia(1)</div>
+            <div class="filter-box f-drop-shad">drop-shadow</div>
+            <div class="filter-box f-multi">multi</div>
+          </div>
+          <div class="grid-label" style="margin-top:1rem; margin-bottom:0.5rem;">mix-blend-mode</div>
+          <div style="display:grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 0.75rem;">
+            <div class="blend-wrap"><div class="blend-overlay blend-multiply"></div><span class="blend-text">multiply</span></div>
+            <div class="blend-wrap"><div class="blend-overlay blend-screen"></div><span class="blend-text">screen</span></div>
+            <div class="blend-wrap"><div class="blend-overlay blend-overlay-bm"></div><span class="blend-text">overlay</span></div>
+            <div class="blend-wrap"><div class="blend-overlay blend-difference"></div><span class="blend-text">difference</span></div>
+            <div class="blend-wrap"><div class="blend-overlay blend-exclusion"></div><span class="blend-text">exclusion</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 09 CLIP-PATH -->
+      <div class="test-section" id="s-clip">
+        <div class="test-header">
+          <span class="test-title">09 - clip-path</span>
+          <span class="test-tag">circle / ellipse / polygon / path</span>
+        </div>
+        <div class="test-body">
+          <div class="clip-grid">
+            <div class="clip-box cp-circle">circle</div>
+            <div class="clip-box cp-ellipse">ellipse</div>
+            <div class="clip-box cp-triangle">triangle</div>
+            <div class="clip-box cp-diamond">diamond</div>
+            <div class="clip-box cp-star">star</div>
+            <div class="clip-box cp-arrow">arrow</div>
+            <div class="clip-box cp-chevron">chevron</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 10 CALC -->
+      <div class="test-section" id="s-calc">
+        <div class="test-header">
+          <span class="test-title">10 - calc() / clamp() / min() / max()</span>
+          <span class="test-tag">CSS math functions</span>
+        </div>
+        <div class="test-body">
+          <div class="calc-demo">
+            <div class="calc-bar cb1">calc(100% - 40px)</div>
+            <div class="calc-bar cb2">calc(50% + 20px)</div>
+            <div class="calc-bar cb3">calc(33.33% - 8px)</div>
+            <div class="calc-bar cb4">clamp(80px, 30%, 200px)</div>
+            <div class="calc-bar cb5">min(60%, 240px)</div>
+            <div class="calc-bar cb6">max(100px, 25%)</div>
+          </div>
+          <div style="margin-top:1rem;">
+            <div class="grid-label" style="margin-bottom:0.5rem;">grid s CSS promennou --cols: 4</div>
+            <div class="var-grid">
+              <div class="var-item">A</div><div class="var-item">B</div>
+              <div class="var-item">C</div><div class="var-item">D</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 11 SCROLL -->
+      <div class="test-section" id="s-overflow">
+        <div class="test-header">
+          <span class="test-title">11 - Overflow + Scroll</span>
+          <span class="test-tag">scroll-snap / custom scrollbar / overscroll</span>
+        </div>
+        <div class="test-body">
+          <div class="grid-label" style="margin-bottom:0.5rem;">scroll-snap (horizontalni)</div>
+          <div class="snap-container">
+            <div class="snap-item">snap 1</div><div class="snap-item">snap 2</div>
+            <div class="snap-item">snap 3</div><div class="snap-item">snap 4</div>
+            <div class="snap-item">snap 5</div><div class="snap-item">snap 6</div>
+          </div>
+          <div style="margin-top:1rem;">
+            <div class="grid-label" style="margin-bottom:0.5rem;">overflow: scroll s custom scrollbarem</div>
+            <div class="overflow-box ov-scroll">
+              Lorem ipsum dolor sit amet consectetur adipisicing elit. Quisquam, voluptatem.
+              Nulla facilis dolore blanditiis voluptates veniam enim sit reiciendis.
+              Voluptate consequuntur aperiam nam temporibus repellat vitae exercitationem sunt.
+              Nesciunt fuga cumque repudiandae quasi dolore quis natus corporis facere quia.
+            </div>
+          </div>
+          <div style="margin-top:1rem;">
+            <div class="grid-label" style="margin-bottom:0.5rem;">overscroll-behavior: contain</div>
+            <div class="overscroll-box">
+              radek 1<br>radek 2<br>radek 3<br>radek 4<br>radek 5<br>
+              radek 6<br>radek 7<br>radek 8<br>radek 9<br>radek 10
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 12 TYPOGRAFIE -->
+      <div class="test-section" id="s-text">
+        <div class="test-header">
+          <span class="test-title">12 - Typografie</span>
+          <span class="test-tag">writing-mode / text-shadow / columns / decoration</span>
+        </div>
+        <div class="test-body">
+          <div class="text-demos">
+            <div class="grid-label">text-shadow</div>
+            <div class="td-row tx-shadow-1" style="font-size:1.1rem;">Glow efekt (neon)</div>
+            <div class="td-row tx-shadow-2" style="font-size:1.1rem;">3D shadow (offset)</div>
+            <div class="td-row tx-shadow-3" style="font-size:1.1rem;">Multi-layer glow</div>
+
+            <div class="grid-label">text-decoration</div>
+            <div class="td-row">
+              <span class="tx-underline">wavy underline</span> &nbsp;
+              <span class="tx-overline">double overline</span> &nbsp;
+              <span class="tx-through">line-through</span>
+            </div>
+
+            <div class="grid-label">writing-mode</div>
+            <div class="writing-wrap td-row" style="align-items:flex-start;">
+              <span class="wr-horizontal">horizontal-tb</span>
+              <span class="wr-vertical-rl">vertical-rl text</span>
+              <span class="wr-vertical-lr">vertical-lr text</span>
+            </div>
+
+            <div class="grid-label">column-count: 3</div>
+            <div class="td-row">
+              <div class="tx-columns">
+                Lorem ipsum dolor sit amet consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam quis nostrud exercitation ullamco laboris.
+              </div>
+            </div>
+
+            <div class="grid-label">typewriter (CSS only)</div>
+            <div class="td-row"><div class="typewriter-line">Hello, rendering engine!</div></div>
+
+            <div class="grid-label">marquee (CSS animation)</div>
+            <div class="marquee-wrap">
+              <div class="marquee-inner">
+                <span>CSS</span> border-radius <span>clip-path</span> mix-blend-mode <span>grid-template-areas</span> conic-gradient <span>scroll-snap</span> backdrop-filter <span>@container</span> animation-timeline
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 13 POSITION -->
+      <div class="test-section" id="s-position">
+        <div class="test-header">
+          <span class="test-title">13 - Position + z-index</span>
+          <span class="test-tag">absolute / transform centering / stacking</span>
+        </div>
+        <div class="test-body">
+          <div class="position-demo">
+            <div class="pos-item pos-tl">top:left</div>
+            <div class="pos-item pos-tr">top:right</div>
+            <div class="pos-item pos-bl">bot:left</div>
+            <div class="pos-item pos-br">bot:right</div>
+            <div class="pos-item pos-ctr">center (translate -50%)</div>
+            <div class="pos-z1">z:1</div>
+            <div class="pos-z2">z:2</div>
+            <div class="pos-z3">z:3</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 14 SVG -->
+      <div class="test-section" id="s-svg">
+        <div class="test-header">
+          <span class="test-title">14 - Inline SVG</span>
+          <span class="test-tag">stroke-dashoffset / viewBox / foreignObject</span>
+        </div>
+        <div class="test-body">
+          <div class="svg-grid">
+            <!-- Animated stroke -->
+            <div class="svg-box">
+              <svg viewBox="0 0 100 100" width="100" height="100">
+                <circle cx="50" cy="50" r="40" fill="none" stroke="rgba(232,255,106,0.2)" stroke-width="4"/>
+                <circle cx="50" cy="50" r="40" fill="none" stroke="var(--a)" stroke-width="4"
+                  stroke-dasharray="251" stroke-dashoffset="251" stroke-linecap="round"
+                  transform="rotate(-90 50 50)">
+                  <animate attributeName="stroke-dashoffset" from="251" to="0" dur="2s" repeatCount="indefinite"/>
+                </circle>
+                <text x="50" y="55" text-anchor="middle" fill="var(--a)" font-size="12" font-family="monospace">75%</text>
+              </svg>
+            </div>
+
+            <!-- Path morphing -->
+            <div class="svg-box">
+              <svg viewBox="0 0 100 100" width="100" height="100">
+                <path fill="none" stroke="var(--b)" stroke-width="3" stroke-linecap="round">
+                  <animate attributeName="d" dur="3s" repeatCount="indefinite" values="
+                    M10,50 C10,20 90,20 90,50;
+                    M10,50 C10,80 90,80 90,50;
+                    M10,50 C10,20 90,20 90,50"
+                  />
+                </path>
+              </svg>
+            </div>
+
+            <!-- Sine wave -->
+            <div class="svg-box">
+              <svg viewBox="0 0 200 80" width="160" height="80">
+                <polyline
+                  id="wave-poly"
+                  fill="none"
+                  stroke="var(--c)"
+                  stroke-width="2"
+                  points=""/>
+              </svg>
+            </div>
+
+            <!-- Spinning gear -->
+            <div class="svg-box">
+              <svg viewBox="0 0 100 100" width="80" height="80">
+                <g transform="translate(50,50)">
+                  <animateTransform attributeName="transform" type="rotate" from="0 0 0" to="360 0 0" dur="4s" repeatCount="indefinite"/>
+                  <path d="M-8,-30 L8,-30 L10,-18 C14,-17 18,-15 21,-12 L33,-15 L40,-5 L30,5 C31,9 31,13 30,17 L40,27 L33,37 L21,34 C18,37 14,39 10,40 L8,52 L-8,52 L-10,40 C-14,39 -18,37 -21,34 L-33,37 L-40,27 L-30,17 C-31,13 -31,9 -30,5 L-40,-5 L-33,-15 L-21,-12 C-18,-15 -14,-17 -10,-18 Z"
+                    fill="none" stroke="var(--d)" stroke-width="2"/>
+                  <circle cx="0" cy="11" r="8" fill="none" stroke="var(--d)" stroke-width="2"/>
+                </g>
+              </svg>
+            </div>
+
+            <!-- SVG gradient + mask -->
+            <div class="svg-box">
+              <svg viewBox="0 0 160 80" width="160" height="80">
+                <defs>
+                  <linearGradient id="svg-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stop-color="#e8ff6a"/>
+                    <stop offset="50%" stop-color="#6affdb"/>
+                    <stop offset="100%" stop-color="#ff6a9b"/>
+                  </linearGradient>
+                  <mask id="svg-mask">
+                    <rect width="160" height="80" fill="white"/>
+                    <text x="80" y="55" text-anchor="middle" font-size="36" font-family="monospace" font-weight="bold" fill="black">MASK</text>
+                  </mask>
+                </defs>
+                <rect width="160" height="80" fill="url(#svg-grad)" mask="url(#svg-mask)"/>
+              </svg>
+            </div>
+
+            <!-- foreignObject -->
+            <div class="svg-box">
+              <svg viewBox="0 0 160 80" width="160" height="80">
+                <rect width="160" height="80" fill="var(--bg)" rx="0"/>
+                <foreignObject x="8" y="8" width="144" height="64">
+                  <div xmlns="http://www.w3.org/1999/xhtml" style="font-size:10px;color:var(--b);font-family:monospace;line-height:1.6;padding:4px;border:1px solid rgba(106,255,219,0.3);">
+                    &lt;foreignObject&gt;<br>
+                    &nbsp;&nbsp;HTML inside SVG!<br>
+                    &lt;/foreignObject&gt;
+                  </div>
+                </foreignObject>
+              </svg>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 15 FORMS -->
+      <div class="test-section" id="s-forms">
+        <div class="test-header">
+          <span class="test-title">15 - Formulare</span>
+          <span class="test-tag">:valid :invalid :placeholder-shown / custom checkbox / range</span>
+        </div>
+        <div class="test-body">
+          <div class="form-demo">
+            <div class="fd-group">
+              <label class="fd-label">TEXT (required)</label>
+              <input type="text" class="fd-input" placeholder="placeholder..." required />
+            </div>
+            <div class="fd-group">
+              <label class="fd-label">EMAIL</label>
+              <input type="email" class="fd-input" placeholder="test@example.com" />
+            </div>
+            <div class="fd-group">
+              <label class="fd-label">NUMBER (min 0 max 100)</label>
+              <input type="number" class="fd-input" min="0" max="100" placeholder="0-100" />
+            </div>
+            <div class="fd-group">
+              <label class="fd-label">SELECT</label>
+              <select class="fd-select">
+                <option>-- vyber --</option>
+                <option>Moznost A</option>
+                <option>Moznost B</option>
+                <option>Moznost C</option>
+              </select>
+            </div>
+            <div class="fd-group full">
+              <label class="fd-label">RANGE: <span id="range-val">50</span></label>
+              <input type="range" class="fd-range" min="0" max="100" value="50" id="range-input"
+                oninput="document.getElementById('range-val').textContent=this.value" />
+            </div>
+            <div class="fd-group full">
+              <label class="fd-label">TEXTAREA</label>
+              <textarea class="fd-textarea" placeholder="Text..."></textarea>
+            </div>
+            <div class="fd-group" style="justify-content:center;">
+              <label class="fd-label">CHECKBOXY</label>
+              <div style="display:flex; flex-direction:column; gap:8px; margin-top:4px;">
+                <label class="fd-checkbox-wrap">
+                  <input type="checkbox" class="fd-checkbox" checked> Checkbox A
+                </label>
+                <label class="fd-checkbox-wrap">
+                  <input type="checkbox" class="fd-checkbox"> Checkbox B
+                </label>
+              </div>
+            </div>
+            <div class="fd-group" style="justify-content:center;">
+              <label class="fd-label">RADIO</label>
+              <div style="display:flex; flex-direction:column; gap:8px; margin-top:4px;">
+                <label class="fd-checkbox-wrap">
+                  <input type="radio" name="r" class="fd-radio" checked> Radio A
+                </label>
+                <label class="fd-checkbox-wrap">
+                  <input type="radio" name="r" class="fd-radio"> Radio B
+                </label>
+              </div>
+            </div>
+            <div class="fd-group full">
+              <label class="fd-label">accent-color</label>
+              <div class="accent-demo">
+                <input type="checkbox" checked>
+                <input type="radio" checked>
+                <input type="range" value="60">
+                <progress value="70" max="100" style="width:120px;"></progress>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 16 TABLE -->
+      <div class="test-section" id="s-table">
+        <div class="test-header">
+          <span class="test-title">16 - Tabulka</span>
+          <span class="test-tag">nth-child striping / hover / tabular-nums</span>
+        </div>
+        <div class="test-body">
+          <div class="table-wrap">
+            <table class="styled-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Projekt</th>
+                  <th>Jazyk</th>
+                  <th style="text-align:right;">Radky</th>
+                  <th style="text-align:right;">Zmena</th>
+                  <th>Stav</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr><td>01</td><td>TriEdit v2</td><td>TypeScript</td><td class="cell-num">18 432</td><td class="cell-num cell-pos">+1 240</td><td>active</td></tr>
+                <tr><td>02</td><td>RustWebEngine</td><td>Rust</td><td class="cell-num">7 891</td><td class="cell-num cell-pos">+380</td><td>WIP</td></tr>
+                <tr><td>03</td><td>Voxel Engine</td><td>C#</td><td class="cell-num">24 105</td><td class="cell-num cell-neg">-120</td><td>pause</td></tr>
+                <tr><td>04</td><td>Subnautica Mod</td><td>C#</td><td class="cell-num">5 320</td><td class="cell-num cell-pos">+60</td><td>test</td></tr>
+                <tr><td>05</td><td>Match-3 Game</td><td>TypeScript</td><td class="cell-num">3 200</td><td class="cell-num">0</td><td>done</td></tr>
+                <tr><td>06</td><td>Drawing App</td><td>HTML/CSS</td><td class="cell-num">1 050</td><td class="cell-num cell-pos">+50</td><td>active</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- 18 MISC / OBSKURNI -->
+      <div class="test-section" id="s-misc">
+        <div class="test-header">
+          <span class="test-title">18 - Obskurni CSS</span>
+          <span class="test-tag">shape-outside / counter / contain / aspect-ratio / env()</span>
+        </div>
+        <div class="test-body">
+          <div style="display: flex; flex-direction: column; gap: 1.5rem;">
+
+            <div>
+              <div class="grid-label">shape-outside (float + polygon)</div>
+              <div class="float-shape-wrap">
+                <div class="float-circle"></div>
+                Text obteka kolem kruhoveho float elementu diky shape-outside: circle(50%). Tato vlastnost rika textu jak ma obtokat ne-pravouhle objekty. Lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod.
+              </div>
+            </div>
+
+            <div>
+              <div class="grid-label">CSS counter (decimal-leading-zero)</div>
+              <ol class="counter-list">
+                <li>Prvni polozka</li>
+                <li>Druha polozka</li>
+                <li>Treti polozka</li>
+              </ol>
+            </div>
+
+            <div>
+              <div class="grid-label">aspect-ratio</div>
+              <div class="aspect-demos">
+                <div class="aspect-box ar-1x1">1:1</div>
+                <div class="aspect-box ar-16x9">16:9</div>
+                <div class="aspect-box ar-4x3">4:3</div>
+                <div class="aspect-box ar-9x16">9:16</div>
+                <div class="aspect-box ar-gold">golden</div>
+              </div>
+            </div>
+
+            <div>
+              <div class="grid-label">contain: layout style paint</div>
+              <div class="contain-box">
+                Tento element ma contain: layout style paint. Optimalizuje vykreslovani - zmeny uvnitr neovlivni layout venku.
+              </div>
+            </div>
+
+            <div>
+              <div class="grid-label">env() safe-area-inset</div>
+              <div class="env-box">padding-top: env(safe-area-inset-top, 0px) -- pro notch displeje</div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+
+      <!-- 19 MODERN CSS -->
+      <div class="test-section" id="s-modern">
+        <div class="test-header">
+          <span class="test-title">19 - Modern CSS (2023+)</span>
+          <span class="test-tag">@layer / @container / color-mix / :has()</span>
+        </div>
+        <div class="test-body">
+          <div style="display:flex; flex-direction:column; gap:1.5rem;">
+
+            <div>
+              <div class="grid-label">@container query (tahni za roh pro zmenu layoutu)</div>
+              <div class="cq-container">
+                <div class="cq-inner">
+                  <div class="cq-item">Item A</div>
+                  <div class="cq-item">Item B</div>
+                  <div class="cq-item">Item C</div>
+                  <div class="cq-item">Item D</div>
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <div class="grid-label">@layer (cascade layers)</div>
+              <div style="padding:0.5rem; background:var(--bg3); border:1px solid var(--border);">
+                <span class="layer-demo">Text stylovany pres tri @layer vrstvy: base, components, utilities</span>
+              </div>
+            </div>
+
+            <div>
+              <div class="grid-label">color-mix() (pokud je podporovano)</div>
+              <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                <div style="width:60px;height:40px;background:color-mix(in srgb, var(--a) 50%, var(--b));display:flex;align-items:center;justify-content:center;font-size:0.55rem;color:#000;">a+b</div>
+                <div style="width:60px;height:40px;background:color-mix(in srgb, var(--c) 30%, var(--d));display:flex;align-items:center;justify-content:center;font-size:0.55rem;color:#fff;">c+d 30</div>
+                <div style="width:60px;height:40px;background:color-mix(in hsl, var(--a) 50%, var(--c));display:flex;align-items:center;justify-content:center;font-size:0.55rem;color:#000;">hsl</div>
+                <div style="width:60px;height:40px;background:color-mix(in oklch, var(--b) 50%, var(--d));display:flex;align-items:center;justify-content:center;font-size:0.55rem;color:#fff;">oklch</div>
+              </div>
+            </div>
+
+            <div>
+              <div class="grid-label">:has() selector</div>
+              <style>
+                .has-demo { display:flex; flex-direction:column; gap:6px; }
+                .has-item { padding:6px 10px; background:var(--bg3); border:1px solid var(--border); font-size:0.75rem; color:var(--muted); }
+                .has-item:has(input:checked) { border-color: var(--a); color: var(--a); background: rgba(232,255,106,0.05); }
+              </style>
+              <div class="has-demo">
+                <label class="has-item"><input type="checkbox"> Polozka 1 (border se zmeni kdyz je zaskrtnuto)</label>
+                <label class="has-item"><input type="checkbox" checked> Polozka 2 (jiz zaskrtnuta)</label>
+                <label class="has-item"><input type="checkbox"> Polozka 3</label>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+
+      <!-- CANVAS 2D -->
+      <div class="test-section" id="s-canvas">
+        <div class="test-header">
+          <span class="test-title">Canvas 2D API</span>
+          <span class="test-tag">kresli myssi - particles - beziery</span>
+        </div>
+        <div class="test-body">
+          <canvas id="main-canvas"></canvas>
+          <div class="js-controls">
+            <button class="js-btn active" id="btn-draw" onclick="setMode('draw')">Kreslit</button>
+            <button class="js-btn" id="btn-particles" onclick="setMode('particles')">Particles</button>
+            <button class="js-btn" id="btn-wave" onclick="setMode('wave')">Sine wave</button>
+            <button class="js-btn" id="btn-clear" onclick="clearCanvas()">Vymazat</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- EVENTS LOG -->
+      <div class="test-section" id="s-events">
+        <div class="test-header">
+          <span class="test-title">JS Events</span>
+          <span class="test-tag">mouse / keyboard / pointer / wheel / clipboard</span>
+        </div>
+        <div class="test-body">
+          <div class="input-events-demo">
+            <div class="ied-box" id="mouse-box"
+              onmousemove="logEvt('mousemove', 'x:'+event.offsetX+' y:'+event.offsetY)"
+              onmouseenter="logEvt('mouseenter', '')"
+              onmouseleave="logEvt('mouseleave', '')"
+              onclick="logEvt('click', 'btn:'+event.button)"
+              oncontextmenu="event.preventDefault(); logEvt('contextmenu', '')"
+              onwheel="logEvt('wheel', 'dy:'+Math.round(event.deltaY))"
+            >
+              <span style="color:var(--b);font-size:0.65rem;letter-spacing:0.1em;">MOUSE ZONE</span>
+              <span>Pohybuj a klikej myssi</span>
+              <span class="ied-val" id="mouse-pos">x:0 y:0</span>
+            </div>
+            <div class="ied-box"
+              tabindex="0"
+              onkeydown="logEvt('keydown', event.key)"
+              onkeyup="logEvt('keyup', event.key)"
+              style="cursor:text; outline:none;"
+              onfocus="this.style.borderColor='var(--b)'"
+              onblur="this.style.borderColor='var(--border)'"
+            >
+              <span style="color:var(--b);font-size:0.65rem;letter-spacing:0.1em;">KEYBOARD ZONE</span>
+              <span>Klikni sem a zmackni klavesy</span>
+              <span class="ied-val" id="key-val">--</span>
+            </div>
+          </div>
+          <div style="margin-top:1rem;">
+            <div class="event-log" id="event-log">
+              <div class="log-entry"><span class="log-ts">00:00:00</span><span class="log-evt">ready</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- OBSERVERS -->
+      <div class="test-section" id="s-observers">
+        <div class="test-header">
+          <span class="test-title">JS Observers</span>
+          <span class="test-tag">IntersectionObserver / ResizeObserver / MutationObserver</span>
+        </div>
+        <div class="test-body">
+          <div style="display:flex; flex-direction:column; gap:1.5rem;">
+
+            <div>
+              <div class="grid-label">IntersectionObserver (scroll doleva/doprava k viditelnosti)</div>
+              <div class="io-row" id="io-row">
+                <div class="io-box">IO 1</div>
+                <div class="io-box">IO 2</div>
+                <div class="io-box">IO 3</div>
+                <div class="io-box">IO 4</div>
+                <div class="io-box">IO 5</div>
+                <div class="io-box">IO 6</div>
+              </div>
+            </div>
+
+            <div>
+              <div class="grid-label">ResizeObserver (tahni za pravi roh)</div>
+              <div class="resize-demo" id="resize-demo">
+                Tento element lze rozsirit tazenim. ResizeObserver sleduje zmeny.
+                <div id="resize-info">sirka: -- px</div>
+              </div>
+            </div>
+
+            <div>
+              <div class="grid-label">MutationObserver</div>
+              <div style="display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap;">
+                <button class="js-btn" onclick="mutateDemo()">Pridat element</button>
+                <button class="js-btn" onclick="document.getElementById('mutation-target').innerHTML=''">Vymazat</button>
+                <span style="font-size:0.7rem; color:var(--muted);">Pocet mutaci: <span id="mutation-count" style="color:var(--a);">0</span></span>
+              </div>
+              <div id="mutation-target" style="margin-top:0.5rem; min-height:40px; background:var(--bg3); border:1px solid var(--border); padding:0.5rem; display:flex; flex-wrap:wrap; gap:6px;"></div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+
+      <!-- DRAG & DROP -->
+      <div class="test-section" id="s-drag">
+        <div class="test-header">
+          <span class="test-title">Drag & Drop API</span>
+          <span class="test-tag">draggable / dragover / drop</span>
+        </div>
+        <div class="test-body">
+          <div style="display:flex; flex-direction:column; gap:1rem;">
+            <div style="display:flex; gap:0.75rem; flex-wrap:wrap;">
+              <div class="draggable" draggable="true" ondragstart="dragStart(event)" data-val="ALPHA">ALPHA</div>
+              <div class="draggable" draggable="true" ondragstart="dragStart(event)" data-val="BETA">BETA</div>
+              <div class="draggable" draggable="true" ondragstart="dragStart(event)" data-val="GAMMA">GAMMA</div>
+            </div>
+            <div class="drag-zone" id="drop-zone"
+              ondragover="event.preventDefault(); this.classList.add('over')"
+              ondragleave="this.classList.remove('over')"
+              ondrop="dropHere(event)"
+            >
+              Pustit sem
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </main>
+  </div>
+
+  <script>
+    /* ============================================================
+       FPS COUNTER
+    ============================================================ */
+    let lastTime = performance.now();
+    let frames = 0;
+    const fpsEl = document.getElementById('fps-counter');
+
+    function measureFps(now) {
+      frames++;
+      if (now - lastTime >= 500) {
+        const fps = Math.round(frames / ((now - lastTime) / 1000));
+        fpsEl.textContent = 'FPS: ' + fps;
+        fpsEl.style.color = fps >= 55 ? 'var(--b)' : fps >= 30 ? 'var(--a)' : 'var(--c)';
+        frames = 0;
+        lastTime = now;
+      }
+      requestAnimationFrame(measureFps);
+    }
+    requestAnimationFrame(measureFps);
+
+    /* ============================================================
+       SVG SINE WAVE
+    ============================================================ */
+    const wavePoly = document.getElementById('wave-poly');
+    let waveT = 0;
+
+    function animateWavePoly() {
+      let pts = '';
+      for (let x = 0; x <= 200; x += 4) {
+        const y = 40 + Math.sin((x / 30) + waveT) * 20 + Math.sin((x / 15) + waveT * 0.7) * 8;
+        pts += x + ',' + y.toFixed(1) + ' ';
+      }
+      wavePoly.setAttribute('points', pts);
+      waveT += 0.04;
+      requestAnimationFrame(animateWavePoly);
+    }
+    animateWavePoly();
+
+    /* ============================================================
+       CANVAS
+    ============================================================ */
+    const canvas = document.getElementById('main-canvas');
+    const ctx = canvas.getContext('2d');
+    let canvasMode = 'draw';
+    let isDrawing = false;
+    let lastX = 0, lastY = 0;
+    let particles = [];
+    let wavePhase = 0;
+    let animId = null;
+
+    function resizeCanvas() {
+      const rect = canvas.getBoundingClientRect();
+      canvas.width  = rect.width;
+      canvas.height = rect.height;
+    }
+    resizeCanvas();
+    window.addEventListener('resize', resizeCanvas);
+
+    function setMode(m) {
+      canvasMode = m;
+      document.querySelectorAll('.js-btn').forEach(b => b.classList.remove('active'));
+      document.getElementById('btn-' + m)?.classList.add('active');
+      if (animId) cancelAnimationFrame(animId);
+      if (m === 'particles') startParticles();
+      if (m === 'wave') startWave();
+    }
+
+    function clearCanvas() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      particles = [];
+    }
+
+    /* -- draw mode -- */
+    canvas.addEventListener('mousedown', e => {
+      if (canvasMode !== 'draw') return;
+      isDrawing = true;
+      [lastX, lastY] = [e.offsetX, e.offsetY];
+    });
+
+    canvas.addEventListener('mousemove', e => {
+      if (!isDrawing || canvasMode !== 'draw') return;
+      ctx.beginPath();
+      ctx.strokeStyle = `hsl(${(e.offsetX / canvas.width) * 360}, 100%, 65%)`;
+      ctx.lineWidth = 2;
+      ctx.lineCap = 'round';
+      ctx.moveTo(lastX, lastY);
+      ctx.lineTo(e.offsetX, e.offsetY);
+      ctx.stroke();
+      [lastX, lastY] = [e.offsetX, e.offsetY];
+    });
+
+    canvas.addEventListener('mouseup', () => { isDrawing = false; });
+
+    /* -- particles -- */
+    function Particle() {
+      this.x = Math.random() * canvas.width;
+      this.y = Math.random() * canvas.height;
+      this.vx = (Math.random() - 0.5) * 2;
+      this.vy = (Math.random() - 0.5) * 2;
+      this.life = 1;
+      this.decay = 0.003 + Math.random() * 0.006;
+      this.size = 1 + Math.random() * 3;
+      const colors = ['#e8ff6a','#6affdb','#ff6a9b','#a06aff'];
+      this.color = colors[Math.floor(Math.random() * colors.length)];
+    }
+
+    function startParticles() {
+      for (let i = 0; i < 80; i++) particles.push(new Particle());
+      loopParticles();
+    }
+
+    function loopParticles() {
+      ctx.fillStyle = 'rgba(10,10,12,0.15)';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      particles = particles.filter(p => p.life > 0);
+      while (particles.length < 80) particles.push(new Particle());
+      particles.forEach(p => {
+        p.x += p.vx;
+        p.y += p.vy;
+        p.life -= p.decay;
+        ctx.globalAlpha = p.life;
+        ctx.fillStyle = p.color;
+        ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
+      });
+      ctx.globalAlpha = 1;
+
+      /* connect nearby particles */
+      for (let i = 0; i < particles.length; i++) {
+        for (let j = i + 1; j < particles.length; j++) {
+          const dx = particles[i].x - particles[j].x;
+          const dy = particles[i].y - particles[j].y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < 80) {
+            ctx.beginPath();
+            ctx.strokeStyle = particles[i].color;
+            ctx.globalAlpha = (1 - dist / 80) * 0.3;
+            ctx.lineWidth = 0.5;
+            ctx.moveTo(particles[i].x, particles[i].y);
+            ctx.lineTo(particles[j].x, particles[j].y);
+            ctx.stroke();
+            ctx.globalAlpha = 1;
+          }
+        }
+      }
+      animId = requestAnimationFrame(loopParticles);
+    }
+
+    /* -- wave -- */
+    function startWave() {
+      loopWave();
+    }
+
+    function loopWave() {
+      ctx.fillStyle = 'rgba(10,10,12,0.25)';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      const colors = ['#e8ff6a','#6affdb','#ff6a9b'];
+      colors.forEach((col, i) => {
+        ctx.beginPath();
+        ctx.strokeStyle = col;
+        ctx.lineWidth = 1.5;
+        ctx.globalAlpha = 0.7;
+        for (let x = 0; x <= canvas.width; x++) {
+          const y = canvas.height / 2
+            + Math.sin((x / 60) + wavePhase + i * 1.2) * 30
+            + Math.sin((x / 30) + wavePhase * 1.5) * 15;
+          x === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+      });
+      ctx.globalAlpha = 1;
+      wavePhase += 0.03;
+      animId = requestAnimationFrame(loopWave);
+    }
+
+    /* ============================================================
+       EVENT LOGGER
+    ============================================================ */
+    const logEl = document.getElementById('event-log');
+    const mousePosEl = document.getElementById('mouse-pos');
+    const keyValEl  = document.getElementById('key-val');
+
+    function pad(n) { return String(n).padStart(2, '0'); }
+
+    function logEvt(name, val) {
+      const now = new Date();
+      const ts = pad(now.getHours()) + ':' + pad(now.getMinutes()) + ':' + pad(now.getSeconds());
+      const div = document.createElement('div');
+      div.className = 'log-entry';
+      div.innerHTML = '<span class="log-ts">' + ts + '</span>'
+        + '<span class="log-evt">' + name + '</span>'
+        + (val ? ' <span class="log-val">' + val + '</span>' : '');
+      logEl.prepend(div);
+      if (logEl.children.length > 50) logEl.lastChild.remove();
+      if (name === 'mousemove') mousePosEl.textContent = val;
+      if (name === 'keydown')   keyValEl.textContent   = val;
+    }
+
+    /* ============================================================
+       INTERSECTION OBSERVER
+    ============================================================ */
+    const ioBoxes = document.querySelectorAll('.io-box');
+    const io = new IntersectionObserver(entries => {
+      entries.forEach(e => {
+        e.target.classList.toggle('visible', e.isIntersecting);
+        if (e.isIntersecting) logEvt('IntersectionObserver', e.target.textContent.trim());
+      });
+    }, { threshold: 0.5 });
+    ioBoxes.forEach(b => io.observe(b));
+
+    /* ============================================================
+       RESIZE OBSERVER
+    ============================================================ */
+    const resizeDemo = document.getElementById('resize-demo');
+    const resizeInfo = document.getElementById('resize-info');
+    const ro = new ResizeObserver(entries => {
+      entries.forEach(e => {
+        const w = Math.round(e.contentRect.width);
+        resizeInfo.textContent = 'sirka: ' + w + ' px';
+        logEvt('ResizeObserver', w + 'px');
+      });
+    });
+    ro.observe(resizeDemo);
+
+    /* ============================================================
+       MUTATION OBSERVER
+    ============================================================ */
+    let mutCount = 0;
+    const mutTarget = document.getElementById('mutation-target');
+    const mutCountEl = document.getElementById('mutation-count');
+    const mo = new MutationObserver(mutations => {
+      mutCount += mutations.length;
+      mutCountEl.textContent = mutCount;
+      mutations.forEach(m => logEvt('MutationObserver', m.type + ' +' + m.addedNodes.length));
+    });
+    mo.observe(mutTarget, { childList: true, subtree: true, attributes: true });
+
+    function mutateDemo() {
+      const colors = ['var(--a)','var(--b)','var(--c)','var(--d)'];
+      const el = document.createElement('div');
+      el.style.cssText = 'padding:4px 8px; border:1px solid ' + colors[mutCount % 4] + '; color:' + colors[mutCount % 4] + '; font-size:0.65rem;';
+      el.textContent = 'node #' + (mutTarget.children.length + 1);
+      mutTarget.appendChild(el);
+    }
+
+    /* ============================================================
+       DRAG & DROP
+    ============================================================ */
+    let dragVal = '';
+
+    function dragStart(e) {
+      dragVal = e.target.dataset.val;
+      e.dataTransfer.setData('text/plain', dragVal);
+      logEvt('dragstart', dragVal);
+    }
+
+    const dropZone = document.getElementById('drop-zone');
+
+    function dropHere(e) {
+      e.preventDefault();
+      dropZone.classList.remove('over');
+      const val = e.dataTransfer.getData('text/plain');
+      dropZone.textContent = 'Dropnuto: ' + val;
+      dropZone.style.color = 'var(--a)';
+      dropZone.style.borderColor = 'var(--a)';
+      logEvt('drop', val);
+      setTimeout(() => {
+        dropZone.textContent = 'Pustit sem';
+        dropZone.style.color = '';
+        dropZone.style.borderColor = '';
+      }, 2000);
+    }
+
+    /* ============================================================
+       SIDEBAR ACTIVE LINK (IntersectionObserver)
+    ============================================================ */
+    const sections = document.querySelectorAll('.test-section');
+    const navLinks = document.querySelectorAll('.nav-link');
+
+    const sectionObs = new IntersectionObserver(entries => {
+      entries.forEach(e => {
+        if (e.isIntersecting) {
+          navLinks.forEach(a => a.classList.remove('active'));
+          const link = document.querySelector('.nav-link[href="#' + e.target.id + '"]');
+          if (link) link.classList.add('active');
+        }
+      });
+    }, { threshold: 0.3 });
+
+    sections.forEach(s => sectionObs.observe(s));
+  </script>
+</body>
+</html>
