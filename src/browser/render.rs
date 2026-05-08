@@ -2496,6 +2496,10 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         zoom: f32,
         /// Trackovany state Ctrl/Shift/Alt pro zoom shortcut detection.
         modifiers: winit::keyboard::ModifiersState,
+        /// Find-on-page (Ctrl+F): otevreny overlay + query + matches.
+        find_open: bool,
+        find_query: String,
+        find_match_idx: usize,
     }
 
     impl ApplicationHandler for App {
@@ -2729,6 +2733,43 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                             _ => {}
                         }
                     }
+                    // Find-on-page typing: pri otevrenem overlay capture chars.
+                    if self.find_open {
+                        match &key_event.logical_key {
+                            Key::Named(NamedKey::Escape) => {
+                                self.find_open = false;
+                                self.find_query.clear();
+                                self.render();
+                                return;
+                            }
+                            Key::Named(NamedKey::Backspace) => {
+                                self.find_query.pop();
+                                self.find_apply();
+                                return;
+                            }
+                            Key::Named(NamedKey::Enter) => {
+                                let dir = if self.modifiers.shift_key() { -1i32 } else { 1 };
+                                self.find_step(dir);
+                                return;
+                            }
+                            Key::Character(s) if !self.modifiers.control_key() => {
+                                self.find_query.push_str(s);
+                                self.find_apply();
+                                return;
+                            }
+                            _ => {}
+                        }
+                    }
+                    // Ctrl+F = toggle find overlay.
+                    if self.modifiers.control_key() {
+                        if let Key::Character(s) = &key_event.logical_key {
+                            if s.as_str() == "f" || s.as_str() == "F" {
+                                self.find_open = true;
+                                self.render();
+                                return;
+                            }
+                        }
+                    }
                     // Ctrl+= / Ctrl++ / Ctrl+- / Ctrl+0 = zoom controls.
                     if self.modifiers.control_key() {
                         if let Key::Character(s) = &key_event.logical_key {
@@ -2838,9 +2879,60 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         }
     }
 
+    fn find_matches_in(layout: &super::layout::LayoutBox, query: &str) -> Vec<(f32, f32, f32)> {
+        let mut out = Vec::new();
+        let q = query.to_lowercase();
+        if q.is_empty() { return out; }
+        fn walk(b: &super::layout::LayoutBox, q: &str, out: &mut Vec<(f32, f32, f32)>) {
+            if let Some(text) = &b.text {
+                if text.to_lowercase().contains(q) {
+                    out.push((b.rect.y, b.rect.x, b.rect.width.max(50.0)));
+                }
+            }
+            for c in &b.children { walk(c, q, out); }
+        }
+        walk(layout, &q, &mut out);
+        out
+    }
+
     impl App {
         fn viewport_h_logical(&self) -> f32 {
             self.renderer.as_ref().map(|r| (r.config.height as f32) / self.zoom).unwrap_or(768.0)
+        }
+        /// Najde vsechny pozice match v display listu textech. Vrati Vec<(y, x, w)>.
+        fn find_collect_matches(&self) -> Vec<(f32, f32, f32)> {
+            match &self.layout_root {
+                Some(l) => find_matches_in(l, &self.find_query),
+                None => Vec::new(),
+            }
+        }
+        fn find_apply(&mut self) {
+            let matches = self.find_collect_matches();
+            if matches.is_empty() {
+                self.find_match_idx = 0;
+            } else if self.find_match_idx >= matches.len() {
+                self.find_match_idx = 0;
+            }
+            self.find_scroll_to_current();
+            self.render();
+        }
+        fn find_step(&mut self, dir: i32) {
+            let matches = self.find_collect_matches();
+            if matches.is_empty() { return; }
+            let n = matches.len() as i32;
+            let cur = self.find_match_idx as i32;
+            self.find_match_idx = ((cur + dir).rem_euclid(n)) as usize;
+            self.find_scroll_to_current();
+            self.render();
+        }
+        fn find_scroll_to_current(&mut self) {
+            let matches = self.find_collect_matches();
+            if let Some(&(my, _, _)) = matches.get(self.find_match_idx) {
+                let vh = self.viewport_h_logical();
+                let target = (my - vh * 0.3).max(0.0);
+                self.scroll_y = target;
+                self.clamp_scroll_to_layout();
+            }
         }
         fn scroll_by_y(&mut self, dy: f32) {
             self.scroll_y = (self.scroll_y + dy).max(0.0);
@@ -3506,6 +3598,40 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                     self.mouse_x, self.mouse_y,
                 );
             }
+            // Find on page: highlight matches + overlay s query a counter.
+            if self.find_open {
+                let matches = find_matches_in(&layout_root, &self.find_query);
+                let cur_idx = self.find_match_idx;
+                for (i, &(my, mx, mw)) in matches.iter().enumerate() {
+                    let color = if i == cur_idx { [255, 165, 0, 180] } else { [255, 235, 100, 130] };
+                    display_list.push(DisplayCommand::Rect {
+                        x: mx - self.scroll_x, y: my - self.scroll_y, w: mw, h: 18.0,
+                        color, radius: 2.0,
+                    });
+                }
+                let vw = (r.config.width as f32) / self.zoom;
+                let bar_w: f32 = 320.0;
+                let bar_h: f32 = 40.0;
+                let bar_x = vw - bar_w - 8.0;
+                let bar_y = 8.0;
+                display_list.push(DisplayCommand::Rect {
+                    x: bar_x, y: bar_y, w: bar_w, h: bar_h,
+                    color: [40, 40, 40, 230], radius: 6.0,
+                });
+                let counter = if matches.is_empty() {
+                    if self.find_query.is_empty() { String::from("Find:") } else { String::from("0/0") }
+                } else {
+                    format!("{}/{}", cur_idx + 1, matches.len())
+                };
+                let label = format!("Find: {}  [{}]", self.find_query, counter);
+                display_list.push(DisplayCommand::Text {
+                    x: bar_x + 12.0, y: bar_y + 10.0,
+                    content: label, color: [255, 255, 255, 255],
+                    font_size: 14.0, bold: false, italic: false,
+                    font_family: String::new(),
+                    strikethrough: false, underline: false,
+                });
+            }
             // Highlight rect pro vybrany element v DevTools.
             if let Some(sel_id) = self.devtools_selected {
                 if let Some(rect) = find_box_rect_by_id(&layout_root, sel_id, self.scroll_y) {
@@ -3692,6 +3818,9 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         devtools_resizing: false,
         zoom: 1.0,
         modifiers: winit::keyboard::ModifiersState::empty(),
+        find_open: false,
+        find_query: String::new(),
+        find_match_idx: 0,
     };
     event_loop.run_app(&mut app).map_err(|e| e.to_string())?;
     Ok(())
