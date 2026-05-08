@@ -158,7 +158,11 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VOut {
     let py = ty * inv_w + tp.center.y;
     let nx = (px / tp.viewport.x) * 2.0 - 1.0;
     let ny = 1.0 - (py / tp.viewport.y) * 2.0;
-    let nz = clamp(tz * inv_w, -1.0, 1.0);
+    // wgpu NDC z range = [0, 1]. Pri 3D rotaci tz muze byt v sirokem rozsahu
+    // (rotateY(45) -> tz ∈ [-hw, +hw]) -> mimo [0,1] = fragment clipped =
+    // pulka rotace nezobrazena. Fix: pevny nz = 0.5 (vsechno na same depth -
+    // ne real 3D, ale spravne 2D-style render rotovaneho elementu).
+    let nz = 0.5;
     var out: VOut;
     out.clip = vec4<f32>(nx, ny, nz, 1.0);
     out.uv = uvs[i];
