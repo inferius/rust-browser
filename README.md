@@ -129,9 +129,13 @@ src/
     dom.rs             DOM tree
     css_parser.rs      CSS -> Stylesheet (cssparser)
     cascade.rs         Selector matching, specificity, animation runtime
-    layout.rs          Box model + taffy + inline layout
+    layout/            Box model + taffy + inline layout (mod.rs + 9 sub-modulu:
+                       length/shadows/shape_fn/transform/transform_parse/filter/
+                       backgrounds/gradients/color)
     paint.rs           ComputedStyle -> DisplayList
-    render.rs          winit + wgpu, WGSL shader, glyph + image atlas
+    render/            winit + wgpu, WGSL shader, glyph + image atlas (mod.rs +
+                       10 sub-modulu: url/forms/dirty/segments/polygon/atlas/
+                       shaders/primitives/canvas_paint/webgl_paint)
   debug_view/          HTML diagnosticke nahledy
     devtools.rs        DevTools panel generator
   utils/               utf8_cursor, makra

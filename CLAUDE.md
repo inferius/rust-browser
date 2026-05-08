@@ -17,55 +17,119 @@ Inspirace Servo (html5ever, selectors, cssparser) ale interpreter, layout pomocn
 
 ```
 src/
-  main.rs                  - Entry point. CLI rezimy: debug / devtools / browser / window / default
+  main.rs                  - Entry point. CLI rezimy: debug / devtools / browser / window / default.
+                              #![allow(dead_code)] (test-expose API + future-pub variants);
+                              unused_imports/unused_variables aktivni jako warning.
   tokens.rs                - TokenKind enum (Punctuator, Keyword, Ident, NumericLiteral, ...)
   ast.rs                   - AST node definice (Expression, Statement, Program)
-  evaluator.rs             - (legacy / pomocny eval)
   utils/
-    mod.rs                 - utf8_cursor, string_utils
+    mod.rs
+    utf8_cursor.rs         - UTF-8 cursor s undo() pro multi-byte CP
     macros/                - debug! a podobne makra
-    string_utils.rs
-    utf8_cursor.rs
-  specifications/          - Konstanty z ECMA262 / spec referencni tabulky (number_literal, lexer_errors)
+  specifications/          - ECMA262 spec referencni tabulky (number_literal, lexer_errors)
 
   lexer/                   - JavaScript tokenizer
-    base.rs                - Lexer struct, parse_str, debug_print_tokens
-    identifier.rs          - Ident + keyword recognition
+    base.rs                - Lexer struct, parse_str, debug_print_tokens, read_identifier_continue
     numeric.rs             - Number literal (decimal/hex/bin/oct/BigInt/scientific)
     string.rs              - String literal vc. template literals (`${...}`)
     regex.rs               - Regex literal disambiguation
-    debug.rs               - Debug pretty-print
+    debug.rs               - debug_print_tokens
+    tests/                 - extracted unit tests (base/numeric/string/regex)
 
   parser/
     mod.rs                 - Recursive descent parser - JS expressions a statements
+    tests.rs               - extracted unit tests
 
-  interpreter/             - Tree-walking JS interpreter
-    mod.rs                 - Interpreter, JsValue, scope, JsObject, run(), event loop, task queue, workers
-    builtins.rs            - Globalni objekty: console, Math, JSON, Date, Intl (ICU4X), fetch (ureq), setTimeout, Worker
-    string_methods.rs      - String prototype metody
-    helpers.rs
+  interpreter/             - Tree-walking JS interpreter (mod.rs split na 6 sub-modulu)
+    mod.rs                 - Interpreter struct, JsValue/JsObject/JsMap/JsSet/JsFunc, Environment,
+                              run(), event loop, drain_timers/workers/websockets, load_module,
+                              dispatch_event, iterator_helper_method
+    eval_call.rs           - eval_call - massive call dispatch (callee match, native + JS fn + class + method)
+    eval_expr.rs           - eval (dispatcher) + eval_unary/binary/logical/assign + assign_to +
+                              destructure_bind + bind_target_expr
+    eval_member.rs         - eval_member + get_prop (obj.prop, obj[key], prototype chain)
+    exec_stmt.rs           - exec_stmts + exec_stmt (if/for/while/return/throw/try/...)
+    class.rs               - make_class_func, construct_class, run_super_constructor, bind_params
+    call_machinery.rs      - call_function dispatch + call_new + construct_map/set/date/error/promise + call_generator
+    builtins.rs            - setup_builtins (4800 LOC giant fn): console, Math, JSON, Date, Intl,
+                              fetch, setTimeout, Worker, storage, observers, navigator, crypto, ...
+    builtins_helpers.rs    - run_worker_thread, make_message_port, build_search_params, make_object_store
+    builtins_reflect.rs    - Reflect API (get/set/has/deleteProperty/ownKeys/...)
+    builtins_atomics.rs    - Atomics API stubs
+    builtins_temporal.rs   - Temporal API stubs (Plain Date/Time/DateTime/...)
+    string_methods.rs      - String prototype methods (charAt/concat/slice/...)
+    bytecode.rs            - Bytecode VM (opt-in via console_eval_via_vm; tree-walker is authoritative)
+    canvas.rs              - Canvas2D context API
+    webgl.rs               - WebGL state + draw queue
+    helpers.rs             - native(), make_settled_promise, helper closures
+    dom_props.rs           - parse_url_parts + url_encode (location.* properties)
+    js_value_impl.rs       - JsValue Display/Debug impls
+    serialize.rs           - structuredClone glue
+    tests/                 - unit + integration tests batches
 
   browser/                 - HTML/CSS engine + rendering
     html_parser.rs         - HTML5 parsing pres html5ever -> nas DOM tree
-    dom.rs                 - DOM node, get_elements_by_tag, text_content, atd.
-    css_parser.rs          - CSS pres cssparser -> StyleSheet, Rule, Declaration. @media, @keyframes, var().
-    cascade.rs             - Selector matching, specificity, kaskada, ruleset -> ComputedStyle
-    layout.rs              - Box model + taffy flex/grid + inline (word wrap, line boxes)
-    paint.rs               - ComputedStyle + LayoutBox -> DisplayList (Rect, Text, Image, Gradient, Shadow, Border)
-    render.rs              - winit + wgpu. WGSL shadery (solid/text/gradient/shadow/SDF). Glyph atlas. Hit test + click dispatch.
-    tests/
+    dom.rs                 - DOM node, get_elements_by_tag, text_content
+    css_parser.rs          - CSS pres cssparser -> StyleSheet, Rule, Declaration; @media, @keyframes, var()
+    cascade.rs             - Selector matching, specificity, kaskada, viewport queries, hover/focus state hash
+    devtools_panel.rs      - In-window devtools paint (F12 toggle)
+    woff.rs                - WOFF/WOFF2 font decompression (brotli + glyf transform reverse)
+    variable_fonts.rs      - Variable font axes detection
+    emoji_fonts.rs         - Color emoji font (COLR/CPAL/CBDT/SBIX/SVG) detection
+    webgl_helpers.rs       - WebGL serialize uniforms + attrib format conversions
+
+    layout/                - layout split (mod.rs + 9 sub-modules; viz layout/mod.rs comment)
+      mod.rs               - LayoutBox struct, layout_tree, build_box, layout_block, flush_inline,
+                              measure_text_width, build_pseudo_box, animations, sticky/anchor positioning
+      length.rs            - parse_length / parse_length_ctx (px/em/rem/vw/vh/%)
+      shadows.rs           - parse_text_shadow + parse_box_shadow
+      shape_fn.rs          - ShapeFunction enum + parse_shape_function
+      transform.rs         - mat4 math + transform_op_matrix + compute_transform_matrix + needs_3d_pipeline
+      transform_parse.rs   - parse_transform_chain + parse_transform tokenize
+      filter.rs            - FilterOp + parse_filter_chain + apply_filter_chain + compute_color_matrix
+      backgrounds.rs       - BgGradient/BgLayer/BgPosition/BgSize/BgRepeat/BgBox/BgAttachment + ClipPath
+      gradients.rs         - parse_any/radial/conic/linear_gradient
+      color.rs             - parse_color (CSS L4 superset): hex/named/rgb/hsl/hwb/oklab/lab/color()/
+                              color-mix()/contrast()/relative
+
+    layout_engine/         - vlastni flex / grid layout
+      mod.rs               - dispatch + helpers
+      flex.rs              - flex algoritmus per CSS Flexbox L1 spec 9.7
+      grid.rs              - grid algoritmus per CSS Grid L1 spec
+      flex_tests.rs / flex_spec_tests.rs / grid_tests.rs / grid_spec_tests.rs / taffy_compliance.rs
+
+    paint.rs               - ComputedStyle + LayoutBox -> DisplayList (Rect/Text/Image/Gradient/Shadow/Border/Filter)
+
+    render/                - render split (mod.rs + 10 sub-modules)
+      mod.rs               - Vertex struct, build_vertices (display list -> verts), Renderer struct + impl,
+                              run_window_with_options (winit ApplicationHandler), apply_paint_animations,
+                              console_eval_via_vm
+      url.rs               - fetch_text_url, fetch_image_bytes, resolve_url, decode_base64
+      forms.rs             - find_ancestor_form, build_form_request, post_form, url_encode
+      dirty.rs             - DirtyRegion (inkrementalni render)
+      segments.rs          - Seg + partition_filter_segments + shift_command_x/y
+      polygon.rs           - polygon math: signed_area, triangulate, clip, point_in_triangle
+      atlas.rs             - GlyphAtlas + ImageAtlas + try_load_default_font (4096x4096 shelf-pack)
+      shaders.rs           - WGSL shader strings: BLUR / TRANSFORM / COMPOSE / RECT
+      primitives.rs        - push_rect/gradient/shadow/image/polygon vertex helpers
+      canvas_paint.rs      - paint_canvas_ops (Canvas2D ops -> DisplayCommand)
+      webgl_paint.rs       - paint_webgl_canvases (WebGL queue drain stub)
+
+    tests/                 - integration tests (cascade/css/dom/html/layout/paint/render/devtools_panel/woff/emoji_fonts/variable_fonts)
 
   debug_view/              - HTML diagnosticke nahledy
     mod.rs                 - generate_debug_html (tokeny + AST)
     tokens_view.rs         - Tokeny jako barevne badge + tooltip
     ast_view.rs            - AST tree (collapsible)
     page.rs                - HTML wrapper (CSS + JS embedded)
-    devtools.rs            - DevTools-like panel (Elements / Console / Network / Performance)
+    devtools.rs            - DevTools-like static HTML export (Elements / Console / Network / Performance)
 
 static/                    - Test HTML/CSS/JS pro browser/devtools
-  test.html, test.css, basic_test.js
+  test.html, test.css, basic_test.js, engine-test.html
 
 DOKUMENTACE.md             - Vyssi-uroven dokumentace projektu (cesky)
+HANDOFF.md                 - Stav projektu + TODO + posledni session changes
+TODO.md / TODO_CSS.md      - Otevrene tasks
 ```
 
 ## CLI rezimy (main.rs)
@@ -74,9 +138,11 @@ DOKUMENTACE.md             - Vyssi-uroven dokumentace projektu (cesky)
 cargo run                                        # Default: tokenize + parse + interpret inline JS
 cargo run -- debug [src.js] [out.html]           # Debug viewer: tokeny + AST do HTML
 cargo run -- devtools [src.html] [out.html]      # DevTools-like nahled (4 panely) + spusti <script> a zachyti console+network
-cargo run -- browser [src.html]                  # Render do okna pres wgpu (default static/test.html)
-cargo run -- window [src.html]                   # Alias browser, pres run_window_with_html
+cargo run -- browser [src.html] [--devtools]     # Render do okna pres wgpu (default static/test.html). --devtools auto-otevri devtools.html
+cargo run -- window [src.html]                   # Alias pro browser
 ```
+
+Entry point je `browser::render::run_window_with_options(html, css, current_html_path, auto_devtools, base_url)`.
 
 ## Architektonicke volby + duvody
 
@@ -169,10 +235,17 @@ Viz HANDOFF.md.
 
 - Komentare cesky, ASCII only.
 - Errory cesky (`"Nelze nacist {path}: {e}"`).
-- Test soubory v `<modul>/tests/` adresari nebo `mod tests` inline.
+- Test soubory: dva patterny:
+  - `<modul>/tests/` adresar + `mod.rs` listing (integration-style, browser/interpreter/lexer/debug_view/parser)
+  - `#[cfg(test)] #[path = "tests/X.rs"] mod tests;` v source souboru pro pristup k privates (lexer/base, lexer/numeric, browser/woff, browser/emoji_fonts, browser/variable_fonts)
+  - Inline `#[cfg(test)] mod tests { ... }` jen pri malych testech (< ~60 LOC) kde extrakce nestoji za to (utf8_cursor, render mod.rs, layout_engine/grid+flex)
 - Cargo.toml ma kazda dependency komentar **proc** je tam.
 - Po kazde feature: build + test + commit. Commit message strucny, popis "co + proc".
 - Rc<RefCell<>> pro sdileny mutable state (interpreter scope, console_log, document).
+- **Splittovani velkych souboru:** modul s vetsi koncentraci kodu rozdelit do `<name>/mod.rs` + sub-soubory. Pattern:
+  - Pro free fns: `mod x;` + `pub use x::{...}` v mod.rs
+  - Pro struct methods: kazdy sub-soubor ma `impl Type { ... }` block, metody `pub(super)` volane z mod.rs / dalsich sub-modulu
+  - Sdilene helpery promoted na `pub(super)` v mod.rs
 
 ## Build / test
 

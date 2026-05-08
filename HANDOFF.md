@@ -2,13 +2,93 @@
 
 Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 
-## Stav projektu (po session N)
+## Stav projektu (po session N+1: cleanup + refactor split)
 
 **Build:** clean, 0 warnings.
 **Tests:** 2361 pass / 0 failed / 3 ignored.
 **wgpu:** 29 (latest stable).
 **naga:** 29.
 **winit:** 0.30.
+
+## Session N+1 highlights (refactor pass)
+
+### Cleanup AI cruft + dead code (commit 20e7456 + 8fc4afc)
+
+- Smazany mrtvy moduly: `evaluator.rs` (legacy 534 LOC nikde neimportovany), `lexer/identifier.rs` (1-line stub), `utils/string_utils.rs` (dead AdvancedStringMethods trait).
+- Smazany mrtvy fns: `render::run_browser`, `run_window_with_html`, `build_form_get_url`, `old_build_form_get_url`; `html_parser::dump_tree`; `paint::cmds_offset_for_box`; `css_parser::declarations_to_map`; `interpreter::try_run_via_vm`; `utf8_cursor::from_string + reset_to`.
+- Zacisteny historicke "driv X ted Y" / "zatim X" / "aktualne X" komentare patrici do commit msg.
+- Globalni `#![allow(dead_code/unused_imports/unused_variables)]` zuzeno na `#![allow(dead_code)]` - test-expose API + future-pub variants ok, ale unused imports/vars ted aktivni warning.
+- ~10 unused imports + 8 unused vars opraveno.
+
+### Test extrakce (commit 20e7456)
+
+- `parser/mod.rs` 2385 -> 1547 (parser/tests.rs 837 LOC)
+- `lexer/base.rs` 597 -> 326 (lexer/tests/base.rs 272 LOC)
+- `browser/woff.rs` 1068 -> 793 (tests/woff_tests.rs 275 LOC)
+- `browser/emoji_fonts.rs` 371 -> 254 (tests/emoji_fonts_tests.rs 118 LOC)
+- `browser/variable_fonts.rs` 164 -> 91 (tests/variable_fonts_tests.rs 73 LOC)
+
+Pattern: `#[cfg(test)] #[path = "tests/X.rs"] mod tests;` v source souboru, test soubor pouziva `use super::*;` pro privates.
+
+### Render split: render.rs 6555 -> render/ s 10 sub-moduly (commit d0496df)
+
+```
+src/browser/render/
+  mod.rs (4310)         Vertex, build_vertices, Renderer, run_window_with_options, apply_paint_animations
+  url.rs (150)          fetch_text_url + fetch_image_bytes + resolve_url + decode_base64
+  forms.rs (115)        find_ancestor_form + build_form_request + post_form
+  dirty.rs (41)         DirtyRegion (inkrementalni render)
+  segments.rs (206)     Seg + partition_filter_segments + shift_command_x/y
+  polygon.rs (149)      polygon math: signed_area + triangulate + clip + point_in_triangle
+  atlas.rs (335)        GlyphAtlas + ImageAtlas + try_load_default_font
+  shaders.rs (407)      WGSL shader strings: BLUR / TRANSFORM / COMPOSE / RECT
+  primitives.rs (618)   push_rect / gradient / shadow / image / polygon vertex helpers
+  canvas_paint.rs (228) paint_canvas_ops (Canvas2D ops -> DisplayCommand)
+  webgl_paint.rs (86)   paint_webgl_canvases (WebGL queue drain stub)
+```
+
+### Layout split: layout.rs 5617 -> layout/ s 9 sub-moduly (commit 254390e)
+
+```
+src/browser/layout/
+  mod.rs (3434)            LayoutBox struct, layout_tree, build_box, layout_block, flush_inline,
+                            measure_text_width, build_pseudo_box, animations, sticky/anchor
+  length.rs (148)          parse_length / parse_length_ctx (px/em/rem/vw/vh/%)
+  shadows.rs (64)          parse_text_shadow + parse_box_shadow
+  shape_fn.rs (86)         ShapeFunction enum + parse_shape_function
+  transform.rs (154)       mat4 math + transform_op_matrix + compute_transform + needs_3d_pipeline
+  transform_parse.rs (135) parse_transform_chain + parse_transform tokenize
+  filter.rs (336)          FilterOp + parse_filter + apply_filter + color_matrix
+  backgrounds.rs (344)     BgGradient/BgLayer/BgPosition/Size/Repeat/Box/Attachment + ClipPath + to_roman
+  gradients.rs (197)       parse_any/radial/conic/linear_gradient
+  color.rs (791)           parse_color CSS L4 superset (hex/named/rgb/hsl/hwb/oklab/lab/color()/...)
+```
+
+### Interpreter split: interpreter/mod.rs 5901 -> 1440 (-76%) + 6 sub-modulu (commit 0c1b481)
+
+```
+src/interpreter/
+  mod.rs (1440)           Interpreter struct, JsValue, JsObject, JsMap/JsSet, JsFunc, Environment,
+                           run(), drain_*, load_module, dispatch_event, iterator_helper_method
+  eval_call.rs (2010)     eval_call - massive call dispatch
+  eval_expr.rs (774)      eval (dispatcher) + eval_unary/binary/logical/assign + assign_to + destructure_bind
+  eval_member.rs (649)    eval_member + get_prop (member access + prototype chain)
+  exec_stmt.rs (390)      exec_stmts + exec_stmt
+  class.rs (310)          make_class_func + construct_class + run_super_constructor + bind_params
+  call_machinery.rs (373) call_function + call_new + construct_map/set/date/error/promise + call_generator
+```
+
+Pattern: kazdy sub-modul ma `impl Interpreter { ... }` block, metody `pub(super)` volane z mod.rs.
+
+### Builtins partial split (commit 43b2ad5)
+
+- `interpreter/builtins.rs` 5138 -> 4824 + `builtins_helpers.rs` 323 LOC.
+- Extrahovany standalone helpery: run_worker_thread, make_message_port, build_search_params, make_object_store.
+- `setup_builtins` (4800 LOC giant fn) zustava intact - splittovat ho do helper fns by vyzadovalo pohyb sdileneho state, riskantni.
+
+### Soucet refactor
+
+23107 -> 14008 LOC v hlavnich souborech, **9099 LOC rozdeleno do 26 sub-modulu**. Build clean, 2361 testu pass.
 
 ## Posledni hlavni opravy v session
 
@@ -108,6 +188,18 @@ Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 
 - [ ] **Bytecode VM:** existujici, jen opt-in pres console_eval_via_vm. Tree-walker authoritative. Plne switch + benchmarks (uz hotove) ukazuji 1.83-7.6x speedup.
 
+- [ ] **builtins.rs setup_builtins split** - aktualne 4800 LOC giant fn. Splittovat do logickych sekci (setup_console, setup_math, setup_object, setup_storage, setup_observers, ...) by zlepsilo navigaci, ale vyzaduje opatrne presmerovavani sdileneho state (env, task_queue, console_log, ...). Zatim jen extrahovany standalone helpery do builtins_helpers.rs.
+
+- [ ] **render/mod.rs Renderer + run_window_with_options split** - 4310 LOC po prvnim splitu. Renderer struct + ApplicationHandler tesne provazane se zoom/scroll/find/addr/PDF event handling. Mozne dalsi rozdeleni:
+  - `render/window/event.rs` - mouse/keyboard event handlers
+  - `render/window/find_overlay.rs` - Ctrl+F find UI
+  - `render/window/address_bar.rs` - Ctrl+L address UI
+  - `render/window/print_pdf.rs` - Ctrl+P PDF export
+
+- [ ] **interpreter/builtins.rs split** - po extrakci helpers (323 LOC) zustava setup_builtins 4800 LOC. Viz vyse.
+
+- [ ] **Devtools rework** (planovany v dalsi session) - bud sjednoceni static HTML export + inline panel, nebo new features (live edit, source maps, breakpoints, profiler). Cekame na rozhodnuti smerovani.
+
 ## Klavesove shortcuts
 
 | Shortcut | Akce |
@@ -149,17 +241,22 @@ Test paths:
 - `static/engine-test.html` - heavy modern CSS (grid, sticky, backdrop-filter, conic-gradient, scroll-snap, @container, :has, color-mix, animation-timeline) - moderate breakage on edge cases
 - `static/transform_debug.html` - simple rotateY box pro debug
 
-## Files s nejvetsi koncentraci kodu
+## Files s nejvetsi koncentraci kodu (po session N+1 refactoru)
 
-- `src/browser/render.rs` (~6500 lines, wgpu pipeline + shadery + zoom + scroll + find/addr/PDF)
-- `src/browser/layout.rs` (~5500 lines, layout + cascade integration + per-element cache + SVG + perspective)
-- `src/browser/paint.rs` (~2200 lines, display list build + transform/filter markers + SVG emit)
-- `src/browser/cascade.rs` (~2000 lines, selectors + specificity + viewport queries + state hash)
-- `src/browser/css_parser.rs` (~1200 lines)
-- `src/browser/layout_engine/flex.rs` (~1500 lines)
-- `src/interpreter/bytecode.rs` (~2700 lines, JS VM)
-- `src/interpreter/webgl.rs` (~1300 lines)
-- `src/browser/woff.rs` (~900 lines)
+- `src/interpreter/builtins.rs` (~4800 lines, setup_builtins giant fn - jeden velky setup pro vsechny global builtins)
+- `src/browser/render/mod.rs` (~4310 lines, Renderer struct + run_window_with_options + winit ApplicationHandler + zoom/scroll/find/addr/PDF event handling)
+- `src/browser/layout/mod.rs` (~3434 lines, LayoutBox + layout_tree + build_box + layout_block + flush_inline + cache + sticky/anchor)
+- `src/interpreter/eval_call.rs` (~2010 lines, eval_call dispatch - extracted z mod.rs)
+- `src/browser/paint.rs` (~1840 lines, display list build + transform/filter markers + SVG emit)
+- `src/browser/cascade.rs` (~2150 lines, selectors + specificity + viewport queries + state hash)
+- `src/parser/mod.rs` (~1547 lines)
+- `src/browser/layout_engine/flex.rs` (~1615 lines)
+- `src/interpreter/mod.rs` (~1440 lines, Interpreter struct + run + helpers - po splitu)
+- `src/interpreter/bytecode.rs` (~2877 lines, JS VM)
+- `src/interpreter/webgl.rs` (~1308 lines)
+- `src/interpreter/helpers.rs` (~1332 lines)
+- `src/browser/css_parser.rs` (~1209 lines)
+- `src/browser/woff.rs` (~793 lines)
 
 ## Architektura cache
 

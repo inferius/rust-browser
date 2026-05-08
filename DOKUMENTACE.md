@@ -429,22 +429,33 @@ src/
   
   lexer/
     mod.rs                 - export lexer modulu
-    base.rs                - hlavni lexer (Lexer struct, lex() smycka)
+    base.rs                - hlavni lexer (Lexer struct, lex() smycka, identifier reading)
     string.rs              - lexer pro retezce a escape sekvence
     numeric.rs             - lexer pro ciselne literaly
-    identifier.rs          - lexer pro identifikatory
     regex.rs               - lexer pro regularni vyrazy
     debug.rs               - pomocne debug funkce
     tests/
+      base.rs              - testy pro core lexer (extracted z base.rs)
       string.rs            - testy pro retezce
       numeric.rs           - testy pro cisla
       regex.rs             - testy pro regularni vyrazy
 
   parser/
     mod.rs                 - cely parser (Pratt + recursive descent)
+    tests.rs               - extracted unit tests (837 LOC)
 
   interpreter/
-    mod.rs                 - cely interpreter (JsValue, Environment, Interpreter)
+    mod.rs                 - Interpreter struct, JsValue, Environment, run(), event loop
+    eval_call.rs           - eval_call dispatch
+    eval_expr.rs           - eval (dispatcher) + binary/unary/logical/assign + destructure
+    eval_member.rs         - eval_member + get_prop (member access + prototype chain)
+    exec_stmt.rs           - exec_stmts + exec_stmt
+    class.rs               - class machinery (make_class_func, construct_class, super)
+    call_machinery.rs      - call_function dispatch + call_new + construct_*
+    builtins.rs            - setup_builtins (4800 LOC: console/Math/JSON/Date/Intl/...)
+    builtins_helpers.rs    - run_worker_thread, message port, search params, IDB store
+    bytecode.rs            - bytecode VM (opt-in; tree-walker je authoritative)
+    canvas.rs / webgl.rs   - Canvas2D + WebGL state APIs
 
   specifications/
     mod.rs                 - export specifikaci
@@ -453,12 +464,19 @@ src/
 
   utils/
     mod.rs                 - export utils
-    utf8_cursor.rs         - char-po-char Unicode reader
-    string_utils.rs        - pomocne funkce pro retezce
+    utf8_cursor.rs         - char-po-char Unicode reader (s undo() pro multi-byte CP)
     macros/
       mod.rs               - export maker
       string_enum.rs       - makro string_enum!
 ```
+
+### Browser engine struktura
+
+Detailne v `CLAUDE.md` - klicove rozdeleni:
+- `browser/render/` - 11 souboru (mod.rs + url/forms/dirty/segments/polygon/atlas/shaders/primitives/canvas_paint/webgl_paint)
+- `browser/layout/` - 10 souboru (mod.rs + length/shadows/shape_fn/transform/transform_parse/filter/backgrounds/gradients/color)
+- `browser/cascade.rs`, `paint.rs`, `css_parser.rs`, `dom.rs`, `html_parser.rs`, `devtools_panel.rs`, `woff.rs` + variable_fonts/emoji_fonts/webgl_helpers
+- `browser/layout_engine/` - flex.rs + grid.rs + tests
 
 ---
 
