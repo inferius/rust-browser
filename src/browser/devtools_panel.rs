@@ -709,7 +709,7 @@ fn paint_network_tab(
     }
 
     // Live z interpretera kdyz state nezapsan.
-    let entries: Vec<(String, u16)> = if state.network.entries.is_empty() {
+    let raw_entries: Vec<(String, u16)> = if state.network.entries.is_empty() {
         if let Some(i) = interp {
             i.network_log.borrow().clone()
         } else {
@@ -718,6 +718,12 @@ fn paint_network_tab(
     } else {
         state.network.entries.iter().map(|e| (e.url.clone(), e.status)).collect()
     };
+
+    // Filter aplikace.
+    let entries: Vec<(String, u16)> = raw_entries.into_iter().filter(|(url, _)| {
+        let ty = crate::devtools::model::network::NetworkResourceType::from_url(url);
+        state.network.filter.matches(ty)
+    }).collect();
 
     let row_y0 = content_y + header_h + 2.0;
     let max_rows = ((content_h - header_h) / ROW_H) as usize;

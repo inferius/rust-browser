@@ -2,10 +2,12 @@
 
 Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 
-## Stav projektu (po session N+2: devtools rework phase 1-7)
+## Stav projektu (po session N+2: devtools rework phase 1-10)
 
 **Build:** clean, 0 warnings.
 **Tests:** 2402 pass / 0 failed / 3 ignored (41 novych devtools tests).
+
+11 devtools commitu (88cb8b8 -> latest), ~5500 LOC noveho kodu, 41 novych testu.
 **wgpu:** 29 (latest stable).
 **naga:** 29.
 **winit:** 0.30.
@@ -204,37 +206,44 @@ ADD ATTRIBUTE:
 - Context menu "Add attribute" akce -> EditTarget::AttributeName edit start
 - Po commit prida novy attr s prazdnou hodnotou na node
 
+## Phase 9 - hromada doplneni (commit e9931ae)
+
+- Edit CSS property dvojklik v Computed pane (EditStyleValue dispatch)
+- JsValue::pretty_print + multi-line console render (Object/Array indent)
+- Local variables panel pri pause (capture_locals pres parent_chain walk)
+- StepKind enum (Into/Over/Out) + step_should_pause + render dispatch
+- Network filter tabs (All/Doc/CSS/JS/Img/Font/XHR) + apply na entries list
+- Cookies sekce v Application (parse document.cookie)
+- IndexedDB stores list v Application (cte indexedDB.__databases__)
+- Source map "Show Original" toggle (pres sourcesContent[0])
+
+## Phase 10 - network filter apply (commit pripraven)
+
+- Filter aplikace na NetworkEntry list pri rendrovani (predtim jen state)
+
 ## Aktualne TODO pro devtools (zbyva)
 
 Real blocking pause v interpreteru:
-- [ ] Async architecture - JS eval na worker thread + channels pro pause/continue
-- [ ] Step Over/Into/Out semantika (track call depth pri step)
-- [ ] Local variables panel pri pause (snapshot env.vars + scope chain walk)
+- [ ] Vyzaduje vetsi async refactor:
+  * Rc<RefCell<>> -> Arc<Mutex<>> napric Interpreter (slozite, !Send)
+  * NEBO: spawn worker thread, message passing pres mpsc kanaly
+  * NEBO: continuation-passing style (kazdy exec_stmt re-entrant z save state)
+- Aktualne logical pause + UI indicator + locals snapshot funguje, ale
+  kod stale "probiha" pri pause - jen log a UI ukazuje, neblokuje exec.
 
-Source maps doplnek:
-- [ ] Toggle "show original sources" tab v Sources - po fetch zobrazi
-  mapped originals namisto generated content
-- [ ] Stack trace remap (pri error log -> orig file:line)
+Network response body capture:
+- [ ] ureq sync response.into_string() vyzaduje volat pred next request,
+  pridat capture path v fetch builtin + ulozit do NetworkEntry.body_preview
 
-Phase 6 doplnek:
-- [ ] Edit CSS property pres dvojklik v Computed panel (currently jen klik
-  na celou row, nedetekuje attr value zone)
-- [ ] Toggle property checkbox (! za property name, klik = !important toggle)
-- [ ] CSS rule add/delete (Styles section)
+CSS edit doplnky:
+- [ ] Toggle property checkbox (! za property name, klik = !important)
+- [ ] CSS rule add/delete (Styles section header buttons)
 
-Phase 7 doplnek:
-- [ ] Cookies tab v Application panelu (cookies registry pres document.cookie)
-- [ ] IndexedDB stores list (IDB store registry)
-- [ ] Network filter tabs (All / XHR / JS / CSS / Img / Doc)
-- [ ] Performance: separate sloupce pro layout / paint / gpu time
-- [ ] Network response body capture (zatim ureq nepristrici)
-
-Console doplnek:
-- [ ] Object/Array log pretty-print s expand/collapse
-- [ ] Console pre-eval s autocomplete fallback pri unknown ident
+Source maps stack trace:
+- [ ] Pri error/console log: parse trace lines + remap pres map_position
 
 Static HTML export:
-- [ ] Eventually delete src/debug_view/devtools.rs (zatim DEPRECATED ponechan)
+- [ ] Eventually delete src/debug_view/devtools.rs (DEPRECATED ponechan)
 
 ## Session N+1 highlights (refactor pass)
 
