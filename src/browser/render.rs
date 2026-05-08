@@ -3863,13 +3863,17 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                             }
                         }
                     }
-                    DisplayCommand::Image { src, .. } => {
+                    DisplayCommand::Image { src, w, h, .. } => {
                         // Resolve relative URL proti base_url (pri http(s) nebo file:// page).
                         let resolved = match &self.base_url {
                             Some(base) => resolve_url(base, src),
                             None => src.clone(),
                         };
                         r.load_image_as(src, &resolved);
+                        // Pri zoomu re-resample image na physical size = w * zoom.
+                        let target_w = (*w * self.zoom).round().max(1.0) as u32;
+                        let target_h = (*h * self.zoom).round().max(1.0) as u32;
+                        r.resample_image_for_size(src, target_w, target_h);
                     }
                     _ => {}
                 }
@@ -4234,6 +4238,9 @@ struct Renderer {
     atlas: GlyphAtlas,
     /// Image RGBA atlas + GPU texture
     image_atlas: ImageAtlas,
+    /// Cached source bytes per URL pro re-resample pri zoomu (load_image_as
+    /// stores, resample_image_for_size cte).
+    image_source_bytes: std::collections::HashMap<String, Vec<u8>>,
     image_tex: wgpu::Texture,
     image_view: wgpu::TextureView,
     /// @font-face loaded fonts: family -> Font.
@@ -4717,6 +4724,7 @@ impl Renderer {
             surface, device, queue, config, zoom: 1.0, pipeline, uniform_buf,
             atlas_tex, atlas_view, atlas_smp, bind_group_layout, bind_group, atlas,
             image_atlas, image_tex, image_view,
+            image_source_bytes: std::collections::HashMap::new(),
             font_registry: std::collections::HashMap::new(),
             loaded_font_urls: std::collections::HashSet::new(),
             color_fonts: std::collections::HashMap::new(),
@@ -5627,6 +5635,8 @@ impl Renderer {
         if self.image_atlas.cache.contains_key(cache_key) { return; }
         let bytes_opt = fetch_image_bytes(fetch_url);
         let bytes = match bytes_opt { Some(b) => b, None => return };
+        // Cache source bytes pro budouci re-resample pri zoomu.
+        self.image_source_bytes.insert(cache_key.to_string(), bytes.clone());
         if let Ok(img) = image::load_from_memory(&bytes) {
             let rgba = img.to_rgba8();
             let (w, h) = (rgba.width(), rgba.height());
@@ -5645,6 +5655,29 @@ impl Renderer {
                 }
             }
             self.image_atlas.add(cache_key, w, h, &raw);
+        }
+    }
+    /// Re-resample image atlas entry na target physical size. Pouzity pri zoomu
+    /// aby image byl ostry na fyzickem rozliseni screen px.
+    fn resample_image_for_size(&mut self, cache_key: &str, target_w: u32, target_h: u32) {
+        // Skip pokud cached size uz blizko target.
+        if let Some(info) = self.image_atlas.cache.get(cache_key) {
+            let dw = (info.width as i32 - target_w as i32).abs();
+            let dh = (info.height as i32 - target_h as i32).abs();
+            if dw < 4 && dh < 4 { return; }
+        }
+        let bytes = match self.image_source_bytes.get(cache_key).cloned() {
+            Some(b) => b,
+            None => return,
+        };
+        if let Ok(img) = image::load_from_memory(&bytes) {
+            let max_atlas = IMAGE_ATLAS_SIZE / 2;
+            let cw = target_w.min(max_atlas);
+            let ch = target_h.min(max_atlas);
+            let resized = img.resize_exact(cw, ch, image::imageops::FilterType::Triangle);
+            let rgba = resized.to_rgba8();
+            // image_atlas.add nahradi existing entry stejnym key.
+            self.image_atlas.add(cache_key, cw, ch, &rgba.into_raw());
         }
     }
 
