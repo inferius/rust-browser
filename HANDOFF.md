@@ -284,13 +284,32 @@ Document, console_log, ...). std::thread::spawn(move || ... interp ...) failuje
 na Send check kvuli Rc/RefCell uvnitr - i s `unsafe impl Send for SendInterp`
 wrapper, closure auto-trait check projde dovnitr a Rust odmitne.
 
-PRO SKUTECNE ZAPOJENI WORKER THREAD:
-1. Rc -> Arc migrace pres ~2400 lokalit (Interpreter struct, JsValue::Object,
-   JsValue::DomNode, JsObject, JsMap, JsSet, NodeData, Document, Environment,
-   wsl, ws_*, custom_elements, mutation_observers, ...)
-2. RefCell -> Mutex (lock blocking) nebo RwLock (read-optimized DOM)
-3. Vsechny .borrow()/.borrow_mut() -> .lock().unwrap()
-4. Weak<NodeData> -> std::sync::Weak
+PRO SKUTECNE ZAPOJENI WORKER THREAD - POKUS + SELHANI (2026-05-09):
+
+Provedl jsem plne sed nahrazeni Rc->Arc, RefCell->Mutex, .borrow()->.lock().unwrap()
+pres ~2400 lokalit napric 41 souboru. Build prosel (po fix std::rc::Arc artefakt
+kde sed vytvoril nesmyslna std::rc::Arc -> std::sync::Arc).
+
+PROBLEM: testy DEADLOCKUJI. Rc<RefCell> umoznuje multiple .borrow() a chained
+.borrow_mut() na same thread (runtime check). std::sync::Mutex NENI re-entrant -
+same thread .lock() podruhe = permanent deadlock. Aktualni interpreter pouziva
+hluboce nested chains kde pri eval volame na same data zase (Environment::define
+volana z capture_locals z exec_stmt s already-locked debugger, etc.).
+
+REVERTED.
+
+PRO PLNOU FUNCTIONAL REAL PAUSE potreba:
+1. parking_lot dep + replace `std::sync::Mutex` -> `parking_lot::ReentrantMutex`
+2. Tato lock() vraci primo guard - replace `.lock().unwrap()` -> `.lock()`
+   napric ~2400 mistech
+3. Pak Rc -> Arc, RefCell -> ReentrantMutex sed pass znovu (uz idempotent)
+4. Build + test (re-entrancy fix predbehne deadlocky)
+5. Spawn worker thread (UnsafeSendWrapper + per-fn Send check fix) - mozne
+   problemy s closure auto-trait check pres Rc-internal fields
+
+ALTERNATIVNE:
+- tokio::sync::Mutex + async runtime + .await skrz vsechny fn signatures
+- Continuation-passing eval (ulozit state, opustit, resume z save) - velky rewrite
 
 ALTERNATIVNI CESTY pro real pause:
 A) Continuation-passing eval (rewrite ~30 fn signatures pro re-entry from save)
