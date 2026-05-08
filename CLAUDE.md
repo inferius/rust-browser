@@ -111,21 +111,59 @@ cargo run -- window [src.html]                   # Alias browser, pres run_windo
 
 ## Co je hotove navic (od posledni revize)
 
-- **GPU image rendering** - mode 4 textureSample z RGBA atlasu (2048x2048 shelf-packed).
-- **CSS animation runtime tick** - apply_animations + apply_paint_animations + request_redraw loop pri active animations/transitions, dispatch animationstart/end/iteration events.
-- **Radial + Conic gradient** - mode 6/7 + multi-stop CPU tesselace.
-- **Canvas 2D API** - 50+ ops: paths (moveTo/lineTo/arc/bezier/quadratic/ellipse/arcTo), fills, strokes (lineWidth/cap/join/dash), state (save/restore + transform stack), gradients (linear+radial), drawImage (full + sub-rect), clip, globalAlpha/CompositeOperation.
-- **@font-face** - HTTP fetch (ureq) + relative URL resolution proti page base_url, FS path fallback. WOFF/WOFF2 dekomprese (WOFF2 jen bez glyf transform), variable font + COLR detection.
-- **SVG support** - emit_svg_children: line/rect/circle/ellipse/polygon/polyline/path/g/text + viewBox + preserveAspectRatio + transform attribute (parse_svg_transform + compose).
-- **Box-shadow inset** - mode 5, fade smerem dovnitr.
-- **CSS clip-path** - inset/circle/ellipse pres compute_clip_rect (rect dimensions + radius), polygon pres ClippedRect + triangulate_polygon (ear-clipping).
-- **WebGL** - 1308 lines: createShader/Program (vertex+fragment WGSL transpile), createBuffer/Texture, vertexAttribPointer, uniform1/2/3/4f/i + Matrix2/3/4fv, drawArrays/Elements, viewport/clear, walk_webgl + process_webgl_drawcalls + swap_view integration.
-- **Form submit** - JS API form.submit() (preventDefault check + collect form data + URL encode + ureq POST/GET) + native button[type=submit] click (dispatch 'submit' event pred navigation).
-- **WOFF2 glyf transform reverse** - full impl per Google's woff2 reference (Apache-2.0). 36B header parsing, 7-stream split, triplet decode (range-based dispatch flag<10/<20/<84/<120/<124/else, with_sign), simple/composite/empty glyph rekonstrukce, store_points + repeat optimization, bbox bitmap, sfnt simple glyph encoding (FLAG_X_SHORT/X_SAME/REPEAT), loca synthesized z glyf offsets (short/long format dle indexFormat). Tests s real Google Fonts Roboto subsets (greek-ext 3680B, greek 9556B, cyrillic 12108B) - vsechny round-trip + fontdue load OK.
+### Rendering / paint
+- **GPU image rendering** - mode 4 textureSample z RGBA atlasu (4096x4096 shelf-packed po 8cf1f8a).
+- **wgpu 0.20 -> 29 upgrade** (0ebf297): RenderPipelineDescriptor +cache+multiview_mask, RenderPassDescriptor +multiview_mask, RenderPassColorAttachment +depth_slice, PipelineLayoutDescriptor -push_constant_ranges +immediate_size, bind_group_layouts &[Option<&BGL>], ShaderModule entry_point Option<&str>, MipmapFilterMode, ImageCopyTexture->TexelCopyTextureInfo, surface.get_current_texture() vraci CurrentSurfaceTexture enum.
+- **HiDPI scale_factor tracking** (a720a63) - Renderer.scale_factor z winit, vp uniform = config.width / (zoom * scale_factor). CSS px -> physical fb mapping spravne pri HiDPI.
+- **3D transform NDC z fix** (f6309cd) - compose_transform shader nz=0.5 konstantni. Driv `clamp(tz*inv_w, -1, 1)` clipoval pulku quadu (wgpu NDC z range = [0,1] ne [-1,+1]). Po fixu rotateX/Y/Z full visible.
+- **CSS animation runtime tick**, **Radial+Conic gradient** (mode 6/7), **Canvas 2D API**, **@font-face**, **SVG support**, **Box-shadow inset**, **CSS clip-path**, **WebGL** (1308 lines).
+- **WOFF2 glyf transform reverse** - real Google Fonts Roboto subsets pass.
+- **Form submit** - JS API + native button[type=submit].
+- **Polygon edge AA** (ff598b5) - winding-aware outward normal (CW = vpravo od edge), 1px feather strip.
+- **Crisp glyph rasterization at zoom** (fd31f04) - atlas key = (font_size * zoom).round(), metrics scale dle inv_z, integer physical pixel snap.
+- **Image atlas re-raster pri zoomu** (fb29b71) - source bytes cached, resample na target physical size.
+- **LCD subpixel atlas storage** (2f05b48 -> 817b41d) - fontdue rasterize_subpixel pri size<24 dela 3x sirku, shader avg ze 3 sub-pixelu = grayscale fallback (proper LCD vyzaduje dual-source blend, neni implemented).
+- **SDF AA range zoom-aware** (e5fd596) - aa_range = 1/zoom logical (= 1 phys px), zachovava sharp edges pri zoomu.
+- **Real bold + italic font variants** - timesbd.ttf, timesi.ttf, timesbi.ttf, fallback fake skew/smear.
+- **Default font Times New Roman** (d03ad51) - match Chrome UA default.
+- **Glyph atlas 4096x4096** (8cf1f8a) - vetsi kapacita pri zoomu.
+- **Animations smooth scroll inertia** (625477e) - lerp 25% per frame na target.
 
-## Co zbyva (TODO)
+### Layout
+- **Per-element layout cache** (05d09bb) - subtree fingerprint = hash(node_ptr + tag + text + sorted style + child fingerprints). Thread-local LAYOUT_CACHE pri build, child rebuild skip pri match.
+- **Cascade hover/focus state hash** (0aba5e5) - cascade_hash zahrnul hovered_node + focused_node, ale skip pokud CSS bez :hover/:focus selektoru.
+- **@media + @container queries pres viewport** (45f5c4b) - cascade_with_viewport pasuje vw/vh.
+- **SVG child LayoutBox rect** (c9bb81e) - z SVG attrs (rect/circle/ellipse/line/text). Devtools highlight + hit-test funguje pres SVG shapes.
+- **Inline replaced explicit_height ovlivnuje line_height** (0e4de94) - SVG/img s height attr drzi spravnou cursor_y advance v parent flow. Section content_h zahrnuje shapes.
+- **Inline-block element_h ovlivnuje line_height** (0e4de94) - button s padding 8+text+8 = 32 px line, cursor_y advance pokryje cely button bbox vc paddingu. Section bottom padding viditelny.
+- **Text vertical center via inner_h** (e1e3391 -> 817b41d) - v_offset = (inner_h - 1.5*fs)/2, bez clampu. Visible glyph (0.9*fs) center v inner_h.
+- **Inline element baseline shift** (eab6562) - pro smaller font (small/sub/sup) rect.y = cursor_y + (parent_fs - el_fs).max(0).
+- **Bold-aware width measure** (186f359) - measure_text_width_styled(text, size, bold) prefer bold font / +1px fake-bold pad. Carka po `<strong>` neoverlapuje.
+- **Text wrap multi-line via \n** (e45836a) - flux_inline insertne newline na break point, render handluje pen_x reset + pen_y advance.
+- **line_height default 1.2** (ad12a0f) - CSS spec normal, predtim 1.4 = prilis aggressivni.
+- **layout_block bound s asymmetric padding** (ad12a0f) - pad_t/pad_b namisto bx.padding shorthand.
+- **Text node rect span pres vsech words** (817b41d) - rect.width = cursor_x - rect.x, height = lines * advance_h. Hit-test funguje pres cely text run, cursor I-beam visible.
+- **Default font sans serif** vs serif Times New Roman (d03ad51).
 
-Vsechny puvodni TODO body hotove. Engine kompletni.
+### Browser shell / UI
+- **Zoom support** (4905e7b) - Ctrl++/-/0 (1.1x kroky, 25%-500%). Layout viewport = window/zoom = reflow.
+- **Vertical + Horizontal scrollbars at zoom** (bd5ad42) - scroll_y/x v logical px, viewport_w/h logical, scrollbar emit visible.
+- **Smooth scroll inertia** (625477e) - lerp scroll_y -> target.
+- **Keyboard scroll** (2ea9e70) - PageUp/Down (0.9 viewport), Arrow (60px), Home/End, Space.
+- **Find on page (Ctrl+F)** (90ddc25) - overlay UI s query + counter, Enter next/Shift+Enter prev, Esc close.
+- **Address bar (Ctrl+L)** (a4380df) - URL input + Enter navigate (http/file/path).
+- **Print to PDF (Ctrl+P)** (8b0ab3a) - printpdf walk LayoutBox tree, Times Roman font, save .pdf.
+- **Text selection** (3e39e85) - mouse drag rect, Ctrl+A select all, Ctrl+C copy text. arboard clipboard.
+- **Cursor icon** (b42d4d1) - I-beam over text, Pointer over a/button/input/select.
+- **Form input typing** (b42d4d1) - focused input/textarea kapture char + Backspace -> set value attr.
+- **Devtools console Ctrl+V paste** (fbc9f85).
+
+### Deps bumps
+- arboard 3.4 -> 3.6, pollster 0.3 -> 0.4, bytemuck 1.16 -> 1.25, fancy-regex 0.13 -> 0.18, brotli 6 -> 8, tungstenite 0.24 -> 0.29, ureq 2.10 -> 2.12 (3.x = API rewrite skip), selectors 0.25 -> 0.38 (CSS L4), cssparser 0.34 -> 0.37, html5ever 0.27 stays (rcdom 0.5+ +unofficial only), icu 1.5 stays (2.0 major rewrite).
+
+## Co zbyva (TODO pro dalsi vlakno)
+
+Viz HANDOFF.md.
 
 ## Konvence
 
