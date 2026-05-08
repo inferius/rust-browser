@@ -3085,7 +3085,15 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
         // bx_clone vlastni line_height, ne parent default.
         let own_lh_px = bx_clone.line_height * font_size;
         let advance_h = own_lh_px.max(font_size * 1.2);
-        line_height = line_height.max(advance_h);
+        // Inline replaced element s explicit_height (svg, img s height attr,
+        // canvas, iframe) - line_height musi pokryt celou jejich vysku, jinak
+        // section content_h ignoruje a section nedosahne pod SVG/img.
+        let line_h_for_this = if let Some(eh) = bx_clone.explicit_height {
+            advance_h.max(eh)
+        } else {
+            advance_h
+        };
+        line_height = line_height.max(line_h_for_this);
         let space_w = font_size * 0.27;
 
         if let Some(text) = &bx_clone.text {
@@ -3204,6 +3212,10 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
                 text_w + pad_l + pad_r
             });
             let element_h = explicit_h.unwrap_or(advance_h + pad_t + pad_b);
+            // Inline-block s padding (button) je vyssi nez advance_h - line_height
+            // musi pokryt cele element_h aby cursor_y advance pod nej a section
+            // content_h zahrnula pad bottom.
+            line_height = line_height.max(element_h);
             if cursor_x + estimated_w > inner_x + inner_w && cursor_x > inner_x {
                 cursor_y += line_height;
                 cursor_x = inner_x;
