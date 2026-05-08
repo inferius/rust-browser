@@ -18,6 +18,7 @@ thread_local! {
 
 /// Set hovered element (= node id z Rc::as_ptr cast as usize). None = zadny.
 pub fn set_hovered_node(id: Option<usize>) { HOVERED_NODE.with(|c| *c.borrow_mut() = id); }
+pub fn get_hovered_node() -> Option<usize> { HOVERED_NODE.with(|c| *c.borrow()) }
 pub fn set_active_node(id: Option<usize>) { ACTIVE_NODE.with(|c| *c.borrow_mut() = id); }
 pub fn set_focused_node(id: Option<usize>) { FOCUSED_NODE.with(|c| *c.borrow_mut() = id); }
 pub fn get_focused_node() -> Option<usize> { FOCUSED_NODE.with(|c| *c.borrow()) }

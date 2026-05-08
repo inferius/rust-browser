@@ -2470,6 +2470,10 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         cached_layout_root: Option<super::layout::LayoutBox>,
         /// True kdyz animations modify layout-affecting props.
         animations_affect_layout: bool,
+        /// Zda current CSS pouziva :hover / :focus selektory. Pokud ne, hover
+        /// change neinvaliduje cascade cache.
+        css_uses_hover: bool,
+        css_uses_focus: bool,
         /// Cache cascade output (DOM root ptr hash -> StyleMap).
         cached_cascade_hash: u64,
         cached_style_map: Option<super::cascade::StyleMap>,
@@ -3676,6 +3680,11 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                         })
                     })
                 });
+                // Detekuj zda CSS obsahuje :hover/:focus selektory. Pokud ne,
+                // hover/focus state nema vliv na cascade -> skip re-cascade pri
+                // hover change.
+                self.css_uses_hover = self.css.contains(":hover");
+                self.css_uses_focus = self.css.contains(":focus");
                 self.cached_stylesheets = Some(parsed);
                 self.cached_stylesheets_hash = css_hash;
                 self.cached_style_map = None;
@@ -3692,6 +3701,14 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                 // cache invalidate pri zmene.
                 ((self.zoom * 1000.0) as i64).hash(&mut h);
                 (r.config.width as u64).hash(&mut h);
+                // Hover/focus state - jen kdyz CSS obsahuje :hover/:focus
+                // selektory. Skip cascade invalidate pokud CSS bez :hover.
+                if self.css_uses_hover {
+                    cascade::get_hovered_node().unwrap_or(0).hash(&mut h);
+                }
+                if self.css_uses_focus {
+                    cascade::get_focused_node().unwrap_or(0).hash(&mut h);
+                }
                 (r.config.height as u64).hash(&mut h);
                 h.finish()
             };
@@ -4181,6 +4198,8 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         display_list_buffer: Vec::with_capacity(2048),
         cached_layout_root: None,
         animations_affect_layout: false,
+        css_uses_hover: false,
+        css_uses_focus: false,
         current_path: current_html_path,
         base_url,
         history: initial_url.into_iter().collect(),

@@ -318,6 +318,11 @@ pub struct Rect {
 
 #[derive(Debug, Clone)]
 pub struct LayoutBox {
+    /// Hash style entry tohoto uzlu (cascade) + DOM children pointer hashes.
+    /// Pri rebuild layout pokud predchozi LayoutBox pro stejny node ma stejny
+    /// fingerprint, lze celou subtree zkopirovat misto re-build (per-element
+    /// cache). Hodnota 0 = ne-hashed nebo invalid.
+    pub fingerprint: u64,
     pub rect: Rect,
     pub display: Display,
     pub bg_color: Option<[u8; 4]>,   // RGBA
@@ -787,6 +792,7 @@ pub struct LayoutBox {
 impl LayoutBox {
     pub fn new() -> Self {
         LayoutBox {
+            fingerprint: 0,
             rect: Rect { x: 0.0, y: 0.0, width: 0.0, height: 0.0 },
             display: Display::Block,
             bg_color: None,
