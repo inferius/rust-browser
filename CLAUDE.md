@@ -68,6 +68,9 @@ src/
     tests/                 - unit + integration tests batches
 
   browser/                 - HTML/CSS engine + rendering
+    devtools_panel.rs      - Inline DevTools panel frontend (paint nad DevToolsState)
+                              + paint_element_highlight (Chrome-like overlay)
+                              + devtools_hit_test + find_box_rect_by_id + pick_node_at_screen_pos
     html_parser.rs         - HTML5 parsing pres html5ever -> nas DOM tree
     dom.rs                 - DOM node, get_elements_by_tag, text_content
     css_parser.rs          - CSS pres cssparser -> StyleSheet, Rule, Declaration; @media, @keyframes, var()
@@ -117,12 +120,28 @@ src/
 
     tests/                 - integration tests (cascade/css/dom/html/layout/paint/render/devtools_panel/woff/emoji_fonts/variable_fonts)
 
-  debug_view/              - HTML diagnosticke nahledy
+  devtools/                - DevTools state + model (sjednoceny pro inline + static frontends)
+    mod.rs                 - DevToolsState (theme, tab, panel_h, focus, frame_counter, ...)
+    theme.rs               - ThemeMode + ThemeFlavor + Palette + OS dark mode detection
+    focus.rs               - FocusTarget enum (keyboard input dispatcher)
+    context_menu.rs        - MenuItem + MenuAction + per-tab builders
+    search.rs              - tag/class/id/CSS selector/XPath element search
+    model/
+      elements.rs          - ElementRow + RowKind + build_rows (s collapsed HashSet)
+      console.rs           - LogEntry + ConsoleInput (cursor/selection/history/clipboard)
+      network.rs           - NetworkEntry + NetworkResourceType + NetworkFilter
+      sources.rs           - SourceFile + SourcesState + Breakpoint + parse_source_map (V3 + VLQ decode)
+      performance.rs       - FrameSample + 240-frame ring buffer
+      styles.rs            - MatchedRule + RuleSource + StylesState
+    tests/
+      console_input_tests.rs / search_tests.rs / sources_tests.rs
+
+  debug_view/              - HTML diagnosticke nahledy (statics)
     mod.rs                 - generate_debug_html (tokeny + AST)
     tokens_view.rs         - Tokeny jako barevne badge + tooltip
     ast_view.rs            - AST tree (collapsible)
     page.rs                - HTML wrapper (CSS + JS embedded)
-    devtools.rs            - DevTools-like static HTML export (Elements / Console / Network / Performance)
+    devtools.rs            - DevTools-like static HTML export (DEPRECATED, F11 stale funguje)
 
 static/                    - Test HTML/CSS/JS pro browser/devtools
   test.html, test.css, basic_test.js, engine-test.html

@@ -326,6 +326,22 @@ fn find_node_by_ptr(root: &Rc<crate::browser::dom::NodeData>, ptr: usize) -> Opt
     None
 }
 
+/// Vyber vsechny `node_id` v subtree pod node `target_id`. Pouziva ElementRow
+/// flat list - depth indikuje strukturu.
+fn collect_subtree_ids(
+    rows: &[crate::devtools::model::elements::ElementRow],
+    target_id: usize,
+    out: &mut Vec<usize>,
+) {
+    let Some(start) = rows.iter().position(|r| r.node_id == target_id) else { return };
+    let target_depth = rows[start].depth;
+    out.push(target_id);
+    for r in rows.iter().skip(start + 1) {
+        if r.depth <= target_depth { break; }
+        out.push(r.node_id);
+    }
+}
+
 
 
 /// Push rect with rounded corners (SDF rendering).
@@ -600,6 +616,14 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                                 }
                                 DevtoolsHit::DismissContextMenu => {
                                     self.devtools.context_menu = None;
+                                }
+                                DevtoolsHit::ContextMenuItem(idx) => {
+                                    let action = self.devtools.context_menu.as_ref()
+                                        .and_then(|m| m.action_at(idx)).cloned();
+                                    self.devtools.context_menu = None;
+                                    if let Some(a) = action {
+                                        self.dispatch_menu_action(a);
+                                    }
                                 }
                                 DevtoolsHit::None | _ => {}
                             }
@@ -1469,6 +1493,110 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                     }
                 }
             }
+        }
+
+        fn dispatch_menu_action(&mut self, action: crate::devtools::context_menu::MenuAction) {
+            use crate::devtools::context_menu::MenuAction::*;
+            match action {
+                CopySelector { node_id } | CopyXPath { node_id } | CopyOuterHtml { node_id } | CopyInnerHtml { node_id } => {
+                    if let Some(interp) = &self.interpreter {
+                        let root = std::rc::Rc::clone(&interp.document.borrow().root);
+                        if let Some(node) = crate::devtools::model::elements::find_node_by_id(&root, node_id) {
+                            let txt = node.tag_name().unwrap_or_default();
+                            if let Ok(mut cb) = arboard::Clipboard::new() {
+                                let _ = cb.set_text(txt);
+                            }
+                        }
+                    }
+                }
+                ScrollIntoView { node_id } => {
+                    if let Some(layout) = &self.layout_root {
+                        if let Some(bx) = crate::browser::devtools_panel::find_layout_box(layout, node_id) {
+                            self.scroll_target_y = bx.rect.y - 50.0;
+                            if self.scroll_target_y < 0.0 { self.scroll_target_y = 0.0; }
+                        }
+                    }
+                }
+                ExpandAll { node_id } => {
+                    let mut to_expand = Vec::new();
+                    collect_subtree_ids(&self.devtools.elements.rows, node_id, &mut to_expand);
+                    for id in to_expand {
+                        self.devtools.elements.collapsed.remove(&id);
+                    }
+                    if let Some(interp) = &self.interpreter {
+                        let root = std::rc::Rc::clone(&interp.document.borrow().root);
+                        crate::browser::devtools_panel::rebuild_tree(&mut self.devtools, &root);
+                    }
+                }
+                CollapseAll { node_id } => {
+                    let mut to_collapse = Vec::new();
+                    collect_subtree_ids(&self.devtools.elements.rows, node_id, &mut to_collapse);
+                    for id in to_collapse {
+                        self.devtools.elements.collapsed.insert(id);
+                    }
+                    if let Some(interp) = &self.interpreter {
+                        let root = std::rc::Rc::clone(&interp.document.borrow().root);
+                        crate::browser::devtools_panel::rebuild_tree(&mut self.devtools, &root);
+                    }
+                }
+                ClearConsole => {
+                    self.devtools.console.log.clear();
+                    if let Some(interp) = &self.interpreter {
+                        interp.console_log.borrow_mut().clear();
+                    }
+                }
+                Copy => {
+                    if let Some(t) = self.devtools.console.input.selected_text() {
+                        if let Ok(mut cb) = arboard::Clipboard::new() { let _ = cb.set_text(t); }
+                    }
+                }
+                Cut => {
+                    if let Some(t) = self.devtools.console.input.cut() {
+                        if let Ok(mut cb) = arboard::Clipboard::new() { let _ = cb.set_text(t); }
+                    }
+                }
+                Paste => {
+                    if let Ok(mut cb) = arboard::Clipboard::new() {
+                        if let Ok(t) = cb.get_text() {
+                            self.devtools.console.input.insert(&t);
+                        }
+                    }
+                }
+                SelectAll => { self.devtools.console.input.select_all(); }
+                CopyUrl { idx } => {
+                    if let Some(e) = self.devtools.network.entries.get(idx) {
+                        if let Ok(mut cb) = arboard::Clipboard::new() {
+                            let _ = cb.set_text(e.url.clone());
+                        }
+                    } else if let Some(interp) = &self.interpreter {
+                        let logs = interp.network_log.borrow();
+                        if let Some((url, _)) = logs.get(idx) {
+                            if let Ok(mut cb) = arboard::Clipboard::new() {
+                                let _ = cb.set_text(url.clone());
+                            }
+                        }
+                    }
+                }
+                CopyAsCurl { idx } => {
+                    let url = self.devtools.network.entries.get(idx).map(|e| e.url.clone())
+                        .or_else(|| self.interpreter.as_ref()
+                            .and_then(|i| i.network_log.borrow().get(idx).map(|(u, _)| u.clone())));
+                    if let Some(u) = url {
+                        let curl = format!("curl '{}' -A 'RustWebEngine/0.1'", u);
+                        if let Ok(mut cb) = arboard::Clipboard::new() {
+                            let _ = cb.set_text(curl);
+                        }
+                    }
+                }
+                AddBreakpoint { file_id, line } => {
+                    self.devtools.sources.toggle_breakpoint(file_id, line);
+                }
+                RemoveAllBreakpoints => {
+                    self.devtools.sources.breakpoints.clear();
+                }
+                _ => {}
+            }
+            self.render();
         }
 
         fn run_elements_search(&mut self) {
@@ -2351,6 +2479,17 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
             if frame_ms > 50.0 {
                 eprintln!("[slow frame] {:.1} ms", frame_ms);
             }
+            // Performance sample do DevTools.
+            let dl_size = self.display_list_buffer.len() as u32;
+            self.devtools.performance.push(crate::devtools::model::performance::FrameSample {
+                frame_index: self.devtools.frame_counter,
+                total_ms: frame_ms,
+                layout_ms: 0.0,
+                paint_build_ms: 0.0,
+                gpu_submit_ms: 0.0,
+                display_list_size: dl_size,
+                vertex_count: 0,
+            });
         }
     }
 

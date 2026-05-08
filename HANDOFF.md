@@ -2,13 +2,145 @@
 
 Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 
-## Stav projektu (po session N+1: cleanup + refactor split)
+## Stav projektu (po session N+2: devtools rework phase 1-3 + 5)
 
 **Build:** clean, 0 warnings.
-**Tests:** 2361 pass / 0 failed / 3 ignored.
+**Tests:** 2396 pass / 0 failed / 3 ignored (35 novych devtools tests).
 **wgpu:** 29 (latest stable).
 **naga:** 29.
 **winit:** 0.30.
+
+## Session N+2 highlights (devtools rework)
+
+Vytvoren novy `src/devtools/` modul - sjednoceny model + state pro inline +
+static frontends. Static HTML export zustava ale je deprecated (F11 stale
+funguje pro snapshot, ale aktivni vyvoj jen na inline panelu).
+
+### Phase 1 - fundament (commit 88cb8b8)
+
+`src/devtools/`:
+- `theme.rs` - ThemeMode (Light/Dark/Auto) + ThemeFlavor (Chrome/Firefox)
+  + OS dark mode detection (Windows/macOS/Linux) cached pres OnceLock
+  + 4 palety (chrome_dark/chrome_light/firefox_dark/firefox_light)
+  + 50+ semantickych barev (bg/border/text/syn_*/log_*/net_*/overlay_*)
+- `mod.rs` - DevToolsState (theme, tab, panel_h/open, focus, frame_counter,
+  ElementsState, ConsoleState, NetworkState, SourcesState, PerformanceState,
+  StylesState, ContextMenuState)
+- `model/elements.rs` - ElementRow + RowKind + build_rows respektuje collapsed
+  HashSet. **KEY FIX:** text nodes ted v stromu (driv skipped).
+- `model/console.rs` - LogEntry + LogLevel + ConsoleInput (cursor + selection
+  + history + clipboard support) + AutocompleteState. 12 unit testu.
+- `model/network.rs` - NetworkEntry + NetworkResourceType + NetworkFilter
+- `model/sources.rs` - SourceFile + SourcesState + Breakpoint
+  + parse_source_map (V3 format) + decode_mappings + decode_vlq_seq
+  (full base64-VLQ decoder per spec). 12 unit testu.
+- `model/performance.rs` - FrameSample (total_ms, layout/paint/gpu) +
+  240-frame ring buffer + counters
+- `model/styles.rs` - MatchedRule + RuleSource (UserAgent/Inline/StyleBlock/
+  External) + StylesState
+- `context_menu.rs` - MenuItem + MenuAction (15+ variants per Tab)
+  + builders elements_row_menu / console_text_menu / network_row_menu / sources_line_menu
+- `search.rs` - tag / class / id / CSS selector / XPath subset (//tag, [@a],
+  //tag[N], /tag/tag) s detect_mode auto-routing. 11 unit testu.
+- `focus.rs` - FocusTarget enum (Page / DevToolsConsole / DevToolsElementsSearch
+  / DevToolsSourcesEditor / AddressBar / FindOverlay / ContextMenu)
+
+### Phase 2 - frontend rewrite (commit 50cb5fa)
+
+`browser/devtools_panel.rs` 569 LOC -> ~1080 LOC kompletni rewrite jako
+frontend nad DevToolsState + Palette. Vsechny hardcoded barvy nahrazeny.
+
+7 tabu: Elements / Console / Network / Sources / Performance / Application / Settings
+
+KLICOVE FIXES:
+- Text nodes ted v Elements tree
+- Scrollbar (vertikal) emit pri overflow
+- Collapsible tree s caret '>' / 'v' indicators
+- Open + close tag radky pri expanded element
+- Self-closing detect pro void elements (br/img/input/...)
+- Selection persists pres F12 close (overlay highlight rendered VZDY)
+- Element highlight overlay (Chrome-like): margin (oranzova) + border (zluta)
+  + padding (zelena) + content (modra) layered rectangles + label box s tag
+  selector + dimensions
+- Hover row highlight
+- Search bar UI s placeholder text "Find by tag / .class / #id / [attr] / //xpath"
+
+### Phase 3 - integration wire-in (commit a978cb2)
+
+CONSOLE:
+- Mirror interpreter.console_log -> devtools.console.log per render frame
+- Console eval s `$0` binding (selected DOM node jako JsValue::DomNode)
+- Proper text input - cursor / selection / history / clipboard
+  (Left/Right s Shift, Home/End, Up/Down history, Ctrl+A/C/X/V, Esc)
+- Focus model - input dostane chary jen pri DevToolsConsole focus
+
+ELEMENTS:
+- Ctrl+F otevre devtools elements search (kdyz panel + Tab Elements)
+- Auto-expand ancestors pri jump-to-search-match
+- Computed styles wire-in - cascade output -> devtools.styles.computed
+- Computed values panel zobrazuje vsechny resolved CSS properties
+- Box info sekce (rect, padding, margin, border-width)
+
+SOURCES:
+- Inline + external `<script>` tagy registrovany jako SourceFile pri parse
+- URL = src attribute nebo "<inline #N>"
+- Auto-select first source pri prepnuti na Sources tab
+- Klik na file row -> selected_id, content + line numbers + breakpoint gutter
+
+THEME:
+- Ctrl+Shift+T cycle Auto -> Light -> Dark
+- Theme dot v toolbar tez cycle
+- Settings tab - klik na Auto/Light/Dark a Chrome/Firefox volby
+
+### Phase 5 - context menu dispatch + perf instrumentation (this commit)
+
+CONTEXT MENU:
+- RMB v devtools panel otevre per-tab menu
+- Klik na item -> dispatch_menu_action s konkretnim ucinkem:
+  * CopySelector / XPath / OuterHtml / InnerHtml -> clipboard
+  * ScrollIntoView - posune page do view selected element
+  * ExpandAll / CollapseAll - subtree z node_id
+  * ClearConsole - clear log + interp.console_log
+  * Copy / Cut / Paste / SelectAll - console input clipboard ops
+  * CopyUrl / CopyAsCurl - network row -> clipboard
+  * AddBreakpoint / RemoveAllBreakpoints - sources
+
+PERFORMANCE:
+- FrameSample push do PerformanceState ring buffer per render frame
+  (frame_index, total_ms, display_list_size)
+- Performance tab graf 240-frame s 16.7ms threshold cara
+
+## Aktualne TODO pro devtools
+
+Phase 3 doplnek:
+- [ ] Console autocomplete provider (globals + member access pres tab key)
+- [ ] Console multiline support (Shift+Enter newline)
+
+Phase 4 - Sources s breakpoints:
+- [ ] Real breakpoint pause v interpreteru (eval `node.span` line check
+  proti devtools.sources.breakpoints set)
+- [ ] Pause UI - Continue / Step Over / Step Into / Step Out buttons
+- [ ] Local variables panel pri pause
+- [ ] Source map fetch + apply pri zobrazeni
+
+Phase 6 - Interaktivni edit:
+- [ ] Double-click na attribute value v Elements tree -> inline input
+- [ ] Edit property value v Computed/Styles panel
+- [ ] Add new declaration v Styles panel
+- [ ] Toggle property checkbox
+
+Phase 7 - Application + advanced:
+- [ ] Storage list panel (localStorage / sessionStorage / cookies)
+- [ ] Network row klik -> detail popup (headers + response preview)
+- [ ] Network filter tabs (All / XHR / JS / CSS / Img / Doc)
+- [ ] Performance: separate sloupce pro layout / paint / gpu time
+
+Settings + persist:
+- [ ] Persist theme volba do user config souboru (~/.rwe/devtools.json)
+
+Static HTML export deprecated:
+- [ ] Note v F11 logu "DEPRECATED, use F12 inline panel"
+- [ ] Eventually delete src/debug_view/devtools.rs (zatim ponechat)
 
 ## Session N+1 highlights (refactor pass)
 
@@ -207,7 +339,8 @@ Pattern: kazdy sub-modul ma `impl Interpreter { ... }` block, metody `pub(super)
 | Ctrl+= / Ctrl++ | Zoom in (1.1x) |
 | Ctrl+- | Zoom out |
 | Ctrl+0 | Zoom reset 100% |
-| Ctrl+F | Find on page |
+| Ctrl+F | Find on page (NEBO Elements search pri devtools open) |
+| Ctrl+Shift+T | Cycle theme (Auto -> Light -> Dark) |
 | Ctrl+L | Address bar |
 | Ctrl+A | Select all |
 | Ctrl+C | Copy selection |
