@@ -4572,7 +4572,6 @@ impl Renderer {
         )).expect("adapter");
         let (device, queue) = pollster::block_on(adapter.request_device(
             &wgpu::DeviceDescriptor::default(),
-            None,
         )).expect("device");
         let size = window.inner_size();
         let surface_caps = surface.get_capabilities(&adapter);
@@ -4702,18 +4701,18 @@ impl Renderer {
             source: wgpu::ShaderSource::Wgsl(RECT_SHADER.into()),
         });
 
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { immediate_size: 0,
             label: Some("pl"),
-            bind_group_layouts: &[&bind_group_layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&bind_group_layout)],
+            
         });
 
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { multiview_mask: None,
             label: Some("pipeline"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: "vs_main",
+                entry_point: Some("vs_main"),
                 compilation_options: Default::default(),
                 buffers: &[wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<Vertex>() as u64,
@@ -4733,7 +4732,7 @@ impl Renderer {
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: "fs_main",
+                entry_point: Some("fs_main"),
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: config.format,
@@ -4744,7 +4743,7 @@ impl Renderer {
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            cache: None,
         });
 
         let atlas = GlyphAtlas::new();
@@ -4823,21 +4822,21 @@ impl Renderer {
                 },
             ],
         });
-        let blur_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        let blur_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { immediate_size: 0,
             label: Some("blur_pl"),
-            bind_group_layouts: &[&blur_bind_group_layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&blur_bind_group_layout)],
+            
         });
-        let blur_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let blur_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { multiview_mask: None,
             label: Some("blur_pipeline"),
             layout: Some(&blur_pipeline_layout),
             vertex: wgpu::VertexState {
-                module: &blur_shader, entry_point: "vs_main",
+                module: &blur_shader, entry_point: Some("vs_main"),
                 compilation_options: Default::default(),
                 buffers: &[], // fullscreen triangle, no vertex buffer
             },
             fragment: Some(wgpu::FragmentState {
-                module: &blur_shader, entry_point: "fs_main",
+                module: &blur_shader, entry_point: Some("fs_main"),
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: offscreen_format,
@@ -4848,7 +4847,7 @@ impl Renderer {
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            cache: None,
         });
 
         // Compose shader + pipeline - samples offscreen RT, kresli do swap chain
@@ -4889,21 +4888,21 @@ impl Renderer {
                 },
             ],
         });
-        let compose_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        let compose_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { immediate_size: 0,
             label: Some("compose_pl"),
-            bind_group_layouts: &[&compose_bind_group_layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&compose_bind_group_layout)],
+            
         });
-        let compose_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let compose_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { multiview_mask: None,
             label: Some("compose_pipeline"),
             layout: Some(&compose_pipeline_layout),
             vertex: wgpu::VertexState {
-                module: &compose_shader, entry_point: "vs_main",
+                module: &compose_shader, entry_point: Some("vs_main"),
                 compilation_options: Default::default(),
                 buffers: &[],
             },
             fragment: Some(wgpu::FragmentState {
-                module: &compose_shader, entry_point: "fs_main",
+                module: &compose_shader, entry_point: Some("fs_main"),
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: config.format,
@@ -4914,7 +4913,7 @@ impl Renderer {
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            cache: None,
         });
 
         // Transform pipeline - samples offscreen, drawat 3D transformed quad
@@ -4955,21 +4954,21 @@ impl Renderer {
                 },
             ],
         });
-        let transform_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        let transform_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { immediate_size: 0,
             label: Some("transform_pl"),
-            bind_group_layouts: &[&transform_bind_group_layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&transform_bind_group_layout)],
+            
         });
-        let transform_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let transform_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { multiview_mask: None,
             label: Some("transform_pipeline"),
             layout: Some(&transform_pipeline_layout),
             vertex: wgpu::VertexState {
-                module: &transform_shader, entry_point: "vs_main",
+                module: &transform_shader, entry_point: Some("vs_main"),
                 compilation_options: Default::default(),
                 buffers: &[],
             },
             fragment: Some(wgpu::FragmentState {
-                module: &transform_shader, entry_point: "fs_main",
+                module: &transform_shader, entry_point: Some("fs_main"),
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: config.format,
@@ -4980,7 +4979,7 @@ impl Renderer {
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            cache: None,
         });
 
         Renderer {
@@ -5043,13 +5042,13 @@ impl Renderer {
             view_formats: &[],
         });
         self.queue.write_texture(
-            wgpu::ImageCopyTexture {
+            wgpu::TexelCopyTextureInfo {
                 texture: &tex, mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
             &rgba_data[..expected_size],
-            wgpu::ImageDataLayout {
+            wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(w * bytes_per_pixel),
                 rows_per_image: Some(h),
@@ -5066,7 +5065,7 @@ impl Renderer {
                 address_mode_w: wgpu::AddressMode::Repeat,
                 mag_filter: wgpu::FilterMode::Linear,
                 min_filter: wgpu::FilterMode::Linear,
-                mipmap_filter: wgpu::FilterMode::Linear,
+                mipmap_filter: wgpu::MipmapFilterMode::Linear,
                 ..Default::default()
             }));
         }
@@ -5158,7 +5157,7 @@ impl Renderer {
                 address_mode_w: wgpu::AddressMode::Repeat,
                 mag_filter: wgpu::FilterMode::Linear,
                 min_filter: wgpu::FilterMode::Linear,
-                mipmap_filter: wgpu::FilterMode::Linear,
+                mipmap_filter: wgpu::MipmapFilterMode::Linear,
                 ..Default::default()
             }));
         }
@@ -5237,26 +5236,26 @@ impl Renderer {
             }]
         };
         // Pripoj uniform bind group layout pokud existuje pro program.
-        let bgl_refs: Vec<&wgpu::BindGroupLayout> = if let Some(bgl) = self.webgl_uniform_bgls.get(&program_id) {
-            vec![bgl]
+        let bgl_refs: Vec<Option<&wgpu::BindGroupLayout>> = if let Some(bgl) = self.webgl_uniform_bgls.get(&program_id) {
+            vec![Some(bgl)]
         } else {
             Vec::new()
         };
-        let pl_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        let pl_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { immediate_size: 0,
             label: Some(&format!("webgl_pl_{program_id}")),
             bind_group_layouts: &bgl_refs,
-            push_constant_ranges: &[],
+            
         });
-        let pipeline = self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let pipeline = self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { multiview_mask: None,
             label: Some(&format!("webgl_pipeline_{program_id}")),
             layout: Some(&pl_layout),
             vertex: wgpu::VertexState {
-                module: &modules.0, entry_point: "main",
+                module: &modules.0, entry_point: Some("main"),
                 compilation_options: Default::default(),
                 buffers: &buffers,
             },
             fragment: Some(wgpu::FragmentState {
-                module: &modules.1, entry_point: "main",
+                module: &modules.1, entry_point: Some("main"),
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: self.config.format,
@@ -5267,7 +5266,7 @@ impl Renderer {
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            cache: None,
         });
         self.webgl_pipelines.insert(program_id, pipeline);
         true
@@ -5375,9 +5374,9 @@ impl Renderer {
             None => wgpu::LoadOp::Load,
         };
         {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor { multiview_mask: None,
                 label: Some("webgl_draw_pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment { depth_slice: None,
                     view, resolve_target: None,
                     ops: wgpu::Operations { load, store: wgpu::StoreOp::Store },
                 })],
@@ -5628,9 +5627,9 @@ impl Renderer {
             None => wgpu::LoadOp::Load,
         };
         {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor { multiview_mask: None,
                 label: Some("webgl_draw_elements"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment { depth_slice: None,
                     view, resolve_target: None,
                     ops: wgpu::Operations { load, store: wgpu::StoreOp::Store },
                 })],
@@ -5670,9 +5669,9 @@ impl Renderer {
         }
         let mut encoder = self.device.create_command_encoder(&Default::default());
         {
-            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor { multiview_mask: None,
                 label: Some("webgl_clear"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment { depth_slice: None,
                     view, resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
@@ -5763,9 +5762,9 @@ impl Renderer {
             ],
         });
         {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor { multiview_mask: None,
                 label: Some("blur_h"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment { depth_slice: None,
                     view: &self.offscreen_view_b,
                     resolve_target: None,
                     ops: wgpu::Operations {
@@ -5796,9 +5795,9 @@ impl Renderer {
             ],
         });
         {
-            let mut pass = encoder2.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut pass = encoder2.begin_render_pass(&wgpu::RenderPassDescriptor { multiview_mask: None,
                 label: Some("blur_v"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment { depth_slice: None,
                     view: &self.offscreen_view,
                     resolve_target: None,
                     ops: wgpu::Operations {
@@ -5948,14 +5947,14 @@ impl Renderer {
     fn upload_image_atlas(&mut self) {
         if !self.image_atlas.dirty { return; }
         self.queue.write_texture(
-            wgpu::ImageCopyTexture {
+            wgpu::TexelCopyTextureInfo {
                 texture: &self.image_tex,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
             &self.image_atlas.pixels,
-            wgpu::ImageDataLayout {
+            wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(IMAGE_ATLAS_SIZE * 4),
                 rows_per_image: Some(IMAGE_ATLAS_SIZE),
@@ -6007,14 +6006,14 @@ impl Renderer {
 
     fn upload_atlas(&self) {
         self.queue.write_texture(
-            wgpu::ImageCopyTexture {
+            wgpu::TexelCopyTextureInfo {
                 texture: &self.atlas_tex,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
             &self.atlas.pixels,
-            wgpu::ImageDataLayout {
+            wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(ATLAS_SIZE),
                 rows_per_image: Some(ATLAS_SIZE),
@@ -6047,8 +6046,8 @@ impl Renderer {
 
         // Acquire frame
         let frame = match self.surface.get_current_texture() {
-            Ok(f) => f,
-            Err(_) => return,
+            wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
+            _ => return,
         };
         let swap_view = frame.texture.create_view(&Default::default());
         // Main RT view - sem kreslime (ne primo na swap chain)
@@ -6074,9 +6073,9 @@ impl Renderer {
             // Nic nekresleno - clear swap chain primo
             let mut encoder = self.device.create_command_encoder(&Default::default());
             {
-                let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor { multiview_mask: None,
                     label: Some("frame_clear"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment { depth_slice: None,
                         view: &swap_view, resolve_target: None,
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.95, g: 0.95, b: 0.97, a: 1.0 }),
@@ -6143,13 +6142,13 @@ impl Renderer {
                     // 1. Snapshot main_rt -> offscreen_tex (scena za elementem)
                     let mut enc = self.device.create_command_encoder(&Default::default());
                     enc.copy_texture_to_texture(
-                        wgpu::ImageCopyTexture {
+                        wgpu::TexelCopyTextureInfo {
                             texture: &self.main_rt,
                             mip_level: 0,
                             origin: wgpu::Origin3d::ZERO,
                             aspect: wgpu::TextureAspect::All,
                         },
-                        wgpu::ImageCopyTexture {
+                        wgpu::TexelCopyTextureInfo {
                             texture: &self.offscreen_tex,
                             mip_level: 0,
                             origin: wgpu::Origin3d::ZERO,
@@ -6212,17 +6211,17 @@ impl Renderer {
         let vp = [self.config.width as f32 / self.zoom, self.config.height as f32 / self.zoom, self.zoom, 0.0];
         self.queue.write_buffer(&self.uniform_buf, 0, bytemuck::cast_slice(&vp));
         let frame = match self.surface.get_current_texture() {
-            Ok(f) => f,
-            Err(_) => return,
+            wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
+            _ => return,
         };
         let view = frame.texture.create_view(&Default::default());
         let had_segments = self.draw_segments_into_view(&view, cmds);
         if !had_segments {
             let mut encoder = self.device.create_command_encoder(&Default::default());
             {
-                let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor { multiview_mask: None,
                     label: Some("clear_only"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment { depth_slice: None,
                         view: &view, resolve_target: None,
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.95, g: 0.95, b: 0.97, a: 1.0 }),
@@ -6255,9 +6254,9 @@ impl Renderer {
             wgpu::LoadOp::Load
         };
         {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor { multiview_mask: None,
                 label: Some("main_seg"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment { depth_slice: None,
                     view, resolve_target: None,
                     ops: wgpu::Operations { load, store: wgpu::StoreOp::Store },
                 })],
@@ -6286,9 +6285,9 @@ impl Renderer {
             self.queue.write_buffer(&vbuf, 0, bytemuck::cast_slice(vertices));
         }
         {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor { multiview_mask: None,
                 label: Some("offscreen_subtree"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment { depth_slice: None,
                     view: &self.offscreen_view, resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
@@ -6343,9 +6342,9 @@ impl Renderer {
             ],
         });
         {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor { multiview_mask: None,
                 label: Some("compose_view_pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment { depth_slice: None,
                     view: swap_view, resolve_target: None,
                     ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
                 })],
@@ -6400,9 +6399,9 @@ impl Renderer {
         let sw = sw.max(0);
         let sh = sh.max(0);
         {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor { multiview_mask: None,
                 label: Some("compose_pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment { depth_slice: None,
                     view, resolve_target: None,
                     ops: wgpu::Operations { load, store: wgpu::StoreOp::Store },
                 })],
@@ -6484,9 +6483,9 @@ impl Renderer {
             wgpu::LoadOp::Load
         };
         {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor { multiview_mask: None,
                 label: Some("transform_pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment { depth_slice: None,
                     view, resolve_target: None,
                     ops: wgpu::Operations { load, store: wgpu::StoreOp::Store },
                 })],
@@ -6508,8 +6507,8 @@ impl Renderer {
         self.queue.write_buffer(&self.uniform_buf, 0, bytemuck::cast_slice(&vp));
 
         let frame = match self.surface.get_current_texture() {
-            Ok(f) => f,
-            Err(_) => return,
+            wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
+            _ => return,
         };
         let view = frame.texture.create_view(&Default::default());
         let mut encoder = self.device.create_command_encoder(&Default::default());
@@ -6525,9 +6524,9 @@ impl Renderer {
         }
 
         {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor { multiview_mask: None,
                 label: Some("main"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment { depth_slice: None,
                     view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {

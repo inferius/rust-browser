@@ -45,10 +45,9 @@ selectors = "0.38"
 cssparser = "0.37"
 
 # Rendering: wgpu - cross-platform GPU API (wraps Vulkan/Metal/DX12/WebGPU)
-wgpu = "0.20"
+wgpu = "29"
 # naga - GLSL frontend + WGSL backend pro WebGL shader transpilaci.
-# Verze sladena s wgpu 0.20 (interne pouziva naga 0.20).
-naga = { version = "0.20", features = ["glsl-in", "wgsl-out"] }
+naga = { version = "29", features = ["glsl-in", "wgsl-out"] }
 winit = "0.30"
 pollster = "0.4"  # block_on bez tokio
 bytemuck = { version = "1.25", features = ["derive"] }  # vertex bytes
