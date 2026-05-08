@@ -2744,6 +2744,37 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                                 self.navigate_url_no_history(&url);
                             }
                         }
+                        // Vertikalni scroll keys: PageDown/Up = +/- viewport_h,
+                        // ArrowDown/Up = +/- 60 px (line height steps), Space =
+                        // PageDown, Shift+Space = PageUp, Home = top, End = bottom.
+                        Key::Named(NamedKey::PageDown) => {
+                            self.scroll_by_y(self.viewport_h_logical() * 0.9);
+                        }
+                        Key::Named(NamedKey::PageUp) => {
+                            self.scroll_by_y(-self.viewport_h_logical() * 0.9);
+                        }
+                        Key::Named(NamedKey::ArrowDown) => {
+                            self.scroll_by_y(60.0);
+                        }
+                        Key::Named(NamedKey::ArrowUp) => {
+                            self.scroll_by_y(-60.0);
+                        }
+                        Key::Named(NamedKey::Home) => {
+                            self.scroll_y = 0.0;
+                            self.scroll_x = 0.0;
+                            self.render();
+                        }
+                        Key::Named(NamedKey::End) => {
+                            if let (Some(layout), Some(r)) = (&self.layout_root, &self.renderer) {
+                                let vh = (r.config.height as f32) / self.zoom;
+                                self.scroll_y = (layout.rect.height - vh).max(0.0);
+                                self.render();
+                            }
+                        }
+                        Key::Named(NamedKey::Space) => {
+                            let dir = if self.modifiers.shift_key() { -1.0 } else { 1.0 };
+                            self.scroll_by_y(dir * self.viewport_h_logical() * 0.9);
+                        }
                         _ => {}
                     }
                 }
@@ -2753,6 +2784,14 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
     }
 
     impl App {
+        fn viewport_h_logical(&self) -> f32 {
+            self.renderer.as_ref().map(|r| (r.config.height as f32) / self.zoom).unwrap_or(768.0)
+        }
+        fn scroll_by_y(&mut self, dy: f32) {
+            self.scroll_y = (self.scroll_y + dy).max(0.0);
+            self.clamp_scroll_to_layout();
+            self.render();
+        }
         /// Po zoom change: clamp scroll_y/scroll_x do max scrollu pro nove
         /// layout dimensions. Pri zoomu out se layout zmensi -> overflow muze
         /// zmizet -> max_scroll = 0. Stara scroll_y > 0 by ukazovala blank.
