@@ -303,19 +303,21 @@ pub fn compile_expr(e: &Expr, code: &mut CodeBlock) -> Result<(), &'static str> 
         Expr::Null => { code.emit(Opcode::LoadNull); Ok(()) }
         Expr::Undefined => { code.emit(Opcode::LoadUndefined); Ok(()) }
         Expr::Ident(name) => {
-            // Special: "this" -> LoadThis opcode.
             if name == "this" {
                 code.emit(Opcode::LoadThis);
                 return Ok(());
             }
-            // Lookup order: 1) lokalni var, 2) closure capture, 3) global.
+            // Lookup: 1) lokalni var, 2) closure capture, 3) global env (Math,
+            // console, $0, ...).
             if let Some(idx) = code.var_names.iter().rposition(|n| n == name) {
                 code.emit(Opcode::LoadVar(idx as u16));
             } else if let Some(cap_idx) = try_capture(name) {
                 code.emit(Opcode::LoadCapture(cap_idx));
             } else {
-                let idx = code.push_var(name);
-                code.emit(Opcode::LoadVar(idx));
+                // Unknown ident -> LoadGlobal (lookup runtime env). Spravne pro
+                // builtins + injected vars ($0, $_, hot-replaced globals).
+                let g_idx = code.push_string(name);
+                code.emit(Opcode::LoadGlobal(g_idx));
             }
             Ok(())
         }

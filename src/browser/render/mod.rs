@@ -2389,6 +2389,13 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
             let target = layout_root.hit_test(self.mouse_x, self.mouse_y);
             let id = target.and_then(|t| t.node.as_ref().map(|n| std::rc::Rc::as_ptr(n) as usize));
             super::cascade::set_hovered_node(id);
+            // Inspect mode: zrcadlit hovered DOM node do devtools state aby
+            // paint_element_highlight zobrazil overlay.
+            if self.devtools.inspect_mode {
+                self.devtools.elements.hovered = id;
+            } else if self.devtools.elements.hovered.is_some() {
+                self.devtools.elements.hovered = None;
+            }
             // Cursor icon dle hover targetu: text nodes -> Text (I-beam), klikatelne
             // (a, button) -> Pointer, jinak Default.
             if let Some(window) = &self.window {

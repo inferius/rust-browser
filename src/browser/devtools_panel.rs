@@ -24,11 +24,16 @@ pub const ROW_H: f32 = 18.0;
 pub const TAB_H: f32 = 30.0;
 const TOOLBAR_BTN_H: f32 = 22.0;
 const FONT_SIZE: f32 = 12.0;
-const FONT_W: f32 = 7.0;
+/// CamingoMono glyph advance pri 12px. Empirically ~7.2px (mono).
+const FONT_W: f32 = 7.2;
 const INDENT_PX: f32 = 16.0;
 pub const RESIZE_GRIP_H: f32 = 4.0;
 const SCROLLBAR_W: f32 = 10.0;
 pub const SEARCH_H: f32 = 28.0;
+/// Custom font family pro vsechen DevTools text.
+const DT_FONT: &str = "CamingoMono";
+const DT_FONT_BOLD: &str = "CamingoMono-Bold";
+const DT_FONT_ITALIC: &str = "CamingoMono-Italic";
 
 // ─── Top-level paint ────────────────────────────────────────────────────
 
@@ -153,21 +158,21 @@ fn paint_toolbar_actions(
     push_rect(cmds, x_right, y, close_w, h,
               if close_hover { pal.bg_row_hover } else { pal.bg_toolbar });
     push_text(cmds, x_right + 8.0, y + (h - FONT_SIZE) * 0.5 + 1.0,
-              "X".to_string(), pal.text, true);
+              "\u{2715}".to_string(), pal.text, false);
 
-    // Theme dot (Ctrl+Shift+T toggle).
+    // Theme dot (Ctrl+Shift+T toggle): sun/moon icon.
     let theme_w = 24.0;
     x_right -= theme_w + 4.0;
     let theme_hover = mouse_x >= x_right && mouse_x < x_right + theme_w
                       && mouse_y >= y && mouse_y < y + h;
     push_rect(cmds, x_right, y, theme_w, h,
               if theme_hover { pal.bg_row_hover } else { pal.bg_toolbar });
-    let icon = if pal.is_dark { "*" } else { "o" };
-    push_text(cmds, x_right + 9.0, y + (h - FONT_SIZE) * 0.5 + 1.0,
-              icon.to_string(), pal.text, true);
+    let icon = if pal.is_dark { "\u{263E}" } else { "\u{263C}" };
+    push_text(cmds, x_right + 7.0, y + (h - FONT_SIZE) * 0.5 + 1.0,
+              icon.to_string(), pal.text, false);
 
-    // Inspect toggle.
-    let insp_w = 80.0;
+    // Inspect toggle: ramecek symbol.
+    let insp_w = 90.0;
     x_right -= insp_w + 4.0;
     let insp_hover = mouse_x >= x_right && mouse_x < x_right + insp_w
                      && mouse_y >= y && mouse_y < y + h;
@@ -175,9 +180,9 @@ fn paint_toolbar_actions(
              else if insp_hover { pal.bg_row_hover }
              else { pal.bg_button };
     push_rect(cmds, x_right, y, insp_w, h, bg);
-    let txt = if state.inspect_mode { pal.text_inverted } else { pal.text };
+    let txt = if state.inspect_mode { pal.text_on_accent } else { pal.text };
     push_text(cmds, x_right + 8.0, y + (h - FONT_SIZE) * 0.5 + 1.0,
-              "Inspect".to_string(), txt, false);
+              "\u{2316} Inspect".to_string(), txt, false);
 }
 
 // ─── Elements tab ───────────────────────────────────────────────────────
@@ -200,14 +205,18 @@ fn paint_elements_tab(
     let body_y = content_y + search_h;
     let body_h = content_h - search_h;
 
-    let split_x = state.elements.split_x.max(200.0).min(win_w - 220.0);
+    // Default split: 70% pro elements pri prvnim render (split_x = 0).
+    let default_split = win_w * 0.7;
+    let split_x = if state.elements.split_x < 1.0 { default_split }
+                  else { state.elements.split_x.max(200.0).min(win_w - 220.0) };
 
-    // Tree pozadi.
+    // Z-order:
+    // 1. Tree bg (left)
+    // 2. Tree rows (clipped na split_x)
+    // 3. Styles bg + splitter (PRES rows pri prelivu)
+    // 4. Styles content
+
     push_rect(cmds, 0.0, body_y, split_x, body_h, pal.bg_panel);
-    // Right pane pozadi (styles).
-    push_rect(cmds, split_x, body_y, win_w - split_x, body_h, pal.bg_panel_alt);
-    // Splitter line.
-    push_rect(cmds, split_x, body_y, 1.0, body_h, pal.border);
 
     // Render rows visible v scroll window.
     let rows = &state.elements.rows;
@@ -220,19 +229,23 @@ fn paint_elements_tab(
         let row = &rows[row_idx];
         let y = body_y + (visual_idx as f32) * ROW_H - (scroll_y % ROW_H);
         if y + ROW_H < body_y || y > body_y + body_h { continue; }
-        paint_element_row(cmds, row, state, pal, split_x, y, mouse_x, mouse_y);
+        paint_element_row(cmds, row, state, pal, split_x - SCROLLBAR_W - 4.0, y, mouse_x, mouse_y);
     }
 
-    // Scrollbar pro tree.
+    // Scrollbar pro tree (vertikalni).
     if total_h > body_h {
         paint_vertical_scrollbar(cmds, pal, split_x - SCROLLBAR_W, body_y,
                                   body_h, total_h, scroll_y);
     }
 
+    // Styles bg + splitter PRES rows (clip via overdraw).
+    push_rect(cmds, split_x, body_y, win_w - split_x, body_h, pal.bg_panel_alt);
+    push_rect(cmds, split_x, body_y, 2.0, body_h, pal.border_strong);
+
     // Right pane: matched styles + computed styles.
     if let Some(sel_id) = state.elements.selected {
         if let Some(bx) = find_layout_box(layout_root, sel_id) {
-            paint_styles_pane(cmds, bx, state, pal, split_x, body_y, win_w - split_x, body_h);
+            paint_styles_pane(cmds, bx, state, pal, split_x + 2.0, body_y, win_w - split_x - 2.0, body_h);
         }
     } else {
         push_text(cmds, split_x + 12.0, body_y + 12.0,
@@ -317,7 +330,8 @@ fn paint_element_row(
         push_rect(cmds, 0.0, y, width, ROW_H, pal.bg_row_hover);
     }
 
-    let text_color_default = if is_sel { pal.text_inverted } else { pal.text };
+    // Pri selected: vsechen text high-contrast (text_on_accent), bez syntaxove barvy.
+    let text_color_default = if is_sel { pal.text_on_accent } else { pal.text };
     let x_indent = 8.0 + row.depth as f32 * INDENT_PX;
     let text_y = y + 3.0;
 
@@ -349,20 +363,20 @@ fn paint_element_row(
             let collapsed = state.elements.collapsed.contains(&row.node_id);
             let mut x = x_indent;
             if *has_children {
-                let caret = if collapsed { ">" } else { "v" };
+                let caret = if collapsed { "\u{25B6}" } else { "\u{25BC}" };
                 push_text(cmds, x - INDENT_PX + 4.0, text_y,
                           caret.to_string(), pal.text_dim, false);
             }
             // <tag
-            push_text(cmds, x, text_y, format!("<{}", tag),
-                      if is_sel { text_color_default } else { pal.syn_tag }, false);
-            x += (tag.len() + 1) as f32 * FONT_W;
+            let tag_color = if is_sel { text_color_default } else { pal.syn_tag };
+            push_text(cmds, x, text_y, format!("<{}", tag), tag_color, false);
+            x += (tag.chars().count() + 1) as f32 * FONT_W;
             // Attrs.
             for (k, v) in attrs {
                 let attr_str = format!(" {}=", k);
                 push_text(cmds, x, text_y, attr_str.clone(),
                           if is_sel { text_color_default } else { pal.syn_attr }, false);
-                x += attr_str.len() as f32 * FONT_W;
+                x += attr_str.chars().count() as f32 * FONT_W;
                 let val_truncated: String = v.chars().take(40).collect();
                 let val_str = if val_truncated.chars().count() < v.chars().count() {
                     format!("\"{}...\"", val_truncated)
@@ -371,13 +385,12 @@ fn paint_element_row(
                 };
                 push_text(cmds, x, text_y, val_str.clone(),
                           if is_sel { text_color_default } else { pal.syn_value }, false);
-                x += val_str.len() as f32 * FONT_W;
+                x += val_str.chars().count() as f32 * FONT_W;
                 if x > width - 30.0 { break; }
             }
             // Closing > nebo />.
             let close = if *self_closing { " />" } else { ">" };
-            push_text(cmds, x, text_y, close.to_string(),
-                      if is_sel { text_color_default } else { pal.syn_tag }, false);
+            push_text(cmds, x, text_y, close.to_string(), tag_color, false);
             // Pri collapsed s detmi: ukaz "..." pred close.
             if *has_children && collapsed {
                 push_text(cmds, x + close.len() as f32 * FONT_W + 2.0, text_y,
@@ -415,16 +428,19 @@ fn paint_edit_row(
     push_text(cmds, x_indent, text_y, prefix.clone(), pal.text_dim, false);
     let text_x = x_indent + prefix.len() as f32 * FONT_W;
 
-    // Selection highlight.
+    // Selection highlight - chars-based offset.
     if let Some((s, e)) = edit.buffer.selection_range() {
-        let sx = text_x + (s as f32) * FONT_W;
-        let ex = text_x + (e as f32) * FONT_W;
+        let s_chars = edit.buffer.text[..s].chars().count();
+        let e_chars = edit.buffer.text[..e].chars().count();
+        let sx = text_x + (s_chars as f32) * FONT_W;
+        let ex = text_x + (e_chars as f32) * FONT_W;
         push_rect(cmds, sx, text_y - 2.0, ex - sx, FONT_SIZE + 4.0, pal.bg_row_selected);
     }
     push_text(cmds, text_x, text_y, edit.buffer.text.clone(), pal.text, false);
-    // Cursor blink.
+    // Cursor blink - chars-based.
     if state.cursor_visible() {
-        let cx = text_x + (edit.buffer.cursor as f32) * FONT_W;
+        let cur_chars = edit.buffer.text[..edit.buffer.cursor].chars().count();
+        let cx = text_x + (cur_chars as f32) * FONT_W;
         push_rect(cmds, cx, text_y - 2.0, 1.0, FONT_SIZE + 4.0, pal.text);
     }
 }
@@ -608,19 +624,22 @@ fn paint_console_input(
     let input = &state.console.input;
     let text_x = prompt_x + 12.0;
 
-    // Selection highlight.
+    // Selection highlight - chars-based (ne byte offset).
     if let Some((s, e)) = input.selection_range() {
-        let sel_x0 = text_x + (s as f32) * FONT_W;
-        let sel_x1 = text_x + (e as f32) * FONT_W;
+        let s_chars = input.text[..s].chars().count();
+        let e_chars = input.text[..e].chars().count();
+        let sel_x0 = text_x + (s_chars as f32) * FONT_W;
+        let sel_x1 = text_x + (e_chars as f32) * FONT_W;
         push_rect(cmds, sel_x0, text_y - 2.0, sel_x1 - sel_x0, FONT_SIZE + 4.0,
                   pal.bg_row_selected);
     }
 
     push_text(cmds, text_x, text_y, input.text.clone(), pal.text, false);
 
-    // Cursor (blink pri focusu).
+    // Cursor (blink pri focusu) - chars-based offset.
     if focused && state.cursor_visible() {
-        let cur_x = text_x + (input.cursor as f32) * FONT_W;
+        let cur_chars = input.text[..input.cursor].chars().count();
+        let cur_x = text_x + (cur_chars as f32) * FONT_W;
         push_rect(cmds, cur_x, text_y - 2.0, 1.0, FONT_SIZE + 4.0, pal.text);
     }
 }
@@ -1155,9 +1174,9 @@ fn paint_theme_choice(
              else { pal.bg_panel };
     push_rect(cmds, x, y, w, h, bg);
     let dot_color = if selected { pal.text_inverted } else { pal.text_dim };
-    push_text(cmds, x + 8.0, y + 3.0, format!("[{}] {}",
-              if selected { "x" } else { " " }, label),
-              if selected { pal.text_inverted } else { pal.text }, false);
+    push_text(cmds, x + 8.0, y + 3.0, format!("{} {}",
+              if selected { "\u{25C9}" } else { "\u{25CB}" }, label),
+              if selected { pal.text_on_accent } else { pal.text }, false);
     let _ = dot_color;
 }
 
@@ -1178,9 +1197,9 @@ fn paint_flavor_choice(
              else if hover { pal.bg_row_hover }
              else { pal.bg_panel };
     push_rect(cmds, x, y, w, h, bg);
-    push_text(cmds, x + 8.0, y + 3.0, format!("[{}] {}",
-              if selected { "x" } else { " " }, label),
-              if selected { pal.text_inverted } else { pal.text }, false);
+    push_text(cmds, x + 8.0, y + 3.0, format!("{} {}",
+              if selected { "\u{25C9}" } else { "\u{25CB}" }, label),
+              if selected { pal.text_on_accent } else { pal.text }, false);
 }
 
 // ─── Context menu ───────────────────────────────────────────────────────
@@ -1189,41 +1208,48 @@ fn paint_context_menu(
     cmds: &mut Vec<DisplayCommand>,
     pal: &Palette,
     menu: &crate::devtools::context_menu::ContextMenuState,
-    _mouse_x: f32, _mouse_y: f32,
+    mouse_x: f32, mouse_y: f32,
 ) {
     use crate::devtools::context_menu::MenuItem;
-    let item_h = ROW_H + 4.0;
-    let mut menu_h = 4.0;
+    let item_h = ROW_H + 6.0;
+    let menu_w = 260.0;
+    let mut menu_h = 8.0;
     for item in &menu.items {
         menu_h += match item {
             MenuItem::Action { .. } => item_h,
-            MenuItem::Separator => 6.0,
+            MenuItem::Separator => 8.0,
         };
     }
-    let menu_w = 240.0;
+    // Drop shadow (offset 2px).
+    push_rect(cmds, menu.x + 2.0, menu.y + 2.0, menu_w, menu_h, [0, 0, 0, 80]);
     push_rect(cmds, menu.x, menu.y, menu_w, menu_h, pal.bg_context_menu);
     push_rect_border(cmds, menu.x, menu.y, menu_w, menu_h, pal.border_strong);
 
-    let mut y = menu.y + 2.0;
+    let mut y = menu.y + 4.0;
     for (i, item) in menu.items.iter().enumerate() {
         match item {
             MenuItem::Action { label, enabled, shortcut, .. } => {
-                let hover = menu.hovered == Some(i);
-                if hover && *enabled {
-                    push_rect(cmds, menu.x + 1.0, y, menu_w - 2.0, item_h,
+                // Hover detect z mouse pos (state.context_menu.hovered je out-of-date).
+                let hover_now = mouse_x >= menu.x + 2.0 && mouse_x < menu.x + menu_w - 2.0
+                                && mouse_y >= y && mouse_y < y + item_h;
+                let hover_state = menu.hovered == Some(i) || hover_now;
+                if hover_state && *enabled {
+                    push_rect(cmds, menu.x + 4.0, y, menu_w - 8.0, item_h,
                               pal.bg_context_menu_hover);
                 }
-                let txt_color = if *enabled { pal.text } else { pal.text_disabled };
-                push_text(cmds, menu.x + 8.0, y + 4.0, label.clone(), txt_color, false);
+                let txt_color = if !*enabled { pal.text_disabled }
+                                else if hover_state { pal.text_on_accent }
+                                else { pal.text };
+                push_text(cmds, menu.x + 14.0, y + 5.0, label.clone(), txt_color, false);
                 if let Some(sh) = shortcut {
-                    push_text(cmds, menu.x + menu_w - 8.0 - (sh.len() as f32) * FONT_W,
-                              y + 4.0, sh.clone(), pal.text_dim, false);
+                    let sh_x = menu.x + menu_w - 14.0 - (sh.chars().count() as f32) * FONT_W;
+                    push_text(cmds, sh_x, y + 5.0, sh.clone(), pal.text_dim, false);
                 }
                 y += item_h;
             }
             MenuItem::Separator => {
-                push_rect(cmds, menu.x + 6.0, y + 2.0, menu_w - 12.0, 1.0, pal.border);
-                y += 6.0;
+                push_rect(cmds, menu.x + 8.0, y + 3.0, menu_w - 16.0, 1.0, pal.border);
+                y += 8.0;
             }
         }
     }
@@ -1767,7 +1793,7 @@ fn push_text(cmds: &mut Vec<DisplayCommand>, x: f32, y: f32, content: String, co
         x, y, content, color,
         font_size: FONT_SIZE, bold: false,
         italic,
-        font_family: String::new(),
+        font_family: if italic { DT_FONT_ITALIC.into() } else { DT_FONT.into() },
         strikethrough: false, underline: false,
     });
 }
@@ -1777,7 +1803,7 @@ fn push_text_bold(cmds: &mut Vec<DisplayCommand>, x: f32, y: f32, content: Strin
         x, y, content, color,
         font_size: FONT_SIZE, bold: true,
         italic,
-        font_family: String::new(),
+        font_family: DT_FONT_BOLD.into(),
         strikethrough: false, underline: false,
     });
 }
@@ -1787,7 +1813,7 @@ fn push_text_italic(cmds: &mut Vec<DisplayCommand>, x: f32, y: f32, content: Str
         x, y, content, color,
         font_size: FONT_SIZE, bold: false,
         italic: true,
-        font_family: String::new(),
+        font_family: DT_FONT_ITALIC.into(),
         strikethrough: false, underline: false,
     });
 }
@@ -1797,7 +1823,7 @@ fn push_text_underline(cmds: &mut Vec<DisplayCommand>, x: f32, y: f32, content: 
         x, y, content, color,
         font_size: FONT_SIZE, bold: false,
         italic: false,
-        font_family: String::new(),
+        font_family: DT_FONT.into(),
         strikethrough,
         underline: false,
     });

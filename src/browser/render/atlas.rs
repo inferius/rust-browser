@@ -131,12 +131,25 @@ impl GlyphAtlas {
             std::fs::read(p).ok()
                 .and_then(|d| fontdue::Font::from_bytes(d, fontdue::FontSettings::default()).ok())
         });
+        // Pre-load CamingoMono pro DevTools UI (monospace, lehci tah).
+        let mut extra_fonts = std::collections::HashMap::new();
+        for (family, path) in &[
+            ("CamingoMono", "static/fonts/CamingoMono-Light.ttf"),
+            ("CamingoMono-Bold", "static/fonts/CamingoMono-Bold.ttf"),
+            ("CamingoMono-Italic", "static/fonts/CamingoMono-LightItalic.ttf"),
+        ] {
+            if let Ok(data) = std::fs::read(path) {
+                if let Ok(f) = fontdue::Font::from_bytes(data, fontdue::FontSettings::default()) {
+                    extra_fonts.insert(family.to_string(), f);
+                }
+            }
+        }
         GlyphAtlas {
             font,
             font_bold,
             font_italic,
             font_bold_italic,
-            extra_fonts: std::collections::HashMap::new(),
+            extra_fonts,
             pixels: vec![0u8; (ATLAS_SIZE * ATLAS_SIZE) as usize],
             cache: std::collections::HashMap::new(),
             cursor_x: 0,
