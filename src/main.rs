@@ -14,6 +14,7 @@ mod parser;
 mod interpreter;
 mod browser;
 mod debug_view;
+mod devtools;
 
 use lexer::base::Lexer;
 use parser::Parser;
