@@ -1,0 +1,407 @@
+//! WGSL shader source strings.
+//!
+//! BLUR: 2-pass gaussian blur (separable). RECT: solid/text/gradient/shadow
+//! multi-mode shader. TRANSFORM: 4x4 matrix s perspective. COMPOSE: filter
+//! result -> swap chain s color matrix.
+
+/// Separable Gaussian blur shader - 2 pass (horizontal + vertical).
+/// Sample 9 tapu s gauss vahami.
+pub(super) const BLUR_SHADER: &str = r#"
+struct BlurParams {
+    /// direction.x = 1 horizontal, .y = 1 vertical
+    direction: vec2<f32>,
+    /// blur radius in pixels
+    radius: f32,
+    /// texel size 1/width or 1/height
+    texel: f32,
+};
+@group(0) @binding(0) var<uniform> params: BlurParams;
+@group(0) @binding(1) var src_tex: texture_2d<f32>;
+@group(0) @binding(2) var src_smp: sampler;
+
+struct VertexOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+
+@vertex
+fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOut {
+    // Fullscreen triangle
+    var pos = array<vec2<f32>, 3>(
+        vec2<f32>(-1.0, -1.0),
+        vec2<f32>( 3.0, -1.0),
+        vec2<f32>(-1.0,  3.0),
+    );
+    var uv = array<vec2<f32>, 3>(
+        vec2<f32>(0.0, 1.0),
+        vec2<f32>(2.0, 1.0),
+        vec2<f32>(0.0, -1.0),
+    );
+    var out: VertexOut;
+    out.clip = vec4<f32>(pos[idx], 0.0, 1.0);
+    out.uv = uv[idx];
+    return out;
+}
+
+@fragment
+fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
+    // 9-tap Gaussian (sigma ~ radius/3). Unrolled - WGSL nepovoluje dynamic
+    // indexing var/let array v Naga validation (jen const-indexable v uniform/storage).
+    let w0: f32 = 0.227027;
+    let w1: f32 = 0.1945946;
+    let w2: f32 = 0.1216216;
+    let w3: f32 = 0.054054;
+    let w4: f32 = 0.016216;
+    let step = params.direction * params.texel * params.radius * 0.3;
+    var color = textureSample(src_tex, src_smp, in.uv) * w0;
+    let off1 = step * 1.0;
+    color = color + textureSample(src_tex, src_smp, in.uv + off1) * w1;
+    color = color + textureSample(src_tex, src_smp, in.uv - off1) * w1;
+    let off2 = step * 2.0;
+    color = color + textureSample(src_tex, src_smp, in.uv + off2) * w2;
+    color = color + textureSample(src_tex, src_smp, in.uv - off2) * w2;
+    let off3 = step * 3.0;
+    color = color + textureSample(src_tex, src_smp, in.uv + off3) * w3;
+    color = color + textureSample(src_tex, src_smp, in.uv - off3) * w3;
+    let off4 = step * 4.0;
+    color = color + textureSample(src_tex, src_smp, in.uv + off4) * w4;
+    color = color + textureSample(src_tex, src_smp, in.uv - off4) * w4;
+    return color;
+}
+"#;
+
+/// 3D Transform compose shader. Renderuje 4-vertex quad transformovany 4x4
+/// matici (vc perspective) v px space, sample z offscreen_tex pres uv region.
+pub(super) const TRANSFORM_SHADER: &str = r#"
+struct TransformParams {
+    /// 4x4 row-major matrix (CSS transform incl. parent perspective).
+    /// V WGSL ulozeno jako 4 vec4 (po radkach).
+    row0: vec4<f32>,
+    row1: vec4<f32>,
+    row2: vec4<f32>,
+    row3: vec4<f32>,
+    /// (cx, cy, hw, hh) - center bbox v px + half-size.
+    center: vec4<f32>,
+    /// (viewport_w, viewport_h, _, _)
+    viewport: vec4<f32>,
+    /// (u0, v0, u1, v1) - region z offscreen RT k samplovani.
+    uv_box: vec4<f32>,
+};
+@group(0) @binding(0) var src_tex: texture_2d<f32>;
+@group(0) @binding(1) var src_smp: sampler;
+@group(0) @binding(2) var<uniform> tp: TransformParams;
+
+struct VOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+
+@vertex
+fn vs_main(@builtin(vertex_index) idx: u32) -> VOut {
+    // 6 vrcholu pro dva trianlges (0,1,2 + 0,2,3)
+    var corners = array<vec2<f32>, 4>(
+        vec2<f32>(-1.0, -1.0),
+        vec2<f32>( 1.0, -1.0),
+        vec2<f32>( 1.0,  1.0),
+        vec2<f32>(-1.0,  1.0),
+    );
+    var uvs = array<vec2<f32>, 4>(
+        vec2<f32>(tp.uv_box.x, tp.uv_box.y),
+        vec2<f32>(tp.uv_box.z, tp.uv_box.y),
+        vec2<f32>(tp.uv_box.z, tp.uv_box.w),
+        vec2<f32>(tp.uv_box.x, tp.uv_box.w),
+    );
+    var ix = array<u32, 6>(0u, 1u, 2u, 0u, 2u, 3u);
+    let i = ix[idx];
+    let c = corners[i];
+    // Local px space (centered)
+    let lx = c.x * tp.center.z;
+    let ly = c.y * tp.center.w;
+    let p = vec4<f32>(lx, ly, 0.0, 1.0);
+    // Apply matrix (row-major: dot s row vec4)
+    let tx = dot(tp.row0, p);
+    let ty = dot(tp.row1, p);
+    let tz = dot(tp.row2, p);
+    let tw = dot(tp.row3, p);
+    // Perspective divide
+    let inv_w = 1.0 / max(tw, 0.0001);
+    let px = tx * inv_w + tp.center.x;
+    let py = ty * inv_w + tp.center.y;
+    let nx = (px / tp.viewport.x) * 2.0 - 1.0;
+    let ny = 1.0 - (py / tp.viewport.y) * 2.0;
+    // wgpu NDC z range = [0, 1]. Pri 3D rotaci tz muze byt v sirokem rozsahu
+    // (rotateY(45) -> tz ∈ [-hw, +hw]) -> mimo [0,1] = fragment clipped =
+    // pulka rotace nezobrazena. Fix: pevny nz = 0.5 (vsechno na same depth -
+    // ne real 3D, ale spravne 2D-style render rotovaneho elementu).
+    let nz = 0.5;
+    var out: VOut;
+    out.clip = vec4<f32>(nx, ny, nz, 1.0);
+    out.uv = uvs[i];
+    return out;
+}
+
+@fragment
+fn fs_main(in: VOut) -> @location(0) vec4<f32> {
+    return textureSample(src_tex, src_smp, in.uv);
+}
+"#;
+
+/// Compose shader - samples offscreen_tex (mid-blur result) a kresli do swap chain.
+/// Aplikuje 4x5 color matrix (vetsina filter operaci) - identity = passthrough.
+pub(super) const COMPOSE_SHADER: &str = r#"
+struct ComposeParams {
+    /// 4x5 color matrix (4 vec4 row + 4-element offset vector).
+    /// row[i] = m[i*5..i*5+4], offset[i] = m[i*5+4].
+    /// WGSL: dva pole pres 4x mat4x4 by stacilo, ale pripravime 5 vec4 (16+16 bytes navic):
+    /// row0(rgba), row1(rgba), row2(rgba), row3(rgba), offset(rgba).
+    row0: vec4<f32>,
+    row1: vec4<f32>,
+    row2: vec4<f32>,
+    row3: vec4<f32>,
+    offset: vec4<f32>,
+};
+@group(0) @binding(0) var src_tex: texture_2d<f32>;
+@group(0) @binding(1) var src_smp: sampler;
+@group(0) @binding(2) var<uniform> params: ComposeParams;
+
+struct VertexOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+
+@vertex
+fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOut {
+    var pos = array<vec2<f32>, 3>(
+        vec2<f32>(-1.0, -1.0),
+        vec2<f32>( 3.0, -1.0),
+        vec2<f32>(-1.0,  3.0),
+    );
+    var uv = array<vec2<f32>, 3>(
+        vec2<f32>(0.0, 1.0),
+        vec2<f32>(2.0, 1.0),
+        vec2<f32>(0.0, -1.0),
+    );
+    var out: VertexOut;
+    out.clip = vec4<f32>(pos[idx], 0.0, 1.0);
+    out.uv = uv[idx];
+    return out;
+}
+
+// CSS filter color matrix (hue-rotate, sepia, saturate, contrast) jsou
+// definovany v sRGB space (NTSC luminance weights pro sRGB displays).
+// Surface format Rgba8UnormSrgb sample auto-converti na LINEAR. Bez gamma
+// kompenzace matrix dava spatny vystup (hue-rotate vraci nespravne barvy).
+// Workflow: linear -> sRGB -> apply matrix -> sRGB -> linear (write surface
+// znovu encoduje na sRGB).
+fn linear_to_srgb(c: vec3<f32>) -> vec3<f32> {
+    let cutoff = vec3<f32>(0.0031308);
+    let lo = c * 12.92;
+    let hi = pow(c, vec3<f32>(1.0/2.4)) * 1.055 - 0.055;
+    return select(hi, lo, c < cutoff);
+}
+fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
+    let cutoff = vec3<f32>(0.04045);
+    let lo = c / 12.92;
+    let hi = pow((c + 0.055) / 1.055, vec3<f32>(2.4));
+    return select(hi, lo, c < cutoff);
+}
+
+@fragment
+fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
+    let src_linear = textureSample(src_tex, src_smp, in.uv);
+    let src_srgb_rgb = linear_to_srgb(src_linear.rgb);
+    let src = vec4<f32>(src_srgb_rgb, src_linear.a);
+    let r = dot(params.row0, src) + params.offset.x;
+    let g = dot(params.row1, src) + params.offset.y;
+    let b = dot(params.row2, src) + params.offset.z;
+    let a = dot(params.row3, src) + params.offset.w;
+    let out_linear_rgb = srgb_to_linear(vec3<f32>(r, g, b));
+    return vec4<f32>(out_linear_rgb, a);
+}
+"#;
+
+pub(super) const RECT_SHADER: &str = r#"
+struct Uniforms {
+    /// (logical_w, logical_h, zoom, _pad). vp je v logical px (window/zoom).
+    viewport: vec4<f32>,
+};
+@group(0) @binding(0) var<uniform> u: Uniforms;
+@group(0) @binding(1) var atlas_tex: texture_2d<f32>;
+@group(0) @binding(2) var atlas_smp: sampler;
+@group(0) @binding(3) var image_tex: texture_2d<f32>;
+
+struct VertexIn {
+    @location(0) pos: vec2<f32>,
+    @location(1) color: vec4<f32>,
+    @location(2) uv: vec2<f32>,
+    @location(3) mode: f32,
+    @location(4) local: vec2<f32>,
+    @location(5) half_size: vec2<f32>,
+    @location(6) radius: f32,
+    @location(7) color2: vec4<f32>,
+    @location(8) blur: f32,
+};
+
+struct VertexOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) color: vec4<f32>,
+    @location(1) uv: vec2<f32>,
+    @location(2) mode: f32,
+    @location(3) local: vec2<f32>,
+    @location(4) half_size: vec2<f32>,
+    @location(5) radius: f32,
+    @location(6) color2: vec4<f32>,
+    @location(7) blur: f32,
+};
+
+@vertex
+fn vs_main(in: VertexIn) -> VertexOut {
+    var out: VertexOut;
+    let x = (in.pos.x / u.viewport.x) * 2.0 - 1.0;
+    let y = 1.0 - (in.pos.y / u.viewport.y) * 2.0;
+    out.clip = vec4<f32>(x, y, 0.0, 1.0);
+    out.color = in.color;
+    out.uv = in.uv;
+    out.mode = in.mode;
+    out.local = in.local;
+    out.half_size = in.half_size;
+    out.radius = in.radius;
+    out.color2 = in.color2;
+    out.blur = in.blur;
+    return out;
+}
+
+/// Signed distance to rounded rectangle.
+fn sdf_rounded_box(p: vec2<f32>, half_size: vec2<f32>, r: f32) -> f32 {
+    let q = abs(p) - half_size + vec2<f32>(r, r);
+    return min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0, 0.0))) - r;
+}
+
+// Gradient mixing v sRGB space. CSS spec: linear-gradient interpolation v sRGB
+// (legacy) nebo oklab (modern default). Linear-space mix dava prilis svetly mid
+// (red->blue mid je purple bright misto darkish purple per Chrome).
+fn lin_to_srgb_v(c: vec3<f32>) -> vec3<f32> {
+    let cutoff = vec3<f32>(0.0031308);
+    let lo = c * 12.92;
+    let hi = pow(c, vec3<f32>(1.0/2.4)) * 1.055 - 0.055;
+    return select(hi, lo, c < cutoff);
+}
+fn srgb_to_lin_v(c: vec3<f32>) -> vec3<f32> {
+    let cutoff = vec3<f32>(0.04045);
+    let lo = c / 12.92;
+    let hi = pow((c + 0.055) / 1.055, vec3<f32>(2.4));
+    return select(hi, lo, c < cutoff);
+}
+fn mix_srgb(a: vec4<f32>, b: vec4<f32>, t: f32) -> vec4<f32> {
+    let a_srgb = lin_to_srgb_v(a.rgb);
+    let b_srgb = lin_to_srgb_v(b.rgb);
+    let mixed = mix(a_srgb, b_srgb, t);
+    return vec4<f32>(srgb_to_lin_v(mixed), mix(a.a, b.a, t));
+}
+
+@fragment
+fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
+    // Mode 1: text - sample atlas (grayscale alpha)
+    if (in.mode > 0.5 && in.mode < 1.5) {
+        let alpha = textureSample(atlas_tex, atlas_smp, in.uv).r;
+        return vec4<f32>(in.color.rgb, in.color.a * alpha);
+    }
+    // Mode 9: LCD subpixel atlas storage (3x horizontal). Bez dual-source
+    // blendu proper LCD nelze - per-channel modulace v standard alpha blendu
+    // dela barevny artifacts. Pouzivame avg ze 3 sub-pixelu = grayscale
+    // approximation s o trochu lepsi AA nez fontdue 1x raster.
+    if (in.mode > 8.5 && in.mode < 9.5) {
+        let dims = textureDimensions(atlas_tex);
+        let texel_w = 1.0 / f32(dims.x);
+        let r_a = textureSample(atlas_tex, atlas_smp, in.uv - vec2<f32>(texel_w, 0.0)).r;
+        let g_a = textureSample(atlas_tex, atlas_smp, in.uv).r;
+        let b_a = textureSample(atlas_tex, atlas_smp, in.uv + vec2<f32>(texel_w, 0.0)).r;
+        let avg = (r_a + g_a + b_a) / 3.0;
+        return vec4<f32>(in.color.rgb, in.color.a * avg);
+    }
+    // Mode 2: linear gradient - lerp color->color2 podle uv.x (pre-rotated)
+    if (in.mode > 1.5 && in.mode < 2.5) {
+        let t = clamp(in.uv.x, 0.0, 1.0);
+        var rgba = mix_srgb(in.color, in.color2, t);
+        if (in.radius > 0.5) {
+            let d = sdf_rounded_box(in.local, in.half_size, in.radius);
+            let aa_range = 1.0 / max(u.viewport.z, 0.0001);
+            let aa = 1.0 - smoothstep(-aa_range, aa_range, d);
+            rgba = vec4<f32>(rgba.rgb, rgba.a * aa);
+        }
+        return rgba;
+    }
+    // Mode 3: shadow with blur (Gaussian-like fade)
+    if (in.mode > 2.5 && in.mode < 3.5) {
+        let blur = max(in.blur, 1.0);
+        let d = sdf_rounded_box(in.local, in.half_size, in.radius);
+        let alpha = 1.0 - smoothstep(-blur, blur, d);
+        return vec4<f32>(in.color.rgb, in.color.a * alpha);
+    }
+    // Mode 6: radial gradient - t = dist(local, grad_center) / grad_radius.
+    // half_size je reused jako grad_center offset (box_cx -> gcx). Border-radius
+    // SDF nelze tady aplikovat protoze actual box half_size neni dostupna.
+    // Border-radius pri radial gradientu by mela byt resena dodatkovou maskou.
+    if (in.mode > 5.5 && in.mode < 6.5) {
+        let d = length(in.local - in.half_size);
+        let t = clamp(d / max(in.blur, 1.0), 0.0, 1.0);
+        return mix_srgb(in.color, in.color2, t);
+    }
+    // Mode 7: conic gradient - t = (atan2(p.y, p.x) - start) / 2pi
+    if (in.mode > 6.5 && in.mode < 7.5) {
+        let p = in.local - in.half_size;
+        var ang = atan2(p.y, p.x) - in.blur;
+        // Normalize do 0..2pi (-> 0..1)
+        let two_pi = 6.28318530718;
+        ang = ang - floor(ang / two_pi) * two_pi;
+        let t = clamp(ang / two_pi, 0.0, 1.0);
+        return mix_srgb(in.color, in.color2, t);
+    }
+    // Mode 5: inset shadow - kresli uvnitr boxu, fade smerem dovnitr od okraju
+    if (in.mode > 4.5 && in.mode < 5.5) {
+        let blur = max(in.blur, 1.0);
+        // Offset shift sample center: pri offset (ox, oy) shadow se posune v opacnem smeru
+        let p = in.local - vec2<f32>(in.color2.x, in.color2.y);
+        let d = sdf_rounded_box(p, in.half_size, in.radius);
+        // Pozitivni d = vne boxu = nezobrazi (mimo cliping kvadr)
+        // Negativni d = uvnitr -> alpha podle vzdalenosti od okraje
+        let alpha = smoothstep(-blur, blur, d);
+        // Clip mimo box
+        let outer = sdf_rounded_box(in.local, in.half_size, in.radius);
+        let aa_range = 1.0 / max(u.viewport.z, 0.0001);
+        let clip = 1.0 - smoothstep(-aa_range, aa_range, outer);
+        return vec4<f32>(in.color.rgb, in.color.a * alpha * clip);
+    }
+    // Mode 8: blurred solid - smoothstep s blur radius na okrajich
+    if (in.mode > 7.5 && in.mode < 8.5) {
+        let blur = max(in.blur, 0.5);
+        let d = sdf_rounded_box(in.local, in.half_size, in.radius);
+        // Inside box (d < -blur): full alpha
+        // Outside (d > blur): zero alpha
+        // Edge: smoothstep
+        let alpha = 1.0 - smoothstep(-blur, blur, d);
+        return vec4<f32>(in.color.rgb, in.color.a * alpha);
+    }
+    // Mode 4: image - sample RGBA z image atlasu
+    if (in.mode > 3.5 && in.mode < 4.5) {
+        var rgba = textureSample(image_tex, atlas_smp, in.uv);
+        rgba.a = rgba.a * in.color.a;
+        if (in.radius > 0.5) {
+            let d = sdf_rounded_box(in.local, in.half_size, in.radius);
+            // AA range = 1 physical px = 1/zoom logical px (smoothstep symetric).
+            let aa_range = 1.0 / max(u.viewport.z, 0.0001);
+            let aa = 1.0 - smoothstep(-aa_range, aa_range, d);
+            rgba.a = rgba.a * aa;
+        }
+        return rgba;
+    }
+    // Mode 0: solid s rounded corners
+    if (in.radius > 0.5) {
+        let d = sdf_rounded_box(in.local, in.half_size, in.radius);
+        let aa_range = 1.0 / max(u.viewport.z, 0.0001);
+        let aa = 1.0 - smoothstep(-aa_range, aa_range, d);
+        return vec4<f32>(in.color.rgb, in.color.a * aa);
+    }
+    return in.color;
+}
+"#;
