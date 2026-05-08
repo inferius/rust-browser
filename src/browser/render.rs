@@ -2769,6 +2769,20 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                     if key_event.state != ElementState::Pressed { return; }
                     // Pri otevrenem devtools + Console tab + zadanym text -> append do console_input.
                     if self.devtools_open && self.devtools_tab == 1 {
+                        // Ctrl+V paste z clipboardu.
+                        if self.modifiers.control_key() {
+                            if let Key::Character(s) = &key_event.logical_key {
+                                if s.as_str() == "v" || s.as_str() == "V" {
+                                    if let Ok(mut cb) = arboard::Clipboard::new() {
+                                        if let Ok(text) = cb.get_text() {
+                                            self.devtools_console_input.push_str(&text);
+                                            if let Some(w) = &self.window { w.request_redraw(); }
+                                        }
+                                    }
+                                    return;
+                                }
+                            }
+                        }
                         match &key_event.logical_key {
                             Key::Named(NamedKey::Backspace) => {
                                 self.devtools_console_input.pop();
