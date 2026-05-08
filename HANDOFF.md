@@ -2,10 +2,10 @@
 
 Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 
-## Stav projektu (po session N+2: devtools rework phase 1-3 + 5)
+## Stav projektu (po session N+2: devtools rework phase 1-3 + 5-7)
 
 **Build:** clean, 0 warnings.
-**Tests:** 2396 pass / 0 failed / 3 ignored (35 novych devtools tests).
+**Tests:** 2401 pass / 0 failed / 3 ignored (40 novych devtools tests).
 **wgpu:** 29 (latest stable).
 **naga:** 29.
 **winit:** 0.30.
@@ -110,37 +110,84 @@ PERFORMANCE:
   (frame_index, total_ms, display_list_size)
 - Performance tab graf 240-frame s 16.7ms threshold cara
 
-## Aktualne TODO pro devtools
+## Phase 6 - Interaktivni DOM/CSS edit (commit 8c7275e)
 
-Phase 3 doplnek:
-- [ ] Console autocomplete provider (globals + member access pres tab key)
-- [ ] Console multiline support (Shift+Enter newline)
+- EditState + EditTarget (AttributeValue / AttributeName / TextNode / InlineStyleProperty)
+- Double-click detection (400ms okno + < 5px) zacina editaci
+- attribute_at_x helper najde attr name v rowu pri x souradnici
+- Edit input render = inline ConsoleInput buffer (cursor + selection)
+- Keyboard route: pri elements.edit.is_some() vsechny keys do edit.buffer
+  (Backspace/Delete/Arrow + Shift, Ctrl+A/C/X/V, Enter/Tab commit, Esc cancel)
+- Commit:
+  * AttributeValue: node.attributes.borrow_mut().insert
+  * TextNode: vytvori novy Rc<NodeData>, swap v parent.children
+  * InlineStyleProperty: parse + replace + serialize "style" attr
+- Invalidate cached_style_map + cached_layout_root + rebuild_tree
 
-Phase 4 - Sources s breakpoints:
-- [ ] Real breakpoint pause v interpreteru (eval `node.span` line check
-  proti devtools.sources.breakpoints set)
-- [ ] Pause UI - Continue / Step Over / Step Into / Step Out buttons
-- [ ] Local variables panel pri pause
-- [ ] Source map fetch + apply pri zobrazeni
+## Phase 3 - Console autocomplete (commit c4e77e4)
 
-Phase 6 - Interaktivni edit:
-- [ ] Double-click na attribute value v Elements tree -> inline input
-- [ ] Edit property value v Computed/Styles panel
-- [ ] Add new declaration v Styles panel
+- suggest(text, cursor, globals) vraci AutocompleteHit list
+- Member access detect: `obj.x` -> properties z hardcoded table
+  (console/Math/JSON/Object/Array/Number/String/Date/Promise/Symbol/document/
+   window/navigator/localStorage/sessionStorage)
+- Plain ident: globals z Environment::names() + JS keywords
+- UI: Tab triggers, Up/Down navigate, Enter/Tab accept, Esc close
+- 5 unit testu
+
+## Phase 7 + persist + deprecate (this commit)
+
+APPLICATION TAB:
+- localStorage / sessionStorage list zobrazeni (key + value)
+- Cte z interpreter.global pres "__storage_data__" prop
+
+SOURCES TAB:
+- Debugger toolbar (Continue / Step Over / Step Into / Step Out buttons)
+- Status indicator (Paused at line N nebo Running)
+- (Buttony cosmetic - real breakpoint pause vyzaduje AST span retrofit
+  + interpreter pause/resume mechanism, viz TODO nize)
+
+THEME PERSIST:
+- save_persisted() ukladaa do %APPDATA%/rwe/devtools.json (Win) nebo
+  ~/.config/rwe/devtools.json (unix)
+- Format: `{ "mode": "auto|light|dark", "flavor": "chrome|firefox" }`
+- Default::default() automaticky load_persisted() nebo Auto+Chrome fallback
+- Wire: ThemeToggle / ThemeChoice / FlavorChoice -> save_persisted po zmene
+
+DEPRECATE STATIC HTML:
+- Doc-comment `DEPRECATED` v src/debug_view/devtools.rs
+- F11 log "[F11 DEPRECATED] ... prefer F12 inline panel"
+- Static export zachovan pro snapshot use case ale neziskava nove featury
+
+## Aktualne TODO pro devtools (zbyva)
+
+Phase 4 - Real breakpoints:
+- [ ] Pridat `line: u32` field do Stmt variants v src/ast.rs
+- [ ] Parser ho nastavi z prvni Token.line
+- [ ] Interpreter exec_stmt kontrolu proti devtools.sources.breakpoints set
+- [ ] Cooperative pause - shared DebuggerState s Renderer pres Rc<RefCell>
+- [ ] Continue / Step Over / Step Into / Step Out funkcionalni
+- [ ] Local variables panel pri pause (snapshot env.vars)
+- [ ] Source map fetch + apply pri zobrazeni (VLQ decoder uz hotov v
+  src/devtools/model/sources.rs)
+
+Phase 6 doplnek:
+- [ ] Add new attribute pres "Add attribute" akci z context menu
+- [ ] Edit CSS property pres dvojklik v Computed panel
 - [ ] Toggle property checkbox
 
-Phase 7 - Application + advanced:
-- [ ] Storage list panel (localStorage / sessionStorage / cookies)
+Phase 7 doplnek:
+- [ ] Cookies tab v Application panelu
+- [ ] IndexedDB stores list
 - [ ] Network row klik -> detail popup (headers + response preview)
 - [ ] Network filter tabs (All / XHR / JS / CSS / Img / Doc)
 - [ ] Performance: separate sloupce pro layout / paint / gpu time
 
-Settings + persist:
-- [ ] Persist theme volba do user config souboru (~/.rwe/devtools.json)
+Console doplnek:
+- [ ] Multiline support (Shift+Enter newline)
+- [ ] Object/Array log pretty-print s expand/collapse
 
-Static HTML export deprecated:
-- [ ] Note v F11 logu "DEPRECATED, use F12 inline panel"
-- [ ] Eventually delete src/debug_view/devtools.rs (zatim ponechat)
+Static HTML export:
+- [ ] Eventually delete src/debug_view/devtools.rs (zatim DEPRECATED ponechan)
 
 ## Session N+1 highlights (refactor pass)
 

@@ -634,9 +634,16 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                                         ThemeMode::Light => ThemeMode::Dark,
                                         ThemeMode::Dark => ThemeMode::Auto,
                                     };
+                                    crate::devtools::theme::save_persisted(self.devtools.theme);
                                 }
-                                DevtoolsHit::ThemeChoice(m) => { self.devtools.theme.mode = m; }
-                                DevtoolsHit::FlavorChoice(f) => { self.devtools.theme.flavor = f; }
+                                DevtoolsHit::ThemeChoice(m) => {
+                                    self.devtools.theme.mode = m;
+                                    crate::devtools::theme::save_persisted(self.devtools.theme);
+                                }
+                                DevtoolsHit::FlavorChoice(f) => {
+                                    self.devtools.theme.flavor = f;
+                                    crate::devtools::theme::save_persisted(self.devtools.theme);
+                                }
                                 DevtoolsHit::ConsoleInput => {
                                     self.devtools.focus = crate::devtools::focus::FocusTarget::DevToolsConsole;
                                 }
@@ -1212,7 +1219,9 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                             if let Some(w) = &self.window { w.request_redraw(); }
                         }
                         Key::Named(NamedKey::F11) => {
-                            // F11 = old behavior = open static devtools.html
+                            // F11 = DEPRECATED static devtools.html snapshot.
+                            // Pouzivej F12 inline panel pro aktivni vyvoj.
+                            println!("[F11 DEPRECATED] static devtools.html snapshot - prefer F12 inline panel");
                             self.regenerate_and_open_devtools();
                         }
                         Key::Named(NamedKey::F5) => {

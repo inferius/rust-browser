@@ -681,9 +681,36 @@ fn paint_sources_tab(
     _mouse_x: f32, _mouse_y: f32,
 ) {
     push_rect(cmds, 0.0, content_y, win_w, content_h, pal.bg_panel);
+
+    // Debugger toolbar nahore: Continue / Step Over / Step Into / Step Out + status.
+    let dbg_h = 28.0;
+    push_rect(cmds, 0.0, content_y, win_w, dbg_h, pal.bg_toolbar);
+    push_rect(cmds, 0.0, content_y + dbg_h - 1.0, win_w, 1.0, pal.border);
+    let labels = ["Continue", "Step Over", "Step Into", "Step Out"];
+    let mut x = 8.0;
+    for label in labels.iter() {
+        let w = label.len() as f32 * FONT_W + 16.0;
+        push_rect(cmds, x, content_y + 4.0, w, dbg_h - 8.0, pal.bg_button);
+        push_text(cmds, x + 8.0, content_y + 9.0, label.to_string(), pal.text, false);
+        x += w + 4.0;
+    }
+    let status = if state.sources.debugger_paused {
+        format!("Paused (line {:?})",
+            state.sources.current_pause_location.map(|(_, l)| l).unwrap_or(0))
+    } else {
+        "Running (set breakpoints with click on line gutter)".to_string()
+    };
+    push_text(cmds, x + 16.0, content_y + 9.0, status,
+              if state.sources.debugger_paused { pal.log_warn } else { pal.text_dim }, true);
+
+    let body_y = content_y + dbg_h;
+    let body_h = content_h - dbg_h;
     let split_x = 240.0;
-    push_rect(cmds, split_x, content_y, 1.0, content_h, pal.border);
-    push_rect(cmds, 0.0, content_y, split_x, content_h, pal.bg_panel_alt);
+    push_rect(cmds, split_x, body_y, 1.0, body_h, pal.border);
+    push_rect(cmds, 0.0, body_y, split_x, body_h, pal.bg_panel_alt);
+
+    let content_y = body_y;
+    let content_h = body_h;
 
     // File list.
     push_text_bold(cmds, 8.0, content_y + 6.0, "Sources".to_string(), pal.text_dim, false);
@@ -797,16 +824,65 @@ fn paint_application_tab(
     cmds: &mut Vec<DisplayCommand>,
     _state: &DevToolsState,
     pal: &Palette,
-    _interp: Option<&Interpreter>,
+    interp: Option<&Interpreter>,
     win_w: f32,
     content_y: f32,
     content_h: f32,
 ) {
     push_rect(cmds, 0.0, content_y, win_w, content_h, pal.bg_panel);
-    push_text_bold(cmds, 12.0, content_y + 12.0, "Application".to_string(), pal.text, false);
-    push_text(cmds, 12.0, content_y + 12.0 + ROW_H,
-              "(Storage / Cookies / IndexedDB - coming soon)".to_string(),
-              pal.text_dim, true);
+
+    let mut sy = content_y + 8.0;
+    let pad_x = 12.0;
+
+    // localStorage section.
+    push_text_bold(cmds, pad_x, sy, "localStorage".to_string(), pal.text, false);
+    sy += ROW_H + 2.0;
+    let local_entries = read_storage(interp, "localStorage");
+    if local_entries.is_empty() {
+        push_text(cmds, pad_x + 12.0, sy, "(empty)".to_string(), pal.text_dim, true);
+        sy += ROW_H;
+    } else {
+        for (k, v) in &local_entries {
+            if sy + ROW_H > content_y + content_h { break; }
+            push_text(cmds, pad_x + 12.0, sy, k.clone(), pal.syn_attr, false);
+            let trunc: String = v.chars().take(80).collect();
+            push_text(cmds, pad_x + 220.0, sy, trunc, pal.syn_value, false);
+            sy += ROW_H;
+        }
+    }
+
+    sy += 12.0;
+    push_text_bold(cmds, pad_x, sy, "sessionStorage".to_string(), pal.text, false);
+    sy += ROW_H + 2.0;
+    let session_entries = read_storage(interp, "sessionStorage");
+    if session_entries.is_empty() {
+        push_text(cmds, pad_x + 12.0, sy, "(empty)".to_string(), pal.text_dim, true);
+        sy += ROW_H;
+    } else {
+        for (k, v) in &session_entries {
+            if sy + ROW_H > content_y + content_h { break; }
+            push_text(cmds, pad_x + 12.0, sy, k.clone(), pal.syn_attr, false);
+            let trunc: String = v.chars().take(80).collect();
+            push_text(cmds, pad_x + 220.0, sy, trunc, pal.syn_value, false);
+            sy += ROW_H;
+        }
+    }
+}
+
+/// Vrati (key, value) pary z storage objektu (interp.global.{name}).
+fn read_storage(interp: Option<&Interpreter>, name: &str) -> Vec<(String, String)> {
+    let Some(interp) = interp else { return Vec::new() };
+    let env = interp.global.borrow();
+    let Some(value) = env.get(name) else { return Vec::new() };
+    let crate::interpreter::JsValue::Object(obj_rc) = value else { return Vec::new() };
+    let obj = obj_rc.borrow();
+    let data_v = obj.get("__storage_data__");
+    if matches!(data_v, crate::interpreter::JsValue::Undefined) { return Vec::new(); }
+    let crate::interpreter::JsValue::Object(data_rc) = data_v else { return Vec::new(); };
+    let data = data_rc.borrow();
+    data.own_keys().iter()
+        .map(|k| (k.clone(), data.get(k).to_string()))
+        .collect()
 }
 
 // ─── Settings tab ───────────────────────────────────────────────────────

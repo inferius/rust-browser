@@ -27,8 +27,80 @@ pub struct ThemeSelection {
 
 impl Default for ThemeSelection {
     fn default() -> Self {
-        ThemeSelection { mode: ThemeMode::Auto, flavor: ThemeFlavor::Chrome }
+        // Try load from config file. Pri chybe fallback Auto+Chrome.
+        load_persisted().unwrap_or(ThemeSelection {
+            mode: ThemeMode::Auto, flavor: ThemeFlavor::Chrome,
+        })
     }
+}
+
+fn config_path() -> Option<std::path::PathBuf> {
+    // %APPDATA%/rwe/devtools.json (Windows) / ~/.config/rwe/devtools.json (unix).
+    #[cfg(target_os = "windows")]
+    {
+        let dir = std::env::var("APPDATA").ok()?;
+        Some(std::path::PathBuf::from(dir).join("rwe").join("devtools.json"))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let dir = std::env::var("HOME").ok()?;
+        Some(std::path::PathBuf::from(dir).join(".config").join("rwe").join("devtools.json"))
+    }
+}
+
+fn load_persisted() -> Option<ThemeSelection> {
+    let path = config_path()?;
+    let content = std::fs::read_to_string(&path).ok()?;
+    parse_config(&content)
+}
+
+fn parse_config(s: &str) -> Option<ThemeSelection> {
+    // Lite JSON: { "mode": "auto|light|dark", "flavor": "chrome|firefox" }
+    let mode = extract_str_value(s, "mode")?;
+    let flavor = extract_str_value(s, "flavor")?;
+    let mode = match mode.as_str() {
+        "auto" => ThemeMode::Auto,
+        "light" => ThemeMode::Light,
+        "dark" => ThemeMode::Dark,
+        _ => return None,
+    };
+    let flavor = match flavor.as_str() {
+        "chrome" => ThemeFlavor::Chrome,
+        "firefox" => ThemeFlavor::Firefox,
+        _ => return None,
+    };
+    Some(ThemeSelection { mode, flavor })
+}
+
+fn extract_str_value(s: &str, key: &str) -> Option<String> {
+    let pattern = format!("\"{}\"", key);
+    let idx = s.find(&pattern)?;
+    let after = &s[idx + pattern.len()..];
+    let colon = after.find(':')?;
+    let after = &after[colon + 1..];
+    let q1 = after.find('"')?;
+    let after = &after[q1 + 1..];
+    let q2 = after.find('"')?;
+    Some(after[..q2].to_string())
+}
+
+/// Ulozi aktualne zvolenou theme do config souboru.
+pub fn save_persisted(sel: ThemeSelection) {
+    let Some(path) = config_path() else { return };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let mode_s = match sel.mode {
+        ThemeMode::Auto => "auto",
+        ThemeMode::Light => "light",
+        ThemeMode::Dark => "dark",
+    };
+    let flavor_s = match sel.flavor {
+        ThemeFlavor::Chrome => "chrome",
+        ThemeFlavor::Firefox => "firefox",
+    };
+    let content = format!("{{\n  \"mode\": \"{}\",\n  \"flavor\": \"{}\"\n}}\n", mode_s, flavor_s);
+    let _ = std::fs::write(&path, content);
 }
 
 /// Resolved palette - vsechny barvy uz konkretni RGBA byty.

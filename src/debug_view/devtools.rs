@@ -1,4 +1,11 @@
 /// DevTools panel - HTML stranka inspirovana Chrome DevTools.
+///
+/// **DEPRECATED**: Tento static HTML export je legacy. Pouzivej F12 inline panel
+/// (browser/devtools_panel.rs) - sjednoceny model nad src/devtools/.
+/// Static export zachovan pro F11 snapshot use case (otevre HTML v default
+/// prohlizeci) ale nedostava nove featury (interactive edit, breakpoints,
+/// autocomplete, theme switching, ...).
+///
 /// Sekce:
 /// - Elements: DOM tree (collapsible) + computed styles
 /// - Console: zachycene console.log/error/warn (z runtime)
