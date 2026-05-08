@@ -41,20 +41,26 @@ impl Interpreter {
         match stmt {
             Stmt::WithLine { line, inner } => {
                 self.current_line = *line;
-                // Breakpoint OR step check: pri match capture locals + log + pause flag.
-                let should_pause = {
+                // Breakpoint OR step check.
+                let (should_pause, skip_once) = {
                     let dbg = self.debugger.borrow();
-                    dbg.is_breakpoint(*line) || dbg.step_should_pause()
+                    let hit = dbg.is_breakpoint(*line) || dbg.step_should_pause();
+                    (hit, dbg.skip_once_line == Some(*line))
                 };
-                if should_pause {
-                    let msg = format!("Breakpoint hit at line {}", line);
+                if should_pause && !skip_once {
+                    let msg = format!("Breakpoint hit at line {} (script aborted; click Continue v devtools)", line);
                     self.console_log.borrow_mut().push(("warn".into(), msg));
-                    // Capture lokalni promenne ze scope chain pro UI panel.
                     let locals = capture_locals(env);
                     let mut dbg = self.debugger.borrow_mut();
                     dbg.pause_at(*line);
                     dbg.locals = locals;
                     dbg.step = None;
+                    // Early abort - propaguj Signal::Paused nahoru.
+                    return Ok(Some(Signal::Paused(*line)));
+                }
+                if skip_once {
+                    // Konzumuj skip_once - dalsi hit na same line uz pause.
+                    self.debugger.borrow_mut().skip_once_line = None;
                 }
                 return self.exec_stmt(inner, env);
             }

@@ -691,6 +691,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                                     }
                                     self.devtools.sources.debugger_paused = false;
                                     self.devtools.sources.current_pause_location = None;
+                                    self.rerun_paused_scripts();
                                 }
                                 DevtoolsHit::DebuggerStepOver => {
                                     if let Some(interp) = &self.interpreter {
@@ -1622,6 +1623,47 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
             }
             println!("[devtools] {} (console: {}, network: {})", out_path.display(), console_log.len(), network_log.len());
             open_in_default_browser(&out_path);
+        }
+
+        /// Rerun vsech scriptu po Continue. resume() uz nastavila skip_once_line
+        /// na predchozi pause line, takze script se pri stejnem BP nezacykli a
+        /// pokracuje az do dalsiho hitu nebo konce.
+        fn rerun_paused_scripts(&mut self) {
+            if self.interpreter.is_none() { return }
+            // Vytvor novy Interpreter (cisty state) ALE zkopiruj breakpoints +
+            // skip_once_line z aktualniho debuggeru aby pause logic fungovala
+            // dale. DOM je v interpreter.document - zachova v novem.
+            let saved_bp;
+            let saved_skip;
+            let saved_console;
+            let saved_doc;
+            {
+                let interp = self.interpreter.as_ref().unwrap();
+                let dbg = interp.debugger.borrow();
+                saved_bp = dbg.breakpoints.clone();
+                saved_skip = dbg.skip_once_line;
+                saved_console = interp.console_log.borrow().clone();
+                saved_doc = std::rc::Rc::clone(&interp.document.borrow().root);
+            }
+            let mut new_interp = crate::interpreter::Interpreter::new();
+            new_interp.set_document(crate::browser::dom::Document {
+                title: String::new(),
+                url: String::new(),
+                root: saved_doc,
+            });
+            *new_interp.console_log.borrow_mut() = saved_console;
+            {
+                let mut dbg = new_interp.debugger.borrow_mut();
+                dbg.breakpoints = saved_bp;
+                dbg.skip_once_line = saved_skip;
+            }
+            self.interpreter = Some(new_interp);
+            // Znovu spust scripts.
+            let mut tmp = self.interpreter.take().unwrap();
+            self.run_inline_scripts(&mut tmp);
+            self.interpreter = Some(tmp);
+            self.cached_layout_root = None;
+            self.cached_style_map = None;
         }
 
         fn run_inline_scripts(&mut self, interp: &mut crate::interpreter::Interpreter) {

@@ -469,6 +469,10 @@ enum Signal {
     Break(Option<String>),
     /// `continue [label]` - preskoceni iterace
     Continue(Option<String>),
+    /// Debugger pause - propaguje az nahoru, run() vrati graceful Ok.
+    /// Tree-walking interp je single-threaded UI, real freeze nelze (UI by zamrzla),
+    /// proto pause = early abort skriptu. Continue v UI rerun skript s skip_first flag.
+    Paused(u32),
 }
 
 /// Zkratka pro vysledek vyhodnoceni vyrazu.
@@ -610,6 +614,9 @@ pub struct DebuggerState {
     pub call_depth: u32,
     /// Snapshot call_depth pri Step start.
     pub step_depth_anchor: u32,
+    /// Pri rerun po Continue: skip pause na teto line raz (aby script nezavartil
+    /// hned znovu). Po consume se vynuluje.
+    pub skip_once_line: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -631,7 +638,8 @@ impl DebuggerState {
         self.hit_count = self.hit_count.saturating_add(1);
     }
     pub fn resume(&mut self) {
-        self.paused_at = None;
+        // Konzumuj paused line do skip_once aby rerun preskoci stejny BP.
+        self.skip_once_line = self.paused_at.take();
         self.step = None;
     }
     pub fn set_breakpoints(&mut self, lines: std::collections::HashSet<u32>) {
@@ -950,6 +958,15 @@ impl Interpreter {
         let env = Rc::clone(&self.global);
         let result = match self.exec_stmts(&program.body, &env)? {
             Some(Signal::Return(v)) => v,
+            Some(Signal::Paused(line)) => {
+                // Tree-walking single-thread: pause = early abort. UI obsluha
+                // ulozi `program` pro pripadny rerun po Continue.
+                self.console_log.borrow_mut().push((
+                    "info".into(),
+                    format!("[debugger] script paused at line {} (early abort)", line),
+                ));
+                JsValue::Undefined
+            }
             _ => JsValue::Undefined,
         };
         // Drain timer queue - spust vsechny setTimeout callbacky

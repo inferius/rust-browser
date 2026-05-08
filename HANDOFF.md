@@ -221,15 +221,45 @@ ADD ATTRIBUTE:
 
 - Filter aplikace na NetworkEntry list pri rendrovani (predtim jen state)
 
-## Aktualne TODO pro devtools (zbyva)
+## Phase 11 - "early abort" pause + Continue rerun (commit pripraven)
 
-Real blocking pause v interpreteru:
-- [ ] Vyzaduje vetsi async refactor:
-  * Rc<RefCell<>> -> Arc<Mutex<>> napric Interpreter (slozite, !Send)
-  * NEBO: spawn worker thread, message passing pres mpsc kanaly
-  * NEBO: continuation-passing style (kazdy exec_stmt re-entrant z save state)
-- Aktualne logical pause + UI indicator + locals snapshot funguje, ale
-  kod stale "probiha" pri pause - jen log a UI ukazuje, neblokuje exec.
+ARCHITEKTONICKY KOMPROMIS:
+- Tree-walking interpreter beti UI thread (interp.run() volame z UI flow).
+- Real blocking pause = UI zamrzne, user neda klikat Continue. Nepouzitelne.
+- Async refactor (Rc->Arc + worker thread + mpsc channels) = velky rework
+  pres ~30 souboru, deferred.
+
+PRAGMATICKE RESENI:
+- Signal::Paused(line) novy variant v interpreter::Signal enum
+- exec_stmt pri breakpoint hit -> return Ok(Some(Signal::Paused(line)))
+- Propaguje pres exec_stmts + loops nahoru (existujici "Some(s) => return"
+  wildcard arm)
+- run() ho zachyti, log "[debugger] script paused at line N (early abort)",
+  vraci Undefined gracefully
+
+CONTINUE FLOW:
+- DebuggerState::resume() premisti paused_at -> skip_once_line
+- UI Continue button volaa rerun_paused_scripts(): vytvori novy Interpreter
+  s zachovanim console_log + document + breakpoints + skip_once_line, pak
+  znovu spusti vsechny <script> tagy
+- exec_stmt pri stejne pause line s skip_once_line == Some(line) preskoci
+  pause + konzumuje skip_once -> dalsi hit ZNOVU pause
+
+LIMITS:
+- Side effects PRED prvnim BP hit (DOM mutace, fetch calls) se opakovaly
+  pri Continue rerun. Idempotentni JS funguje OK, mutating ne.
+- Step Over/Into/Out vyzaduji bezne pause + pri Continue user clicks step
+  na presnou line - aktualne all step kinds funguji jako "next stmt"
+  pause (which is == Step Into).
+- Local vars panel ukazuje snapshot pri pause (z capture_locals).
+
+NEXT-LEVEL VYLEPSENI (TODO):
+- [ ] Async refactor pres Arc<Mutex> + worker thread = real freeze pause
+- [ ] Idempotent rerun protection (snapshot DOM pred run + revert pri rerun)
+- [ ] Conditional breakpoints (eval expr na pause check)
+- [ ] Logpoint (log expr namisto pause)
+
+## Zbyly devtools TODO
 
 Network response body capture:
 - [ ] ureq sync response.into_string() vyzaduje volat pred next request,
