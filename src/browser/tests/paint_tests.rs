@@ -1483,3 +1483,46 @@ fn engine_test_html_cascade_applies() {
         }
     }
 }
+
+#[test]
+fn rotate_y_45_emits_matrix_with_cos45() {
+    let cmds = build_dl(
+        r#"<html><body><div class="b"></div></body></html>"#,
+        r#".b { width: 80px; height: 60px; transform: rotateY(45deg); display: inline-block; }"#,
+    );
+    let m = cmds.iter().find_map(|c| {
+        if let DisplayCommand::TransformBegin { matrix, .. } = c { Some(*matrix) } else { None }
+    }).expect("TransformBegin");
+    let c45 = (45.0_f32.to_radians()).cos();
+    println!("matrix m[0]={} (expected cos45={})", m[0], c45);
+    println!("matrix m[2]={} (expected sin45={})", m[2], (45.0_f32.to_radians()).sin());
+    println!("matrix row3: {:?}", &m[12..16]);
+    assert!((m[0] - c45).abs() < 0.01, "m[0]={} not cos(45)={}", m[0], c45);
+    assert!((m[15] - 1.0).abs() < 0.01, "m[15]={} should be 1", m[15]);
+    // tw pri lx=hw=40, ly=0, lz=0:
+    let tw = m[12]*40.0 + m[13]*0.0 + m[14]*0.0 + m[15];
+    let tx = m[0]*40.0 + m[1]*0.0 + m[2]*0.0 + m[3];
+    let px = tx / tw.max(0.0001);
+    println!("hw=40, lx=40 -> tx={} tw={} px={} (expected ~28.3)", tx, tw, px);
+    assert!((px - 28.28).abs() < 0.5, "px={} expected ~28.3", px);
+}
+
+#[test]
+fn rot_box_in_flex_row_keeps_80x60() {
+    let cmds = build_dl(
+        r#"<html><body><div class="row"><div class="b">A</div><div class="b">B</div></div></body></html>"#,
+        r#".row { display: flex; gap: 8px; }
+           .b { width: 80px; height: 60px; transform: rotateY(45deg); }"#,
+    );
+    let tbs: Vec<_> = cmds.iter().filter_map(|c| {
+        if let DisplayCommand::TransformBegin { x, y, w, h, .. } = c {
+            Some((*x, *y, *w, *h))
+        } else { None }
+    }).collect();
+    println!("transform begins: {:?}", tbs);
+    assert!(tbs.len() >= 2, "expected 2 transforms");
+    for (_, _, w, h) in &tbs {
+        assert!((w - 80.0).abs() < 1.0, "w={} != 80", w);
+        assert!((h - 60.0).abs() < 1.0, "h={} != 60", h);
+    }
+}

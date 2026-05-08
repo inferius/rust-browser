@@ -6457,18 +6457,14 @@ impl Renderer {
         let z = self.zoom.max(0.0001);
         let vw = self.config.width as f32;
         let vh = self.config.height as f32;
-        let pad: f32 = 1.0;
-        let u0 = ((x * z - pad) / vw).clamp(0.0, 1.0);
-        let v0 = ((y * z - pad) / vh).clamp(0.0, 1.0);
-        let u1 = (((x + w) * z + pad) / vw).clamp(0.0, 1.0);
-        let v1 = (((y + h) * z + pad) / vh).clamp(0.0, 1.0);
+        let u0 = (x * z / vw).clamp(0.0, 1.0);
+        let v0 = (y * z / vh).clamp(0.0, 1.0);
+        let u1 = ((x + w) * z / vw).clamp(0.0, 1.0);
+        let v1 = ((y + h) * z / vh).clamp(0.0, 1.0);
         let cx = x + w * 0.5;
         let cy = y + h * 0.5;
-        // Half-size rozsirime o pad - jinak by quad sampling oblast neodpovidala
-        // shader vertex local positions (lx ∈ [-hw, +hw]). Kdyz uv_box pokryva
-        // (x-pad)..(x+w+pad), tak quad musi mit shodne pokryti -> hw' = hw + pad.
-        let hw = w * 0.5 + pad;
-        let hh = h * 0.5 + pad;
+        let hw = w * 0.5;
+        let hh = h * 0.5;
 
         // Layout uniformu: 8x vec4 = 128 bytes
         // matrix v WGSL row-major: row0 = [m[0], m[1], m[2], m[3]], etc.
