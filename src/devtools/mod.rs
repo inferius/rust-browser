@@ -190,6 +190,8 @@ pub struct NetworkState {
     pub filter: NetworkFilter,
     pub selected: Option<usize>,
     pub scroll_y: f32,
+    /// True kdyz user kliknul na row - zobrazit detail popup.
+    pub detail_open: bool,
 }
 
 impl Default for NetworkFilter {

@@ -2,10 +2,10 @@
 
 Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 
-## Stav projektu (po session N+2: devtools rework phase 1-3 + 5-7)
+## Stav projektu (po session N+2: devtools rework phase 1-7)
 
 **Build:** clean, 0 warnings.
-**Tests:** 2401 pass / 0 failed / 3 ignored (40 novych devtools tests).
+**Tests:** 2402 pass / 0 failed / 3 ignored (41 novych devtools tests).
 **wgpu:** 29 (latest stable).
 **naga:** 29.
 **winit:** 0.30.
@@ -158,33 +158,80 @@ DEPRECATE STATIC HTML:
 - F11 log "[F11 DEPRECATED] ... prefer F12 inline panel"
 - Static export zachovan pro snapshot use case ale neziskava nove featury
 
+## Phase 4 real - Breakpoints (commit 9836999)
+
+AST RETROFIT:
+- Stmt::WithLine { line: u32, inner: Box<Stmt> } wrapper
+- Parser parse_stmt zachyti line z self.cur().line PRED inner parse
+- AST consumers peel WithLine pri match (eval_call, bytecode compile_program,
+  bytecode Stmt::Class super() detect, bytecode compile_stmt)
+
+INTERPRETER:
+- exec_stmt handler pro Stmt::WithLine: update current_line, check breakpoint,
+  log "Breakpoint hit at line N", debugger.pause_at(line), pak dispatch inner
+- DebuggerState struct (breakpoints, paused_at, hit_count) v Rc<RefCell>
+
+UI WIRE:
+- Per render frame: sync devtools.sources.breakpoints -> interp.debugger
+- Mirror interp.debugger.paused_at -> devtools.sources.current_pause_location
+- Sources tab Continue/Step buttony hit-test -> debugger.resume()
+
+LIMITACE:
+- Logical pause (no actual blocking) - JS pokracuje, jen log + UI indikator
+- Real blocking pause vyzaduje async runtime (vsechen state pres channels)
+- Step Over/Into/Out vsechna jednoda jako Continue
+
+## Phase 8 - Source maps + multiline + network detail + add-attr (this commit)
+
+SOURCE MAP FETCH:
+- SourcesState::load_source_map(file_id, base_url, fetcher) - resolve relative
+  + data: URI shortcut + parse_source_map (V3 format pres lite JSON parser
+  + base64-VLQ decoder)
+- SourcesState::map_position(file_id, gen_line, gen_col) -> (orig_file, orig_line, orig_col)
+- Wire v render: po add_file scriptu hned try fetch source map pres
+  fetch_text_url
+
+CONSOLE MULTILINE:
+- Shift+Enter v console input -> insert("\n") (multiline edit)
+- Plain Enter stale submit (eval + log)
+
+NETWORK DETAIL POPUP:
+- Klik na network row -> network.selected + network.detail_open = true
+- Pri detail_open: pravy panel zabira 40% sirky tabu, zobrazi Status, URL,
+  Method, Response (preview placeholder)
+
+ADD ATTRIBUTE:
+- Context menu "Add attribute" akce -> EditTarget::AttributeName edit start
+- Po commit prida novy attr s prazdnou hodnotou na node
+
 ## Aktualne TODO pro devtools (zbyva)
 
-Phase 4 - Real breakpoints:
-- [ ] Pridat `line: u32` field do Stmt variants v src/ast.rs
-- [ ] Parser ho nastavi z prvni Token.line
-- [ ] Interpreter exec_stmt kontrolu proti devtools.sources.breakpoints set
-- [ ] Cooperative pause - shared DebuggerState s Renderer pres Rc<RefCell>
-- [ ] Continue / Step Over / Step Into / Step Out funkcionalni
-- [ ] Local variables panel pri pause (snapshot env.vars)
-- [ ] Source map fetch + apply pri zobrazeni (VLQ decoder uz hotov v
-  src/devtools/model/sources.rs)
+Real blocking pause v interpreteru:
+- [ ] Async architecture - JS eval na worker thread + channels pro pause/continue
+- [ ] Step Over/Into/Out semantika (track call depth pri step)
+- [ ] Local variables panel pri pause (snapshot env.vars + scope chain walk)
+
+Source maps doplnek:
+- [ ] Toggle "show original sources" tab v Sources - po fetch zobrazi
+  mapped originals namisto generated content
+- [ ] Stack trace remap (pri error log -> orig file:line)
 
 Phase 6 doplnek:
-- [ ] Add new attribute pres "Add attribute" akci z context menu
-- [ ] Edit CSS property pres dvojklik v Computed panel
-- [ ] Toggle property checkbox
+- [ ] Edit CSS property pres dvojklik v Computed panel (currently jen klik
+  na celou row, nedetekuje attr value zone)
+- [ ] Toggle property checkbox (! za property name, klik = !important toggle)
+- [ ] CSS rule add/delete (Styles section)
 
 Phase 7 doplnek:
-- [ ] Cookies tab v Application panelu
-- [ ] IndexedDB stores list
-- [ ] Network row klik -> detail popup (headers + response preview)
+- [ ] Cookies tab v Application panelu (cookies registry pres document.cookie)
+- [ ] IndexedDB stores list (IDB store registry)
 - [ ] Network filter tabs (All / XHR / JS / CSS / Img / Doc)
 - [ ] Performance: separate sloupce pro layout / paint / gpu time
+- [ ] Network response body capture (zatim ureq nepristrici)
 
 Console doplnek:
-- [ ] Multiline support (Shift+Enter newline)
 - [ ] Object/Array log pretty-print s expand/collapse
+- [ ] Console pre-eval s autocomplete fallback pri unknown ident
 
 Static HTML export:
 - [ ] Eventually delete src/debug_view/devtools.rs (zatim DEPRECATED ponechan)

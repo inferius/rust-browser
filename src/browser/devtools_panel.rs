@@ -626,6 +626,34 @@ fn paint_network_tab(
 ) {
     push_rect(cmds, 0.0, content_y, win_w, content_h, pal.bg_panel);
 
+    // Detail popup overlay - kdyz selected + detail_open.
+    let show_detail = state.network.detail_open && state.network.selected.is_some();
+    let main_w = if show_detail { win_w * 0.6 } else { win_w };
+    if show_detail {
+        let dx = main_w;
+        push_rect(cmds, dx, content_y, win_w - dx, content_h, pal.bg_panel_alt);
+        push_rect(cmds, dx, content_y, 1.0, content_h, pal.border);
+        if let Some(idx) = state.network.selected {
+            let entry: Option<(String, u16)> = state.network.entries.get(idx)
+                .map(|e| (e.url.clone(), e.status))
+                .or_else(|| interp.and_then(|i| i.network_log.borrow().get(idx).cloned()));
+            if let Some((url, status)) = entry {
+                let mut sy = content_y + 12.0;
+                push_text_bold(cmds, dx + 12.0, sy, "Headers".to_string(), pal.text, false);
+                sy += ROW_H + 4.0;
+                push_text(cmds, dx + 12.0, sy, format!("Status: {}", status), pal.text, false);
+                sy += ROW_H;
+                push_text(cmds, dx + 12.0, sy, format!("URL: {}", url), pal.text_dim, false);
+                sy += ROW_H + 8.0;
+                push_text_bold(cmds, dx + 12.0, sy, "Method: GET".to_string(), pal.text, false);
+                sy += ROW_H + 8.0;
+                push_text_bold(cmds, dx + 12.0, sy, "Response (preview)".to_string(), pal.text, false);
+                sy += ROW_H + 4.0;
+                push_text(cmds, dx + 12.0, sy, "(Content body neni captured ve store)".to_string(), pal.text_dim, true);
+            }
+        }
+    }
+
     // Sloupce header.
     let header_h = ROW_H + 4.0;
     push_rect(cmds, 0.0, content_y, win_w, header_h, pal.bg_panel_alt);

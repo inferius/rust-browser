@@ -656,6 +656,10 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                                 DevtoolsHit::SourcesGutter { file_id, line } => {
                                     self.devtools.sources.toggle_breakpoint(file_id, line);
                                 }
+                                DevtoolsHit::NetworkRow(idx) => {
+                                    self.devtools.network.selected = Some(idx);
+                                    self.devtools.network.detail_open = true;
+                                }
                                 DevtoolsHit::PanelArea => {
                                     self.devtools.focus = crate::devtools::focus::FocusTarget::Page;
                                 }
@@ -924,6 +928,10 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                             Key::Named(NamedKey::ArrowDown) => { input.history_next(); }
                             Key::Named(NamedKey::Escape) => {
                                 self.devtools.focus = FocusTarget::Page;
+                            }
+                            Key::Named(NamedKey::Enter) if shift => {
+                                // Shift+Enter = vlozi newline (multiline edit).
+                                self.devtools.console.input.insert("\n");
                             }
                             Key::Named(NamedKey::Enter) => {
                                 let cmd = self.devtools.console.input.submit();
@@ -1603,11 +1611,17 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                 })
                 .collect();
 
-            // Registruj scripts do DevTools sources panel.
+            // Registruj scripts do DevTools sources panel + try fetch source map.
             use crate::devtools::model::sources::SourceLang;
+            let base = self.base_url.clone().unwrap_or_default();
             for (url, src) in &scripts {
                 if src.trim().is_empty() { continue; }
-                self.devtools.sources.add_file(url.clone(), src.clone(), SourceLang::JavaScript);
+                let id = self.devtools.sources.add_file(url.clone(), src.clone(), SourceLang::JavaScript);
+                let resolve_base = if url.starts_with("http") || url.starts_with("file:") {
+                    url.clone()
+                } else { base.clone() };
+                self.devtools.sources.load_source_map(id, &resolve_base,
+                    |u| super::render::fetch_text_url(u));
             }
 
             for (_url, src) in scripts {
@@ -1786,6 +1800,15 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         fn dispatch_menu_action(&mut self, action: crate::devtools::context_menu::MenuAction) {
             use crate::devtools::context_menu::MenuAction::*;
             match action {
+                AddAttribute { node_id } => {
+                    use crate::devtools::{EditState, EditTarget};
+                    use crate::devtools::model::console::ConsoleInput;
+                    self.devtools.elements.edit = Some(EditState {
+                        target: EditTarget::AttributeName { node_id, value: "".to_string() },
+                        buffer: ConsoleInput::new(),
+                    });
+                    self.devtools.focus = crate::devtools::focus::FocusTarget::DevToolsConsole;
+                }
                 CopySelector { node_id } | CopyXPath { node_id } | CopyOuterHtml { node_id } | CopyInnerHtml { node_id } => {
                     if let Some(interp) = &self.interpreter {
                         let root = std::rc::Rc::clone(&interp.document.borrow().root);

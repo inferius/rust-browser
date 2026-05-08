@@ -53,6 +53,59 @@ impl SourcesState {
         id
     }
 
+    /// Spusti fetch + parse source mapu pro file s `id`. Bere fetcher closure
+    /// (URL -> Option<String>) - typicky `crate::browser::render::fetch_text_url`.
+    pub fn load_source_map<F: Fn(&str) -> Option<String>>(&mut self, file_id: u32, base_url: &str, fetch: F) {
+        let Some(file) = self.files.iter_mut().find(|f| f.id == file_id) else { return };
+        if file.source_map.is_some() { return }
+        let Some(map_url) = file.source_map_url.clone() else { return };
+        // Resolve relative.
+        let resolved = if map_url.starts_with("http://") || map_url.starts_with("https://")
+            || map_url.starts_with("file:") || map_url.starts_with("data:") {
+            map_url.clone()
+        } else if let Some(base_dir_end) = base_url.rfind('/') {
+            format!("{}/{}", &base_url[..base_dir_end], map_url)
+        } else {
+            map_url.clone()
+        };
+        // Data URI shortcut.
+        if let Some(rest) = resolved.strip_prefix("data:application/json") {
+            if let Some(b64_idx) = rest.find(",base64") {
+                let _ = b64_idx;
+            } else if let Some(comma) = rest.find(',') {
+                let body = &rest[comma+1..];
+                if let Some(map) = parse_source_map(body) {
+                    file.source_map = Some(map);
+                }
+                return;
+            }
+        }
+        if let Some(content) = fetch(&resolved) {
+            if let Some(map) = parse_source_map(&content) {
+                file.source_map = Some(map);
+            }
+        }
+    }
+
+    /// Map generated (line, col) -> original (file, line, col) pres source map
+    /// nejblizsi predchazejici segment. None pri absent map nebo nematch.
+    pub fn map_position(&self, file_id: u32, gen_line: u32, gen_col: u32) -> Option<(String, u32, u32)> {
+        let file = self.files.iter().find(|f| f.id == file_id)?;
+        let map = file.source_map.as_ref()?;
+        let segs = map.mappings.get(gen_line as usize)?;
+        // Najdi nejvetsi seg.gen_col <= gen_col.
+        let mut best: Option<&MapSegment> = None;
+        for s in segs {
+            if s.gen_col <= gen_col {
+                best = Some(s);
+            } else { break; }
+        }
+        let s = best?;
+        let src_idx = s.src_idx? as usize;
+        let src_name = map.sources.get(src_idx).cloned()?;
+        Some((src_name, s.src_line?, s.src_col?))
+    }
+
     pub fn toggle_breakpoint(&mut self, file_id: u32, line: u32) -> bool {
         let bp = Breakpoint { file_id, line };
         if self.breakpoints.contains(&bp) {
