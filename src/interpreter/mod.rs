@@ -43,6 +43,7 @@ use num_traits::Pow;
 
 pub mod helpers;
 mod builtins;
+mod builtins_helpers;
 mod string_methods;
 pub(crate) mod webgl;
 pub(crate) mod canvas;
