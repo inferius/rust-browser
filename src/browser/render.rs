@@ -2592,15 +2592,27 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                 WindowEvent::CloseRequested => event_loop.exit(),
                 WindowEvent::Resized(size) => {
                     if let Some(r) = &mut self.renderer {
+                        // Update scale_factor pri resize (DPI mohlo zmenit).
+                        if let Some(w) = &self.window {
+                            r.scale_factor = w.scale_factor() as f32;
+                        }
                         r.resize(size.width.max(1), size.height.max(1));
                     }
+                    self.cached_layout_root = None;
+                    self.render();
+                }
+                WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                    if let Some(r) = &mut self.renderer {
+                        r.scale_factor = scale_factor as f32;
+                    }
+                    self.cached_layout_root = None;
                     self.render();
                 }
                 WindowEvent::CursorMoved { position, .. } => {
-                    // Mouse coords prevedeme z physical px na logical (layout
-                    // space) delenim zoom. scroll_y je uz v logical px.
-                    let new_x = (position.x as f32) / self.zoom + self.scroll_x;
-                    let new_y = (position.y as f32) / self.zoom + self.scroll_y;
+                    // Mouse position je physical px. Logical = physical / (zoom * scale_factor).
+                    let scale = self.renderer.as_ref().map(|r| r.scale_factor).unwrap_or(1.0);
+                    let new_x = (position.x as f32) / (self.zoom * scale) + self.scroll_x;
+                    let new_y = (position.y as f32) / (self.zoom * scale) + self.scroll_y;
                     // Skip update kdyz se pozice nezmenila (deduplicate winit spam).
                     if (new_x - self.mouse_x).abs() < 0.5 && (new_y - self.mouse_y).abs() < 0.5 {
                         return;
@@ -2711,7 +2723,8 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                     // Scroll amount je v physical px ze winit; layout je
                     // v logical -> dele zoom. Smooth scroll: meni TARGET, render
                     // tick interpoluje scroll_y -> target.
-                    let logical_scroll = scroll_amount / self.zoom.max(0.0001);
+                    let scale = self.renderer.as_ref().map(|r| r.scale_factor).unwrap_or(1.0);
+                    let logical_scroll = scroll_amount / (self.zoom * scale).max(0.0001);
                     if self.modifiers.shift_key() {
                         self.scroll_target_x -= logical_scroll;
                         if self.scroll_target_x < 0.0 { self.scroll_target_x = 0.0; }
@@ -3025,7 +3038,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                         }
                         Key::Named(NamedKey::End) => {
                             if let (Some(layout), Some(r)) = (&self.layout_root, &self.renderer) {
-                                let vh = (r.config.height as f32) / self.zoom;
+                                let vh = (r.config.height as f32) / (self.zoom * r.scale_factor);
                                 self.scroll_target_y = (layout.rect.height - vh).max(0.0);
                                 self.render();
                             }
@@ -3060,7 +3073,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
 
     impl App {
         fn viewport_h_logical(&self) -> f32 {
-            self.renderer.as_ref().map(|r| (r.config.height as f32) / self.zoom).unwrap_or(768.0)
+            self.renderer.as_ref().map(|r| (r.config.height as f32) / (self.zoom * r.scale_factor)).unwrap_or(768.0)
         }
         /// Najde vsechny pozice match v display listu textech. Vrati Vec<(y, x, w)>.
         fn find_collect_matches(&self) -> Vec<(f32, f32, f32)> {
@@ -3195,8 +3208,8 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         /// zmizet -> max_scroll = 0. Stara scroll_y > 0 by ukazovala blank.
         fn clamp_scroll_to_layout(&mut self) {
             if let (Some(layout), Some(r)) = (&self.layout_root, &self.renderer) {
-                let vw = (r.config.width as f32) / self.zoom;
-                let vh = (r.config.height as f32) / self.zoom;
+                let vw = (r.config.width as f32) / (self.zoom * r.scale_factor);
+                let vh = (r.config.height as f32) / (self.zoom * r.scale_factor);
                 let max_y = (layout.rect.height - vh).max(0.0);
                 let max_x = (layout.rect.width - vw).max(0.0);
                 if self.scroll_y > max_y { self.scroll_y = max_y; }
@@ -3714,8 +3727,8 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
             };
             if self.cached_style_map.is_none() || self.cached_cascade_hash != cascade_hash {
                 // Cascade s viewport pro @media + @container queries.
-                let vw_logical = (r.config.width as f32) / self.zoom;
-                let vh_logical = (r.config.height as f32) / self.zoom;
+                let vw_logical = (r.config.width as f32) / (self.zoom * r.scale_factor);
+                let vh_logical = (r.config.height as f32) / (self.zoom * r.scale_factor);
                 self.cached_style_map = Some(cascade::cascade_with_viewport(
                     &document_root, stylesheets, vw_logical, vh_logical));
                 self.cached_pseudo_map = Some(cascade::cascade_pseudo(&document_root, stylesheets));
@@ -3842,8 +3855,8 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
             // Browser zoom: logical viewport = window / zoom (-> reflow at scaled
             // size). Render shader uniform = same logical dimensions, takze layout
             // px se mapuje na scaled NDC (visualni zoom).
-            let viewport_w = (r.config.width as f32) / self.zoom;
-            let viewport_h = (r.config.height as f32) / self.zoom;
+            let viewport_w = (r.config.width as f32) / (self.zoom * r.scale_factor);
+            let viewport_h = (r.config.height as f32) / (self.zoom * r.scale_factor);
             // Layout cache: rebuild jen kdyz CSS/DOM/viewport zmenil nebo
             // animations modifikuji layout-relevant props (width/height/margin/...).
             let layout_cache_valid = self.cached_layout_root.is_some()
@@ -3992,7 +4005,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
             // (Selection rect uz emitnuty PRED build_display_list - rendered POD textem.)
             // Address bar (Ctrl+L) overlay: input top centered.
             if self.addr_open {
-                let vw = (r.config.width as f32) / self.zoom;
+                let vw = (r.config.width as f32) / (self.zoom * r.scale_factor);
                 let bar_w: f32 = (vw - 80.0).min(800.0);
                 let bar_h: f32 = 40.0;
                 let bar_x = (vw - bar_w) * 0.5;
@@ -4021,7 +4034,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                         color, radius: 2.0,
                     });
                 }
-                let vw = (r.config.width as f32) / self.zoom;
+                let vw = (r.config.width as f32) / (self.zoom * r.scale_factor);
                 let bar_w: f32 = 320.0;
                 let bar_h: f32 = 40.0;
                 let bar_x = vw - bar_w - 8.0;
@@ -4061,7 +4074,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
 
             // Scrollbar rendering: pri page content overflow Y emituj track + thumb.
             // Logical viewport (window/zoom) - vertices jsou v logical px.
-            let viewport_w = (r.config.width as f32) / self.zoom;
+            let viewport_w = (r.config.width as f32) / (self.zoom * r.scale_factor);
             let viewport_h = ((r.config.height as f32) - panel_h) / self.zoom;
             let total_h = layout_root.rect.height;
             if total_h > viewport_h {
@@ -4517,6 +4530,10 @@ struct Renderer {
     /// width / zoom). Uniform vp je nastaven na (config.w / zoom, config.h /
     /// zoom) tak aby NDC mapping render-koval zoom*logical px na physical px.
     zoom: f32,
+    /// HiDPI scale_factor z winit. config.width je v physical px = logical *
+    /// scale_factor. CSS coords jsou logical -> NDC mapping musi pouzit logical
+    /// vp = config.width / scale_factor.
+    scale_factor: f32,
     pipeline: wgpu::RenderPipeline,
     uniform_buf: wgpu::Buffer,
     atlas_tex: wgpu::Texture,
@@ -4600,7 +4617,12 @@ impl Renderer {
             &wgpu::DeviceDescriptor::default(),
         )).expect("device");
         let size = window.inner_size();
+        let scale_factor = window.scale_factor();
         let surface_caps = surface.get_capabilities(&adapter);
+        eprintln!("[render] window inner_size = {}x{} physical, scale_factor = {} (logical = {}x{})",
+            size.width, size.height, scale_factor,
+            (size.width as f64 / scale_factor) as u32,
+            (size.height as f64 / scale_factor) as u32);
         // Pokud winit jeste nedostal WM_SIZE na Windows, inner_size = 0. Fallback na rozumny default.
         let init_w = if size.width > 0 { size.width } else { 1280 };
         let init_h = if size.height > 0 { size.height } else { 900 };
@@ -5009,7 +5031,9 @@ impl Renderer {
         });
 
         Renderer {
-            surface, device, queue, config, zoom: 1.0, pipeline, uniform_buf,
+            surface, device, queue, config, zoom: 1.0,
+            scale_factor: scale_factor as f32,
+            pipeline, uniform_buf,
             atlas_tex, atlas_view, atlas_smp, bind_group_layout, bind_group, atlas,
             image_atlas, image_tex, image_view,
             image_source_bytes: std::collections::HashMap::new(),
@@ -5996,6 +6020,10 @@ impl Renderer {
         self.config.width = w;
         self.config.height = h;
         self.surface.configure(&self.device, &self.config);
+        eprintln!("[render] resize physical = {}x{} (scale_factor={}, logical = {}x{})",
+            w, h, self.scale_factor,
+            (w as f32 / self.scale_factor) as u32,
+            (h as f32 / self.scale_factor) as u32);
         // Recreate offscreen RTs (format = swap chain pro main pipeline kompat)
         let fmt = self.config.format;
         let make = |dev: &wgpu::Device, label: &str| {
@@ -6063,7 +6091,7 @@ impl Renderer {
         // Browser zoom: vp uniform = logical dims (window/zoom). Vertex px coords
         // jsou v logical px (layout running at logical viewport). NDC mapping
         // px/vp pak skaluje obsah o zoom faktor pri compose do framebufferu.
-        let vp = [self.config.width as f32 / self.zoom, self.config.height as f32 / self.zoom, self.zoom, 0.0];
+        let vp = [self.config.width as f32 / (self.zoom * self.scale_factor), self.config.height as f32 / (self.zoom * self.scale_factor), self.zoom, 0.0];
         self.queue.write_buffer(&self.uniform_buf, 0, bytemuck::cast_slice(&vp));
 
         // Dirty rect: cely frame je dirty (aktualne full-redraw)
@@ -6234,7 +6262,7 @@ impl Renderer {
         // Browser zoom: vp uniform = logical dims (window/zoom). Vertex px coords
         // jsou v logical px (layout running at logical viewport). NDC mapping
         // px/vp pak skaluje obsah o zoom faktor pri compose do framebufferu.
-        let vp = [self.config.width as f32 / self.zoom, self.config.height as f32 / self.zoom, self.zoom, 0.0];
+        let vp = [self.config.width as f32 / (self.zoom * self.scale_factor), self.config.height as f32 / (self.zoom * self.scale_factor), self.zoom, 0.0];
         self.queue.write_buffer(&self.uniform_buf, 0, bytemuck::cast_slice(&vp));
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
@@ -6414,8 +6442,9 @@ impl Renderer {
             wgpu::LoadOp::Load
         };
         // Scissor: clamp do swap chain rozmeru, integer pixely.
-        // x/y/w/h jsou layout (logical) px - prevedeme na physical pres zoom.
-        let z = self.zoom.max(0.0001);
+        // x/y/w/h jsou layout (logical) px - prevedeme na physical pres
+        // zoom * scale_factor (HiDPI).
+        let z = (self.zoom * self.scale_factor).max(0.0001);
         let vw = self.config.width as i32;
         let vh = self.config.height as i32;
         let sx = (x * z).max(0.0) as i32;
@@ -6454,7 +6483,9 @@ impl Renderer {
         // bledly s prilehlym transparent contentem v offscreen RT a element
         // by vypadal uzsi nez ma byt.
         // Offscreen RT je v physical px, x/y/w/h v logical px. Prevedeme.
-        let z = self.zoom.max(0.0001);
+        // Offscreen RT je v PHYSICAL px; x/y/w/h v LOGICAL px. UV mapping musi
+        // pouzit physical scale = zoom * scale_factor.
+        let z = (self.zoom * self.scale_factor).max(0.0001);
         let vw = self.config.width as f32;
         let vh = self.config.height as f32;
         let u0 = (x * z / vw).clamp(0.0, 1.0);
@@ -6525,7 +6556,7 @@ impl Renderer {
         // Browser zoom: vp uniform = logical dims (window/zoom). Vertex px coords
         // jsou v logical px (layout running at logical viewport). NDC mapping
         // px/vp pak skaluje obsah o zoom faktor pri compose do framebufferu.
-        let vp = [self.config.width as f32 / self.zoom, self.config.height as f32 / self.zoom, self.zoom, 0.0];
+        let vp = [self.config.width as f32 / (self.zoom * self.scale_factor), self.config.height as f32 / (self.zoom * self.scale_factor), self.zoom, 0.0];
         self.queue.write_buffer(&self.uniform_buf, 0, bytemuck::cast_slice(&vp));
 
         let frame = match self.surface.get_current_texture() {
