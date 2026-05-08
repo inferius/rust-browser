@@ -1435,3 +1435,51 @@ fn debug_button_all_commands() {
         println!("{:?}", c);
     }
 }
+
+#[test]
+fn engine_test_html_inline_styles_load() {
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet};
+    let html = match std::fs::read_to_string("static/engine-test.html") {
+        Ok(s) => s, Err(_) => return,
+    };
+    let doc = parse_html(&html, "about:blank");
+    let styles: Vec<String> = doc.root.get_elements_by_tag("style")
+        .iter().map(|s| s.text_content()).collect();
+    println!("inline <style> blocks: {}", styles.len());
+    for (i, s) in styles.iter().enumerate() {
+        println!("  block {}: {} chars, first 80: {}", i, s.len(),
+            s.chars().take(80).collect::<String>());
+    }
+    assert!(!styles.is_empty(), "no inline <style> blocks extracted");
+    let combined: String = styles.join("\n");
+    let sheet = parse_stylesheet(&combined);
+    println!("parsed rules: {}", sheet.rules.len());
+    println!("parsed @media: {}", sheet.media_queries.len());
+    assert!(sheet.rules.len() > 5, "few rules parsed: {}", sheet.rules.len());
+}
+
+#[test]
+fn engine_test_html_cascade_applies() {
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade};
+    let html = match std::fs::read_to_string("static/engine-test.html") {
+        Ok(s) => s, Err(_) => return,
+    };
+    let doc = parse_html(&html, "about:blank");
+    let combined: String = doc.root.get_elements_by_tag("style")
+        .iter().map(|s| s.text_content()).collect::<Vec<_>>().join("\n");
+    let sheet = parse_stylesheet(&combined);
+    let map = cascade::cascade(&doc.root, &[sheet]);
+    println!("cascade entries: {}", map.len());
+    let bodies = doc.root.get_elements_by_tag("body");
+    if let Some(body) = bodies.first() {
+        let body_id = std::rc::Rc::as_ptr(body) as usize;
+        if let Some(styles) = map.get(&body_id) {
+            println!("body styles ({} props):", styles.len());
+            for (k, v) in styles.iter().take(10) {
+                println!("  {}: {}", k, v);
+            }
+        } else {
+            println!("body NOT in cascade map!");
+        }
+    }
+}

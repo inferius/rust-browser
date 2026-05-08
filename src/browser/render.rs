@@ -3239,9 +3239,36 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                 Ok(s) => s,
                 Err(e) => { eprintln!("[load] nelze nacist {}: {e}", path.display()); return; }
             };
-            // Hledej co-located CSS pres .css extenzion.
+            // Extract CSS: co-located .css + inline <style> + <link rel=stylesheet>.
             let css_path = path.with_extension("css");
-            let css = std::fs::read_to_string(&css_path).unwrap_or_default();
+            let mut css = std::fs::read_to_string(&css_path).unwrap_or_default();
+            // Pre-parse HTML pro extract <style> + <link>. Plny parse az pozdeji.
+            let url = format!("file:///{}", path.display().to_string().replace('\\', "/"));
+            let preview_doc = super::html_parser::parse_html(&html, &url);
+            for style in preview_doc.root.get_elements_by_tag("style") {
+                css.push('\n');
+                css.push_str(&style.text_content());
+            }
+            for link in preview_doc.root.get_elements_by_tag("link") {
+                let rel = link.attr("rel").unwrap_or_default().to_lowercase();
+                if rel.contains("stylesheet") {
+                    if let Some(href) = link.attr("href") {
+                        let resolved = resolve_url(&url, &href);
+                        if let Some(p) = resolved.strip_prefix("file:///") {
+                            let p = p.replace('/', std::path::MAIN_SEPARATOR_STR);
+                            if let Ok(c) = std::fs::read_to_string(&p) {
+                                css.push('\n');
+                                css.push_str(&c);
+                            }
+                        } else if resolved.starts_with("http") {
+                            if let Some(c) = fetch_text_url(&resolved) {
+                                css.push('\n');
+                                css.push_str(&c);
+                            }
+                        }
+                    }
+                }
+            }
             self.html = html;
             self.css = css;
             self.current_path = Some(path.to_path_buf());
