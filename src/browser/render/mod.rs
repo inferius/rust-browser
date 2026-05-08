@@ -285,11 +285,26 @@ fn apply_paint_animations(box_: &mut crate::browser::layout::LayoutBox,
 }
 
 /// Eval JS via bytecode VM s globals z Interpreter env. Pri compile failure
-/// nebo runtime error vrati Err s message.
-fn console_eval_via_vm(src: &str, interp: &crate::interpreter::Interpreter) -> Result<crate::interpreter::JsValue, String> {
+/// nebo runtime error vrati Err s message. Pred eval definuje `$0` (selected
+/// DevTools element) jako DomNode proxy v globalu.
+fn console_eval_via_vm(src: &str, interp: &crate::interpreter::Interpreter, selected_node_id: Option<usize>) -> Result<crate::interpreter::JsValue, String> {
     use crate::lexer::base::Lexer;
     use crate::parser::Parser;
     use crate::interpreter::bytecode::{compile_program, VM};
+    use crate::interpreter::JsValue;
+
+    // Definuj $0 = selected DOM node (or undefined).
+    let dollar0 = match selected_node_id {
+        Some(id) => {
+            let root = std::rc::Rc::clone(&interp.document.borrow().root);
+            match crate::devtools::model::elements::find_node_by_id(&root, id) {
+                Some(n) => JsValue::DomNode(n),
+                None => JsValue::Undefined,
+            }
+        }
+        None => JsValue::Undefined,
+    };
+    interp.global.borrow_mut().define("$0", dollar0);
 
     let lex = Lexer::parse_str(src, "<console>").map_err(|e| format!("Lexer: {:?}", e))?;
     let mut parser = Parser::new(lex.tokens.clone());
@@ -528,7 +543,15 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                             let hit = devtools_hit_test(&self.devtools, layout, win_w, win_h, self.mouse_x, raw_y);
                             use crate::browser::devtools_panel::DevtoolsHit;
                             match hit {
-                                DevtoolsHit::TabClick(t) => { self.devtools.tab = t; }
+                                DevtoolsHit::TabClick(t) => {
+                                    self.devtools.tab = t;
+                                    // Auto-select first source pri prepnuti na Sources tab.
+                                    if t == crate::devtools::Tab::Sources
+                                        && self.devtools.sources.selected_id.is_none()
+                                        && !self.devtools.sources.files.is_empty() {
+                                        self.devtools.sources.selected_id = Some(self.devtools.sources.files[0].id);
+                                    }
+                                }
                                 DevtoolsHit::TreeRow(node_id) => {
                                     self.devtools.elements.selected = Some(node_id);
                                 }
@@ -601,6 +624,58 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                     }
                     self.handle_click(self.mouse_x, self.mouse_y);
                     self.render();
+                }
+                WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Right, .. } => {
+                    // RMB: pri devtools panel open, vyhodnotime kontextove menu per-tab.
+                    let raw_y = self.mouse_y - self.scroll_y;
+                    let win_h = self.renderer.as_ref().map(|r| r.config.height as f32).unwrap_or(0.0);
+                    let panel_h = if self.devtools.panel_open { self.devtools.panel_h.min(win_h * 0.7) } else { 0.0 };
+                    if self.devtools.panel_open && raw_y >= win_h - panel_h {
+                        use crate::browser::devtools_panel::{RESIZE_GRIP_H, SEARCH_H};
+                        use crate::devtools::context_menu::{ContextMenuState,
+                            elements_row_menu, console_text_menu, console_log_menu,
+                            network_row_menu, sources_line_menu};
+                        let _ = console_log_menu;
+                        let items = match self.devtools.tab {
+                            crate::devtools::Tab::Elements => {
+                                let split_x = self.devtools.elements.split_x.max(200.0);
+                                if self.mouse_x < split_x {
+                                    let body_y = win_h - panel_h + RESIZE_GRIP_H + crate::browser::devtools_panel::TAB_H
+                                        + if self.devtools.elements.search.open { SEARCH_H } else { 0.0 };
+                                    let row_idx = ((raw_y - body_y + self.devtools.elements.scroll_y) / 18.0) as usize;
+                                    if row_idx < self.devtools.elements.rows.len() {
+                                        let nid = self.devtools.elements.rows[row_idx].node_id;
+                                        self.devtools.elements.selected = Some(nid);
+                                        Some(elements_row_menu(nid))
+                                    } else {
+                                        None
+                                    }
+                                } else { None }
+                            }
+                            crate::devtools::Tab::Console => Some(console_text_menu()),
+                            crate::devtools::Tab::Network => {
+                                let header_h = 18.0 + 4.0;
+                                let toolbar_top = win_h - panel_h + RESIZE_GRIP_H + crate::browser::devtools_panel::TAB_H;
+                                let row_y = toolbar_top + header_h + 2.0;
+                                let idx = ((raw_y - row_y) / 18.0) as usize;
+                                if idx < self.devtools.network.entries.len() {
+                                    Some(network_row_menu(idx))
+                                } else { None }
+                            }
+                            crate::devtools::Tab::Sources => {
+                                if let Some(file_id) = self.devtools.sources.selected_id {
+                                    let toolbar_top = win_h - panel_h + RESIZE_GRIP_H + crate::browser::devtools_panel::TAB_H;
+                                    let line_idx = ((raw_y - toolbar_top + self.devtools.sources.scroll_y) / 18.0) as usize;
+                                    Some(sources_line_menu(file_id, line_idx as u32 + 1))
+                                } else { None }
+                            }
+                            _ => None,
+                        };
+                        if let Some(items) = items {
+                            self.devtools.context_menu = Some(ContextMenuState::new(self.mouse_x, raw_y, items));
+                        }
+                        self.render();
+                    }
                 }
                 WindowEvent::MouseWheel { delta, .. } => {
                     let scroll_amount = match delta {
@@ -703,8 +778,9 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                                         level: LogLevel::InputEcho,
                                         text: cmd.clone(),
                                     });
+                                    let sel_id = self.devtools.elements.selected;
                                     if let Some(interp) = &mut self.interpreter {
-                                        let result = console_eval_via_vm(&cmd, interp);
+                                        let result = console_eval_via_vm(&cmd, interp, sel_id);
                                         match result {
                                             Ok(v) => self.devtools.console.push_log(LogEntry {
                                                 level: LogLevel::Result,
@@ -894,11 +970,33 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                             _ => {}
                         }
                     }
-                    // Ctrl+F = toggle find overlay.
+                    // Ctrl+Shift+T = cycle theme (Auto/Light/Dark).
+                    if self.modifiers.control_key() && self.modifiers.shift_key() {
+                        if let Key::Character(s) = &key_event.logical_key {
+                            if s.as_str() == "t" || s.as_str() == "T" {
+                                use crate::devtools::theme::ThemeMode;
+                                self.devtools.theme.mode = match self.devtools.theme.mode {
+                                    ThemeMode::Auto => ThemeMode::Light,
+                                    ThemeMode::Light => ThemeMode::Dark,
+                                    ThemeMode::Dark => ThemeMode::Auto,
+                                };
+                                println!("[theme] {:?}", self.devtools.theme.mode);
+                                self.render();
+                                return;
+                            }
+                        }
+                    }
+                    // Ctrl+F = toggle find overlay (page) NEBO devtools elements search
+                    // (kdyz devtools.panel_open + Tab Elements).
                     if self.modifiers.control_key() {
                         if let Key::Character(s) = &key_event.logical_key {
                             if s.as_str() == "f" || s.as_str() == "F" {
-                                self.find_open = true;
+                                if self.devtools.panel_open && self.devtools.tab == crate::devtools::Tab::Elements {
+                                    self.devtools.elements.search.open = true;
+                                    self.devtools.focus = crate::devtools::focus::FocusTarget::DevToolsElementsSearch;
+                                } else {
+                                    self.find_open = true;
+                                }
                                 self.render();
                                 return;
                             }
@@ -1332,19 +1430,30 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
             open_in_default_browser(&out_path);
         }
 
-        fn run_inline_scripts(&self, interp: &mut crate::interpreter::Interpreter) {
+        fn run_inline_scripts(&mut self, interp: &mut crate::interpreter::Interpreter) {
             use crate::lexer::base::Lexer;
             use crate::parser::Parser;
             use crate::tokens::TokenKind;
 
             let doc_ref = interp.document.clone();
-            let scripts: Vec<String> = doc_ref.borrow().root
+            let scripts: Vec<(String, String)> = doc_ref.borrow().root
                 .get_elements_by_tag("script")
                 .iter()
-                .map(|s| s.text_content())
+                .enumerate()
+                .map(|(i, s)| {
+                    let url = s.attr("src").unwrap_or_else(|| format!("<inline #{}>", i + 1));
+                    (url, s.text_content())
+                })
                 .collect();
 
-            for src in scripts {
+            // Registruj scripts do DevTools sources panel.
+            use crate::devtools::model::sources::SourceLang;
+            for (url, src) in &scripts {
+                if src.trim().is_empty() { continue; }
+                self.devtools.sources.add_file(url.clone(), src.clone(), SourceLang::JavaScript);
+            }
+
+            for (_url, src) in scripts {
                 if src.trim().is_empty() { continue; }
                 if let Ok(lex) = Lexer::parse_str(&src, "<inline>") {
                     let tokens: Vec<_> = lex.tokens.into_iter()
@@ -1676,6 +1785,24 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         fn render(&mut self) {
             use super::{css_parser, cascade, layout, paint};
             let frame_start = std::time::Instant::now();
+            // Mirror interpreter console_log do DevToolsState (jen nove entries).
+            // Drz running counter v DevToolsState pres console.log.len() porovnani.
+            if let Some(interp) = &self.interpreter {
+                let logs = interp.console_log.borrow();
+                let already = self.devtools.console.log.len();
+                if logs.len() > already {
+                    use crate::devtools::model::console::{LogEntry, LogLevel};
+                    for (level, msg) in logs.iter().skip(already) {
+                        let lvl = match level.as_str() {
+                            "error" => LogLevel::Error,
+                            "warn" => LogLevel::Warn,
+                            _ => LogLevel::Info,
+                        };
+                        self.devtools.console.log.push(LogEntry { level: lvl, text: msg.clone() });
+                    }
+                    self.devtools.console.stick_to_bottom = true;
+                }
+            }
             // Smooth scroll tick: interpoluje scroll_y -> scroll_target_y. Pokud
             // stale animuje, na konci request_redraw pro pokracovani.
             let _scroll_animating = self.smooth_scroll_tick();
@@ -1760,6 +1887,21 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
             }
             let mut style_map = self.cached_style_map.as_ref().unwrap().clone();
             let pseudo_map = self.cached_pseudo_map.as_ref().cloned().unwrap_or_default();
+
+            // Wire computed styles do DevTools state pri selected element.
+            if let Some(sel) = self.devtools.elements.selected {
+                if let Some(decl_map) = style_map.get(&sel) {
+                    let mut entries: Vec<(String, String)> = decl_map.iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect();
+                    entries.sort_by(|a, b| a.0.cmp(&b.0));
+                    self.devtools.styles.computed = entries;
+                } else {
+                    self.devtools.styles.computed.clear();
+                }
+            } else {
+                self.devtools.styles.computed.clear();
+            }
 
             let elapsed = self.start_time.elapsed().as_secs_f32();
 

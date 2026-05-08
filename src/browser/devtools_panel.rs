@@ -20,15 +20,15 @@ use crate::devtools::model::elements::{ElementRow, RowKind};
 use crate::devtools::model::console::LogLevel;
 use crate::interpreter::Interpreter;
 
-const ROW_H: f32 = 18.0;
-const TAB_H: f32 = 30.0;
+pub const ROW_H: f32 = 18.0;
+pub const TAB_H: f32 = 30.0;
 const TOOLBAR_BTN_H: f32 = 22.0;
 const FONT_SIZE: f32 = 12.0;
 const FONT_W: f32 = 7.0;
 const INDENT_PX: f32 = 16.0;
 pub const RESIZE_GRIP_H: f32 = 4.0;
 const SCROLLBAR_W: f32 = 10.0;
-const SEARCH_H: f32 = 28.0;
+pub const SEARCH_H: f32 = 28.0;
 
 // ─── Top-level paint ────────────────────────────────────────────────────
 
@@ -418,32 +418,36 @@ fn paint_styles_pane(
         }
     }
 
-    // Computed values fallback z LayoutBox.
+    // Computed values - z cascade vystupu (state.styles.computed) + box rect.
     if sy + ROW_H > max_y { return; }
-    push_text_bold(cmds, pad_x, sy, "Computed (LayoutBox)".to_string(), pal.text, false);
+    push_text_bold(cmds, pad_x, sy, "Computed".to_string(), pal.text, false);
     sy += ROW_H + 2.0;
 
-    let computed = vec![
-        ("display", format!("{:?}", bx.display)),
-        ("position", format!("{:?}", bx.position)),
-        ("rect", format!("x={:.0} y={:.0} w={:.0} h={:.0}", bx.rect.x, bx.rect.y, bx.rect.width, bx.rect.height)),
+    let filter = state.styles.filter.to_lowercase();
+    for (k, v) in &state.styles.computed {
+        if sy + ROW_H > max_y { return; }
+        if !filter.is_empty() && !k.contains(&filter) { continue; }
+        push_text(cmds, pad_x, sy, format!("{}:", k), pal.syn_property, false);
+        push_text(cmds, pad_x + 160.0, sy, v.clone(), pal.text, false);
+        sy += ROW_H;
+    }
+
+    // Box info (rect / margin / padding z LayoutBox).
+    if sy + ROW_H > max_y { return; }
+    sy += 8.0;
+    push_text_bold(cmds, pad_x, sy, "Box".to_string(), pal.text, false);
+    sy += ROW_H + 2.0;
+    let box_info = vec![
+        ("rect", format!("x={:.0} y={:.0} w={:.0} h={:.0}",
+            bx.rect.x, bx.rect.y, bx.rect.width, bx.rect.height)),
         ("padding", format!("{:.0}", bx.padding)),
         ("margin", format!("{:.0}", bx.margin)),
-        ("font-size", format!("{:.0}px", bx.font_size)),
-        ("line-height", format!("{:.2}", bx.line_height)),
-        ("color", match bx.text_color {
-            Some(c) => format!("rgb({},{},{})", c[0], c[1], c[2]),
-            None => "(default)".to_string(),
-        }),
-        ("background-color", match bx.bg_color {
-            Some(c) => format!("rgba({},{},{},{})", c[0], c[1], c[2], c[3]),
-            None => "(transparent)".to_string(),
-        }),
+        ("border-width", format!("{:.0}", bx.border_width)),
     ];
-    for (k, v) in &computed {
+    for (k, v) in &box_info {
         if sy + ROW_H > max_y { break; }
         push_text(cmds, pad_x, sy, format!("{}:", k), pal.syn_property, false);
-        push_text(cmds, pad_x + 130.0, sy, v.clone(), pal.text, false);
+        push_text(cmds, pad_x + 160.0, sy, v.clone(), pal.text, false);
         sy += ROW_H;
     }
 }
@@ -469,24 +473,11 @@ fn paint_console_tab(
     push_rect(cmds, 0.0, input_y, win_w, input_h, pal.bg_panel_alt);
     push_rect(cmds, 0.0, input_y, win_w, 1.0, pal.border);
 
-    // Vykresli logy. Sjednoceny zdroj: state.console.log + interpreter live capture
-    // (pri prvnim runu se pretocime do state).
-    let entries: Vec<(LogLevel, String)> = if state.console.log.is_empty() {
-        if let Some(i) = interp {
-            i.console_log.borrow().iter().map(|(level, msg)| {
-                let lvl = match level.as_str() {
-                    "error" => LogLevel::Error,
-                    "warn" => LogLevel::Warn,
-                    _ => LogLevel::Info,
-                };
-                (lvl, msg.clone())
-            }).collect()
-        } else {
-            Vec::new()
-        }
-    } else {
-        state.console.log.iter().map(|e| (e.level, e.text.clone())).collect()
-    };
+    // Logs: state.console.log je mirror z interpreter.console_log (ten radi v
+    // each render frame).
+    let _ = interp;
+    let entries: Vec<(LogLevel, String)> = state.console.log.iter()
+        .map(|e| (e.level, e.text.clone())).collect();
 
     // Stick to bottom: render od konce.
     let max_visible = (log_h / ROW_H) as usize;
