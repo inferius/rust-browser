@@ -292,6 +292,21 @@ fn paint_element_row(
     y: f32,
     mouse_x: f32, mouse_y: f32,
 ) {
+    use crate::devtools::EditTarget;
+    // Pokud je tato row prave editovana, render editor namisto normalniho radku.
+    if let Some(edit) = &state.elements.edit {
+        let edit_node = match &edit.target {
+            EditTarget::AttributeValue { node_id, .. } => *node_id,
+            EditTarget::AttributeName { node_id, .. } => *node_id,
+            EditTarget::TextNode { node_id } => *node_id,
+            EditTarget::InlineStyleProperty { node_id, .. } => *node_id,
+        };
+        if edit_node == row.node_id {
+            paint_edit_row(cmds, row, edit, state, pal, width, y);
+            return;
+        }
+    }
+
     let is_sel = state.elements.selected == Some(row.node_id);
     let is_hov = mouse_x < width && mouse_y >= y && mouse_y < y + ROW_H;
 
@@ -373,6 +388,44 @@ fn paint_element_row(
             push_text(cmds, x_indent, text_y, format!("</{}>", tag),
                       if is_sel { text_color_default } else { pal.syn_tag }, false);
         }
+    }
+}
+
+fn paint_edit_row(
+    cmds: &mut Vec<DisplayCommand>,
+    row: &ElementRow,
+    edit: &crate::devtools::EditState,
+    state: &DevToolsState,
+    pal: &Palette,
+    width: f32,
+    y: f32,
+) {
+    use crate::devtools::EditTarget;
+    push_rect(cmds, 0.0, y, width, ROW_H, pal.bg_input_focus);
+    push_rect(cmds, 0.0, y, 3.0, ROW_H, pal.accent);
+    let x_indent = 8.0 + row.depth as f32 * INDENT_PX;
+    let text_y = y + 3.0;
+    // Prefix label dle target type.
+    let prefix = match &edit.target {
+        EditTarget::AttributeValue { attr, .. } => format!("{}=", attr),
+        EditTarget::AttributeName { value, .. } => format!("[new]={}=", value),
+        EditTarget::TextNode { .. } => "text:".to_string(),
+        EditTarget::InlineStyleProperty { property, .. } => format!("{}: ", property),
+    };
+    push_text(cmds, x_indent, text_y, prefix.clone(), pal.text_dim, false);
+    let text_x = x_indent + prefix.len() as f32 * FONT_W;
+
+    // Selection highlight.
+    if let Some((s, e)) = edit.buffer.selection_range() {
+        let sx = text_x + (s as f32) * FONT_W;
+        let ex = text_x + (e as f32) * FONT_W;
+        push_rect(cmds, sx, text_y - 2.0, ex - sx, FONT_SIZE + 4.0, pal.bg_row_selected);
+    }
+    push_text(cmds, text_x, text_y, edit.buffer.text.clone(), pal.text, false);
+    // Cursor blink.
+    if state.cursor_visible() {
+        let cx = text_x + (edit.buffer.cursor as f32) * FONT_W;
+        push_rect(cmds, cx, text_y - 2.0, 1.0, FONT_SIZE + 4.0, pal.text);
     }
 }
 
@@ -978,7 +1031,7 @@ pub fn paint_element_highlight(
 
 // ─── Hit-test ───────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum DevtoolsHit {
     None,
     /// Resize grip drag.
@@ -1015,6 +1068,12 @@ pub enum DevtoolsHit {
     ContextMenuItem(usize),
     /// Klik mimo - zavri context menu.
     DismissContextMenu,
+    /// Dvojklik na attribute value zone - zacni editaci.
+    EditAttributeValue { node_id: usize, attr: String },
+    /// Dvojklik na text node - zacni editaci.
+    EditTextNode { node_id: usize },
+    /// Dvojklik v Computed/Styles panel na property hodnotu.
+    EditStyleValue { node_id: usize, property: String },
 }
 
 pub fn devtools_hit_test(
@@ -1125,12 +1184,63 @@ fn hit_test_elements(
     let row_idx = ((mouse_y - body_y + scroll_y) / ROW_H) as usize;
     if row_idx >= state.elements.rows.len() { return DevtoolsHit::PanelArea; }
     let row = &state.elements.rows[row_idx];
-    // Caret zone: x_indent - INDENT_PX..x_indent.
     let caret_x = 8.0 + row.depth as f32 * INDENT_PX - INDENT_PX;
     if let RowKind::Element { has_children: true, .. } = &row.kind {
         if mouse_x >= caret_x && mouse_x < caret_x + INDENT_PX {
             return DevtoolsHit::TreeCaret(row.node_id);
         }
+    }
+    DevtoolsHit::TreeRow(row.node_id)
+}
+
+/// Najdi attribute pri x souradnici v dane Element row. Vraci Some((attr_name))
+/// pokud kurzor je nad attr value oblasti (mezi `="` a `"`).
+pub fn attribute_at_x(row: &ElementRow, mouse_x: f32) -> Option<String> {
+    let RowKind::Element { tag, attrs, .. } = &row.kind else { return None };
+    let mut x = 8.0 + row.depth as f32 * INDENT_PX;
+    x += (tag.len() + 1) as f32 * FONT_W;
+    for (k, v) in attrs {
+        let attr_str = format!(" {}=", k);
+        x += attr_str.len() as f32 * FONT_W;
+        let val_truncated: String = v.chars().take(40).collect();
+        let val_str = if val_truncated.chars().count() < v.chars().count() {
+            format!("\"{}...\"", val_truncated)
+        } else {
+            format!("\"{}\"", val_truncated)
+        };
+        let val_w = val_str.len() as f32 * FONT_W;
+        if mouse_x >= x && mouse_x < x + val_w {
+            return Some(k.clone());
+        }
+        x += val_w;
+    }
+    None
+}
+
+/// Detekce dvojkliku zony pro Elements tree. Vraci hit pokud kurzor je nad
+/// attr value (-> EditAttributeValue) nebo text node (-> EditTextNode).
+pub fn double_click_hit_elements(
+    state: &DevToolsState,
+    win_w: f32, content_y: f32, mouse_x: f32, mouse_y: f32,
+) -> DevtoolsHit {
+    let search_h = if state.elements.search.open { SEARCH_H } else { 0.0 };
+    let body_y = content_y + search_h;
+    let split_x = state.elements.split_x.max(200.0).min(win_w - 220.0);
+    if mouse_x >= split_x { return DevtoolsHit::PanelArea; }
+    let scroll_y = state.elements.scroll_y;
+    let row_idx = ((mouse_y - body_y + scroll_y) / ROW_H) as usize;
+    if row_idx >= state.elements.rows.len() { return DevtoolsHit::PanelArea; }
+    let row = &state.elements.rows[row_idx];
+    match &row.kind {
+        RowKind::Element { .. } => {
+            if let Some(attr) = attribute_at_x(row, mouse_x) {
+                return DevtoolsHit::EditAttributeValue { node_id: row.node_id, attr };
+            }
+        }
+        RowKind::Text(_) => {
+            return DevtoolsHit::EditTextNode { node_id: row.node_id };
+        }
+        _ => {}
     }
     DevtoolsHit::TreeRow(row.node_id)
 }

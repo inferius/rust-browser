@@ -123,6 +123,26 @@ pub struct ElementsState {
     pub search: ElementsSearch,
     /// Sirka levego (tree) sloupce v pixelech, drag-resize.
     pub split_x: f32,
+    /// Aktualne editovany element field (attr/text/style).
+    pub edit: Option<EditState>,
+}
+
+#[derive(Debug, Clone)]
+pub struct EditState {
+    pub target: EditTarget,
+    pub buffer: model::console::ConsoleInput,
+}
+
+#[derive(Debug, Clone)]
+pub enum EditTarget {
+    /// Editace existujiciho atributu - nahradi value.
+    AttributeValue { node_id: usize, attr: String },
+    /// Editace nazvu atributu (krok 1 pri AddAttribute).
+    AttributeName { node_id: usize, value: String },
+    /// Editace text node value.
+    TextNode { node_id: usize },
+    /// Editace CSS property v Computed/Styles panelu - aplikuje jako inline style.
+    InlineStyleProperty { node_id: usize, property: String },
 }
 
 #[derive(Debug, Default)]

@@ -413,6 +413,9 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         devtools: crate::devtools::DevToolsState,
         /// True kdyz user drze LMB na resize grip a tahne.
         devtools_resizing: bool,
+        /// Double-click detect: cas posledniho LMB pressed + pozice.
+        last_click_time: Option<std::time::Instant>,
+        last_click_pos: (f32, f32),
         /// Browser zoom factor (1.0 = 100%). Ctrl++/Ctrl+- meni v krocich,
         /// Ctrl+0 reset. Layout viewport pri zoomu = window/zoom (tj. logical
         /// dimensions mensi -> reflow). Render uniform vp = window/zoom -> px
@@ -544,6 +547,19 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                     }
                 }
                 WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } => {
+                    // Double-click detection: 400ms okno + < 5px vzdalenost.
+                    let now = std::time::Instant::now();
+                    let is_double_click = self.last_click_time
+                        .map(|t| {
+                            let dt = now.duration_since(t).as_millis() < 400;
+                            let dx = (self.mouse_x - self.last_click_pos.0).abs();
+                            let dy = (self.mouse_y - self.last_click_pos.1).abs();
+                            dt && dx < 5.0 && dy < 5.0
+                        })
+                        .unwrap_or(false);
+                    self.last_click_time = Some(now);
+                    self.last_click_pos = (self.mouse_x, self.mouse_y);
+
                     // Selection start: kazdy MouseDown nastavi anchor. Drag move
                     // updatuje current. Release < 3px diff = clear (simple click).
                     self.selection_anchor = Some((self.mouse_x, self.mouse_y));
@@ -554,6 +570,28 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                     let win_h = self.renderer.as_ref().map(|r| r.config.height as f32).unwrap_or(0.0);
                     let win_w = self.renderer.as_ref().map(|r| r.config.width as f32).unwrap_or(0.0);
                     let panel_h = if self.devtools.panel_open { self.devtools.panel_h.min(win_h * 0.7) } else { 0.0 };
+
+                    // Double-click v Elements tab -> zacni editaci attr value / text node.
+                    if is_double_click && self.devtools.panel_open && raw_y >= win_h - panel_h
+                        && self.devtools.tab == crate::devtools::Tab::Elements {
+                        use crate::browser::devtools_panel::{double_click_hit_elements, RESIZE_GRIP_H, TAB_H, DevtoolsHit};
+                        let content_y = win_h - panel_h + RESIZE_GRIP_H + TAB_H;
+                        let dchit = double_click_hit_elements(&self.devtools, win_w, content_y, self.mouse_x, raw_y);
+                        match dchit {
+                            DevtoolsHit::EditAttributeValue { node_id, attr } => {
+                                self.start_edit_attribute_value(node_id, attr);
+                                self.render();
+                                return;
+                            }
+                            DevtoolsHit::EditTextNode { node_id } => {
+                                self.start_edit_text_node(node_id);
+                                self.render();
+                                return;
+                            }
+                            _ => {}
+                        }
+                    }
+
                     if self.devtools.panel_open && raw_y >= win_h - panel_h {
                         if let Some(layout) = &self.layout_root {
                             let hit = devtools_hit_test(&self.devtools, layout, win_w, win_h, self.mouse_x, raw_y);
@@ -776,8 +814,52 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                 // Ctrl++ / Ctrl+- / Ctrl+0 = zoom in/out/reset (page reflow).
                 WindowEvent::KeyboardInput { event: key_event, .. } => {
                     if key_event.state != ElementState::Pressed { return; }
-                    // Console input - proper text field s cursor / selection / history / clipboard.
+                    // Edit mode (DOM/CSS edit) - presmeruj key events do edit.buffer.
                     use crate::devtools::focus::FocusTarget;
+                    if self.devtools.panel_open && self.devtools.elements.edit.is_some() {
+                        let ctrl = self.modifiers.control_key();
+                        let shift = self.modifiers.shift_key();
+                        let edit = self.devtools.elements.edit.as_mut().unwrap();
+                        let input = &mut edit.buffer;
+                        match &key_event.logical_key {
+                            Key::Named(NamedKey::Backspace) => { input.backspace(); }
+                            Key::Named(NamedKey::Delete) => { input.delete_forward(); }
+                            Key::Named(NamedKey::ArrowLeft) => { input.move_left(shift); }
+                            Key::Named(NamedKey::ArrowRight) => { input.move_right(shift); }
+                            Key::Named(NamedKey::Home) => { input.move_home(shift); }
+                            Key::Named(NamedKey::End) => { input.move_end(shift); }
+                            Key::Named(NamedKey::Escape) => { self.cancel_edit(); }
+                            Key::Named(NamedKey::Enter) => { self.commit_edit(); }
+                            Key::Named(NamedKey::Tab) => { self.commit_edit(); }
+                            Key::Character(s) if ctrl => {
+                                match s.as_str() {
+                                    "v" | "V" => {
+                                        if let Ok(mut cb) = arboard::Clipboard::new() {
+                                            if let Ok(t) = cb.get_text() { input.insert(&t); }
+                                        }
+                                    }
+                                    "c" | "C" => {
+                                        if let Some(t) = input.selected_text() {
+                                            if let Ok(mut cb) = arboard::Clipboard::new() { let _ = cb.set_text(t); }
+                                        }
+                                    }
+                                    "x" | "X" => {
+                                        if let Some(t) = input.cut() {
+                                            if let Ok(mut cb) = arboard::Clipboard::new() { let _ = cb.set_text(t); }
+                                        }
+                                    }
+                                    "a" | "A" => { input.select_all(); }
+                                    _ => {}
+                                }
+                            }
+                            Key::Character(s) => { input.insert(s); }
+                            _ => {}
+                        }
+                        if let Some(w) = &self.window { w.request_redraw(); }
+                        return;
+                    }
+
+                    // Console input - proper text field s cursor / selection / history / clipboard.
                     if self.devtools.panel_open && self.devtools.focus == FocusTarget::DevToolsConsole {
                         let ctrl = self.modifiers.control_key();
                         let shift = self.modifiers.shift_key();
@@ -1493,6 +1575,136 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                     }
                 }
             }
+        }
+
+        fn start_edit_attribute_value(&mut self, node_id: usize, attr: String) {
+            let Some(interp) = &self.interpreter else { return };
+            let root = std::rc::Rc::clone(&interp.document.borrow().root);
+            let Some(node) = crate::devtools::model::elements::find_node_by_id(&root, node_id) else { return };
+            let original = node.attributes.borrow().iter()
+                .find(|(k, _)| k.as_str() == attr.as_str())
+                .map(|(_, v)| v.clone()).unwrap_or_default();
+            use crate::devtools::{EditState, EditTarget};
+            use crate::devtools::model::console::ConsoleInput;
+            let mut buf = ConsoleInput::new();
+            buf.text = original.clone();
+            buf.cursor = original.len();
+            self.devtools.elements.edit = Some(EditState {
+                target: EditTarget::AttributeValue { node_id, attr },
+                buffer: buf,
+            });
+            self.devtools.focus = crate::devtools::focus::FocusTarget::DevToolsConsole;
+        }
+
+        fn start_edit_text_node(&mut self, node_id: usize) {
+            let Some(interp) = &self.interpreter else { return };
+            let root = std::rc::Rc::clone(&interp.document.borrow().root);
+            let Some(node) = crate::devtools::model::elements::find_node_by_id(&root, node_id) else { return };
+            let original = if let crate::browser::dom::NodeKind::Text(t) = &node.kind {
+                t.clone()
+            } else { return };
+            use crate::devtools::{EditState, EditTarget};
+            use crate::devtools::model::console::ConsoleInput;
+            let mut buf = ConsoleInput::new();
+            buf.text = original.clone();
+            buf.cursor = original.len();
+            self.devtools.elements.edit = Some(EditState {
+                target: EditTarget::TextNode { node_id },
+                buffer: buf,
+            });
+            self.devtools.focus = crate::devtools::focus::FocusTarget::DevToolsConsole;
+        }
+
+        fn start_edit_style_property(&mut self, node_id: usize, property: String) {
+            use crate::devtools::{EditState, EditTarget};
+            use crate::devtools::model::console::ConsoleInput;
+            let original = self.devtools.styles.computed.iter()
+                .find(|(k, _)| k == &property).map(|(_, v)| v.clone()).unwrap_or_default();
+            let mut buf = ConsoleInput::new();
+            buf.text = original.clone();
+            buf.cursor = original.len();
+            self.devtools.elements.edit = Some(EditState {
+                target: EditTarget::InlineStyleProperty { node_id, property },
+                buffer: buf,
+            });
+            self.devtools.focus = crate::devtools::focus::FocusTarget::DevToolsConsole;
+        }
+
+        fn commit_edit(&mut self) {
+            use crate::devtools::EditTarget;
+            let Some(edit) = self.devtools.elements.edit.take() else { return };
+            let new_value = edit.buffer.text;
+            let Some(interp) = &mut self.interpreter else { return };
+            let root = std::rc::Rc::clone(&interp.document.borrow().root);
+            match edit.target {
+                EditTarget::AttributeValue { node_id, attr } => {
+                    if let Some(node) = crate::devtools::model::elements::find_node_by_id(&root, node_id) {
+                        node.attributes.borrow_mut().insert(attr, new_value);
+                    }
+                }
+                EditTarget::AttributeName { node_id, value } => {
+                    let new_name = new_value.trim().to_string();
+                    if !new_name.is_empty() {
+                        if let Some(node) = crate::devtools::model::elements::find_node_by_id(&root, node_id) {
+                            node.attributes.borrow_mut().insert(new_name, value);
+                        }
+                    }
+                }
+                EditTarget::TextNode { node_id } => {
+                    // NodeKind nelze in-place mutovat (neni RefCell). Workaround: najit
+                    // parent + index v children, vytvorit novy Rc<NodeData> s novym
+                    // textem, swap. Stary node se garbage-colectuje (Rc count -> 0).
+                    if let Some(node) = crate::devtools::model::elements::find_node_by_id(&root, node_id) {
+                        if let Some(parent) = node.parent.borrow().upgrade() {
+                            let mut kids = parent.children.borrow_mut();
+                            if let Some(idx) = kids.iter().position(|c| std::rc::Rc::as_ptr(c) as usize == node_id) {
+                                let new_node = std::rc::Rc::new(crate::browser::dom::NodeData {
+                                    kind: crate::browser::dom::NodeKind::Text(new_value),
+                                    attributes: std::cell::RefCell::new(std::collections::HashMap::new()),
+                                    parent: std::cell::RefCell::new(std::rc::Rc::downgrade(&parent)),
+                                    children: std::cell::RefCell::new(Vec::new()),
+                                    listeners: std::cell::RefCell::new(std::collections::HashMap::new()),
+                                });
+                                kids[idx] = new_node;
+                            }
+                        }
+                    }
+                }
+                EditTarget::InlineStyleProperty { node_id, property } => {
+                    if let Some(node) = crate::devtools::model::elements::find_node_by_id(&root, node_id) {
+                        let mut attrs = node.attributes.borrow_mut();
+                        let existing = attrs.iter().find(|(k, _)| k.as_str() == "style")
+                            .map(|(_, v)| v.clone()).unwrap_or_default();
+                        // Replace nebo append do inline style.
+                        let mut decls: Vec<(String, String)> = existing.split(';')
+                            .filter_map(|d| {
+                                let d = d.trim();
+                                if d.is_empty() { return None; }
+                                let (k, v) = d.split_once(':')?;
+                                Some((k.trim().to_string(), v.trim().to_string()))
+                            })
+                            .collect();
+                        if let Some(idx) = decls.iter().position(|(k, _)| k == &property) {
+                            decls[idx].1 = new_value;
+                        } else {
+                            decls.push((property, new_value));
+                        }
+                        let new_style = decls.iter().map(|(k, v)| format!("{}: {}", k, v))
+                            .collect::<Vec<_>>().join("; ");
+                        attrs.insert("style".into(), new_style);
+                    }
+                }
+            }
+            // Invalidate caches - cascade + layout musi rebuilt.
+            self.cached_style_map = None;
+            self.cached_layout_root = None;
+            crate::browser::devtools_panel::rebuild_tree(&mut self.devtools, &root);
+            self.devtools.focus = crate::devtools::focus::FocusTarget::Page;
+        }
+
+        fn cancel_edit(&mut self) {
+            self.devtools.elements.edit = None;
+            self.devtools.focus = crate::devtools::focus::FocusTarget::Page;
         }
 
         fn dispatch_menu_action(&mut self, action: crate::devtools::context_menu::MenuAction) {
@@ -2536,6 +2748,8 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         animation_iterations: std::collections::HashMap::new(),
         devtools: crate::devtools::DevToolsState::default(),
         devtools_resizing: false,
+        last_click_time: None,
+        last_click_pos: (0.0, 0.0),
         zoom: 1.0,
         modifiers: winit::keyboard::ModifiersState::empty(),
         find_open: false,
