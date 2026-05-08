@@ -71,6 +71,70 @@ impl std::fmt::Display for JsValue {
 }
 
 impl JsValue {
+    /// Pretty-print pro DevTools console - multi-line vystup pro Object/Array,
+    /// nested s indentaci. Pouziva se pri zobrazeni eval result.
+    pub fn pretty_print(&self) -> String {
+        self.pretty_inner(0, 4)
+    }
+
+    fn pretty_inner(&self, depth: usize, max_depth: usize) -> String {
+        if depth > max_depth { return "...".to_string() }
+        match self {
+            JsValue::Undefined => "undefined".into(),
+            JsValue::Null => "null".into(),
+            JsValue::Bool(b) => b.to_string(),
+            JsValue::Number(n) => {
+                if n.is_nan() { "NaN".into() }
+                else if n.is_infinite() { if *n > 0.0 { "Infinity".into() } else { "-Infinity".into() } }
+                else { n.to_string() }
+            }
+            JsValue::Str(s) => format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"")),
+            JsValue::BigInt(n) => format!("{}n", n),
+            JsValue::BigNumber(n) => n.to_string(),
+            JsValue::Array(arr) => {
+                let items = arr.borrow();
+                if items.is_empty() { return "[]".into(); }
+                let parts: Vec<String> = items.iter().map(|v| v.pretty_inner(depth + 1, max_depth)).collect();
+                let oneline = format!("[{}]", parts.join(", "));
+                if oneline.len() < 80 || depth >= max_depth { return oneline; }
+                let indent = "  ".repeat(depth + 1);
+                let closing = "  ".repeat(depth);
+                format!("[\n{}{}\n{}]", indent, parts.join(&format!(",\n{}", indent)), closing)
+            }
+            JsValue::Object(obj) => {
+                let o = obj.borrow();
+                let keys = o.own_keys();
+                if keys.is_empty() { return "{}".into(); }
+                let parts: Vec<String> = keys.iter().map(|k| {
+                    let v = o.get(k);
+                    format!("{}: {}", k, v.pretty_inner(depth + 1, max_depth))
+                }).collect();
+                let oneline = format!("{{ {} }}", parts.join(", "));
+                if oneline.len() < 80 || depth >= max_depth { return oneline; }
+                let indent = "  ".repeat(depth + 1);
+                let closing = "  ".repeat(depth);
+                format!("{{\n{}{}\n{}}}", indent, parts.join(&format!(",\n{}", indent)), closing)
+            }
+            JsValue::Map(m) => {
+                let entries = &m.borrow().entries;
+                let parts: Vec<String> = entries.iter().map(|(k, v)|
+                    format!("{} => {}", k.pretty_inner(depth + 1, max_depth), v.pretty_inner(depth + 1, max_depth))
+                ).collect();
+                format!("Map({}) {{ {} }}", entries.len(), parts.join(", "))
+            }
+            JsValue::Set(s) => {
+                let vals = &s.borrow().values;
+                let parts: Vec<String> = vals.iter().map(|v| v.pretty_inner(depth + 1, max_depth)).collect();
+                format!("Set({}) {{ {} }}", vals.len(), parts.join(", "))
+            }
+            JsValue::Function(_) => "[Function]".into(),
+            JsValue::DomNode(n) => {
+                let tag = n.tag_name().unwrap_or_else(|| "node".into());
+                format!("<{} />", tag)
+            }
+        }
+    }
+
     pub fn is_truthy(&self) -> bool {
         match self {
             JsValue::Undefined | JsValue::Null => false,

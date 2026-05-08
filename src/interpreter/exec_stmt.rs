@@ -2,6 +2,33 @@
 
 use super::*;
 
+/// Snapshot lokalnich promennych ze scope chain (current env + parent).
+/// Vraci pary (name, stringified value), serazene podle nazvu.
+fn capture_locals(env: &Rc<RefCell<Environment>>) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut cur = Some(Rc::clone(env));
+    let mut depth = 0;
+    while let Some(e) = cur {
+        let names = e.borrow().names();
+        for n in names {
+            if seen.contains(&n) { continue; }
+            // Skip globaly (vetsinou builtins) - jen lokalni scopes.
+            if depth > 4 { break; }
+            if let Some(v) = e.borrow().get(&n) {
+                // Skip funkce + typeof "[Function]" - bloat.
+                if matches!(v, JsValue::Function(_)) { continue; }
+                seen.insert(n.clone());
+                out.push((n, v.pretty_print()));
+            }
+        }
+        cur = e.borrow().parent_chain();
+        depth += 1;
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
 impl Interpreter {
     pub(super) fn exec_stmts(&mut self, stmts: &[Stmt], env: &Rc<RefCell<Environment>>) -> StmtResult {
         for s in stmts {
@@ -14,11 +41,20 @@ impl Interpreter {
         match stmt {
             Stmt::WithLine { line, inner } => {
                 self.current_line = *line;
-                // Breakpoint check: pri match log do console + set pause location.
-                if self.debugger.borrow().is_breakpoint(*line) {
+                // Breakpoint OR step check: pri match capture locals + log + pause flag.
+                let should_pause = {
+                    let dbg = self.debugger.borrow();
+                    dbg.is_breakpoint(*line) || dbg.step_should_pause()
+                };
+                if should_pause {
                     let msg = format!("Breakpoint hit at line {}", line);
                     self.console_log.borrow_mut().push(("warn".into(), msg));
-                    self.debugger.borrow_mut().pause_at(*line);
+                    // Capture lokalni promenne ze scope chain pro UI panel.
+                    let locals = capture_locals(env);
+                    let mut dbg = self.debugger.borrow_mut();
+                    dbg.pause_at(*line);
+                    dbg.locals = locals;
+                    dbg.step = None;
                 }
                 return self.exec_stmt(inner, env);
             }

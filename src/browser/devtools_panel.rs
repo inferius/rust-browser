@@ -532,10 +532,22 @@ fn paint_console_tab(
     let entries: Vec<(LogLevel, String)> = state.console.log.iter()
         .map(|e| (e.level, e.text.clone())).collect();
 
+    // Expand log entries do per-line listu (multi-line msg = multiple lines).
+    let mut display_lines: Vec<(LogLevel, String, bool)> = Vec::new();
+    for (lvl, msg) in &entries {
+        let mut first = true;
+        for line in msg.lines() {
+            display_lines.push((*lvl, line.to_string(), first));
+            first = false;
+        }
+        if msg.is_empty() {
+            display_lines.push((*lvl, String::new(), true));
+        }
+    }
     // Stick to bottom: render od konce.
     let max_visible = (log_h / ROW_H) as usize;
-    let start = entries.len().saturating_sub(max_visible);
-    for (i, (lvl, msg)) in entries.iter().skip(start).enumerate() {
+    let start = display_lines.len().saturating_sub(max_visible);
+    for (i, (lvl, line, first)) in display_lines.iter().skip(start).enumerate() {
         let ey = log_y + 4.0 + (i as f32) * ROW_H;
         let color = match lvl {
             LogLevel::Info | LogLevel::Result => pal.log_info,
@@ -543,13 +555,14 @@ fn paint_console_tab(
             LogLevel::Error => pal.log_error,
             LogLevel::InputEcho => pal.log_input_marker,
         };
-        // Marker pred input echo.
-        let prefix = match lvl {
-            LogLevel::InputEcho => "> ",
-            LogLevel::Result => "< ",
-            _ => "",
-        };
-        push_text(cmds, 8.0, ey, format!("{}{}", prefix, msg), color, false);
+        let prefix = if *first {
+            match lvl {
+                LogLevel::InputEcho => "> ",
+                LogLevel::Result => "< ",
+                _ => "",
+            }
+        } else { "  " };
+        push_text(cmds, 8.0, ey, format!("{}{}", prefix, line), color, false);
     }
 
     // Input field.
@@ -625,6 +638,36 @@ fn paint_network_tab(
     _mouse_x: f32, _mouse_y: f32,
 ) {
     push_rect(cmds, 0.0, content_y, win_w, content_h, pal.bg_panel);
+
+    // Filter toolbar nahore.
+    let filter_h = 26.0;
+    push_rect(cmds, 0.0, content_y, win_w, filter_h, pal.bg_toolbar);
+    push_rect(cmds, 0.0, content_y + filter_h - 1.0, win_w, 1.0, pal.border);
+    use crate::devtools::model::network::NetworkFilter;
+    let filters = [
+        ("All", NetworkFilter::All),
+        ("Doc", NetworkFilter::Document),
+        ("CSS", NetworkFilter::Stylesheet),
+        ("JS", NetworkFilter::Script),
+        ("Img", NetworkFilter::Image),
+        ("Font", NetworkFilter::Font),
+        ("XHR", NetworkFilter::Xhr),
+    ];
+    let mut fx = 8.0;
+    for (label, f) in filters.iter() {
+        let w = label.len() as f32 * FONT_W + 14.0;
+        let active = state.network.filter == *f;
+        let bg = if active { pal.bg_tab_active } else { pal.bg_toolbar };
+        push_rect(cmds, fx, content_y + 3.0, w, filter_h - 6.0, bg);
+        if active {
+            push_rect(cmds, fx, content_y + filter_h - 5.0, w, 2.0, pal.accent);
+        }
+        push_text(cmds, fx + 7.0, content_y + 7.0, label.to_string(),
+                  if active { pal.text } else { pal.text_dim }, false);
+        fx += w + 2.0;
+    }
+    let content_y = content_y + filter_h;
+    let content_h = content_h - filter_h;
 
     // Detail popup overlay - kdyz selected + detail_open.
     let show_detail = state.network.detail_open && state.network.selected.is_some();
@@ -755,15 +798,57 @@ fn paint_sources_tab(
         if sy > content_y + content_h - ROW_H { break; }
     }
 
-    // Right pane: source content + breakpoints.
+    // Right pane: source content + breakpoints + locals popup pri pause.
     if let Some(id) = state.sources.selected_id {
         if let Some(file) = state.sources.files.iter().find(|f| f.id == id) {
+            // Locals panel zabira 250px na pravem okraji pri pause.
+            let locals_w = if state.sources.debugger_paused { 250.0 } else { 0.0 };
+            let src_w = win_w - split_x - 1.0 - locals_w;
             paint_source_content(cmds, file, state, pal, split_x + 1.0, content_y,
-                                 win_w - split_x - 1.0, content_h);
+                                 src_w, content_h);
+            if state.sources.debugger_paused {
+                paint_locals_pane(cmds, pal, split_x + 1.0 + src_w, content_y, locals_w, content_h, state);
+            }
         }
     } else {
         push_text(cmds, split_x + 12.0, content_y + 12.0,
                   "Select a source file".to_string(), pal.text_dim, false);
+    }
+}
+
+fn paint_locals_pane(
+    cmds: &mut Vec<DisplayCommand>,
+    pal: &Palette,
+    x: f32, y: f32, w: f32, h: f32,
+    state: &DevToolsState,
+) {
+    push_rect(cmds, x, y, 1.0, h, pal.border);
+    push_rect(cmds, x + 1.0, y, w - 1.0, h, pal.bg_panel_alt);
+    push_text_bold(cmds, x + 8.0, y + 8.0, "Local Variables".to_string(), pal.text, false);
+    let mut sy = y + 8.0 + ROW_H + 2.0;
+    let max_y = y + h;
+    if state.sources.locals.is_empty() {
+        push_text(cmds, x + 12.0, sy, "(no locals captured)".to_string(),
+                  pal.text_dim, true);
+        return;
+    }
+    for (name, val) in &state.sources.locals {
+        if sy + ROW_H > max_y { break; }
+        // Multi-line value: prvni line s name, dalsi indented.
+        let mut first = true;
+        for line in val.lines() {
+            if sy + ROW_H > max_y { break; }
+            if first {
+                push_text(cmds, x + 8.0, sy, format!("{}:", name), pal.syn_attr, false);
+                let trunc: String = line.chars().take(40).collect();
+                push_text(cmds, x + 8.0 + (name.len() + 2) as f32 * FONT_W, sy,
+                          trunc, pal.syn_value, false);
+                first = false;
+            } else {
+                push_text(cmds, x + 16.0, sy, line.chars().take(40).collect(), pal.text_dim, false);
+            }
+            sy += ROW_H;
+        }
     }
 }
 
@@ -777,7 +862,27 @@ fn paint_source_content(
     let gutter_w = 50.0;
     push_rect(cmds, x, y, gutter_w, h, pal.bg_panel_alt);
 
-    let lines: Vec<&str> = file.content.lines().collect();
+    // Toggle "Show original" button (kdyz source map je k dispozici).
+    if file.source_map.is_some() {
+        let btn_w = 100.0;
+        let btn_x = x + w - btn_w - 8.0;
+        let btn_y = y + 4.0;
+        let bg = if state.sources.show_original { pal.accent } else { pal.bg_button };
+        push_rect(cmds, btn_x, btn_y, btn_w, ROW_H, bg);
+        push_text(cmds, btn_x + 6.0, btn_y + 3.0,
+                  if state.sources.show_original { "Original".into() } else { "Generated".into() },
+                  if state.sources.show_original { pal.text_inverted } else { pal.text }, false);
+    }
+
+    // Vyber content - bud generated nebo original z source map sourcesContent[0].
+    let content_buffer: String = if state.sources.show_original {
+        if let Some(map) = &file.source_map {
+            if let Some(Some(orig)) = map.sources_content.first() {
+                orig.clone()
+            } else { file.content.clone() }
+        } else { file.content.clone() }
+    } else { file.content.clone() };
+    let lines: Vec<&str> = content_buffer.lines().collect();
     let scroll_y = state.sources.scroll_y;
     let max_visible = ((h / ROW_H).ceil() as usize) + 1;
     let start = (scroll_y / ROW_H) as usize;
@@ -895,6 +1000,80 @@ fn paint_application_tab(
             sy += ROW_H;
         }
     }
+
+    // Cookies sekce.
+    sy += 12.0;
+    push_text_bold(cmds, pad_x, sy, "Cookies".to_string(), pal.text, false);
+    sy += ROW_H + 2.0;
+    let cookies = read_cookies(interp);
+    if cookies.is_empty() {
+        push_text(cmds, pad_x + 12.0, sy, "(empty)".to_string(), pal.text_dim, true);
+        sy += ROW_H;
+    } else {
+        for (k, v) in &cookies {
+            if sy + ROW_H > content_y + content_h { break; }
+            push_text(cmds, pad_x + 12.0, sy, k.clone(), pal.syn_attr, false);
+            push_text(cmds, pad_x + 220.0, sy, v.clone(), pal.syn_value, false);
+            sy += ROW_H;
+        }
+    }
+
+    // IndexedDB sekce.
+    sy += 12.0;
+    push_text_bold(cmds, pad_x, sy, "IndexedDB".to_string(), pal.text, false);
+    sy += ROW_H + 2.0;
+    let idb_dbs = read_indexeddb(interp);
+    if idb_dbs.is_empty() {
+        push_text(cmds, pad_x + 12.0, sy, "(empty)".to_string(), pal.text_dim, true);
+    } else {
+        for (db_name, stores) in &idb_dbs {
+            if sy + ROW_H > content_y + content_h { break; }
+            push_text(cmds, pad_x + 12.0, sy, db_name.clone(), pal.syn_attr, false);
+            push_text(cmds, pad_x + 220.0, sy, format!("{} store(s)", stores.len()),
+                      pal.syn_value, false);
+            sy += ROW_H;
+            for store in stores {
+                if sy + ROW_H > content_y + content_h { break; }
+                push_text(cmds, pad_x + 24.0, sy, format!("- {}", store), pal.text_dim, false);
+                sy += ROW_H;
+            }
+        }
+    }
+}
+
+fn read_cookies(interp: Option<&Interpreter>) -> Vec<(String, String)> {
+    let Some(interp) = interp else { return Vec::new() };
+    // document.cookie je string "k1=v1; k2=v2; ..."
+    let env = interp.global.borrow();
+    let Some(doc_v) = env.get("document") else { return Vec::new() };
+    let crate::interpreter::JsValue::Object(doc_rc) = doc_v else { return Vec::new() };
+    let cookie_str = doc_rc.borrow().get("cookie");
+    let crate::interpreter::JsValue::Str(s) = cookie_str else { return Vec::new() };
+    s.split(';').filter_map(|pair| {
+        let pair = pair.trim();
+        let (k, v) = pair.split_once('=')?;
+        Some((k.trim().to_string(), v.trim().to_string()))
+    }).collect()
+}
+
+fn read_indexeddb(interp: Option<&Interpreter>) -> Vec<(String, Vec<String>)> {
+    let Some(interp) = interp else { return Vec::new() };
+    let env = interp.global.borrow();
+    let Some(idb_v) = env.get("indexedDB") else { return Vec::new() };
+    let crate::interpreter::JsValue::Object(idb_rc) = idb_v else { return Vec::new() };
+    let dbs_v = idb_rc.borrow().get("__databases__");
+    let crate::interpreter::JsValue::Object(dbs_rc) = dbs_v else { return Vec::new(); };
+    let dbs = dbs_rc.borrow();
+    dbs.own_keys().iter().map(|name| {
+        let db_v = dbs.get(name);
+        let stores: Vec<String> = if let crate::interpreter::JsValue::Object(db_rc) = db_v {
+            let stores_v = db_rc.borrow().get("__stores__");
+            if let crate::interpreter::JsValue::Object(s_rc) = stores_v {
+                s_rc.borrow().own_keys()
+            } else { Vec::new() }
+        } else { Vec::new() };
+        (name.clone(), stores)
+    }).collect()
 }
 
 /// Vrati (key, value) pary z storage objektu (interp.global.{name}).
@@ -1178,6 +1357,10 @@ pub enum DevtoolsHit {
     EditTextNode { node_id: usize },
     /// Dvojklik v Computed/Styles panel na property hodnotu.
     EditStyleValue { node_id: usize, property: String },
+    /// Network filter tab klik.
+    NetworkFilterClick(crate::devtools::model::network::NetworkFilter),
+    /// Toggle "show original source" v Sources.
+    SourcesToggleOriginal,
     /// Continue debugger button v Sources tab.
     DebuggerContinue,
     /// Step Over button.
@@ -1330,7 +1513,8 @@ pub fn attribute_at_x(row: &ElementRow, mouse_x: f32) -> Option<String> {
 }
 
 /// Detekce dvojkliku zony pro Elements tree. Vraci hit pokud kurzor je nad
-/// attr value (-> EditAttributeValue) nebo text node (-> EditTextNode).
+/// attr value (-> EditAttributeValue), text node (-> EditTextNode) nebo
+/// computed property hodnotu v styles pane (-> EditStyleValue).
 pub fn double_click_hit_elements(
     state: &DevToolsState,
     win_w: f32, content_y: f32, mouse_x: f32, mouse_y: f32,
@@ -1338,7 +1522,40 @@ pub fn double_click_hit_elements(
     let search_h = if state.elements.search.open { SEARCH_H } else { 0.0 };
     let body_y = content_y + search_h;
     let split_x = state.elements.split_x.max(200.0).min(win_w - 220.0);
-    if mouse_x >= split_x { return DevtoolsHit::PanelArea; }
+
+    // Styles pane (right) - dvojklik na property hodnotu v Computed sekci.
+    if mouse_x >= split_x {
+        if let Some(node_id) = state.elements.selected {
+            // Computed sekce zacina ~ 4 ROW_H pod top (po Matched rules
+            // sekci). Pragmaticky najdi line ktery odpovida property zona
+            // za "{prop}:" labelem (x > split_x + 160).
+            let local_x = mouse_x - (split_x + 12.0);
+            if local_x > 148.0 {
+                // Iteruj computed na zaklade y pozice. Spocitej "Computed"
+                // header offset.
+                let mut sy = body_y + 8.0;
+                sy += ROW_H + 2.0; // "Matched CSS rules"
+                if state.styles.matched_rules.is_empty() {
+                    sy += ROW_H + 8.0;
+                } else {
+                    for r in &state.styles.matched_rules {
+                        sy += ROW_H;
+                        sy += (r.declarations.len() as f32) * ROW_H;
+                        sy += ROW_H + 4.0;
+                    }
+                }
+                sy += ROW_H + 2.0; // "Computed" header
+                for (k, _) in &state.styles.computed {
+                    if mouse_y >= sy && mouse_y < sy + ROW_H {
+                        return DevtoolsHit::EditStyleValue { node_id, property: k.clone() };
+                    }
+                    sy += ROW_H;
+                }
+            }
+        }
+        return DevtoolsHit::PanelArea;
+    }
+
     let scroll_y = state.elements.scroll_y;
     let row_idx = ((mouse_y - body_y + scroll_y) / ROW_H) as usize;
     if row_idx >= state.elements.rows.len() { return DevtoolsHit::PanelArea; }
@@ -1393,6 +1610,16 @@ fn hit_test_sources(
         }
         return DevtoolsHit::PanelArea;
     }
+    // "Show original" button (kdyz source map ma file).
+    if mouse_y < body_y + ROW_H + 8.0 {
+        if let Some(file_id) = state.sources.selected_id {
+            if let Some(file) = state.sources.files.iter().find(|f| f.id == file_id) {
+                if file.source_map.is_some() {
+                    return DevtoolsHit::SourcesToggleOriginal;
+                }
+            }
+        }
+    }
     // Gutter klik = toggle breakpoint.
     let gutter_w = 50.0;
     if mouse_x < split_x + gutter_w {
@@ -1410,11 +1637,34 @@ fn hit_test_network(
     _win_w: f32,
     content_y: f32,
     _content_h: f32,
-    _mouse_x: f32, mouse_y: f32,
+    mouse_x: f32, mouse_y: f32,
 ) -> DevtoolsHit {
+    use crate::devtools::model::network::NetworkFilter;
+    let filter_h = 26.0;
+    if mouse_y < content_y + filter_h {
+        let filters = [
+            ("All", NetworkFilter::All),
+            ("Doc", NetworkFilter::Document),
+            ("CSS", NetworkFilter::Stylesheet),
+            ("JS", NetworkFilter::Script),
+            ("Img", NetworkFilter::Image),
+            ("Font", NetworkFilter::Font),
+            ("XHR", NetworkFilter::Xhr),
+        ];
+        let mut fx = 8.0;
+        for (label, f) in filters.iter() {
+            let w = label.len() as f32 * FONT_W + 14.0;
+            if mouse_x >= fx && mouse_x < fx + w {
+                return DevtoolsHit::NetworkFilterClick(*f);
+            }
+            fx += w + 2.0;
+        }
+        return DevtoolsHit::PanelArea;
+    }
+    let body_y = content_y + filter_h;
     let header_h = ROW_H + 4.0;
-    if mouse_y < content_y + header_h { return DevtoolsHit::PanelArea; }
-    let row_y = content_y + header_h + 2.0;
+    if mouse_y < body_y + header_h { return DevtoolsHit::PanelArea; }
+    let row_y = body_y + header_h + 2.0;
     let idx = ((mouse_y - row_y) / ROW_H) as usize;
     if idx < state.network.entries.len() {
         DevtoolsHit::NetworkRow(idx)

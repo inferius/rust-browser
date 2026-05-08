@@ -373,6 +373,11 @@ impl Environment {
         self.vars.keys().cloned().collect()
     }
 
+    /// Vraci parent scope (None u global).
+    pub fn parent_chain(&self) -> Option<Rc<RefCell<Environment>>> {
+        self.parent.clone()
+    }
+
     /// Vytvori novy globalni scope (bez rodice).
     pub fn new_global() -> Rc<RefCell<Self>> {
         Rc::new(RefCell::new(Environment { vars: HashMap::new(), parent: None }))
@@ -594,6 +599,27 @@ pub struct DebuggerState {
     pub paused_at: Option<u32>,
     /// Counter hit-u pres celou run pro UI feedback.
     pub hit_count: u32,
+    /// Snapshot lokalnich promennych pri posledni pause (name -> stringified value).
+    /// Plni se v exec_stmt pri breakpoint hit ze current env scope chain.
+    pub locals: Vec<(String, String)>,
+    /// Step mode - kdyz Some, dalsi exec_stmt pause bez ohledu na breakpoint.
+    pub step: Option<StepKind>,
+    /// Current call depth (incremented pri call_function, decremented na return).
+    /// Pouziva se pro Step Over (pause kdyz depth <= snapshot) /
+    /// Step Out (pause kdyz depth < snapshot).
+    pub call_depth: u32,
+    /// Snapshot call_depth pri Step start.
+    pub step_depth_anchor: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StepKind {
+    /// Kazdy stmt pause - vstoupi do volane funkce.
+    Into,
+    /// Pause na stejne nebo niz urovni depth.
+    Over,
+    /// Pause az kdyz depth < anchor (vraceni z funkce).
+    Out,
 }
 
 impl DebuggerState {
@@ -606,9 +632,27 @@ impl DebuggerState {
     }
     pub fn resume(&mut self) {
         self.paused_at = None;
+        self.step = None;
     }
     pub fn set_breakpoints(&mut self, lines: std::collections::HashSet<u32>) {
         self.breakpoints = lines;
+    }
+
+    /// Spustit Step kind - po next exec_stmt pause s prislusnym scope.
+    pub fn start_step(&mut self, kind: StepKind) {
+        self.step = Some(kind);
+        self.step_depth_anchor = self.call_depth;
+        self.paused_at = None;
+    }
+
+    /// True pokud step podminka pri current depth zpusobi pause.
+    pub fn step_should_pause(&self) -> bool {
+        let Some(kind) = self.step else { return false };
+        match kind {
+            StepKind::Into => true,
+            StepKind::Over => self.call_depth <= self.step_depth_anchor,
+            StepKind::Out => self.call_depth < self.step_depth_anchor,
+        }
     }
 }
 

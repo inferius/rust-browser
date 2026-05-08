@@ -588,6 +588,11 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                                 self.render();
                                 return;
                             }
+                            DevtoolsHit::EditStyleValue { node_id, property } => {
+                                self.start_edit_style_property(node_id, property);
+                                self.render();
+                                return;
+                            }
                             _ => {}
                         }
                     }
@@ -660,6 +665,12 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                                     self.devtools.network.selected = Some(idx);
                                     self.devtools.network.detail_open = true;
                                 }
+                                DevtoolsHit::NetworkFilterClick(f) => {
+                                    self.devtools.network.filter = f;
+                                }
+                                DevtoolsHit::SourcesToggleOriginal => {
+                                    self.devtools.sources.show_original = !self.devtools.sources.show_original;
+                                }
                                 DevtoolsHit::PanelArea => {
                                     self.devtools.focus = crate::devtools::focus::FocusTarget::Page;
                                 }
@@ -674,12 +685,30 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                                         self.dispatch_menu_action(a);
                                     }
                                 }
-                                DevtoolsHit::DebuggerContinue
-                                | DevtoolsHit::DebuggerStepOver
-                                | DevtoolsHit::DebuggerStepInto
-                                | DevtoolsHit::DebuggerStepOut => {
+                                DevtoolsHit::DebuggerContinue => {
                                     if let Some(interp) = &self.interpreter {
                                         interp.debugger.borrow_mut().resume();
+                                    }
+                                    self.devtools.sources.debugger_paused = false;
+                                    self.devtools.sources.current_pause_location = None;
+                                }
+                                DevtoolsHit::DebuggerStepOver => {
+                                    if let Some(interp) = &self.interpreter {
+                                        interp.debugger.borrow_mut().start_step(crate::interpreter::StepKind::Over);
+                                    }
+                                    self.devtools.sources.debugger_paused = false;
+                                    self.devtools.sources.current_pause_location = None;
+                                }
+                                DevtoolsHit::DebuggerStepInto => {
+                                    if let Some(interp) = &self.interpreter {
+                                        interp.debugger.borrow_mut().start_step(crate::interpreter::StepKind::Into);
+                                    }
+                                    self.devtools.sources.debugger_paused = false;
+                                    self.devtools.sources.current_pause_location = None;
+                                }
+                                DevtoolsHit::DebuggerStepOut => {
+                                    if let Some(interp) = &self.interpreter {
+                                        interp.debugger.borrow_mut().start_step(crate::interpreter::StepKind::Out);
                                     }
                                     self.devtools.sources.debugger_paused = false;
                                     self.devtools.sources.current_pause_location = None;
@@ -947,7 +976,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                                         match result {
                                             Ok(v) => self.devtools.console.push_log(LogEntry {
                                                 level: LogLevel::Result,
-                                                text: v.to_string(),
+                                                text: v.pretty_print(),
                                             }),
                                             Err(e) => self.devtools.console.push_log(LogEntry {
                                                 level: LogLevel::Error,
@@ -2244,9 +2273,11 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                     if let Some(file_id) = self.devtools.sources.selected_id {
                         self.devtools.sources.current_pause_location = Some((file_id, line));
                         self.devtools.sources.debugger_paused = true;
+                        self.devtools.sources.locals = dbg.locals.clone();
                     }
                 } else {
                     self.devtools.sources.debugger_paused = false;
+                    self.devtools.sources.locals.clear();
                 }
             }
             // Mirror interpreter console_log do DevToolsState (jen nove entries).

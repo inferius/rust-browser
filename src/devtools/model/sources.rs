@@ -30,6 +30,10 @@ pub struct SourcesState {
     pub scroll_y: f32,
     pub debugger_paused: bool,
     pub current_pause_location: Option<(u32, u32)>, // (file_id, line)
+    /// Snapshot lokalni promenne pri pause - mirror z interp.debugger.locals.
+    pub locals: Vec<(String, String)>,
+    /// True = zobraz original source pres source map mapping (z sourcesContent).
+    pub show_original: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
