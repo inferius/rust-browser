@@ -2834,6 +2834,11 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                                 }
                                 return;
                             }
+                            if s.as_str() == "p" || s.as_str() == "P" {
+                                // Ctrl+P: export current page do PDF.
+                                self.export_pdf();
+                                return;
+                            }
                         }
                     }
                     // Ctrl+= / Ctrl++ / Ctrl+- / Ctrl+0 = zoom controls.
@@ -2991,6 +2996,52 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
             self.find_match_idx = ((cur + dir).rem_euclid(n)) as usize;
             self.find_scroll_to_current();
             self.render();
+        }
+        /// Export aktualni stranky do PDF souboru. Walk LayoutBox tree, emituje
+        /// text uzly + bg rects do printpdf documentu. Save do current_path
+        /// directory s .pdf priponou.
+        fn export_pdf(&mut self) {
+            use printpdf::*;
+            let layout = match &self.layout_root { Some(l) => l.clone(), None => return };
+            let page_w_mm = 210.0_f32; // A4 width
+            let _page_h_mm = 297.0_f32;
+            // Layout coords v px -> PDF v mm. Approx 96 DPI = 1 px = 0.264 mm.
+            let px_to_mm = 0.264_f32;
+            let total_h_mm = layout.rect.height * px_to_mm;
+            let (doc, page1, layer1) = PdfDocument::new("Page", Mm(page_w_mm), Mm(total_h_mm.max(297.0)), "Layer 1");
+            let font = match doc.add_builtin_font(BuiltinFont::TimesRoman) {
+                Ok(f) => f,
+                Err(e) => { eprintln!("[pdf] font fail: {e}"); return; }
+            };
+            let layer = doc.get_page(page1).get_layer(layer1);
+            // Walk LayoutBox tree, emituje text uzly s pozici (x, h-y) (PDF y-up).
+            fn walk(b: &super::layout::LayoutBox, layer: &PdfLayerReference, font: &IndirectFontRef, page_h_px: f32, px_to_mm: f32) {
+                if let Some(text) = &b.text {
+                    if !text.trim().is_empty() {
+                        let x_mm = b.rect.x * px_to_mm;
+                        let y_mm = (page_h_px - b.rect.y - b.font_size) * px_to_mm;
+                        let fs = b.font_size * px_to_mm * 2.83; // pt = mm * 2.83
+                        layer.use_text(text, fs, Mm(x_mm), Mm(y_mm), font);
+                    }
+                }
+                for ch in &b.children { walk(ch, layer, font, page_h_px, px_to_mm); }
+            }
+            walk(&layout, &layer, &font, layout.rect.height, px_to_mm);
+            // Save: pri current_path pres .pdf substituce, jinak ~/page.pdf.
+            let out_path = self.current_path.as_ref()
+                .and_then(|p| p.to_str().map(|s| s.replace(".html", ".pdf")))
+                .unwrap_or_else(|| "page.pdf".to_string());
+            match std::fs::File::create(&out_path) {
+                Ok(file) => {
+                    let mut bw = std::io::BufWriter::new(file);
+                    if let Err(e) = doc.save(&mut bw) {
+                        eprintln!("[pdf] save fail: {e}");
+                    } else {
+                        println!("[pdf] saved: {}", out_path);
+                    }
+                }
+                Err(e) => eprintln!("[pdf] open fail {}: {}", out_path, e),
+            }
         }
         /// Extrahuje text z LayoutBoxu prekryvajicich selection rect, posle do
         /// system clipboard pres arboard. Selection coords v logical px (uz s

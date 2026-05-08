@@ -16,6 +16,8 @@ opt-level = 3
 [dependencies]
 # Cross-platform clipboard read/write (Ctrl+C, Ctrl+V).
 arboard = "3.4"
+# PDF generation pro print/export.
+printpdf = "0.7"
 unicode-general-category = "1.0.0"
 unicode-ident = "1.0.18"
 num-bigint = "0.4.6"
