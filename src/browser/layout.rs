@@ -1401,6 +1401,47 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
             bx.rect.height = h;
             bx.explicit_height = Some(h);
         }
+        // SVG children: spocti rect z SVG atributu (x/y/cx/cy/r/rx/ry/x1/y1...)
+        // a uloz na child LayoutBox pro proper devtools highlight + hit-test.
+        // Pozice je relative to SVG box (paint pridava svg.rect.x/y origin).
+        for child in bx.children.iter_mut() {
+            let child_node = match &child.node { Some(n) => Rc::clone(n), None => continue };
+            let attr_f = |name: &str, default: f32| -> f32 {
+                child_node.attr(name).and_then(|v| v.parse().ok()).unwrap_or(default)
+            };
+            let tag = child.tag.clone().unwrap_or_default();
+            let (cx_off, cy_off, cw, ch) = match tag.as_str() {
+                "rect" => (
+                    attr_f("x", 0.0), attr_f("y", 0.0),
+                    attr_f("width", 0.0), attr_f("height", 0.0),
+                ),
+                "circle" => {
+                    let cx = attr_f("cx", 0.0); let cy = attr_f("cy", 0.0);
+                    let r = attr_f("r", 0.0);
+                    (cx - r, cy - r, 2.0 * r, 2.0 * r)
+                }
+                "ellipse" => {
+                    let cx = attr_f("cx", 0.0); let cy = attr_f("cy", 0.0);
+                    let rx = attr_f("rx", 0.0); let ry = attr_f("ry", 0.0);
+                    (cx - rx, cy - ry, 2.0 * rx, 2.0 * ry)
+                }
+                "line" => {
+                    let x1 = attr_f("x1", 0.0); let y1 = attr_f("y1", 0.0);
+                    let x2 = attr_f("x2", 0.0); let y2 = attr_f("y2", 0.0);
+                    (x1.min(x2), y1.min(y2), (x2 - x1).abs(), (y2 - y1).abs())
+                }
+                "text" => {
+                    let x = attr_f("x", 0.0); let y = attr_f("y", 0.0);
+                    let fs = attr_f("font-size", 14.0);
+                    (x, y - fs, fs * 8.0, fs)  // Approx text rect.
+                }
+                _ => continue,
+            };
+            child.rect.x = bx.rect.x + cx_off;
+            child.rect.y = bx.rect.y + cy_off;
+            child.rect.width = cw;
+            child.rect.height = ch;
+        }
     }
     // Video tag: replaced element (zatim bez decode - jen layout box + placeholder).
     // Default 300x150 per HTML spec, ale poster image / controls renderovany v paint.
