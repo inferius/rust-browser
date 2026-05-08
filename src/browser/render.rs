@@ -2531,6 +2531,9 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         find_open: bool,
         find_query: String,
         find_match_idx: usize,
+        /// Address bar (Ctrl+L): toggleable input overlay. Enter navigate.
+        addr_open: bool,
+        addr_input: String,
         /// Smooth scroll target. Render tick interpoluje scroll_y -> target.
         scroll_target_y: f32,
         scroll_target_x: f32,
@@ -2785,6 +2788,44 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                             _ => {}
                         }
                     }
+                    // Address bar typing.
+                    if self.addr_open {
+                        match &key_event.logical_key {
+                            Key::Named(NamedKey::Escape) => {
+                                self.addr_open = false;
+                                self.addr_input.clear();
+                                self.render();
+                                return;
+                            }
+                            Key::Named(NamedKey::Backspace) => {
+                                self.addr_input.pop();
+                                self.render();
+                                return;
+                            }
+                            Key::Named(NamedKey::Enter) => {
+                                let url = std::mem::take(&mut self.addr_input);
+                                self.addr_open = false;
+                                if !url.is_empty() {
+                                    println!("[address] navigate: {}", url);
+                                    if url.starts_with("http://") || url.starts_with("https://") || url.starts_with("file:///") {
+                                        self.navigate_url(&url);
+                                    } else {
+                                        // Predpoklad lokal path.
+                                        let p = std::path::PathBuf::from(&url);
+                                        self.load_path(&p);
+                                    }
+                                }
+                                self.render();
+                                return;
+                            }
+                            Key::Character(s) if !self.modifiers.control_key() => {
+                                self.addr_input.push_str(s);
+                                self.render();
+                                return;
+                            }
+                            _ => {}
+                        }
+                    }
                     // Find-on-page typing: pri otevrenem overlay capture chars.
                     if self.find_open {
                         match &key_event.logical_key {
@@ -2837,6 +2878,13 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                             if s.as_str() == "p" || s.as_str() == "P" {
                                 // Ctrl+P: export current page do PDF.
                                 self.export_pdf();
+                                return;
+                            }
+                            if s.as_str() == "l" || s.as_str() == "L" {
+                                // Ctrl+L: toggle address bar.
+                                self.addr_open = true;
+                                self.addr_input = self.base_url.clone().unwrap_or_default();
+                                self.render();
                                 return;
                             }
                         }
@@ -3807,6 +3855,26 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                     });
                 }
             }
+            // Address bar (Ctrl+L) overlay: input top centered.
+            if self.addr_open {
+                let vw = (r.config.width as f32) / self.zoom;
+                let bar_w: f32 = (vw - 80.0).min(800.0);
+                let bar_h: f32 = 40.0;
+                let bar_x = (vw - bar_w) * 0.5;
+                let bar_y = 8.0;
+                display_list.push(DisplayCommand::Rect {
+                    x: bar_x, y: bar_y, w: bar_w, h: bar_h,
+                    color: [40, 40, 40, 240], radius: 6.0,
+                });
+                let label = format!("URL: {}", self.addr_input);
+                display_list.push(DisplayCommand::Text {
+                    x: bar_x + 12.0, y: bar_y + 10.0,
+                    content: label, color: [255, 255, 255, 255],
+                    font_size: 14.0, bold: false, italic: false,
+                    font_family: String::new(),
+                    strikethrough: false, underline: false,
+                });
+            }
             // Find on page: highlight matches + overlay s query a counter.
             if self.find_open {
                 let matches = find_matches_in(&layout_root, &self.find_query);
@@ -4034,6 +4102,8 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         find_open: false,
         find_query: String::new(),
         find_match_idx: 0,
+        addr_open: false,
+        addr_input: String::new(),
         scroll_target_y: 0.0,
         scroll_target_x: 0.0,
         selection_anchor: None,
