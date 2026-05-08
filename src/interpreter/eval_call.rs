@@ -50,12 +50,17 @@ impl Interpreter {
                             None => {}
                         }
                     }
-                    // Posledni prikaz: vyraz vraci hodnotu, jinak undefined
+                    // Posledni prikaz: vyraz vraci hodnotu, jinak undefined.
+                    // Unwrap Stmt::WithLine pred match.
                     let last = &prog.body[last_idx];
-                    match last {
+                    let mut peeled = last;
+                    while let crate::ast::Stmt::WithLine { inner, .. } = peeled {
+                        peeled = inner;
+                    }
+                    match peeled {
                         crate::ast::Stmt::Expr(e) => self.eval(e, env),
-                        other => {
-                            match self.exec_stmt(other, env)? {
+                        _ => {
+                            match self.exec_stmt(last, env)? {
                                 Some(Signal::Return(v)) => Ok(v),
                                 _ => Ok(JsValue::Undefined),
                             }

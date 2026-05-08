@@ -1039,6 +1039,7 @@ pub fn compile_expr(e: &Expr, code: &mut CodeBlock) -> Result<(), &'static str> 
 /// Zkus zkompilovat statement. Vrati Err("...") pri non-supported.
 pub fn compile_stmt(s: &Stmt, code: &mut CodeBlock) -> Result<(), &'static str> {
     match s {
+        Stmt::WithLine { inner, .. } => compile_stmt(inner, code),
         Stmt::Expr(e) => {
             // Special: Stmt::Expr(Function/AsyncFunc s name) = function declaration
             // (parser bug - top-level `async function f` mapuje na Stmt::Expr).
@@ -1564,8 +1565,10 @@ pub fn compile_stmt(s: &Stmt, code: &mut CodeBlock) -> Result<(), &'static str> 
             }
             // Append ctor body. Pri extends, super() volani se ignoruje (uz inlined).
             for s in ctor_body {
-                // Skip explicit super() call - we already initialized via __super_inst.
-                if let Stmt::Expr(Expr::Call { callee, .. }) = &s {
+                // Peel WithLine pred match.
+                let mut peeled = &s;
+                while let Stmt::WithLine { inner, .. } = peeled { peeled = inner; }
+                if let Stmt::Expr(Expr::Call { callee, .. }) = peeled {
                     if let Expr::Ident(n) = callee.as_ref() {
                         if n == "super" { continue; }
                     }
@@ -1784,14 +1787,17 @@ pub fn compile_program(stmts: &[Stmt]) -> Result<CodeBlock, &'static str> {
     let mut code = CodeBlock::new();
     let last_idx = stmts.len().saturating_sub(1);
     for (i, s) in stmts.iter().enumerate() {
+        // Unwrap Stmt::WithLine pro line-tracking wrapper (debugger).
+        let mut peeled = s;
+        while let Stmt::WithLine { inner, .. } = peeled { peeled = inner; }
         if i == last_idx {
-            // Last stmt: pri Stmt::Expr nemmtuj Pop, hodnota = vysledek programu.
-            if let Stmt::Expr(e) = s {
+            // Last stmt: pri Stmt::Expr neemituj Pop, hodnota = vysledek programu.
+            if let Stmt::Expr(e) = peeled {
                 compile_expr(e, &mut code)?;
                 continue;
             }
         }
-        compile_stmt(s, &mut code)?;
+        compile_stmt(peeled, &mut code)?;
     }
     code.emit(Opcode::Halt);
     Ok(code)

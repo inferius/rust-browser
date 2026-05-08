@@ -12,6 +12,16 @@ impl Interpreter {
 
     pub(super) fn exec_stmt(&mut self, stmt: &Stmt, env: &Rc<RefCell<Environment>>) -> StmtResult {
         match stmt {
+            Stmt::WithLine { line, inner } => {
+                self.current_line = *line;
+                // Breakpoint check: pri match log do console + set pause location.
+                if self.debugger.borrow().is_breakpoint(*line) {
+                    let msg = format!("Breakpoint hit at line {}", line);
+                    self.console_log.borrow_mut().push(("warn".into(), msg));
+                    self.debugger.borrow_mut().pause_at(*line);
+                }
+                return self.exec_stmt(inner, env);
+            }
             Stmt::Empty => Ok(None),
 
             Stmt::Expr(e) => { self.eval(e, env)?; Ok(None) }

@@ -207,6 +207,18 @@ impl Parser {
 
     fn parse_stmt(&mut self) -> Result<Stmt, ParseError> {
         self.skip_trivia();
+        let line = self.cur().line as u32;
+        let inner = self.parse_stmt_inner()?;
+        // WithLine wrap - skip pro Empty + jiz wrapped + Block (zachova exec).
+        // Block obsahuje vlastni stmts kazdy s WithLine z parse_block_body.
+        match inner {
+            Stmt::Empty | Stmt::WithLine { .. } | Stmt::Block(_) => Ok(inner),
+            other => Ok(Stmt::WithLine { line, inner: Box::new(other) }),
+        }
+    }
+
+    fn parse_stmt_inner(&mut self) -> Result<Stmt, ParseError> {
+        self.skip_trivia();
         match self.kind().clone() {
             TokenKind::Operator(OperatorEnum::LBrace) => {
                 self.advance();

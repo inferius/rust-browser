@@ -579,6 +579,37 @@ pub struct Interpreter {
     pub mutation_observers: Rc<RefCell<Vec<(usize, JsValue, JsValue, bool)>>>,
     /// Pending mutation records pro batched delivery (microtask queue).
     pub pending_mutation_records: Rc<RefCell<Vec<(usize, JsValue, JsValue)>>>,
+    /// Aktualni line v exec - update z Stmt::WithLine. 0 pri rucne run.
+    pub current_line: u32,
+    /// Sdileny debugger state - breakpoints + pause indicator.
+    pub debugger: Rc<RefCell<DebuggerState>>,
+}
+
+/// Debugger state - sdileny mezi Interpreter a UI (Renderer/devtools_panel).
+#[derive(Debug, Default)]
+pub struct DebuggerState {
+    /// Set lines kde je aktivni breakpoint (pro current source).
+    pub breakpoints: std::collections::HashSet<u32>,
+    /// Aktualne hit pause line (None = neni paused).
+    pub paused_at: Option<u32>,
+    /// Counter hit-u pres celou run pro UI feedback.
+    pub hit_count: u32,
+}
+
+impl DebuggerState {
+    pub fn is_breakpoint(&self, line: u32) -> bool {
+        self.breakpoints.contains(&line)
+    }
+    pub fn pause_at(&mut self, line: u32) {
+        self.paused_at = Some(line);
+        self.hit_count = self.hit_count.saturating_add(1);
+    }
+    pub fn resume(&mut self) {
+        self.paused_at = None;
+    }
+    pub fn set_breakpoints(&mut self, lines: std::collections::HashSet<u32>) {
+        self.breakpoints = lines;
+    }
 }
 
 // ─── Pomocne funkce ──────────────────────────────────────────────────────────
@@ -630,6 +661,8 @@ impl Interpreter {
             custom_element_instances: Rc::new(RefCell::new(std::collections::HashMap::new())),
             mutation_observers,
             pending_mutation_records: Rc::new(RefCell::new(Vec::new())),
+            current_line: 0,
+            debugger: Rc::new(RefCell::new(DebuggerState::default())),
         }
     }
 

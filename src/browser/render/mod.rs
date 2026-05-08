@@ -670,6 +670,16 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                                         self.dispatch_menu_action(a);
                                     }
                                 }
+                                DevtoolsHit::DebuggerContinue
+                                | DevtoolsHit::DebuggerStepOver
+                                | DevtoolsHit::DebuggerStepInto
+                                | DevtoolsHit::DebuggerStepOut => {
+                                    if let Some(interp) = &self.interpreter {
+                                        interp.debugger.borrow_mut().resume();
+                                    }
+                                    self.devtools.sources.debugger_paused = false;
+                                    self.devtools.sources.current_pause_location = None;
+                                }
                                 DevtoolsHit::None | _ => {}
                             }
                         }
@@ -2191,6 +2201,31 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         fn render(&mut self) {
             use super::{css_parser, cascade, layout, paint};
             let frame_start = std::time::Instant::now();
+            // Sync devtools breakpoints -> interpreter debugger.
+            // Pri zmene state.sources.breakpoints (klik gutter), prepocitej set linies
+            // pro current selected file a propa do interpreter.debugger.
+            if let Some(interp) = &self.interpreter {
+                let bp_lines: std::collections::HashSet<u32> = self.devtools.sources.breakpoints.iter()
+                    .filter_map(|b| {
+                        // Kdyz file_id zobrazeneho zdroje je breakpoint.file_id, hodna line.
+                        // Pro ted bereme vsechny breakpoints (bez file mapping).
+                        Some(b.line)
+                    })
+                    .collect();
+                let mut dbg = interp.debugger.borrow_mut();
+                if dbg.breakpoints != bp_lines {
+                    dbg.breakpoints = bp_lines;
+                }
+                // Mirror paused_at -> devtools UI.
+                if let Some(line) = dbg.paused_at {
+                    if let Some(file_id) = self.devtools.sources.selected_id {
+                        self.devtools.sources.current_pause_location = Some((file_id, line));
+                        self.devtools.sources.debugger_paused = true;
+                    }
+                } else {
+                    self.devtools.sources.debugger_paused = false;
+                }
+            }
             // Mirror interpreter console_log do DevToolsState (jen nove entries).
             // Drz running counter v DevToolsState pres console.log.len() porovnani.
             if let Some(interp) = &self.interpreter {

@@ -48,6 +48,9 @@ fn leaf(label: &str, kind: &str) -> String {
 pub fn render_stmt(s: &Stmt) -> String {
     let mut out = String::new();
     match s {
+        Stmt::WithLine { line, inner } => {
+            return format!("<span class=\"line-marker\">@{}</span>{}", line, render_stmt(inner));
+        }
         Stmt::Expr(e) => {
             out.push_str(&open_node("ExpressionStatement", "stmt"));
             out.push_str(&render_expr(e));

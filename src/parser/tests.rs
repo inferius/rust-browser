@@ -9,19 +9,62 @@ fn parse(src: &str) -> Program {
         .filter(|t| !matches!(t.kind, TokenKind::Whitespace | TokenKind::Newline
             | TokenKind::CommentLine(_) | TokenKind::CommentBlock(_)))
         .collect();
-    Parser::new(tokens).parse().unwrap()
+    let mut prog = Parser::new(tokens).parse().unwrap();
+    // Deep unwrap WithLine pro test convenience.
+    prog.body = prog.body.into_iter().map(deep_unwrap).collect();
+    prog
+}
+
+fn unwrap_line(s: Stmt) -> Stmt {
+    match s {
+        Stmt::WithLine { inner, .. } => unwrap_line(*inner),
+        other => other,
+    }
+}
+
+/// Rekurzivne unwrap WithLine v cele AST - pro testy.
+fn deep_unwrap(s: Stmt) -> Stmt {
+    let s = unwrap_line(s);
+    match s {
+        Stmt::Block(body) => Stmt::Block(body.into_iter().map(deep_unwrap).collect()),
+        Stmt::Function { name, params, body } => Stmt::Function {
+            name, params, body: body.into_iter().map(deep_unwrap).collect(),
+        },
+        Stmt::GeneratorFunc { name, params, body } => Stmt::GeneratorFunc {
+            name, params, body: body.into_iter().map(deep_unwrap).collect(),
+        },
+        Stmt::AsyncFunc { name, params, body } => Stmt::AsyncFunc {
+            name, params, body: body.into_iter().map(deep_unwrap).collect(),
+        },
+        Stmt::If { test, yes, no } => Stmt::If {
+            test, yes: Box::new(deep_unwrap(*yes)), no: no.map(|s| Box::new(deep_unwrap(*s))),
+        },
+        Stmt::While { test, body } => Stmt::While { test, body: Box::new(deep_unwrap(*body)) },
+        Stmt::DoWhile { body, test } => Stmt::DoWhile { body: Box::new(deep_unwrap(*body)), test },
+        Stmt::For { init, test, update, body } => Stmt::For {
+            init, test, update, body: Box::new(deep_unwrap(*body)),
+        },
+        Stmt::ForIn { kind, target, iter, body } => Stmt::ForIn {
+            kind, target, iter, body: Box::new(deep_unwrap(*body)),
+        },
+        Stmt::ForOf { kind, target, iter, body } => Stmt::ForOf {
+            kind, target, iter, body: Box::new(deep_unwrap(*body)),
+        },
+        other => other,
+    }
 }
 
 fn parse_expr(src: &str) -> Expr {
     let prog = parse(src);
-    match prog.body.into_iter().next().unwrap() {
+    let s = unwrap_line(prog.body.into_iter().next().unwrap());
+    match s {
         Stmt::Expr(e) => e,
         other => panic!("Ocekavan ExprStmt, nalezeno {other:?}"),
     }
 }
 
 fn parse_stmt(src: &str) -> Stmt {
-    parse(src).body.into_iter().next().unwrap()
+    unwrap_line(parse(src).body.into_iter().next().unwrap())
 }
 
 // --- cisla a stringy ---
@@ -828,6 +871,27 @@ fn empty_program() {
 fn empty_block() {
     let prog = parse("{ }");
     assert_eq!(prog.body.len(), 1);
+}
+
+#[test]
+fn with_line_wrapping_present() {
+    // Ovejruje, ze parser ovinuje top-level stmts do Stmt::WithLine.
+    // Pres normalni parse() jsou unwrapnute (deep_unwrap) - vytvor Parser primo.
+    let lex = Lexer::parse_str("let x = 1;\nlet y = 2;", "<t>").unwrap();
+    let toks: Vec<_> = lex.tokens.into_iter()
+        .filter(|t| !matches!(t.kind, TokenKind::Whitespace | TokenKind::Newline
+            | TokenKind::CommentLine(_) | TokenKind::CommentBlock(_)))
+        .collect();
+    let prog = Parser::new(toks).parse().unwrap();
+    assert_eq!(prog.body.len(), 2);
+    match &prog.body[0] {
+        Stmt::WithLine { line, .. } => assert_eq!(*line, 1),
+        other => panic!("ocekavan WithLine, mam {other:?}"),
+    }
+    match &prog.body[1] {
+        Stmt::WithLine { line, .. } => assert_eq!(*line, 2),
+        other => panic!("ocekavan WithLine, mam {other:?}"),
+    }
 }
 
 #[test]

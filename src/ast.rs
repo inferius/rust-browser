@@ -442,6 +442,11 @@ pub enum Stmt {
     /// - `export { a, b as c }` -> Named(Vec<(local, exported)>)
     /// - `export { a } from "path"` -> ReExport (zatim nepodporujeme)
     Export(ExportKind),
+
+    /// Wrapper s line info pro debugger / source map. Parser obali kazdy stmt.
+    /// Interpreter exec_stmt extrahuje line + dispatch na inner.
+    /// Renderer zde nestoji - line je 0 pri rucne tvorbe.
+    WithLine { line: u32, inner: Box<Stmt> },
 }
 
 /// Specifikator importu - co se z modulu nacita a pod jakym jmenem.

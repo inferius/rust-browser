@@ -1150,6 +1150,14 @@ pub enum DevtoolsHit {
     EditTextNode { node_id: usize },
     /// Dvojklik v Computed/Styles panel na property hodnotu.
     EditStyleValue { node_id: usize, property: String },
+    /// Continue debugger button v Sources tab.
+    DebuggerContinue,
+    /// Step Over button.
+    DebuggerStepOver,
+    /// Step Into button.
+    DebuggerStepInto,
+    /// Step Out button.
+    DebuggerStepOut,
 }
 
 pub fn devtools_hit_test(
@@ -1328,9 +1336,30 @@ fn hit_test_sources(
     _content_h: f32,
     mouse_x: f32, mouse_y: f32,
 ) -> DevtoolsHit {
+    // Debugger toolbar nahore - 28px high.
+    let dbg_h = 28.0;
+    if mouse_y < content_y + dbg_h {
+        let labels = ["Continue", "Step Over", "Step Into", "Step Out"];
+        let actions = [
+            DevtoolsHit::DebuggerContinue,
+            DevtoolsHit::DebuggerStepOver,
+            DevtoolsHit::DebuggerStepInto,
+            DevtoolsHit::DebuggerStepOut,
+        ];
+        let mut x = 8.0;
+        for (i, label) in labels.iter().enumerate() {
+            let w = label.len() as f32 * FONT_W + 16.0;
+            if mouse_x >= x && mouse_x < x + w {
+                return actions[i].clone();
+            }
+            x += w + 4.0;
+        }
+        return DevtoolsHit::PanelArea;
+    }
+    let body_y = content_y + dbg_h;
     let split_x = 240.0;
     if mouse_x < split_x {
-        let row_idx = ((mouse_y - (content_y + ROW_H + 8.0)) / ROW_H) as usize;
+        let row_idx = ((mouse_y - (body_y + ROW_H + 8.0)) / ROW_H) as usize;
         if row_idx < state.sources.files.len() {
             return DevtoolsHit::SourcesFileRow(state.sources.files[row_idx].id);
         }
@@ -1341,7 +1370,7 @@ fn hit_test_sources(
     if mouse_x < split_x + gutter_w {
         if let Some(file_id) = state.sources.selected_id {
             let scroll_y = state.sources.scroll_y;
-            let line_idx = ((mouse_y - content_y + scroll_y) / ROW_H) as usize;
+            let line_idx = ((mouse_y - body_y + scroll_y) / ROW_H) as usize;
             return DevtoolsHit::SourcesGutter { file_id, line: line_idx as u32 + 1 };
         }
     }
