@@ -20,6 +20,7 @@ thread_local! {
 pub fn set_hovered_node(id: Option<usize>) { HOVERED_NODE.with(|c| *c.borrow_mut() = id); }
 pub fn set_active_node(id: Option<usize>) { ACTIVE_NODE.with(|c| *c.borrow_mut() = id); }
 pub fn set_focused_node(id: Option<usize>) { FOCUSED_NODE.with(|c| *c.borrow_mut() = id); }
+pub fn get_focused_node() -> Option<usize> { FOCUSED_NODE.with(|c| *c.borrow()) }
 
 fn current_node_id(node: &Rc<Node>) -> usize { Rc::as_ptr(node) as usize }
 fn is_node_match(node: &Rc<Node>, cell: &'static std::thread::LocalKey<std::cell::RefCell<Option<usize>>>) -> bool {

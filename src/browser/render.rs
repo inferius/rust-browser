@@ -2788,6 +2788,45 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                             _ => {}
                         }
                     }
+                    // Form input typing: pri focused input/textarea zachyti char.
+                    {
+                        let focused_id = super::cascade::get_focused_node();
+                        if let Some(fid) = focused_id {
+                            if !self.find_open && !self.addr_open
+                                && !(self.devtools_open && self.devtools_tab == 1)
+                                && !self.modifiers.control_key()
+                            {
+                                if let Some(interp) = &self.interpreter {
+                                    let doc_root = std::rc::Rc::clone(&interp.document.borrow().root);
+                                    if let Some(node) = find_node_by_ptr(&doc_root, fid) {
+                                        let tag = node.tag_name().unwrap_or_default();
+                                        if matches!(tag.as_str(), "input" | "textarea") {
+                                            match &key_event.logical_key {
+                                                Key::Named(NamedKey::Backspace) => {
+                                                    let cur = node.attr("value").unwrap_or_default();
+                                                    let mut chars: Vec<char> = cur.chars().collect();
+                                                    chars.pop();
+                                                    node.set_attr("value", &chars.into_iter().collect::<String>());
+                                                    self.cached_layout_root = None;
+                                                    self.render();
+                                                    return;
+                                                }
+                                                Key::Character(s) => {
+                                                    let cur = node.attr("value").unwrap_or_default();
+                                                    let new_val = format!("{}{}", cur, s);
+                                                    node.set_attr("value", &new_val);
+                                                    self.cached_layout_root = None;
+                                                    self.render();
+                                                    return;
+                                                }
+                                                _ => {}
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                     // Address bar typing.
                     if self.addr_open {
                         match &key_event.logical_key {
@@ -3529,6 +3568,41 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
             let target = layout_root.hit_test(self.mouse_x, self.mouse_y);
             let id = target.and_then(|t| t.node.as_ref().map(|n| std::rc::Rc::as_ptr(n) as usize));
             super::cascade::set_hovered_node(id);
+            // Cursor icon dle hover targetu: text nodes -> Text (I-beam), klikatelne
+            // (a, button) -> Pointer, jinak Default.
+            if let Some(window) = &self.window {
+                use winit::window::CursorIcon;
+                let icon = match target {
+                    Some(t) => {
+                        let tag = t.tag.as_deref();
+                        if matches!(tag, Some("a") | Some("button") | Some("input") | Some("select")) {
+                            CursorIcon::Pointer
+                        } else if t.text.is_some() {
+                            CursorIcon::Text
+                        } else {
+                            // Recurzivne najdi nejhlubsi child s textem.
+                            fn has_text_descendant(b: &super::layout::LayoutBox, mx: f32, my: f32) -> bool {
+                                if b.text.is_some()
+                                    && mx >= b.rect.x && mx < b.rect.x + b.rect.width
+                                    && my >= b.rect.y && my < b.rect.y + b.rect.height {
+                                    return true;
+                                }
+                                for c in &b.children {
+                                    if has_text_descendant(c, mx, my) { return true; }
+                                }
+                                false
+                            }
+                            if has_text_descendant(t, self.mouse_x, self.mouse_y) {
+                                CursorIcon::Text
+                            } else {
+                                CursorIcon::Default
+                            }
+                        }
+                    }
+                    None => CursorIcon::Default,
+                };
+                window.set_cursor(icon);
+            }
         }
 
         fn render(&mut self) {
