@@ -413,7 +413,7 @@ fn emit_svg_children_xform(bx: &LayoutBox, parent_xform: &[f32; 6], cmds: &mut V
         let attr_f = |name: &str, default: f32| -> f32 {
             child.attr(name).and_then(|v| v.parse().ok()).unwrap_or(default)
         };
-        let attr_color = |name: &str, default: [u8;4]| -> [u8;4] {
+        let _attr_color = |name: &str, default: [u8;4]| -> [u8;4] {
             child.attr(name).and_then(|v| super::layout::parse_color(&v)).unwrap_or(default)
         };
         // Local transform from "transform" attr.
@@ -1386,8 +1386,8 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
     }
     } // any_bg_clip_text else
 
-    // bx.bg_gradient a bx.bg_color: legacy cesta pro background shorthand bez backgrounds vec.
-    // Pokud uz backgrounds loop zpracoval barvu, preskocime bg_color aby nedoslo k dvojimu vykresleni.
+    // bx.bg_gradient + bx.bg_color: shorthand bez backgrounds vec.
+    // Skip bg_color pokud backgrounds loop uz barvu vykreslil.
     let bg_color_handled_by_layers = bx.backgrounds.iter().any(|l| l.color.is_some());
 
     // Background gradient ma prioritu pred solid color
@@ -1781,13 +1781,6 @@ fn scale_cmd(cmd: &mut DisplayCommand, sx: f32, sy: f32, cx: f32, cy: f32) {
         }
         DisplayCommand::FilterEnd | DisplayCommand::BackdropFilterEnd | DisplayCommand::TransformEnd | DisplayCommand::MaskEnd => {}
     }
-}
-
-fn cmds_offset_for_box(_bx: &LayoutBox, _cmds: &[DisplayCommand]) -> usize {
-    // Pro spravnou implementaci by potreboval index z volajiciho.
-    // Zatim vraci 0 - znamena translate aplikuje na cely strom (chybne pri vice transformech).
-    // Real impl: paint_box vracel range.
-    0
 }
 
 /// Rotace pozice kolem centroid (cx, cy). Sirka/vyska zustavaji - jen pos rotuje.

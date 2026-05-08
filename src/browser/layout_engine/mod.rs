@@ -258,5 +258,3 @@ mod grid_spec_tests;
 #[cfg(test)]
 mod taffy_compliance;
 
-pub use flex::{layout_flex, FlexDirection, FlexWrap, JustifyContent, AlignItems};
-pub use grid::layout_grid;

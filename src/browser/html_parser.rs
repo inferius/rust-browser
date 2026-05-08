@@ -107,31 +107,3 @@ fn convert_handle(handle: &Handle, parent: &Rc<Node>) {
     }
 }
 
-/// Pretty-print DOM strom (pro debugging).
-pub fn dump_tree(node: &Rc<Node>, depth: usize) -> String {
-    use super::dom::NodeKind;
-    let indent = "  ".repeat(depth);
-    let mut out = String::new();
-    match &node.kind {
-        NodeKind::Document => out.push_str(&format!("{indent}#document\n")),
-        NodeKind::Element(tag) => {
-            let attrs: Vec<String> = node.attributes.borrow().iter()
-                .map(|(k, v)| format!(" {k}=\"{v}\""))
-                .collect();
-            out.push_str(&format!("{indent}<{tag}{}>\n", attrs.join("")));
-        }
-        NodeKind::Text(t) => {
-            let trimmed = t.trim();
-            if !trimmed.is_empty() {
-                out.push_str(&format!("{indent}\"{}\"\n", trimmed));
-            }
-        }
-        NodeKind::Comment(c) => out.push_str(&format!("{indent}<!--{c}-->\n")),
-        NodeKind::Cdata(c)   => out.push_str(&format!("{indent}<![CDATA[{c}]]>\n")),
-        NodeKind::DocType(n) => out.push_str(&format!("{indent}<!DOCTYPE {n}>\n")),
-    }
-    for ch in node.children.borrow().iter() {
-        out.push_str(&dump_tree(ch, depth + 1));
-    }
-    out
-}

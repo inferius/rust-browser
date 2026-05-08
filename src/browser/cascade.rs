@@ -141,11 +141,10 @@ pub fn expand_shorthand(prop: &str, value: &str, out: &mut HashMap<String, Strin
             out.insert(prop.into(), value.into());
         }
         "background" => {
-            // Background shorthand resetuje vsechny longhandy na initial.
-            // Pri color value: nastav background-color a vyresetuj image/gradient
-            // priznak. Pri gradient/image: nastav background-image a vyresetuj
-            // background-color (transparent), aby driv-cascadnuty solid color
-            // neprosakoval skrze gradient (CSS spec: shorthand override).
+            // Background shorthand resetuje vsechny longhandy na initial
+            // (CSS spec: shorthand override). Color value -> set bg-color,
+            // gradient/image -> set bg-image + reset bg-color na transparent
+            // aby kaskadou prijata barva neprosakla skrze gradient.
             if super::layout::parse_color(value).is_some() {
                 out.insert("background-color".into(), value.into());
                 out.insert("background-image".into(), "none".into());
@@ -2000,7 +1999,6 @@ pub fn apply_transitions(
     active: &[ActiveTransition],
     elapsed_secs: f32,
 ) {
-    use super::layout::interpolate_keyframes as _;
     for at in active {
         let t = elapsed_secs - at.start_time - at.spec.delay_secs;
         if t < 0.0 { continue; }

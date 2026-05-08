@@ -1,1 +1,0 @@
-// Metody pro ctenicidentifikatoru jsou v base.rs (read_identifier, read_identifier_continue).

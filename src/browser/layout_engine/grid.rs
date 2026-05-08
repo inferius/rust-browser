@@ -205,7 +205,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
     let _ = (column_flow, dense_flow);
     let cols = col_tracks.len();
     // Helper: resolve grid-column-start s prepend offsetem.
-    let resolve_col_start = |start: i32| -> Option<usize> {
+    let _resolve_col_start = |start: i32| -> Option<usize> {
         if start > 0 {
             // Positive: 1-based explicit -> 0-based + prepend.
             Some(((start - 1) as usize) + col_prepend)
@@ -234,7 +234,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
 
     let _ = (column_flow, dense_flow);
     // In-flow item count (abs/fixed/display:none vyradit pri vypoctu rows).
-    let in_flow_count = bx.children.iter()
+    let _in_flow_count = bx.children.iter()
         .filter(|c| !super::is_out_of_flow(c) && !matches!(c.display, super::super::layout::Display::None))
         .count();
     let rows_explicit_str = bx.grid_template_rows.clone();

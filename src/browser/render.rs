@@ -5,12 +5,7 @@
 
 use super::paint::DisplayCommand;
 use super::devtools_panel::{paint_devtools_panel, find_box_rect_by_id, devtools_hit_test, DevtoolsHit, pick_node_at_screen_pos};
-// Re-export pro back-compat (testy + jine moduly).
-pub use super::webgl_helpers::{
-    webgl_compute_stride, webgl_attrib_to_vertex_format, webgl_serialize_uniforms,
-    webgl_extract_pending, webgl_effective_clear, webgl_count_draws, webgl_count_clears,
-    webgl_linked_program_ids, webgl_layout_has_canvas, webgl_canvas_count,
-};
+use super::webgl_helpers::{webgl_compute_stride, webgl_attrib_to_vertex_format, webgl_serialize_uniforms};
 use bytemuck::{Pod, Zeroable};
 use std::rc::Rc;
 
@@ -754,7 +749,6 @@ fn paint_canvas_ops(
                                 strikethrough: false, underline: false,
                             });
                         }
-                        // Nove operace - paint stub (state pres apply uvnitr render pipeline TODO)
                         CanvasOp::DrawImage { src, dx, dy, dw, dh } => {
                             cmds.push(DisplayCommand::Image {
                                 x: bx.rect.x + dx, y: bx.rect.y + dy,
@@ -764,7 +758,7 @@ fn paint_canvas_ops(
                             });
                         }
                         CanvasOp::DrawImageSrc { src, dx, dy, dw, dh, .. } => {
-                            // Sub-rect varianta - zatim ignorujeme src crop, kresleme cely image do dest
+                            // src crop neimplementovan: vykresli cely image do dest rect.
                             cmds.push(DisplayCommand::Image {
                                 x: bx.rect.x + dx, y: bx.rect.y + dy,
                                 w: *dw, h: *dh,
@@ -781,7 +775,7 @@ fn paint_canvas_ops(
                             path_points.push((bx.rect.x + x, bx.rect.y + y));
                         }
                         CanvasOp::RoundRect { x, y, w, h, radius: _ } => {
-                            // Approximace bez radius zatim
+                            // Aproximace: ostre rohy (radius ignorovany).
                             path_points.push((bx.rect.x + x, bx.rect.y + y));
                             path_points.push((bx.rect.x + x + w, bx.rect.y + y));
                             path_points.push((bx.rect.x + x + w, bx.rect.y + y + h));
@@ -789,7 +783,7 @@ fn paint_canvas_ops(
                             path_points.push((bx.rect.x + x, bx.rect.y + y));
                         }
                         CanvasOp::Ellipse { cx, cy, rx, ry, .. } => {
-                            // Approximace 16 bodu
+                            // 16-bodova polygon aproximace.
                             for i in 0..=16 {
                                 let t = (i as f32) * std::f32::consts::TAU / 16.0;
                                 let px = bx.rect.x + cx + rx * t.cos();
@@ -800,7 +794,7 @@ fn paint_canvas_ops(
                         CanvasOp::QuadraticCurveTo { x, y, .. }
                         | CanvasOp::BezierCurveTo { x, y, .. }
                         | CanvasOp::ArcTo { x2: x, y2: y, .. } => {
-                            // Approximace - end point only (TODO: skutecna interpolace)
+                            // Aproximace: jen endpoint (zadna krivka interpolace).
                             path_points.push((bx.rect.x + x, bx.rect.y + y));
                         }
                         CanvasOp::StrokeText { text, x, y } => {
@@ -816,7 +810,8 @@ fn paint_canvas_ops(
                                 strikethrough: false, underline: false,
                             });
                         }
-                        // State / transform / styling ops - state-only, render je read-only zatim
+                        // State / transform / styling ops - render je no-op,
+                        // plna impl by drzela state stack per-op.
                         CanvasOp::Save | CanvasOp::Restore
                         | CanvasOp::Translate { .. } | CanvasOp::Rotate { .. }
                         | CanvasOp::Scale { .. } | CanvasOp::SetTransform { .. }
@@ -830,9 +825,7 @@ fn paint_canvas_ops(
                         | CanvasOp::ShadowColor(_) | CanvasOp::ShadowBlur(_)
                         | CanvasOp::ShadowOffsetX(_) | CanvasOp::ShadowOffsetY(_)
                         | CanvasOp::FillStyleLinearGradient { .. }
-                        | CanvasOp::FillStyleRadialGradient { .. } => {
-                            // No-op v render-stub. Plna impl by drzela state per-op.
-                        }
+                        | CanvasOp::FillStyleRadialGradient { .. } => {}
                     }
                 }
             }
@@ -2420,36 +2413,6 @@ impl ImageAtlas {
     }
 }
 
-// ─── Public API ─────────────────────────────────────────────────────────
-
-/// Text-mode dump display listu (bez okna).
-pub fn run_browser(html: &str, css: &str) {
-    use super::{html_parser, css_parser, cascade, layout, paint};
-
-    let document = html_parser::parse_html(html, "about:blank");
-    let stylesheets = vec![css_parser::parse_stylesheet(css)];
-    let style_map = cascade::cascade(&document.root, &stylesheets);
-
-    let viewport_w = 1024.0;
-    let viewport_h = 768.0;
-    let layout_root = layout::layout_tree(&document.root, &style_map, viewport_w, viewport_h);
-    let display_list = paint::build_display_list(&layout_root);
-
-    println!("Document title: {}", document.title);
-    println!("Display list: {} commands", display_list.len());
-    for (i, cmd) in display_list.iter().enumerate().take(20) {
-        println!("  [{i}] {cmd:?}");
-    }
-    if display_list.len() > 20 {
-        println!("  ... +{} more", display_list.len() - 20);
-    }
-}
-
-/// Real GUI okno s wgpu rendering + JS event integrace.
-pub fn run_window_with_html(html: String, css: String) -> Result<(), String> {
-    run_window_with_options(html, css, None, false, None)
-}
-
 /// Spusti okno s dodatecnymi options.
 /// - `current_html_path`: pri Some umozni reload pres drag-drop (relativni paths v HTML)
 /// - `auto_devtools`: pri true vygeneruje devtools.html a otevre v OS default browser
@@ -2458,7 +2421,7 @@ pub fn run_window_with_html(html: String, css: String) -> Result<(), String> {
 pub fn run_window_with_options(html: String, css: String, current_html_path: Option<std::path::PathBuf>, auto_devtools: bool, base_url: Option<String>) -> Result<(), String> {
     use winit::application::ApplicationHandler;
     use winit::event::{WindowEvent, MouseButton, ElementState};
-    use winit::event_loop::{ActiveEventLoop, EventLoop};
+    use winit::event_loop::ActiveEventLoop;
     use winit::window::{Window, WindowId};
     use winit::keyboard::{Key, NamedKey};
 
@@ -2663,7 +2626,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                     self.selection_anchor = Some((self.mouse_x, self.mouse_y));
                     self.selection_current = Some((self.mouse_x, self.mouse_y));
                     self.selection_dragging = true;
-                    // Devtools panel hit-test: pri kliku v panelu vyhodnocujeme nejdriv tam.
+                    // Devtools panel hit-test ma prioritu nad page hit-testem.
                     let raw_y = self.mouse_y - self.scroll_y;
                     let win_h = self.renderer.as_ref().map(|r| r.config.height as f32).unwrap_or(0.0);
                     let win_w = self.renderer.as_ref().map(|r| r.config.width as f32).unwrap_or(0.0);
@@ -3672,7 +3635,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
             let frame_start = std::time::Instant::now();
             // Smooth scroll tick: interpoluje scroll_y -> scroll_target_y. Pokud
             // stale animuje, na konci request_redraw pro pokracovani.
-            let scroll_animating = self.smooth_scroll_tick();
+            let _scroll_animating = self.smooth_scroll_tick();
             let r = match &mut self.renderer { Some(r) => r, None => return };
             // Push zoom faktor do rendereru pro vp uniform skalovani.
             r.zoom = self.zoom;
@@ -4362,16 +4325,6 @@ fn build_form_request(form: &std::rc::Rc<crate::browser::dom::Node>, base_url: O
     }
 }
 
-/// Backward-compat helper - jen GET URL.
-fn build_form_get_url(form: &std::rc::Rc<crate::browser::dom::Node>, base_url: Option<&str>) -> Option<String> {
-    let (url, method, body) = build_form_request(form, base_url)?;
-    if method == "get" && body.is_none() { Some(url) } else {
-        // POST je return URL bez body - caller potrebuje volat POST flow.
-        // Caller by mel pouzit build_form_request misto teto fce kdyz chce body.
-        Some(url)
-    }
-}
-
 /// POST request s url-encoded form body. Vrati response HTML.
 fn post_form(url: &str, body: &str) -> Option<String> {
     if !url.starts_with("http://") && !url.starts_with("https://") {
@@ -4386,84 +4339,6 @@ fn post_form(url: &str, body: &str) -> Option<String> {
     {
         Ok(resp) => resp.into_string().ok(),
         Err(e) => { eprintln!("[form POST] {url}: {e}"); None }
-    }
-}
-
-#[allow(dead_code)]
-fn old_build_form_get_url(form: &std::rc::Rc<crate::browser::dom::Node>, base_url: Option<&str>) -> Option<String> {
-    let action = form.attr("action").unwrap_or_default();
-    let method = form.attr("method").unwrap_or_default().to_lowercase();
-    if method == "post" {
-        eprintln!("[form] POST submit zatim neimplementovano - skip");
-        return None;
-    }
-    // Resolve action proti base.
-    let action_resolved = if action.is_empty() {
-        // Default = current page URL.
-        base_url.unwrap_or("").to_string()
-    } else if let Some(b) = base_url {
-        resolve_url(b, &action)
-    } else {
-        action
-    };
-    // Collect form fields (input/select/textarea) descendants.
-    let mut params: Vec<(String, String)> = Vec::new();
-    fn collect(node: &std::rc::Rc<crate::browser::dom::Node>, out: &mut Vec<(String, String)>) {
-        if matches!(node.kind, crate::browser::dom::NodeKind::Element(_)) {
-            if let Some(tag) = node.tag_name() {
-                let is_input = matches!(tag.as_str(), "input" | "select" | "textarea");
-                if is_input {
-                    let name = node.attr("name").unwrap_or_default();
-                    if !name.is_empty() {
-                        let val = match tag.as_str() {
-                            "input" => {
-                                let t = node.attr("type").unwrap_or_default().to_lowercase();
-                                if t == "checkbox" || t == "radio" {
-                                    if node.attr("checked").is_some() {
-                                        node.attr("value").unwrap_or_else(|| "on".to_string())
-                                    } else {
-                                        return;
-                                    }
-                                } else {
-                                    node.attr("value").unwrap_or_default()
-                                }
-                            }
-                            "select" => {
-                                // Najdi selected option value.
-                                let mut selected: Option<String> = None;
-                                let mut first: Option<String> = None;
-                                for ch in node.children.borrow().iter() {
-                                    if ch.tag_name().as_deref() == Some("option") {
-                                        let v = ch.attr("value").unwrap_or_else(|| ch.text_content().trim().to_string());
-                                        if first.is_none() { first = Some(v.clone()); }
-                                        if ch.attr("selected").is_some() { selected = Some(v); break; }
-                                    }
-                                }
-                                selected.or(first).unwrap_or_default()
-                            }
-                            "textarea" => node.text_content().trim().to_string(),
-                            _ => String::new(),
-                        };
-                        out.push((name, val));
-                    }
-                }
-            }
-        }
-        for ch in node.children.borrow().iter() {
-            collect(ch, out);
-        }
-    }
-    collect(form, &mut params);
-    // URL encode params + concat.
-    let qs: Vec<String> = params.into_iter().map(|(k, v)| {
-        format!("{}={}", url_encode(&k), url_encode(&v))
-    }).collect();
-    let qs_joined = qs.join("&");
-    let separator = if action_resolved.contains('?') { "&" } else { "?" };
-    if qs_joined.is_empty() {
-        Some(action_resolved)
-    } else {
-        Some(format!("{action_resolved}{separator}{qs_joined}"))
     }
 }
 

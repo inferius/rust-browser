@@ -216,18 +216,14 @@ pub(crate) fn parse_url_parts(url: &str) -> UrlParts {
     UrlParts { protocol: proto, host, hostname, port, pathname, search, hash, origin }
 }
 
-/// Application/x-www-form-urlencoded encoder (RFC 3986 unreserved chars).
+/// application/x-www-form-urlencoded encoder (RFC 3986 unreserved chars).
 pub(crate) fn url_encode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
         match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(b as char);
-            }
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
             b' ' => out.push('+'),
-            _ => {
-                out.push_str(&format!("%{:02X}", b));
-            }
+            _ => out.push_str(&format!("%{:02X}", b)),
         }
     }
     out

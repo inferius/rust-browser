@@ -4,8 +4,6 @@
 /// Kazde pravidlo ma selektor + deklarace (property: value).
 /// Pro plne CSS3 selectors by se pouzil selectors crate, zde lite parser.
 
-use std::collections::HashMap;
-
 #[derive(Debug, Clone)]
 pub struct Stylesheet {
     pub rules: Vec<Rule>,
@@ -1209,11 +1207,3 @@ fn parse_an_plus_b(s: &str) -> (i32, i32) {
     (0, 0)
 }
 
-/// Konverze deklaraci na HashMap (property -> value).
-pub fn declarations_to_map(decls: &[Declaration]) -> HashMap<String, String> {
-    let mut m = HashMap::new();
-    for d in decls {
-        m.insert(d.property.clone(), d.value.clone());
-    }
-    m
-}

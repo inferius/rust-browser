@@ -30,14 +30,13 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::str::FromStr;
-use crate::ast::{self, *};
+use crate::ast::*;
 use bigdecimal::BigDecimal;
 use bigdecimal::ToPrimitive;
 use bigdecimal::Zero;
 use num_bigint::BigInt;
 use num_bigint::Sign;
 use num_traits::Zero as NumZero;
-use num_traits::ToPrimitive as NumToPrimitive;
 use num_traits::Pow;
 
 // ─── Submoduly ────────────────────────────────────────────────────────────────
@@ -54,8 +53,8 @@ mod js_value_impl;
 mod builtins_reflect;
 mod builtins_atomics;
 mod builtins_temporal;
-pub(crate) use webgl::{WebGLState, WebGLShader, WebGLProgram, WebGLDrawCmd, WebGLTexture, WebGLAttribSlot, WebGLUniformValue, UniformSlot, UniformSlotKind};
-pub(crate) use webgl::{extract_uniform_layout, extract_texture_sampler_counts, extract_resource_bindings};
+#[allow(unused_imports)] // WebGLProgram je expose jen pro testy (cargo build je nevidi)
+pub(crate) use webgl::{WebGLState, WebGLProgram, WebGLDrawCmd, WebGLAttribSlot, WebGLUniformValue, UniformSlot, UniformSlotKind};
 use helpers::*;
 use builtins::setup_builtins;
 use string_methods::call_string_method;
@@ -881,37 +880,6 @@ impl Interpreter {
             }
         }
         Ok(result)
-    }
-
-    /// Pokus se zkompilovat program do bytecode + spustit pres VM.
-    /// Pri uspechu propaguje top-level deklarace do env + vrati Some(result).
-    /// Pri compile fail nebo VM runtime err vrati None - volajici udela
-    /// tree-walker fallback. Env je RESTORED z snapshotu pri VM err.
-    /// Opt-in API: tree-walker zustava authoritative pro Interpreter::run.
-    pub fn try_run_via_vm(&mut self, body: &[Stmt], env: &Rc<RefCell<Environment>>) -> Option<JsValue> {
-        let code = bytecode::compile_program(body).ok()?;
-        // Snapshot env vars pred VM run pro pripadny rollback.
-        let snapshot = env.borrow().vars.clone();
-        let mut vm = bytecode::VM::with_env(env.clone());
-        match vm.run(&code) {
-            Ok(v) => {
-                // Propaguj top-level deklarace zpet do env (skip internal hidden vars).
-                for (i, name) in code.var_names.iter().enumerate() {
-                    if name.starts_with("__") { continue; }
-                    if let Some(val) = vm.locals.get(i) {
-                        if !matches!(val, JsValue::Undefined) {
-                            env.borrow_mut().define(name, val.clone());
-                        }
-                    }
-                }
-                Some(v)
-            }
-            Err(_) => {
-                // Restore env stav pred VM (kdyz se neco castecne propagovalo).
-                env.borrow_mut().vars = snapshot;
-                None
-            }
-        }
     }
 
     /// Spusti vsechny cekajici timer callbacky.
@@ -2236,7 +2204,7 @@ impl Interpreter {
         super_class: JsValue,
         args: Vec<JsValue>,
         this_obj: &Rc<RefCell<JsObject>>,
-        parent_env: &Rc<RefCell<Env>>,
+        _parent_env: &Rc<RefCell<Env>>,
     ) -> Result<(), JsError> {
         match super_class {
             JsValue::Function(JsFunc::Class {
@@ -3985,8 +3953,6 @@ impl Interpreter {
                         }
                         "toPrecision" => {
                             let digits = arg_vals.first().map(|v| v.to_number() as usize).unwrap_or(1);
-                            let s = format!("{:.prec$e}", n, prec = if digits > 0 { digits - 1 } else { 0 });
-                            // Preved z Rust vedecke notace do JS formatu
                             return Ok(JsValue::Str(format!("{:.prec$}", n, prec = if digits > 0 { digits - 1 } else { 0 })));
                         }
                         "toExponential" => {
@@ -4119,7 +4085,7 @@ impl Interpreter {
                 }
                 // ─── DomNode metody (real browser::dom Node) ─────────────
                 JsValue::DomNode(node_rc) => {
-                    use crate::browser::dom::{NodeData, NodeKind};
+                    use crate::browser::dom::NodeData;
                     let n = Rc::clone(node_rc);
                     let arg_vals = self.eval_args(args, env)?;
                     match key.as_str() {

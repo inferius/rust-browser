@@ -763,7 +763,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             } else { parse_align_items(&self_str) };
             matches!(item_align, AlignItems::Baseline)
         }).map(|(k, _)| k).collect();
-        let all_have_children = !baseline_items_idx.is_empty() && baseline_items_idx.iter().all(|&k| {
+        let _all_have_children = !baseline_items_idx.is_empty() && baseline_items_idx.iter().all(|&k| {
             let real_idx = in_flow[line_indices[k]];
             bx.children[real_idx].children.iter().any(|c|
                 !matches!(c.position, super::super::layout::Position::Absolute | super::super::layout::Position::Fixed)
@@ -771,7 +771,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         });
         // Detekce pseudo-flex (block s align-items=baseline heuristika): vsechny items jsou
         // plain block bez flex-direction. Pri tom synth baseline pro vsechny.
-        let any_real_flex_item = baseline_items_idx.iter().any(|&k| {
+        let _any_real_flex_item = baseline_items_idx.iter().any(|&k| {
             let real_idx = in_flow[line_indices[k]];
             let item = &bx.children[real_idx];
             matches!(item.display, super::super::layout::Display::Flex | super::super::layout::Display::Grid)
@@ -1525,10 +1525,11 @@ fn parse_align_items(s: &str) -> AlignItems {
     }
 }
 
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
+    
     #[test]
     fn parse_direction_basic() {
         assert_eq!(parse_flex_direction("row"), FlexDirection::Row);
@@ -1536,35 +1537,35 @@ mod tests {
         assert_eq!(parse_flex_direction("column"), FlexDirection::Column);
         assert_eq!(parse_flex_direction("column-reverse"), FlexDirection::ColumnReverse);
     }
-
+    
     #[test]
     fn parse_wrap_basic() {
         assert_eq!(parse_flex_wrap("wrap"), FlexWrap::Wrap);
         assert_eq!(parse_flex_wrap("nowrap"), FlexWrap::NoWrap);
         assert_eq!(parse_flex_wrap("wrap-reverse"), FlexWrap::WrapReverse);
     }
-
+    
     #[test]
     fn justify_offsets_flex_start() {
         let (s, b) = compute_justify_offsets(JustifyContent::FlexStart, 100.0, 3, 0.0);
         assert_eq!(s, 0.0);
         assert_eq!(b, 0.0);
     }
-
+    
     #[test]
     fn justify_offsets_center() {
         let (s, b) = compute_justify_offsets(JustifyContent::Center, 100.0, 3, 0.0);
         assert_eq!(s, 50.0);
         assert_eq!(b, 0.0);
     }
-
+    
     #[test]
     fn justify_offsets_space_between() {
         let (s, b) = compute_justify_offsets(JustifyContent::SpaceBetween, 100.0, 3, 0.0);
         assert_eq!(s, 0.0);
         assert_eq!(b, 50.0);
     }
-
+    
     #[test]
     fn justify_offsets_space_evenly() {
         let (s, b) = compute_justify_offsets(JustifyContent::SpaceEvenly, 100.0, 3, 0.0);
@@ -1572,13 +1573,13 @@ mod tests {
         assert_eq!(s, 25.0);
         assert_eq!(b, 25.0);
     }
-
+    
     #[test]
     fn align_offset_center() {
         let off = compute_align_offset(AlignItems::Center, 100.0, 30.0);
         assert_eq!(off, 35.0);
     }
-
+    
     #[test]
     fn collect_lines_no_wrap() {
         let items = vec![
@@ -1589,7 +1590,7 @@ mod tests {
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].len(), 5);
     }
-
+    
     #[test]
     fn collect_lines_wrap_overflow() {
         let items = vec![
@@ -1600,7 +1601,7 @@ mod tests {
         // 60 + 60 = 120 > 100 -> 2 prvni nenajdou se v 1 line
         assert_eq!(lines.len(), 3);
     }
-
+    
     #[test]
     fn resolve_grow_distributes_free_space() {
         let items = vec![

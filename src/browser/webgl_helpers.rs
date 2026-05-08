@@ -3,8 +3,6 @@
 //! Obsahuje: serializace uniformy, attrib format konverze, draw extraction,
 //! count helpers.
 
-use crate::interpreter;
-
 /// Serialize uniformy z WebGLState dle program uniform layout do bytes.
 /// Buffer alokovan na uniform_buffer_size, prazdne sloty zustavaji 0.
 pub fn webgl_serialize_uniforms(

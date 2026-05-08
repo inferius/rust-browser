@@ -1,12 +1,8 @@
-/// Kurzor pro čtení UTF-8 řetězce znak po znaku.
-///
-/// # Opravená chyba oproti originálu
-/// `undo()` nyní sleduje počet bajtů posledního `advance()`,
-/// takže funguje správně i pro vícebajtové UTF-8 znaky (ě, č, š, 😀, …).
+/// Kurzor pro UTF-8 cteni znak po znaku. `undo()` zpetuje o presny pocet
+/// bajtu posledniho `advance()`, aby fungovalo i pro multi-byte CP.
 pub struct Utf8Cursor {
     input: Vec<u8>,
     pos: usize,
-    /// Počet bajtů které spotřeboval poslední `advance()`.
     last_len: usize,
 }
 
@@ -15,19 +11,12 @@ impl Utf8Cursor {
         Self { input: s.as_bytes().to_vec(), pos: 0, last_len: 0 }
     }
 
-    pub fn from_string(s: String) -> Self {
-        Self { input: s.into_bytes(), pos: 0, last_len: 0 }
-    }
-
-    /// Konec vstupu?
     pub fn eof(&self) -> bool { self.pos >= self.input.len() }
 
-    /// Aktuální znak (bez posunutí).
     pub fn peek(&self) -> Option<char> {
         self.char_at(self.pos).map(|(ch, _)| ch)
     }
 
-    /// N-tý znak od aktuální pozice (0 = peek).
     pub fn peek_n(&self, n: usize) -> Option<char> {
         let mut i = self.pos;
         for _ in 0..n {
@@ -37,7 +26,6 @@ impl Utf8Cursor {
         self.char_at(i).map(|(ch, _)| ch)
     }
 
-    /// Přečte a vrátí aktuální znak, posune kurzor.
     pub fn advance(&mut self) -> Option<char> {
         let (ch, len) = self.char_at(self.pos)?;
         self.last_len = len;
@@ -45,19 +33,13 @@ impl Utf8Cursor {
         Some(ch)
     }
 
-    /// Vrátí se zpět o jeden znak (přesně o počet bajtů posledního advance).
     pub fn undo(&mut self) {
-        debug_assert!(self.last_len > 0, "undo() bez předchozího advance()");
+        debug_assert!(self.last_len > 0, "undo() bez predchoziho advance()");
         self.pos -= self.last_len;
         self.last_len = 0;
     }
 
     pub fn pos(&self) -> usize { self.pos }
-
-    pub fn reset_to(&mut self, pos: usize) {
-        self.pos = pos;
-        self.last_len = 0;
-    }
 
     // ── Interní UTF-8 dekodér ────────────────────────────────────────────────
 

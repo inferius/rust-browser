@@ -5,7 +5,10 @@
 use crate::browser::paint::DisplayCommand;
 use crate::browser::render::{
     partition_filter_segments, Seg, polygon_signed_area, triangulate_polygon,
-    paint_webgl_canvases, webgl_attrib_to_vertex_format, webgl_compute_stride,
+    paint_webgl_canvases,
+};
+use crate::browser::webgl_helpers::{
+    webgl_attrib_to_vertex_format, webgl_compute_stride,
     webgl_extract_pending, webgl_effective_clear, webgl_count_draws, webgl_count_clears,
     webgl_linked_program_ids, webgl_layout_has_canvas, webgl_canvas_count,
     webgl_serialize_uniforms,

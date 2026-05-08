@@ -1644,9 +1644,7 @@ pub fn setup_builtins(
     // Vola callback synchronne + vraci ViewTransition object s Promise resolved.
     doc_obj.set("startViewTransition".into(), native("document.startViewTransition", |args| {
         let _cb = args.into_iter().next().unwrap_or(JsValue::Undefined);
-        // Real implementace by snapshotla pred-stav, pak po-stav, transitionovat.
-        // Zde callback se zavola pri prvni next event (nemam direct access -
-        // user code musi pri budoucim render volat). Prozatim no-op + stub object.
+        // Stub: callback se nikdy nezavola, vraci se resolved Promise.
         let obj = Rc::new(RefCell::new(JsObject::new()));
         let resolved_promise = make_settled_promise("fulfilled", JsValue::Undefined);
         obj.borrow_mut().set("ready".into(), resolved_promise.clone());

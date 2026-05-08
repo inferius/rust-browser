@@ -763,7 +763,7 @@ pub struct LayoutBox {
     pub overflow_x: String,
     /// overflow-y value
     pub overflow_y: String,
-    /// scrollbar-width numericky (px) z taffy fixture (drive ignorovany).
+    /// scrollbar-width numericky (px).
     pub scrollbar_size: f32,
     /// White-space: nowrap zachazi text jako jeden radek
     pub white_space_nowrap: bool,
@@ -4851,10 +4851,8 @@ pub fn needs_3d_pipeline(ops: &[TransformOp], parent_perspective: Option<f32>) -
     }
     for op in ops {
         match op {
-            // 2D Rotate prosly driv pres CPU rotate_cmd ktere ale jen sdouvalo
-            // origin x/y - rect zustal axis-aligned. Real rotace vyzaduje GPU
-            // pipeline. Forceni 3D pipeline pro 2D rotace = boxy se opravdu
-            // otoci.
+            // 2D rotace -> GPU pipeline (CPU rotate_cmd jen posunul origin,
+            // rect zustal axis-aligned).
             TransformOp::Rotate(rad) if rad.abs() > 1e-3 => return true,
             TransformOp::Rotate3D { x, y, .. } if x.abs() > 1e-3 || y.abs() > 1e-3 => return true,
             TransformOp::Perspective(_) => return true,

@@ -1,6 +1,8 @@
+// dead_code allow: mnoho fns je expose pro tests (compiluji se zvlast) +
+// pro budouci pub API (DOM/CSS variant exhaustivnost). unused_imports +
+// unused_variables zustavaji aktivni - chceme je videt + opravit.
 #![allow(dead_code)]
-#![allow(unused_imports)]
-#![allow(unused_variables)]
+
 #[macro_use]
 mod utils;
 
