@@ -2500,6 +2500,9 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         find_open: bool,
         find_query: String,
         find_match_idx: usize,
+        /// Smooth scroll target. Render tick interpoluje scroll_y -> target.
+        scroll_target_y: f32,
+        scroll_target_x: f32,
     }
 
     impl ApplicationHandler for App {
@@ -2643,34 +2646,27 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                         return;
                     }
                     // Scroll amount je v physical px ze winit; layout je
-                    // v logical -> dele zoom.
+                    // v logical -> dele zoom. Smooth scroll: meni TARGET, render
+                    // tick interpoluje scroll_y -> target.
                     let logical_scroll = scroll_amount / self.zoom.max(0.0001);
                     if self.modifiers.shift_key() {
-                        // Shift+wheel = horizontal scroll.
-                        self.scroll_x -= logical_scroll;
-                        if self.scroll_x < 0.0 { self.scroll_x = 0.0; }
-                        if let Some(layout) = &self.layout_root {
-                            let viewport_w = self.renderer.as_ref().map(|r| (r.config.width as f32) / self.zoom).unwrap_or(1280.0);
-                            let max_scroll_x = (layout.rect.width - viewport_w).max(0.0);
-                            if self.scroll_x > max_scroll_x { self.scroll_x = max_scroll_x; }
-                        }
+                        self.scroll_target_x -= logical_scroll;
+                        if self.scroll_target_x < 0.0 { self.scroll_target_x = 0.0; }
                     } else {
-                        self.scroll_y -= logical_scroll;
-                        if self.scroll_y < 0.0 { self.scroll_y = 0.0; }
-                        // Clamp na max scroll. Layout height i viewport_h v logical.
-                        if let Some(layout) = &self.layout_root {
-                            let viewport_h = self.renderer.as_ref().map(|r| (r.config.height as f32) / self.zoom).unwrap_or(768.0);
-                            let max_scroll = (layout.rect.height - viewport_h).max(0.0);
-                            if self.scroll_y > max_scroll { self.scroll_y = max_scroll; }
-                        }
+                        self.scroll_target_y -= logical_scroll;
+                        if self.scroll_target_y < 0.0 { self.scroll_target_y = 0.0; }
                     }
+                    self.clamp_scroll_to_layout();
                     self.render();
                 }
                 WindowEvent::RedrawRequested => {
                     self.render();
-                    // Continual redraw JEN pri aktivnich animacich/transition (jinak idle).
+                    // Continual redraw pri aktivnich animacich/transition NEBO smooth
+                    // scroll animation (kdyz scroll_y != scroll_target_y).
                     let has_anim = !self.active_animations.is_empty()
-                        || !self.active_transitions.is_empty();
+                        || !self.active_transitions.is_empty()
+                        || (self.scroll_y - self.scroll_target_y).abs() > 0.5
+                        || (self.scroll_x - self.scroll_target_x).abs() > 0.5;
                     if has_anim {
                         if let Some(w) = &self.window {
                             w.request_redraw();
@@ -2856,14 +2852,15 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                             self.scroll_by_y(-60.0);
                         }
                         Key::Named(NamedKey::Home) => {
-                            self.scroll_y = 0.0;
-                            self.scroll_x = 0.0;
+                            // Home: smooth scroll to top.
+                            self.scroll_target_y = 0.0;
+                            self.scroll_target_x = 0.0;
                             self.render();
                         }
                         Key::Named(NamedKey::End) => {
                             if let (Some(layout), Some(r)) = (&self.layout_root, &self.renderer) {
                                 let vh = (r.config.height as f32) / self.zoom;
-                                self.scroll_y = (layout.rect.height - vh).max(0.0);
+                                self.scroll_target_y = (layout.rect.height - vh).max(0.0);
                                 self.render();
                             }
                         }
@@ -2929,13 +2926,13 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
             let matches = self.find_collect_matches();
             if let Some(&(my, _, _)) = matches.get(self.find_match_idx) {
                 let vh = self.viewport_h_logical();
-                let target = (my - vh * 0.3).max(0.0);
-                self.scroll_y = target;
+                self.scroll_target_y = (my - vh * 0.3).max(0.0);
                 self.clamp_scroll_to_layout();
             }
         }
         fn scroll_by_y(&mut self, dy: f32) {
-            self.scroll_y = (self.scroll_y + dy).max(0.0);
+            // Smooth scroll: posun target. Render tick interpoluje scroll_y -> target.
+            self.scroll_target_y = (self.scroll_target_y + dy).max(0.0);
             self.clamp_scroll_to_layout();
             self.render();
         }
@@ -2950,7 +2947,29 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                 let max_x = (layout.rect.width - vw).max(0.0);
                 if self.scroll_y > max_y { self.scroll_y = max_y; }
                 if self.scroll_x > max_x { self.scroll_x = max_x; }
+                if self.scroll_target_y > max_y { self.scroll_target_y = max_y; }
+                if self.scroll_target_x > max_x { self.scroll_target_x = max_x; }
             }
+        }
+        /// Smooth scroll tick. Lerp scroll_y -> scroll_target_y. Vrati true pokud
+        /// stale animuje (volajici by mel request_redraw).
+        fn smooth_scroll_tick(&mut self) -> bool {
+            let dy = self.scroll_target_y - self.scroll_y;
+            let dx = self.scroll_target_x - self.scroll_x;
+            let mut animating = false;
+            if dy.abs() > 0.5 {
+                self.scroll_y += dy * 0.25;
+                animating = true;
+            } else {
+                self.scroll_y = self.scroll_target_y;
+            }
+            if dx.abs() > 0.5 {
+                self.scroll_x += dx * 0.25;
+                animating = true;
+            } else {
+                self.scroll_x = self.scroll_target_x;
+            }
+            animating
         }
     }
 
@@ -2977,6 +2996,9 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
             self.css = css;
             self.current_path = Some(path.to_path_buf());
             self.scroll_y = 0.0;
+            self.scroll_target_y = 0.0;
+            self.scroll_x = 0.0;
+            self.scroll_target_x = 0.0;
             self.start_time = std::time::Instant::now();
             self.prev_style_map = None;
             self.active_animations.clear();
@@ -3158,6 +3180,9 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                                         self.css = String::new();
                                         self.base_url = Some(url.clone());
                                         self.scroll_y = 0.0;
+            self.scroll_target_y = 0.0;
+            self.scroll_x = 0.0;
+            self.scroll_target_x = 0.0;
                                         let mut interp = crate::interpreter::Interpreter::new();
                                         let doc = super::html_parser::parse_html(&self.html, &url);
                                         interp.set_document(doc);
@@ -3259,6 +3284,9 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                 self.base_url = Some(url.to_string());
                 self.current_path = None;
                 self.scroll_y = 0.0;
+            self.scroll_target_y = 0.0;
+            self.scroll_x = 0.0;
+            self.scroll_target_x = 0.0;
                 self.start_time = std::time::Instant::now();
                 self.prev_style_map = None;
                 self.active_animations.clear();
@@ -3295,6 +3323,9 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         fn render(&mut self) {
             use super::{css_parser, cascade, layout, paint};
             let frame_start = std::time::Instant::now();
+            // Smooth scroll tick: interpoluje scroll_y -> scroll_target_y. Pokud
+            // stale animuje, na konci request_redraw pro pokracovani.
+            let scroll_animating = self.smooth_scroll_tick();
             let r = match &mut self.renderer { Some(r) => r, None => return };
             // Push zoom faktor do rendereru pro vp uniform skalovani.
             r.zoom = self.zoom;
@@ -3821,6 +3852,8 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         find_open: false,
         find_query: String::new(),
         find_match_idx: 0,
+        scroll_target_y: 0.0,
+        scroll_target_x: 0.0,
     };
     event_loop.run_app(&mut app).map_err(|e| e.to_string())?;
     Ok(())
