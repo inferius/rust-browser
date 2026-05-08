@@ -13,6 +13,7 @@ pub mod model;
 pub mod context_menu;
 pub mod search;
 pub mod focus;
+pub mod debug_runner;
 
 use std::collections::HashSet;
 use theme::{ThemeSelection, Palette, resolve_palette};

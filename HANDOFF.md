@@ -259,6 +259,86 @@ NEXT-LEVEL VYLEPSENI (TODO):
 - [ ] Conditional breakpoints (eval expr na pause check)
 - [ ] Logpoint (log expr namisto pause)
 
+## Phase 13 - HYBRID debug mode (real freeze pause AKTIVNI)
+
+ARCHITEKTONICKE RESENI:
+- **Bezne browsing**: 0 overhead. Sync exec na UI thread, current Rc<RefCell> path.
+- **Debug session** (F12 open + breakpoints set): spawn worker thread s
+  vlastni Interpreter. Worker eval skripty, posila events pres mpsc channel.
+  UI thread pollu events per render frame, pri pause UI je responsive.
+
+KEY INSIGHT: Interpreter !Send nevadi pokud je VYTVAREN UVNITR worker thread
+closure. Vse Rc/RefCell zustane single-thread (na worker). Sdileny mezi UI a
+worker je jen `Arc<Mutex<DebuggerState>>` + Condvar + mpsc channels (vsechny Send).
+
+NOVY MODUL: src/devtools/debug_runner.rs
+
+`DebugRunner` struct:
+- event_rx: Receiver<WorkerEvent> (Log, Network, Pause, Done, Error, Started)
+- cmd_tx: Sender<UiCommand> (Continue, StepOver/Into/Out, ToggleBreakpoint, Quit)
+- debugger: Arc<Mutex<DebuggerState>> sdileny s worker
+- continue_signal: Arc<(Mutex<bool>, Condvar)> pro block_for_continue notify
+- handle: JoinHandle pro graceful join
+- is_paused, last_pause_line - cached UI state z events
+
+`DebugRunner::spawn(html, base_url, breakpoints)`:
+- Vytvori channels + Arc<Mutex<DebuggerState>> + Condvar
+- Spawn worker thread s 64MB stack
+- Worker closure: Interpreter::new() UVNITR (Send-clean), set doc, attach
+  shared debugger, run scripts, emit events pres tx, exit
+
+`DebugRunner::notify_continue()` - po klik Continue button v UI
+`DebugRunner::drain_events()` - per frame poll, vraci nove events
+`DebugRunner::is_finished()` - worker thread skoncil
+`DebugRunner::join()` - blocking wait na exit
+
+WORKER MAIN:
+- Parse HTML uvnitr workera (rcdom Rc na worker safe)
+- Cyklicky pres scripts: process pending UI commands (BP toggle), parse +
+  interp.run(prog), flush console_log + network_log diff -> tx
+- Po vsem skriptech send Done event
+
+INTEGRATION v src/browser/render/mod.rs:
+- Renderer +debug_runner: Option<DebugRunner>
+- activate_debug_mode() - spawn worker s aktualnim HTML + breakpoints
+- deactivate_debug_mode() - notify continue (wake any pause) + join
+- poll_debug_runner() - per render frame, drain events:
+  * Log -> devtools.console.log push
+  * Network -> devtools.network.entries push
+  * Pause -> devtools.sources.debugger_paused + locals mirror z shared dbg
+  * Done -> sources.debugger_paused = false, log "Script done", auto-deactivate
+- F12 toggle: pri otevreni s breakpoints aktivuje, pri zavreni deaktivuje
+- Klik na BP gutter (prvni BP): auto-aktivace pokud panel open
+
+TRIGGERY DEBUG MODE:
+1. F12 (otevri panel) + breakpoints uz set -> auto-spawn
+2. Klik na line gutter (prvni BP) + panel open -> auto-spawn
+3. F12 (zavri panel) -> auto-deactivate + join worker
+
+UI INDIKACE:
+- Console log "[debug-mode] Worker thread spustil eval JS - real freeze pause aktivni"
+- Pri pause: Sources tab pause indicator + line highlight + locals panel
+- Po Done: "[debug-mode] Script done"
+
+VYKONOSTNI PROFIL:
+- Pri devtools closed nebo zadne breakpoints: 0 overhead, sync exec.
+- Pri debug mode aktivni: serialization cost per event (mikrosekundy).
+  Pri tisicich events za frame mozne perceptible. Pro typicke debug session
+  s few BP hits = negligible.
+- DOM mutations Z workera nejsou sdileny do UI - UI ukazuje cached layout
+  z page load. Po script done worker exit (DOM zmeny lost). Acceptable
+  trade-off pro debug mode.
+
+LIMITS:
+- Worker DOM != UI DOM (separate page parse). Page interactivity behem
+  debug session omezene.
+- Console.log z workera mirror pres event channel (instead of Rc<RefCell>
+  shared).
+- Step Over/Into/Out implementace ceka na Step kind dispatch pres cmd_tx
+  (foundation hotova).
+
+Build clean, 2402 testu pass.
+
 ## Phase 12 - Async pause infrastructure (foundation)
 
 PRIDANE FOUNDATION pro real freeze pause (aktivuje se po Arc rework):

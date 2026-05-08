@@ -429,6 +429,10 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         shared_debugger: crate::interpreter::SharedDebugger,
         /// Continue signal pri pause v worker thread.
         continue_signal: crate::interpreter::ContinueSignal,
+        /// Hybrid debug-mode runner. Some pri devtools open + breakpoints set +
+        /// page reload. Worker thread holds vlastni Interpreter, eval JS s
+        /// blocking pause podpora. UI thread polluje events per frame.
+        debug_runner: Option<crate::devtools::debug_runner::DebugRunner>,
         /// Browser zoom factor (1.0 = 100%). Ctrl++/Ctrl+- meni v krocich,
         /// Ctrl+0 reset. Layout viewport pri zoomu = window/zoom (tj. logical
         /// dimensions mensi -> reflow). Render uniform vp = window/zoom -> px
@@ -673,6 +677,11 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                                 }
                                 DevtoolsHit::SourcesGutter { file_id, line } => {
                                     self.devtools.sources.toggle_breakpoint(file_id, line);
+                                    // Auto-aktivace debug mode pri prvnim BP.
+                                    if self.devtools.panel_open && !self.devtools.sources.breakpoints.is_empty()
+                                        && self.debug_runner.is_none() {
+                                        self.activate_debug_mode();
+                                    }
                                 }
                                 DevtoolsHit::NetworkRow(idx) => {
                                     self.devtools.network.selected = Some(idx);
@@ -1268,13 +1277,19 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                     }
                     match key_event.logical_key {
                         Key::Named(NamedKey::F12) => {
-                            // Toggle in-window devtools panel.
                             self.devtools.panel_open = !self.devtools.panel_open;
                             if self.devtools.panel_open {
                                 if let Some(interp) = &self.interpreter {
                                     let root = std::rc::Rc::clone(&interp.document.borrow().root);
                                     crate::browser::devtools_panel::rebuild_tree(&mut self.devtools, &root);
                                 }
+                                // Hybrid: pri otevreni s breakpointy nastav debug mode.
+                                if !self.devtools.sources.breakpoints.is_empty() {
+                                    self.activate_debug_mode();
+                                }
+                            } else {
+                                // Pri zavreni F12: deaktivuj debug worker.
+                                self.deactivate_debug_mode();
                             }
                             println!("[F12] devtools panel = {}", if self.devtools.panel_open { "ON" } else { "OFF" });
                             if let Some(w) = &self.window { w.request_redraw(); }
@@ -1680,13 +1695,109 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         }
 
         /// Notify worker thread pres Condvar - po klik Continue/Step.
-        /// Pouziva se kdyz Interpreter beti na worker thread s attach_shared_debugger.
-        /// Aktualne nepouziva primarne (interp beti UI thread, viz HANDOFF Arc rework).
         fn notify_continue(&self) {
+            // Hybrid debug runner pres vlastni Condvar.
+            if let Some(runner) = &self.debug_runner {
+                runner.notify_continue();
+                return;
+            }
+            // Fallback: own continue_signal (legacy, pro single-thread early-abort path).
             let (lock, cvar) = &*self.continue_signal;
             let mut continued = lock.lock().unwrap();
             *continued = true;
             cvar.notify_all();
+        }
+
+        /// Aktivace hybrid debug mode - spawn worker thread s vlastnim Interpreter.
+        /// Vraci true pokud spawn uspesny (nebo uz aktivni). Page UI dale render
+        /// cached layout dokud worker neposla Done event.
+        fn activate_debug_mode(&mut self) {
+            if self.debug_runner.is_some() { return; }
+            let html = self.html.clone();
+            let base_url = self.base_url.clone().unwrap_or_default();
+            let bp_lines: Vec<u32> = self.devtools.sources.breakpoints.iter()
+                .map(|b| b.line).collect();
+            let runner = crate::devtools::debug_runner::DebugRunner::spawn(
+                html, base_url, bp_lines);
+            self.devtools.console.push_log(crate::devtools::model::console::LogEntry {
+                level: crate::devtools::model::console::LogLevel::Info,
+                text: "[debug-mode] Worker thread spustil eval JS - real freeze pause aktivni".into(),
+            });
+            self.debug_runner = Some(runner);
+        }
+
+        /// Deaktivuj debug mode - graceful join worker.
+        fn deactivate_debug_mode(&mut self) {
+            if let Some(runner) = self.debug_runner.take() {
+                runner.notify_continue(); // wake jakkoliv stale paused worker
+                runner.join();
+                self.devtools.console.push_log(crate::devtools::model::console::LogEntry {
+                    level: crate::devtools::model::console::LogLevel::Info,
+                    text: "[debug-mode] Worker thread skoncil".into(),
+                });
+            }
+        }
+
+        /// Poll events z debug worker - vola se per render frame.
+        fn poll_debug_runner(&mut self) {
+            let Some(runner) = &mut self.debug_runner else { return };
+            let events = runner.drain_events();
+            use crate::devtools::debug_runner::WorkerEvent;
+            use crate::devtools::model::console::{LogEntry, LogLevel};
+            for ev in events {
+                match ev {
+                    WorkerEvent::Started => {}
+                    WorkerEvent::Log { level, msg } => {
+                        let lvl = match level.as_str() {
+                            "error" => LogLevel::Error,
+                            "warn" => LogLevel::Warn,
+                            _ => LogLevel::Info,
+                        };
+                        self.devtools.console.push_log(LogEntry { level: lvl, text: msg });
+                    }
+                    WorkerEvent::Network { url, status } => {
+                        use crate::devtools::model::network::{NetworkEntry, NetworkResourceType};
+                        self.devtools.network.entries.push(NetworkEntry {
+                            url: url.clone(),
+                            method: "GET".into(),
+                            status,
+                            resource_type: NetworkResourceType::from_url(&url),
+                            size_bytes: 0,
+                            duration_ms: 0,
+                            started_at_ms: 0,
+                        });
+                    }
+                    WorkerEvent::Pause { line } => {
+                        self.devtools.sources.debugger_paused = true;
+                        if let Some(file_id) = self.devtools.sources.selected_id
+                            .or_else(|| self.devtools.sources.files.first().map(|f| f.id))
+                        {
+                            self.devtools.sources.current_pause_location = Some((file_id, line));
+                        }
+                        // Mirror locals z shared dbg.
+                        let dbg = runner.debugger.lock().unwrap();
+                        self.devtools.sources.locals = dbg.locals.clone();
+                    }
+                    WorkerEvent::Done => {
+                        self.devtools.console.push_log(LogEntry {
+                            level: LogLevel::Info,
+                            text: "[debug-mode] Script done".into(),
+                        });
+                        self.devtools.sources.debugger_paused = false;
+                        self.devtools.sources.current_pause_location = None;
+                    }
+                    WorkerEvent::Error(e) => {
+                        self.devtools.console.push_log(LogEntry {
+                            level: LogLevel::Error,
+                            text: format!("[debug-mode] Error: {}", e),
+                        });
+                    }
+                }
+            }
+            // Po Done event, join worker (uvolni handle).
+            if runner.is_finished() {
+                self.deactivate_debug_mode();
+            }
         }
 
         fn run_inline_scripts(&mut self, interp: &mut crate::interpreter::Interpreter) {
@@ -2318,6 +2429,8 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         fn render(&mut self) {
             use super::{css_parser, cascade, layout, paint};
             let frame_start = std::time::Instant::now();
+            // Hybrid debug mode: poll worker events + sync state.
+            self.poll_debug_runner();
             // Sync devtools breakpoints -> interpreter debugger.
             // Pri zmene state.sources.breakpoints (klik gutter), prepocitej set linies
             // pro current selected file a propa do interpreter.debugger.
@@ -2974,6 +3087,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
             crate::interpreter::DebuggerState::default())),
         continue_signal: std::sync::Arc::new((
             std::sync::Mutex::new(false), std::sync::Condvar::new())),
+        debug_runner: None,
         zoom: 1.0,
         modifiers: winit::keyboard::ModifiersState::empty(),
         find_open: false,
