@@ -3661,10 +3661,19 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                 let mut h = std::collections::hash_map::DefaultHasher::new();
                 (Rc::as_ptr(&document_root) as usize).hash(&mut h);
                 css_hash.hash(&mut h);
+                // Zoom + viewport ovlivnuji @media + @container query matches -
+                // cache invalidate pri zmene.
+                ((self.zoom * 1000.0) as i64).hash(&mut h);
+                (r.config.width as u64).hash(&mut h);
+                (r.config.height as u64).hash(&mut h);
                 h.finish()
             };
             if self.cached_style_map.is_none() || self.cached_cascade_hash != cascade_hash {
-                self.cached_style_map = Some(cascade::cascade(&document_root, stylesheets));
+                // Cascade s viewport pro @media + @container queries.
+                let vw_logical = (r.config.width as f32) / self.zoom;
+                let vh_logical = (r.config.height as f32) / self.zoom;
+                self.cached_style_map = Some(cascade::cascade_with_viewport(
+                    &document_root, stylesheets, vw_logical, vh_logical));
                 self.cached_pseudo_map = Some(cascade::cascade_pseudo(&document_root, stylesheets));
                 self.cached_cascade_hash = cascade_hash;
             }
