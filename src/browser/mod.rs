@@ -24,6 +24,7 @@ pub mod webgl_helpers;
 pub mod dom_input_buffer;
 pub mod interactive;
 pub mod selection;
+pub mod textrun;
 
 #[cfg(test)]
 mod tests;

@@ -6602,9 +6602,32 @@ impl Renderer {
                 ..Default::default()
             }
         )).expect("adapter");
-        let (device, queue) = pollster::block_on(adapter.request_device(
-            &wgpu::DeviceDescriptor::default(),
-        )).expect("device");
+        // Pokus se requestnout DUAL_SOURCE_BLENDING pro real LCD subpixel text.
+        // Kdyz HW/driver nepodpori, fallback na default (gamma-corrected grayscale).
+        let supports_dual_source = adapter.features()
+            .contains(wgpu::Features::DUAL_SOURCE_BLENDING);
+        let (device, queue) = if supports_dual_source {
+            pollster::block_on(adapter.request_device(
+                &wgpu::DeviceDescriptor {
+                    label: Some("rwe-device"),
+                    required_features: wgpu::Features::DUAL_SOURCE_BLENDING,
+                    required_limits: wgpu::Limits::default(),
+                    ..Default::default()
+                },
+            )).unwrap_or_else(|_| {
+                eprintln!("[render] DUAL_SOURCE_BLENDING request selhal, fallback");
+                pollster::block_on(adapter.request_device(
+                    &wgpu::DeviceDescriptor::default(),
+                )).expect("device")
+            })
+        } else {
+            eprintln!("[render] adapter nema DUAL_SOURCE_BLENDING - LCD subpixel grayscale fallback");
+            pollster::block_on(adapter.request_device(
+                &wgpu::DeviceDescriptor::default(),
+            )).expect("device")
+        };
+        let dual_source_blend = device.features().contains(wgpu::Features::DUAL_SOURCE_BLENDING);
+        eprintln!("[render] dual_source_blending: {}", dual_source_blend);
         let size = window.inner_size();
         let scale_factor = window.scale_factor();
         let surface_caps = surface.get_capabilities(&adapter);
