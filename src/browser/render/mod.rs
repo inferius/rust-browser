@@ -4672,6 +4672,25 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                              Some(&titles), self.tabs.active, Some(&favicons),
                                              Some(&pins));
                 // Status bar dole - pri hover URL preview.
+                // Scroll-to-top button (pravy dolni roh) pri scroll_y > 200.
+                if self.scroll_y > 200.0 {
+                    let panel_h_logical_local = if self.devtools.panel_open {
+                        self.devtools.panel_h.min(win_h_logical * 0.7)
+                    } else { 0.0 };
+                    let btn_x = win_w_logical - 40.0;
+                    let btn_y = win_h_logical - panel_h_logical_local - 50.0;
+                    display_list.push(DisplayCommand::Rect {
+                        x: btn_x, y: btn_y, w: 32.0, h: 32.0,
+                        color: [69, 161, 255, 220], radius: 16.0,
+                    });
+                    display_list.push(DisplayCommand::Text {
+                        x: btn_x + 10.0, y: btn_y + 6.0, content: "↑".to_string(),
+                        color: [255, 255, 255, 255],
+                        font_size: 18.0, bold: true, italic: false,
+                        font_family: "Inter".into(),
+                        strikethrough: false, underline: false,
+                    });
+                }
                 if let Some(url) = &self.status_hover_url {
                     let panel_h_logical = if self.devtools.panel_open {
                         self.devtools.panel_h.min(win_h_logical * 0.7)
