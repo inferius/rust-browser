@@ -758,17 +758,33 @@ pub fn cascade_with_viewport(root: &Rc<Node>, stylesheets: &[Stylesheet],
     let mut effective: Vec<Stylesheet> = Vec::new();
     for sheet in stylesheets {
         let mut combined = sheet.clone();
+        // Pre-resolve vh/vw v decl values na px hodnoty z viewport.
+        for rule in &mut combined.rules {
+            for d in &mut rule.declarations {
+                d.value = resolve_viewport_units(&d.value, viewport_w, viewport_h);
+            }
+        }
         // Aplikuj jen vyhovujici media queries
         for mq in &sheet.media_queries {
             if super::css_parser::evaluate_media_query(&mq.query, viewport_w, viewport_h) {
-                combined.rules.extend(mq.rules.clone());
+                let mut rules = mq.rules.clone();
+                for rule in &mut rules {
+                    for d in &mut rule.declarations {
+                        d.value = resolve_viewport_units(&d.value, viewport_w, viewport_h);
+                    }
+                }
+                combined.rules.extend(rules);
             }
         }
-        // Aplikuj container queries - pro start s viewport jako approximation
-        // container size. TODO: per-element ancestor lookup.
         for cq in &sheet.container_queries {
             if super::css_parser::evaluate_container_query(&cq.condition, viewport_w, viewport_h) {
-                combined.rules.extend(cq.rules.clone());
+                let mut rules = cq.rules.clone();
+                for rule in &mut rules {
+                    for d in &mut rule.declarations {
+                        d.value = resolve_viewport_units(&d.value, viewport_w, viewport_h);
+                    }
+                }
+                combined.rules.extend(rules);
             }
         }
         combined.media_queries.clear();
@@ -776,6 +792,63 @@ pub fn cascade_with_viewport(root: &Rc<Node>, stylesheets: &[Stylesheet],
         effective.push(combined);
     }
     cascade(root, &effective)
+}
+
+/// Replace "Nvh" / "Nvw" / "Nvmin" / "Nvmax" v retezci na "Mpx" hodnoty
+/// dle viewport_w/h. Aplikuje se pred resolve_calc (ktery pak ma px values).
+fn resolve_viewport_units(s: &str, vw: f32, vh: f32) -> String {
+    // Quick path: pokud retezec neobsahuje "vh"/"vw"/"vmin"/"vmax", nic nedelej.
+    if !(s.contains("vh") || s.contains("vw") || s.contains("vmin") || s.contains("vmax")) {
+        return s.to_string();
+    }
+    let mut out = String::with_capacity(s.len());
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        // Find numeric followed by viewport unit. Must check unit BEFORE
+        // consuming digits (jinak number bez vh/vw zere a vyhozeno).
+        let is_digit_start = bytes[i].is_ascii_digit() || (bytes[i] == b'.' && i+1 < bytes.len() && bytes[i+1].is_ascii_digit());
+        if is_digit_start {
+            let start = i;
+            // Allow leading -/+ already handled outside (we just push as-is).
+            while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == b'.') {
+                i += 1;
+            }
+            let num_str = &s[start..i];
+            let rest = &s[i..];
+            // Check unit. Must distinguish "vmin"/"vmax" before "v" prefix.
+            let (replaced, advance) = if rest.starts_with("vmin") {
+                let n: f32 = num_str.parse().unwrap_or(0.0);
+                (Some(n * vw.min(vh) / 100.0), 4)
+            } else if rest.starts_with("vmax") {
+                let n: f32 = num_str.parse().unwrap_or(0.0);
+                (Some(n * vw.max(vh) / 100.0), 4)
+            } else if rest.starts_with("vh") && !rest.starts_with("vhx") {
+                // "vh" must be followed by non-letter (separator/end).
+                let next = rest.as_bytes().get(2).copied().unwrap_or(b' ');
+                if !next.is_ascii_alphabetic() {
+                    let n: f32 = num_str.parse().unwrap_or(0.0);
+                    (Some(n * vh / 100.0), 2)
+                } else { (None, 0) }
+            } else if rest.starts_with("vw") {
+                let next = rest.as_bytes().get(2).copied().unwrap_or(b' ');
+                if !next.is_ascii_alphabetic() {
+                    let n: f32 = num_str.parse().unwrap_or(0.0);
+                    (Some(n * vw / 100.0), 2)
+                } else { (None, 0) }
+            } else { (None, 0) };
+            if let Some(px) = replaced {
+                out.push_str(&format!("{}px", px));
+                i += advance;
+            } else {
+                out.push_str(num_str);
+            }
+        } else {
+            out.push(bytes[i] as char);
+            i += 1;
+        }
+    }
+    out
 }
 
 /// Per-element container query evaluation: container_sizes je mapa

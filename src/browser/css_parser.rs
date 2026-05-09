@@ -920,8 +920,12 @@ fn parse_keyframes(block: &str) -> Vec<(f32, Vec<Declaration>)> {
 /// Vyhodnoti media query string proti viewport.
 /// Podporuje: (max-width: Npx), (min-width: Npx), (orientation: ...)
 pub fn evaluate_media_query(query: &str, viewport_w: f32, viewport_h: f32) -> bool {
-    // Mlha: zjednoduseny - pokud "screen", "all" nebo prazdny -> true
     let q = query.trim().to_lowercase();
+    // Print media disable: stranky ne pri print neaplikuji print rules.
+    // Real browser dela switch screen/print mode. Default = screen.
+    if q == "print" || q.starts_with("print ") || q.contains(" print ") || q.ends_with(" print") {
+        return false;
+    }
     // Strip type "screen"/"all" + "and"
     let q = q.replace("screen", "").replace("all", "").replace(" and ", " ");
     // Range syntax L4: "(400px <= width <= 800px)" / "(width < 600px)" / "(width >= 800px)"

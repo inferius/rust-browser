@@ -138,7 +138,7 @@ mod tests {
         };
         let doc = parse_html(&fx.html, "");
         let stylesheet = parse_stylesheet(&fx.css);
-        let map = cascade::cascade(&doc.root, &[stylesheet]);
+        let map = cascade::cascade_with_viewport(&doc.root, &[stylesheet], fx.viewport.0, fx.viewport.1);
         let layout_root = layout::layout_tree(&doc.root, &map, fx.viewport.0, fx.viewport.1);
         // Layout vraci document-level box. expected tree zacina <html>.
         // Najdi html v actual children pro paralelni walk od stejne urovne.
