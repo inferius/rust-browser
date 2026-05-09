@@ -6524,6 +6524,9 @@ struct Renderer {
     /// vp = config.width / scale_factor.
     scale_factor: f32,
     pipeline: wgpu::RenderPipeline,
+    /// Optional LCD pipeline pro real subpixel text - vyzaduje DUAL_SOURCE_BLENDING.
+    /// None pri unsupported HW (fallback grayscale v hlavnim shaderu mode 9).
+    lcd_pipeline: Option<wgpu::RenderPipeline>,
     uniform_buf: wgpu::Buffer,
     atlas_tex: wgpu::Texture,
     atlas_view: wgpu::TextureView,
@@ -6806,6 +6809,59 @@ impl Renderer {
             cache: None,
         });
 
+        // Real LCD subpixel pipeline - dual-source blend pri HW support.
+        // Per-channel mask blend (Src1Color factor) = ClearType-style color fringes.
+        let lcd_pipeline = if dual_source_blend {
+            Some(device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                multiview_mask: None,
+                label: Some("lcd-pipeline"),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_main"),
+                    compilation_options: Default::default(),
+                    buffers: &[wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<Vertex>() as u64,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &wgpu::vertex_attr_array![
+                            0 => Float32x2, 1 => Float32x4, 2 => Float32x2,
+                            3 => Float32, 4 => Float32x2, 5 => Float32x2,
+                            6 => Float32, 7 => Float32x4, 8 => Float32,
+                        ],
+                    }],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_main_lcd"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: config.format,
+                        // Dual-source: src1 dostane mask z @location(1).
+                        // result = color * mask + dst * (1 - mask) per-channel.
+                        blend: Some(wgpu::BlendState {
+                            color: wgpu::BlendComponent {
+                                src_factor: wgpu::BlendFactor::Src1,
+                                dst_factor: wgpu::BlendFactor::OneMinusSrc1,
+                                operation: wgpu::BlendOperation::Add,
+                            },
+                            alpha: wgpu::BlendComponent {
+                                src_factor: wgpu::BlendFactor::One,
+                                dst_factor: wgpu::BlendFactor::OneMinusSrc1Alpha,
+                                operation: wgpu::BlendOperation::Add,
+                            },
+                        }),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                cache: None,
+            }))
+        } else {
+            None
+        };
+
         let atlas = GlyphAtlas::new();
 
         let image_atlas = ImageAtlas::new();
@@ -7045,7 +7101,7 @@ impl Renderer {
         Renderer {
             surface, device, queue, config, zoom: 1.0,
             scale_factor: scale_factor as f32,
-            pipeline, uniform_buf,
+            pipeline, lcd_pipeline, uniform_buf,
             atlas_tex, atlas_view, atlas_smp, bind_group_layout, bind_group, atlas,
             image_atlas, image_tex, image_view,
             image_source_bytes: std::collections::HashMap::new(),
@@ -8352,6 +8408,27 @@ impl Renderer {
                 pass.set_bind_group(0, &self.bind_group, &[]);
                 pass.set_vertex_buffer(0, vbuf.slice(..));
                 pass.draw(0..vertices.len() as u32, 0..1);
+                // LCD subpixel text - second pass s dual-source pipeline.
+                // Filter vertices na mode == 9. Hardware si kresli per-channel
+                // mask blend (real ClearType-style color fringes).
+                if let Some(lcd_pipe) = &self.lcd_pipeline {
+                    let lcd_verts: Vec<Vertex> = vertices.iter()
+                        .filter(|v| (v.mode - 9.0).abs() < 0.5)
+                        .copied().collect();
+                    if !lcd_verts.is_empty() {
+                        let lcd_vbuf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                            label: Some("lcd_vb"),
+                            size: (lcd_verts.len() * std::mem::size_of::<Vertex>()) as u64,
+                            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                            mapped_at_creation: false,
+                        });
+                        self.queue.write_buffer(&lcd_vbuf, 0, bytemuck::cast_slice(&lcd_verts));
+                        pass.set_pipeline(lcd_pipe);
+                        pass.set_bind_group(0, &self.bind_group, &[]);
+                        pass.set_vertex_buffer(0, lcd_vbuf.slice(..));
+                        pass.draw(0..lcd_verts.len() as u32, 0..1);
+                    }
+                }
             }
         }
         self.queue.submit(std::iter::once(encoder.finish()));

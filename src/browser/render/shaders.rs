@@ -299,6 +299,29 @@ fn mix_srgb(a: vec4<f32>, b: vec4<f32>, t: f32) -> vec4<f32> {
     return vec4<f32>(srgb_to_lin_v(mixed), mix(a.a, b.a, t));
 }
 
+/// Real LCD subpixel text - dual-source blend variant. Sample 3 sousedni
+/// subpixely (R/G/B) z atlas, vrati 2 fragment outputs:
+///   @location(0) = text RGB (color)
+///   @location(1) = per-subpixel mask alpha (R = r_a, G = g_a, B = b_a)
+/// Pipeline blend: src_factor=Src1Color, dst_factor=OneMinusSrc1Color =>
+/// per-channel alpha blending = real ClearType-style color fringes.
+struct LcdOut {
+    @location(0) color: vec4<f32>,
+    @location(1) blend: vec4<f32>,
+};
+@fragment
+fn fs_main_lcd(in: VertexOut) -> LcdOut {
+    let dims = textureDimensions(atlas_tex);
+    let texel_w = 1.0 / f32(dims.x);
+    let r_a = textureSample(atlas_tex, atlas_smp, in.uv - vec2<f32>(texel_w, 0.0)).r;
+    let g_a = textureSample(atlas_tex, atlas_smp, in.uv).r;
+    let b_a = textureSample(atlas_tex, atlas_smp, in.uv + vec2<f32>(texel_w, 0.0)).r;
+    var out: LcdOut;
+    out.color = vec4<f32>(in.color.rgb, 1.0);
+    out.blend = vec4<f32>(r_a * in.color.a, g_a * in.color.a, b_a * in.color.a, 1.0);
+    return out;
+}
+
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     // Mode 1: text - sample atlas (grayscale alpha)
