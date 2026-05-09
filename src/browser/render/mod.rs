@@ -2362,6 +2362,17 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                     url: &str, tab_titles: Option<&[String]>, active: usize,
                                     favicon_urls: Option<&[Option<String>]>,
                                     pinned: Option<&[bool]>) {
+        paint_shell_chrome_with_loading(list, win_w, chrome_h, url, tab_titles, active,
+                                        favicon_urls, pinned, None, 0.0);
+    }
+
+    /// Verze co podporuje per-tab loading flag + animacni fazi (sekundy od startu)
+    /// pro busy spinner.
+    fn paint_shell_chrome_with_loading(list: &mut Vec<DisplayCommand>, win_w: f32, chrome_h: f32,
+                                       url: &str, tab_titles: Option<&[String]>, active: usize,
+                                       favicon_urls: Option<&[Option<String>]>,
+                                       pinned: Option<&[bool]>,
+                                       loading: Option<&[bool]>, anim_t: f32) {
         // Bookmarks bar paint pod nav bar - dalsi 24px row.
         let bms = crate::devtools::bookmarks::load_bookmarks();
         let _ = &bms; // used below ve scope.
@@ -2411,11 +2422,38 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         strikethrough: false, underline: false,
                     });
                 }
-                // Favicon (16x16) v levem rohu chipu (skip pri pinned - pin uz tam je).
-                let favicon_present = if is_pinned { None } else {
+                // Loading: rotujici dot misto favicon. Spinner = 8 prouzku v kruhu, fade dle uhlu.
+                let is_loading = loading.and_then(|l| l.get(i)).copied().unwrap_or(false);
+                let favicon_present = if is_pinned || is_loading { None } else {
                     favicon_urls.and_then(|fs| fs.get(i)).and_then(|f| f.clone())
                 };
-                let text_x_off = if let Some(furl) = favicon_present {
+                let text_x_off = if is_loading && !is_pinned {
+                    // Spinner: 8 prouzku v kruhu, fade dle uhlu+t.
+                    let cx = tx + 14.0;
+                    let cy = 16.0;
+                    let bars = 8;
+                    let phase = (anim_t * 8.0) as i32;
+                    for b in 0..bars {
+                        let ang = (b as f32) * std::f32::consts::TAU / bars as f32;
+                        let dx = ang.cos();
+                        let dy = ang.sin();
+                        let inner = 3.5;
+                        let outer = 6.5;
+                        let x1 = cx + dx * inner;
+                        let y1 = cy + dy * inner;
+                        let x2 = cx + dx * outer;
+                        let y2 = cy + dy * outer;
+                        let lit = ((b as i32 - phase).rem_euclid(bars as i32)) as f32 / bars as f32;
+                        let a = (60.0 + lit * 195.0) as u8;
+                        list.push(DisplayCommand::Rect {
+                            x: x1.min(x2) - 0.5, y: y1.min(y2) - 0.5,
+                            w: (x2 - x1).abs().max(1.5),
+                            h: (y2 - y1).abs().max(1.5),
+                            color: [69, 161, 255, a], radius: 0.5,
+                        });
+                    }
+                    28.0
+                } else if let Some(furl) = favicon_present {
                     list.push(DisplayCommand::Image {
                         x: tx + 6.0, y: 8.0, w: 16.0, h: 16.0,
                         src: furl,
@@ -2997,9 +3035,21 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             interp.set_document(doc);
             self.run_inline_scripts(&mut interp);
             self.interpreter = Some(interp);
-            // Update window title.
+            // Sync title -> active tab + window title.
+            let page_title = crate::browser::render::tabs::extract_title(&self.html)
+                .unwrap_or_else(|| path.file_name()
+                    .and_then(|n| n.to_str()).unwrap_or("page").to_string());
+            {
+                let cur = self.tabs.active_tab_mut();
+                cur.html = self.html.clone();
+                cur.css = self.css.clone();
+                cur.path = Some(path.to_path_buf());
+                cur.url = Some(url.clone());
+                cur.title = page_title.clone();
+                cur.loading = false;
+            }
             if let Some(w) = &self.window {
-                w.set_title(&format!("Rust Web Engine - {}", path.display()));
+                w.set_title(&format!("{} - Rust Web Engine", page_title));
             }
             // Pokud je auto_devtools zaplo, take regen + open po reload.
             if self.auto_devtools {
@@ -3864,18 +3914,23 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             self.history_idx = self.history.len() - 1;
             self.navigate_url_no_history(url);
             // Persist v profile history (~/.rwe/profiles/<active>/history.json).
+            // Pouzij realny <title> tagu (z aktivniho tab po nav), fallback URL last segment.
+            let title = self.tabs.active_tab().title.clone();
             crate::devtools::history::append_entry(&crate::devtools::history::HistoryEntry {
                 url: url.to_string(),
-                title: url.split('/').last().unwrap_or(url).to_string(),
+                title,
                 visited_at: crate::devtools::history::now_ts(),
             });
         }
 
         /// Navigate bez modifikace history (back/forward use this).
         fn navigate_url_no_history(&mut self, url: &str) {
+            // Loading flag: zobrazi spinner v tab chip behem fetch.
+            self.tabs.active_tab_mut().loading = true;
             // about: URL handled internally.
             if url.starts_with("about:") {
                 if self.navigate_about(url) {
+                    self.tabs.active_tab_mut().loading = false;
                     self.render();
                     return;
                 }
@@ -3916,8 +3971,18 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 interp.set_document(doc);
                 self.run_inline_scripts(&mut interp);
                 self.interpreter = Some(interp);
+                let page_title = crate::browser::render::tabs::extract_title(&self.html)
+                    .unwrap_or_else(|| url.to_string());
+                {
+                    let cur = self.tabs.active_tab_mut();
+                    cur.html = self.html.clone();
+                    cur.css = self.css.clone();
+                    cur.url = Some(url.to_string());
+                    cur.title = page_title.clone();
+                    cur.loading = false;
+                }
                 if let Some(w) = &self.window {
-                    w.set_title(&format!("Rust Web Engine - {url}"));
+                    w.set_title(&format!("{} - Rust Web Engine", page_title));
                 }
                 self.render();
             } else if let Some(rest) = url.strip_prefix("file:///") {
@@ -4681,12 +4746,14 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 let favicons: Vec<Option<String>> = self.tabs.tabs.iter()
                     .map(|t| t.favicon_url.clone()).collect();
                 let pins: Vec<bool> = self.tabs.tabs.iter().map(|t| t.pinned).collect();
+                let loadings: Vec<bool> = self.tabs.tabs.iter().map(|t| t.loading).collect();
                 let bm_count = crate::devtools::bookmarks::load_bookmarks().len();
                 let chrome_h = 64.0 + if bm_count > 0 { 24.0 } else { 0.0 };
-                paint_shell_chrome_with_pins(&mut display_list, win_w_logical, chrome_h,
+                let anim_t = self.start_time.elapsed().as_secs_f32();
+                paint_shell_chrome_with_loading(&mut display_list, win_w_logical, chrome_h,
                                              self.base_url.as_deref().unwrap_or(""),
                                              Some(&titles), self.tabs.active, Some(&favicons),
-                                             Some(&pins));
+                                             Some(&pins), Some(&loadings), anim_t);
                 // Status bar dole - pri hover URL preview.
                 // Scroll-to-top button (pravy dolni roh) pri scroll_y > 200.
                 if self.scroll_y > 200.0 {

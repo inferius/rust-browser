@@ -156,7 +156,7 @@ fn html_escape_local(s: &str) -> String {
 /// Najdi favicon URL: <link rel="icon" href="...">, fallback /favicon.ico.
 /// Extrahuj <title>...</title> z HTML (case-insensitive, prvni vyskyt).
 /// None pokud chybi nebo je prazdny.
-fn extract_title(html: &str) -> Option<String> {
+pub fn extract_title(html: &str) -> Option<String> {
     let lower = html.to_lowercase();
     let start = lower.find("<title")?;
     let tag_end = lower[start..].find('>').map(|e| start + e + 1)?;
