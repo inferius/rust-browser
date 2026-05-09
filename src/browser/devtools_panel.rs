@@ -276,7 +276,10 @@ fn paint_elements_tab(
     for (visual_idx, row_idx) in (start_row..rows.len().min(start_row + visible_rows)).enumerate() {
         let row = &rows[row_idx];
         let y = body_y + (visual_idx as f32) * ROW_H - (scroll_y % ROW_H);
-        if y + ROW_H < body_y || y > body_y + body_h { continue; }
+        // Skip partial rows pri okrajich - text by se rozlil pres body bounds
+        // (do toolbar nahore, do horizontal sb dole). push_text/push_rect
+        // nejsou clipped, takze full-row check je nutny.
+        if y < body_y || y + ROW_H > body_y + body_h { continue; }
         paint_element_row(cmds, row, state, pal, split_x - SCROLLBAR_W - 4.0, y, mouse_x, mouse_y);
     }
 

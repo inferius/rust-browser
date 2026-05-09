@@ -457,6 +457,9 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         selection_anchor: Option<(f32, f32)>,
         selection_current: Option<(f32, f32)>,
         selection_dragging: bool,
+        /// Main page scrollbar drag - true pri LMB hold na vertical/horizontal thumb.
+        page_scrollbar_v_drag: bool,
+        page_scrollbar_h_drag: bool,
     }
 
     impl ApplicationHandler for App {
@@ -538,6 +541,32 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                         self.render();
                         return;
                     }
+                    // Main page scrollbar drag.
+                    if self.page_scrollbar_v_drag || self.page_scrollbar_h_drag {
+                        if let Some(layout) = &self.layout_root {
+                            let win_h = self.renderer.as_ref().map(|r| r.config.height as f32).unwrap_or(0.0);
+                            let win_w = self.renderer.as_ref().map(|r| r.config.width as f32).unwrap_or(0.0);
+                            let scale = self.renderer.as_ref().map(|r| r.scale_factor).unwrap_or(1.0);
+                            let panel_h = if self.devtools.panel_open { self.devtools.panel_h.min(win_h * 0.7) } else { 0.0 };
+                            let viewport_w = win_w / (self.zoom * scale);
+                            let viewport_h = (win_h - panel_h) / self.zoom;
+                            if self.page_scrollbar_v_drag && layout.rect.height > viewport_h {
+                                let max_scroll = (layout.rect.height - viewport_h).max(1.0);
+                                let thumb_h = (viewport_h * viewport_h / layout.rect.height).max(40.0);
+                                let my_screen = self.mouse_y - self.scroll_y;
+                                let frac = ((my_screen - thumb_h * 0.5) / (viewport_h - thumb_h)).clamp(0.0, 1.0);
+                                self.scroll_target_y = frac * max_scroll;
+                            }
+                            if self.page_scrollbar_h_drag && layout.rect.width > viewport_w {
+                                let max_scroll = (layout.rect.width - viewport_w).max(1.0);
+                                let thumb_w = (viewport_w * viewport_w / layout.rect.width).max(40.0);
+                                let frac = ((self.mouse_x - thumb_w * 0.5) / (viewport_w - thumb_w)).clamp(0.0, 1.0);
+                                self.scroll_target_x = frac * max_scroll;
+                            }
+                        }
+                        self.render();
+                        return;
+                    }
                     // Splitter drag: aktualizuj split_x.
                     if self.devtools.elements.dragging_split {
                         let win_w = self.renderer.as_ref().map(|r| r.config.width as f32).unwrap_or(0.0);
@@ -594,6 +623,11 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                         self.devtools.elements.dragging_scrollbar = None;
                         self.render();
                     }
+                    if self.page_scrollbar_v_drag || self.page_scrollbar_h_drag {
+                        self.page_scrollbar_v_drag = false;
+                        self.page_scrollbar_h_drag = false;
+                        self.render();
+                    }
                     if self.selection_dragging {
                         self.selection_dragging = false;
                         // Pokud minimal drag (< 3px), clear selection (= simple click).
@@ -630,6 +664,44 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                     let win_h = self.renderer.as_ref().map(|r| r.config.height as f32).unwrap_or(0.0);
                     let win_w = self.renderer.as_ref().map(|r| r.config.width as f32).unwrap_or(0.0);
                     let panel_h = if self.devtools.panel_open { self.devtools.panel_h.min(win_h * 0.7) } else { 0.0 };
+
+                    // Main page scrollbar hit-test (priorita nad page click).
+                    // Pozn: scrollbar je shifted by shift_command_x(-scroll_x), takze
+                    // visible position = bar_x - scroll_x. Mouse_x ma scroll_x baked-in
+                    // (viz CursorMoved), takze srovnani s bar_x funguje primo.
+                    if let Some(layout) = &self.layout_root {
+                        let scale = self.renderer.as_ref().map(|r| r.scale_factor).unwrap_or(1.0);
+                        let viewport_w = win_w / (self.zoom * scale);
+                        let viewport_h = (win_h - panel_h) / self.zoom;
+                        let mx = self.mouse_x;
+                        let my_screen = self.mouse_y - self.scroll_y;
+                        // Vertikalni scrollbar.
+                        if layout.rect.height > viewport_h
+                           && mx >= viewport_w - 12.0 && mx < viewport_w
+                           && my_screen >= 0.0 && my_screen < viewport_h {
+                            self.page_scrollbar_v_drag = true;
+                            let max_scroll = (layout.rect.height - viewport_h).max(1.0);
+                            let thumb_h = (viewport_h * viewport_h / layout.rect.height).max(40.0);
+                            let frac = ((my_screen - thumb_h * 0.5) / (viewport_h - thumb_h)).clamp(0.0, 1.0);
+                            self.scroll_target_y = frac * max_scroll;
+                            self.selection_dragging = false;
+                            self.render();
+                            return;
+                        }
+                        // Horizontalni scrollbar.
+                        if layout.rect.width > viewport_w
+                           && my_screen >= viewport_h - 12.0 && my_screen < viewport_h
+                           && mx >= 0.0 && mx < viewport_w {
+                            self.page_scrollbar_h_drag = true;
+                            let max_scroll = (layout.rect.width - viewport_w).max(1.0);
+                            let thumb_w = (viewport_w * viewport_w / layout.rect.width).max(40.0);
+                            let frac = ((mx - thumb_w * 0.5) / (viewport_w - thumb_w)).clamp(0.0, 1.0);
+                            self.scroll_target_x = frac * max_scroll;
+                            self.selection_dragging = false;
+                            self.render();
+                            return;
+                        }
+                    }
 
                     // Double-click v Elements tab -> zacni editaci attr value / text node.
                     if is_double_click && self.devtools.panel_open && raw_y >= win_h - panel_h
@@ -3177,6 +3249,8 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         selection_anchor: None,
         selection_current: None,
         selection_dragging: false,
+        page_scrollbar_v_drag: false,
+        page_scrollbar_h_drag: false,
     };
     event_loop.run_app(&mut app).map_err(|e| e.to_string())?;
     Ok(())
