@@ -190,8 +190,53 @@ fn devtools_state_settings_popup_default_zavren() {
 #[test]
 fn profile_active_default_je_default() {
     use crate::devtools::profile::active_profile;
-    // Pri startu testu env var moze byt nastaveny - dalsi test musi
-    // pocitat s timto.
     let name = active_profile();
     assert!(!name.is_empty());
+}
+
+#[test]
+fn hsv_to_rgb_red() {
+    use crate::devtools::hsv_to_rgb;
+    assert_eq!(hsv_to_rgb(0.0, 1.0, 1.0), [255, 0, 0, 255]);
+}
+
+#[test]
+fn hsv_to_rgb_green() {
+    use crate::devtools::hsv_to_rgb;
+    assert_eq!(hsv_to_rgb(120.0, 1.0, 1.0), [0, 255, 0, 255]);
+}
+
+#[test]
+fn hsv_to_rgb_blue() {
+    use crate::devtools::hsv_to_rgb;
+    assert_eq!(hsv_to_rgb(240.0, 1.0, 1.0), [0, 0, 255, 255]);
+}
+
+#[test]
+fn hsv_to_rgb_white() {
+    use crate::devtools::hsv_to_rgb;
+    assert_eq!(hsv_to_rgb(0.0, 0.0, 1.0), [255, 255, 255, 255]);
+}
+
+#[test]
+fn hsv_to_rgb_black() {
+    use crate::devtools::hsv_to_rgb;
+    assert_eq!(hsv_to_rgb(0.0, 0.0, 0.0), [0, 0, 0, 255]);
+}
+
+#[test]
+fn tab_manager_close_does_not_remove_last() {
+    use crate::browser::render::tabs::TabManager;
+    let mut m = TabManager::default();
+    m.close(0);
+    assert_eq!(m.tabs.len(), 1);
+}
+
+#[test]
+fn change_kind_variants() {
+    use crate::devtools::ChangeKind;
+    let _: ChangeKind = ChangeKind::StyleEdit;
+    let _: ChangeKind = ChangeKind::AttrEdit;
+    let _: ChangeKind = ChangeKind::ClassToggle;
+    let _: ChangeKind = ChangeKind::TextEdit;
 }
