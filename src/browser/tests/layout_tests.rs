@@ -367,6 +367,79 @@ fn flex_row_explicit_size_items_side_by_side() {
 }
 
 #[test]
+fn flex_test_header_uppercase_span_natural_height() {
+    // Mock engine-test test-header: span s text-transform uppercase +
+    // letter-spacing - musi byt 1 line h.
+    let doc = parse_html(r#"<html><body>
+        <div class="ts">
+            <div class="hdr">
+                <span class="title">01 - Box Model</span>
+                <span class="tag">width / height</span>
+            </div>
+        </div>
+    </body></html>"#, "");
+    let css = parse_stylesheet(r#"
+        .ts { width: 2766px; }
+        .hdr {
+            padding: 12px 16px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .title { font-size: 11.2px; letter-spacing: 1.68px; text-transform: uppercase; }
+        .tag { font-size: 9.6px; padding: 2px 6px; }
+    "#);
+    let map = cascade::cascade(&doc.root, &[css]);
+    let layout = layout::layout_tree(&doc.root, &map, 3045.0, 2063.0);
+    let hdr = layout.children.iter()
+        .find(|c| c.tag.as_deref() == Some("html"))
+        .and_then(|h| h.children.iter().find(|c| c.tag.as_deref() == Some("body")))
+        .and_then(|b| b.children.iter().find(|c| c.tag.as_deref() == Some("div")))
+        .and_then(|t| t.children.iter().find(|c| c.tag.as_deref() == Some("div")))
+        .expect("hdr");
+    println!("hdr: y={} h={}", hdr.rect.y, hdr.rect.height);
+    for (i, sp) in hdr.children.iter().enumerate() {
+        println!("  span[{}] y={} w={} h={}", i, sp.rect.y, sp.rect.width, sp.rect.height);
+    }
+    let title = &hdr.children[0];
+    let tag = &hdr.children[1];
+    assert!(title.rect.height < 24.0,
+        "title h must be ~14, got {}", title.rect.height);
+    assert!(tag.rect.height < 24.0,
+        "tag h must be ~12, got {}", tag.rect.height);
+    // tag musi byt vpravo (justify-content: space-between).
+    assert!(tag.rect.x > title.rect.x + 1000.0,
+        "tag x must be far right of title, title.x={} tag.x={}", title.rect.x, tag.rect.x);
+}
+
+#[test]
+fn flex_align_items_center_no_cross_stretch_on_span() {
+    // Engine bug: flex container display: flex + align-items: center -
+    // span child dostal stretched cross height (h=27 misto natural 14).
+    let doc = parse_html(r#"<html><body><div class="hdr">
+        <span>Title</span>
+    </div></body></html>"#, "");
+    let css = parse_stylesheet(r#"
+        .hdr { display: flex; align-items: center; height: 30px; padding: 6px 16px; width: 800px; }
+        span { font-size: 12px; }
+    "#);
+    let map = cascade::cascade(&doc.root, &[css]);
+    let layout = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+    let hdr = layout.children.iter()
+        .find(|c| c.tag.as_deref() == Some("html"))
+        .and_then(|h| h.children.iter().find(|c| c.tag.as_deref() == Some("body")))
+        .and_then(|b| b.children.iter().find(|c| c.tag.as_deref() == Some("div")))
+        .expect("hdr");
+    let sp = &hdr.children[0];
+    println!("hdr: y={} h={}, span: y={} h={}",
+        hdr.rect.y, hdr.rect.height, sp.rect.y, sp.rect.height);
+    // align-items: center -> span natural h (~14-17 pri 1.2 line-height na 12px font).
+    // Bez stretch span.h cca 14.
+    assert!(sp.rect.height < 24.0,
+        "span align-items center -> natural h, expected <24, got {}", sp.rect.height);
+}
+
+#[test]
 fn flex_inline_children_become_flex_items() {
     // CSS Flex L1: pri display: flex parent, inline children (span) se
     // chovaji jako flex items (blockified) a justify-content je aplikuje.
