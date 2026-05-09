@@ -53,6 +53,7 @@ use canvas_paint::paint_canvas_ops;
 
 mod webgl_paint;
 mod text_input;
+pub mod tabs;
 #[allow(unused_imports)] // pub use - test exposure
 pub use webgl_paint::paint_webgl_canvases;
 

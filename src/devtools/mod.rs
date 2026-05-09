@@ -15,6 +15,7 @@ pub mod search;
 pub mod focus;
 pub mod debug_runner;
 pub mod profile;
+pub mod history;
 
 use std::collections::HashSet;
 
