@@ -281,26 +281,47 @@ td.date { color: #a1a1ae; font-size: 12px; width: 200px; }
 /// Render about:bookmarks page.
 pub fn render_about_bookmarks() -> (String, String) {
     let bookmarks = crate::devtools::bookmarks::load_bookmarks();
-    let rows = if bookmarks.is_empty() {
-        "<li class='empty'>Zadne zalozky - Ctrl+D na strance je prida</li>".to_string()
+    let body_inner = if bookmarks.is_empty() {
+        "<ul><li class='empty'>Zadne zalozky - Ctrl+D na strance je prida</li></ul>".to_string()
     } else {
-        bookmarks.iter().map(|b|
-            format!("<li><a href=\"{}\">{}</a> <small>{}</small></li>",
-                    html_escape(&b.url), html_escape(&b.title), html_escape(&b.url))
-        ).collect::<Vec<_>>().join("\n")
+        let groups = crate::devtools::bookmarks::group_by_folder(&bookmarks);
+        let mut out = String::new();
+        // Root prvni.
+        if let Some(roots) = groups.get("") {
+            out.push_str("<h2 class='fld'>Korenove</h2><ul>");
+            for b in roots {
+                out.push_str(&format!(
+                    "<li><a href=\"{}\">{}</a> <small>{}</small></li>",
+                    html_escape(&b.url), html_escape(&b.title), html_escape(&b.url)
+                ));
+            }
+            out.push_str("</ul>");
+        }
+        for (folder, items) in groups.iter().filter(|(k, _)| !k.is_empty()) {
+            out.push_str(&format!("<h2 class='fld'>{}</h2><ul>", html_escape(folder)));
+            for b in items {
+                out.push_str(&format!(
+                    "<li><a href=\"{}\">{}</a> <small>{}</small></li>",
+                    html_escape(&b.url), html_escape(&b.title), html_escape(&b.url)
+                ));
+            }
+            out.push_str("</ul>");
+        }
+        out
     };
     let html = format!(r#"<!DOCTYPE html><html><head><title>Zalozky</title></head>
 <body>
 <div class=cfg>
 <h1>Zalozky</h1>
-<ul>{rows}</ul>
+{body}
 </div>
-</body></html>"#, rows = rows);
+</body></html>"#, body = body_inner);
     let css = r#"
 body { font-family: 'Inter', sans-serif; background: #1a1a1f; color: #e8e6df; margin: 0; padding: 32px; }
 .cfg { max-width: 800px; margin: 0 auto; }
 h1 { color: #69a1ff; font-size: 32px; margin-bottom: 16px; }
-ul { list-style: none; padding: 0; }
+h2.fld { color: #fbbf69; font-size: 16px; margin: 20px 0 8px 0; border-bottom: 1px solid #3a3a45; padding-bottom: 4px; }
+ul { list-style: none; padding: 0; margin: 0 0 12px 0; }
 li { background: #2a2932; padding: 12px 16px; margin-bottom: 4px; border-radius: 6px; }
 li a { color: #69a1ff; text-decoration: none; font-weight: 600; }
 li a:hover { text-decoration: underline; }
