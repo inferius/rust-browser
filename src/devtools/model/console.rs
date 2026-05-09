@@ -204,6 +204,14 @@ impl ConsoleInput {
         self.clear_selection();
     }
 
+    /// Nastavi cursor na konkretni byte offset, snap na char boundary.
+    pub fn set_cursor_byte(&mut self, idx: usize) {
+        let mut i = idx.min(self.text.len());
+        while i > 0 && !self.text.is_char_boundary(i) { i -= 1; }
+        self.cursor = i;
+        self.clear_selection();
+    }
+
     pub fn clear(&mut self) {
         self.text.clear();
         self.cursor = 0;

@@ -26,7 +26,7 @@ const TOOLBAR_BTN_H: f32 = 22.0;
 const FONT_SIZE: f32 = 12.0;
 /// Fallback advance kdyz fontdue load selze.
 const FONT_W: f32 = 7.2;
-const INDENT_PX: f32 = 16.0;
+pub const INDENT_PX: f32 = 16.0;
 pub const RESIZE_GRIP_H: f32 = 4.0;
 const SCROLLBAR_W: f32 = 10.0;
 pub const SEARCH_H: f32 = 28.0;
@@ -35,6 +35,22 @@ const SPLITTER_HIT_PX: f32 = 6.0;
 const DT_FONT: &str = "CamingoMono";
 const DT_FONT_BOLD: &str = "CamingoMono-Bold";
 const DT_FONT_ITALIC: &str = "CamingoMono-Italic";
+
+/// Najdi byte offset v textu, jehoz x-pozice je nejblize `target_x`.
+/// Pouziva se pro kliknuti mysi na text input - prevede pixel pos na cursor pos.
+pub fn dt_byte_idx_at_x(text: &str, target_x: f32) -> usize {
+    if target_x <= 0.0 { return 0; }
+    let mut acc = 0.0f32;
+    let mut last_byte = 0;
+    for (byte_off, ch) in text.char_indices() {
+        let w = dt_text_width(&ch.to_string());
+        let mid = acc + w * 0.5;
+        if target_x < mid { return byte_off; }
+        acc += w;
+        last_byte = byte_off + ch.len_utf8();
+    }
+    last_byte
+}
 
 /// Realna sirka textu v CamingoMono pri FONT_SIZE - musi pasovat na render side
 /// (oba pouzivaji fontdue.metrics().advance_width).

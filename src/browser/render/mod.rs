@@ -744,6 +744,35 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                                     }
                                 }
                                 DevtoolsHit::TreeRow(node_id) => {
+                                    // Pri aktivni inline edit + click na editovany row:
+                                    // prevod x na byte idx + set cursor v edit.buffer.
+                                    if let Some(edit) = self.devtools.elements.edit.as_mut() {
+                                        use crate::devtools::EditTarget;
+                                        let edit_node = match &edit.target {
+                                            EditTarget::AttributeValue { node_id, .. } => *node_id,
+                                            EditTarget::AttributeName { node_id, .. } => *node_id,
+                                            EditTarget::TextNode { node_id } => *node_id,
+                                            EditTarget::InlineStyleProperty { node_id, .. } => *node_id,
+                                        };
+                                        if edit_node == node_id {
+                                            use crate::browser::devtools_panel::{dt_text_width, dt_byte_idx_at_x, INDENT_PX};
+                                            let depth = self.devtools.elements.rows.iter()
+                                                .find(|r| r.node_id == node_id)
+                                                .map(|r| r.depth).unwrap_or(0);
+                                            let prefix = match &edit.target {
+                                                EditTarget::AttributeValue { attr, .. } => format!("{}=", attr),
+                                                EditTarget::AttributeName { value, .. } => format!("[new]={}=", value),
+                                                EditTarget::TextNode { .. } => "text:".to_string(),
+                                                EditTarget::InlineStyleProperty { property, .. } => format!("{}: ", property),
+                                            };
+                                            let text_x = 8.0 + depth as f32 * INDENT_PX + dt_text_width(&prefix);
+                                            let rel_x = self.mouse_x - text_x;
+                                            let idx = dt_byte_idx_at_x(&edit.buffer.text, rel_x);
+                                            edit.buffer.set_cursor_byte(idx);
+                                            self.render();
+                                            return;
+                                        }
+                                    }
                                     self.devtools.elements.selected = Some(node_id);
                                 }
                                 DevtoolsHit::TreeCaret(node_id) => {
@@ -783,6 +812,13 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                                 }
                                 DevtoolsHit::ConsoleInput => {
                                     self.devtools.focus = crate::devtools::focus::FocusTarget::DevToolsConsole;
+                                    // Click-to-position cursor: prevod mouse_x na byte idx.
+                                    use crate::browser::devtools_panel::{dt_text_width, dt_byte_idx_at_x};
+                                    let prompt_x = 10.0 + dt_text_width("> ");
+                                    let rel_x = self.mouse_x - prompt_x;
+                                    let text = self.devtools.console.input.text.clone();
+                                    let idx = dt_byte_idx_at_x(&text, rel_x);
+                                    self.devtools.console.input.set_cursor_byte(idx);
                                 }
                                 DevtoolsHit::ElementsSearchBar => {
                                     self.devtools.focus = crate::devtools::focus::FocusTarget::DevToolsElementsSearch;
@@ -1043,6 +1079,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                             Key::Named(NamedKey::ArrowRight) => { input.move_right(shift); }
                             Key::Named(NamedKey::Home) => { input.move_home(shift); }
                             Key::Named(NamedKey::End) => { input.move_end(shift); }
+                            Key::Named(NamedKey::Space) => { input.insert(" "); }
                             Key::Named(NamedKey::Escape) => { self.cancel_edit(); }
                             Key::Named(NamedKey::Enter) => { self.commit_edit(); }
                             Key::Named(NamedKey::Tab) => { self.commit_edit(); }
@@ -1118,6 +1155,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                             Key::Named(NamedKey::ArrowRight) => { input.move_right(shift); }
                             Key::Named(NamedKey::Home) => { input.move_home(shift); }
                             Key::Named(NamedKey::End) => { input.move_end(shift); }
+                            Key::Named(NamedKey::Space) => { input.insert(" "); }
                             Key::Named(NamedKey::ArrowUp) => { input.history_prev(); }
                             Key::Named(NamedKey::ArrowDown) => { input.history_next(); }
                             Key::Named(NamedKey::Escape) => {
@@ -1198,6 +1236,10 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                                 self.devtools.elements.search.query.pop();
                                 self.run_elements_search();
                             }
+                            Key::Named(NamedKey::Space) => {
+                                self.devtools.elements.search.query.push(' ');
+                                self.run_elements_search();
+                            }
                             Key::Named(NamedKey::Enter) => {
                                 if shift {
                                     if self.devtools.elements.search.current == 0 {
@@ -1246,6 +1288,13 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                                                     self.render();
                                                     return;
                                                 }
+                                                Key::Named(NamedKey::Space) => {
+                                                    let cur = node.attr("value").unwrap_or_default();
+                                                    node.set_attr("value", &format!("{} ", cur));
+                                                    self.cached_layout_root = None;
+                                                    self.render();
+                                                    return;
+                                                }
                                                 Key::Character(s) => {
                                                     let cur = node.attr("value").unwrap_or_default();
                                                     let new_val = format!("{}{}", cur, s);
@@ -1273,6 +1322,11 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                             }
                             Key::Named(NamedKey::Backspace) => {
                                 self.addr_input.pop();
+                                self.render();
+                                return;
+                            }
+                            Key::Named(NamedKey::Space) => {
+                                self.addr_input.push(' ');
                                 self.render();
                                 return;
                             }
@@ -1311,6 +1365,11 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                             }
                             Key::Named(NamedKey::Backspace) => {
                                 self.find_query.pop();
+                                self.find_apply();
+                                return;
+                            }
+                            Key::Named(NamedKey::Space) => {
+                                self.find_query.push(' ');
                                 self.find_apply();
                                 return;
                             }
