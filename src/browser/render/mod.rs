@@ -910,6 +910,19 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                     self.render();
                                     return;
                                 }
+                                ChromeHit::BookmarkStar => {
+                                    if let Some(url) = self.base_url.clone() {
+                                        let bms = crate::devtools::bookmarks::load_bookmarks();
+                                        if bms.iter().any(|b| b.url == url) {
+                                            crate::devtools::bookmarks::remove_bookmark(&url);
+                                        } else {
+                                            let title = url.split('/').last().unwrap_or(&url).to_string();
+                                            crate::devtools::bookmarks::add_bookmark(&url, &title);
+                                        }
+                                        self.render();
+                                    }
+                                    return;
+                                }
                                 ChromeHit::TabContextMenu(_) | ChromeHit::BookmarkContextMenu(_) => {
                                     // RMB only - LMB ignoruje.
                                 }
@@ -2190,6 +2203,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         Reload,
         UrlBar,
         DevtoolsToggle,
+        BookmarkStar,
         BookmarkClick(String),
         BookmarkContextMenu(String),
         None,
@@ -2227,7 +2241,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             if mouse_x >= 28.0 && mouse_x < 48.0 { return ChromeHit::Forward; }
             if mouse_x >= 48.0 && mouse_x < 68.0 { return ChromeHit::Reload; }
             if mouse_x >= win_w - 36.0 && mouse_x < win_w - 8.0 { return ChromeHit::DevtoolsToggle; }
-            if mouse_x >= 78.0 && mouse_x < win_w - 48.0 { return ChromeHit::UrlBar; }
+            if mouse_x >= win_w - 76.0 && mouse_x < win_w - 56.0 { return ChromeHit::BookmarkStar; }
+            if mouse_x >= 78.0 && mouse_x < win_w - 80.0 { return ChromeHit::UrlBar; }
         }
         // Bookmarks bar (24px pod nav bar).
         let bm_y = chrome_h - 24.0;
@@ -2387,6 +2402,17 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 color: [251, 251, 254, 255],
                 font_size: 14.0, bold: false, italic: false,
                 font_family: "CamingoMono".into(),
+                strikethrough: false, underline: false,
+            });
+            // Bookmark star indicator (vpravo na konci URL bar, oznaci je-li current URL v bookmarks).
+            let bookmarked = !url.is_empty()
+                && crate::devtools::bookmarks::load_bookmarks().iter().any(|b| b.url == url);
+            let star_color = if bookmarked { [254, 191, 84, 255] } else { [109, 109, 124, 200] };
+            list.push(DisplayCommand::Text {
+                x: win_w - 76.0, y: ny + 8.0, content: "★".to_string(),
+                color: star_color,
+                font_size: 16.0, bold: false, italic: false,
+                font_family: "Inter".into(),
                 strikethrough: false, underline: false,
             });
             // Devtools toggle button (na konci nav baru pred URL).
