@@ -538,6 +538,41 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                         self.render();
                         return;
                     }
+                    // Splitter drag: aktualizuj split_x.
+                    if self.devtools.elements.dragging_split {
+                        let win_w = self.renderer.as_ref().map(|r| r.config.width as f32).unwrap_or(0.0);
+                        self.devtools.elements.split_x = self.mouse_x.clamp(200.0, win_w - 220.0);
+                        self.render();
+                        return;
+                    }
+                    // Scrollbar drag: prevod mouse_y na scroll_y.
+                    if let Some(target) = self.devtools.elements.dragging_scrollbar {
+                        use crate::devtools::ScrollTarget;
+                        let win_h = self.renderer.as_ref().map(|r| r.config.height as f32).unwrap_or(0.0);
+                        let panel_h = self.devtools.panel_h.min(win_h * 0.7);
+                        let panel_y = win_h - panel_h;
+                        let body_y = panel_y + 4.0 + 30.0
+                            + if self.devtools.elements.search.open { 28.0 } else { 0.0 };
+                        let body_h = panel_h - 4.0 - 30.0
+                            - if self.devtools.elements.search.open { 28.0 } else { 0.0 };
+                        let raw_y = self.mouse_y - self.scroll_y;
+                        let frac = ((raw_y - body_y) / body_h).clamp(0.0, 1.0);
+                        match target {
+                            ScrollTarget::ElementsTree => {
+                                let total_h = self.devtools.elements.rows.len() as f32 * 18.0;
+                                let max_scroll = (total_h - body_h).max(0.0);
+                                self.devtools.elements.scroll_y = frac * max_scroll;
+                            }
+                            ScrollTarget::StylesPane => {
+                                let total_h = self.devtools.styles.computed.len() as f32 * 18.0 * 4.0;
+                                let max_scroll = (total_h - body_h).max(0.0);
+                                self.devtools.styles.scroll_y = frac * max_scroll;
+                            }
+                            _ => {}
+                        }
+                        self.render();
+                        return;
+                    }
                     self.update_hover();
                     if self.selection_dragging {
                         self.selection_current = Some((self.mouse_x, self.mouse_y));
@@ -549,6 +584,14 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                 WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left, .. } => {
                     if self.devtools_resizing {
                         self.devtools_resizing = false;
+                        self.render();
+                    }
+                    if self.devtools.elements.dragging_split {
+                        self.devtools.elements.dragging_split = false;
+                        self.render();
+                    }
+                    if self.devtools.elements.dragging_scrollbar.is_some() {
+                        self.devtools.elements.dragging_scrollbar = None;
                         self.render();
                     }
                     if self.selection_dragging {
@@ -736,6 +779,12 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                                     self.devtools.sources.debugger_paused = false;
                                     self.devtools.sources.current_pause_location = None;
                                 }
+                                DevtoolsHit::SplitterDrag => {
+                                    self.devtools.elements.dragging_split = true;
+                                }
+                                DevtoolsHit::ScrollbarThumb(target) => {
+                                    self.devtools.elements.dragging_scrollbar = Some(target);
+                                }
                                 DevtoolsHit::None | _ => {}
                             }
                         }
@@ -750,6 +799,18 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                         if let Some(layout) = &self.layout_root {
                             if let Some(node_id) = pick_node_at_screen_pos(layout, self.mouse_x, raw_y, self.scroll_y) {
                                 self.devtools.elements.selected = Some(node_id);
+                                // Scroll tree pane na vybranou row.
+                                if let Some(idx) = self.devtools.elements.rows.iter()
+                                    .position(|r| r.node_id == node_id) {
+                                    let row_y = idx as f32 * 18.0;
+                                    let body_h = panel_h - 4.0 - 30.0;
+                                    self.devtools.elements.scroll_y = (row_y - body_h * 0.5).max(0.0);
+                                }
+                                // Auto-otevri devtools pokud je zavren.
+                                if !self.devtools.panel_open {
+                                    self.devtools.panel_open = true;
+                                    self.devtools.tab = crate::devtools::Tab::Elements;
+                                }
                                 println!("[inspect] selected node id=0x{:x}", node_id);
                             }
                         }
@@ -824,8 +885,17 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                     if self.devtools.panel_open && raw_y >= win_h - panel_h {
                         match self.devtools.tab {
                             crate::devtools::Tab::Elements => {
-                                self.devtools.elements.scroll_y -= scroll_amount;
-                                if self.devtools.elements.scroll_y < 0.0 { self.devtools.elements.scroll_y = 0.0; }
+                                let win_w = self.renderer.as_ref().map(|r| r.config.width as f32).unwrap_or(0.0);
+                                let default_split = win_w * 0.7;
+                                let split_x = if self.devtools.elements.split_x < 1.0 { default_split }
+                                              else { self.devtools.elements.split_x.max(200.0).min(win_w - 220.0) };
+                                if self.mouse_x >= split_x {
+                                    self.devtools.styles.scroll_y -= scroll_amount;
+                                    if self.devtools.styles.scroll_y < 0.0 { self.devtools.styles.scroll_y = 0.0; }
+                                } else {
+                                    self.devtools.elements.scroll_y -= scroll_amount;
+                                    if self.devtools.elements.scroll_y < 0.0 { self.devtools.elements.scroll_y = 0.0; }
+                                }
                             }
                             crate::devtools::Tab::Sources => {
                                 self.devtools.sources.scroll_y -= scroll_amount;

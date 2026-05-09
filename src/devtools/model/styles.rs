@@ -31,4 +31,5 @@ pub struct StylesState {
     pub matched_rules: Vec<MatchedRule>,
     pub computed: Vec<(String, String)>,
     pub filter: String,
+    pub scroll_y: f32,
 }

@@ -126,6 +126,18 @@ pub struct ElementsState {
     pub split_x: f32,
     /// Aktualne editovany element field (attr/text/style).
     pub edit: Option<EditState>,
+    /// Drag state - splitter resize.
+    pub dragging_split: bool,
+    /// Scrollbar thumb drag state - (target panel, click_offset_v_thumb).
+    pub dragging_scrollbar: Option<ScrollTarget>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollTarget {
+    ElementsTree,
+    StylesPane,
+    Console,
+    Sources,
 }
 
 #[derive(Debug, Clone)]

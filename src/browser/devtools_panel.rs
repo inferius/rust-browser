@@ -24,16 +24,103 @@ pub const ROW_H: f32 = 18.0;
 pub const TAB_H: f32 = 30.0;
 const TOOLBAR_BTN_H: f32 = 22.0;
 const FONT_SIZE: f32 = 12.0;
-/// CamingoMono glyph advance pri 12px. Empirically ~7.2px (mono).
+/// Fallback advance kdyz fontdue load selze.
 const FONT_W: f32 = 7.2;
 const INDENT_PX: f32 = 16.0;
 pub const RESIZE_GRIP_H: f32 = 4.0;
 const SCROLLBAR_W: f32 = 10.0;
 pub const SEARCH_H: f32 = 28.0;
+const SPLITTER_HIT_PX: f32 = 6.0;
 /// Custom font family pro vsechen DevTools text.
 const DT_FONT: &str = "CamingoMono";
 const DT_FONT_BOLD: &str = "CamingoMono-Bold";
 const DT_FONT_ITALIC: &str = "CamingoMono-Italic";
+
+/// Realna sirka textu v CamingoMono pri FONT_SIZE - musi pasovat na render side
+/// (oba pouzivaji fontdue.metrics().advance_width).
+pub fn dt_text_width(text: &str) -> f32 {
+    use std::sync::OnceLock;
+    static FONT: OnceLock<Option<fontdue::Font>> = OnceLock::new();
+    let f = FONT.get_or_init(|| {
+        let candidates = [
+            "static/fonts/CamingoMono-Light.ttf",
+            "fonts/CamingoMono-Light.ttf",
+        ];
+        for p in candidates.iter() {
+            if let Ok(d) = std::fs::read(p) {
+                if let Ok(font) = fontdue::Font::from_bytes(d, fontdue::FontSettings::default()) {
+                    return Some(font);
+                }
+            }
+        }
+        None
+    });
+    match f.as_ref() {
+        Some(font) => text.chars().map(|c| font.metrics(c, FONT_SIZE).advance_width).sum(),
+        None => text.chars().count() as f32 * FONT_W,
+    }
+}
+
+// ─── Vector icons (push_rect-based, CamingoMono nema dostatecne unicode glyphs) ──
+
+/// Caret shape - filled triangle 8x8. dir = 0 (right) | 1 (down).
+fn icon_caret(cmds: &mut Vec<DisplayCommand>, x: f32, y: f32, dir: u8, color: [u8; 4]) {
+    // x,y = top-left of 8x8 bounding box.
+    if dir == 0 {
+        // Right-pointing: 4 horizontal lines (top->mid widening, mid->bottom shrinking).
+        for i in 0..4 {
+            let lh = 1.0;
+            let lw = (i + 1) as f32;
+            push_rect(cmds, x + 1.0, y + 1.0 + i as f32, lw, lh, color);
+            push_rect(cmds, x + 1.0, y + 7.0 - i as f32 - 1.0, lw, lh, color);
+        }
+    } else {
+        // Down-pointing: triangle made of horizontal lines, top wide, narrowing.
+        for i in 0..4 {
+            let lh = 1.0;
+            let lw = (7 - i * 2).max(1) as f32;
+            let lx = x + 1.0 + i as f32;
+            push_rect(cmds, lx, y + 1.0 + i as f32, lw, lh, color);
+        }
+    }
+}
+
+/// X close icon (12x12 box, lines through corners).
+fn icon_close(cmds: &mut Vec<DisplayCommand>, x: f32, y: f32, color: [u8; 4]) {
+    for i in 0..8 {
+        push_rect(cmds, x + 2.0 + i as f32, y + 2.0 + i as f32, 1.5, 1.5, color);
+        push_rect(cmds, x + 2.0 + i as f32, y + 9.0 - i as f32, 1.5, 1.5, color);
+    }
+}
+
+/// Sun icon - filled circle + 4 rays.
+fn icon_sun(cmds: &mut Vec<DisplayCommand>, x: f32, y: f32, color: [u8; 4]) {
+    cmds.push(DisplayCommand::Rect { x: x + 3.0, y: y + 3.0, w: 6.0, h: 6.0, color, radius: 3.0 });
+    push_rect(cmds, x + 5.5, y, 1.0, 2.0, color);
+    push_rect(cmds, x + 5.5, y + 10.0, 1.0, 2.0, color);
+    push_rect(cmds, x, y + 5.5, 2.0, 1.0, color);
+    push_rect(cmds, x + 10.0, y + 5.5, 2.0, 1.0, color);
+}
+
+/// Moon (crescent) - approximated by filled disc + smaller bg disc offset.
+fn icon_moon(cmds: &mut Vec<DisplayCommand>, x: f32, y: f32, color: [u8; 4], bg: [u8; 4]) {
+    cmds.push(DisplayCommand::Rect { x: x + 1.0, y: y + 1.0, w: 10.0, h: 10.0, color, radius: 5.0 });
+    cmds.push(DisplayCommand::Rect { x: x + 4.0, y: y, w: 9.0, h: 9.0, color: bg, radius: 4.5 });
+}
+
+/// Crosshair (inspect) - 4 corner brackets.
+fn icon_crosshair(cmds: &mut Vec<DisplayCommand>, x: f32, y: f32, color: [u8; 4]) {
+    let w = 12.0;
+    push_rect(cmds, x, y, 4.0, 1.0, color);
+    push_rect(cmds, x, y, 1.0, 4.0, color);
+    push_rect(cmds, x + w - 4.0, y, 4.0, 1.0, color);
+    push_rect(cmds, x + w - 1.0, y, 1.0, 4.0, color);
+    push_rect(cmds, x, y + w - 1.0, 4.0, 1.0, color);
+    push_rect(cmds, x, y + w - 4.0, 1.0, 4.0, color);
+    push_rect(cmds, x + w - 4.0, y + w - 1.0, 4.0, 1.0, color);
+    push_rect(cmds, x + w - 1.0, y + w - 4.0, 1.0, 4.0, color);
+    push_rect(cmds, x + 5.5, y + 5.5, 1.0, 1.0, color);
+}
 
 // ─── Top-level paint ────────────────────────────────────────────────────
 
@@ -157,21 +244,22 @@ fn paint_toolbar_actions(
                       && mouse_y >= y && mouse_y < y + h;
     push_rect(cmds, x_right, y, close_w, h,
               if close_hover { pal.bg_row_hover } else { pal.bg_toolbar });
-    push_text(cmds, x_right + 8.0, y + (h - FONT_SIZE) * 0.5 + 1.0,
-              "\u{2715}".to_string(), pal.text, false);
+    icon_close(cmds, x_right + 6.0, y + (h - 12.0) * 0.5, pal.text);
 
     // Theme dot (Ctrl+Shift+T toggle): sun/moon icon.
     let theme_w = 24.0;
     x_right -= theme_w + 4.0;
     let theme_hover = mouse_x >= x_right && mouse_x < x_right + theme_w
                       && mouse_y >= y && mouse_y < y + h;
-    push_rect(cmds, x_right, y, theme_w, h,
-              if theme_hover { pal.bg_row_hover } else { pal.bg_toolbar });
-    let icon = if pal.is_dark { "\u{263E}" } else { "\u{263C}" };
-    push_text(cmds, x_right + 7.0, y + (h - FONT_SIZE) * 0.5 + 1.0,
-              icon.to_string(), pal.text, false);
+    let theme_bg = if theme_hover { pal.bg_row_hover } else { pal.bg_toolbar };
+    push_rect(cmds, x_right, y, theme_w, h, theme_bg);
+    if pal.is_dark {
+        icon_moon(cmds, x_right + 6.0, y + (h - 12.0) * 0.5, pal.text, theme_bg);
+    } else {
+        icon_sun(cmds, x_right + 6.0, y + (h - 12.0) * 0.5, pal.text);
+    }
 
-    // Inspect toggle: ramecek symbol.
+    // Inspect toggle: crosshair + label.
     let insp_w = 90.0;
     x_right -= insp_w + 4.0;
     let insp_hover = mouse_x >= x_right && mouse_x < x_right + insp_w
@@ -181,8 +269,9 @@ fn paint_toolbar_actions(
              else { pal.bg_button };
     push_rect(cmds, x_right, y, insp_w, h, bg);
     let txt = if state.inspect_mode { pal.text_on_accent } else { pal.text };
-    push_text(cmds, x_right + 8.0, y + (h - FONT_SIZE) * 0.5 + 1.0,
-              "\u{2316} Inspect".to_string(), txt, false);
+    icon_crosshair(cmds, x_right + 6.0, y + (h - 12.0) * 0.5, txt);
+    push_text(cmds, x_right + 22.0, y + (h - FONT_SIZE) * 0.5 + 1.0,
+              "Inspect".to_string(), txt, false);
 }
 
 // ─── Elements tab ───────────────────────────────────────────────────────
@@ -363,9 +452,9 @@ fn paint_element_row(
             let collapsed = state.elements.collapsed.contains(&row.node_id);
             let mut x = x_indent;
             if *has_children {
-                let caret = if collapsed { "\u{25B6}" } else { "\u{25BC}" };
-                push_text(cmds, x - INDENT_PX + 4.0, text_y,
-                          caret.to_string(), pal.text_dim, false);
+                let caret_color = if is_sel { text_color_default } else { pal.text_dim };
+                icon_caret(cmds, x - INDENT_PX + 3.0, text_y + 2.0,
+                           if collapsed { 0 } else { 1 }, caret_color);
             }
             // <tag
             let tag_color = if is_sel { text_color_default } else { pal.syn_tag };
@@ -426,21 +515,17 @@ fn paint_edit_row(
         EditTarget::InlineStyleProperty { property, .. } => format!("{}: ", property),
     };
     push_text(cmds, x_indent, text_y, prefix.clone(), pal.text_dim, false);
-    let text_x = x_indent + prefix.len() as f32 * FONT_W;
+    let text_x = x_indent + dt_text_width(&prefix);
 
-    // Selection highlight - chars-based offset.
+    // Selection highlight - real-advance based.
     if let Some((s, e)) = edit.buffer.selection_range() {
-        let s_chars = edit.buffer.text[..s].chars().count();
-        let e_chars = edit.buffer.text[..e].chars().count();
-        let sx = text_x + (s_chars as f32) * FONT_W;
-        let ex = text_x + (e_chars as f32) * FONT_W;
+        let sx = text_x + dt_text_width(&edit.buffer.text[..s]);
+        let ex = text_x + dt_text_width(&edit.buffer.text[..e]);
         push_rect(cmds, sx, text_y - 2.0, ex - sx, FONT_SIZE + 4.0, pal.bg_row_selected);
     }
     push_text(cmds, text_x, text_y, edit.buffer.text.clone(), pal.text, false);
-    // Cursor blink - chars-based.
     if state.cursor_visible() {
-        let cur_chars = edit.buffer.text[..edit.buffer.cursor].chars().count();
-        let cx = text_x + (cur_chars as f32) * FONT_W;
+        let cx = text_x + dt_text_width(&edit.buffer.text[..edit.buffer.cursor]);
         push_rect(cmds, cx, text_y - 2.0, 1.0, FONT_SIZE + 4.0, pal.text);
     }
 }
@@ -452,7 +537,8 @@ fn paint_styles_pane(
     pal: &Palette,
     x: f32, y: f32, _w: f32, h: f32,
 ) {
-    let mut sy = y + 8.0;
+    let scroll = state.styles.scroll_y;
+    let mut sy = y + 8.0 - scroll;
     let max_y = y + h;
     let pad_x = x + 12.0;
 
@@ -622,24 +708,20 @@ fn paint_console_input(
     push_text(cmds, prompt_x, text_y, ">".to_string(), pal.log_input_marker, true);
 
     let input = &state.console.input;
-    let text_x = prompt_x + 12.0;
+    let text_x = prompt_x + dt_text_width("> ");
 
-    // Selection highlight - chars-based (ne byte offset).
+    // Selection highlight - real-advance based.
     if let Some((s, e)) = input.selection_range() {
-        let s_chars = input.text[..s].chars().count();
-        let e_chars = input.text[..e].chars().count();
-        let sel_x0 = text_x + (s_chars as f32) * FONT_W;
-        let sel_x1 = text_x + (e_chars as f32) * FONT_W;
+        let sel_x0 = text_x + dt_text_width(&input.text[..s]);
+        let sel_x1 = text_x + dt_text_width(&input.text[..e]);
         push_rect(cmds, sel_x0, text_y - 2.0, sel_x1 - sel_x0, FONT_SIZE + 4.0,
                   pal.bg_row_selected);
     }
 
     push_text(cmds, text_x, text_y, input.text.clone(), pal.text, false);
 
-    // Cursor (blink pri focusu) - chars-based offset.
     if focused && state.cursor_visible() {
-        let cur_chars = input.text[..input.cursor].chars().count();
-        let cur_x = text_x + (cur_chars as f32) * FONT_W;
+        let cur_x = text_x + dt_text_width(&input.text[..input.cursor]);
         push_rect(cmds, cur_x, text_y - 2.0, 1.0, FONT_SIZE + 4.0, pal.text);
     }
 }
@@ -1401,6 +1483,10 @@ pub enum DevtoolsHit {
     DebuggerStepInto,
     /// Step Out button.
     DebuggerStepOut,
+    /// Drag splitter v Elements tab (resize tree vs styles).
+    SplitterDrag,
+    /// Drag scrollbar thumb (target panel).
+    ScrollbarThumb(crate::devtools::ScrollTarget),
 }
 
 pub fn devtools_hit_test(
@@ -1503,9 +1589,39 @@ fn hit_test_elements(
         return DevtoolsHit::ElementsSearchBar;
     }
     let body_y = content_y + search_h;
-    let _body_h = content_h - search_h;
-    let split_x = state.elements.split_x.max(200.0).min(win_w - 220.0);
-    if mouse_x >= split_x { return DevtoolsHit::PanelArea; }
+    let body_h = content_h - search_h;
+    let default_split = win_w * 0.7;
+    let split_x = if state.elements.split_x < 1.0 { default_split }
+                  else { state.elements.split_x.max(200.0).min(win_w - 220.0) };
+
+    // Splitter zone (+/- SPLITTER_HIT_PX kolem split_x).
+    if (mouse_x - split_x).abs() < SPLITTER_HIT_PX && mouse_y >= body_y && mouse_y < body_y + body_h {
+        return DevtoolsHit::SplitterDrag;
+    }
+
+    if mouse_x >= split_x {
+        // Pravy pane - check styles scrollbar thumb.
+        let total_h = state.styles.computed.len() as f32 * ROW_H * 4.0;
+        if total_h > body_h {
+            let sb_x = win_w - SCROLLBAR_W;
+            if mouse_x >= sb_x && mouse_x < sb_x + SCROLLBAR_W
+               && mouse_y >= body_y && mouse_y < body_y + body_h {
+                return DevtoolsHit::ScrollbarThumb(crate::devtools::ScrollTarget::StylesPane);
+            }
+        }
+        return DevtoolsHit::PanelArea;
+    }
+
+    // Levy pane - check tree scrollbar thumb.
+    let rows = &state.elements.rows;
+    let total_h = rows.len() as f32 * ROW_H;
+    if total_h > body_h {
+        let sb_x = split_x - SCROLLBAR_W;
+        if mouse_x >= sb_x && mouse_x < sb_x + SCROLLBAR_W
+           && mouse_y >= body_y && mouse_y < body_y + body_h {
+            return DevtoolsHit::ScrollbarThumb(crate::devtools::ScrollTarget::ElementsTree);
+        }
+    }
 
     let scroll_y = state.elements.scroll_y;
     let row_idx = ((mouse_y - body_y + scroll_y) / ROW_H) as usize;
