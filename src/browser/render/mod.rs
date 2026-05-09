@@ -2111,7 +2111,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
     impl App {
         fn handle_escape_close_popups(&mut self) -> bool {
             // Close prioritou: color picker > settings > class manager >
-            // tab overflow > addr bar > find.
+            // tab overflow > addr bar > find > selection.
             if self.devtools.color_picker.is_some() {
                 self.devtools.color_picker = None;
                 return true;
@@ -2126,6 +2126,21 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             }
             if self.devtools.tab_overflow_open {
                 self.devtools.tab_overflow_open = false;
+                return true;
+            }
+            if self.addr_open {
+                self.addr_open = false;
+                self.addr_input.clear();
+                return true;
+            }
+            if self.find_open {
+                self.find_open = false;
+                self.find_query.clear();
+                return true;
+            }
+            // Last resort: clear page selection.
+            if self.page_sel_anchor().is_some() {
+                self.page_sel_clear();
                 return true;
             }
             false
