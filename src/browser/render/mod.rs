@@ -946,7 +946,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                         cur.css = self.css.clone();
                                         cur.url = self.base_url.clone();
                                     }
-                                    self.tabs.switch_to(idx);
+                                    self.switch_tab_with_swap(idx);
                                     let t = self.tabs.active_tab().clone();
                                     self.html = t.html;
                                     self.css = t.css;
@@ -2380,7 +2380,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                 if let Ok(n) = s.as_str().parse::<usize>() {
                                     if n >= 1 && n <= 9 {
                                         if n - 1 < self.tabs.tabs.len() {
-                                            self.tabs.switch_to(n - 1);
+                                            self.switch_tab_with_swap(n - 1);
                                             let t = self.tabs.active_tab().clone();
                                             self.html = t.html;
                                             self.css = t.css;
@@ -2396,11 +2396,12 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         }
                         // Ctrl+Tab = next tab.
                         if matches!(&key_event.logical_key, Key::Named(NamedKey::Tab)) && self.shell_mode {
-                            if self.modifiers.shift_key() {
-                                self.tabs.prev();
+                            let target = if self.modifiers.shift_key() {
+                                if self.tabs.active == 0 { self.tabs.tabs.len() - 1 } else { self.tabs.active - 1 }
                             } else {
-                                self.tabs.next();
-                            }
+                                (self.tabs.active + 1) % self.tabs.tabs.len()
+                            };
+                            self.switch_tab_with_swap(target);
                             let t = self.tabs.active_tab().clone();
                             self.html = t.html;
                             self.css = t.css;
@@ -3959,9 +3960,9 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 TabReload(idx) => {
                     if let Some(url) = self.tabs.tabs[idx].url.clone() {
                         let active_was = self.tabs.active;
-                        self.tabs.switch_to(idx);
+                        self.switch_tab_with_swap(idx);
                         self.navigate_url_no_history(&url);
-                        self.tabs.switch_to(active_was);
+                        self.switch_tab_with_swap(active_was);
                     }
                 }
                 BookmarkOpen(url) => {
@@ -4317,6 +4318,31 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         }
 
         /// Write arbitrary style value (z editing buffer) na selected node inline style.
+        /// Swap interpreter mezi App.interpreter a target_tab.stored_interpreter.
+        /// Stash aktualni interp do soucasneho aktivniho tabu pred prepnutim.
+        /// Cilove tab dostane App.interpreter (presune se z stored_interpreter).
+        /// Pri prvni navsteve target_tab neni stored_interp -> App.interpreter
+        /// = None, nasledne navigate_url ho vytvori.
+        fn switch_tab_with_swap(&mut self, target_idx: usize) {
+            if target_idx >= self.tabs.tabs.len() { return; }
+            if target_idx == self.tabs.active { return; }
+            let prev = self.tabs.active;
+            // Stash current interp do prev tabu (pokud existuje).
+            if let Some(interp) = self.interpreter.take() {
+                self.tabs.stash_interpreter(prev, Box::new(interp));
+            }
+            self.tabs.switch_to(target_idx);
+            // Take target's stored interp (pokud existuje).
+            if let Some(boxed) = self.tabs.take_target_interpreter(target_idx) {
+                self.interpreter = Some(*boxed);
+            }
+            // Cache invalidace - nove DOM/document.
+            self.cached_layout_root = None;
+            self.cached_style_map = None;
+            self.cached_pseudo_map = None;
+            self.cached_matched_key = None;
+        }
+
         fn write_back_style_edit(&mut self, prop: &str, value: &str) {
             let Some(node_id) = self.devtools.elements.selected else { return };
             if let Some(interp) = &self.interpreter {

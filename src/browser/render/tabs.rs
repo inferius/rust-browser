@@ -8,7 +8,6 @@
 
 use std::path::PathBuf;
 
-#[derive(Debug, Clone)]
 pub struct Tab {
     pub url: Option<String>,
     pub path: Option<PathBuf>,
@@ -32,6 +31,49 @@ pub struct Tab {
     pub loading: bool,
     /// Skupinova barva (top edge stripe). None = bez skupiny.
     pub group_color: Option<[u8; 4]>,
+    /// Per-tab Interpreter (S1) - drzi JS state pri tab switch.
+    /// Move semantics: pri switch_to inactive -> active swap s App.interpreter.
+    /// None = tab nema vlastni interp ulozeny (jeste neaktivni nebo prevzaty).
+    /// Clone tabu nekopiruje interpreter - prazdny stored_interpreter v cili.
+    pub stored_interpreter: Option<Box<crate::interpreter::Interpreter>>,
+}
+
+impl std::fmt::Debug for Tab {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Tab")
+            .field("url", &self.url)
+            .field("title", &self.title)
+            .field("pinned", &self.pinned)
+            .field("loading", &self.loading)
+            .field("has_stored_interp", &self.stored_interpreter.is_some())
+            .finish()
+    }
+}
+
+impl Clone for Tab {
+    fn clone(&self) -> Self {
+        // stored_interpreter NEKLOPIROVAT - Interpreter neni Clone a sdileni
+        // by porusilo per-tab izolaci JS state. Cilove tab dostane None;
+        // skutecny presun probiha jen pres mem::swap pri switch_to.
+        Self {
+            url: self.url.clone(),
+            path: self.path.clone(),
+            html: self.html.clone(),
+            css: self.css.clone(),
+            title: self.title.clone(),
+            favicon_url: self.favicon_url.clone(),
+            favicon_bytes: self.favicon_bytes.clone(),
+            scroll_y: self.scroll_y,
+            scroll_x: self.scroll_x,
+            history: self.history.clone(),
+            history_idx: self.history_idx,
+            document_root: self.document_root.clone(),
+            pinned: self.pinned,
+            loading: self.loading,
+            group_color: self.group_color,
+            stored_interpreter: None,
+        }
+    }
 }
 
 impl Tab {
@@ -57,6 +99,7 @@ impl Tab {
             pinned: false,
             loading: false,
             group_color: None,
+            stored_interpreter: None,
         }
     }
 
@@ -76,6 +119,7 @@ impl Tab {
             pinned: false,
             loading: false,
             group_color: None,
+            stored_interpreter: None,
         }
     }
 }
@@ -575,6 +619,22 @@ impl TabManager {
 
     pub fn switch_to(&mut self, idx: usize) {
         if idx < self.tabs.len() { self.active = idx; }
+    }
+
+    /// Switch + interpreter swap: vraci stored_interpreter cilove tabu pokud
+    /// je ulozen. Caller (App) swapne s svym aktualnim interpretrem pro
+    /// preserve JS state kazdy tab. Volat misto switch_to() pri user-driven
+    /// switch.
+    pub fn take_target_interpreter(&mut self, idx: usize) -> Option<Box<crate::interpreter::Interpreter>> {
+        if idx >= self.tabs.len() { return None; }
+        self.tabs[idx].stored_interpreter.take()
+    }
+
+    /// Stash interpreter into specified tab idx (typicky stary aktivni tab).
+    pub fn stash_interpreter(&mut self, idx: usize, interp: Box<crate::interpreter::Interpreter>) {
+        if let Some(t) = self.tabs.get_mut(idx) {
+            t.stored_interpreter = Some(interp);
+        }
     }
 
     pub fn open(&mut self, tab: Tab) {
