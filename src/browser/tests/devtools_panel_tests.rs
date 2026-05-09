@@ -51,7 +51,11 @@ fn devtools_hit_test_tab_click() {
     // Tab Elements je na x ~= 8..(8 + len * 7 + 18). Klik dovnitr.
     let panel_y = 800.0 - state.panel_h;
     let hit = devtools_hit_test(&state, &layout, 1280.0, 800.0, 30.0, panel_y + 14.0);
-    assert!(matches!(hit, DevtoolsHit::TabClick(Tab::Elements)));
+    if let DevtoolsHit::TabClick(t) = hit {
+        assert_eq!(t, Tab::Elements);
+    } else {
+        panic!("expected TabClick, got {:?}", hit);
+    }
 }
 
 #[test]

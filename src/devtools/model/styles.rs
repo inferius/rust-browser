@@ -65,6 +65,12 @@ pub struct StylesState {
     pub section_header_zones: std::cell::RefCell<Vec<(f32, f32, f32, f32, String)>>,
     /// Pridavam novy inline style decl - phase: typuju prop, pak value.
     pub adding_inline_decl: Option<AddingInlineDecl>,
+    /// Edit existing inline decl (klik na value). (property, buffer).
+    pub editing_inline: Option<(String, String)>,
+    /// Cache (x, y, w, h, prop) zone klikatelnych value v inline section.
+    pub inline_value_zones: std::cell::RefCell<Vec<(f32, f32, f32, f32, String)>>,
+    /// Cache (x, y, w, h) "+ pridat" tlacitko v inline section.
+    pub inline_add_btn_zone: std::cell::RefCell<Option<(f32, f32, f32, f32)>>,
     /// Cache (x, y, w, h) overflow chevron buttonu v side panel sub-tab strip.
     /// None = chevron neviditelny (vsechny tabs vejde se).
     pub overflow_chevron_zone: std::cell::RefCell<Option<(f32, f32, f32, f32)>>,

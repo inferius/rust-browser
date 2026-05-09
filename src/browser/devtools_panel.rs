@@ -2078,6 +2078,105 @@ fn paint_styles_pane(
     // Visibility check - skip render rows out of [min_y, max_y].
     let in_view = |sy: f32| sy + ROW_H >= min_y && sy < max_y;
 
+    // Reset inline zones.
+    state.styles.inline_value_zones.borrow_mut().clear();
+    *state.styles.inline_add_btn_zone.borrow_mut() = None;
+
+    // ─── Section: prvek { } - inline styles editor ───
+    if in_view(sy) {
+        let tag = bx.node.as_ref().and_then(|n| n.tag_name())
+            .unwrap_or_else(|| "prvek".to_string());
+        push_text(cmds, pad_x, sy, format!("{} {{", tag), pal.syn_attr, false);
+    }
+    sy += ROW_H;
+    // Parse current inline style attribute do (prop, value) pairs.
+    let inline_attr = bx.node.as_ref()
+        .and_then(|n| n.attributes.borrow().get("style").cloned())
+        .unwrap_or_default();
+    let inline_decls: Vec<(String, String)> = inline_attr.split(';')
+        .filter_map(|d| {
+            let mut parts = d.splitn(2, ':');
+            let prop = parts.next()?.trim();
+            let val = parts.next()?.trim();
+            if prop.is_empty() || val.is_empty() { return None; }
+            Some((prop.to_string(), val.to_string()))
+        })
+        .collect();
+    for (prop, val) in &inline_decls {
+        if sy >= max_y { break; }
+        if in_view(sy) {
+            // Editing? Render input.
+            let editing = state.styles.editing_inline.as_ref()
+                .filter(|(p, _)| p == prop);
+            if let Some((_, buf)) = editing {
+                let prefix = format!("  {}: ", prop);
+                push_text(cmds, pad_x, sy, prefix.clone(), pal.syn_property, false);
+                let edit_x = pad_x + dt_text_width(&prefix);
+                push_rect(cmds, edit_x - 2.0, sy, 200.0, ROW_H, pal.bg_input_focus);
+                push_rect_border(cmds, edit_x - 2.0, sy, 200.0, ROW_H, pal.accent);
+                push_text(cmds, edit_x, sy, buf.clone(), pal.text, false);
+                let cur_x = edit_x + dt_text_width(buf);
+                push_rect(cmds, cur_x, sy + 2.0, 1.0, ROW_H - 4.0, pal.accent);
+            } else {
+                push_text(cmds, pad_x, sy, format!("  {}: ", prop), pal.syn_property, false);
+                let v_x = pad_x + dt_text_width(&format!("  {}: ", prop));
+                push_text(cmds, v_x, sy, format!("{};", val), pal.text, false);
+                let v_w = dt_text_width(val).max(40.0);
+                state.styles.inline_value_zones.borrow_mut()
+                    .push((v_x, sy, v_w, ROW_H, prop.clone()));
+            }
+        }
+        sy += ROW_H;
+    }
+    // Add new decl row + button.
+    if let Some(adding) = &state.styles.adding_inline_decl {
+        if in_view(sy) {
+            use crate::devtools::model::styles::AddPhase;
+            let prop_focus = adding.phase == AddPhase::Property;
+            let val_focus = adding.phase == AddPhase::Value;
+            push_text(cmds, pad_x, sy, "  ".to_string(), pal.syn_property, false);
+            // Property input.
+            let p_x = pad_x + 16.0;
+            let p_w = 140.0;
+            push_rect(cmds, p_x, sy, p_w, ROW_H,
+                if prop_focus { pal.bg_input_focus } else { pal.bg_input });
+            push_rect_border(cmds, p_x, sy, p_w, ROW_H,
+                if prop_focus { pal.accent } else { pal.border });
+            push_text(cmds, p_x + 4.0, sy, adding.prop_buffer.clone(), pal.text, false);
+            if prop_focus {
+                push_rect(cmds, p_x + 4.0 + dt_text_width(&adding.prop_buffer),
+                    sy + 2.0, 1.0, ROW_H - 4.0, pal.accent);
+            }
+            push_text(cmds, p_x + p_w + 4.0, sy, ":".to_string(), pal.text_dim, false);
+            // Value input.
+            let v_x = p_x + p_w + 12.0;
+            let v_w = 180.0;
+            push_rect(cmds, v_x, sy, v_w, ROW_H,
+                if val_focus { pal.bg_input_focus } else { pal.bg_input });
+            push_rect_border(cmds, v_x, sy, v_w, ROW_H,
+                if val_focus { pal.accent } else { pal.border });
+            push_text(cmds, v_x + 4.0, sy, adding.value_buffer.clone(), pal.text, false);
+            if val_focus {
+                push_rect(cmds, v_x + 4.0 + dt_text_width(&adding.value_buffer),
+                    sy + 2.0, 1.0, ROW_H - 4.0, pal.accent);
+            }
+        }
+        sy += ROW_H + 2.0;
+    } else if in_view(sy) {
+        // "+ pridat" button.
+        let btn_w = 80.0;
+        let btn_x = pad_x + 16.0;
+        push_rect(cmds, btn_x, sy + 2.0, btn_w, ROW_H - 2.0, pal.bg_button);
+        push_rect_border(cmds, btn_x, sy + 2.0, btn_w, ROW_H - 2.0, pal.border);
+        push_text(cmds, btn_x + 6.0, sy + 4.0, "+ pridat".to_string(), pal.text_dim, false);
+        *state.styles.inline_add_btn_zone.borrow_mut() = Some((btn_x, sy + 2.0, btn_w, ROW_H - 2.0));
+        sy += ROW_H + 2.0;
+    }
+    if in_view(sy) {
+        push_text(cmds, pad_x, sy, "}".to_string(), pal.syn_attr, false);
+    }
+    sy += ROW_H + 8.0;
+
     // Section: matched rules header.
     if in_view(sy) {
         push_ui_text(cmds, pad_x, sy, "Vybrane styly".to_string(), pal.text, true);
@@ -3331,6 +3430,10 @@ pub enum DevtoolsHit {
     ColorPickerRgbFocus(usize),
     /// Klik na value v styles pane - otevrit editor pro property.
     EditDeclValue(String),
+    /// Klik na value v inline section - otevrit editor.
+    EditInlineValue(String),
+    /// Klik na "+ pridat" button - otevrit add-new inline decl.
+    AddInlineDecl,
     /// Klik na match preview ctverecek - toggle highlight matching elementu.
     ToggleMatchPreview(String),
     /// Klik na source link - prepni Sources tab + open file.
@@ -3772,6 +3875,22 @@ fn hit_test_elements(
             }
         }
         drop(mzones);
+        // Inline value zone (klik value v "prvek {}" sekci).
+        let inline_v = state.styles.inline_value_zones.borrow();
+        for (zx, zy, zw, zh, prop) in inline_v.iter() {
+            if mouse_x >= *zx && mouse_x < zx + zw
+               && mouse_y >= *zy && mouse_y < zy + zh {
+                return DevtoolsHit::EditInlineValue(prop.clone());
+            }
+        }
+        drop(inline_v);
+        // "+ pridat" inline button.
+        if let Some((zx, zy, zw, zh)) = *state.styles.inline_add_btn_zone.borrow() {
+            if mouse_x >= zx && mouse_x < zx + zw
+               && mouse_y >= zy && mouse_y < zy + zh {
+                return DevtoolsHit::AddInlineDecl;
+            }
+        }
         // Source link klik.
         let szones = state.styles.source_link_zones.borrow();
         for (zx, zy, zw, zh, lab) in szones.iter() {

@@ -1440,6 +1440,35 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                         .map(|(_, v)| v.clone()).unwrap_or_default();
                                     self.devtools.styles.editing_value = Some((prop, cur));
                                 }
+                                DevtoolsHit::EditInlineValue(prop) => {
+                                    // Read current inline value z node attr "style".
+                                    let val = self.devtools.elements.selected
+                                        .and_then(|sel| {
+                                            self.interpreter.as_ref().and_then(|i| {
+                                                let root = std::rc::Rc::clone(&i.document.borrow().root);
+                                                find_node_by_ptr(&root, sel)
+                                            })
+                                        })
+                                        .and_then(|n| n.attributes.borrow().get("style").cloned())
+                                        .and_then(|s| {
+                                            for d in s.split(';') {
+                                                let mut parts = d.splitn(2, ':');
+                                                if let (Some(p), Some(v)) = (parts.next(), parts.next()) {
+                                                    if p.trim() == prop { return Some(v.trim().to_string()); }
+                                                }
+                                            }
+                                            None
+                                        }).unwrap_or_default();
+                                    self.devtools.styles.editing_inline = Some((prop, val));
+                                }
+                                DevtoolsHit::AddInlineDecl => {
+                                    use crate::devtools::model::styles::{AddingInlineDecl, AddPhase};
+                                    self.devtools.styles.adding_inline_decl = Some(AddingInlineDecl {
+                                        phase: AddPhase::Property,
+                                        prop_buffer: String::new(),
+                                        value_buffer: String::new(),
+                                    });
+                                }
                                 DevtoolsHit::ToggleMatchPreview(sel) => {
                                     if self.devtools.match_preview_selector.as_deref() == Some(&sel) {
                                         self.devtools.match_preview_selector = None;
@@ -1963,6 +1992,96 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                     match p.focus {
                                         BookmarkPickerFocus::Title => p.title_buffer.push_str(s),
                                         BookmarkPickerFocus::Folder => p.folder_buffer.push_str(s),
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                        self.render();
+                        return;
+                    }
+                    // Editing inline (klik value v prvek{}) - typovani.
+                    if self.devtools.styles.editing_inline.is_some() {
+                        match &key_event.logical_key {
+                            Key::Named(NamedKey::Backspace) => {
+                                if let Some((_, b)) = self.devtools.styles.editing_inline.as_mut() {
+                                    b.pop();
+                                }
+                            }
+                            Key::Named(NamedKey::Enter) => {
+                                if let Some((prop, val)) = self.devtools.styles.editing_inline.take() {
+                                    self.write_back_style_edit(&prop, &val);
+                                }
+                            }
+                            Key::Named(NamedKey::Escape) => {
+                                self.devtools.styles.editing_inline = None;
+                            }
+                            Key::Named(NamedKey::Space) => {
+                                if let Some((_, b)) = self.devtools.styles.editing_inline.as_mut() {
+                                    b.push(' ');
+                                }
+                            }
+                            Key::Character(s) => {
+                                if let Some((_, b)) = self.devtools.styles.editing_inline.as_mut() {
+                                    b.push_str(s);
+                                }
+                            }
+                            _ => {}
+                        }
+                        self.render();
+                        return;
+                    }
+                    // Adding new inline decl.
+                    if self.devtools.styles.adding_inline_decl.is_some() {
+                        use crate::devtools::model::styles::AddPhase;
+                        match &key_event.logical_key {
+                            Key::Named(NamedKey::Backspace) => {
+                                if let Some(a) = self.devtools.styles.adding_inline_decl.as_mut() {
+                                    match a.phase {
+                                        AddPhase::Property => { a.prop_buffer.pop(); }
+                                        AddPhase::Value => { a.value_buffer.pop(); }
+                                    }
+                                }
+                            }
+                            Key::Named(NamedKey::Tab) => {
+                                if let Some(a) = self.devtools.styles.adding_inline_decl.as_mut() {
+                                    a.phase = match a.phase {
+                                        AddPhase::Property => AddPhase::Value,
+                                        AddPhase::Value => AddPhase::Property,
+                                    };
+                                }
+                            }
+                            Key::Named(NamedKey::Enter) => {
+                                if let Some(a) = self.devtools.styles.adding_inline_decl.as_ref() {
+                                    if a.phase == AddPhase::Property && !a.prop_buffer.is_empty() {
+                                        // Move na value phase.
+                                        if let Some(am) = self.devtools.styles.adding_inline_decl.as_mut() {
+                                            am.phase = AddPhase::Value;
+                                        }
+                                    } else if !a.prop_buffer.is_empty() && !a.value_buffer.is_empty() {
+                                        let prop = a.prop_buffer.clone();
+                                        let val = a.value_buffer.clone();
+                                        self.devtools.styles.adding_inline_decl = None;
+                                        self.write_back_style_edit(&prop, &val);
+                                    }
+                                }
+                            }
+                            Key::Named(NamedKey::Escape) => {
+                                self.devtools.styles.adding_inline_decl = None;
+                            }
+                            Key::Named(NamedKey::Space) => {
+                                if let Some(a) = self.devtools.styles.adding_inline_decl.as_mut() {
+                                    match a.phase {
+                                        AddPhase::Property => a.prop_buffer.push(' '),
+                                        AddPhase::Value => a.value_buffer.push(' '),
+                                    }
+                                }
+                            }
+                            Key::Character(s) => {
+                                if let Some(a) = self.devtools.styles.adding_inline_decl.as_mut() {
+                                    match a.phase {
+                                        AddPhase::Property => a.prop_buffer.push_str(s),
+                                        AddPhase::Value => a.value_buffer.push_str(s),
                                     }
                                 }
                             }
