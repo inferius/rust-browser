@@ -206,12 +206,25 @@ fn resolve_favicon(base: &str, href: &str) -> String {
 
 /// Render about:history page - cely seznam navstivenych URL.
 pub fn render_about_history() -> (String, String) {
+    render_about_history_filtered("")
+}
+
+pub fn render_about_history_filtered(query: &str) -> (String, String) {
     let history = crate::devtools::history::load_history();
-    let total = history.len();
-    let rows = if history.is_empty() {
-        "<tr><td colspan=2 class='empty'>Zadna historie</td></tr>".to_string()
+    let q_low = query.to_lowercase();
+    let filtered: Vec<&crate::devtools::history::HistoryEntry> = if q_low.is_empty() {
+        history.iter().collect()
     } else {
-        history.iter().rev().take(500).map(|h| {
+        history.iter().filter(|h|
+            h.url.to_lowercase().contains(&q_low) || h.title.to_lowercase().contains(&q_low)
+        ).collect()
+    };
+    let total = filtered.len();
+    let rows = if filtered.is_empty() {
+        format!("<tr><td colspan=2 class='empty'>Zadna {} polozka</td></tr>",
+                if q_low.is_empty() { "historie" } else { "shoda" })
+    } else {
+        filtered.iter().rev().take(500).map(|h| {
             let date = format_ts(h.visited_at);
             format!("<tr><td><a href=\"{}\">{}</a></td><td class=date>{}</td></tr>",
                     html_escape(&h.url), html_escape(&h.title), date)

@@ -1075,6 +1075,12 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                     self.devtools.theme.flavor = f;
                                     crate::devtools::theme::save_persisted(self.devtools.theme);
                                 }
+                                DevtoolsHit::ConsoleClear => {
+                                    self.devtools.console.log.clear();
+                                }
+                                DevtoolsHit::NetworkClear => {
+                                    self.devtools.network.entries.clear();
+                                }
                                 DevtoolsHit::ConsoleInput => {
                                     self.devtools.focus = crate::devtools::focus::FocusTarget::DevToolsConsole;
                                     // Click-to-position cursor: prevod mouse_x na byte idx.

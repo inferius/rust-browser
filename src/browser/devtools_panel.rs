@@ -1937,10 +1937,20 @@ fn paint_console_tab(
     content_h: f32,
     _mouse_x: f32, _mouse_y: f32,
 ) {
+    // Toolbar nahore: clear button.
+    let toolbar_h = 24.0;
+    push_rect(cmds, 0.0, content_y, win_w, toolbar_h, pal.bg_panel_alt);
+    push_rect(cmds, 0.0, content_y + toolbar_h - 1.0, win_w, 1.0, pal.border);
+    let clear_w = 80.0;
+    push_rect(cmds, 8.0, content_y + 3.0, clear_w, toolbar_h - 6.0, pal.bg_button);
+    push_ui_text(cmds, 16.0, content_y + 6.0,
+                 format!("✕ Vymazat ({})", state.console.log.len()),
+                 pal.text_dim, false);
+
     let input_h = 32.0;
     let input_y = content_y + content_h - input_h;
-    let log_y = content_y;
-    let log_h = content_h - input_h;
+    let log_y = content_y + toolbar_h;
+    let log_h = content_h - input_h - toolbar_h;
 
     push_rect(cmds, 0.0, log_y, win_w, log_h, pal.bg_panel);
     push_rect(cmds, 0.0, input_y, win_w, input_h, pal.bg_panel_alt);
@@ -2085,6 +2095,13 @@ fn paint_network_tab(
                   if active { pal.text } else { pal.text_dim }, false);
         fx += w + 2.0;
     }
+    // Clear button vpravo.
+    let clear_w = 80.0;
+    let clear_x = win_w - clear_w - 8.0;
+    push_rect(cmds, clear_x, content_y + 3.0, clear_w, filter_h - 6.0, pal.bg_button);
+    push_ui_text(cmds, clear_x + 8.0, content_y + 7.0,
+                 format!("✕ Vymazat ({})", state.network.entries.len()),
+                 pal.text_dim, false);
     let content_y = content_y + filter_h;
     let content_h = content_h - filter_h;
 
@@ -2900,6 +2917,10 @@ pub enum DevtoolsHit {
     PanelArea,
     /// Console input focus.
     ConsoleInput,
+    /// Clear console log button.
+    ConsoleClear,
+    /// Clear network log button.
+    NetworkClear,
     /// Sources file row.
     SourcesFileRow(u32),
     /// Sources line gutter klik (toggle BP).
@@ -3186,6 +3207,12 @@ pub fn devtools_hit_test(
     match state.tab {
         Tab::Elements => hit_test_elements(state, layout_root, content_w, content_y, content_h, local_mx, mouse_y),
         Tab::Console => {
+            // Clear button toolbar nahore.
+            let toolbar_h = 24.0;
+            if mouse_y >= content_y && mouse_y < content_y + toolbar_h
+               && local_mx >= 8.0 && local_mx < 88.0 {
+                return DevtoolsHit::ConsoleClear;
+            }
             let input_h = 32.0;
             let input_y = content_y + content_h - input_h;
             if mouse_y >= input_y { return DevtoolsHit::ConsoleInput; }
@@ -3490,7 +3517,7 @@ fn hit_test_sources(
 
 fn hit_test_network(
     state: &DevToolsState,
-    _win_w: f32,
+    win_w: f32,
     content_y: f32,
     _content_h: f32,
     mouse_x: f32, mouse_y: f32,
@@ -3498,6 +3525,12 @@ fn hit_test_network(
     use crate::devtools::model::network::NetworkFilter;
     let filter_h = 26.0;
     if mouse_y < content_y + filter_h {
+        // Clear button vpravo.
+        let clear_w = 80.0;
+        let clear_x = win_w - clear_w - 8.0;
+        if mouse_x >= clear_x && mouse_x < clear_x + clear_w {
+            return DevtoolsHit::NetworkClear;
+        }
         let filters = [
             ("All", NetworkFilter::All),
             ("Doc", NetworkFilter::Document),
