@@ -30,6 +30,8 @@ pub struct Tab {
     /// Loading state - pri navigate na URL true, po dokonceni false.
     /// Vyuzite pro busy indicator v tab chip.
     pub loading: bool,
+    /// Skupinova barva (top edge stripe). None = bez skupiny.
+    pub group_color: Option<[u8; 4]>,
 }
 
 impl Tab {
@@ -54,6 +56,7 @@ impl Tab {
             document_root: None,
             pinned: false,
             loading: false,
+            group_color: None,
         }
     }
 
@@ -72,6 +75,7 @@ impl Tab {
             document_root: None,
             pinned: false,
             loading: false,
+            group_color: None,
         }
     }
 }

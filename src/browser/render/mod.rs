@@ -1414,6 +1414,37 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                     },
                                     MenuItem::Separator,
                                     MenuItem::Action {
+                                        label: "Skupina: Modra".to_string(),
+                                        action: MenuAction::TabSetGroup(idx, Some([69, 161, 255, 255])),
+                                        enabled: true, shortcut: None,
+                                    },
+                                    MenuItem::Action {
+                                        label: "Skupina: Zelena".to_string(),
+                                        action: MenuAction::TabSetGroup(idx, Some([72, 191, 130, 255])),
+                                        enabled: true, shortcut: None,
+                                    },
+                                    MenuItem::Action {
+                                        label: "Skupina: Zluta".to_string(),
+                                        action: MenuAction::TabSetGroup(idx, Some([254, 191, 84, 255])),
+                                        enabled: true, shortcut: None,
+                                    },
+                                    MenuItem::Action {
+                                        label: "Skupina: Cervena".to_string(),
+                                        action: MenuAction::TabSetGroup(idx, Some([235, 87, 87, 255])),
+                                        enabled: true, shortcut: None,
+                                    },
+                                    MenuItem::Action {
+                                        label: "Skupina: Fialova".to_string(),
+                                        action: MenuAction::TabSetGroup(idx, Some([165, 99, 224, 255])),
+                                        enabled: true, shortcut: None,
+                                    },
+                                    MenuItem::Action {
+                                        label: "Skupina: Bez".to_string(),
+                                        action: MenuAction::TabSetGroup(idx, None),
+                                        enabled: true, shortcut: None,
+                                    },
+                                    MenuItem::Separator,
+                                    MenuItem::Action {
                                         label: "Obnovit".to_string(),
                                         action: MenuAction::TabReload(idx),
                                         enabled: true, shortcut: Some("F5".to_string()),
@@ -2410,6 +2441,17 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                        favicon_urls: Option<&[Option<String>]>,
                                        pinned: Option<&[bool]>,
                                        loading: Option<&[bool]>, anim_t: f32) {
+        paint_shell_chrome_with_groups(list, win_w, chrome_h, url, tab_titles, active,
+                                       favicon_urls, pinned, loading, anim_t, None);
+    }
+
+    /// Verze s tab group colors - top-edge stripe.
+    fn paint_shell_chrome_with_groups(list: &mut Vec<DisplayCommand>, win_w: f32, chrome_h: f32,
+                                      url: &str, tab_titles: Option<&[String]>, active: usize,
+                                      favicon_urls: Option<&[Option<String>]>,
+                                      pinned: Option<&[bool]>,
+                                      loading: Option<&[bool]>, anim_t: f32,
+                                      groups: Option<&[Option<[u8; 4]>]>) {
         // Bookmarks bar paint pod nav bar - dalsi 24px row.
         let bms = crate::devtools::bookmarks::load_bookmarks();
         let _ = &bms; // used below ve scope.
@@ -2449,6 +2491,13 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     x: tx, y: 4.0, w: chip_w, h: tab_h - 4.0,
                     color: bg, radius: 4.0,
                 });
+                // Group color top stripe (3px).
+                if let Some(gc) = groups.and_then(|g| g.get(i)).and_then(|c| *c) {
+                    list.push(DisplayCommand::Rect {
+                        x: tx + 2.0, y: 4.0, w: chip_w - 4.0, h: 3.0,
+                        color: gc, radius: 1.5,
+                    });
+                }
                 if is_pinned {
                     // Pinned indicator (zluty pin v levem rohu).
                     list.push(DisplayCommand::Text {
@@ -3505,6 +3554,11 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 TabDuplicate(idx) => {
                     let dup = self.tabs.tabs[idx].clone();
                     self.tabs.open(dup);
+                }
+                TabSetGroup(idx, color) => {
+                    if let Some(t) = self.tabs.tabs.get_mut(idx) {
+                        t.group_color = color;
+                    }
                 }
                 TabPinToggle(idx) => {
                     if let Some(t) = self.tabs.tabs.get_mut(idx) {
@@ -4792,13 +4846,15 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     .map(|t| t.favicon_url.clone()).collect();
                 let pins: Vec<bool> = self.tabs.tabs.iter().map(|t| t.pinned).collect();
                 let loadings: Vec<bool> = self.tabs.tabs.iter().map(|t| t.loading).collect();
+                let groups: Vec<Option<[u8; 4]>> = self.tabs.tabs.iter()
+                    .map(|t| t.group_color).collect();
                 let bm_count = crate::devtools::bookmarks::load_bookmarks().len();
                 let chrome_h = 64.0 + if bm_count > 0 { 24.0 } else { 0.0 };
                 let anim_t = self.start_time.elapsed().as_secs_f32();
-                paint_shell_chrome_with_loading(&mut display_list, win_w_logical, chrome_h,
+                paint_shell_chrome_with_groups(&mut display_list, win_w_logical, chrome_h,
                                              self.base_url.as_deref().unwrap_or(""),
                                              Some(&titles), self.tabs.active, Some(&favicons),
-                                             Some(&pins), Some(&loadings), anim_t);
+                                             Some(&pins), Some(&loadings), anim_t, Some(&groups));
                 // Status bar dole - pri hover URL preview.
                 // Scroll-to-top button (pravy dolni roh) pri scroll_y > 200.
                 if self.scroll_y > 200.0 {

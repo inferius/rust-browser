@@ -19,6 +19,8 @@ pub enum MenuAction {
     TabDuplicate(usize),
     TabReload(usize),
     TabPinToggle(usize),
+    /// Pridat/odebrat tab do skupiny - color [r,g,b,a] nebo None (clear).
+    TabSetGroup(usize, Option<[u8; 4]>),
     BookmarkOpen(String),
     BookmarkDelete(String),
 
