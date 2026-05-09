@@ -1363,6 +1363,12 @@ fn collect_lines(items: &[FlexItem], container_main: f32, wrap: FlexWrap, gap: f
     if matches!(wrap, FlexWrap::NoWrap) {
         return vec![(0..items.len()).collect()];
     }
+    // Pri container_main = 0 (parent rect.width pre-pass not set) - all items
+    // do jedne line. Bez teto pojistky: kazdy item vlastni line (used > 0 always),
+    // container.h = sum(item.h) misto max -> 5x roznasobeny height.
+    if container_main <= 0.0 {
+        return vec![(0..items.len()).collect()];
+    }
     let mut lines: Vec<Vec<usize>> = Vec::new();
     let mut current: Vec<usize> = Vec::new();
     let mut used = 0.0_f32;
@@ -1380,6 +1386,14 @@ fn collect_lines(items: &[FlexItem], container_main: f32, wrap: FlexWrap, gap: f
         }
     }
     if !current.is_empty() { lines.push(current); }
+    if std::env::var("FLEX_DEBUG").is_ok() {
+        eprintln!("[flex_lines] container_main={} gap={} items={} -> {} lines",
+            container_main, gap, items.len(), lines.len());
+        for (li, l) in lines.iter().enumerate() {
+            let sum: f32 = l.iter().map(|&i| items[i].main_size).sum();
+            eprintln!("  line[{}] {} items, main_sum={}", li, l.len(), sum);
+        }
+    }
     lines
 }
 
