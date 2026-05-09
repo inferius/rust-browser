@@ -49,12 +49,27 @@ Material Symbols Outlined font pro icons (chevron_right E5CC, expand_more
 E5CF, close E5CD, light_mode E518, dark_mode E51C, center_focus_strong
 E3B4). Predtim CamingoMono renderoval velka kolecka.
 
+### Option D - SelectionRegistry hotove
+
+`Document.selection: RefCell<SelectionRegistry>` ted drzi:
+- `input_states: HashMap<NodeId, InputState>` - per-element cursor +
+  anchor pres DomInputBuffer.commit_back / Drop. NodeData clean (16B
+  saving per node).
+- `active_input` foundation pro JS Selection API.
+- `page_selection: PageSelection { anchor, current, dragging, cached_text }` -
+  App.selection_* mirrored po kazdem write (mouse handlers + Ctrl+A).
+  cached_text snapshotuje compute_selection_text z layout pro JS API.
+- W3C bridge: window.getSelection() + document.getSelection() toString()
+  cte z registry. Driv stub vracel prazdny string.
+
 ### Co zbyva (next session)
 
-- **Phase 6 full**: TextRun extraction z layout (Vec<TextRun{node_id,
-  byte_offset, glyph_x[], rect}>), selection (run_idx, byte_idx) model,
-  paint highlight per glyph range. Replace per-text-box rect highlight.
-  Ctrl+C extrakce textu only (ne ne-text). Tohle je ~1-2 day work.
+- **App.selection_* full deletion**: zatim duplicate primary state, mirror
+  prepisuje registry. Future cleanup = primary state v registry only.
+- **Char-level selection highlight**: aktualne per-text-box (prinic-line
+  effect) coz odpovida rect drag. Char-byte precision vyzaduje glyph
+  x_advances z fontdue metrics per box - nice-to-have ale brain existing
+  funkcni.
 - **Click handler migrace na InteractiveKind**: handle_click ted ad-hoc
   match na tag. Prejit na `classify(node).dispatch(ev)`.
 - **DomInputBuffer click-to-position**: TextInput element klik momentalne
