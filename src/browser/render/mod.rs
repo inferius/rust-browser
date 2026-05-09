@@ -145,6 +145,51 @@ pub(super) struct Vertex {
 
 /// Vrati bytemuck-friendly vertices pro display list.
 /// Pro Rect: 6 vertexu (2 trojuhelniky). Pro text: 6 vertexu per glyph.
+/// Extract TextRun info z DisplayCommand::Text pro per-glyph selection.
+/// Spocita cumulative_advances pres atlas glyph widths.
+fn extract_text_runs(
+    commands: &[DisplayCommand],
+    atlas: &GlyphAtlas,
+    zoom: f32,
+) -> Vec<crate::browser::textrun::TextRun> {
+    let mut runs = Vec::new();
+    for cmd in commands {
+        if let DisplayCommand::Text { x, y, content, font_size, bold, italic, font_family, .. } = cmd {
+            let z = zoom.max(0.0001);
+            let physical_size = (*font_size * z).round().max(1.0) as u32;
+            let inv_z = 1.0 / z;
+            let lookup_family = match (*bold, *italic) {
+                (true, true) if atlas.font_bold_italic.is_some() =>
+                    format!("__bi__:{}", font_family),
+                (false, true) if atlas.font_italic.is_some() =>
+                    format!("__italic__:{}", font_family),
+                (true, _) if atlas.font_bold.is_some() =>
+                    format!("__bold__:{}", font_family),
+                _ => font_family.clone(),
+            };
+            let mut cumulative: Vec<f32> = Vec::with_capacity(content.chars().count() + 1);
+            cumulative.push(0.0);
+            let mut acc = 0.0;
+            for ch in content.chars() {
+                let advance = atlas.get(&lookup_family, ch, physical_size)
+                    .map(|g| g.advance * inv_z)
+                    .unwrap_or(*font_size * 0.5);
+                acc += advance;
+                cumulative.push(acc);
+            }
+            runs.push(crate::browser::textrun::TextRun {
+                node_id: 0, // populated later kdyz mam DOM ref
+                text: content.clone(),
+                origin_x: *x,
+                origin_y: *y,
+                cumulative_advances: cumulative,
+                line_height: *font_size * 1.2,
+            });
+        }
+    }
+    runs
+}
+
 fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: &ImageAtlas, zoom: f32) -> Vec<Vertex> {
     let mut verts = Vec::new();
     for cmd in commands {
@@ -528,6 +573,11 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         /// panelu zacne drag. Pri pohybu mysi se animation_origin shifte tak
         /// aby progress odpovidal pozici kursoru na track.
         animations_scrubber_drag: bool,
+        /// Per-frame painted TextRun pole - foundation pro per-glyph selection.
+        /// Naplnuje se po build_vertices, pouzivame pro hit-test (mouse -> SelectionPos).
+        /// Aktualne flow-extract zustava authoritative pro copy; postupny prechod
+        /// na per-glyph anchor/focus.
+        painted_text_runs: Vec<crate::browser::textrun::TextRun>,
         /// Bookmark picker (Ctrl+D popup): edit title + folder.
         bookmark_picker: Option<BookmarkPickerState>,
         cached_pseudo_map: Option<super::cascade::PseudoStyleMap>,
@@ -3467,6 +3517,22 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 }
             }
         }
+        /// Hit-test (x, y) na painted_text_runs pro per-glyph selection.
+        /// Vraci SelectionPos nebo None (mimo vsech runs).
+        pub fn hit_test_text_run(&self, x: f32, y: f32) -> Option<crate::browser::textrun::SelectionPos> {
+            crate::browser::textrun::hit_test_runs(&self.painted_text_runs, x, y)
+        }
+
+        /// Extract text z anchor->focus SelectionPos pro Ctrl+C copy.
+        /// Per-glyph precision (vs flow-based bbox extract).
+        pub fn extract_text_run_selection(&self,
+            anchor: crate::browser::textrun::SelectionPos,
+            focus: crate::browser::textrun::SelectionPos,
+        ) -> String {
+            let sel = crate::browser::textrun::TextSelection { anchor, focus };
+            sel.extract_text(&self.painted_text_runs)
+        }
+
         fn page_sel_clear(&self) {
             let Some(interp) = &self.interpreter else { return };
             let doc = interp.document.borrow();
@@ -6347,6 +6413,11 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // Split list na page (pred WebGL) + overlay (po WebGL).
             let (page_cmds, overlay_cmds) = display_list.split_at(overlay_split);
 
+            // Extract TextRun pole pro per-glyph selection (foundation).
+            // Walks display_list a build cumulative_advances z atlas. Page cmds
+            // jen (overlay nemam textovy obsah co user vybira).
+            self.painted_text_runs = extract_text_runs(page_cmds, &r.atlas, r.zoom);
+
             // Pri WebGL canvas s pending queue, vyuzij webgl-aware draw flow.
             let webgl_states_opt = self.interpreter.as_ref().map(|i| i.webgl_states.clone());
             if let Some(states_rc) = &webgl_states_opt {
@@ -6418,6 +6489,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         paused_animation_nodes: std::collections::HashSet::new(),
         paused_node_styles: std::collections::HashMap::new(),
         animations_scrubber_drag: false,
+        painted_text_runs: Vec::new(),
         bookmark_picker: None,
         cached_pseudo_map: None,
         display_list_buffer: Vec::with_capacity(2048),
