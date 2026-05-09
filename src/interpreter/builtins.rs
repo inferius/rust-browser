@@ -41,6 +41,7 @@ pub fn setup_builtins(
     mutation_observers: &Rc<RefCell<Vec<(usize, super::JsValue, super::JsValue, bool)>>>,
     websockets: &Rc<RefCell<HashMap<u32, super::WebSocketState>>>,
     next_ws_id: &Rc<RefCell<u32>>,
+    pending_fetches: &Rc<RefCell<Vec<super::PendingFetch>>>,
 ) {
     let mut e = env.borrow_mut();
 
@@ -1592,13 +1593,15 @@ pub fn setup_builtins(
 
     // ─── fetch - real HTTP client (ureq, blocking) ──────────────────────────
     let net_log_clone = Rc::clone(network_log);
+    let pending_fetches_clone = Rc::clone(pending_fetches);
     e.define("fetch", native("fetch", move |a| {
         let net_log = Rc::clone(&net_log_clone);
+        let pf = Rc::clone(&pending_fetches_clone);
         let mut iter = a.into_iter();
         let url = iter.next().map(|v| v.to_string()).unwrap_or_default();
         let init = iter.next().unwrap_or(JsValue::Undefined);
 
-        // Parse init
+        // Parse init - method/body/headers ze JS objektu.
         let mut method = "GET".to_string();
         let mut body: Option<String> = None;
         let mut headers: Vec<(String, String)> = Vec::new();
@@ -1615,39 +1618,41 @@ pub fn setup_builtins(
             }
         }
 
-        // Dispatch request
-        let req_result = perform_http_request(&url, &method, &headers, body.as_deref());
-        // Log network call
-        let log_status = match &req_result {
-            Ok((s, ..)) => *s,
-            Err(_) => 0,
-        };
-        net_log.borrow_mut().push((url.clone(), log_status));
-        match req_result {
-            Ok((status, status_text, resp_body, resp_headers)) => {
-                let mut response = JsObject::new();
-                response.set("__response__".into(), JsValue::Bool(true));
-                response.set("__body__".into(),    JsValue::Str(resp_body));
-                response.set("url".into(),         JsValue::Str(url));
-                response.set("status".into(),      JsValue::Number(status as f64));
-                response.set("ok".into(),          JsValue::Bool(status >= 200 && status < 300));
-                response.set("statusText".into(),  JsValue::Str(status_text));
-                let mut hdr_obj = JsObject::new();
-                for (k, v) in resp_headers {
-                    hdr_obj.set(k.to_lowercase(), JsValue::Str(v));
-                }
-                hdr_obj.set("__headers__".into(), JsValue::Bool(true));
-                response.set("headers".into(), JsValue::Object(Rc::new(RefCell::new(hdr_obj))));
-                let response_val = JsValue::Object(Rc::new(RefCell::new(response)));
-                Ok(make_settled_promise("fulfilled", response_val))
-            }
-            Err(msg) => {
-                let mut err = JsObject::new();
-                err.set("name".into(),    JsValue::Str("TypeError".into()));
-                err.set("message".into(), JsValue::Str(format!("Failed to fetch: {msg}")));
-                Ok(make_settled_promise("rejected", JsValue::Object(Rc::new(RefCell::new(err)))))
-            }
+        // Sync URL validation - bez schemu = rejected hned (real browser dela same).
+        if !url.starts_with("http://") && !url.starts_with("https://")
+           && !url.starts_with("file://") && !url.starts_with("data:") {
+            let mut err = JsObject::new();
+            err.set("name".into(), JsValue::Str("TypeError".into()));
+            err.set("message".into(), JsValue::Str(format!("Failed to fetch: invalid URL: {url}")));
+            net_log.borrow_mut().push((url.clone(), 0));
+            return Ok(make_settled_promise("rejected",
+                JsValue::Object(Rc::new(RefCell::new(err)))));
         }
+        // Async fetch - spawn thread, vrati pending Promise. drain_fetches()
+        // v event loopu prepne na fulfilled/rejected pri try_recv Ok.
+        let (tx, rx) = std::sync::mpsc::channel::<super::FetchOutcome>();
+        let url_thread = url.clone();
+        let method_thread = method.clone();
+        let body_thread = body.clone();
+        let headers_thread = headers.clone();
+        std::thread::spawn(move || {
+            let result = perform_http_request(
+                &url_thread, &method_thread, &headers_thread, body_thread.as_deref());
+            let _ = tx.send(result);
+        });
+
+        // Pending Promise - drain ho posli prepne pri completion.
+        let mut promise = JsObject::new();
+        promise.set("__promise_state__".into(), JsValue::Str("pending".into()));
+        promise.set("__promise_value__".into(), JsValue::Undefined);
+        let promise_obj = Rc::new(RefCell::new(promise));
+        net_log.borrow_mut().push((url.clone(), 0)); // pending
+        pf.borrow_mut().push(super::PendingFetch {
+            promise_obj: Rc::clone(&promise_obj),
+            url: url.clone(),
+            receiver: rx,
+        });
+        Ok(JsValue::Object(promise_obj))
     }));
 
     // Konstruktory bez vlastni logiky (logika je v call_new)

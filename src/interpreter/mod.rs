@@ -527,6 +527,15 @@ pub enum WebSocketCommand {
     Close,
 }
 
+/// Pending fetch task - drzi handle na pending Promise + receiver.
+pub struct PendingFetch {
+    pub promise_obj: Rc<RefCell<JsObject>>,
+    pub url: String,
+    pub receiver: std::sync::mpsc::Receiver<FetchOutcome>,
+}
+
+pub type FetchOutcome = Result<(u16, String, String, Vec<(String, String)>), String>;
+
 #[derive(Debug)]
 pub enum WebSocketEvent {
     Open,
@@ -566,6 +575,11 @@ pub struct Interpreter {
     /// DOM Document - sdileny mezi browser engine a JS interpreterem.
     /// Pri startu prazdny; muze byt nahrazen z parsed HTML.
     pub document: Rc<RefCell<crate::browser::dom::Document>>,
+    /// Pending fetch tasks - non-blocking ureq spawn s mpsc Receiver.
+    /// drain_fetches() vola z event loopu kazdy frame; pri try_recv Ok,
+    /// pending promise se prepne na fulfilled/rejected.
+    /// Format: (promise_obj, Receiver<perform_http_request output>).
+    pub pending_fetches: Rc<RefCell<Vec<PendingFetch>>>,
     /// Event callback registry: ID -> JS callback funkce.
     /// Pouziva se pro addEventListener / dispatchEvent.
     pub event_callbacks: Rc<RefCell<HashMap<usize, JsValue>>>,
@@ -701,10 +715,13 @@ impl Interpreter {
             Rc::new(RefCell::new(HashMap::new()));
         let mutation_observers: Rc<RefCell<Vec<(usize, JsValue, JsValue, bool)>>> =
             Rc::new(RefCell::new(Vec::new()));
+        let pending_fetches: Rc<RefCell<Vec<PendingFetch>>> =
+            Rc::new(RefCell::new(Vec::new()));
         setup_builtins(
             &global, &task_queue, &next_timer_id, &workers, &next_worker_id,
             &document, &console_log, &network_log, &custom_elements,
             &mutation_observers, &websockets, &next_ws_id,
+            &pending_fetches,
         );
         Interpreter {
             global, yield_buffer: None, task_queue, next_timer_id,
@@ -729,6 +746,62 @@ impl Interpreter {
             debugger: Rc::new(RefCell::new(DebuggerState::default())),
             shared_debugger: None,
             continue_signal: None,
+            pending_fetches,
+        }
+    }
+
+    /// Drainuj dokoncene async fetch tasks - try_recv kazdy pending,
+    /// pri Ok prepne pending Promise -> fulfilled/rejected. Volat z event
+    /// loopu kazdy frame (App.render).
+    pub fn drain_fetches(&mut self) {
+        let mut completed: Vec<usize> = Vec::new();
+        {
+            let pending = self.pending_fetches.borrow();
+            for (i, task) in pending.iter().enumerate() {
+                if let Ok(outcome) = task.receiver.try_recv() {
+                    completed.push(i);
+                    let mut p = task.promise_obj.borrow_mut();
+                    match outcome {
+                        Ok((status, status_text, body, headers)) => {
+                            let mut response = JsObject::new();
+                            response.set("__response__".into(), JsValue::Bool(true));
+                            response.set("__body__".into(), JsValue::Str(body));
+                            response.set("url".into(), JsValue::Str(task.url.clone()));
+                            response.set("status".into(), JsValue::Number(status as f64));
+                            response.set("ok".into(), JsValue::Bool(status >= 200 && status < 300));
+                            response.set("statusText".into(), JsValue::Str(status_text));
+                            let mut hdr_obj = JsObject::new();
+                            for (k, v) in headers {
+                                hdr_obj.set(k.to_lowercase(), JsValue::Str(v));
+                            }
+                            hdr_obj.set("__headers__".into(), JsValue::Bool(true));
+                            response.set("headers".into(), JsValue::Object(Rc::new(RefCell::new(hdr_obj))));
+                            p.set("__promise_state__".into(), JsValue::Str("fulfilled".into()));
+                            p.set("__promise_value__".into(),
+                                JsValue::Object(Rc::new(RefCell::new(response))));
+                        }
+                        Err(msg) => {
+                            let mut err = JsObject::new();
+                            err.set("name".into(), JsValue::Str("TypeError".into()));
+                            err.set("message".into(), JsValue::Str(format!("Failed to fetch: {msg}")));
+                            p.set("__promise_state__".into(), JsValue::Str("rejected".into()));
+                            p.set("__promise_value__".into(),
+                                JsValue::Object(Rc::new(RefCell::new(err))));
+                        }
+                    }
+                    // Network log update.
+                    let status = match &task.receiver.try_recv() {
+                        Ok(Ok((s, ..))) => *s,
+                        _ => 0,
+                    };
+                    let _ = status;
+                }
+            }
+        }
+        // Remove completed (zpetne aby idx zustal valid).
+        let mut pending = self.pending_fetches.borrow_mut();
+        for i in completed.into_iter().rev() {
+            if i < pending.len() { pending.remove(i); }
         }
     }
 

@@ -5084,6 +5084,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // Drainuj WebSocket events kazdy frame (dispatch onopen/onmessage/onerror/onclose).
             if let Some(interp) = &mut self.interpreter {
                 let _ = interp.drain_websockets();
+                interp.drain_fetches();
             }
 
             // CSS Transitions: detekuj zmeny vs prev_style_map a vyrob aktivni transitions.
