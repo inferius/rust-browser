@@ -2,6 +2,35 @@
 
 Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 
+## Session N+13: about pages + Esc close + flavor switcher
+
+**2448 tests pass, build clean (0 warnings).**
+
+About: pages:
+- about:history - cely seznam navstivenych URL (max 500), per-row link
+  + relative time (pred 5 min / pred 2 h / ...)
+- about:bookmarks - list zalozek
+- Wired do navigate_about() handler
+
+Esc close priority popups:
+- handle_escape_close_popups() - color picker > settings > class
+  manager > tab overflow
+- Pre-empts ostatni KeyboardInput handlers
+
+Chrome height dynamic:
+- Base 64 (tab + nav) + 24 (bookmarks bar) jen kdyz bms.len() > 0
+- shift_page_for_chrome + paint_shell_chrome_with_favicons receive
+  computed chrome_h
+
+Settings popup flavor switcher:
+- Pridana sekce Flavor (Chrome/Firefox) s active button highlight
+- SelectFlavor action + DevtoolsHit::SettingsFlavor + persist
+
+Tab close X visualni:
+- 16x16 kruhova bg pod close button (hover hint)
+
+Cleanup: 0 warnings.
+
 ## Session N+12: settings theme klik + tests + element label Inter
 
 **2448 tests pass, build clean.**
