@@ -365,7 +365,15 @@ fn collect_subtree_ids(
 /// - `auto_devtools`: pri true vygeneruje devtools.html a otevre v OS default browser
 /// - `base_url`: page URL pro relative resolution (http(s)://... nebo file:///...).
 ///   Pri None se odvodi z `current_html_path`.
+pub fn run_window_with_shell(html: String, css: String, current_html_path: Option<std::path::PathBuf>, auto_devtools: bool, base_url: Option<String>) -> Result<(), String> {
+    run_window_inner(html, css, current_html_path, auto_devtools, base_url, true)
+}
+
 pub fn run_window_with_options(html: String, css: String, current_html_path: Option<std::path::PathBuf>, auto_devtools: bool, base_url: Option<String>) -> Result<(), String> {
+    run_window_inner(html, css, current_html_path, auto_devtools, base_url, false)
+}
+
+fn run_window_inner(html: String, css: String, current_html_path: Option<std::path::PathBuf>, auto_devtools: bool, base_url: Option<String>, shell_mode: bool) -> Result<(), String> {
     use winit::application::ApplicationHandler;
     use winit::event::{WindowEvent, MouseButton, ElementState};
     use winit::event_loop::ActiveEventLoop;
@@ -462,6 +470,12 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         /// Main page scrollbar drag - true pri LMB hold na vertical/horizontal thumb.
         page_scrollbar_v_drag: bool,
         page_scrollbar_h_drag: bool,
+        /// Browser shell mode - kdyz true, vykresli se chrome bar (tabs +
+        /// address bar + back/forward) + page area zacne pod chromem.
+        /// Toggle pres CLI flag --shell nebo Ctrl+Shift+B.
+        shell_mode: bool,
+        /// Chrome bar vyska (tab bar + nav bar).
+        shell_chrome_h: f32,
     }
 
     impl ApplicationHandler for App {
@@ -1578,6 +1592,96 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         fn estimate_styles_total_h(&self) -> f32 {
             self.devtools.styles.estimate_total_h()
         }
+        fn shell_chrome_h_active(&self) -> f32 {
+            if self.shell_mode { self.shell_chrome_h } else { 0.0 }
+        }
+    }
+
+    /// Paint chrome bar (tabs + nav) - free fn aby slo volat behem renderer borrow.
+    fn paint_shell_chrome_inline(list: &mut Vec<DisplayCommand>, win_w: f32, chrome_h: f32, url: &str) {
+        {
+            let tab_h = 28.0;
+            let nav_h = chrome_h - tab_h;
+            // Chrome bg.
+            list.push(DisplayCommand::Rect {
+                x: 0.0, y: 0.0, w: win_w, h: chrome_h,
+                color: [42, 41, 50, 255], radius: 0.0,
+            });
+            list.push(DisplayCommand::Rect {
+                x: 0.0, y: chrome_h - 1.0, w: win_w, h: 1.0,
+                color: [76, 76, 85, 255], radius: 0.0,
+            });
+            // Tab strip.
+            let tab_w = 200.0_f32.min(win_w - 60.0);
+            list.push(DisplayCommand::Rect {
+                x: 4.0, y: 4.0, w: tab_w, h: tab_h - 4.0,
+                color: [27, 27, 35, 255], radius: 4.0,
+            });
+            // Title in tab.
+            let title = if url.is_empty() { "Nova zalozka".to_string() }
+                       else {
+                           let s = url.split('/').last().unwrap_or(url).to_string();
+                           if s.is_empty() { "page".to_string() } else { s }
+                       };
+            list.push(DisplayCommand::Text {
+                x: 12.0, y: 8.0, content: title,
+                color: [251, 251, 254, 255],
+                font_size: 13.0, bold: false, italic: false,
+                font_family: "CamingoMono".into(),
+                strikethrough: false, underline: false,
+            });
+            // + new tab button.
+            list.push(DisplayCommand::Text {
+                x: tab_w + 12.0, y: 8.0, content: "+".to_string(),
+                color: [191, 191, 201, 255],
+                font_size: 16.0, bold: true, italic: false,
+                font_family: "CamingoMono".into(),
+                strikethrough: false, underline: false,
+            });
+
+            // Nav bar (back/forward/reload + URL).
+            let ny = tab_h;
+            // Back button.
+            list.push(DisplayCommand::Text {
+                x: 12.0, y: ny + 8.0, content: "<".to_string(),
+                color: [251, 251, 254, 255],
+                font_size: 16.0, bold: true, italic: false,
+                font_family: "CamingoMono".into(),
+                strikethrough: false, underline: false,
+            });
+            // Forward.
+            list.push(DisplayCommand::Text {
+                x: 32.0, y: ny + 8.0, content: ">".to_string(),
+                color: [251, 251, 254, 255],
+                font_size: 16.0, bold: true, italic: false,
+                font_family: "CamingoMono".into(),
+                strikethrough: false, underline: false,
+            });
+            // Reload.
+            list.push(DisplayCommand::Text {
+                x: 52.0, y: ny + 8.0, content: "↻".to_string(),
+                color: [251, 251, 254, 255],
+                font_size: 14.0, bold: false, italic: false,
+                font_family: "CamingoMono".into(),
+                strikethrough: false, underline: false,
+            });
+            // URL bar.
+            let url_x = 78.0;
+            let url_w = win_w - url_x - 12.0;
+            list.push(DisplayCommand::Rect {
+                x: url_x, y: ny + 4.0, w: url_w, h: nav_h - 8.0,
+                color: [27, 27, 35, 255], radius: 4.0,
+            });
+            list.push(DisplayCommand::Text {
+                x: url_x + 8.0, y: ny + 9.0, content: url.to_string(),
+                color: [251, 251, 254, 255],
+                font_size: 12.0, bold: false, italic: false,
+                font_family: "CamingoMono".into(),
+                strikethrough: false, underline: false,
+            });
+        }
+    }
+    impl App {
         // ─── Page selection accessors (Document.selection.page_selection) ───
         // App.selection_* fields zruseny - registry je primary state.
 
@@ -3332,6 +3436,13 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                 &self.devtools,
                 self.scroll_y,
             );
+            // Shell chrome bar (tabs + nav) - shell_mode only. Paint here misto
+            // self.paint_shell_chrome (borrow konflikt s renderer mut).
+            if self.shell_mode {
+                let win_w_logical = (r.config.width as f32) / (self.zoom * r.scale_factor);
+                paint_shell_chrome_inline(&mut display_list, win_w_logical, self.shell_chrome_h,
+                                          self.base_url.as_deref().unwrap_or(""));
+            }
 
             // In-window DevTools panel - emit pred scrollbar a po main viewport content.
             // viewport_w/h v logical px (display list je v logical, vp uniform / zoom*scale).
@@ -3600,6 +3711,8 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         scroll_target_x: 0.0,
         page_scrollbar_v_drag: false,
         page_scrollbar_h_drag: false,
+        shell_mode,
+        shell_chrome_h: 64.0,
     };
     event_loop.run_app(&mut app).map_err(|e| e.to_string())?;
     Ok(())

@@ -205,9 +205,10 @@ console.log(greeting, result);
     //   - http(s):// URL    -> fetch HTML pres ureq, extract <link> CSS taky pres HTTP
     //   - file system path  -> read local
     //   - default static/test.html
-    if args.len() > 1 && (args[1] == "browser" || args[1] == "window") {
+    if args.len() > 1 && (args[1] == "browser" || args[1] == "window" || args[1] == "shell") {
         let mut target: Option<String> = None;
         let mut auto_devtools = false;
+        let shell_mode = args[1] == "shell";
         for a in &args[2..] {
             if a == "--devtools" || a == "-d" { auto_devtools = true; }
             else if !a.starts_with('-') && target.is_none() { target = Some(a.clone()); }
@@ -281,7 +282,12 @@ console.log(greeting, result);
             (html, css_combined, Some(base), Some(abs_path))
         };
 
-        if let Err(e) = browser::render::run_window_with_options(html, css, current_path, auto_devtools, base_url) {
+        let result = if shell_mode {
+            browser::render::run_window_with_shell(html, css, current_path, auto_devtools, base_url)
+        } else {
+            browser::render::run_window_with_options(html, css, current_path, auto_devtools, base_url)
+        };
+        if let Err(e) = result {
             eprintln!("Chyba okna: {e}");
         }
         return;
