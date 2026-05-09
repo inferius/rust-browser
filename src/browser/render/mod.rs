@@ -578,6 +578,10 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         /// Aktualne flow-extract zustava authoritative pro copy; postupny prechod
         /// na per-glyph anchor/focus.
         painted_text_runs: Vec<crate::browser::textrun::TextRun>,
+        /// Async jobs registry - background work (file IO, image lazy load).
+        /// Drain per frame; on_complete callbacks beha v main thread (mohou
+        /// modifikovat Interpreter pres Rc<RefCell>).
+        async_jobs: crate::browser::async_jobs::AsyncJobsRegistry,
         /// Bookmark picker (Ctrl+D popup): edit title + folder.
         bookmark_picker: Option<BookmarkPickerState>,
         cached_pseudo_map: Option<super::cascade::PseudoStyleMap>,
@@ -5431,6 +5435,11 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 let _ = interp.drain_websockets();
                 interp.drain_fetches();
             }
+            // Drain async background jobs (image lazy load, file IO, etc).
+            self.async_jobs.drain();
+            if let Some(interp) = &mut self.interpreter {
+                let _ = interp; // re-borrow scope
+            }
 
             // CSS Transitions: detekuj zmeny vs prev_style_map a vyrob aktivni transitions.
             let mut ended_transitions: Vec<(usize, String)> = Vec::new();
@@ -6490,6 +6499,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         paused_node_styles: std::collections::HashMap::new(),
         animations_scrubber_drag: false,
         painted_text_runs: Vec::new(),
+        async_jobs: crate::browser::async_jobs::AsyncJobsRegistry::new(),
         bookmark_picker: None,
         cached_pseudo_map: None,
         display_list_buffer: Vec::with_capacity(2048),
