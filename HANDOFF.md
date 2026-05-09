@@ -2,6 +2,63 @@
 
 Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 
+## Session N+4: DevTools Firefox-style + browser shell foundation
+
+**Build clean, 2416 tests pass.**
+
+### Hotovo (plan 1 - DevTools Firefox-style)
+
+- **Phase 1** Bug: highlight overlay zmizi pri panel_open=false (toggle F12)
+- **Phase 2** Tab overflow ▼ popup menu pri uzkem okne (Firefox-style)
+- **Phase 3** Three-column Inspector layout (tree | styles | side panel)
+- **Phase 4** Side panel framework: SidePanelTab enum (Layout/Computed/
+  Changes/Compatibility/Fonts/Animations) + collapsible sections
+  (SectionId enum + collapsed_sections HashSet)
+- **Phase 5** Page-side flex/grid overlays:
+  paint_inspector_overlays - dashed border container, per-item solid border,
+  gap stripes, free space hatch. State.overlays Vec<OverlayDescriptor>.
+- **Phase 6** Firefox dark = vychozi tema (Default ThemeSelection -> Firefox+Auto)
+- **Phase 14** var() token chips v styles pane (paint_decl_line)
+- **Phase 15** Color swatch inline u rgb/hex/hsl/named (parse_css_color)
+- **Phase 17** Source label per matched rule (right-aligned)
+- **Phase 18** Specificity badge (a,b,c) za selektorem
+
+### Hotovo (plan 2 - browser shell)
+
+- **Phase 1 lightweight**: shell_mode flag + chrome bar paint
+  (tab strip + nav bar + URL bar). CLI: `cargo run -- shell [path]`.
+
+### Co zbyva
+
+**Plan 1 deferred (deep UX, lower priority):**
+- Phase 7-13: Layout sub-tab full (flex item diagram s basis/final/grow/shrink),
+  Computed migrace, Animations timeline scrubber, Fonts glyph preview,
+  Changes diff tracker
+- Phase 16: Color picker popup (HSV trojuhelnik + RGB/HEX inputs)
+- Phase 19: Kompatibilita tab data (browser support matrix per prop)
+- Overlay toggle UI hit-test (state.overlays manipulace pres console pro ted)
+
+**Plan 2 deferred (true browser shell):**
+- True multi-tab: Vec<Tab> per separate Document/Interpreter/scroll/history
+- Page area pod chrome bar (layout viewport_h - chrome_h)
+- Tab bar interactions (klik, close, +new)
+- Nav bar buttons (back/forward/reload) clickable
+- URL bar focus + edit (uz mame Ctrl+L overlay - integrace)
+- Keyboard shortcuts (Ctrl+T/W/Tab/1-9)
+- History persistence (~/.rwe/history.json)
+- Bookmarks bar
+- Session restore
+
+**Tests added (firefox_devtools_tests.rs - 14 tests):**
+- default_theme_fallback_je_firefox
+- side_panel_tabs_visible_default_je_5
+- side_panel_tab_kompatibilita_skryta_default
+- devtools_state_default_initialized
+- overlay_descriptor_basic
+- collapsed_sections_toggle
+- parse_css_color_hex_3/6/8 + rgb/rgba/named/invalid
+- compute_tab_layout_overflow
+
 ## Session N+3: text edit unifikace + bugfixes (latest)
 
 Bugfixy:
