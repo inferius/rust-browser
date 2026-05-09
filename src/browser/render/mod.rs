@@ -2308,6 +2308,13 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
     fn paint_shell_chrome_with_favicons(list: &mut Vec<DisplayCommand>, win_w: f32, chrome_h: f32,
                                          url: &str, tab_titles: Option<&[String]>, active: usize,
                                          favicon_urls: Option<&[Option<String>]>) {
+        paint_shell_chrome_with_pins(list, win_w, chrome_h, url, tab_titles, active, favicon_urls, None);
+    }
+
+    fn paint_shell_chrome_with_pins(list: &mut Vec<DisplayCommand>, win_w: f32, chrome_h: f32,
+                                    url: &str, tab_titles: Option<&[String]>, active: usize,
+                                    favicon_urls: Option<&[Option<String>]>,
+                                    pinned: Option<&[bool]>) {
         // Bookmarks bar paint pod nav bar - dalsi 24px row.
         let bms = crate::devtools::bookmarks::load_bookmarks();
         let _ = &bms; // used below ve scope.
@@ -2334,16 +2341,33 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                      }]
             };
             let n = titles_owned.len();
-            let tab_w = 200.0_f32.min((win_w - 60.0) / (n as f32).max(1.0));
+            let pin_count = pinned.map(|p| p.iter().filter(|x| **x).count()).unwrap_or(0);
+            let avail_w = win_w - 60.0 - (pin_count as f32) * 40.0;
+            let normal_count = n.saturating_sub(pin_count).max(1);
+            let tab_w = 200.0_f32.min(avail_w / normal_count as f32);
             let mut tx = 4.0;
             for (i, title) in titles_owned.iter().enumerate() {
+                let is_pinned = pinned.map(|p| p.get(i).copied().unwrap_or(false)).unwrap_or(false);
+                let chip_w = if is_pinned { 36.0 } else { tab_w };
                 let bg = if i == active { [27, 27, 35, 255] } else { [42, 41, 50, 255] };
                 list.push(DisplayCommand::Rect {
-                    x: tx, y: 4.0, w: tab_w, h: tab_h - 4.0,
+                    x: tx, y: 4.0, w: chip_w, h: tab_h - 4.0,
                     color: bg, radius: 4.0,
                 });
-                // Favicon (16x16) v levem rohu chipu.
-                let favicon_present = favicon_urls.and_then(|fs| fs.get(i)).and_then(|f| f.clone());
+                if is_pinned {
+                    // Pinned indicator (zluty pin v levem rohu).
+                    list.push(DisplayCommand::Text {
+                        x: tx + 4.0, y: 6.0, content: "📌".to_string(),
+                        color: [254, 191, 84, 255],
+                        font_size: 11.0, bold: false, italic: false,
+                        font_family: "Inter".into(),
+                        strikethrough: false, underline: false,
+                    });
+                }
+                // Favicon (16x16) v levem rohu chipu (skip pri pinned - pin uz tam je).
+                let favicon_present = if is_pinned { None } else {
+                    favicon_urls.and_then(|fs| fs.get(i)).and_then(|f| f.clone())
+                };
                 let text_x_off = if let Some(furl) = favicon_present {
                     list.push(DisplayCommand::Image {
                         x: tx + 6.0, y: 8.0, w: 16.0, h: 16.0,
@@ -2351,30 +2375,34 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         radius: 0.0,
                     });
                     28.0
+                } else if is_pinned {
+                    20.0
                 } else {
                     8.0
                 };
-                let trunc: String = title.chars().take(20).collect();
-                list.push(DisplayCommand::Text {
-                    x: tx + text_x_off, y: 8.0, content: trunc,
-                    color: [251, 251, 254, 255],
-                    font_size: 13.0, bold: i == active, italic: false,
-                    font_family: "Inter".into(),
-                    strikethrough: false, underline: false,
-                });
-                // Close X (s hover hint - kruh kolem).
-                list.push(DisplayCommand::Rect {
-                    x: tx + tab_w - 18.0, y: 6.0, w: 16.0, h: 16.0,
-                    color: [56, 56, 65, 200], radius: 8.0,
-                });
-                list.push(DisplayCommand::Text {
-                    x: tx + tab_w - 14.0, y: 8.0, content: "x".to_string(),
-                    color: [220, 220, 230, 255],
-                    font_size: 12.0, bold: true, italic: false,
-                    font_family: "Inter".into(),
-                    strikethrough: false, underline: false,
-                });
-                tx += tab_w + 2.0;
+                if !is_pinned {
+                    let trunc: String = title.chars().take(20).collect();
+                    list.push(DisplayCommand::Text {
+                        x: tx + text_x_off, y: 8.0, content: trunc,
+                        color: [251, 251, 254, 255],
+                        font_size: 13.0, bold: i == active, italic: false,
+                        font_family: "Inter".into(),
+                        strikethrough: false, underline: false,
+                    });
+                    // Close X (jen non-pinned).
+                    list.push(DisplayCommand::Rect {
+                        x: tx + chip_w - 18.0, y: 6.0, w: 16.0, h: 16.0,
+                        color: [56, 56, 65, 200], radius: 8.0,
+                    });
+                    list.push(DisplayCommand::Text {
+                        x: tx + chip_w - 14.0, y: 8.0, content: "x".to_string(),
+                        color: [220, 220, 230, 255],
+                        font_size: 12.0, bold: true, italic: false,
+                        font_family: "Inter".into(),
+                        strikethrough: false, underline: false,
+                    });
+                }
+                tx += chip_w + 2.0;
             }
             // + new tab button.
             list.push(DisplayCommand::Text {
@@ -4605,11 +4633,13 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 let titles: Vec<String> = self.tabs.tabs.iter().map(|t| t.title.clone()).collect();
                 let favicons: Vec<Option<String>> = self.tabs.tabs.iter()
                     .map(|t| t.favicon_url.clone()).collect();
+                let pins: Vec<bool> = self.tabs.tabs.iter().map(|t| t.pinned).collect();
                 let bm_count = crate::devtools::bookmarks::load_bookmarks().len();
                 let chrome_h = 64.0 + if bm_count > 0 { 24.0 } else { 0.0 };
-                paint_shell_chrome_with_favicons(&mut display_list, win_w_logical, chrome_h,
-                                                 self.base_url.as_deref().unwrap_or(""),
-                                                 Some(&titles), self.tabs.active, Some(&favicons));
+                paint_shell_chrome_with_pins(&mut display_list, win_w_logical, chrome_h,
+                                             self.base_url.as_deref().unwrap_or(""),
+                                             Some(&titles), self.tabs.active, Some(&favicons),
+                                             Some(&pins));
                 // Status bar dole - pri hover URL preview.
                 if let Some(url) = &self.status_hover_url {
                     let panel_h_logical = if self.devtools.panel_open {
