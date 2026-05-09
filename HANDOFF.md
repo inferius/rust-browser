@@ -2,6 +2,30 @@
 
 Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 
+## Session N+10: tab drag + addr autocomplete + state save polish
+
+**2441 tests pass, build clean.**
+
+Tab drag reorder:
+- App.tab_drag_idx + tab_drag_x_start fields
+- LMB on tab chip = init drag, CursorMoved = swap v Vec, Released = clear
+- Active idx fix pri reorderingu (drag posune active jak treba)
+
+Address bar autocomplete:
+- Pri non-empty query match na bookmarks (★) + history (↻)
+- Popup pod bar s title + URL preview
+- Klik na suggestion -> navigate_url + zavri popup
+- Inter font, dark theme
+
+Tab state save consistency:
+- Ctrl+T + ChromeHit::NewTab ted save current tab state (scroll/html/css/
+  url) pred .open(empty)
+- Driv ztracene zmeny pri new tab; konzistentni s TabClick
+
+Favicon foundation:
+- Tab.favicon_bytes: Option<Vec<u8>> (cache)
+- TODO: async fetch + render v tab chip
+
 ## Session N+9: color picker write-back + RMB menus
 
 **2441 tests pass, build clean.**
