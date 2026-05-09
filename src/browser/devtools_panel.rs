@@ -14,6 +14,19 @@ use std::rc::Rc;
 use crate::browser::paint::DisplayCommand;
 use crate::browser::layout::LayoutBox;
 use crate::browser::dom::{NodeData, NodeKind};
+// Local shift helper - shift_command_x v render je pub(super).
+fn shift_cmd_x(cmd: &mut DisplayCommand, dx: f32) {
+    use DisplayCommand::*;
+    match cmd {
+        Rect { x, .. } => *x += dx,
+        Text { x, .. } => *x += dx,
+        Border { x, .. } => *x += dx,
+        Image { x, .. } => *x += dx,
+        Gradient { x, .. } => *x += dx,
+        Shadow { x, .. } => *x += dx,
+        _ => {}
+    }
+}
 use crate::devtools::{DevToolsState, Tab};
 use crate::devtools::theme::Palette;
 use crate::devtools::model::elements::{ElementRow, RowKind};
@@ -185,8 +198,15 @@ pub fn paint_devtools_panel(
     push_rect(cmds, toolbar_x, toolbar_y, toolbar_w, TAB_H, pal.bg_toolbar);
     push_rect(cmds, toolbar_x, toolbar_y + TAB_H - 1.0, toolbar_w, 1.0, pal.border);
 
-    paint_tabs(cmds, state, &pal, toolbar_y, toolbar_w, mouse_x, mouse_y);
-    paint_toolbar_actions(cmds, state, &pal, toolbar_y, toolbar_w, mouse_x, mouse_y);
+    // Pri non-Bottom dock se obsah vykresli s panel_x offset pres translation
+    // wrap. Existujici tab paint funkce predpokladaji x=0 origin -> emit do
+    // local buffer + pak shift do panel coords.
+    let needs_x_shift = panel_x.abs() > 0.5;
+    let mut local_cmds: Vec<DisplayCommand> = if needs_x_shift { Vec::new() } else { Vec::new() };
+    let target_cmds: &mut Vec<DisplayCommand> = if needs_x_shift { &mut local_cmds } else { cmds };
+
+    paint_tabs(target_cmds, state, &pal, toolbar_y, toolbar_w, mouse_x - panel_x, mouse_y);
+    paint_toolbar_actions(target_cmds, state, &pal, toolbar_y, toolbar_w, mouse_x - panel_x, mouse_y);
 
     // Content area.
     let content_y = toolbar_y + TAB_H;
@@ -194,21 +214,35 @@ pub fn paint_devtools_panel(
         DockPosition::Bottom | DockPosition::PopupWindow | DockPosition::Top =>
             panel_h - RESIZE_GRIP_H - TAB_H,
         DockPosition::Left | DockPosition::Right =>
-            panel_h - TAB_H, // grip horizontal dimension (left/right) neujima vyssi prostor
+            panel_h - TAB_H,
     };
-    let content_x = toolbar_x;
     let content_w = toolbar_w;
-    if content_h <= 0.0 { return; }
-    let _ = content_x; // x offset prosakuje do tabu pres state.panel_x (TODO).
+    if content_h <= 0.0 {
+        if needs_x_shift {
+            for mut cmd in local_cmds {
+                shift_cmd_x(&mut cmd, panel_x);
+                cmds.push(cmd);
+            }
+        }
+        return;
+    }
 
+    let m_x_local = mouse_x - panel_x;
     match state.tab {
-        Tab::Elements => paint_elements_tab(cmds, layout_root, state, &pal, content_w, content_y, content_h, mouse_x, mouse_y),
-        Tab::Console => paint_console_tab(cmds, state, &pal, interp, content_w, content_y, content_h, mouse_x, mouse_y),
-        Tab::Network => paint_network_tab(cmds, state, &pal, interp, content_w, content_y, content_h, mouse_x, mouse_y),
-        Tab::Sources => paint_sources_tab(cmds, state, &pal, content_w, content_y, content_h, mouse_x, mouse_y),
-        Tab::Performance => paint_performance_tab(cmds, state, &pal, content_w, content_y, content_h),
-        Tab::Application => paint_application_tab(cmds, state, &pal, interp, content_w, content_y, content_h),
-        Tab::Settings => paint_settings_tab(cmds, state, &pal, content_w, content_y, content_h, mouse_x, mouse_y),
+        Tab::Elements => paint_elements_tab(target_cmds, layout_root, state, &pal, content_w, content_y, content_h, m_x_local, mouse_y),
+        Tab::Console => paint_console_tab(target_cmds, state, &pal, interp, content_w, content_y, content_h, m_x_local, mouse_y),
+        Tab::Network => paint_network_tab(target_cmds, state, &pal, interp, content_w, content_y, content_h, m_x_local, mouse_y),
+        Tab::Sources => paint_sources_tab(target_cmds, state, &pal, content_w, content_y, content_h, m_x_local, mouse_y),
+        Tab::Performance => paint_performance_tab(target_cmds, state, &pal, content_w, content_y, content_h),
+        Tab::Application => paint_application_tab(target_cmds, state, &pal, interp, content_w, content_y, content_h),
+        Tab::Settings => paint_settings_tab(target_cmds, state, &pal, content_w, content_y, content_h, m_x_local, mouse_y),
+    }
+    // Flush local buffer s x shift.
+    if needs_x_shift {
+        for mut cmd in local_cmds {
+            shift_cmd_x(&mut cmd, panel_x);
+            cmds.push(cmd);
+        }
     }
 
     // Settings popup (dock chooser + theme).
