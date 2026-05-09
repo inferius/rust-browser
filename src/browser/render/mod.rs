@@ -2489,20 +2489,21 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
             let target = layout_root.hit_test(x, y);
             if let Some(target) = target {
                 if let Some(node) = &target.node {
-                    // Set focus na klik (HTML interactive elements: input/textarea/select/button/a).
+                    // Centralni klasifikace pres InteractiveKind misto ad-hoc tag matchu.
                     let tag = node.tag_name();
-                    let is_focusable = matches!(tag.as_deref(),
-                        Some("input") | Some("textarea") | Some("select") | Some("button") | Some("a")
-                    ) || node.attr("tabindex").is_some();
+                    let kind = crate::browser::interactive::classify(node);
+                    use crate::browser::interactive::InteractiveKind;
+                    let is_focusable = kind.is_focusable() || node.attr("tabindex").is_some();
                     if is_focusable {
                         super::cascade::set_focused_node(Some(std::rc::Rc::as_ptr(node) as usize));
                     } else {
                         super::cascade::set_focused_node(None);
                     }
-                    // Form submit: <button type=submit> / <input type=submit> klik nebo
-                    // <a href> klik -> navigate.
-                    let is_submit_button = matches!(tag.as_deref(), Some("button") | Some("input"))
-                        && node.attr("type").as_deref().map(|t| t.eq_ignore_ascii_case("submit")).unwrap_or(matches!(tag.as_deref(), Some("button")));
+                    // Form submit: kind=Button + type=submit/button (button default
+                    // = submit). Driv ad-hoc match na tag.
+                    let is_submit_button = matches!(kind, InteractiveKind::Button)
+                        && (tag.as_deref() == Some("button")
+                            || node.attr("type").as_deref().map(|t| t.eq_ignore_ascii_case("submit")).unwrap_or(false));
                     if is_submit_button {
                         if let Some(form) = find_ancestor_form(node) {
                             // Dispatch 'submit' event - browsery to delaji pred navigation.
@@ -2567,31 +2568,60 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                             }
                         }
                     }
-                    // <select> click: toggle open dropdown.
-                    if tag.as_deref() == Some("select") {
-                        let id = std::rc::Rc::as_ptr(node) as usize;
-                        let same = self.open_select.map(|(t, ..)| t == id).unwrap_or(false);
-                        if same {
-                            self.open_select = None;
-                        } else {
-                            self.open_select = Some((id, target.rect.x, target.rect.y, target.rect.width));
+                    // Per-kind dispatch pres InteractiveKind klasifikaci.
+                    match kind {
+                        InteractiveKind::Select => {
+                            let id = std::rc::Rc::as_ptr(node) as usize;
+                            let same = self.open_select.map(|(t, ..)| t == id).unwrap_or(false);
+                            if same {
+                                self.open_select = None;
+                            } else {
+                                self.open_select = Some((id, target.rect.x, target.rect.y, target.rect.width));
+                            }
+                            self.render();
+                            return;
                         }
-                        self.render();
-                        return;
-                    }
-                    // <a href="..."> click -> navigate.
-                    if tag.as_deref() == Some("a") {
-                        if let Some(href) = node.attr("href") {
-                            if !href.starts_with('#') {
-                                let url = match &self.base_url {
-                                    Some(b) => resolve_url(b, &href),
-                                    None => href.clone(),
-                                };
-                                println!("[link] {url}");
-                                self.navigate_url(&url);
-                                return;
+                        InteractiveKind::Link => {
+                            if let Some(href) = node.attr("href") {
+                                if !href.starts_with('#') {
+                                    let url = match &self.base_url {
+                                        Some(b) => resolve_url(b, &href),
+                                        None => href.clone(),
+                                    };
+                                    println!("[link] {url}");
+                                    self.navigate_url(&url);
+                                    return;
+                                }
                             }
                         }
+                        InteractiveKind::Checkbox | InteractiveKind::Radio => {
+                            // Toggle checked attr.
+                            let was = node.attr("checked").is_some();
+                            if matches!(kind, InteractiveKind::Radio) {
+                                // Radio - uncheck siblings se stejnym name.
+                                let name = node.attr("name").unwrap_or_default();
+                                if let Some(form) = find_ancestor_form(node) {
+                                    fn walk_uncheck(n: &std::rc::Rc<crate::browser::dom::Node>, name: &str) {
+                                        if n.tag_name().as_deref() == Some("input")
+                                            && n.attr("type").as_deref().map(|t| t.eq_ignore_ascii_case("radio")).unwrap_or(false)
+                                            && n.attr("name").as_deref() == Some(name) {
+                                            n.attributes.borrow_mut().remove("checked");
+                                        }
+                                        for c in n.children.borrow().iter() { walk_uncheck(c, name); }
+                                    }
+                                    walk_uncheck(&form, &name);
+                                }
+                            }
+                            if was && !matches!(kind, InteractiveKind::Radio) {
+                                node.attributes.borrow_mut().remove("checked");
+                            } else {
+                                node.attributes.borrow_mut().insert("checked".into(), "checked".into());
+                            }
+                            self.cached_layout_root = None;
+                            // render() volat az po fall-through dispatch click listeners
+                            // (interp je borrowed mut, render volat mimo blok).
+                        }
+                        _ => {}
                     }
                     // Vyvolej click listeners na node
                     let ids: Vec<usize> = node.listeners.borrow().get("click")
