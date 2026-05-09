@@ -119,14 +119,14 @@ fn history_prev_next() {
 
 #[test]
 fn suggest_member_access() {
-    let (start, hits) = suggest("console.l", 9, &[]).expect("hits");
+    let (start, hits) = suggest("console.l", 9, &[], &|_| Vec::new()).expect("hits");
     assert_eq!(start, 8);
     assert!(hits.iter().any(|h| h.text == "log"));
 }
 
 #[test]
 fn suggest_keyword() {
-    let (start, hits) = suggest("ret", 3, &[]).expect("hits");
+    let (start, hits) = suggest("ret", 3, &[], &|_| Vec::new()).expect("hits");
     assert_eq!(start, 0);
     assert!(hits.iter().any(|h| h.text == "return"));
 }
@@ -134,20 +134,20 @@ fn suggest_keyword() {
 #[test]
 fn suggest_global() {
     let globals = vec!["myVar".to_string(), "myFunction".to_string()];
-    let (_start, hits) = suggest("my", 2, &globals).expect("hits");
+    let (_start, hits) = suggest("my", 2, &globals, &|_| Vec::new()).expect("hits");
     assert!(hits.iter().any(|h| h.text == "myVar"));
     assert!(hits.iter().any(|h| h.text == "myFunction"));
 }
 
 #[test]
 fn suggest_empty_at_cursor_zero() {
-    let r = suggest("foo", 0, &[]);
+    let r = suggest("foo", 0, &[], &|_| Vec::new());
     assert!(r.is_none());
 }
 
 #[test]
 fn suggest_member_math() {
-    let (_, hits) = suggest("Math.s", 6, &[]).expect("hits");
+    let (_, hits) = suggest("Math.s", 6, &[], &|_| Vec::new()).expect("hits");
     assert!(hits.iter().any(|h| h.text == "sqrt"));
     assert!(hits.iter().any(|h| h.text == "sin"));
 }

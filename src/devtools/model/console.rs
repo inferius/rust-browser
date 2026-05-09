@@ -315,7 +315,16 @@ impl AutocompleteState {
 /// Strategie:
 /// - Pri `obj.x` -> hits = vsechny vlastnosti `obj` matching prefix `x`
 /// - Pri samotnem `id` -> hits = globaly + JS keywords matching prefix
-pub fn suggest(text: &str, cursor: usize, globals: &[String]) -> Option<(usize, Vec<AutocompleteHit>)> {
+///
+/// `resolve_props` callback dostane base ident (napr. "console", "$0", "myVar")
+/// a vraci realne property keys z interpreter env. Caller poskytne reflektivni
+/// lookup. Pri None nebo prazdnem vystupu, fallback na hardcoded baseline.
+pub fn suggest(
+    text: &str,
+    cursor: usize,
+    globals: &[String],
+    resolve_props: &dyn Fn(&str) -> Vec<String>,
+) -> Option<(usize, Vec<AutocompleteHit>)> {
     if cursor == 0 || cursor > text.len() { return None; }
     let bytes = text.as_bytes();
 
@@ -341,16 +350,26 @@ pub fn suggest(text: &str, cursor: usize, globals: &[String]) -> Option<(usize, 
             } else { break; }
         }
         let base = &text[base_start..base_end];
-        // Hardcoded base completions pro top-level builtins.
-        let props = base_property_completions(base);
-        let mut hits: Vec<AutocompleteHit> = props.iter()
+        // Reflective lookup nejprve - real props z interpreter env.
+        let mut props: Vec<String> = resolve_props(base);
+        // Doplnit prototype chain methods (Array/String/DOM) - ty nejsou
+        // own props ale dostupne pres dot access. Pokud caller vrati nic
+        // (base unknown), fallback na hardcoded baseline.
+        let baseline = base_property_completions(base);
+        for p in baseline {
+            if !props.contains(&p.to_string()) {
+                props.push(p.to_string());
+            }
+        }
+        let mut hits: Vec<AutocompleteHit> = props.into_iter()
             .filter(|p| p.starts_with(prefix))
             .map(|p| AutocompleteHit {
-                text: p.to_string(),
+                text: p,
                 kind: HitKind::Property,
             })
             .collect();
         hits.sort_by(|a, b| a.text.cmp(&b.text));
+        hits.dedup_by(|a, b| a.text == b.text);
         if hits.is_empty() { return None; }
         return Some((id_start, hits));
     }

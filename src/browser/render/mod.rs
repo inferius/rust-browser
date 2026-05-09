@@ -3642,11 +3642,28 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             use crate::devtools::model::console::{suggest, AutocompleteState};
             let text = self.devtools.console.input.text.clone();
             let cursor = self.devtools.console.input.cursor;
-            // Vezmi globals z interpreteru env (top-level vars).
             let globals: Vec<String> = if let Some(interp) = &self.interpreter {
                 interp.global.borrow().names()
             } else { Vec::new() };
-            if let Some((start, hits)) = suggest(&text, cursor, &globals) {
+            // Reflective property resolver: base ident -> own props z JsObject.
+            // Hleda v env: kdyz base je top-level var, a hodnota je Object,
+            // vrat keys. Jinak prazdny - fallback na hardcoded baseline.
+            let interp_ref = self.interpreter.as_ref();
+            let resolve = |base: &str| -> Vec<String> {
+                let Some(interp) = interp_ref else { return Vec::new() };
+                let val = interp.global.borrow().get(base);
+                match val {
+                    Some(crate::interpreter::JsValue::Object(obj)) => {
+                        let b = obj.borrow();
+                        b.props.keys()
+                            .filter(|k| !k.starts_with("__"))
+                            .cloned()
+                            .collect()
+                    }
+                    _ => Vec::new(),
+                }
+            };
+            if let Some((start, hits)) = suggest(&text, cursor, &globals, &resolve) {
                 self.devtools.console.autocomplete = AutocompleteState::open(hits, start);
             } else {
                 self.devtools.console.autocomplete = None;
