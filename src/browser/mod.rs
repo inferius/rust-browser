@@ -25,6 +25,7 @@ pub mod dom_input_buffer;
 pub mod interactive;
 pub mod selection;
 pub mod textrun;
+pub mod async_jobs;
 
 #[cfg(test)]
 mod tests;
