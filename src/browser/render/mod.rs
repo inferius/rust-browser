@@ -476,6 +476,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         tab_drag_x_start: f32,
         /// Status bar hover URL preview (Some = link hover, None = hidden).
         status_hover_url: Option<String>,
+        /// Tooltip nad shell tab chip (full title) - (text, x, y screen logical).
+        shell_tab_tooltip: Option<(String, f32, f32)>,
         /// Browser shell mode - kdyz true, vykresli se chrome bar (tabs +
         /// address bar + back/forward) + page area zacne pod chromem.
         /// Toggle pres CLI flag --shell nebo Ctrl+Shift+B.
@@ -707,6 +709,24 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         return;
                     }
                     self.update_hover();
+                    // Shell tab tooltip - hover na chip > 1.0s v ramci jednoho chip.
+                    self.shell_tab_tooltip = None;
+                    if self.shell_mode {
+                        let scale_local = self.renderer.as_ref().map(|r| r.scale_factor).unwrap_or(1.0);
+                        let mx = (position.x as f32) / (self.zoom * scale_local);
+                        let my = (position.y as f32) / (self.zoom * scale_local);
+                        if my < self.shell_chrome_h {
+                            let viewport_w = self.viewport_w_logical();
+                            let hit = hit_chrome(viewport_w, self.shell_chrome_h, &self.tabs, mx, my);
+                            if let ChromeHit::TabClick(idx) = hit {
+                                if let Some(t) = self.tabs.tabs.get(idx) {
+                                    if t.title.chars().count() > 20 {
+                                        self.shell_tab_tooltip = Some((t.title.clone(), mx, my + 16.0));
+                                    }
+                                }
+                            }
+                        }
+                    }
                     if self.page_sel_dragging() {
                         self.page_sel_update_current((self.mouse_x, self.mouse_y));
                         self.render();
@@ -1941,6 +1961,11 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                             if s.as_str() == "b" || s.as_str() == "B" {
                                 // Ctrl+B: open bookmarks page.
                                 self.navigate_url("about:bookmarks");
+                                return;
+                            }
+                            if s.as_str() == "h" || s.as_str() == "H" {
+                                // Ctrl+H: open history page.
+                                self.navigate_url("about:history");
                                 return;
                             }
                             // Shell tab shortcuts.
@@ -4875,24 +4900,61 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         strikethrough: false, underline: false,
                     });
                 }
-                if let Some(url) = &self.status_hover_url {
-                    let panel_h_logical = if self.devtools.panel_open {
-                        self.devtools.panel_h.min(win_h_logical * 0.7)
-                    } else { 0.0 };
-                    let sb_y = win_h_logical - panel_h_logical - 22.0;
-                    let url_short: String = url.chars().take(120).collect();
-                    let sb_w = (url_short.len() as f32) * 7.0 + 24.0;
+                // Shell tab tooltip - kdyz mouse nad chip s truncated title.
+                if let Some((txt, x, y)) = &self.shell_tab_tooltip {
+                    let tw = (txt.chars().count() as f32) * 7.0 + 16.0;
+                    let tx = x.min(win_w_logical - tw - 4.0).max(4.0);
                     display_list.push(DisplayCommand::Rect {
-                        x: 4.0, y: sb_y, w: sb_w.min(win_w_logical - 8.0),
-                        h: 20.0, color: [27, 27, 35, 240], radius: 2.0,
+                        x: tx, y: *y, w: tw, h: 22.0,
+                        color: [16, 16, 22, 240], radius: 4.0,
                     });
                     display_list.push(DisplayCommand::Text {
-                        x: 12.0, y: sb_y + 3.0, content: url_short,
-                        color: [191, 191, 201, 255],
+                        x: tx + 8.0, y: *y + 4.0, content: txt.clone(),
+                        color: [251, 251, 254, 255],
                         font_size: 12.0, bold: false, italic: false,
                         font_family: "Inter".into(),
                         strikethrough: false, underline: false,
                     });
+                }
+                // Status bar - permanentni dolni lista. Vlevo URL hover (jen pokud je),
+                // vpravo zoom % indicator pri zoom != 1.0.
+                let panel_h_logical = if self.devtools.panel_open {
+                    self.devtools.panel_h.min(win_h_logical * 0.7)
+                } else { 0.0 };
+                let sb_y = win_h_logical - panel_h_logical - 22.0;
+                let zoom_pct = (self.zoom * 100.0).round() as i32;
+                let show_zoom = (self.zoom - 1.0).abs() > 0.01;
+                if self.status_hover_url.is_some() || show_zoom {
+                    if let Some(url) = &self.status_hover_url {
+                        let url_short: String = url.chars().take(120).collect();
+                        let sb_w = (url_short.len() as f32) * 7.0 + 24.0;
+                        display_list.push(DisplayCommand::Rect {
+                            x: 4.0, y: sb_y, w: sb_w.min(win_w_logical * 0.7),
+                            h: 20.0, color: [27, 27, 35, 240], radius: 2.0,
+                        });
+                        display_list.push(DisplayCommand::Text {
+                            x: 12.0, y: sb_y + 3.0, content: url_short,
+                            color: [191, 191, 201, 255],
+                            font_size: 12.0, bold: false, italic: false,
+                            font_family: "Inter".into(),
+                            strikethrough: false, underline: false,
+                        });
+                    }
+                    if show_zoom {
+                        let txt = format!("{}%", zoom_pct);
+                        let zw = (txt.len() as f32) * 8.0 + 16.0;
+                        display_list.push(DisplayCommand::Rect {
+                            x: win_w_logical - zw - 4.0, y: sb_y, w: zw, h: 20.0,
+                            color: [42, 41, 50, 240], radius: 2.0,
+                        });
+                        display_list.push(DisplayCommand::Text {
+                            x: win_w_logical - zw + 6.0, y: sb_y + 3.0, content: txt,
+                            color: [254, 191, 84, 255],
+                            font_size: 12.0, bold: true, italic: false,
+                            font_family: "CamingoMono".into(),
+                            strikethrough: false, underline: false,
+                        });
+                    }
                 }
             }
 
@@ -5277,6 +5339,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         tab_drag_idx: None,
         tab_drag_x_start: 0.0,
         status_hover_url: None,
+        shell_tab_tooltip: None,
         shell_mode,
         shell_chrome_h: 64.0,
         tabs: {
