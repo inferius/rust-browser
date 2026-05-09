@@ -1532,7 +1532,17 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
         // BEZ clampu na 0 - pri inner_h < 1.5*fs negative shift posune text
         // do pad_t area (badge/highlight maly inner = mensi clam). Akceptace.
         let inner_h = bx.rect.height - pad_t - pad_b;
-        let v_offset = (inner_h - bx.font_size * 1.5) * 0.5;
+        // Vertical centering jen pro single-line text. Multi-line wrap (\n
+        // v textu z flush_inline) nebo box vyssi nez 1.5 lines = top-align,
+        // jinak druhy + dalsi radky se posunou pod box (browser top-aligns
+        // multi-line text v block boxu).
+        let advance_h = bx.font_size * 1.2;
+        let is_multiline = text.contains('\n') || inner_h > advance_h * 1.5;
+        let v_offset = if is_multiline {
+            0.0
+        } else {
+            (inner_h - bx.font_size * 1.5) * 0.5
+        };
         let text_y = bx.rect.y + pad_t + v_offset;
         let text_color = with_alpha(bx.text_color.unwrap_or([0, 0, 0, 255]));
         // Text shadow - emit pred main text aby byl v pozadi
