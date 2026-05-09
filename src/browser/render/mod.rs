@@ -455,9 +455,6 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         /// Text selection: anchor (mouse down pos), current (mouse drag pos).
         /// Pri obou Some + dragging = aktivni rect highlight. Ctrl+C extrahuje
         /// text uvnitr.
-        selection_anchor: Option<(f32, f32)>,
-        selection_current: Option<(f32, f32)>,
-        selection_dragging: bool,
         /// Main page scrollbar drag - true pri LMB hold na vertical/horizontal thumb.
         page_scrollbar_v_drag: bool,
         page_scrollbar_h_drag: bool,
@@ -600,9 +597,8 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                         return;
                     }
                     self.update_hover();
-                    if self.selection_dragging {
-                        self.selection_current = Some((self.mouse_x, self.mouse_y));
-                        self.mirror_page_selection_to_registry();
+                    if self.page_sel_dragging() {
+                        self.page_sel_update_current((self.mouse_x, self.mouse_y));
                         self.render();
                     } else if self.open_select.is_some() {
                         self.render();
@@ -626,16 +622,8 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                         self.page_scrollbar_h_drag = false;
                         self.render();
                     }
-                    if self.selection_dragging {
-                        self.selection_dragging = false;
-                        // Pokud minimal drag (< 3px), clear selection (= simple click).
-                        if let (Some(a), Some(c)) = (self.selection_anchor, self.selection_current) {
-                            if (a.0 - c.0).abs() < 3.0 && (a.1 - c.1).abs() < 3.0 {
-                                self.selection_anchor = None;
-                                self.selection_current = None;
-                            }
-                        }
-                        self.mirror_page_selection_to_registry();
+                    if self.page_sel_dragging() {
+                        self.page_sel_end_drag();
                         self.render();
                     }
                 }
@@ -655,10 +643,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
 
                     // Selection start: kazdy MouseDown nastavi anchor. Drag move
                     // updatuje current. Release < 3px diff = clear (simple click).
-                    self.selection_anchor = Some((self.mouse_x, self.mouse_y));
-                    self.selection_current = Some((self.mouse_x, self.mouse_y));
-                    self.selection_dragging = true;
-                    self.mirror_page_selection_to_registry();
+                    self.page_sel_begin((self.mouse_x, self.mouse_y));
                     // Devtools panel hit-test ma prioritu nad page hit-testem.
                     // mouse_x/y v doc-logical, raw_y v screen-logical. viewport_w/h v logical.
                     let raw_y = self.mouse_y - self.scroll_y;
@@ -684,7 +669,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                             let thumb_h = (viewport_h_page * viewport_h_page / layout.rect.height).max(40.0);
                             let frac = ((my_screen - thumb_h * 0.5) / (viewport_h_page - thumb_h)).clamp(0.0, 1.0);
                             self.scroll_target_y = frac * max_scroll;
-                            self.selection_dragging = false;
+                            self.page_sel_clear();
                             self.render();
                             return;
                         }
@@ -697,7 +682,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                             let thumb_w = (viewport_w * viewport_w / layout.rect.width).max(40.0);
                             let frac = ((mx - thumb_w * 0.5) / (viewport_w - thumb_w)).clamp(0.0, 1.0);
                             self.scroll_target_x = frac * max_scroll;
-                            self.selection_dragging = false;
+                            self.page_sel_clear();
                             self.render();
                             return;
                         }
@@ -1354,9 +1339,9 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                             if s.as_str() == "a" || s.as_str() == "A" {
                                 // Ctrl+A: select cely document.
                                 if let Some(layout) = &self.layout_root {
-                                    self.selection_anchor = Some((layout.rect.x, layout.rect.y));
-                                    self.selection_current = Some((layout.rect.x + layout.rect.width, layout.rect.y + layout.rect.height));
-                                    self.mirror_page_selection_to_registry();
+                                    let a = (layout.rect.x, layout.rect.y);
+                                    let c = (layout.rect.x + layout.rect.width, layout.rect.y + layout.rect.height);
+                                    self.page_sel_set_full(a, c);
                                     self.render();
                                 }
                                 return;
@@ -1542,26 +1527,68 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         fn estimate_styles_total_h(&self) -> f32 {
             self.devtools.styles.estimate_total_h()
         }
-        /// Mirror App.selection_* state -> Document.selection.page_selection.
-        /// Volat po kazde zmene App fields. JS Selection API (window.getSelection)
-        /// cte z registry.
-        fn mirror_page_selection_to_registry(&self) {
+        // ─── Page selection accessors (Document.selection.page_selection) ───
+        // App.selection_* fields zruseny - registry je primary state.
+
+        fn page_sel_anchor(&self) -> Option<(f32, f32)> {
+            self.interpreter.as_ref()
+                .and_then(|i| i.document.borrow().selection.borrow().page_selection.as_ref().map(|p| p.anchor))
+        }
+        fn page_sel_current(&self) -> Option<(f32, f32)> {
+            self.interpreter.as_ref()
+                .and_then(|i| i.document.borrow().selection.borrow().page_selection.as_ref().map(|p| p.current))
+        }
+        fn page_sel_dragging(&self) -> bool {
+            self.interpreter.as_ref()
+                .map(|i| i.document.borrow().selection.borrow().page_selection.as_ref().map(|p| p.dragging).unwrap_or(false))
+                .unwrap_or(false)
+        }
+        fn page_sel_begin(&self, anchor: (f32, f32)) {
+            let Some(interp) = &self.interpreter else { return };
+            let doc = interp.document.borrow();
+            doc.selection.borrow_mut().page_selection = Some(crate::browser::selection::PageSelection {
+                anchor,
+                current: anchor,
+                dragging: true,
+                cached_text: String::new(),
+            });
+        }
+        fn page_sel_update_current(&self, current: (f32, f32)) {
+            let Some(anchor) = self.page_sel_anchor() else { return };
+            let cached = self.compute_selection_text(anchor, current);
             let Some(interp) = &self.interpreter else { return };
             let doc = interp.document.borrow();
             let mut reg = doc.selection.borrow_mut();
-            match (self.selection_anchor, self.selection_current) {
-                (Some(a), Some(c)) => {
-                    let cached = self.compute_selection_text(a, c);
-                    reg.page_selection = Some(crate::browser::selection::PageSelection {
-                        anchor: a,
-                        current: c,
-                        dragging: self.selection_dragging,
-                        cached_text: cached,
-                    });
-                }
-                _ => reg.page_selection = None,
+            if let Some(ps) = reg.page_selection.as_mut() {
+                ps.current = current;
+                ps.cached_text = cached;
             }
         }
+        fn page_sel_end_drag(&self) {
+            let Some(interp) = &self.interpreter else { return };
+            let doc = interp.document.borrow();
+            let mut reg = doc.selection.borrow_mut();
+            if let Some(ps) = reg.page_selection.as_mut() {
+                ps.dragging = false;
+                if (ps.anchor.0 - ps.current.0).abs() < 3.0 && (ps.anchor.1 - ps.current.1).abs() < 3.0 {
+                    reg.page_selection = None;
+                }
+            }
+        }
+        fn page_sel_clear(&self) {
+            let Some(interp) = &self.interpreter else { return };
+            let doc = interp.document.borrow();
+            doc.selection.borrow_mut().page_selection = None;
+        }
+        fn page_sel_set_full(&self, anchor: (f32, f32), current: (f32, f32)) {
+            let cached = self.compute_selection_text(anchor, current);
+            let Some(interp) = &self.interpreter else { return };
+            let doc = interp.document.borrow();
+            doc.selection.borrow_mut().page_selection = Some(crate::browser::selection::PageSelection {
+                anchor, current, dragging: false, cached_text: cached,
+            });
+        }
+
         /// Walk layout tree, najdi text boxes intersect rect, concat textu.
         fn compute_selection_text(&self, a: (f32, f32), c: (f32, f32)) -> String {
             let Some(layout) = &self.layout_root else { return String::new() };
@@ -1733,7 +1760,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         /// system clipboard pres arboard. Selection coords v logical px (uz s
         /// scroll_y aplikovany na mouse).
         fn copy_selection_to_clipboard(&mut self) {
-            let (a, c) = match (self.selection_anchor, self.selection_current) {
+            let (a, c) = match (self.page_sel_anchor(), self.page_sel_current()) {
                 (Some(a), Some(c)) => (a, c),
                 _ => return,
             };
@@ -2732,6 +2759,10 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
             // Smooth scroll tick: interpoluje scroll_y -> scroll_target_y. Pokud
             // stale animuje, na konci request_redraw pro pokracovani.
             let _scroll_animating = self.smooth_scroll_tick();
+            // Extract page selection anchor/current pred renderer borrow
+            // (page_sel_* metody borrowuji self.interpreter immutably).
+            let self_page_sel_anchor = self.page_sel_anchor();
+            let self_page_sel_current = self.page_sel_current();
             let r = match &mut self.renderer { Some(r) => r, None => return };
             // Push zoom faktor do rendereru pro vp uniform skalovani.
             r.zoom = self.zoom;
@@ -2986,7 +3017,8 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
             // textem. Per-text-box highlight: walk layout, kazdy text run co se
             // protina s drag rectem dostane vlastni highlight rectangle (browser-like
             // "select per line" namisto single big rect).
-            if let (Some(a), Some(c)) = (self.selection_anchor, self.selection_current) {
+            let page_sel = (self_page_sel_anchor, self_page_sel_current);
+            if let (Some(a), Some(c)) = page_sel {
                 let x0 = a.0.min(c.0);
                 let y0 = a.1.min(c.1);
                 let x1 = a.0.max(c.0);
@@ -3390,9 +3422,6 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         addr_input: crate::devtools::model::text_buffer::SimpleStringBuffer::new(),
         scroll_target_y: 0.0,
         scroll_target_x: 0.0,
-        selection_anchor: None,
-        selection_current: None,
-        selection_dragging: false,
         page_scrollbar_v_drag: false,
         page_scrollbar_h_drag: false,
     };
