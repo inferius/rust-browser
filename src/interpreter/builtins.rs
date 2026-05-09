@@ -1492,6 +1492,14 @@ pub fn setup_builtins(
     }
     {
         let doc = Rc::clone(document);
+        doc_obj.set("__set_title__".into(), native("document.title=", move |args| {
+            let v = args.into_iter().next().unwrap_or(JsValue::Undefined);
+            doc.borrow_mut().title = v.to_string();
+            Ok(JsValue::Undefined)
+        }));
+    }
+    {
+        let doc = Rc::clone(document);
         doc_obj.set("__get_URL__".into(), native("document.URL", move |_| {
             Ok(JsValue::Str(doc.borrow().url.clone()))
         }));

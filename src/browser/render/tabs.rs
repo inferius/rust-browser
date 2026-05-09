@@ -437,17 +437,31 @@ h1 { color: #69a1ff; font-size: 48px; margin-bottom: 16px; }
 pub struct TabManager {
     pub tabs: Vec<Tab>,
     pub active: usize,
+    /// Ring buffer recently closed tabs (Ctrl+Shift+T = restore last).
+    /// Max 10 entries.
+    pub closed_stack: Vec<Tab>,
 }
 
 impl Default for TabManager {
     fn default() -> Self {
-        Self { tabs: vec![Tab::empty()], active: 0 }
+        Self { tabs: vec![Tab::empty()], active: 0, closed_stack: Vec::new() }
     }
 }
 
 impl TabManager {
     pub fn new(initial: Tab) -> Self {
-        Self { tabs: vec![initial], active: 0 }
+        Self { tabs: vec![initial], active: 0, closed_stack: Vec::new() }
+    }
+
+    /// Restore last closed tab. Vraci true pokud byl restore proveden.
+    pub fn restore_last_closed(&mut self) -> bool {
+        if let Some(tab) = self.closed_stack.pop() {
+            self.tabs.push(tab);
+            self.active = self.tabs.len() - 1;
+            true
+        } else {
+            false
+        }
     }
 
     pub fn active_tab(&self) -> &Tab {
@@ -470,7 +484,12 @@ impl TabManager {
     pub fn close(&mut self, idx: usize) {
         if self.tabs.len() <= 1 { return; }
         if idx >= self.tabs.len() { return; }
-        self.tabs.remove(idx);
+        let removed = self.tabs.remove(idx);
+        // Push do closed_stack pro Ctrl+Shift+T restore. Max 10 entries.
+        self.closed_stack.push(removed);
+        if self.closed_stack.len() > 10 {
+            self.closed_stack.remove(0);
+        }
         if self.active >= self.tabs.len() {
             self.active = self.tabs.len() - 1;
         } else if self.active > idx {

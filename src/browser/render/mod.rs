@@ -1914,6 +1914,33 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                             }
                             // Shell tab shortcuts.
                             if self.shell_mode {
+                                if (s.as_str() == "T") && self.modifiers.shift_key() {
+                                    // Ctrl+Shift+T = restore last closed tab.
+                                    {
+                                        let cur = self.tabs.active_tab_mut();
+                                        cur.scroll_y = self.scroll_y;
+                                        cur.scroll_x = self.scroll_x;
+                                        cur.html = self.html.clone();
+                                        cur.css = self.css.clone();
+                                        cur.url = self.base_url.clone();
+                                    }
+                                    if self.tabs.restore_last_closed() {
+                                        let t = self.tabs.active_tab().clone();
+                                        self.html = t.html;
+                                        self.css = t.css;
+                                        self.base_url = t.url;
+                                        self.scroll_y = t.scroll_y;
+                                        self.scroll_x = t.scroll_x;
+                                        self.cached_layout_root = None;
+                                        self.cached_stylesheets = None;
+                                        // Reload pres URL aby JS state byl fresh.
+                                        if let Some(url) = self.base_url.clone() {
+                                            self.navigate_url_no_history(&url);
+                                        }
+                                        self.render();
+                                    }
+                                    return;
+                                }
                                 if s.as_str() == "t" || s.as_str() == "T" {
                                     // Ctrl+T = new tab.
                                     {
@@ -3284,6 +3311,14 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                             eprintln!("[script error] {e}");
                         }
                     }
+                }
+            }
+            // Po skriptech: sync document.title (mohlo jit zmenit zevnitr JS) -> active tab + window.
+            let new_title = interp.document.borrow().title.clone();
+            if !new_title.is_empty() {
+                self.tabs.active_tab_mut().title = new_title.clone();
+                if let Some(w) = &self.window {
+                    w.set_title(&format!("{} - Rust Web Engine", new_title));
                 }
             }
         }
