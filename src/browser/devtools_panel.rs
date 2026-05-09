@@ -951,9 +951,12 @@ fn paint_side_panel(
     // Overflow chevron - kliknutelny dropdown s ostatnimi taby.
     let active_in_overflow = overflow_start.map(|s|
         visible[s..].contains(&state.side_panel_tab)).unwrap_or(false);
+    // Chevron je VZDY paintovan v pravem rohu strip - klik otevre menu vsech
+    // sub-tabu (vc Compatibility ktery neni v visible_default). Dropdown
+    // proto vzdy funkcni bez ohledu na velikost panelu.
     *state.styles.overflow_chevron_zone.borrow_mut() = None;
     state.styles.overflow_dropdown_zones.borrow_mut().clear();
-    if let Some(start) = overflow_start {
+    {
         let cx = x + w - 22.0;
         let cy = y + 4.0;
         let cw = 18.0;
@@ -964,19 +967,19 @@ fn paint_side_panel(
         push_rect(cmds, cx, cy, cw, ch, cb);
         push_icon(cmds, cx + 1.0, cy + (ch - ICON_SIZE) * 0.5, ICON_EXPAND_MORE, pal.text);
         *state.styles.overflow_chevron_zone.borrow_mut() = Some((cx, cy, cw, ch));
-        // Dropdown menu.
+        // Dropdown menu - vsechny sub-taby (full all() list, ne jen overflow).
         if state.side_panel_overflow_open {
+            let all_tabs = SidePanelTab::all();
             let drop_y = y + strip_h + 2.0;
             let item_h = ROW_H + 4.0;
-            let hidden = &visible[start..];
-            let menu_h = (hidden.len() as f32) * item_h + 6.0;
+            let menu_h = (all_tabs.len() as f32) * item_h + 6.0;
             let menu_x = x + w - 160.0;
             let menu_w = 156.0;
             push_rect(cmds, menu_x + 2.0, drop_y + 2.0, menu_w, menu_h, [0, 0, 0, 80]);
             push_rect(cmds, menu_x, drop_y, menu_w, menu_h, pal.bg_context_menu);
             push_rect_border(cmds, menu_x, drop_y, menu_w, menu_h, pal.border_strong);
             let mut iy = drop_y + 4.0;
-            for (i, t) in hidden.iter().enumerate() {
+            for (i, t) in all_tabs.iter().enumerate() {
                 let active = state.side_panel_tab == *t;
                 let hov = mouse_x >= menu_x && mouse_x < menu_x + menu_w
                     && mouse_y >= iy && mouse_y < iy + item_h;
@@ -987,7 +990,7 @@ fn paint_side_panel(
                 let col = if active { pal.text_on_accent } else { pal.text };
                 push_ui_text(cmds, menu_x + 10.0, iy + 4.0, t.label().to_string(), col, active);
                 state.styles.overflow_dropdown_zones.borrow_mut()
-                    .push((menu_x, iy, menu_w, item_h, start + i));
+                    .push((menu_x, iy, menu_w, item_h, i));
                 iy += item_h;
             }
         }
@@ -1336,8 +1339,12 @@ fn paint_side_computed(
     use crate::devtools::model::styles::{shorthand_for, is_shorthand};
     let expanded = state.styles.computed_expanded.borrow().clone();
     state.styles.computed_chevron_zones.borrow_mut().clear();
-    // Group: vsechny props ktere maji shorthand parent dostanou Some(shorthand).
-    // Shorthand props samotne dostanou is_shorthand=true.
+    // Sady: shorthand klice realne pritomne v computed. Sub-prop skryjeme jen
+    // kdyz shorthand parent v computed existuje (jinak nemame co collapsed).
+    let present_shorthands: std::collections::HashSet<String> = state.styles.computed.iter()
+        .filter(|(k, _)| is_shorthand(k))
+        .map(|(k, _)| k.clone())
+        .collect();
     let mut hidden_shorthands: std::collections::HashSet<String> = Default::default();
     for (k, _) in &state.styles.computed {
         if is_shorthand(k) && expanded.contains(k) {
@@ -1347,9 +1354,10 @@ fn paint_side_computed(
     for (k, v) in &state.styles.computed {
         if sy >= max_y { break; }
         if !filter.is_empty() && !k.contains(&filter) { continue; }
-        // Sub-prop ktery patri pod collapsed shorthand -> skip.
+        // Sub-prop ktery patri pod collapsed shorthand -> skip JEN kdyz shorthand
+        // parent v computed je. Bez parent shorthand zustava vse viditelne.
         if let Some(sh) = shorthand_for(k) {
-            if !expanded.contains(sh) {
+            if present_shorthands.contains(sh) && !expanded.contains(sh) {
                 continue;
             }
         }
@@ -2109,9 +2117,13 @@ fn paint_styles_pane(
                 },
             };
             if in_view(sy) {
-                // Match preview toggle - ctverecek tecky [..] vlevo od selectoru.
+                // Selektor prvni; ctverecek mezi selektorem a `{`.
+                let sel_text_x = pad_x;
+                push_text(cmds, sel_text_x, sy, rule.selector.clone(), pal.syn_attr, false);
+                let sel_w = dt_text_width(&rule.selector);
+                // Match preview toggle - ctverecek tecky [..] vedle selektoru.
                 // Klik = highlight v document elementum matching selector.
-                let toggle_x = pad_x;
+                let toggle_x = sel_text_x + sel_w + 6.0;
                 let toggle_active = state.match_preview_selector.as_deref() == Some(&rule.selector);
                 let tcol = if toggle_active { pal.accent } else { pal.text_dim };
                 push_rect_border(cmds, toggle_x, sy + 3.0, 12.0, 12.0, tcol);
@@ -2126,17 +2138,15 @@ fn paint_styles_pane(
                 }
                 state.styles.match_toggle_zones.borrow_mut().push(
                     (toggle_x, sy + 3.0, 12.0, 12.0, rule.selector.clone()));
-                // Selektor + brace.
-                let sel_text_x = toggle_x + 18.0;
-                push_text(cmds, sel_text_x, sy, rule.selector.clone(), pal.syn_attr, false);
-                let sel_w = dt_text_width(&rule.selector);
-                push_text(cmds, sel_text_x + sel_w, sy, " {".to_string(), pal.text_dim, false);
+                // Open brace po ctverecku.
+                let brace_x = toggle_x + 18.0;
+                push_text(cmds, brace_x, sy, "{".to_string(), pal.text_dim, false);
                 // Specificity badge.
                 let a = (rule.specificity >> 16) & 0xFF;
                 let b = (rule.specificity >> 8) & 0xFF;
                 let c = rule.specificity & 0xFF;
                 let badge = format!("({},{},{})", a, b, c);
-                let badge_x = sel_text_x + sel_w + 24.0;
+                let badge_x = brace_x + 14.0;
                 push_text(cmds, badge_x, sy, badge.clone(), pal.text_disabled, false);
                 // Source link - klik prepne Sources tab + open file.
                 let label_w = dt_text_width(&src_label);
@@ -3661,8 +3671,8 @@ fn hit_test_elements(
                 if mouse_x >= *zx && mouse_x < zx + zw
                    && mouse_y >= *zy && mouse_y < zy + zh {
                     use crate::devtools::SidePanelTab;
-                    let visible = SidePanelTab::visible_default();
-                    if let Some(t) = visible.get(*idx) {
+                    let all_tabs = SidePanelTab::all();
+                    if let Some(t) = all_tabs.get(*idx) {
                         return DevtoolsHit::SidePanelTabClick(*t);
                     }
                 }

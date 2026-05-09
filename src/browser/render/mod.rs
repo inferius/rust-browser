@@ -458,6 +458,10 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         /// Cache pro matched_rules build - (selected_node, cascade_hash).
         /// Bez zmeny ani jednoho neni potreba pretizet rules walk.
         cached_matched_key: Option<(Option<usize>, u64)>,
+        /// Animations time origin - drahy speed/pause/restart pres devtools panel.
+        /// Effective_anim_time = (now - origin) * speed; pri pause snapshot do paused_at.
+        animation_origin: std::time::Instant,
+        animation_pause_start: Option<std::time::Instant>,
         cached_pseudo_map: Option<super::cascade::PseudoStyleMap>,
         /// Cesta k aktualne nactenemu HTML souboru (pro reload + relativni paths).
         current_path: Option<std::path::PathBuf>,
@@ -1323,29 +1327,49 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                     self.devtools.side_panel_overflow_open = !self.devtools.side_panel_overflow_open;
                                 }
                                 DevtoolsHit::AnimationsAction(action) => {
+                                    use std::time::{Instant, Duration};
                                     match action.as_str() {
                                         "pause" => {
-                                            self.devtools.animations_paused = !self.devtools.animations_paused;
-                                            if self.devtools.animations_paused {
-                                                let t = self.devtools.frame_counter as f32 / 60.0
-                                                    * self.devtools.animations_speed;
-                                                self.devtools.animations_paused_at = Some(t.fract());
+                                            if !self.devtools.animations_paused {
+                                                // Freeze: zaznam start pauzy.
+                                                self.animation_pause_start = Some(Instant::now());
+                                                self.devtools.animations_paused = true;
                                             } else {
-                                                self.devtools.animations_paused_at = None;
+                                                // Resume: shift origin pres pause duration -> elapsed pokracuje.
+                                                if let Some(ps) = self.animation_pause_start.take() {
+                                                    let pause_dur = ps.elapsed();
+                                                    self.animation_origin += pause_dur;
+                                                }
+                                                self.devtools.animations_paused = false;
                                             }
                                         }
                                         "speed" => {
-                                            // Cycle 0.25 / 0.5 / 1.0 / 2.0 / 4.0.
+                                            // Cycle 0.25 / 0.5 / 1 / 2 / 4. Snapshot effective_t,
+                                            // pak shift origin tak aby novy speed pokracoval z teze hodnoty.
                                             let speeds = [0.25, 0.5, 1.0, 2.0, 4.0];
                                             let cur = self.devtools.animations_speed;
                                             let idx = speeds.iter().position(|s| (s - cur).abs() < 0.01).unwrap_or(2);
-                                            self.devtools.animations_speed = speeds[(idx + 1) % speeds.len()];
+                                            let new_speed = speeds[(idx + 1) % speeds.len()];
+                                            let now = Instant::now();
+                                            let raw_now = if self.devtools.animations_paused {
+                                                self.animation_pause_start.unwrap_or(now)
+                                            } else { now };
+                                            let cur_t = raw_now.duration_since(self.animation_origin)
+                                                .as_secs_f32() * cur;
+                                            // new_origin: raw_now - cur_t/new_speed.
+                                            self.animation_origin = raw_now
+                                                - Duration::from_secs_f32((cur_t / new_speed).max(0.0));
+                                            self.devtools.animations_speed = new_speed;
                                         }
                                         "restart" => {
-                                            // Restart = clear active_animations -> rebuild.
                                             self.active_animations.clear();
                                             self.animation_iterations.clear();
-                                            self.start_time = std::time::Instant::now();
+                                            self.animation_origin = Instant::now();
+                                            if self.devtools.animations_paused {
+                                                self.animation_pause_start = Some(Instant::now());
+                                            } else {
+                                                self.animation_pause_start = None;
+                                            }
                                         }
                                         _ => {}
                                     }
@@ -4885,7 +4909,16 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             }
             self.devtools.styles.font_faces = faces;
 
-            let elapsed = self.start_time.elapsed().as_secs_f32();
+            // Animation-effective time: respektuje pause + speed multiplikator
+            // z devtools Animations panelu. Bez pause = real elapsed * speed.
+            let elapsed = {
+                let now = std::time::Instant::now();
+                let raw_now = if self.devtools.animations_paused {
+                    self.animation_pause_start.unwrap_or(now)
+                } else { now };
+                raw_now.duration_since(self.animation_origin).as_secs_f32()
+                    * self.devtools.animations_speed
+            };
 
             // Drainuj WebSocket events kazdy frame (dispatch onopen/onmessage/onerror/onclose).
             if let Some(interp) = &mut self.interpreter {
@@ -5797,6 +5830,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         cached_cascade_hash: 0,
         cached_style_map: None,
         cached_matched_key: None,
+        animation_origin: std::time::Instant::now(),
+        animation_pause_start: None,
         cached_pseudo_map: None,
         display_list_buffer: Vec::with_capacity(2048),
         cached_layout_root: None,
