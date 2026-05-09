@@ -9,6 +9,37 @@ use super::webgl_helpers::{webgl_compute_stride, webgl_attrib_to_vertex_format, 
 use bytemuck::{Pod, Zeroable};
 use std::rc::Rc;
 
+/// Resolvuj address bar input do navigovatelne URL.
+/// - "https://x" / "http://x" / "file:///x" / "about:x" - passthrough
+/// - "www.x" - prepend "https://"
+/// - "domain.tld[/path]" - prepend "https://"
+/// - "/abs/path" nebo "C:\..." - file path passthrough
+/// - "search query" (s mezerou nebo bez tld) - DuckDuckGo Lite search URL
+pub fn resolve_addr_input(input: &str) -> String {
+    let s = input.trim();
+    if s.starts_with("http://") || s.starts_with("https://")
+       || s.starts_with("file:///") || s.starts_with("about:") {
+        return s.to_string();
+    }
+    if s.starts_with("www.") {
+        return format!("https://{}", s);
+    }
+    // Look like domain (contains dot, no spaces, ASCII-ish).
+    let looks_like_domain = !s.contains(' ')
+        && s.contains('.')
+        && s.chars().all(|c| c.is_ascii_alphanumeric() || ".-_/?:&=%#".contains(c));
+    if looks_like_domain {
+        return format!("https://{}", s);
+    }
+    // Local path heuristics.
+    if s.starts_with('/') || (s.len() >= 3 && &s[1..3] == ":\\") {
+        return s.to_string();
+    }
+    // Default: search query -> DuckDuckGo Lite.
+    let q: String = s.chars().map(|c| if c == ' ' { '+' } else { c }).collect();
+    format!("https://duckduckgo.com/?q={}", q)
+}
+
 /// Reading mode CSS - injected pri Ctrl+Alt+R toggle. Schova
 /// nav/aside/footer, centrovani main do max 720px, beige bg, vetsi serif.
 const READING_MODE_CSS: &str = r#"
@@ -1430,6 +1461,30 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     self.handle_click(self.mouse_x, self.mouse_y);
                     self.render();
                 }
+                WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Middle, .. } => {
+                    // Middle-click na tab chip = zavrit ten tab.
+                    if self.shell_mode {
+                        let viewport_w = self.viewport_w_logical();
+                        let mx = self.mouse_x;
+                        let my_screen = self.mouse_y - self.scroll_y;
+                        if my_screen < self.shell_chrome_h {
+                            let hit = hit_chrome(viewport_w, self.shell_chrome_h, &self.tabs, mx, my_screen);
+                            if let ChromeHit::TabClick(idx) | ChromeHit::TabClose(idx) | ChromeHit::TabContextMenu(idx) = hit {
+                                let pinned = self.tabs.tabs.get(idx).map(|t| t.pinned).unwrap_or(false);
+                                if !pinned {
+                                    self.tabs.close(idx);
+                                    let t = self.tabs.active_tab().clone();
+                                    self.html = t.html;
+                                    self.css = t.css;
+                                    self.base_url = t.url;
+                                    self.cached_layout_root = None;
+                                    self.cached_stylesheets = None;
+                                    self.render();
+                                }
+                            }
+                        }
+                    }
+                }
                 WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Right, .. } => {
                     let raw_y = self.mouse_y - self.scroll_y;
                     let viewport_h = self.viewport_h_logical();
@@ -1870,11 +1925,13 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                 self.addr_input.clear();
                                 self.addr_open = false;
                                 if !url.is_empty() {
-                                    println!("[address] navigate: {}", url);
-                                    if url.starts_with("http://") || url.starts_with("https://") || url.starts_with("file:///") {
-                                        self.navigate_url(&url);
+                                    let resolved = resolve_addr_input(&url);
+                                    println!("[address] navigate: {} -> {}", url, resolved);
+                                    if resolved.starts_with("http://") || resolved.starts_with("https://")
+                                        || resolved.starts_with("file:///") || resolved.starts_with("about:") {
+                                        self.navigate_url(&resolved);
                                     } else {
-                                        let p = std::path::PathBuf::from(&url);
+                                        let p = std::path::PathBuf::from(&resolved);
                                         self.load_path(&p);
                                     }
                                 }
