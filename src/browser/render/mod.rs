@@ -1936,6 +1936,16 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                     self.render();
                                     return;
                                 }
+                                if s.as_str() == "n" || s.as_str() == "N" {
+                                    // Ctrl+N = open new browser window (spawn novy proces).
+                                    let exe = std::env::current_exe().ok();
+                                    if let Some(exe) = exe {
+                                        let _ = std::process::Command::new(exe)
+                                            .arg("browser")
+                                            .spawn();
+                                    }
+                                    return;
+                                }
                                 if s.as_str() == "w" || s.as_str() == "W" {
                                     // Ctrl+W = close active tab.
                                     let active = self.tabs.active;
