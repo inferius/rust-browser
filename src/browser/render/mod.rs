@@ -1164,6 +1164,8 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                             }
                             TextKeyOutcome::Unhandled => {}
                         }
+                        if let Some(w) = &self.window { w.request_redraw(); }
+                        return;
                     }
                     // Elements search bar input.
                     if self.devtools.panel_open && self.devtools.focus == FocusTarget::DevToolsElementsSearch {
@@ -3052,10 +3054,10 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
             // (test stranka 7000 px, viewport 900 px = 8x mensi paint cost).
             // Reuse buffer pres frames - alloc-free.
             let mut display_list = std::mem::take(&mut self.display_list_buffer);
-            // Selection emit PRED layout commands - selection bg rendered POD
-            // textem. Per-text-box highlight: walk layout, kazdy text run co se
-            // protina s drag rectem dostane vlastni highlight rectangle (browser-like
-            // "select per line" namisto single big rect).
+            paint::build_display_list_culled_into(&layout_root, self.scroll_y, viewport_h, &mut display_list);
+            // Selection emit PO layout commands - selection rect alpha tint nad
+            // bg + textem. Browser-like: highlight visible cez bg + text shows
+            // through alpha. Per-text-box, char-level snap pres fontdue advance.
             let page_sel = (self_page_sel_anchor, self_page_sel_current);
             if let (Some(a), Some(c)) = page_sel {
                 let x0 = a.0.min(c.0);
@@ -3063,8 +3065,6 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                 let x1 = a.0.max(c.0);
                 let y1 = a.1.max(c.1);
                 if x1 > x0 + 1.0 || y1 > y0 + 1.0 {
-                    // Char-level snap: pres fontdue advance per char najde
-                    // first/last char ktere mid-pos spada do selection range.
                     fn collect_text_boxes(
                         b: &super::layout::LayoutBox,
                         sx0: f32, sy0: f32, sx1: f32, sy1: f32,
@@ -3096,10 +3096,8 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                                     acc += adv;
                                 }
                                 let hs = hl_start.unwrap_or(0.0);
-                                let iy0 = by0.max(sy0);
-                                let iy1 = by1.min(sy1);
-                                if hl_end > hs + 0.5 && iy1 > iy0 + 0.5 {
-                                    out.push((bx0 + hs, iy0, hl_end - hs, iy1 - iy0));
+                                if hl_end > hs + 0.5 {
+                                    out.push((bx0 + hs, by0, hl_end - hs, b.rect.height));
                                 }
                             }
                         }
@@ -3112,12 +3110,11 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                     for (hx, hy, hw, hh) in hits {
                         display_list.push(DisplayCommand::Rect {
                             x: hx, y: hy, w: hw, h: hh,
-                            color: [80, 150, 255, 100], radius: 0.0,
+                            color: [80, 150, 255, 120], radius: 0.0,
                         });
                     }
                 }
             }
-            paint::build_display_list_culled_into(&layout_root, self.scroll_y, viewport_h, &mut display_list);
 
             // Canvas API: emit canvas ops jako DisplayCommands.
             if let Some(interp) = &self.interpreter {
