@@ -1886,6 +1886,16 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                 }
                                 return;
                             }
+                            if s.as_str() == "h" || s.as_str() == "H" {
+                                // Ctrl+H: open history page.
+                                self.navigate_url("about:history");
+                                return;
+                            }
+                            if s.as_str() == "b" || s.as_str() == "B" {
+                                // Ctrl+B: open bookmarks page.
+                                self.navigate_url("about:bookmarks");
+                                return;
+                            }
                             // Shell tab shortcuts.
                             if self.shell_mode {
                                 if s.as_str() == "t" || s.as_str() == "T" {
