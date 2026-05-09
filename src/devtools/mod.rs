@@ -17,6 +17,7 @@ pub mod debug_runner;
 pub mod profile;
 pub mod history;
 pub mod bookmarks;
+pub mod session;
 
 use std::collections::HashSet;
 

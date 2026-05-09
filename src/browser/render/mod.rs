@@ -1862,6 +1862,19 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         fn shell_chrome_h_active(&self) -> f32 {
             if self.shell_mode { self.shell_chrome_h } else { 0.0 }
         }
+        /// Page commands shift dolu o chrome height (pri shell_mode).
+        fn shift_page_for_chrome(&self, list: &mut [DisplayCommand]) {
+            let dy = self.shell_chrome_h_active();
+            if dy < 0.5 { return; }
+            for cmd in list.iter_mut() {
+                use DisplayCommand::*;
+                match cmd {
+                    Rect { y, .. } | Text { y, .. } | Border { y, .. }
+                    | Image { y, .. } | Gradient { y, .. } | Shadow { y, .. } => *y += dy,
+                    _ => {}
+                }
+            }
+        }
     }
 
     /// Chrome bar hit zones.
@@ -3875,6 +3888,19 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             if self.scroll_x.abs() > 0.001 {
                 for cmd in display_list.iter_mut() {
                     shift_command_x(cmd, -self.scroll_x);
+                }
+            }
+            // Shell mode: shift page commands dolu o chrome_h aby content
+            // nezacinal pod chrome bar.
+            if self.shell_mode {
+                let dy = self.shell_chrome_h;
+                for cmd in display_list.iter_mut() {
+                    use DisplayCommand::*;
+                    match cmd {
+                        Rect { y, .. } | Text { y, .. } | Border { y, .. }
+                        | Image { y, .. } | Gradient { y, .. } | Shadow { y, .. } => *y += dy,
+                        _ => {}
+                    }
                 }
             }
             // Split point: vsechno za timto bodem se renderuje AZ PO WebGL passu,
