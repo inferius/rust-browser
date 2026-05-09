@@ -1280,9 +1280,25 @@ pub fn setup_builtins(
     // document.createRange()
     doc_obj.set("createRange".into(), native("document.createRange", |_| Ok(make_range())));
 
-    // document.getSelection()
+    // document.getSelection() - cte z Document.selection registry (cached_text).
     {
         let sel = make_selection();
+        if let JsValue::Object(obj) = &sel {
+            let dr = Rc::clone(document);
+            obj.borrow_mut().set("toString".into(), native("toString", move |_| {
+                let d = dr.borrow();
+                let s = d.selection.borrow();
+                Ok(JsValue::Str(s.page_selection.as_ref()
+                    .map(|p| p.cached_text.clone())
+                    .unwrap_or_default()))
+            }));
+            let dr2 = Rc::clone(document);
+            obj.borrow_mut().set("isCollapsed".into(), JsValue::Bool({
+                let d = dr2.borrow();
+                let s = d.selection.borrow();
+                s.page_selection.is_none()
+            }));
+        }
         doc_obj.set("getSelection".into(), native("document.getSelection", move |_| Ok(sel.clone())));
     }
 
@@ -4662,8 +4678,21 @@ pub fn setup_builtins(
         JsValue::Object(obj)
     }
 
-    let sel = make_selection();
-    e.define("getSelection", native("getSelection", move |_| Ok(sel.clone())));
+    // window.getSelection() - mirror document.getSelection (cte registry).
+    {
+        let sel = make_selection();
+        if let JsValue::Object(obj) = &sel {
+            let dr = Rc::clone(document);
+            obj.borrow_mut().set("toString".into(), native("toString", move |_| {
+                let d = dr.borrow();
+                let s = d.selection.borrow();
+                Ok(JsValue::Str(s.page_selection.as_ref()
+                    .map(|p| p.cached_text.clone())
+                    .unwrap_or_default()))
+            }));
+        }
+        e.define("getSelection", native("getSelection", move |_| Ok(sel.clone())));
+    }
     e.define("Range", native("Range", |_| Ok(make_range())));
 
     // ─── WebSocket ─────────────────────────────────────────────────────────

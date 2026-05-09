@@ -30,7 +30,7 @@ pub struct InputState {
 }
 
 /// Page-level selection. Aktualne rect-drag, phase 6 -> text-run.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct PageSelection {
     /// Anchor v document logical px (kde mouse pressed).
     pub anchor: (f32, f32),
@@ -38,6 +38,9 @@ pub struct PageSelection {
     pub current: (f32, f32),
     /// Aktivni drag (mouse down)?
     pub dragging: bool,
+    /// Snapshot extrahovaneho textu z intersect text boxu (App update pri
+    /// zmene selection). Pouzite W3C Selection.toString() bez layout pristupu.
+    pub cached_text: String,
 }
 
 #[derive(Debug, Default)]
@@ -88,6 +91,7 @@ impl SelectionRegistry {
             anchor,
             current: anchor,
             dragging: true,
+            cached_text: String::new(),
         });
     }
 

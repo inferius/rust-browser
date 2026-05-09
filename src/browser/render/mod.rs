@@ -602,6 +602,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                     self.update_hover();
                     if self.selection_dragging {
                         self.selection_current = Some((self.mouse_x, self.mouse_y));
+                        self.mirror_page_selection_to_registry();
                         self.render();
                     } else if self.open_select.is_some() {
                         self.render();
@@ -634,6 +635,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                                 self.selection_current = None;
                             }
                         }
+                        self.mirror_page_selection_to_registry();
                         self.render();
                     }
                 }
@@ -656,6 +658,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                     self.selection_anchor = Some((self.mouse_x, self.mouse_y));
                     self.selection_current = Some((self.mouse_x, self.mouse_y));
                     self.selection_dragging = true;
+                    self.mirror_page_selection_to_registry();
                     // Devtools panel hit-test ma prioritu nad page hit-testem.
                     // mouse_x/y v doc-logical, raw_y v screen-logical. viewport_w/h v logical.
                     let raw_y = self.mouse_y - self.scroll_y;
@@ -1353,6 +1356,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                                 if let Some(layout) = &self.layout_root {
                                     self.selection_anchor = Some((layout.rect.x, layout.rect.y));
                                     self.selection_current = Some((layout.rect.x + layout.rect.width, layout.rect.y + layout.rect.height));
+                                    self.mirror_page_selection_to_registry();
                                     self.render();
                                 }
                                 return;
@@ -1537,6 +1541,51 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         }
         fn estimate_styles_total_h(&self) -> f32 {
             self.devtools.styles.estimate_total_h()
+        }
+        /// Mirror App.selection_* state -> Document.selection.page_selection.
+        /// Volat po kazde zmene App fields. JS Selection API (window.getSelection)
+        /// cte z registry.
+        fn mirror_page_selection_to_registry(&self) {
+            let Some(interp) = &self.interpreter else { return };
+            let doc = interp.document.borrow();
+            let mut reg = doc.selection.borrow_mut();
+            match (self.selection_anchor, self.selection_current) {
+                (Some(a), Some(c)) => {
+                    let cached = self.compute_selection_text(a, c);
+                    reg.page_selection = Some(crate::browser::selection::PageSelection {
+                        anchor: a,
+                        current: c,
+                        dragging: self.selection_dragging,
+                        cached_text: cached,
+                    });
+                }
+                _ => reg.page_selection = None,
+            }
+        }
+        /// Walk layout tree, najdi text boxes intersect rect, concat textu.
+        fn compute_selection_text(&self, a: (f32, f32), c: (f32, f32)) -> String {
+            let Some(layout) = &self.layout_root else { return String::new() };
+            let x0 = a.0.min(c.0);
+            let y0 = a.1.min(c.1);
+            let x1 = a.0.max(c.0);
+            let y1 = a.1.max(c.1);
+            if (x1 - x0).abs() < 1.0 && (y1 - y0).abs() < 1.0 { return String::new(); }
+            let mut out = String::new();
+            fn walk(b: &super::layout::LayoutBox, x0: f32, y0: f32, x1: f32, y1: f32, out: &mut String) {
+                if let Some(text) = &b.text {
+                    let bx0 = b.rect.x;
+                    let by0 = b.rect.y;
+                    let bx1 = bx0 + b.rect.width;
+                    let by1 = by0 + b.rect.height;
+                    if bx0 < x1 && bx1 > x0 && by0 < y1 && by1 > y0 {
+                        out.push_str(text);
+                        out.push(' ');
+                    }
+                }
+                for ch in &b.children { walk(ch, x0, y0, x1, y1, out); }
+            }
+            walk(layout, x0, y0, x1, y1, &mut out);
+            out.trim().to_string()
         }
         /// Centralni cursor icon dispatch - dle pozice + DOM/devtools state.
         fn compute_cursor_icon(&self, target: Option<&super::layout::LayoutBox>) -> winit::window::CursorIcon {
