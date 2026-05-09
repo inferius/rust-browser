@@ -4542,6 +4542,21 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             if self.shell_mode {
                 let win_w_logical = (r.config.width as f32) / (self.zoom * r.scale_factor);
                 let win_h_logical = (r.config.height as f32) / (self.zoom * r.scale_factor);
+                // Zoom indicator pri non-100% (pravy roh status zone).
+                if (self.zoom - 1.0).abs() > 0.01 {
+                    display_list.push(DisplayCommand::Rect {
+                        x: win_w_logical - 60.0, y: 4.0, w: 50.0, h: 20.0,
+                        color: [69, 161, 255, 220], radius: 4.0,
+                    });
+                    display_list.push(DisplayCommand::Text {
+                        x: win_w_logical - 56.0, y: 6.0,
+                        content: format!("{:.0}%", self.zoom * 100.0),
+                        color: [255, 255, 255, 255],
+                        font_size: 12.0, bold: true, italic: false,
+                        font_family: "Inter".into(),
+                        strikethrough: false, underline: false,
+                    });
+                }
                 let titles: Vec<String> = self.tabs.tabs.iter().map(|t| t.title.clone()).collect();
                 let favicons: Vec<Option<String>> = self.tabs.tabs.iter()
                     .map(|t| t.favicon_url.clone()).collect();

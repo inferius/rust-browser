@@ -22,6 +22,9 @@ pub struct Tab {
     pub scroll_x: f32,
     pub history: Vec<String>,
     pub history_idx: usize,
+    /// Per-tab Document - sdileny clone Rc na tab swap. None = pred prvni
+    /// load (re-parse z html). Some = kesovany doc s JS state pro fast switch.
+    pub document_root: Option<std::rc::Rc<crate::browser::dom::NodeData>>,
 }
 
 impl Tab {
@@ -40,6 +43,7 @@ impl Tab {
             scroll_y: 0.0, scroll_x: 0.0,
             history: Vec::new(),
             history_idx: 0,
+            document_root: None,
         }
     }
 
@@ -55,6 +59,7 @@ impl Tab {
             scroll_y: 0.0, scroll_x: 0.0,
             history: Vec::new(),
             history_idx: 0,
+            document_root: None,
         }
     }
 }
