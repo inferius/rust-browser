@@ -3151,7 +3151,11 @@ pub fn layout_block(bx: &mut LayoutBox) {
                 }
 
                 // Apply position offsety
-                let is_in_flow = matches!(child.position, Position::Static | Position::Relative);
+                // Sticky position se chova jako Relative pri default scroll - JE v normal
+                // flow (zabira misto). Drive: Sticky vyjmut -> nasledujici sibling
+                // overlap (header h=48 + page se kreslila pri y=0 stejne).
+                let is_in_flow = matches!(child.position,
+                    Position::Static | Position::Relative | Position::Sticky);
                 match child.position {
                     Position::Relative => {
                         let dy = child.offset_top.unwrap_or(0.0);

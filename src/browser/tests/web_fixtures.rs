@@ -140,8 +140,25 @@ mod tests {
         let stylesheet = parse_stylesheet(&fx.css);
         let map = cascade::cascade(&doc.root, &[stylesheet]);
         let layout_root = layout::layout_tree(&doc.root, &map, fx.viewport.0, fx.viewport.1);
+        // Layout vraci document-level box. expected tree zacina <html>.
+        // Najdi html v actual children pro paralelni walk od stejne urovne.
+        let actual_html = layout_root.children.iter()
+            .find(|c| c.tag.as_deref() == Some("html"))
+            .unwrap_or(&layout_root);
+        if std::env::var("DUMP_TREE").is_ok() {
+            fn dump(b: &layout::LayoutBox, depth: usize) {
+                if depth > 4 { return; }
+                let id = b.node.as_ref().and_then(|n| n.attr("id")).unwrap_or_default();
+                let cls = b.node.as_ref().and_then(|n| n.attr("class")).unwrap_or_default();
+                println!("{:indent$}<{}#{}.{}> y={} h={} children={}",
+                    "", b.tag.as_deref().unwrap_or("?"), id, cls,
+                    b.rect.y, b.rect.height, b.children.len(), indent = depth * 2);
+                for c in &b.children { dump(c, depth + 1); }
+            }
+            dump(actual_html, 0);
+        }
         let mut stats = Stats::default();
-        compare_trees(&fx.tree, &layout_root, tolerance, "", &mut stats);
+        compare_trees(&fx.tree, actual_html, tolerance, "", &mut stats);
         let pct = if stats.total > 0 {
             (stats.matched as f32 / stats.total as f32) * 100.0
         } else { 0.0 };
@@ -176,5 +193,13 @@ mod tests {
     #[ignore]
     fn web_fixture_engine_test() {
         run_fixture("tests/fixtures/web/engine-test.json", 5.0, 0.0);
+    }
+
+    /// Loose tolerance variant - overi celkovy progres bez 15px Chrome scrollbar
+    /// + per-glyph font width diff. Pro zacatek zatim relevant.
+    #[test]
+    #[ignore]
+    fn web_fixture_engine_test_loose() {
+        run_fixture("tests/fixtures/web/engine-test.json", 20.0, 0.0);
     }
 }

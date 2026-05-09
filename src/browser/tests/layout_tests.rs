@@ -202,6 +202,92 @@ fn float_clear_both() {
 }
 
 #[test]
+fn debug_engine_test_html_top_layout() {
+    // Replikuje engine-test.html strukturu - body s sticky header (display:flex)
+    // a grid .page child. Verify ze body NE da header celou page height.
+    let html = r#"<html><body>
+        <div id="header"></div>
+        <div class="page">
+            <nav id="sidebar"></nav>
+            <main></main>
+        </div>
+    </body></html>"#;
+    let css = r#"
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        body { background: black; }
+        #header {
+            position: sticky; top: 0; z-index: 999;
+            height: 48px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 32px;
+            background: rgba(10,10,12,0.7);
+        }
+        .page {
+            display: grid;
+            grid-template-columns: 200px 1fr;
+            min-height: calc(100vh - 48px);
+        }
+        #sidebar { position: sticky; top: 48px; height: calc(100vh - 48px); }
+    "#;
+    let doc = parse_html(html, "");
+    let stylesheet = parse_stylesheet(css);
+    let map = cascade::cascade(&doc.root, &[stylesheet]);
+    let root = layout::layout_tree(&doc.root, &map, 3045.0, 2063.0);
+    let body = root.children.iter()
+        .find(|c| c.tag.as_deref() == Some("html"))
+        .and_then(|h| h.children.iter().find(|c| c.tag.as_deref() == Some("body")))
+        .expect("body");
+    println!("body: x={} y={} w={} h={} children={}",
+        body.rect.x, body.rect.y, body.rect.width, body.rect.height, body.children.len());
+    for (i, c) in body.children.iter().enumerate() {
+        let id = c.node.as_ref().and_then(|n| n.attr("id")).unwrap_or_default();
+        let cls = c.node.as_ref().and_then(|n| n.attr("class")).unwrap_or_default();
+        println!("  [{}] tag={:?} id={} class={} x={} y={} w={} h={}",
+            i, c.tag, id, cls, c.rect.x, c.rect.y, c.rect.width, c.rect.height);
+    }
+    let header = body.children.iter()
+        .find(|c| c.node.as_ref().and_then(|n| n.attr("id")).as_deref() == Some("header"))
+        .expect("header");
+    assert!((header.rect.height - 48.0).abs() < 5.0,
+        "header height={} expected 48", header.rect.height);
+    let page = body.children.iter()
+        .find(|c| c.node.as_ref().and_then(|n| n.attr("class")).map(|s| s.contains("page")).unwrap_or(false))
+        .expect("page");
+    println!("page: x={} y={} w={} h={} children={}",
+        page.rect.x, page.rect.y, page.rect.width, page.rect.height, page.children.len());
+    assert!(page.children.len() >= 2, "page musi mit 2+ children (sidebar+main)");
+}
+
+#[test]
+fn debug_real_engine_test_html_body_layout() {
+    let path = "static/engine-test.html";
+    let html = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(_) => { return; }
+    };
+    let doc = parse_html(&html, "");
+    let css_blocks = doc.root.get_elements_by_tag("style");
+    let css: String = css_blocks.iter().map(|s| s.text_content()).collect::<Vec<_>>().join("\n");
+    let stylesheet = parse_stylesheet(&css);
+    let map = cascade::cascade(&doc.root, &[stylesheet]);
+    let root = layout::layout_tree(&doc.root, &map, 3045.0, 2063.0);
+    let body = root.children.iter()
+        .find(|c| c.tag.as_deref() == Some("html"))
+        .and_then(|h| h.children.iter().find(|c| c.tag.as_deref() == Some("body")))
+        .expect("body");
+    println!("body: x={} y={} w={} h={} children={}",
+        body.rect.x, body.rect.y, body.rect.width, body.rect.height, body.children.len());
+    for (i, c) in body.children.iter().enumerate() {
+        let id = c.node.as_ref().and_then(|n| n.attr("id")).unwrap_or_default();
+        let cls = c.node.as_ref().and_then(|n| n.attr("class")).unwrap_or_default();
+        println!("  body[{}] tag={:?} id={} class={} x={} y={} w={} h={} display={:?}",
+            i, c.tag, id, cls, c.rect.x, c.rect.y, c.rect.width, c.rect.height, c.display);
+    }
+}
+
+#[test]
 fn flex_inline_children_become_flex_items() {
     // CSS Flex L1: pri display: flex parent, inline children (span) se
     // chovaji jako flex items (blockified) a justify-content je aplikuje.
