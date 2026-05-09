@@ -1163,7 +1163,21 @@ pub fn layout_tree_with_pseudo_cached(
     layout_root.rect.width = viewport_width;
     layout_root.rect.height = viewport_height;
     layout_dispatch(&mut layout_root);
-    // Post-pass: anchor positioning resolve
+    // CSS scrollbar reservation: pri vertical overflow (content > viewport),
+    // browser reserve 15 px scrollbar -> html/body width = viewport - 15.
+    // Detect: po prvnim layoutu zkontroluj html.rect.height. Pokud > viewport_h,
+    // re-layout s 15 px reduced viewport_w.
+    const SCROLLBAR_W: f32 = 15.0;
+    let has_overflow = layout_root.children.iter()
+        .filter_map(|c| if c.tag.as_deref() == Some("html") { Some(c) } else { None })
+        .any(|html| html.rect.height > viewport_height
+            || html.children.iter().any(|body| body.rect.height > viewport_height));
+    if has_overflow && viewport_width > SCROLLBAR_W + 100.0 {
+        layout_root = build_box_with_pseudo_cached(root, style_map, pseudo_map, cache);
+        layout_root.rect.width = viewport_width - SCROLLBAR_W;
+        layout_root.rect.height = viewport_height;
+        layout_dispatch(&mut layout_root);
+    }
     let anchor_map = collect_anchors(&layout_root);
     apply_anchor_positioning(&mut layout_root, &anchor_map);
     apply_table_border_collapse(&mut layout_root, false);

@@ -147,7 +147,7 @@ mod tests {
             .unwrap_or(&layout_root);
         if std::env::var("DUMP_TREE").is_ok() {
             fn dump(b: &layout::LayoutBox, depth: usize) {
-                if depth > 4 { return; }
+                if depth > 8 { return; }
                 let id = b.node.as_ref().and_then(|n| n.attr("id")).unwrap_or_default();
                 let cls = b.node.as_ref().and_then(|n| n.attr("class")).unwrap_or_default();
                 println!("{:indent$}<{}#{}.{}> y={} h={} children={}",
