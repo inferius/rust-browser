@@ -5107,9 +5107,10 @@ impl Renderer {
         }
 
         // 3. Overlay (devtools, scrollbars, addr/find bar) -> main_rt PO WebGL,
-        // aby UI prvky neprekryl WebGL clear color.
+        // aby UI prvky neprekryl WebGL clear color. start_clear=false zachova
+        // existujici page + WebGL obsah.
         let had_overlay = if !overlay_cmds.is_empty() {
-            self.draw_segments_into_view(&main_rt_view, overlay_cmds)
+            self.draw_segments_into_view_ext(&main_rt_view, overlay_cmds, false)
         } else { false };
 
         // 4. Composit main_rt -> swap chain
@@ -5145,8 +5146,17 @@ impl Renderer {
     /// Pro BackdropFilter: view musi byt main_rt (COPY_SRC) - snapshotuje obsah
     /// pres copy_texture_to_texture pred aplikaci filtru.
     fn draw_segments_into_view(&mut self, view: &wgpu::TextureView, cmds: &[DisplayCommand]) -> bool {
+        self.draw_segments_into_view_ext(view, cmds, true)
+    }
+
+    /// Pri start_clear=false neclearuje texturu pri prvni passi (Load namisto
+    /// Clear). Pouzite pro overlay pass po WebGL - chce zachovat existujici
+    /// page + WebGL obsah, jen kreslit overlay nad nim.
+    fn draw_segments_into_view_ext(&mut self, view: &wgpu::TextureView, cmds: &[DisplayCommand], start_clear: bool) -> bool {
+        if cmds.is_empty() { return false; }
         let segments: Vec<Seg> = partition_filter_segments(cmds);
-        let mut first_pass = true;
+        if segments.is_empty() { return false; }
+        let mut first_pass = start_clear;
         for seg in segments {
             match seg {
                 Seg::Main(slice) => {
@@ -5246,7 +5256,9 @@ impl Renderer {
                 }
             }
         }
-        !first_pass
+        // Pri start_clear=false vraci true vzdy (nelze rozliset z first_pass);
+        // pri start_clear=true vraci !first_pass = at least one Seg processed.
+        if start_clear { !first_pass } else { true }
     }
 
     /// Legacy wrapper - draw_segments bez WebGL pass.
