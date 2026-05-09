@@ -124,8 +124,34 @@ impl Tab {
     }
 }
 
-/// Render about:downloads - listing souboru ze ~/Downloads (placeholder = OS download dir).
+/// Render about:downloads - listing tracked downloadu (Ctrl+S save) + OS dir.
 pub fn render_about_downloads() -> (String, String) {
+    let tracked = crate::devtools::downloads::load_downloads();
+    let tracked_html = if tracked.is_empty() {
+        "<p class='empty'>Zadne sledovane stahovani. Ctrl+S na strance ulozi HTML.</p>".to_string()
+    } else {
+        let rows: Vec<String> = tracked.iter().rev().take(50).map(|d| {
+            let kb = (d.size_bytes as f64) / 1024.0;
+            let size_str = if kb < 1024.0 { format!("{:.1} KB", kb) }
+                           else { format!("{:.1} MB", kb / 1024.0) };
+            let age = crate::devtools::downloads::now_ts().saturating_sub(d.timestamp_ts);
+            let age_str = if age < 60 { format!("pred {}s", age) }
+                else if age < 3600 { format!("pred {}m", age / 60) }
+                else if age < 86400 { format!("pred {}h", age / 3600) }
+                else { format!("pred {}d", age / 86400) };
+            format!("<li class='dl'><div><span class='name'>{}</span><br><small>{}</small></div><div class='meta'>{} - {}</div></li>",
+                html_escape(&d.path), html_escape(&d.url), size_str, age_str)
+        }).collect();
+        format!("<h2>Stazeny browserem</h2><ul>{}</ul>", rows.join("\n"))
+    };
+    let (ext_html, ext_css) = render_about_downloads_os();
+    let html = format!("<!DOCTYPE html><html><head><title>Stahnuti</title></head>\n<body><div class=cfg><h1>Stahnuti</h1>{}{}</div></body></html>",
+        tracked_html, ext_html);
+    (html, ext_css)
+}
+
+/// Stary OS-dir listing - presunuto sem aby ho hub mohl pouzivat.
+fn render_about_downloads_os() -> (String, String) {
     // Resolve Downloads dir bez extra crate. Windows: %USERPROFILE%\Downloads.
     // Unix: $HOME/Downloads.
     let dl_dir = std::env::var("USERPROFILE").ok()
@@ -164,25 +190,22 @@ pub fn render_about_downloads() -> (String, String) {
         }
         _ => "<p class='empty'>Slozka stahnuti neexistuje</p>".to_string()
     };
-    let html = format!(r#"<!DOCTYPE html><html><head><title>Stahnuti</title></head>
-<body>
-<div class=cfg>
-<h1>Stahnuti</h1>
-{body}
-</div>
-</body></html>"#, body = body);
+    let html_inner = format!("<h2>Slozka stahnuti</h2>{}", body);
     let css = r#"
 body { font-family: 'Inter', sans-serif; background: #1a1a1f; color: #e8e6df; margin: 0; padding: 32px; }
 .cfg { max-width: 800px; margin: 0 auto; }
 h1 { color: #69a1ff; font-size: 32px; margin-bottom: 16px; }
+h2 { color: #fbbf69; font-size: 16px; margin: 24px 0 8px 0; border-bottom: 1px solid #3a3a45; padding-bottom: 4px; }
 .dir { color: #fbbf69; font-family: 'CamingoMono', monospace; font-size: 13px; margin-bottom: 16px; }
 ul { list-style: none; padding: 0; }
 li { background: #2a2932; padding: 10px 16px; margin-bottom: 4px; border-radius: 6px; display: flex; justify-content: space-between; }
+li.dl { flex-direction: column; }
+li.dl .meta { color: #a1a1ae; font-size: 11px; margin-top: 4px; }
 .name { color: #e8e6df; }
 li small { color: #a1a1ae; font-size: 11px; }
 .empty { color: #a1a1ae; font-style: italic; }
 "#;
-    (html, css.to_string())
+    (html_inner, css.to_string())
 }
 
 /// Render about:about page - hub se seznamem vsech internich about: URLs.

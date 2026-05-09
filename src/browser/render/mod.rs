@@ -2371,6 +2371,11 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                 self.navigate_url("about:downloads");
                                 return;
                             }
+                            if s.as_str() == "s" || s.as_str() == "S" {
+                                // Ctrl+S: save current page HTML do Downloads/.
+                                self.save_page_to_downloads();
+                                return;
+                            }
                             if s.as_str() == "B" && self.modifiers.shift_key() {
                                 // Ctrl+Shift+B: toggle bookmarks bar visibility.
                                 self.bookmarks_bar_visible = !self.bookmarks_bar_visible;
@@ -4435,6 +4440,42 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             self.cached_style_map = None;
             self.cached_pseudo_map = None;
             self.cached_matched_key = None;
+        }
+
+        /// Ctrl+S = save current page HTML do $HOME/Downloads + zaznam do downloads tracker.
+        fn save_page_to_downloads(&mut self) {
+            let dl_dir = std::env::var("USERPROFILE").ok()
+                .or_else(|| std::env::var("HOME").ok())
+                .map(|h| std::path::PathBuf::from(h).join("Downloads"));
+            let Some(dir) = dl_dir else { return };
+            let _ = std::fs::create_dir_all(&dir);
+            let url = self.base_url.clone().unwrap_or_else(|| "page".to_string());
+            // Filename z URL last segment + timestamp pro unique.
+            let base = url.split('/').last().unwrap_or("page");
+            let safe: String = base.chars()
+                .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') { c } else { '_' })
+                .collect();
+            let ts = crate::devtools::downloads::now_ts();
+            let fname = if safe.is_empty() || safe == "_" {
+                format!("page_{}.html", ts)
+            } else if safe.ends_with(".html") || safe.ends_with(".htm") {
+                format!("{}_{}.html", &safe[..safe.len()-5.min(safe.len())], ts)
+            } else {
+                format!("{}_{}.html", safe, ts)
+            };
+            let path = dir.join(&fname);
+            if let Err(e) = std::fs::write(&path, &self.html) {
+                eprintln!("[save] {}: {}", path.display(), e);
+                return;
+            }
+            let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            let rec = crate::devtools::downloads::DownloadRecord {
+                url, path: path.display().to_string(),
+                size_bytes: size, timestamp_ts: ts,
+                mime: "text/html".to_string(),
+            };
+            crate::devtools::downloads::append_record(&rec);
+            println!("[save] {} ({} B)", path.display(), size);
         }
 
         fn write_back_style_edit(&mut self, prop: &str, value: &str) {
