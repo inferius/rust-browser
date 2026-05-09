@@ -1590,6 +1590,9 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         }
 
         /// Walk layout tree, najdi text boxes intersect rect, concat textu.
+        /// Char-level: per box najde substring kde char_x_offset spada do
+        /// horizontalniho intersect range. Vertikalne celym box (jednoradkove
+        /// inline boxy = OK, multi-line by potreboval line break detect).
         fn compute_selection_text(&self, a: (f32, f32), c: (f32, f32)) -> String {
             let Some(layout) = &self.layout_root else { return String::new() };
             let x0 = a.0.min(c.0);
@@ -1604,9 +1607,33 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                     let by0 = b.rect.y;
                     let bx1 = bx0 + b.rect.width;
                     let by1 = by0 + b.rect.height;
+                    // Vertikalni overlap test - kazda sub-pixel intersection se pocita.
                     if bx0 < x1 && bx1 > x0 && by0 < y1 && by1 > y0 {
-                        out.push_str(text);
-                        out.push(' ');
+                        // Char-level horizontal slicing: pres fontdue advance per char.
+                        let sel_left_in_box = (x0 - bx0).max(0.0);
+                        let sel_right_in_box = (x1 - bx0).min(b.rect.width);
+                        let mut acc = 0.0f32;
+                        let mut start_byte: Option<usize> = None;
+                        let mut end_byte: usize = text.len();
+                        let bold = b.bold;
+                        for (byte_off, ch) in text.char_indices() {
+                            let adv = super::layout::measure_text_width_styled(
+                                &ch.to_string(), b.font_size, bold);
+                            let mid = acc + adv * 0.5;
+                            if start_byte.is_none() && mid >= sel_left_in_box {
+                                start_byte = Some(byte_off);
+                            }
+                            if mid > sel_right_in_box {
+                                end_byte = byte_off;
+                                break;
+                            }
+                            acc += adv;
+                        }
+                        let s = start_byte.unwrap_or(0);
+                        if s < end_byte {
+                            out.push_str(&text[s..end_byte]);
+                            out.push(' ');
+                        }
                     }
                 }
                 for ch in &b.children { walk(ch, x0, y0, x1, y1, out); }
@@ -1764,28 +1791,10 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                 (Some(a), Some(c)) => (a, c),
                 _ => return,
             };
-            let x0 = a.0.min(c.0);
-            let y0 = a.1.min(c.1);
-            let x1 = a.0.max(c.0);
-            let y1 = a.1.max(c.1);
-            let layout = match &self.layout_root { Some(l) => l, None => return };
-            let mut out = String::new();
-            fn walk(b: &super::layout::LayoutBox, x0: f32, y0: f32, x1: f32, y1: f32, out: &mut String) {
-                if let Some(text) = &b.text {
-                    let by0 = b.rect.y;
-                    let by1 = b.rect.y + b.rect.height;
-                    let bx0 = b.rect.x;
-                    let bx1 = b.rect.x + b.rect.width;
-                    let overlap = bx0 < x1 && bx1 > x0 && by0 < y1 && by1 > y0;
-                    if overlap {
-                        out.push_str(text);
-                        out.push(' ');
-                    }
-                }
-                for ch in &b.children { walk(ch, x0, y0, x1, y1, out); }
-            }
-            walk(layout, x0, y0, x1, y1, &mut out);
-            let trimmed = out.trim().to_string();
+            // Reuse char-level extractor (compute_selection_text). Pred phase 6
+            // copy bral cely text intersect boxes; ted jen chars v selection
+            // range pres fontdue advance.
+            let trimmed = self.compute_selection_text(a, c);
             if trimmed.is_empty() { return; }
             match arboard::Clipboard::new() {
                 Ok(mut cb) => {
@@ -3054,24 +3063,43 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                 let x1 = a.0.max(c.0);
                 let y1 = a.1.max(c.1);
                 if x1 > x0 + 1.0 || y1 > y0 + 1.0 {
+                    // Char-level snap: pres fontdue advance per char najde
+                    // first/last char ktere mid-pos spada do selection range.
                     fn collect_text_boxes(
                         b: &super::layout::LayoutBox,
                         sx0: f32, sy0: f32, sx1: f32, sy1: f32,
                         out: &mut Vec<(f32, f32, f32, f32)>,
                     ) {
-                        if b.text.is_some() {
+                        if let Some(text) = &b.text {
                             let bx0 = b.rect.x;
                             let by0 = b.rect.y;
-                            let bx1 = b.rect.x + b.rect.width;
-                            let by1 = b.rect.y + b.rect.height;
-                            // Rect intersection.
+                            let bx1 = bx0 + b.rect.width;
+                            let by1 = by0 + b.rect.height;
                             if bx0 < sx1 && bx1 > sx0 && by0 < sy1 && by1 > sy0 {
-                                let ix0 = bx0.max(sx0);
+                                let sel_left = (sx0 - bx0).max(0.0);
+                                let sel_right = (sx1 - bx0).min(b.rect.width);
+                                let mut acc = 0.0f32;
+                                let mut hl_start: Option<f32> = None;
+                                let mut hl_end: f32 = b.rect.width;
+                                let bold = b.bold;
+                                for ch in text.chars() {
+                                    let adv = super::layout::measure_text_width_styled(
+                                        &ch.to_string(), b.font_size, bold);
+                                    let mid = acc + adv * 0.5;
+                                    if hl_start.is_none() && mid >= sel_left {
+                                        hl_start = Some(acc);
+                                    }
+                                    if mid > sel_right {
+                                        hl_end = acc;
+                                        break;
+                                    }
+                                    acc += adv;
+                                }
+                                let hs = hl_start.unwrap_or(0.0);
                                 let iy0 = by0.max(sy0);
-                                let ix1 = bx1.min(sx1);
                                 let iy1 = by1.min(sy1);
-                                if ix1 > ix0 + 0.5 && iy1 > iy0 + 0.5 {
-                                    out.push((ix0, iy0, ix1 - ix0, iy1 - iy0));
+                                if hl_end > hs + 0.5 && iy1 > iy0 + 0.5 {
+                                    out.push((bx0 + hs, iy0, hl_end - hs, iy1 - iy0));
                                 }
                             }
                         }
