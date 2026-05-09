@@ -253,6 +253,14 @@ pub fn paint_devtools_panel(
     if state.class_manager_open {
         paint_class_manager(cmds, state, layout_root, &pal, win_w, win_h, mouse_x, mouse_y);
     }
+    // Tooltip overlay (z-order top).
+    if let Some(tt) = &state.tooltip {
+        let tw = dt_text_width(&tt.text) + 16.0;
+        let th = ROW_H + 4.0;
+        push_rect(cmds, tt.x, tt.y, tw, th, [42, 41, 50, 240]);
+        push_rect_border(cmds, tt.x, tt.y, tw, th, pal.border_strong);
+        push_text(cmds, tt.x + 8.0, tt.y + 4.0, tt.text.clone(), pal.text, false);
+    }
     // Color picker popup.
     if state.color_picker.is_some() {
         paint_color_picker(cmds, state, &pal);
@@ -1139,22 +1147,74 @@ fn paint_side_computed(
 
 fn paint_side_changes(
     cmds: &mut Vec<DisplayCommand>,
-    _state: &DevToolsState,
+    state: &DevToolsState,
     pal: &Palette,
-    x: f32, y: f32, _w: f32, _h: f32,
+    x: f32, y: f32, _w: f32, h: f32,
 ) {
-    push_text(cmds, x + 12.0, y + 12.0,
-              "Zmeny CSS - zatim prazdne".to_string(), pal.text_dim, true);
+    let mut sy = y + 8.0;
+    let pad_x = x + 12.0;
+    let max_y = y + h;
+    if state.changes.is_empty() {
+        push_ui_text_italic(cmds, pad_x, sy,
+                            "Zadne zmeny - editace pres devtools se zobrazi tady".to_string(),
+                            pal.text_dim);
+        return;
+    }
+    push_ui_text(cmds, pad_x, sy, format!("Zmeny ({})", state.changes.len()),
+                 pal.text, true);
+    sy += ROW_H + 4.0;
+    for ch in state.changes.iter().rev().take(50) {
+        if sy >= max_y { break; }
+        let kind_label = match ch.kind {
+            crate::devtools::ChangeKind::StyleEdit => "[style]",
+            crate::devtools::ChangeKind::AttrEdit => "[attr]",
+            crate::devtools::ChangeKind::ClassToggle => "[class]",
+            crate::devtools::ChangeKind::TextEdit => "[text]",
+        };
+        push_text(cmds, pad_x, sy, kind_label.to_string(), pal.syn_keyword, false);
+        push_text(cmds, pad_x + 60.0, sy, ch.property.clone(), pal.syn_property, false);
+        sy += ROW_H;
+        let diff = format!("  {} -> {}",
+                           ch.old_value.chars().take(30).collect::<String>(),
+                           ch.new_value.chars().take(30).collect::<String>());
+        push_text(cmds, pad_x, sy, diff, pal.text_dim, false);
+        sy += ROW_H + 4.0;
+    }
 }
 
 fn paint_side_compat(
     cmds: &mut Vec<DisplayCommand>,
-    _state: &DevToolsState,
+    state: &DevToolsState,
     pal: &Palette,
-    x: f32, y: f32, _w: f32, _h: f32,
+    x: f32, y: f32, _w: f32, h: f32,
 ) {
-    push_text(cmds, x + 12.0, y + 12.0,
-              "Kompatibilita - browser support per prop".to_string(), pal.text_dim, true);
+    let mut sy = y + 8.0;
+    let pad_x = x + 12.0;
+    let max_y = y + h;
+    push_ui_text(cmds, pad_x, sy, "Browser kompatibilita".to_string(), pal.text, true);
+    sy += ROW_H + 4.0;
+    // Static map: property -> (chrome %, firefox %, safari %, fully supported).
+    // V realne devtools by se data brala z caniuse.com export.
+    let compat_data: &[(&str, &str, bool)] = &[
+        ("display: grid", "Chrome 57+, Firefox 52+, Safari 10.1+", true),
+        ("display: flex", "Chrome 21+, Firefox 20+, Safari 7+", true),
+        ("color-mix()", "Chrome 111+, Firefox 113+, Safari 16.2+", true),
+        ("container-queries", "Chrome 105+, Firefox 110+, Safari 16+", true),
+        ("@property", "Chrome 85+, Firefox 128+, Safari 16.4+", true),
+        ("subgrid", "Chrome 117+, Firefox 71+, Safari 16+", true),
+        ("text-wrap: balance", "Chrome 114+, Firefox 121+, Safari 17.5+", true),
+        ("anchor positioning", "Chrome 125+, Firefox no, Safari TP", false),
+        ("view transitions", "Chrome 111+, Firefox no, Safari 18+", false),
+    ];
+    for (prop, support, full) in compat_data {
+        if sy >= max_y { break; }
+        let dot = if *full { [148, 222, 124, 255] } else { [255, 200, 96, 255] };
+        push_rect(cmds, pad_x, sy + 5.0, 8.0, 8.0, dot);
+        push_text(cmds, pad_x + 14.0, sy, prop.to_string(), pal.syn_property, false);
+        sy += ROW_H;
+        push_text(cmds, pad_x + 14.0, sy, support.to_string(), pal.text_dim, false);
+        sy += ROW_H + 4.0;
+    }
 }
 
 fn paint_side_fonts(

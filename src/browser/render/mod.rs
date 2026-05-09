@@ -723,6 +723,15 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                             let hit = hit_chrome(viewport_w, self.shell_chrome_h, &self.tabs, mx, my_screen);
                             match hit {
                                 ChromeHit::TabClick(idx) => {
+                                    // Save current tab state pred switch.
+                                    {
+                                        let cur = self.tabs.active_tab_mut();
+                                        cur.scroll_y = self.scroll_y;
+                                        cur.scroll_x = self.scroll_x;
+                                        cur.html = self.html.clone();
+                                        cur.css = self.css.clone();
+                                        cur.url = self.base_url.clone();
+                                    }
                                     self.tabs.switch_to(idx);
                                     let t = self.tabs.active_tab().clone();
                                     self.html = t.html;
@@ -1111,9 +1120,18 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                                     classes.push(&cls);
                                                 }
                                                 let new_val = classes.join(" ");
-                                                node.attributes.borrow_mut().insert("class".to_string(), new_val);
+                                                node.attributes.borrow_mut().insert("class".to_string(), new_val.clone());
                                                 self.cached_layout_root = None;
                                                 self.cached_cascade_hash = 0;
+                                                // Changes log entry.
+                                                self.devtools.changes.push(crate::devtools::ChangeEntry {
+                                                    timestamp_ts: crate::devtools::history::now_ts(),
+                                                    kind: crate::devtools::ChangeKind::ClassToggle,
+                                                    target_node_id: sel_id,
+                                                    property: "class".to_string(),
+                                                    old_value: cur,
+                                                    new_value: new_val,
+                                                });
                                             }
                                         }
                                     }
@@ -3352,6 +3370,39 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             let target = layout_root.hit_test(self.mouse_x, self.mouse_y);
             let id = target.and_then(|t| t.node.as_ref().map(|n| std::rc::Rc::as_ptr(n) as usize));
             super::cascade::set_hovered_node(id);
+            // Tooltip update: hover nad swatch -> hex string, var chip -> name.
+            self.devtools.tooltip = None;
+            if self.devtools.panel_open {
+                let mx_screen = self.mouse_x - self.scroll_x;
+                let my_screen = self.mouse_y - self.scroll_y;
+                let zones = self.devtools.styles.swatch_zones.borrow();
+                for (zx, zy, zw, zh, col) in zones.iter() {
+                    if mx_screen >= *zx && mx_screen < zx + zw
+                       && my_screen >= *zy && my_screen < zy + zh {
+                        self.devtools.tooltip = Some(crate::devtools::TooltipState {
+                            x: zx + zw + 4.0,
+                            y: zy - 6.0,
+                            text: format!("#{:02x}{:02x}{:02x} alpha={}", col[0], col[1], col[2], col[3]),
+                        });
+                        break;
+                    }
+                }
+                drop(zones);
+                if self.devtools.tooltip.is_none() {
+                    let vzones = self.devtools.styles.var_zones.borrow();
+                    for (zx, zy, zw, zh, name) in vzones.iter() {
+                        if mx_screen >= *zx && mx_screen < zx + zw
+                           && my_screen >= *zy && my_screen < zy + zh {
+                            self.devtools.tooltip = Some(crate::devtools::TooltipState {
+                                x: zx + zw + 4.0,
+                                y: zy - 6.0,
+                                text: format!("Klikni pro skok na {}", name),
+                            });
+                            break;
+                        }
+                    }
+                }
+            }
             // Force-hover/focus/active z styles toolbar - prepise reality.
             if self.devtools.force_hover {
                 if let Some(sel) = self.devtools.elements.selected {

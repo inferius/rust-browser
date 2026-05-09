@@ -108,6 +108,35 @@ pub struct DevToolsState {
     pub class_manager_open: bool,
     /// Highlight target var() definice po jump (Some(name) na N frames).
     pub var_highlight: Option<(String, u32)>,
+    /// Tooltip state - hover nad swatch/chip ukaze popup s detailem.
+    pub tooltip: Option<TooltipState>,
+    /// Changes log - tracking inline CSS edits pres devtools.
+    pub changes: Vec<ChangeEntry>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ChangeEntry {
+    pub timestamp_ts: u64,
+    pub kind: ChangeKind,
+    pub target_node_id: usize,
+    pub property: String,
+    pub old_value: String,
+    pub new_value: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChangeKind {
+    StyleEdit,
+    AttrEdit,
+    ClassToggle,
+    TextEdit,
+}
+
+#[derive(Debug, Clone)]
+pub struct TooltipState {
+    pub x: f32,
+    pub y: f32,
+    pub text: String,
 }
 
 #[derive(Debug, Clone)]
@@ -236,6 +265,8 @@ impl Default for DevToolsState {
             force_active: false,
             class_manager_open: false,
             var_highlight: None,
+            tooltip: None,
+            changes: Vec::new(),
         }
     }
 }
