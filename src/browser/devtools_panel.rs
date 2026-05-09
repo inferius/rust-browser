@@ -800,6 +800,18 @@ fn paint_section_header(
     y + ROW_H + 4.0
 }
 
+/// Parse "1.5s" / "200ms" -> seconds.
+fn parse_duration(s: &str) -> f32 {
+    let s = s.trim();
+    if let Some(num_str) = s.strip_suffix("ms") {
+        num_str.parse::<f32>().unwrap_or(0.0) / 1000.0
+    } else if let Some(num_str) = s.strip_suffix('s') {
+        num_str.parse::<f32>().unwrap_or(0.0)
+    } else {
+        s.parse::<f32>().unwrap_or(1.0)
+    }
+}
+
 /// Flex item diagram (Firefox-style): basis -> final size visualization.
 /// Pri growth: ukaz basis (modry rect) + extra grow (zelena pruh napravo).
 /// Pri shrink: ukaz basis (modry rect, sirsi) + cervena indikace ktera
@@ -1154,13 +1166,13 @@ fn paint_side_animations(
     sy = paint_section_header(cmds, state, pal, &SectionId::AnimationsList,
                                "Animace na elementu", x, sy, w);
     if !state.collapsed_sections.contains(&SectionId::AnimationsList) {
-        // Animation properties z computed styles.
         let lookup = |key: &str| state.styles.computed.iter()
             .find(|(k, _)| k == key).map(|(_, v)| v.clone());
         let name = lookup("animation-name");
         if let Some(n) = name.filter(|s| !s.is_empty() && s != "none") {
             push_text(cmds, pad_x, sy, format!("name: {}", n), pal.text, false);
             sy += ROW_H;
+            let duration_str = lookup("animation-duration").unwrap_or_else(|| "1s".to_string());
             if let Some(v) = lookup("animation-duration") {
                 push_text(cmds, pad_x, sy, format!("duration: {}", v), pal.text_dim, false);
                 sy += ROW_H;
@@ -1173,13 +1185,26 @@ fn paint_side_animations(
                 push_text(cmds, pad_x, sy, format!("timing: {}", v), pal.text_dim, false);
                 sy += ROW_H;
             }
-            if let Some(v) = lookup("animation-delay") {
-                push_text(cmds, pad_x, sy, format!("delay: {}", v), pal.text_dim, false);
-                sy += ROW_H;
-            }
-            if let Some(v) = lookup("animation-direction") {
-                push_text(cmds, pad_x, sy, format!("direction: {}", v), pal.text_dim, false);
-                sy += ROW_H;
+            // Timeline scrubber.
+            sy += 8.0;
+            push_ui_text(cmds, pad_x, sy, "Timeline".to_string(), pal.text_dim, true);
+            sy += ROW_H;
+            let timeline_w = w - 24.0;
+            let track_y = sy;
+            push_rect(cmds, pad_x, track_y, timeline_w, 20.0, pal.bg_panel_alt);
+            push_rect_border(cmds, pad_x, track_y, timeline_w, 20.0, pal.border);
+            // Playhead - approximate progress (frame_counter % duration).
+            let dur_seconds = parse_duration(&duration_str).max(0.1);
+            let progress = ((state.frame_counter as f32 / 60.0) % dur_seconds) / dur_seconds;
+            let head_x = pad_x + progress * timeline_w;
+            push_rect(cmds, head_x - 1.0, track_y - 2.0, 3.0, 24.0, pal.accent);
+            sy += 28.0;
+            // Keyframes ticks.
+            for tick in &[0.0, 0.25, 0.5, 0.75, 1.0] {
+                let tx = pad_x + tick * timeline_w;
+                push_rect(cmds, tx, track_y + 22.0, 1.0, 4.0, pal.text_dim);
+                push_ui_text(cmds, tx - 10.0, track_y + 28.0,
+                             format!("{:.0}%", tick * 100.0), pal.text_disabled, false);
             }
         } else {
             push_ui_text_italic(cmds, pad_x, sy,
