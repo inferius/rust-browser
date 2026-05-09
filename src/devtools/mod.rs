@@ -106,6 +106,8 @@ pub struct DevToolsState {
     pub force_active: bool,
     /// Class manager popup (.cls button) - pri kliku ukazuje add/toggle classes.
     pub class_manager_open: bool,
+    /// Highlight target var() definice po jump (Some(name) na N frames).
+    pub var_highlight: Option<(String, u32)>,
 }
 
 #[derive(Debug, Clone)]
@@ -117,6 +119,10 @@ pub struct ColorPickerState {
     pub rgba: [u8; 4],
     /// HSV hue 0..360 pro slider.
     pub hue: f32,
+    /// Saturation 0..1.
+    pub sat: f32,
+    /// Value 0..1.
+    pub val: f32,
     /// Source identifikator pro write-back: (node_id, property).
     pub target: Option<(usize, String)>,
 }
@@ -126,10 +132,32 @@ impl Default for ColorPickerState {
         Self {
             anchor_x: 0.0, anchor_y: 0.0,
             rgba: [255, 0, 0, 255],
-            hue: 0.0,
+            hue: 0.0, sat: 1.0, val: 1.0,
             target: None,
         }
     }
+}
+
+/// HSV (h:0..360, s:0..1, v:0..1) -> RGB (0..255).
+pub fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [u8; 4] {
+    let c = v * s;
+    let h6 = h / 60.0;
+    let x = c * (1.0 - (h6 % 2.0 - 1.0).abs());
+    let (rp, gp, bp) = match h6 as i32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = v - c;
+    [
+        ((rp + m) * 255.0).round().clamp(0.0, 255.0) as u8,
+        ((gp + m) * 255.0).round().clamp(0.0, 255.0) as u8,
+        ((bp + m) * 255.0).round().clamp(0.0, 255.0) as u8,
+        255,
+    ]
 }
 
 /// Side panel sub-tab v Inspector.
@@ -207,6 +235,7 @@ impl Default for DevToolsState {
             force_focus: false,
             force_active: false,
             class_manager_open: false,
+            var_highlight: None,
         }
     }
 }
@@ -223,6 +252,13 @@ impl DevToolsState {
 
     pub fn tick_frame(&mut self) {
         self.frame_counter = self.frame_counter.wrapping_add(1);
+        // Decay var_highlight counter.
+        if let Some((_, n)) = self.var_highlight.as_mut() {
+            if *n > 0 { *n -= 1; }
+        }
+        if matches!(self.var_highlight, Some((_, 0))) {
+            self.var_highlight = None;
+        }
     }
 }
 

@@ -1040,19 +1040,13 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                 DevtoolsHit::ColorPickerHue(h) => {
                                     if let Some(cp) = self.devtools.color_picker.as_mut() {
                                         cp.hue = h;
-                                        // Convert HSV -> RGB pri V=255 S=255.
-                                        let h_deg = h;
-                                        let c = 255u8;
-                                        let x = (255.0 * (1.0 - ((h_deg / 60.0) % 2.0 - 1.0).abs())) as u8;
-                                        let (r, g, b) = match (h_deg / 60.0) as i32 {
-                                            0 => (c, x, 0),
-                                            1 => (x, c, 0),
-                                            2 => (0, c, x),
-                                            3 => (0, x, c),
-                                            4 => (x, 0, c),
-                                            _ => (c, 0, x),
-                                        };
-                                        cp.rgba = [r, g, b, 255];
+                                        cp.rgba = crate::devtools::hsv_to_rgb(cp.hue, cp.sat, cp.val);
+                                    }
+                                }
+                                DevtoolsHit::ColorPickerSV(s, v) => {
+                                    if let Some(cp) = self.devtools.color_picker.as_mut() {
+                                        cp.sat = s; cp.val = v;
+                                        cp.rgba = crate::devtools::hsv_to_rgb(cp.hue, cp.sat, cp.val);
                                     }
                                 }
                                 DevtoolsHit::ColorPickerClose => {
@@ -1062,7 +1056,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                     self.devtools.color_picker = Some(crate::devtools::ColorPickerState {
                                         anchor_x, anchor_y,
                                         rgba: color,
-                                        hue: 0.0,
+                                        hue: 0.0, sat: 1.0, val: 1.0,
                                         target: None,
                                     });
                                 }
@@ -1090,15 +1084,34 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                 DevtoolsHit::AddNewRule => {
                                     // TODO add new inline rule + open editor.
                                 }
+                                DevtoolsHit::ClassManagerToggleClass(cls) => {
+                                    if let Some(sel_id) = self.devtools.elements.selected {
+                                        if let Some(interp) = &self.interpreter {
+                                            let doc_root = std::rc::Rc::clone(&interp.document.borrow().root);
+                                            if let Some(node) = find_node_by_ptr(&doc_root, sel_id) {
+                                                let cur = node.attributes.borrow().get("class").cloned().unwrap_or_default();
+                                                let mut classes: Vec<&str> = cur.split_whitespace().collect();
+                                                if let Some(pos) = classes.iter().position(|c| **c == cls) {
+                                                    classes.remove(pos);
+                                                } else {
+                                                    classes.push(&cls);
+                                                }
+                                                let new_val = classes.join(" ");
+                                                node.attributes.borrow_mut().insert("class".to_string(), new_val);
+                                                self.cached_layout_root = None;
+                                                self.cached_cascade_hash = 0;
+                                            }
+                                        }
+                                    }
+                                }
                                 DevtoolsHit::JumpToVar(name) => {
-                                    // Najdi :root rule s --name property a scrollni styles pane.
                                     if let Some(idx) = self.devtools.styles.matched_rules.iter().position(|r|
                                         r.declarations.iter().any(|d| d.property == name)) {
-                                        // Approximate position - row idx * ROW_H * 5 (each rule ~5 lines).
                                         let target_y = (idx as f32) * 18.0 * 5.0;
                                         self.devtools.styles.scroll_y = target_y.max(0.0);
                                     }
-                                    println!("[devtools] jump na {} (TODO highlight)", name);
+                                    // Highlight cilove var rule po N frames.
+                                    self.devtools.var_highlight = Some((name, 90)); // ~1.5s @ 60fps
                                 }
                                 DevtoolsHit::OverlayToggle(kind, node_id) => {
                                     let pos = self.devtools.overlays.iter().position(|o|
@@ -2168,9 +2181,35 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         /// Centralni cursor icon dispatch - dle pozice + DOM/devtools state.
         fn compute_cursor_icon(&self, target: Option<&super::layout::LayoutBox>) -> winit::window::CursorIcon {
             use winit::window::CursorIcon;
+            use crate::devtools::profile::DockPosition;
             // 1. Devtools panel hit?
             let mx_screen = self.mouse_x - self.scroll_x;
             let my_screen = self.mouse_y - self.scroll_y;
+            // Resize grip cursor (per dock).
+            if self.devtools.panel_open {
+                let (px, py, pw, ph) = self.panel_rect_logical();
+                if mx_screen >= px && mx_screen < px + pw
+                   && my_screen >= py && my_screen < py + ph {
+                    let grip_hit = match self.devtools.dock_position {
+                        DockPosition::Bottom | DockPosition::PopupWindow =>
+                            my_screen < py + 4.0,
+                        DockPosition::Top =>
+                            my_screen >= py + ph - 4.0,
+                        DockPosition::Left =>
+                            mx_screen >= px + pw - 4.0,
+                        DockPosition::Right =>
+                            mx_screen < px + 4.0,
+                    };
+                    if grip_hit {
+                        return match self.devtools.dock_position {
+                            DockPosition::Bottom | DockPosition::Top | DockPosition::PopupWindow =>
+                                CursorIcon::RowResize,
+                            DockPosition::Left | DockPosition::Right =>
+                                CursorIcon::ColResize,
+                        };
+                    }
+                }
+            }
             if self.point_in_devtools(mx_screen, my_screen) {
                 // Console input + elements search input + inline edit -> Text.
                 use crate::devtools::focus::FocusTarget;

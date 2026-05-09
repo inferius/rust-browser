@@ -1711,6 +1711,12 @@ fn paint_styles_pane(
             for d in &rule.declarations {
                 if sy >= max_y { return; }
                 if in_view(sy) {
+                    // Highlight bg pri matchu var_highlight (po jump).
+                    let highlight = state.var_highlight.as_ref()
+                        .map(|(n, _)| n == &d.property).unwrap_or(false);
+                    if highlight {
+                        push_rect(cmds, pad_x - 4.0, sy, 250.0, ROW_H, pal.bg_row_selected);
+                    }
                     let mut sw = state.styles.swatch_zones.borrow_mut();
                     let mut vz = state.styles.var_zones.borrow_mut();
                     paint_decl_line(cmds, pal, &mut sw, &mut vz, pad_x, sy, &d.property, &d.value, d.important, d.overridden);
@@ -2807,6 +2813,8 @@ pub enum DevtoolsHit {
     SettingsClose,
     /// Color picker: hue slider klik (hue 0..360).
     ColorPickerHue(f32),
+    /// Color picker: SV box klik - normalized (saturation 0..1, value 0..1).
+    ColorPickerSV(f32, f32),
     /// Color picker: klik mimo -> close.
     ColorPickerClose,
     /// Klik na color swatch v styles pane -> open color picker.
@@ -2819,6 +2827,8 @@ pub enum DevtoolsHit {
     AddNewRule,
     /// Klik na var() chip v styles pane - jump na :root rule s definici.
     JumpToVar(String),
+    /// Class manager: toggle class na selected node.
+    ClassManagerToggleClass(String),
 }
 
 /// Stable ID pro collapsible sections - persistuje state napric framem.
@@ -2846,7 +2856,7 @@ pub fn devtools_hit_test(
     mouse_x: f32, mouse_y: f32,
 ) -> DevtoolsHit {
     if !state.panel_open { return DevtoolsHit::None; }
-    // Class manager popup: outside click -> dismiss (reuse ClassManagerToggle).
+    // Class manager popup: outside click -> dismiss; checkbox click -> toggle.
     if state.class_manager_open {
         let pop_w = 280.0;
         let pop_h = 240.0;
@@ -2855,6 +2865,21 @@ pub fn devtools_hit_test(
         if mouse_x < px || mouse_x >= px + pop_w
            || mouse_y < py || mouse_y >= py + pop_h {
             return DevtoolsHit::ClassManagerToggle;
+        }
+        // Checkbox row hit-test - per class.
+        if let Some(sel_id) = state.elements.selected {
+            if let Some(bx) = find_layout_box(layout_root, sel_id) {
+                let class_attr = bx.node.as_ref().and_then(|n|
+                    n.attributes.borrow().get("class").cloned()
+                ).unwrap_or_default();
+                let mut sy = py + 44.0 + ROW_H + 4.0;
+                for cls in class_attr.split_whitespace() {
+                    if mouse_y >= sy && mouse_y < sy + ROW_H {
+                        return DevtoolsHit::ClassManagerToggleClass(cls.to_string());
+                    }
+                    sy += ROW_H;
+                }
+            }
         }
         return DevtoolsHit::PanelArea;
     }
@@ -2866,18 +2891,24 @@ pub fn devtools_hit_test(
            || mouse_y < cp.anchor_y || mouse_y >= cp.anchor_y + pop_h {
             return DevtoolsHit::ColorPickerClose;
         }
-        // Hue slider hit.
         let sv_x = cp.anchor_x + 10.0;
         let sv_y = cp.anchor_y + 10.0;
         let sv_w = pop_w - 20.0;
         let sv_h = 120.0;
+        // SV box klik -> sat/val.
+        if mouse_x >= sv_x && mouse_x < sv_x + sv_w
+           && mouse_y >= sv_y && mouse_y < sv_y + sv_h {
+            let s = ((mouse_x - sv_x) / sv_w).clamp(0.0, 1.0);
+            let v = 1.0 - ((mouse_y - sv_y) / sv_h).clamp(0.0, 1.0);
+            return DevtoolsHit::ColorPickerSV(s, v);
+        }
+        // Hue slider hit.
         let hue_y = sv_y + sv_h + 8.0;
         if mouse_y >= hue_y && mouse_y < hue_y + 12.0
            && mouse_x >= sv_x && mouse_x < sv_x + sv_w {
             let frac = ((mouse_x - sv_x) / sv_w).clamp(0.0, 1.0);
             return DevtoolsHit::ColorPickerHue(frac * 360.0);
         }
-        // SV box hit (TODO - aktualne nedispatchuje).
         return DevtoolsHit::PanelArea;
     }
     use crate::devtools::profile::DockPosition;
@@ -3003,18 +3034,21 @@ pub fn devtools_hit_test(
     }
     let content_y = toolbar_y + TAB_H;
     let content_h = panel_h - RESIZE_GRIP_H - TAB_H;
+    // Shift mouse_x do panel-local coords pri non-Bottom dock (paint pouziva
+    // x=0 origin a flushuje pres panel_x shift, hit-test musi delat opak).
+    let local_mx = mouse_x - panel_x;
+    let content_w = panel_w;
     match state.tab {
-        Tab::Elements => hit_test_elements(state, layout_root, win_w, content_y, content_h, mouse_x, mouse_y),
+        Tab::Elements => hit_test_elements(state, layout_root, content_w, content_y, content_h, local_mx, mouse_y),
         Tab::Console => {
-            // Klik dole = console input focus.
             let input_h = 32.0;
             let input_y = content_y + content_h - input_h;
             if mouse_y >= input_y { return DevtoolsHit::ConsoleInput; }
             DevtoolsHit::PanelArea
         }
-        Tab::Sources => hit_test_sources(state, win_w, content_y, content_h, mouse_x, mouse_y),
-        Tab::Network => hit_test_network(state, win_w, content_y, content_h, mouse_x, mouse_y),
-        Tab::Settings => hit_test_settings(state, content_y, mouse_x, mouse_y),
+        Tab::Sources => hit_test_sources(state, content_w, content_y, content_h, local_mx, mouse_y),
+        Tab::Network => hit_test_network(state, content_w, content_y, content_h, local_mx, mouse_y),
+        Tab::Settings => hit_test_settings(state, content_y, local_mx, mouse_y),
         _ => DevtoolsHit::PanelArea,
     }
 }
