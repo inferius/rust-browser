@@ -118,6 +118,90 @@ fn resolve_favicon(base: &str, href: &str) -> String {
     format!("{}{}", base_dir, href)
 }
 
+/// Render about:history page - cely seznam navstivenych URL.
+pub fn render_about_history() -> (String, String) {
+    let history = crate::devtools::history::load_history();
+    let total = history.len();
+    let rows = if history.is_empty() {
+        "<tr><td colspan=2 class='empty'>Zadna historie</td></tr>".to_string()
+    } else {
+        history.iter().rev().take(500).map(|h| {
+            let date = format_ts(h.visited_at);
+            format!("<tr><td><a href=\"{}\">{}</a></td><td class=date>{}</td></tr>",
+                    html_escape(&h.url), html_escape(&h.title), date)
+        }).collect::<Vec<_>>().join("\n")
+    };
+    let html = format!(r#"<!DOCTYPE html><html><head><title>Historie</title></head>
+<body>
+<div class=cfg>
+<h1>Historie</h1>
+<p class=subtitle>{total} polozek (max 500 zobrazeno)</p>
+<table>
+<thead><tr><th>Stranka</th><th>Cas</th></tr></thead>
+<tbody>
+{rows}
+</tbody>
+</table>
+</div>
+</body></html>"#, total = total, rows = rows);
+    let css = r#"
+body { font-family: 'Inter', sans-serif; background: #1a1a1f; color: #e8e6df; margin: 0; padding: 32px; }
+.cfg { max-width: 900px; margin: 0 auto; }
+h1 { color: #69a1ff; font-size: 32px; }
+.subtitle { color: #a1a1ae; font-size: 14px; margin-bottom: 24px; }
+table { width: 100%; border-collapse: collapse; }
+th { text-align: left; color: #94de7c; padding: 8px; border-bottom: 1px solid #4c4c55; }
+td { padding: 8px; border-bottom: 1px solid #2a2932; }
+td a { color: #69a1ff; text-decoration: none; }
+td a:hover { text-decoration: underline; }
+td.date { color: #a1a1ae; font-size: 12px; width: 200px; }
+.empty { color: #a1a1ae; font-style: italic; text-align: center; padding: 24px; }
+"#;
+    (html, css.to_string())
+}
+
+/// Render about:bookmarks page.
+pub fn render_about_bookmarks() -> (String, String) {
+    let bookmarks = crate::devtools::bookmarks::load_bookmarks();
+    let rows = if bookmarks.is_empty() {
+        "<li class='empty'>Zadne zalozky - Ctrl+D na strance je prida</li>".to_string()
+    } else {
+        bookmarks.iter().map(|b|
+            format!("<li><a href=\"{}\">{}</a> <small>{}</small></li>",
+                    html_escape(&b.url), html_escape(&b.title), html_escape(&b.url))
+        ).collect::<Vec<_>>().join("\n")
+    };
+    let html = format!(r#"<!DOCTYPE html><html><head><title>Zalozky</title></head>
+<body>
+<div class=cfg>
+<h1>Zalozky</h1>
+<ul>{rows}</ul>
+</div>
+</body></html>"#, rows = rows);
+    let css = r#"
+body { font-family: 'Inter', sans-serif; background: #1a1a1f; color: #e8e6df; margin: 0; padding: 32px; }
+.cfg { max-width: 800px; margin: 0 auto; }
+h1 { color: #69a1ff; font-size: 32px; margin-bottom: 16px; }
+ul { list-style: none; padding: 0; }
+li { background: #2a2932; padding: 12px 16px; margin-bottom: 4px; border-radius: 6px; }
+li a { color: #69a1ff; text-decoration: none; font-weight: 600; }
+li a:hover { text-decoration: underline; }
+li small { color: #a1a1ae; margin-left: 8px; font-size: 12px; }
+.empty { color: #a1a1ae; font-style: italic; }
+"#;
+    (html, css.to_string())
+}
+
+fn format_ts(ts: u64) -> String {
+    if ts == 0 { return String::new(); }
+    let now = crate::devtools::history::now_ts();
+    let age = now.saturating_sub(ts);
+    if age < 60 { format!("pred {} s", age) }
+    else if age < 3600 { format!("pred {} min", age / 60) }
+    else if age < 86400 { format!("pred {} h", age / 3600) }
+    else { format!("pred {} dny", age / 86400) }
+}
+
 /// Render about:config page from current profile state.
 pub fn render_about_config() -> (String, String) {
     let profile = crate::devtools::profile::active_profile();

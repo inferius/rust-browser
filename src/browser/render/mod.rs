@@ -1523,6 +1523,14 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 // Ctrl++ / Ctrl+- / Ctrl+0 = zoom in/out/reset (page reflow).
                 WindowEvent::KeyboardInput { event: key_event, .. } => {
                     if key_event.state != ElementState::Pressed { return; }
+                    // Esc zavre vsechny popupy (color picker / settings / class
+                    // manager / tab overflow) pred ostatnim handlingom.
+                    if matches!(&key_event.logical_key, Key::Named(NamedKey::Escape)) {
+                        if self.handle_escape_close_popups() {
+                            self.render();
+                            return;
+                        }
+                    }
                     // Edit mode (DOM/CSS edit) - presmeruj key events do edit.buffer.
                     use crate::devtools::focus::FocusTarget;
                     if self.devtools.panel_open && self.devtools.elements.edit.is_some() {
@@ -2054,6 +2062,27 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
     }
 
     impl App {
+        fn handle_escape_close_popups(&mut self) -> bool {
+            // Close prioritou: color picker > settings > class manager >
+            // tab overflow > addr bar > find.
+            if self.devtools.color_picker.is_some() {
+                self.devtools.color_picker = None;
+                return true;
+            }
+            if self.devtools.settings_popup_open {
+                self.devtools.settings_popup_open = false;
+                return true;
+            }
+            if self.devtools.class_manager_open {
+                self.devtools.class_manager_open = false;
+                return true;
+            }
+            if self.devtools.tab_overflow_open {
+                self.devtools.tab_overflow_open = false;
+                return true;
+            }
+            false
+        }
         fn viewport_h_logical(&self) -> f32 {
             self.renderer.as_ref().map(|r| (r.config.height as f32) / (self.zoom * r.scale_factor)).unwrap_or(768.0)
         }
@@ -2119,7 +2148,10 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             self.devtools.styles.estimate_total_h()
         }
         fn shell_chrome_h_active(&self) -> f32 {
-            if self.shell_mode { self.shell_chrome_h } else { 0.0 }
+            if !self.shell_mode { return 0.0; }
+            let bm_count = crate::devtools::bookmarks::load_bookmarks().len();
+            // Base: tab strip 28 + nav 36 = 64. Bookmarks bar 24 navic.
+            64.0 + if bm_count > 0 { 24.0 } else { 0.0 }
         }
         /// Page commands shift dolu o chrome height (pri shell_mode).
         fn shift_page_for_chrome(&self, list: &mut [DisplayCommand]) {
@@ -3652,6 +3684,24 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     self.cached_stylesheets = None;
                     true
                 }
+                "about:history" => {
+                    let (html, css) = crate::browser::render::tabs::render_about_history();
+                    self.html = html;
+                    self.css = css;
+                    self.base_url = Some("about:history".to_string());
+                    self.cached_layout_root = None;
+                    self.cached_stylesheets = None;
+                    true
+                }
+                "about:bookmarks" => {
+                    let (html, css) = crate::browser::render::tabs::render_about_bookmarks();
+                    self.html = html;
+                    self.css = css;
+                    self.base_url = Some("about:bookmarks".to_string());
+                    self.cached_layout_root = None;
+                    self.cached_stylesheets = None;
+                    true
+                }
                 _ => false,
             }
         }
@@ -4416,7 +4466,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // Shell mode: shift page commands dolu o chrome_h aby content
             // nezacinal pod chrome bar.
             if self.shell_mode {
-                let dy = self.shell_chrome_h;
+                let bm_count = crate::devtools::bookmarks::load_bookmarks().len();
+                let dy = 64.0 + if bm_count > 0 { 24.0 } else { 0.0 };
                 for cmd in display_list.iter_mut() {
                     use DisplayCommand::*;
                     match cmd {
@@ -4452,7 +4503,9 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 let titles: Vec<String> = self.tabs.tabs.iter().map(|t| t.title.clone()).collect();
                 let favicons: Vec<Option<String>> = self.tabs.tabs.iter()
                     .map(|t| t.favicon_url.clone()).collect();
-                paint_shell_chrome_with_favicons(&mut display_list, win_w_logical, self.shell_chrome_h,
+                let bm_count = crate::devtools::bookmarks::load_bookmarks().len();
+                let chrome_h = 64.0 + if bm_count > 0 { 24.0 } else { 0.0 };
+                paint_shell_chrome_with_favicons(&mut display_list, win_w_logical, chrome_h,
                                                  self.base_url.as_deref().unwrap_or(""),
                                                  Some(&titles), self.tabs.active, Some(&favicons));
             }
