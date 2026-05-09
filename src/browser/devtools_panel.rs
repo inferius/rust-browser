@@ -413,29 +413,29 @@ fn paint_settings_popup(
                  pal.text_dim, true);
 }
 
-/// HSV trojuhelnik / box + hue slider color picker. Klasicky CSS color
-/// editor: SV box (gradient) + hue slider + RGB/HEX inputs.
+/// HSV box + hue slider color picker s editable HEX/RGB inputs.
 fn paint_color_picker(
     cmds: &mut Vec<DisplayCommand>,
     state: &DevToolsState,
     pal: &Palette,
 ) {
     let Some(cp) = &state.color_picker else { return };
-    let pop_w = 240.0;
-    let pop_h = 220.0;
+    let pop_w = 280.0;
+    let pop_h = 320.0;
     let px = cp.anchor_x;
     let py = cp.anchor_y;
+    // Drop shadow.
+    push_rect(cmds, px + 2.0, py + 2.0, pop_w, pop_h, [0, 0, 0, 100]);
     push_rect(cmds, px, py, pop_w, pop_h, pal.bg_panel);
     push_rect_border(cmds, px, py, pop_w, pop_h, pal.border_strong);
 
-    // SV gradient box - aproximace pres grid 16x12 ctvercu s HSV per-cell.
-    // Cell: saturation = (col / cols), value = 1 - (row / rows).
-    let sv_x = px + 10.0;
-    let sv_y = py + 10.0;
-    let sv_w = pop_w - 20.0;
-    let sv_h = 120.0;
-    let cols = 16;
-    let rows = 12;
+    // SV gradient box - jemnejsi grid 32x20 = 640 buniek vs predtim 192.
+    let sv_x = px + 12.0;
+    let sv_y = py + 12.0;
+    let sv_w = pop_w - 24.0;
+    let sv_h = 160.0;
+    let cols = 32;
+    let rows = 20;
     let cell_w = sv_w / cols as f32;
     let cell_h = sv_h / rows as f32;
     for r in 0..rows {
@@ -448,38 +448,70 @@ fn paint_color_picker(
         }
     }
     push_rect_border(cmds, sv_x, sv_y, sv_w, sv_h, pal.border);
-    // SV marker - kruhova hint s aktualni s/v.
+    // SV marker - krouzek 8px white outline + 4px black core.
     let mxv = sv_x + cp.sat * sv_w;
     let myv = sv_y + (1.0 - cp.val) * sv_h;
-    push_rect(cmds, mxv - 3.0, myv - 3.0, 6.0, 6.0, [255, 255, 255, 255]);
-    push_rect(cmds, mxv - 1.0, myv - 1.0, 2.0, 2.0, [0, 0, 0, 255]);
+    push_rect_border(cmds, mxv - 5.0, myv - 5.0, 10.0, 10.0, [255, 255, 255, 255]);
+    push_rect_border(cmds, mxv - 4.0, myv - 4.0, 8.0, 8.0, [0, 0, 0, 255]);
 
-    // Hue slider (proste 6-segment rainbow approximation).
-    let hue_y = sv_y + sv_h + 8.0;
-    let hue_h = 12.0;
-    let segments = [
-        [255, 0, 0, 255], [255, 255, 0, 255], [0, 255, 0, 255],
-        [0, 255, 255, 255], [0, 0, 255, 255], [255, 0, 255, 255], [255, 0, 0, 255],
-    ];
-    let seg_w = sv_w / 6.0;
-    for i in 0..6 {
-        push_rect(cmds, sv_x + (i as f32) * seg_w, hue_y, seg_w, hue_h, segments[i]);
+    // Hue slider - vice segmentu (24) pro plynulejsi prechod.
+    let hue_y = sv_y + sv_h + 10.0;
+    let hue_h = 16.0;
+    let n_seg = 24;
+    let seg_w = sv_w / n_seg as f32;
+    for i in 0..n_seg {
+        let h = (i as f32) * 360.0 / n_seg as f32;
+        let col = crate::devtools::hsv_to_rgb(h, 1.0, 1.0);
+        push_rect(cmds, sv_x + (i as f32) * seg_w, hue_y, seg_w + 1.0, hue_h, col);
     }
-    // Hue marker.
+    push_rect_border(cmds, sv_x, hue_y, sv_w, hue_h, pal.border);
+    // Hue marker - kanal pres celou vysku slideru.
     let mx = sv_x + (cp.hue / 360.0) * sv_w;
     push_rect(cmds, mx - 1.0, hue_y - 2.0, 3.0, hue_h + 4.0, [255, 255, 255, 255]);
     push_rect_border(cmds, mx - 1.0, hue_y - 2.0, 3.0, hue_h + 4.0, [0, 0, 0, 255]);
 
-    // HEX label + value.
-    let info_y = hue_y + hue_h + 12.0;
-    let hex = format!("#{:02x}{:02x}{:02x}", cp.rgba[0], cp.rgba[1], cp.rgba[2]);
-    push_ui_text(cmds, sv_x, info_y, "HEX:".to_string(), pal.text_dim, true);
-    push_text(cmds, sv_x + 36.0, info_y, hex, pal.text, false);
-    push_ui_text(cmds, sv_x, info_y + 18.0,
-                 format!("RGB: {} {} {}", cp.rgba[0], cp.rgba[1], cp.rgba[2]),
-                 pal.text, false);
-    push_ui_text(cmds, sv_x, info_y + 36.0,
-                 "Klik mimo zavre".to_string(), pal.text_disabled, false);
+    // Inputs row: HEX + R + G + B + preview swatch.
+    let row_y = hue_y + hue_h + 14.0;
+    let label_y = row_y;
+    let input_y = row_y + 14.0;
+    let input_h = 22.0;
+    // HEX label + input.
+    push_ui_text(cmds, sv_x, label_y, "HEX".to_string(), pal.text_dim, true);
+    let hex_w = 80.0;
+    let hex_bg = if cp.hex_focused { pal.bg_input_focus } else { pal.bg_input };
+    push_rect(cmds, sv_x, input_y, hex_w, input_h, hex_bg);
+    push_rect_border(cmds, sv_x, input_y, hex_w, input_h, pal.border);
+    push_text(cmds, sv_x + 4.0, input_y + 4.0, format!("#{}", cp.hex_input), pal.text, false);
+    if cp.hex_focused {
+        // Cursor blink indikator.
+        let cur_x = sv_x + 4.0 + (cp.hex_input.len() as f32 + 1.0) * 7.0;
+        push_rect(cmds, cur_x, input_y + 4.0, 1.0, 14.0, pal.accent);
+    }
+    // RGB inputs.
+    let rgb_x = sv_x + hex_w + 8.0;
+    let rgb_w = 44.0;
+    for (i, label) in ["R", "G", "B"].iter().enumerate() {
+        let x = rgb_x + (i as f32) * (rgb_w + 4.0);
+        push_ui_text(cmds, x, label_y, label.to_string(), pal.text_dim, true);
+        let bg = if cp.rgb_focused == Some(i) { pal.bg_input_focus } else { pal.bg_input };
+        push_rect(cmds, x, input_y, rgb_w, input_h, bg);
+        push_rect_border(cmds, x, input_y, rgb_w, input_h, pal.border);
+        push_text(cmds, x + 4.0, input_y + 4.0, cp.rgb_inputs[i].clone(), pal.text, false);
+        if cp.rgb_focused == Some(i) {
+            let cur_x = x + 4.0 + cp.rgb_inputs[i].len() as f32 * 7.0;
+            push_rect(cmds, cur_x, input_y + 4.0, 1.0, 14.0, pal.accent);
+        }
+    }
+    // Preview swatch.
+    let prev_x = sv_x + sv_w - 36.0;
+    push_rect(cmds, prev_x, input_y, 36.0, input_h, cp.rgba);
+    push_rect_border(cmds, prev_x, input_y, 36.0, input_h, pal.border);
+
+    // Bottom hint row.
+    let hint_y = input_y + input_h + 12.0;
+    push_ui_text_italic(cmds, sv_x, hint_y,
+        "Klik na SV/hue, klik input + typuj, Enter aplikuje, Esc zavre".to_string(),
+        pal.text_disabled);
 }
 
 /// Hit-test pro settings popup. Vraci akci nebo None.
@@ -3084,6 +3116,10 @@ pub enum DevtoolsHit {
     ComputedShorthandToggle(String),
     /// Klik na overflow chevron v side panel sub-tab strip.
     SidePanelOverflowToggle,
+    /// Klik na HEX input v color pickeru.
+    ColorPickerHexFocus,
+    /// Klik na R/G/B input (i=0..2).
+    ColorPickerRgbFocus(usize),
     /// Klik na flex/grid overlay toggle v Layout sub-tabu.
     OverlayToggle(crate::devtools::OverlayKind, usize),
     /// Klik na settings gear button v toolbaru.
@@ -3170,16 +3206,16 @@ pub fn devtools_hit_test(
     }
     // Color picker priority: klik mimo popup -> close.
     if let Some(cp) = &state.color_picker {
-        let pop_w = 240.0;
-        let pop_h = 220.0;
+        let pop_w = 280.0;
+        let pop_h = 320.0;
         if mouse_x < cp.anchor_x || mouse_x >= cp.anchor_x + pop_w
            || mouse_y < cp.anchor_y || mouse_y >= cp.anchor_y + pop_h {
             return DevtoolsHit::ColorPickerClose;
         }
-        let sv_x = cp.anchor_x + 10.0;
-        let sv_y = cp.anchor_y + 10.0;
-        let sv_w = pop_w - 20.0;
-        let sv_h = 120.0;
+        let sv_x = cp.anchor_x + 12.0;
+        let sv_y = cp.anchor_y + 12.0;
+        let sv_w = pop_w - 24.0;
+        let sv_h = 160.0;
         // SV box klik -> sat/val.
         if mouse_x >= sv_x && mouse_x < sv_x + sv_w
            && mouse_y >= sv_y && mouse_y < sv_y + sv_h {
@@ -3188,11 +3224,30 @@ pub fn devtools_hit_test(
             return DevtoolsHit::ColorPickerSV(s, v);
         }
         // Hue slider hit.
-        let hue_y = sv_y + sv_h + 8.0;
-        if mouse_y >= hue_y && mouse_y < hue_y + 12.0
+        let hue_y = sv_y + sv_h + 10.0;
+        let hue_h = 16.0;
+        if mouse_y >= hue_y && mouse_y < hue_y + hue_h
            && mouse_x >= sv_x && mouse_x < sv_x + sv_w {
             let frac = ((mouse_x - sv_x) / sv_w).clamp(0.0, 1.0);
             return DevtoolsHit::ColorPickerHue(frac * 360.0);
+        }
+        // Input fields hit.
+        let input_y = hue_y + hue_h + 14.0 + 14.0;
+        let input_h = 22.0;
+        if mouse_y >= input_y && mouse_y < input_y + input_h {
+            // HEX field.
+            if mouse_x >= sv_x && mouse_x < sv_x + 80.0 {
+                return DevtoolsHit::ColorPickerHexFocus;
+            }
+            // RGB fields.
+            let rgb_x = sv_x + 88.0;
+            let rgb_w = 44.0;
+            for i in 0..3 {
+                let x = rgb_x + (i as f32) * (rgb_w + 4.0);
+                if mouse_x >= x && mouse_x < x + rgb_w {
+                    return DevtoolsHit::ColorPickerRgbFocus(i);
+                }
+            }
         }
         return DevtoolsHit::PanelArea;
     }

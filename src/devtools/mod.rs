@@ -158,6 +158,14 @@ pub struct ColorPickerState {
     pub val: f32,
     /// Source identifikator pro write-back: (node_id, property).
     pub target: Option<(usize, String)>,
+    /// HEX input field text (editable). Default sync z rgba.
+    pub hex_input: String,
+    /// True kdyz uzivatel klikl do hex fieldu - keystroke jdou tam.
+    pub hex_focused: bool,
+    /// Per-channel R/G/B input texts (editable).
+    pub rgb_inputs: [String; 3],
+    /// Index focused RGB inputu (0/1/2) nebo None.
+    pub rgb_focused: Option<usize>,
 }
 
 impl Default for ColorPickerState {
@@ -167,8 +175,77 @@ impl Default for ColorPickerState {
             rgba: [255, 0, 0, 255],
             hue: 0.0, sat: 1.0, val: 1.0,
             target: None,
+            hex_input: "ff0000".to_string(),
+            hex_focused: false,
+            rgb_inputs: ["255".to_string(), "0".to_string(), "0".to_string()],
+            rgb_focused: None,
         }
     }
+}
+
+impl ColorPickerState {
+    /// Sync hex/rgb input texts z aktualni rgba (po SV/hue klik).
+    pub fn sync_inputs_from_rgba(&mut self) {
+        self.hex_input = format!("{:02x}{:02x}{:02x}", self.rgba[0], self.rgba[1], self.rgba[2]);
+        self.rgb_inputs = [
+            self.rgba[0].to_string(),
+            self.rgba[1].to_string(),
+            self.rgba[2].to_string(),
+        ];
+    }
+    /// Apply hex_input -> rgba. True pokud parse OK.
+    pub fn apply_hex(&mut self) -> bool {
+        let s = self.hex_input.trim().trim_start_matches('#');
+        if s.len() != 6 { return false; }
+        let r = u8::from_str_radix(&s[0..2], 16);
+        let g = u8::from_str_radix(&s[2..4], 16);
+        let b = u8::from_str_radix(&s[4..6], 16);
+        match (r, g, b) {
+            (Ok(r), Ok(g), Ok(b)) => {
+                self.rgba = [r, g, b, 255];
+                let (h, s_v, v) = rgb_to_hsv(r, g, b);
+                self.hue = h;
+                self.sat = s_v;
+                self.val = v;
+                self.sync_inputs_from_rgba();
+                true
+            }
+            _ => false
+        }
+    }
+    /// Apply rgb_inputs[i] -> rgba.
+    pub fn apply_rgb(&mut self, i: usize) -> bool {
+        if i >= 3 { return false; }
+        let v = self.rgb_inputs[i].trim().parse::<u32>().ok().filter(|x| *x <= 255);
+        match v {
+            Some(v) => {
+                self.rgba[i] = v as u8;
+                let (h, s_v, vv) = rgb_to_hsv(self.rgba[0], self.rgba[1], self.rgba[2]);
+                self.hue = h; self.sat = s_v; self.val = vv;
+                self.sync_inputs_from_rgba();
+                true
+            }
+            None => false,
+        }
+    }
+}
+
+/// RGB (0..255) -> HSV (h:0..360, s:0..1, v:0..1).
+pub fn rgb_to_hsv(r: u8, g: u8, b: u8) -> (f32, f32, f32) {
+    let rf = r as f32 / 255.0;
+    let gf = g as f32 / 255.0;
+    let bf = b as f32 / 255.0;
+    let max = rf.max(gf).max(bf);
+    let min = rf.min(gf).min(bf);
+    let d = max - min;
+    let v = max;
+    let s = if max == 0.0 { 0.0 } else { d / max };
+    let h = if d == 0.0 { 0.0 }
+            else if max == rf { 60.0 * (((gf - bf) / d) % 6.0) }
+            else if max == gf { 60.0 * (((bf - rf) / d) + 2.0) }
+            else { 60.0 * (((rf - gf) / d) + 4.0) };
+    let h = if h < 0.0 { h + 360.0 } else { h };
+    (h, s, v)
 }
 
 /// HSV (h:0..360, s:0..1, v:0..1) -> RGB (0..255).

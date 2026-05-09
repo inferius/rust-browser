@@ -1310,6 +1310,18 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                 DevtoolsHit::SidePanelOverflowToggle => {
                                     self.devtools.side_panel_overflow_open = !self.devtools.side_panel_overflow_open;
                                 }
+                                DevtoolsHit::ColorPickerHexFocus => {
+                                    if let Some(cp) = &mut self.devtools.color_picker {
+                                        cp.hex_focused = true;
+                                        cp.rgb_focused = None;
+                                    }
+                                }
+                                DevtoolsHit::ColorPickerRgbFocus(i) => {
+                                    if let Some(cp) = &mut self.devtools.color_picker {
+                                        cp.hex_focused = false;
+                                        cp.rgb_focused = Some(i);
+                                    }
+                                }
                                 DevtoolsHit::SettingsToggle => {
                                     self.devtools.settings_popup_open = !self.devtools.settings_popup_open;
                                 }
@@ -1332,6 +1344,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                     if let Some(cp) = self.devtools.color_picker.as_mut() {
                                         cp.hue = h;
                                         cp.rgba = crate::devtools::hsv_to_rgb(cp.hue, cp.sat, cp.val);
+                                        cp.sync_inputs_from_rgba();
                                     }
                                     self.write_back_color_picker();
                                 }
@@ -1339,6 +1352,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                     if let Some(cp) = self.devtools.color_picker.as_mut() {
                                         cp.sat = s; cp.val = v;
                                         cp.rgba = crate::devtools::hsv_to_rgb(cp.hue, cp.sat, cp.val);
+                                        cp.sync_inputs_from_rgba();
                                     }
                                     self.write_back_color_picker();
                                 }
@@ -1347,12 +1361,19 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                 }
                                 DevtoolsHit::OpenColorPicker { anchor_x, anchor_y, color, property } => {
                                     let target = self.devtools.elements.selected.map(|id| (id, property.clone()));
-                                    self.devtools.color_picker = Some(crate::devtools::ColorPickerState {
+                                    let (h, s, v) = crate::devtools::rgb_to_hsv(color[0], color[1], color[2]);
+                                    let mut cp = crate::devtools::ColorPickerState {
                                         anchor_x, anchor_y,
                                         rgba: color,
-                                        hue: 0.0, sat: 1.0, val: 1.0,
+                                        hue: h, sat: s, val: v,
                                         target,
-                                    });
+                                        hex_input: format!("{:02x}{:02x}{:02x}", color[0], color[1], color[2]),
+                                        hex_focused: false,
+                                        rgb_inputs: [color[0].to_string(), color[1].to_string(), color[2].to_string()],
+                                        rgb_focused: None,
+                                    };
+                                    cp.sync_inputs_from_rgba();
+                                    self.devtools.color_picker = Some(cp);
                                 }
                                 DevtoolsHit::ForcePseudoToggle => {
                                     // Cycle: none -> hover -> focus -> active -> none.
@@ -1741,6 +1762,48 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     // manager / tab overflow) pred ostatnim handlingom.
                     if matches!(&key_event.logical_key, Key::Named(NamedKey::Escape)) {
                         if self.handle_escape_close_popups() {
+                            self.render();
+                            return;
+                        }
+                    }
+                    // Color picker hex/rgb input keyboard - typovani.
+                    if let Some(cp) = self.devtools.color_picker.as_mut() {
+                        if cp.hex_focused || cp.rgb_focused.is_some() {
+                            match &key_event.logical_key {
+                                Key::Named(NamedKey::Backspace) => {
+                                    if cp.hex_focused { cp.hex_input.pop(); }
+                                    else if let Some(i) = cp.rgb_focused {
+                                        cp.rgb_inputs[i].pop();
+                                    }
+                                }
+                                Key::Named(NamedKey::Enter) => {
+                                    let ok = if cp.hex_focused { cp.apply_hex() }
+                                             else if let Some(i) = cp.rgb_focused { cp.apply_rgb(i) }
+                                             else { false };
+                                    if ok { self.write_back_color_picker(); }
+                                }
+                                Key::Character(s) => {
+                                    let ch = s.chars().next();
+                                    if let Some(c) = ch {
+                                        if cp.hex_focused {
+                                            // HEX: jen [0-9a-fA-F], max 6.
+                                            if c.is_ascii_hexdigit() && cp.hex_input.len() < 6 {
+                                                cp.hex_input.push(c.to_ascii_lowercase());
+                                                cp.apply_hex();
+                                                self.write_back_color_picker();
+                                            }
+                                        } else if let Some(i) = cp.rgb_focused {
+                                            // RGB: jen [0-9], max 3.
+                                            if c.is_ascii_digit() && cp.rgb_inputs[i].len() < 3 {
+                                                cp.rgb_inputs[i].push(c);
+                                                cp.apply_rgb(i);
+                                                self.write_back_color_picker();
+                                            }
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
                             self.render();
                             return;
                         }
