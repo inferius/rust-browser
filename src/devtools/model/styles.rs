@@ -51,6 +51,11 @@ pub struct StylesState {
     pub computed_expanded: std::cell::RefCell<std::collections::HashSet<String>>,
     /// Cache (x, y, w, h, shorthand_name) clickable chevron zon v Computed panelu.
     pub computed_chevron_zones: std::cell::RefCell<Vec<(f32, f32, f32, f32, String)>>,
+    /// Cache (x, y, w, h, property_name) zon clickable na value v styles pane.
+    /// Klik = otevrit editor. Per-frame populated.
+    pub decl_value_zones: std::cell::RefCell<Vec<(f32, f32, f32, f32, String)>>,
+    /// Aktivni edit value: Some((property, buffer)). Dopisovani pres KeyboardInput.
+    pub editing_value: Option<(String, String)>,
 }
 
 /// Vrati shorthand jmeno pokud `prop` je sub-property nejakeho shorthand.

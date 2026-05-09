@@ -1784,6 +1784,7 @@ fn paint_decl_line(
     pal: &Palette,
     swatch_zones: &mut Vec<(f32, f32, f32, f32, [u8; 4], String)>,
     var_zones: &mut Vec<(f32, f32, f32, f32, String)>,
+    value_zones: &mut Vec<(f32, f32, f32, f32, String)>,
     x: f32, y: f32,
     property: &str,
     value: &str,
@@ -1793,6 +1794,7 @@ fn paint_decl_line(
     let mut cx = x;
     push_text(cmds, cx, y, format!("  {}: ", property), pal.syn_property, false);
     cx += dt_text_width(&format!("  {}: ", property));
+    let value_start_x = cx;
 
     // Color swatch detection - prefix value parsing.
     if let Some(c) = parse_css_color(value.trim()) {
@@ -1840,6 +1842,9 @@ fn paint_decl_line(
         cx += dt_text_width(" !important");
     }
     push_text(cmds, cx, y, ";".to_string(), pal.text_dim, false);
+    // Track value zone (od start_value do cx) aby klik otevrel editor.
+    let value_w = (cx - value_start_x).max(40.0);
+    value_zones.push((value_start_x, y, value_w, ROW_H, property.to_string()));
     if overridden {
         // Strikethrough cary.
         let line_w = cx - x;
@@ -1912,9 +1917,10 @@ fn paint_styles_pane(
     pal: &Palette,
     x: f32, y: f32, w: f32, h: f32,
 ) {
-    // Reset swatch + var zones (per-frame populated v paint_decl_line).
+    // Reset swatch + var + value zones (per-frame populated v paint_decl_line).
     state.styles.swatch_zones.borrow_mut().clear();
     state.styles.var_zones.borrow_mut().clear();
+    state.styles.decl_value_zones.borrow_mut().clear();
     // Toolbar nahore (filter + :hov/.cls/+ buttons).
     paint_styles_toolbar(cmds, state, pal, x, y, w, 0.0, 0.0);
     let toolbar_h = 26.0;
@@ -2005,9 +2011,25 @@ fn paint_styles_pane(
                     if highlight {
                         push_rect(cmds, pad_x - 4.0, sy, 250.0, ROW_H, pal.bg_row_selected);
                     }
-                    let mut sw = state.styles.swatch_zones.borrow_mut();
-                    let mut vz = state.styles.var_zones.borrow_mut();
-                    paint_decl_line(cmds, pal, &mut sw, &mut vz, pad_x, sy, &d.property, &d.value, d.important, d.overridden);
+                    // Pokud editing_value matchuje tuto property -> render input field misto value text.
+                    let editing = state.styles.editing_value.as_ref()
+                        .filter(|(p, _)| p == &d.property);
+                    if let Some((_, buffer)) = editing {
+                        let prefix = format!("  {}: ", d.property);
+                        push_text(cmds, pad_x, sy, prefix.clone(), pal.syn_property, false);
+                        let edit_x = pad_x + dt_text_width(&prefix);
+                        let edit_w = 200.0;
+                        push_rect(cmds, edit_x - 2.0, sy, edit_w, ROW_H, pal.bg_input_focus);
+                        push_rect_border(cmds, edit_x - 2.0, sy, edit_w, ROW_H, pal.accent);
+                        push_text(cmds, edit_x, sy, buffer.clone(), pal.text, false);
+                        let cur_x = edit_x + dt_text_width(buffer);
+                        push_rect(cmds, cur_x, sy + 2.0, 1.0, ROW_H - 4.0, pal.accent);
+                    } else {
+                        let mut sw = state.styles.swatch_zones.borrow_mut();
+                        let mut vz = state.styles.var_zones.borrow_mut();
+                        let mut vlz = state.styles.decl_value_zones.borrow_mut();
+                        paint_decl_line(cmds, pal, &mut sw, &mut vz, &mut vlz, pad_x, sy, &d.property, &d.value, d.important, d.overridden);
+                    }
                 }
                 sy += ROW_H;
             }
@@ -3120,6 +3142,8 @@ pub enum DevtoolsHit {
     ColorPickerHexFocus,
     /// Klik na R/G/B input (i=0..2).
     ColorPickerRgbFocus(usize),
+    /// Klik na value v styles pane - otevrit editor pro property.
+    EditDeclValue(String),
     /// Klik na flex/grid overlay toggle v Layout sub-tabu.
     OverlayToggle(crate::devtools::OverlayKind, usize),
     /// Klik na settings gear button v toolbaru.
@@ -3564,6 +3588,15 @@ fn hit_test_elements(
             }
         }
         drop(zones);
+        // Value zone klik -> edit mode.
+        let vzones = state.styles.decl_value_zones.borrow();
+        for (zx, zy, zw, zh, prop) in vzones.iter() {
+            if mouse_x >= *zx && mouse_x < zx + zw
+               && mouse_y >= *zy && mouse_y < zy + zh {
+                return DevtoolsHit::EditDeclValue(prop.clone());
+            }
+        }
+        drop(vzones);
         // Var chip hit.
         let vzones = state.styles.var_zones.borrow();
         for (zx, zy, zw, zh, name) in vzones.iter() {

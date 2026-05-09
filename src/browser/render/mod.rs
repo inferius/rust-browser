@@ -1322,6 +1322,13 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                         cp.rgb_focused = Some(i);
                                     }
                                 }
+                                DevtoolsHit::EditDeclValue(prop) => {
+                                    // Initial buffer = current value pro tuto property z computed.
+                                    let cur = self.devtools.styles.computed.iter()
+                                        .find(|(k, _)| k == &prop)
+                                        .map(|(_, v)| v.clone()).unwrap_or_default();
+                                    self.devtools.styles.editing_value = Some((prop, cur));
+                                }
                                 DevtoolsHit::SettingsToggle => {
                                     self.devtools.settings_popup_open = !self.devtools.settings_popup_open;
                                 }
@@ -1765,6 +1772,37 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                             self.render();
                             return;
                         }
+                    }
+                    // Editing value v styles pane - typovani do bufferu.
+                    if self.devtools.styles.editing_value.is_some() {
+                        match &key_event.logical_key {
+                            Key::Named(NamedKey::Backspace) => {
+                                if let Some((_, b)) = self.devtools.styles.editing_value.as_mut() {
+                                    b.pop();
+                                }
+                            }
+                            Key::Named(NamedKey::Enter) => {
+                                if let Some((prop, val)) = self.devtools.styles.editing_value.take() {
+                                    self.write_back_style_edit(&prop, &val);
+                                }
+                            }
+                            Key::Named(NamedKey::Escape) => {
+                                self.devtools.styles.editing_value = None;
+                            }
+                            Key::Character(s) => {
+                                if let Some((_, b)) = self.devtools.styles.editing_value.as_mut() {
+                                    b.push_str(s);
+                                }
+                            }
+                            Key::Named(NamedKey::Space) => {
+                                if let Some((_, b)) = self.devtools.styles.editing_value.as_mut() {
+                                    b.push(' ');
+                                }
+                            }
+                            _ => {}
+                        }
+                        self.render();
+                        return;
                     }
                     // Color picker hex/rgb input keyboard - typovani.
                     if let Some(cp) = self.devtools.color_picker.as_mut() {
@@ -4157,6 +4195,32 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             } else {
                 // Klik mimo - clear focus.
                 super::cascade::set_focused_node(None);
+            }
+        }
+
+        /// Write arbitrary style value (z editing buffer) na selected node inline style.
+        fn write_back_style_edit(&mut self, prop: &str, value: &str) {
+            let Some(node_id) = self.devtools.elements.selected else { return };
+            if let Some(interp) = &self.interpreter {
+                let doc_root = std::rc::Rc::clone(&interp.document.borrow().root);
+                if let Some(node) = find_node_by_ptr(&doc_root, node_id) {
+                    let mut attrs = node.attributes.borrow_mut();
+                    let cur_style = attrs.get("style").cloned().unwrap_or_default();
+                    let new_style = update_inline_style(&cur_style, prop, value);
+                    let old_value = cur_style.clone();
+                    attrs.insert("style".to_string(), new_style.clone());
+                    drop(attrs);
+                    self.cached_layout_root = None;
+                    self.cached_cascade_hash = 0;
+                    self.devtools.changes.push(crate::devtools::ChangeEntry {
+                        timestamp_ts: crate::devtools::history::now_ts(),
+                        kind: crate::devtools::ChangeKind::StyleEdit,
+                        target_node_id: node_id,
+                        property: prop.to_string(),
+                        old_value,
+                        new_value: new_style,
+                    });
+                }
             }
         }
 
