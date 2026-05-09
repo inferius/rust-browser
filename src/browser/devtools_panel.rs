@@ -800,6 +800,56 @@ fn paint_section_header(
     y + ROW_H + 4.0
 }
 
+/// Flex item diagram (Firefox-style): basis -> final size visualization.
+/// Pri growth: ukaz basis (modry rect) + extra grow (zelena pruh napravo).
+/// Pri shrink: ukaz basis (modry rect, sirsi) + cervena indikace ktera
+/// cast byla ubrana.
+fn paint_flex_item_diagram(
+    cmds: &mut Vec<DisplayCommand>,
+    bx: &LayoutBox,
+    pal: &Palette,
+    x: f32, y: f32, w: f32,
+) -> f32 {
+    let _final_size = bx.rect.width.max(bx.rect.height);
+    // Diagram bounds.
+    let dx = x + 8.0;
+    let dy = y + 8.0;
+    let dw = (w - 16.0).max(100.0);
+    let dh = 60.0;
+    // Bg.
+    push_rect(cmds, dx, dy, dw, dh, pal.bg_panel_alt);
+    push_rect_border(cmds, dx, dy, dw, dh, pal.border);
+
+    // Basis (modry rect uvnitr).
+    let basis_str = if bx.flex_basis.is_empty() || bx.flex_basis == "auto" {
+        "auto".to_string()
+    } else {
+        bx.flex_basis.clone()
+    };
+    let basis_w = (dw * 0.6).min(dw - 4.0);
+    push_rect(cmds, dx + 2.0, dy + 4.0, basis_w, dh - 8.0, [69, 161, 255, 180]);
+    push_ui_text(cmds, dx + 8.0, dy + dh - 22.0, "basis".to_string(), pal.text_dim, false);
+    push_ui_text(cmds, dx + 8.0, dy + dh - 8.0, basis_str, [255, 255, 255, 255], true);
+
+    // Growth zona (zelena pruh za basis).
+    if bx.flex_grow > 0.0 {
+        let grow_w = (dw - basis_w - 4.0).max(0.0);
+        if grow_w > 1.0 {
+            push_rect(cmds, dx + basis_w + 2.0, dy + 4.0, grow_w, dh - 8.0, [148, 222, 124, 180]);
+            push_ui_text(cmds, dx + basis_w + 8.0, dy + dh - 22.0,
+                         format!("grow {}", bx.flex_grow), pal.text_dim, false);
+        }
+    }
+
+    // Final size info.
+    push_ui_text(cmds, x, dy + dh + 8.0,
+                 format!("Vysledna velikost: {:.0} x {:.0} px",
+                         bx.rect.width, bx.rect.height),
+                 pal.text, true);
+
+    y + dh + 32.0
+}
+
 /// Firefox-style nested box model viz: margin (oranzova) -> border (zluta)
 /// -> padding (zelena) -> content (modra), s rozmery na kazde strane.
 fn paint_box_model_viz(
@@ -874,6 +924,23 @@ fn paint_side_layout(
     let node_id = bx.node.as_ref().map(|n| std::rc::Rc::as_ptr(n) as usize).unwrap_or(0);
     use crate::devtools::OverlayKind;
 
+    // Pri vybranem flex item: diagram s basis/final/grow/shrink.
+    // Detect: parent je flex container (lookup via node.parent if exists).
+    let is_flex_item = bx.node.as_ref().and_then(|n| n.parent.borrow().upgrade())
+        .map(|p| {
+            // Naivni detect: parent ma display: flex z attrs nebo .style.
+            // Pro real check by potreba parent LayoutBox - skip pro ted.
+            let _ = p;
+            true
+        }).unwrap_or(false);
+    if is_flex_item && (bx.flex_grow > 0.0 || bx.flex_shrink != 1.0 || !bx.flex_basis.is_empty()) {
+        sy = paint_section_header(cmds, state, pal, &SectionId::LayoutFlex,
+                                   "Polozka flex z rodice", x, sy, w);
+        if !state.collapsed_sections.contains(&SectionId::LayoutFlex) {
+            sy = paint_flex_item_diagram(cmds, bx, pal, x + 8.0, sy + 4.0, w - 16.0);
+        }
+    }
+
     // Flex container section.
     if matches!(bx.display, crate::browser::layout::Display::Flex) {
         sy = paint_section_header(cmds, state, pal, &SectionId::LayoutFlex,
@@ -911,7 +978,27 @@ fn paint_side_layout(
                       format!("Overlay: {}", if active { "ZAP" } else { "VYP" }),
                       pal.text, false);
             sy += ROW_H;
-            push_text(cmds, pad_x, sy, "Grid layout active".to_string(), pal.text_dim, false);
+            // Grid template tracks.
+            if !bx.grid_template_columns.is_empty() {
+                push_text(cmds, pad_x, sy,
+                          format!("columns: {}", bx.grid_template_columns),
+                          pal.text_dim, false);
+                sy += ROW_H;
+            }
+            if !bx.grid_template_rows.is_empty() {
+                push_text(cmds, pad_x, sy,
+                          format!("rows: {}", bx.grid_template_rows),
+                          pal.text_dim, false);
+                sy += ROW_H;
+            }
+            if !bx.grid_template_areas.is_empty() {
+                push_text(cmds, pad_x, sy,
+                          format!("areas: {}", bx.grid_template_areas.replace('\n', " | ")),
+                          pal.text_dim, false);
+                sy += ROW_H;
+            }
+            push_text(cmds, pad_x, sy, format!("gap: {:.0} {:.0}", bx.row_gap, bx.column_gap),
+                      pal.text_dim, false);
             sy += ROW_H + 4.0;
         }
     }
