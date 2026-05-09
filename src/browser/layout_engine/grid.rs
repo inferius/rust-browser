@@ -1647,11 +1647,6 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         let m_t_pos = if auto_t_g { 0.0 } else { m_t };
         child.rect.x = inner_x + cx + m_l_pos + final_off_x;
         child.rect.y = inner_y + cy + m_t_pos + final_off_y;
-        if std::env::var("GRID_DEBUG").is_ok() {
-            let id = child.node.as_ref().and_then(|n| n.attr("id")).unwrap_or_default();
-            eprintln!("[grid] {} -> y={} (inner_y={} cy={} m_t={} off_y={})",
-                id, child.rect.y, inner_y, cy, m_t_pos, final_off_y);
-        }
         // CSS positioning offset - top/left/bottom/right se aplikuje JEN pri
         // position: relative. Sticky se vola apply_sticky() zvlast pri scroll.
         // Static + sticky pri layout-time = bez offset (sticky shift dela

@@ -1386,14 +1386,6 @@ fn collect_lines(items: &[FlexItem], container_main: f32, wrap: FlexWrap, gap: f
         }
     }
     if !current.is_empty() { lines.push(current); }
-    if std::env::var("FLEX_DEBUG").is_ok() {
-        eprintln!("[flex_lines] container_main={} gap={} items={} -> {} lines",
-            container_main, gap, items.len(), lines.len());
-        for (li, l) in lines.iter().enumerate() {
-            let sum: f32 = l.iter().map(|&i| items[i].main_size).sum();
-            eprintln!("  line[{}] {} items, main_sum={}", li, l.len(), sum);
-        }
-    }
     lines
 }
 
