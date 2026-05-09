@@ -568,7 +568,18 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                     // Splitter drag: aktualizuj split_x v logical px.
                     if self.devtools.elements.dragging_split {
                         let viewport_w = self.viewport_w_logical();
-                        self.devtools.elements.split_x = (self.mouse_x - self.scroll_x).clamp(200.0, viewport_w - 220.0);
+                        let max_x = viewport_w - self.devtools.side_panel_w - 200.0;
+                        self.devtools.elements.split_x = (self.mouse_x - self.scroll_x).clamp(200.0, max_x);
+                        self.render();
+                        return;
+                    }
+                    // Side panel splitter drag.
+                    if self.devtools.elements.dragging_side_split {
+                        let viewport_w = self.viewport_w_logical();
+                        let mx = self.mouse_x - self.scroll_x;
+                        // mx = styles_end position; side_panel_w = win_w - mx.
+                        let new_w = (viewport_w - mx).clamp(180.0, viewport_w - 400.0);
+                        self.devtools.side_panel_w = new_w;
                         self.render();
                         return;
                     }
@@ -615,6 +626,10 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                     }
                     if self.devtools.elements.dragging_split {
                         self.devtools.elements.dragging_split = false;
+                        self.render();
+                    }
+                    if self.devtools.elements.dragging_side_split {
+                        self.devtools.elements.dragging_side_split = false;
                         self.render();
                     }
                     if self.devtools.elements.dragging_scrollbar.is_some() {
@@ -893,7 +908,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                                     self.devtools.side_panel_tab = t;
                                 }
                                 DevtoolsHit::SidePanelSplitterDrag => {
-                                    self.devtools.elements.dragging_split = true;
+                                    self.devtools.elements.dragging_side_split = true;
                                 }
                                 DevtoolsHit::SectionToggle(id) => {
                                     if self.devtools.collapsed_sections.contains(&id) {
@@ -3302,10 +3317,16 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
             // takze WebGL canvas neprekryje devtools/scrollbar/address bar/find.
             let overlay_split = display_list.len();
 
-            // Element highlight overlay (Chrome-like padding/margin viz) - vykresli
-            // VZDY pri Some(selected) bez ohledu na panel_open. Zachova selection
-            // visibility napric F12 toggle.
+            // Element highlight overlay (Chrome-like padding/margin viz) -
+            // jen kdyz panel_open (jinak overlay perzistuje pres zavreni).
             crate::browser::devtools_panel::paint_element_highlight(
+                &mut display_list,
+                &layout_root,
+                &self.devtools,
+                self.scroll_y,
+            );
+            // Inspector flex/grid overlays - per active OverlayDescriptor v state.
+            crate::browser::devtools_panel::paint_inspector_overlays(
                 &mut display_list,
                 &layout_root,
                 &self.devtools,

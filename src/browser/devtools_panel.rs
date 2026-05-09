@@ -358,18 +358,23 @@ fn paint_elements_tab(
     let body_y = content_y + search_h;
     let body_h = content_h - search_h;
 
-    // Default split: 70% pro elements pri prvnim render (split_x = 0).
-    let default_split = win_w * 0.7;
-    let split_x = if state.elements.split_x < 1.0 { default_split }
-                  else { state.elements.split_x.max(200.0).min(win_w - 220.0) };
+    // Three-column layout: tree | styles | side panel.
+    // split_x = tree | styles boundary; styles_end = win_w - side_panel_w.
+    let default_tree_split = (win_w - state.side_panel_w) * 0.45;
+    let tree_split = if state.elements.split_x < 1.0 { default_tree_split }
+                     else { state.elements.split_x.max(200.0).min(win_w - state.side_panel_w - 200.0) };
+    let side_panel_w = state.side_panel_w.clamp(180.0, win_w - 400.0);
+    let styles_end = win_w - side_panel_w;
 
     // Z-order:
     // 1. Tree bg (left)
-    // 2. Tree rows (clipped na split_x)
-    // 3. Styles bg + splitter (PRES rows pri prelivu)
+    // 2. Tree rows (clipped na tree_split)
+    // 3. Styles bg + splitter
     // 4. Styles content
+    // 5. Side panel bg + splitter
+    // 6. Side panel content
 
-    push_rect(cmds, 0.0, body_y, split_x, body_h, pal.bg_panel);
+    push_rect(cmds, 0.0, body_y, tree_split, body_h, pal.bg_panel);
 
     // Render rows visible v scroll window.
     let rows = &state.elements.rows;
@@ -381,32 +386,273 @@ fn paint_elements_tab(
     for (visual_idx, row_idx) in (start_row..rows.len().min(start_row + visible_rows)).enumerate() {
         let row = &rows[row_idx];
         let y = body_y + (visual_idx as f32) * ROW_H - (scroll_y % ROW_H);
-        // Skip partial rows pri okrajich - text by se rozlil pres body bounds
-        // (do toolbar nahore, do horizontal sb dole). push_text/push_rect
-        // nejsou clipped, takze full-row check je nutny.
         if y < body_y || y + ROW_H > body_y + body_h { continue; }
-        paint_element_row(cmds, row, state, pal, split_x - SCROLLBAR_W - 4.0, y, mouse_x, mouse_y);
+        paint_element_row(cmds, row, state, pal, tree_split - SCROLLBAR_W - 4.0, y, mouse_x, mouse_y);
     }
 
-    // Scrollbar pro tree (vertikalni).
     if total_h > body_h {
-        paint_vertical_scrollbar(cmds, pal, split_x - SCROLLBAR_W, body_y,
+        paint_vertical_scrollbar(cmds, pal, tree_split - SCROLLBAR_W, body_y,
                                   body_h, total_h, scroll_y);
     }
 
-    // Styles bg + splitter PRES rows (clip via overdraw).
-    push_rect(cmds, split_x, body_y, win_w - split_x, body_h, pal.bg_panel_alt);
-    push_rect(cmds, split_x, body_y, 2.0, body_h, pal.border_strong);
+    // Styles pane (middle).
+    push_rect(cmds, tree_split, body_y, styles_end - tree_split, body_h, pal.bg_panel_alt);
+    push_rect(cmds, tree_split, body_y, 2.0, body_h, pal.border_strong);
 
-    // Right pane: matched styles + computed styles.
     if let Some(sel_id) = state.elements.selected {
         if let Some(bx) = find_layout_box(layout_root, sel_id) {
-            paint_styles_pane(cmds, bx, state, pal, split_x + 2.0, body_y, win_w - split_x - 2.0, body_h);
+            paint_styles_pane(cmds, bx, state, pal, tree_split + 2.0, body_y, styles_end - tree_split - 2.0, body_h);
         }
     } else {
-        push_text(cmds, split_x + 12.0, body_y + 12.0,
-                  "Select an element to see styles".to_string(),
+        push_text(cmds, tree_split + 12.0, body_y + 12.0,
+                  "Vyberte element pro zobrazeni stylu".to_string(),
                   pal.text_dim, false);
+    }
+
+    // Side panel (right column).
+    push_rect(cmds, styles_end, body_y, side_panel_w, body_h, pal.bg_panel);
+    push_rect(cmds, styles_end, body_y, 2.0, body_h, pal.border_strong);
+    paint_side_panel(cmds, layout_root, state, pal, styles_end + 2.0, body_y, side_panel_w - 2.0, body_h, mouse_x, mouse_y);
+}
+
+// ─── Side panel (Layout/Computed/Animations/Fonts/...) ──────────────────
+
+fn paint_side_panel(
+    cmds: &mut Vec<DisplayCommand>,
+    layout_root: &LayoutBox,
+    state: &DevToolsState,
+    pal: &Palette,
+    x: f32, y: f32, w: f32, h: f32,
+    mouse_x: f32, mouse_y: f32,
+) {
+    use crate::devtools::SidePanelTab;
+    // Sub-tab strip nahore.
+    let strip_h = TAB_H;
+    push_rect(cmds, x, y, w, strip_h, pal.bg_toolbar);
+    push_rect(cmds, x, y + strip_h - 1.0, w, 1.0, pal.border);
+    let visible = SidePanelTab::visible_default();
+    let mut tx = x + 8.0;
+    for t in visible {
+        let label = t.label();
+        let tw = (label.len() as f32) * FONT_W + 12.0;
+        let active = state.side_panel_tab == *t;
+        let hov = mouse_x >= tx && mouse_x < tx + tw && mouse_y >= y + 4.0 && mouse_y < y + strip_h - 4.0;
+        let bg = if active { pal.bg_tab_active }
+                 else if hov { pal.bg_row_hover }
+                 else { pal.bg_toolbar };
+        push_rect(cmds, tx, y + 4.0, tw, strip_h - 8.0, bg);
+        if active {
+            push_rect(cmds, tx, y + strip_h - 4.0, tw, 2.0, pal.accent);
+        }
+        let col = if active { pal.text } else { pal.text_dim };
+        push_text(cmds, tx + 6.0, y + 8.0, label.to_string(), col, false);
+        tx += tw + 2.0;
+    }
+    let body_y = y + strip_h;
+    let body_h = h - strip_h;
+    push_rect(cmds, x, body_y, w, body_h, pal.bg_panel);
+
+    // Body content per tab.
+    if let Some(sel_id) = state.elements.selected {
+        if let Some(bx) = find_layout_box(layout_root, sel_id) {
+            match state.side_panel_tab {
+                SidePanelTab::Layout => paint_side_layout(cmds, bx, state, pal, x, body_y, w, body_h),
+                SidePanelTab::Computed => paint_side_computed(cmds, state, pal, x, body_y, w, body_h),
+                SidePanelTab::Changes => paint_side_changes(cmds, state, pal, x, body_y, w, body_h),
+                SidePanelTab::Compatibility => paint_side_compat(cmds, state, pal, x, body_y, w, body_h),
+                SidePanelTab::Fonts => paint_side_fonts(cmds, bx, state, pal, x, body_y, w, body_h),
+                SidePanelTab::Animations => paint_side_animations(cmds, bx, state, pal, x, body_y, w, body_h),
+            }
+        }
+    } else {
+        push_text(cmds, x + 12.0, body_y + 12.0,
+                  "Vyberte element".to_string(), pal.text_dim, false);
+    }
+}
+
+/// Helper - vykresli collapsible section header. Vrati novy y (po headeru).
+fn paint_section_header(
+    cmds: &mut Vec<DisplayCommand>,
+    state: &DevToolsState,
+    pal: &Palette,
+    id: &SectionId,
+    title: &str,
+    x: f32, y: f32, w: f32,
+) -> f32 {
+    let collapsed = state.collapsed_sections.contains(id);
+    let icon = if collapsed { ICON_CHEVRON_RIGHT } else { ICON_EXPAND_MORE };
+    push_rect(cmds, x, y, w, ROW_H + 4.0, pal.bg_panel_alt);
+    push_icon(cmds, x + 4.0, y + (ROW_H - ICON_SIZE) * 0.5, icon, pal.text);
+    push_text(cmds, x + 22.0, y + 4.0, title.to_string(), pal.text, true);
+    y + ROW_H + 4.0
+}
+
+fn paint_side_layout(
+    cmds: &mut Vec<DisplayCommand>,
+    bx: &LayoutBox,
+    state: &DevToolsState,
+    pal: &Palette,
+    x: f32, y: f32, w: f32, _h: f32,
+) {
+    let mut sy = y + 4.0;
+    let pad_x = x + 12.0;
+
+    let node_id = bx.node.as_ref().map(|n| std::rc::Rc::as_ptr(n) as usize).unwrap_or(0);
+    use crate::devtools::OverlayKind;
+
+    // Flex container section.
+    if matches!(bx.display, crate::browser::layout::Display::Flex) {
+        sy = paint_section_header(cmds, state, pal, &SectionId::LayoutFlex,
+                                   "Flex container", x, sy, w);
+        if !state.collapsed_sections.contains(&SectionId::LayoutFlex) {
+            // Overlay toggle indicator: kruhove oznaceni + label.
+            let active = state.overlays.iter().any(|o| o.node_id == node_id && o.kind == OverlayKind::Flex);
+            let dot_col = if active { pal.accent } else { pal.text_dim };
+            push_rect(cmds, pad_x, sy + 4.0, 8.0, 8.0, dot_col);
+            push_text(cmds, pad_x + 14.0, sy,
+                      format!("Overlay: {}", if active { "ZAP" } else { "VYP" }),
+                      pal.text, false);
+            sy += ROW_H;
+            push_text(cmds, pad_x, sy, format!("flex-direction: {}", bx.flex_direction),
+                      pal.text_dim, false);
+            sy += ROW_H;
+            push_text(cmds, pad_x, sy, format!("flex-wrap: {}", bx.flex_wrap),
+                      pal.text_dim, false);
+            sy += ROW_H;
+            push_text(cmds, pad_x, sy, format!("gap: {:.0} {:.0}", bx.row_gap, bx.column_gap),
+                      pal.text_dim, false);
+            sy += ROW_H + 4.0;
+        }
+    }
+
+    // Grid container section.
+    if matches!(bx.display, crate::browser::layout::Display::Grid) {
+        sy = paint_section_header(cmds, state, pal, &SectionId::LayoutGrid,
+                                   "Grid container", x, sy, w);
+        if !state.collapsed_sections.contains(&SectionId::LayoutGrid) {
+            let active = state.overlays.iter().any(|o| o.node_id == node_id && o.kind == OverlayKind::Grid);
+            let dot_col = if active { pal.accent } else { pal.text_dim };
+            push_rect(cmds, pad_x, sy + 4.0, 8.0, 8.0, dot_col);
+            push_text(cmds, pad_x + 14.0, sy,
+                      format!("Overlay: {}", if active { "ZAP" } else { "VYP" }),
+                      pal.text, false);
+            sy += ROW_H;
+            push_text(cmds, pad_x, sy, "Grid layout active".to_string(), pal.text_dim, false);
+            sy += ROW_H + 4.0;
+        }
+    }
+
+    // Box model section.
+    sy = paint_section_header(cmds, state, pal, &SectionId::LayoutBoxModel,
+                               "Model boxu", x, sy, w);
+    if !state.collapsed_sections.contains(&SectionId::LayoutBoxModel) {
+        let m_t = bx.margin_top.unwrap_or(bx.margin);
+        let m_r = bx.margin_right.unwrap_or(bx.margin);
+        let m_b = bx.margin_bottom.unwrap_or(bx.margin);
+        let m_l = bx.margin_left.unwrap_or(bx.margin);
+        let p_t = bx.padding_top.unwrap_or(bx.padding);
+        let p_r = bx.padding_right.unwrap_or(bx.padding);
+        let p_b = bx.padding_bottom.unwrap_or(bx.padding);
+        let p_l = bx.padding_left.unwrap_or(bx.padding);
+        push_text(cmds, pad_x, sy, format!("margin: {:.0} {:.0} {:.0} {:.0}", m_t, m_r, m_b, m_l), pal.text, false);
+        sy += ROW_H;
+        push_text(cmds, pad_x, sy, format!("border: {:.0}", bx.border_width), pal.text, false);
+        sy += ROW_H;
+        push_text(cmds, pad_x, sy, format!("padding: {:.0} {:.0} {:.0} {:.0}", p_t, p_r, p_b, p_l), pal.text, false);
+        sy += ROW_H;
+        push_text(cmds, pad_x, sy,
+                  format!("content: {:.0} x {:.0}", bx.rect.width, bx.rect.height),
+                  pal.text, false);
+        sy += ROW_H + 4.0;
+    }
+
+    // Box properties section.
+    sy = paint_section_header(cmds, state, pal, &SectionId::LayoutBoxProps,
+                               "Vlastnosti box modelu", x, sy, w);
+    if !state.collapsed_sections.contains(&SectionId::LayoutBoxProps) {
+        push_text(cmds, pad_x, sy, format!("display: {:?}", bx.display), pal.text, false);
+        sy += ROW_H;
+        push_text(cmds, pad_x, sy, format!("position: {:?}", bx.position), pal.text, false);
+        sy += ROW_H;
+        push_text(cmds, pad_x, sy, format!("line-height: {:.2}", bx.line_height), pal.text, false);
+    }
+}
+
+fn paint_side_computed(
+    cmds: &mut Vec<DisplayCommand>,
+    state: &DevToolsState,
+    pal: &Palette,
+    x: f32, y: f32, _w: f32, h: f32,
+) {
+    let scroll = state.styles.scroll_y;
+    let mut sy = y + 8.0 - scroll;
+    let max_y = y + h;
+    let pad_x = x + 12.0;
+    let filter = state.styles.filter.to_lowercase();
+    for (k, v) in &state.styles.computed {
+        if sy >= max_y { return; }
+        if !filter.is_empty() && !k.contains(&filter) { continue; }
+        if sy + ROW_H >= y {
+            push_text(cmds, pad_x, sy, format!("{}:", k), pal.syn_property, false);
+            push_text(cmds, pad_x + 140.0, sy, v.clone(), pal.text, false);
+        }
+        sy += ROW_H;
+    }
+}
+
+fn paint_side_changes(
+    cmds: &mut Vec<DisplayCommand>,
+    _state: &DevToolsState,
+    pal: &Palette,
+    x: f32, y: f32, _w: f32, _h: f32,
+) {
+    push_text(cmds, x + 12.0, y + 12.0,
+              "Zmeny CSS - zatim prazdne".to_string(), pal.text_dim, true);
+}
+
+fn paint_side_compat(
+    cmds: &mut Vec<DisplayCommand>,
+    _state: &DevToolsState,
+    pal: &Palette,
+    x: f32, y: f32, _w: f32, _h: f32,
+) {
+    push_text(cmds, x + 12.0, y + 12.0,
+              "Kompatibilita - browser support per prop".to_string(), pal.text_dim, true);
+}
+
+fn paint_side_fonts(
+    cmds: &mut Vec<DisplayCommand>,
+    bx: &LayoutBox,
+    state: &DevToolsState,
+    pal: &Palette,
+    x: f32, y: f32, w: f32, _h: f32,
+) {
+    let mut sy = y + 4.0;
+    let pad_x = x + 12.0;
+    sy = paint_section_header(cmds, state, pal, &SectionId::FontsUsed,
+                               "Pouzite font v elementu", x, sy, w);
+    if !state.collapsed_sections.contains(&SectionId::FontsUsed) {
+        let family = if bx.font_family.is_empty() { "default".to_string() } else { bx.font_family.clone() };
+        push_text(cmds, pad_x, sy, family, pal.text, false);
+        sy += ROW_H;
+        push_text(cmds, pad_x, sy, format!("{}px {}", bx.font_size as i32,
+                  if bx.bold { "bold" } else { "normal" }), pal.text_dim, false);
+    }
+}
+
+fn paint_side_animations(
+    cmds: &mut Vec<DisplayCommand>,
+    _bx: &LayoutBox,
+    state: &DevToolsState,
+    pal: &Palette,
+    x: f32, y: f32, w: f32, _h: f32,
+) {
+    let mut sy = y + 4.0;
+    let pad_x = x + 12.0;
+    sy = paint_section_header(cmds, state, pal, &SectionId::AnimationsList,
+                               "Animace na elementu", x, sy, w);
+    if !state.collapsed_sections.contains(&SectionId::AnimationsList) {
+        push_text(cmds, pad_x, sy, "Zadne aktivni animace".to_string(), pal.text_dim, true);
     }
 }
 
@@ -1453,6 +1699,123 @@ fn paint_context_menu(
 /// Vykresli highlight pres vybrany / hover element (Chrome-like content/padding/
 /// border/margin barevne pasky + label s rozmery). Volana z render flow VZDY,
 /// nezavisle na panel_open. Rect je v render-space (po scroll_y odecet).
+/// Page-side overlay paint: flex/grid container visualization (Firefox-style).
+/// Pro kazdy aktivni overlay v state.overlays vykresli na strance:
+/// - Flex: dashed border container, solid border per item, gap stripes,
+///   free space crosshatch
+/// - Grid: line numbers, area names (TODO), infinite extension
+pub fn paint_inspector_overlays(
+    cmds: &mut Vec<DisplayCommand>,
+    layout_root: &LayoutBox,
+    state: &DevToolsState,
+    scroll_y: f32,
+) {
+    if !state.panel_open { return; }
+    use crate::devtools::{OverlayKind};
+    for ov in &state.overlays {
+        let Some(bx) = find_layout_box(layout_root, ov.node_id) else { continue };
+        match ov.kind {
+            OverlayKind::Flex => paint_flex_overlay(cmds, bx, scroll_y),
+            OverlayKind::Grid => paint_grid_overlay(cmds, bx, scroll_y),
+        }
+    }
+}
+
+fn paint_flex_overlay(cmds: &mut Vec<DisplayCommand>, bx: &LayoutBox, scroll_y: f32) {
+    let purple: [u8; 4] = [173, 127, 232, 255];
+    let purple_dim: [u8; 4] = [173, 127, 232, 80];
+    let r = &bx.rect;
+    let cx = r.x;
+    let cy = r.y - scroll_y;
+    let cw = r.width;
+    let ch = r.height;
+    // Container dashed border.
+    push_dashed_border(cmds, cx, cy, cw, ch, 2.0, purple);
+    // Per-item solid border + gap stripes.
+    let row_dir = !bx.flex_direction.contains("column");
+    let mut prev_end: Option<f32> = None;
+    for child in &bx.children {
+        let cr = &child.rect;
+        let ix = cr.x;
+        let iy = cr.y - scroll_y;
+        let iw = cr.width;
+        let ih = cr.height;
+        // Solid 1px border.
+        push_rect(cmds, ix, iy, iw, 1.0, purple);
+        push_rect(cmds, ix, iy + ih - 1.0, iw, 1.0, purple);
+        push_rect(cmds, ix, iy, 1.0, ih, purple);
+        push_rect(cmds, ix + iw - 1.0, iy, 1.0, ih, purple);
+        // Gap stripe pred itemom.
+        if let Some(pe) = prev_end {
+            if row_dir {
+                let gap_w = ix - pe;
+                if gap_w > 0.5 {
+                    push_rect(cmds, pe, iy, gap_w, ih, purple_dim);
+                }
+            } else {
+                let gap_h = iy - pe;
+                if gap_h > 0.5 {
+                    push_rect(cmds, ix, pe, iw, gap_h, purple_dim);
+                }
+            }
+        }
+        prev_end = Some(if row_dir { ix + iw } else { iy + ih });
+    }
+    // Free space (zbytek po itemech v container) - crosshatch v koncove zone.
+    if let Some(end) = prev_end {
+        if row_dir {
+            let free_w = (cx + cw) - end;
+            if free_w > 1.0 {
+                push_rect(cmds, end, cy, free_w, ch, [173, 127, 232, 30]);
+            }
+        } else {
+            let free_h = (cy + ch) - end;
+            if free_h > 1.0 {
+                push_rect(cmds, cx, end, cw, free_h, [173, 127, 232, 30]);
+            }
+        }
+    }
+}
+
+fn paint_grid_overlay(cmds: &mut Vec<DisplayCommand>, bx: &LayoutBox, scroll_y: f32) {
+    let cyan: [u8; 4] = [100, 200, 255, 255];
+    let r = &bx.rect;
+    let cx = r.x;
+    let cy = r.y - scroll_y;
+    let cw = r.width;
+    let ch = r.height;
+    push_dashed_border(cmds, cx, cy, cw, ch, 2.0, cyan);
+    // Per-item border (cells).
+    for child in &bx.children {
+        let cr = &child.rect;
+        push_rect(cmds, cr.x, cr.y - scroll_y, cr.width, 1.0, cyan);
+        push_rect(cmds, cr.x, cr.y - scroll_y + cr.height - 1.0, cr.width, 1.0, cyan);
+        push_rect(cmds, cr.x, cr.y - scroll_y, 1.0, cr.height, cyan);
+        push_rect(cmds, cr.x + cr.width - 1.0, cr.y - scroll_y, 1.0, cr.height, cyan);
+    }
+}
+
+/// Dashed border 1px - vykresli pres push_rect mensi segments.
+fn push_dashed_border(cmds: &mut Vec<DisplayCommand>, x: f32, y: f32, w: f32, h: f32, dash: f32, color: [u8; 4]) {
+    let gap = dash;
+    // Top + bottom.
+    let mut dx = 0.0;
+    while dx < w {
+        let seg = dash.min(w - dx);
+        push_rect(cmds, x + dx, y, seg, 1.0, color);
+        push_rect(cmds, x + dx, y + h - 1.0, seg, 1.0, color);
+        dx += dash + gap;
+    }
+    // Left + right.
+    let mut dy = 0.0;
+    while dy < h {
+        let seg = dash.min(h - dy);
+        push_rect(cmds, x, y + dy, 1.0, seg, color);
+        push_rect(cmds, x + w - 1.0, y + dy, 1.0, seg, color);
+        dy += dash + gap;
+    }
+}
+
 pub fn paint_element_highlight(
     cmds: &mut Vec<DisplayCommand>,
     layout_root: &LayoutBox,
@@ -1758,20 +2121,72 @@ fn hit_test_elements(
     }
     let body_y = content_y + search_h;
     let body_h = content_h - search_h;
-    let default_split = win_w * 0.7;
-    let split_x = if state.elements.split_x < 1.0 { default_split }
-                  else { state.elements.split_x.max(200.0).min(win_w - 220.0) };
+    // Three-column geometry.
+    let default_tree_split = (win_w - state.side_panel_w) * 0.45;
+    let tree_split = if state.elements.split_x < 1.0 { default_tree_split }
+                     else { state.elements.split_x.max(200.0).min(win_w - state.side_panel_w - 200.0) };
+    let side_panel_w = state.side_panel_w.clamp(180.0, win_w - 400.0);
+    let styles_end = win_w - side_panel_w;
 
-    // Splitter zone (+/- SPLITTER_HIT_PX kolem split_x).
-    if (mouse_x - split_x).abs() < SPLITTER_HIT_PX && mouse_y >= body_y && mouse_y < body_y + body_h {
+    // Tree splitter zone.
+    if (mouse_x - tree_split).abs() < SPLITTER_HIT_PX && mouse_y >= body_y && mouse_y < body_y + body_h {
         return DevtoolsHit::SplitterDrag;
     }
+    // Side panel splitter zone.
+    if (mouse_x - styles_end).abs() < SPLITTER_HIT_PX && mouse_y >= body_y && mouse_y < body_y + body_h {
+        return DevtoolsHit::SidePanelSplitterDrag;
+    }
 
-    if mouse_x >= split_x {
-        // Pravy pane - check styles scrollbar thumb.
+    // Side panel area (right column).
+    if mouse_x >= styles_end {
+        // Sub-tab strip nahore.
+        if mouse_y < body_y + TAB_H {
+            use crate::devtools::SidePanelTab;
+            let mut tx = styles_end + 8.0;
+            for t in SidePanelTab::visible_default() {
+                let label = t.label();
+                let tw = (label.len() as f32) * FONT_W + 12.0;
+                if mouse_x >= tx && mouse_x < tx + tw {
+                    return DevtoolsHit::SidePanelTabClick(*t);
+                }
+                tx += tw + 2.0;
+            }
+        }
+        // Section header hit-test (toggle collapse). Headers podle sub-tabu.
+        let body_y_inner = body_y + TAB_H;
+        if mouse_y >= body_y_inner {
+            // Per-sub-tab section list (poradi musi pasovat na paint).
+            let sections: &[SectionId] = match state.side_panel_tab {
+                crate::devtools::SidePanelTab::Layout => &[
+                    SectionId::LayoutFlex, SectionId::LayoutGrid,
+                    SectionId::LayoutBoxModel, SectionId::LayoutBoxProps,
+                ],
+                crate::devtools::SidePanelTab::Fonts => &[SectionId::FontsUsed, SectionId::FontsFaces],
+                crate::devtools::SidePanelTab::Animations => &[SectionId::AnimationsList],
+                _ => &[],
+            };
+            let mut sy = body_y_inner + 4.0;
+            for id in sections {
+                let header_h = ROW_H + 4.0;
+                if mouse_x >= styles_end && mouse_x < styles_end + side_panel_w
+                   && mouse_y >= sy && mouse_y < sy + header_h {
+                    return DevtoolsHit::SectionToggle(id.clone());
+                }
+                sy += header_h;
+                // Aproximace - ne-presne ale dostatecne pro top-level sections.
+                if !state.collapsed_sections.contains(id) {
+                    sy += ROW_H * 4.0; // typicke obsah
+                }
+            }
+        }
+        return DevtoolsHit::PanelArea;
+    }
+
+    // Styles pane area.
+    if mouse_x >= tree_split {
         let total_h = state.styles.computed.len() as f32 * ROW_H * 4.0;
         if total_h > body_h {
-            let sb_x = win_w - SCROLLBAR_W;
+            let sb_x = styles_end - SCROLLBAR_W;
             if mouse_x >= sb_x && mouse_x < sb_x + SCROLLBAR_W
                && mouse_y >= body_y && mouse_y < body_y + body_h {
                 return DevtoolsHit::ScrollbarThumb(crate::devtools::ScrollTarget::StylesPane);
@@ -1779,6 +2194,7 @@ fn hit_test_elements(
         }
         return DevtoolsHit::PanelArea;
     }
+    let split_x = tree_split;
 
     // Levy pane - check tree scrollbar thumb.
     let rows = &state.elements.rows;
