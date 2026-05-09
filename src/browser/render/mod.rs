@@ -478,6 +478,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         status_hover_url: Option<String>,
         /// Tooltip nad shell tab chip (full title) - (text, x, y screen logical).
         shell_tab_tooltip: Option<(String, f32, f32)>,
+        /// F1 toggle: keyboard shortcuts cheat sheet overlay.
+        shortcuts_overlay_open: bool,
         /// Browser shell mode - kdyz true, vykresli se chrome bar (tabs +
         /// address bar + back/forward) + page area zacne pod chromem.
         /// Toggle pres CLI flag --shell nebo Ctrl+Shift+B.
@@ -2110,6 +2112,10 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         }
                     }
                     match key_event.logical_key {
+                        Key::Named(NamedKey::F1) => {
+                            self.shortcuts_overlay_open = !self.shortcuts_overlay_open;
+                            if let Some(w) = &self.window { w.request_redraw(); }
+                        }
                         Key::Named(NamedKey::F12) => {
                             self.devtools.panel_open = !self.devtools.panel_open;
                             if self.devtools.panel_open {
@@ -2219,8 +2225,12 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
 
     impl App {
         fn handle_escape_close_popups(&mut self) -> bool {
-            // Close prioritou: color picker > settings > class manager >
-            // tab overflow > addr bar > find > selection.
+            // Close prioritou: shortcuts overlay > color picker > settings >
+            // class manager > tab overflow > addr bar > find > selection.
+            if self.shortcuts_overlay_open {
+                self.shortcuts_overlay_open = false;
+                return true;
+            }
             if self.devtools.color_picker.is_some() {
                 self.devtools.color_picker = None;
                 return true;
@@ -4900,6 +4910,76 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         strikethrough: false, underline: false,
                     });
                 }
+                // F1 shortcuts overlay - modal pres celou viewport.
+                if self.shortcuts_overlay_open {
+                    let mw = 480.0_f32.min(win_w_logical - 40.0);
+                    let mh = 480.0_f32.min(win_h_logical - 60.0);
+                    let mx = (win_w_logical - mw) / 2.0;
+                    let my = (win_h_logical - mh) / 2.0;
+                    // Backdrop
+                    display_list.push(DisplayCommand::Rect {
+                        x: 0.0, y: 0.0, w: win_w_logical, h: win_h_logical,
+                        color: [0, 0, 0, 160], radius: 0.0,
+                    });
+                    // Modal panel
+                    display_list.push(DisplayCommand::Rect {
+                        x: mx, y: my, w: mw, h: mh,
+                        color: [27, 27, 35, 250], radius: 8.0,
+                    });
+                    display_list.push(DisplayCommand::Text {
+                        x: mx + 20.0, y: my + 16.0, content: "Klavesove zkratky".to_string(),
+                        color: [251, 251, 254, 255],
+                        font_size: 18.0, bold: true, italic: false,
+                        font_family: "Inter".into(),
+                        strikethrough: false, underline: false,
+                    });
+                    let entries: &[(&str, &str)] = &[
+                        ("Ctrl+T",        "Nova zalozka"),
+                        ("Ctrl+W",        "Zavrit zalozku"),
+                        ("Ctrl+Shift+T",  "Obnovit zavrenou zalozku"),
+                        ("Ctrl+N",        "Nove okno"),
+                        ("Ctrl+Tab",      "Dalsi zalozka"),
+                        ("Ctrl+1..9",     "Skok na zalozku N"),
+                        ("Ctrl+L",        "Address bar"),
+                        ("Ctrl+F",        "Hledat na strance"),
+                        ("Ctrl+B",        "Zalozky"),
+                        ("Ctrl+H",        "Historie"),
+                        ("Ctrl+D",        "Pridat zalozku"),
+                        ("Ctrl+P",        "Tisk do PDF"),
+                        ("Ctrl+0/+/-",    "Zoom reset/in/out"),
+                        ("Ctrl+A",        "Vybrat vse"),
+                        ("Ctrl+C",        "Kopirovat"),
+                        ("F1",            "Tato napoveda"),
+                        ("F12",           "DevTools panel"),
+                        ("Esc",           "Zavrit overlay/popup"),
+                    ];
+                    for (i, (k, v)) in entries.iter().enumerate() {
+                        let row_y = my + 48.0 + (i as f32) * 22.0;
+                        if row_y + 16.0 > my + mh - 16.0 { break; }
+                        display_list.push(DisplayCommand::Text {
+                            x: mx + 20.0, y: row_y, content: k.to_string(),
+                            color: [254, 191, 84, 255],
+                            font_size: 13.0, bold: true, italic: false,
+                            font_family: "CamingoMono".into(),
+                            strikethrough: false, underline: false,
+                        });
+                        display_list.push(DisplayCommand::Text {
+                            x: mx + 160.0, y: row_y, content: v.to_string(),
+                            color: [191, 191, 201, 255],
+                            font_size: 13.0, bold: false, italic: false,
+                            font_family: "Inter".into(),
+                            strikethrough: false, underline: false,
+                        });
+                    }
+                    display_list.push(DisplayCommand::Text {
+                        x: mx + 20.0, y: my + mh - 28.0,
+                        content: "Esc zavre".to_string(),
+                        color: [109, 109, 124, 255],
+                        font_size: 11.0, bold: false, italic: true,
+                        font_family: "Inter".into(),
+                        strikethrough: false, underline: false,
+                    });
+                }
                 // Shell tab tooltip - kdyz mouse nad chip s truncated title.
                 if let Some((txt, x, y)) = &self.shell_tab_tooltip {
                     let tw = (txt.chars().count() as f32) * 7.0 + 16.0;
@@ -5340,6 +5420,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         tab_drag_x_start: 0.0,
         status_hover_url: None,
         shell_tab_tooltip: None,
+        shortcuts_overlay_open: false,
         shell_mode,
         shell_chrome_h: 64.0,
         tabs: {
