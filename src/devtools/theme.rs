@@ -27,9 +27,10 @@ pub struct ThemeSelection {
 
 impl Default for ThemeSelection {
     fn default() -> Self {
-        // Try load from config file. Pri chybe fallback Auto+Chrome.
+        // Default: Firefox dark (po phase 6 redesignu). Try load from config file
+        // s fallback na Firefox+Auto.
         load_persisted().unwrap_or(ThemeSelection {
-            mode: ThemeMode::Auto, flavor: ThemeFlavor::Chrome,
+            mode: ThemeMode::Auto, flavor: ThemeFlavor::Firefox,
         })
     }
 }

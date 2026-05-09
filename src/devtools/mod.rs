@@ -16,6 +16,10 @@ pub mod focus;
 pub mod debug_runner;
 
 use std::collections::HashSet;
+
+#[cfg(test)]
+#[path = "tests/firefox_devtools_tests.rs"]
+mod firefox_tests;
 use theme::{ThemeSelection, Palette, resolve_palette};
 use model::elements::ElementRow;
 use model::console::{ConsoleInput, LogEntry, AutocompleteState};

@@ -843,6 +843,131 @@ fn paint_edit_row(
     }
 }
 
+/// Vykresli jeden CSS declaration radek se swatchem barvy a chip-rendering var().
+/// Format: `  prop: value;` kde value muze obsahovat var(--name) -> chip a/nebo
+/// color literal -> swatch.
+fn paint_decl_line(
+    cmds: &mut Vec<DisplayCommand>,
+    pal: &Palette,
+    x: f32, y: f32,
+    property: &str,
+    value: &str,
+    important: bool,
+    overridden: bool,
+) {
+    let mut cx = x;
+    push_text(cmds, cx, y, format!("  {}: ", property), pal.syn_property, false);
+    cx += dt_text_width(&format!("  {}: ", property));
+
+    // Color swatch detection - prefix value parsing.
+    if let Some(c) = parse_css_color(value.trim()) {
+        push_rect(cmds, cx, y + 3.0, 12.0, 12.0, c);
+        push_rect(cmds, cx, y + 3.0, 12.0, 1.0, pal.border);
+        push_rect(cmds, cx, y + 14.0, 12.0, 1.0, pal.border);
+        push_rect(cmds, cx, y + 3.0, 1.0, 12.0, pal.border);
+        push_rect(cmds, cx + 11.0, y + 3.0, 1.0, 12.0, pal.border);
+        cx += 16.0;
+    }
+
+    // Render value chunks: var(--x) chips + plain text.
+    let mut i = 0;
+    let bytes = value.as_bytes();
+    while i < bytes.len() {
+        if value[i..].starts_with("var(") {
+            let end = value[i+4..].find(')').map(|e| e + i + 4).unwrap_or(value.len());
+            let inner = &value[i+4..end];
+            // Var name = first arg before comma.
+            let name = inner.split(',').next().unwrap_or(inner).trim();
+            let chip_w = dt_text_width(name) + 14.0;
+            let txt_color = if overridden { pal.text_disabled } else { pal.text };
+            push_rect(cmds, cx, y + 2.0, chip_w, 14.0, pal.bg_button);
+            push_rect_border(cmds, cx, y + 2.0, chip_w, 14.0, pal.border);
+            push_text(cmds, cx + 4.0, y, name.to_string(), txt_color, false);
+            cx += chip_w + 2.0;
+            i = end + 1;
+        } else {
+            // Find next "var(" to break chunk.
+            let next_var = value[i..].find("var(").map(|n| n + i);
+            let chunk_end = next_var.unwrap_or(value.len());
+            let chunk = &value[i..chunk_end];
+            if !chunk.is_empty() {
+                let col = if overridden { pal.text_disabled } else { pal.text };
+                push_text(cmds, cx, y, chunk.to_string(), col, false);
+                cx += dt_text_width(chunk);
+            }
+            i = chunk_end;
+        }
+    }
+    if important {
+        push_text(cmds, cx, y, " !important".to_string(), pal.syn_keyword, false);
+        cx += dt_text_width(" !important");
+    }
+    push_text(cmds, cx, y, ";".to_string(), pal.text_dim, false);
+    if overridden {
+        // Strikethrough cary.
+        let line_w = cx - x;
+        push_rect(cmds, x, y + 8.0, line_w, 1.0, pal.text_disabled);
+    }
+}
+
+/// Test-exposed wrapper.
+#[cfg(test)]
+pub fn parse_css_color_for_test(s: &str) -> Option<[u8; 4]> {
+    parse_css_color(s)
+}
+
+/// Parse CSS color literal -> RGBA. Pokrita: #rgb, #rrggbb, #rrggbbaa,
+/// rgb()/rgba(), hsl()/hsla() (heuristic), nazvy ('red'/'blue'/...).
+fn parse_css_color(s: &str) -> Option<[u8; 4]> {
+    let s = s.trim();
+    if s.starts_with('#') {
+        let hex = &s[1..];
+        let parse2 = |p: &str| u8::from_str_radix(p, 16).ok();
+        match hex.len() {
+            3 => {
+                let r = parse2(&format!("{}{}", &hex[0..1], &hex[0..1]))?;
+                let g = parse2(&format!("{}{}", &hex[1..2], &hex[1..2]))?;
+                let b = parse2(&format!("{}{}", &hex[2..3], &hex[2..3]))?;
+                Some([r, g, b, 255])
+            }
+            6 => Some([parse2(&hex[0..2])?, parse2(&hex[2..4])?, parse2(&hex[4..6])?, 255]),
+            8 => Some([parse2(&hex[0..2])?, parse2(&hex[2..4])?, parse2(&hex[4..6])?, parse2(&hex[6..8])?]),
+            _ => None,
+        }
+    } else if s.starts_with("rgb(") || s.starts_with("rgba(") {
+        let open = s.find('(')?;
+        let close = s.find(')')?;
+        let parts: Vec<&str> = s[open+1..close].split(',').collect();
+        if parts.len() < 3 { return None; }
+        let r = parts[0].trim().parse::<f32>().ok()? as u8;
+        let g = parts[1].trim().parse::<f32>().ok()? as u8;
+        let b = parts[2].trim().parse::<f32>().ok()? as u8;
+        let a = parts.get(3).and_then(|p| p.trim().parse::<f32>().ok())
+            .map(|f| (f * 255.0) as u8).unwrap_or(255);
+        Some([r, g, b, a])
+    } else {
+        // Named colors - pokryte zakladni.
+        let named = match s.to_lowercase().as_str() {
+            "red" => [255, 0, 0, 255],
+            "green" => [0, 128, 0, 255],
+            "blue" => [0, 0, 255, 255],
+            "white" => [255, 255, 255, 255],
+            "black" => [0, 0, 0, 255],
+            "yellow" => [255, 255, 0, 255],
+            "cyan" => [0, 255, 255, 255],
+            "magenta" => [255, 0, 255, 255],
+            "gray" | "grey" => [128, 128, 128, 255],
+            "orange" => [255, 165, 0, 255],
+            "purple" => [128, 0, 128, 255],
+            "pink" => [255, 192, 203, 255],
+            "brown" => [165, 42, 42, 255],
+            "transparent" => [0, 0, 0, 0],
+            _ => return None,
+        };
+        Some(named)
+    }
+}
+
 fn paint_styles_pane(
     cmds: &mut Vec<DisplayCommand>,
     bx: &LayoutBox,
@@ -900,9 +1025,7 @@ fn paint_styles_pane(
             for d in &rule.declarations {
                 if sy >= max_y { return; }
                 if in_view(sy) {
-                    let line = format!("  {}: {}{};", d.property, d.value,
-                                       if d.important { " !important" } else { "" });
-                    push_text_underline(cmds, pad_x, sy, line, pal.text, d.overridden);
+                    paint_decl_line(cmds, pal, pad_x, sy, &d.property, &d.value, d.important, d.overridden);
                 }
                 sy += ROW_H;
             }
