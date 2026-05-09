@@ -80,6 +80,41 @@ impl Tab {
     }
 }
 
+/// Render about:about page - hub se seznamem vsech internich about: URLs.
+pub fn render_about_about() -> (String, String) {
+    let entries: &[(&str, &str)] = &[
+        ("about:newtab", "Nova zalozka s top-sites"),
+        ("about:history", "Historie navstev (Ctrl+H)"),
+        ("about:bookmarks", "Zalozky vc. groups (Ctrl+B)"),
+        ("about:config", "Konfigurace + profil"),
+    ];
+    let rows = entries.iter().map(|(url, desc)| {
+        format!("<li><a href=\"{}\">{}</a><br><small>{}</small></li>", url, url, desc)
+    }).collect::<Vec<_>>().join("\n");
+    let html = format!(r#"<!DOCTYPE html><html><head><title>O aplikaci</title></head>
+<body>
+<div class=cfg>
+<h1>O aplikaci - interni stranky</h1>
+<ul>{rows}</ul>
+<p class="info">Rust Web Engine - vlastni JS engine + browser. Spousti se pres CLI:
+<code>cargo run -- browser</code>.</p>
+</div>
+</body></html>"#, rows = rows);
+    let css = r#"
+body { font-family: 'Inter', sans-serif; background: #1a1a1f; color: #e8e6df; margin: 0; padding: 32px; }
+.cfg { max-width: 800px; margin: 0 auto; }
+h1 { color: #69a1ff; font-size: 32px; margin-bottom: 16px; }
+ul { list-style: none; padding: 0; }
+li { background: #2a2932; padding: 16px 20px; margin-bottom: 8px; border-radius: 6px; }
+li a { color: #69a1ff; text-decoration: none; font-weight: 600; font-family: 'CamingoMono', monospace; font-size: 16px; }
+li a:hover { text-decoration: underline; }
+li small { color: #a1a1ae; font-size: 13px; }
+.info { color: #a1a1ae; margin-top: 24px; }
+code { background: #2a2932; padding: 2px 8px; border-radius: 3px; color: #fbbf69; }
+"#;
+    (html, css.to_string())
+}
+
 /// Render about:newtab page s top-sites z history + bookmarks shortcuts.
 pub fn render_about_newtab() -> (String, String) {
     let history = crate::devtools::history::load_history();

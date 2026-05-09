@@ -868,6 +868,19 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         let viewport_w = self.viewport_w_logical();
                         let mx = self.mouse_x;
                         let my_screen = self.mouse_y - self.scroll_y;
+                        // Reading mode badge click - toggle.
+                        if self.reading_mode_on && my_screen < 28.0 {
+                            let bx = viewport_w - 200.0;
+                            if mx >= bx && mx <= bx + 100.0 && my_screen >= 4.0 && my_screen <= 24.0 {
+                                self.reading_mode_on = false;
+                                self.cached_stylesheets = None;
+                                self.cached_style_map = None;
+                                self.cached_pseudo_map = None;
+                                self.cached_layout_root = None;
+                                self.render();
+                                return;
+                            }
+                        }
                         if my_screen < self.shell_chrome_h {
                             let hit = hit_chrome(viewport_w, self.shell_chrome_h, &self.tabs, mx, my_screen);
                             match hit {
@@ -4055,6 +4068,15 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     self.html = html;
                     self.css = css;
                     self.base_url = Some("about:bookmarks".to_string());
+                    self.cached_layout_root = None;
+                    self.cached_stylesheets = None;
+                    true
+                }
+                "about:about" => {
+                    let (html, css) = crate::browser::render::tabs::render_about_about();
+                    self.html = html;
+                    self.css = css;
+                    self.base_url = Some("about:about".to_string());
                     self.cached_layout_root = None;
                     self.cached_stylesheets = None;
                     true
