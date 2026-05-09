@@ -2327,11 +2327,15 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     font_family: "Inter".into(),
                     strikethrough: false, underline: false,
                 });
-                // Close X.
+                // Close X (s hover hint - kruh kolem).
+                list.push(DisplayCommand::Rect {
+                    x: tx + tab_w - 18.0, y: 6.0, w: 16.0, h: 16.0,
+                    color: [56, 56, 65, 200], radius: 8.0,
+                });
                 list.push(DisplayCommand::Text {
-                    x: tx + tab_w - 16.0, y: 8.0, content: "x".to_string(),
-                    color: [191, 191, 201, 255],
-                    font_size: 12.0, bold: false, italic: false,
+                    x: tx + tab_w - 14.0, y: 8.0, content: "x".to_string(),
+                    color: [220, 220, 230, 255],
+                    font_size: 12.0, bold: true, italic: false,
                     font_family: "Inter".into(),
                     strikethrough: false, underline: false,
                 });
