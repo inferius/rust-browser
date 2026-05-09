@@ -603,11 +603,20 @@ fn paint_styles_pane(
         push_text_bold(cmds, pad_x, sy, "Box".to_string(), pal.text, false);
     }
     sy += ROW_H + 2.0;
+    // Asymmetric margin/padding: top/right/bottom/left wins, jinak shorthand.
+    let p_t = bx.padding_top.unwrap_or(bx.padding);
+    let p_r = bx.padding_right.unwrap_or(bx.padding);
+    let p_b = bx.padding_bottom.unwrap_or(bx.padding);
+    let p_l = bx.padding_left.unwrap_or(bx.padding);
+    let m_t = bx.margin_top.unwrap_or(bx.margin);
+    let m_r = bx.margin_right.unwrap_or(bx.margin);
+    let m_b = bx.margin_bottom.unwrap_or(bx.margin);
+    let m_l = bx.margin_left.unwrap_or(bx.margin);
     let box_info = vec![
         ("rect", format!("x={:.0} y={:.0} w={:.0} h={:.0}",
             bx.rect.x, bx.rect.y, bx.rect.width, bx.rect.height)),
-        ("padding", format!("{:.0}", bx.padding)),
-        ("margin", format!("{:.0}", bx.margin)),
+        ("padding", format!("{:.0} {:.0} {:.0} {:.0}", p_t, p_r, p_b, p_l)),
+        ("margin", format!("{:.0} {:.0} {:.0} {:.0}", m_t, m_r, m_b, m_l)),
         ("border-width", format!("{:.0}", bx.border_width)),
     ];
     for (k, v) in &box_info {
@@ -1367,9 +1376,16 @@ pub fn paint_element_highlight(
     let Some(bx) = find_layout_box(layout_root, node_id) else { return };
 
     // Rect obsahu = bx.rect (uz po margin/padding pripravne v build_box).
+    // Asymmetric margin/padding: top/right/bottom/left wins, jinak shorthand.
     let r = &bx.rect;
-    let p = bx.padding;
-    let m = bx.margin;
+    let p_t = bx.padding_top.unwrap_or(bx.padding);
+    let p_r = bx.padding_right.unwrap_or(bx.padding);
+    let p_b = bx.padding_bottom.unwrap_or(bx.padding);
+    let p_l = bx.padding_left.unwrap_or(bx.padding);
+    let m_t = bx.margin_top.unwrap_or(bx.margin);
+    let m_r = bx.margin_right.unwrap_or(bx.margin);
+    let m_b = bx.margin_bottom.unwrap_or(bx.margin);
+    let m_l = bx.margin_left.unwrap_or(bx.margin);
     let bw = bx.border_width.max(0.0);
 
     let content_x = r.x;
@@ -1381,25 +1397,25 @@ pub fn paint_element_highlight(
     // Border box = +border. Margin box = +margin.
     // Vykresli je ako 4 vrstvy (margin -> border -> padding -> content), kazda jen
     // ramecek (vnejsi minus vnitrni).
-    // Margin rect (oranzova).
-    let mx = content_x - p - bw - m;
-    let my = content_y - p - bw - m;
-    let mw = content_w + 2.0 * (p + bw + m);
-    let mh = content_h + 2.0 * (p + bw + m);
+    // Margin rect (oranzova) - asymmetric per side.
+    let mx = content_x - p_l - bw - m_l;
+    let my = content_y - p_t - bw - m_t;
+    let mw = content_w + p_l + p_r + 2.0 * bw + m_l + m_r;
+    let mh = content_h + p_t + p_b + 2.0 * bw + m_t + m_b;
     push_rect(cmds, mx, my, mw, mh, pal.overlay_margin);
 
     // Border rect (zluta).
-    let bx_x = content_x - p - bw;
-    let by_y = content_y - p - bw;
-    let bw_w = content_w + 2.0 * (p + bw);
-    let bh_h = content_h + 2.0 * (p + bw);
+    let bx_x = content_x - p_l - bw;
+    let by_y = content_y - p_t - bw;
+    let bw_w = content_w + p_l + p_r + 2.0 * bw;
+    let bh_h = content_h + p_t + p_b + 2.0 * bw;
     push_rect(cmds, bx_x, by_y, bw_w, bh_h, pal.overlay_border);
 
-    // Padding rect (zelena).
-    let px = content_x - p;
-    let py = content_y - p;
-    let pw = content_w + 2.0 * p;
-    let ph = content_h + 2.0 * p;
+    // Padding rect (zelena) - asymmetric per side.
+    let px = content_x - p_l;
+    let py = content_y - p_t;
+    let pw = content_w + p_l + p_r;
+    let ph = content_h + p_t + p_b;
     push_rect(cmds, px, py, pw, ph, pal.overlay_padding);
 
     // Content rect (modra).

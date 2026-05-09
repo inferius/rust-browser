@@ -97,7 +97,11 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: 
                 let c = normalize_color(color);
                 let mut pen_x = *x;
                 let mut pen_y = *y + *font_size;
-                let line_advance = *font_size * 1.4;
+                // Line advance match layout flush_inline (1.2 default) -
+                // jinak \n wrap render advancuje vic nez layout-allocated
+                // height -> text leze pres rect.height + nadbytecny visual
+                // gap mezi radky.
+                let line_advance = *font_size * 1.2;
                 // Italic: pri dostupne italic font variante real italic raster
                 // (skew = 0). Pri fallback fake skew transform.
                 let has_real_italic = *italic && (
@@ -1591,56 +1595,74 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
             });
         }
 
-        /// Walk layout tree, najdi text boxes intersect rect, concat textu.
-        /// Char-level: per box najde substring kde char_x_offset spada do
-        /// horizontalniho intersect range. Vertikalne celym box (jednoradkove
-        /// inline boxy = OK, multi-line by potreboval line break detect).
+        /// Flow-based text extract: anchor->current v reading order, pres
+        /// wrapped lines. First line: chars od start.x; middle lines: full
+        /// line; last line: chars do end.x.
         fn compute_selection_text(&self, a: (f32, f32), c: (f32, f32)) -> String {
             let Some(layout) = &self.layout_root else { return String::new() };
-            let x0 = a.0.min(c.0);
-            let y0 = a.1.min(c.1);
-            let x1 = a.0.max(c.0);
-            let y1 = a.1.max(c.1);
-            if (x1 - x0).abs() < 1.0 && (y1 - y0).abs() < 1.0 { return String::new(); }
+            let (start, end) = if a.1 < c.1 || (a.1 == c.1 && a.0 <= c.0) {
+                (a, c)
+            } else { (c, a) };
+            if (end.0 - start.0).abs() < 1.0 && (end.1 - start.1).abs() < 1.0 { return String::new(); }
             let mut out = String::new();
-            fn walk(b: &super::layout::LayoutBox, x0: f32, y0: f32, x1: f32, y1: f32, out: &mut String) {
+            fn walk(b: &super::layout::LayoutBox, sx: f32, sy: f32, ex: f32, ey: f32, out: &mut String) {
                 if let Some(text) = &b.text {
                     let bx0 = b.rect.x;
                     let by0 = b.rect.y;
-                    let bx1 = bx0 + b.rect.width;
                     let by1 = by0 + b.rect.height;
-                    // Vertikalni overlap test - kazda sub-pixel intersection se pocita.
-                    if bx0 < x1 && bx1 > x0 && by0 < y1 && by1 > y0 {
-                        // Char-level horizontal slicing: pres fontdue advance per char.
-                        let sel_left_in_box = (x0 - bx0).max(0.0);
-                        let sel_right_in_box = (x1 - bx0).min(b.rect.width);
-                        let mut acc = 0.0f32;
-                        let mut start_byte: Option<usize> = None;
-                        let mut end_byte: usize = text.len();
+                    if by1 >= sy && by0 <= ey {
+                        let lh = (b.line_height * b.font_size).max(b.font_size * 1.2);
                         let bold = b.bold;
-                        for (byte_off, ch) in text.char_indices() {
-                            let adv = super::layout::measure_text_width_styled(
-                                &ch.to_string(), b.font_size, bold);
-                            let mid = acc + adv * 0.5;
-                            if start_byte.is_none() && mid >= sel_left_in_box {
-                                start_byte = Some(byte_off);
+                        let lines: Vec<&str> = text.split('\n').collect();
+                        for (li, line) in lines.iter().enumerate() {
+                            let line_y = by0 + (li as f32) * lh;
+                            let line_y_end = line_y + lh;
+                            if line_y_end < sy || line_y > ey { continue; }
+                            let is_first_line = sy >= line_y && sy < line_y_end;
+                            let is_last_line = ey >= line_y && ey < line_y_end;
+                            let line_start_x = bx0;
+                            let line_w: f32 = line.chars().map(|ch|
+                                super::layout::measure_text_width_styled(
+                                    &ch.to_string(), b.font_size, bold)).sum();
+                            let (x_lo, x_hi) = if is_first_line && is_last_line {
+                                (sx.min(ex), sx.max(ex))
+                            } else if is_first_line {
+                                (sx, line_start_x + line_w)
+                            } else if is_last_line {
+                                (line_start_x, ex)
+                            } else {
+                                (line_start_x, line_start_x + line_w)
+                            };
+                            let sel_left = (x_lo - line_start_x).max(0.0);
+                            let sel_right = (x_hi - line_start_x).min(line_w);
+                            if sel_right <= sel_left + 0.5 { continue; }
+                            let mut acc = 0.0f32;
+                            let mut start_byte: Option<usize> = None;
+                            let mut end_byte: usize = line.len();
+                            for (byte_off, ch) in line.char_indices() {
+                                let adv = super::layout::measure_text_width_styled(
+                                    &ch.to_string(), b.font_size, bold);
+                                let mid = acc + adv * 0.5;
+                                if start_byte.is_none() && mid >= sel_left {
+                                    start_byte = Some(byte_off);
+                                }
+                                if mid > sel_right {
+                                    end_byte = byte_off;
+                                    break;
+                                }
+                                acc += adv;
                             }
-                            if mid > sel_right_in_box {
-                                end_byte = byte_off;
-                                break;
+                            let s = start_byte.unwrap_or(0);
+                            if s < end_byte {
+                                out.push_str(&line[s..end_byte]);
+                                out.push(' ');
                             }
-                            acc += adv;
-                        }
-                        let s = start_byte.unwrap_or(0);
-                        if s < end_byte {
-                            out.push_str(&text[s..end_byte]);
-                            out.push(' ');
                         }
                     }
                 }
-                for ch in &b.children { walk(ch, x0, y0, x1, y1, out); }
+                for ch in &b.children { walk(ch, sx, sy, ex, ey, out); }
             }
-            walk(layout, x0, y0, x1, y1, &mut out);
+            walk(layout, start.0, start.1, end.0, end.1, &mut out);
             out.trim().to_string()
         }
         /// Centralni cursor icon dispatch - dle pozice + DOM/devtools state.
@@ -3055,19 +3077,24 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
             // Reuse buffer pres frames - alloc-free.
             let mut display_list = std::mem::take(&mut self.display_list_buffer);
             paint::build_display_list_culled_into(&layout_root, self.scroll_y, viewport_h, &mut display_list);
-            // Selection emit PO layout commands - selection rect alpha tint nad
-            // bg + textem. Browser-like: highlight visible cez bg + text shows
-            // through alpha. Per-text-box, char-level snap pres fontdue advance.
+            // Selection emit PO layout commands - flow-based row selection.
+            // Anchor + current point urcuji "first" (top-left order) a "last".
+            // Per text node se walked lines (\n split z flush_inline wrap),
+            // first line: chars od anchor.x do konce, middle lines: full,
+            // last line: chars od start do current.x. Browser-like.
             let page_sel = (self_page_sel_anchor, self_page_sel_current);
             if let (Some(a), Some(c)) = page_sel {
-                let x0 = a.0.min(c.0);
-                let y0 = a.1.min(c.1);
-                let x1 = a.0.max(c.0);
-                let y1 = a.1.max(c.1);
-                if x1 > x0 + 1.0 || y1 > y0 + 1.0 {
-                    fn collect_text_boxes(
+                // Order: ktery point je "first" v reading flow (top-to-bottom,
+                // left-to-right pri stejnem y).
+                let (start, end) = if a.1 < c.1 || (a.1 == c.1 && a.0 <= c.0) {
+                    (a, c)
+                } else {
+                    (c, a)
+                };
+                if (end.0 - start.0).abs() > 1.0 || (end.1 - start.1).abs() > 1.0 {
+                    fn collect_text_lines(
                         b: &super::layout::LayoutBox,
-                        sx0: f32, sy0: f32, sx1: f32, sy1: f32,
+                        sx: f32, sy: f32, ex: f32, ey: f32,
                         out: &mut Vec<(f32, f32, f32, f32)>,
                     ) {
                         if let Some(text) = &b.text {
@@ -3075,38 +3102,81 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                             let by0 = b.rect.y;
                             let bx1 = bx0 + b.rect.width;
                             let by1 = by0 + b.rect.height;
-                            if bx0 < sx1 && bx1 > sx0 && by0 < sy1 && by1 > sy0 {
-                                let sel_left = (sx0 - bx0).max(0.0);
-                                let sel_right = (sx1 - bx0).min(b.rect.width);
-                                let mut acc = 0.0f32;
-                                let mut hl_start: Option<f32> = None;
-                                let mut hl_end: f32 = b.rect.width;
+                            // Line height = font_size * line_height.
+                            let lh = (b.line_height * b.font_size).max(b.font_size * 1.2);
+                            // Vertical box ne v selection rozsah -> skip.
+                            if by1 < sy || by0 > ey { /* skip */ }
+                            else {
                                 let bold = b.bold;
-                                for ch in text.chars() {
-                                    let adv = super::layout::measure_text_width_styled(
-                                        &ch.to_string(), b.font_size, bold);
-                                    let mid = acc + adv * 0.5;
-                                    if hl_start.is_none() && mid >= sel_left {
-                                        hl_start = Some(acc);
+                                // Lines z text (\n split). Pri flush_inline byly inserted.
+                                let lines: Vec<&str> = text.split('\n').collect();
+                                let n_lines = lines.len();
+                                for (li, line) in lines.iter().enumerate() {
+                                    let line_y = by0 + (li as f32) * lh;
+                                    let line_y_end = line_y + lh;
+                                    // Skip line mimo selection vertical.
+                                    if line_y_end < sy || line_y > ey { continue; }
+                                    // Spada start.y do tohoto radku?
+                                    let is_first_line = sy >= line_y && sy < line_y_end;
+                                    let is_last_line = ey >= line_y && ey < line_y_end;
+                                    // Range x: first_line -> [start.x, line_end];
+                                    // last_line -> [line_start, end.x]; middle -> full.
+                                    let line_w = line.chars().map(|ch|
+                                        super::layout::measure_text_width_styled(
+                                            &ch.to_string(), b.font_size, bold)).sum::<f32>();
+                                    let line_start_x = if li == 0 { bx0 } else {
+                                        // Wrapped line - zacina od inner_x parentu.
+                                        // Approximaceuze rect.x (typicky inner_x p).
+                                        bx0
+                                    };
+                                    // X range pro selection na tomto radku.
+                                    let (x_lo, x_hi) = if is_first_line && is_last_line {
+                                        // Sel zacina + konci na tomto radku.
+                                        (sx.min(ex), sx.max(ex))
+                                    } else if is_first_line {
+                                        // Od sx do konce radku.
+                                        (sx, line_start_x + line_w)
+                                    } else if is_last_line {
+                                        // Od zacatku radku do ex.
+                                        (line_start_x, ex)
+                                    } else {
+                                        // Middle line - cely radek.
+                                        (line_start_x, line_start_x + line_w)
+                                    };
+                                    // Char-snap.
+                                    let sel_left = (x_lo - line_start_x).max(0.0);
+                                    let sel_right = (x_hi - line_start_x).min(line_w);
+                                    if sel_right <= sel_left + 0.5 { continue; }
+                                    let mut acc = 0.0f32;
+                                    let mut hl_start: Option<f32> = None;
+                                    let mut hl_end: f32 = line_w;
+                                    for ch in line.chars() {
+                                        let adv = super::layout::measure_text_width_styled(
+                                            &ch.to_string(), b.font_size, bold);
+                                        let mid = acc + adv * 0.5;
+                                        if hl_start.is_none() && mid >= sel_left {
+                                            hl_start = Some(acc);
+                                        }
+                                        if mid > sel_right {
+                                            hl_end = acc;
+                                            break;
+                                        }
+                                        acc += adv;
                                     }
-                                    if mid > sel_right {
-                                        hl_end = acc;
-                                        break;
+                                    let hs = hl_start.unwrap_or(0.0);
+                                    if hl_end > hs + 0.5 {
+                                        out.push((line_start_x + hs, line_y, hl_end - hs, lh));
                                     }
-                                    acc += adv;
                                 }
-                                let hs = hl_start.unwrap_or(0.0);
-                                if hl_end > hs + 0.5 {
-                                    out.push((bx0 + hs, by0, hl_end - hs, b.rect.height));
-                                }
+                                let _ = (bx1, by1, n_lines);
                             }
                         }
-                        for c in &b.children {
-                            collect_text_boxes(c, sx0, sy0, sx1, sy1, out);
+                        for ch in &b.children {
+                            collect_text_lines(ch, sx, sy, ex, ey, out);
                         }
                     }
                     let mut hits = Vec::new();
-                    collect_text_boxes(&layout_root, x0, y0, x1, y1, &mut hits);
+                    collect_text_lines(&layout_root, start.0, start.1, end.0, end.1, &mut hits);
                     for (hx, hy, hw, hh) in hits {
                         display_list.push(DisplayCommand::Rect {
                             x: hx, y: hy, w: hw, h: hh,
