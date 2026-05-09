@@ -463,6 +463,10 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         /// change neinvaliduje cascade cache.
         css_uses_hover: bool,
         css_uses_focus: bool,
+        /// CSS pouziva @media/@container queries, takze viewport zmena ovlivni
+        /// cascade. Bez teto detekce by se cascade rebuilovala pri kazdem
+        /// pixelu resize -> resize lag.
+        css_uses_viewport: bool,
         /// Cache cascade output (DOM root ptr hash -> StyleMap).
         cached_cascade_hash: u64,
         cached_style_map: Option<super::cascade::StyleMap>,
@@ -638,20 +642,27 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 }
                 WindowEvent::Resized(size) => {
                     if let Some(r) = &mut self.renderer {
-                        // Update scale_factor pri resize (DPI mohlo zmenit).
                         if let Some(w) = &self.window {
                             r.scale_factor = w.scale_factor() as f32;
                         }
                         r.resize(size.width.max(1), size.height.max(1));
                     }
-                    self.cached_layout_root = None;
+                    // PERF: layout cache invalidate jen pri viewport-dependent CSS.
+                    // Bez @media/vh layout je viewport-independent (content size
+                    // urcen z elements, ne window) -> kesovany layout zustava
+                    // valid pri resize, render jen prepocita scrollbars + shifts.
+                    if self.css_uses_viewport {
+                        self.cached_layout_root = None;
+                    }
                     self.render();
                 }
                 WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                     if let Some(r) = &mut self.renderer {
                         r.scale_factor = scale_factor as f32;
                     }
-                    self.cached_layout_root = None;
+                    // Scale factor zmena dela DPI shift glyph atlas - layout
+                    // (logical px) zustava stejny.
+                    let _ = scale_factor;
                     self.render();
                 }
                 WindowEvent::CursorMoved { position, .. } => {
@@ -4901,6 +4912,14 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 // hover change.
                 self.css_uses_hover = self.css.contains(":hover");
                 self.css_uses_focus = self.css.contains(":focus");
+                // Detect viewport-dependent queries: @media, @container, vw/vh units.
+                self.css_uses_viewport = self.css.contains("@media")
+                    || self.css.contains("@container")
+                    || self.css.contains("vw") || self.css.contains("vh")
+                    || self.css.contains("vmin") || self.css.contains("vmax")
+                    || self.css.contains("dvh") || self.css.contains("dvw")
+                    || self.css.contains("svw") || self.css.contains("svh")
+                    || self.css.contains("lvw") || self.css.contains("lvh");
                 self.cached_stylesheets = Some(parsed);
                 self.cached_stylesheets_hash = combined_hash;
                 self.cached_style_map = None;
@@ -4913,19 +4932,19 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 let mut h = std::collections::hash_map::DefaultHasher::new();
                 (Rc::as_ptr(&document_root) as usize).hash(&mut h);
                 css_hash.hash(&mut h);
-                // Zoom + viewport ovlivnuji @media + @container query matches -
-                // cache invalidate pri zmene.
                 ((self.zoom * 1000.0) as i64).hash(&mut h);
-                (r.config.width as u64).hash(&mut h);
-                // Hover/focus state - jen kdyz CSS obsahuje :hover/:focus
-                // selektory. Skip cascade invalidate pokud CSS bez :hover.
+                // Viewport jen pri uses_viewport (resize lag fix). Bez @media/vh
+                // cascade neni viewport-dependent -> cache zustava valid pri resize.
+                if self.css_uses_viewport {
+                    (r.config.width as u64).hash(&mut h);
+                    (r.config.height as u64).hash(&mut h);
+                }
                 if self.css_uses_hover {
                     cascade::get_hovered_node().unwrap_or(0).hash(&mut h);
                 }
                 if self.css_uses_focus {
                     cascade::get_focused_node().unwrap_or(0).hash(&mut h);
                 }
-                (r.config.height as u64).hash(&mut h);
                 h.finish()
             };
             if self.cached_style_map.is_none() || self.cached_cascade_hash != cascade_hash {
@@ -6105,6 +6124,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         animations_affect_layout: false,
         css_uses_hover: false,
         css_uses_focus: false,
+        css_uses_viewport: false,
         current_path: current_html_path,
         base_url,
         history: initial_url.into_iter().collect(),
