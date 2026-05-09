@@ -987,7 +987,6 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                     // mouse_x/y jsou logical (po /(zoom*scale)), srovnani s logical viewport.
                     let raw_y_logical = self.mouse_y - self.scroll_y;
                     let viewport_w = self.viewport_w_logical();
-                    let viewport_h = self.viewport_h_logical();
                     if self.point_in_devtools(self.mouse_x - self.scroll_x, raw_y_logical) {
                         let scroll_amount_logical = scroll_amount / (self.zoom * self.renderer.as_ref().map(|r| r.scale_factor).unwrap_or(1.0));
                         match self.devtools.tab {
@@ -1894,7 +1893,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                 saved_console = interp.console_log.borrow().clone();
                 saved_doc = std::rc::Rc::clone(&interp.document.borrow().root);
             }
-            let mut new_interp = crate::interpreter::Interpreter::new();
+            let new_interp = crate::interpreter::Interpreter::new();
             new_interp.set_document(crate::browser::dom::Document {
                 title: String::new(),
                 url: String::new(),

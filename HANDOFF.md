@@ -2,6 +2,65 @@
 
 Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 
+## Session N+3: text edit unifikace + bugfixes (latest)
+
+Bugfixy:
+- **WebGL z-order**: WebGL canvas pass behi mezi page CSS a overlay (devtools/
+  scrollbar/addr/find). Predtim WebGL clear color prekryl devtools.
+  `draw_full_frame(page_cmds, overlay_cmds, ...)`, split point v App::render
+  pred paint_element_highlight.
+- **Hit-test units**: vsechny mouse/wheel/scrollbar handlery prevedeny na
+  logical px. `panel_h_logical()`, `viewport_w/h_logical()`,
+  `point_in_devtools()` helpery. Predtim mix logical/physical pri zoom/HiDPI
+  -> wheel zachytaval devtools i kdyz kurzor nad strankou.
+- **Styles pane scrollbar + clip**: `StylesState::estimate_total_h()` +
+  scrollbar render + clamp scroll_y na max_scroll. `in_view()` guard skipne
+  text mimo body rect (top + bottom). Driv infinite scroll a content bleed
+  do tab area.
+- **Tree row bleed**: skip rows s y < body_y nebo y + ROW_H > body_y + body_h.
+- **Main page scrollbar drag**: V/H thumb LMB hit-test + drag prevod mouse
+  pos -> scroll_target_y/x.
+
+Text edit unifikace (phase 1-7 z planu):
+- **TextBuffer trait** v `src/devtools/model/text_buffer.rs`. Primitivy
+  text/cursor/anchor/replace_range, default impls insert/backspace/move/
+  select_all/cut/...
+- ConsoleInput, **SimpleStringBuffer**, **DomInputBuffer** vsechny TextBuffer.
+  DomInputBuffer adapter pres Rc<NodeData> + value attr cache + commit_back
+  pri Drop. NodeData rozsireny o `input_cursor: Cell<usize>` + `input_anchor:
+  Cell<Option<usize>>`.
+- **Centralni dispatch_text_key + dispatch_text_click** v
+  `src/browser/render/text_input.rs`. Vsech 6 mist (console, inline edit,
+  form input, addr bar, find, elements search) ted volaji jeden dispatch +
+  per-handler outcome routing (Submit/Cancel/Tab/Newline/Handled).
+- **Cursor icon stack** - jedna funkce `compute_cursor_icon()` s prioritou
+  devtools panel -> page scrollbar -> page element classify. ColResize u
+  splitteru, RowResize u resize gripu, Text uvnitr edit/console/search.
+- **InteractiveElement classify** v `src/browser/interactive.rs`.
+  `InteractiveKind` enum (Link/Button/Checkbox/Radio/TextInput/Select/Option/
+  Label/Summary/None) + `cursor_icon()`, `is_focusable()`, `accepts_text()`.
+  Foundation pro budouci click handler dispatch unify.
+- **Page selection** - per-text-box highlight namisto single big rect.
+  Walk layout, kazdy text run intersect rect emit highlight per box. Full
+  text-run model (char-byte selection, copy preserves text only) je TODO
+  phase 6 future.
+
+Material Symbols Outlined font pro icons (chevron_right E5CC, expand_more
+E5CF, close E5CD, light_mode E518, dark_mode E51C, center_focus_strong
+E3B4). Predtim CamingoMono renderoval velka kolecka.
+
+### Co zbyva (next session)
+
+- **Phase 6 full**: TextRun extraction z layout (Vec<TextRun{node_id,
+  byte_offset, glyph_x[], rect}>), selection (run_idx, byte_idx) model,
+  paint highlight per glyph range. Replace per-text-box rect highlight.
+  Ctrl+C extrakce textu only (ne ne-text). Tohle je ~1-2 day work.
+- **Click handler migrace na InteractiveKind**: handle_click ted ad-hoc
+  match na tag. Prejit na `classify(node).dispatch(ev)`.
+- **DomInputBuffer click-to-position**: TextInput element klik momentalne
+  jen focusne. Pri-button klik mapovat mouse_x na byte cursor pres
+  measure_text_width per char z page font (ne CamingoMono).
+
 ## Stav projektu (po session N+2: devtools rework phase 1-10)
 
 **Build:** clean, 0 warnings.
