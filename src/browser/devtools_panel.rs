@@ -1554,7 +1554,7 @@ fn paint_edit_row(
 fn paint_decl_line(
     cmds: &mut Vec<DisplayCommand>,
     pal: &Palette,
-    swatch_zones: &mut Vec<(f32, f32, f32, f32, [u8; 4])>,
+    swatch_zones: &mut Vec<(f32, f32, f32, f32, [u8; 4], String)>,
     var_zones: &mut Vec<(f32, f32, f32, f32, String)>,
     x: f32, y: f32,
     property: &str,
@@ -1573,7 +1573,7 @@ fn paint_decl_line(
         push_rect(cmds, cx, y + 14.0, 12.0, 1.0, pal.border);
         push_rect(cmds, cx, y + 3.0, 1.0, 12.0, pal.border);
         push_rect(cmds, cx + 11.0, y + 3.0, 1.0, 12.0, pal.border);
-        swatch_zones.push((cx, y + 3.0, 12.0, 12.0, c));
+        swatch_zones.push((cx, y + 3.0, 12.0, 12.0, c, property.to_string()));
         cx += 16.0;
     }
 
@@ -2878,7 +2878,7 @@ pub enum DevtoolsHit {
     /// Color picker: klik mimo -> close.
     ColorPickerClose,
     /// Klik na color swatch v styles pane -> open color picker.
-    OpenColorPicker { anchor_x: f32, anchor_y: f32, color: [u8; 4] },
+    OpenColorPicker { anchor_x: f32, anchor_y: f32, color: [u8; 4], property: String },
     /// Klik na :hov toolbar button - cycle hover/focus/active force.
     ForcePseudoToggle,
     /// Klik na .cls toolbar button - toggle class manager popup.
@@ -3202,13 +3202,14 @@ fn hit_test_elements(
         }
         // Color swatch hit (zone cached pri last paint).
         let zones = state.styles.swatch_zones.borrow();
-        for (zx, zy, zw, zh, col) in zones.iter() {
+        for (zx, zy, zw, zh, col, prop) in zones.iter() {
             if mouse_x >= *zx && mouse_x < zx + zw
                && mouse_y >= *zy && mouse_y < zy + zh {
                 return DevtoolsHit::OpenColorPicker {
                     anchor_x: *zx,
                     anchor_y: zy + zh + 4.0,
                     color: *col,
+                    property: prop.clone(),
                 };
             }
         }

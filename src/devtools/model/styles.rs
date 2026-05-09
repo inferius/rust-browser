@@ -40,7 +40,8 @@ pub struct StylesState {
     /// color picker. Volane interior-mut pres RefCell? Ne - paint_styles_pane
     /// bere &state. Resime pres separate tracking field s lifetime per frame.
     /// Pro ted: pure RefCell na hot path je OK.
-    pub swatch_zones: std::cell::RefCell<Vec<(f32, f32, f32, f32, [u8; 4])>>,
+    /// (x, y, w, h, color, property_name) - property pro write-back picker.
+    pub swatch_zones: std::cell::RefCell<Vec<(f32, f32, f32, f32, [u8; 4], String)>>,
     /// Cache var() chip zon: (x, y, w, h, var_name).
     pub var_zones: std::cell::RefCell<Vec<(f32, f32, f32, f32, String)>>,
     /// @font-face deklarace ze vsech stylesheets (family, src, weight, style).

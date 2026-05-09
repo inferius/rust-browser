@@ -1087,22 +1087,25 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                         cp.hue = h;
                                         cp.rgba = crate::devtools::hsv_to_rgb(cp.hue, cp.sat, cp.val);
                                     }
+                                    self.write_back_color_picker();
                                 }
                                 DevtoolsHit::ColorPickerSV(s, v) => {
                                     if let Some(cp) = self.devtools.color_picker.as_mut() {
                                         cp.sat = s; cp.val = v;
                                         cp.rgba = crate::devtools::hsv_to_rgb(cp.hue, cp.sat, cp.val);
                                     }
+                                    self.write_back_color_picker();
                                 }
                                 DevtoolsHit::ColorPickerClose => {
                                     self.devtools.color_picker = None;
                                 }
-                                DevtoolsHit::OpenColorPicker { anchor_x, anchor_y, color } => {
+                                DevtoolsHit::OpenColorPicker { anchor_x, anchor_y, color, property } => {
+                                    let target = self.devtools.elements.selected.map(|id| (id, property.clone()));
                                     self.devtools.color_picker = Some(crate::devtools::ColorPickerState {
                                         anchor_x, anchor_y,
                                         rgba: color,
                                         hue: 0.0, sat: 1.0, val: 1.0,
-                                        target: None,
+                                        target,
                                     });
                                 }
                                 DevtoolsHit::ForcePseudoToggle => {
@@ -2096,6 +2099,32 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
     }
 
     /// Paint chrome bar (tabs + nav) - free fn aby slo volat behem renderer borrow.
+    /// Inline style update - replace or append "{prop}: {value};".
+    pub fn update_inline_style(cur: &str, prop: &str, value: &str) -> String {
+        // Parse cur do prop:value pairs.
+        let mut out: Vec<String> = Vec::new();
+        let mut found = false;
+        for decl in cur.split(';') {
+            let decl = decl.trim();
+            if decl.is_empty() { continue; }
+            if let Some(colon) = decl.find(':') {
+                let k = decl[..colon].trim();
+                if k == prop {
+                    out.push(format!("{}: {}", prop, value));
+                    found = true;
+                } else {
+                    out.push(decl.to_string());
+                }
+            } else {
+                out.push(decl.to_string());
+            }
+        }
+        if !found {
+            out.push(format!("{}: {}", prop, value));
+        }
+        out.join("; ")
+    }
+
     fn paint_shell_chrome_inline(list: &mut Vec<DisplayCommand>, win_w: f32, chrome_h: f32, url: &str) {
         paint_shell_chrome_full(list, win_w, chrome_h, url, None, 0);
     }
@@ -3450,6 +3479,36 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             }
         }
 
+        /// Write picker color do source CSS (inline style attr na target node).
+        fn write_back_color_picker(&mut self) {
+            let Some(cp) = self.devtools.color_picker.clone() else { return };
+            let Some((node_id, prop)) = cp.target else { return };
+            let hex = format!("#{:02x}{:02x}{:02x}", cp.rgba[0], cp.rgba[1], cp.rgba[2]);
+            if let Some(interp) = &self.interpreter {
+                let doc_root = std::rc::Rc::clone(&interp.document.borrow().root);
+                if let Some(node) = find_node_by_ptr(&doc_root, node_id) {
+                    let mut attrs = node.attributes.borrow_mut();
+                    let cur_style = attrs.get("style").cloned().unwrap_or_default();
+                    // Replace prop value v inline style nebo append.
+                    let new_style = update_inline_style(&cur_style, &prop, &hex);
+                    let old_value = cur_style.clone();
+                    attrs.insert("style".to_string(), new_style.clone());
+                    drop(attrs);
+                    self.cached_layout_root = None;
+                    self.cached_cascade_hash = 0;
+                    // Changes log.
+                    self.devtools.changes.push(crate::devtools::ChangeEntry {
+                        timestamp_ts: crate::devtools::history::now_ts(),
+                        kind: crate::devtools::ChangeKind::StyleEdit,
+                        target_node_id: node_id,
+                        property: prop,
+                        old_value,
+                        new_value: new_style,
+                    });
+                }
+            }
+        }
+
         fn navigate_about(&mut self, url: &str) -> bool {
             // Internal pages: about:newtab, about:config.
             match url {
@@ -3562,7 +3621,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 let mx_screen = self.mouse_x - self.scroll_x;
                 let my_screen = self.mouse_y - self.scroll_y;
                 let zones = self.devtools.styles.swatch_zones.borrow();
-                for (zx, zy, zw, zh, col) in zones.iter() {
+                for (zx, zy, zw, zh, col, _prop) in zones.iter() {
                     if mx_screen >= *zx && mx_screen < zx + zw
                        && my_screen >= *zy && my_screen < zy + zh {
                         self.devtools.tooltip = Some(crate::devtools::TooltipState {
