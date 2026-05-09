@@ -98,6 +98,9 @@ pub struct DevToolsState {
     pub side_panel_w: f32,
     /// Sub-tab overflow dropdown otevren - ▼ chevron pri zmenseni panelu.
     pub side_panel_overflow_open: bool,
+    /// Aktivni match-preview selector (highlight elementu matching selectoru).
+    /// None = bez highlight. Toggle pres ctverecek vlevo od selectoru.
+    pub match_preview_selector: Option<String>,
     /// Dock position devtools panelu (Bottom/Right/Left/Top/Popup).
     pub dock_position: profile::DockPosition,
     /// Settings popup state (kdyz user otevre dock chooser dialog).
@@ -339,6 +342,7 @@ impl Default for DevToolsState {
             collapsed_sections: HashSet::new(),
             side_panel_w: 280.0,
             side_panel_overflow_open: false,
+            match_preview_selector: None,
             dock_position: profile::load_dock_position(),
             settings_popup_open: false,
             color_picker: None,

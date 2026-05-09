@@ -1105,7 +1105,14 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         }
                     }
 
-                    if self.devtools.panel_open && raw_y >= viewport_h - panel_h {
+                    // Modal popups (settings/color picker) zachycuji klik kdekoli
+                    // - ne jen v panel boundsi. Bez teto vyjimky popup centered
+                    // mimo panel rect by neslo zavrit ani klikat.
+                    let modal_active = self.devtools.settings_popup_open
+                        || self.devtools.color_picker.is_some()
+                        || self.devtools.class_manager_open;
+                    let in_panel = raw_y >= viewport_h - panel_h;
+                    if self.devtools.panel_open && (in_panel || modal_active) {
                         if let Some(layout) = &self.layout_root {
                             let hit = devtools_hit_test(&self.devtools, layout, viewport_w, viewport_h, self.mouse_x, raw_y);
                             use crate::browser::devtools_panel::DevtoolsHit;
@@ -1328,6 +1335,29 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                         .find(|(k, _)| k == &prop)
                                         .map(|(_, v)| v.clone()).unwrap_or_default();
                                     self.devtools.styles.editing_value = Some((prop, cur));
+                                }
+                                DevtoolsHit::ToggleMatchPreview(sel) => {
+                                    if self.devtools.match_preview_selector.as_deref() == Some(&sel) {
+                                        self.devtools.match_preview_selector = None;
+                                    } else {
+                                        self.devtools.match_preview_selector = Some(sel);
+                                    }
+                                }
+                                DevtoolsHit::OpenSourceLink(label) => {
+                                    // Prepnout na Sources tab. Najdi file dle label
+                                    // (filename z URL nebo "<style> #idx").
+                                    self.devtools.tab = crate::devtools::Tab::Sources;
+                                    // Best-effort: kdyz label obsahuje filename, najdi
+                                    // odpovidajici source file v sources panel.
+                                    if !label.starts_with("<style>") && !label.starts_with("user agent") && !label.starts_with("inline") {
+                                        let files = self.devtools.sources.files.clone();
+                                        for (idx, f) in files.iter().enumerate() {
+                                            if f.url.ends_with(&label) || f.url.contains(&label) {
+                                                self.devtools.sources.selected_id = Some(idx as u32);
+                                                break;
+                                            }
+                                        }
+                                    }
                                 }
                                 DevtoolsHit::SettingsToggle => {
                                     self.devtools.settings_popup_open = !self.devtools.settings_popup_open;
@@ -1690,21 +1720,35 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     let viewport_w = self.viewport_w_logical();
                     if self.point_in_devtools(self.mouse_x - self.scroll_x, raw_y_logical) {
                         let scroll_amount_logical = scroll_amount / (self.zoom * self.renderer.as_ref().map(|r| r.scale_factor).unwrap_or(1.0));
+                        // Globalni scroll routing: vzdy ta cast pod kurzorem.
+                        // Pri Elements: 3 zony - tree | styles | side_panel.
                         match self.devtools.tab {
                             crate::devtools::Tab::Elements => {
-                                let default_split = viewport_w * 0.7;
-                                let split_x = if self.devtools.elements.split_x < 1.0 { default_split }
-                                              else { self.devtools.elements.split_x.max(200.0).min(viewport_w - 220.0) };
+                                let mx_local = self.mouse_x - self.scroll_x;
+                                let side_panel_w = self.devtools.side_panel_w.clamp(180.0, viewport_w - 400.0);
+                                let styles_end = viewport_w - side_panel_w;
+                                let default_tree_split = (viewport_w - side_panel_w) * 0.45;
+                                let tree_split = if self.devtools.elements.split_x < 1.0 { default_tree_split }
+                                                  else { self.devtools.elements.split_x.max(200.0).min(viewport_w - side_panel_w - 200.0) };
                                 let body_h = self.panel_h_logical() - 4.0 - 30.0
                                     - if self.devtools.elements.search.open { 28.0 } else { 0.0 };
-                                if (self.mouse_x - self.scroll_x) >= split_x {
+                                if mx_local >= styles_end {
+                                    // Side panel - obsah obvykle maly, scroll jen pri overflow.
+                                    // Pro ted: no-op (side panel nescrolluje).
+                                } else if mx_local >= tree_split {
+                                    // Styles pane.
                                     let total_h = self.estimate_styles_total_h();
                                     let max_scroll = (total_h - body_h).max(0.0);
-                                    self.devtools.styles.scroll_y = (self.devtools.styles.scroll_y - scroll_amount_logical).clamp(0.0, max_scroll);
+                                    if max_scroll > 0.0 {
+                                        self.devtools.styles.scroll_y = (self.devtools.styles.scroll_y - scroll_amount_logical).clamp(0.0, max_scroll);
+                                    }
                                 } else {
+                                    // Tree pane.
                                     let total_h = self.devtools.elements.rows.len() as f32 * 18.0;
                                     let max_scroll = (total_h - body_h).max(0.0);
-                                    self.devtools.elements.scroll_y = (self.devtools.elements.scroll_y - scroll_amount_logical).clamp(0.0, max_scroll);
+                                    if max_scroll > 0.0 {
+                                        self.devtools.elements.scroll_y = (self.devtools.elements.scroll_y - scroll_amount_logical).clamp(0.0, max_scroll);
+                                    }
                                 }
                             }
                             crate::devtools::Tab::Sources => {
@@ -4694,25 +4738,34 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 if let Some(node) = find_node_by_ptr(&document_root, sel) {
                     use crate::devtools::model::styles::{MatchedRule, RuleSource, RuleDecl};
                     let mut matched: Vec<MatchedRule> = Vec::new();
-                    // 1. Direct match na selected node.
+                    // 1. Direct match na selected node. Dedup pres (selector_str + decls_hash + source).
+                    let mut seen_keys: std::collections::HashSet<String> = Default::default();
                     for (sheet_idx, sheet) in stylesheets.iter().enumerate() {
                         for rule in &sheet.rules {
                             for sel_obj in &rule.selectors {
                                 if super::cascade::matches_selector(&node, sel_obj) {
-                                    let decls: Vec<RuleDecl> = rule.declarations.iter()
-                                        .map(|d| RuleDecl {
-                                            property: d.property.clone(),
-                                            value: d.value.clone(),
-                                            important: d.important,
-                                            overridden: false,
-                                        }).collect();
-                                    matched.push(MatchedRule {
-                                        selector: sel_obj.to_string(),
-                                        source: RuleSource::StyleBlock { index: sheet_idx },
-                                        specificity: 0,
-                                        declarations: decls,
-                                        inherited_from: None,
-                                    });
+                                    let sel_str = sel_obj.to_string();
+                                    // Skladani decls hash pres property=value parovani.
+                                    let decls_repr: String = rule.declarations.iter()
+                                        .map(|d| format!("{}={};", d.property, d.value))
+                                        .collect();
+                                    let key = format!("{}|{}|{}", sheet_idx, sel_str, decls_repr);
+                                    if seen_keys.insert(key) {
+                                        let decls: Vec<RuleDecl> = rule.declarations.iter()
+                                            .map(|d| RuleDecl {
+                                                property: d.property.clone(),
+                                                value: d.value.clone(),
+                                                important: d.important,
+                                                overridden: false,
+                                            }).collect();
+                                        matched.push(MatchedRule {
+                                            selector: sel_str,
+                                            source: RuleSource::StyleBlock { index: sheet_idx },
+                                            specificity: 0,
+                                            declarations: decls,
+                                            inherited_from: None,
+                                        });
+                                    }
                                     break;
                                 }
                             }
@@ -4740,6 +4793,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                             for rule in &sheet.rules {
                                 for sel_obj in &rule.selectors {
                                     if super::cascade::matches_selector(&parent, sel_obj) {
+                                        let sel_str = sel_obj.to_string();
                                         let inh_decls: Vec<RuleDecl> = rule.declarations.iter()
                                             .filter(|d| is_inheritable(&d.property))
                                             .map(|d| RuleDecl {
@@ -4749,13 +4803,20 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                                 overridden: false,
                                             }).collect();
                                         if !inh_decls.is_empty() {
-                                            matched.push(MatchedRule {
-                                                selector: sel_obj.to_string(),
-                                                source: RuleSource::StyleBlock { index: sheet_idx },
-                                                specificity: 0,
-                                                declarations: inh_decls,
-                                                inherited_from: Some(parent_tag.clone()),
-                                            });
+                                            let decls_repr: String = inh_decls.iter()
+                                                .map(|d| format!("{}={};", d.property, d.value))
+                                                .collect();
+                                            let key = format!("inh:{}|{}|{}|{}",
+                                                parent_tag, sheet_idx, sel_str, decls_repr);
+                                            if seen_keys.insert(key) {
+                                                matched.push(MatchedRule {
+                                                    selector: sel_str,
+                                                    source: RuleSource::StyleBlock { index: sheet_idx },
+                                                    specificity: 0,
+                                                    declarations: inh_decls,
+                                                    inherited_from: Some(parent_tag.clone()),
+                                                });
+                                            }
                                         }
                                         break;
                                     }

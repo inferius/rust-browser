@@ -73,13 +73,16 @@ pub fn dt_byte_idx_at_x(text: &str, target_x: f32) -> usize {
 
 /// Realna sirka textu v CamingoMono pri FONT_SIZE - musi pasovat na render side
 /// (oba pouzivaji fontdue.metrics().advance_width).
+/// Measure text width pri devtools FONT_SIZE pomoci Inter (DT_FONT).
+/// Musi sedet s render side font - jinak cursor v consoli driftuje.
 pub fn dt_text_width(text: &str) -> f32 {
     use std::sync::OnceLock;
     static FONT: OnceLock<Option<fontdue::Font>> = OnceLock::new();
     let f = FONT.get_or_init(|| {
+        // Prvne zkus disk paths, pak embedded bytes - vzdy zaruci match s render.
         let candidates = [
-            "static/fonts/CamingoMono-Light.ttf",
-            "fonts/CamingoMono-Light.ttf",
+            "static/fonts/Inter-Regular.ttf",
+            "fonts/Inter-Regular.ttf",
         ];
         for p in candidates.iter() {
             if let Ok(d) = std::fs::read(p) {
@@ -88,7 +91,9 @@ pub fn dt_text_width(text: &str) -> f32 {
                 }
             }
         }
-        None
+        // Embedded fallback - garantovany match s atlas.
+        let bytes: &[u8] = include_bytes!("../../static/fonts/Inter-Regular.ttf");
+        fontdue::Font::from_bytes(bytes.to_vec(), fontdue::FontSettings::default()).ok()
     });
     match f.as_ref() {
         Some(font) => text.chars().map(|c| font.metrics(c, FONT_SIZE).advance_width).sum(),
@@ -328,13 +333,15 @@ fn paint_settings_popup(
     mouse_x: f32, mouse_y: f32,
 ) {
     use crate::devtools::profile::DockPosition;
-    let pop_w = 320.0;
-    let pop_h = 280.0;
-    let px = (win_w - pop_w) * 0.5;
-    let py = (win_h - pop_h) * 0.5;
-    // Backdrop (semi-transparent).
+    let pop_w = 280.0;
+    let pop_h = 360.0;
+    // Anchor v pravem hornim rohu panelu (kde gear tlacitko je).
+    let px = (win_w - pop_w - 12.0).max(8.0);
+    let py = (win_h - pop_h - 12.0).max(8.0);
+    // Backdrop - klik mimo popup zavre.
     push_rect(cmds, 0.0, 0.0, win_w, win_h, [0, 0, 0, 100]);
-    // Popup card.
+    // Popup card s drop shadow.
+    push_rect(cmds, px + 3.0, py + 3.0, pop_w, pop_h, [0, 0, 0, 120]);
     push_rect(cmds, px, py, pop_w, pop_h, pal.bg_panel);
     push_rect_border(cmds, px, py, pop_w, pop_h, pal.border_strong);
     // Header.
@@ -528,10 +535,10 @@ pub fn settings_popup_hit(
 ) -> Option<SettingsPopupAction> {
     use crate::devtools::profile::DockPosition;
     if !state.settings_popup_open { return None; }
-    let pop_w = 320.0;
-    let pop_h = 280.0;
-    let px = (win_w - pop_w) * 0.5;
-    let py = (win_h - pop_h) * 0.5;
+    let pop_w = 280.0;
+    let pop_h = 360.0;
+    let px = (win_w - pop_w - 12.0).max(8.0);
+    let py = (win_h - pop_h - 12.0).max(8.0);
     // Outside popup -> dismiss.
     if mouse_x < px || mouse_x >= px + pop_w || mouse_y < py || mouse_y >= py + pop_h {
         return Some(SettingsPopupAction::Dismiss);
@@ -1917,10 +1924,12 @@ fn paint_styles_pane(
     pal: &Palette,
     x: f32, y: f32, w: f32, h: f32,
 ) {
-    // Reset swatch + var + value zones (per-frame populated v paint_decl_line).
+    // Reset swatch + var + value + toggle + source zones (per-frame populated).
     state.styles.swatch_zones.borrow_mut().clear();
     state.styles.var_zones.borrow_mut().clear();
     state.styles.decl_value_zones.borrow_mut().clear();
+    state.styles.match_toggle_zones.borrow_mut().clear();
+    state.styles.source_link_zones.borrow_mut().clear();
     // Toolbar nahore (filter + :hov/.cls/+ buttons).
     paint_styles_toolbar(cmds, state, pal, x, y, w, 0.0, 0.0);
     let toolbar_h = 26.0;
@@ -1985,21 +1994,44 @@ fn paint_styles_pane(
                 },
             };
             if in_view(sy) {
-                // Selektor + specificity badge + source label vpravo.
-                let sel_str = format!("{} {{", rule.selector);
-                push_text(cmds, pad_x, sy, sel_str.clone(), pal.syn_property, false);
-                // Specificity badge (a, b, c) format: ID, CLASS, TYPE counts.
-                // u32 packed: high 8 = a, mid 8 = b, low 8 = c.
+                // Match preview toggle - ctverecek tecky [..] vlevo od selectoru.
+                // Klik = highlight v document elementum matching selector.
+                let toggle_x = pad_x;
+                let toggle_active = state.match_preview_selector.as_deref() == Some(&rule.selector);
+                let tcol = if toggle_active { pal.accent } else { pal.text_dim };
+                push_rect_border(cmds, toggle_x, sy + 3.0, 12.0, 12.0, tcol);
+                if toggle_active {
+                    push_rect(cmds, toggle_x + 3.0, sy + 6.0, 6.0, 6.0, pal.accent);
+                } else {
+                    // Tecky 4x v rohu pro vizualni hint (firefox-like).
+                    push_rect(cmds, toggle_x + 2.0, sy + 5.0, 1.0, 1.0, pal.text_dim);
+                    push_rect(cmds, toggle_x + 8.0, sy + 5.0, 1.0, 1.0, pal.text_dim);
+                    push_rect(cmds, toggle_x + 2.0, sy + 11.0, 1.0, 1.0, pal.text_dim);
+                    push_rect(cmds, toggle_x + 8.0, sy + 11.0, 1.0, 1.0, pal.text_dim);
+                }
+                state.styles.match_toggle_zones.borrow_mut().push(
+                    (toggle_x, sy + 3.0, 12.0, 12.0, rule.selector.clone()));
+                // Selektor + brace.
+                let sel_text_x = toggle_x + 18.0;
+                push_text(cmds, sel_text_x, sy, rule.selector.clone(), pal.syn_attr, false);
+                let sel_w = dt_text_width(&rule.selector);
+                push_text(cmds, sel_text_x + sel_w, sy, " {".to_string(), pal.text_dim, false);
+                // Specificity badge.
                 let a = (rule.specificity >> 16) & 0xFF;
                 let b = (rule.specificity >> 8) & 0xFF;
                 let c = rule.specificity & 0xFF;
                 let badge = format!("({},{},{})", a, b, c);
-                let badge_x = pad_x + dt_text_width(&sel_str) + 8.0;
+                let badge_x = sel_text_x + sel_w + 24.0;
                 push_text(cmds, badge_x, sy, badge.clone(), pal.text_disabled, false);
+                // Source link - klik prepne Sources tab + open file.
                 let label_w = dt_text_width(&src_label);
                 let style_pane_w = bx.rect.width.max(300.0);
                 let src_x = pad_x + style_pane_w - label_w - 24.0;
-                push_text(cmds, src_x, sy, src_label, pal.text_dim, true);
+                push_text(cmds, src_x, sy, src_label.clone(), pal.accent, false);
+                // Underline pro link affordance.
+                push_rect(cmds, src_x, sy + ROW_H - 2.0, label_w, 1.0, pal.accent);
+                state.styles.source_link_zones.borrow_mut().push(
+                    (src_x, sy, label_w, ROW_H, src_label.clone()));
             }
             sy += ROW_H;
             for d in &rule.declarations {
@@ -3144,6 +3176,10 @@ pub enum DevtoolsHit {
     ColorPickerRgbFocus(usize),
     /// Klik na value v styles pane - otevrit editor pro property.
     EditDeclValue(String),
+    /// Klik na match preview ctverecek - toggle highlight matching elementu.
+    ToggleMatchPreview(String),
+    /// Klik na source link - prepni Sources tab + open file.
+    OpenSourceLink(String),
     /// Klik na flex/grid overlay toggle v Layout sub-tabu.
     OverlayToggle(crate::devtools::OverlayKind, usize),
     /// Klik na settings gear button v toolbaru.
@@ -3597,6 +3633,24 @@ fn hit_test_elements(
             }
         }
         drop(vzones);
+        // Match preview toggle ctverecek.
+        let mzones = state.styles.match_toggle_zones.borrow();
+        for (zx, zy, zw, zh, sel) in mzones.iter() {
+            if mouse_x >= *zx && mouse_x < zx + zw
+               && mouse_y >= *zy && mouse_y < zy + zh {
+                return DevtoolsHit::ToggleMatchPreview(sel.clone());
+            }
+        }
+        drop(mzones);
+        // Source link klik.
+        let szones = state.styles.source_link_zones.borrow();
+        for (zx, zy, zw, zh, lab) in szones.iter() {
+            if mouse_x >= *zx && mouse_x < zx + zw
+               && mouse_y >= *zy && mouse_y < zy + zh {
+                return DevtoolsHit::OpenSourceLink(lab.clone());
+            }
+        }
+        drop(szones);
         // Var chip hit.
         let vzones = state.styles.var_zones.borrow();
         for (zx, zy, zw, zh, name) in vzones.iter() {

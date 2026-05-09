@@ -131,8 +131,33 @@ impl GlyphAtlas {
             std::fs::read(p).ok()
                 .and_then(|d| fontdue::Font::from_bytes(d, fontdue::FontSettings::default()).ok())
         });
-        // Pre-load CamingoMono pro DevTools UI (monospace, lehci tah).
+        // Pre-load custom fonts pro DevTools UI. Resolution chain:
+        // 1) primy path (relative k cwd)
+        // 2) project root (parent exe dir / lookup CARGO_MANIFEST_DIR)
+        // 3) embedded bytes (include_bytes!) - guaranteed fallback
         let mut extra_fonts = std::collections::HashMap::new();
+        let try_load = |path: &str| -> Option<Vec<u8>> {
+            if let Ok(d) = std::fs::read(path) { return Some(d); }
+            // exe parent / static/fonts/...
+            if let Ok(exe) = std::env::current_exe() {
+                if let Some(p) = exe.parent() {
+                    let alt = p.join(path);
+                    if let Ok(d) = std::fs::read(&alt) { return Some(d); }
+                    // Cargo deep target/debug/exe -> ../../<path>
+                    if let Some(p2) = p.parent().and_then(|x| x.parent()) {
+                        let alt2 = p2.join(path);
+                        if let Ok(d) = std::fs::read(&alt2) { return Some(d); }
+                    }
+                }
+            }
+            None
+        };
+        // Embedded fallback - guarantees Inter prosli pri kazdem buildu.
+        let embedded: &[(&str, &[u8])] = &[
+            ("Inter", include_bytes!("../../../static/fonts/Inter-Regular.ttf")),
+            ("Inter-Bold", include_bytes!("../../../static/fonts/Inter-Bold.ttf")),
+            ("Inter-Italic", include_bytes!("../../../static/fonts/Inter-Italic.ttf")),
+        ];
         for (family, path) in &[
             ("CamingoMono", "static/fonts/CamingoMono-Light.ttf"),
             ("CamingoMono-Bold", "static/fonts/CamingoMono-Bold.ttf"),
@@ -142,10 +167,17 @@ impl GlyphAtlas {
             ("Inter-Bold", "static/fonts/Inter-Bold.ttf"),
             ("Inter-Italic", "static/fonts/Inter-Italic.ttf"),
         ] {
-            if let Ok(data) = std::fs::read(path) {
+            let data = try_load(path).or_else(|| {
+                embedded.iter().find(|(f, _)| f == family).map(|(_, b)| b.to_vec())
+            });
+            if let Some(data) = data {
                 if let Ok(f) = fontdue::Font::from_bytes(data, fontdue::FontSettings::default()) {
                     extra_fonts.insert(family.to_string(), f);
+                } else {
+                    eprintln!("[fonts] {} parse failed", family);
                 }
+            } else {
+                eprintln!("[fonts] {} nenalezen ({})", family, path);
             }
         }
         GlyphAtlas {

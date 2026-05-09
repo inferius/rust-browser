@@ -56,6 +56,10 @@ pub struct StylesState {
     pub decl_value_zones: std::cell::RefCell<Vec<(f32, f32, f32, f32, String)>>,
     /// Aktivni edit value: Some((property, buffer)). Dopisovani pres KeyboardInput.
     pub editing_value: Option<(String, String)>,
+    /// Cache (x, y, w, h, selector) clickable match-preview ctverecku.
+    pub match_toggle_zones: std::cell::RefCell<Vec<(f32, f32, f32, f32, String)>>,
+    /// Cache (x, y, w, h, source_label) clickable source linku (filename:line).
+    pub source_link_zones: std::cell::RefCell<Vec<(f32, f32, f32, f32, String)>>,
 }
 
 /// Vrati shorthand jmeno pokud `prop` je sub-property nejakeho shorthand.
