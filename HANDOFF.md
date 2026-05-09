@@ -2,6 +2,33 @@
 
 Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 
+## Session N+7: B-fixes + S-features + P13/P19/tooltip
+
+**2441 tests pass, build clean.**
+
+B1-B6 quick fixes:
+- B1 Right/Left dock hit-test x-offset (local_mx = mouse_x - panel_x)
+- B2 Color picker SV box klik -> sat/val
+- B3 hsv_to_rgb full HSV->RGB convert + cp.sat/val fields
+- B4 Class manager checkbox toggle (add/remove class)
+- B5 Var jump highlight (90 frame decay v tick_frame)
+- B6 Resize cursor RowResize/ColResize per dock
+
+S-features:
+- S2 Session restore: load_session pri startu + save_session pri close
+- S3 Bookmarks bar: 24px panel pod nav bar, per-bookmark chip,
+  Ctrl+D = bookmark current page
+- S5 New tab page (about:newtab): native HTML/CSS const v tabs.rs,
+  centered grid s 4 informacnimi kartami
+
+P-features:
+- P13 Changes sub-tab: ChangeEntry log, ClassToggle hooks
+- P19 Compatibility sub-tab: static caniuse-style data, green/yellow
+  status dots
+- P-tooltip: hover swatch -> hex tooltip, hover var chip -> jump hint
+
+Tab switching: save state pred switch_to (drive ztracene changes).
+
 ## Session N+6: shell tab integration + class manager + @font-face
 
 **2441 tests pass, build clean.**
