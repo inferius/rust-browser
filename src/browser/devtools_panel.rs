@@ -215,6 +215,10 @@ pub fn paint_devtools_panel(
     if state.settings_popup_open {
         paint_settings_popup(cmds, state, &pal, win_w, win_h, mouse_x, mouse_y);
     }
+    // Color picker popup.
+    if state.color_picker.is_some() {
+        paint_color_picker(cmds, state, &pal);
+    }
     // Context menu vykresli pres vsechno (z-order top).
     if let Some(menu) = &state.context_menu {
         paint_context_menu(cmds, &pal, menu, mouse_x, mouse_y);
@@ -278,6 +282,58 @@ fn paint_settings_popup(
     sy += 8.0;
     push_ui_text(cmds, px + 16.0, sy, format!("Profil: {}", crate::devtools::profile::active_profile()),
                  pal.text_dim, true);
+}
+
+/// HSV trojuhelnik / box + hue slider color picker. Klasicky CSS color
+/// editor: SV box (gradient) + hue slider + RGB/HEX inputs.
+fn paint_color_picker(
+    cmds: &mut Vec<DisplayCommand>,
+    state: &DevToolsState,
+    pal: &Palette,
+) {
+    let Some(cp) = &state.color_picker else { return };
+    let pop_w = 240.0;
+    let pop_h = 220.0;
+    let px = cp.anchor_x;
+    let py = cp.anchor_y;
+    push_rect(cmds, px, py, pop_w, pop_h, pal.bg_panel);
+    push_rect_border(cmds, px, py, pop_w, pop_h, pal.border_strong);
+
+    // SV gradient box (placeholder - solid square s aktualni barvou).
+    let sv_x = px + 10.0;
+    let sv_y = py + 10.0;
+    let sv_w = pop_w - 20.0;
+    let sv_h = 120.0;
+    // Aktualne emit jen solid color - real gradient = vyzaduje multi-color shader.
+    push_rect(cmds, sv_x, sv_y, sv_w, sv_h, cp.rgba);
+    push_rect_border(cmds, sv_x, sv_y, sv_w, sv_h, pal.border);
+
+    // Hue slider (proste 6-segment rainbow approximation).
+    let hue_y = sv_y + sv_h + 8.0;
+    let hue_h = 12.0;
+    let segments = [
+        [255, 0, 0, 255], [255, 255, 0, 255], [0, 255, 0, 255],
+        [0, 255, 255, 255], [0, 0, 255, 255], [255, 0, 255, 255], [255, 0, 0, 255],
+    ];
+    let seg_w = sv_w / 6.0;
+    for i in 0..6 {
+        push_rect(cmds, sv_x + (i as f32) * seg_w, hue_y, seg_w, hue_h, segments[i]);
+    }
+    // Hue marker.
+    let mx = sv_x + (cp.hue / 360.0) * sv_w;
+    push_rect(cmds, mx - 1.0, hue_y - 2.0, 3.0, hue_h + 4.0, [255, 255, 255, 255]);
+    push_rect_border(cmds, mx - 1.0, hue_y - 2.0, 3.0, hue_h + 4.0, [0, 0, 0, 255]);
+
+    // HEX label + value.
+    let info_y = hue_y + hue_h + 12.0;
+    let hex = format!("#{:02x}{:02x}{:02x}", cp.rgba[0], cp.rgba[1], cp.rgba[2]);
+    push_ui_text(cmds, sv_x, info_y, "HEX:".to_string(), pal.text_dim, true);
+    push_text(cmds, sv_x + 36.0, info_y, hex, pal.text, false);
+    push_ui_text(cmds, sv_x, info_y + 18.0,
+                 format!("RGB: {} {} {}", cp.rgba[0], cp.rgba[1], cp.rgba[2]),
+                 pal.text, false);
+    push_ui_text(cmds, sv_x, info_y + 36.0,
+                 "Klik mimo zavre".to_string(), pal.text_disabled, false);
 }
 
 /// Hit-test pro settings popup. Vraci akci nebo None.
@@ -1221,8 +1277,22 @@ fn paint_styles_pane(
         }
         sy += ROW_H + 8.0;
     } else {
+        let mut last_inherited_from: Option<String> = None;
         for rule in &state.styles.matched_rules {
             if sy >= max_y { break; }
+            // Inherited group header.
+            if rule.inherited_from != last_inherited_from {
+                if let Some(tag) = &rule.inherited_from {
+                    sy += 4.0;
+                    if in_view(sy) {
+                        push_ui_text(cmds, pad_x, sy,
+                                     format!("Pododedeno z {}", tag),
+                                     pal.text_dim, true);
+                    }
+                    sy += ROW_H + 4.0;
+                }
+                last_inherited_from = rule.inherited_from.clone();
+            }
             let src_label = match &rule.source {
                 crate::devtools::model::styles::RuleSource::UserAgent => "user agent".to_string(),
                 crate::devtools::model::styles::RuleSource::Inline => "inline".to_string(),
@@ -2346,6 +2416,10 @@ pub enum DevtoolsHit {
     SettingsDock(crate::devtools::profile::DockPosition),
     /// Klik mimo settings popup nebo na X.
     SettingsClose,
+    /// Color picker: hue slider klik (hue 0..360).
+    ColorPickerHue(f32),
+    /// Color picker: klik mimo -> close.
+    ColorPickerClose,
 }
 
 /// Stable ID pro collapsible sections - persistuje state napric framem.
@@ -2373,6 +2447,28 @@ pub fn devtools_hit_test(
     mouse_x: f32, mouse_y: f32,
 ) -> DevtoolsHit {
     if !state.panel_open { return DevtoolsHit::None; }
+    // Color picker priority: klik mimo popup -> close.
+    if let Some(cp) = &state.color_picker {
+        let pop_w = 240.0;
+        let pop_h = 220.0;
+        if mouse_x < cp.anchor_x || mouse_x >= cp.anchor_x + pop_w
+           || mouse_y < cp.anchor_y || mouse_y >= cp.anchor_y + pop_h {
+            return DevtoolsHit::ColorPickerClose;
+        }
+        // Hue slider hit.
+        let sv_x = cp.anchor_x + 10.0;
+        let sv_y = cp.anchor_y + 10.0;
+        let sv_w = pop_w - 20.0;
+        let sv_h = 120.0;
+        let hue_y = sv_y + sv_h + 8.0;
+        if mouse_y >= hue_y && mouse_y < hue_y + 12.0
+           && mouse_x >= sv_x && mouse_x < sv_x + sv_w {
+            let frac = ((mouse_x - sv_x) / sv_w).clamp(0.0, 1.0);
+            return DevtoolsHit::ColorPickerHue(frac * 360.0);
+        }
+        // SV box hit (TODO - aktualne nedispatchuje).
+        return DevtoolsHit::PanelArea;
+    }
     use crate::devtools::profile::DockPosition;
     let s = state.panel_h.min(match state.dock_position {
         DockPosition::Left | DockPosition::Right => win_w * 0.7,

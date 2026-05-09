@@ -95,6 +95,32 @@ pub struct DevToolsState {
     pub dock_position: profile::DockPosition,
     /// Settings popup state (kdyz user otevre dock chooser dialog).
     pub settings_popup_open: bool,
+    /// Color picker popup state. Some = aktivni (user kliknul na color swatch).
+    pub color_picker: Option<ColorPickerState>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ColorPickerState {
+    /// Anchor pozice (kde popup vyskoci) - typicky pod swatch.
+    pub anchor_x: f32,
+    pub anchor_y: f32,
+    /// Aktualne editovana barva (RGBA 0..255).
+    pub rgba: [u8; 4],
+    /// HSV hue 0..360 pro slider.
+    pub hue: f32,
+    /// Source identifikator pro write-back: (node_id, property).
+    pub target: Option<(usize, String)>,
+}
+
+impl Default for ColorPickerState {
+    fn default() -> Self {
+        Self {
+            anchor_x: 0.0, anchor_y: 0.0,
+            rgba: [255, 0, 0, 255],
+            hue: 0.0,
+            target: None,
+        }
+    }
 }
 
 /// Side panel sub-tab v Inspector.
@@ -167,6 +193,7 @@ impl Default for DevToolsState {
             side_panel_w: 280.0,
             dock_position: profile::load_dock_position(),
             settings_popup_open: false,
+            color_picker: None,
         }
     }
 }

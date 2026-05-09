@@ -7,6 +7,9 @@ pub struct MatchedRule {
     pub specificity: u32,
     /// (property, value, important, overridden_by_later) - serazene per source.
     pub declarations: Vec<RuleDecl>,
+    /// Pri rule zdedeno z ancestoru (CSS inheritance) Some(tag), jinak None.
+    /// Firefox-style group: "Pododědo z {tag}" header v styles pane.
+    pub inherited_from: Option<String>,
 }
 
 #[derive(Debug, Clone)]

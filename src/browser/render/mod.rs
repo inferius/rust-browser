@@ -953,6 +953,27 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                 DevtoolsHit::SettingsClose => {
                                     self.devtools.settings_popup_open = false;
                                 }
+                                DevtoolsHit::ColorPickerHue(h) => {
+                                    if let Some(cp) = self.devtools.color_picker.as_mut() {
+                                        cp.hue = h;
+                                        // Convert HSV -> RGB pri V=255 S=255.
+                                        let h_deg = h;
+                                        let c = 255u8;
+                                        let x = (255.0 * (1.0 - ((h_deg / 60.0) % 2.0 - 1.0).abs())) as u8;
+                                        let (r, g, b) = match (h_deg / 60.0) as i32 {
+                                            0 => (c, x, 0),
+                                            1 => (x, c, 0),
+                                            2 => (0, c, x),
+                                            3 => (0, x, c),
+                                            4 => (x, 0, c),
+                                            _ => (c, 0, x),
+                                        };
+                                        cp.rgba = [r, g, b, 255];
+                                    }
+                                }
+                                DevtoolsHit::ColorPickerClose => {
+                                    self.devtools.color_picker = None;
+                                }
                                 DevtoolsHit::OverlayToggle(kind, node_id) => {
                                     let pos = self.devtools.overlays.iter().position(|o|
                                         o.node_id == node_id && o.kind == kind);
@@ -3158,6 +3179,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 if let Some(node) = find_node_by_ptr(&document_root, sel) {
                     use crate::devtools::model::styles::{MatchedRule, RuleSource, RuleDecl};
                     let mut matched: Vec<MatchedRule> = Vec::new();
+                    // 1. Direct match na selected node.
                     for (sheet_idx, sheet) in stylesheets.iter().enumerate() {
                         for rule in &sheet.rules {
                             for sel_obj in &rule.selectors {
@@ -3174,11 +3196,58 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                         source: RuleSource::StyleBlock { index: sheet_idx },
                                         specificity: 0,
                                         declarations: decls,
+                                        inherited_from: None,
                                     });
                                     break;
                                 }
                             }
                         }
+                    }
+                    // 2. Inherited rules: walk parent chain, najdi pravidla
+                    // ktera matchuji ancestor + maji inheritable property.
+                    fn is_inheritable(prop: &str) -> bool {
+                        matches!(prop,
+                            "color" | "font-family" | "font-size" | "font-weight"
+                            | "font-style" | "font-variant" | "font-stretch"
+                            | "line-height" | "letter-spacing" | "word-spacing"
+                            | "text-align" | "text-indent" | "text-transform"
+                            | "white-space" | "visibility" | "cursor" | "direction"
+                            | "list-style" | "list-style-type" | "list-style-position"
+                            | "list-style-image" | "border-collapse" | "border-spacing"
+                            | "caption-side" | "empty-cells" | "quotes" | "tab-size"
+                            | "writing-mode" | "orphans" | "widows" | "hyphens"
+                            | "word-break" | "word-wrap" | "overflow-wrap")
+                    }
+                    let mut current = node.parent.borrow().upgrade();
+                    while let Some(parent) = current {
+                        let parent_tag = parent.tag_name().unwrap_or_else(|| "node".into());
+                        for (sheet_idx, sheet) in stylesheets.iter().enumerate() {
+                            for rule in &sheet.rules {
+                                for sel_obj in &rule.selectors {
+                                    if super::cascade::matches_selector(&parent, sel_obj) {
+                                        let inh_decls: Vec<RuleDecl> = rule.declarations.iter()
+                                            .filter(|d| is_inheritable(&d.property))
+                                            .map(|d| RuleDecl {
+                                                property: d.property.clone(),
+                                                value: d.value.clone(),
+                                                important: d.important,
+                                                overridden: false,
+                                            }).collect();
+                                        if !inh_decls.is_empty() {
+                                            matched.push(MatchedRule {
+                                                selector: format!("{:?}", sel_obj).chars().take(80).collect(),
+                                                source: RuleSource::StyleBlock { index: sheet_idx },
+                                                specificity: 0,
+                                                declarations: inh_decls,
+                                                inherited_from: Some(parent_tag.clone()),
+                                            });
+                                        }
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        current = parent.parent.borrow().upgrade();
                     }
                     self.devtools.styles.matched_rules = matched;
                 } else {
