@@ -27,6 +27,9 @@ pub struct Tab {
     pub document_root: Option<std::rc::Rc<crate::browser::dom::NodeData>>,
     /// Pinned tab - menci sirka, prvni v poradi, nejde zavrit krome unpinu.
     pub pinned: bool,
+    /// Loading state - pri navigate na URL true, po dokonceni false.
+    /// Vyuzite pro busy indicator v tab chip.
+    pub loading: bool,
 }
 
 impl Tab {
@@ -47,6 +50,7 @@ impl Tab {
             history_idx: 0,
             document_root: None,
             pinned: false,
+            loading: false,
         }
     }
 
@@ -64,6 +68,7 @@ impl Tab {
             history_idx: 0,
             document_root: None,
             pinned: false,
+            loading: false,
         }
     }
 }
