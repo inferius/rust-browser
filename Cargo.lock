@@ -26,6 +26,7 @@ dependencies = [
  "printpdf",
  "regex",
  "selectors",
+ "serde_json",
  "stacker",
  "tungstenite",
  "unicode-general-category",
