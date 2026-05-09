@@ -663,6 +663,15 @@ pub struct LayoutBox {
     pub field_sizing: String,
     /// CSS Animations L2 - interpolate-size: numeric-only (default) | allow-keywords.
     pub interpolate_size: String,
+    /// CSS Multi-column Layout L1 - column-count: 1+ (auto = 1 default).
+    /// Pri > 1: layout_block rozdeli flow children rovnomerne do N sloupcu.
+    pub column_count: u32,
+    /// column-gap mezi sloupci (px).
+    pub column_gap_multicol: f32,
+    /// column-rule: width style color - separator mezi sloupci.
+    pub column_rule_width: f32,
+    pub column_rule_color: [u8; 4],
+    pub column_rule_style: String,
     /// CSS Grid L1/L2 - grid-template-columns/rows raw string (parser-only zatim).
     /// Format: "<line-name>? <track-size> <line-name>? ..." napr. "[start] 1fr [mid] 2fr [end]".
     pub grid_template_columns: String,
@@ -1012,6 +1021,11 @@ impl LayoutBox {
             text_decoration_skip_ink: String::new(),
             field_sizing: String::new(),
             interpolate_size: String::new(),
+            column_count: 1,
+            column_gap_multicol: 16.0,
+            column_rule_width: 0.0,
+            column_rule_color: [128, 128, 128, 255],
+            column_rule_style: String::new(),
             grid_template_columns: String::new(),
             grid_template_rows: String::new(),
             grid_template_areas: String::new(),
@@ -1966,7 +1980,40 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(v) = s.get("flex-shrink") { bx.flex_shrink = v.trim().parse().unwrap_or(1.0); }
     if let Some(v) = s.get("flex-basis") { bx.flex_basis = v.trim().to_string(); }
     if let Some(v) = s.get("row-gap") { bx.row_gap = parse_length(v); }
-    if let Some(v) = s.get("column-gap") { bx.column_gap = parse_length(v); }
+    if let Some(v) = s.get("column-gap") {
+        bx.column_gap = parse_length(v);
+        bx.column_gap_multicol = parse_length(v);
+    }
+    // Multi-column Layout L1: column-count + columns shorthand + column-rule.
+    if let Some(v) = s.get("column-count") {
+        bx.column_count = v.trim().parse::<u32>().unwrap_or(1).max(1);
+    }
+    if let Some(v) = s.get("columns") {
+        // shorthand: column-width column-count (any order, auto allowed).
+        for tok in v.split_whitespace() {
+            if let Ok(n) = tok.parse::<u32>() {
+                bx.column_count = n.max(1);
+            }
+            // column-width ignorovan pro ted; jen count + auto.
+        }
+    }
+    if let Some(v) = s.get("column-rule") {
+        // shorthand: <width> <style> <color>
+        for tok in v.split_whitespace() {
+            if tok.ends_with("px") || tok.ends_with("em") {
+                bx.column_rule_width = parse_length(tok);
+            } else if matches!(tok, "solid" | "dashed" | "dotted" | "double" | "none") {
+                bx.column_rule_style = tok.to_string();
+            } else if let Some(c) = parse_color(tok) {
+                bx.column_rule_color = c;
+            }
+        }
+    }
+    if let Some(v) = s.get("column-rule-width") { bx.column_rule_width = parse_length(v); }
+    if let Some(v) = s.get("column-rule-style") { bx.column_rule_style = v.trim().to_string(); }
+    if let Some(v) = s.get("column-rule-color") {
+        if let Some(c) = parse_color(v.trim()) { bx.column_rule_color = c; }
+    }
     if let Some(v) = s.get("gap") {
         let parts: Vec<&str> = v.split_whitespace().collect();
         if parts.len() == 1 {
@@ -2837,11 +2884,91 @@ fn layout_block_vertical(bx: &mut LayoutBox) {
     }
 }
 
+/// CSS Multi-column Layout L1 - rozdelit flow children do N rovnomernych sloupcu.
+/// Heuristic balance: rozdeli children rovnomerne dle pocet (nejjednodussi -
+/// real spec dela balance dle vyska pres iteracni algoritmus).
+fn layout_block_multicol(bx: &mut LayoutBox) {
+    let pad_l = bx.padding_left.unwrap_or(bx.padding);
+    let pad_r = bx.padding_right.unwrap_or(bx.padding);
+    let pad_t = bx.padding_top.unwrap_or(bx.padding);
+    let pad_b = bx.padding_bottom.unwrap_or(bx.padding);
+    let inner_x = bx.rect.x + pad_l + bx.border_width;
+    let inner_y = bx.rect.y + pad_t + bx.border_width;
+    let inner_w = bx.rect.width - pad_l - pad_r - 2.0 * bx.border_width;
+    let n_cols = bx.column_count.max(1) as f32;
+    let gap = bx.column_gap_multicol;
+    // Sirka jedneho sloupce: (inner_w - gap*(n-1)) / n.
+    let col_w = ((inner_w - gap * (n_cols - 1.0)) / n_cols).max(1.0);
+    // Round-robin distribuce children do sloupcu.
+    // Real CSS balance dle vyska: sum heights -> target = total/n; distribuje
+    // children sekvencne, pri overfull preskoci na dalsi col. Aproximujeme.
+    let n_children = bx.children.len();
+    if n_children == 0 {
+        // Empty container - inner_h zustane podle padding.
+        if !bx.taffy_mode || bx.rect.height == 0.0 {
+            bx.rect.height = pad_t + pad_b + 2.0 * bx.border_width;
+        }
+        return;
+    }
+    // Pre-pass: layout kazdy child as standalone (rect.x/y bude prepocitano)
+    // pro znalost child.rect.height (potrebuju pri balance).
+    for child in bx.children.iter_mut() {
+        child.rect.x = inner_x;
+        child.rect.y = inner_y;
+        child.rect.width = col_w;
+        if let Some(eh) = child.explicit_height {
+            child.rect.height = eh;
+        } else if child.rect.height == 0.0 && child.text.is_some() {
+            child.rect.height = child.font_size * child.line_height;
+        }
+        layout_dispatch(child);
+    }
+    // Total content height pro target_h.
+    let total_h: f32 = bx.children.iter().map(|c| {
+        let m_t = c.margin_top.unwrap_or(c.margin);
+        let m_b = c.margin_bottom.unwrap_or(c.margin);
+        c.rect.height + m_t + m_b
+    }).sum();
+    let target_h = (total_h / n_cols).max(1.0);
+    // Distribuce: greedy fill kazdeho sloupce do target_h.
+    let mut col_idx = 0u32;
+    let mut col_y = inner_y;
+    let mut col_max_h = 0.0_f32;
+    for child in bx.children.iter_mut() {
+        let m_t = child.margin_top.unwrap_or(child.margin);
+        let m_b = child.margin_bottom.unwrap_or(child.margin);
+        let h = child.rect.height + m_t + m_b;
+        // Pokud aktualni col by overfull a neni posledni, prejdi do dalsiho.
+        if col_idx + 1 < bx.column_count && (col_y - inner_y) + h > target_h && (col_y - inner_y) > 0.0 {
+            col_max_h = col_max_h.max(col_y - inner_y);
+            col_idx += 1;
+            col_y = inner_y;
+        }
+        let col_x = inner_x + (col_idx as f32) * (col_w + gap);
+        child.rect.x = col_x;
+        child.rect.y = col_y + m_t;
+        child.rect.width = col_w;
+        // Re-layout child s novou rect (column-internal flow).
+        layout_dispatch(child);
+        col_y += h;
+        col_max_h = col_max_h.max(col_y - inner_y);
+    }
+    // Container vyska = nejvetsi sloupec + padding.
+    if !bx.taffy_mode || bx.rect.height == 0.0 {
+        bx.rect.height = pad_t + col_max_h + pad_b + 2.0 * bx.border_width;
+    }
+}
+
 pub fn layout_block(bx: &mut LayoutBox) {
     // writing-mode: vertical-rl / vertical-lr - block axis zmena na X
     let vertical = matches!(bx.writing_mode.as_str(), "vertical-rl" | "vertical-lr");
     if vertical {
         layout_block_vertical(bx);
+        return;
+    }
+    // Multi-column Layout L1: pri column-count > 1 rozdeli flow do N sloupcu.
+    if bx.column_count > 1 {
+        layout_block_multicol(bx);
         return;
     }
     // V taffy_mode: pamatuj puvodni height (uz nastaveny rodicem). Pak po vypoctu

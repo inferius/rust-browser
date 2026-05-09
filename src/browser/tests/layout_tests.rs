@@ -26,6 +26,36 @@ fn layout_block_stacking() {
 }
 
 #[test]
+fn multicol_distributes_children_to_columns() {
+    let doc = parse_html(r#"<html><body><div class="cols">
+        <p>A</p><p>B</p><p>C</p><p>D</p><p>E</p><p>F</p>
+    </div></body></html>"#, "");
+    let css = parse_stylesheet(r#"
+        .cols { column-count: 3; column-gap: 10px; width: 600px; }
+        p { height: 50px; margin: 0; }
+    "#);
+    let map = cascade::cascade(&doc.root, &[css]);
+    let layout = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+    let cols = layout.children.iter()
+        .find(|c| c.tag.as_deref() == Some("html"))
+        .and_then(|h| h.children.iter().find(|c| c.tag.as_deref() == Some("body")))
+        .and_then(|b| b.children.iter().find(|c| c.tag.as_deref() == Some("div")))
+        .expect("div.cols");
+    // 3 sloupce -> children rozdeleny po 2 (6 total / 3 cols).
+    // Sirka kazdeho sloupce: (600 - 2*10) / 3 = ~193.3 px.
+    let col_w = (600.0 - 2.0 * 10.0) / 3.0;
+    // Children dostali ruzne x souradnice po sloupcich.
+    let unique_xs: std::collections::HashSet<i32> = cols.children.iter()
+        .map(|c| c.rect.x as i32).collect();
+    assert!(unique_xs.len() >= 2, "musi byt vice nez 1 sloupec, x = {:?}", unique_xs);
+    // Kazdy child ma sirku col_w +- 2px tolerance.
+    for c in &cols.children {
+        assert!((c.rect.width - col_w).abs() < 5.0,
+            "expected col_w ~{} got {}", col_w, c.rect.width);
+    }
+}
+
+#[test]
 fn parse_color_hex() {
     assert_eq!(layout::parse_color("#ff0000"), Some([255, 0, 0, 255]));
     assert_eq!(layout::parse_color("#f00"), Some([255, 0, 0, 255]));

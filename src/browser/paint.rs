@@ -1670,6 +1670,32 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
         });
     }
 
+    // CSS Multi-column Layout L1 - column-rule mezi sloupci. Vykresleno PO
+    // children aby separator byl viditelny pres pozadi sloupcu.
+    if bx.column_count > 1 && bx.column_rule_width > 0.0 && bx.column_rule_style != "none" {
+        let pad_l = bx.padding_left.unwrap_or(bx.padding);
+        let pad_r = bx.padding_right.unwrap_or(bx.padding);
+        let pad_t = bx.padding_top.unwrap_or(bx.padding);
+        let pad_b = bx.padding_bottom.unwrap_or(bx.padding);
+        let inner_x = bx.rect.x + pad_l + bx.border_width;
+        let inner_y = bx.rect.y + pad_t + bx.border_width;
+        let inner_w = bx.rect.width - pad_l - pad_r - 2.0 * bx.border_width;
+        let inner_h = bx.rect.height - pad_t - pad_b - 2.0 * bx.border_width;
+        let n_cols = bx.column_count as f32;
+        let gap = bx.column_gap_multicol;
+        let col_w = ((inner_w - gap * (n_cols - 1.0)) / n_cols).max(1.0);
+        let mut color = bx.column_rule_color;
+        color[3] = ((color[3] as u32 * alpha_mul as u32) / 255).min(255) as u8;
+        for i in 1..bx.column_count {
+            // Rule cara mezi sloupcem (i-1) a i. Stred gap.
+            let rx = inner_x + (i as f32) * col_w + (i as f32 - 0.5) * gap - bx.column_rule_width * 0.5;
+            cmds.push(DisplayCommand::Rect {
+                x: rx, y: inner_y, w: bx.column_rule_width, h: inner_h,
+                color, radius: 0.0,
+            });
+        }
+    }
+
     // mask-image end marker
     if has_mask {
         cmds.push(DisplayCommand::MaskEnd);
