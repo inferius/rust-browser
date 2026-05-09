@@ -2,6 +2,35 @@
 
 Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 
+## Session N+5: A1-A4 + B1-B2 + C1-C3 (full sprint)
+
+**2439 tests pass, build clean.**
+
+A1 Color swatch click -> picker (RefCell swatch_zones cache + hit-test).
+A2 :hov / .cls / + buttons (force pseudo cycle, class manager, add rule
+   stub) + active highlight.
+A3 var() chip click -> jump na :root rule (RefCell var_zones cache).
+A4 Panel Left/Right dock content x-shift (local cmds buffer + flush
+   s shift_cmd_x).
+
+B1 Flex item diagram - basis (modry) + grow (zelena) bar + final size.
+B2 Grid container info - grid-template columns/rows/areas + gap.
+
+C1 TabManager (src/browser/render/tabs.rs) - Tab struct + TabManager
+   (open/close/switch/next/prev) + 8 unit testu. Foundation pro multi-tab.
+C2 History persistence (src/devtools/history.rs) - HistoryEntry +
+   ~/.rwe/profiles/<active>/history.json + 4 unit testu.
+   Bookmarks persistence (src/devtools/bookmarks.rs) + 3 unit testu.
+C3 Animations timeline scrubber (track + playhead + tick markers).
+
+Pred-tim phase (commited):
+- Per-dock render geometry (Top/Bottom plne, Left/Right partial)
+- Color picker popup (HSV slider, HEX/RGB labels)
+- Inherited styles section ("Pododedeno z {tag}")
+- Animations + Fonts sub-tabs full populace
+- Computed sub-tab filter + per-prop color swatches
+- Box model viz (Firefox nested rectangle)
+
 ## Session N+4: DevTools Firefox-style + browser shell foundation
 
 **Build clean, 2416 tests pass.**
