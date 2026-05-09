@@ -2,6 +2,25 @@
 
 Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 
+## Session N+15: about:newtab dynamic + tab pin
+
+**2448 tests pass, build clean (0 warnings).**
+
+About:newtab dynamic:
+- render_about_newtab() z history (top 8 sites) + bookmarks chips
+- Stranky cards (about:config / history / bookmarks)
+- Hint footer
+- Tab::empty() pouziva render_about_newtab()
+
+Tab pin:
+- Tab.pinned: bool field
+- Tab context menu prvni: "Pripnout"/"Odepnout"
+- TabPinToggle action - togglane + sort pinned-first + preserve active
+- Pinned chip 36px wide (vs 200px), 📌 emoji, no title/close
+- Pinned not closable (TabClose disabled)
+
+paint_shell_chrome_with_pins varianta s pinned bool list.
+
 ## Session N+14: shell polish + chrome interactions
 
 **2448 tests pass, build clean (0 warnings).**
