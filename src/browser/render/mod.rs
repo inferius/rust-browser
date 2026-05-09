@@ -477,6 +477,9 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         shell_mode: bool,
         /// Chrome bar vyska (tab bar + nav bar).
         shell_chrome_h: f32,
+        /// Multi-tab manager (shell mode). Active tab drives App.html/css/...
+        /// Switch tab = swap active state via tabs.switch_to + reload.
+        tabs: tabs::TabManager,
     }
 
     impl ApplicationHandler for App {
@@ -696,6 +699,82 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     let viewport_w = self.viewport_w_logical();
                     let viewport_h = self.viewport_h_logical();
                     let panel_h = self.panel_h_logical();
+
+                    // Shell chrome hit-test (priorita nad page).
+                    if self.shell_mode {
+                        let viewport_w = self.viewport_w_logical();
+                        let mx = self.mouse_x;
+                        let my_screen = self.mouse_y - self.scroll_y;
+                        if my_screen < self.shell_chrome_h {
+                            let hit = hit_chrome(viewport_w, self.shell_chrome_h, &self.tabs, mx, my_screen);
+                            match hit {
+                                ChromeHit::TabClick(idx) => {
+                                    self.tabs.switch_to(idx);
+                                    let t = self.tabs.active_tab().clone();
+                                    self.html = t.html;
+                                    self.css = t.css;
+                                    self.base_url = t.url;
+                                    self.cached_layout_root = None;
+                                    self.cached_stylesheets = None;
+                                    self.scroll_y = t.scroll_y;
+                                    self.scroll_x = t.scroll_x;
+                                    self.render();
+                                    return;
+                                }
+                                ChromeHit::TabClose(idx) => {
+                                    self.tabs.close(idx);
+                                    let t = self.tabs.active_tab().clone();
+                                    self.html = t.html;
+                                    self.css = t.css;
+                                    self.base_url = t.url;
+                                    self.cached_layout_root = None;
+                                    self.cached_stylesheets = None;
+                                    self.render();
+                                    return;
+                                }
+                                ChromeHit::NewTab => {
+                                    self.tabs.open(crate::browser::render::tabs::Tab::empty());
+                                    let t = self.tabs.active_tab().clone();
+                                    self.html = t.html;
+                                    self.css = t.css;
+                                    self.base_url = None;
+                                    self.cached_layout_root = None;
+                                    self.cached_stylesheets = None;
+                                    self.render();
+                                    return;
+                                }
+                                ChromeHit::Back => {
+                                    if self.history_idx > 0 {
+                                        self.history_idx -= 1;
+                                        let url = self.history[self.history_idx].clone();
+                                        self.navigate_url_no_history(&url);
+                                    }
+                                    return;
+                                }
+                                ChromeHit::Forward => {
+                                    if self.history_idx + 1 < self.history.len() {
+                                        self.history_idx += 1;
+                                        let url = self.history[self.history_idx].clone();
+                                        self.navigate_url_no_history(&url);
+                                    }
+                                    return;
+                                }
+                                ChromeHit::Reload => {
+                                    if let Some(u) = self.base_url.clone() {
+                                        self.navigate_url_no_history(&u);
+                                    }
+                                    return;
+                                }
+                                ChromeHit::UrlBar => {
+                                    self.addr_open = true;
+                                    self.addr_input = crate::devtools::model::text_buffer::SimpleStringBuffer::with_text(self.base_url.clone().unwrap_or_default());
+                                    self.render();
+                                    return;
+                                }
+                                ChromeHit::None => {}
+                            }
+                        }
+                    }
 
                     // Main page scrollbar hit-test (priorita nad page click).
                     // Pozn: scrollbar je shifted by shift_command_x(-scroll_x), takze
@@ -1513,6 +1592,66 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                 self.render();
                                 return;
                             }
+                            // Shell tab shortcuts.
+                            if self.shell_mode {
+                                if s.as_str() == "t" || s.as_str() == "T" {
+                                    // Ctrl+T = new tab.
+                                    self.tabs.open(crate::browser::render::tabs::Tab::empty());
+                                    let t = self.tabs.active_tab().clone();
+                                    self.html = t.html;
+                                    self.css = t.css;
+                                    self.base_url = None;
+                                    self.cached_layout_root = None;
+                                    self.cached_stylesheets = None;
+                                    self.render();
+                                    return;
+                                }
+                                if s.as_str() == "w" || s.as_str() == "W" {
+                                    // Ctrl+W = close active tab.
+                                    let active = self.tabs.active;
+                                    self.tabs.close(active);
+                                    let t = self.tabs.active_tab().clone();
+                                    self.html = t.html;
+                                    self.css = t.css;
+                                    self.base_url = t.url;
+                                    self.cached_layout_root = None;
+                                    self.cached_stylesheets = None;
+                                    self.render();
+                                    return;
+                                }
+                                // Ctrl+1..9 jump to tab N-1.
+                                if let Ok(n) = s.as_str().parse::<usize>() {
+                                    if n >= 1 && n <= 9 {
+                                        if n - 1 < self.tabs.tabs.len() {
+                                            self.tabs.switch_to(n - 1);
+                                            let t = self.tabs.active_tab().clone();
+                                            self.html = t.html;
+                                            self.css = t.css;
+                                            self.base_url = t.url;
+                                            self.cached_layout_root = None;
+                                            self.cached_stylesheets = None;
+                                            self.render();
+                                        }
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                        // Ctrl+Tab = next tab.
+                        if matches!(&key_event.logical_key, Key::Named(NamedKey::Tab)) && self.shell_mode {
+                            if self.modifiers.shift_key() {
+                                self.tabs.prev();
+                            } else {
+                                self.tabs.next();
+                            }
+                            let t = self.tabs.active_tab().clone();
+                            self.html = t.html;
+                            self.css = t.css;
+                            self.base_url = t.url;
+                            self.cached_layout_root = None;
+                            self.cached_stylesheets = None;
+                            self.render();
+                            return;
                         }
                     }
                     // Ctrl+= / Ctrl++ / Ctrl+- / Ctrl+0 = zoom controls.
@@ -1725,8 +1864,61 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         }
     }
 
+    /// Chrome bar hit zones.
+    pub enum ChromeHit {
+        TabClick(usize),   // klik na tab chip idx
+        TabClose(usize),   // klik na X u tab idx
+        NewTab,            // +
+        Back,              // <
+        Forward,           // >
+        Reload,            // ↻
+        UrlBar,            // klik na URL input
+        None,
+    }
+
+    pub fn hit_chrome(win_w: f32, chrome_h: f32, tabs: &tabs::TabManager,
+                      mouse_x: f32, mouse_y: f32) -> ChromeHit {
+        if mouse_y < 0.0 || mouse_y >= chrome_h { return ChromeHit::None; }
+        let tab_h = 28.0;
+        let nav_h = chrome_h - tab_h;
+        if mouse_y < tab_h {
+            // Tab strip.
+            let tab_w = 200.0_f32.min(win_w / (tabs.tabs.len().max(1) as f32 + 0.5));
+            let mut tx = 4.0;
+            for (i, _) in tabs.tabs.iter().enumerate() {
+                if mouse_x >= tx && mouse_x < tx + tab_w {
+                    // Close X v pravej casti chipu.
+                    if mouse_x >= tx + tab_w - 22.0 {
+                        return ChromeHit::TabClose(i);
+                    }
+                    return ChromeHit::TabClick(i);
+                }
+                tx += tab_w + 2.0;
+            }
+            // + new tab.
+            if mouse_x >= tx && mouse_x < tx + 22.0 {
+                return ChromeHit::NewTab;
+            }
+            return ChromeHit::None;
+        }
+        // Nav bar.
+        let ny = tab_h;
+        if mouse_y >= ny && mouse_y < ny + nav_h {
+            if mouse_x >= 8.0 && mouse_x < 28.0 { return ChromeHit::Back; }
+            if mouse_x >= 28.0 && mouse_x < 48.0 { return ChromeHit::Forward; }
+            if mouse_x >= 48.0 && mouse_x < 68.0 { return ChromeHit::Reload; }
+            if mouse_x >= 78.0 && mouse_x < win_w - 12.0 { return ChromeHit::UrlBar; }
+        }
+        ChromeHit::None
+    }
+
     /// Paint chrome bar (tabs + nav) - free fn aby slo volat behem renderer borrow.
     fn paint_shell_chrome_inline(list: &mut Vec<DisplayCommand>, win_w: f32, chrome_h: f32, url: &str) {
+        paint_shell_chrome_full(list, win_w, chrome_h, url, None, 0);
+    }
+
+    fn paint_shell_chrome_full(list: &mut Vec<DisplayCommand>, win_w: f32, chrome_h: f32,
+                                url: &str, tab_titles: Option<&[String]>, active: usize) {
         {
             let tab_h = 28.0;
             let nav_h = chrome_h - tab_h;
@@ -1739,31 +1931,49 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 x: 0.0, y: chrome_h - 1.0, w: win_w, h: 1.0,
                 color: [76, 76, 85, 255], radius: 0.0,
             });
-            // Tab strip.
-            let tab_w = 200.0_f32.min(win_w - 60.0);
-            list.push(DisplayCommand::Rect {
-                x: 4.0, y: 4.0, w: tab_w, h: tab_h - 4.0,
-                color: [27, 27, 35, 255], radius: 4.0,
-            });
-            // Title in tab.
-            let title = if url.is_empty() { "Nova zalozka".to_string() }
-                       else {
-                           let s = url.split('/').last().unwrap_or(url).to_string();
-                           if s.is_empty() { "page".to_string() } else { s }
-                       };
-            list.push(DisplayCommand::Text {
-                x: 12.0, y: 8.0, content: title,
-                color: [251, 251, 254, 255],
-                font_size: 13.0, bold: false, italic: false,
-                font_family: "CamingoMono".into(),
-                strikethrough: false, underline: false,
-            });
+            // Tab strip - per-tab chip.
+            let titles_owned: Vec<String> = if let Some(t) = tab_titles {
+                t.to_vec()
+            } else {
+                vec![if url.is_empty() { "Nova zalozka".to_string() }
+                     else {
+                         let s = url.split('/').last().unwrap_or(url).to_string();
+                         if s.is_empty() { "page".to_string() } else { s }
+                     }]
+            };
+            let n = titles_owned.len();
+            let tab_w = 200.0_f32.min((win_w - 60.0) / (n as f32).max(1.0));
+            let mut tx = 4.0;
+            for (i, title) in titles_owned.iter().enumerate() {
+                let bg = if i == active { [27, 27, 35, 255] } else { [42, 41, 50, 255] };
+                list.push(DisplayCommand::Rect {
+                    x: tx, y: 4.0, w: tab_w, h: tab_h - 4.0,
+                    color: bg, radius: 4.0,
+                });
+                let trunc: String = title.chars().take(22).collect();
+                list.push(DisplayCommand::Text {
+                    x: tx + 8.0, y: 8.0, content: trunc,
+                    color: [251, 251, 254, 255],
+                    font_size: 13.0, bold: i == active, italic: false,
+                    font_family: "Inter".into(),
+                    strikethrough: false, underline: false,
+                });
+                // Close X.
+                list.push(DisplayCommand::Text {
+                    x: tx + tab_w - 16.0, y: 8.0, content: "x".to_string(),
+                    color: [191, 191, 201, 255],
+                    font_size: 12.0, bold: false, italic: false,
+                    font_family: "Inter".into(),
+                    strikethrough: false, underline: false,
+                });
+                tx += tab_w + 2.0;
+            }
             // + new tab button.
             list.push(DisplayCommand::Text {
-                x: tab_w + 12.0, y: 8.0, content: "+".to_string(),
+                x: tx + 4.0, y: 6.0, content: "+".to_string(),
                 color: [191, 191, 201, 255],
-                font_size: 16.0, bold: true, italic: false,
-                font_family: "CamingoMono".into(),
+                font_size: 18.0, bold: true, italic: false,
+                font_family: "Inter".into(),
                 strikethrough: false, underline: false,
             });
 
@@ -2966,6 +3176,12 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             self.history.push(url.to_string());
             self.history_idx = self.history.len() - 1;
             self.navigate_url_no_history(url);
+            // Persist v profile history (~/.rwe/profiles/<active>/history.json).
+            crate::devtools::history::append_entry(&crate::devtools::history::HistoryEntry {
+                url: url.to_string(),
+                title: url.split('/').last().unwrap_or(url).to_string(),
+                visited_at: crate::devtools::history::now_ts(),
+            });
         }
 
         /// Navigate bez modifikace history (back/forward use this).
@@ -3684,8 +3900,10 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // self.paint_shell_chrome (borrow konflikt s renderer mut).
             if self.shell_mode {
                 let win_w_logical = (r.config.width as f32) / (self.zoom * r.scale_factor);
-                paint_shell_chrome_inline(&mut display_list, win_w_logical, self.shell_chrome_h,
-                                          self.base_url.as_deref().unwrap_or(""));
+                let titles: Vec<String> = self.tabs.tabs.iter().map(|t| t.title.clone()).collect();
+                paint_shell_chrome_full(&mut display_list, win_w_logical, self.shell_chrome_h,
+                                        self.base_url.as_deref().unwrap_or(""),
+                                        Some(&titles), self.tabs.active);
             }
 
             // In-window DevTools panel - emit pred scrollbar a po main viewport content.
@@ -3904,6 +4122,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
     #[cfg(not(target_os = "windows"))]
     let event_loop = EventLoop::new().map_err(|e| e.to_string())?;
     let initial_url = base_url.clone();
+    let initial_tab = tabs::Tab::new(html.clone(), css.clone(), base_url.clone(), current_html_path.clone());
     let mut app = App {
         html, css,
         cached_stylesheets_hash: 0,
@@ -3957,6 +4176,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         page_scrollbar_h_drag: false,
         shell_mode,
         shell_chrome_h: 64.0,
+        tabs: tabs::TabManager::new(initial_tab),
     };
     event_loop.run_app(&mut app).map_err(|e| e.to_string())?;
     Ok(())
