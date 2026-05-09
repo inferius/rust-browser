@@ -1307,6 +1307,9 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                         s.insert(name);
                                     }
                                 }
+                                DevtoolsHit::SidePanelOverflowToggle => {
+                                    self.devtools.side_panel_overflow_open = !self.devtools.side_panel_overflow_open;
+                                }
                                 DevtoolsHit::SettingsToggle => {
                                     self.devtools.settings_popup_open = !self.devtools.settings_popup_open;
                                 }
@@ -1816,7 +1819,11 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         use crate::browser::render::text_input::{dispatch_text_key, TextKeyOutcome};
                         let outcome = dispatch_text_key(input, &key_event.logical_key, ctrl, shift);
                         match outcome {
-                            TextKeyOutcome::Handled => {}
+                            TextKeyOutcome::Handled => {
+                                // Live autocomplete refresh po kazdem typed znaku.
+                                self.trigger_autocomplete();
+                                if let Some(w) = &self.window { w.request_redraw(); }
+                            }
                             TextKeyOutcome::Tab => {
                                 self.trigger_autocomplete();
                                 if let Some(w) = &self.window { w.request_redraw(); }

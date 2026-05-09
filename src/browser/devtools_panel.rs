@@ -883,10 +883,17 @@ fn paint_side_panel(
     push_rect(cmds, x, y, w, strip_h, pal.bg_toolbar);
     push_rect(cmds, x, y + strip_h - 1.0, w, 1.0, pal.border);
     let visible = SidePanelTab::visible_default();
+    // Reserve 24px right pro overflow chevron.
+    let max_tx = x + w - 26.0;
     let mut tx = x + 8.0;
-    for t in visible {
+    let mut overflow_start: Option<usize> = None;
+    for (i, t) in visible.iter().enumerate() {
         let label = t.label();
         let tw = (label.len() as f32) * FONT_W + 12.0;
+        if tx + tw > max_tx {
+            overflow_start = Some(i);
+            break;
+        }
         let active = state.side_panel_tab == *t;
         let hov = mouse_x >= tx && mouse_x < tx + tw && mouse_y >= y + 4.0 && mouse_y < y + strip_h - 4.0;
         let bg = if active { pal.bg_tab_active }
@@ -899,6 +906,45 @@ fn paint_side_panel(
         let col = if active { pal.text } else { pal.text_dim };
         push_ui_text(cmds, tx + 6.0, y + 8.0, label.to_string(), col, active);
         tx += tw + 2.0;
+    }
+    // Overflow chevron - kliknutelny dropdown s ostatnimi taby.
+    let active_in_overflow = overflow_start.map(|s|
+        visible[s..].contains(&state.side_panel_tab)).unwrap_or(false);
+    if overflow_start.is_some() {
+        let cx = x + w - 22.0;
+        let cy = y + 4.0;
+        let cw = 18.0;
+        let ch = strip_h - 8.0;
+        let cb = if active_in_overflow { pal.bg_tab_active }
+                 else if state.side_panel_overflow_open { pal.bg_row_hover }
+                 else { pal.bg_toolbar };
+        push_rect(cmds, cx, cy, cw, ch, cb);
+        push_icon(cmds, cx + 1.0, cy + (ch - ICON_SIZE) * 0.5, ICON_EXPAND_MORE, pal.text);
+        // Dropdown menu.
+        if state.side_panel_overflow_open {
+            let drop_y = y + strip_h + 2.0;
+            let item_h = ROW_H + 4.0;
+            let hidden = &visible[overflow_start.unwrap()..];
+            let menu_h = (hidden.len() as f32) * item_h + 6.0;
+            let menu_x = x + w - 160.0;
+            let menu_w = 156.0;
+            push_rect(cmds, menu_x + 2.0, drop_y + 2.0, menu_w, menu_h, [0, 0, 0, 80]);
+            push_rect(cmds, menu_x, drop_y, menu_w, menu_h, pal.bg_context_menu);
+            push_rect_border(cmds, menu_x, drop_y, menu_w, menu_h, pal.border_strong);
+            let mut iy = drop_y + 4.0;
+            for t in hidden {
+                let active = state.side_panel_tab == *t;
+                let hov = mouse_x >= menu_x && mouse_x < menu_x + menu_w
+                    && mouse_y >= iy && mouse_y < iy + item_h;
+                if hov || active {
+                    push_rect(cmds, menu_x + 2.0, iy, menu_w - 4.0, item_h,
+                              if active { pal.bg_row_selected } else { pal.bg_context_menu_hover });
+                }
+                let col = if active { pal.text_on_accent } else { pal.text };
+                push_ui_text(cmds, menu_x + 10.0, iy + 4.0, t.label().to_string(), col, active);
+                iy += item_h;
+            }
+        }
     }
     let body_y = y + strip_h;
     let body_h = h - strip_h;
@@ -1347,7 +1393,9 @@ fn paint_side_fonts(
     sy = paint_section_header(cmds, state, pal, &SectionId::FontsUsed,
                                "Pouzity font v elementu", x, sy, w);
     if !state.collapsed_sections.contains(&SectionId::FontsUsed) {
-        let family = if bx.font_family.is_empty() { "default (Times Roman)".to_string() }
+        // Real CSS family bez pouhych alias names. Pokud chybi, "default" =
+        // co browser realne pouzije (Times New Roman v render side).
+        let family = if bx.font_family.is_empty() { "default".to_string() }
                      else { bx.font_family.clone() };
         push_text(cmds, pad_x, sy, family.clone(), pal.text, false);
         sy += ROW_H;
@@ -1357,17 +1405,28 @@ fn paint_side_fonts(
                           if bx.italic { "italic" } else { "normal" }),
                   pal.text_dim, false);
         sy += ROW_H;
-        // Glyph preview (sample text).
+        // Glyph preview - render real font_size + family + bold + italic z elementu.
         let preview = "AaBbCcDd 0123";
-        push_rect(cmds, pad_x, sy + 4.0, w - 24.0, 32.0, pal.bg_panel_alt);
+        let preview_size = bx.font_size.max(12.0).min(28.0);
+        let preview_h = preview_size + 12.0;
+        push_rect(cmds, pad_x, sy + 4.0, w - 24.0, preview_h, pal.bg_panel_alt);
+        push_rect_border(cmds, pad_x, sy + 4.0, w - 24.0, preview_h, pal.border);
+        // Pri prazdnem family (default Times Roman v page render) zachovat to
+        // - to je presne co user vidi.
+        let preview_family = if bx.font_family.is_empty() {
+            "Times New Roman".to_string()
+        } else {
+            bx.font_family.clone()
+        };
         cmds.push(DisplayCommand::Text {
             x: pad_x + 8.0, y: sy + 8.0,
             content: preview.to_string(),
             color: pal.text,
-            font_size: 18.0, bold: bx.bold, italic: bx.italic,
-            font_family: family,
+            font_size: preview_size, bold: bx.bold, italic: bx.italic,
+            font_family: preview_family,
             strikethrough: false, underline: false,
         });
+        sy += preview_h - ROW_H;
         sy += 40.0;
         push_ui_text(cmds, pad_x, sy,
                      format!("line-height: {:.2}", bx.line_height), pal.text_dim, false);
@@ -1415,7 +1474,26 @@ fn paint_side_animations(
     if !state.collapsed_sections.contains(&SectionId::AnimationsList) {
         let lookup = |key: &str| state.styles.computed.iter()
             .find(|(k, _)| k == key).map(|(_, v)| v.clone());
-        let name = lookup("animation-name");
+        // Pokud `animation-name` chybi, fallback na shorthand `animation`
+        // - extrahuj posledni token co neni cas/iteracion/easing.
+        let name = lookup("animation-name").or_else(|| {
+            lookup("animation").and_then(|s| {
+                // Heuristika: posledni neprazdny token co neni rezervovane slovo.
+                let reserved: &[&str] = &["infinite", "alternate", "reverse",
+                    "alternate-reverse", "normal", "forwards", "backwards", "both",
+                    "running", "paused", "ease", "ease-in", "ease-out", "ease-in-out",
+                    "linear", "step-start", "step-end", "none"];
+                let toks: Vec<&str> = s.split_whitespace().collect();
+                toks.into_iter().rev().find(|t| {
+                    let lt = t.to_lowercase();
+                    !reserved.contains(&lt.as_str())
+                        && !lt.ends_with('s') && !lt.ends_with("ms")
+                        && !lt.parse::<f32>().is_ok()
+                        && !lt.starts_with("cubic-bezier")
+                        && !lt.starts_with("steps")
+                }).map(|s| s.to_string())
+            })
+        });
         if let Some(n) = name.filter(|s| !s.is_empty() && s != "none") {
             push_text(cmds, pad_x, sy, format!("name: {}", n), pal.text, false);
             sy += ROW_H;
@@ -3004,6 +3082,8 @@ pub enum DevtoolsHit {
     SectionToggle(SectionId),
     /// Klik na chevron v Computed panelu - toggle shorthand expansion.
     ComputedShorthandToggle(String),
+    /// Klik na overflow chevron v side panel sub-tab strip.
+    SidePanelOverflowToggle,
     /// Klik na flex/grid overlay toggle v Layout sub-tabu.
     OverlayToggle(crate::devtools::OverlayKind, usize),
     /// Klik na settings gear button v toolbaru.
@@ -3308,17 +3388,60 @@ fn hit_test_elements(
                 }
             }
         }
+        // Overflow dropdown items hit-test (kdyz otevren).
+        if state.side_panel_overflow_open && mouse_y >= body_y + TAB_H {
+            use crate::devtools::SidePanelTab;
+            let visible = SidePanelTab::visible_default();
+            let max_tx = styles_end + side_panel_w - 26.0;
+            let mut tx2 = styles_end + 8.0;
+            let mut overflow_start: Option<usize> = None;
+            for (i, t) in visible.iter().enumerate() {
+                let tw = (t.label().len() as f32) * FONT_W + 12.0;
+                if tx2 + tw > max_tx { overflow_start = Some(i); break; }
+                tx2 += tw + 2.0;
+            }
+            if let Some(start) = overflow_start {
+                let drop_y = body_y + TAB_H + 2.0;
+                let item_h = ROW_H + 4.0;
+                let menu_x = styles_end + side_panel_w - 160.0;
+                let menu_w = 156.0;
+                let hidden = &visible[start..];
+                let menu_h = (hidden.len() as f32) * item_h + 6.0;
+                if mouse_x >= menu_x && mouse_x < menu_x + menu_w
+                    && mouse_y >= drop_y && mouse_y < drop_y + menu_h {
+                    let idx = ((mouse_y - drop_y - 4.0) / item_h) as usize;
+                    if let Some(t) = hidden.get(idx) {
+                        return DevtoolsHit::SidePanelTabClick(*t);
+                    }
+                    return DevtoolsHit::PanelArea;
+                }
+            }
+        }
         // Sub-tab strip nahore.
         if mouse_y < body_y + TAB_H {
             use crate::devtools::SidePanelTab;
+            let visible = SidePanelTab::visible_default();
+            let max_tx = styles_end + side_panel_w - 26.0;
             let mut tx = styles_end + 8.0;
-            for t in SidePanelTab::visible_default() {
+            let mut overflow_start: Option<usize> = None;
+            for (i, t) in visible.iter().enumerate() {
                 let label = t.label();
                 let tw = (label.len() as f32) * FONT_W + 12.0;
+                if tx + tw > max_tx {
+                    overflow_start = Some(i);
+                    break;
+                }
                 if mouse_x >= tx && mouse_x < tx + tw {
                     return DevtoolsHit::SidePanelTabClick(*t);
                 }
                 tx += tw + 2.0;
+            }
+            // Chevron klik = toggle overflow dropdown.
+            if overflow_start.is_some() {
+                let cx = styles_end + side_panel_w - 22.0;
+                if mouse_x >= cx && mouse_x < cx + 18.0 {
+                    return DevtoolsHit::SidePanelOverflowToggle;
+                }
             }
         }
         // Section header hit-test (toggle collapse). Headers podle sub-tabu.

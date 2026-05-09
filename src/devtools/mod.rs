@@ -57,9 +57,11 @@ impl Tab {
     }
 
     pub fn all() -> &'static [Tab] {
+        // Settings tab odstranen z visible tabs - dostupne pres gear popup
+        // (klik ozubene kolo v pravem toolbaru otevre nastaveni dock+theme+flavor).
         &[
             Tab::Elements, Tab::Console, Tab::Network,
-            Tab::Sources, Tab::Performance, Tab::Application, Tab::Settings,
+            Tab::Sources, Tab::Performance, Tab::Application,
         ]
     }
 }
@@ -94,6 +96,8 @@ pub struct DevToolsState {
     pub collapsed_sections: HashSet<crate::browser::devtools_panel::SectionId>,
     /// Side panel sirka v px (right column = vypocitano/rozlozeni/...).
     pub side_panel_w: f32,
+    /// Sub-tab overflow dropdown otevren - ▼ chevron pri zmenseni panelu.
+    pub side_panel_overflow_open: bool,
     /// Dock position devtools panelu (Bottom/Right/Left/Top/Popup).
     pub dock_position: profile::DockPosition,
     /// Settings popup state (kdyz user otevre dock chooser dialog).
@@ -257,6 +261,7 @@ impl Default for DevToolsState {
             overlays: Vec::new(),
             collapsed_sections: HashSet::new(),
             side_panel_w: 280.0,
+            side_panel_overflow_open: false,
             dock_position: profile::load_dock_position(),
             settings_popup_open: false,
             color_picker: None,

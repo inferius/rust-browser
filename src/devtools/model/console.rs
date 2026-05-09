@@ -416,9 +416,36 @@ fn base_property_completions(base: &str) -> Vec<&'static str> {
                             "cookieEnabled", "geolocation"],
         "localStorage" | "sessionStorage" => vec!["getItem", "setItem", "removeItem",
                                                    "clear", "key", "length"],
-        // Generic object/array prototype props.
-        _ => vec!["toString", "valueOf", "hasOwnProperty", "constructor",
-                  "isPrototypeOf", "propertyIsEnumerable", "length"],
+        // Generic object/array prototype props + frequently-used Array/String
+        // instance methods - bez ohledu na real type vraci nejcasteji uziteky.
+        _ => vec![
+            // Array methods
+            "push", "pop", "shift", "unshift", "slice", "splice", "concat",
+            "join", "reverse", "sort", "indexOf", "lastIndexOf", "includes",
+            "find", "findIndex", "filter", "map", "reduce", "reduceRight",
+            "forEach", "every", "some", "flat", "flatMap", "fill", "copyWithin",
+            "entries", "keys", "values", "at", "length",
+            // String methods
+            "charAt", "charCodeAt", "codePointAt", "concat", "indexOf",
+            "lastIndexOf", "includes", "startsWith", "endsWith", "slice",
+            "substring", "substr", "split", "trim", "trimStart", "trimEnd",
+            "toLowerCase", "toUpperCase", "padStart", "padEnd", "repeat",
+            "replace", "replaceAll", "match", "matchAll", "search", "normalize",
+            "at", "raw",
+            // DOM Element/Node common
+            "appendChild", "removeChild", "insertBefore", "replaceChild",
+            "querySelector", "querySelectorAll", "getAttribute", "setAttribute",
+            "removeAttribute", "hasAttribute", "classList", "className",
+            "innerHTML", "outerHTML", "textContent", "innerText",
+            "parentNode", "parentElement", "childNodes", "children",
+            "firstChild", "lastChild", "nextSibling", "previousSibling",
+            "addEventListener", "removeEventListener", "dispatchEvent",
+            "getBoundingClientRect", "scrollIntoView", "click", "focus", "blur",
+            "style", "dataset", "id", "tagName", "nodeName", "nodeType",
+            // Generic
+            "toString", "valueOf", "hasOwnProperty", "constructor",
+            "isPrototypeOf", "propertyIsEnumerable",
+        ],
     }
 }
 
