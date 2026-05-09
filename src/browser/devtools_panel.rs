@@ -469,6 +469,7 @@ fn paint_color_picker(
 /// Hit-test pro settings popup. Vraci akci nebo None.
 pub enum SettingsPopupAction {
     SelectDock(crate::devtools::profile::DockPosition),
+    SelectTheme(crate::devtools::theme::ThemeMode),
     Close,
     Dismiss,
 }
@@ -499,6 +500,19 @@ pub fn settings_popup_hit(
             return Some(SettingsPopupAction::SelectDock(*pos));
         }
         sy += ROW_H + 2.0;
+    }
+    // Theme buttons row.
+    sy += 8.0 + ROW_H + 4.0;
+    use crate::devtools::theme::ThemeMode;
+    if mouse_y >= sy && mouse_y < sy + ROW_H + 2.0 {
+        let labels = [(ThemeMode::Auto, "Auto"), (ThemeMode::Light, "Svetly"), (ThemeMode::Dark, "Tmavy")];
+        for (i, (mode, label)) in labels.iter().enumerate() {
+            let bw = (label.len() as f32) * FONT_W + 12.0;
+            let bx = px + 16.0 + (i as f32) * (bw + 4.0);
+            if mouse_x >= bx && mouse_x < bx + bw {
+                return Some(SettingsPopupAction::SelectTheme(*mode));
+            }
+        }
     }
     None
 }
@@ -2824,9 +2838,9 @@ pub fn paint_element_highlight(
     let ly = (my - lh - 2.0).max(2.0);
 
     push_rect(cmds, lx, ly, lw, lh, pal.overlay_label_bg);
-    push_text(cmds, lx + 8.0, ly + 4.0, label.clone(), pal.accent, true);
-    push_text(cmds, lx + 8.0 + label.len() as f32 * FONT_W, ly + 4.0,
-              dims, pal.overlay_label_text, false);
+    push_ui_text(cmds, lx + 8.0, ly + 4.0, label.clone(), pal.accent, true);
+    push_ui_text(cmds, lx + 8.0 + label.len() as f32 * FONT_W, ly + 4.0,
+                 dims, pal.overlay_label_text, false);
 }
 
 // ─── Hit-test ───────────────────────────────────────────────────────────
@@ -2906,6 +2920,8 @@ pub enum DevtoolsHit {
     SettingsToggle,
     /// Klik v settings popupu - vyber dock position.
     SettingsDock(crate::devtools::profile::DockPosition),
+    /// Klik v settings popupu - vyber theme.
+    SettingsTheme(crate::devtools::theme::ThemeMode),
     /// Klik mimo settings popup nebo na X.
     SettingsClose,
     /// Color picker: hue slider klik (hue 0..360).
@@ -3027,6 +3043,7 @@ pub fn devtools_hit_test(
         if let Some(action) = settings_popup_hit(state, win_w, win_h, mouse_x, mouse_y) {
             return match action {
                 SettingsPopupAction::SelectDock(p) => DevtoolsHit::SettingsDock(p),
+                SettingsPopupAction::SelectTheme(t) => DevtoolsHit::SettingsTheme(t),
                 SettingsPopupAction::Close | SettingsPopupAction::Dismiss => DevtoolsHit::SettingsClose,
             };
         }

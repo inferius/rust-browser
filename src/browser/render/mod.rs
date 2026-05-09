@@ -528,6 +528,13 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 WindowEvent::CloseRequested => {
                     // Save session pri shell mode quit.
                     if self.shell_mode {
+                        // Save current tab state pred snapshot.
+                        {
+                            let cur = self.tabs.active_tab_mut();
+                            cur.scroll_y = self.scroll_y;
+                            cur.scroll_x = self.scroll_x;
+                            cur.url = self.base_url.clone();
+                        }
                         let session = crate::devtools::session::Session {
                             tabs: self.tabs.tabs.iter().map(|t|
                                 crate::devtools::session::SessionTab {
@@ -1161,6 +1168,10 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                 DevtoolsHit::SettingsDock(pos) => {
                                     self.devtools.dock_position = pos;
                                     crate::devtools::profile::save_dock_position(pos);
+                                }
+                                DevtoolsHit::SettingsTheme(t) => {
+                                    self.devtools.theme.mode = t;
+                                    crate::devtools::theme::save_persisted(self.devtools.theme);
                                 }
                                 DevtoolsHit::SettingsClose => {
                                     self.devtools.settings_popup_open = false;
