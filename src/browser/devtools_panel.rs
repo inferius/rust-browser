@@ -1014,12 +1014,29 @@ fn paint_styles_pane(
             let src_label = match &rule.source {
                 crate::devtools::model::styles::RuleSource::UserAgent => "user agent".to_string(),
                 crate::devtools::model::styles::RuleSource::Inline => "inline".to_string(),
-                crate::devtools::model::styles::RuleSource::StyleBlock { index } => format!("<style #{}>", index),
-                crate::devtools::model::styles::RuleSource::External { url } => url.clone(),
+                crate::devtools::model::styles::RuleSource::StyleBlock { index } => format!("<style> #{}", index),
+                crate::devtools::model::styles::RuleSource::External { url } => {
+                    // Vytvor "filename:line" label - line zatim 0 (TODO line track).
+                    let fname = url.split('/').last().unwrap_or(url).to_string();
+                    fname
+                },
             };
             if in_view(sy) {
-                push_text(cmds, pad_x, sy, format!("{} {{ /* {} */", rule.selector, src_label),
-                          pal.syn_property, false);
+                // Selektor + specificity badge + source label vpravo.
+                let sel_str = format!("{} {{", rule.selector);
+                push_text(cmds, pad_x, sy, sel_str.clone(), pal.syn_property, false);
+                // Specificity badge (a, b, c) format: ID, CLASS, TYPE counts.
+                // u32 packed: high 8 = a, mid 8 = b, low 8 = c.
+                let a = (rule.specificity >> 16) & 0xFF;
+                let b = (rule.specificity >> 8) & 0xFF;
+                let c = rule.specificity & 0xFF;
+                let badge = format!("({},{},{})", a, b, c);
+                let badge_x = pad_x + dt_text_width(&sel_str) + 8.0;
+                push_text(cmds, badge_x, sy, badge.clone(), pal.text_disabled, false);
+                let label_w = dt_text_width(&src_label);
+                let style_pane_w = bx.rect.width.max(300.0);
+                let src_x = pad_x + style_pane_w - label_w - 24.0;
+                push_text(cmds, src_x, sy, src_label, pal.text_dim, true);
             }
             sy += ROW_H;
             for d in &rule.declarations {
