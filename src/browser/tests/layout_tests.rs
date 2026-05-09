@@ -202,6 +202,35 @@ fn float_clear_both() {
 }
 
 #[test]
+fn flex_inline_children_become_flex_items() {
+    // CSS Flex L1: pri display: flex parent, inline children (span) se
+    // chovaji jako flex items (blockified) a justify-content je aplikuje.
+    let doc = parse_html(r#"<html><body><div id="hdr">
+        <span class="logo">LEFT</span>
+        <span id="cnt">RIGHT</span>
+    </div></body></html>"#, "");
+    let css = parse_stylesheet(r#"
+        #hdr { display: flex; justify-content: space-between; height: 48px; width: 1000px; }
+        .logo { color: red; }
+        #cnt { color: blue; }
+    "#);
+    let map = cascade::cascade(&doc.root, &[css]);
+    let layout = layout::layout_tree(&doc.root, &map, 3045.0, 2063.0);
+    let hdr = layout.children.iter()
+        .find(|c| c.tag.as_deref() == Some("html"))
+        .and_then(|h| h.children.iter().find(|c| c.tag.as_deref() == Some("body")))
+        .and_then(|b| b.children.iter().find(|c| c.tag.as_deref() == Some("div")))
+        .expect("hdr");
+    let logo = &hdr.children[0];
+    let cnt = &hdr.children[1];
+    println!("hdr:  x={} y={} w={} h={}", hdr.rect.x, hdr.rect.y, hdr.rect.width, hdr.rect.height);
+    println!("logo: x={} y={} w={} h={}", logo.rect.x, logo.rect.y, logo.rect.width, logo.rect.height);
+    println!("cnt:  x={} y={} w={} h={}", cnt.rect.x, cnt.rect.y, cnt.rect.width, cnt.rect.height);
+    assert!(logo.rect.x < 100.0, "logo musi byt vlevo, x={}", logo.rect.x);
+    assert!(cnt.rect.x > 800.0, "cnt musi byt vpravo (justify-content space-between), x={}", cnt.rect.x);
+}
+
+#[test]
 fn parse_color_hex() {
     assert_eq!(layout::parse_color("#ff0000"), Some([255, 0, 0, 255]));
     assert_eq!(layout::parse_color("#f00"), Some([255, 0, 0, 255]));
