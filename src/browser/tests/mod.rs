@@ -8,3 +8,4 @@ mod paint_tests;
 mod render_tests;
 mod dom_tests;
 mod devtools_panel_tests;
+mod engine_test_diagnostic;
