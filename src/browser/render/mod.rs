@@ -9,6 +9,15 @@ use super::webgl_helpers::{webgl_compute_stride, webgl_attrib_to_vertex_format, 
 use bytemuck::{Pod, Zeroable};
 use std::rc::Rc;
 
+/// Format window title - pri >=2 tabech prefix s "(N)" tab counter.
+pub fn format_window_title(page_title: &str, tab_count: usize) -> String {
+    if tab_count >= 2 {
+        format!("({}) {} - Rust Web Engine", tab_count, page_title)
+    } else {
+        format!("{} - Rust Web Engine", page_title)
+    }
+}
+
 /// Resolvuj address bar input do navigovatelne URL.
 /// - "https://x" / "http://x" / "file:///x" / "about:x" - passthrough
 /// - "www.x" - prepend "https://"
@@ -2048,6 +2057,11 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                 self.navigate_url("about:history");
                                 return;
                             }
+                            if s.as_str() == "j" || s.as_str() == "J" {
+                                // Ctrl+J: open downloads page.
+                                self.navigate_url("about:downloads");
+                                return;
+                            }
                             if s.as_str() == "b" || s.as_str() == "B" {
                                 // Ctrl+B: open bookmarks page.
                                 self.navigate_url("about:bookmarks");
@@ -3263,7 +3277,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 cur.loading = false;
             }
             if let Some(w) = &self.window {
-                w.set_title(&format!("{} - Rust Web Engine", page_title));
+                w.set_title(&format_window_title(&page_title, self.tabs.tabs.len()));
             }
             // Pokud je auto_devtools zaplo, take regen + open po reload.
             if self.auto_devtools {
@@ -3495,7 +3509,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             if !new_title.is_empty() {
                 self.tabs.active_tab_mut().title = new_title.clone();
                 if let Some(w) = &self.window {
-                    w.set_title(&format!("{} - Rust Web Engine", new_title));
+                    w.set_title(&format_window_title(&new_title, self.tabs.tabs.len()));
                 }
             }
         }
@@ -3969,7 +3983,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                         interp.set_document(doc);
                                         self.run_inline_scripts(&mut interp);
                                         self.interpreter = Some(interp);
-                                        if let Some(w) = &self.window { w.set_title(&format!("Rust Web Engine - {url}")); }
+                                        if let Some(w) = &self.window { w.set_title(&format_window_title(&url, self.tabs.tabs.len())); }
                                         self.render();
                                     }
                                 } else {
@@ -4138,6 +4152,15 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     self.cached_stylesheets = None;
                     true
                 }
+                "about:downloads" => {
+                    let (html, css) = crate::browser::render::tabs::render_about_downloads();
+                    self.html = html;
+                    self.css = css;
+                    self.base_url = Some("about:downloads".to_string());
+                    self.cached_layout_root = None;
+                    self.cached_stylesheets = None;
+                    true
+                }
                 _ => false,
             }
         }
@@ -4218,7 +4241,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     cur.loading = false;
                 }
                 if let Some(w) = &self.window {
-                    w.set_title(&format!("{} - Rust Web Engine", page_title));
+                    w.set_title(&format_window_title(&page_title, self.tabs.tabs.len()));
                 }
                 self.render();
             } else if let Some(rest) = url.strip_prefix("file:///") {

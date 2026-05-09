@@ -80,12 +80,74 @@ impl Tab {
     }
 }
 
+/// Render about:downloads - listing souboru ze ~/Downloads (placeholder = OS download dir).
+pub fn render_about_downloads() -> (String, String) {
+    // Resolve Downloads dir bez extra crate. Windows: %USERPROFILE%\Downloads.
+    // Unix: $HOME/Downloads.
+    let dl_dir = std::env::var("USERPROFILE").ok()
+        .or_else(|| std::env::var("HOME").ok())
+        .map(|h| std::path::PathBuf::from(h).join("Downloads"));
+    let body = match dl_dir.as_ref() {
+        Some(dir) if dir.exists() => {
+            let mut entries: Vec<(String, u64, std::time::SystemTime)> = Vec::new();
+            if let Ok(rd) = std::fs::read_dir(dir) {
+                for e in rd.flatten() {
+                    if let Ok(md) = e.metadata() {
+                        if md.is_file() {
+                            let name = e.file_name().to_string_lossy().into_owned();
+                            let size = md.len();
+                            let mt = md.modified().unwrap_or(std::time::UNIX_EPOCH);
+                            entries.push((name, size, mt));
+                        }
+                    }
+                }
+            }
+            // Sort newest first.
+            entries.sort_by(|a, b| b.2.cmp(&a.2));
+            entries.truncate(50);
+            if entries.is_empty() {
+                format!("<p class='empty'>Slozka {} je prazdna</p>", html_escape(&dir.display().to_string()))
+            } else {
+                let rows = entries.iter().map(|(n, s, _)| {
+                    let kb = (*s as f64) / 1024.0;
+                    let size_str = if kb < 1024.0 { format!("{:.1} KB", kb) }
+                                   else { format!("{:.1} MB", kb / 1024.0) };
+                    format!("<li><span class='name'>{}</span> <small>{}</small></li>",
+                            html_escape(n), size_str)
+                }).collect::<Vec<_>>().join("\n");
+                format!("<p class='dir'>{}</p><ul>{}</ul>", html_escape(&dir.display().to_string()), rows)
+            }
+        }
+        _ => "<p class='empty'>Slozka stahnuti neexistuje</p>".to_string()
+    };
+    let html = format!(r#"<!DOCTYPE html><html><head><title>Stahnuti</title></head>
+<body>
+<div class=cfg>
+<h1>Stahnuti</h1>
+{body}
+</div>
+</body></html>"#, body = body);
+    let css = r#"
+body { font-family: 'Inter', sans-serif; background: #1a1a1f; color: #e8e6df; margin: 0; padding: 32px; }
+.cfg { max-width: 800px; margin: 0 auto; }
+h1 { color: #69a1ff; font-size: 32px; margin-bottom: 16px; }
+.dir { color: #fbbf69; font-family: 'CamingoMono', monospace; font-size: 13px; margin-bottom: 16px; }
+ul { list-style: none; padding: 0; }
+li { background: #2a2932; padding: 10px 16px; margin-bottom: 4px; border-radius: 6px; display: flex; justify-content: space-between; }
+.name { color: #e8e6df; }
+li small { color: #a1a1ae; font-size: 11px; }
+.empty { color: #a1a1ae; font-style: italic; }
+"#;
+    (html, css.to_string())
+}
+
 /// Render about:about page - hub se seznamem vsech internich about: URLs.
 pub fn render_about_about() -> (String, String) {
     let entries: &[(&str, &str)] = &[
         ("about:newtab", "Nova zalozka s top-sites"),
         ("about:history", "Historie navstev (Ctrl+H)"),
         ("about:bookmarks", "Zalozky vc. groups (Ctrl+B)"),
+        ("about:downloads", "Stahnuti (Ctrl+J)"),
         ("about:config", "Konfigurace + profil"),
     ];
     let rows = entries.iter().map(|(url, desc)| {
