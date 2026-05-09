@@ -959,15 +959,18 @@ fn paint_side_panel(
     *state.styles.overflow_chevron_zone.borrow_mut() = None;
     state.styles.overflow_dropdown_zones.borrow_mut().clear();
     {
-        let cx = x + w - 22.0;
-        let cy = y + 4.0;
-        let cw = 18.0;
-        let ch = strip_h - 8.0;
+        // Vetsi clickable zone pro chevron - 28x cely strip (drive 18x22 = obtizny zasah).
+        let cx = x + w - 28.0;
+        let cy = y;
+        let cw = 28.0;
+        let ch = strip_h;
         let cb = if active_in_overflow { pal.bg_tab_active }
                  else if state.side_panel_overflow_open { pal.bg_row_hover }
                  else { pal.bg_toolbar };
-        push_rect(cmds, cx, cy, cw, ch, cb);
-        push_icon(cmds, cx + 1.0, cy + (ch - ICON_SIZE) * 0.5, ICON_EXPAND_MORE, pal.text);
+        push_rect(cmds, cx + 2.0, cy + 4.0, cw - 4.0, ch - 8.0, cb);
+        // Sipka ikona uprostred zony.
+        push_icon(cmds, cx + (cw - ICON_SIZE) * 0.5, cy + (ch - ICON_SIZE) * 0.5,
+                  ICON_EXPAND_MORE, pal.text);
         *state.styles.overflow_chevron_zone.borrow_mut() = Some((cx, cy, cw, ch));
         // Dropdown menu - vsechny sub-taby (full all() list, ne jen overflow).
         if state.side_panel_overflow_open {
@@ -1372,17 +1375,20 @@ fn paint_side_computed(
             let has_subprops = is_shorthand(k)
                 && state.styles.computed.iter().any(|(kk, _)|
                     shorthand_for(kk).map(|s| s == k).unwrap_or(false));
-            let mut text_x = pad_x;
+            // Vzdy rezervovat 16px pro chevron sloupec - odsazeni stejne
+            // pro vsechny props bez ohledu na sipku.
+            let text_x = if shorthand_for(k).is_some() && !has_subprops {
+                pad_x + 32.0  // sub-prop pod shorthand: dalsi indent
+            } else {
+                pad_x + 16.0  // chevron col rezervovany vzdy
+            };
             if has_subprops {
                 let exp = expanded.contains(k);
                 let icon = if exp { ICON_EXPAND_MORE } else { ICON_CHEVRON_RIGHT };
-                push_icon(cmds, pad_x - 2.0, sy + (ROW_H - ICON_SIZE) * 0.5, icon, pal.text);
+                push_icon(cmds, pad_x, sy + (ROW_H - ICON_SIZE) * 0.5, icon, pal.text);
+                // Klikatelna zona dostatecne velka (whole 16px chevron col).
                 state.styles.computed_chevron_zones.borrow_mut()
-                    .push((pad_x - 4.0, sy, 18.0, ROW_H, k.clone()));
-                text_x = pad_x + 16.0;
-            } else if shorthand_for(k).is_some() {
-                // Sub-prop indent.
-                text_x = pad_x + 24.0;
+                    .push((pad_x - 2.0, sy, 18.0, ROW_H, k.clone()));
             }
             push_text(cmds, text_x, sy, format!("{}:", k), pal.syn_property, false);
             let mut value_x = text_x + 132.0;
@@ -2288,16 +2294,17 @@ fn paint_styles_pane(
                     let has_subprops = is_shorthand(&d.property)
                         && rule.declarations.iter().any(|dd|
                             shorthand_for(&dd.property).map(|s| s == d.property).unwrap_or(false));
-                    let mut text_x = pad_x;
+                    let text_x = if shorthand_for(&d.property).is_some() && !has_subprops {
+                        pad_x + 32.0
+                    } else {
+                        pad_x + 16.0
+                    };
                     if has_subprops {
                         let exp = expanded.contains(&d.property);
                         let icon = if exp { ICON_EXPAND_MORE } else { ICON_CHEVRON_RIGHT };
-                        push_icon(cmds, pad_x - 2.0, sy + (ROW_H - ICON_SIZE) * 0.5, icon, pal.text);
+                        push_icon(cmds, pad_x, sy + (ROW_H - ICON_SIZE) * 0.5, icon, pal.text);
                         state.styles.computed_chevron_zones.borrow_mut()
-                            .push((pad_x - 4.0, sy, 18.0, ROW_H, d.property.clone()));
-                        text_x = pad_x + 16.0;
-                    } else if shorthand_for(&d.property).is_some() {
-                        text_x = pad_x + 24.0;
+                            .push((pad_x - 2.0, sy, 18.0, ROW_H, d.property.clone()));
                     }
                     let editing = state.styles.editing_value.as_ref()
                         .filter(|(ri, p, _)| *ri == rule_idx && p == &d.property);

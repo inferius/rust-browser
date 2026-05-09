@@ -394,6 +394,46 @@ fn console_eval_via_vm(src: &str, interp: &crate::interpreter::Interpreter, sele
     vm.run(&code).map_err(|e| format!("Runtime: {}", e))
 }
 
+/// Walk DOM, najdi elementy matchujici selector + vykresli orange outline pres
+/// jejich layout box. Pouzite pro match-preview toggle ctverec v styles panelu.
+fn paint_match_preview_recursive(
+    list: &mut Vec<DisplayCommand>,
+    node: &Rc<crate::browser::dom::NodeData>,
+    sel: &super::css_parser::Selector,
+    layout_root: &super::layout::LayoutBox,
+    scroll_y: f32,
+) {
+    if super::cascade::matches_selector(node, sel) {
+        let node_ptr = Rc::as_ptr(node) as usize;
+        if let Some((rx, ry, rw, rh)) = super::devtools_panel::find_box_rect_by_id(layout_root, node_ptr, scroll_y) {
+            let y = ry;
+            list.push(DisplayCommand::Rect {
+                x: rx, y, w: rw, h: rh,
+                color: [255, 165, 0, 60], radius: 0.0,
+            });
+            list.push(DisplayCommand::Rect {
+                x: rx, y, w: rw, h: 2.0,
+                color: [255, 165, 0, 220], radius: 0.0,
+            });
+            list.push(DisplayCommand::Rect {
+                x: rx, y: y + rh - 2.0, w: rw, h: 2.0,
+                color: [255, 165, 0, 220], radius: 0.0,
+            });
+            list.push(DisplayCommand::Rect {
+                x: rx, y, w: 2.0, h: rh,
+                color: [255, 165, 0, 220], radius: 0.0,
+            });
+            list.push(DisplayCommand::Rect {
+                x: rx + rw - 2.0, y, w: 2.0, h: rh,
+                color: [255, 165, 0, 220], radius: 0.0,
+            });
+        }
+    }
+    for child in node.children.borrow().iter() {
+        paint_match_preview_recursive(list, child, sel, layout_root, scroll_y);
+    }
+}
+
 fn find_node_by_ptr(root: &Rc<crate::browser::dom::NodeData>, ptr: usize) -> Option<Rc<crate::browser::dom::NodeData>> {
     if Rc::as_ptr(root) as usize == ptr {
         return Some(Rc::clone(root));
@@ -477,6 +517,9 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         /// Effective_anim_time = (now - origin) * speed; pri pause snapshot do paused_at.
         animation_origin: std::time::Instant,
         animation_pause_start: Option<std::time::Instant>,
+        /// Per-element pause - selected nodes maji animace zamrzly. Pause v
+        /// Animations panelu pri vybranem elementu toggle pres tento set.
+        paused_animation_nodes: std::collections::HashSet<usize>,
         /// Bookmark picker (Ctrl+D popup): edit title + folder.
         bookmark_picker: Option<BookmarkPickerState>,
         cached_pseudo_map: Option<super::cascade::PseudoStyleMap>,
@@ -731,13 +774,19 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                 let thumb_h = (viewport_h * viewport_h / layout.rect.height).max(40.0);
                                 let my_screen = self.mouse_y - self.scroll_y;
                                 let frac = ((my_screen - thumb_h * 0.5) / (viewport_h - thumb_h)).clamp(0.0, 1.0);
-                                self.scroll_target_y = frac * max_scroll;
+                                // Drag scrollbar = direct (bez smooth interp). User chce
+                                // immediate response; smooth lerp by zpomalil drag.
+                                let target = frac * max_scroll;
+                                self.scroll_target_y = target;
+                                self.scroll_y = target;
                             }
                             if self.page_scrollbar_h_drag && layout.rect.width > viewport_w {
                                 let max_scroll = (layout.rect.width - viewport_w).max(1.0);
                                 let thumb_w = (viewport_w * viewport_w / layout.rect.width).max(40.0);
                                 let frac = ((self.mouse_x - thumb_w * 0.5) / (viewport_w - thumb_w)).clamp(0.0, 1.0);
-                                self.scroll_target_x = frac * max_scroll;
+                                let target = frac * max_scroll;
+                                self.scroll_target_x = target;
+                                self.scroll_x = target;
                             }
                         }
                         self.render();
@@ -1379,12 +1428,20 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                     use std::time::{Instant, Duration};
                                     match action.as_str() {
                                         "pause" => {
-                                            if !self.devtools.animations_paused {
-                                                // Freeze: zaznam start pauzy.
+                                            // Per-element pause kdyz je vybrany element. Bez selection
+                                            // = global pause (puvodni chovani).
+                                            if let Some(sel) = self.devtools.elements.selected {
+                                                if self.paused_animation_nodes.contains(&sel) {
+                                                    self.paused_animation_nodes.remove(&sel);
+                                                } else {
+                                                    self.paused_animation_nodes.insert(sel);
+                                                }
+                                                self.devtools.animations_paused =
+                                                    !self.paused_animation_nodes.is_empty();
+                                            } else if !self.devtools.animations_paused {
                                                 self.animation_pause_start = Some(Instant::now());
                                                 self.devtools.animations_paused = true;
                                             } else {
-                                                // Resume: shift origin pres pause duration -> elapsed pokracuje.
                                                 if let Some(ps) = self.animation_pause_start.take() {
                                                     let pause_dur = ps.elapsed();
                                                     self.animation_origin += pause_dur;
@@ -5269,7 +5326,16 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // Runtime CSS animation: skip cely walk pokud zadne keyframes neexistuji.
             let has_keyframes = stylesheets.iter().any(|s| !s.keyframes.is_empty());
             if has_keyframes {
+                // Per-element pause: snapshot pre-anim style mapy paused nodes
+                // pred apply, po apply restore (= zafrozenuti).
+                let pre_anim_paused: Vec<(usize, std::collections::HashMap<String, String>)> =
+                    self.paused_animation_nodes.iter()
+                        .filter_map(|id| style_map.get(id).map(|m| (*id, m.clone())))
+                        .collect();
                 let _animating = cascade::apply_animations(&mut style_map, stylesheets, elapsed);
+                for (id, snap) in pre_anim_paused {
+                    style_map.insert(id, snap);
+                }
                 let max_scroll = (style_map.len() as f32).max(1.0);
                 let scroll_progress = if max_scroll > 1.0 { self.scroll_y / max_scroll.max(1.0) } else { 0.0 };
                 let _ = cascade::apply_scroll_animations(&mut style_map, stylesheets, scroll_progress);
@@ -5593,6 +5659,32 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 &self.devtools,
                 self.scroll_y,
             );
+            // Match preview overlay - vykresli orange outline kolem vsech
+            // elementu matchujici aktivni selector (toggle ctverec v styles).
+            if let Some(sel_str) = self.devtools.match_preview_selector.clone() {
+                if let Some(stylesheets) = self.cached_stylesheets.as_ref() {
+                    // Najdi rule v stylesheets s tim selectorem (po to_string()).
+                    let mut sel_obj_found = None;
+                    for sheet in stylesheets.iter() {
+                        for rule in &sheet.rules {
+                            for s in &rule.selectors {
+                                if s.to_string() == sel_str {
+                                    sel_obj_found = Some(s.clone());
+                                    break;
+                                }
+                            }
+                            if sel_obj_found.is_some() { break; }
+                        }
+                        if sel_obj_found.is_some() { break; }
+                    }
+                    if let Some(sel) = sel_obj_found {
+                        // Walk DOM, najdi vsechny matching elementy, vykresli outline.
+                        let doc_root = std::rc::Rc::clone(&document_root);
+                        paint_match_preview_recursive(
+                            &mut display_list, &doc_root, &sel, &layout_root, self.scroll_y);
+                    }
+                }
+            }
             // Inspector flex/grid overlays - per active OverlayDescriptor v state.
             crate::browser::devtools_panel::paint_inspector_overlays(
                 &mut display_list,
@@ -6240,6 +6332,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         cached_matched_key: None,
         animation_origin: std::time::Instant::now(),
         animation_pause_start: None,
+        paused_animation_nodes: std::collections::HashSet::new(),
         bookmark_picker: None,
         cached_pseudo_map: None,
         display_list_buffer: Vec::with_capacity(2048),

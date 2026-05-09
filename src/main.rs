@@ -109,6 +109,18 @@ fn main() {
 fn real_main() {
     let args: Vec<String> = std::env::args().collect();
 
+    // Safe-mode: --safe-mode flag resetuje profile config (theme/dock/sirku
+    // panelu) na default. Pouzite po crash z bad config (napr. dock NaN).
+    if args.iter().any(|a| a == "--safe-mode" || a == "-safe-mode") {
+        if let Some(dir) = devtools::profile::ensure_profile_dir(devtools::profile::active_profile()) {
+            // Smaze dock_position.json a theme.json - jine soubory zachovat
+            // (history, bookmarks, downloads chce uzivatel preserve).
+            let _ = std::fs::remove_file(dir.join("dock_position.json"));
+            let _ = std::fs::remove_file(dir.join("theme.json"));
+            eprintln!("[safe-mode] reset profile config v {}", dir.display());
+        }
+    }
+
     // Debug viewer: cargo run -- debug [file.js] [output.html]
     if args.len() > 1 && args[1] == "debug" {
         let (source, source_name) = if args.len() > 2 {
