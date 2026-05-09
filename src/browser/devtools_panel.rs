@@ -917,6 +917,8 @@ fn paint_side_panel(
     mouse_x: f32, mouse_y: f32,
 ) {
     use crate::devtools::SidePanelTab;
+    // Reset section_header_zones - hit-test cte cista per-frame data.
+    state.styles.section_header_zones.borrow_mut().clear();
     // Sub-tab strip nahore.
     let strip_h = TAB_H;
     push_rect(cmds, x, y, w, strip_h, pal.bg_toolbar);
@@ -949,7 +951,9 @@ fn paint_side_panel(
     // Overflow chevron - kliknutelny dropdown s ostatnimi taby.
     let active_in_overflow = overflow_start.map(|s|
         visible[s..].contains(&state.side_panel_tab)).unwrap_or(false);
-    if overflow_start.is_some() {
+    *state.styles.overflow_chevron_zone.borrow_mut() = None;
+    state.styles.overflow_dropdown_zones.borrow_mut().clear();
+    if let Some(start) = overflow_start {
         let cx = x + w - 22.0;
         let cy = y + 4.0;
         let cw = 18.0;
@@ -959,11 +963,12 @@ fn paint_side_panel(
                  else { pal.bg_toolbar };
         push_rect(cmds, cx, cy, cw, ch, cb);
         push_icon(cmds, cx + 1.0, cy + (ch - ICON_SIZE) * 0.5, ICON_EXPAND_MORE, pal.text);
+        *state.styles.overflow_chevron_zone.borrow_mut() = Some((cx, cy, cw, ch));
         // Dropdown menu.
         if state.side_panel_overflow_open {
             let drop_y = y + strip_h + 2.0;
             let item_h = ROW_H + 4.0;
-            let hidden = &visible[overflow_start.unwrap()..];
+            let hidden = &visible[start..];
             let menu_h = (hidden.len() as f32) * item_h + 6.0;
             let menu_x = x + w - 160.0;
             let menu_w = 156.0;
@@ -971,7 +976,7 @@ fn paint_side_panel(
             push_rect(cmds, menu_x, drop_y, menu_w, menu_h, pal.bg_context_menu);
             push_rect_border(cmds, menu_x, drop_y, menu_w, menu_h, pal.border_strong);
             let mut iy = drop_y + 4.0;
-            for t in hidden {
+            for (i, t) in hidden.iter().enumerate() {
                 let active = state.side_panel_tab == *t;
                 let hov = mouse_x >= menu_x && mouse_x < menu_x + menu_w
                     && mouse_y >= iy && mouse_y < iy + item_h;
@@ -981,6 +986,8 @@ fn paint_side_panel(
                 }
                 let col = if active { pal.text_on_accent } else { pal.text };
                 push_ui_text(cmds, menu_x + 10.0, iy + 4.0, t.label().to_string(), col, active);
+                state.styles.overflow_dropdown_zones.borrow_mut()
+                    .push((menu_x, iy, menu_w, item_h, start + i));
                 iy += item_h;
             }
         }
@@ -1018,10 +1025,47 @@ fn paint_section_header(
 ) -> f32 {
     let collapsed = state.collapsed_sections.contains(id);
     let icon = if collapsed { ICON_CHEVRON_RIGHT } else { ICON_EXPAND_MORE };
-    push_rect(cmds, x, y, w, ROW_H + 4.0, pal.bg_panel_alt);
+    let h = ROW_H + 4.0;
+    push_rect(cmds, x, y, w, h, pal.bg_panel_alt);
     push_icon(cmds, x + 4.0, y + (ROW_H - ICON_SIZE) * 0.5, icon, pal.text);
     push_text(cmds, x + 22.0, y + 4.0, title.to_string(), pal.text, true);
-    y + ROW_H + 4.0
+    // Track click zone pro hit-test (presny x/y, ne aproximace).
+    state.styles.section_header_zones.borrow_mut()
+        .push((x, y, w, h, format!("{:?}", id)));
+    y + h
+}
+
+/// Parse easing string -> bezier control points (c1x, c1y, c2x, c2y).
+/// Pokrita: ease/ease-in/ease-out/ease-in-out/linear/cubic-bezier(...).
+fn parse_easing(s: &str) -> (f32, f32, f32, f32) {
+    let s = s.trim();
+    if s == "linear" { return (0.0, 0.0, 1.0, 1.0); }
+    if s == "ease" { return (0.25, 0.1, 0.25, 1.0); }
+    if s == "ease-in" { return (0.42, 0.0, 1.0, 1.0); }
+    if s == "ease-out" { return (0.0, 0.0, 0.58, 1.0); }
+    if s == "ease-in-out" { return (0.42, 0.0, 0.58, 1.0); }
+    if let Some(inner) = s.strip_prefix("cubic-bezier(").and_then(|s| s.strip_suffix(')')) {
+        let parts: Vec<f32> = inner.split(',')
+            .filter_map(|p| p.trim().parse::<f32>().ok())
+            .collect();
+        if parts.len() == 4 {
+            return (parts[0], parts[1], parts[2], parts[3]);
+        }
+    }
+    (0.25, 0.1, 0.25, 1.0)
+}
+
+/// Cubic Bezier P0=(p0x,p0y=0) P1=(p1x,p1y) P2=(p2x,p2y) P3=(p3x=1,p3y=1).
+/// Vraci (x, y) pro parameter t v [0,1].
+fn cubic_bezier(t: f32, p0x: f32, p1x: f32, p1y: f32, p2x: f32, p2y: f32, p3x: f32) -> (f32, f32) {
+    let mt = 1.0 - t;
+    let mt2 = mt * mt;
+    let mt3 = mt2 * mt;
+    let t2 = t * t;
+    let t3 = t2 * t;
+    let x = mt3 * p0x + 3.0 * mt2 * t * p1x + 3.0 * mt * t2 * p2x + t3 * p3x;
+    let y = 3.0 * mt2 * t * p1y + 3.0 * mt * t2 * p2y + t3 * 1.0;
+    (x, y)
 }
 
 /// Parse "1.5s" / "200ms" -> seconds.
@@ -1506,6 +1550,7 @@ fn paint_side_animations(
     pal: &Palette,
     x: f32, y: f32, w: f32, _h: f32,
 ) {
+    state.styles.animations_btn_zones.borrow_mut().clear();
     let mut sy = y + 4.0;
     let pad_x = x + 12.0;
     sy = paint_section_header(cmds, state, pal, &SectionId::AnimationsList,
@@ -1537,6 +1582,7 @@ fn paint_side_animations(
             push_text(cmds, pad_x, sy, format!("name: {}", n), pal.text, false);
             sy += ROW_H;
             let duration_str = lookup("animation-duration").unwrap_or_else(|| "1s".to_string());
+            let timing_fn = lookup("animation-timing-function").unwrap_or_else(|| "ease".to_string());
             if let Some(v) = lookup("animation-duration") {
                 push_text(cmds, pad_x, sy, format!("duration: {}", v), pal.text_dim, false);
                 sy += ROW_H;
@@ -1545,31 +1591,100 @@ fn paint_side_animations(
                 push_text(cmds, pad_x, sy, format!("iterations: {}", v), pal.text_dim, false);
                 sy += ROW_H;
             }
-            if let Some(v) = lookup("animation-timing-function") {
-                push_text(cmds, pad_x, sy, format!("timing: {}", v), pal.text_dim, false);
+            if !timing_fn.is_empty() {
+                push_text(cmds, pad_x, sy, format!("timing: {}", timing_fn), pal.text_dim, false);
                 sy += ROW_H;
             }
-            // Timeline scrubber.
-            sy += 8.0;
+            // ─── Toolbar: pause/play + speed + restart ───
+            sy += 6.0;
+            let btn_h = 22.0;
+            let btn_y = sy;
+            // Pause/Play button.
+            let pp_w = 32.0;
+            push_rect(cmds, pad_x, btn_y, pp_w, btn_h, pal.bg_button);
+            push_rect_border(cmds, pad_x, btn_y, pp_w, btn_h, pal.border);
+            let pp_label = if state.animations_paused { "▶".to_string() } else { "⏸".to_string() };
+            push_text(cmds, pad_x + 11.0, btn_y + 3.0, pp_label, pal.text, false);
+            state.styles.animations_btn_zones.borrow_mut()
+                .push((pad_x, btn_y, pp_w, btn_h, "pause".to_string()));
+            // Speed cycle button.
+            let sp_w = 56.0;
+            let sp_x = pad_x + pp_w + 6.0;
+            push_rect(cmds, sp_x, btn_y, sp_w, btn_h, pal.bg_button);
+            push_rect_border(cmds, sp_x, btn_y, sp_w, btn_h, pal.border);
+            push_text(cmds, sp_x + 6.0, btn_y + 3.0,
+                format!("{}x", state.animations_speed), pal.text, false);
+            state.styles.animations_btn_zones.borrow_mut()
+                .push((sp_x, btn_y, sp_w, btn_h, "speed".to_string()));
+            // Restart button.
+            let rs_w = 70.0;
+            let rs_x = sp_x + sp_w + 6.0;
+            push_rect(cmds, rs_x, btn_y, rs_w, btn_h, pal.bg_button);
+            push_rect_border(cmds, rs_x, btn_y, rs_w, btn_h, pal.border);
+            push_text(cmds, rs_x + 6.0, btn_y + 3.0, "↻ restart".to_string(), pal.text, false);
+            state.styles.animations_btn_zones.borrow_mut()
+                .push((rs_x, btn_y, rs_w, btn_h, "restart".to_string()));
+            sy += btn_h + 8.0;
+
+            // ─── Timeline track ───
             push_ui_text(cmds, pad_x, sy, "Timeline".to_string(), pal.text_dim, true);
             sy += ROW_H;
             let timeline_w = w - 24.0;
             let track_y = sy;
             push_rect(cmds, pad_x, track_y, timeline_w, 20.0, pal.bg_panel_alt);
             push_rect_border(cmds, pad_x, track_y, timeline_w, 20.0, pal.border);
-            // Playhead - approximate progress (frame_counter % duration).
             let dur_seconds = parse_duration(&duration_str).max(0.1);
-            let progress = ((state.frame_counter as f32 / 60.0) % dur_seconds) / dur_seconds;
+            // Pri pause neaktualizovat progress.
+            let progress = if state.animations_paused {
+                state.animations_paused_at.unwrap_or(0.0)
+            } else {
+                let t = state.frame_counter as f32 / 60.0 * state.animations_speed;
+                (t % dur_seconds) / dur_seconds
+            };
             let head_x = pad_x + progress * timeline_w;
             push_rect(cmds, head_x - 1.0, track_y - 2.0, 3.0, 24.0, pal.accent);
             sy += 28.0;
-            // Keyframes ticks.
             for tick in &[0.0, 0.25, 0.5, 0.75, 1.0] {
                 let tx = pad_x + tick * timeline_w;
                 push_rect(cmds, tx, track_y + 22.0, 1.0, 4.0, pal.text_dim);
                 push_ui_text(cmds, tx - 10.0, track_y + 28.0,
                              format!("{:.0}%", tick * 100.0), pal.text_disabled, false);
             }
+
+            // ─── Easing graf - sample bezier curve ───
+            sy += 12.0;
+            push_ui_text(cmds, pad_x, sy, format!("Krivka ({})", timing_fn),
+                         pal.text_dim, true);
+            sy += ROW_H;
+            let graph_w = (w - 24.0).min(220.0);
+            let graph_h = 80.0;
+            let gx = pad_x;
+            let gy = sy;
+            push_rect(cmds, gx, gy, graph_w, graph_h, pal.bg_panel_alt);
+            push_rect_border(cmds, gx, gy, graph_w, graph_h, pal.border);
+            // Diagonal reference (linear).
+            for i in 0..40 {
+                let f = i as f32 / 40.0;
+                let px = gx + f * graph_w;
+                let py = gy + (1.0 - f) * graph_h;
+                push_rect(cmds, px, py, 2.0, 1.0, pal.text_disabled);
+            }
+            // Bezier curve points - sample timing fn.
+            let (c1x, c1y, c2x, c2y) = parse_easing(&timing_fn);
+            let n_samples = 60;
+            for i in 0..n_samples {
+                let t = i as f32 / (n_samples - 1) as f32;
+                let (bx, by) = cubic_bezier(t, 0.0, c1x, c1y, c2x, c2y, 1.0);
+                let px = gx + bx * graph_w;
+                let py = gy + (1.0 - by) * graph_h;
+                push_rect(cmds, px - 1.0, py - 1.0, 2.5, 2.5, pal.accent);
+            }
+            // Progress dot na krivce.
+            let (_, py_progress) = cubic_bezier(progress, 0.0, c1x, c1y, c2x, c2y, 1.0);
+            let dot_x = gx + progress * graph_w;
+            let dot_y = gy + (1.0 - py_progress) * graph_h;
+            push_rect(cmds, dot_x - 4.0, dot_y - 4.0, 8.0, 8.0, [191, 99, 224, 255]);
+            sy += graph_h + 8.0;
         } else {
             push_ui_text_italic(cmds, pad_x, sy,
                                 "Zadne aktivni animace".to_string(), pal.text_dim);
@@ -2034,22 +2149,50 @@ fn paint_styles_pane(
                     (src_x, sy, label_w, ROW_H, src_label.clone()));
             }
             sy += ROW_H;
+            // Shorthand grupovani v rule decls - default collapsed sub-props.
+            use crate::devtools::model::styles::{shorthand_for, is_shorthand};
+            let expanded = state.styles.computed_expanded.borrow().clone();
+            let mut hidden_shorthands: std::collections::HashSet<String> = Default::default();
+            for d in &rule.declarations {
+                if is_shorthand(&d.property) && expanded.contains(&d.property) {
+                    hidden_shorthands.insert(d.property.clone());
+                }
+            }
             for d in &rule.declarations {
                 if sy >= max_y { return; }
+                // Sub-prop ktery patri pod collapsed shorthand -> skip.
+                if let Some(sh) = shorthand_for(&d.property) {
+                    if !expanded.contains(sh) { continue; }
+                }
+                // Shorthand expanded -> skip self (sub-props nahrazuji).
+                if hidden_shorthands.contains(&d.property) { continue; }
                 if in_view(sy) {
-                    // Highlight bg pri matchu var_highlight (po jump).
                     let highlight = state.var_highlight.as_ref()
                         .map(|(n, _)| n == &d.property).unwrap_or(false);
                     if highlight {
                         push_rect(cmds, pad_x - 4.0, sy, 250.0, ROW_H, pal.bg_row_selected);
                     }
-                    // Pokud editing_value matchuje tuto property -> render input field misto value text.
+                    // Chevron pri shorthand prop ktery ma sub-props v rule decls.
+                    let has_subprops = is_shorthand(&d.property)
+                        && rule.declarations.iter().any(|dd|
+                            shorthand_for(&dd.property).map(|s| s == d.property).unwrap_or(false));
+                    let mut text_x = pad_x;
+                    if has_subprops {
+                        let exp = expanded.contains(&d.property);
+                        let icon = if exp { ICON_EXPAND_MORE } else { ICON_CHEVRON_RIGHT };
+                        push_icon(cmds, pad_x - 2.0, sy + (ROW_H - ICON_SIZE) * 0.5, icon, pal.text);
+                        state.styles.computed_chevron_zones.borrow_mut()
+                            .push((pad_x - 4.0, sy, 18.0, ROW_H, d.property.clone()));
+                        text_x = pad_x + 16.0;
+                    } else if shorthand_for(&d.property).is_some() {
+                        text_x = pad_x + 24.0;
+                    }
                     let editing = state.styles.editing_value.as_ref()
                         .filter(|(p, _)| p == &d.property);
                     if let Some((_, buffer)) = editing {
                         let prefix = format!("  {}: ", d.property);
-                        push_text(cmds, pad_x, sy, prefix.clone(), pal.syn_property, false);
-                        let edit_x = pad_x + dt_text_width(&prefix);
+                        push_text(cmds, text_x, sy, prefix.clone(), pal.syn_property, false);
+                        let edit_x = text_x + dt_text_width(&prefix);
                         let edit_w = 200.0;
                         push_rect(cmds, edit_x - 2.0, sy, edit_w, ROW_H, pal.bg_input_focus);
                         push_rect_border(cmds, edit_x - 2.0, sy, edit_w, ROW_H, pal.accent);
@@ -2060,7 +2203,7 @@ fn paint_styles_pane(
                         let mut sw = state.styles.swatch_zones.borrow_mut();
                         let mut vz = state.styles.var_zones.borrow_mut();
                         let mut vlz = state.styles.decl_value_zones.borrow_mut();
-                        paint_decl_line(cmds, pal, &mut sw, &mut vz, &mut vlz, pad_x, sy, &d.property, &d.value, d.important, d.overridden);
+                        paint_decl_line(cmds, pal, &mut sw, &mut vz, &mut vlz, text_x, sy, &d.property, &d.value, d.important, d.overridden);
                     }
                 }
                 sy += ROW_H;
@@ -3170,6 +3313,8 @@ pub enum DevtoolsHit {
     ComputedShorthandToggle(String),
     /// Klik na overflow chevron v side panel sub-tab strip.
     SidePanelOverflowToggle,
+    /// Animations panel toolbar action (pause/speed/restart).
+    AnimationsAction(String),
     /// Klik na HEX input v color pickeru.
     ColorPickerHexFocus,
     /// Klik na R/G/B input (i=0..2).
@@ -3503,98 +3648,73 @@ fn hit_test_elements(
                 }
             }
         }
-        // Overflow dropdown items hit-test (kdyz otevren).
-        if state.side_panel_overflow_open && mouse_y >= body_y + TAB_H {
-            use crate::devtools::SidePanelTab;
-            let visible = SidePanelTab::visible_default();
-            let max_tx = styles_end + side_panel_w - 26.0;
-            let mut tx2 = styles_end + 8.0;
-            let mut overflow_start: Option<usize> = None;
-            for (i, t) in visible.iter().enumerate() {
-                let tw = (t.label().len() as f32) * FONT_W + 12.0;
-                if tx2 + tw > max_tx { overflow_start = Some(i); break; }
-                tx2 += tw + 2.0;
-            }
-            if let Some(start) = overflow_start {
-                let drop_y = body_y + TAB_H + 2.0;
-                let item_h = ROW_H + 4.0;
-                let menu_x = styles_end + side_panel_w - 160.0;
-                let menu_w = 156.0;
-                let hidden = &visible[start..];
-                let menu_h = (hidden.len() as f32) * item_h + 6.0;
-                if mouse_x >= menu_x && mouse_x < menu_x + menu_w
-                    && mouse_y >= drop_y && mouse_y < drop_y + menu_h {
-                    let idx = ((mouse_y - drop_y - 4.0) / item_h) as usize;
-                    if let Some(t) = hidden.get(idx) {
-                        return DevtoolsHit::SidePanelTabClick(*t);
-                    }
-                    return DevtoolsHit::PanelArea;
-                }
+        // Overflow chevron + dropdown - hit-test pres real-painted zones.
+        if let Some((zx, zy, zw, zh)) = *state.styles.overflow_chevron_zone.borrow() {
+            if mouse_x >= zx && mouse_x < zx + zw
+               && mouse_y >= zy && mouse_y < zy + zh {
+                return DevtoolsHit::SidePanelOverflowToggle;
             }
         }
-        // Sub-tab strip nahore.
+        if state.side_panel_overflow_open {
+            let dz = state.styles.overflow_dropdown_zones.borrow();
+            for (zx, zy, zw, zh, idx) in dz.iter() {
+                if mouse_x >= *zx && mouse_x < zx + zw
+                   && mouse_y >= *zy && mouse_y < zy + zh {
+                    use crate::devtools::SidePanelTab;
+                    let visible = SidePanelTab::visible_default();
+                    if let Some(t) = visible.get(*idx) {
+                        return DevtoolsHit::SidePanelTabClick(*t);
+                    }
+                }
+            }
+            drop(dz);
+        }
+        // Sub-tab strip nahore - normal tabs (do overflow start).
         if mouse_y < body_y + TAB_H {
             use crate::devtools::SidePanelTab;
             let visible = SidePanelTab::visible_default();
             let max_tx = styles_end + side_panel_w - 26.0;
             let mut tx = styles_end + 8.0;
-            let mut overflow_start: Option<usize> = None;
-            for (i, t) in visible.iter().enumerate() {
+            for t in visible.iter() {
                 let label = t.label();
                 let tw = (label.len() as f32) * FONT_W + 12.0;
-                if tx + tw > max_tx {
-                    overflow_start = Some(i);
-                    break;
-                }
+                if tx + tw > max_tx { break; }
                 if mouse_x >= tx && mouse_x < tx + tw {
                     return DevtoolsHit::SidePanelTabClick(*t);
                 }
                 tx += tw + 2.0;
             }
-            // Chevron klik = toggle overflow dropdown.
-            if overflow_start.is_some() {
-                let cx = styles_end + side_panel_w - 22.0;
-                if mouse_x >= cx && mouse_x < cx + 18.0 {
-                    return DevtoolsHit::SidePanelOverflowToggle;
+        }
+        // Animations panel toolbar buttons.
+        if matches!(state.side_panel_tab, crate::devtools::SidePanelTab::Animations) {
+            let bz = state.styles.animations_btn_zones.borrow();
+            for (zx, zy, zw, zh, action) in bz.iter() {
+                if mouse_x >= *zx && mouse_x < zx + zw
+                   && mouse_y >= *zy && mouse_y < zy + zh {
+                    return DevtoolsHit::AnimationsAction(action.clone());
                 }
             }
         }
-        // Section header hit-test (toggle collapse). Headers podle sub-tabu.
-        let body_y_inner = body_y + TAB_H;
-        if mouse_y >= body_y_inner {
-            // Per-sub-tab section list (poradi musi pasovat na paint).
-            let sections: &[SectionId] = match state.side_panel_tab {
-                crate::devtools::SidePanelTab::Layout => &[
-                    SectionId::LayoutFlex, SectionId::LayoutGrid,
-                    SectionId::LayoutBoxModel, SectionId::LayoutBoxProps,
-                ],
-                crate::devtools::SidePanelTab::Fonts => &[SectionId::FontsUsed, SectionId::FontsFaces],
-                crate::devtools::SidePanelTab::Animations => &[SectionId::AnimationsList],
-                _ => &[],
-            };
-            let mut sy = body_y_inner + 4.0;
-            for id in sections {
-                let header_h = ROW_H + 4.0;
-                if mouse_x >= styles_end && mouse_x < styles_end + side_panel_w
-                   && mouse_y >= sy && mouse_y < sy + header_h {
-                    return DevtoolsHit::SectionToggle(id.clone());
-                }
-                sy += header_h;
-                if !state.collapsed_sections.contains(id) {
-                    // Realna vyska obsahu - musi presne sedet s paint_side_layout.
-                    sy += match id {
-                        SectionId::LayoutFlex => ROW_H * 4.0 + 4.0,
-                        SectionId::LayoutGrid => ROW_H * 5.0 + 4.0,
-                        SectionId::LayoutBoxModel => 130.0 + 4.0,
-                        SectionId::LayoutBoxProps => ROW_H * 3.0 + 4.0,
-                        SectionId::FontsUsed => ROW_H * 6.0 + 4.0,
-                        SectionId::FontsFaces => ROW_H * 4.0 + 4.0,
-                        SectionId::AnimationsList => ROW_H * 6.0 + 4.0,
-                        _ => ROW_H * 4.0,
-                    };
-                }
+        // Section header hit-test - presne zones z paint phase (debug-string match).
+        let zones = state.styles.section_header_zones.borrow();
+        for (zx, zy, zw, zh, id_str) in zones.iter() {
+            if mouse_x >= *zx && mouse_x < zx + zw
+               && mouse_y >= *zy && mouse_y < zy + zh {
+                // Map id_str zpet na SectionId.
+                let id = match id_str.as_str() {
+                    "LayoutFlex" => SectionId::LayoutFlex,
+                    "LayoutGrid" => SectionId::LayoutGrid,
+                    "LayoutBoxModel" => SectionId::LayoutBoxModel,
+                    "LayoutBoxProps" => SectionId::LayoutBoxProps,
+                    "FontsUsed" => SectionId::FontsUsed,
+                    "FontsFaces" => SectionId::FontsFaces,
+                    "AnimationsList" => SectionId::AnimationsList,
+                    _ => continue,
+                };
+                return DevtoolsHit::SectionToggle(id);
             }
         }
+        drop(zones);
         return DevtoolsHit::PanelArea;
     }
 

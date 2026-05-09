@@ -455,6 +455,9 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         /// Cache cascade output (DOM root ptr hash -> StyleMap).
         cached_cascade_hash: u64,
         cached_style_map: Option<super::cascade::StyleMap>,
+        /// Cache pro matched_rules build - (selected_node, cascade_hash).
+        /// Bez zmeny ani jednoho neni potreba pretizet rules walk.
+        cached_matched_key: Option<(Option<usize>, u64)>,
         cached_pseudo_map: Option<super::cascade::PseudoStyleMap>,
         /// Cesta k aktualne nactenemu HTML souboru (pro reload + relativni paths).
         current_path: Option<std::path::PathBuf>,
@@ -1295,6 +1298,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                 }
                                 DevtoolsHit::SidePanelTabClick(t) => {
                                     self.devtools.side_panel_tab = t;
+                                    // Po vyberu z dropdown menu zavri overflow.
+                                    self.devtools.side_panel_overflow_open = false;
                                 }
                                 DevtoolsHit::SidePanelSplitterDrag => {
                                     self.devtools.elements.dragging_side_split = true;
@@ -1316,6 +1321,34 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                 }
                                 DevtoolsHit::SidePanelOverflowToggle => {
                                     self.devtools.side_panel_overflow_open = !self.devtools.side_panel_overflow_open;
+                                }
+                                DevtoolsHit::AnimationsAction(action) => {
+                                    match action.as_str() {
+                                        "pause" => {
+                                            self.devtools.animations_paused = !self.devtools.animations_paused;
+                                            if self.devtools.animations_paused {
+                                                let t = self.devtools.frame_counter as f32 / 60.0
+                                                    * self.devtools.animations_speed;
+                                                self.devtools.animations_paused_at = Some(t.fract());
+                                            } else {
+                                                self.devtools.animations_paused_at = None;
+                                            }
+                                        }
+                                        "speed" => {
+                                            // Cycle 0.25 / 0.5 / 1.0 / 2.0 / 4.0.
+                                            let speeds = [0.25, 0.5, 1.0, 2.0, 4.0];
+                                            let cur = self.devtools.animations_speed;
+                                            let idx = speeds.iter().position(|s| (s - cur).abs() < 0.01).unwrap_or(2);
+                                            self.devtools.animations_speed = speeds[(idx + 1) % speeds.len()];
+                                        }
+                                        "restart" => {
+                                            // Restart = clear active_animations -> rebuild.
+                                            self.active_animations.clear();
+                                            self.animation_iterations.clear();
+                                            self.start_time = std::time::Instant::now();
+                                        }
+                                        _ => {}
+                                    }
                                 }
                                 DevtoolsHit::ColorPickerHexFocus => {
                                     if let Some(cp) = &mut self.devtools.color_picker {
@@ -4723,6 +4756,11 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             let pseudo_map = self.cached_pseudo_map.as_ref().cloned().unwrap_or_default();
 
             // Wire computed styles + matched rules do DevTools state pri selected element.
+            // PERF: cele toto je drahe (walk vsech rules x selectors); cache pres
+            // (selected, cascade_hash) - bez zmeny selection ani cascade nevolat znovu.
+            // Driv: tato cesta byla volana kazdy frame pri active_animations -> lag.
+            let matched_cache_key = (self.devtools.elements.selected, cascade_hash);
+            let need_rebuild_matched = self.cached_matched_key != Some(matched_cache_key);
             if let Some(sel) = self.devtools.elements.selected {
                 if let Some(decl_map) = style_map.get(&sel) {
                     let mut entries: Vec<(String, String)> = decl_map.iter()
@@ -4733,8 +4771,9 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 } else {
                     self.devtools.styles.computed.clear();
                 }
-                // Matched rules: walk stylesheets, najdi rules co selector
-                // matches na selected node. Sort dle specificity desc.
+                // Matched rules: walk stylesheets - drahy O(rules*selectors).
+                // Cache pres (selected, cascade_hash) - skip kdyz nezmenilo se.
+                if need_rebuild_matched {
                 if let Some(node) = find_node_by_ptr(&document_root, sel) {
                     use crate::devtools::model::styles::{MatchedRule, RuleSource, RuleDecl};
                     let mut matched: Vec<MatchedRule> = Vec::new();
@@ -4829,9 +4868,12 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 } else {
                     self.devtools.styles.matched_rules.clear();
                 }
+                self.cached_matched_key = Some(matched_cache_key);
+                } // end need_rebuild_matched
             } else {
                 self.devtools.styles.computed.clear();
                 self.devtools.styles.matched_rules.clear();
+                self.cached_matched_key = None;
             }
             // Populate @font-face declarations.
             let mut faces = Vec::new();
@@ -5754,6 +5796,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         cached_stylesheets: None,
         cached_cascade_hash: 0,
         cached_style_map: None,
+        cached_matched_key: None,
         cached_pseudo_map: None,
         display_list_buffer: Vec::with_capacity(2048),
         cached_layout_root: None,

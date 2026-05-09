@@ -60,6 +60,34 @@ pub struct StylesState {
     pub match_toggle_zones: std::cell::RefCell<Vec<(f32, f32, f32, f32, String)>>,
     /// Cache (x, y, w, h, source_label) clickable source linku (filename:line).
     pub source_link_zones: std::cell::RefCell<Vec<(f32, f32, f32, f32, String)>>,
+    /// Cache (x, y, w, h, section_id_str) section header click zon v side panelu.
+    /// Per-frame populated v paint_section_header. Hit-test cte presny x/y.
+    pub section_header_zones: std::cell::RefCell<Vec<(f32, f32, f32, f32, String)>>,
+    /// Pridavam novy inline style decl - phase: typuju prop, pak value.
+    pub adding_inline_decl: Option<AddingInlineDecl>,
+    /// Cache (x, y, w, h) overflow chevron buttonu v side panel sub-tab strip.
+    /// None = chevron neviditelny (vsechny tabs vejde se).
+    pub overflow_chevron_zone: std::cell::RefCell<Option<(f32, f32, f32, f32)>>,
+    /// Cache (x, y, w, h, tab_idx) klikatelnych dropdown items.
+    pub overflow_dropdown_zones: std::cell::RefCell<Vec<(f32, f32, f32, f32, usize)>>,
+    /// Cache (x, y, w, h, action) animations panel toolbar buttonu.
+    /// action: "pause" / "speed" / "restart".
+    pub animations_btn_zones: std::cell::RefCell<Vec<(f32, f32, f32, f32, String)>>,
+}
+
+/// State pri pridavani noveho inline stylu na selected element.
+/// Phase Property -> Value. Tab/Enter prepne, druhy Enter = apply.
+#[derive(Debug, Clone)]
+pub struct AddingInlineDecl {
+    pub phase: AddPhase,
+    pub prop_buffer: String,
+    pub value_buffer: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AddPhase {
+    Property,
+    Value,
 }
 
 /// Vrati shorthand jmeno pokud `prop` je sub-property nejakeho shorthand.

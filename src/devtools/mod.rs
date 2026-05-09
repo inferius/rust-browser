@@ -101,6 +101,12 @@ pub struct DevToolsState {
     /// Aktivni match-preview selector (highlight elementu matching selectoru).
     /// None = bez highlight. Toggle pres ctverecek vlevo od selectoru.
     pub match_preview_selector: Option<String>,
+    /// Animations panel: aktualni stav prehravani.
+    pub animations_paused: bool,
+    /// Animations panel: speed multiplier (0.25/0.5/1.0/2.0/4.0).
+    pub animations_speed: f32,
+    /// Pri pause: progress 0..1 frozen pro paint.
+    pub animations_paused_at: Option<f32>,
     /// Dock position devtools panelu (Bottom/Right/Left/Top/Popup).
     pub dock_position: profile::DockPosition,
     /// Settings popup state (kdyz user otevre dock chooser dialog).
@@ -343,6 +349,9 @@ impl Default for DevToolsState {
             side_panel_w: 280.0,
             side_panel_overflow_open: false,
             match_preview_selector: None,
+            animations_paused: false,
+            animations_speed: 1.0,
+            animations_paused_at: None,
             dock_position: profile::load_dock_position(),
             settings_popup_open: false,
             color_picker: None,
