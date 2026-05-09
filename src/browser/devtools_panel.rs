@@ -853,8 +853,10 @@ fn paint_elements_tab(
     // split_x = tree | styles boundary; styles_end = win_w - side_panel_w.
     let default_tree_split = (win_w - state.side_panel_w) * 0.45;
     let tree_split = if state.elements.split_x < 1.0 { default_tree_split }
-                     else { state.elements.split_x.max(200.0).min(win_w - state.side_panel_w - 200.0) };
-    let side_panel_w = state.side_panel_w.clamp(180.0, win_w - 400.0);
+                     else { state.elements.split_x.max(200.0).min((win_w - state.side_panel_w - 200.0).max(201.0)) };
+    // clamp guard: kdyz win_w < 580, max < min - panic. Ensure max >= 181.
+    let max_side = (win_w - 400.0).max(181.0);
+    let side_panel_w = state.side_panel_w.clamp(180.0, max_side);
     let styles_end = win_w - side_panel_w;
 
     // Z-order:
@@ -1914,7 +1916,8 @@ fn paint_decl_line(
     pal: &Palette,
     swatch_zones: &mut Vec<(f32, f32, f32, f32, [u8; 4], String)>,
     var_zones: &mut Vec<(f32, f32, f32, f32, String)>,
-    value_zones: &mut Vec<(f32, f32, f32, f32, String)>,
+    value_zones: &mut Vec<(f32, f32, f32, f32, usize, String)>,
+    rule_idx: usize,
     x: f32, y: f32,
     property: &str,
     value: &str,
@@ -1974,7 +1977,7 @@ fn paint_decl_line(
     push_text(cmds, cx, y, ";".to_string(), pal.text_dim, false);
     // Track value zone (od start_value do cx) aby klik otevrel editor.
     let value_w = (cx - value_start_x).max(40.0);
-    value_zones.push((value_start_x, y, value_w, ROW_H, property.to_string()));
+    value_zones.push((value_start_x, y, value_w, ROW_H, rule_idx, property.to_string()));
     if overridden {
         // Strikethrough cary.
         let line_w = cx - x;
@@ -2190,7 +2193,7 @@ fn paint_styles_pane(
         sy += ROW_H + 8.0;
     } else {
         let mut last_inherited_from: Option<String> = None;
-        for rule in &state.styles.matched_rules {
+        for (rule_idx, rule) in state.styles.matched_rules.iter().enumerate() {
             if sy >= max_y { break; }
             // Inherited group header.
             if rule.inherited_from != last_inherited_from {
@@ -2297,8 +2300,8 @@ fn paint_styles_pane(
                         text_x = pad_x + 24.0;
                     }
                     let editing = state.styles.editing_value.as_ref()
-                        .filter(|(p, _)| p == &d.property);
-                    if let Some((_, buffer)) = editing {
+                        .filter(|(ri, p, _)| *ri == rule_idx && p == &d.property);
+                    if let Some((_, _, buffer)) = editing {
                         let prefix = format!("  {}: ", d.property);
                         push_text(cmds, text_x, sy, prefix.clone(), pal.syn_property, false);
                         let edit_x = text_x + dt_text_width(&prefix);
@@ -2312,7 +2315,7 @@ fn paint_styles_pane(
                         let mut sw = state.styles.swatch_zones.borrow_mut();
                         let mut vz = state.styles.var_zones.borrow_mut();
                         let mut vlz = state.styles.decl_value_zones.borrow_mut();
-                        paint_decl_line(cmds, pal, &mut sw, &mut vz, &mut vlz, text_x, sy, &d.property, &d.value, d.important, d.overridden);
+                        paint_decl_line(cmds, pal, &mut sw, &mut vz, &mut vlz, rule_idx, text_x, sy, &d.property, &d.value, d.important, d.overridden);
                     }
                 }
                 sy += ROW_H;
@@ -3428,8 +3431,8 @@ pub enum DevtoolsHit {
     ColorPickerHexFocus,
     /// Klik na R/G/B input (i=0..2).
     ColorPickerRgbFocus(usize),
-    /// Klik na value v styles pane - otevrit editor pro property.
-    EditDeclValue(String),
+    /// Klik na value v styles pane - otevrit editor pro property v rule_idx.
+    EditDeclValue(usize, String),
     /// Klik na value v inline section - otevrit editor.
     EditInlineValue(String),
     /// Klik na "+ pridat" button - otevrit add-new inline decl.
@@ -3736,8 +3739,10 @@ fn hit_test_elements(
     // Three-column geometry.
     let default_tree_split = (win_w - state.side_panel_w) * 0.45;
     let tree_split = if state.elements.split_x < 1.0 { default_tree_split }
-                     else { state.elements.split_x.max(200.0).min(win_w - state.side_panel_w - 200.0) };
-    let side_panel_w = state.side_panel_w.clamp(180.0, win_w - 400.0);
+                     else { state.elements.split_x.max(200.0).min((win_w - state.side_panel_w - 200.0).max(201.0)) };
+    // clamp guard: kdyz win_w < 580, max < min - panic. Ensure max >= 181.
+    let max_side = (win_w - 400.0).max(181.0);
+    let side_panel_w = state.side_panel_w.clamp(180.0, max_side);
     let styles_end = win_w - side_panel_w;
 
     // Tree splitter zone.
@@ -3859,10 +3864,10 @@ fn hit_test_elements(
         drop(zones);
         // Value zone klik -> edit mode.
         let vzones = state.styles.decl_value_zones.borrow();
-        for (zx, zy, zw, zh, prop) in vzones.iter() {
+        for (zx, zy, zw, zh, ri, prop) in vzones.iter() {
             if mouse_x >= *zx && mouse_x < zx + zw
                && mouse_y >= *zy && mouse_y < zy + zh {
-                return DevtoolsHit::EditDeclValue(prop.clone());
+                return DevtoolsHit::EditDeclValue(*ri, prop.clone());
             }
         }
         drop(vzones);
@@ -3921,7 +3926,84 @@ fn hit_test_elements(
     }
     let split_x = tree_split;
 
-    // Levy pane - check tree scrollbar thumb.
+    // CRITICAL: tree handling JEN pri mouse_x < tree_split. Drive klik
+    // v styles pane (mezi tree_split a styles_end) propadl do tree row
+    // computation -> vybral element pod prstem misto styles handling.
+    if mouse_x >= tree_split {
+        // Styles pane area (middle column). Klik na value/swatch/var/edit
+        // zones uz se kontroluju v early returns nize. Default = PanelArea
+        // (zachyti propagation, neprosi do page).
+        // Swatch zone hit (color picker open).
+        let zones = state.styles.swatch_zones.borrow();
+        for (zx, zy, zw, zh, col, prop) in zones.iter() {
+            if mouse_x >= *zx && mouse_x < zx + zw
+               && mouse_y >= *zy && mouse_y < zy + zh {
+                return DevtoolsHit::OpenColorPicker {
+                    anchor_x: *zx,
+                    anchor_y: zy + zh + 4.0,
+                    color: *col,
+                    property: prop.clone(),
+                };
+            }
+        }
+        drop(zones);
+        // Decl value zone (existing rules).
+        let vz = state.styles.decl_value_zones.borrow();
+        for (zx, zy, zw, zh, ri, prop) in vz.iter() {
+            if mouse_x >= *zx && mouse_x < zx + zw
+               && mouse_y >= *zy && mouse_y < zy + zh {
+                return DevtoolsHit::EditDeclValue(*ri, prop.clone());
+            }
+        }
+        drop(vz);
+        // Inline value zone (klik value v "prvek {}" sekci).
+        let iv = state.styles.inline_value_zones.borrow();
+        for (zx, zy, zw, zh, prop) in iv.iter() {
+            if mouse_x >= *zx && mouse_x < zx + zw
+               && mouse_y >= *zy && mouse_y < zy + zh {
+                return DevtoolsHit::EditInlineValue(prop.clone());
+            }
+        }
+        drop(iv);
+        // "+ pridat" inline button.
+        if let Some((zx, zy, zw, zh)) = *state.styles.inline_add_btn_zone.borrow() {
+            if mouse_x >= zx && mouse_x < zx + zw
+               && mouse_y >= zy && mouse_y < zy + zh {
+                return DevtoolsHit::AddInlineDecl;
+            }
+        }
+        // Match preview toggle ctverecek.
+        let mz = state.styles.match_toggle_zones.borrow();
+        for (zx, zy, zw, zh, sel) in mz.iter() {
+            if mouse_x >= *zx && mouse_x < zx + zw
+               && mouse_y >= *zy && mouse_y < zy + zh {
+                return DevtoolsHit::ToggleMatchPreview(sel.clone());
+            }
+        }
+        drop(mz);
+        // Source link.
+        let sl = state.styles.source_link_zones.borrow();
+        for (zx, zy, zw, zh, lab) in sl.iter() {
+            if mouse_x >= *zx && mouse_x < zx + zw
+               && mouse_y >= *zy && mouse_y < zy + zh {
+                return DevtoolsHit::OpenSourceLink(lab.clone());
+            }
+        }
+        drop(sl);
+        // Var chip.
+        let vc = state.styles.var_zones.borrow();
+        for (zx, zy, zw, zh, name) in vc.iter() {
+            if mouse_x >= *zx && mouse_x < zx + zw
+               && mouse_y >= *zy && mouse_y < zy + zh {
+                return DevtoolsHit::JumpToVar(name.clone());
+            }
+        }
+        drop(vc);
+        // Default styles pane area - zachyti klik (no propagation na page).
+        return DevtoolsHit::PanelArea;
+    }
+
+    // Tree pane (mouse_x < tree_split).
     let rows = &state.elements.rows;
     let total_h = rows.len() as f32 * ROW_H;
     if total_h > body_h {

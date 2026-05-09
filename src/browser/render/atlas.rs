@@ -200,18 +200,25 @@ impl GlyphAtlas {
     /// kazdy alternative a vraci prvni nalezeny @font-face entry.
     pub(super) fn font_for(&self, family: &str) -> &fontdue::Font {
         // Combinace bold+italic: __bi__: prefix.
+        // CRITICAL: extra_fonts (explicit family name jako "Inter-Bold") MUSI
+        // mit prioritu pred system bold variant. Drive: __bold__:Inter-Bold
+        // by se skoncilo na font_bold (Times Bold) a ignorovat Inter-Bold.
         if let Some(rest) = family.strip_prefix("__bi__:") {
+            // Prvne explicit family v extra_fonts (napr. "Inter-Bold").
+            if let Some(f) = self.extra_fonts.get(rest) { return f; }
+            // Fallback na system bold-italic > italic > bold > regular.
             if let Some(f) = &self.font_bold_italic { return f; }
-            // Fallback chain: italic > bold > regular.
             if let Some(f) = &self.font_italic { return f; }
             if let Some(f) = &self.font_bold { return f; }
             return self.font_for(rest);
         }
         if let Some(rest) = family.strip_prefix("__italic__:") {
+            if let Some(f) = self.extra_fonts.get(rest) { return f; }
             if let Some(f) = &self.font_italic { return f; }
             return self.font_for(rest);
         }
         if let Some(rest) = family.strip_prefix("__bold__:") {
+            if let Some(f) = self.extra_fonts.get(rest) { return f; }
             if let Some(b) = &self.font_bold { return b; }
             return self.font_for(rest);
         }

@@ -761,13 +761,12 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         // Pri Bottom/Top: panel_w = viewport_w. Mouse_x v panel_x..panel_x+panel_w.
                         // styles_end = mouse_x_local; side_panel_w = panel_w - mouse_x_local.
                         let local_mx = mx_screen - px;
+                        let max_w = (pw - 400.0).max(181.0);
                         let new_w = match self.devtools.dock_position {
                             DockPosition::Bottom | DockPosition::Top | DockPosition::PopupWindow =>
-                                (pw - local_mx).clamp(180.0, pw - 400.0),
+                                (pw - local_mx).clamp(180.0, max_w),
                             DockPosition::Left | DockPosition::Right =>
-                                // Pri vertical dock side panel ma fixed sirku 280
-                                // (side panel je nadeleny pro Inspector).
-                                (pw - local_mx).clamp(180.0, pw - 400.0),
+                                (pw - local_mx).clamp(180.0, max_w),
                         };
                         if new_w > 0.0 {
                             self.devtools.side_panel_w = new_w;
@@ -1165,7 +1164,10 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     let modal_active = self.devtools.settings_popup_open
                         || self.devtools.color_picker.is_some()
                         || self.devtools.class_manager_open;
-                    let in_panel = raw_y >= viewport_h - panel_h;
+                    // Pouzij point_in_devtools (respektuje dock position) misto
+                    // bottom-only check raw_y >= viewport_h - panel_h. Bez teto
+                    // opravy pri Top/Left/Right dock klik v panelu propaguje na page.
+                    let in_panel = self.point_in_devtools(self.mouse_x - self.scroll_x, raw_y);
                     if self.devtools.panel_open && (in_panel || modal_active) {
                         if let Some(layout) = &self.layout_root {
                             let hit = devtools_hit_test(&self.devtools, layout, viewport_w, viewport_h, self.mouse_x, raw_y);
@@ -1433,12 +1435,14 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                         cp.rgb_focused = Some(i);
                                     }
                                 }
-                                DevtoolsHit::EditDeclValue(prop) => {
-                                    // Initial buffer = current value pro tuto property z computed.
-                                    let cur = self.devtools.styles.computed.iter()
-                                        .find(|(k, _)| k == &prop)
-                                        .map(|(_, v)| v.clone()).unwrap_or_default();
-                                    self.devtools.styles.editing_value = Some((prop, cur));
+                                DevtoolsHit::EditDeclValue(rule_idx, prop) => {
+                                    // Initial buffer = current value z konkretni rule (ne computed).
+                                    let cur = self.devtools.styles.matched_rules.get(rule_idx)
+                                        .and_then(|r| r.declarations.iter()
+                                            .find(|d| d.property == prop)
+                                            .map(|d| d.value.clone()))
+                                        .unwrap_or_default();
+                                    self.devtools.styles.editing_value = Some((rule_idx, prop, cur));
                                 }
                                 DevtoolsHit::EditInlineValue(prop) => {
                                     // Read current inline value z node attr "style".
@@ -1858,7 +1862,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         match self.devtools.tab {
                             crate::devtools::Tab::Elements => {
                                 let mx_local = self.mouse_x - self.scroll_x;
-                                let side_panel_w = self.devtools.side_panel_w.clamp(180.0, viewport_w - 400.0);
+                                let side_panel_w = self.devtools.side_panel_w.clamp(180.0, (viewport_w - 400.0).max(181.0));
                                 let styles_end = viewport_w - side_panel_w;
                                 let default_tree_split = (viewport_w - side_panel_w) * 0.45;
                                 let tree_split = if self.devtools.elements.split_x < 1.0 { default_tree_split }
@@ -2094,12 +2098,12 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     if self.devtools.styles.editing_value.is_some() {
                         match &key_event.logical_key {
                             Key::Named(NamedKey::Backspace) => {
-                                if let Some((_, b)) = self.devtools.styles.editing_value.as_mut() {
+                                if let Some((_, _, b)) = self.devtools.styles.editing_value.as_mut() {
                                     b.pop();
                                 }
                             }
                             Key::Named(NamedKey::Enter) => {
-                                if let Some((prop, val)) = self.devtools.styles.editing_value.take() {
+                                if let Some((_ri, prop, val)) = self.devtools.styles.editing_value.take() {
                                     self.write_back_style_edit(&prop, &val);
                                 }
                             }
@@ -2107,12 +2111,12 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                 self.devtools.styles.editing_value = None;
                             }
                             Key::Character(s) => {
-                                if let Some((_, b)) = self.devtools.styles.editing_value.as_mut() {
+                                if let Some((_, _, b)) = self.devtools.styles.editing_value.as_mut() {
                                     b.push_str(s);
                                 }
                             }
                             Key::Named(NamedKey::Space) => {
-                                if let Some((_, b)) = self.devtools.styles.editing_value.as_mut() {
+                                if let Some((_, _, b)) = self.devtools.styles.editing_value.as_mut() {
                                     b.push(' ');
                                 }
                             }

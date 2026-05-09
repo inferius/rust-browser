@@ -51,11 +51,14 @@ pub struct StylesState {
     pub computed_expanded: std::cell::RefCell<std::collections::HashSet<String>>,
     /// Cache (x, y, w, h, shorthand_name) clickable chevron zon v Computed panelu.
     pub computed_chevron_zones: std::cell::RefCell<Vec<(f32, f32, f32, f32, String)>>,
-    /// Cache (x, y, w, h, property_name) zon clickable na value v styles pane.
-    /// Klik = otevrit editor. Per-frame populated.
-    pub decl_value_zones: std::cell::RefCell<Vec<(f32, f32, f32, f32, String)>>,
-    /// Aktivni edit value: Some((property, buffer)). Dopisovani pres KeyboardInput.
-    pub editing_value: Option<(String, String)>,
+    /// Cache (x, y, w, h, rule_idx, property_name) zon clickable na value
+    /// v styles pane. Klik = otevrit editor pres EditDeclValue(rule_idx, prop).
+    /// rule_idx odlisuje value u multiple matched rules s same property.
+    pub decl_value_zones: std::cell::RefCell<Vec<(f32, f32, f32, f32, usize, String)>>,
+    /// Aktivni edit value: Some((rule_idx, property, buffer)). rule_idx zajistuje
+    /// ze edit se zobrazi jen u konkretni rule, ne vsechny matched_rules s
+    /// stejnym property (drive: 2x .section -> oba kresly edit pri klik na 1).
+    pub editing_value: Option<(usize, String, String)>,
     /// Cache (x, y, w, h, selector) clickable match-preview ctverecku.
     pub match_toggle_zones: std::cell::RefCell<Vec<(f32, f32, f32, f32, String)>>,
     /// Cache (x, y, w, h, source_label) clickable source linku (filename:line).
