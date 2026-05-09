@@ -2,6 +2,20 @@
 
 Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 
+## Session N+17: Esc full handle + scroll-to-top + loading field
+
+**2448 tests pass, build clean.**
+
+Esc handler rozsireny:
+- color picker -> settings -> class manager -> tab overflow -> addr bar
+  -> find -> page selection clear (priority order)
+
+Scroll-to-top button:
+- Pri scroll_y > 200 floating button v pravem dolnim rohu (32x32 accent)
+- Klik = scroll_target_y = 0 (smooth scroll)
+
+Tab.loading: bool field (foundation pro busy spinner v tab chip).
+
 ## Session N+16: clear buttons + Ctrl+H/B + history filter API
 
 **2448 tests pass, build clean.**
