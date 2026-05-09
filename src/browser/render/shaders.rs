@@ -311,12 +311,23 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     // dela barevny artifacts. Pouzivame avg ze 3 sub-pixelu = grayscale
     // approximation s o trochu lepsi AA nez fontdue 1x raster.
     if (in.mode > 8.5 && in.mode < 9.5) {
+        // Gamma-correct subpixel coverage:
+        // 1) sample 3 sousedni subpixely R/G/B
+        // 2) prevedeme do linear (^2.2 aproximace srgb)
+        // 3) avg v linear space (gamma-correct blending)
+        // 4) zpet do srgb pres ^(1/2.2)
+        // Bez dual-source = grayscale ale spravne tonove. Bez gamma corr
+        // glyfy vychazely o 8-12% tmavsi nez ocekavane (sub-linear blending).
         let dims = textureDimensions(atlas_tex);
         let texel_w = 1.0 / f32(dims.x);
         let r_a = textureSample(atlas_tex, atlas_smp, in.uv - vec2<f32>(texel_w, 0.0)).r;
         let g_a = textureSample(atlas_tex, atlas_smp, in.uv).r;
         let b_a = textureSample(atlas_tex, atlas_smp, in.uv + vec2<f32>(texel_w, 0.0)).r;
-        let avg = (r_a + g_a + b_a) / 3.0;
+        let r_lin = pow(r_a, 2.2);
+        let g_lin = pow(g_a, 2.2);
+        let b_lin = pow(b_a, 2.2);
+        let avg_lin = (r_lin + g_lin + b_lin) * (1.0 / 3.0);
+        let avg = pow(avg_lin, 1.0 / 2.2);
         return vec4<f32>(in.color.rgb, in.color.a * avg);
     }
     // Mode 2: linear gradient - lerp color->color2 podle uv.x (pre-rotated)
