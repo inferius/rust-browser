@@ -885,19 +885,47 @@ fn paint_side_fonts(
     let mut sy = y + 4.0;
     let pad_x = x + 12.0;
     sy = paint_section_header(cmds, state, pal, &SectionId::FontsUsed,
-                               "Pouzite font v elementu", x, sy, w);
+                               "Pouzity font v elementu", x, sy, w);
     if !state.collapsed_sections.contains(&SectionId::FontsUsed) {
-        let family = if bx.font_family.is_empty() { "default".to_string() } else { bx.font_family.clone() };
-        push_text(cmds, pad_x, sy, family, pal.text, false);
+        let family = if bx.font_family.is_empty() { "default (Times Roman)".to_string() }
+                     else { bx.font_family.clone() };
+        push_text(cmds, pad_x, sy, family.clone(), pal.text, false);
         sy += ROW_H;
-        push_text(cmds, pad_x, sy, format!("{}px {}", bx.font_size as i32,
-                  if bx.bold { "bold" } else { "normal" }), pal.text_dim, false);
+        push_text(cmds, pad_x, sy,
+                  format!("{}px / {} / {}", bx.font_size as i32,
+                          if bx.bold { "bold (700)" } else { "normal (400)" },
+                          if bx.italic { "italic" } else { "normal" }),
+                  pal.text_dim, false);
+        sy += ROW_H;
+        // Glyph preview (sample text).
+        let preview = "AaBbCcDd 0123";
+        push_rect(cmds, pad_x, sy + 4.0, w - 24.0, 32.0, pal.bg_panel_alt);
+        cmds.push(DisplayCommand::Text {
+            x: pad_x + 8.0, y: sy + 8.0,
+            content: preview.to_string(),
+            color: pal.text,
+            font_size: 18.0, bold: bx.bold, italic: bx.italic,
+            font_family: family,
+            strikethrough: false, underline: false,
+        });
+        sy += 40.0;
+        push_ui_text(cmds, pad_x, sy,
+                     format!("line-height: {:.2}", bx.line_height), pal.text_dim, false);
+    }
+    // @font-face section.
+    sy += 8.0;
+    sy = paint_section_header(cmds, state, pal, &SectionId::FontsFaces,
+                               "@font-face deklarace", x, sy, w);
+    if !state.collapsed_sections.contains(&SectionId::FontsFaces) {
+        push_ui_text_italic(cmds, pad_x, sy,
+                            "(seznam load. via render side)".to_string(),
+                            pal.text_dim);
     }
 }
 
 fn paint_side_animations(
     cmds: &mut Vec<DisplayCommand>,
-    _bx: &LayoutBox,
+    bx: &LayoutBox,
     state: &DevToolsState,
     pal: &Palette,
     x: f32, y: f32, w: f32, _h: f32,
@@ -907,8 +935,47 @@ fn paint_side_animations(
     sy = paint_section_header(cmds, state, pal, &SectionId::AnimationsList,
                                "Animace na elementu", x, sy, w);
     if !state.collapsed_sections.contains(&SectionId::AnimationsList) {
-        push_text(cmds, pad_x, sy, "Zadne aktivni animace".to_string(), pal.text_dim, true);
+        // Animation properties z computed styles.
+        let lookup = |key: &str| state.styles.computed.iter()
+            .find(|(k, _)| k == key).map(|(_, v)| v.clone());
+        let name = lookup("animation-name");
+        if let Some(n) = name.filter(|s| !s.is_empty() && s != "none") {
+            push_text(cmds, pad_x, sy, format!("name: {}", n), pal.text, false);
+            sy += ROW_H;
+            if let Some(v) = lookup("animation-duration") {
+                push_text(cmds, pad_x, sy, format!("duration: {}", v), pal.text_dim, false);
+                sy += ROW_H;
+            }
+            if let Some(v) = lookup("animation-iteration-count") {
+                push_text(cmds, pad_x, sy, format!("iterations: {}", v), pal.text_dim, false);
+                sy += ROW_H;
+            }
+            if let Some(v) = lookup("animation-timing-function") {
+                push_text(cmds, pad_x, sy, format!("timing: {}", v), pal.text_dim, false);
+                sy += ROW_H;
+            }
+            if let Some(v) = lookup("animation-delay") {
+                push_text(cmds, pad_x, sy, format!("delay: {}", v), pal.text_dim, false);
+                sy += ROW_H;
+            }
+            if let Some(v) = lookup("animation-direction") {
+                push_text(cmds, pad_x, sy, format!("direction: {}", v), pal.text_dim, false);
+                sy += ROW_H;
+            }
+        } else {
+            push_ui_text_italic(cmds, pad_x, sy,
+                                "Zadne aktivni animace".to_string(), pal.text_dim);
+        }
     }
+    // Transitions.
+    let transition = state.styles.computed.iter()
+        .find(|(k, _)| k == "transition" || k == "transition-property")
+        .map(|(_, v)| v.clone());
+    if let Some(t) = transition.filter(|s| !s.is_empty() && s != "none" && s != "all") {
+        sy += 8.0;
+        push_ui_text(cmds, pad_x, sy, format!("transition: {}", t), pal.text_dim, true);
+    }
+    let _ = bx;
 }
 
 fn paint_elements_search_bar(
