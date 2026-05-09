@@ -2835,7 +2835,7 @@ fn layout_flex(bx: &mut LayoutBox) {
 /// Inline (text) deti se take layoutuji svisle.
 /// Recursivne posune cely LayoutBox subtree o (dx, dy). Pouziva se pri
 /// Position::Relative offsetech a pri animation tick (left/top keyframes).
-fn shift_subtree(bx: &mut LayoutBox, dx: f32, dy: f32) {
+pub fn shift_subtree(bx: &mut LayoutBox, dx: f32, dy: f32) {
     bx.rect.x += dx;
     bx.rect.y += dy;
     for ch in bx.children.iter_mut() {

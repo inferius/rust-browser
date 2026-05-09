@@ -1253,22 +1253,61 @@ pub fn layout_flex(bx: &mut LayoutBox) {
     for ch in bx.children.iter_mut() {
         if super::is_out_of_flow(ch) { continue; }
         if matches!(ch.display, super::super::layout::Display::None) { continue; }
-        // Aplikuj relative position offset (top/left/bottom/right) na in-flow items.
-        let off_x = if let Some(l) = ch.offset_left { l }
-                    else if let Some(r) = ch.offset_right { -r }
-                    else { 0.0 };
-        let off_y = if let Some(t) = ch.offset_top { t }
-                    else if let Some(b) = ch.offset_bottom { -b }
-                    else { 0.0 };
-        ch.rect.x += off_x;
-        ch.rect.y += off_y;
-        // Pri block s flex-direction nebo justify-content/align-items: layout as flex.
+        // CSS positioning: top/left/bottom/right ovlivnuje JEN Position::Relative.
+        // Sticky offset aplikuje apply_sticky() pri scroll.
+        if matches!(ch.position, super::super::layout::Position::Relative) {
+            let off_x = if let Some(l) = ch.offset_left { l }
+                        else if let Some(r) = ch.offset_right { -r }
+                        else { 0.0 };
+            let off_y = if let Some(t) = ch.offset_top { t }
+                        else if let Some(b) = ch.offset_bottom { -b }
+                        else { 0.0 };
+            ch.rect.x += off_x;
+            ch.rect.y += off_y;
+        }
         let has_flex_attr = !ch.flex_direction.is_empty() || !ch.justify_content.is_empty();
         match ch.display {
             super::super::layout::Display::Flex => super::flex::layout_flex(ch),
             super::super::layout::Display::Grid => super::grid::layout_grid(ch),
             super::super::layout::Display::Block if has_flex_attr => super::flex::layout_flex(ch),
             _ => super::super::layout::layout_block(ch),
+        }
+    }
+
+    // 10. POST-LAYOUT REFLOW: aplikuje JEN pri column auto-height +
+    // vsech items auto-height (zadny explicit_height + flex_grow=0). Bez teto
+    // podminky kazi justify-content + column-reverse + fixed-height stack.
+    // Ucel: opravit auto-height items prekryv pri column main_size pre-pass=0.
+    if !direction.is_row() && bx.explicit_height.is_none()
+       && matches!(justify, JustifyContent::FlexStart)
+       && !matches!(direction, FlexDirection::ColumnReverse)
+       && bx.children.iter().all(|c| c.explicit_height.is_none() && c.flex_grow == 0.0)
+    {
+        let pad_t = bx.padding_top.unwrap_or(bx.padding);
+        let inner_y_local = bx.rect.y + pad_t + bx.border_width;
+        let mut cursor = inner_y_local;
+        let gap = bx.row_gap;
+        let n = bx.children.len();
+        let mut first = true;
+        for i in 0..n {
+            let ch = &mut bx.children[i];
+            if super::is_out_of_flow(ch) { continue; }
+            if matches!(ch.display, super::super::layout::Display::None) { continue; }
+            let m_t = ch.margin_top.unwrap_or(ch.margin);
+            let m_b = ch.margin_bottom.unwrap_or(ch.margin);
+            if !first { cursor += gap; }
+            cursor += m_t;
+            let dy = cursor - ch.rect.y;
+            if dy.abs() > 0.5 {
+                super::super::layout::shift_subtree(ch, 0.0, dy);
+            }
+            cursor += ch.rect.height + m_b;
+            first = false;
+        }
+        let pad_b = bx.padding_bottom.unwrap_or(bx.padding);
+        let new_h = cursor - bx.rect.y + pad_b + bx.border_width;
+        if new_h > bx.rect.height {
+            bx.rect.height = new_h;
         }
     }
 }

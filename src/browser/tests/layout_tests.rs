@@ -288,6 +288,85 @@ fn debug_real_engine_test_html_body_layout() {
 }
 
 #[test]
+fn flex_column_items_auto_height_from_content() {
+    // engine-test.html bug: main { display: flex; flex-direction: column; }
+    // s 22 test-section children. Engine vsem dava h=~80, real Chrome h=200+.
+    let doc = parse_html(r#"<html><body><div class="main">
+        <section class="ts">
+            <div class="hdr">Header</div>
+            <div class="body">
+                <p>Lorem ipsum content that should make this section taller.</p>
+                <p>More content line.</p>
+                <p>And another line.</p>
+            </div>
+        </section>
+        <section class="ts">
+            <div class="hdr">Header 2</div>
+            <div class="body"><p>Short.</p></div>
+        </section>
+    </div></body></html>"#, "");
+    let css = parse_stylesheet(r#"
+        .main { display: flex; flex-direction: column; gap: 48px; padding: 32px; }
+        .ts { border: 1px solid red; background: gray; }
+        .hdr { padding: 12px; }
+        .body { padding: 24px; }
+        p { margin: 0 0 8px 0; }
+    "#);
+    let map = cascade::cascade(&doc.root, &[css]);
+    let layout = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+    let main_el = layout.children.iter()
+        .find(|c| c.tag.as_deref() == Some("html"))
+        .and_then(|h| h.children.iter().find(|c| c.tag.as_deref() == Some("body")))
+        .and_then(|b| b.children.iter().find(|c| c.tag.as_deref() == Some("div")))
+        .expect("main");
+    println!("main: y={} h={} children={}", main_el.rect.y, main_el.rect.height, main_el.children.len());
+    for (i, sec) in main_el.children.iter().enumerate() {
+        println!("  section[{}] y={} h={} children={}", i, sec.rect.y, sec.rect.height, sec.children.len());
+        for (j, c) in sec.children.iter().enumerate() {
+            println!("    child[{}] tag={:?} y={} h={}", j, c.tag, c.rect.y, c.rect.height);
+        }
+    }
+    // Section 1 ma vic obsahu nez section 2 -> h1 > h2.
+    let s1 = &main_el.children[0];
+    let s2 = &main_el.children[1];
+    assert!(s1.rect.height > 80.0,
+        "section 1 vyssi nez 80 (3 odstavce + padding), got {}", s1.rect.height);
+    assert!(s1.rect.height > s2.rect.height,
+        "s1.h={} musi byt > s2.h={}", s1.rect.height, s2.rect.height);
+}
+
+#[test]
+fn flex_row_explicit_size_items_side_by_side() {
+    // engine-test.html box-model-demo: flex + flex-wrap + ruzne size boxy.
+    let doc = parse_html(r#"<html><body><div class="demo">
+        <div class="b1"></div>
+        <div class="b2"></div>
+        <div class="b3"></div>
+    </div></body></html>"#, "");
+    let css = parse_stylesheet(r#"
+        .demo { display: flex; gap: 24px; flex-wrap: wrap; align-items: flex-end; width: 800px; }
+        .b1 { width: 40px; height: 40px; }
+        .b2 { width: 60px; height: 60px; }
+        .b3 { width: 80px; height: 80px; }
+    "#);
+    let map = cascade::cascade(&doc.root, &[css]);
+    let layout = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+    let demo = layout.children.iter()
+        .find(|c| c.tag.as_deref() == Some("html"))
+        .and_then(|h| h.children.iter().find(|c| c.tag.as_deref() == Some("body")))
+        .and_then(|b| b.children.iter().find(|c| c.tag.as_deref() == Some("div")))
+        .expect("demo");
+    println!("demo: x={} y={} w={} h={}", demo.rect.x, demo.rect.y, demo.rect.width, demo.rect.height);
+    for (i, b) in demo.children.iter().enumerate() {
+        println!("  b[{}] x={} y={} w={} h={}", i, b.rect.x, b.rect.y, b.rect.width, b.rect.height);
+    }
+    // Boxy musi byt vedle sebe (rozdilne x), ne pod sebou.
+    let xs: Vec<f32> = demo.children.iter().map(|c| c.rect.x).collect();
+    assert!(xs[1] > xs[0] + 30.0, "b2 musi byt vpravo od b1: {:?}", xs);
+    assert!(xs[2] > xs[1] + 50.0, "b3 musi byt vpravo od b2: {:?}", xs);
+}
+
+#[test]
 fn flex_inline_children_become_flex_items() {
     // CSS Flex L1: pri display: flex parent, inline children (span) se
     // chovaji jako flex items (blockified) a justify-content je aplikuje.
