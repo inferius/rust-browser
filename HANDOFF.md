@@ -2,6 +2,34 @@
 
 Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 
+## Session N+8: shell/devtools polish + RMB menus
+
+**2441 tests pass, build clean.**
+
+S6 Favicon parsing:
+- Tab.favicon_url field + derive_favicon_url() pres <link rel=icon>
+- resolve_favicon: absolute / //protocol / /path / relative
+- TODO icon load + render v tab chip
+
+S4 Settings page (about:config):
+- render_about_config() native HTML s profile/dock/bookmarks/history
+- navigate_about() handler pred fetch_text_url
+- about: prefix check v navigate_url_no_history
+
+Bookmarks bar interactivity:
+- ChromeHit::BookmarkClick(url) hit-test
+- LMB navigate, RMB context menu (Open/Delete)
+- Ctrl+D = bookmark current page
+
+Tab context menu (RMB v shell chrome):
+- Zavrit / Zavrit ostatni / Duplikovat / Obnovit
+- MenuAction extension + dispatch_menu_action handlery
+
+Side panel splitter per-dock: drag mouse_x prevod do panel-local coords.
+
+P-add Add new rule: + button v styles toolbar appendne "/* nova vlastnost */: ;"
+do inline style attr selected node.
+
 ## Session N+7: B-fixes + S-features + P13/P19/tooltip
 
 **2441 tests pass, build clean.**
