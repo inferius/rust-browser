@@ -3117,12 +3117,17 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
             let break_word = bx_clone.overflow_wrap.as_str() == "break-word"
                 || bx_clone.overflow_wrap.as_str() == "anywhere"
                 || bx_clone.word_break.as_str() == "break-all";
+            // Tracker max line-end x napric vsemi radky - pro spravnou rect.width
+            // pri wrapovanem textu (cursor_x pri exitu = jen last line end).
+            let mut max_line_end_x: f32 = cursor_x;
             for (wi, word) in words.iter().enumerate() {
                 let w = measure_text_width_styled(word, font_size, bx_clone.bold);
                 let inter_word_space = if wi > 0 { space_w } else { 0.0 };
                 let needs_wrap = cursor_x + inter_word_space + w > inner_x + inner_w
                     && cursor_x > inner_x;
                 if needs_wrap {
+                    // Pre-wrap zaznam soucasne line end (cursor_x na konci predchozi line).
+                    max_line_end_x = max_line_end_x.max(cursor_x);
                     cursor_y += line_height;
                     cursor_x = inner_x;
                     if !wrapped_text.is_empty() && !wrapped_text.ends_with('\n') {
@@ -3168,13 +3173,24 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
             if bx_clone.tag.is_none() {
                 bx.children[idx].text = Some(wrapped_text);
             }
-            // Update text rect: span vsech words na all lines (ne jen first word)
-            // pro hit-test + cursor I-beam pres cely text.
-            let final_x = bx.children[idx].rect.x;
+            // Update text rect: span vsech radku (max line end x), ne jen
+            // posledniho. Pro wrapped text rect.width = max(line_end - inner_x)
+            // -> hit-test + cursor I-beam pokryje cely visual text bounding.
+            // Pri multi-line + first line start = inner_x set rect.x = inner_x.
             let final_y = bx.children[idx].rect.y;
-            let lines = (cursor_y - final_y) / advance_h.max(1.0) + 1.0;
-            let span_w = (cursor_x - final_x).max(bx.children[idx].rect.width);
-            bx.children[idx].rect.width = span_w;
+            let lines = ((cursor_y - final_y) / advance_h.max(1.0)).round() + 1.0;
+            // Final line end - cursor_x je end of last word.
+            max_line_end_x = max_line_end_x.max(cursor_x);
+            let multi_line = lines >= 2.0;
+            if multi_line {
+                // Snap rect.x na inner_x (lines 2+ zacinaji odsud); width
+                // = max line end - inner_x (= sirka nejsiriho radku).
+                bx.children[idx].rect.x = inner_x;
+                bx.children[idx].rect.width = (max_line_end_x - inner_x).max(0.0);
+            } else {
+                let final_x = bx.children[idx].rect.x;
+                bx.children[idx].rect.width = (cursor_x - final_x).max(bx.children[idx].rect.width);
+            }
             bx.children[idx].rect.height = (advance_h * lines).max(advance_h);
             prev_had_trailing_space = trailing_ws;
         } else if !bx_clone.children.is_empty() {
