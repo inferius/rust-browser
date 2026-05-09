@@ -9,6 +9,21 @@ use super::webgl_helpers::{webgl_compute_stride, webgl_attrib_to_vertex_format, 
 use bytemuck::{Pod, Zeroable};
 use std::rc::Rc;
 
+/// Reading mode CSS - injected pri Ctrl+Alt+R toggle. Schova
+/// nav/aside/footer, centrovani main do max 720px, beige bg, vetsi serif.
+const READING_MODE_CSS: &str = r#"
+body { background: #f4ecd8 !important; color: #2a2520 !important; }
+nav, aside, footer, header.global, .sidebar, .ad, .advertisement, .banner, .cookie { display: none !important; }
+main, article, [role=main], .content, .post, .entry { max-width: 720px !important; margin: 0 auto !important; padding: 32px 24px !important; background: #fbf6e9 !important; }
+body * { font-family: Georgia, serif !important; }
+p, li, blockquote { line-height: 1.7 !important; font-size: 18px !important; }
+h1 { font-size: 32px !important; }
+h2 { font-size: 24px !important; }
+h3 { font-size: 20px !important; }
+img, video { max-width: 100% !important; height: auto !important; }
+a { color: #2a4d8f !important; }
+"#;
+
 // Async worker pro JS exec vyzaduje Interpreter: Send. Aktualne Interpreter ma
 // Rc<RefCell> interne, takze !Send. Wrappers `unsafe impl Send for SendInterp`
 // nestaci protoze closure auto-trait check projde dovnitr Rc pres autoderef.
@@ -480,6 +495,9 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         shell_tab_tooltip: Option<(String, f32, f32)>,
         /// F1 toggle: keyboard shortcuts cheat sheet overlay.
         shortcuts_overlay_open: bool,
+        /// Reading mode (Ctrl+Alt+R): inject zen-style CSS - hide nav/sidebar/footer,
+        /// center main, beige bg, vetsi serif text.
+        reading_mode_on: bool,
         /// Browser shell mode - kdyz true, vykresli se chrome bar (tabs +
         /// address bar + back/forward) + page area zacne pod chromem.
         /// Toggle pres CLI flag --shell nebo Ctrl+Shift+B.
@@ -1965,9 +1983,14 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                 self.navigate_url("about:bookmarks");
                                 return;
                             }
-                            if s.as_str() == "h" || s.as_str() == "H" {
-                                // Ctrl+H: open history page.
-                                self.navigate_url("about:history");
+                            // Ctrl+Alt+R = toggle reading mode (zen view).
+                            if (s.as_str() == "r" || s.as_str() == "R") && self.modifiers.alt_key() {
+                                self.reading_mode_on = !self.reading_mode_on;
+                                self.cached_stylesheets = None;
+                                self.cached_style_map = None;
+                                self.cached_pseudo_map = None;
+                                self.cached_layout_root = None;
+                                self.render();
                                 return;
                             }
                             // Shell tab shortcuts.
@@ -4309,8 +4332,20 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 self.css.hash(&mut h);
                 h.finish()
             };
-            if self.cached_stylesheets.is_none() || self.cached_stylesheets_hash != css_hash {
-                let parsed = vec![css_parser::parse_stylesheet(&self.css)];
+            // Reading mode injected CSS pridano k page CSS pokud zaple.
+            let reading_css = if self.reading_mode_on { READING_MODE_CSS } else { "" };
+            let combined_hash = if self.reading_mode_on {
+                use std::hash::{Hash, Hasher};
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                self.css.hash(&mut h);
+                "rmode".hash(&mut h);
+                h.finish()
+            } else { css_hash };
+            if self.cached_stylesheets.is_none() || self.cached_stylesheets_hash != combined_hash {
+                let combined = if self.reading_mode_on {
+                    format!("{}\n{}", self.css, reading_css)
+                } else { self.css.clone() };
+                let parsed = vec![css_parser::parse_stylesheet(&combined)];
                 for sheet in &parsed {
                     r.load_font_faces(&sheet.font_faces, self.base_url.as_deref());
                 }
@@ -4336,7 +4371,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 self.css_uses_hover = self.css.contains(":hover");
                 self.css_uses_focus = self.css.contains(":focus");
                 self.cached_stylesheets = Some(parsed);
-                self.cached_stylesheets_hash = css_hash;
+                self.cached_stylesheets_hash = combined_hash;
                 self.cached_style_map = None;
                 self.cached_pseudo_map = None;
                 self.cached_layout_root = None;
@@ -5421,6 +5456,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         status_hover_url: None,
         shell_tab_tooltip: None,
         shortcuts_overlay_open: false,
+        reading_mode_on: false,
         shell_mode,
         shell_chrome_h: 64.0,
         tabs: {
