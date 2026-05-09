@@ -34,9 +34,12 @@ pub struct Tab {
 
 impl Tab {
     pub fn new(html: String, css: String, url: Option<String>, path: Option<PathBuf>) -> Self {
-        let title = url.clone()
-            .map(|u| u.split('/').last().unwrap_or(&u).to_string())
-            .unwrap_or_else(|| "Nova zalozka".to_string());
+        // Title prefer z <title>...</title>, fallback URL last segment.
+        let title = extract_title(&html).unwrap_or_else(|| {
+            url.clone()
+                .map(|u| u.split('/').last().unwrap_or(&u).to_string())
+                .unwrap_or_else(|| "Nova zalozka".to_string())
+        });
         let favicon_url = url.as_ref().map(|u| derive_favicon_url(u, &html));
         // Fetch favicon bytes (sync). HTTP only; file:// URL = skip.
         let favicon_bytes = favicon_url.as_ref()
@@ -151,6 +154,17 @@ fn html_escape_local(s: &str) -> String {
 }
 
 /// Najdi favicon URL: <link rel="icon" href="...">, fallback /favicon.ico.
+/// Extrahuj <title>...</title> z HTML (case-insensitive, prvni vyskyt).
+/// None pokud chybi nebo je prazdny.
+fn extract_title(html: &str) -> Option<String> {
+    let lower = html.to_lowercase();
+    let start = lower.find("<title")?;
+    let tag_end = lower[start..].find('>').map(|e| start + e + 1)?;
+    let close = lower[tag_end..].find("</title>").map(|e| tag_end + e)?;
+    let raw = html[tag_end..close].trim();
+    if raw.is_empty() { None } else { Some(raw.to_string()) }
+}
+
 fn derive_favicon_url(base_url: &str, html: &str) -> String {
     // Naivni parse <link rel="icon" href="...">.
     let lower = html.to_lowercase();
