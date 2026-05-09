@@ -972,28 +972,16 @@ fn paint_side_panel(
         push_icon(cmds, cx + (cw - ICON_SIZE) * 0.5, cy + (ch - ICON_SIZE) * 0.5,
                   ICON_EXPAND_MORE, pal.text);
         *state.styles.overflow_chevron_zone.borrow_mut() = Some((cx, cy, cw, ch));
-        // Dropdown menu - vsechny sub-taby (full all() list, ne jen overflow).
+        // Dropdown menu se vykresli AZ PO body contentu (z-order issue: drive
+        // body bg pokryl dropdown). Zaznamenat zone tady, paint primitives pak.
         if state.side_panel_overflow_open {
             let all_tabs = SidePanelTab::all();
             let drop_y = y + strip_h + 2.0;
             let item_h = ROW_H + 4.0;
-            let menu_h = (all_tabs.len() as f32) * item_h + 6.0;
             let menu_x = x + w - 160.0;
             let menu_w = 156.0;
-            push_rect(cmds, menu_x + 2.0, drop_y + 2.0, menu_w, menu_h, [0, 0, 0, 80]);
-            push_rect(cmds, menu_x, drop_y, menu_w, menu_h, pal.bg_context_menu);
-            push_rect_border(cmds, menu_x, drop_y, menu_w, menu_h, pal.border_strong);
             let mut iy = drop_y + 4.0;
-            for (i, t) in all_tabs.iter().enumerate() {
-                let active = state.side_panel_tab == *t;
-                let hov = mouse_x >= menu_x && mouse_x < menu_x + menu_w
-                    && mouse_y >= iy && mouse_y < iy + item_h;
-                if hov || active {
-                    push_rect(cmds, menu_x + 2.0, iy, menu_w - 4.0, item_h,
-                              if active { pal.bg_row_selected } else { pal.bg_context_menu_hover });
-                }
-                let col = if active { pal.text_on_accent } else { pal.text };
-                push_ui_text(cmds, menu_x + 10.0, iy + 4.0, t.label().to_string(), col, active);
+            for (i, _t) in all_tabs.iter().enumerate() {
                 state.styles.overflow_dropdown_zones.borrow_mut()
                     .push((menu_x, iy, menu_w, item_h, i));
                 iy += item_h;
@@ -1019,6 +1007,34 @@ fn paint_side_panel(
     } else {
         push_text(cmds, x + 12.0, body_y + 12.0,
                   "Vyberte element".to_string(), pal.text_dim, false);
+    }
+
+    // Overflow dropdown - VYKRESLIT NA KONCI (po body content) aby byl nahore.
+    // Drive body bg pokryval dropdown a popup nebyl videt.
+    if state.side_panel_overflow_open {
+        let all_tabs = SidePanelTab::all();
+        let drop_y = y + strip_h + 2.0;
+        let item_h = ROW_H + 4.0;
+        let menu_h = (all_tabs.len() as f32) * item_h + 6.0;
+        let menu_x = x + w - 160.0;
+        let menu_w = 156.0;
+        // Drop shadow + bg.
+        push_rect(cmds, menu_x + 3.0, drop_y + 3.0, menu_w, menu_h, [0, 0, 0, 120]);
+        push_rect(cmds, menu_x, drop_y, menu_w, menu_h, pal.bg_context_menu);
+        push_rect_border(cmds, menu_x, drop_y, menu_w, menu_h, pal.border_strong);
+        let mut iy = drop_y + 4.0;
+        for t in all_tabs.iter() {
+            let active = state.side_panel_tab == *t;
+            let hov = mouse_x >= menu_x && mouse_x < menu_x + menu_w
+                && mouse_y >= iy && mouse_y < iy + item_h;
+            if hov || active {
+                push_rect(cmds, menu_x + 2.0, iy, menu_w - 4.0, item_h,
+                          if active { pal.bg_row_selected } else { pal.bg_context_menu_hover });
+            }
+            let col = if active { pal.text_on_accent } else { pal.text };
+            push_ui_text(cmds, menu_x + 10.0, iy + 4.0, t.label().to_string(), col, active);
+            iy += item_h;
+        }
     }
 }
 
@@ -1649,6 +1665,9 @@ fn paint_side_animations(
             let track_y = sy;
             push_rect(cmds, pad_x, track_y, timeline_w, 20.0, pal.bg_panel_alt);
             push_rect_border(cmds, pad_x, track_y, timeline_w, 20.0, pal.border);
+            // Zone pro scrubber drag - klik nebo drag aplikuje pozici.
+            state.styles.animations_btn_zones.borrow_mut()
+                .push((pad_x, track_y, timeline_w, 20.0, "scrub".to_string()));
             let dur_seconds = parse_duration(&duration_str).max(0.1);
             // Pri pause neaktualizovat progress.
             let progress = if state.animations_paused {
@@ -2065,7 +2084,10 @@ fn paint_styles_pane(
     // Toolbar nahore (filter + :hov/.cls/+ buttons).
     paint_styles_toolbar(cmds, state, pal, x, y, w, 0.0, 0.0);
     let toolbar_h = 26.0;
-    let total_h = state.styles.estimate_total_h();
+    // Pouzij real-painted height z minuleho framu (presny). Pri prvnim paint
+    // estimate fallback. Po paint pass se updatne na realnou hodnotu.
+    let last_painted = *state.styles.last_painted_h.borrow();
+    let total_h = if last_painted > 0.0 { last_painted } else { state.styles.estimate_total_h() };
     let max_scroll = (total_h - h + toolbar_h).max(0.0);
     let scroll = state.styles.scroll_y.clamp(0.0, max_scroll);
     let mut sy = y + toolbar_h + 8.0 - scroll;
@@ -2073,14 +2095,13 @@ fn paint_styles_pane(
     let min_y = y + toolbar_h;
     let pad_x = x + 12.0;
     // Scrollbar emit pri overflow (track + thumb pri pravem okraji pane).
-    if total_h > h {
+    if max_scroll > 0.0 {
         let bar_w = SCROLLBAR_W;
         let bar_x = x + w - bar_w;
-        push_rect(cmds, bar_x, y, bar_w, h, pal.bg_panel_alt);
-        let thumb_h = (h * h / total_h).max(20.0);
-        let thumb_y = if max_scroll > 0.0 {
-            y + (scroll / max_scroll) * (h - thumb_h)
-        } else { y };
+        push_rect(cmds, bar_x, y + toolbar_h, bar_w, h - toolbar_h, pal.bg_panel_alt);
+        let visible_h = h - toolbar_h;
+        let thumb_h = (visible_h * visible_h / total_h).max(20.0);
+        let thumb_y = y + toolbar_h + (scroll / max_scroll) * (visible_h - thumb_h);
         push_rect(cmds, bar_x + 2.0, thumb_y, bar_w - 4.0, thumb_h, pal.border_strong);
     }
 
@@ -2277,7 +2298,7 @@ fn paint_styles_pane(
                 }
             }
             for d in &rule.declarations {
-                if sy >= max_y { return; }
+                if sy >= max_y { *state.styles.last_painted_h.borrow_mut() = (sy - y) + 16.0; return; }
                 // Sub-prop ktery patri pod collapsed shorthand -> skip.
                 if let Some(sh) = shorthand_for(&d.property) {
                     if !expanded.contains(sh) { continue; }
@@ -2340,7 +2361,7 @@ fn paint_styles_pane(
     }
 
     // Computed values - z cascade vystupu (state.styles.computed) + box rect.
-    if sy >= max_y { return; }
+    if sy >= max_y { *state.styles.last_painted_h.borrow_mut() = (sy - y) + 16.0; return; }
     if in_view(sy) {
         push_text_bold(cmds, pad_x, sy, "Computed".to_string(), pal.text, false);
     }
@@ -2348,7 +2369,7 @@ fn paint_styles_pane(
 
     let filter = state.styles.filter.to_lowercase();
     for (k, v) in &state.styles.computed {
-        if sy >= max_y { return; }
+        if sy >= max_y { *state.styles.last_painted_h.borrow_mut() = (sy - y) + 16.0; return; }
         if !filter.is_empty() && !k.contains(&filter) { continue; }
         if in_view(sy) {
             push_text(cmds, pad_x, sy, format!("{}:", k), pal.syn_property, false);
@@ -2358,7 +2379,7 @@ fn paint_styles_pane(
     }
 
     // Box info (rect / margin / padding z LayoutBox).
-    if sy >= max_y { return; }
+    if sy >= max_y { *state.styles.last_painted_h.borrow_mut() = (sy - y) + 16.0; return; }
     sy += 8.0;
     if in_view(sy) {
         push_text_bold(cmds, pad_x, sy, "Box".to_string(), pal.text, false);
@@ -2388,6 +2409,8 @@ fn paint_styles_pane(
         }
         sy += ROW_H;
     }
+    // Track real painted height pro spravny scrollbar + max_scroll v dalsim framu.
+    *state.styles.last_painted_h.borrow_mut() = (sy - y) + 16.0;
 }
 
 // ─── Console tab ────────────────────────────────────────────────────────
@@ -3434,6 +3457,8 @@ pub enum DevtoolsHit {
     SidePanelOverflowToggle,
     /// Animations panel toolbar action (pause/speed/restart).
     AnimationsAction(String),
+    /// Animations timeline scrub - progress 0..1.
+    AnimationsScrub(f32),
     /// Klik na HEX input v color pickeru.
     ColorPickerHexFocus,
     /// Klik na R/G/B input (i=0..2).
@@ -3810,12 +3835,16 @@ fn hit_test_elements(
                 tx += tw + 2.0;
             }
         }
-        // Animations panel toolbar buttons.
+        // Animations panel toolbar buttons + scrubber zone.
         if matches!(state.side_panel_tab, crate::devtools::SidePanelTab::Animations) {
             let bz = state.styles.animations_btn_zones.borrow();
             for (zx, zy, zw, zh, action) in bz.iter() {
                 if mouse_x >= *zx && mouse_x < zx + zw
                    && mouse_y >= *zy && mouse_y < zy + zh {
+                    if action == "scrub" {
+                        let progress = ((mouse_x - zx) / zw).clamp(0.0, 1.0);
+                        return DevtoolsHit::AnimationsScrub(progress);
+                    }
                     return DevtoolsHit::AnimationsAction(action.clone());
                 }
             }

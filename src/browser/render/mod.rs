@@ -517,9 +517,17 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         /// Effective_anim_time = (now - origin) * speed; pri pause snapshot do paused_at.
         animation_origin: std::time::Instant,
         animation_pause_start: Option<std::time::Instant>,
-        /// Per-element pause - selected nodes maji animace zamrzly. Pause v
-        /// Animations panelu pri vybranem elementu toggle pres tento set.
+        /// Per-element pause - selected nodes maji animace zamrzly v presne
+        /// fazi pri toggle. Pause v Animations panelu (s vybranym elementem)
+        /// snapshot animated style v ten moment + restore kazdy frame.
         paused_animation_nodes: std::collections::HashSet<usize>,
+        /// Per-node frozen style snapshot - pri pause toggle uchova soucasny
+        /// (animated) styl, kazdy frame se aplikuje misto fresh anim tick.
+        paused_node_styles: std::collections::HashMap<usize, std::collections::HashMap<String, String>>,
+        /// Drag timeline scrubber state - pri MouseDown na track v Animations
+        /// panelu zacne drag. Pri pohybu mysi se animation_origin shifte tak
+        /// aby progress odpovidal pozici kursoru na track.
+        animations_scrubber_drag: bool,
         /// Bookmark picker (Ctrl+D popup): edit title + folder.
         bookmark_picker: Option<BookmarkPickerState>,
         cached_pseudo_map: Option<super::cascade::PseudoStyleMap>,
@@ -764,6 +772,42 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         self.render();
                         return;
                     }
+                    // Animations scrubber drag - update progress podle mouse_x.
+                    if self.animations_scrubber_drag {
+                        let bz = self.devtools.styles.animations_btn_zones.borrow();
+                        for (zx, zy, zw, zh, action) in bz.iter() {
+                            if action == "scrub" {
+                                let local_mx = self.mouse_x;
+                                let local_my = self.mouse_y - self.scroll_y;
+                                if local_my >= *zy - 10.0 && local_my < zy + zh + 10.0 {
+                                    let progress = ((local_mx - zx) / zw).clamp(0.0, 1.0);
+                                    drop(bz);
+                                    use std::time::{Instant, Duration};
+                                    let dur = self.devtools.styles.computed.iter()
+                                        .find(|(k, _)| k == "animation-duration")
+                                        .and_then(|(_, v)| {
+                                            let s = v.trim();
+                                            if let Some(n) = s.strip_suffix("ms") {
+                                                n.parse::<f32>().ok().map(|x| x / 1000.0)
+                                            } else if let Some(n) = s.strip_suffix('s') {
+                                                n.parse::<f32>().ok()
+                                            } else { s.parse::<f32>().ok() }
+                                        }).unwrap_or(1.0).max(0.1);
+                                    let target_t = progress * dur;
+                                    let speed = self.devtools.animations_speed.max(0.01);
+                                    let now = Instant::now();
+                                    self.animation_origin = now - Duration::from_secs_f32((target_t / speed).max(0.0));
+                                    if self.devtools.animations_paused {
+                                        self.animation_pause_start = Some(now);
+                                    }
+                                    self.paused_node_styles.clear();
+                                    self.render();
+                                    return;
+                                }
+                                break;
+                            }
+                        }
+                    }
                     // Main page scrollbar drag.
                     if self.page_scrollbar_v_drag || self.page_scrollbar_h_drag {
                         if let Some(layout) = &self.layout_root {
@@ -919,6 +963,9 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         self.page_scrollbar_v_drag = false;
                         self.page_scrollbar_h_drag = false;
                         self.render();
+                    }
+                    if self.animations_scrubber_drag {
+                        self.animations_scrubber_drag = false;
                     }
                     if self.tab_drag_idx.is_some() {
                         self.tab_drag_idx = None;
@@ -1424,17 +1471,50 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                 DevtoolsHit::SidePanelOverflowToggle => {
                                     self.devtools.side_panel_overflow_open = !self.devtools.side_panel_overflow_open;
                                 }
+                                DevtoolsHit::AnimationsScrub(progress) => {
+                                    use std::time::{Instant, Duration};
+                                    // Scrub: shift animation_origin tak aby effective elapsed
+                                    // odpovida progress * duration. Pri pri drag/click on track.
+                                    self.animations_scrubber_drag = true;
+                                    let dur = self.devtools.styles.computed.iter()
+                                        .find(|(k, _)| k == "animation-duration")
+                                        .map(|(_, v)| {
+                                            let s = v.trim();
+                                            if let Some(n) = s.strip_suffix("ms") {
+                                                n.parse::<f32>().ok().map(|x| x / 1000.0)
+                                            } else if let Some(n) = s.strip_suffix('s') {
+                                                n.parse::<f32>().ok()
+                                            } else { s.parse::<f32>().ok() }
+                                        }).flatten().unwrap_or(1.0).max(0.1);
+                                    let target_t = progress * dur;
+                                    let speed = self.devtools.animations_speed.max(0.01);
+                                    let now = Instant::now();
+                                    self.animation_origin = now - Duration::from_secs_f32((target_t / speed).max(0.0));
+                                    if self.devtools.animations_paused {
+                                        self.animation_pause_start = Some(now);
+                                    }
+                                    // Pri scrub clear paused snapshots (force re-snapshot na novou fazi).
+                                    self.paused_node_styles.clear();
+                                }
                                 DevtoolsHit::AnimationsAction(action) => {
                                     use std::time::{Instant, Duration};
                                     match action.as_str() {
                                         "pause" => {
-                                            // Per-element pause kdyz je vybrany element. Bez selection
-                                            // = global pause (puvodni chovani).
+                                            // Per-element pause kdyz je vybrany element. Snapshot
+                                            // CURRENT (po anim) styl pri toggle - drzeni presne fazi.
                                             if let Some(sel) = self.devtools.elements.selected {
                                                 if self.paused_animation_nodes.contains(&sel) {
                                                     self.paused_animation_nodes.remove(&sel);
+                                                    self.paused_node_styles.remove(&sel);
                                                 } else {
                                                     self.paused_animation_nodes.insert(sel);
+                                                    // Snapshot current style_map[sel] z minuleho framu
+                                                    // (cached). Bude reused jako frozen.
+                                                    if let Some(sm) = &self.cached_style_map {
+                                                        if let Some(style) = sm.get(&sel) {
+                                                            self.paused_node_styles.insert(sel, style.clone());
+                                                        }
+                                                    }
                                                 }
                                                 self.devtools.animations_paused =
                                                     !self.paused_animation_nodes.is_empty();
@@ -5326,15 +5406,18 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // Runtime CSS animation: skip cely walk pokud zadne keyframes neexistuji.
             let has_keyframes = stylesheets.iter().any(|s| !s.keyframes.is_empty());
             if has_keyframes {
-                // Per-element pause: snapshot pre-anim style mapy paused nodes
-                // pred apply, po apply restore (= zafrozenuti).
-                let pre_anim_paused: Vec<(usize, std::collections::HashMap<String, String>)> =
-                    self.paused_animation_nodes.iter()
-                        .filter_map(|id| style_map.get(id).map(|m| (*id, m.clone())))
-                        .collect();
                 let _animating = cascade::apply_animations(&mut style_map, stylesheets, elapsed);
-                for (id, snap) in pre_anim_paused {
-                    style_map.insert(id, snap);
+                // Per-element pause: aplikuj frozen snapshot (zachytava presnou
+                // fazi pri toggle). Pri prvni paused frame neni snapshot - vezmi
+                // current animated styl + uloz pro dalsi framy.
+                let paused_ids: Vec<usize> = self.paused_animation_nodes.iter().copied().collect();
+                for id in paused_ids {
+                    if let Some(snap) = self.paused_node_styles.get(&id) {
+                        style_map.insert(id, snap.clone());
+                    } else if let Some(cur) = style_map.get(&id).cloned() {
+                        // First-time pause - snapshot animated styl ted.
+                        self.paused_node_styles.insert(id, cur);
+                    }
                 }
                 let max_scroll = (style_map.len() as f32).max(1.0);
                 let scroll_progress = if max_scroll > 1.0 { self.scroll_y / max_scroll.max(1.0) } else { 0.0 };
@@ -6333,6 +6416,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         animation_origin: std::time::Instant::now(),
         animation_pause_start: None,
         paused_animation_nodes: std::collections::HashSet::new(),
+        paused_node_styles: std::collections::HashMap::new(),
+        animations_scrubber_drag: false,
         bookmark_picker: None,
         cached_pseudo_map: None,
         display_list_buffer: Vec::with_capacity(2048),

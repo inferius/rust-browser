@@ -82,6 +82,9 @@ pub struct StylesState {
     /// Cache (x, y, w, h, action) animations panel toolbar buttonu.
     /// action: "pause" / "speed" / "restart".
     pub animations_btn_zones: std::cell::RefCell<Vec<(f32, f32, f32, f32, String)>>,
+    /// Real painted total height styles pane - mereni po paint pass.
+    /// Pouzite pro scrollbar + max_scroll clamp (estimate je podestiman).
+    pub last_painted_h: std::cell::RefCell<f32>,
 }
 
 /// State pri pridavani noveho inline stylu na selected element.
