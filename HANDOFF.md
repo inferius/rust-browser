@@ -2,6 +2,27 @@
 
 Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 
+## Session N+16: clear buttons + Ctrl+H/B + history filter API
+
+**2448 tests pass, build clean.**
+
+Console clear:
+- Toolbar nahore s "✕ Vymazat (N)" button v Console tabu
+- ConsoleClear hit handler -> log Vec clear
+
+Network clear:
+- "✕ Vymazat (N)" button vpravo v filter toolbaru Network tabu
+- NetworkClear handler
+
+Keyboard shortcuts:
+- Ctrl+H = navigate about:history
+- Ctrl+B = navigate about:bookmarks
+
+History filter API:
+- render_about_history_filtered(query) - filter URL/title.contains
+- render_about_history() = filtered("") wrapper
+- Foundation pro budouci search input v history page
+
 ## Session N+15: about:newtab dynamic + tab pin
 
 **2448 tests pass, build clean (0 warnings).**
