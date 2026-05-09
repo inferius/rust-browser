@@ -61,65 +61,27 @@ pub fn dt_text_width(text: &str) -> f32 {
     }
 }
 
-// ─── Vector icons (push_rect-based, CamingoMono nema dostatecne unicode glyphs) ──
+// ─── Material Symbols icons (Google Fonts, OFL) ─────────────────────────
+//
+// Codepoints (Outlined): chevron_right E5CC, expand_more E5CF, close E5CD,
+// light_mode E518, dark_mode E51C, center_focus_strong E3B4.
 
-/// Caret shape - filled triangle 8x8. dir = 0 (right) | 1 (down).
-fn icon_caret(cmds: &mut Vec<DisplayCommand>, x: f32, y: f32, dir: u8, color: [u8; 4]) {
-    // x,y = top-left of 8x8 bounding box.
-    if dir == 0 {
-        // Right-pointing: 4 horizontal lines (top->mid widening, mid->bottom shrinking).
-        for i in 0..4 {
-            let lh = 1.0;
-            let lw = (i + 1) as f32;
-            push_rect(cmds, x + 1.0, y + 1.0 + i as f32, lw, lh, color);
-            push_rect(cmds, x + 1.0, y + 7.0 - i as f32 - 1.0, lw, lh, color);
-        }
-    } else {
-        // Down-pointing: triangle made of horizontal lines, top wide, narrowing.
-        for i in 0..4 {
-            let lh = 1.0;
-            let lw = (7 - i * 2).max(1) as f32;
-            let lx = x + 1.0 + i as f32;
-            push_rect(cmds, lx, y + 1.0 + i as f32, lw, lh, color);
-        }
-    }
-}
+const ICON_FONT: &str = "MaterialSymbolsOutlined";
+const ICON_SIZE: f32 = 16.0;
+const ICON_CHEVRON_RIGHT: char = '\u{E5CC}';
+const ICON_EXPAND_MORE: char = '\u{E5CF}';
+const ICON_CLOSE: char = '\u{E5CD}';
+const ICON_LIGHT_MODE: char = '\u{E518}';
+const ICON_DARK_MODE: char = '\u{E51C}';
+const ICON_INSPECT: char = '\u{E3B4}';
 
-/// X close icon (12x12 box, lines through corners).
-fn icon_close(cmds: &mut Vec<DisplayCommand>, x: f32, y: f32, color: [u8; 4]) {
-    for i in 0..8 {
-        push_rect(cmds, x + 2.0 + i as f32, y + 2.0 + i as f32, 1.5, 1.5, color);
-        push_rect(cmds, x + 2.0 + i as f32, y + 9.0 - i as f32, 1.5, 1.5, color);
-    }
-}
-
-/// Sun icon - filled circle + 4 rays.
-fn icon_sun(cmds: &mut Vec<DisplayCommand>, x: f32, y: f32, color: [u8; 4]) {
-    cmds.push(DisplayCommand::Rect { x: x + 3.0, y: y + 3.0, w: 6.0, h: 6.0, color, radius: 3.0 });
-    push_rect(cmds, x + 5.5, y, 1.0, 2.0, color);
-    push_rect(cmds, x + 5.5, y + 10.0, 1.0, 2.0, color);
-    push_rect(cmds, x, y + 5.5, 2.0, 1.0, color);
-    push_rect(cmds, x + 10.0, y + 5.5, 2.0, 1.0, color);
-}
-
-/// Moon (crescent) - approximated by filled disc + smaller bg disc offset.
-fn icon_moon(cmds: &mut Vec<DisplayCommand>, x: f32, y: f32, color: [u8; 4], bg: [u8; 4]) {
-    cmds.push(DisplayCommand::Rect { x: x + 1.0, y: y + 1.0, w: 10.0, h: 10.0, color, radius: 5.0 });
-    cmds.push(DisplayCommand::Rect { x: x + 4.0, y: y, w: 9.0, h: 9.0, color: bg, radius: 4.5 });
-}
-
-/// Crosshair (inspect) - 4 corner brackets.
-fn icon_crosshair(cmds: &mut Vec<DisplayCommand>, x: f32, y: f32, color: [u8; 4]) {
-    let w = 12.0;
-    push_rect(cmds, x, y, 4.0, 1.0, color);
-    push_rect(cmds, x, y, 1.0, 4.0, color);
-    push_rect(cmds, x + w - 4.0, y, 4.0, 1.0, color);
-    push_rect(cmds, x + w - 1.0, y, 1.0, 4.0, color);
-    push_rect(cmds, x, y + w - 1.0, 4.0, 1.0, color);
-    push_rect(cmds, x, y + w - 4.0, 1.0, 4.0, color);
-    push_rect(cmds, x + w - 4.0, y + w - 1.0, 4.0, 1.0, color);
-    push_rect(cmds, x + w - 1.0, y + w - 4.0, 1.0, 4.0, color);
-    push_rect(cmds, x + 5.5, y + 5.5, 1.0, 1.0, color);
+fn push_icon(cmds: &mut Vec<DisplayCommand>, x: f32, y: f32, ch: char, color: [u8; 4]) {
+    cmds.push(DisplayCommand::Text {
+        x, y, content: ch.to_string(), color,
+        font_size: ICON_SIZE, bold: false, italic: false,
+        font_family: ICON_FONT.into(),
+        strikethrough: false, underline: false,
+    });
 }
 
 // ─── Top-level paint ────────────────────────────────────────────────────
@@ -244,7 +206,7 @@ fn paint_toolbar_actions(
                       && mouse_y >= y && mouse_y < y + h;
     push_rect(cmds, x_right, y, close_w, h,
               if close_hover { pal.bg_row_hover } else { pal.bg_toolbar });
-    icon_close(cmds, x_right + 6.0, y + (h - 12.0) * 0.5, pal.text);
+    push_icon(cmds, x_right + 4.0, y + (h - ICON_SIZE) * 0.5, ICON_CLOSE, pal.text);
 
     // Theme dot (Ctrl+Shift+T toggle): sun/moon icon.
     let theme_w = 24.0;
@@ -253,13 +215,10 @@ fn paint_toolbar_actions(
                       && mouse_y >= y && mouse_y < y + h;
     let theme_bg = if theme_hover { pal.bg_row_hover } else { pal.bg_toolbar };
     push_rect(cmds, x_right, y, theme_w, h, theme_bg);
-    if pal.is_dark {
-        icon_moon(cmds, x_right + 6.0, y + (h - 12.0) * 0.5, pal.text, theme_bg);
-    } else {
-        icon_sun(cmds, x_right + 6.0, y + (h - 12.0) * 0.5, pal.text);
-    }
+    let theme_icon = if pal.is_dark { ICON_DARK_MODE } else { ICON_LIGHT_MODE };
+    push_icon(cmds, x_right + 4.0, y + (h - ICON_SIZE) * 0.5, theme_icon, pal.text);
 
-    // Inspect toggle: crosshair + label.
+    // Inspect toggle: icon + label.
     let insp_w = 90.0;
     x_right -= insp_w + 4.0;
     let insp_hover = mouse_x >= x_right && mouse_x < x_right + insp_w
@@ -269,8 +228,8 @@ fn paint_toolbar_actions(
              else { pal.bg_button };
     push_rect(cmds, x_right, y, insp_w, h, bg);
     let txt = if state.inspect_mode { pal.text_on_accent } else { pal.text };
-    icon_crosshair(cmds, x_right + 6.0, y + (h - 12.0) * 0.5, txt);
-    push_text(cmds, x_right + 22.0, y + (h - FONT_SIZE) * 0.5 + 1.0,
+    push_icon(cmds, x_right + 4.0, y + (h - ICON_SIZE) * 0.5, ICON_INSPECT, txt);
+    push_text(cmds, x_right + 24.0, y + (h - FONT_SIZE) * 0.5 + 1.0,
               "Inspect".to_string(), txt, false);
 }
 
@@ -453,8 +412,8 @@ fn paint_element_row(
             let mut x = x_indent;
             if *has_children {
                 let caret_color = if is_sel { text_color_default } else { pal.text_dim };
-                icon_caret(cmds, x - INDENT_PX + 3.0, text_y + 2.0,
-                           if collapsed { 0 } else { 1 }, caret_color);
+                let icon = if collapsed { ICON_CHEVRON_RIGHT } else { ICON_EXPAND_MORE };
+                push_icon(cmds, x - INDENT_PX, y + (ROW_H - ICON_SIZE) * 0.5, icon, caret_color);
             }
             // <tag
             let tag_color = if is_sel { text_color_default } else { pal.syn_tag };
