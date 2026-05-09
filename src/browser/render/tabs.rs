@@ -188,11 +188,12 @@ const NEW_TAB_HTML: &str = r#"<!DOCTYPE html>
 <h1>Rust Web Engine</h1>
 <p class="subtitle">Vlastni prohlizec, vlastni renderovaci jadro.</p>
 <div class="cards">
-<div class="card"><h3>Konzole</h3><p>F12 -> tab Konzole</p></div>
-<div class="card"><h3>Inspektor</h3><p>F12 -> Elements + Hover na element</p></div>
-<div class="card"><h3>Sit</h3><p>F12 -> tab Sit</p></div>
-<div class="card"><h3>Nastaveni</h3><p>Ozubene kolo v toolbaru</p></div>
+<a href="about:config" class="card"><h3>Nastaveni</h3><p>Profil, dock pozice, theme</p></a>
+<a href="https://example.com" class="card"><h3>Example</h3><p>Test stranka</p></a>
+<a href="https://news.ycombinator.com" class="card"><h3>Hacker News</h3><p>Tech news</p></a>
+<a href="https://github.com" class="card"><h3>GitHub</h3><p>Code repos</p></a>
 </div>
+<p class="hint">Ctrl+L pro adresu, Ctrl+T novy tab, Ctrl+W zavrit, F12 devtools</p>
 </div>
 </body></html>"#;
 
@@ -202,9 +203,11 @@ body { font-family: 'Inter', sans-serif; background: #1a1a1f; color: #e8e6df; ma
 h1 { color: #69a1ff; font-size: 48px; margin-bottom: 16px; }
 .subtitle { color: #a1a1ae; font-size: 16px; margin-bottom: 48px; }
 .cards { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-.card { background: #2a2932; padding: 24px; border-radius: 8px; border: 1px solid #4c4c55; }
+.card { background: #2a2932; padding: 24px; border-radius: 8px; border: 1px solid #4c4c55; text-decoration: none; display: block; }
+.card:hover { background: #383744; }
 .card h3 { color: #69a1ff; margin-top: 0; }
 .card p { color: #a1a1ae; font-size: 14px; }
+.hint { color: #6d6d7c; font-size: 12px; margin-top: 32px; font-style: italic; }
 "#;
 
 #[derive(Debug)]
