@@ -538,6 +538,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         /// Reading mode (Ctrl+Alt+R): inject zen-style CSS - hide nav/sidebar/footer,
         /// center main, beige bg, vetsi serif text.
         reading_mode_on: bool,
+        /// Bookmarks bar visibility (Ctrl+Shift+B toggle). Default true.
+        bookmarks_bar_visible: bool,
         /// Browser shell mode - kdyz true, vykresli se chrome bar (tabs +
         /// address bar + back/forward) + page area zacne pod chromem.
         /// Toggle pres CLI flag --shell nebo Ctrl+Shift+B.
@@ -2062,6 +2064,12 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                 self.navigate_url("about:downloads");
                                 return;
                             }
+                            if s.as_str() == "B" && self.modifiers.shift_key() {
+                                // Ctrl+Shift+B: toggle bookmarks bar visibility.
+                                self.bookmarks_bar_visible = !self.bookmarks_bar_visible;
+                                self.render();
+                                return;
+                            }
                             if s.as_str() == "b" || s.as_str() == "B" {
                                 // Ctrl+B: open bookmarks page.
                                 self.navigate_url("about:bookmarks");
@@ -2438,8 +2446,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         fn shell_chrome_h_active(&self) -> f32 {
             if !self.shell_mode { return 0.0; }
             let bm_count = crate::devtools::bookmarks::load_bookmarks().len();
-            // Base: tab strip 28 + nav 36 = 64. Bookmarks bar 24 navic.
-            64.0 + if bm_count > 0 { 24.0 } else { 0.0 }
+            // Base: tab strip 28 + nav 36 = 64. Bookmarks bar 24 navic (kdyz visible + nejaky bm).
+            64.0 + if bm_count > 0 && self.bookmarks_bar_visible { 24.0 } else { 0.0 }
         }
         /// Page commands shift dolu o chrome height (pri shell_mode).
         fn shift_page_for_chrome(&self, list: &mut [DisplayCommand]) {
@@ -2790,8 +2798,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 font_family: "CamingoMono".into(),
                 strikethrough: false, underline: false,
             });
-            // Bookmarks bar (jen kdyz nejake jsou).
-            if !bms.is_empty() {
+            // Bookmarks bar (jen kdyz nejake jsou A chrome_h alokovala 24px navic).
+            if !bms.is_empty() && chrome_h >= 88.0 {
                 let bm_y = chrome_h - 24.0;
                 list.push(DisplayCommand::Rect {
                     x: 0.0, y: bm_y, w: win_w, h: 24.0,
@@ -4964,7 +4972,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // nezacinal pod chrome bar.
             if self.shell_mode {
                 let bm_count = crate::devtools::bookmarks::load_bookmarks().len();
-                let dy = 64.0 + if bm_count > 0 { 24.0 } else { 0.0 };
+                let dy = 64.0 + if bm_count > 0 && self.bookmarks_bar_visible { 24.0 } else { 0.0 };
                 for cmd in display_list.iter_mut() {
                     use DisplayCommand::*;
                     match cmd {
@@ -5021,7 +5029,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 let groups: Vec<Option<[u8; 4]>> = self.tabs.tabs.iter()
                     .map(|t| t.group_color).collect();
                 let bm_count = crate::devtools::bookmarks::load_bookmarks().len();
-                let chrome_h = 64.0 + if bm_count > 0 { 24.0 } else { 0.0 };
+                let chrome_h = 64.0 + if bm_count > 0 && self.bookmarks_bar_visible { 24.0 } else { 0.0 };
                 let anim_t = self.start_time.elapsed().as_secs_f32();
                 paint_shell_chrome_with_groups(&mut display_list, win_w_logical, chrome_h,
                                              self.base_url.as_deref().unwrap_or(""),
@@ -5081,8 +5089,10 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         ("Ctrl+F",        "Hledat na strance"),
                         ("Ctrl+B",        "Zalozky"),
                         ("Ctrl+H",        "Historie"),
+                        ("Ctrl+J",        "Stahnuti"),
                         ("Ctrl+D",        "Pridat zalozku"),
                         ("Ctrl+P",        "Tisk do PDF"),
+                        ("Ctrl+Alt+R",    "Reading mode (zen view)"),
                         ("Ctrl+0/+/-",    "Zoom reset/in/out"),
                         ("Ctrl+A",        "Vybrat vse"),
                         ("Ctrl+C",        "Kopirovat"),
@@ -5575,6 +5585,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         shell_tab_tooltip: None,
         shortcuts_overlay_open: false,
         reading_mode_on: false,
+        bookmarks_bar_visible: true,
         shell_mode,
         shell_chrome_h: 64.0,
         tabs: {
