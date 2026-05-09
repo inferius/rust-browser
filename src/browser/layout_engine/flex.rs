@@ -302,14 +302,29 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                 intrinsic_content_width(ch)
             }
         }) };
+        // Pri inline elementu s text-only children (span s textem) - intrinsic
+        // h = font_size * line_height. Drive: span.text=None, rect.h=0, est_h=0.
+        // Pak flex item h se clamp na pb_h (= padding+border) -> 27 px misto 14.
+        fn intrinsic_text_h(ch: &super::super::layout::LayoutBox) -> f32 {
+            if ch.text.is_some() {
+                return if ch.taffy_mode { 10.0 } else { ch.font_size * 1.4 };
+            }
+            if !ch.children.is_empty() && ch.children.iter().all(|c| c.text.is_some() || (c.tag.is_none() && c.children.is_empty())) {
+                let lh = if ch.line_height > 0.0 { ch.line_height } else { 1.2 };
+                return ch.font_size * lh;
+            }
+            0.0
+        }
         let mut est_h = if pct_h_skip || pct_h_indefinite {
             if ch.text.is_some() {
                 if ch.taffy_mode { 10.0 } else { ch.font_size * 1.4 }
-            } else if ch.rect.height > 0.0 { ch.rect.height } else { 0.0 }
+            } else if ch.rect.height > 0.0 { ch.rect.height }
+            else { intrinsic_text_h(ch) }
         } else { ch.explicit_height.unwrap_or_else(|| {
             if ch.text.is_some() {
                 if ch.taffy_mode { 10.0 } else { ch.font_size * 1.4 }
-            } else if ch.rect.height > 0.0 { ch.rect.height } else { 0.0 }
+            } else if ch.rect.height > 0.0 { ch.rect.height }
+            else { intrinsic_text_h(ch) }
         }) };
         // writing-mode: vertical-lr/rl - osy textu se prohodi.
         // Inline axis (delka textu) je vertikalni, block axis je horizontalni.
