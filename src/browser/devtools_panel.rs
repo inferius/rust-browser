@@ -742,6 +742,67 @@ fn paint_section_header(
     y + ROW_H + 4.0
 }
 
+/// Firefox-style nested box model viz: margin (oranzova) -> border (zluta)
+/// -> padding (zelena) -> content (modra), s rozmery na kazde strane.
+fn paint_box_model_viz(
+    cmds: &mut Vec<DisplayCommand>,
+    bx: &LayoutBox,
+    pal: &Palette,
+    x: f32, y: f32, w: f32,
+) -> f32 {
+    let m_t = bx.margin_top.unwrap_or(bx.margin);
+    let m_r = bx.margin_right.unwrap_or(bx.margin);
+    let m_b = bx.margin_bottom.unwrap_or(bx.margin);
+    let m_l = bx.margin_left.unwrap_or(bx.margin);
+    let p_t = bx.padding_top.unwrap_or(bx.padding);
+    let p_r = bx.padding_right.unwrap_or(bx.padding);
+    let p_b = bx.padding_bottom.unwrap_or(bx.padding);
+    let p_l = bx.padding_left.unwrap_or(bx.padding);
+    let bw = bx.border_width;
+
+    // Box dimensions (visual nested box).
+    let box_w = w.min(280.0);
+    let box_h = 180.0;
+    let cx = x + (w - box_w) * 0.5;
+    let cy = y;
+
+    // Margin layer (orange).
+    push_rect(cmds, cx, cy, box_w, box_h, pal.overlay_margin);
+    let inset = 24.0;
+    // Border layer (yellow).
+    push_rect(cmds, cx + inset, cy + inset, box_w - 2.0 * inset, box_h - 2.0 * inset, pal.overlay_border);
+    // Padding layer (green).
+    let inset2 = 48.0;
+    push_rect(cmds, cx + inset2, cy + inset2, box_w - 2.0 * inset2, box_h - 2.0 * inset2, pal.overlay_padding);
+    // Content layer (blue).
+    let inset3 = 72.0;
+    push_rect(cmds, cx + inset3, cy + inset3, box_w - 2.0 * inset3, box_h - 2.0 * inset3, pal.overlay_content);
+
+    // Labels per layer (text uvnitr ramecku).
+    let lbl_color = pal.text;
+    // Margin labels (4 sides).
+    push_ui_text(cmds, cx + box_w * 0.5 - 8.0, cy + 4.0, format!("{:.0}", m_t), lbl_color, false);
+    push_ui_text(cmds, cx + box_w * 0.5 - 8.0, cy + box_h - 18.0, format!("{:.0}", m_b), lbl_color, false);
+    push_ui_text(cmds, cx + 4.0, cy + box_h * 0.5 - 7.0, format!("{:.0}", m_l), lbl_color, false);
+    push_ui_text(cmds, cx + box_w - 24.0, cy + box_h * 0.5 - 7.0, format!("{:.0}", m_r), lbl_color, false);
+    // Border (single value).
+    push_ui_text(cmds, cx + box_w * 0.5 - 8.0, cy + inset + 2.0, format!("{:.0}", bw), lbl_color, false);
+    // Padding labels.
+    push_ui_text(cmds, cx + box_w * 0.5 - 8.0, cy + inset2 + 2.0, format!("{:.0}", p_t), lbl_color, false);
+    push_ui_text(cmds, cx + box_w * 0.5 - 8.0, cy + box_h - inset2 - 16.0, format!("{:.0}", p_b), lbl_color, false);
+    push_ui_text(cmds, cx + inset2 + 2.0, cy + box_h * 0.5 - 7.0, format!("{:.0}", p_l), lbl_color, false);
+    push_ui_text(cmds, cx + box_w - inset2 - 22.0, cy + box_h * 0.5 - 7.0, format!("{:.0}", p_r), lbl_color, false);
+    // Content size (center).
+    push_ui_text(cmds, cx + box_w * 0.5 - 30.0, cy + box_h * 0.5 - 7.0,
+                 format!("{:.0} x {:.0}", bx.rect.width, bx.rect.height), lbl_color, true);
+    // Section labels (rohy).
+    push_ui_text(cmds, cx + 2.0, cy + box_h - 16.0, "margin".to_string(), pal.text_dim, false);
+    push_ui_text(cmds, cx + inset + 2.0, cy + box_h - inset - 16.0, "border".to_string(), pal.text_dim, false);
+    push_ui_text(cmds, cx + inset2 + 2.0, cy + box_h - inset2 - 16.0, "padding".to_string(), pal.text_dim, false);
+
+    y + box_h + 12.0
+}
+
 fn paint_side_layout(
     cmds: &mut Vec<DisplayCommand>,
     bx: &LayoutBox,
@@ -801,24 +862,7 @@ fn paint_side_layout(
     sy = paint_section_header(cmds, state, pal, &SectionId::LayoutBoxModel,
                                "Model boxu", x, sy, w);
     if !state.collapsed_sections.contains(&SectionId::LayoutBoxModel) {
-        let m_t = bx.margin_top.unwrap_or(bx.margin);
-        let m_r = bx.margin_right.unwrap_or(bx.margin);
-        let m_b = bx.margin_bottom.unwrap_or(bx.margin);
-        let m_l = bx.margin_left.unwrap_or(bx.margin);
-        let p_t = bx.padding_top.unwrap_or(bx.padding);
-        let p_r = bx.padding_right.unwrap_or(bx.padding);
-        let p_b = bx.padding_bottom.unwrap_or(bx.padding);
-        let p_l = bx.padding_left.unwrap_or(bx.padding);
-        push_text(cmds, pad_x, sy, format!("margin: {:.0} {:.0} {:.0} {:.0}", m_t, m_r, m_b, m_l), pal.text, false);
-        sy += ROW_H;
-        push_text(cmds, pad_x, sy, format!("border: {:.0}", bx.border_width), pal.text, false);
-        sy += ROW_H;
-        push_text(cmds, pad_x, sy, format!("padding: {:.0} {:.0} {:.0} {:.0}", p_t, p_r, p_b, p_l), pal.text, false);
-        sy += ROW_H;
-        push_text(cmds, pad_x, sy,
-                  format!("content: {:.0} x {:.0}", bx.rect.width, bx.rect.height),
-                  pal.text, false);
-        sy += ROW_H + 4.0;
+        sy = paint_box_model_viz(cmds, bx, pal, x + 8.0, sy + 4.0, w - 16.0);
     }
 
     // Box properties section.
@@ -837,21 +881,51 @@ fn paint_side_computed(
     cmds: &mut Vec<DisplayCommand>,
     state: &DevToolsState,
     pal: &Palette,
-    x: f32, y: f32, _w: f32, h: f32,
+    x: f32, y: f32, w: f32, h: f32,
 ) {
+    // Filter input bar nahore.
+    let filter_h = 26.0;
+    push_rect(cmds, x, y, w, filter_h, pal.bg_panel_alt);
+    push_rect(cmds, x, y + filter_h - 1.0, w, 1.0, pal.border);
+    push_rect(cmds, x + 8.0, y + 4.0, w - 16.0, filter_h - 8.0, pal.bg_input);
+    push_rect_border(cmds, x + 8.0, y + 4.0, w - 16.0, filter_h - 8.0, pal.border);
+    let display_filter = if state.styles.filter.is_empty() {
+        push_ui_text_italic(cmds, x + 14.0, y + 7.0,
+                            "Filtr (jmeno prop)".to_string(), pal.text_disabled);
+        String::new()
+    } else {
+        push_text(cmds, x + 14.0, y + 7.0, state.styles.filter.clone(), pal.text, false);
+        state.styles.filter.clone()
+    };
+
+    // Body: sorted props + filter match.
+    let body_y = y + filter_h;
     let scroll = state.styles.scroll_y;
-    let mut sy = y + 8.0 - scroll;
+    let mut sy = body_y + 8.0 - scroll;
     let max_y = y + h;
     let pad_x = x + 12.0;
-    let filter = state.styles.filter.to_lowercase();
+    let filter = display_filter.to_lowercase();
+    let mut count = 0;
     for (k, v) in &state.styles.computed {
-        if sy >= max_y { return; }
+        if sy >= max_y { break; }
         if !filter.is_empty() && !k.contains(&filter) { continue; }
-        if sy + ROW_H >= y {
+        if sy + ROW_H >= body_y {
             push_text(cmds, pad_x, sy, format!("{}:", k), pal.syn_property, false);
-            push_text(cmds, pad_x + 140.0, sy, v.clone(), pal.text, false);
+            // Color swatch pri color value.
+            let mut value_x = pad_x + 140.0;
+            if let Some(c) = parse_css_color(v.trim()) {
+                push_rect(cmds, value_x, sy + 3.0, 12.0, 12.0, c);
+                push_rect_border(cmds, value_x, sy + 3.0, 12.0, 12.0, pal.border);
+                value_x += 16.0;
+            }
+            push_text(cmds, value_x, sy, v.clone(), pal.text, false);
+            count += 1;
         }
         sy += ROW_H;
+    }
+    if count == 0 && !state.styles.computed.is_empty() {
+        push_ui_text_italic(cmds, pad_x, body_y + 12.0,
+                            "Zadne shody filtru".to_string(), pal.text_dim);
     }
 }
 
