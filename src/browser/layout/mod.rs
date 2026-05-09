@@ -3236,6 +3236,10 @@ pub fn layout_block(bx: &mut LayoutBox) {
 /// Flush inline buffer: rozmista inline boxy s wrapem.
 /// Vraci new cursor_y po vsech radkach.
 fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f32, inner_w: f32) -> f32 {
+    if std::env::var("INLINE_DEBUG").is_ok() {
+        eprintln!("[inline] tag={:?} indices={:?} inner_x={} inner_w={} bx.rect.w={}",
+            bx.tag, indices.len(), inner_x, inner_w, bx.rect.width);
+    }
     let mut cursor_x = inner_x;
     let mut cursor_y = start_y;
     let parent_font_size = bx.font_size;
@@ -3344,7 +3348,11 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
             for (wi, word) in words.iter().enumerate() {
                 let w = measure_text_width_styled(word, font_size, bx_clone.bold);
                 let inter_word_space = if wi > 0 { space_w } else { 0.0 };
-                let needs_wrap = cursor_x + inter_word_space + w > inner_x + inner_w
+                // Pri inner_w <= 0 (pre-pass parent.rect.width=0) NE wrap -
+                // vsech slov v jedne line. Real layout pak prepocita s
+                // spravnym inner_w. Bez teto guard kazde slovo wrap -> 8x lines.
+                let needs_wrap = inner_w > 0.0
+                    && cursor_x + inter_word_space + w > inner_x + inner_w
                     && cursor_x > inner_x;
                 if needs_wrap {
                     // Pre-wrap zaznam soucasne line end (cursor_x na konci predchozi line).
