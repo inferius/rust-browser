@@ -13,6 +13,14 @@ pub enum MenuItem {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MenuAction {
+    // Shell tab/bookmark context menu
+    TabClose(usize),
+    TabCloseOthers(usize),
+    TabDuplicate(usize),
+    TabReload(usize),
+    BookmarkOpen(String),
+    BookmarkDelete(String),
+
     // Elements tab
     EditAttribute { node_id: usize, attr: String },
     AddAttribute { node_id: usize },

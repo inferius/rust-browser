@@ -617,13 +617,28 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         self.render();
                         return;
                     }
-                    // Side panel splitter drag.
+                    // Side panel splitter drag (per dock: convert mouse pos
+                    // do panel-local coords).
                     if self.devtools.elements.dragging_side_split {
+                        use crate::devtools::profile::DockPosition;
                         let viewport_w = self.viewport_w_logical();
-                        let mx = self.mouse_x - self.scroll_x;
-                        // mx = styles_end position; side_panel_w = win_w - mx.
-                        let new_w = (viewport_w - mx).clamp(180.0, viewport_w - 400.0);
-                        self.devtools.side_panel_w = new_w;
+                        let mx_screen = self.mouse_x - self.scroll_x;
+                        let (px, _py, pw, _ph) = self.panel_rect_logical();
+                        // Pri Bottom/Top: panel_w = viewport_w. Mouse_x v panel_x..panel_x+panel_w.
+                        // styles_end = mouse_x_local; side_panel_w = panel_w - mouse_x_local.
+                        let local_mx = mx_screen - px;
+                        let new_w = match self.devtools.dock_position {
+                            DockPosition::Bottom | DockPosition::Top | DockPosition::PopupWindow =>
+                                (pw - local_mx).clamp(180.0, pw - 400.0),
+                            DockPosition::Left | DockPosition::Right =>
+                                // Pri vertical dock side panel ma fixed sirku 280
+                                // (side panel je nadeleny pro Inspector).
+                                (pw - local_mx).clamp(180.0, pw - 400.0),
+                        };
+                        if new_w > 0.0 {
+                            self.devtools.side_panel_w = new_w;
+                        }
+                        let _ = viewport_w;
                         self.render();
                         return;
                     }
@@ -1220,10 +1235,64 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     self.render();
                 }
                 WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Right, .. } => {
-                    // RMB: pri devtools panel open, vyhodnotime kontextove menu per-tab.
                     let raw_y = self.mouse_y - self.scroll_y;
                     let viewport_h = self.viewport_h_logical();
                     let panel_h = self.panel_h_logical();
+                    // Shell chrome RMB: tab/bookmark context menu.
+                    if self.shell_mode && raw_y < self.shell_chrome_h {
+                        let viewport_w = self.viewport_w_logical();
+                        let mx = self.mouse_x;
+                        let hit = hit_chrome(viewport_w, self.shell_chrome_h, &self.tabs, mx, raw_y);
+                        use crate::devtools::context_menu::{ContextMenuState, MenuItem, MenuAction};
+                        match hit {
+                            ChromeHit::TabClick(idx) | ChromeHit::TabClose(idx) | ChromeHit::TabContextMenu(idx) => {
+                                let items = vec![
+                                    MenuItem::Action {
+                                        label: "Zavrit".to_string(),
+                                        action: MenuAction::TabClose(idx),
+                                        enabled: true, shortcut: Some("Ctrl+W".to_string()),
+                                    },
+                                    MenuItem::Action {
+                                        label: "Zavrit ostatni".to_string(),
+                                        action: MenuAction::TabCloseOthers(idx),
+                                        enabled: true, shortcut: None,
+                                    },
+                                    MenuItem::Action {
+                                        label: "Duplikovat".to_string(),
+                                        action: MenuAction::TabDuplicate(idx),
+                                        enabled: true, shortcut: None,
+                                    },
+                                    MenuItem::Separator,
+                                    MenuItem::Action {
+                                        label: "Obnovit".to_string(),
+                                        action: MenuAction::TabReload(idx),
+                                        enabled: true, shortcut: Some("F5".to_string()),
+                                    },
+                                ];
+                                self.devtools.context_menu = Some(ContextMenuState::new(self.mouse_x, raw_y, items));
+                                self.render();
+                                return;
+                            }
+                            ChromeHit::BookmarkClick(url) | ChromeHit::BookmarkContextMenu(url) => {
+                                let items = vec![
+                                    MenuItem::Action {
+                                        label: "Otevrit".to_string(),
+                                        action: MenuAction::BookmarkOpen(url.clone()),
+                                        enabled: true, shortcut: None,
+                                    },
+                                    MenuItem::Action {
+                                        label: "Smazat".to_string(),
+                                        action: MenuAction::BookmarkDelete(url),
+                                        enabled: true, shortcut: None,
+                                    },
+                                ];
+                                self.devtools.context_menu = Some(ContextMenuState::new(self.mouse_x, raw_y, items));
+                                self.render();
+                                return;
+                            }
+                            _ => {}
+                        }
+                    }
                     if self.devtools.panel_open && raw_y >= viewport_h - panel_h {
                         use crate::browser::devtools_panel::{RESIZE_GRIP_H, SEARCH_H};
                         use crate::devtools::context_menu::{ContextMenuState,
@@ -2996,6 +3065,45 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         fn dispatch_menu_action(&mut self, action: crate::devtools::context_menu::MenuAction) {
             use crate::devtools::context_menu::MenuAction::*;
             match action {
+                TabClose(idx) => {
+                    self.tabs.close(idx);
+                    let t = self.tabs.active_tab().clone();
+                    self.html = t.html;
+                    self.css = t.css;
+                    self.base_url = t.url;
+                    self.cached_layout_root = None;
+                    self.cached_stylesheets = None;
+                }
+                TabCloseOthers(idx) => {
+                    let keep = self.tabs.tabs[idx].clone();
+                    self.tabs.tabs.clear();
+                    self.tabs.tabs.push(keep);
+                    self.tabs.active = 0;
+                    let t = self.tabs.active_tab().clone();
+                    self.html = t.html;
+                    self.css = t.css;
+                    self.base_url = t.url;
+                    self.cached_layout_root = None;
+                    self.cached_stylesheets = None;
+                }
+                TabDuplicate(idx) => {
+                    let dup = self.tabs.tabs[idx].clone();
+                    self.tabs.open(dup);
+                }
+                TabReload(idx) => {
+                    if let Some(url) = self.tabs.tabs[idx].url.clone() {
+                        let active_was = self.tabs.active;
+                        self.tabs.switch_to(idx);
+                        self.navigate_url_no_history(&url);
+                        self.tabs.switch_to(active_was);
+                    }
+                }
+                BookmarkOpen(url) => {
+                    self.navigate_url(&url);
+                }
+                BookmarkDelete(url) => {
+                    crate::devtools::bookmarks::remove_bookmark(&url);
+                }
                 AddAttribute { node_id } => {
                     use crate::devtools::{EditState, EditTarget};
                     use crate::devtools::model::console::ConsoleInput;
