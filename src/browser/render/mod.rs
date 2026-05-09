@@ -986,6 +986,40 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                         target: None,
                                     });
                                 }
+                                DevtoolsHit::ForcePseudoToggle => {
+                                    // Cycle: none -> hover -> focus -> active -> none.
+                                    let h = self.devtools.force_hover;
+                                    let f = self.devtools.force_focus;
+                                    let a = self.devtools.force_active;
+                                    if !h && !f && !a {
+                                        self.devtools.force_hover = true;
+                                    } else if h {
+                                        self.devtools.force_hover = false;
+                                        self.devtools.force_focus = true;
+                                    } else if f {
+                                        self.devtools.force_focus = false;
+                                        self.devtools.force_active = true;
+                                    } else {
+                                        self.devtools.force_active = false;
+                                    }
+                                    self.cached_layout_root = None;
+                                }
+                                DevtoolsHit::ClassManagerToggle => {
+                                    self.devtools.class_manager_open = !self.devtools.class_manager_open;
+                                }
+                                DevtoolsHit::AddNewRule => {
+                                    // TODO add new inline rule + open editor.
+                                }
+                                DevtoolsHit::JumpToVar(name) => {
+                                    // Najdi :root rule s --name property a scrollni styles pane.
+                                    if let Some(idx) = self.devtools.styles.matched_rules.iter().position(|r|
+                                        r.declarations.iter().any(|d| d.property == name)) {
+                                        // Approximate position - row idx * ROW_H * 5 (each rule ~5 lines).
+                                        let target_y = (idx as f32) * 18.0 * 5.0;
+                                        self.devtools.styles.scroll_y = target_y.max(0.0);
+                                    }
+                                    println!("[devtools] jump na {} (TODO highlight)", name);
+                                }
                                 DevtoolsHit::OverlayToggle(kind, node_id) => {
                                     let pos = self.devtools.overlays.iter().position(|o|
                                         o.node_id == node_id && o.kind == kind);
@@ -2992,6 +3026,17 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             let target = layout_root.hit_test(self.mouse_x, self.mouse_y);
             let id = target.and_then(|t| t.node.as_ref().map(|n| std::rc::Rc::as_ptr(n) as usize));
             super::cascade::set_hovered_node(id);
+            // Force-hover/focus/active z styles toolbar - prepise reality.
+            if self.devtools.force_hover {
+                if let Some(sel) = self.devtools.elements.selected {
+                    super::cascade::set_hovered_node(Some(sel));
+                }
+            }
+            if self.devtools.force_focus {
+                if let Some(sel) = self.devtools.elements.selected {
+                    super::cascade::set_focused_node(Some(sel));
+                }
+            }
             // Devtools tree hover: mouse v devtools panelu nad Elements tree
             // -> set hovered (Firefox-style page overlay). Mimo tree -> clear.
             // Inspect mode prepise hover na page-side hit-test.

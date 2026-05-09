@@ -97,6 +97,12 @@ pub struct DevToolsState {
     pub settings_popup_open: bool,
     /// Color picker popup state. Some = aktivni (user kliknul na color swatch).
     pub color_picker: Option<ColorPickerState>,
+    /// Force pseudo-classes na selected element (Firefox :hov toolbar).
+    pub force_hover: bool,
+    pub force_focus: bool,
+    pub force_active: bool,
+    /// Class manager popup (.cls button) - pri kliku ukazuje add/toggle classes.
+    pub class_manager_open: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -194,6 +200,10 @@ impl Default for DevToolsState {
             dock_position: profile::load_dock_position(),
             settings_popup_open: false,
             color_picker: None,
+            force_hover: false,
+            force_focus: false,
+            force_active: false,
+            class_manager_open: false,
         }
     }
 }

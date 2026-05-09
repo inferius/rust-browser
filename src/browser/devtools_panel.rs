@@ -566,9 +566,9 @@ fn paint_toolbar_actions(
 }
 
 /// Styles pane top toolbar (filter bar): :hov / .cls / + state buttons.
-/// Renderuje pres top stranky styles pane. Klik toggle (TODO).
 pub fn paint_styles_toolbar(
     cmds: &mut Vec<DisplayCommand>,
+    state: &DevToolsState,
     pal: &Palette,
     x: f32, y: f32, w: f32,
     _mouse_x: f32, _mouse_y: f32,
@@ -576,21 +576,45 @@ pub fn paint_styles_toolbar(
     let h = 26.0;
     push_rect(cmds, x, y, w, h, pal.bg_panel_alt);
     push_rect(cmds, x, y + h - 1.0, w, 1.0, pal.border);
-    // Filter input box (placeholder).
     let input_x = x + 8.0;
     let input_w = w * 0.5;
     push_rect(cmds, input_x, y + 4.0, input_w, h - 8.0, pal.bg_input);
     push_rect_border(cmds, input_x, y + 4.0, input_w, h - 8.0, pal.border);
     push_ui_text_italic(cmds, input_x + 6.0, y + 7.0,
                         "Filtr stylu".to_string(), pal.text_disabled);
-    // :hov, .cls, + buttons vpravo.
+
+    // :hov, .cls, + buttons vpravo s active state highlight.
     let mut bx_x = x + w - 8.0;
-    for label in [":hov", ".cls", "+"].iter().rev() {
+    let active_states = [
+        (":hov", state.force_hover || state.force_focus || state.force_active),
+        (".cls", state.class_manager_open),
+        ("+", false),
+    ];
+    for (label, active) in active_states.iter().rev() {
         let bw = (label.len() as f32) * FONT_W + 8.0;
         bx_x -= bw + 4.0;
-        push_rect(cmds, bx_x, y + 4.0, bw, h - 8.0, pal.bg_button);
-        push_ui_text(cmds, bx_x + 4.0, y + 7.0, label.to_string(), pal.text_dim, false);
+        let bg = if *active { pal.accent } else { pal.bg_button };
+        let txt = if *active { pal.text_on_accent } else { pal.text_dim };
+        push_rect(cmds, bx_x, y + 4.0, bw, h - 8.0, bg);
+        push_ui_text(cmds, bx_x + 4.0, y + 7.0, label.to_string(), txt, false);
     }
+}
+
+/// Hit-test pro :hov/.cls/+ buttons v styles toolbar. Vraci index 0/1/2 nebo None.
+pub fn styles_toolbar_btn_hit(
+    x: f32, y: f32, w: f32, mouse_x: f32, mouse_y: f32,
+) -> Option<usize> {
+    let h = 26.0;
+    if mouse_y < y || mouse_y >= y + h { return None; }
+    let mut bx_x = x + w - 8.0;
+    for (idx_rev, label) in ["+", ".cls", ":hov"].iter().enumerate() {
+        let bw = (label.len() as f32) * FONT_W + 8.0;
+        bx_x -= bw + 4.0;
+        if mouse_x >= bx_x && mouse_x < bx_x + bw {
+            return Some(2 - idx_rev); // 0=hov, 1=cls, 2=+
+        }
+    }
+    None
 }
 
 // ─── Elements tab ───────────────────────────────────────────────────────
@@ -1255,6 +1279,8 @@ fn paint_edit_row(
 fn paint_decl_line(
     cmds: &mut Vec<DisplayCommand>,
     pal: &Palette,
+    swatch_zones: &mut Vec<(f32, f32, f32, f32, [u8; 4])>,
+    var_zones: &mut Vec<(f32, f32, f32, f32, String)>,
     x: f32, y: f32,
     property: &str,
     value: &str,
@@ -1272,6 +1298,7 @@ fn paint_decl_line(
         push_rect(cmds, cx, y + 14.0, 12.0, 1.0, pal.border);
         push_rect(cmds, cx, y + 3.0, 1.0, 12.0, pal.border);
         push_rect(cmds, cx + 11.0, y + 3.0, 1.0, 12.0, pal.border);
+        swatch_zones.push((cx, y + 3.0, 12.0, 12.0, c));
         cx += 16.0;
     }
 
@@ -1289,6 +1316,7 @@ fn paint_decl_line(
             push_rect(cmds, cx, y + 2.0, chip_w, 14.0, pal.bg_button);
             push_rect_border(cmds, cx, y + 2.0, chip_w, 14.0, pal.border);
             push_text(cmds, cx + 4.0, y, name.to_string(), txt_color, false);
+            var_zones.push((cx, y + 2.0, chip_w, 14.0, name.to_string()));
             cx += chip_w + 2.0;
             i = end + 1;
         } else {
@@ -1381,8 +1409,11 @@ fn paint_styles_pane(
     pal: &Palette,
     x: f32, y: f32, w: f32, h: f32,
 ) {
+    // Reset swatch + var zones (per-frame populated v paint_decl_line).
+    state.styles.swatch_zones.borrow_mut().clear();
+    state.styles.var_zones.borrow_mut().clear();
     // Toolbar nahore (filter + :hov/.cls/+ buttons).
-    paint_styles_toolbar(cmds, pal, x, y, w, 0.0, 0.0);
+    paint_styles_toolbar(cmds, state, pal, x, y, w, 0.0, 0.0);
     let toolbar_h = 26.0;
     let total_h = state.styles.estimate_total_h();
     let max_scroll = (total_h - h + toolbar_h).max(0.0);
@@ -1465,7 +1496,9 @@ fn paint_styles_pane(
             for d in &rule.declarations {
                 if sy >= max_y { return; }
                 if in_view(sy) {
-                    paint_decl_line(cmds, pal, pad_x, sy, &d.property, &d.value, d.important, d.overridden);
+                    let mut sw = state.styles.swatch_zones.borrow_mut();
+                    let mut vz = state.styles.var_zones.borrow_mut();
+                    paint_decl_line(cmds, pal, &mut sw, &mut vz, pad_x, sy, &d.property, &d.value, d.important, d.overridden);
                 }
                 sy += ROW_H;
             }
@@ -2563,6 +2596,14 @@ pub enum DevtoolsHit {
     ColorPickerClose,
     /// Klik na color swatch v styles pane -> open color picker.
     OpenColorPicker { anchor_x: f32, anchor_y: f32, color: [u8; 4] },
+    /// Klik na :hov toolbar button - cycle hover/focus/active force.
+    ForcePseudoToggle,
+    /// Klik na .cls toolbar button - toggle class manager popup.
+    ClassManagerToggle,
+    /// Klik na + toolbar button - add new rule (TODO).
+    AddNewRule,
+    /// Klik na var() chip v styles pane - jump na :root rule s definici.
+    JumpToVar(String),
 }
 
 /// Stable ID pro collapsible sections - persistuje state napric framem.
@@ -2828,6 +2869,38 @@ fn hit_test_elements(
 
     // Styles pane area.
     if mouse_x >= tree_split {
+        // Toolbar buttons hit (top 26px).
+        if mouse_y >= body_y && mouse_y < body_y + 26.0 {
+            if let Some(idx) = styles_toolbar_btn_hit(tree_split, body_y, styles_end - tree_split, mouse_x, mouse_y) {
+                return match idx {
+                    0 => DevtoolsHit::ForcePseudoToggle,
+                    1 => DevtoolsHit::ClassManagerToggle,
+                    _ => DevtoolsHit::AddNewRule,
+                };
+            }
+        }
+        // Color swatch hit (zone cached pri last paint).
+        let zones = state.styles.swatch_zones.borrow();
+        for (zx, zy, zw, zh, col) in zones.iter() {
+            if mouse_x >= *zx && mouse_x < zx + zw
+               && mouse_y >= *zy && mouse_y < zy + zh {
+                return DevtoolsHit::OpenColorPicker {
+                    anchor_x: *zx,
+                    anchor_y: zy + zh + 4.0,
+                    color: *col,
+                };
+            }
+        }
+        drop(zones);
+        // Var chip hit.
+        let vzones = state.styles.var_zones.borrow();
+        for (zx, zy, zw, zh, name) in vzones.iter() {
+            if mouse_x >= *zx && mouse_x < zx + zw
+               && mouse_y >= *zy && mouse_y < zy + zh {
+                return DevtoolsHit::JumpToVar(name.clone());
+            }
+        }
+        drop(vzones);
         let total_h = state.styles.computed.len() as f32 * ROW_H * 4.0;
         if total_h > body_h {
             let sb_x = styles_end - SCROLLBAR_W;

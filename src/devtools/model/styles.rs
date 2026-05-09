@@ -35,6 +35,14 @@ pub struct StylesState {
     pub computed: Vec<(String, String)>,
     pub filter: String,
     pub scroll_y: f32,
+    /// Cache swatch zon (x, y, w, h, rgba) emitnutych v posledni paint
+    /// pass. Hit-test cte tento Vec - pri kliku v swatch rect -> open
+    /// color picker. Volane interior-mut pres RefCell? Ne - paint_styles_pane
+    /// bere &state. Resime pres separate tracking field s lifetime per frame.
+    /// Pro ted: pure RefCell na hot path je OK.
+    pub swatch_zones: std::cell::RefCell<Vec<(f32, f32, f32, f32, [u8; 4])>>,
+    /// Cache var() chip zon: (x, y, w, h, var_name).
+    pub var_zones: std::cell::RefCell<Vec<(f32, f32, f32, f32, String)>>,
 }
 
 impl StylesState {
