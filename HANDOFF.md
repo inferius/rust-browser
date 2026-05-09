@@ -2,6 +2,24 @@
 
 Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 
+## Session N+12: settings theme klik + tests + element label Inter
+
+**2448 tests pass, build clean.**
+
+Settings theme switcher klik handler:
+- SettingsPopupAction::SelectTheme + DevtoolsHit::SettingsTheme
+- Klik na tlacitko Auto/Svetly/Tmavy: state.theme.mode + save_persisted
+- Theme zmena okamzite
+
+Polish:
+- Element highlight label ted Inter font (push_ui_text)
+- Session save pri CloseRequested aktualizuje active tab state pred snapshot
+
+Tests pridane (7 novych, 2448 pass total):
+- hsv_to_rgb_red/green/blue/white/black
+- tab_manager_close_does_not_remove_last
+- change_kind_variants
+
 ## Session N+11: favicon + SV gradient + new tab cards + addr cursor
 
 **2441 tests pass, build clean.**
