@@ -1,5 +1,7 @@
 //! Console panel: log entries + input field s cursor/selection/history + autocomplete.
 
+use super::text_buffer::TextBuffer;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LogLevel {
     Info,
@@ -218,6 +220,28 @@ impl ConsoleInput {
         self.anchor = None;
         self.history_idx = None;
         self.history_pending.clear();
+    }
+}
+
+impl TextBuffer for ConsoleInput {
+    fn text(&self) -> &str { &self.text }
+    fn cursor(&self) -> usize { self.cursor }
+    fn set_cursor(&mut self, byte: usize) {
+        let mut i = byte.min(self.text.len());
+        while i > 0 && !self.text.is_char_boundary(i) { i -= 1; }
+        self.cursor = i;
+    }
+    fn anchor(&self) -> Option<usize> { self.anchor }
+    fn set_anchor(&mut self, byte: Option<usize>) {
+        self.anchor = byte.map(|b| {
+            let mut i = b.min(self.text.len());
+            while i > 0 && !self.text.is_char_boundary(i) { i -= 1; }
+            i
+        });
+    }
+    fn replace_range(&mut self, range: std::ops::Range<usize>, with: &str) {
+        self.text.replace_range(range, with);
+        self.history_idx = None;
     }
 }
 

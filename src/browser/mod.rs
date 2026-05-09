@@ -21,6 +21,8 @@ pub mod woff;
 pub mod variable_fonts;
 pub mod emoji_fonts;
 pub mod webgl_helpers;
+pub mod dom_input_buffer;
+pub mod interactive;
 
 #[cfg(test)]
 mod tests;

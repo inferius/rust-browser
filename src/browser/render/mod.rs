@@ -52,6 +52,7 @@ mod canvas_paint;
 use canvas_paint::paint_canvas_ops;
 
 mod webgl_paint;
+mod text_input;
 #[allow(unused_imports)] // pub use - test exposure
 pub use webgl_paint::paint_webgl_canvases;
 
@@ -1069,42 +1070,20 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                     if self.devtools.panel_open && self.devtools.elements.edit.is_some() {
                         let ctrl = self.modifiers.control_key();
                         let shift = self.modifiers.shift_key();
-                        let edit = self.devtools.elements.edit.as_mut().unwrap();
-                        let input = &mut edit.buffer;
-                        match &key_event.logical_key {
-                            Key::Named(NamedKey::Backspace) => { input.backspace(); }
-                            Key::Named(NamedKey::Delete) => { input.delete_forward(); }
-                            Key::Named(NamedKey::ArrowLeft) => { input.move_left(shift); }
-                            Key::Named(NamedKey::ArrowRight) => { input.move_right(shift); }
-                            Key::Named(NamedKey::Home) => { input.move_home(shift); }
-                            Key::Named(NamedKey::End) => { input.move_end(shift); }
-                            Key::Named(NamedKey::Space) => { input.insert(" "); }
-                            Key::Named(NamedKey::Escape) => { self.cancel_edit(); }
-                            Key::Named(NamedKey::Enter) => { self.commit_edit(); }
-                            Key::Named(NamedKey::Tab) => { self.commit_edit(); }
-                            Key::Character(s) if ctrl => {
-                                match s.as_str() {
-                                    "v" | "V" => {
-                                        if let Ok(mut cb) = arboard::Clipboard::new() {
-                                            if let Ok(t) = cb.get_text() { input.insert(&t); }
-                                        }
-                                    }
-                                    "c" | "C" => {
-                                        if let Some(t) = input.selected_text() {
-                                            if let Ok(mut cb) = arboard::Clipboard::new() { let _ = cb.set_text(t); }
-                                        }
-                                    }
-                                    "x" | "X" => {
-                                        if let Some(t) = input.cut() {
-                                            if let Ok(mut cb) = arboard::Clipboard::new() { let _ = cb.set_text(t); }
-                                        }
-                                    }
-                                    "a" | "A" => { input.select_all(); }
-                                    _ => {}
+                        use crate::browser::render::text_input::{dispatch_text_key, TextKeyOutcome};
+                        let outcome = {
+                            let edit = self.devtools.elements.edit.as_mut().unwrap();
+                            dispatch_text_key(&mut edit.buffer, &key_event.logical_key, ctrl, shift)
+                        };
+                        match outcome {
+                            TextKeyOutcome::Cancel => { self.cancel_edit(); }
+                            TextKeyOutcome::Submit | TextKeyOutcome::Tab => { self.commit_edit(); }
+                            TextKeyOutcome::Newline => {
+                                if let Some(edit) = self.devtools.elements.edit.as_mut() {
+                                    edit.buffer.insert("\n");
                                 }
                             }
-                            Key::Character(s) => { input.insert(s); }
-                            _ => {}
+                            TextKeyOutcome::Handled | TextKeyOutcome::Unhandled => {}
                         }
                         if let Some(w) = &self.window { w.request_redraw(); }
                         return;
@@ -1142,29 +1121,37 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                                 _ => {}
                             }
                         }
+                        // Console-specific specialty: Up/Down = history navigation.
                         match &key_event.logical_key {
-                            Key::Named(NamedKey::Tab) => {
+                            Key::Named(NamedKey::ArrowUp) => {
+                                input.history_prev();
+                                if let Some(w) = &self.window { w.request_redraw(); }
+                                return;
+                            }
+                            Key::Named(NamedKey::ArrowDown) => {
+                                input.history_next();
+                                if let Some(w) = &self.window { w.request_redraw(); }
+                                return;
+                            }
+                            _ => {}
+                        }
+                        // Centralni dispatch (Backspace/Space/Arrow/Home/End/Ctrl shortcuts).
+                        use crate::browser::render::text_input::{dispatch_text_key, TextKeyOutcome};
+                        let outcome = dispatch_text_key(input, &key_event.logical_key, ctrl, shift);
+                        match outcome {
+                            TextKeyOutcome::Handled => {}
+                            TextKeyOutcome::Tab => {
                                 self.trigger_autocomplete();
                                 if let Some(w) = &self.window { w.request_redraw(); }
                                 return;
                             }
-                            Key::Named(NamedKey::Backspace) => { input.backspace(); }
-                            Key::Named(NamedKey::Delete) => { input.delete_forward(); }
-                            Key::Named(NamedKey::ArrowLeft) => { input.move_left(shift); }
-                            Key::Named(NamedKey::ArrowRight) => { input.move_right(shift); }
-                            Key::Named(NamedKey::Home) => { input.move_home(shift); }
-                            Key::Named(NamedKey::End) => { input.move_end(shift); }
-                            Key::Named(NamedKey::Space) => { input.insert(" "); }
-                            Key::Named(NamedKey::ArrowUp) => { input.history_prev(); }
-                            Key::Named(NamedKey::ArrowDown) => { input.history_next(); }
-                            Key::Named(NamedKey::Escape) => {
+                            TextKeyOutcome::Cancel => {
                                 self.devtools.focus = FocusTarget::Page;
                             }
-                            Key::Named(NamedKey::Enter) if shift => {
-                                // Shift+Enter = vlozi newline (multiline edit).
-                                self.devtools.console.input.insert("\n");
+                            TextKeyOutcome::Newline => {
+                                input.insert("\n");
                             }
-                            Key::Named(NamedKey::Enter) => {
+                            TextKeyOutcome::Submit => {
                                 let cmd = self.devtools.console.input.submit();
                                 if !cmd.trim().is_empty() {
                                     use crate::devtools::model::console::{LogEntry, LogLevel};
@@ -1188,40 +1175,8 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                                     }
                                 }
                             }
-                            Key::Character(s) if ctrl => {
-                                match s.as_str() {
-                                    "v" | "V" => {
-                                        if let Ok(mut cb) = arboard::Clipboard::new() {
-                                            if let Ok(text) = cb.get_text() {
-                                                self.devtools.console.input.insert(&text);
-                                            }
-                                        }
-                                    }
-                                    "c" | "C" => {
-                                        if let Some(t) = self.devtools.console.input.selected_text() {
-                                            if let Ok(mut cb) = arboard::Clipboard::new() {
-                                                let _ = cb.set_text(t);
-                                            }
-                                        }
-                                    }
-                                    "x" | "X" => {
-                                        if let Some(t) = self.devtools.console.input.cut() {
-                                            if let Ok(mut cb) = arboard::Clipboard::new() {
-                                                let _ = cb.set_text(t);
-                                            }
-                                        }
-                                    }
-                                    "a" | "A" => { self.devtools.console.input.select_all(); }
-                                    _ => {}
-                                }
-                            }
-                            Key::Character(s) => {
-                                self.devtools.console.input.insert(s);
-                            }
-                            _ => {}
+                            TextKeyOutcome::Unhandled => {}
                         }
-                        if let Some(w) = &self.window { w.request_redraw(); }
-                        return;
                     }
                     // Elements search bar input.
                     if self.devtools.panel_open && self.devtools.focus == FocusTarget::DevToolsElementsSearch {
@@ -1264,7 +1219,9 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                         if let Some(w) = &self.window { w.request_redraw(); }
                         return;
                     }
-                    // Form input typing: pri focused input/textarea zachyti char.
+                    // Form input typing: pri focused input/textarea routovat pres
+                    // DomInputBuffer + centralni dispatch_text_key. Cursor + selection
+                    // zije v NodeData.input_cursor / input_anchor.
                     {
                         let focused_id = super::cascade::get_focused_node();
                         if let Some(fid) = focused_id {
@@ -1272,38 +1229,28 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                                 && !self.devtools.focus.is_text_input()
                                 && !self.modifiers.control_key()
                             {
-                                if let Some(interp) = &self.interpreter {
+                                let node_opt = self.interpreter.as_ref().and_then(|interp| {
                                     let doc_root = std::rc::Rc::clone(&interp.document.borrow().root);
-                                    if let Some(node) = find_node_by_ptr(&doc_root, fid) {
-                                        let tag = node.tag_name().unwrap_or_default();
-                                        if matches!(tag.as_str(), "input" | "textarea") {
-                                            match &key_event.logical_key {
-                                                Key::Named(NamedKey::Backspace) => {
-                                                    let cur = node.attr("value").unwrap_or_default();
-                                                    let mut chars: Vec<char> = cur.chars().collect();
-                                                    chars.pop();
-                                                    node.set_attr("value", &chars.into_iter().collect::<String>());
-                                                    self.cached_layout_root = None;
-                                                    self.render();
-                                                    return;
-                                                }
-                                                Key::Named(NamedKey::Space) => {
-                                                    let cur = node.attr("value").unwrap_or_default();
-                                                    node.set_attr("value", &format!("{} ", cur));
-                                                    self.cached_layout_root = None;
-                                                    self.render();
-                                                    return;
-                                                }
-                                                Key::Character(s) => {
-                                                    let cur = node.attr("value").unwrap_or_default();
-                                                    let new_val = format!("{}{}", cur, s);
-                                                    node.set_attr("value", &new_val);
-                                                    self.cached_layout_root = None;
-                                                    self.render();
-                                                    return;
-                                                }
-                                                _ => {}
-                                            }
+                                    find_node_by_ptr(&doc_root, fid)
+                                });
+                                if let Some(node) = node_opt {
+                                    let tag = node.tag_name().unwrap_or_default();
+                                    if matches!(tag.as_str(), "input" | "textarea") {
+                                        use crate::browser::dom_input_buffer::DomInputBuffer;
+                                        use crate::browser::render::text_input::{dispatch_text_key, TextKeyOutcome};
+                                        let ctrl = self.modifiers.control_key();
+                                        let shift = self.modifiers.shift_key();
+                                        let mut buf = DomInputBuffer::new(node);
+                                        let outcome = dispatch_text_key(&mut buf, &key_event.logical_key, ctrl, shift);
+                                        let consumed = !matches!(outcome, TextKeyOutcome::Unhandled);
+                                        if matches!(outcome, TextKeyOutcome::Submit) {
+                                            // TODO form submit (najit ancestor form).
+                                        }
+                                        drop(buf); // Drop -> commit_back value attr.
+                                        if consumed {
+                                            self.cached_layout_root = None;
+                                            self.render();
+                                            return;
                                         }
                                     }
                                 }
@@ -1609,6 +1556,72 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         }
         fn estimate_styles_total_h(&self) -> f32 {
             self.devtools.styles.estimate_total_h()
+        }
+        /// Centralni cursor icon dispatch - dle pozice + DOM/devtools state.
+        fn compute_cursor_icon(&self, target: Option<&super::layout::LayoutBox>) -> winit::window::CursorIcon {
+            use winit::window::CursorIcon;
+            // 1. Devtools panel hit?
+            let mx_screen = self.mouse_x - self.scroll_x;
+            let my_screen = self.mouse_y - self.scroll_y;
+            if self.point_in_devtools(mx_screen, my_screen) {
+                // Console input + elements search input + inline edit -> Text.
+                use crate::devtools::focus::FocusTarget;
+                if matches!(self.devtools.focus,
+                    FocusTarget::DevToolsConsole | FocusTarget::DevToolsElementsSearch)
+                    || self.devtools.elements.edit.is_some() {
+                    // Hit-test by mohl byt presnejsi (jen nad input rect), ale Text
+                    // je zelec pri text edit panelu uzitecny default.
+                    return CursorIcon::Text;
+                }
+                // Splitter drag zone -> ColResize.
+                if self.devtools.tab == crate::devtools::Tab::Elements {
+                    let viewport_w = self.viewport_w_logical();
+                    let default_split = viewport_w * 0.7;
+                    let split_x = if self.devtools.elements.split_x < 1.0 { default_split }
+                                  else { self.devtools.elements.split_x.max(200.0).min(viewport_w - 220.0) };
+                    if (mx_screen - split_x).abs() < 6.0 {
+                        return CursorIcon::ColResize;
+                    }
+                }
+                // Resize grip top -> RowResize.
+                if (my_screen - self.panel_top_logical()).abs() < 4.0 {
+                    return CursorIcon::RowResize;
+                }
+                return CursorIcon::Default;
+            }
+            // 2. Page main scrollbar -> Default.
+            if let Some(layout) = &self.layout_root {
+                let viewport_w = self.viewport_w_logical();
+                let viewport_h = self.viewport_h_logical() - self.panel_h_logical();
+                if layout.rect.height > viewport_h
+                    && self.mouse_x >= viewport_w - 12.0 && self.mouse_x < viewport_w {
+                    return CursorIcon::Default;
+                }
+            }
+            // 3. Page element classify pres InteractiveKind.
+            if let Some(t) = target {
+                if let Some(node) = &t.node {
+                    let kind = crate::browser::interactive::classify(node);
+                    if kind != crate::browser::interactive::InteractiveKind::None {
+                        return kind.cursor_icon();
+                    }
+                }
+                if t.text.is_some() {
+                    return CursorIcon::Text;
+                }
+                // Descendant text recurz.
+                fn has_text(b: &super::layout::LayoutBox, mx: f32, my: f32) -> bool {
+                    if b.text.is_some()
+                        && mx >= b.rect.x && mx < b.rect.x + b.rect.width
+                        && my >= b.rect.y && my < b.rect.y + b.rect.height { return true; }
+                    for c in &b.children { if has_text(c, mx, my) { return true; } }
+                    false
+                }
+                if has_text(t, self.mouse_x, self.mouse_y) {
+                    return CursorIcon::Text;
+                }
+            }
+            CursorIcon::Default
         }
         /// Body content y range Elements/Sources/Console - od top toolbaru.
         fn devtools_body_h(&self) -> f32 {
@@ -2186,6 +2199,8 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                                     parent: std::cell::RefCell::new(std::rc::Rc::downgrade(&parent)),
                                     children: std::cell::RefCell::new(Vec::new()),
                                     listeners: std::cell::RefCell::new(std::collections::HashMap::new()),
+                                    input_cursor: std::cell::Cell::new(0),
+                                    input_anchor: std::cell::Cell::new(None),
                                 });
                                 kids[idx] = new_node;
                             }
@@ -2623,39 +2638,14 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
             } else if self.devtools.elements.hovered.is_some() {
                 self.devtools.elements.hovered = None;
             }
-            // Cursor icon dle hover targetu: text nodes -> Text (I-beam), klikatelne
-            // (a, button) -> Pointer, jinak Default.
+            // Cursor icon stack - jeden compute_cursor_icon() s prioritou:
+            // 1. Devtools panel? -> dle hit_test (search/console = Text, scrollbar/btn = Default/Pointer)
+            // 2. Page form button/link/select -> Pointer
+            // 3. Page input/textarea -> Text
+            // 4. Page text run -> Text
+            // 5. Default
             if let Some(window) = &self.window {
-                use winit::window::CursorIcon;
-                let icon = match target {
-                    Some(t) => {
-                        let tag = t.tag.as_deref();
-                        if matches!(tag, Some("a") | Some("button") | Some("input") | Some("select")) {
-                            CursorIcon::Pointer
-                        } else if t.text.is_some() {
-                            CursorIcon::Text
-                        } else {
-                            // Recurzivne najdi nejhlubsi child s textem.
-                            fn has_text_descendant(b: &super::layout::LayoutBox, mx: f32, my: f32) -> bool {
-                                if b.text.is_some()
-                                    && mx >= b.rect.x && mx < b.rect.x + b.rect.width
-                                    && my >= b.rect.y && my < b.rect.y + b.rect.height {
-                                    return true;
-                                }
-                                for c in &b.children {
-                                    if has_text_descendant(c, mx, my) { return true; }
-                                }
-                                false
-                            }
-                            if has_text_descendant(t, self.mouse_x, self.mouse_y) {
-                                CursorIcon::Text
-                            } else {
-                                CursorIcon::Default
-                            }
-                        }
-                    }
-                    None => CursorIcon::Default,
-                };
+                let icon = self.compute_cursor_icon(target);
                 window.set_cursor(icon);
             }
         }
