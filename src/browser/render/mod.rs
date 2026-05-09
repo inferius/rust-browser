@@ -930,6 +930,10 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                     self.devtools.tab = t;
                                     self.devtools.tab_overflow_open = false;
                                 }
+                                _ if self.devtools.tab_overflow_open => {
+                                    // Klik mimo overflow popup -> dismiss.
+                                    self.devtools.tab_overflow_open = false;
+                                }
                                 DevtoolsHit::SidePanelTabClick(t) => {
                                     self.devtools.side_panel_tab = t;
                                 }
@@ -973,6 +977,14 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                 }
                                 DevtoolsHit::ColorPickerClose => {
                                     self.devtools.color_picker = None;
+                                }
+                                DevtoolsHit::OpenColorPicker { anchor_x, anchor_y, color } => {
+                                    self.devtools.color_picker = Some(crate::devtools::ColorPickerState {
+                                        anchor_x, anchor_y,
+                                        rgba: color,
+                                        hue: 0.0,
+                                        target: None,
+                                    });
                                 }
                                 DevtoolsHit::OverlayToggle(kind, node_id) => {
                                     let pos = self.devtools.overlays.iter().position(|o|

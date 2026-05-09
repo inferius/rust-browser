@@ -2487,6 +2487,8 @@ pub enum DevtoolsHit {
     ColorPickerHue(f32),
     /// Color picker: klik mimo -> close.
     ColorPickerClose,
+    /// Klik na color swatch v styles pane -> open color picker.
+    OpenColorPicker { anchor_x: f32, anchor_y: f32, color: [u8; 4] },
 }
 
 /// Stable ID pro collapsible sections - persistuje state napric framem.
