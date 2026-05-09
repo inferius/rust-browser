@@ -1235,7 +1235,7 @@ fn paint_side_changes(
 
 fn paint_side_compat(
     cmds: &mut Vec<DisplayCommand>,
-    state: &DevToolsState,
+    _state: &DevToolsState,
     pal: &Palette,
     x: f32, y: f32, _w: f32, h: f32,
 ) {

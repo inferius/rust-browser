@@ -7,7 +7,7 @@
 //!   bookmarks.json   - bookmarks (shell mode)
 //!   history.json     - browsing history (shell mode)
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DockPosition {
