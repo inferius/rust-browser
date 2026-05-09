@@ -125,41 +125,90 @@ pub fn paint_devtools_panel(
 ) {
     if !state.panel_open || state.panel_h <= 0.0 { return; }
     let pal = state.palette();
-    let panel_h = state.panel_h.min(win_h * 0.7);
-    let panel_y = win_h - panel_h;
+    use crate::devtools::profile::DockPosition;
+    let s = state.panel_h.min(match state.dock_position {
+        DockPosition::Left | DockPosition::Right => win_w * 0.7,
+        _ => win_h * 0.7,
+    });
+    // Panel rect dle dock position.
+    let (panel_x, panel_y, panel_w, panel_h) = match state.dock_position {
+        DockPosition::Bottom | DockPosition::PopupWindow =>
+            (0.0, win_h - s, win_w, s),
+        DockPosition::Top => (0.0, 0.0, win_w, s),
+        DockPosition::Left => (0.0, 0.0, s, win_h),
+        DockPosition::Right => (win_w - s, 0.0, s, win_h),
+    };
 
     // Pozadi panelu.
-    push_rect(cmds, 0.0, panel_y, win_w, panel_h, pal.bg_panel);
-    // Top horizontal border (oddeleni od page).
-    push_rect(cmds, 0.0, panel_y, win_w, 1.0, pal.border_strong);
+    push_rect(cmds, panel_x, panel_y, panel_w, panel_h, pal.bg_panel);
+    // Border separator (proti page) - na strane co dock dotyka page.
+    match state.dock_position {
+        DockPosition::Bottom => push_rect(cmds, panel_x, panel_y, panel_w, 1.0, pal.border_strong),
+        DockPosition::Top => push_rect(cmds, panel_x, panel_y + panel_h - 1.0, panel_w, 1.0, pal.border_strong),
+        DockPosition::Left => push_rect(cmds, panel_x + panel_w - 1.0, panel_y, 1.0, panel_h, pal.border_strong),
+        DockPosition::Right => push_rect(cmds, panel_x, panel_y, 1.0, panel_h, pal.border_strong),
+        DockPosition::PopupWindow => push_rect(cmds, panel_x, panel_y, panel_w, 1.0, pal.border_strong),
+    }
 
-    // Resize grip - 4px draggable area pri vrchu (pred toolbarem).
-    let grip_hover = mouse_x >= 0.0 && mouse_x <= win_w
-        && mouse_y >= panel_y && mouse_y < panel_y + RESIZE_GRIP_H;
+    // Resize grip - draggable area na hranice dotyku page.
+    let (grip_x, grip_y, grip_w, grip_h) = match state.dock_position {
+        DockPosition::Bottom | DockPosition::PopupWindow =>
+            (panel_x, panel_y, panel_w, RESIZE_GRIP_H),
+        DockPosition::Top =>
+            (panel_x, panel_y + panel_h - RESIZE_GRIP_H, panel_w, RESIZE_GRIP_H),
+        DockPosition::Left =>
+            (panel_x + panel_w - RESIZE_GRIP_H, panel_y, RESIZE_GRIP_H, panel_h),
+        DockPosition::Right =>
+            (panel_x, panel_y, RESIZE_GRIP_H, panel_h),
+    };
+    let grip_hover = mouse_x >= grip_x && mouse_x < grip_x + grip_w
+        && mouse_y >= grip_y && mouse_y < grip_y + grip_h;
     let grip_color = if grip_hover { pal.accent } else { pal.border };
-    push_rect(cmds, 0.0, panel_y + 1.0, win_w, RESIZE_GRIP_H - 1.0, grip_color);
+    push_rect(cmds, grip_x, grip_y, grip_w, grip_h, grip_color);
 
-    // Toolbar (taby + akce).
-    let toolbar_y = panel_y + RESIZE_GRIP_H;
-    push_rect(cmds, 0.0, toolbar_y, win_w, TAB_H, pal.bg_toolbar);
-    push_rect(cmds, 0.0, toolbar_y + TAB_H - 1.0, win_w, 1.0, pal.border);
+    // Toolbar (taby + akce). Pro vertical docks (Left/Right) vleze pod grip
+    // jako horizontal strip nahore panelu.
+    let toolbar_y = match state.dock_position {
+        DockPosition::Bottom | DockPosition::PopupWindow => panel_y + RESIZE_GRIP_H,
+        DockPosition::Top => panel_y,
+        DockPosition::Left | DockPosition::Right => panel_y, // vertical dock - toolbar nahore
+    };
+    let toolbar_x = match state.dock_position {
+        DockPosition::Right => panel_x + RESIZE_GRIP_H, // grip vlevo
+        _ => panel_x,
+    };
+    let toolbar_w = match state.dock_position {
+        DockPosition::Left => panel_w - RESIZE_GRIP_H, // grip vpravo
+        DockPosition::Right => panel_w - RESIZE_GRIP_H, // grip vlevo
+        _ => panel_w,
+    };
+    push_rect(cmds, toolbar_x, toolbar_y, toolbar_w, TAB_H, pal.bg_toolbar);
+    push_rect(cmds, toolbar_x, toolbar_y + TAB_H - 1.0, toolbar_w, 1.0, pal.border);
 
-    paint_tabs(cmds, state, &pal, toolbar_y, win_w, mouse_x, mouse_y);
-    paint_toolbar_actions(cmds, state, &pal, toolbar_y, win_w, mouse_x, mouse_y);
+    paint_tabs(cmds, state, &pal, toolbar_y, toolbar_w, mouse_x, mouse_y);
+    paint_toolbar_actions(cmds, state, &pal, toolbar_y, toolbar_w, mouse_x, mouse_y);
 
     // Content area.
     let content_y = toolbar_y + TAB_H;
-    let content_h = panel_h - RESIZE_GRIP_H - TAB_H;
+    let content_h = match state.dock_position {
+        DockPosition::Bottom | DockPosition::PopupWindow | DockPosition::Top =>
+            panel_h - RESIZE_GRIP_H - TAB_H,
+        DockPosition::Left | DockPosition::Right =>
+            panel_h - TAB_H, // grip horizontal dimension (left/right) neujima vyssi prostor
+    };
+    let content_x = toolbar_x;
+    let content_w = toolbar_w;
     if content_h <= 0.0 { return; }
+    let _ = content_x; // x offset prosakuje do tabu pres state.panel_x (TODO).
 
     match state.tab {
-        Tab::Elements => paint_elements_tab(cmds, layout_root, state, &pal, win_w, content_y, content_h, mouse_x, mouse_y),
-        Tab::Console => paint_console_tab(cmds, state, &pal, interp, win_w, content_y, content_h, mouse_x, mouse_y),
-        Tab::Network => paint_network_tab(cmds, state, &pal, interp, win_w, content_y, content_h, mouse_x, mouse_y),
-        Tab::Sources => paint_sources_tab(cmds, state, &pal, win_w, content_y, content_h, mouse_x, mouse_y),
-        Tab::Performance => paint_performance_tab(cmds, state, &pal, win_w, content_y, content_h),
-        Tab::Application => paint_application_tab(cmds, state, &pal, interp, win_w, content_y, content_h),
-        Tab::Settings => paint_settings_tab(cmds, state, &pal, win_w, content_y, content_h, mouse_x, mouse_y),
+        Tab::Elements => paint_elements_tab(cmds, layout_root, state, &pal, content_w, content_y, content_h, mouse_x, mouse_y),
+        Tab::Console => paint_console_tab(cmds, state, &pal, interp, content_w, content_y, content_h, mouse_x, mouse_y),
+        Tab::Network => paint_network_tab(cmds, state, &pal, interp, content_w, content_y, content_h, mouse_x, mouse_y),
+        Tab::Sources => paint_sources_tab(cmds, state, &pal, content_w, content_y, content_h, mouse_x, mouse_y),
+        Tab::Performance => paint_performance_tab(cmds, state, &pal, content_w, content_y, content_h),
+        Tab::Application => paint_application_tab(cmds, state, &pal, interp, content_w, content_y, content_h),
+        Tab::Settings => paint_settings_tab(cmds, state, &pal, content_w, content_y, content_h, mouse_x, mouse_y),
     }
 
     // Settings popup (dock chooser + theme).
@@ -2324,8 +2373,19 @@ pub fn devtools_hit_test(
     mouse_x: f32, mouse_y: f32,
 ) -> DevtoolsHit {
     if !state.panel_open { return DevtoolsHit::None; }
-    let panel_h = state.panel_h.min(win_h * 0.7);
-    let panel_y = win_h - panel_h;
+    use crate::devtools::profile::DockPosition;
+    let s = state.panel_h.min(match state.dock_position {
+        DockPosition::Left | DockPosition::Right => win_w * 0.7,
+        _ => win_h * 0.7,
+    });
+    let (panel_x, panel_y, panel_w, panel_h) = match state.dock_position {
+        DockPosition::Bottom | DockPosition::PopupWindow =>
+            (0.0, win_h - s, win_w, s),
+        DockPosition::Top => (0.0, 0.0, win_w, s),
+        DockPosition::Left => (0.0, 0.0, s, win_h),
+        DockPosition::Right => (win_w - s, 0.0, s, win_h),
+    };
+    let _ = (panel_x, panel_w); // pouzite dale - nehlasi unused.
 
     // Settings popup ma prioritu nad cely panel hit-test.
     if state.settings_popup_open {
@@ -2360,8 +2420,23 @@ pub fn devtools_hit_test(
         return DevtoolsHit::DismissContextMenu;
     }
 
-    if mouse_y < panel_y { return DevtoolsHit::None; }
-    if mouse_y < panel_y + RESIZE_GRIP_H {
+    // Mimo panel rect -> None (per-dock check).
+    if mouse_x < panel_x || mouse_x >= panel_x + panel_w
+       || mouse_y < panel_y || mouse_y >= panel_y + panel_h {
+        return DevtoolsHit::None;
+    }
+    // Resize grip dle dock position.
+    let grip_hit = match state.dock_position {
+        DockPosition::Bottom | DockPosition::PopupWindow =>
+            mouse_y >= panel_y && mouse_y < panel_y + RESIZE_GRIP_H,
+        DockPosition::Top =>
+            mouse_y >= panel_y + panel_h - RESIZE_GRIP_H && mouse_y < panel_y + panel_h,
+        DockPosition::Left =>
+            mouse_x >= panel_x + panel_w - RESIZE_GRIP_H && mouse_x < panel_x + panel_w,
+        DockPosition::Right =>
+            mouse_x >= panel_x && mouse_x < panel_x + RESIZE_GRIP_H,
+    };
+    if grip_hit {
         return DevtoolsHit::ResizeGrip;
     }
     let toolbar_y = panel_y + RESIZE_GRIP_H;

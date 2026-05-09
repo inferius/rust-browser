@@ -548,12 +548,24 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     }
                     self.mouse_x = new_x;
                     self.mouse_y = new_y;
-                    // Resize drag: aktualizuj devtools_height (logical px).
+                    // Resize drag: aktualizuj panel size dle dock position.
                     if self.devtools_resizing {
+                        use crate::devtools::profile::DockPosition;
+                        let viewport_w = self.viewport_w_logical();
                         let viewport_h = self.viewport_h_logical();
+                        let raw_x = new_x - self.scroll_x;
                         let raw_y = new_y - self.scroll_y;
-                        let new_height = (viewport_h - raw_y).max(60.0).min(viewport_h * 0.9);
-                        self.devtools.panel_h = new_height;
+                        let new_size = match self.devtools.dock_position {
+                            DockPosition::Bottom | DockPosition::PopupWindow =>
+                                (viewport_h - raw_y).max(60.0).min(viewport_h * 0.9),
+                            DockPosition::Top =>
+                                raw_y.max(60.0).min(viewport_h * 0.9),
+                            DockPosition::Left =>
+                                raw_x.max(180.0).min(viewport_w * 0.9),
+                            DockPosition::Right =>
+                                (viewport_w - raw_x).max(180.0).min(viewport_w * 0.9),
+                        };
+                        self.devtools.panel_h = new_size;
                         self.render();
                         return;
                     }
@@ -1582,22 +1594,60 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         fn viewport_w_logical(&self) -> f32 {
             self.renderer.as_ref().map(|r| (r.config.width as f32) / (self.zoom * r.scale_factor)).unwrap_or(1024.0)
         }
-        /// Vyska devtools panelu v logical px (clampnuta na 70% viewportu).
-        fn panel_h_logical(&self) -> f32 {
+        /// Velikost devtools panelu (na perpendicular axis k dock side).
+        /// Bottom/Top: vyska. Left/Right: sirka.
+        fn panel_size_logical(&self) -> f32 {
             if !self.devtools.panel_open { return 0.0; }
-            self.devtools.panel_h.min(self.viewport_h_logical() * 0.7)
+            use crate::devtools::profile::DockPosition;
+            let max_dim = match self.devtools.dock_position {
+                DockPosition::Left | DockPosition::Right => self.viewport_w_logical(),
+                _ => self.viewport_h_logical(),
+            };
+            self.devtools.panel_h.min(max_dim * 0.7)
         }
-        /// Top edge devtools panelu v logical px (= viewport_h - panel_h).
+        /// Legacy alias.
+        fn panel_h_logical(&self) -> f32 { self.panel_size_logical() }
+        /// Vraci rect devtools panelu v logical px: (x, y, w, h).
+        fn panel_rect_logical(&self) -> (f32, f32, f32, f32) {
+            use crate::devtools::profile::DockPosition;
+            let vw = self.viewport_w_logical();
+            let vh = self.viewport_h_logical();
+            if !self.devtools.panel_open { return (0.0, vh, vw, 0.0); }
+            let s = self.panel_size_logical();
+            match self.devtools.dock_position {
+                DockPosition::Bottom | DockPosition::PopupWindow =>
+                    (0.0, vh - s, vw, s),
+                DockPosition::Top => (0.0, 0.0, vw, s),
+                DockPosition::Left => (0.0, 0.0, s, vh),
+                DockPosition::Right => (vw - s, 0.0, s, vh),
+            }
+        }
+        /// Page area rect (viewport bez devtools panelu).
+        fn page_rect_logical(&self) -> (f32, f32, f32, f32) {
+            use crate::devtools::profile::DockPosition;
+            let vw = self.viewport_w_logical();
+            let vh = self.viewport_h_logical();
+            if !self.devtools.panel_open { return (0.0, 0.0, vw, vh); }
+            let s = self.panel_size_logical();
+            match self.devtools.dock_position {
+                DockPosition::Bottom | DockPosition::PopupWindow =>
+                    (0.0, 0.0, vw, vh - s),
+                DockPosition::Top => (0.0, s, vw, vh - s),
+                DockPosition::Left => (s, 0.0, vw - s, vh),
+                DockPosition::Right => (0.0, 0.0, vw - s, vh),
+            }
+        }
+        /// Top edge devtools panelu v logical px - LEGACY (predpokala bottom).
+        /// Pouziva existujici hit-test code, dokud nezmigruji na panel_rect.
         fn panel_top_logical(&self) -> f32 {
-            self.viewport_h_logical() - self.panel_h_logical()
+            self.panel_rect_logical().1
         }
         /// Test: je dany logical-y bod v devtools panelu?
         fn point_in_devtools(&self, logical_x: f32, logical_y: f32) -> bool {
-            self.devtools.panel_open
-                && logical_x >= 0.0
-                && logical_x < self.viewport_w_logical()
-                && logical_y >= self.panel_top_logical()
-                && logical_y < self.viewport_h_logical()
+            if !self.devtools.panel_open { return false; }
+            let (px, py, pw, ph) = self.panel_rect_logical();
+            logical_x >= px && logical_x < px + pw
+                && logical_y >= py && logical_y < py + ph
         }
         fn estimate_styles_total_h(&self) -> f32 {
             self.devtools.styles.estimate_total_h()
