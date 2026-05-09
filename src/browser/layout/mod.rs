@@ -2990,14 +2990,87 @@ pub fn layout_block(bx: &mut LayoutBox) {
     // Inline run - sbiraji se inline boxy do line buffer, flush pri block child nebo konci
     let mut inline_buffer: Vec<usize> = Vec::new();
     // CSS margin collapse: adjacent vertical margins se nesakcaji, ale beru max.
-    // Tracker prev_margin_bottom aby dalsi block child margin_top byl pouzit jen
-    // do max vs prev_m_b.
     let mut prev_margin_bottom: f32 = 0.0;
     let mut had_prev_block = false;
+
+    // CSS Floats L1 - aktivni floats v aktualnim block formating context.
+    // (x, y, width, height, side: 'l'/'r'). Block siblings shrink x/width o
+    // floats prekryvajici cursor_y. Cleared pri clear: left/right/both.
+    let mut floats: Vec<(f32, f32, f32, f32, char)> = Vec::new();
+    let active_float_bounds = |y: f32, floats: &[(f32, f32, f32, f32, char)],
+                               inner_x: f32, inner_w: f32| -> (f32, f32) {
+        // Vraci (left_offset, available_width) pro radek na pozici y.
+        let mut left_off = 0.0_f32;
+        let mut right_off = 0.0_f32;
+        for (fx, fy, fw, fh, side) in floats {
+            if y + 1.0 >= *fy && y < *fy + *fh {
+                if *side == 'l' {
+                    left_off = left_off.max(fx + fw - inner_x);
+                } else {
+                    right_off = right_off.max((inner_x + inner_w) - fx);
+                }
+            }
+        }
+        let avail = (inner_w - left_off - right_off).max(0.0);
+        (left_off, avail)
+    };
 
     let mut i = 0;
     while i < bx.children.len() {
         let display = bx.children[i].display;
+        let float_v = bx.children[i].float_value.clone();
+        let clear_v = bx.children[i].clear_value.clone();
+
+        // CSS clear: posun cursor_y pod aktivni floats odpovidajici strany.
+        if clear_v == "left" || clear_v == "right" || clear_v == "both" {
+            for (_fx, fy, _fw, fh, side) in &floats {
+                let cleared = match clear_v.as_str() {
+                    "left" => *side == 'l',
+                    "right" => *side == 'r',
+                    "both" => true,
+                    _ => false,
+                };
+                if cleared {
+                    cursor_y = cursor_y.max(fy + fh);
+                }
+            }
+        }
+
+        // Float left/right: pozicovani na inner edge, advance cursor_y NE.
+        if (float_v == "left" || float_v == "right") && display != Display::None {
+            if !inline_buffer.is_empty() {
+                cursor_y = flush_inline(bx, &inline_buffer, inner_x, cursor_y, inner_w);
+                inline_buffer.clear();
+            }
+            let child = &mut bx.children[i];
+            let m_l = child.margin_left.unwrap_or(child.margin);
+            let m_r = child.margin_right.unwrap_or(child.margin);
+            let m_t = child.margin_top.unwrap_or(child.margin);
+            let cw = child.explicit_width.unwrap_or(100.0).max(1.0);
+            let ch = child.explicit_height.unwrap_or(child.rect.height.max(50.0));
+            child.rect.width = cw;
+            child.rect.height = ch;
+            child.rect.y = cursor_y + m_t;
+            if float_v == "left" {
+                let (left_off, _) = active_float_bounds(cursor_y, &floats, inner_x, inner_w);
+                child.rect.x = inner_x + left_off + m_l;
+            } else {
+                let mut right_off = 0.0_f32;
+                for (fx, fy, _fw, fh, side) in &floats {
+                    if cursor_y + 1.0 >= *fy && cursor_y < *fy + *fh && *side == 'r' {
+                        right_off = right_off.max((inner_x + inner_w) - fx);
+                    }
+                }
+                child.rect.x = inner_x + inner_w - right_off - cw - m_r;
+            }
+            layout_dispatch(child);
+            let side = if float_v == "left" { 'l' } else { 'r' };
+            floats.push((child.rect.x, child.rect.y, cw + m_l + m_r,
+                ch + m_t + child.margin_bottom.unwrap_or(child.margin), side));
+            i += 1;
+            continue;
+        }
+
         match display {
             Display::Block | Display::Flex | Display::Grid
             | Display::ListItem | Display::Table | Display::TableHeader
@@ -3019,9 +3092,12 @@ pub fn layout_block(bx: &mut LayoutBox) {
                 // Margin collapse: m_t aplikuje se jen do max(prev_m_b, m_t).
                 // Pokud prev_m_b uz byla pricteta, sktorta o min(prev_m_b, m_t).
                 let collapsed_m_t = if had_prev_block { (m_t - prev_margin_bottom).max(0.0) } else { m_t };
-                child.rect.x = inner_x + m_l;
+                // Aktivni float bounds na cursor_y (CSS Float L1).
+                let (float_left_off, float_avail_w) = active_float_bounds(
+                    cursor_y + collapsed_m_t, &floats, inner_x, inner_w);
+                child.rect.x = inner_x + float_left_off + m_l;
                 child.rect.y = cursor_y + collapsed_m_t;
-                child.rect.width = child.explicit_width.unwrap_or(inner_w - m_l - m_r);
+                child.rect.width = child.explicit_width.unwrap_or(float_avail_w - m_l - m_r);
                 // Clamp dle min-width / max-width
                 if !child.min_width_v.is_empty() && child.min_width_v != "none" {
                     let mn = parse_length(&child.min_width_v.clone());

@@ -169,6 +169,7 @@ pub(super) fn shift_command_y(cmd: &mut DisplayCommand, dy: f32) {
         | DisplayCommand::Gradient { y, .. }
         | DisplayCommand::Shadow { y, .. }
         | DisplayCommand::Image { y, .. }
+        | DisplayCommand::ImageFit { y, .. }
         | DisplayCommand::BlurredRect { y, .. }
         | DisplayCommand::FilterBegin { y, .. }
         | DisplayCommand::BackdropFilterBegin { y, .. }
@@ -191,6 +192,7 @@ pub(super) fn shift_command_x(cmd: &mut DisplayCommand, dx: f32) {
         | DisplayCommand::Gradient { x, .. }
         | DisplayCommand::Shadow { x, .. }
         | DisplayCommand::Image { x, .. }
+        | DisplayCommand::ImageFit { x, .. }
         | DisplayCommand::BlurredRect { x, .. }
         | DisplayCommand::FilterBegin { x, .. }
         | DisplayCommand::BackdropFilterBegin { x, .. }

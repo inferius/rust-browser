@@ -202,11 +202,21 @@ pub enum DisplayCommand {
         /// Inset varianta: stin uvnitr boxu (smer fade obraceny).
         inset: bool,
     },
-    /// Image - decoded RGBA bytes + dimensions.
+    /// Image - decoded RGBA bytes + dimensions. object_fit + object_position
+    /// adjustuji UV/dest mapping pri renderu (cover/contain/fill/none/scale-down).
     Image {
         x: f32, y: f32, w: f32, h: f32,
         src: String,
         radius: f32,
+    },
+    /// Image s object-fit/object-position (CSS Images L3). Renderer prepocita
+    /// inner dst rect dle aspect ratio + position string ("center" / "left top" / "50% 50%").
+    ImageFit {
+        x: f32, y: f32, w: f32, h: f32,
+        src: String,
+        radius: f32,
+        object_fit: String,    // fill | contain | cover | none | scale-down
+        object_position: String,
     },
     /// Blurred solid rect - shader mode 8. Smoothstep edge blur radius.
     BlurredRect { x: f32, y: f32, w: f32, h: f32, color: [u8; 4], radius: f32, blur: f32 },
@@ -1154,16 +1164,25 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
         });
     }
 
-    // Image - emit Image command (img tag - cover boxu)
+    // Image - emit Image command (img tag - cover boxu). Object-fit/position
+    // emit ImageFit pokud nastaveny (renderer prepocita src/dest mapping).
     if let Some(src) = &bx.image_src {
-        cmds.push(DisplayCommand::Image {
-            x: bx.rect.x,
-            y: bx.rect.y,
-            w: bx.rect.width,
-            h: bx.rect.height,
-            src: src.clone(),
-            radius: bx.border_radius,
-        });
+        let fit = bx.object_fit.trim();
+        if !fit.is_empty() && fit != "fill" {
+            cmds.push(DisplayCommand::ImageFit {
+                x: bx.rect.x, y: bx.rect.y, w: bx.rect.width, h: bx.rect.height,
+                src: src.clone(),
+                radius: bx.border_radius,
+                object_fit: fit.to_string(),
+                object_position: bx.object_position.trim().to_string(),
+            });
+        } else {
+            cmds.push(DisplayCommand::Image {
+                x: bx.rect.x, y: bx.rect.y, w: bx.rect.width, h: bx.rect.height,
+                src: src.clone(),
+                radius: bx.border_radius,
+            });
+        }
     }
 
     // <video> placeholder pri chybejicim posteru: tmavy box + play triangle.
@@ -1801,6 +1820,7 @@ fn scale_cmd(cmd: &mut DisplayCommand, sx: f32, sy: f32, cx: f32, cy: f32) {
         | DisplayCommand::Gradient { x, y, w, h, .. }
         | DisplayCommand::Shadow { x, y, w, h, .. }
         | DisplayCommand::Image { x, y, w, h, .. }
+        | DisplayCommand::ImageFit { x, y, w, h, .. }
         | DisplayCommand::BlurredRect { x, y, w, h, .. }
         | DisplayCommand::FilterBegin { x, y, w, h, .. }
         | DisplayCommand::BackdropFilterBegin { x, y, w, h, .. }
@@ -1836,6 +1856,7 @@ fn rotate_cmd(cmd: &mut DisplayCommand, cos: f32, sin: f32, cx: f32, cy: f32) {
         | DisplayCommand::Gradient { x, y, .. }
         | DisplayCommand::Shadow { x, y, .. }
         | DisplayCommand::Image { x, y, .. }
+        | DisplayCommand::ImageFit { x, y, .. }
         | DisplayCommand::BlurredRect { x, y, .. }
         | DisplayCommand::FilterBegin { x, y, .. }
         | DisplayCommand::BackdropFilterBegin { x, y, .. }
@@ -1859,6 +1880,7 @@ fn shift_cmd(cmd: &mut DisplayCommand, dx: f32, dy: f32) {
         | DisplayCommand::Gradient { x, y, .. }
         | DisplayCommand::Shadow { x, y, .. }
         | DisplayCommand::Image { x, y, .. }
+        | DisplayCommand::ImageFit { x, y, .. }
         | DisplayCommand::BlurredRect { x, y, .. }
         | DisplayCommand::FilterBegin { x, y, .. }
         | DisplayCommand::BackdropFilterBegin { x, y, .. }

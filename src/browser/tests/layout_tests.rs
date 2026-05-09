@@ -56,6 +56,152 @@ fn multicol_distributes_children_to_columns() {
 }
 
 #[test]
+fn grid_two_columns_200px_1fr() {
+    // Engine-test.html .page layout: 200px sidebar + 1fr content side-by-side.
+    let doc = parse_html(r#"<html><body><div class="page">
+        <div id="sidebar"></div>
+        <main></main>
+    </div></body></html>"#, "");
+    let css = parse_stylesheet(r#"
+        .page { display: grid; grid-template-columns: 200px 1fr; width: 1024px; }
+        #sidebar { background: red; }
+        main { background: blue; }
+    "#);
+    let map = cascade::cascade(&doc.root, &[css]);
+    let layout = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+    let page = layout.children.iter()
+        .find(|c| c.tag.as_deref() == Some("html"))
+        .and_then(|h| h.children.iter().find(|c| c.tag.as_deref() == Some("body")))
+        .and_then(|b| b.children.iter().find(|c| c.tag.as_deref() == Some("div")))
+        .expect("page");
+    assert_eq!(page.children.len(), 2);
+    let sidebar = &page.children[0];
+    let main = &page.children[1];
+    println!("sidebar: x={} y={} w={} h={}",
+        sidebar.rect.x, sidebar.rect.y, sidebar.rect.width, sidebar.rect.height);
+    println!("main:    x={} y={} w={} h={}",
+        main.rect.x, main.rect.y, main.rect.width, main.rect.height);
+    // Sidebar by mel byt vlevo (x=0), sirka 200.
+    assert!((sidebar.rect.width - 200.0).abs() < 5.0,
+        "sidebar width: expected 200, got {}", sidebar.rect.width);
+    // Main vedle sidebaru (x >= 200), sirka 824 (1024 - 200).
+    assert!(main.rect.x >= sidebar.rect.x + sidebar.rect.width - 5.0,
+        "main musi byt vedle sidebaru, sidebar.x+w={} main.x={}",
+        sidebar.rect.x + sidebar.rect.width, main.rect.x);
+    // Y pozice stejna (vedle sebe, ne pod).
+    assert!((sidebar.rect.y - main.rect.y).abs() < 5.0,
+        "sidebar.y={} main.y={} - ocekavano vedle sebe, ne pod", sidebar.rect.y, main.rect.y);
+}
+
+#[test]
+fn sticky_header_top_pinned() {
+    let doc = parse_html(r#"<html><body>
+        <header id="hdr"></header>
+        <main></main>
+    </body></html>"#, "");
+    let css = parse_stylesheet(r#"
+        header { position: sticky; top: 0; height: 48px; background: red; }
+        main { height: 2000px; background: blue; }
+    "#);
+    let map = cascade::cascade(&doc.root, &[css]);
+    let layout = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+    let body = layout.children.iter()
+        .find(|c| c.tag.as_deref() == Some("html"))
+        .and_then(|h| h.children.iter().find(|c| c.tag.as_deref() == Some("body")))
+        .expect("body");
+    let header = body.children.iter()
+        .find(|c| c.tag.as_deref() == Some("header"))
+        .expect("header");
+    assert_eq!(header.position, layout::Position::Sticky);
+    // Pri vychozi (scroll=0) sticky se chova jako relative - na puvodni pozici.
+    println!("header.y = {}", header.rect.y);
+    assert!(header.rect.y < 50.0, "header musi byt nahore: y = {}", header.rect.y);
+}
+
+#[test]
+fn float_left_image_text_wraps() {
+    // Float left: image vlevo, text obeha vpravo.
+    let doc = parse_html(r#"<html><body><div class="container">
+        <div class="box"></div>
+        <p>Lorem ipsum dolor sit amet consectetur adipiscing</p>
+    </div></body></html>"#, "");
+    let css = parse_stylesheet(r#"
+        .container { width: 600px; }
+        .box { float: left; width: 100px; height: 100px; background: red; }
+        p { margin: 0; }
+    "#);
+    let map = cascade::cascade(&doc.root, &[css]);
+    let layout = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+    let container = layout.children.iter()
+        .find(|c| c.tag.as_deref() == Some("html"))
+        .and_then(|h| h.children.iter().find(|c| c.tag.as_deref() == Some("body")))
+        .and_then(|b| b.children.iter().find(|c| c.tag.as_deref() == Some("div")))
+        .expect("container");
+    let box_el = &container.children[0];
+    let p_el = &container.children[1];
+    println!("box: x={} y={} w={} h={}", box_el.rect.x, box_el.rect.y, box_el.rect.width, box_el.rect.height);
+    println!("p:   x={} y={} w={} h={}", p_el.rect.x, p_el.rect.y, p_el.rect.width, p_el.rect.height);
+    assert_eq!(box_el.float_value, "left");
+    // P element musi zacit vpravo od float (x >= 100).
+    assert!(p_el.rect.x >= box_el.rect.x + box_el.rect.width - 5.0,
+        "p.x={} ocekavano >= {}", p_el.rect.x, box_el.rect.x + box_el.rect.width);
+}
+
+#[test]
+fn float_right_positioning() {
+    let doc = parse_html(r#"<html><body><div class="container">
+        <div class="box"></div>
+        <p>Text</p>
+    </div></body></html>"#, "");
+    let css = parse_stylesheet(r#"
+        .container { width: 600px; }
+        .box { float: right; width: 100px; height: 50px; background: red; }
+        p { margin: 0; }
+    "#);
+    let map = cascade::cascade(&doc.root, &[css]);
+    let layout = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+    let container = layout.children.iter()
+        .find(|c| c.tag.as_deref() == Some("html"))
+        .and_then(|h| h.children.iter().find(|c| c.tag.as_deref() == Some("body")))
+        .and_then(|b| b.children.iter().find(|c| c.tag.as_deref() == Some("div")))
+        .expect("container");
+    let box_el = &container.children[0];
+    println!("box: x={} y={} w={}", box_el.rect.x, box_el.rect.y, box_el.rect.width);
+    // Float right -> x at right edge of container.
+    let container_right = container.rect.x + container.rect.width;
+    let expected = container_right - 100.0;
+    assert!((box_el.rect.x - expected).abs() < 5.0,
+        "float right x = {}, expected ~{}", box_el.rect.x, expected);
+}
+
+#[test]
+fn float_clear_both() {
+    let doc = parse_html(r#"<html><body><div class="container">
+        <div class="box1"></div>
+        <div class="box2"></div>
+        <p class="cleared">Below</p>
+    </div></body></html>"#, "");
+    let css = parse_stylesheet(r#"
+        .container { width: 600px; }
+        .box1 { float: left; width: 100px; height: 100px; }
+        .box2 { float: right; width: 100px; height: 80px; }
+        .cleared { clear: both; margin: 0; }
+    "#);
+    let map = cascade::cascade(&doc.root, &[css]);
+    let layout = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+    let container = layout.children.iter()
+        .find(|c| c.tag.as_deref() == Some("html"))
+        .and_then(|h| h.children.iter().find(|c| c.tag.as_deref() == Some("body")))
+        .and_then(|b| b.children.iter().find(|c| c.tag.as_deref() == Some("div")))
+        .expect("container");
+    let cleared = &container.children[2];
+    println!("cleared: y={}", cleared.rect.y);
+    // Cleared element musi byt pod nejvyssim float (100px box1).
+    assert!(cleared.rect.y >= 100.0,
+        "cleared y={} musi byt >= 100 (max float height)", cleared.rect.y);
+}
+
+#[test]
 fn parse_color_hex() {
     assert_eq!(layout::parse_color("#ff0000"), Some([255, 0, 0, 255]));
     assert_eq!(layout::parse_color("#f00"), Some([255, 0, 0, 255]));

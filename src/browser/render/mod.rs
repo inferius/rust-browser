@@ -421,7 +421,40 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: 
                 if let Some(info) = image_atlas.get(src) {
                     push_image(&mut verts, *x, *y, *w, *h, info.uv0, info.uv1, *radius);
                 } else {
-                    // Fallback: placeholder seda kdyz image neni v atlase
+                    let placeholder = [0.7, 0.7, 0.75, 1.0];
+                    push_rect_rounded(&mut verts, *x, *y, *w, *h, placeholder, *radius);
+                }
+            }
+            DisplayCommand::ImageFit { x, y, w, h, src, radius, object_fit, object_position } => {
+                if let Some(info) = image_atlas.get(src) {
+                    let img_w = (info.uv1[0] - info.uv0[0]).abs();
+                    let img_h = (info.uv1[1] - info.uv0[1]).abs();
+                    // Original image aspect ratio (z UV ratios). Pri 0 fallback fill.
+                    let src_aspect = if img_h > 0.0 { img_w / img_h } else { 1.0 };
+                    let dst_aspect = if *h > 0.0 { *w / *h } else { 1.0 };
+                    let (dw, dh) = match object_fit.as_str() {
+                        "contain" => {
+                            if src_aspect > dst_aspect { (*w, *w / src_aspect) }
+                            else { (*h * src_aspect, *h) }
+                        }
+                        "cover" => {
+                            if src_aspect > dst_aspect { (*h * src_aspect, *h) }
+                            else { (*w, *w / src_aspect) }
+                        }
+                        "none" => (*w, *h), // bez znalosti orig px - keep dst
+                        "scale-down" => {
+                            // min(none, contain). Bez orig px = contain default.
+                            if src_aspect > dst_aspect { (*w, *w / src_aspect) }
+                            else { (*h * src_aspect, *h) }
+                        }
+                        _ => (*w, *h), // "fill" default
+                    };
+                    // Object-position: center default. Parse "left/right/top/bottom/center" + "%".
+                    let (px_frac, py_frac) = parse_object_position(object_position);
+                    let dx = *x + (*w - dw) * px_frac;
+                    let dy = *y + (*h - dh) * py_frac;
+                    push_image(&mut verts, dx, dy, dw, dh, info.uv0, info.uv1, *radius);
+                } else {
                     let placeholder = [0.7, 0.7, 0.75, 1.0];
                     push_rect_rounded(&mut verts, *x, *y, *w, *h, placeholder, *radius);
                 }
@@ -513,6 +546,40 @@ fn console_eval_via_vm(src: &str, interp: &crate::interpreter::Interpreter, sele
     let code = compile_program(&program.body).map_err(|e| format!("Compile: {}", e))?;
     let mut vm = VM::with_env(interp.global.clone());
     vm.run(&code).map_err(|e| format!("Runtime: {}", e))
+}
+
+/// Parse CSS object-position do (x_frac, y_frac) v range [0,1].
+/// "center" / "left" / "right" / "top" / "bottom" / "50%" / "0% 0%" / "left top".
+fn parse_object_position(s: &str) -> (f32, f32) {
+    let trimmed = s.trim();
+    if trimmed.is_empty() || trimmed == "center" { return (0.5, 0.5); }
+    let toks: Vec<&str> = trimmed.split_whitespace().collect();
+    let parse_axis = |t: &str, axis: char| -> f32 {
+        match t {
+            "left" => 0.0, "right" => 1.0, "top" => 0.0, "bottom" => 1.0,
+            "center" => 0.5,
+            _ => {
+                if let Some(p) = t.strip_suffix('%') {
+                    p.parse::<f32>().ok().map(|v| v / 100.0).unwrap_or(0.5)
+                } else {
+                    let _ = axis;
+                    0.5
+                }
+            }
+        }
+    };
+    match toks.len() {
+        1 => {
+            let v = parse_axis(toks[0], 'x');
+            // Single token: "top"/"bottom" -> y, jine -> x.
+            match toks[0] {
+                "top" | "bottom" => (0.5, v),
+                _ => (v, 0.5),
+            }
+        }
+        2 => (parse_axis(toks[0], 'x'), parse_axis(toks[1], 'y')),
+        _ => (0.5, 0.5),
+    }
 }
 
 /// Walk DOM, najdi elementy matchujici selector + vykresli orange outline pres
