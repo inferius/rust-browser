@@ -47,9 +47,10 @@ const SPLITTER_HIT_PX: f32 = 6.0;
 /// Custom font family pro vsechen DevTools text.
 /// CamingoMono = code (selectors, declarations, tree tags, attr values, console).
 /// Inter = sans-serif pro UI chrome (labels, headings, buttons).
-const DT_FONT: &str = "CamingoMono";
-const DT_FONT_BOLD: &str = "CamingoMono-Bold";
-const DT_FONT_ITALIC: &str = "CamingoMono-Italic";
+// User pref: vsude Inter v devtools, zadny serif/CamingoMono.
+const DT_FONT: &str = "Inter";
+const DT_FONT_BOLD: &str = "Inter-Bold";
+const DT_FONT_ITALIC: &str = "Inter-Italic";
 const DT_UI_FONT: &str = "Inter";
 const DT_UI_FONT_BOLD: &str = "Inter-Bold";
 const DT_UI_FONT_ITALIC: &str = "Inter-Italic";
@@ -1193,7 +1194,9 @@ fn paint_side_computed(
         state.styles.filter.clone()
     };
 
-    // Body: sorted props + filter match.
+    // Body: shorthand-grouped props + filter match. Default collapsed:
+    // pri "padding-top" + "padding" current state ukaz jen "padding" + chevron;
+    // expand -> ukaz padding-top/right/bottom/left misto.
     let body_y = y + filter_h;
     let scroll = state.styles.scroll_y;
     let mut sy = body_y + 8.0 - scroll;
@@ -1201,13 +1204,49 @@ fn paint_side_computed(
     let pad_x = x + 12.0;
     let filter = display_filter.to_lowercase();
     let mut count = 0;
+    use crate::devtools::model::styles::{shorthand_for, is_shorthand};
+    let expanded = state.styles.computed_expanded.borrow().clone();
+    state.styles.computed_chevron_zones.borrow_mut().clear();
+    // Group: vsechny props ktere maji shorthand parent dostanou Some(shorthand).
+    // Shorthand props samotne dostanou is_shorthand=true.
+    let mut hidden_shorthands: std::collections::HashSet<String> = Default::default();
+    for (k, _) in &state.styles.computed {
+        if is_shorthand(k) && expanded.contains(k) {
+            hidden_shorthands.insert(k.clone());
+        }
+    }
     for (k, v) in &state.styles.computed {
         if sy >= max_y { break; }
         if !filter.is_empty() && !k.contains(&filter) { continue; }
+        // Sub-prop ktery patri pod collapsed shorthand -> skip.
+        if let Some(sh) = shorthand_for(k) {
+            if !expanded.contains(sh) {
+                continue;
+            }
+        }
+        // Shorthand expanded -> skip self (sub-props nahrazuji).
+        if hidden_shorthands.contains(k) {
+            continue;
+        }
         if sy + ROW_H >= body_y {
-            push_text(cmds, pad_x, sy, format!("{}:", k), pal.syn_property, false);
-            // Color swatch pri color value.
-            let mut value_x = pad_x + 140.0;
+            // Chevron pri shorthand props ktere maji sub-props v computed.
+            let has_subprops = is_shorthand(k)
+                && state.styles.computed.iter().any(|(kk, _)|
+                    shorthand_for(kk).map(|s| s == k).unwrap_or(false));
+            let mut text_x = pad_x;
+            if has_subprops {
+                let exp = expanded.contains(k);
+                let icon = if exp { ICON_EXPAND_MORE } else { ICON_CHEVRON_RIGHT };
+                push_icon(cmds, pad_x - 2.0, sy + (ROW_H - ICON_SIZE) * 0.5, icon, pal.text);
+                state.styles.computed_chevron_zones.borrow_mut()
+                    .push((pad_x - 4.0, sy, 18.0, ROW_H, k.clone()));
+                text_x = pad_x + 16.0;
+            } else if shorthand_for(k).is_some() {
+                // Sub-prop indent.
+                text_x = pad_x + 24.0;
+            }
+            push_text(cmds, text_x, sy, format!("{}:", k), pal.syn_property, false);
+            let mut value_x = text_x + 132.0;
             if let Some(c) = parse_css_color(v.trim()) {
                 push_rect(cmds, value_x, sy + 3.0, 12.0, 12.0, c);
                 push_rect_border(cmds, value_x, sy + 3.0, 12.0, 12.0, pal.border);
@@ -2963,6 +3002,8 @@ pub enum DevtoolsHit {
     SidePanelSplitterDrag,
     /// Klik na collapsible section header (toggle expand).
     SectionToggle(SectionId),
+    /// Klik na chevron v Computed panelu - toggle shorthand expansion.
+    ComputedShorthandToggle(String),
     /// Klik na flex/grid overlay toggle v Layout sub-tabu.
     OverlayToggle(crate::devtools::OverlayKind, usize),
     /// Klik na settings gear button v toolbaru.
@@ -3257,6 +3298,16 @@ fn hit_test_elements(
 
     // Side panel area (right column).
     if mouse_x >= styles_end {
+        // Computed chevron hit-test (klik shorthand expand).
+        if matches!(state.side_panel_tab, crate::devtools::SidePanelTab::Computed) {
+            let zones = state.styles.computed_chevron_zones.borrow();
+            for (zx, zy, zw, zh, name) in zones.iter() {
+                if mouse_x >= *zx && mouse_x < zx + zw
+                   && mouse_y >= *zy && mouse_y < zy + zh {
+                    return DevtoolsHit::ComputedShorthandToggle(name.clone());
+                }
+            }
+        }
         // Sub-tab strip nahore.
         if mouse_y < body_y + TAB_H {
             use crate::devtools::SidePanelTab;
@@ -3291,9 +3342,18 @@ fn hit_test_elements(
                     return DevtoolsHit::SectionToggle(id.clone());
                 }
                 sy += header_h;
-                // Aproximace - ne-presne ale dostatecne pro top-level sections.
                 if !state.collapsed_sections.contains(id) {
-                    sy += ROW_H * 4.0; // typicke obsah
+                    // Realna vyska obsahu - musi presne sedet s paint_side_layout.
+                    sy += match id {
+                        SectionId::LayoutFlex => ROW_H * 4.0 + 4.0,
+                        SectionId::LayoutGrid => ROW_H * 5.0 + 4.0,
+                        SectionId::LayoutBoxModel => 130.0 + 4.0,
+                        SectionId::LayoutBoxProps => ROW_H * 3.0 + 4.0,
+                        SectionId::FontsUsed => ROW_H * 6.0 + 4.0,
+                        SectionId::FontsFaces => ROW_H * 4.0 + 4.0,
+                        SectionId::AnimationsList => ROW_H * 6.0 + 4.0,
+                        _ => ROW_H * 4.0,
+                    };
                 }
             }
         }

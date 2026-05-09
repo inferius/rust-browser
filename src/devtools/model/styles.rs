@@ -46,6 +46,40 @@ pub struct StylesState {
     pub var_zones: std::cell::RefCell<Vec<(f32, f32, f32, f32, String)>>,
     /// @font-face deklarace ze vsech stylesheets (family, src, weight, style).
     pub font_faces: Vec<(String, String, String, String)>,
+    /// Set rozbalenych shorthand groups v Computed panelu (padding, margin, ...).
+    /// Default = collapsed (jen shorthand value, sub-props skryte).
+    pub computed_expanded: std::cell::RefCell<std::collections::HashSet<String>>,
+    /// Cache (x, y, w, h, shorthand_name) clickable chevron zon v Computed panelu.
+    pub computed_chevron_zones: std::cell::RefCell<Vec<(f32, f32, f32, f32, String)>>,
+}
+
+/// Vrati shorthand jmeno pokud `prop` je sub-property nejakeho shorthand.
+/// Napriklad "padding-top" -> Some("padding"), "background-color" -> Some("background").
+pub fn shorthand_for(prop: &str) -> Option<&'static str> {
+    let shorthands: &[&str] = &[
+        "padding", "margin", "border", "border-radius", "border-width",
+        "border-style", "border-color", "background", "font", "transition",
+        "animation", "outline", "list-style", "flex", "grid", "grid-area",
+        "grid-template", "place-items", "place-content", "place-self",
+        "inset", "overflow", "gap", "scroll-margin", "scroll-padding",
+    ];
+    for sh in shorthands {
+        if prop == *sh { return None; }
+        if prop.starts_with(sh) && prop.as_bytes().get(sh.len()) == Some(&b'-') {
+            return Some(*sh);
+        }
+    }
+    None
+}
+
+/// Set vsech shorthand jmen co mohou mit sub-props.
+pub fn is_shorthand(prop: &str) -> bool {
+    matches!(prop, "padding" | "margin" | "border" | "border-radius"
+        | "border-width" | "border-style" | "border-color" | "background"
+        | "font" | "transition" | "animation" | "outline" | "list-style"
+        | "flex" | "grid" | "grid-area" | "grid-template" | "place-items"
+        | "place-content" | "place-self" | "inset" | "overflow" | "gap"
+        | "scroll-margin" | "scroll-padding")
 }
 
 impl StylesState {

@@ -1299,6 +1299,14 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                         self.devtools.collapsed_sections.insert(id);
                                     }
                                 }
+                                DevtoolsHit::ComputedShorthandToggle(name) => {
+                                    let mut s = self.devtools.styles.computed_expanded.borrow_mut();
+                                    if s.contains(&name) {
+                                        s.remove(&name);
+                                    } else {
+                                        s.insert(name);
+                                    }
+                                }
                                 DevtoolsHit::SettingsToggle => {
                                     self.devtools.settings_popup_open = !self.devtools.settings_popup_open;
                                 }
@@ -4548,7 +4556,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                             overridden: false,
                                         }).collect();
                                     matched.push(MatchedRule {
-                                        selector: format!("{:?}", sel_obj).chars().take(80).collect(),
+                                        selector: sel_obj.to_string(),
                                         source: RuleSource::StyleBlock { index: sheet_idx },
                                         specificity: 0,
                                         declarations: decls,
@@ -4591,7 +4599,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                             }).collect();
                                         if !inh_decls.is_empty() {
                                             matched.push(MatchedRule {
-                                                selector: format!("{:?}", sel_obj).chars().take(80).collect(),
+                                                selector: sel_obj.to_string(),
                                                 source: RuleSource::StyleBlock { index: sheet_idx },
                                                 specificity: 0,
                                                 declarations: inh_decls,

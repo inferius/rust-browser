@@ -210,6 +210,81 @@ pub enum Combinator {
     GeneralSibling,
 }
 
+impl std::fmt::Display for SimpleSelector {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(t) = &self.tag {
+            f.write_str(t)?;
+        } else if self.id.is_none() && self.classes.is_empty()
+            && self.attributes.is_empty() && self.pseudo_classes.is_empty()
+            && self.pseudo_funcs.is_empty() && self.pseudo_element.is_none() {
+            f.write_str("*")?;
+        }
+        if let Some(id) = &self.id { write!(f, "#{}", id)?; }
+        for c in &self.classes { write!(f, ".{}", c)?; }
+        for a in &self.attributes {
+            f.write_str("[")?;
+            f.write_str(&a.name)?;
+            match a.op {
+                AttrOp::Exists => {}
+                AttrOp::Equals => write!(f, "=\"{}\"", a.value.as_deref().unwrap_or(""))?,
+                AttrOp::Contains => write!(f, "*=\"{}\"", a.value.as_deref().unwrap_or(""))?,
+                AttrOp::StartsWith => write!(f, "^=\"{}\"", a.value.as_deref().unwrap_or(""))?,
+                AttrOp::EndsWith => write!(f, "$=\"{}\"", a.value.as_deref().unwrap_or(""))?,
+                AttrOp::WordContains => write!(f, "~=\"{}\"", a.value.as_deref().unwrap_or(""))?,
+            }
+            f.write_str("]")?;
+        }
+        for p in &self.pseudo_classes { write!(f, ":{}", p)?; }
+        for p in &self.pseudo_funcs {
+            match p {
+                PseudoFunc::Is(list) => write!(f, ":is({})", join_sels(list))?,
+                PseudoFunc::Where(list) => write!(f, ":where({})", join_sels(list))?,
+                PseudoFunc::Not(list) => write!(f, ":not({})", join_sels(list))?,
+                PseudoFunc::Has(list) => write!(f, ":has({})", join_sels(list))?,
+                PseudoFunc::NthChild { a, b, of_type, last } => {
+                    let name = match (last, of_type) {
+                        (true, true) => "nth-last-of-type",
+                        (true, false) => "nth-last-child",
+                        (false, true) => "nth-of-type",
+                        (false, false) => "nth-child",
+                    };
+                    if *a == 0 { write!(f, ":{}({})", name, b)?; }
+                    else if *b == 0 { write!(f, ":{}({}n)", name, a)?; }
+                    else if *b > 0 { write!(f, ":{}({}n+{})", name, a, b)?; }
+                    else { write!(f, ":{}({}n{})", name, a, b)?; }
+                }
+                PseudoFunc::Lang(l) => write!(f, ":lang({})", l)?,
+                PseudoFunc::Dir(d) => write!(f, ":dir({})", d)?,
+                PseudoFunc::Unknown { name, args } => write!(f, ":{}({})", name, args)?,
+            }
+        }
+        if let Some(pe) = &self.pseudo_element { write!(f, "::{}", pe)?; }
+        Ok(())
+    }
+}
+
+fn join_sels(list: &[Selector]) -> String {
+    list.iter().map(|s| s.to_string()).collect::<Vec<_>>().join(", ")
+}
+
+impl std::fmt::Display for Selector {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (i, part) in self.parts.iter().enumerate() {
+            if i > 0 {
+                let comb = match part.combinator {
+                    Some(Combinator::Child) => " > ",
+                    Some(Combinator::AdjacentSibling) => " + ",
+                    Some(Combinator::GeneralSibling) => " ~ ",
+                    _ => " ",
+                };
+                f.write_str(comb)?;
+            }
+            std::fmt::Display::fmt(part, f)?;
+        }
+        Ok(())
+    }
+}
+
 /// Specificita selektoru: (id_count, class_count, type_count)
 pub fn specificity(sel: &Selector) -> (u32, u32, u32) {
     let mut id_count = 0;
