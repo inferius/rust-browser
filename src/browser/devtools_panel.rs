@@ -391,6 +391,21 @@ fn paint_settings_popup(
         push_ui_text(cmds, bx_x + 6.0, sy + 2.0, label.to_string(), txt, false);
     }
 
+    // Section: Theme flavor.
+    sy += ROW_H + 8.0;
+    push_ui_text(cmds, px + 16.0, sy, "Flavor".to_string(), pal.text_dim, true);
+    sy += ROW_H + 4.0;
+    use crate::devtools::theme::ThemeFlavor;
+    for (i, (flavor, label)) in [(ThemeFlavor::Chrome, "Chrome"), (ThemeFlavor::Firefox, "Firefox")].iter().enumerate() {
+        let active = state.theme.flavor == *flavor;
+        let bw = (label.len() as f32) * FONT_W + 12.0;
+        let bx_x = px + 16.0 + (i as f32) * (bw + 4.0);
+        let bg = if active { pal.accent } else { pal.bg_button };
+        let txt = if active { pal.text_on_accent } else { pal.text };
+        push_rect(cmds, bx_x, sy, bw, ROW_H + 2.0, bg);
+        push_ui_text(cmds, bx_x + 6.0, sy + 2.0, label.to_string(), txt, false);
+    }
+
     // Section: Profil.
     sy += ROW_H + 16.0;
     push_ui_text(cmds, px + 16.0, sy, format!("Profil: {}", crate::devtools::profile::active_profile()),
@@ -470,6 +485,7 @@ fn paint_color_picker(
 pub enum SettingsPopupAction {
     SelectDock(crate::devtools::profile::DockPosition),
     SelectTheme(crate::devtools::theme::ThemeMode),
+    SelectFlavor(crate::devtools::theme::ThemeFlavor),
     Close,
     Dismiss,
 }
@@ -503,7 +519,7 @@ pub fn settings_popup_hit(
     }
     // Theme buttons row.
     sy += 8.0 + ROW_H + 4.0;
-    use crate::devtools::theme::ThemeMode;
+    use crate::devtools::theme::{ThemeMode, ThemeFlavor};
     if mouse_y >= sy && mouse_y < sy + ROW_H + 2.0 {
         let labels = [(ThemeMode::Auto, "Auto"), (ThemeMode::Light, "Svetly"), (ThemeMode::Dark, "Tmavy")];
         for (i, (mode, label)) in labels.iter().enumerate() {
@@ -511,6 +527,18 @@ pub fn settings_popup_hit(
             let bx = px + 16.0 + (i as f32) * (bw + 4.0);
             if mouse_x >= bx && mouse_x < bx + bw {
                 return Some(SettingsPopupAction::SelectTheme(*mode));
+            }
+        }
+    }
+    // Flavor row.
+    sy += ROW_H + 8.0 + ROW_H + 4.0;
+    if mouse_y >= sy && mouse_y < sy + ROW_H + 2.0 {
+        let labels = [(ThemeFlavor::Chrome, "Chrome"), (ThemeFlavor::Firefox, "Firefox")];
+        for (i, (flavor, label)) in labels.iter().enumerate() {
+            let bw = (label.len() as f32) * FONT_W + 12.0;
+            let bx = px + 16.0 + (i as f32) * (bw + 4.0);
+            if mouse_x >= bx && mouse_x < bx + bw {
+                return Some(SettingsPopupAction::SelectFlavor(*flavor));
             }
         }
     }
@@ -2922,6 +2950,8 @@ pub enum DevtoolsHit {
     SettingsDock(crate::devtools::profile::DockPosition),
     /// Klik v settings popupu - vyber theme.
     SettingsTheme(crate::devtools::theme::ThemeMode),
+    /// Klik v settings popupu - vyber flavor.
+    SettingsFlavor(crate::devtools::theme::ThemeFlavor),
     /// Klik mimo settings popup nebo na X.
     SettingsClose,
     /// Color picker: hue slider klik (hue 0..360).
@@ -3044,6 +3074,7 @@ pub fn devtools_hit_test(
             return match action {
                 SettingsPopupAction::SelectDock(p) => DevtoolsHit::SettingsDock(p),
                 SettingsPopupAction::SelectTheme(t) => DevtoolsHit::SettingsTheme(t),
+                SettingsPopupAction::SelectFlavor(f) => DevtoolsHit::SettingsFlavor(f),
                 SettingsPopupAction::Close | SettingsPopupAction::Dismiss => DevtoolsHit::SettingsClose,
             };
         }

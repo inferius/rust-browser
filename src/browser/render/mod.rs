@@ -1173,6 +1173,10 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                     self.devtools.theme.mode = t;
                                     crate::devtools::theme::save_persisted(self.devtools.theme);
                                 }
+                                DevtoolsHit::SettingsFlavor(f) => {
+                                    self.devtools.theme.flavor = f;
+                                    crate::devtools::theme::save_persisted(self.devtools.theme);
+                                }
                                 DevtoolsHit::SettingsClose => {
                                     self.devtools.settings_popup_open = false;
                                 }
