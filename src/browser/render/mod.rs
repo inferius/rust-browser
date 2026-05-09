@@ -4712,12 +4712,40 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 } else {
                     format!("{}/{}", cur_idx + 1, matches.len())
                 };
-                let label = format!("Find: {}  [{}]", self.find_query.text, counter);
                 display_list.push(DisplayCommand::Text {
                     x: bar_x + 12.0, y: bar_y + 10.0,
-                    content: label, color: [255, 255, 255, 255],
+                    content: format!("Find: {}", self.find_query.text),
+                    color: [255, 255, 255, 255],
                     font_size: 14.0, bold: false, italic: false,
-                    font_family: String::new(),
+                    font_family: "Inter".into(),
+                    strikethrough: false, underline: false,
+                });
+                // Counter vpravo + nav buttons.
+                display_list.push(DisplayCommand::Text {
+                    x: bar_x + bar_w - 100.0, y: bar_y + 10.0,
+                    content: counter.clone(),
+                    color: if matches.is_empty() && !self.find_query.text.is_empty() {
+                        [255, 117, 100, 255]
+                    } else { [191, 191, 201, 255] },
+                    font_size: 12.0, bold: true, italic: false,
+                    font_family: "Inter".into(),
+                    strikethrough: false, underline: false,
+                });
+                // Up / Down arrow buttons (Shift+Enter / Enter).
+                display_list.push(DisplayCommand::Text {
+                    x: bar_x + bar_w - 50.0, y: bar_y + 10.0,
+                    content: "↑".to_string(),
+                    color: [191, 191, 201, 255],
+                    font_size: 14.0, bold: false, italic: false,
+                    font_family: "Inter".into(),
+                    strikethrough: false, underline: false,
+                });
+                display_list.push(DisplayCommand::Text {
+                    x: bar_x + bar_w - 32.0, y: bar_y + 10.0,
+                    content: "↓".to_string(),
+                    color: [191, 191, 201, 255],
+                    font_size: 14.0, bold: false, italic: false,
+                    font_family: "Inter".into(),
                     strikethrough: false, underline: false,
                 });
             }
