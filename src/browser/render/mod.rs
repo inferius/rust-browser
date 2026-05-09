@@ -2224,6 +2224,12 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
 
     fn paint_shell_chrome_full(list: &mut Vec<DisplayCommand>, win_w: f32, chrome_h: f32,
                                 url: &str, tab_titles: Option<&[String]>, active: usize) {
+        paint_shell_chrome_with_favicons(list, win_w, chrome_h, url, tab_titles, active, None);
+    }
+
+    fn paint_shell_chrome_with_favicons(list: &mut Vec<DisplayCommand>, win_w: f32, chrome_h: f32,
+                                         url: &str, tab_titles: Option<&[String]>, active: usize,
+                                         favicon_urls: Option<&[Option<String>]>) {
         // Bookmarks bar paint pod nav bar - dalsi 24px row.
         let bms = crate::devtools::bookmarks::load_bookmarks();
         let _ = &bms; // used below ve scope.
@@ -2258,9 +2264,21 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     x: tx, y: 4.0, w: tab_w, h: tab_h - 4.0,
                     color: bg, radius: 4.0,
                 });
-                let trunc: String = title.chars().take(22).collect();
+                // Favicon (16x16) v levem rohu chipu.
+                let favicon_present = favicon_urls.and_then(|fs| fs.get(i)).and_then(|f| f.clone());
+                let text_x_off = if let Some(furl) = favicon_present {
+                    list.push(DisplayCommand::Image {
+                        x: tx + 6.0, y: 8.0, w: 16.0, h: 16.0,
+                        src: furl,
+                        radius: 0.0,
+                    });
+                    28.0
+                } else {
+                    8.0
+                };
+                let trunc: String = title.chars().take(20).collect();
                 list.push(DisplayCommand::Text {
-                    x: tx + 8.0, y: 8.0, content: trunc,
+                    x: tx + text_x_off, y: 8.0, content: trunc,
                     color: [251, 251, 254, 255],
                     font_size: 13.0, bold: i == active, italic: false,
                     font_family: "Inter".into(),
@@ -4421,9 +4439,11 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             if self.shell_mode {
                 let win_w_logical = (r.config.width as f32) / (self.zoom * r.scale_factor);
                 let titles: Vec<String> = self.tabs.tabs.iter().map(|t| t.title.clone()).collect();
-                paint_shell_chrome_full(&mut display_list, win_w_logical, self.shell_chrome_h,
-                                        self.base_url.as_deref().unwrap_or(""),
-                                        Some(&titles), self.tabs.active);
+                let favicons: Vec<Option<String>> = self.tabs.tabs.iter()
+                    .map(|t| t.favicon_url.clone()).collect();
+                paint_shell_chrome_with_favicons(&mut display_list, win_w_logical, self.shell_chrome_h,
+                                                 self.base_url.as_deref().unwrap_or(""),
+                                                 Some(&titles), self.tabs.active, Some(&favicons));
             }
 
             // In-window DevTools panel - emit pred scrollbar a po main viewport content.

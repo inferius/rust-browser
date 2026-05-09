@@ -30,9 +30,13 @@ impl Tab {
             .map(|u| u.split('/').last().unwrap_or(&u).to_string())
             .unwrap_or_else(|| "Nova zalozka".to_string());
         let favicon_url = url.as_ref().map(|u| derive_favicon_url(u, &html));
+        // Fetch favicon bytes (sync). HTTP only; file:// URL = skip.
+        let favicon_bytes = favicon_url.as_ref()
+            .filter(|u| u.starts_with("http://") || u.starts_with("https://"))
+            .and_then(|u| crate::browser::render::fetch_image_bytes(u));
         Self {
             url, path, html, css, title, favicon_url,
-            favicon_bytes: None,
+            favicon_bytes,
             scroll_y: 0.0, scroll_x: 0.0,
             history: Vec::new(),
             history_idx: 0,

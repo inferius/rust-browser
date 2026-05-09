@@ -392,14 +392,31 @@ fn paint_color_picker(
     push_rect(cmds, px, py, pop_w, pop_h, pal.bg_panel);
     push_rect_border(cmds, px, py, pop_w, pop_h, pal.border_strong);
 
-    // SV gradient box (placeholder - solid square s aktualni barvou).
+    // SV gradient box - aproximace pres grid 16x12 ctvercu s HSV per-cell.
+    // Cell: saturation = (col / cols), value = 1 - (row / rows).
     let sv_x = px + 10.0;
     let sv_y = py + 10.0;
     let sv_w = pop_w - 20.0;
     let sv_h = 120.0;
-    // Aktualne emit jen solid color - real gradient = vyzaduje multi-color shader.
-    push_rect(cmds, sv_x, sv_y, sv_w, sv_h, cp.rgba);
+    let cols = 16;
+    let rows = 12;
+    let cell_w = sv_w / cols as f32;
+    let cell_h = sv_h / rows as f32;
+    for r in 0..rows {
+        for c in 0..cols {
+            let s = (c as f32 + 0.5) / cols as f32;
+            let v = 1.0 - (r as f32 + 0.5) / rows as f32;
+            let col = crate::devtools::hsv_to_rgb(cp.hue, s, v);
+            push_rect(cmds, sv_x + c as f32 * cell_w, sv_y + r as f32 * cell_h,
+                      cell_w + 1.0, cell_h + 1.0, col);
+        }
+    }
     push_rect_border(cmds, sv_x, sv_y, sv_w, sv_h, pal.border);
+    // SV marker - kruhova hint s aktualni s/v.
+    let mxv = sv_x + cp.sat * sv_w;
+    let myv = sv_y + (1.0 - cp.val) * sv_h;
+    push_rect(cmds, mxv - 3.0, myv - 3.0, 6.0, 6.0, [255, 255, 255, 255]);
+    push_rect(cmds, mxv - 1.0, myv - 1.0, 2.0, 2.0, [0, 0, 0, 255]);
 
     // Hue slider (proste 6-segment rainbow approximation).
     let hue_y = sv_y + sv_h + 8.0;
