@@ -807,6 +807,22 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                             }
                         }
                     }
+                    // Scroll-to-top button hit (pravy dolni roh, jen pri scroll_y > 200).
+                    if self.shell_mode && self.scroll_y > 200.0 {
+                        let viewport_w = self.viewport_w_logical();
+                        let viewport_h = self.viewport_h_logical();
+                        let panel_h = self.panel_h_logical();
+                        let btn_x = viewport_w - 40.0;
+                        let btn_y = viewport_h - panel_h - 50.0;
+                        let mx = self.mouse_x;
+                        let my_screen = self.mouse_y - self.scroll_y;
+                        if mx >= btn_x && mx < btn_x + 32.0
+                           && my_screen >= btn_y && my_screen < btn_y + 32.0 {
+                            self.scroll_target_y = 0.0;
+                            self.render();
+                            return;
+                        }
+                    }
                     // Shell chrome hit-test (priorita nad page).
                     if self.shell_mode {
                         let viewport_w = self.viewport_w_logical();
