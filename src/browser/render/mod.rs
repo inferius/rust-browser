@@ -4476,11 +4476,20 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 let label = format!("URL: {}", self.addr_input.text);
                 display_list.push(DisplayCommand::Text {
                     x: bar_x + 12.0, y: bar_y + 10.0,
-                    content: label, color: [255, 255, 255, 255],
+                    content: label.clone(), color: [255, 255, 255, 255],
                     font_size: 14.0, bold: false, italic: false,
                     font_family: "Inter".into(),
                     strikethrough: false, underline: false,
                 });
+                // Cursor blink ~ 60 frame interval.
+                if (self.devtools.frame_counter / 30) % 2 == 0 {
+                    let label_w = (label.len() as f32) * 7.5;
+                    display_list.push(DisplayCommand::Rect {
+                        x: bar_x + 14.0 + label_w, y: bar_y + 10.0,
+                        w: 2.0, h: 18.0,
+                        color: [255, 255, 255, 255], radius: 0.0,
+                    });
+                }
                 // Autocomplete suggestions z history (max 8 matchu).
                 let q = self.addr_input.text.to_lowercase();
                 if !q.is_empty() {
