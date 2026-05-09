@@ -36,17 +36,10 @@ impl Default for ThemeSelection {
 }
 
 fn config_path() -> Option<std::path::PathBuf> {
-    // %APPDATA%/rwe/devtools.json (Windows) / ~/.config/rwe/devtools.json (unix).
-    #[cfg(target_os = "windows")]
-    {
-        let dir = std::env::var("APPDATA").ok()?;
-        Some(std::path::PathBuf::from(dir).join("rwe").join("devtools.json"))
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let dir = std::env::var("HOME").ok()?;
-        Some(std::path::PathBuf::from(dir).join(".config").join("rwe").join("devtools.json"))
-    }
+    // ~/.rwe/profiles/<active>/devtools.json. Migrace z legacy
+    // ~/AppData/Roaming/rwe/devtools.json one-shot.
+    super::profile::migrate_legacy_config();
+    super::profile::devtools_config_path()
 }
 
 fn load_persisted() -> Option<ThemeSelection> {

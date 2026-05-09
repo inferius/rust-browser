@@ -129,3 +129,69 @@ fn compute_tab_layout_overflow() {
     assert!(overflow.len() > 0, "Pri 400px sirce nejake taby v overflow");
     assert_eq!(visible.len() + overflow.len(), Tab::all().len());
 }
+
+#[test]
+fn dock_position_default_je_bottom() {
+    use crate::devtools::profile::DockPosition;
+    let d = DockPosition::default();
+    assert!(matches!(d, DockPosition::Bottom));
+}
+
+#[test]
+fn dock_position_roundtrip() {
+    use crate::devtools::profile::DockPosition;
+    for p in DockPosition::all() {
+        let s = p.as_str();
+        let parsed = DockPosition::from_str(s);
+        assert_eq!(parsed, Some(*p), "Roundtrip {} failed", s);
+    }
+}
+
+#[test]
+fn dock_position_invalid_str() {
+    use crate::devtools::profile::DockPosition;
+    assert_eq!(DockPosition::from_str("invalid"), None);
+    assert_eq!(DockPosition::from_str(""), None);
+}
+
+#[test]
+fn dock_position_all_count_5() {
+    use crate::devtools::profile::DockPosition;
+    assert_eq!(DockPosition::all().len(), 5);
+}
+
+#[test]
+fn dock_position_labels_unique() {
+    use crate::devtools::profile::DockPosition;
+    let mut labels: Vec<&'static str> = DockPosition::all().iter().map(|p| p.label()).collect();
+    labels.sort();
+    let orig_len = labels.len();
+    labels.dedup();
+    assert_eq!(orig_len, labels.len(), "labels musi byt unikatni");
+}
+
+#[test]
+fn devtools_state_default_dock_je_bottom_nebo_loaded() {
+    // Default je Bottom OR loaded persisted hodnota. Test: vychozi hodnota
+    // je validni varianta enumu.
+    let s = DevToolsState::default();
+    use crate::devtools::profile::DockPosition;
+    assert!(matches!(s.dock_position,
+        DockPosition::Bottom | DockPosition::Right
+        | DockPosition::Left | DockPosition::Top | DockPosition::PopupWindow));
+}
+
+#[test]
+fn devtools_state_settings_popup_default_zavren() {
+    let s = DevToolsState::default();
+    assert!(!s.settings_popup_open);
+}
+
+#[test]
+fn profile_active_default_je_default() {
+    use crate::devtools::profile::active_profile;
+    // Pri startu testu env var moze byt nastaveny - dalsi test musi
+    // pocitat s timto.
+    let name = active_profile();
+    assert!(!name.is_empty());
+}

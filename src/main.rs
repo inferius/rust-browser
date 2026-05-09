@@ -211,6 +211,9 @@ console.log(greeting, result);
         let shell_mode = args[1] == "shell";
         for a in &args[2..] {
             if a == "--devtools" || a == "-d" { auto_devtools = true; }
+            else if let Some(name) = a.strip_prefix("--profile=") {
+                browser::devtools_panel::set_profile(name);
+            }
             else if !a.starts_with('-') && target.is_none() { target = Some(a.clone()); }
         }
         let target = target.unwrap_or_else(|| "static/test.html".to_string());

@@ -931,6 +931,16 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                         self.devtools.collapsed_sections.insert(id);
                                     }
                                 }
+                                DevtoolsHit::SettingsToggle => {
+                                    self.devtools.settings_popup_open = !self.devtools.settings_popup_open;
+                                }
+                                DevtoolsHit::SettingsDock(pos) => {
+                                    self.devtools.dock_position = pos;
+                                    crate::devtools::profile::save_dock_position(pos);
+                                }
+                                DevtoolsHit::SettingsClose => {
+                                    self.devtools.settings_popup_open = false;
+                                }
                                 DevtoolsHit::OverlayToggle(kind, node_id) => {
                                     let pos = self.devtools.overlays.iter().position(|o|
                                         o.node_id == node_id && o.kind == kind);

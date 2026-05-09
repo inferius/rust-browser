@@ -82,6 +82,11 @@ pub fn dt_text_width(text: &str) -> f32 {
     }
 }
 
+/// Set active profile - volat z CLI parsing pred prvnim devtools state load.
+pub fn set_profile(name: &str) {
+    crate::devtools::profile::set_active_profile(name.to_string());
+}
+
 // ─── Material Symbols icons (Google Fonts, OFL) ─────────────────────────
 //
 // Codepoints (Outlined): chevron_right E5CC, expand_more E5CF, close E5CD,
@@ -95,6 +100,7 @@ const ICON_CLOSE: char = '\u{E5CD}';
 const ICON_LIGHT_MODE: char = '\u{E518}';
 const ICON_DARK_MODE: char = '\u{E51C}';
 const ICON_INSPECT: char = '\u{E3B4}';
+const ICON_SETTINGS: char = '\u{E8B8}'; // settings gear
 
 fn push_icon(cmds: &mut Vec<DisplayCommand>, x: f32, y: f32, ch: char, color: [u8; 4]) {
     cmds.push(DisplayCommand::Text {
@@ -156,10 +162,110 @@ pub fn paint_devtools_panel(
         Tab::Settings => paint_settings_tab(cmds, state, &pal, win_w, content_y, content_h, mouse_x, mouse_y),
     }
 
+    // Settings popup (dock chooser + theme).
+    if state.settings_popup_open {
+        paint_settings_popup(cmds, state, &pal, win_w, win_h, mouse_x, mouse_y);
+    }
     // Context menu vykresli pres vsechno (z-order top).
     if let Some(menu) = &state.context_menu {
         paint_context_menu(cmds, &pal, menu, mouse_x, mouse_y);
     }
+}
+
+fn paint_settings_popup(
+    cmds: &mut Vec<DisplayCommand>,
+    state: &DevToolsState,
+    pal: &Palette,
+    win_w: f32,
+    win_h: f32,
+    mouse_x: f32, mouse_y: f32,
+) {
+    use crate::devtools::profile::DockPosition;
+    let pop_w = 320.0;
+    let pop_h = 280.0;
+    let px = (win_w - pop_w) * 0.5;
+    let py = (win_h - pop_h) * 0.5;
+    // Backdrop (semi-transparent).
+    push_rect(cmds, 0.0, 0.0, win_w, win_h, [0, 0, 0, 100]);
+    // Popup card.
+    push_rect(cmds, px, py, pop_w, pop_h, pal.bg_panel);
+    push_rect_border(cmds, px, py, pop_w, pop_h, pal.border_strong);
+    // Header.
+    push_rect(cmds, px, py, pop_w, 32.0, pal.bg_panel_alt);
+    push_ui_text(cmds, px + 12.0, py + 8.0, "Nastaveni DevTools".to_string(), pal.text, true);
+    // Close X vpravo.
+    let close_x = px + pop_w - 28.0;
+    let close_hover = mouse_x >= close_x && mouse_x < close_x + 24.0
+                      && mouse_y >= py + 4.0 && mouse_y < py + 28.0;
+    if close_hover {
+        push_rect(cmds, close_x, py + 4.0, 24.0, 24.0, pal.bg_row_hover);
+    }
+    push_icon(cmds, close_x + 4.0, py + 8.0, ICON_CLOSE, pal.text);
+
+    // Section: Pozice docku.
+    let mut sy = py + 44.0;
+    push_ui_text(cmds, px + 16.0, sy, "Pozice docku".to_string(), pal.text_dim, true);
+    sy += ROW_H + 4.0;
+    for pos in DockPosition::all() {
+        let active = state.dock_position == *pos;
+        let row_y = sy;
+        let row_hov = mouse_x >= px && mouse_x < px + pop_w
+                      && mouse_y >= row_y && mouse_y < row_y + ROW_H + 2.0;
+        if row_hov {
+            push_rect(cmds, px + 8.0, row_y, pop_w - 16.0, ROW_H + 2.0, pal.bg_row_hover);
+        }
+        // Radio dot.
+        let dot_x = px + 16.0;
+        let dot_y = row_y + 5.0;
+        push_rect_border(cmds, dot_x, dot_y, 10.0, 10.0, pal.border);
+        if active {
+            push_rect(cmds, dot_x + 2.0, dot_y + 2.0, 6.0, 6.0, pal.accent);
+        }
+        push_ui_text(cmds, px + 36.0, row_y + 2.0, pos.label().to_string(), pal.text, false);
+        sy += ROW_H + 2.0;
+    }
+
+    // Section: Profil.
+    sy += 8.0;
+    push_ui_text(cmds, px + 16.0, sy, format!("Profil: {}", crate::devtools::profile::active_profile()),
+                 pal.text_dim, true);
+}
+
+/// Hit-test pro settings popup. Vraci akci nebo None.
+pub enum SettingsPopupAction {
+    SelectDock(crate::devtools::profile::DockPosition),
+    Close,
+    Dismiss,
+}
+
+pub fn settings_popup_hit(
+    state: &DevToolsState, win_w: f32, win_h: f32, mouse_x: f32, mouse_y: f32,
+) -> Option<SettingsPopupAction> {
+    use crate::devtools::profile::DockPosition;
+    if !state.settings_popup_open { return None; }
+    let pop_w = 320.0;
+    let pop_h = 280.0;
+    let px = (win_w - pop_w) * 0.5;
+    let py = (win_h - pop_h) * 0.5;
+    // Outside popup -> dismiss.
+    if mouse_x < px || mouse_x >= px + pop_w || mouse_y < py || mouse_y >= py + pop_h {
+        return Some(SettingsPopupAction::Dismiss);
+    }
+    // Close X.
+    let close_x = px + pop_w - 28.0;
+    if mouse_x >= close_x && mouse_x < close_x + 24.0
+       && mouse_y >= py + 4.0 && mouse_y < py + 28.0 {
+        return Some(SettingsPopupAction::Close);
+    }
+    // Dock options.
+    let mut sy = py + 44.0 + ROW_H + 4.0;
+    for pos in DockPosition::all() {
+        if mouse_y >= sy && mouse_y < sy + ROW_H + 2.0 {
+            return Some(SettingsPopupAction::SelectDock(*pos));
+        }
+        sy += ROW_H + 2.0;
+    }
+    None
 }
 
 // ─── Tabs ────────────────────────────────────────────────────────────────
@@ -317,6 +423,17 @@ fn paint_toolbar_actions(
     push_rect(cmds, x_right, y, close_w, h,
               if close_hover { pal.bg_row_hover } else { pal.bg_toolbar });
     push_icon(cmds, x_right + 4.0, y + (h - ICON_SIZE) * 0.5, ICON_CLOSE, pal.text);
+
+    // Settings gear (otevre dock chooser popup).
+    let set_w = 24.0;
+    x_right -= set_w + 4.0;
+    let set_hover = mouse_x >= x_right && mouse_x < x_right + set_w
+                    && mouse_y >= y && mouse_y < y + h;
+    let set_bg = if state.settings_popup_open { pal.bg_tab_active }
+                 else if set_hover { pal.bg_row_hover }
+                 else { pal.bg_toolbar };
+    push_rect(cmds, x_right, y, set_w, h, set_bg);
+    push_icon(cmds, x_right + 4.0, y + (h - ICON_SIZE) * 0.5, ICON_SETTINGS, pal.text);
 
     // Theme dot (Ctrl+Shift+T toggle): sun/moon icon.
     let theme_w = 24.0;
@@ -2174,6 +2291,12 @@ pub enum DevtoolsHit {
     SectionToggle(SectionId),
     /// Klik na flex/grid overlay toggle v Layout sub-tabu.
     OverlayToggle(crate::devtools::OverlayKind, usize),
+    /// Klik na settings gear button v toolbaru.
+    SettingsToggle,
+    /// Klik v settings popupu - vyber dock position.
+    SettingsDock(crate::devtools::profile::DockPosition),
+    /// Klik mimo settings popup nebo na X.
+    SettingsClose,
 }
 
 /// Stable ID pro collapsible sections - persistuje state napric framem.
@@ -2203,6 +2326,16 @@ pub fn devtools_hit_test(
     if !state.panel_open { return DevtoolsHit::None; }
     let panel_h = state.panel_h.min(win_h * 0.7);
     let panel_y = win_h - panel_h;
+
+    // Settings popup ma prioritu nad cely panel hit-test.
+    if state.settings_popup_open {
+        if let Some(action) = settings_popup_hit(state, win_w, win_h, mouse_x, mouse_y) {
+            return match action {
+                SettingsPopupAction::SelectDock(p) => DevtoolsHit::SettingsDock(p),
+                SettingsPopupAction::Close | SettingsPopupAction::Dismiss => DevtoolsHit::SettingsClose,
+            };
+        }
+    }
 
     // Context menu hit-test ma prioritu.
     if let Some(menu) = &state.context_menu {
@@ -2265,6 +2398,12 @@ pub fn devtools_hit_test(
         x_right -= close_w;
         if mouse_x >= x_right && mouse_x < x_right + close_w {
             return DevtoolsHit::Close;
+        }
+        // Settings gear.
+        let set_w = 24.0;
+        x_right -= set_w + 4.0;
+        if mouse_x >= x_right && mouse_x < x_right + set_w {
+            return DevtoolsHit::SettingsToggle;
         }
         // Theme dot.
         let theme_w = 24.0;

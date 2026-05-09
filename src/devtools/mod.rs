@@ -14,6 +14,7 @@ pub mod context_menu;
 pub mod search;
 pub mod focus;
 pub mod debug_runner;
+pub mod profile;
 
 use std::collections::HashSet;
 
@@ -90,6 +91,10 @@ pub struct DevToolsState {
     pub collapsed_sections: HashSet<crate::browser::devtools_panel::SectionId>,
     /// Side panel sirka v px (right column = vypocitano/rozlozeni/...).
     pub side_panel_w: f32,
+    /// Dock position devtools panelu (Bottom/Right/Left/Top/Popup).
+    pub dock_position: profile::DockPosition,
+    /// Settings popup state (kdyz user otevre dock chooser dialog).
+    pub settings_popup_open: bool,
 }
 
 /// Side panel sub-tab v Inspector.
@@ -160,6 +165,8 @@ impl Default for DevToolsState {
             overlays: Vec::new(),
             collapsed_sections: HashSet::new(),
             side_panel_w: 280.0,
+            dock_position: profile::load_dock_position(),
+            settings_popup_open: false,
         }
     }
 }
