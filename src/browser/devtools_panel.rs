@@ -339,12 +339,12 @@ fn paint_elements_search_bar(
     push_rect(cmds, input_x, input_y, input_w, input_h, pal.bg_input);
     push_rect_border(cmds, input_x, input_y, input_w, input_h, pal.border);
     let placeholder_text = "Find by tag / .class / #id / [attr] / //xpath";
-    let display_text = if state.elements.search.query.is_empty() {
+    let display_text = if state.elements.search.query.text.is_empty() {
         placeholder_text.to_string()
     } else {
-        state.elements.search.query.clone()
+        state.elements.search.query.text.clone()
     };
-    let txt_color = if state.elements.search.query.is_empty() {
+    let txt_color = if state.elements.search.query.text.is_empty() {
         pal.text_disabled
     } else {
         pal.text
@@ -353,7 +353,7 @@ fn paint_elements_search_bar(
 
     // Match counter.
     let s = &state.elements.search;
-    let counter = if s.query.is_empty() {
+    let counter = if s.query.text.is_empty() {
         String::new()
     } else if s.matches.is_empty() {
         "0 / 0".to_string()

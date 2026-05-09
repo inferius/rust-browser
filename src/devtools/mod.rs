@@ -161,8 +161,7 @@ pub enum EditTarget {
 #[derive(Debug, Default)]
 pub struct ElementsSearch {
     pub open: bool,
-    pub query: String,
-    pub cursor: usize,
+    pub query: model::text_buffer::SimpleStringBuffer,
     pub matches: Vec<usize>,
     pub current: usize,
     pub mode: SearchMode,

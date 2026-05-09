@@ -444,11 +444,11 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         modifiers: winit::keyboard::ModifiersState,
         /// Find-on-page (Ctrl+F): otevreny overlay + query + matches.
         find_open: bool,
-        find_query: String,
+        find_query: crate::devtools::model::text_buffer::SimpleStringBuffer,
         find_match_idx: usize,
         /// Address bar (Ctrl+L): toggleable input overlay. Enter navigate.
         addr_open: bool,
-        addr_input: String,
+        addr_input: crate::devtools::model::text_buffer::SimpleStringBuffer,
         /// Smooth scroll target. Render tick interpoluje scroll_y -> target.
         scroll_target_y: f32,
         scroll_target_x: f32,
@@ -1180,21 +1180,17 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                     }
                     // Elements search bar input.
                     if self.devtools.panel_open && self.devtools.focus == FocusTarget::DevToolsElementsSearch {
+                        use crate::browser::render::text_input::{dispatch_text_key, TextKeyOutcome};
+                        let ctrl = self.modifiers.control_key();
                         let shift = self.modifiers.shift_key();
-                        match &key_event.logical_key {
-                            Key::Named(NamedKey::Escape) => {
+                        let outcome = dispatch_text_key(&mut self.devtools.elements.search.query,
+                            &key_event.logical_key, ctrl, shift);
+                        match outcome {
+                            TextKeyOutcome::Cancel => {
                                 self.devtools.focus = FocusTarget::Page;
                                 self.devtools.elements.search.open = false;
                             }
-                            Key::Named(NamedKey::Backspace) => {
-                                self.devtools.elements.search.query.pop();
-                                self.run_elements_search();
-                            }
-                            Key::Named(NamedKey::Space) => {
-                                self.devtools.elements.search.query.push(' ');
-                                self.run_elements_search();
-                            }
-                            Key::Named(NamedKey::Enter) => {
+                            TextKeyOutcome::Submit => {
                                 if shift {
                                     if self.devtools.elements.search.current == 0 {
                                         let n = self.devtools.elements.search.matches.len();
@@ -1210,8 +1206,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                                 }
                                 self.jump_to_search_match();
                             }
-                            Key::Character(s) => {
-                                self.devtools.elements.search.query.push_str(s);
+                            TextKeyOutcome::Handled => {
                                 self.run_elements_search();
                             }
                             _ => {}
@@ -1259,32 +1254,20 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                     }
                     // Address bar typing.
                     if self.addr_open {
-                        match &key_event.logical_key {
-                            Key::Named(NamedKey::Escape) => {
-                                self.addr_open = false;
+                        use crate::browser::render::text_input::{dispatch_text_key, TextKeyOutcome};
+                        let ctrl = self.modifiers.control_key();
+                        let shift = self.modifiers.shift_key();
+                        let outcome = dispatch_text_key(&mut self.addr_input, &key_event.logical_key, ctrl, shift);
+                        match outcome {
+                            TextKeyOutcome::Submit => {
+                                let url = std::mem::take(&mut self.addr_input.text);
                                 self.addr_input.clear();
-                                self.render();
-                                return;
-                            }
-                            Key::Named(NamedKey::Backspace) => {
-                                self.addr_input.pop();
-                                self.render();
-                                return;
-                            }
-                            Key::Named(NamedKey::Space) => {
-                                self.addr_input.push(' ');
-                                self.render();
-                                return;
-                            }
-                            Key::Named(NamedKey::Enter) => {
-                                let url = std::mem::take(&mut self.addr_input);
                                 self.addr_open = false;
                                 if !url.is_empty() {
                                     println!("[address] navigate: {}", url);
                                     if url.starts_with("http://") || url.starts_with("https://") || url.starts_with("file:///") {
                                         self.navigate_url(&url);
                                     } else {
-                                        // Predpoklad lokal path.
                                         let p = std::path::PathBuf::from(&url);
                                         self.load_path(&p);
                                     }
@@ -1292,8 +1275,13 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                                 self.render();
                                 return;
                             }
-                            Key::Character(s) if !self.modifiers.control_key() => {
-                                self.addr_input.push_str(s);
+                            TextKeyOutcome::Cancel => {
+                                self.addr_open = false;
+                                self.addr_input.clear();
+                                self.render();
+                                return;
+                            }
+                            TextKeyOutcome::Handled => {
                                 self.render();
                                 return;
                             }
@@ -1302,30 +1290,23 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                     }
                     // Find-on-page typing: pri otevrenem overlay capture chars.
                     if self.find_open {
-                        match &key_event.logical_key {
-                            Key::Named(NamedKey::Escape) => {
+                        use crate::browser::render::text_input::{dispatch_text_key, TextKeyOutcome};
+                        let ctrl = self.modifiers.control_key();
+                        let shift = self.modifiers.shift_key();
+                        let outcome = dispatch_text_key(&mut self.find_query, &key_event.logical_key, ctrl, shift);
+                        match outcome {
+                            TextKeyOutcome::Submit => {
+                                let dir = if shift { -1i32 } else { 1 };
+                                self.find_step(dir);
+                                return;
+                            }
+                            TextKeyOutcome::Cancel => {
                                 self.find_open = false;
                                 self.find_query.clear();
                                 self.render();
                                 return;
                             }
-                            Key::Named(NamedKey::Backspace) => {
-                                self.find_query.pop();
-                                self.find_apply();
-                                return;
-                            }
-                            Key::Named(NamedKey::Space) => {
-                                self.find_query.push(' ');
-                                self.find_apply();
-                                return;
-                            }
-                            Key::Named(NamedKey::Enter) => {
-                                let dir = if self.modifiers.shift_key() { -1i32 } else { 1 };
-                                self.find_step(dir);
-                                return;
-                            }
-                            Key::Character(s) if !self.modifiers.control_key() => {
-                                self.find_query.push_str(s);
+                            TextKeyOutcome::Handled => {
                                 self.find_apply();
                                 return;
                             }
@@ -1384,7 +1365,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                             if s.as_str() == "l" || s.as_str() == "L" {
                                 // Ctrl+L: toggle address bar.
                                 self.addr_open = true;
-                                self.addr_input = self.base_url.clone().unwrap_or_default();
+                                self.addr_input = crate::devtools::model::text_buffer::SimpleStringBuffer::with_text(self.base_url.clone().unwrap_or_default());
                                 self.render();
                                 return;
                             }
@@ -1630,7 +1611,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         /// Najde vsechny pozice match v display listu textech. Vrati Vec<(y, x, w)>.
         fn find_collect_matches(&self) -> Vec<(f32, f32, f32)> {
             match &self.layout_root {
-                Some(l) => find_matches_in(l, &self.find_query),
+                Some(l) => find_matches_in(l, &self.find_query.text),
                 None => Vec::new(),
             }
         }
@@ -2358,7 +2339,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         }
 
         fn run_elements_search(&mut self) {
-            let q = self.devtools.elements.search.query.clone();
+            let q = self.devtools.elements.search.query.text.clone();
             let mode = self.devtools.elements.search.mode;
             self.devtools.elements.search.matches.clear();
             self.devtools.elements.search.current = 0;
@@ -3093,7 +3074,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                     x: bar_x, y: bar_y, w: bar_w, h: bar_h,
                     color: [40, 40, 40, 240], radius: 6.0,
                 });
-                let label = format!("URL: {}", self.addr_input);
+                let label = format!("URL: {}", self.addr_input.text);
                 display_list.push(DisplayCommand::Text {
                     x: bar_x + 12.0, y: bar_y + 10.0,
                     content: label, color: [255, 255, 255, 255],
@@ -3104,7 +3085,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
             }
             // Find on page: highlight matches + overlay s query a counter.
             if self.find_open {
-                let matches = find_matches_in(&layout_root, &self.find_query);
+                let matches = find_matches_in(&layout_root, &self.find_query.text);
                 let cur_idx = self.find_match_idx;
                 for (i, &(my, mx, mw)) in matches.iter().enumerate() {
                     let color = if i == cur_idx { [255, 165, 0, 180] } else { [255, 235, 100, 130] };
@@ -3123,11 +3104,11 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                     color: [40, 40, 40, 230], radius: 6.0,
                 });
                 let counter = if matches.is_empty() {
-                    if self.find_query.is_empty() { String::from("Find:") } else { String::from("0/0") }
+                    if self.find_query.text.is_empty() { String::from("Find:") } else { String::from("0/0") }
                 } else {
                     format!("{}/{}", cur_idx + 1, matches.len())
                 };
-                let label = format!("Find: {}  [{}]", self.find_query, counter);
+                let label = format!("Find: {}  [{}]", self.find_query.text, counter);
                 display_list.push(DisplayCommand::Text {
                     x: bar_x + 12.0, y: bar_y + 10.0,
                     content: label, color: [255, 255, 255, 255],
@@ -3325,10 +3306,10 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
         zoom: 1.0,
         modifiers: winit::keyboard::ModifiersState::empty(),
         find_open: false,
-        find_query: String::new(),
+        find_query: crate::devtools::model::text_buffer::SimpleStringBuffer::new(),
         find_match_idx: 0,
         addr_open: false,
-        addr_input: String::new(),
+        addr_input: crate::devtools::model::text_buffer::SimpleStringBuffer::new(),
         scroll_target_y: 0.0,
         scroll_target_x: 0.0,
         selection_anchor: None,
