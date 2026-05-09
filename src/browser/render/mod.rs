@@ -49,6 +49,17 @@ pub fn resolve_addr_input(input: &str) -> String {
     format!("https://duckduckgo.com/?q={}", q)
 }
 
+#[derive(Debug, Clone)]
+pub struct BookmarkPickerState {
+    pub url: String,
+    pub title_buffer: String,
+    pub folder_buffer: String,
+    pub focus: BookmarkPickerFocus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BookmarkPickerFocus { Title, Folder }
+
 /// Reading mode CSS - injected pri Ctrl+Alt+R toggle. Schova
 /// nav/aside/footer, centrovani main do max 720px, beige bg, vetsi serif.
 const READING_MODE_CSS: &str = r#"
@@ -462,6 +473,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         /// Effective_anim_time = (now - origin) * speed; pri pause snapshot do paused_at.
         animation_origin: std::time::Instant,
         animation_pause_start: Option<std::time::Instant>,
+        /// Bookmark picker (Ctrl+D popup): edit title + folder.
+        bookmark_picker: Option<BookmarkPickerState>,
         cached_pseudo_map: Option<super::cascade::PseudoStyleMap>,
         /// Cesta k aktualne nactenemu HTML souboru (pro reload + relativni paths).
         current_path: Option<std::path::PathBuf>,
@@ -540,6 +553,9 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         status_hover_url: Option<String>,
         /// Tooltip nad shell tab chip (full title) - (text, x, y screen logical).
         shell_tab_tooltip: Option<(String, f32, f32)>,
+        /// Hover state pro tab tooltip - (tab_idx, x, y, hover_start).
+        /// Tooltip se zobrazi az kdyz hover trva > 500ms na stejnem tabu.
+        shell_tab_hover_pending: Option<(usize, f32, f32, std::time::Instant)>,
         /// F1 toggle: keyboard shortcuts cheat sheet overlay.
         shortcuts_overlay_open: bool,
         /// Reading mode (Ctrl+Alt+R): inject zen-style CSS - hide nav/sidebar/footer,
@@ -778,21 +794,41 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         return;
                     }
                     self.update_hover();
-                    // Shell tab tooltip - hover na chip > 1.0s v ramci jednoho chip.
+                    // Shell tab tooltip - 500ms delay pred zobrazenim. Hover na
+                    // jiny tab nebo mimo chrome resetuje pending. Pri hover_start
+                    // staci > 500ms -> tooltip aktivni.
                     self.shell_tab_tooltip = None;
                     if self.shell_mode {
                         let scale_local = self.renderer.as_ref().map(|r| r.scale_factor).unwrap_or(1.0);
                         let mx = (position.x as f32) / (self.zoom * scale_local);
                         let my = (position.y as f32) / (self.zoom * scale_local);
+                        let mut active_idx: Option<usize> = None;
                         if my < self.shell_chrome_h {
                             let viewport_w = self.viewport_w_logical();
                             let hit = hit_chrome(viewport_w, self.shell_chrome_h, &self.tabs, mx, my);
                             if let ChromeHit::TabClick(idx) = hit {
-                                if let Some(t) = self.tabs.tabs.get(idx) {
-                                    if t.title.chars().count() > 20 {
-                                        self.shell_tab_tooltip = Some((t.title.clone(), mx, my + 16.0));
+                                active_idx = Some(idx);
+                            }
+                        }
+                        match (active_idx, self.shell_tab_hover_pending.as_ref()) {
+                            (Some(idx), Some((prev_idx, _, _, _))) if *prev_idx == idx => {
+                                // Stale stejny tab - check elapsed.
+                                let elapsed = self.shell_tab_hover_pending.as_ref()
+                                    .map(|(_, _, _, t)| t.elapsed()).unwrap();
+                                if elapsed >= std::time::Duration::from_millis(500) {
+                                    if let Some(t) = self.tabs.tabs.get(idx) {
+                                        if t.title.chars().count() > 20 {
+                                            self.shell_tab_tooltip = Some((t.title.clone(), mx, my + 16.0));
+                                        }
                                     }
                                 }
+                            }
+                            (Some(idx), _) => {
+                                // Novy tab - reset hover_start.
+                                self.shell_tab_hover_pending = Some((idx, mx, my, std::time::Instant::now()));
+                            }
+                            (None, _) => {
+                                self.shell_tab_hover_pending = None;
                             }
                         }
                     }
@@ -1874,6 +1910,56 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                             return;
                         }
                     }
+                    // Bookmark picker keyboard - typovani title/folder, Tab swap focus.
+                    if self.bookmark_picker.is_some() {
+                        match &key_event.logical_key {
+                            Key::Named(NamedKey::Backspace) => {
+                                if let Some(p) = self.bookmark_picker.as_mut() {
+                                    match p.focus {
+                                        BookmarkPickerFocus::Title => { p.title_buffer.pop(); }
+                                        BookmarkPickerFocus::Folder => { p.folder_buffer.pop(); }
+                                    }
+                                }
+                            }
+                            Key::Named(NamedKey::Tab) => {
+                                if let Some(p) = self.bookmark_picker.as_mut() {
+                                    p.focus = match p.focus {
+                                        BookmarkPickerFocus::Title => BookmarkPickerFocus::Folder,
+                                        BookmarkPickerFocus::Folder => BookmarkPickerFocus::Title,
+                                    };
+                                }
+                            }
+                            Key::Named(NamedKey::Enter) => {
+                                if let Some(p) = self.bookmark_picker.take() {
+                                    crate::devtools::bookmarks::add_bookmark_in(
+                                        &p.url, &p.title_buffer, &p.folder_buffer);
+                                    println!("[bookmark] added {} to folder {:?}", p.url, p.folder_buffer);
+                                }
+                            }
+                            Key::Named(NamedKey::Escape) => {
+                                self.bookmark_picker = None;
+                            }
+                            Key::Named(NamedKey::Space) => {
+                                if let Some(p) = self.bookmark_picker.as_mut() {
+                                    match p.focus {
+                                        BookmarkPickerFocus::Title => p.title_buffer.push(' '),
+                                        BookmarkPickerFocus::Folder => p.folder_buffer.push(' '),
+                                    }
+                                }
+                            }
+                            Key::Character(s) => {
+                                if let Some(p) = self.bookmark_picker.as_mut() {
+                                    match p.focus {
+                                        BookmarkPickerFocus::Title => p.title_buffer.push_str(s),
+                                        BookmarkPickerFocus::Folder => p.folder_buffer.push_str(s),
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                        self.render();
+                        return;
+                    }
                     // Editing value v styles pane - typovani do bufferu.
                     if self.devtools.styles.editing_value.is_some() {
                         match &key_event.logical_key {
@@ -2262,11 +2348,15 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                 return;
                             }
                             if s.as_str() == "d" || s.as_str() == "D" {
-                                // Ctrl+D: bookmark current page.
+                                // Ctrl+D: open bookmark picker popup s folder selection.
                                 if let Some(url) = self.base_url.clone() {
-                                    let title = url.split('/').last().unwrap_or(&url).to_string();
-                                    crate::devtools::bookmarks::add_bookmark(&url, &title);
-                                    println!("[bookmark] added {}", url);
+                                    let title = self.tabs.active_tab().title.clone();
+                                    self.bookmark_picker = Some(BookmarkPickerState {
+                                        url,
+                                        title_buffer: title,
+                                        folder_buffer: String::new(),
+                                        focus: BookmarkPickerFocus::Title,
+                                    });
                                     self.render();
                                 }
                                 return;
@@ -2558,8 +2648,12 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
 
     impl App {
         fn handle_escape_close_popups(&mut self) -> bool {
-            // Close prioritou: shortcuts overlay > color picker > settings >
+            // Close prioritou: bookmark picker > shortcuts overlay > color picker > settings >
             // class manager > tab overflow > addr bar > find > selection.
+            if self.bookmark_picker.is_some() {
+                self.bookmark_picker = None;
+                return true;
+            }
             if self.shortcuts_overlay_open {
                 self.shortcuts_overlay_open = false;
                 return true;
@@ -5376,6 +5470,110 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         strikethrough: false, underline: false,
                     });
                 }
+                // Bookmark picker popup (Ctrl+D).
+                if let Some(p) = &self.bookmark_picker {
+                    let pop_w = 420.0_f32;
+                    let pop_h = 240.0_f32;
+                    let px = (win_w_logical - pop_w) * 0.5;
+                    let py = 80.0_f32;
+                    display_list.push(DisplayCommand::Rect {
+                        x: 0.0, y: 0.0, w: win_w_logical, h: win_h_logical,
+                        color: [0, 0, 0, 140], radius: 0.0,
+                    });
+                    display_list.push(DisplayCommand::Rect {
+                        x: px, y: py, w: pop_w, h: pop_h,
+                        color: [27, 27, 35, 250], radius: 8.0,
+                    });
+                    display_list.push(DisplayCommand::Text {
+                        x: px + 16.0, y: py + 14.0, content: "Pridat zalozku".to_string(),
+                        color: [251, 251, 254, 255],
+                        font_size: 16.0, bold: true, italic: false,
+                        font_family: "Inter".into(),
+                        strikethrough: false, underline: false,
+                    });
+                    // URL line.
+                    display_list.push(DisplayCommand::Text {
+                        x: px + 16.0, y: py + 44.0,
+                        content: format!("URL: {}", p.url.chars().take(50).collect::<String>()),
+                        color: [161, 161, 174, 255],
+                        font_size: 11.0, bold: false, italic: false,
+                        font_family: "Inter".into(),
+                        strikethrough: false, underline: false,
+                    });
+                    // Title input.
+                    let title_focused = p.focus == BookmarkPickerFocus::Title;
+                    display_list.push(DisplayCommand::Text {
+                        x: px + 16.0, y: py + 70.0, content: "Nazev".to_string(),
+                        color: [191, 191, 201, 255],
+                        font_size: 12.0, bold: true, italic: false,
+                        font_family: "Inter".into(),
+                        strikethrough: false, underline: false,
+                    });
+                    let inp_y = py + 88.0;
+                    let inp_h = 26.0;
+                    display_list.push(DisplayCommand::Rect {
+                        x: px + 16.0, y: inp_y, w: pop_w - 32.0, h: inp_h,
+                        color: if title_focused { [42, 42, 56, 255] } else { [35, 35, 45, 255] },
+                        radius: 4.0,
+                    });
+                    display_list.push(DisplayCommand::Text {
+                        x: px + 22.0, y: inp_y + 5.0, content: p.title_buffer.clone(),
+                        color: [251, 251, 254, 255],
+                        font_size: 13.0, bold: false, italic: false,
+                        font_family: "Inter".into(),
+                        strikethrough: false, underline: false,
+                    });
+                    if title_focused {
+                        display_list.push(DisplayCommand::Rect {
+                            x: px + 22.0 + (p.title_buffer.chars().count() as f32) * 7.5,
+                            y: inp_y + 6.0, w: 1.0, h: 16.0,
+                            color: [254, 191, 84, 255], radius: 0.0,
+                        });
+                    }
+                    // Folder input.
+                    let folder_focused = p.focus == BookmarkPickerFocus::Folder;
+                    display_list.push(DisplayCommand::Text {
+                        x: px + 16.0, y: py + 124.0, content: "Slozka (volitelne)".to_string(),
+                        color: [191, 191, 201, 255],
+                        font_size: 12.0, bold: true, italic: false,
+                        font_family: "Inter".into(),
+                        strikethrough: false, underline: false,
+                    });
+                    let f_y = py + 142.0;
+                    display_list.push(DisplayCommand::Rect {
+                        x: px + 16.0, y: f_y, w: pop_w - 32.0, h: inp_h,
+                        color: if folder_focused { [42, 42, 56, 255] } else { [35, 35, 45, 255] },
+                        radius: 4.0,
+                    });
+                    let folder_disp = if p.folder_buffer.is_empty() && !folder_focused {
+                        "Korenove".to_string()
+                    } else { p.folder_buffer.clone() };
+                    display_list.push(DisplayCommand::Text {
+                        x: px + 22.0, y: f_y + 5.0, content: folder_disp,
+                        color: if p.folder_buffer.is_empty() && !folder_focused {
+                            [109, 109, 124, 255]
+                        } else { [251, 251, 254, 255] },
+                        font_size: 13.0, bold: false, italic: false,
+                        font_family: "Inter".into(),
+                        strikethrough: false, underline: false,
+                    });
+                    if folder_focused {
+                        display_list.push(DisplayCommand::Rect {
+                            x: px + 22.0 + (p.folder_buffer.chars().count() as f32) * 7.5,
+                            y: f_y + 6.0, w: 1.0, h: 16.0,
+                            color: [254, 191, 84, 255], radius: 0.0,
+                        });
+                    }
+                    // Hint dolu.
+                    display_list.push(DisplayCommand::Text {
+                        x: px + 16.0, y: py + pop_h - 28.0,
+                        content: "Tab: zmena pole | Enter: ulozit | Esc: zrusit".to_string(),
+                        color: [109, 109, 124, 255],
+                        font_size: 11.0, bold: false, italic: true,
+                        font_family: "Inter".into(),
+                        strikethrough: false, underline: false,
+                    });
+                }
                 // F1 shortcuts overlay - modal pres celou viewport.
                 if self.shortcuts_overlay_open {
                     let mw = 480.0_f32.min(win_w_logical - 40.0);
@@ -5858,6 +6056,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         cached_matched_key: None,
         animation_origin: std::time::Instant::now(),
         animation_pause_start: None,
+        bookmark_picker: None,
         cached_pseudo_map: None,
         display_list_buffer: Vec::with_capacity(2048),
         cached_layout_root: None,
@@ -5907,6 +6106,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         tab_drag_x_start: 0.0,
         status_hover_url: None,
         shell_tab_tooltip: None,
+        shell_tab_hover_pending: None,
         shortcuts_overlay_open: false,
         reading_mode_on: false,
         bookmarks_bar_visible: true,
