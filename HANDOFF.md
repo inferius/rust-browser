@@ -2,6 +2,34 @@
 
 Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 
+## Session N+6: shell tab integration + class manager + @font-face
+
+**2441 tests pass, build clean.**
+
+Shell mode plne integrovan:
+- App.tabs: tabs::TabManager s initial tab z launch args.
+- paint_shell_chrome_full per-tab chip rendering, Inter font, active highlight.
+- ChromeHit enum + hit_chrome dispatcher.
+- Chrome interactions: TabClick (switch), TabClose, NewTab, Back/Forward,
+  Reload, UrlBar -> open addr.
+- Keyboard shortcuts: Ctrl+T new, Ctrl+W close, Ctrl+1..9 jump,
+  Ctrl+Tab next, Ctrl+Shift+Tab prev.
+- Page area shifted dolu o chrome_h pri shell_mode (page nezacina pod chrome).
+- History persistence: navigate_url volaje history::append_entry ->
+  ~/.rwe/profiles/<active>/history.json.
+
+Session restore (src/devtools/session.rs):
+- Session struct (tabs Vec<SessionTab>, active idx) + save/load.
+- 2 unit testy.
+
+Class manager popup:
+- paint_class_manager modal (centred), list aktivnich CSS class
+  s checkboxy + class names. Outside klik dismiss.
+
+@font-face enumeration:
+- StylesState.font_faces (family, src, weight, style) populate z stylesheets.
+- Fonts sub-tab list per face s detail rows.
+
 ## Session N+5: A1-A4 + B1-B2 + C1-C3 (full sprint)
 
 **2439 tests pass, build clean.**
