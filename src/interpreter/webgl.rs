@@ -122,9 +122,196 @@ pub(crate) fn create_webgl_context(state: Rc<RefCell<WebGLState>>) -> JsValue {
     for (name, val) in &constants {
         obj_rc.borrow_mut().set(name.to_string(), JsValue::Number(*val as f64));
     }
+    // WebGL2 constants - vsechny additions oproti WebGL1.
+    let webgl2_constants: &[(&str, u32)] = &[
+        // Buffer types
+        ("UNIFORM_BUFFER", 0x8A11), ("COPY_READ_BUFFER", 0x8F36),
+        ("COPY_WRITE_BUFFER", 0x8F37), ("TRANSFORM_FEEDBACK_BUFFER", 0x8C8E),
+        ("PIXEL_PACK_BUFFER", 0x88EB), ("PIXEL_UNPACK_BUFFER", 0x88EC),
+        // Texture
+        ("TEXTURE_2D_ARRAY", 0x8C1A), ("TEXTURE_3D", 0x806F),
+        ("TEXTURE_BINDING_2D_ARRAY", 0x8C1D),
+        ("RGBA32F", 0x8814), ("RGB32F", 0x8815),
+        ("RGBA16F", 0x881A), ("RGB16F", 0x881B),
+        ("R8", 0x8229), ("RG8", 0x822B), ("RGBA8", 0x8058),
+        ("R32F", 0x822E), ("RG32F", 0x8230),
+        ("DEPTH_COMPONENT24", 0x81A6), ("DEPTH_COMPONENT32F", 0x8CAC),
+        ("DEPTH24_STENCIL8", 0x88F0), ("RED", 0x1903), ("RG", 0x8227),
+        ("HALF_FLOAT", 0x140B), ("FLOAT_VEC2", 0x8B50),
+        ("UNSIGNED_INT_2_10_10_10_REV", 0x8368),
+        ("UNSIGNED_INT_24_8", 0x84FA), ("FLOAT_32_UNSIGNED_INT_24_8_REV", 0x8DAD),
+        // Color attachments (MRT)
+        ("COLOR_ATTACHMENT0", 0x8CE0), ("COLOR_ATTACHMENT1", 0x8CE1),
+        ("COLOR_ATTACHMENT2", 0x8CE2), ("COLOR_ATTACHMENT3", 0x8CE3),
+        ("COLOR_ATTACHMENT4", 0x8CE4), ("COLOR_ATTACHMENT5", 0x8CE5),
+        ("COLOR_ATTACHMENT6", 0x8CE6), ("COLOR_ATTACHMENT7", 0x8CE7),
+        ("DEPTH_ATTACHMENT", 0x8D00), ("STENCIL_ATTACHMENT", 0x8D20),
+        ("READ_FRAMEBUFFER", 0x8CA8), ("DRAW_FRAMEBUFFER", 0x8CA9),
+        // Sampler
+        ("SAMPLER_BINDING", 0x8919), ("SAMPLER_2D_ARRAY", 0x8DC1),
+        ("SAMPLER_3D", 0x8B5F), ("SAMPLER_2D_SHADOW", 0x8B62),
+        // Transform feedback
+        ("TRANSFORM_FEEDBACK", 0x8E22), ("INTERLEAVED_ATTRIBS", 0x8C8C),
+        ("SEPARATE_ATTRIBS", 0x8C8D),
+        // Sync
+        ("SYNC_GPU_COMMANDS_COMPLETE", 0x9117),
+        ("SIGNALED", 0x9119), ("UNSIGNALED", 0x9118),
+        // Misc
+        ("MAX_3D_TEXTURE_SIZE", 0x8073), ("MAX_ARRAY_TEXTURE_LAYERS", 0x88FF),
+        ("MAX_VERTEX_UNIFORM_BLOCKS", 0x8A2B),
+        ("MAX_FRAGMENT_UNIFORM_BLOCKS", 0x8A2D),
+        ("UNIFORM_BUFFER_OFFSET_ALIGNMENT", 0x8A34),
+    ];
+    for (name, val) in webgl2_constants {
+        obj_rc.borrow_mut().set(name.to_string(), JsValue::Number(*val as f64));
+    }
     // canvas property (minimal stub)
     obj_rc.borrow_mut().set("drawingBufferWidth".into(), JsValue::Number(300.0));
     obj_rc.borrow_mut().set("drawingBufferHeight".into(), JsValue::Number(150.0));
+
+    // ─── WebGL2 method stubs ─────────────────────────────────────────
+    // VAO (Vertex Array Object) - drzi vertex attrib state.
+    let vao_counter = Rc::new(RefCell::new(0u32));
+    {
+        let counter = Rc::clone(&vao_counter);
+        obj_rc.borrow_mut().set("createVertexArray".into(),
+            native("createVertexArray", move |_| {
+                let mut c = counter.borrow_mut();
+                *c += 1;
+                let mut o = JsObject::new();
+                o.set("__vao__".into(), JsValue::Number(*c as f64));
+                Ok(JsValue::Object(Rc::new(RefCell::new(o))))
+            }));
+    }
+    obj_rc.borrow_mut().set("bindVertexArray".into(),
+        native("bindVertexArray", |_| Ok(JsValue::Undefined)));
+    obj_rc.borrow_mut().set("deleteVertexArray".into(),
+        native("deleteVertexArray", |_| Ok(JsValue::Undefined)));
+    obj_rc.borrow_mut().set("isVertexArray".into(),
+        native("isVertexArray", |_| Ok(JsValue::Bool(true))));
+    // Instancing
+    obj_rc.borrow_mut().set("drawArraysInstanced".into(),
+        native("drawArraysInstanced", |_| Ok(JsValue::Undefined)));
+    obj_rc.borrow_mut().set("drawElementsInstanced".into(),
+        native("drawElementsInstanced", |_| Ok(JsValue::Undefined)));
+    obj_rc.borrow_mut().set("vertexAttribDivisor".into(),
+        native("vertexAttribDivisor", |_| Ok(JsValue::Undefined)));
+    // UBO (Uniform Buffer Objects)
+    obj_rc.borrow_mut().set("getUniformBlockIndex".into(),
+        native("getUniformBlockIndex", |_| Ok(JsValue::Number(0.0))));
+    obj_rc.borrow_mut().set("uniformBlockBinding".into(),
+        native("uniformBlockBinding", |_| Ok(JsValue::Undefined)));
+    obj_rc.borrow_mut().set("bindBufferBase".into(),
+        native("bindBufferBase", |_| Ok(JsValue::Undefined)));
+    obj_rc.borrow_mut().set("bindBufferRange".into(),
+        native("bindBufferRange", |_| Ok(JsValue::Undefined)));
+    obj_rc.borrow_mut().set("getActiveUniformBlockParameter".into(),
+        native("getActiveUniformBlockParameter", |_| Ok(JsValue::Number(0.0))));
+    obj_rc.borrow_mut().set("getActiveUniformBlockName".into(),
+        native("getActiveUniformBlockName", |_| Ok(JsValue::Str(String::new()))));
+    // Sampler objects
+    let sampler_counter = Rc::new(RefCell::new(0u32));
+    {
+        let counter = Rc::clone(&sampler_counter);
+        obj_rc.borrow_mut().set("createSampler".into(),
+            native("createSampler", move |_| {
+                let mut c = counter.borrow_mut();
+                *c += 1;
+                let mut o = JsObject::new();
+                o.set("__sampler__".into(), JsValue::Number(*c as f64));
+                Ok(JsValue::Object(Rc::new(RefCell::new(o))))
+            }));
+    }
+    obj_rc.borrow_mut().set("bindSampler".into(),
+        native("bindSampler", |_| Ok(JsValue::Undefined)));
+    obj_rc.borrow_mut().set("samplerParameteri".into(),
+        native("samplerParameteri", |_| Ok(JsValue::Undefined)));
+    obj_rc.borrow_mut().set("samplerParameterf".into(),
+        native("samplerParameterf", |_| Ok(JsValue::Undefined)));
+    obj_rc.borrow_mut().set("deleteSampler".into(),
+        native("deleteSampler", |_| Ok(JsValue::Undefined)));
+    // Transform feedback
+    obj_rc.borrow_mut().set("createTransformFeedback".into(),
+        native("createTransformFeedback", |_| {
+            let mut o = JsObject::new();
+            o.set("__tf__".into(), JsValue::Bool(true));
+            Ok(JsValue::Object(Rc::new(RefCell::new(o))))
+        }));
+    obj_rc.borrow_mut().set("bindTransformFeedback".into(),
+        native("bindTransformFeedback", |_| Ok(JsValue::Undefined)));
+    obj_rc.borrow_mut().set("beginTransformFeedback".into(),
+        native("beginTransformFeedback", |_| Ok(JsValue::Undefined)));
+    obj_rc.borrow_mut().set("endTransformFeedback".into(),
+        native("endTransformFeedback", |_| Ok(JsValue::Undefined)));
+    obj_rc.borrow_mut().set("transformFeedbackVaryings".into(),
+        native("transformFeedbackVaryings", |_| Ok(JsValue::Undefined)));
+    obj_rc.borrow_mut().set("getTransformFeedbackVarying".into(),
+        native("getTransformFeedbackVarying", |_| Ok(JsValue::Null)));
+    // MRT (Multi Render Target)
+    obj_rc.borrow_mut().set("drawBuffers".into(),
+        native("drawBuffers", |_| Ok(JsValue::Undefined)));
+    obj_rc.borrow_mut().set("readBuffer".into(),
+        native("readBuffer", |_| Ok(JsValue::Undefined)));
+    // Texture storage
+    obj_rc.borrow_mut().set("texStorage2D".into(),
+        native("texStorage2D", |_| Ok(JsValue::Undefined)));
+    obj_rc.borrow_mut().set("texStorage3D".into(),
+        native("texStorage3D", |_| Ok(JsValue::Undefined)));
+    obj_rc.borrow_mut().set("texImage3D".into(),
+        native("texImage3D", |_| Ok(JsValue::Undefined)));
+    obj_rc.borrow_mut().set("texSubImage3D".into(),
+        native("texSubImage3D", |_| Ok(JsValue::Undefined)));
+    obj_rc.borrow_mut().set("copyTexSubImage3D".into(),
+        native("copyTexSubImage3D", |_| Ok(JsValue::Undefined)));
+    // Framebuffer
+    obj_rc.borrow_mut().set("framebufferTextureLayer".into(),
+        native("framebufferTextureLayer", |_| Ok(JsValue::Undefined)));
+    obj_rc.borrow_mut().set("blitFramebuffer".into(),
+        native("blitFramebuffer", |_| Ok(JsValue::Undefined)));
+    obj_rc.borrow_mut().set("invalidateFramebuffer".into(),
+        native("invalidateFramebuffer", |_| Ok(JsValue::Undefined)));
+    obj_rc.borrow_mut().set("invalidateSubFramebuffer".into(),
+        native("invalidateSubFramebuffer", |_| Ok(JsValue::Undefined)));
+    // Uniforms (vetsi range)
+    for m in &["uniform1ui", "uniform2ui", "uniform3ui", "uniform4ui",
+               "uniform1uiv", "uniform2uiv", "uniform3uiv", "uniform4uiv",
+               "uniformMatrix2x3fv", "uniformMatrix3x2fv",
+               "uniformMatrix2x4fv", "uniformMatrix4x2fv",
+               "uniformMatrix3x4fv", "uniformMatrix4x3fv",
+               "vertexAttribI4i", "vertexAttribI4iv",
+               "vertexAttribI4ui", "vertexAttribI4uiv",
+               "vertexAttribIPointer"] {
+        obj_rc.borrow_mut().set(m.to_string(),
+            native(m, |_| Ok(JsValue::Undefined)));
+    }
+    // Sync objects
+    obj_rc.borrow_mut().set("fenceSync".into(), native("fenceSync", |_| {
+        let mut o = JsObject::new();
+        o.set("__sync__".into(), JsValue::Bool(true));
+        Ok(JsValue::Object(Rc::new(RefCell::new(o))))
+    }));
+    obj_rc.borrow_mut().set("clientWaitSync".into(),
+        native("clientWaitSync", |_| Ok(JsValue::Number(0.0))));
+    obj_rc.borrow_mut().set("waitSync".into(),
+        native("waitSync", |_| Ok(JsValue::Undefined)));
+    obj_rc.borrow_mut().set("deleteSync".into(),
+        native("deleteSync", |_| Ok(JsValue::Undefined)));
+    obj_rc.borrow_mut().set("isSync".into(),
+        native("isSync", |_| Ok(JsValue::Bool(true))));
+    // Query
+    obj_rc.borrow_mut().set("createQuery".into(), native("createQuery", |_| {
+        let mut o = JsObject::new();
+        o.set("__query__".into(), JsValue::Bool(true));
+        Ok(JsValue::Object(Rc::new(RefCell::new(o))))
+    }));
+    obj_rc.borrow_mut().set("beginQuery".into(),
+        native("beginQuery", |_| Ok(JsValue::Undefined)));
+    obj_rc.borrow_mut().set("endQuery".into(),
+        native("endQuery", |_| Ok(JsValue::Undefined)));
+    obj_rc.borrow_mut().set("getQueryParameter".into(),
+        native("getQueryParameter", |_| Ok(JsValue::Number(0.0))));
+    obj_rc.borrow_mut().set("deleteQuery".into(),
+        native("deleteQuery", |_| Ok(JsValue::Undefined)));
 
     // ─── State setters ──────────────────────────────────────────────
     {

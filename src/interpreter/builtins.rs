@@ -2820,6 +2820,89 @@ pub fn setup_builtins(
         Ok(make_settled_promise("fulfilled", JsValue::Object(bitmap)))
     }));
 
+    // ─── CSS Houdini API stubs ─────────────────────────────────────────────
+    // CSS.paintWorklet.addModule(url) registers paint(name) classes.
+    // Aktualne stub - registry sleduje, paint() invocation = no-op.
+    let paint_registry: Rc<RefCell<HashMap<String, JsValue>>> =
+        Rc::new(RefCell::new(HashMap::new()));
+    let property_registry: Rc<RefCell<HashMap<String, JsValue>>> =
+        Rc::new(RefCell::new(HashMap::new()));
+    {
+        let mut css_obj = JsObject::new();
+        // CSS.paintWorklet.addModule(url) -> Promise
+        let mut paint_worklet = JsObject::new();
+        paint_worklet.set("addModule".into(), native("addModule", |a| {
+            let _url = a.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+            Ok(make_settled_promise("fulfilled", JsValue::Undefined))
+        }));
+        css_obj.set("paintWorklet".into(),
+            JsValue::Object(Rc::new(RefCell::new(paint_worklet))));
+        // CSS.layoutWorklet stub
+        let mut layout_worklet = JsObject::new();
+        layout_worklet.set("addModule".into(), native("addModule", |_| {
+            Ok(make_settled_promise("fulfilled", JsValue::Undefined))
+        }));
+        css_obj.set("layoutWorklet".into(),
+            JsValue::Object(Rc::new(RefCell::new(layout_worklet))));
+        // CSS.animationWorklet stub
+        let mut anim_worklet = JsObject::new();
+        anim_worklet.set("addModule".into(), native("addModule", |_| {
+            Ok(make_settled_promise("fulfilled", JsValue::Undefined))
+        }));
+        css_obj.set("animationWorklet".into(),
+            JsValue::Object(Rc::new(RefCell::new(anim_worklet))));
+        // CSS.registerProperty({name, syntax, inherits, initialValue}) - typed props
+        let prop_reg = Rc::clone(&property_registry);
+        css_obj.set("registerProperty".into(), native("registerProperty", move |a| {
+            if let Some(JsValue::Object(o)) = a.into_iter().next() {
+                let b = o.borrow();
+                if let JsValue::Str(name) = b.get("name") {
+                    prop_reg.borrow_mut().insert(name, JsValue::Object(Rc::clone(&o)));
+                }
+            }
+            Ok(JsValue::Undefined)
+        }));
+        // CSS.supports("prop: value") -> bool. Naivni: vsechno supported.
+        css_obj.set("supports".into(), native("supports", |_| Ok(JsValue::Bool(true))));
+        // CSS.escape(str) - escape pro selektory. Naivni passthrough.
+        css_obj.set("escape".into(), native("escape", |a| {
+            Ok(JsValue::Str(a.into_iter().next().map(|v| v.to_string()).unwrap_or_default()))
+        }));
+        // CSS unit factory functions: CSS.px(N), CSS.em(N), ...
+        for unit in &["px", "em", "rem", "pt", "pc", "in", "cm", "mm", "ex", "ch",
+                      "vw", "vh", "vmin", "vmax", "%", "deg", "rad", "turn", "s", "ms"] {
+            let u = unit.to_string();
+            css_obj.set(unit.to_string(), native(unit, move |a| {
+                let n = a.into_iter().next().map(|v| v.to_number()).unwrap_or(0.0);
+                let mut o = JsObject::new();
+                o.set("value".into(), JsValue::Number(n));
+                o.set("unit".into(), JsValue::Str(u.clone()));
+                o.set("__cssunit__".into(), JsValue::Bool(true));
+                Ok(JsValue::Object(Rc::new(RefCell::new(o))))
+            }));
+        }
+        // CSS.number(N), CSS.percent(N)
+        css_obj.set("number".into(), native("number", |a| {
+            let n = a.into_iter().next().map(|v| v.to_number()).unwrap_or(0.0);
+            Ok(JsValue::Number(n))
+        }));
+        e.define("CSS", JsValue::Object(Rc::new(RefCell::new(css_obj))));
+    }
+    // registerPaint(name, classDef) - global. Pri paint(name) v CSS by se
+    // invokoval paint() metoda; aktualne stub registry only.
+    {
+        let pr = Rc::clone(&paint_registry);
+        e.define("registerPaint", native("registerPaint", move |a| {
+            let mut it = a.into_iter();
+            let name = it.next().map(|v| v.to_string()).unwrap_or_default();
+            let class_def = it.next().unwrap_or(JsValue::Undefined);
+            pr.borrow_mut().insert(name, class_def);
+            Ok(JsValue::Undefined)
+        }));
+    }
+    let _ = paint_registry;
+    let _ = property_registry;
+
     // ─── Path2D stub - canvas paths ───────────────────────────────────────
     e.define("Path2D", native("Path2D", |_| {
         let obj = Rc::new(RefCell::new(JsObject::new()));
