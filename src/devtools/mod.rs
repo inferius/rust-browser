@@ -76,6 +76,62 @@ pub struct DevToolsState {
 
     /// Frame counter pro cursor blink.
     pub frame_counter: u64,
+    /// Tab overflow popup (Firefox-style ▼ pri uzkem okne).
+    pub tab_overflow_open: bool,
+    /// Selected side panel sub-tab v Inspectoru.
+    pub side_panel_tab: SidePanelTab,
+    /// Aktivni overlay descriptors (flex/grid visualization na strance).
+    pub overlays: Vec<OverlayDescriptor>,
+    /// Collapsible sections - set obsahuje IDs ktere user collapsed.
+    pub collapsed_sections: HashSet<crate::browser::devtools_panel::SectionId>,
+    /// Side panel sirka v px (right column = vypocitano/rozlozeni/...).
+    pub side_panel_w: f32,
+}
+
+/// Side panel sub-tab v Inspector.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SidePanelTab {
+    Layout,
+    Computed,
+    Changes,
+    Compatibility,
+    Fonts,
+    Animations,
+}
+
+impl SidePanelTab {
+    pub fn label(self) -> &'static str {
+        match self {
+            SidePanelTab::Layout => "Rozlozeni",
+            SidePanelTab::Computed => "Vypocitano",
+            SidePanelTab::Changes => "Zmeny",
+            SidePanelTab::Compatibility => "Kompatibilita",
+            SidePanelTab::Fonts => "Pisma",
+            SidePanelTab::Animations => "Animace",
+        }
+    }
+    /// Sub-taby viditelne v UI default; ostatni za ▼ menu.
+    pub fn visible_default() -> &'static [SidePanelTab] {
+        &[SidePanelTab::Layout, SidePanelTab::Computed,
+          SidePanelTab::Changes, SidePanelTab::Fonts, SidePanelTab::Animations]
+    }
+    pub fn all() -> &'static [SidePanelTab] {
+        &[SidePanelTab::Layout, SidePanelTab::Computed, SidePanelTab::Changes,
+          SidePanelTab::Compatibility, SidePanelTab::Fonts, SidePanelTab::Animations]
+    }
+}
+
+/// Visualizace flex/grid container na strance (Firefox-style overlay).
+#[derive(Debug, Clone)]
+pub struct OverlayDescriptor {
+    pub node_id: usize,
+    pub kind: OverlayKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OverlayKind {
+    Flex,
+    Grid,
 }
 
 impl Default for DevToolsState {
@@ -95,6 +151,11 @@ impl Default for DevToolsState {
             context_menu: None,
             inspect_mode: false,
             frame_counter: 0,
+            tab_overflow_open: false,
+            side_panel_tab: SidePanelTab::Layout,
+            overlays: Vec::new(),
+            collapsed_sections: HashSet::new(),
+            side_panel_w: 280.0,
         }
     }
 }

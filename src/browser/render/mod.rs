@@ -882,6 +882,36 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                                 DevtoolsHit::ScrollbarThumb(target) => {
                                     self.devtools.elements.dragging_scrollbar = Some(target);
                                 }
+                                DevtoolsHit::TabOverflowToggle => {
+                                    self.devtools.tab_overflow_open = !self.devtools.tab_overflow_open;
+                                }
+                                DevtoolsHit::TabOverflowPick(t) => {
+                                    self.devtools.tab = t;
+                                    self.devtools.tab_overflow_open = false;
+                                }
+                                DevtoolsHit::SidePanelTabClick(t) => {
+                                    self.devtools.side_panel_tab = t;
+                                }
+                                DevtoolsHit::SidePanelSplitterDrag => {
+                                    self.devtools.elements.dragging_split = true;
+                                }
+                                DevtoolsHit::SectionToggle(id) => {
+                                    if self.devtools.collapsed_sections.contains(&id) {
+                                        self.devtools.collapsed_sections.remove(&id);
+                                    } else {
+                                        self.devtools.collapsed_sections.insert(id);
+                                    }
+                                }
+                                DevtoolsHit::OverlayToggle(kind, node_id) => {
+                                    let pos = self.devtools.overlays.iter().position(|o|
+                                        o.node_id == node_id && o.kind == kind);
+                                    match pos {
+                                        Some(i) => { self.devtools.overlays.remove(i); }
+                                        None => self.devtools.overlays.push(crate::devtools::OverlayDescriptor {
+                                            node_id, kind,
+                                        }),
+                                    }
+                                }
                                 DevtoolsHit::None | _ => {}
                             }
                         }

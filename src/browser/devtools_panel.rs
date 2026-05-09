@@ -159,6 +159,38 @@ pub fn paint_devtools_panel(
 
 // ─── Tabs ────────────────────────────────────────────────────────────────
 
+/// Tab strip layout: vraci (visible_tabs, overflow_tabs). Pri uzkem okne se
+/// posledni taby presunuji do overflow ▼ menu.
+pub fn compute_tab_layout(win_w: f32) -> (Vec<Tab>, Vec<Tab>) {
+    let max_x = toolbar_actions_x(win_w) - 100.0; // rezerva pro Inspect/Theme/Close
+    let mut visible = Vec::new();
+    let mut overflow = Vec::new();
+    let mut x = 8.0;
+    let overflow_btn_w = 22.0;
+    for t in Tab::all() {
+        let w = (t.label().len() as f32) * FONT_W + 18.0;
+        if x + w + overflow_btn_w + 2.0 <= max_x {
+            visible.push(*t);
+            x += w + 2.0;
+        } else {
+            overflow.push(*t);
+        }
+    }
+    (visible, overflow)
+}
+
+fn tab_rect_in_visible(visible: &[Tab], idx: usize, toolbar_y: f32) -> (f32, f32, f32, f32) {
+    let mut x = 8.0;
+    for (i, t) in visible.iter().enumerate() {
+        let w = (t.label().len() as f32) * FONT_W + 18.0;
+        if i == idx {
+            return (x, toolbar_y + 4.0, w, TAB_H - 4.0);
+        }
+        x += w + 2.0;
+    }
+    (x, toolbar_y + 4.0, 60.0, TAB_H - 4.0)
+}
+
 fn tab_rect(idx: usize, toolbar_y: f32) -> (f32, f32, f32, f32) {
     let labels = Tab::all();
     let mut x = 8.0;
@@ -172,16 +204,27 @@ fn tab_rect(idx: usize, toolbar_y: f32) -> (f32, f32, f32, f32) {
     (x, toolbar_y + 4.0, 60.0, TAB_H - 4.0)
 }
 
+/// Pozice ▼ overflow buttonu - hned za poslednim visible tabom.
+pub fn tab_overflow_btn_rect(win_w: f32, toolbar_y: f32) -> (f32, f32, f32, f32) {
+    let (visible, _) = compute_tab_layout(win_w);
+    let mut x = 8.0;
+    for t in &visible {
+        x += (t.label().len() as f32) * FONT_W + 18.0 + 2.0;
+    }
+    (x, toolbar_y + 4.0, 22.0, TAB_H - 4.0)
+}
+
 fn paint_tabs(
     cmds: &mut Vec<DisplayCommand>,
     state: &DevToolsState,
     pal: &Palette,
     toolbar_y: f32,
-    _win_w: f32,
+    win_w: f32,
     mouse_x: f32, mouse_y: f32,
 ) {
-    for (i, t) in Tab::all().iter().enumerate() {
-        let (x, y, w, h) = tab_rect(i, toolbar_y);
+    let (visible, overflow) = compute_tab_layout(win_w);
+    for (i, t) in visible.iter().enumerate() {
+        let (x, y, w, h) = tab_rect_in_visible(&visible, i, toolbar_y);
         let active = state.tab == *t;
         let hovered = mouse_x >= x && mouse_x < x + w && mouse_y >= y && mouse_y < y + h;
         let bg = if active { pal.bg_tab_active }
@@ -189,13 +232,59 @@ fn paint_tabs(
                  else { pal.bg_toolbar };
         push_rect(cmds, x, y, w, h, bg);
         if active {
-            // Akcent bottom underline.
             push_rect(cmds, x, y + h - 2.0, w, 2.0, pal.accent);
         }
         let txt_color = if active { pal.text } else { pal.text_dim };
         push_text(cmds, x + 9.0, y + (h - FONT_SIZE) * 0.5 + 1.0,
                   t.label().to_string(), txt_color, false);
     }
+    // Overflow ▼ button + popup menu.
+    if !overflow.is_empty() {
+        let (bx, by, bw, bh) = tab_overflow_btn_rect(win_w, toolbar_y);
+        let hov = mouse_x >= bx && mouse_x < bx + bw && mouse_y >= by && mouse_y < by + bh;
+        let bg = if state.tab_overflow_open { pal.bg_tab_active }
+                 else if hov { pal.bg_row_hover }
+                 else { pal.bg_toolbar };
+        push_rect(cmds, bx, by, bw, bh, bg);
+        // Material expand_more icon.
+        push_icon(cmds, bx + 3.0, by + (bh - ICON_SIZE) * 0.5, ICON_EXPAND_MORE, pal.text);
+
+        if state.tab_overflow_open {
+            // Popup menu pod ▼ button.
+            let item_h = ROW_H + 4.0;
+            let menu_w = 180.0;
+            let menu_x = bx + bw - menu_w;
+            let menu_y = by + bh + 2.0;
+            let menu_h = (overflow.len() as f32) * item_h + 4.0;
+            push_rect(cmds, menu_x, menu_y, menu_w, menu_h, pal.bg_context_menu);
+            push_rect_border(cmds, menu_x, menu_y, menu_w, menu_h, pal.border);
+            for (i, t) in overflow.iter().enumerate() {
+                let iy = menu_y + 2.0 + (i as f32) * item_h;
+                let ihov = mouse_x >= menu_x && mouse_x < menu_x + menu_w
+                       && mouse_y >= iy && mouse_y < iy + item_h;
+                if ihov {
+                    push_rect(cmds, menu_x + 1.0, iy, menu_w - 2.0, item_h, pal.bg_context_menu_hover);
+                }
+                push_text(cmds, menu_x + 12.0, iy + 4.0, t.label().to_string(), pal.text, false);
+            }
+        }
+    }
+}
+
+/// Hit-test pro overflow popup item. Vraci index v overflow listu.
+pub fn tab_overflow_popup_hit(state: &DevToolsState, win_w: f32, toolbar_y: f32, mouse_x: f32, mouse_y: f32) -> Option<usize> {
+    if !state.tab_overflow_open { return None; }
+    let (_, overflow) = compute_tab_layout(win_w);
+    if overflow.is_empty() { return None; }
+    let (bx, by, bw, bh) = tab_overflow_btn_rect(win_w, toolbar_y);
+    let item_h = ROW_H + 4.0;
+    let menu_w = 180.0;
+    let menu_x = bx + bw - menu_w;
+    let menu_y = by + bh + 2.0;
+    if mouse_x < menu_x || mouse_x >= menu_x + menu_w { return None; }
+    let i = ((mouse_y - menu_y - 2.0) / item_h) as i32;
+    if i < 0 || i as usize >= overflow.len() { return None; }
+    Some(i as usize)
 }
 
 fn toolbar_actions_x(win_w: f32) -> f32 {
@@ -1370,6 +1459,9 @@ pub fn paint_element_highlight(
     state: &DevToolsState,
     scroll_y: f32,
 ) {
+    // Highlight visible jen kdyz devtools panel open. Toggle F12 -> overlay
+    // zmizi spolu s panelem (driv overlay perzistoval pres zavreni).
+    if !state.panel_open { return; }
     let pal = state.palette();
     let target = state.elements.hovered.or(state.elements.selected);
     let Some(node_id) = target else { return };
@@ -1516,6 +1608,35 @@ pub enum DevtoolsHit {
     SplitterDrag,
     /// Drag scrollbar thumb (target panel).
     ScrollbarThumb(crate::devtools::ScrollTarget),
+    /// Klik na ▼ tab overflow button - toggle popup.
+    TabOverflowToggle,
+    /// Klik na overflow popup item.
+    TabOverflowPick(Tab),
+    /// Klik na side panel sub-tab.
+    SidePanelTabClick(crate::devtools::SidePanelTab),
+    /// Klik na side panel splitter (mezi styles a side panelem).
+    SidePanelSplitterDrag,
+    /// Klik na collapsible section header (toggle expand).
+    SectionToggle(SectionId),
+    /// Klik na flex/grid overlay toggle v Layout sub-tabu.
+    OverlayToggle(crate::devtools::OverlayKind, usize),
+}
+
+/// Stable ID pro collapsible sections - persistuje state napric framem.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum SectionId {
+    LayoutFlex,
+    LayoutGrid,
+    LayoutBoxModel,
+    LayoutBoxProps,
+    StylesMatched,
+    StylesComputed,
+    StylesBox,
+    FontsUsed,
+    FontsFaces,
+    AnimationsList,
+    ChangesList,
+    CompatibilityList,
 }
 
 pub fn devtools_hit_test(
@@ -1557,13 +1678,31 @@ pub fn devtools_hit_test(
         return DevtoolsHit::ResizeGrip;
     }
     let toolbar_y = panel_y + RESIZE_GRIP_H;
+    // Tab overflow popup hit-test (priorita pred bezne tab cliky).
+    if state.tab_overflow_open {
+        if let Some(idx) = tab_overflow_popup_hit(state, win_w, toolbar_y, mouse_x, mouse_y) {
+            let (_, overflow) = compute_tab_layout(win_w);
+            if let Some(t) = overflow.get(idx).copied() {
+                return DevtoolsHit::TabOverflowPick(t);
+            }
+        }
+    }
     if mouse_y < toolbar_y + TAB_H {
-        // Tab klik?
-        for (i, t) in Tab::all().iter().enumerate() {
-            let (tx, ty, tw, th) = tab_rect(i, toolbar_y);
+        // Visible taby (vrame compute_tab_layout).
+        let (visible, _) = compute_tab_layout(win_w);
+        for (i, t) in visible.iter().enumerate() {
+            let (tx, ty, tw, th) = tab_rect_in_visible(&visible, i, toolbar_y);
             if mouse_x >= tx && mouse_x < tx + tw && mouse_y >= ty && mouse_y < ty + th {
                 return DevtoolsHit::TabClick(*t);
             }
+        }
+        // Overflow ▼ button.
+        let (bx, by, bw, bh) = tab_overflow_btn_rect(win_w, toolbar_y);
+        let (_, overflow) = compute_tab_layout(win_w);
+        if !overflow.is_empty()
+           && mouse_x >= bx && mouse_x < bx + bw
+           && mouse_y >= by && mouse_y < by + bh {
+            return DevtoolsHit::TabOverflowToggle;
         }
         // Toolbar actions vpravo.
         let mut x_right = toolbar_actions_x(win_w);
