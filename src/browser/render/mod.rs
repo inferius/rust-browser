@@ -522,7 +522,21 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
 
         fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
             match event {
-                WindowEvent::CloseRequested => event_loop.exit(),
+                WindowEvent::CloseRequested => {
+                    // Save session pri shell mode quit.
+                    if self.shell_mode {
+                        let session = crate::devtools::session::Session {
+                            tabs: self.tabs.tabs.iter().map(|t|
+                                crate::devtools::session::SessionTab {
+                                    url: t.url.clone(),
+                                    title: t.title.clone(),
+                                }).collect(),
+                            active: self.tabs.active,
+                        };
+                        crate::devtools::session::save_session(&session);
+                    }
+                    event_loop.exit();
+                }
                 WindowEvent::Resized(size) => {
                     if let Some(r) = &mut self.renderer {
                         // Update scale_factor pri resize (DPI mohlo zmenit).
@@ -1605,6 +1619,16 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                 self.render();
                                 return;
                             }
+                            if s.as_str() == "d" || s.as_str() == "D" {
+                                // Ctrl+D: bookmark current page.
+                                if let Some(url) = self.base_url.clone() {
+                                    let title = url.split('/').last().unwrap_or(&url).to_string();
+                                    crate::devtools::bookmarks::add_bookmark(&url, &title);
+                                    println!("[bookmark] added {}", url);
+                                    self.render();
+                                }
+                                return;
+                            }
                             // Shell tab shortcuts.
                             if self.shell_mode {
                                 if s.as_str() == "t" || s.as_str() == "T" {
@@ -1945,6 +1969,9 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
 
     fn paint_shell_chrome_full(list: &mut Vec<DisplayCommand>, win_w: f32, chrome_h: f32,
                                 url: &str, tab_titles: Option<&[String]>, active: usize) {
+        // Bookmarks bar paint pod nav bar - dalsi 24px row.
+        let bms = crate::devtools::bookmarks::load_bookmarks();
+        let _ = &bms; // used below ve scope.
         {
             let tab_h = 28.0;
             let nav_h = chrome_h - tab_h;
@@ -2043,6 +2070,36 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 font_family: "CamingoMono".into(),
                 strikethrough: false, underline: false,
             });
+            // Bookmarks bar (jen kdyz nejake jsou).
+            if !bms.is_empty() {
+                let bm_y = chrome_h - 24.0;
+                list.push(DisplayCommand::Rect {
+                    x: 0.0, y: bm_y, w: win_w, h: 24.0,
+                    color: [35, 34, 43, 255], radius: 0.0,
+                });
+                list.push(DisplayCommand::Rect {
+                    x: 0.0, y: bm_y + 23.0, w: win_w, h: 1.0,
+                    color: [76, 76, 85, 255], radius: 0.0,
+                });
+                let mut bx_x = 8.0;
+                for bm in bms.iter().take(15) {
+                    let title_trunc: String = bm.title.chars().take(18).collect();
+                    let bw = (title_trunc.len() as f32) * 7.0 + 16.0;
+                    if bx_x + bw > win_w - 8.0 { break; }
+                    list.push(DisplayCommand::Rect {
+                        x: bx_x, y: bm_y + 2.0, w: bw, h: 20.0,
+                        color: [42, 41, 50, 255], radius: 4.0,
+                    });
+                    list.push(DisplayCommand::Text {
+                        x: bx_x + 6.0, y: bm_y + 5.0,
+                        content: title_trunc, color: [191, 191, 201, 255],
+                        font_size: 11.0, bold: false, italic: false,
+                        font_family: "Inter".into(),
+                        strikethrough: false, underline: false,
+                    });
+                    bx_x += bw + 4.0;
+                }
+            }
         }
     }
     impl App {
@@ -4196,7 +4253,25 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
     #[cfg(not(target_os = "windows"))]
     let event_loop = EventLoop::new().map_err(|e| e.to_string())?;
     let initial_url = base_url.clone();
-    let initial_tab = tabs::Tab::new(html.clone(), css.clone(), base_url.clone(), current_html_path.clone());
+    // Session restore (shell mode): pri startu nahraje predchozi tabs.
+    let mut initial_tabs: Vec<tabs::Tab> = Vec::new();
+    let mut initial_active: usize = 0;
+    if shell_mode {
+        if let Some(s) = crate::devtools::session::load_session() {
+            for st in &s.tabs {
+                let url = st.url.clone();
+                let mut tab = tabs::Tab::empty();
+                tab.title = st.title.clone();
+                tab.url = url;
+                initial_tabs.push(tab);
+            }
+            initial_active = s.active.min(initial_tabs.len().saturating_sub(1));
+        }
+    }
+    if initial_tabs.is_empty() {
+        initial_tabs.push(tabs::Tab::new(html.clone(), css.clone(), base_url.clone(), current_html_path.clone()));
+    }
+    let initial_tab = initial_tabs[initial_active].clone();
     let mut app = App {
         html, css,
         cached_stylesheets_hash: 0,
@@ -4250,7 +4325,15 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         page_scrollbar_h_drag: false,
         shell_mode,
         shell_chrome_h: 64.0,
-        tabs: tabs::TabManager::new(initial_tab),
+        tabs: {
+            let mut tm = tabs::TabManager::new(initial_tab);
+            // Pri session restore pridej dalsi tabs.
+            if shell_mode && initial_tabs.len() > 1 {
+                tm.tabs = initial_tabs;
+                tm.active = initial_active;
+            }
+            tm
+        },
     };
     event_loop.run_app(&mut app).map_err(|e| e.to_string())?;
     Ok(())

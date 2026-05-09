@@ -36,10 +36,10 @@ impl Tab {
 
     pub fn empty() -> Self {
         Self {
-            url: None,
+            url: Some("about:newtab".to_string()),
             path: None,
-            html: "<html><body><h1>Nova zalozka</h1></body></html>".to_string(),
-            css: String::new(),
+            html: NEW_TAB_HTML.to_string(),
+            css: NEW_TAB_CSS.to_string(),
             title: "Nova zalozka".to_string(),
             scroll_y: 0.0, scroll_x: 0.0,
             history: Vec::new(),
@@ -47,6 +47,32 @@ impl Tab {
         }
     }
 }
+
+const NEW_TAB_HTML: &str = r#"<!DOCTYPE html>
+<html><head><title>Nova zalozka</title></head>
+<body>
+<div class="container">
+<h1>Rust Web Engine</h1>
+<p class="subtitle">Vlastni prohlizec, vlastni renderovaci jadro.</p>
+<div class="cards">
+<div class="card"><h3>Konzole</h3><p>F12 -> tab Konzole</p></div>
+<div class="card"><h3>Inspektor</h3><p>F12 -> Elements + Hover na element</p></div>
+<div class="card"><h3>Sit</h3><p>F12 -> tab Sit</p></div>
+<div class="card"><h3>Nastaveni</h3><p>Ozubene kolo v toolbaru</p></div>
+</div>
+</div>
+</body></html>"#;
+
+const NEW_TAB_CSS: &str = r#"
+body { font-family: 'Inter', sans-serif; background: #1a1a1f; color: #e8e6df; margin: 0; padding: 0; }
+.container { max-width: 800px; margin: 80px auto; padding: 40px; text-align: center; }
+h1 { color: #69a1ff; font-size: 48px; margin-bottom: 16px; }
+.subtitle { color: #a1a1ae; font-size: 16px; margin-bottom: 48px; }
+.cards { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.card { background: #2a2932; padding: 24px; border-radius: 8px; border: 1px solid #4c4c55; }
+.card h3 { color: #69a1ff; margin-top: 0; }
+.card p { color: #a1a1ae; font-size: 14px; }
+"#;
 
 #[derive(Debug)]
 pub struct TabManager {
