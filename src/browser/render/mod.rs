@@ -794,6 +794,13 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                     self.render();
                                     return;
                                 }
+                                ChromeHit::BookmarkClick(url) => {
+                                    self.navigate_url(&url);
+                                    return;
+                                }
+                                ChromeHit::TabContextMenu(_) | ChromeHit::BookmarkContextMenu(_) => {
+                                    // RMB only - LMB ignoruje.
+                                }
                                 ChromeHit::None => {}
                             }
                         }
@@ -1105,7 +1112,28 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                     self.devtools.class_manager_open = !self.devtools.class_manager_open;
                                 }
                                 DevtoolsHit::AddNewRule => {
-                                    // TODO add new inline rule + open editor.
+                                    // Pridej prazdny inline style attribut na selected node + open editor.
+                                    if let Some(sel_id) = self.devtools.elements.selected {
+                                        if let Some(interp) = &self.interpreter {
+                                            let doc_root = std::rc::Rc::clone(&interp.document.borrow().root);
+                                            if let Some(node) = find_node_by_ptr(&doc_root, sel_id) {
+                                                let mut attrs = node.attributes.borrow_mut();
+                                                let cur_style = attrs.get("style").cloned().unwrap_or_default();
+                                                if !cur_style.contains("/* nova vlastnost */") {
+                                                    let appended = if cur_style.is_empty() {
+                                                        "/* nova vlastnost */: ;".to_string()
+                                                    } else {
+                                                        format!("{}; /* nova vlastnost */: ;", cur_style.trim_end_matches(';'))
+                                                    };
+                                                    attrs.insert("style".to_string(), appended);
+                                                }
+                                                drop(attrs);
+                                                self.cached_layout_root = None;
+                                                self.cached_cascade_hash = 0;
+                                                println!("[devtools] add rule - inline style updated");
+                                            }
+                                        }
+                                    }
                                 }
                                 DevtoolsHit::ClassManagerToggleClass(cls) => {
                                     if let Some(sel_id) = self.devtools.elements.selected {
@@ -1934,13 +1962,16 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
 
     /// Chrome bar hit zones.
     pub enum ChromeHit {
-        TabClick(usize),   // klik na tab chip idx
-        TabClose(usize),   // klik na X u tab idx
-        NewTab,            // +
-        Back,              // <
-        Forward,           // >
-        Reload,            // ↻
-        UrlBar,            // klik na URL input
+        TabClick(usize),
+        TabClose(usize),
+        TabContextMenu(usize),  // RMB on tab
+        NewTab,
+        Back,
+        Forward,
+        Reload,
+        UrlBar,
+        BookmarkClick(String),
+        BookmarkContextMenu(String),  // RMB on bookmark
         None,
     }
 
@@ -1976,6 +2007,21 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             if mouse_x >= 28.0 && mouse_x < 48.0 { return ChromeHit::Forward; }
             if mouse_x >= 48.0 && mouse_x < 68.0 { return ChromeHit::Reload; }
             if mouse_x >= 78.0 && mouse_x < win_w - 12.0 { return ChromeHit::UrlBar; }
+        }
+        // Bookmarks bar (24px pod nav bar).
+        let bm_y = chrome_h - 24.0;
+        if mouse_y >= bm_y && mouse_y < bm_y + 24.0 {
+            let bms = crate::devtools::bookmarks::load_bookmarks();
+            let mut bx = 8.0;
+            for bm in bms.iter().take(15) {
+                let title_trunc: String = bm.title.chars().take(18).collect();
+                let bw = (title_trunc.len() as f32) * 7.0 + 16.0;
+                if bx + bw > win_w - 8.0 { break; }
+                if mouse_x >= bx && mouse_x < bx + bw {
+                    return ChromeHit::BookmarkClick(bm.url.clone());
+                }
+                bx += bw + 4.0;
+            }
         }
         ChromeHit::None
     }
@@ -3296,6 +3342,31 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             }
         }
 
+        fn navigate_about(&mut self, url: &str) -> bool {
+            // Internal pages: about:newtab, about:config.
+            match url {
+                "about:newtab" => {
+                    let t = crate::browser::render::tabs::Tab::empty();
+                    self.html = t.html;
+                    self.css = t.css;
+                    self.base_url = Some("about:newtab".to_string());
+                    self.cached_layout_root = None;
+                    self.cached_stylesheets = None;
+                    true
+                }
+                "about:config" => {
+                    let (html, css) = crate::browser::render::tabs::render_about_config();
+                    self.html = html;
+                    self.css = css;
+                    self.base_url = Some("about:config".to_string());
+                    self.cached_layout_root = None;
+                    self.cached_stylesheets = None;
+                    true
+                }
+                _ => false,
+            }
+        }
+
         /// Navigate s history push (smaze forward history pri navigaci).
         fn navigate_url(&mut self, url: &str) {
             // Truncate forward history.
@@ -3313,6 +3384,13 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
 
         /// Navigate bez modifikace history (back/forward use this).
         fn navigate_url_no_history(&mut self, url: &str) {
+            // about: URL handled internally.
+            if url.starts_with("about:") {
+                if self.navigate_about(url) {
+                    self.render();
+                    return;
+                }
+            }
             let is_url = url.starts_with("http://") || url.starts_with("https://");
             if is_url {
                 let html = match fetch_text_url(url) { Some(s) => s, None => return };
