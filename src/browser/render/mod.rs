@@ -805,11 +805,22 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                     return;
                                 }
                                 ChromeHit::NewTab => {
+                                    // Save current tab state pred open.
+                                    {
+                                        let cur = self.tabs.active_tab_mut();
+                                        cur.scroll_y = self.scroll_y;
+                                        cur.scroll_x = self.scroll_x;
+                                        cur.html = self.html.clone();
+                                        cur.css = self.css.clone();
+                                        cur.url = self.base_url.clone();
+                                    }
                                     self.tabs.open(crate::browser::render::tabs::Tab::empty());
                                     let t = self.tabs.active_tab().clone();
                                     self.html = t.html;
                                     self.css = t.css;
-                                    self.base_url = None;
+                                    self.base_url = t.url;
+                                    self.scroll_y = t.scroll_y;
+                                    self.scroll_x = t.scroll_x;
                                     self.cached_layout_root = None;
                                     self.cached_stylesheets = None;
                                     self.render();
@@ -1785,11 +1796,21 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                             if self.shell_mode {
                                 if s.as_str() == "t" || s.as_str() == "T" {
                                     // Ctrl+T = new tab.
+                                    {
+                                        let cur = self.tabs.active_tab_mut();
+                                        cur.scroll_y = self.scroll_y;
+                                        cur.scroll_x = self.scroll_x;
+                                        cur.html = self.html.clone();
+                                        cur.css = self.css.clone();
+                                        cur.url = self.base_url.clone();
+                                    }
                                     self.tabs.open(crate::browser::render::tabs::Tab::empty());
                                     let t = self.tabs.active_tab().clone();
                                     self.html = t.html;
                                     self.css = t.css;
-                                    self.base_url = None;
+                                    self.base_url = t.url;
+                                    self.scroll_y = t.scroll_y;
+                                    self.scroll_x = t.scroll_x;
                                     self.cached_layout_root = None;
                                     self.cached_stylesheets = None;
                                     self.render();
