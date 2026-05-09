@@ -5031,6 +5031,22 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         strikethrough: false, underline: false,
                     });
                 }
+                // Reading mode badge v top-right pri zaple.
+                if self.reading_mode_on {
+                    let bx = win_w_logical - 200.0;
+                    let by = 4.0;
+                    display_list.push(DisplayCommand::Rect {
+                        x: bx, y: by, w: 100.0, h: 20.0,
+                        color: [254, 191, 84, 220], radius: 10.0,
+                    });
+                    display_list.push(DisplayCommand::Text {
+                        x: bx + 10.0, y: by + 3.0, content: "Reading mode".to_string(),
+                        color: [42, 41, 50, 255],
+                        font_size: 11.0, bold: true, italic: false,
+                        font_family: "Inter".into(),
+                        strikethrough: false, underline: false,
+                    });
+                }
                 // Status bar - permanentni dolni lista. Vlevo URL hover (jen pokud je),
                 // vpravo zoom % indicator pri zoom != 1.0.
                 let panel_h_logical = if self.devtools.panel_open {
