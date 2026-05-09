@@ -2,6 +2,26 @@
 
 Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 
+## Session N+9: color picker write-back + RMB menus
+
+**2441 tests pass, build clean.**
+
+Color picker write-back full:
+- swatch_zones nese property name (6-tuple)
+- OpenColorPicker nese property + cilovy element
+- write_back_color_picker zapise hex do inline style attr
+- update_inline_style helper parsuje + slozi prop:value pairs
+- ChangeEntry log (StyleEdit) viditelne v Changes sub-tabu
+- Live preview na page (cache invalidate)
+
+Tab + bookmark RMB context menu:
+- ChromeHit::TabContextMenu/BookmarkContextMenu
+- Items: Zavrit / Zavrit ostatni / Duplikovat / Obnovit / Otevrit / Smazat
+- dispatch_menu_action handlery
+
+Side panel splitter per-dock + favicon + about:config + add rule
+(uvedeno v predchozim N+8 commitech).
+
 ## Session N+8: shell/devtools polish + RMB menus
 
 **2441 tests pass, build clean.**
