@@ -2,6 +2,32 @@
 
 Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 
+## Session N+14: shell polish + chrome interactions
+
+**2448 tests pass, build clean (0 warnings).**
+
+Devtools toggle button:
+- F12 button vpravo v shell nav baru
+- ChromeHit::DevtoolsToggle handler
+
+Status bar URL preview:
+- App.status_hover_url field, update_hover detect <a href>
+- Shell mode render dole (sb_y = win_h - panel_h - 22)
+
+Zoom indicator:
+- Pri zoom != 1.0 vykresli accent badge "{:.0}%" v pravem hornim rohu
+
+Bookmark star toggle:
+- ★ icon na konci URL bar, yellow kdyz bookmarked
+- Klik = add/remove bookmark
+- ChromeHit::BookmarkStar handler
+
+Find on page polish:
+- Counter separated z labelu, red color pri zero matches
+- ↑ ↓ nav arrows vpravo
+
+Tab.document_root field foundation (per-tab Document caching).
+
 ## Session N+13: about pages + Esc close + flavor switcher
 
 **2448 tests pass, build clean (0 warnings).**
