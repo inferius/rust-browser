@@ -32,9 +32,14 @@ const SCROLLBAR_W: f32 = 10.0;
 pub const SEARCH_H: f32 = 28.0;
 const SPLITTER_HIT_PX: f32 = 6.0;
 /// Custom font family pro vsechen DevTools text.
+/// CamingoMono = code (selectors, declarations, tree tags, attr values, console).
+/// Inter = sans-serif pro UI chrome (labels, headings, buttons).
 const DT_FONT: &str = "CamingoMono";
 const DT_FONT_BOLD: &str = "CamingoMono-Bold";
 const DT_FONT_ITALIC: &str = "CamingoMono-Italic";
+const DT_UI_FONT: &str = "Inter";
+const DT_UI_FONT_BOLD: &str = "Inter-Bold";
+const DT_UI_FONT_ITALIC: &str = "Inter-Italic";
 
 /// Najdi byte offset v textu, jehoz x-pozice je nejblize `target_x`.
 /// Pouziva se pro kliknuti mysi na text input - prevede pixel pos na cursor pos.
@@ -235,8 +240,8 @@ fn paint_tabs(
             push_rect(cmds, x, y + h - 2.0, w, 2.0, pal.accent);
         }
         let txt_color = if active { pal.text } else { pal.text_dim };
-        push_text(cmds, x + 9.0, y + (h - FONT_SIZE) * 0.5 + 1.0,
-                  t.label().to_string(), txt_color, false);
+        push_ui_text(cmds, x + 9.0, y + (h - FONT_SIZE) * 0.5 + 1.0,
+                     t.label().to_string(), txt_color, active);
     }
     // Overflow ▼ button + popup menu.
     if !overflow.is_empty() {
@@ -334,8 +339,36 @@ fn paint_toolbar_actions(
     push_rect(cmds, x_right, y, insp_w, h, bg);
     let txt = if state.inspect_mode { pal.text_on_accent } else { pal.text };
     push_icon(cmds, x_right + 4.0, y + (h - ICON_SIZE) * 0.5, ICON_INSPECT, txt);
-    push_text(cmds, x_right + 24.0, y + (h - FONT_SIZE) * 0.5 + 1.0,
-              "Inspect".to_string(), txt, false);
+    push_ui_text(cmds, x_right + 24.0, y + (h - FONT_SIZE) * 0.5 + 1.0,
+                 "Inspect".to_string(), txt, false);
+}
+
+/// Styles pane top toolbar (filter bar): :hov / .cls / + state buttons.
+/// Renderuje pres top stranky styles pane. Klik toggle (TODO).
+pub fn paint_styles_toolbar(
+    cmds: &mut Vec<DisplayCommand>,
+    pal: &Palette,
+    x: f32, y: f32, w: f32,
+    _mouse_x: f32, _mouse_y: f32,
+) {
+    let h = 26.0;
+    push_rect(cmds, x, y, w, h, pal.bg_panel_alt);
+    push_rect(cmds, x, y + h - 1.0, w, 1.0, pal.border);
+    // Filter input box (placeholder).
+    let input_x = x + 8.0;
+    let input_w = w * 0.5;
+    push_rect(cmds, input_x, y + 4.0, input_w, h - 8.0, pal.bg_input);
+    push_rect_border(cmds, input_x, y + 4.0, input_w, h - 8.0, pal.border);
+    push_ui_text_italic(cmds, input_x + 6.0, y + 7.0,
+                        "Filtr stylu".to_string(), pal.text_disabled);
+    // :hov, .cls, + buttons vpravo.
+    let mut bx_x = x + w - 8.0;
+    for label in [":hov", ".cls", "+"].iter().rev() {
+        let bw = (label.len() as f32) * FONT_W + 8.0;
+        bx_x -= bw + 4.0;
+        push_rect(cmds, bx_x, y + 4.0, bw, h - 8.0, pal.bg_button);
+        push_ui_text(cmds, bx_x + 4.0, y + 7.0, label.to_string(), pal.text_dim, false);
+    }
 }
 
 // ─── Elements tab ───────────────────────────────────────────────────────
@@ -445,7 +478,7 @@ fn paint_side_panel(
             push_rect(cmds, tx, y + strip_h - 4.0, tw, 2.0, pal.accent);
         }
         let col = if active { pal.text } else { pal.text_dim };
-        push_text(cmds, tx + 6.0, y + 8.0, label.to_string(), col, false);
+        push_ui_text(cmds, tx + 6.0, y + 8.0, label.to_string(), col, active);
         tx += tw + 2.0;
     }
     let body_y = y + strip_h;
@@ -760,7 +793,7 @@ fn paint_element_row(
             push_text_italic(cmds, x_indent, text_y, format!("\"{}\"", t),
                              if is_sel { pal.text_inverted } else { pal.syn_text_node }, false);
         }
-        RowKind::Element { tag, attrs, self_closing, has_children } => {
+        RowKind::Element { tag, attrs, self_closing, has_children, inline_text } => {
             // Caret expand/collapse pro elementy s detmi.
             let collapsed = state.elements.collapsed.contains(&row.node_id);
             let mut x = x_indent;
@@ -793,10 +826,20 @@ fn paint_element_row(
             // Closing > nebo />.
             let close = if *self_closing { " />" } else { ">" };
             push_text(cmds, x, text_y, close.to_string(), tag_color, false);
-            // Pri collapsed s detmi: ukaz "..." pred close.
+            x += close.chars().count() as f32 * FONT_W;
+            // Pri collapsed s detmi: ukaz inline text preview kdyz kratky,
+            // jinak "..." (Firefox-style).
             if *has_children && collapsed {
-                push_text(cmds, x + close.len() as f32 * FONT_W + 2.0, text_y,
-                          "...".to_string(), pal.text_dim, false);
+                if let Some(text) = inline_text {
+                    let text_color = if is_sel { text_color_default } else { pal.syn_text_node };
+                    push_text(cmds, x, text_y, text.clone(), text_color, false);
+                    x += text.chars().count() as f32 * FONT_W;
+                    push_text(cmds, x, text_y, format!("</{}>", tag), tag_color, false);
+                } else {
+                    push_text(cmds, x + 2.0, text_y, "...".to_string(), pal.text_dim, false);
+                    x += 2.0 + 3.0 * FONT_W;
+                    push_text(cmds, x, text_y, format!("</{}>", tag), tag_color, false);
+                }
             }
         }
         RowKind::CloseTag(tag) => {
@@ -975,12 +1018,15 @@ fn paint_styles_pane(
     pal: &Palette,
     x: f32, y: f32, w: f32, h: f32,
 ) {
+    // Toolbar nahore (filter + :hov/.cls/+ buttons).
+    paint_styles_toolbar(cmds, pal, x, y, w, 0.0, 0.0);
+    let toolbar_h = 26.0;
     let total_h = state.styles.estimate_total_h();
-    let max_scroll = (total_h - h).max(0.0);
+    let max_scroll = (total_h - h + toolbar_h).max(0.0);
     let scroll = state.styles.scroll_y.clamp(0.0, max_scroll);
-    let mut sy = y + 8.0 - scroll;
+    let mut sy = y + toolbar_h + 8.0 - scroll;
     let max_y = y + h;
-    let min_y = y; // Top clip - skip text co by tekl nahoru.
+    let min_y = y + toolbar_h;
     let pad_x = x + 12.0;
     // Scrollbar emit pri overflow (track + thumb pri pravem okraji pane).
     if total_h > h {
@@ -997,15 +1043,15 @@ fn paint_styles_pane(
     // Visibility check - skip render rows out of [min_y, max_y].
     let in_view = |sy: f32| sy + ROW_H >= min_y && sy < max_y;
 
-    // Section: matched rules.
+    // Section: matched rules header.
     if in_view(sy) {
-        push_text_bold(cmds, pad_x, sy, "Matched CSS rules".to_string(), pal.text, false);
+        push_ui_text(cmds, pad_x, sy, "Vybrane styly".to_string(), pal.text, true);
     }
     sy += ROW_H + 2.0;
 
     if state.styles.matched_rules.is_empty() {
         if in_view(sy) {
-            push_text(cmds, pad_x, sy, "(no matched rules)".to_string(), pal.text_dim, true);
+            push_ui_text_italic(cmds, pad_x, sy, "(zadna shoda)".to_string(), pal.text_dim);
         }
         sy += ROW_H + 8.0;
     } else {
@@ -1050,6 +1096,11 @@ fn paint_styles_pane(
                 push_text(cmds, pad_x, sy, "}".to_string(), pal.syn_property, false);
             }
             sy += ROW_H + 4.0;
+            // Divider line mezi rules.
+            if in_view(sy) {
+                push_rect(cmds, pad_x, sy, 200.0, 1.0, pal.border);
+            }
+            sy += 4.0;
         }
     }
 
@@ -1962,12 +2013,12 @@ pub fn paint_element_highlight(
     state: &DevToolsState,
     scroll_y: f32,
 ) {
-    // Highlight visible jen kdyz devtools panel open. Toggle F12 -> overlay
-    // zmizi spolu s panelem (driv overlay perzistoval pres zavreni).
+    // Highlight jen pri hoveru v devtools tree (Firefox-style). Selected
+    // element ZUSTAVA v tree highlighted ale na page overlay pouze pri hover.
+    // Driv hovered.or(selected) -> trvaly visualni overlay. Ted hovered only.
     if !state.panel_open { return; }
     let pal = state.palette();
-    let target = state.elements.hovered.or(state.elements.selected);
-    let Some(node_id) = target else { return };
+    let Some(node_id) = state.elements.hovered else { return };
     let Some(bx) = find_layout_box(layout_root, node_id) else { return };
 
     // Rect obsahu = bx.rect (uz po margin/padding pripravne v build_box).
@@ -2638,12 +2689,46 @@ fn push_text(cmds: &mut Vec<DisplayCommand>, x: f32, y: f32, content: String, co
     });
 }
 
+/// Bold text - default Inter (UI). Code-style bold text pouzit
+/// push_text_code_bold (CamingoMono-Bold).
 fn push_text_bold(cmds: &mut Vec<DisplayCommand>, x: f32, y: f32, content: String, color: [u8; 4], italic: bool) {
     cmds.push(DisplayCommand::Text {
         x, y, content, color,
         font_size: FONT_SIZE, bold: true,
         italic,
+        font_family: if italic { DT_UI_FONT_ITALIC.into() } else { DT_UI_FONT_BOLD.into() },
+        strikethrough: false, underline: false,
+    });
+}
+
+#[allow(dead_code)]
+fn push_text_code_bold(cmds: &mut Vec<DisplayCommand>, x: f32, y: f32, content: String, color: [u8; 4], italic: bool) {
+    cmds.push(DisplayCommand::Text {
+        x, y, content, color,
+        font_size: FONT_SIZE, bold: true,
+        italic,
         font_family: DT_FONT_BOLD.into(),
+        strikethrough: false, underline: false,
+    });
+}
+
+/// UI text - sans-serif Inter pro headings, labels, panel chrome.
+fn push_ui_text(cmds: &mut Vec<DisplayCommand>, x: f32, y: f32, content: String, color: [u8; 4], bold: bool) {
+    cmds.push(DisplayCommand::Text {
+        x, y, content, color,
+        font_size: FONT_SIZE, bold,
+        italic: false,
+        font_family: if bold { DT_UI_FONT_BOLD.into() } else { DT_UI_FONT.into() },
+        strikethrough: false, underline: false,
+    });
+}
+
+fn push_ui_text_italic(cmds: &mut Vec<DisplayCommand>, x: f32, y: f32, content: String, color: [u8; 4]) {
+    cmds.push(DisplayCommand::Text {
+        x, y, content, color,
+        font_size: FONT_SIZE, bold: false,
+        italic: true,
+        font_family: DT_UI_FONT_ITALIC.into(),
         strikethrough: false, underline: false,
     });
 }

@@ -12,6 +12,10 @@ pub enum RowKind {
         attrs: Vec<(String, String)>,
         self_closing: bool,
         has_children: bool,
+        /// Pri collapsed s pouhym text-child a kratkym textem (<INLINE_LIMIT chars)
+        /// Some(text) -> render `<tag>text</tag>` inline misto `<tag>...</tag>`.
+        /// Firefox-style summary preview.
+        inline_text: Option<String>,
     },
     Text(String),
     Comment(String),
@@ -20,6 +24,9 @@ pub enum RowKind {
     /// Closing tag radek pro expanded element (zobrazuje se za children).
     CloseTag(String),
 }
+
+/// Limit pro inline text preview pri collapsed elementu.
+const INLINE_PREVIEW_LIMIT: usize = 60;
 
 #[derive(Debug, Clone)]
 pub struct ElementRow {
@@ -65,6 +72,19 @@ fn walk(
             // Self-closing pro void elements (br/img/input/...) i kdyz NodeKind je Element.
             let self_closing = !has_children && is_void_element(tag);
             let is_collapsed = collapsed.contains(&id);
+            // Inline text preview: vsichni children = text, suma <= INLINE_PREVIEW_LIMIT.
+            let inline_text: Option<String> = if has_children {
+                let only_text: Vec<String> = kids.iter().filter_map(|ch| match &ch.kind {
+                    NodeKind::Text(t) => Some(t.trim().to_string()),
+                    _ => None,
+                }).collect();
+                if only_text.len() == kids.len() {
+                    let combined = only_text.join("");
+                    if combined.chars().count() <= INLINE_PREVIEW_LIMIT && !combined.is_empty() {
+                        Some(combined)
+                    } else { None }
+                } else { None }
+            } else { None };
             out.push(ElementRow {
                 depth,
                 node_id: id,
@@ -73,6 +93,7 @@ fn walk(
                     attrs,
                     self_closing,
                     has_children,
+                    inline_text,
                 },
             });
             if has_children && !is_collapsed {

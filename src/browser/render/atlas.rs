@@ -138,6 +138,9 @@ impl GlyphAtlas {
             ("CamingoMono-Bold", "static/fonts/CamingoMono-Bold.ttf"),
             ("CamingoMono-Italic", "static/fonts/CamingoMono-LightItalic.ttf"),
             ("MaterialSymbolsOutlined", "static/fonts/MaterialSymbolsOutlined.ttf"),
+            ("Inter", "static/fonts/Inter-Regular.ttf"),
+            ("Inter-Bold", "static/fonts/Inter-Bold.ttf"),
+            ("Inter-Italic", "static/fonts/Inter-Italic.ttf"),
         ] {
             if let Ok(data) = std::fs::read(path) {
                 if let Ok(f) = fontdue::Font::from_bytes(data, fontdue::FontSettings::default()) {

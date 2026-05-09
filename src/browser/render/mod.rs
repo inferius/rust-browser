@@ -2899,10 +2899,35 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             let target = layout_root.hit_test(self.mouse_x, self.mouse_y);
             let id = target.and_then(|t| t.node.as_ref().map(|n| std::rc::Rc::as_ptr(n) as usize));
             super::cascade::set_hovered_node(id);
-            // Inspect mode: zrcadlit hovered DOM node do devtools state aby
-            // paint_element_highlight zobrazil overlay.
+            // Devtools tree hover: mouse v devtools panelu nad Elements tree
+            // -> set hovered (Firefox-style page overlay). Mimo tree -> clear.
+            // Inspect mode prepise hover na page-side hit-test.
+            let mx_screen = self.mouse_x - self.scroll_x;
+            let my_screen = self.mouse_y - self.scroll_y;
+            let in_devtools = self.point_in_devtools(mx_screen, my_screen);
+            let mut tree_hover_id: Option<usize> = None;
+            if in_devtools && self.devtools.tab == crate::devtools::Tab::Elements {
+                let viewport_w = self.viewport_w_logical();
+                let panel_top = self.panel_top_logical();
+                let panel_h = self.panel_h_logical();
+                let default_tree_split = (viewport_w - self.devtools.side_panel_w) * 0.45;
+                let tree_split = if self.devtools.elements.split_x < 1.0 { default_tree_split }
+                                 else { self.devtools.elements.split_x.max(200.0).min(viewport_w - self.devtools.side_panel_w - 200.0) };
+                let body_y = panel_top + 4.0 + 30.0
+                    + if self.devtools.elements.search.open { 28.0 } else { 0.0 };
+                let _body_h = panel_h - 4.0 - 30.0
+                    - if self.devtools.elements.search.open { 28.0 } else { 0.0 };
+                if mx_screen < tree_split && my_screen >= body_y {
+                    let row_idx = ((my_screen - body_y + self.devtools.elements.scroll_y) / 18.0) as usize;
+                    if row_idx < self.devtools.elements.rows.len() {
+                        tree_hover_id = Some(self.devtools.elements.rows[row_idx].node_id);
+                    }
+                }
+            }
             if self.devtools.inspect_mode {
                 self.devtools.elements.hovered = id;
+            } else if tree_hover_id.is_some() {
+                self.devtools.elements.hovered = tree_hover_id;
             } else if self.devtools.elements.hovered.is_some() {
                 self.devtools.elements.hovered = None;
             }
@@ -3057,7 +3082,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             let mut style_map = self.cached_style_map.as_ref().unwrap().clone();
             let pseudo_map = self.cached_pseudo_map.as_ref().cloned().unwrap_or_default();
 
-            // Wire computed styles do DevTools state pri selected element.
+            // Wire computed styles + matched rules do DevTools state pri selected element.
             if let Some(sel) = self.devtools.elements.selected {
                 if let Some(decl_map) = style_map.get(&sel) {
                     let mut entries: Vec<(String, String)> = decl_map.iter()
@@ -3068,8 +3093,40 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 } else {
                     self.devtools.styles.computed.clear();
                 }
+                // Matched rules: walk stylesheets, najdi rules co selector
+                // matches na selected node. Sort dle specificity desc.
+                if let Some(node) = find_node_by_ptr(&document_root, sel) {
+                    use crate::devtools::model::styles::{MatchedRule, RuleSource, RuleDecl};
+                    let mut matched: Vec<MatchedRule> = Vec::new();
+                    for (sheet_idx, sheet) in stylesheets.iter().enumerate() {
+                        for rule in &sheet.rules {
+                            for sel_obj in &rule.selectors {
+                                if super::cascade::matches_selector(&node, sel_obj) {
+                                    let decls: Vec<RuleDecl> = rule.declarations.iter()
+                                        .map(|d| RuleDecl {
+                                            property: d.property.clone(),
+                                            value: d.value.clone(),
+                                            important: d.important,
+                                            overridden: false,
+                                        }).collect();
+                                    matched.push(MatchedRule {
+                                        selector: format!("{:?}", sel_obj).chars().take(80).collect(),
+                                        source: RuleSource::StyleBlock { index: sheet_idx },
+                                        specificity: 0,
+                                        declarations: decls,
+                                    });
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    self.devtools.styles.matched_rules = matched;
+                } else {
+                    self.devtools.styles.matched_rules.clear();
+                }
             } else {
                 self.devtools.styles.computed.clear();
+                self.devtools.styles.matched_rules.clear();
             }
 
             let elapsed = self.start_time.elapsed().as_secs_f32();
