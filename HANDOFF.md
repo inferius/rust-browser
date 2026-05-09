@@ -2,6 +2,28 @@
 
 Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 
+## Session N+11: favicon + SV gradient + new tab cards + addr cursor
+
+**2441 tests pass, build clean.**
+
+Real favicon load:
+- Tab::new() sync fetch_image_bytes pres derive_favicon_url
+- Tab.favicon_bytes cache
+- paint_shell_chrome_with_favicons render 16x16 Image v tab chip + posun text
+
+Color picker SV gradient (real):
+- 16x12 grid HSV cells (s = col/cols, v = 1 - row/rows)
+- Aktivni hue propaguje do gradient barev
+- SV marker white 6x6 + black 2x2 dot na (sat, 1-val) pozici
+
+New tab page:
+- Klikatelne <a href> cards (about:config / example.com / HN / GitHub)
+- Hover bg highlight + hint footer s shortcuts
+
+Address bar cursor blink (frame_counter mod 60).
+
+Settings popup theme switcher (Auto/Svetly/Tmavy buttons).
+
 ## Session N+10: tab drag + addr autocomplete + state save polish
 
 **2441 tests pass, build clean.**
