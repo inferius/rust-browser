@@ -105,7 +105,7 @@ pub use atlas::{try_load_default_font, ImageAtlas};
 use atlas::{GlyphAtlas, ATLAS_SIZE, IMAGE_ATLAS_SIZE};
 
 mod shaders;
-use shaders::{BLUR_SHADER, TRANSFORM_SHADER, COMPOSE_SHADER, RECT_SHADER};
+use shaders::{BLUR_SHADER, TRANSFORM_SHADER, COMPOSE_SHADER, RECT_SHADER, LCD_SHADER};
 
 mod primitives;
 use primitives::{push_rect, push_rect_rounded, push_rect_uv, push_skewed_quad,
@@ -145,6 +145,82 @@ pub(super) struct Vertex {
 
 /// Vrati bytemuck-friendly vertices pro display list.
 /// Pro Rect: 6 vertexu (2 trojuhelniky). Pro text: 6 vertexu per glyph.
+/// Build LCD subpixel pipeline (dual-source blend). Catch-unwind + error scope
+/// guard - pri shader compile / pipeline validation fail vraci None (fallback
+/// grayscale v hlavnim pipeline mode 9).
+fn build_lcd_pipeline(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    format: wgpu::TextureFormat,
+) -> Option<wgpu::RenderPipeline> {
+    let shader_or_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("lcd-shader"),
+            source: wgpu::ShaderSource::Wgsl(LCD_SHADER.into()),
+        })
+    }));
+    let lcd_shader = match shader_or_panic {
+        Ok(s) => s,
+        Err(_) => {
+            eprintln!("[render] LCD shader compile panic - fallback grayscale");
+            return None;
+        }
+    };
+    let pipe_or_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            multiview_mask: None,
+            label: Some("lcd-pipeline"),
+            layout: Some(layout),
+            vertex: wgpu::VertexState {
+                module: &lcd_shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<Vertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![
+                        0 => Float32x2, 1 => Float32x4, 2 => Float32x2,
+                        3 => Float32, 4 => Float32x2, 5 => Float32x2,
+                        6 => Float32, 7 => Float32x4, 8 => Float32,
+                    ],
+                }],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &lcd_shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState {
+                        color: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::Src1,
+                            dst_factor: wgpu::BlendFactor::OneMinusSrc1,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                        alpha: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::One,
+                            dst_factor: wgpu::BlendFactor::OneMinusSrc1Alpha,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                    }),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            cache: None,
+        })
+    }));
+    match pipe_or_panic {
+        Ok(p) => Some(p),
+        Err(_) => {
+            eprintln!("[render] LCD pipeline create panic - fallback grayscale");
+            None
+        }
+    }
+}
+
 /// Extract TextRun info z DisplayCommand::Text pro per-glyph selection.
 /// Spocita cumulative_advances pres atlas glyph widths.
 fn extract_text_runs(
@@ -6688,9 +6764,14 @@ impl Renderer {
             }
         )).expect("adapter");
         // Pokus se requestnout DUAL_SOURCE_BLENDING pro real LCD subpixel text.
-        // Kdyz HW/driver nepodpori, fallback na default (gamma-corrected grayscale).
-        let supports_dual_source = adapter.features()
-            .contains(wgpu::Features::DUAL_SOURCE_BLENDING);
+        // OPT-IN pres env RUST_WEB_ENGINE_LCD=1 - default OFF (bezpecny fallback).
+        // WGSL @blend_src(0)/(1) attributes nemusi byt podporene v kazdem
+        // wgpu/naga buildu - opt-in zabranuje crash pri shader compile.
+        let lcd_opt_in = std::env::var("RUST_WEB_ENGINE_LCD")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        let supports_dual_source = lcd_opt_in
+            && adapter.features().contains(wgpu::Features::DUAL_SOURCE_BLENDING);
         let (device, queue) = if supports_dual_source {
             pollster::block_on(adapter.request_device(
                 &wgpu::DeviceDescriptor {
@@ -6892,57 +6973,14 @@ impl Renderer {
         });
 
         // Real LCD subpixel pipeline - dual-source blend pri HW support.
-        // Per-channel mask blend (Src1Color factor) = ClearType-style color fringes.
+        // Separate shader module (LCD_SHADER) s `enable dual_source_blending`
+        // directive - kompiluje se jen kdyz device feature aktivni. Pri non-
+        // support zustava None (mode 9 vertices se vykresli s main pipeline pres
+        // gamma-correct grayscale fallback v main fs_main).
+        // LCD pipeline build via helper s error scope guard.
         let lcd_pipeline = if dual_source_blend {
-            Some(device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                multiview_mask: None,
-                label: Some("lcd-pipeline"),
-                layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some("vs_main"),
-                    compilation_options: Default::default(),
-                    buffers: &[wgpu::VertexBufferLayout {
-                        array_stride: std::mem::size_of::<Vertex>() as u64,
-                        step_mode: wgpu::VertexStepMode::Vertex,
-                        attributes: &wgpu::vertex_attr_array![
-                            0 => Float32x2, 1 => Float32x4, 2 => Float32x2,
-                            3 => Float32, 4 => Float32x2, 5 => Float32x2,
-                            6 => Float32, 7 => Float32x4, 8 => Float32,
-                        ],
-                    }],
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some("fs_main_lcd"),
-                    compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: config.format,
-                        // Dual-source: src1 dostane mask z @location(1).
-                        // result = color * mask + dst * (1 - mask) per-channel.
-                        blend: Some(wgpu::BlendState {
-                            color: wgpu::BlendComponent {
-                                src_factor: wgpu::BlendFactor::Src1,
-                                dst_factor: wgpu::BlendFactor::OneMinusSrc1,
-                                operation: wgpu::BlendOperation::Add,
-                            },
-                            alpha: wgpu::BlendComponent {
-                                src_factor: wgpu::BlendFactor::One,
-                                dst_factor: wgpu::BlendFactor::OneMinusSrc1Alpha,
-                                operation: wgpu::BlendOperation::Add,
-                            },
-                        }),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
-                primitive: wgpu::PrimitiveState::default(),
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState::default(),
-                cache: None,
-            }))
-        } else {
-            None
-        };
+            build_lcd_pipeline(&device, &pipeline_layout, config.format)
+        } else { None };
 
         let atlas = GlyphAtlas::new();
 

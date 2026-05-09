@@ -299,29 +299,6 @@ fn mix_srgb(a: vec4<f32>, b: vec4<f32>, t: f32) -> vec4<f32> {
     return vec4<f32>(srgb_to_lin_v(mixed), mix(a.a, b.a, t));
 }
 
-/// Real LCD subpixel text - dual-source blend variant. Sample 3 sousedni
-/// subpixely (R/G/B) z atlas, vrati 2 fragment outputs:
-///   @location(0) = text RGB (color)
-///   @location(1) = per-subpixel mask alpha (R = r_a, G = g_a, B = b_a)
-/// Pipeline blend: src_factor=Src1Color, dst_factor=OneMinusSrc1Color =>
-/// per-channel alpha blending = real ClearType-style color fringes.
-struct LcdOut {
-    @location(0) color: vec4<f32>,
-    @location(1) blend: vec4<f32>,
-};
-@fragment
-fn fs_main_lcd(in: VertexOut) -> LcdOut {
-    let dims = textureDimensions(atlas_tex);
-    let texel_w = 1.0 / f32(dims.x);
-    let r_a = textureSample(atlas_tex, atlas_smp, in.uv - vec2<f32>(texel_w, 0.0)).r;
-    let g_a = textureSample(atlas_tex, atlas_smp, in.uv).r;
-    let b_a = textureSample(atlas_tex, atlas_smp, in.uv + vec2<f32>(texel_w, 0.0)).r;
-    var out: LcdOut;
-    out.color = vec4<f32>(in.color.rgb, 1.0);
-    out.blend = vec4<f32>(r_a * in.color.a, g_a * in.color.a, b_a * in.color.a, 1.0);
-    return out;
-}
-
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     // Mode 1: text - sample atlas (grayscale alpha)
@@ -437,5 +414,69 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         return vec4<f32>(in.color.rgb, in.color.a * aa);
     }
     return in.color;
+}
+"#;
+
+/// Separate shader pro LCD subpixel text (dual-source blending).
+/// Vyzaduje DUAL_SOURCE_BLENDING device feature - kompiluje se jen kdyz HW
+/// podporuje. Bez supportu zustava jako None pipeline.
+/// WGSL @blend_src(0)/(1) attributes na stejnem @location(0).
+pub(super) const LCD_SHADER: &str = r#"
+struct Uniforms {
+    viewport: vec4<f32>,
+};
+@group(0) @binding(0) var<uniform> u: Uniforms;
+@group(0) @binding(1) var atlas_tex: texture_2d<f32>;
+@group(0) @binding(2) var atlas_smp: sampler;
+@group(0) @binding(3) var image_tex: texture_2d<f32>;
+@group(0) @binding(4) var image_smp: sampler;
+
+struct VertexIn {
+    @location(0) pos: vec2<f32>,
+    @location(1) color: vec4<f32>,
+    @location(2) uv: vec2<f32>,
+    @location(3) mode: f32,
+    @location(4) local: vec2<f32>,
+    @location(5) half_size: vec2<f32>,
+    @location(6) radius: f32,
+    @location(7) color2: vec4<f32>,
+    @location(8) blur: f32,
+};
+
+struct VertexOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) color: vec4<f32>,
+    @location(1) uv: vec2<f32>,
+};
+
+@vertex
+fn vs_main(in: VertexIn) -> VertexOut {
+    var out: VertexOut;
+    let vp_w = u.viewport.x;
+    let vp_h = u.viewport.y;
+    let ndc_x = (in.pos.x / vp_w) * 2.0 - 1.0;
+    let ndc_y = 1.0 - (in.pos.y / vp_h) * 2.0;
+    out.clip = vec4<f32>(ndc_x, ndc_y, 0.0, 1.0);
+    out.color = in.color;
+    out.uv = in.uv;
+    return out;
+}
+
+struct LcdOut {
+    @location(0) @blend_src(0) color: vec4<f32>,
+    @location(0) @blend_src(1) blend: vec4<f32>,
+};
+
+@fragment
+fn fs_main(in: VertexOut) -> LcdOut {
+    let dims = textureDimensions(atlas_tex);
+    let texel_w = 1.0 / f32(dims.x);
+    let r_a = textureSample(atlas_tex, atlas_smp, in.uv - vec2<f32>(texel_w, 0.0)).r;
+    let g_a = textureSample(atlas_tex, atlas_smp, in.uv).r;
+    let b_a = textureSample(atlas_tex, atlas_smp, in.uv + vec2<f32>(texel_w, 0.0)).r;
+    var out: LcdOut;
+    out.color = vec4<f32>(in.color.rgb, 1.0);
+    out.blend = vec4<f32>(r_a * in.color.a, g_a * in.color.a, b_a * in.color.a, 1.0);
+    return out;
 }
 "#;
