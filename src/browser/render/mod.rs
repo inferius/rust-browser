@@ -1367,11 +1367,18 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         use crate::devtools::context_menu::{ContextMenuState, MenuItem, MenuAction};
                         match hit {
                             ChromeHit::TabClick(idx) | ChromeHit::TabClose(idx) | ChromeHit::TabContextMenu(idx) => {
+                                let pinned = self.tabs.tabs.get(idx).map(|t| t.pinned).unwrap_or(false);
                                 let items = vec![
+                                    MenuItem::Action {
+                                        label: if pinned { "Odepnout".to_string() } else { "Pripnout".to_string() },
+                                        action: MenuAction::TabPinToggle(idx),
+                                        enabled: true, shortcut: None,
+                                    },
+                                    MenuItem::Separator,
                                     MenuItem::Action {
                                         label: "Zavrit".to_string(),
                                         action: MenuAction::TabClose(idx),
-                                        enabled: true, shortcut: Some("Ctrl+W".to_string()),
+                                        enabled: !pinned, shortcut: Some("Ctrl+W".to_string()),
                                     },
                                     MenuItem::Action {
                                         label: "Zavrit ostatni".to_string(),
@@ -3329,6 +3336,18 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     let dup = self.tabs.tabs[idx].clone();
                     self.tabs.open(dup);
                 }
+                TabPinToggle(idx) => {
+                    if let Some(t) = self.tabs.tabs.get_mut(idx) {
+                        t.pinned = !t.pinned;
+                    }
+                    // Sort: pinned first.
+                    self.tabs.tabs.sort_by(|a, b| b.pinned.cmp(&a.pinned));
+                    if let Some(active_url) = self.base_url.clone() {
+                        if let Some(new_pos) = self.tabs.tabs.iter().position(|t| t.url.as_ref() == Some(&active_url)) {
+                            self.tabs.active = new_pos;
+                        }
+                    }
+                }
                 TabReload(idx) => {
                     if let Some(url) = self.tabs.tabs[idx].url.clone() {
                         let active_was = self.tabs.active;
@@ -3723,9 +3742,9 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // Internal pages: about:newtab, about:config.
             match url {
                 "about:newtab" => {
-                    let t = crate::browser::render::tabs::Tab::empty();
-                    self.html = t.html;
-                    self.css = t.css;
+                    let (html, css) = crate::browser::render::tabs::render_about_newtab();
+                    self.html = html;
+                    self.css = css;
                     self.base_url = Some("about:newtab".to_string());
                     self.cached_layout_root = None;
                     self.cached_stylesheets = None;

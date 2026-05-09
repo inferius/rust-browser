@@ -18,6 +18,7 @@ pub enum MenuAction {
     TabCloseOthers(usize),
     TabDuplicate(usize),
     TabReload(usize),
+    TabPinToggle(usize),
     BookmarkOpen(String),
     BookmarkDelete(String),
 

@@ -25,6 +25,8 @@ pub struct Tab {
     /// Per-tab Document - sdileny clone Rc na tab swap. None = pred prvni
     /// load (re-parse z html). Some = kesovany doc s JS state pro fast switch.
     pub document_root: Option<std::rc::Rc<crate::browser::dom::NodeData>>,
+    /// Pinned tab - menci sirka, prvni v poradi, nejde zavrit krome unpinu.
+    pub pinned: bool,
 }
 
 impl Tab {
@@ -44,15 +46,16 @@ impl Tab {
             history: Vec::new(),
             history_idx: 0,
             document_root: None,
+            pinned: false,
         }
     }
 
     pub fn empty() -> Self {
+        let (html, css) = render_about_newtab();
         Self {
             url: Some("about:newtab".to_string()),
             path: None,
-            html: NEW_TAB_HTML.to_string(),
-            css: NEW_TAB_CSS.to_string(),
+            html, css,
             title: "Nova zalozka".to_string(),
             favicon_url: None,
             favicon_bytes: None,
@@ -60,8 +63,86 @@ impl Tab {
             history: Vec::new(),
             history_idx: 0,
             document_root: None,
+            pinned: false,
         }
     }
+}
+
+/// Render about:newtab page s top-sites z history + bookmarks shortcuts.
+pub fn render_about_newtab() -> (String, String) {
+    let history = crate::devtools::history::load_history();
+    let bookmarks = crate::devtools::bookmarks::load_bookmarks();
+    // Top 8 nejnavstevovanejsich URL z history (count occurrences).
+    let mut counts: std::collections::HashMap<String, (u32, String)> = std::collections::HashMap::new();
+    for h in &history {
+        let entry = counts.entry(h.url.clone()).or_insert((0, h.title.clone()));
+        entry.0 += 1;
+    }
+    let mut top: Vec<(String, u32, String)> = counts.into_iter()
+        .map(|(u, (c, t))| (u, c, t))
+        .collect();
+    top.sort_by(|a, b| b.1.cmp(&a.1));
+    let top_8: Vec<&(String, u32, String)> = top.iter().take(8).collect();
+    let recent_section = if top_8.is_empty() {
+        "<p class=hint>Zadna historie - po navstivenim stranek se zobrazi top sites</p>".to_string()
+    } else {
+        let cards = top_8.iter().map(|(url, _, title)| {
+            let title_short: String = title.chars().take(24).collect();
+            format!("<a href=\"{}\" class=card><h3>{}</h3><p>{}</p></a>",
+                    html_escape_local(url),
+                    html_escape_local(&title_short),
+                    html_escape_local(&url.chars().take(40).collect::<String>()))
+        }).collect::<Vec<_>>().join("\n");
+        format!("<h2>Top sites</h2><div class=cards>{}</div>", cards)
+    };
+    let bm_section = if bookmarks.is_empty() {
+        String::new()
+    } else {
+        let chips = bookmarks.iter().take(20).map(|b|
+            format!("<a href=\"{}\" class=chip>{}</a>",
+                    html_escape_local(&b.url), html_escape_local(&b.title))
+        ).collect::<Vec<_>>().join("\n");
+        format!("<h2>Zalozky</h2><div class=chips>{}</div>", chips)
+    };
+    let html = format!(r#"<!DOCTYPE html>
+<html><head><title>Nova zalozka</title></head>
+<body>
+<div class=container>
+<h1>Rust Web Engine</h1>
+<p class=subtitle>Vlastni prohlizec, vlastni renderovaci jadro.</p>
+{recent}
+{bms}
+<h2>Stranky</h2>
+<div class=cards>
+<a href="about:config" class=card><h3>Nastaveni</h3><p>Profil, dock, theme</p></a>
+<a href="about:history" class=card><h3>Historie</h3><p>Vsechny navstevy</p></a>
+<a href="about:bookmarks" class=card><h3>Zalozky</h3><p>Ulozene odkazy</p></a>
+</div>
+<p class=hint>Ctrl+L adresa, Ctrl+T novy tab, Ctrl+W zavrit, F12 devtools, Ctrl+D bookmark</p>
+</div>
+</body></html>"#, recent = recent_section, bms = bm_section);
+    let css = r#"
+body { font-family: 'Inter', sans-serif; background: #1a1a1f; color: #e8e6df; margin: 0; padding: 0; }
+.container { max-width: 900px; margin: 60px auto; padding: 40px; }
+h1 { color: #69a1ff; font-size: 48px; margin-bottom: 16px; text-align: center; }
+h2 { color: #94de7c; font-size: 18px; margin-top: 32px; margin-bottom: 12px; }
+.subtitle { color: #a1a1ae; font-size: 16px; margin-bottom: 32px; text-align: center; }
+.cards { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 12px; }
+.card { background: #2a2932; padding: 16px; border-radius: 8px; border: 1px solid #4c4c55; text-decoration: none; display: block; }
+.card:hover { background: #383744; border-color: #69a1ff; }
+.card h3 { color: #69a1ff; margin-top: 0; margin-bottom: 6px; font-size: 14px; }
+.card p { color: #a1a1ae; font-size: 11px; margin: 0; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { background: #2a2932; padding: 6px 12px; border-radius: 16px; color: #e8e6df; text-decoration: none; font-size: 13px; }
+.chip:hover { background: #69a1ff; color: white; }
+.hint { color: #6d6d7c; font-size: 12px; margin-top: 32px; font-style: italic; text-align: center; }
+"#;
+    (html, css.to_string())
+}
+
+fn html_escape_local(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+     .replace('"', "&quot;")
 }
 
 /// Najdi favicon URL: <link rel="icon" href="...">, fallback /favicon.ico.
