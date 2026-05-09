@@ -371,8 +371,28 @@ fn paint_settings_popup(
         sy += ROW_H + 2.0;
     }
 
-    // Section: Profil.
+    // Section: Theme.
     sy += 8.0;
+    push_ui_text(cmds, px + 16.0, sy, "Tema".to_string(), pal.text_dim, true);
+    sy += ROW_H + 4.0;
+    use crate::devtools::theme::ThemeMode;
+    for mode in [ThemeMode::Auto, ThemeMode::Light, ThemeMode::Dark].iter() {
+        let active = state.theme.mode == *mode;
+        let label = match mode {
+            ThemeMode::Auto => "Auto",
+            ThemeMode::Light => "Svetly",
+            ThemeMode::Dark => "Tmavy",
+        };
+        let bw = (label.len() as f32) * FONT_W + 12.0;
+        let bx_x = px + 16.0 + (mode.to_owned() as i32 as f32) * (bw + 4.0);
+        let bg = if active { pal.accent } else { pal.bg_button };
+        let txt = if active { pal.text_on_accent } else { pal.text };
+        push_rect(cmds, bx_x, sy, bw, ROW_H + 2.0, bg);
+        push_ui_text(cmds, bx_x + 6.0, sy + 2.0, label.to_string(), txt, false);
+    }
+
+    // Section: Profil.
+    sy += ROW_H + 16.0;
     push_ui_text(cmds, px + 16.0, sy, format!("Profil: {}", crate::devtools::profile::active_profile()),
                  pal.text_dim, true);
 }
