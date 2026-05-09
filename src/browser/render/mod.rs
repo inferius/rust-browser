@@ -3544,6 +3544,15 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 self.devtools.styles.computed.clear();
                 self.devtools.styles.matched_rules.clear();
             }
+            // Populate @font-face declarations.
+            let mut faces = Vec::new();
+            for sheet in stylesheets.iter() {
+                for ff in &sheet.font_faces {
+                    faces.push((ff.family.clone(), ff.src.clone(),
+                                ff.weight.clone(), ff.style.clone()));
+                }
+            }
+            self.devtools.styles.font_faces = faces;
 
             let elapsed = self.start_time.elapsed().as_secs_f32();
 

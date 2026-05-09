@@ -1199,9 +1199,27 @@ fn paint_side_fonts(
     sy = paint_section_header(cmds, state, pal, &SectionId::FontsFaces,
                                "@font-face deklarace", x, sy, w);
     if !state.collapsed_sections.contains(&SectionId::FontsFaces) {
-        push_ui_text_italic(cmds, pad_x, sy,
-                            "(seznam load. via render side)".to_string(),
-                            pal.text_dim);
+        if state.styles.font_faces.is_empty() {
+            push_ui_text_italic(cmds, pad_x, sy,
+                                "Zadne @font-face v dokumentu".to_string(),
+                                pal.text_dim);
+        } else {
+            for (family, src, weight, style) in &state.styles.font_faces {
+                push_text(cmds, pad_x, sy, family.clone(), pal.syn_attr, false);
+                sy += ROW_H;
+                let src_short = if src.chars().count() > 50 {
+                    format!("{}...", src.chars().take(50).collect::<String>())
+                } else { src.clone() };
+                push_text(cmds, pad_x + 8.0, sy, src_short, pal.text_dim, false);
+                sy += ROW_H;
+                if !weight.is_empty() || !style.is_empty() {
+                    push_text(cmds, pad_x + 8.0, sy,
+                              format!("{} {}", weight, style), pal.text_disabled, false);
+                    sy += ROW_H;
+                }
+                sy += 4.0;
+            }
+        }
     }
 }
 

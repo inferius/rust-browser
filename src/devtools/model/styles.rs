@@ -43,6 +43,8 @@ pub struct StylesState {
     pub swatch_zones: std::cell::RefCell<Vec<(f32, f32, f32, f32, [u8; 4])>>,
     /// Cache var() chip zon: (x, y, w, h, var_name).
     pub var_zones: std::cell::RefCell<Vec<(f32, f32, f32, f32, String)>>,
+    /// @font-face deklarace ze vsech stylesheets (family, src, weight, style).
+    pub font_faces: Vec<(String, String, String, String)>,
 }
 
 impl StylesState {
