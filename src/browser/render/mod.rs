@@ -474,6 +474,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         /// Tab drag reorder state - Some(idx) pri probihajici drag.
         tab_drag_idx: Option<usize>,
         tab_drag_x_start: f32,
+        /// Status bar hover URL preview (Some = link hover, None = hidden).
+        status_hover_url: Option<String>,
         /// Browser shell mode - kdyz true, vykresli se chrome bar (tabs +
         /// address bar + back/forward) + page area zacne pod chromem.
         /// Toggle pres CLI flag --shell nebo Ctrl+Shift+B.
@@ -901,6 +903,11 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                 }
                                 ChromeHit::BookmarkClick(url) => {
                                     self.navigate_url(&url);
+                                    return;
+                                }
+                                ChromeHit::DevtoolsToggle => {
+                                    self.devtools.panel_open = !self.devtools.panel_open;
+                                    self.render();
                                     return;
                                 }
                                 ChromeHit::TabContextMenu(_) | ChromeHit::BookmarkContextMenu(_) => {
@@ -2176,14 +2183,15 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
     pub enum ChromeHit {
         TabClick(usize),
         TabClose(usize),
-        TabContextMenu(usize),  // RMB on tab
+        TabContextMenu(usize),
         NewTab,
         Back,
         Forward,
         Reload,
         UrlBar,
+        DevtoolsToggle,
         BookmarkClick(String),
-        BookmarkContextMenu(String),  // RMB on bookmark
+        BookmarkContextMenu(String),
         None,
     }
 
@@ -2218,7 +2226,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             if mouse_x >= 8.0 && mouse_x < 28.0 { return ChromeHit::Back; }
             if mouse_x >= 28.0 && mouse_x < 48.0 { return ChromeHit::Forward; }
             if mouse_x >= 48.0 && mouse_x < 68.0 { return ChromeHit::Reload; }
-            if mouse_x >= 78.0 && mouse_x < win_w - 12.0 { return ChromeHit::UrlBar; }
+            if mouse_x >= win_w - 36.0 && mouse_x < win_w - 8.0 { return ChromeHit::DevtoolsToggle; }
+            if mouse_x >= 78.0 && mouse_x < win_w - 48.0 { return ChromeHit::UrlBar; }
         }
         // Bookmarks bar (24px pod nav bar).
         let bm_y = chrome_h - 24.0;
@@ -2380,9 +2389,22 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 font_family: "CamingoMono".into(),
                 strikethrough: false, underline: false,
             });
+            // Devtools toggle button (na konci nav baru pred URL).
+            let dt_x = win_w - 36.0;
+            list.push(DisplayCommand::Rect {
+                x: dt_x, y: ny + 4.0, w: 28.0, h: nav_h - 8.0,
+                color: [42, 41, 50, 255], radius: 4.0,
+            });
+            list.push(DisplayCommand::Text {
+                x: dt_x + 6.0, y: ny + 8.0, content: "F12".to_string(),
+                color: [191, 191, 201, 255],
+                font_size: 11.0, bold: true, italic: false,
+                font_family: "Inter".into(),
+                strikethrough: false, underline: false,
+            });
             // URL bar.
             let url_x = 78.0;
-            let url_w = win_w - url_x - 12.0;
+            let url_w = win_w - url_x - 48.0;
             list.push(DisplayCommand::Rect {
                 x: url_x, y: ny + 4.0, w: url_w, h: nav_h - 8.0,
                 color: [27, 27, 35, 255], radius: 4.0,
@@ -3795,6 +3817,17 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             let target = layout_root.hit_test(self.mouse_x, self.mouse_y);
             let id = target.and_then(|t| t.node.as_ref().map(|n| std::rc::Rc::as_ptr(n) as usize));
             super::cascade::set_hovered_node(id);
+            // Status bar URL preview pri hover na link.
+            self.status_hover_url = None;
+            if let Some(t) = target {
+                if let Some(node) = &t.node {
+                    if node.tag_name().as_deref() == Some("a") {
+                        if let Some(href) = node.attr("href") {
+                            self.status_hover_url = Some(href);
+                        }
+                    }
+                }
+            }
             // Tooltip update: hover nad swatch -> hex string, var chip -> name.
             self.devtools.tooltip = None;
             if self.devtools.panel_open {
@@ -4508,6 +4541,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // self.paint_shell_chrome (borrow konflikt s renderer mut).
             if self.shell_mode {
                 let win_w_logical = (r.config.width as f32) / (self.zoom * r.scale_factor);
+                let win_h_logical = (r.config.height as f32) / (self.zoom * r.scale_factor);
                 let titles: Vec<String> = self.tabs.tabs.iter().map(|t| t.title.clone()).collect();
                 let favicons: Vec<Option<String>> = self.tabs.tabs.iter()
                     .map(|t| t.favicon_url.clone()).collect();
@@ -4516,6 +4550,26 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 paint_shell_chrome_with_favicons(&mut display_list, win_w_logical, chrome_h,
                                                  self.base_url.as_deref().unwrap_or(""),
                                                  Some(&titles), self.tabs.active, Some(&favicons));
+                // Status bar dole - pri hover URL preview.
+                if let Some(url) = &self.status_hover_url {
+                    let panel_h_logical = if self.devtools.panel_open {
+                        self.devtools.panel_h.min(win_h_logical * 0.7)
+                    } else { 0.0 };
+                    let sb_y = win_h_logical - panel_h_logical - 22.0;
+                    let url_short: String = url.chars().take(120).collect();
+                    let sb_w = (url_short.len() as f32) * 7.0 + 24.0;
+                    display_list.push(DisplayCommand::Rect {
+                        x: 4.0, y: sb_y, w: sb_w.min(win_w_logical - 8.0),
+                        h: 20.0, color: [27, 27, 35, 240], radius: 2.0,
+                    });
+                    display_list.push(DisplayCommand::Text {
+                        x: 12.0, y: sb_y + 3.0, content: url_short,
+                        color: [191, 191, 201, 255],
+                        font_size: 12.0, bold: false, italic: false,
+                        font_family: "Inter".into(),
+                        strikethrough: false, underline: false,
+                    });
+                }
             }
 
             // In-window DevTools panel - emit pred scrollbar a po main viewport content.
@@ -4870,6 +4924,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         page_scrollbar_h_drag: false,
         tab_drag_idx: None,
         tab_drag_x_start: 0.0,
+        status_hover_url: None,
         shell_mode,
         shell_chrome_h: 64.0,
         tabs: {
