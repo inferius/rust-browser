@@ -16,6 +16,8 @@ pub struct Tab {
     pub css: String,
     pub title: String,
     pub favicon_url: Option<String>,
+    /// Cached favicon bytes (PNG/ICO/SVG). Loaded async on tab create.
+    pub favicon_bytes: Option<Vec<u8>>,
     pub scroll_y: f32,
     pub scroll_x: f32,
     pub history: Vec<String>,
@@ -30,6 +32,7 @@ impl Tab {
         let favicon_url = url.as_ref().map(|u| derive_favicon_url(u, &html));
         Self {
             url, path, html, css, title, favicon_url,
+            favicon_bytes: None,
             scroll_y: 0.0, scroll_x: 0.0,
             history: Vec::new(),
             history_idx: 0,
@@ -44,6 +47,7 @@ impl Tab {
             css: NEW_TAB_CSS.to_string(),
             title: "Nova zalozka".to_string(),
             favicon_url: None,
+            favicon_bytes: None,
             scroll_y: 0.0, scroll_x: 0.0,
             history: Vec::new(),
             history_idx: 0,

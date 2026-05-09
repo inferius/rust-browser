@@ -471,6 +471,9 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         /// Main page scrollbar drag - true pri LMB hold na vertical/horizontal thumb.
         page_scrollbar_v_drag: bool,
         page_scrollbar_h_drag: bool,
+        /// Tab drag reorder state - Some(idx) pri probihajici drag.
+        tab_drag_idx: Option<usize>,
+        tab_drag_x_start: f32,
         /// Browser shell mode - kdyz true, vykresli se chrome bar (tabs +
         /// address bar + back/forward) + page area zacne pod chromem.
         /// Toggle pres CLI flag --shell nebo Ctrl+Shift+B.
@@ -566,6 +569,30 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     }
                     self.mouse_x = new_x;
                     self.mouse_y = new_y;
+                    // Tab drag reorder.
+                    if let Some(drag_idx) = self.tab_drag_idx {
+                        if self.shell_mode {
+                            let viewport_w = self.viewport_w_logical();
+                            let n = self.tabs.tabs.len();
+                            let tab_w = 200.0_f32.min((viewport_w - 60.0) / (n as f32).max(1.0));
+                            let target = ((self.mouse_x - 4.0) / (tab_w + 2.0)).max(0.0) as usize;
+                            let target = target.min(n.saturating_sub(1));
+                            if target != drag_idx {
+                                let tab = self.tabs.tabs.remove(drag_idx);
+                                self.tabs.tabs.insert(target, tab);
+                                if self.tabs.active == drag_idx {
+                                    self.tabs.active = target;
+                                } else if drag_idx < self.tabs.active && target >= self.tabs.active {
+                                    self.tabs.active -= 1;
+                                } else if drag_idx > self.tabs.active && target <= self.tabs.active {
+                                    self.tabs.active += 1;
+                                }
+                                self.tab_drag_idx = Some(target);
+                            }
+                            self.render();
+                            return;
+                        }
+                    }
                     // Resize drag: aktualizuj panel size dle dock position.
                     if self.devtools_resizing {
                         use crate::devtools::profile::DockPosition;
@@ -700,6 +727,10 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         self.page_scrollbar_h_drag = false;
                         self.render();
                     }
+                    if self.tab_drag_idx.is_some() {
+                        self.tab_drag_idx = None;
+                        self.render();
+                    }
                     if self.page_sel_dragging() {
                         self.page_sel_end_drag();
                         self.render();
@@ -738,6 +769,9 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                             let hit = hit_chrome(viewport_w, self.shell_chrome_h, &self.tabs, mx, my_screen);
                             match hit {
                                 ChromeHit::TabClick(idx) => {
+                                    // Initiate drag tracking + switch.
+                                    self.tab_drag_idx = Some(idx);
+                                    self.tab_drag_x_start = self.mouse_x;
                                     // Save current tab state pred switch.
                                     {
                                         let cur = self.tabs.active_tab_mut();
@@ -4349,7 +4383,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 self.mouse_y - self.scroll_y,
             );
             // (Selection rect uz emitnuty PRED build_display_list - rendered POD textem.)
-            // Address bar (Ctrl+L) overlay: input top centered.
+            // Address bar (Ctrl+L) overlay: input top centered + autocomplete.
             if self.addr_open {
                 let vw = (r.config.width as f32) / (self.zoom * r.scale_factor);
                 let bar_w: f32 = (vw - 80.0).min(800.0);
@@ -4365,9 +4399,64 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     x: bar_x + 12.0, y: bar_y + 10.0,
                     content: label, color: [255, 255, 255, 255],
                     font_size: 14.0, bold: false, italic: false,
-                    font_family: String::new(),
+                    font_family: "Inter".into(),
                     strikethrough: false, underline: false,
                 });
+                // Autocomplete suggestions z history (max 8 matchu).
+                let q = self.addr_input.text.to_lowercase();
+                if !q.is_empty() {
+                    let history = crate::devtools::history::load_history();
+                    let bookmarks = crate::devtools::bookmarks::load_bookmarks();
+                    let mut suggest: Vec<(String, String, bool)> = Vec::new();
+                    for b in &bookmarks {
+                        if b.url.to_lowercase().contains(&q) || b.title.to_lowercase().contains(&q) {
+                            suggest.push((b.url.clone(), b.title.clone(), true));
+                            if suggest.len() >= 8 { break; }
+                        }
+                    }
+                    for h in history.iter().rev() {
+                        if suggest.len() >= 8 { break; }
+                        if suggest.iter().any(|(u, _, _)| *u == h.url) { continue; }
+                        if h.url.to_lowercase().contains(&q) || h.title.to_lowercase().contains(&q) {
+                            suggest.push((h.url.clone(), h.title.clone(), false));
+                        }
+                    }
+                    if !suggest.is_empty() {
+                        let popup_y = bar_y + bar_h + 4.0;
+                        let item_h = 28.0_f32;
+                        let popup_h = (suggest.len() as f32) * item_h;
+                        display_list.push(DisplayCommand::Rect {
+                            x: bar_x, y: popup_y, w: bar_w, h: popup_h,
+                            color: [40, 40, 40, 240], radius: 6.0,
+                        });
+                        for (i, (url, title, is_bm)) in suggest.iter().enumerate() {
+                            let iy = popup_y + (i as f32) * item_h;
+                            let icon = if *is_bm { "★" } else { "↻" };
+                            display_list.push(DisplayCommand::Text {
+                                x: bar_x + 12.0, y: iy + 6.0, content: icon.to_string(),
+                                color: [191, 191, 201, 255],
+                                font_size: 14.0, bold: false, italic: false,
+                                font_family: "Inter".into(),
+                                strikethrough: false, underline: false,
+                            });
+                            display_list.push(DisplayCommand::Text {
+                                x: bar_x + 32.0, y: iy + 4.0, content: title.clone(),
+                                color: [255, 255, 255, 255],
+                                font_size: 13.0, bold: true, italic: false,
+                                font_family: "Inter".into(),
+                                strikethrough: false, underline: false,
+                            });
+                            let url_short: String = url.chars().take(80).collect();
+                            display_list.push(DisplayCommand::Text {
+                                x: bar_x + 32.0, y: iy + 16.0, content: url_short,
+                                color: [161, 161, 174, 255],
+                                font_size: 11.0, bold: false, italic: false,
+                                font_family: "Inter".into(),
+                                strikethrough: false, underline: false,
+                            });
+                        }
+                    }
+                }
             }
             // Find on page: highlight matches + overlay s query a counter.
             if self.find_open {
@@ -4619,6 +4708,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         scroll_target_x: 0.0,
         page_scrollbar_v_drag: false,
         page_scrollbar_h_drag: false,
+        tab_drag_idx: None,
+        tab_drag_x_start: 0.0,
         shell_mode,
         shell_chrome_h: 64.0,
         tabs: {
