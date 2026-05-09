@@ -62,19 +62,34 @@ E3B4). Predtim CamingoMono renderoval velka kolecka.
 - W3C bridge: window.getSelection() + document.getSelection() toString()
   cte z registry. Driv stub vracel prazdny string.
 
+### Vse hotovo
+
+- App.selection_* fields smazany, registry je primary state.
+  page_sel_anchor/current/dragging/begin/update_current/end_drag/clear/
+  set_full helpers na App. compute_selection_text walk extract via
+  fontdue advance.
+- Click handler migrace na InteractiveKind: classify(node) jednou,
+  per-kind match (Button -> form submit, Select -> dropdown, Link ->
+  navigate, Checkbox/Radio -> toggle checked + radio name uncheck siblings).
+- Char-level selection highlight: per text box, find first/last char
+  ktere mid-x spada do selection range, snap na char boundaries.
+  Ctrl+C delegate na compute_selection_text - extract jen selectovany
+  range, ne whole boxes.
+
 ### Co zbyva (next session)
 
-- **App.selection_* full deletion**: zatim duplicate primary state, mirror
-  prepisuje registry. Future cleanup = primary state v registry only.
-- **Char-level selection highlight**: aktualne per-text-box (prinic-line
-  effect) coz odpovida rect drag. Char-byte precision vyzaduje glyph
-  x_advances z fontdue metrics per box - nice-to-have ale brain existing
-  funkcni.
-- **Click handler migrace na InteractiveKind**: handle_click ted ad-hoc
-  match na tag. Prejit na `classify(node).dispatch(ev)`.
-- **DomInputBuffer click-to-position**: TextInput element klik momentalne
-  jen focusne. Pri-button klik mapovat mouse_x na byte cursor pres
-  measure_text_width per char z page font (ne CamingoMono).
+- **DomInputBuffer click-to-position v page form input**: TextInput
+  element klik momentalne jen focusne. Pri-button klik mapovat
+  mouse_x na byte cursor pres measure_text_width per char z page font
+  (ne CamingoMono - to je devtools only).
+- **Multi-line text within single LayoutBox**: char-level extract
+  predpokladu jednoradkovy box. Wrap detect (\n v textu) by dovolil
+  multi-line slicing.
+- **Selection start/end per node, ne global rect**: aktualne anchor +
+  current jsou (f32, f32) v page space. Browser pouziva (Node, offset).
+  Reorder DOM/CSS-induced layout shift by neposunul existujici selection.
+  Pro to potreba (run_idx_global, byte_idx) reprezentace + run_idx
+  resolved kazdy frame z layout walk order.
 
 ## Stav projektu (po session N+2: devtools rework phase 1-10)
 
