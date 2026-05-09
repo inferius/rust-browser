@@ -33,3 +33,34 @@ pub struct StylesState {
     pub filter: String,
     pub scroll_y: f32,
 }
+
+impl StylesState {
+    /// Odhad celkove vysky contentu pri layout konstantach paint_styles_pane:
+    /// row_h=18, padding/gaps. Pouziva se pro clamp scroll + scrollbar thumb.
+    pub fn estimate_total_h(&self) -> f32 {
+        let row_h = 18.0_f32;
+        let mut h = 8.0; // top padding
+        // "Matched CSS rules" header.
+        h += row_h + 2.0;
+        if self.matched_rules.is_empty() {
+            h += row_h + 8.0;
+        } else {
+            for r in &self.matched_rules {
+                h += row_h; // selector line
+                h += r.declarations.len() as f32 * row_h;
+                h += row_h + 4.0; // closing brace
+            }
+        }
+        // Computed header.
+        h += row_h + 2.0;
+        let filter = self.filter.to_lowercase();
+        for (k, _) in &self.computed {
+            if !filter.is_empty() && !k.contains(&filter) { continue; }
+            h += row_h;
+        }
+        // Box section.
+        h += 8.0 + row_h + 2.0;
+        h += 4.0 * row_h;
+        h
+    }
+}

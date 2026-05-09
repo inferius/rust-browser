@@ -513,62 +513,95 @@ fn paint_styles_pane(
     bx: &LayoutBox,
     state: &DevToolsState,
     pal: &Palette,
-    x: f32, y: f32, _w: f32, h: f32,
+    x: f32, y: f32, w: f32, h: f32,
 ) {
-    let scroll = state.styles.scroll_y;
+    let total_h = state.styles.estimate_total_h();
+    let max_scroll = (total_h - h).max(0.0);
+    let scroll = state.styles.scroll_y.clamp(0.0, max_scroll);
     let mut sy = y + 8.0 - scroll;
     let max_y = y + h;
+    let min_y = y; // Top clip - skip text co by tekl nahoru.
     let pad_x = x + 12.0;
+    // Scrollbar emit pri overflow (track + thumb pri pravem okraji pane).
+    if total_h > h {
+        let bar_w = SCROLLBAR_W;
+        let bar_x = x + w - bar_w;
+        push_rect(cmds, bar_x, y, bar_w, h, pal.bg_panel_alt);
+        let thumb_h = (h * h / total_h).max(20.0);
+        let thumb_y = if max_scroll > 0.0 {
+            y + (scroll / max_scroll) * (h - thumb_h)
+        } else { y };
+        push_rect(cmds, bar_x + 2.0, thumb_y, bar_w - 4.0, thumb_h, pal.border_strong);
+    }
+
+    // Visibility check - skip render rows out of [min_y, max_y].
+    let in_view = |sy: f32| sy + ROW_H >= min_y && sy < max_y;
 
     // Section: matched rules.
-    push_text_bold(cmds, pad_x, sy, "Matched CSS rules".to_string(), pal.text, false);
+    if in_view(sy) {
+        push_text_bold(cmds, pad_x, sy, "Matched CSS rules".to_string(), pal.text, false);
+    }
     sy += ROW_H + 2.0;
 
     if state.styles.matched_rules.is_empty() {
-        push_text(cmds, pad_x, sy, "(no matched rules)".to_string(), pal.text_dim, true);
+        if in_view(sy) {
+            push_text(cmds, pad_x, sy, "(no matched rules)".to_string(), pal.text_dim, true);
+        }
         sy += ROW_H + 8.0;
     } else {
         for rule in &state.styles.matched_rules {
-            if sy + ROW_H > max_y { break; }
+            if sy >= max_y { break; }
             let src_label = match &rule.source {
                 crate::devtools::model::styles::RuleSource::UserAgent => "user agent".to_string(),
                 crate::devtools::model::styles::RuleSource::Inline => "inline".to_string(),
                 crate::devtools::model::styles::RuleSource::StyleBlock { index } => format!("<style #{}>", index),
                 crate::devtools::model::styles::RuleSource::External { url } => url.clone(),
             };
-            push_text(cmds, pad_x, sy, format!("{} {{ /* {} */", rule.selector, src_label),
-                      pal.syn_property, false);
+            if in_view(sy) {
+                push_text(cmds, pad_x, sy, format!("{} {{ /* {} */", rule.selector, src_label),
+                          pal.syn_property, false);
+            }
             sy += ROW_H;
             for d in &rule.declarations {
-                if sy + ROW_H > max_y { return; }
-                let line = format!("  {}: {}{};", d.property, d.value,
-                                   if d.important { " !important" } else { "" });
-                push_text_underline(cmds, pad_x, sy, line, pal.text, d.overridden);
+                if sy >= max_y { return; }
+                if in_view(sy) {
+                    let line = format!("  {}: {}{};", d.property, d.value,
+                                       if d.important { " !important" } else { "" });
+                    push_text_underline(cmds, pad_x, sy, line, pal.text, d.overridden);
+                }
                 sy += ROW_H;
             }
-            push_text(cmds, pad_x, sy, "}".to_string(), pal.syn_property, false);
+            if in_view(sy) {
+                push_text(cmds, pad_x, sy, "}".to_string(), pal.syn_property, false);
+            }
             sy += ROW_H + 4.0;
         }
     }
 
     // Computed values - z cascade vystupu (state.styles.computed) + box rect.
-    if sy + ROW_H > max_y { return; }
-    push_text_bold(cmds, pad_x, sy, "Computed".to_string(), pal.text, false);
+    if sy >= max_y { return; }
+    if in_view(sy) {
+        push_text_bold(cmds, pad_x, sy, "Computed".to_string(), pal.text, false);
+    }
     sy += ROW_H + 2.0;
 
     let filter = state.styles.filter.to_lowercase();
     for (k, v) in &state.styles.computed {
-        if sy + ROW_H > max_y { return; }
+        if sy >= max_y { return; }
         if !filter.is_empty() && !k.contains(&filter) { continue; }
-        push_text(cmds, pad_x, sy, format!("{}:", k), pal.syn_property, false);
-        push_text(cmds, pad_x + 160.0, sy, v.clone(), pal.text, false);
+        if in_view(sy) {
+            push_text(cmds, pad_x, sy, format!("{}:", k), pal.syn_property, false);
+            push_text(cmds, pad_x + 160.0, sy, v.clone(), pal.text, false);
+        }
         sy += ROW_H;
     }
 
     // Box info (rect / margin / padding z LayoutBox).
-    if sy + ROW_H > max_y { return; }
+    if sy >= max_y { return; }
     sy += 8.0;
-    push_text_bold(cmds, pad_x, sy, "Box".to_string(), pal.text, false);
+    if in_view(sy) {
+        push_text_bold(cmds, pad_x, sy, "Box".to_string(), pal.text, false);
+    }
     sy += ROW_H + 2.0;
     let box_info = vec![
         ("rect", format!("x={:.0} y={:.0} w={:.0} h={:.0}",
@@ -578,9 +611,11 @@ fn paint_styles_pane(
         ("border-width", format!("{:.0}", bx.border_width)),
     ];
     for (k, v) in &box_info {
-        if sy + ROW_H > max_y { break; }
-        push_text(cmds, pad_x, sy, format!("{}:", k), pal.syn_property, false);
-        push_text(cmds, pad_x + 160.0, sy, v.clone(), pal.text, false);
+        if sy >= max_y { break; }
+        if in_view(sy) {
+            push_text(cmds, pad_x, sy, format!("{}:", k), pal.syn_property, false);
+            push_text(cmds, pad_x + 160.0, sy, v.clone(), pal.text, false);
+        }
         sy += ROW_H;
     }
 }

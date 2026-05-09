@@ -532,11 +532,11 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                     }
                     self.mouse_x = new_x;
                     self.mouse_y = new_y;
-                    // Resize drag: aktualizuj devtools_height na zaklade pozice.
+                    // Resize drag: aktualizuj devtools_height (logical px).
                     if self.devtools_resizing {
-                        let win_h = self.renderer.as_ref().map(|r| r.config.height as f32).unwrap_or(0.0);
+                        let viewport_h = self.viewport_h_logical();
                         let raw_y = new_y - self.scroll_y;
-                        let new_height = (win_h - raw_y).max(60.0).min(win_h * 0.9);
+                        let new_height = (viewport_h - raw_y).max(60.0).min(viewport_h * 0.9);
                         self.devtools.panel_h = new_height;
                         self.render();
                         return;
@@ -544,12 +544,8 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                     // Main page scrollbar drag.
                     if self.page_scrollbar_v_drag || self.page_scrollbar_h_drag {
                         if let Some(layout) = &self.layout_root {
-                            let win_h = self.renderer.as_ref().map(|r| r.config.height as f32).unwrap_or(0.0);
-                            let win_w = self.renderer.as_ref().map(|r| r.config.width as f32).unwrap_or(0.0);
-                            let scale = self.renderer.as_ref().map(|r| r.scale_factor).unwrap_or(1.0);
-                            let panel_h = if self.devtools.panel_open { self.devtools.panel_h.min(win_h * 0.7) } else { 0.0 };
-                            let viewport_w = win_w / (self.zoom * scale);
-                            let viewport_h = (win_h - panel_h) / self.zoom;
+                            let viewport_w = self.viewport_w_logical();
+                            let viewport_h = self.viewport_h_logical() - self.panel_h_logical();
                             if self.page_scrollbar_v_drag && layout.rect.height > viewport_h {
                                 let max_scroll = (layout.rect.height - viewport_h).max(1.0);
                                 let thumb_h = (viewport_h * viewport_h / layout.rect.height).max(40.0);
@@ -567,19 +563,19 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                         self.render();
                         return;
                     }
-                    // Splitter drag: aktualizuj split_x.
+                    // Splitter drag: aktualizuj split_x v logical px.
                     if self.devtools.elements.dragging_split {
-                        let win_w = self.renderer.as_ref().map(|r| r.config.width as f32).unwrap_or(0.0);
-                        self.devtools.elements.split_x = self.mouse_x.clamp(200.0, win_w - 220.0);
+                        let viewport_w = self.viewport_w_logical();
+                        self.devtools.elements.split_x = (self.mouse_x - self.scroll_x).clamp(200.0, viewport_w - 220.0);
                         self.render();
                         return;
                     }
                     // Scrollbar drag: prevod mouse_y na scroll_y.
                     if let Some(target) = self.devtools.elements.dragging_scrollbar {
                         use crate::devtools::ScrollTarget;
-                        let win_h = self.renderer.as_ref().map(|r| r.config.height as f32).unwrap_or(0.0);
-                        let panel_h = self.devtools.panel_h.min(win_h * 0.7);
-                        let panel_y = win_h - panel_h;
+                        let viewport_h = self.viewport_h_logical();
+                        let panel_h = self.panel_h_logical();
+                        let panel_y = viewport_h - panel_h;
                         let body_y = panel_y + 4.0 + 30.0
                             + if self.devtools.elements.search.open { 28.0 } else { 0.0 };
                         let body_h = panel_h - 4.0 - 30.0
@@ -593,7 +589,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                                 self.devtools.elements.scroll_y = frac * max_scroll;
                             }
                             ScrollTarget::StylesPane => {
-                                let total_h = self.devtools.styles.computed.len() as f32 * 18.0 * 4.0;
+                                let total_h = self.devtools.styles.estimate_total_h();
                                 let max_scroll = (total_h - body_h).max(0.0);
                                 self.devtools.styles.scroll_y = frac * max_scroll;
                             }
@@ -660,29 +656,29 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                     self.selection_current = Some((self.mouse_x, self.mouse_y));
                     self.selection_dragging = true;
                     // Devtools panel hit-test ma prioritu nad page hit-testem.
+                    // mouse_x/y v doc-logical, raw_y v screen-logical. viewport_w/h v logical.
                     let raw_y = self.mouse_y - self.scroll_y;
-                    let win_h = self.renderer.as_ref().map(|r| r.config.height as f32).unwrap_or(0.0);
-                    let win_w = self.renderer.as_ref().map(|r| r.config.width as f32).unwrap_or(0.0);
-                    let panel_h = if self.devtools.panel_open { self.devtools.panel_h.min(win_h * 0.7) } else { 0.0 };
+                    let viewport_w = self.viewport_w_logical();
+                    let viewport_h = self.viewport_h_logical();
+                    let panel_h = self.panel_h_logical();
 
                     // Main page scrollbar hit-test (priorita nad page click).
                     // Pozn: scrollbar je shifted by shift_command_x(-scroll_x), takze
                     // visible position = bar_x - scroll_x. Mouse_x ma scroll_x baked-in
                     // (viz CursorMoved), takze srovnani s bar_x funguje primo.
+                    // Layout/scrollbar plati pro page area = viewport bez panelu.
                     if let Some(layout) = &self.layout_root {
-                        let scale = self.renderer.as_ref().map(|r| r.scale_factor).unwrap_or(1.0);
-                        let viewport_w = win_w / (self.zoom * scale);
-                        let viewport_h = (win_h - panel_h) / self.zoom;
+                        let viewport_h_page = viewport_h - panel_h;
                         let mx = self.mouse_x;
                         let my_screen = self.mouse_y - self.scroll_y;
                         // Vertikalni scrollbar.
-                        if layout.rect.height > viewport_h
+                        if layout.rect.height > viewport_h_page
                            && mx >= viewport_w - 12.0 && mx < viewport_w
-                           && my_screen >= 0.0 && my_screen < viewport_h {
+                           && my_screen >= 0.0 && my_screen < viewport_h_page {
                             self.page_scrollbar_v_drag = true;
-                            let max_scroll = (layout.rect.height - viewport_h).max(1.0);
-                            let thumb_h = (viewport_h * viewport_h / layout.rect.height).max(40.0);
-                            let frac = ((my_screen - thumb_h * 0.5) / (viewport_h - thumb_h)).clamp(0.0, 1.0);
+                            let max_scroll = (layout.rect.height - viewport_h_page).max(1.0);
+                            let thumb_h = (viewport_h_page * viewport_h_page / layout.rect.height).max(40.0);
+                            let frac = ((my_screen - thumb_h * 0.5) / (viewport_h_page - thumb_h)).clamp(0.0, 1.0);
                             self.scroll_target_y = frac * max_scroll;
                             self.selection_dragging = false;
                             self.render();
@@ -690,7 +686,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                         }
                         // Horizontalni scrollbar.
                         if layout.rect.width > viewport_w
-                           && my_screen >= viewport_h - 12.0 && my_screen < viewport_h
+                           && my_screen >= viewport_h_page - 12.0 && my_screen < viewport_h_page
                            && mx >= 0.0 && mx < viewport_w {
                             self.page_scrollbar_h_drag = true;
                             let max_scroll = (layout.rect.width - viewport_w).max(1.0);
@@ -704,11 +700,11 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                     }
 
                     // Double-click v Elements tab -> zacni editaci attr value / text node.
-                    if is_double_click && self.devtools.panel_open && raw_y >= win_h - panel_h
+                    if is_double_click && self.devtools.panel_open && raw_y >= viewport_h - panel_h
                         && self.devtools.tab == crate::devtools::Tab::Elements {
                         use crate::browser::devtools_panel::{double_click_hit_elements, RESIZE_GRIP_H, TAB_H, DevtoolsHit};
-                        let content_y = win_h - panel_h + RESIZE_GRIP_H + TAB_H;
-                        let dchit = double_click_hit_elements(&self.devtools, win_w, content_y, self.mouse_x, raw_y);
+                        let content_y = viewport_h - panel_h + RESIZE_GRIP_H + TAB_H;
+                        let dchit = double_click_hit_elements(&self.devtools, viewport_w, content_y, self.mouse_x, raw_y);
                         match dchit {
                             DevtoolsHit::EditAttributeValue { node_id, attr } => {
                                 self.start_edit_attribute_value(node_id, attr);
@@ -729,9 +725,9 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                         }
                     }
 
-                    if self.devtools.panel_open && raw_y >= win_h - panel_h {
+                    if self.devtools.panel_open && raw_y >= viewport_h - panel_h {
                         if let Some(layout) = &self.layout_root {
-                            let hit = devtools_hit_test(&self.devtools, layout, win_w, win_h, self.mouse_x, raw_y);
+                            let hit = devtools_hit_test(&self.devtools, layout, viewport_w, viewport_h, self.mouse_x, raw_y);
                             use crate::browser::devtools_panel::DevtoolsHit;
                             match hit {
                                 DevtoolsHit::TabClick(t) => {
@@ -932,9 +928,9 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                 WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Right, .. } => {
                     // RMB: pri devtools panel open, vyhodnotime kontextove menu per-tab.
                     let raw_y = self.mouse_y - self.scroll_y;
-                    let win_h = self.renderer.as_ref().map(|r| r.config.height as f32).unwrap_or(0.0);
-                    let panel_h = if self.devtools.panel_open { self.devtools.panel_h.min(win_h * 0.7) } else { 0.0 };
-                    if self.devtools.panel_open && raw_y >= win_h - panel_h {
+                    let viewport_h = self.viewport_h_logical();
+                    let panel_h = self.panel_h_logical();
+                    if self.devtools.panel_open && raw_y >= viewport_h - panel_h {
                         use crate::browser::devtools_panel::{RESIZE_GRIP_H, SEARCH_H};
                         use crate::devtools::context_menu::{ContextMenuState,
                             elements_row_menu, console_text_menu, console_log_menu,
@@ -944,7 +940,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                             crate::devtools::Tab::Elements => {
                                 let split_x = self.devtools.elements.split_x.max(200.0);
                                 if self.mouse_x < split_x {
-                                    let body_y = win_h - panel_h + RESIZE_GRIP_H + crate::browser::devtools_panel::TAB_H
+                                    let body_y = viewport_h - panel_h + RESIZE_GRIP_H + crate::browser::devtools_panel::TAB_H
                                         + if self.devtools.elements.search.open { SEARCH_H } else { 0.0 };
                                     let row_idx = ((raw_y - body_y + self.devtools.elements.scroll_y) / 18.0) as usize;
                                     if row_idx < self.devtools.elements.rows.len() {
@@ -959,7 +955,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                             crate::devtools::Tab::Console => Some(console_text_menu()),
                             crate::devtools::Tab::Network => {
                                 let header_h = 18.0 + 4.0;
-                                let toolbar_top = win_h - panel_h + RESIZE_GRIP_H + crate::browser::devtools_panel::TAB_H;
+                                let toolbar_top = viewport_h - panel_h + RESIZE_GRIP_H + crate::browser::devtools_panel::TAB_H;
                                 let row_y = toolbar_top + header_h + 2.0;
                                 let idx = ((raw_y - row_y) / 18.0) as usize;
                                 if idx < self.devtools.network.entries.len() {
@@ -968,7 +964,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                             }
                             crate::devtools::Tab::Sources => {
                                 if let Some(file_id) = self.devtools.sources.selected_id {
-                                    let toolbar_top = win_h - panel_h + RESIZE_GRIP_H + crate::browser::devtools_panel::TAB_H;
+                                    let toolbar_top = viewport_h - panel_h + RESIZE_GRIP_H + crate::browser::devtools_panel::TAB_H;
                                     let line_idx = ((raw_y - toolbar_top + self.devtools.sources.scroll_y) / 18.0) as usize;
                                     Some(sources_line_menu(file_id, line_idx as u32 + 1))
                                 } else { None }
@@ -987,31 +983,34 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                         winit::event::MouseScrollDelta::PixelDelta(p) => p.y as f32,
                     };
                     // Pri kurzoru nad devtools panelem - scrolluj tree, ne stranku.
-                    let raw_y = self.mouse_y - self.scroll_y;
-                    let win_h = self.renderer.as_ref().map(|r| r.config.height as f32).unwrap_or(0.0);
-                    let panel_h = if self.devtools.panel_open { self.devtools.panel_h.min(win_h * 0.7) } else { 0.0 };
-                    if self.devtools.panel_open && raw_y >= win_h - panel_h {
+                    // mouse_x/y jsou logical (po /(zoom*scale)), srovnani s logical viewport.
+                    let raw_y_logical = self.mouse_y - self.scroll_y;
+                    let viewport_w = self.viewport_w_logical();
+                    let viewport_h = self.viewport_h_logical();
+                    if self.point_in_devtools(self.mouse_x - self.scroll_x, raw_y_logical) {
+                        let scroll_amount_logical = scroll_amount / (self.zoom * self.renderer.as_ref().map(|r| r.scale_factor).unwrap_or(1.0));
                         match self.devtools.tab {
                             crate::devtools::Tab::Elements => {
-                                let win_w = self.renderer.as_ref().map(|r| r.config.width as f32).unwrap_or(0.0);
-                                let default_split = win_w * 0.7;
+                                let default_split = viewport_w * 0.7;
                                 let split_x = if self.devtools.elements.split_x < 1.0 { default_split }
-                                              else { self.devtools.elements.split_x.max(200.0).min(win_w - 220.0) };
-                                if self.mouse_x >= split_x {
-                                    self.devtools.styles.scroll_y -= scroll_amount;
-                                    if self.devtools.styles.scroll_y < 0.0 { self.devtools.styles.scroll_y = 0.0; }
+                                              else { self.devtools.elements.split_x.max(200.0).min(viewport_w - 220.0) };
+                                let body_h = self.panel_h_logical() - 4.0 - 30.0
+                                    - if self.devtools.elements.search.open { 28.0 } else { 0.0 };
+                                if (self.mouse_x - self.scroll_x) >= split_x {
+                                    let total_h = self.estimate_styles_total_h();
+                                    let max_scroll = (total_h - body_h).max(0.0);
+                                    self.devtools.styles.scroll_y = (self.devtools.styles.scroll_y - scroll_amount_logical).clamp(0.0, max_scroll);
                                 } else {
-                                    self.devtools.elements.scroll_y -= scroll_amount;
-                                    if self.devtools.elements.scroll_y < 0.0 { self.devtools.elements.scroll_y = 0.0; }
+                                    let total_h = self.devtools.elements.rows.len() as f32 * 18.0;
+                                    let max_scroll = (total_h - body_h).max(0.0);
+                                    self.devtools.elements.scroll_y = (self.devtools.elements.scroll_y - scroll_amount_logical).clamp(0.0, max_scroll);
                                 }
                             }
                             crate::devtools::Tab::Sources => {
-                                self.devtools.sources.scroll_y -= scroll_amount;
-                                if self.devtools.sources.scroll_y < 0.0 { self.devtools.sources.scroll_y = 0.0; }
+                                self.devtools.sources.scroll_y = (self.devtools.sources.scroll_y - scroll_amount_logical).max(0.0);
                             }
                             crate::devtools::Tab::Console => {
-                                self.devtools.console.scroll_y -= scroll_amount;
-                                if self.devtools.console.scroll_y < 0.0 { self.devtools.console.scroll_y = 0.0; }
+                                self.devtools.console.scroll_y = (self.devtools.console.scroll_y - scroll_amount_logical).max(0.0);
                             }
                             _ => {}
                         }
@@ -1587,6 +1586,33 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
     impl App {
         fn viewport_h_logical(&self) -> f32 {
             self.renderer.as_ref().map(|r| (r.config.height as f32) / (self.zoom * r.scale_factor)).unwrap_or(768.0)
+        }
+        fn viewport_w_logical(&self) -> f32 {
+            self.renderer.as_ref().map(|r| (r.config.width as f32) / (self.zoom * r.scale_factor)).unwrap_or(1024.0)
+        }
+        /// Vyska devtools panelu v logical px (clampnuta na 70% viewportu).
+        fn panel_h_logical(&self) -> f32 {
+            if !self.devtools.panel_open { return 0.0; }
+            self.devtools.panel_h.min(self.viewport_h_logical() * 0.7)
+        }
+        /// Top edge devtools panelu v logical px (= viewport_h - panel_h).
+        fn panel_top_logical(&self) -> f32 {
+            self.viewport_h_logical() - self.panel_h_logical()
+        }
+        /// Test: je dany logical-y bod v devtools panelu?
+        fn point_in_devtools(&self, logical_x: f32, logical_y: f32) -> bool {
+            self.devtools.panel_open
+                && logical_x >= 0.0
+                && logical_x < self.viewport_w_logical()
+                && logical_y >= self.panel_top_logical()
+                && logical_y < self.viewport_h_logical()
+        }
+        fn estimate_styles_total_h(&self) -> f32 {
+            self.devtools.styles.estimate_total_h()
+        }
+        /// Body content y range Elements/Sources/Console - od top toolbaru.
+        fn devtools_body_h(&self) -> f32 {
+            (self.panel_h_logical() - 4.0 - 30.0).max(0.0)
         }
         /// Najde vsechny pozice match v display listu textech. Vrati Vec<(y, x, w)>.
         fn find_collect_matches(&self) -> Vec<(f32, f32, f32)> {
@@ -3028,6 +3054,18 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                 }
             }
 
+            // Aplikuj horizontalni scroll posun na page content (pred overlay split).
+            // Overlay (devtools, scrollbars, addr bar, find) jsou screen-fixed a
+            // shift se na ne neaplikuje.
+            if self.scroll_x.abs() > 0.001 {
+                for cmd in display_list.iter_mut() {
+                    shift_command_x(cmd, -self.scroll_x);
+                }
+            }
+            // Split point: vsechno za timto bodem se renderuje AZ PO WebGL passu,
+            // takze WebGL canvas neprekryje devtools/scrollbar/address bar/find.
+            let overlay_split = display_list.len();
+
             // Element highlight overlay (Chrome-like padding/margin viz) - vykresli
             // VZDY pri Some(selected) bez ohledu na panel_open. Zachova selection
             // visibility napric F12 toggle.
@@ -3039,16 +3077,19 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
             );
 
             // In-window DevTools panel - emit pred scrollbar a po main viewport content.
-            let win_h = r.config.height as f32;
+            // viewport_w/h v logical px (display list je v logical, vp uniform / zoom*scale).
+            let viewport_w_logical = (r.config.width as f32) / (self.zoom * r.scale_factor);
+            let viewport_h_logical = (r.config.height as f32) / (self.zoom * r.scale_factor);
             self.devtools.tick_frame();
             paint_devtools_panel(
                 &mut display_list,
                 &layout_root,
                 &self.devtools,
                 self.interpreter.as_ref(),
-                r.config.width as f32,
-                win_h,
-                self.mouse_x, self.mouse_y,
+                viewport_w_logical,
+                viewport_h_logical,
+                self.mouse_x - self.scroll_x,
+                self.mouse_y - self.scroll_y,
             );
             // (Selection rect uz emitnuty PRED build_display_list - rendered POD textem.)
             // Address bar (Ctrl+L) overlay: input top centered.
@@ -3108,11 +3149,10 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
             // (Highlight rect uz vykreslen pres paint_element_highlight nahore.)
 
             // Scrollbar rendering: pri page content overflow Y emituj track + thumb.
-            // Logical viewport (window/zoom) - vertices jsou v logical px.
-            let win_h = r.config.height as f32;
-            let panel_h = if self.devtools.panel_open { self.devtools.panel_h.min(win_h * 0.7) } else { 0.0 };
-            let viewport_w = (r.config.width as f32) / (self.zoom * r.scale_factor);
-            let viewport_h = (win_h - panel_h) / self.zoom;
+            // Logical viewport - vertices v logical px.
+            let panel_h_logical = if self.devtools.panel_open { self.devtools.panel_h.min(viewport_h_logical * 0.7) } else { 0.0 };
+            let viewport_w = viewport_w_logical;
+            let viewport_h = viewport_h_logical - panel_h_logical;
             let total_h = layout_root.rect.height;
             if total_h > viewport_h {
                 let bar_w = 12.0_f32;
@@ -3150,13 +3190,6 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                     color: [160, 160, 170, 255], radius: (bar_h - 4.0) * 0.5,
                 });
             }
-            // Aplikuj horizontalni scroll posun na vsechny commandy.
-            if self.scroll_x.abs() > 0.001 {
-                for cmd in display_list.iter_mut() {
-                    shift_command_x(cmd, -self.scroll_x);
-                }
-            }
-
             // Pre-rasterize vsechny glyfy do atlasu + nacti images.
             // Pri COLR color font: rasterize char jako RGBA + put do image_atlas
             // pres synthetic key "__colr:{family}:{ch}:{size}". Render path detekuje.
@@ -3216,11 +3249,14 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
             r.upload_atlas();
             r.upload_image_atlas();
 
+            // Split list na page (pred WebGL) + overlay (po WebGL).
+            let (page_cmds, overlay_cmds) = display_list.split_at(overlay_split);
+
             // Pri WebGL canvas s pending queue, vyuzij webgl-aware draw flow.
             let webgl_states_opt = self.interpreter.as_ref().map(|i| i.webgl_states.clone());
             if let Some(states_rc) = &webgl_states_opt {
                 let states = states_rc.borrow();
-                r.draw_full_frame(&display_list, &layout_root, Some(&*states), self.scroll_y);
+                r.draw_full_frame(page_cmds, overlay_cmds, &layout_root, Some(&*states), self.scroll_y);
             } else {
                 r.draw_segments(&display_list);
             }
@@ -4898,6 +4934,7 @@ impl Renderer {
     pub fn draw_full_frame(
         &mut self,
         cmds: &[DisplayCommand],
+        overlay_cmds: &[DisplayCommand],
         layout_root: &super::layout::LayoutBox,
         webgl_states: Option<&std::collections::HashMap<usize, std::rc::Rc<std::cell::RefCell<crate::interpreter::WebGLState>>>>,
         scroll_y: f32,
@@ -4922,10 +4959,10 @@ impl Renderer {
         // Main RT view - sem kreslime (ne primo na swap chain)
         let main_rt_view = self.main_rt.create_view(&Default::default());
 
-        // 1. CSS display list -> main_rt
+        // 1. CSS display list (page content) -> main_rt
         let had_segments = self.draw_segments_into_view(&main_rt_view, cmds);
 
-        // 2. WebGL pass -> main_rt
+        // 2. WebGL pass -> main_rt (po page contentu, pred overlay)
         let mut webgl_did_render = false;
         if let Some(states) = webgl_states {
             if !states.is_empty() {
@@ -4933,8 +4970,14 @@ impl Renderer {
             }
         }
 
-        // 3. Composit main_rt -> swap chain
-        if had_segments || webgl_did_render {
+        // 3. Overlay (devtools, scrollbars, addr/find bar) -> main_rt PO WebGL,
+        // aby UI prvky neprekryl WebGL clear color.
+        let had_overlay = if !overlay_cmds.is_empty() {
+            self.draw_segments_into_view(&main_rt_view, overlay_cmds)
+        } else { false };
+
+        // 4. Composit main_rt -> swap chain
+        if had_segments || webgl_did_render || had_overlay {
             let vw = self.config.width as f32;
             let vh = self.config.height as f32;
             self.compose_view_to_swap(&swap_view, &main_rt_view, 0.0, 0.0, vw, vh);
