@@ -249,6 +249,10 @@ pub fn paint_devtools_panel(
     if state.settings_popup_open {
         paint_settings_popup(cmds, state, &pal, win_w, win_h, mouse_x, mouse_y);
     }
+    // Class manager popup.
+    if state.class_manager_open {
+        paint_class_manager(cmds, state, layout_root, &pal, win_w, win_h, mouse_x, mouse_y);
+    }
     // Color picker popup.
     if state.color_picker.is_some() {
         paint_color_picker(cmds, state, &pal);
@@ -257,6 +261,53 @@ pub fn paint_devtools_panel(
     if let Some(menu) = &state.context_menu {
         paint_context_menu(cmds, &pal, menu, mouse_x, mouse_y);
     }
+}
+
+fn paint_class_manager(
+    cmds: &mut Vec<DisplayCommand>,
+    state: &DevToolsState,
+    layout_root: &LayoutBox,
+    pal: &Palette,
+    win_w: f32,
+    win_h: f32,
+    _mouse_x: f32, _mouse_y: f32,
+) {
+    let pop_w = 280.0;
+    let pop_h = 240.0;
+    let px = (win_w - pop_w) * 0.5;
+    let py = (win_h - pop_h) * 0.5;
+    push_rect(cmds, 0.0, 0.0, win_w, win_h, [0, 0, 0, 100]);
+    push_rect(cmds, px, py, pop_w, pop_h, pal.bg_panel);
+    push_rect_border(cmds, px, py, pop_w, pop_h, pal.border_strong);
+    push_rect(cmds, px, py, pop_w, 32.0, pal.bg_panel_alt);
+    push_ui_text(cmds, px + 12.0, py + 8.0, "Tridy elementu".to_string(), pal.text, true);
+
+    // Class list pro selected element.
+    let mut sy = py + 44.0;
+    if let Some(sel_id) = state.elements.selected {
+        if let Some(bx) = find_layout_box(layout_root, sel_id) {
+            let class_attr = bx.node.as_ref().and_then(|n|
+                n.attributes.borrow().get("class").cloned()
+            ).unwrap_or_default();
+            if class_attr.is_empty() {
+                push_ui_text_italic(cmds, px + 16.0, sy,
+                                    "Element nema tridy".to_string(), pal.text_dim);
+            } else {
+                push_ui_text(cmds, px + 16.0, sy, "Aktivni tridy:".to_string(), pal.text_dim, false);
+                sy += ROW_H + 4.0;
+                for cls in class_attr.split_whitespace() {
+                    // Checkbox + class name.
+                    push_rect_border(cmds, px + 16.0, sy + 2.0, 12.0, 12.0, pal.border);
+                    push_rect(cmds, px + 18.0, sy + 4.0, 8.0, 8.0, pal.accent);
+                    push_text(cmds, px + 36.0, sy, format!(".{}", cls), pal.syn_attr, false);
+                    sy += ROW_H;
+                }
+            }
+        }
+    }
+    // Hint.
+    push_ui_text_italic(cmds, px + 16.0, py + pop_h - 24.0,
+                        "Klik mimo zavre".to_string(), pal.text_disabled);
 }
 
 fn paint_settings_popup(
@@ -2777,6 +2828,18 @@ pub fn devtools_hit_test(
     mouse_x: f32, mouse_y: f32,
 ) -> DevtoolsHit {
     if !state.panel_open { return DevtoolsHit::None; }
+    // Class manager popup: outside click -> dismiss (reuse ClassManagerToggle).
+    if state.class_manager_open {
+        let pop_w = 280.0;
+        let pop_h = 240.0;
+        let px = (win_w - pop_w) * 0.5;
+        let py = (win_h - pop_h) * 0.5;
+        if mouse_x < px || mouse_x >= px + pop_w
+           || mouse_y < py || mouse_y >= py + pop_h {
+            return DevtoolsHit::ClassManagerToggle;
+        }
+        return DevtoolsHit::PanelArea;
+    }
     // Color picker priority: klik mimo popup -> close.
     if let Some(cp) = &state.color_picker {
         let pop_w = 240.0;
