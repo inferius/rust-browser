@@ -2934,19 +2934,49 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
             // (test stranka 7000 px, viewport 900 px = 8x mensi paint cost).
             // Reuse buffer pres frames - alloc-free.
             let mut display_list = std::mem::take(&mut self.display_list_buffer);
-            // Selection rect emit PRED layout commands - selection bg rendered
-            // POD textem (display_list order = render order, first = bottom).
-            // Coords v document space, shift_command_y posune vsechno o -scroll_y.
+            // Selection emit PRED layout commands - selection bg rendered POD
+            // textem. Per-text-box highlight: walk layout, kazdy text run co se
+            // protina s drag rectem dostane vlastni highlight rectangle (browser-like
+            // "select per line" namisto single big rect).
             if let (Some(a), Some(c)) = (self.selection_anchor, self.selection_current) {
                 let x0 = a.0.min(c.0);
                 let y0 = a.1.min(c.1);
                 let x1 = a.0.max(c.0);
                 let y1 = a.1.max(c.1);
                 if x1 > x0 + 1.0 || y1 > y0 + 1.0 {
-                    display_list.push(DisplayCommand::Rect {
-                        x: x0, y: y0, w: x1 - x0, h: y1 - y0,
-                        color: [80, 150, 255, 100], radius: 0.0,
-                    });
+                    fn collect_text_boxes(
+                        b: &super::layout::LayoutBox,
+                        sx0: f32, sy0: f32, sx1: f32, sy1: f32,
+                        out: &mut Vec<(f32, f32, f32, f32)>,
+                    ) {
+                        if b.text.is_some() {
+                            let bx0 = b.rect.x;
+                            let by0 = b.rect.y;
+                            let bx1 = b.rect.x + b.rect.width;
+                            let by1 = b.rect.y + b.rect.height;
+                            // Rect intersection.
+                            if bx0 < sx1 && bx1 > sx0 && by0 < sy1 && by1 > sy0 {
+                                let ix0 = bx0.max(sx0);
+                                let iy0 = by0.max(sy0);
+                                let ix1 = bx1.min(sx1);
+                                let iy1 = by1.min(sy1);
+                                if ix1 > ix0 + 0.5 && iy1 > iy0 + 0.5 {
+                                    out.push((ix0, iy0, ix1 - ix0, iy1 - iy0));
+                                }
+                            }
+                        }
+                        for c in &b.children {
+                            collect_text_boxes(c, sx0, sy0, sx1, sy1, out);
+                        }
+                    }
+                    let mut hits = Vec::new();
+                    collect_text_boxes(&layout_root, x0, y0, x1, y1, &mut hits);
+                    for (hx, hy, hw, hh) in hits {
+                        display_list.push(DisplayCommand::Rect {
+                            x: hx, y: hy, w: hw, h: hh,
+                            color: [80, 150, 255, 100], radius: 0.0,
+                        });
+                    }
                 }
             }
             paint::build_display_list_culled_into(&layout_root, self.scroll_y, viewport_h, &mut display_list);
