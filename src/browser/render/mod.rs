@@ -760,6 +760,44 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     let viewport_h = self.viewport_h_logical();
                     let panel_h = self.panel_h_logical();
 
+                    // Address bar autocomplete suggestion klik.
+                    if self.addr_open && !self.addr_input.text.is_empty() {
+                        let viewport_w = self.viewport_w_logical();
+                        let bar_w = (viewport_w - 80.0).min(800.0);
+                        let bar_x = (viewport_w - bar_w) * 0.5;
+                        let bar_y = 8.0_f32;
+                        let bar_h = 40.0_f32;
+                        let popup_y = bar_y + bar_h + 4.0;
+                        let item_h = 28.0_f32;
+                        let mx = self.mouse_x;
+                        let my_screen = self.mouse_y - self.scroll_y;
+                        if mx >= bar_x && mx < bar_x + bar_w && my_screen >= popup_y {
+                            let q = self.addr_input.text.to_lowercase();
+                            let history = crate::devtools::history::load_history();
+                            let bookmarks = crate::devtools::bookmarks::load_bookmarks();
+                            let mut suggest: Vec<String> = Vec::new();
+                            for b in &bookmarks {
+                                if b.url.to_lowercase().contains(&q) || b.title.to_lowercase().contains(&q) {
+                                    suggest.push(b.url.clone());
+                                    if suggest.len() >= 8 { break; }
+                                }
+                            }
+                            for h in history.iter().rev() {
+                                if suggest.len() >= 8 { break; }
+                                if suggest.contains(&h.url) { continue; }
+                                if h.url.to_lowercase().contains(&q) || h.title.to_lowercase().contains(&q) {
+                                    suggest.push(h.url.clone());
+                                }
+                            }
+                            let idx = ((my_screen - popup_y) / item_h) as usize;
+                            if let Some(url) = suggest.get(idx).cloned() {
+                                self.addr_open = false;
+                                self.addr_input.clear();
+                                self.navigate_url(&url);
+                                return;
+                            }
+                        }
+                    }
                     // Shell chrome hit-test (priorita nad page).
                     if self.shell_mode {
                         let viewport_w = self.viewport_w_logical();
