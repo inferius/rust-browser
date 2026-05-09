@@ -23,6 +23,7 @@ pub mod emoji_fonts;
 pub mod webgl_helpers;
 pub mod dom_input_buffer;
 pub mod interactive;
+pub mod selection;
 
 #[cfg(test)]
 mod tests;

@@ -83,8 +83,6 @@ fn convert_handle(handle: &Handle, parent: &Rc<Node>) {
                     parent: std::cell::RefCell::new(std::rc::Weak::new()),
                     children: std::cell::RefCell::new(Vec::new()),
                     listeners: std::cell::RefCell::new(HashMap::new()),
-                    input_cursor: std::cell::Cell::new(0),
-                    input_anchor: std::cell::Cell::new(None),
                 }))
             }
             RcNodeData::Document => {

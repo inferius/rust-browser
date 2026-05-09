@@ -1223,10 +1223,11 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                                 && !self.devtools.focus.is_text_input()
                                 && !self.modifiers.control_key()
                             {
-                                let node_opt = self.interpreter.as_ref().and_then(|interp| {
+                                let (node_opt, doc_rc) = self.interpreter.as_ref().map(|interp| {
                                     let doc_root = std::rc::Rc::clone(&interp.document.borrow().root);
-                                    find_node_by_ptr(&doc_root, fid)
-                                });
+                                    let n = find_node_by_ptr(&doc_root, fid);
+                                    (n, std::rc::Rc::clone(&interp.document))
+                                }).unwrap_or((None, std::rc::Rc::new(std::cell::RefCell::new(crate::browser::dom::Document::empty(String::new())))));
                                 if let Some(node) = node_opt {
                                     let tag = node.tag_name().unwrap_or_default();
                                     if matches!(tag.as_str(), "input" | "textarea") {
@@ -1234,7 +1235,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                                         use crate::browser::render::text_input::{dispatch_text_key, TextKeyOutcome};
                                         let ctrl = self.modifiers.control_key();
                                         let shift = self.modifiers.shift_key();
-                                        let mut buf = DomInputBuffer::new(node);
+                                        let mut buf = DomInputBuffer::new(node, doc_rc);
                                         let outcome = dispatch_text_key(&mut buf, &key_event.logical_key, ctrl, shift);
                                         let consumed = !matches!(outcome, TextKeyOutcome::Unhandled);
                                         if matches!(outcome, TextKeyOutcome::Submit) {
@@ -1895,6 +1896,7 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
             }
             let new_interp = crate::interpreter::Interpreter::new();
             new_interp.set_document(crate::browser::dom::Document {
+                selection: std::cell::RefCell::new(crate::browser::selection::SelectionRegistry::new()),
                 title: String::new(),
                 url: String::new(),
                 root: saved_doc,
@@ -2179,8 +2181,6 @@ pub fn run_window_with_options(html: String, css: String, current_html_path: Opt
                                     parent: std::cell::RefCell::new(std::rc::Rc::downgrade(&parent)),
                                     children: std::cell::RefCell::new(Vec::new()),
                                     listeners: std::cell::RefCell::new(std::collections::HashMap::new()),
-                                    input_cursor: std::cell::Cell::new(0),
-                                    input_anchor: std::cell::Cell::new(None),
                                 });
                                 kids[idx] = new_node;
                             }

@@ -35,12 +35,6 @@ pub struct NodeData {
     pub children: RefCell<Vec<Rc<Node>>>,
     /// Listeners: event_type -> Vec<callback> (callback je opaque pres usize id)
     pub listeners: RefCell<HashMap<String, Vec<usize>>>,
-    /// Text input cursor (byte offset v `value` attr). Pouzite jen pro
-    /// <input>/<textarea>; ostatni elementy ignoruji. Default = end of text
-    /// (initial focus).
-    pub input_cursor: std::cell::Cell<usize>,
-    /// Selection anchor (byte offset). None = caret only, Some = selection.
-    pub input_anchor: std::cell::Cell<Option<usize>>,
 }
 
 pub type Node = NodeData;
@@ -79,8 +73,6 @@ impl NodeData {
             parent: RefCell::new(Weak::new()),
             children: RefCell::new(Vec::new()),
             listeners: RefCell::new(HashMap::new()),
-            input_cursor: std::cell::Cell::new(0),
-            input_anchor: std::cell::Cell::new(None),
         })
     }
 
@@ -91,8 +83,6 @@ impl NodeData {
             parent: RefCell::new(Weak::new()),
             children: RefCell::new(Vec::new()),
             listeners: RefCell::new(HashMap::new()),
-            input_cursor: std::cell::Cell::new(0),
-            input_anchor: std::cell::Cell::new(None),
         })
     }
 
@@ -103,8 +93,6 @@ impl NodeData {
             parent: RefCell::new(Weak::new()),
             children: RefCell::new(Vec::new()),
             listeners: RefCell::new(HashMap::new()),
-            input_cursor: std::cell::Cell::new(0),
-            input_anchor: std::cell::Cell::new(None),
         })
     }
 
@@ -115,8 +103,6 @@ impl NodeData {
             parent: RefCell::new(Weak::new()),
             children: RefCell::new(Vec::new()),
             listeners: RefCell::new(HashMap::new()),
-            input_cursor: std::cell::Cell::new(0),
-            input_anchor: std::cell::Cell::new(None),
         })
     }
 
@@ -247,6 +233,9 @@ pub struct Document {
     pub root: Rc<Node>,
     pub url: String,
     pub title: String,
+    /// Document-level selection state - text input cursors, page selection
+    /// rangesy. Foundation pro W3C Selection API + page text-run selection.
+    pub selection: RefCell<super::selection::SelectionRegistry>,
 }
 
 impl Document {
@@ -263,6 +252,7 @@ impl Document {
             root,
             url,
             title: String::new(),
+            selection: RefCell::new(super::selection::SelectionRegistry::new()),
         }
     }
 
@@ -272,6 +262,7 @@ impl Document {
             root: NodeData::new_document(),
             url,
             title: String::new(),
+            selection: RefCell::new(super::selection::SelectionRegistry::new()),
         }
     }
 
