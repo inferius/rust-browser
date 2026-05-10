@@ -5790,12 +5790,16 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             };
 
             // Drainuj WebSocket events kazdy frame (dispatch onopen/onmessage/onerror/onclose).
+            let _t_drain = std::time::Instant::now();
             if let Some(interp) = &mut self.interpreter {
                 let _ = interp.drain_websockets();
                 interp.drain_fetches();
             }
+            perf_t("drain (ws+fetch)", _t_drain);
+            let _t_async = std::time::Instant::now();
             // Drain async background jobs (image lazy load, file IO, etc).
             self.async_jobs.drain();
+            perf_t("async_jobs.drain", _t_async);
             if let Some(interp) = &mut self.interpreter {
                 let _ = interp; // re-borrow scope
             }
@@ -7020,12 +7024,14 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
 
             // Pri WebGL canvas s pending queue, vyuzij webgl-aware draw flow.
             let webgl_states_opt = self.interpreter.as_ref().map(|i| i.webgl_states.clone());
+            let _t_gpu = std::time::Instant::now();
             if let Some(states_rc) = &webgl_states_opt {
                 let states = states_rc.borrow();
                 r.draw_full_frame(page_cmds, overlay_cmds, &layout_root, Some(&*states), self.scroll_y);
             } else {
                 r.draw_segments(&display_list);
             }
+            perf_t("gpu draw + present", _t_gpu);
 
             // Ulozim layout pro hit test + vrat display_list buffer pro priste.
             // PERF: pri owned=None (immutable cesta) self.layout_root zustava

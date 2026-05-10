@@ -1588,7 +1588,13 @@ pub fn setup_builtins(
     window.set("innerWidth".into(),  JsValue::Number(1024.0));
     window.set("innerHeight".into(), JsValue::Number(768.0));
     window.set("devicePixelRatio".into(), JsValue::Number(1.0));
-    e.define("window", JsValue::Object(Rc::new(RefCell::new(window))));
+    let window_rc = Rc::new(RefCell::new(window));
+    let window_val = JsValue::Object(Rc::clone(&window_rc));
+    e.define("window", window_val.clone());
+    // Top-level `this` v non-strict mode = globalThis = window. Bez tohoto
+    // skripty co cti `this.foo` na top levelu (kazda produkcni stranka -
+    // googleadsense, polyfilly, IIFE) selzou s ReferenceError 'this'.
+    e.define("this", window_val.clone());
 
 
     // ─── fetch - real HTTP client (ureq, blocking) ──────────────────────────
@@ -1781,8 +1787,8 @@ pub fn setup_builtins(
     e.define("NaN",       JsValue::Number(f64::NAN));
     e.define("undefined", JsValue::Undefined);
 
-    // globalThis - stub
-    e.define("globalThis", JsValue::Object(Rc::new(RefCell::new(JsObject::new()))));
+    // globalThis = window (per HTML spec, browsing context's global object).
+    e.define("globalThis", window_val.clone());
 
     // queueMicrotask - stub (sync)
     e.define("queueMicrotask", native("queueMicrotask", |_| Ok(JsValue::Undefined)));
