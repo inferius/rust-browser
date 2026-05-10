@@ -294,7 +294,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                 if ch.taffy_mode {
                     t.chars().filter(|c| !matches!(*c, '\u{200B}' | ' ' | '\n' | '\t')).count() as f32 * 10.0
                 } else {
-                    super::super::layout::measure_text_width(t, ch.font_size)
+                    super::super::layout::measure_text_width_full(t, ch.font_size, ch.bold, ch.italic, &ch.font_family)
                 }
             } else if ch.rect.width > 0.0 { ch.rect.width } else {
                 // Recursive content width pres descendants (text nodes uvnitr).
@@ -309,7 +309,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                     // Taffy fixtures: 10px per visible char (excl. ZWS).
                     t.chars().filter(|c| !matches!(*c, '\u{200B}' | ' ' | '\n' | '\t')).count() as f32 * 10.0
                 } else {
-                    super::super::layout::measure_text_width(t, ch.font_size)
+                    super::super::layout::measure_text_width_full(t, ch.font_size, ch.bold, ch.italic, &ch.font_family)
                 }
             } else if ch.rect.width > 0.0 { ch.rect.width } else {
                 intrinsic_content_width(ch)
@@ -1378,7 +1378,7 @@ fn intrinsic_content_width(bx: &LayoutBox) -> f32 {
     let pad_r = bx.padding_right.unwrap_or(bx.padding);
     let chrome = pad_l + pad_r + 2.0 * bx.border_width;
     if let Some(t) = &bx.text {
-        return super::super::layout::measure_text_width(t, bx.font_size) + chrome;
+        return super::super::layout::measure_text_width_full(t, bx.font_size, bx.bold, bx.italic, &bx.font_family) + chrome;
     }
     // Sum descendant max-content widths.
     let max_child: f32 = bx.children.iter()

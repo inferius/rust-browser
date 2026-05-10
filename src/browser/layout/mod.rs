@@ -3378,7 +3378,7 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
         // space) a flush_inline measure (s synthetic 0.27*fs) rozdilne -> spurious
         // text wrap kdyz pre-pass dal min sirku nez flush_inline potrebuje.
         let space_w = {
-            let g = measure_text_width_styled(" ", font_size, bx_clone.bold);
+            let g = measure_text_width_full(" ", font_size, bx_clone.bold, bx_clone.italic, &bx_clone.font_family);
             if g > 0.0 { g } else { font_size * 0.27 }
         };
 
@@ -3407,7 +3407,7 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
             // pri wrapovanem textu (cursor_x pri exitu = jen last line end).
             let mut max_line_end_x: f32 = cursor_x;
             for (wi, word) in words.iter().enumerate() {
-                let w = measure_text_width_styled(word, font_size, bx_clone.bold);
+                let w = measure_text_width_full(word, font_size, bx_clone.bold, bx_clone.italic, &bx_clone.font_family);
                 let inter_word_space = if wi > 0 { space_w } else { 0.0 };
                 // Pri inner_w <= 0 (pre-pass parent.rect.width=0) NE wrap -
                 // vsech slov v jedne line. Real layout pak prepocita s
@@ -3440,7 +3440,7 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
                     let mut acc_w = 0.0;
                     let chars: Vec<char> = word.chars().collect();
                     for ch in chars {
-                        let ch_w = measure_text_width_styled(&ch.to_string(), font_size, bx_clone.bold);
+                        let ch_w = measure_text_width_full(&ch.to_string(), font_size, bx_clone.bold, bx_clone.italic, &bx_clone.font_family);
                         if cursor_x + acc_w + ch_w > inner_x + inner_w && cursor_x > inner_x {
                             cursor_y += line_height;
                             cursor_x = inner_x;
@@ -3586,50 +3586,126 @@ pub fn measure_text_width(text: &str, font_size: f32) -> f32 {
 }
 
 pub fn measure_text_width_styled(text: &str, font_size: f32, bold: bool) -> f32 {
+    measure_text_width_full(text, font_size, bold, false, "")
+}
+
+/// Family-aware measure: vyhleda monospace/serif/sans-serif font dle CSS
+/// font-family list. Pri zadnem matchu fallback na default (Times). Bez tohoto
+/// by Courier-New text mereny default Times davalo zcela odlisne sirky -
+/// kazdy span text na stranky s monospace body by nasel jine wrap pointy.
+pub fn measure_text_width_full(text: &str, font_size: f32, bold: bool, italic: bool, family: &str) -> f32 {
     use std::sync::OnceLock;
     static FONT: OnceLock<Option<fontdue::Font>> = OnceLock::new();
     static FONT_BOLD: OnceLock<Option<fontdue::Font>> = OnceLock::new();
+    static FONT_MONO: OnceLock<Option<fontdue::Font>> = OnceLock::new();
+    static FONT_MONO_BOLD: OnceLock<Option<fontdue::Font>> = OnceLock::new();
+    static FONT_SANS: OnceLock<Option<fontdue::Font>> = OnceLock::new();
+    static FONT_SANS_BOLD: OnceLock<Option<fontdue::Font>> = OnceLock::new();
+
+    let _ = italic; // italic font by-mela rovnou stejnou advance jako regular zhruba
 
     let font_opt = FONT.get_or_init(|| {
         super::render::try_load_default_font()
             .and_then(|data| fontdue::Font::from_bytes(data, fontdue::FontSettings::default()).ok())
     });
     let font_bold_opt = FONT_BOLD.get_or_init(|| {
-        // Match render-side bold font candidates.
-        let candidates: &[&str] = &[
+        load_font_first(&[
             "C:\\Windows\\Fonts\\timesbd.ttf",
             "C:\\Windows\\Fonts\\segoeuib.ttf",
             "C:\\Windows\\Fonts\\arialbd.ttf",
             "/usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf",
             "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf",
             "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        ];
-        for path in candidates {
-            if let Ok(d) = std::fs::read(path) {
-                if let Ok(f) = fontdue::Font::from_bytes(d, fontdue::FontSettings::default()) {
-                    return Some(f);
-                }
-            }
-        }
-        None
+        ])
+    });
+    let mono_opt = FONT_MONO.get_or_init(|| {
+        load_font_first(&[
+            "C:\\Windows\\Fonts\\cour.ttf",   // Courier New
+            "C:\\Windows\\Fonts\\consola.ttf", // Consolas
+            "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
+        ])
+    });
+    let mono_bold_opt = FONT_MONO_BOLD.get_or_init(|| {
+        load_font_first(&[
+            "C:\\Windows\\Fonts\\courbd.ttf",
+            "C:\\Windows\\Fonts\\consolab.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationMono-Bold.ttf",
+        ])
+    });
+    let sans_opt = FONT_SANS.get_or_init(|| {
+        load_font_first(&[
+            "C:\\Windows\\Fonts\\segoeui.ttf",
+            "C:\\Windows\\Fonts\\arial.ttf",
+            "C:\\Windows\\Fonts\\verdana.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        ])
+    });
+    let sans_bold_opt = FONT_SANS_BOLD.get_or_init(|| {
+        load_font_first(&[
+            "C:\\Windows\\Fonts\\segoeuib.ttf",
+            "C:\\Windows\\Fonts\\arialbd.ttf",
+            "C:\\Windows\\Fonts\\verdanab.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        ])
     });
 
-    // Pri bold preferuj real bold font; pri jeho neexistenci pricti fake-bold
-    // 1px smear per char (render side dela double-draw +1px).
-    let active_font = if bold { font_bold_opt.as_ref().or(font_opt.as_ref()) } else { font_opt.as_ref() };
-    let fake_bold_pad = if bold && font_bold_opt.is_none() { 1.0 } else { 0.0 };
+    // Family lookup: parse CSS font-family list (comma-separated alternatives,
+    // last is generic family). Hledame primo monospace/sans-serif keywords i
+    // zname rodiny.
+    let f_lower = family.to_lowercase();
+    let is_mono = f_lower.contains("monospace")
+        || f_lower.contains("courier")
+        || f_lower.contains("consolas")
+        || f_lower.contains("monaco")
+        || f_lower.contains("menlo");
+    let is_sans = !is_mono && (
+        f_lower.contains("sans-serif")
+        || f_lower.contains("arial")
+        || f_lower.contains("helvetica")
+        || f_lower.contains("segoe")
+        || f_lower.contains("verdana")
+        || f_lower.contains("inter")
+        || f_lower.contains("roboto")
+        || f_lower.contains("system-ui"));
+
+    let active_font: Option<&fontdue::Font> = if is_mono {
+        if bold { mono_bold_opt.as_ref().or(mono_opt.as_ref()) } else { mono_opt.as_ref() }
+    } else if is_sans {
+        if bold { sans_bold_opt.as_ref().or(sans_opt.as_ref()) } else { sans_opt.as_ref() }
+    } else {
+        if bold { font_bold_opt.as_ref().or(font_opt.as_ref()) } else { font_opt.as_ref() }
+    };
+    // Fallback chain: pokud zvolena varianta nenalezena, defaultni font.
+    let active_font = active_font.or(font_opt.as_ref());
+    let fake_bold_pad = if bold && active_font.map(|f| !std::ptr::eq(f, font_opt.as_ref().unwrap_or(f))).unwrap_or(false) { 0.0 } else if bold { 1.0 } else { 0.0 };
+    let _ = fake_bold_pad; // reset - simple semantics: bez fake-bold pad, mereno z bold font kdyz dostupne
 
     match active_font {
         Some(font) => {
             text.chars().map(|ch| {
-                font.metrics(ch, font_size).advance_width + fake_bold_pad
+                font.metrics(ch, font_size).advance_width
             }).sum()
         }
         None => {
             let avg_char_w = font_size * 0.55;
-            text.chars().count() as f32 * (avg_char_w + fake_bold_pad)
+            text.chars().count() as f32 * avg_char_w
         }
     }
+}
+
+fn load_font_first(paths: &[&str]) -> Option<fontdue::Font> {
+    for path in paths {
+        if let Ok(d) = std::fs::read(path) {
+            if let Ok(f) = fontdue::Font::from_bytes(d, fontdue::FontSettings::default()) {
+                return Some(f);
+            }
+        }
+    }
+    None
 }
 
 /// Parse barvu z CSS string.

@@ -1162,7 +1162,55 @@ pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
         style_map.insert(node_id(node), styles);
     });
 
+    // Inheritance pass: pro kazdy element, ktery NEMA explicit hodnotu pro
+    // inherited CSS prop (font-*, color, text-*, line-height, ...), prevezme
+    // hodnotu od parent. CSS spec: inherited props automaticky kaskaduji.
+    // Bez tohoto by spany na stranky s body { font-family: Courier } nedostavaly
+    // Courier - mereni pak na nasem default Times davalo zcela jine sirky.
+    propagate_inherited(root, &mut style_map, None);
+
     style_map
+}
+
+/// Recurse top-down a propaguj inherited props od parent na deti.
+fn propagate_inherited(
+    node: &Rc<Node>,
+    style_map: &mut StyleMap,
+    parent_styles: Option<&HashMap<String, String>>,
+) {
+    // Inherited CSS props - subset bez tech, ktere maji UA defaults v
+    // build_box (font-size pro h1-h6, font-weight pro h1-h6+strong+b, atd.).
+    // Inherit jen vec, kde UA defaults nejsou specificke per-tag.
+    // font-family je nejdulezitejsi (mereni text widths) - kazda stranka by
+    // mela specificky font.
+    const INHERITED: &[&str] = &[
+        "font-family", "font-style", "font-variant",
+        "color", "line-height", "letter-spacing", "word-spacing",
+        "text-align",
+        "text-indent", "text-transform", "white-space", "word-break", "overflow-wrap",
+        "direction", "writing-mode", "visibility", "cursor", "list-style", "list-style-type",
+        "list-style-position", "list-style-image", "quotes", "tab-size",
+    ];
+    if matches!(node.kind, NodeKind::Element { .. }) {
+        let id = node_id(node);
+        // Klonu parent_styles jako vector inherited slozka aplikacni:
+        if let Some(parent) = parent_styles {
+            let entry = style_map.entry(id).or_default();
+            for &prop in INHERITED {
+                if !entry.contains_key(prop) {
+                    if let Some(v) = parent.get(prop) {
+                        entry.insert(prop.into(), v.clone());
+                    }
+                }
+            }
+        }
+    }
+    // Get this node's styles AFTER inheritance to pass to children.
+    let own_styles = style_map.get(&node_id(node)).cloned();
+    let pass_styles = own_styles.as_ref().or(parent_styles);
+    for ch in node.children.borrow().iter() {
+        propagate_inherited(ch, style_map, pass_styles);
+    }
 }
 
 /// Cascade jen pro pseudo-elements (::before / ::after / ...).
