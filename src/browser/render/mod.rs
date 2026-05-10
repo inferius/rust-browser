@@ -1300,6 +1300,20 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     }
                 }
                 WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } => {
+                    // Klik mimo chrome bar pri otevrenem addr_open = blur
+                    // (zavri editor). Klik UVNITR chrome bar prohlasuje
+                    // ChromeHit::UrlBar nize a addr_open zustane.
+                    if self.addr_open && self.shell_mode {
+                        let chrome_h = self.shell_chrome_h_active();
+                        let my_screen = self.mouse_y - self.scroll_y;
+                        if my_screen >= chrome_h {
+                            self.addr_open = false;
+                            self.addr_input.clear();
+                            self.render();
+                            // Pokracujeme dal v hit-testu (klik mohl mirit
+                            // do page).
+                        }
+                    }
                     // Double-click detection: 400ms okno + < 5px vzdalenost.
                     let now = std::time::Instant::now();
                     let is_double_click = self.last_click_time
@@ -6366,6 +6380,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 // Pri addr_open + shell mode: focus ramecek + caret + selection
                 // overlay nad chrome URL bar.
                 if self.addr_open {
+                    use crate::browser::devtools_panel::dt_text_width;
                     let tab_h = 28.0;
                     let nav_h = chrome_h - tab_h
                         - if bm_count > 0 && self.bookmarks_bar_visible { 24.0 } else { 0.0 };
@@ -6382,22 +6397,25 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         color: [27, 27, 35, 255], radius: 4.0,
                     });
                     // Re-emit text (puvodni prekryl jsme novym rectem).
+                    // Sjednocujem font na Inter @ FONT_SIZE 12 = stejny jako
+                    // dt_text_width measure -> presny caret X.
                     display_list.push(DisplayCommand::Text {
                         x: url_x + 8.0, y: ny + 9.0,
                         content: self.addr_input.text.clone(),
                         color: [251, 251, 254, 255],
                         font_size: 12.0, bold: false, italic: false,
-                        font_family: "CamingoMono".into(),
+                        font_family: "Inter".into(),
                         strikethrough: false, underline: false,
                     });
+                    let text = &self.addr_input.text;
+                    let cursor = self.addr_input.cursor.min(text.len());
                     // Selection highlight (anchor != cursor).
-                    if let (Some(a), c) = (self.addr_input.anchor, self.addr_input.cursor) {
-                        if a != c {
-                            let (lo, hi) = (a.min(c), a.max(c));
-                            let pre = &self.addr_input.text[..lo.min(self.addr_input.text.len())];
-                            let mid = &self.addr_input.text[lo.min(self.addr_input.text.len())..hi.min(self.addr_input.text.len())];
-                            let pre_w = (pre.chars().count() as f32) * 7.2;
-                            let mid_w = (mid.chars().count() as f32) * 7.2;
+                    if let Some(a) = self.addr_input.anchor {
+                        let a = a.min(text.len());
+                        if a != cursor {
+                            let (lo, hi) = (a.min(cursor), a.max(cursor));
+                            let pre_w = dt_text_width(&text[..lo]);
+                            let mid_w = dt_text_width(&text[lo..hi]);
                             display_list.push(DisplayCommand::Rect {
                                 x: url_x + 8.0 + pre_w, y: ny + 7.0,
                                 w: mid_w, h: nav_h - 14.0,
@@ -6405,10 +6423,13 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                             });
                         }
                     }
-                    // Caret blink (~60 frame interval).
-                    if (self.devtools.frame_counter / 30) % 2 == 0 {
-                        let pre = &self.addr_input.text[..self.addr_input.cursor.min(self.addr_input.text.len())];
-                        let pre_w = (pre.chars().count() as f32) * 7.2;
+                    // Caret blink: 1 Hz (0.5s on, 0.5s off) z elapsed time -
+                    // bez zavislosti na frame rate (frame_counter @ 144 FPS
+                    // davalo ~2.4 Hz blink = epileptic).
+                    let elapsed = self.start_time.elapsed().as_secs_f32();
+                    let blink_on = (elapsed * 2.0) as i32 % 2 == 0;
+                    if blink_on {
+                        let pre_w = dt_text_width(&text[..cursor]);
                         display_list.push(DisplayCommand::Rect {
                             x: url_x + 8.0 + pre_w, y: ny + 7.0,
                             w: 1.5, h: nav_h - 14.0,

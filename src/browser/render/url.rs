@@ -64,8 +64,14 @@ pub fn resolve_url(base: &str, relative: &str) -> String {
         return format!("{scheme_host}{relative}");
     }
     // Relative path: resolve proti directory v base_path.
-    let last_slash = base_path.rfind('/').unwrap_or(0);
-    let base_dir = &base_path[..=last_slash.min(base_path.len().saturating_sub(1))];
+    // Empty base_path (google.com bez path) -> base_dir = "/" (root).
+    let base_dir: String = if base_path.is_empty() {
+        "/".to_string()
+    } else {
+        let last_slash = base_path.rfind('/').unwrap_or(0);
+        // Inclusive range bezpecne na non-empty stringu.
+        base_path[..=last_slash.min(base_path.len() - 1)].to_string()
+    };
     let mut combined = format!("{scheme_host}{base_dir}{relative}");
     // Resolve .. and . segments.
     if combined.contains("/../") || combined.contains("/./") {
