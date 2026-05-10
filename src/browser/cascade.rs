@@ -523,6 +523,13 @@ fn split_at_comma_depth0(s: &str) -> (&str, Option<&str>) {
     (s, None)
 }
 
+// Viewport context pro min()/max()/clamp() unit konverzi (vw/vh -> px).
+// Set pri cascade_with_viewport, cteno v eval_math_func. Default 0,0 ->
+// fallback na old behavior bez konverze (testy bez viewport).
+thread_local! {
+    pub(crate) static MATH_VIEWPORT: std::cell::RefCell<(f32, f32)> = std::cell::RefCell::new((0.0, 0.0));
+}
+
 /// Resolvuje min(a, b, ...), max(a, b, ...), clamp(min, val, max).
 /// Najde nejvnitrnejsi vyskyt (zaden child neni mezi argumenty), pak iterativne.
 fn resolve_math_func(s: &str) -> String {
@@ -590,9 +597,39 @@ fn eval_math_func(name: &str, args: &str) -> String {
     let parsed: Vec<(f32, String)> = parts.iter().map(|p| parse_value_with_unit(p)).collect();
     if parsed.is_empty() { return args.to_string(); }
 
-    // Pouzij jednotku z prvniho argumentu jako vystupni
-    let unit = parsed[0].1.clone();
-    let nums: Vec<f32> = parsed.iter().map(|(n, _)| *n).collect();
+    // Konvertuj vsechny argumenty do px pomoci viewport contextu z thread-local.
+    // Bez tohoto by min(68vw, 450px) jen porovnal cisla 68 vs 450 ignorujic
+    // jednotky -> spatny result na realnych strankach (modal sirky atd.).
+    let (vw_px, vh_px) = MATH_VIEWPORT.with(|c| *c.borrow());
+    let to_px = |n: f32, unit: &str| -> f32 {
+        match unit {
+            "px" | "" => n,
+            "vw"  => n * vw_px / 100.0,
+            "vh"  => n * vh_px / 100.0,
+            "vmin" => n * vw_px.min(vh_px) / 100.0,
+            "vmax" => n * vw_px.max(vh_px) / 100.0,
+            "em" | "rem" | "ch" | "ex" | "lh" | "rlh" => n * 16.0,
+            "pt"  => n * 1.333_333,
+            "%"   => n, // nelze resolvovat bez parent kontextu - ponech jako %.
+            _     => n,
+        }
+    };
+    // Pokud vsechny argumenty jsou ve stejne jednotce, ponech ji.
+    // Pokud mix nebo neco s viewport jednotkou, vystup px.
+    let first_unit = parsed[0].1.clone();
+    let all_same_unit = parsed.iter().all(|(_, u)| *u == first_unit);
+    let needs_conv = parsed.iter().any(|(_, u)|
+        matches!(u.as_str(), "vw" | "vh" | "vmin" | "vmax" | "em" | "rem" | "ch" | "ex" | "lh" | "rlh"));
+    let (nums, unit): (Vec<f32>, String) = if all_same_unit && !needs_conv {
+        // Same unit - eval na raw cislech, vystup ve stejne jednotce.
+        (parsed.iter().map(|(n, _)| *n).collect(), first_unit.clone())
+    } else if vw_px > 0.0 || vh_px > 0.0 {
+        // Convert vse na px.
+        (parsed.iter().map(|(n, u)| to_px(*n, u)).collect(), "px".to_string())
+    } else {
+        // Bez viewport contextu = fallback na drivejsi behavior.
+        (parsed.iter().map(|(n, _)| *n).collect(), first_unit.clone())
+    };
 
     let result = match name {
         "min" => nums.iter().cloned().fold(f32::INFINITY, f32::min),
@@ -763,6 +800,9 @@ fn eval_calc_expr(expr: &str) -> String {
 /// (kruhova zavislost s layoutem).
 pub fn cascade_with_viewport(root: &Rc<Node>, stylesheets: &[Stylesheet],
                               viewport_w: f32, viewport_h: f32) -> StyleMap {
+    // Set viewport pro thread-local pouzity v eval_math_func k konverzi
+    // vw/vh argumentu min()/max()/clamp() na px.
+    MATH_VIEWPORT.with(|c| *c.borrow_mut() = (viewport_w, viewport_h));
     // Sjednotit rules + matching media query + matching container query rules
     let mut effective: Vec<Stylesheet> = Vec::new();
     for sheet in stylesheets {
