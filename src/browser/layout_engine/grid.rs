@@ -1589,10 +1589,21 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         let mut final_w = if stretch_w { cw_avail } else { item_w };
         let mut final_h = if stretch_h { ch_avail } else if let Some(wh) = wrapped_text_h { wh } else { item_h };
         // Apply min/max + padding+border floor (item nemuze byt mensi nez padding+border).
-        let cw_min = super::super::layout::parse_length(&child.min_width_v);
-        let cw_max = if child.max_width_v.is_empty() { f32::INFINITY } else { super::super::layout::parse_length(&child.max_width_v) };
-        let ch_min = super::super::layout::parse_length(&child.min_height_v);
-        let ch_max = if child.max_height_v.is_empty() { f32::INFINITY } else { super::super::layout::parse_length(&child.max_height_v) };
+        // Percent values resolvujem proti grid container inner_w/inner_h.
+        // Bez tohoto by max-width: 100% z parse_length vracelo 16 (default
+        // parent_size) a item zustaval clampnuty na 16 px.
+        fn pct_or_px(v: &str, parent: f32) -> f32 {
+            if let Some(pct_str) = v.trim().strip_suffix('%') {
+                if let Ok(p) = pct_str.parse::<f32>() {
+                    return parent * p / 100.0;
+                }
+            }
+            super::super::layout::parse_length(v)
+        }
+        let cw_min = if child.min_width_v.is_empty() || child.min_width_v == "none" { 0.0 } else { pct_or_px(&child.min_width_v, cw_avail) };
+        let cw_max = if child.max_width_v.is_empty() || child.max_width_v == "none" { f32::INFINITY } else { pct_or_px(&child.max_width_v, cw_avail) };
+        let ch_min = if child.min_height_v.is_empty() || child.min_height_v == "none" { 0.0 } else { pct_or_px(&child.min_height_v, ch_avail) };
+        let ch_max = if child.max_height_v.is_empty() || child.max_height_v == "none" { f32::INFINITY } else { pct_or_px(&child.max_height_v, ch_avail) };
         let pb_l = child.padding_left.unwrap_or(child.padding) + child.border_left_width.unwrap_or(child.border_width);
         let pb_r = child.padding_right.unwrap_or(child.padding) + child.border_right_width.unwrap_or(child.border_width);
         let pb_t = child.padding_top.unwrap_or(child.padding) + child.border_top_width.unwrap_or(child.border_width);
