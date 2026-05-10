@@ -5630,12 +5630,16 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 h.finish()
             };
             if self.cached_style_map.is_none() || self.cached_cascade_hash != cascade_hash {
+                let _t_cascade = std::time::Instant::now();
                 // Cascade s viewport pro @media + @container queries.
                 let vw_logical = (r.config.width as f32) / (self.zoom * r.scale_factor);
                 let vh_logical = (r.config.height as f32) / (self.zoom * r.scale_factor);
                 self.cached_style_map = Some(Rc::new(cascade::cascade_with_viewport(
                     &document_root, stylesheets, vw_logical, vh_logical)));
+                perf_t("cascade::cascade_with_viewport", _t_cascade);
+                let _t_pseudo = std::time::Instant::now();
                 self.cached_pseudo_map = Some(cascade::cascade_pseudo(&document_root, stylesheets));
+                perf_t("cascade::cascade_pseudo", _t_pseudo);
                 self.cached_cascade_hash = cascade_hash;
             }
             let _t_clone = std::time::Instant::now();
@@ -5652,6 +5656,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // PERF: cele toto je drahe (walk vsech rules x selectors); cache pres
             // (selected, cascade_hash) - bez zmeny selection ani cascade nevolat znovu.
             // Driv: tato cesta byla volana kazdy frame pri active_animations -> lag.
+            let _t_devtools_wire = std::time::Instant::now();
             let matched_cache_key = (self.devtools.elements.selected, cascade_hash);
             let need_rebuild_matched = self.cached_matched_key != Some(matched_cache_key);
             if let Some(sel) = self.devtools.elements.selected {
@@ -5789,6 +5794,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     * self.devtools.animations_speed
             };
 
+            perf_t("devtools_wire", _t_devtools_wire);
             // Drainuj WebSocket events kazdy frame (dispatch onopen/onmessage/onerror/onclose).
             let _t_drain = std::time::Instant::now();
             if let Some(interp) = &mut self.interpreter {
@@ -5848,6 +5854,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
 
             // Runtime CSS animation: skip cely walk pokud zadne keyframes neexistuji.
             let has_keyframes = stylesheets.iter().any(|s| !s.keyframes.is_empty());
+            let _t_anim_apply = std::time::Instant::now();
             if has_keyframes {
                 let _animating = cascade::apply_animations(Rc::make_mut(&mut style_map), stylesheets, elapsed);
                 // Per-element pause: aplikuj frozen snapshot (zachytava presnou
@@ -5866,6 +5873,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 let scroll_progress = if max_scroll > 1.0 { self.scroll_y / max_scroll.max(1.0) } else { 0.0 };
                 let _ = cascade::apply_scroll_animations(Rc::make_mut(&mut style_map), stylesheets, scroll_progress);
             }
+            perf_t("apply_animations + scroll_anims", _t_anim_apply);
 
             // Detect animation start/end + iteration events.
             // Skip cely walk pri zadnych keyframes - test na to ze stranka vubec nema animations.
@@ -6090,6 +6098,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             let mut display_list = std::mem::take(&mut self.display_list_buffer);
             paint::build_display_list_culled_into(&layout_root, self.scroll_y, viewport_h, &mut display_list);
             perf_t("paint::build_display_list_culled", _t_paint);
+            let _t_post_paint = std::time::Instant::now();
             // Selection emit PO layout commands - flow-based row selection.
             // Anchor + current point urcuji "first" (top-left order) a "last".
             // Per text node se walked lines (\n split z flush_inline wrap),
@@ -7022,6 +7031,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // jen (overlay nemam textovy obsah co user vybira).
             self.painted_text_runs = extract_text_runs(page_cmds, &r.atlas, r.zoom);
 
+            perf_t("post_paint (chrome+devtools+selection)", _t_post_paint);
             // Pri WebGL canvas s pending queue, vyuzij webgl-aware draw flow.
             let webgl_states_opt = self.interpreter.as_ref().map(|i| i.webgl_states.clone());
             let _t_gpu = std::time::Instant::now();
