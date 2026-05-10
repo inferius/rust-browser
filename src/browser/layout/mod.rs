@@ -328,6 +328,11 @@ pub struct LayoutBox {
     /// apply_sticky modifikuje rect.y per scroll - bez tohoto pole by druhy
     /// pruchod cetl modifikovany rect.y a interpretoval ho jako original.
     pub sticky_original_y: Option<f32>,
+    /// Animacni baseline rect (pred apply_paint_animations). Soft path
+    /// (cache hit + animuje width/height/left/top) mutuje `rect` per frame -
+    /// bez baseline by druhy frame cetl uz mutovany rect a akumuloval offsets.
+    /// Reset na None pri kazdem layout rebuild (cache miss).
+    pub anim_baseline: Option<Rect>,
     pub display: Display,
     pub bg_color: Option<[u8; 4]>,   // RGBA
     pub text_color: Option<[u8; 4]>,
@@ -808,6 +813,7 @@ impl LayoutBox {
             fingerprint: 0,
             rect: Rect { x: 0.0, y: 0.0, width: 0.0, height: 0.0 },
             sticky_original_y: None,
+            anim_baseline: None,
             display: Display::Block,
             bg_color: None,
             text_color: None,

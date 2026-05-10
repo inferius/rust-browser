@@ -497,6 +497,12 @@ fn apply_paint_animations_inner(box_: &mut crate::browser::layout::LayoutBox,
                                  parent_width: f32) {
     let node_id = box_.node.as_ref().map(|n| Rc::as_ptr(n) as usize).unwrap_or(0);
     let original_width = box_.rect.width;
+    // Baseline rect: pri prvni apply zachyti pozici PRED jakoukoli animaci.
+    // Dalsi frames cti baseline misto current rect aby se animace neakumulovala.
+    if box_.anim_baseline.is_none() {
+        box_.anim_baseline = Some(box_.rect);
+    }
+    let baseline = box_.anim_baseline.unwrap_or(box_.rect);
     if let Some(styles) = style_map.get(&node_id) {
         if let Some(o) = styles.get("opacity") {
             if let Ok(v) = o.parse::<f32>() {
@@ -520,15 +526,40 @@ fn apply_paint_animations_inner(box_: &mut crate::browser::layout::LayoutBox,
             box_.filter = crate::browser::layout::parse_filter_chain(f);
         }
         // INCREMENTAL LAYOUT: aplikuj animovanou width/height na rect kdyz
-        // element ma overflow:hidden (self-contained, ne reflow). Drive
-        // typewriter potreboval full layout rebuild kazdy frame, ted jen
-        // pricte rect.width upravu.
+        // element ma overflow:hidden NEBO position != static (self-contained,
+        // ne reflow). Drive typewriter potreboval full layout rebuild kazdy
+        // frame, ted jen pricte rect.width upravu.
         let oh_x = box_.overflow_x.as_str() == "hidden" || box_.overflow_x.as_str() == "clip";
         let oh_y = box_.overflow_y.as_str() == "hidden" || box_.overflow_y.as_str() == "clip";
-        if oh_x || oh_y {
+        let is_oof = !matches!(box_.position, super::layout::Position::Static);
+        // Position-only animace (left/top/right/bottom): aplikuj jako offset
+        // od baseline. Bez tohoto by slide-anim (left 0->400) trigeroval
+        // hard layout kazdy frame (~12 ms na test.html).
+        if is_oof {
+            if let Some(l) = styles.get("left") {
+                let px = crate::browser::layout::parse_length(l.trim());
+                box_.rect.x = baseline.x + px;
+            } else if let Some(r) = styles.get("right") {
+                let px = crate::browser::layout::parse_length(r.trim());
+                box_.rect.x = baseline.x - px;
+            } else {
+                box_.rect.x = baseline.x;
+            }
+            if let Some(t) = styles.get("top") {
+                let px = crate::browser::layout::parse_length(t.trim());
+                box_.rect.y = baseline.y + px;
+            } else if let Some(b) = styles.get("bottom") {
+                let px = crate::browser::layout::parse_length(b.trim());
+                box_.rect.y = baseline.y - px;
+            } else {
+                box_.rect.y = baseline.y;
+            }
+        }
+        if oh_x || oh_y || is_oof {
             // Pouzijeme cached parent_width pro % rozeznavani.
-            // Width animace: aktualizuj rect.width pri overflow-x:hidden.
-            if oh_x {
+            // Width animace: aktualizuj rect.width pri overflow-x:hidden NEBO
+            // pri position != static (out-of-flow nebo relative).
+            if oh_x || is_oof {
                 if let Some(w) = styles.get("width") {
                     let trimmed = w.trim();
                     if let Some(pct_str) = trimmed.strip_suffix('%') {
@@ -545,7 +576,7 @@ fn apply_paint_animations_inner(box_: &mut crate::browser::layout::LayoutBox,
                     }
                 }
             }
-            if oh_y {
+            if oh_y || is_oof {
                 if let Some(h) = styles.get("height") {
                     let trimmed = h.trim();
                     if let Some(pct_str) = trimmed.strip_suffix('%') {
@@ -772,6 +803,11 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         /// element ma overflow:hidden - width change nezpusobi reflow.
         /// Klic optimalizace pro typewriter (overflow:hidden + anim width).
         width_height_only_animations: std::collections::HashSet<String>,
+        /// Animace s POUZE left/top/right/bottom props (zadne jine layout aff).
+        /// Pri position != static = self-contained (relative offset = visual,
+        /// absolute/fixed = out-of-flow). Sibling layout neovliveny -> soft path.
+        /// Klic pro slide-anim (left 0->400px na .anim-box position:relative).
+        position_only_animations: std::collections::HashSet<String>,
         /// Ring buffer poslednich N frame timing pro FPS counter overlay.
         /// Default 60 frame window. Render hori v ms, FPS = 1000 / avg.
         frame_times_ms: std::collections::VecDeque<f32>,
@@ -1443,6 +1479,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                     return;
                                 }
                                 ChromeHit::UrlBar => {
+                                    eprintln!("[addr] open via UrlBar click");
                                     self.addr_open = true;
                                     self.addr_input = crate::devtools::model::text_buffer::SimpleStringBuffer::with_text_selected(self.base_url.clone().unwrap_or_default());
                                     self.render();
@@ -2900,6 +2937,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                             }
                             if s.as_str() == "l" || s.as_str() == "L" {
                                 // Ctrl+L: toggle address bar.
+                                eprintln!("[addr] open via Ctrl+L");
                                 self.addr_open = true;
                                 self.addr_input = crate::devtools::model::text_buffer::SimpleStringBuffer::with_text_selected(self.base_url.clone().unwrap_or_default());
                                 self.render();
@@ -5492,28 +5530,42 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     matches!(p, "width" | "height" | "min-width" | "max-width"
                                 | "min-height" | "max-height")
                 }
+                fn is_position_prop(p: &str) -> bool {
+                    matches!(p, "left" | "top" | "right" | "bottom")
+                }
                 self.layout_affecting_animations.clear();
                 self.width_height_only_animations.clear();
+                self.position_only_animations.clear();
                 for sheet in &parsed {
                     for kf in &sheet.keyframes {
                         let mut has_layout_aff = false;
-                        let mut has_other_layout_aff = false; // layout-aff but NOT width/height
+                        let mut has_non_wh_layout = false;     // layout-aff a NENI width/height
+                        let mut has_non_pos_layout = false;    // layout-aff a NENI left/top/right/bottom
                         for (_, decls) in &kf.frames {
                             for d in decls {
                                 if is_layout_affecting_prop(&d.property) {
                                     has_layout_aff = true;
                                     if !is_width_height_prop(&d.property) {
-                                        has_other_layout_aff = true;
+                                        has_non_wh_layout = true;
+                                    }
+                                    if !is_position_prop(&d.property) {
+                                        has_non_pos_layout = true;
                                     }
                                 }
                             }
                         }
                         if has_layout_aff {
                             self.layout_affecting_animations.insert(kf.name.clone());
-                            if !has_other_layout_aff {
-                                // Animuje POUZE width/height - kandidat na soft layout
-                                // (incremental: aplikujeme na rect, ne re-layout).
+                            if !has_non_wh_layout {
+                                // Pouze width/height - soft pokud overflow:hidden
+                                // nebo position != static.
                                 self.width_height_only_animations.insert(kf.name.clone());
+                            }
+                            if !has_non_pos_layout {
+                                // Pouze left/top/right/bottom - soft pokud
+                                // position != static (relative shift, absolute/fixed
+                                // out-of-flow). Sibling flow netknut.
+                                self.position_only_animations.insert(kf.name.clone());
                             }
                         }
                     }
@@ -5901,16 +5953,25 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             }
             let aff_layout = self.active_animations.iter().any(|(node_id, name)| {
                 if !self.layout_affecting_animations.contains(name) { return false; }
-                // Pokud width/height-only animace + element ma overflow:hidden,
-                // change je self-contained = NE hard invalidace.
-                if self.width_height_only_animations.contains(name) {
-                    if let Some(cache_root) = self.cached_layout_root.as_ref() {
-                        if let Some(bx) = find_box_by_node_id(cache_root, *node_id) {
-                            let oh = bx.overflow_x.as_str() == "hidden"
-                                || bx.overflow_y.as_str() == "hidden"
-                                || bx.overflow_x.as_str() == "clip"
-                                || bx.overflow_y.as_str() == "clip";
-                            if oh { return false; } // soft - skip invalidace
+                // Soft path triggers - vsechny "self-contained" animace.
+                if let Some(cache_root) = self.cached_layout_root.as_ref() {
+                    if let Some(bx) = find_box_by_node_id(cache_root, *node_id) {
+                        let is_oof = !matches!(bx.position, super::layout::Position::Static);
+                        let oh = bx.overflow_x.as_str() == "hidden"
+                            || bx.overflow_y.as_str() == "hidden"
+                            || bx.overflow_x.as_str() == "clip"
+                            || bx.overflow_y.as_str() == "clip";
+                        // width/height-only: soft pokud overflow hidden NEBO
+                        // position != static (out-of-flow nebo relative -
+                        // sibling flow nezavisi na ramecku tohoto elementu).
+                        if self.width_height_only_animations.contains(name) {
+                            if oh || is_oof { return false; }
+                        }
+                        // position-only (left/top/right/bottom): soft pokud
+                        // position != static. Relative = pure visual offset,
+                        // absolute/fixed = out-of-flow.
+                        if self.position_only_animations.contains(name) {
+                            if is_oof { return false; }
                         }
                     }
                 }
@@ -5957,10 +6018,18 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 // Per-element layout cache: pasujeme prev cached_layout_root jako
                 // hint. Pri match fingerprint reuznavaji subtrees.
                 let prev_root = self.cached_layout_root.as_ref();
-                let lr = layout::layout_tree_with_pseudo_cached(
+                let mut lr = layout::layout_tree_with_pseudo_cached(
                     &document_root, &*style_map, pseudo_map,
                     viewport_w, viewport_h, prev_root);
                 perf_t("layout_tree (rebuild)", _t_layout);
+                // Reset anim_baseline po hard layout - novy rect = nova
+                // baseline. Bez reset by per-element cache reused boxy
+                // mely stale baseline z minuleho framu.
+                fn reset_baseline_walk(b: &mut super::layout::LayoutBox) {
+                    b.anim_baseline = None;
+                    for ch in b.children.iter_mut() { reset_baseline_walk(ch); }
+                }
+                reset_baseline_walk(&mut lr);
                 // Detekce sticky elementu - jen jednou pri rebuild. Per-frame
                 // apply_sticky walk skip kdyz false (vetsina stranek sticky nema).
                 fn has_sticky_walk(b: &super::layout::LayoutBox) -> bool {
@@ -6966,6 +7035,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         layout_has_sticky: false,
         layout_affecting_animations: std::collections::HashSet::new(),
         width_height_only_animations: std::collections::HashSet::new(),
+        position_only_animations: std::collections::HashSet::new(),
         frame_times_ms: std::collections::VecDeque::with_capacity(60),
         show_fps: std::env::var("PERF_DEBUG").is_ok(),
         current_path: current_html_path,
