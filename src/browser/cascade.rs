@@ -815,12 +815,7 @@ pub fn cascade_with_viewport(root: &Rc<Node>, stylesheets: &[Stylesheet],
         }
         // Aplikuj jen vyhovujici media queries
         for mq in &sheet.media_queries {
-            let active = super::css_parser::evaluate_media_query(&mq.query, viewport_w, viewport_h);
-            if std::env::var("MQ_DEBUG").is_ok() {
-                eprintln!("[mq] vw={} vh={} query={:?} active={}",
-                    viewport_w, viewport_h, mq.query, active);
-            }
-            if active {
+            if super::css_parser::evaluate_media_query(&mq.query, viewport_w, viewport_h) {
                 let mut rules = mq.rules.clone();
                 for rule in &mut rules {
                     for d in &mut rule.declarations {
