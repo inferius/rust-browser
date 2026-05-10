@@ -695,6 +695,16 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         /// cascade. Bez teto detekce by se cascade rebuilovala pri kazdem
         /// pixelu resize -> resize lag.
         css_uses_viewport: bool,
+        /// CSS obsahuje "transition" property - pak je potreba prev_style_map
+        /// pro detekci transitions vs current. Bez "transition" v CSS preskakujeme
+        /// drahy clone style_map kazdy frame.
+        css_uses_transitions: bool,
+        /// CSS obsahuje "@keyframes" - pak runtime animations rotation. Bez nich
+        /// preskakujeme apply_animations + clone.
+        css_uses_keyframes: bool,
+        /// Layout obsahuje position: sticky elementy - pak apply_sticky musi mit
+        /// mutable layout_root. Bez sticky preskakujeme clone cached_layout_root.
+        layout_has_sticky: bool,
         /// Cache cascade output (DOM root ptr hash -> StyleMap).
         cached_cascade_hash: u64,
         cached_style_map: Option<super::cascade::StyleMap>,
@@ -5276,6 +5286,13 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         fn render(&mut self) {
             use super::{css_parser, cascade, layout, paint};
             let frame_start = std::time::Instant::now();
+            let _perf_debug = std::env::var("PERF_DEBUG").is_ok();
+            let perf_t = |label: &str, t: std::time::Instant| {
+                if std::env::var("PERF_DEBUG").is_ok() {
+                    eprintln!("[perf] {} {:.2} ms", label, t.elapsed().as_secs_f64() * 1000.0);
+                }
+            };
+            let _ = perf_t;
             // Hybrid debug mode: poll worker events + sync state.
             self.poll_debug_runner();
             // Sync devtools breakpoints -> interpreter debugger.
@@ -5385,6 +5402,10 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 // hover change.
                 self.css_uses_hover = self.css.contains(":hover");
                 self.css_uses_focus = self.css.contains(":focus");
+                self.css_uses_transitions = self.css.contains("transition");
+                self.css_uses_keyframes = self.css.contains("@keyframes")
+                    || self.css.contains("animation:")
+                    || self.css.contains("animation-name");
                 // Detect viewport-dependent queries: @media, @container, vw/vh units.
                 self.css_uses_viewport = self.css.contains("@media")
                     || self.css.contains("@container")
@@ -5429,7 +5450,9 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 self.cached_pseudo_map = Some(cascade::cascade_pseudo(&document_root, stylesheets));
                 self.cached_cascade_hash = cascade_hash;
             }
+            let _t_clone = std::time::Instant::now();
             let mut style_map = self.cached_style_map.as_ref().unwrap().clone();
+            perf_t("style_map clone", _t_clone);
             let pseudo_map = self.cached_pseudo_map.as_ref().cloned().unwrap_or_default();
 
             // Wire computed styles + matched rules do DevTools state pri selected element.
@@ -5701,8 +5724,16 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 }
             }
 
-            // Uloz current style_map pro dalsi frame (transition diff source)
-            self.prev_style_map = Some(style_map.clone());
+            // Uloz current style_map pro dalsi frame (transition diff source).
+            // PERF: jen kdyz CSS obsahuje "transition" - jinak detect_transitions
+            // se nikdy netrigguje a clone (5000+ HashMap entries) je zbytecny.
+            let _t_prev = std::time::Instant::now();
+            if self.css_uses_transitions {
+                self.prev_style_map = Some(style_map.clone());
+            } else {
+                self.prev_style_map = None;
+            }
+            perf_t("prev_style_map clone", _t_prev);
 
             // Browser zoom: logical viewport = window / zoom (-> reflow at scaled
             // size). Render shader uniform = same logical dimensions, takze layout
@@ -5716,8 +5747,11 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 && self.cached_layout_root.as_ref().map(|l| {
                     (l.rect.width - viewport_w).abs() < 0.5 && (l.rect.height - viewport_h).abs() < 0.5
                 }).unwrap_or(false);
+            let _t_layout = std::time::Instant::now();
             let mut layout_root = if layout_cache_valid {
-                self.cached_layout_root.as_ref().unwrap().clone()
+                let l = self.cached_layout_root.as_ref().unwrap().clone();
+                perf_t("layout_root clone (cache hit)", _t_layout);
+                l
             } else {
                 // Per-element layout cache: pasujeme prev cached_layout_root jako
                 // hint. Pri match fingerprint reuznavaji subtrees (skip style/
@@ -5727,22 +5761,43 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 let lr = layout::layout_tree_with_pseudo_cached(
                     &document_root, &style_map, &pseudo_map,
                     viewport_w, viewport_h, prev_root);
+                perf_t("layout_tree (rebuild)", _t_layout);
+                let _t2 = std::time::Instant::now();
+                // Detekce sticky elementu - jen jednou pri rebuild. Per-frame
+                // apply_sticky walk skip kdyz false (vetsina stranek sticky nema).
+                fn has_sticky_walk(b: &super::layout::LayoutBox) -> bool {
+                    if matches!(b.position, super::layout::Position::Sticky) { return true; }
+                    b.children.iter().any(has_sticky_walk)
+                }
+                self.layout_has_sticky = has_sticky_walk(&lr);
                 self.cached_layout_root = Some(lr.clone());
+                perf_t("cached_layout_root clone (after rebuild)", _t2);
                 lr
             };
             // Post-pass: aplikuj animation values na cached layout boxes
             // (transforms, opacity, colors, filter - paint-only props ktere se
             // za zivota cache mohou menit kazdy frame).
-            if layout_cache_valid {
+            // PERF: skip cely walk pokud zadne keyframes / aktivni animace -
+            // bez nich neni co aplikovat, walk 5000+ node by jen mrhal.
+            if layout_cache_valid && (self.css_uses_keyframes || !self.active_animations.is_empty() || !self.active_transitions.is_empty()) {
+                let _t_anim = std::time::Instant::now();
                 apply_paint_animations(&mut layout_root, &style_map);
+                perf_t("apply_paint_animations", _t_anim);
             }
             // Apply position: sticky pri current scroll
-            layout::apply_sticky(&mut layout_root, self.scroll_y);
+            // PERF: skip walk pokud layout neobsahuje sticky elementy.
+            if self.layout_has_sticky {
+                let _t_sticky = std::time::Instant::now();
+                layout::apply_sticky(&mut layout_root, self.scroll_y);
+                perf_t("apply_sticky", _t_sticky);
+            }
             // Viewport culling: vyrad off-screen elementy z paint walku
             // (test stranka 7000 px, viewport 900 px = 8x mensi paint cost).
             // Reuse buffer pres frames - alloc-free.
+            let _t_paint = std::time::Instant::now();
             let mut display_list = std::mem::take(&mut self.display_list_buffer);
             paint::build_display_list_culled_into(&layout_root, self.scroll_y, viewport_h, &mut display_list);
+            perf_t("paint::build_display_list_culled", _t_paint);
             // Selection emit PO layout commands - flow-based row selection.
             // Anchor + current point urcuji "first" (top-left order) a "last".
             // Per text node se walked lines (\n split z flush_inline wrap),
@@ -6651,6 +6706,9 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         css_uses_hover: false,
         css_uses_focus: false,
         css_uses_viewport: false,
+        css_uses_transitions: false,
+        css_uses_keyframes: false,
+        layout_has_sticky: false,
         current_path: current_html_path,
         base_url,
         history: initial_url.into_iter().collect(),
