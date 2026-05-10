@@ -2527,8 +2527,31 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         if t.contains("line-through") { bx.text_strikethrough = true; }
     }
     // Overflow
+    // overflow shorthand: "hidden" | "visible" | "scroll" | "auto" | "clip"
+    // alebo dve hodnoty "hidden auto" (x y).
     if let Some(ov) = s.get("overflow") {
-        bx.overflow_hidden = matches!(ov.trim(), "hidden" | "clip");
+        let t = ov.trim();
+        bx.overflow_hidden = matches!(t, "hidden" | "clip");
+        let parts: Vec<&str> = t.split_whitespace().collect();
+        match parts.len() {
+            1 => {
+                bx.overflow_x = parts[0].to_string();
+                bx.overflow_y = parts[0].to_string();
+            }
+            2 => {
+                bx.overflow_x = parts[0].to_string();
+                bx.overflow_y = parts[1].to_string();
+            }
+            _ => {}
+        }
+    }
+    if let Some(ox) = s.get("overflow-x") {
+        bx.overflow_x = ox.trim().to_string();
+        if matches!(bx.overflow_x.as_str(), "hidden" | "clip") { bx.overflow_hidden = true; }
+    }
+    if let Some(oy) = s.get("overflow-y") {
+        bx.overflow_y = oy.trim().to_string();
+        if matches!(bx.overflow_y.as_str(), "hidden" | "clip") { bx.overflow_hidden = true; }
     }
     // White-space
     if let Some(ws) = s.get("white-space") {
