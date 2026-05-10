@@ -2956,10 +2956,17 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                         let tag = b.tag.as_deref().unwrap_or("?");
                                         let txt = b.text.as_deref().unwrap_or("");
                                         let txt_short: String = txt.chars().take(40).collect();
+                                        let class = b.node.as_ref()
+                                            .and_then(|n| n.attr("class"))
+                                            .unwrap_or_default();
+                                        let id = b.node.as_ref()
+                                            .and_then(|n| n.attr("id"))
+                                            .unwrap_or_default();
                                         out.push_str(&format!(
-                                            "{indent}<{tag}> rect=({:.0},{:.0} {:.0}x{:.0}) display={:?} text={:?}\n",
+                                            "{indent}<{tag} id={:?} class={:?}> rect=({:.0},{:.0} {:.0}x{:.0}) display={:?} ew={:?} mw={:?} text={:?}\n",
+                                            id, class,
                                             b.rect.x, b.rect.y, b.rect.width, b.rect.height,
-                                            b.display, txt_short));
+                                            b.display, b.explicit_width, b.max_width_v, txt_short));
                                         for ch in &b.children { dump(ch, depth + 1, out); }
                                     }
                                     let mut out = String::new();
