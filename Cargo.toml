@@ -65,6 +65,13 @@ fontdue = "0.9"  # font rasterizer pro glyph atlas
 # To je out-of-scope pro pure-Rust projekt. AVIF DECODE je TODO (separate crate
 # nebo system dav1d).
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "webp", "tiff", "ico", "tga", "exr", "qoi", "ff", "hdr", "pnm", "dds"] }
+# SVG -> raster decoder (pure Rust). Pouzity v load_image_as kdyz `image`
+# crate selhe a obsah vypada jako SVG (XML s <svg root). Real-world stranky
+# (google logo, github icons, ...) maji SVG ikony co bez tohohle nedaji
+# decodnout -> tombstone -> chybi v atlasu.
+resvg = { version = "0.45", default-features = false, features = ["text", "system-fonts"] }
+usvg = { version = "0.45", default-features = false, features = ["text", "system-fonts"] }
+tiny-skia = "0.11"
 # WOFF dekomprese (zlib stream per table). Pure-Rust deflate. WOFF2 (brotli + transformations) zatim TODO.
 flate2 = "1.0"
 # WOFF2 brotli decompressor (pure Rust). Glyf transform reverse zatim TODO.

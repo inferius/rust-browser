@@ -487,6 +487,42 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: 
 /// Aplikuje animation/transition hodnoty z style_map na cached layout boxes.
 /// Pouziva se kdyz cache je valid pro layout struktury, ale paint props
 /// (transform/opacity/color/filter) se menily kazdy frame pres animations.
+/// SVG -> RGBA raster pres resvg. Vraci true pri uspechu a uloz do atlasu.
+fn try_decode_svg_into_atlas(bytes: &[u8], cache_key: &str,
+                              atlas: &mut crate::browser::render::atlas::ImageAtlas) -> bool {
+    // Rychly check: SVG bytes obsahuji "<svg" near start. Bez tohoto by
+    // resvg parsoval nahodne bytes a vracel chybu pomalu.
+    let head: &[u8] = if bytes.len() > 256 { &bytes[..256] } else { bytes };
+    let head_str = std::str::from_utf8(head).unwrap_or("");
+    if !head_str.contains("<svg") && !head_str.contains("<?xml") {
+        return false;
+    }
+    let opt = usvg::Options::default();
+    let tree = match usvg::Tree::from_data(bytes, &opt) {
+        Ok(t) => t,
+        Err(_) => return false,
+    };
+    let size = tree.size();
+    let w = size.width().ceil().max(1.0) as u32;
+    let h = size.height().ceil().max(1.0) as u32;
+    // Cap velikost na atlas pulku.
+    let max = (IMAGE_ATLAS_SIZE / 2) as u32;
+    let (target_w, target_h) = if w > max || h > max {
+        let scale = (max as f32) / (w.max(h) as f32);
+        (((w as f32) * scale) as u32, ((h as f32) * scale) as u32)
+    } else { (w, h) };
+    let mut pixmap = match tiny_skia::Pixmap::new(target_w, target_h) {
+        Some(p) => p,
+        None => return false,
+    };
+    let scale_x = (target_w as f32) / (w as f32);
+    let scale_y = (target_h as f32) / (h as f32);
+    let transform = tiny_skia::Transform::from_scale(scale_x, scale_y);
+    resvg::render(&tree, transform, &mut pixmap.as_mut());
+    atlas.add(cache_key, target_w, target_h, pixmap.data());
+    true
+}
+
 fn apply_paint_animations(box_: &mut crate::browser::layout::LayoutBox,
                            style_map: &crate::browser::cascade::StyleMap) {
     apply_paint_animations_inner(box_, style_map, 0.0);
@@ -8724,8 +8760,7 @@ impl Renderer {
         // Tombstone check: predchozi pokus selhal (fetch failed nebo decode
         // failed) - dalsi frame uz znova nezkousime. Bez tohoto kazdy frame
         // sync ureq fetch + image::load_from_memory na nesupportovanem
-        // formatu = 1 s lag per frame na realnych strankach (google logo
-        // je SVG, image crate ho neumi decode).
+        // formatu = 1 s lag per frame na realnych strankach.
         if self.image_load_failed.contains(cache_key) { return; }
         let bytes_opt = fetch_image_bytes(fetch_url);
         let bytes = match bytes_opt {
@@ -8755,10 +8790,15 @@ impl Renderer {
                 }
             }
             self.image_atlas.add(cache_key, w, h, &raw);
-        } else {
-            // Decode failed (napr. SVG, neznamy format). Tombstone.
-            self.image_load_failed.insert(cache_key.to_string());
+            return;
         }
+        // image crate failed - zkusime SVG (resvg). Realne stranky (google
+        // logo, github icons) maji SVG ikony.
+        if try_decode_svg_into_atlas(&bytes, cache_key, &mut self.image_atlas) {
+            return;
+        }
+        // Vsechno selhalo - tombstone.
+        self.image_load_failed.insert(cache_key.to_string());
     }
     /// Re-resample image atlas entry na target physical size. Pouzity pri zoomu
     /// aby image byl ostry na fyzickem rozliseni screen px.
