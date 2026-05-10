@@ -941,7 +941,7 @@ pub fn evaluate_media_query(query: &str, viewport_w: f32, viewport_h: f32) -> bo
     }
     // Conditions oddelene zavorkami
     for cond in q.split(')').filter(|s| !s.trim().is_empty()) {
-        let c = cond.trim_start_matches('(').trim();
+        let c = cond.trim().trim_start_matches('(').trim();
         if c.is_empty() { continue; }
         if let Some(idx) = c.find(':') {
             let prop = c[..idx].trim();
