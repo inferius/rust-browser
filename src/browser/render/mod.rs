@@ -7040,6 +7040,25 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             for cmd in &display_list {
                 match cmd {
                     DisplayCommand::Text { content, font_size, font_family, color, bold, italic, .. } => {
+                        // Per-Text-cmd cache. Pri identickem text+style ze
+                        // minulych framu = vsechny chars uz v atlasu, skip.
+                        let cmd_hash = {
+                            use std::hash::{Hash, Hasher};
+                            let mut h = std::collections::hash_map::DefaultHasher::new();
+                            content.hash(&mut h);
+                            (*font_size as u32).hash(&mut h);
+                            font_family.hash(&mut h);
+                            bold.hash(&mut h);
+                            italic.hash(&mut h);
+                            // Color je v key kvuli COLR rasterize ktery
+                            // bake-uje barvu do glyph bitmapy.
+                            color.hash(&mut h);
+                            h.finish()
+                        };
+                        if r.text_cmd_warmed.contains(&cmd_hash) {
+                            continue;
+                        }
+                        r.text_cmd_warmed.insert(cmd_hash);
                         for ch in content.chars() {
                             // Pokus o color glyph rasterization.
                             let mut color_added = false;
@@ -7352,6 +7371,11 @@ struct Renderer {
     /// load_image_as skip dalsi pokusy aby kazdy frame sync ureq + decode
     /// nezdrzoval. Resi 1 s lag per frame na strankach s SVG/unknown img.
     image_load_failed: std::collections::HashSet<String>,
+    /// Cache hashes Text commands (content + font_size + font_family + bold/italic)
+    /// uz prosly atlas warm-up. Per-Text fast-path skip cele char iterace pri
+    /// znovu-pouziti stejneho textu. Resi 20 ms warm-up loop na strankach
+    /// kde display list je stable mezi framy.
+    text_cmd_warmed: std::collections::HashSet<u64>,
     image_tex: wgpu::Texture,
     image_view: wgpu::TextureView,
     /// @font-face loaded fonts: family -> Font.
@@ -7881,6 +7905,7 @@ impl Renderer {
             image_atlas, image_tex, image_view,
             image_source_bytes: std::collections::HashMap::new(),
             image_load_failed: std::collections::HashSet::new(),
+            text_cmd_warmed: std::collections::HashSet::new(),
             font_registry: std::collections::HashMap::new(),
             loaded_font_urls: std::collections::HashSet::new(),
             color_fonts: std::collections::HashMap::new(),
