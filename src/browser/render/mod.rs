@@ -6976,6 +6976,18 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 display_list_size: dl_size,
                 vertex_count: 0,
             });
+            // Continual redraw: pokud po render() jsou aktivni animace,
+            // transitions, smooth scroll, nebo loading flag - schedule
+            // dalsi RedrawRequested. Bez tohoto by render() volana z handler
+            // (TabClose, NewTab, navigate) prerusila animation loop a stranka
+            // by zustala mrtva az do dalsi user input.
+            let has_anim = !self.active_animations.is_empty()
+                || !self.active_transitions.is_empty()
+                || (self.scroll_y - self.scroll_target_y).abs() > 0.5
+                || (self.scroll_x - self.scroll_target_x).abs() > 0.5;
+            if has_anim {
+                if let Some(w) = &self.window { w.request_redraw(); }
+            }
         }
     }
 
