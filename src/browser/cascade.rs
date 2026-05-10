@@ -1806,8 +1806,16 @@ impl AnimationSpec {
         let mut play_state: String = "running".into();
 
         // Shorthand parsing - tokenizace respektuje zavorky (cubic-bezier(...), steps(...))
-        if let Some(short) = styles.get("animation") {
-            for tok in tokenize_balanced(short) {
+        // Multi-animation shorthand `a 3s, b 1s infinite` musi byt parsovany
+        // separately - jinak jeden spec sluci tokeny vsech a vznikne
+        // permanent infinite. Bereme jen PRVNI subspec (TODO multi-animation
+        // tracking pres Vec<AnimationSpec> v active_animations).
+        if let Some(short_full) = styles.get("animation") {
+            let short_first = match split_top_level_commas(short_full).first() {
+                Some(s) => s.to_string(),
+                None => short_full.clone(),
+            };
+            for tok in tokenize_balanced(&short_first) {
                 let tok = tok.as_str();
                 if let Some(s) = parse_time(tok) {
                     if duration == 0.0 { duration = s; } else { delay = s; }

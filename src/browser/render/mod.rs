@@ -5796,13 +5796,15 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             }).unwrap_or(false);
             let layout_cache_valid = cached_some && !aff_layout && viewport_match;
             if std::env::var("PERF_DEBUG").is_ok() && !layout_cache_valid {
-                let anim_names: Vec<&String> = self.active_animations.iter()
+                let aff_names: Vec<&String> = self.active_animations.iter()
                     .filter(|(_, n)| self.layout_affecting_animations.contains(n))
                     .map(|(_, n)| n).collect();
-                eprintln!("[cache_invalid] cached_some={} aff_layout={} viewport_match={} (vp_w={}, vp_h={}, cached={:?}, active_anims={}, layout_aff_anim_names={:?})",
+                let all_names: Vec<&String> = self.active_animations.iter()
+                    .map(|(_, n)| n).collect();
+                eprintln!("[cache_invalid] cached_some={} aff_layout={} viewport_match={} (vp_w={}, vp_h={}, cached={:?}, active_anims_total={}, all_names={:?}, aff_names={:?})",
                     cached_some, aff_layout, viewport_match, viewport_w, viewport_h,
                     self.cached_layout_root.as_ref().map(|l| (l.rect.width, l.rect.height)),
-                    self.active_animations.len(), anim_names);
+                    self.active_animations.len(), all_names, aff_names);
             }
             let _t_layout = std::time::Instant::now();
             // PERF: skip layout_root.clone() kdyz neni potreba mutace. Bez animations
