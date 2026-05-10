@@ -1729,10 +1729,18 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         }
         // Dispatch podle child.display (block/flex/grid) - layout_block jen flowuje
         // grandchildren, neresi grid/flex inner.
+        let _pre_w = child.rect.width;
         match child.display {
             super::super::layout::Display::Flex => super::flex::layout_flex(child),
             super::super::layout::Display::Grid => super::grid::layout_grid(child),
             _ => super::super::layout::layout_block(child),
+        }
+        if std::env::var("GRID_DEBUG").is_ok() {
+            let class = child.node.as_ref().and_then(|n| n.attr("class")).unwrap_or_default();
+            if class.contains("right-container") || class.contains("left-menu") {
+                eprintln!("[grid_after_dispatch] class={:?} pre_w={} post_w={}",
+                    class, _pre_w, child.rect.width);
+            }
         }
     }
 
