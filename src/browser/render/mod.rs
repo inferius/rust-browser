@@ -6352,10 +6352,70 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 let bm_count = crate::devtools::bookmarks::load_bookmarks().len();
                 let chrome_h = 64.0 + if bm_count > 0 && self.bookmarks_bar_visible { 24.0 } else { 0.0 };
                 let anim_t = self.start_time.elapsed().as_secs_f32();
+                // Pri otevrenem addr baru zobrazujeme rozeditovany text v chrome
+                // URL bar misto base_url - user pise primo do nej.
+                let url_for_paint = if self.addr_open {
+                    self.addr_input.text.clone()
+                } else {
+                    self.base_url.clone().unwrap_or_default()
+                };
                 paint_shell_chrome_with_groups(&mut display_list, win_w_logical, chrome_h,
-                                             self.base_url.as_deref().unwrap_or(""),
+                                             &url_for_paint,
                                              Some(&titles), self.tabs.active, Some(&favicons),
                                              Some(&pins), Some(&loadings), anim_t, Some(&groups));
+                // Pri addr_open + shell mode: focus ramecek + caret + selection
+                // overlay nad chrome URL bar.
+                if self.addr_open {
+                    let tab_h = 28.0;
+                    let nav_h = chrome_h - tab_h
+                        - if bm_count > 0 && self.bookmarks_bar_visible { 24.0 } else { 0.0 };
+                    let ny = tab_h;
+                    let url_x = 78.0_f32;
+                    let url_w = win_w_logical - url_x - 48.0;
+                    // Focus highlight (modra obvodka 1px).
+                    display_list.push(DisplayCommand::Rect {
+                        x: url_x - 1.0, y: ny + 3.0, w: url_w + 2.0, h: nav_h - 6.0,
+                        color: [69, 161, 255, 255], radius: 5.0,
+                    });
+                    display_list.push(DisplayCommand::Rect {
+                        x: url_x, y: ny + 4.0, w: url_w, h: nav_h - 8.0,
+                        color: [27, 27, 35, 255], radius: 4.0,
+                    });
+                    // Re-emit text (puvodni prekryl jsme novym rectem).
+                    display_list.push(DisplayCommand::Text {
+                        x: url_x + 8.0, y: ny + 9.0,
+                        content: self.addr_input.text.clone(),
+                        color: [251, 251, 254, 255],
+                        font_size: 12.0, bold: false, italic: false,
+                        font_family: "CamingoMono".into(),
+                        strikethrough: false, underline: false,
+                    });
+                    // Selection highlight (anchor != cursor).
+                    if let (Some(a), c) = (self.addr_input.anchor, self.addr_input.cursor) {
+                        if a != c {
+                            let (lo, hi) = (a.min(c), a.max(c));
+                            let pre = &self.addr_input.text[..lo.min(self.addr_input.text.len())];
+                            let mid = &self.addr_input.text[lo.min(self.addr_input.text.len())..hi.min(self.addr_input.text.len())];
+                            let pre_w = (pre.chars().count() as f32) * 7.2;
+                            let mid_w = (mid.chars().count() as f32) * 7.2;
+                            display_list.push(DisplayCommand::Rect {
+                                x: url_x + 8.0 + pre_w, y: ny + 7.0,
+                                w: mid_w, h: nav_h - 14.0,
+                                color: [69, 161, 255, 130], radius: 0.0,
+                            });
+                        }
+                    }
+                    // Caret blink (~60 frame interval).
+                    if (self.devtools.frame_counter / 30) % 2 == 0 {
+                        let pre = &self.addr_input.text[..self.addr_input.cursor.min(self.addr_input.text.len())];
+                        let pre_w = (pre.chars().count() as f32) * 7.2;
+                        display_list.push(DisplayCommand::Rect {
+                            x: url_x + 8.0 + pre_w, y: ny + 7.0,
+                            w: 1.5, h: nav_h - 14.0,
+                            color: [251, 251, 254, 255], radius: 0.0,
+                        });
+                    }
+                }
                 // Status bar dole - pri hover URL preview.
                 // Scroll-to-top button (pravy dolni roh) pri scroll_y > 200.
                 if self.scroll_y > 200.0 {
@@ -6678,7 +6738,10 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             );
             // (Selection rect uz emitnuty PRED build_display_list - rendered POD textem.)
             // Address bar (Ctrl+L) overlay: input top centered + autocomplete.
-            if self.addr_open {
+            // V shell modu se edit dela primo v chrome URL baru, popup zustava
+            // jen pro autocomplete - ale vykresluje se v non-shell modu nebo
+            // pri non-empty input.
+            if self.addr_open && !self.shell_mode {
                 let vw = (r.config.width as f32) / (self.zoom * r.scale_factor);
                 let bar_w: f32 = (vw - 80.0).min(800.0);
                 let bar_h: f32 = 40.0;
