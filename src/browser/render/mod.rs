@@ -7033,6 +7033,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     color: [160, 160, 170, 255], radius: (bar_h - 4.0) * 0.5,
                 });
             }
+            let _t_atlas = std::time::Instant::now();
             // Pre-rasterize vsechny glyfy do atlasu + nacti images.
             // Pri COLR color font: rasterize char jako RGBA + put do image_atlas
             // pres synthetic key "__colr:{family}:{ch}:{size}". Render path detekuje.
@@ -7091,14 +7092,17 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             }
             r.upload_atlas();
             r.upload_image_atlas();
+            perf_t("atlas warm-up + upload", _t_atlas);
 
             // Split list na page (pred WebGL) + overlay (po WebGL).
             let (page_cmds, overlay_cmds) = display_list.split_at(overlay_split);
 
+            let _t_runs = std::time::Instant::now();
             // Extract TextRun pole pro per-glyph selection (foundation).
             // Walks display_list a build cumulative_advances z atlas. Page cmds
             // jen (overlay nemam textovy obsah co user vybira).
             self.painted_text_runs = extract_text_runs(page_cmds, &r.atlas, r.zoom);
+            perf_t("extract_text_runs", _t_runs);
 
             perf_t("post_paint::addr_overlay+rest", _t_addr_overlay);
             perf_t("post_paint::overlays", _t_overlays);
