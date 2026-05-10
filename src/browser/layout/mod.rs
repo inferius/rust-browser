@@ -3306,13 +3306,24 @@ pub fn layout_block(bx: &mut LayoutBox) {
                 } else {
                     float_avail_w - m_l - m_r
                 };
-                // Clamp dle min-width / max-width
+                // Clamp dle min-width / max-width. Procenta resolve proti
+                // parent inner_w (jinak parse_length da default 16 -> clamp
+                // na 16 a layout cely zkolaboval).
+                let parent_w_for_pct = float_avail_w - m_l - m_r;
+                fn pct_or_len(v: &str, parent: f32) -> f32 {
+                    if let Some(pct_str) = v.trim().strip_suffix('%') {
+                        if let Ok(p) = pct_str.parse::<f32>() {
+                            return parent * p / 100.0;
+                        }
+                    }
+                    parse_length(v)
+                }
                 if !child.min_width_v.is_empty() && child.min_width_v != "none" {
-                    let mn = parse_length(&child.min_width_v.clone());
+                    let mn = pct_or_len(&child.min_width_v.clone(), parent_w_for_pct);
                     if mn > 0.0 { child.rect.width = child.rect.width.max(mn); }
                 }
                 if !child.max_width_v.is_empty() && child.max_width_v != "none" {
-                    let mx = parse_length(&child.max_width_v.clone());
+                    let mx = pct_or_len(&child.max_width_v.clone(), parent_w_for_pct);
                     if mx > 0.0 { child.rect.width = child.rect.width.min(mx); }
                 }
                 // explicit_height z CSS height prop; jinak height_pct (% z parent height);
@@ -3339,13 +3350,18 @@ pub fn layout_block(bx: &mut LayoutBox) {
                         20.0
                     };
                 }
-                // Clamp dle min-height / max-height
+                // Clamp dle min-height / max-height. Percent resolve proti
+                // parent inner_h (cely block layout fix per width/height %).
+                let parent_h_for_pct = (bx.rect.height
+                    - bx.padding_top.unwrap_or(bx.padding)
+                    - bx.padding_bottom.unwrap_or(bx.padding)
+                    - 2.0 * bx.border_width).max(0.0);
                 if !child.min_height_v.is_empty() && child.min_height_v != "none" {
-                    let mn = parse_length(&child.min_height_v.clone());
+                    let mn = pct_or_len(&child.min_height_v.clone(), parent_h_for_pct);
                     if mn > 0.0 { child.rect.height = child.rect.height.max(mn); }
                 }
                 if !child.max_height_v.is_empty() && child.max_height_v != "none" {
-                    let mx = parse_length(&child.max_height_v.clone());
+                    let mx = pct_or_len(&child.max_height_v.clone(), parent_h_for_pct);
                     if mx > 0.0 { child.rect.height = child.rect.height.min(mx); }
                 }
                 layout_dispatch(child);
