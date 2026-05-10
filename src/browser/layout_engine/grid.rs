@@ -1587,6 +1587,13 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         let stretch_w = !has_w && !any_auto_x && (js.is_empty() || js == "stretch" || js == "normal");
         let stretch_h = !has_h && !any_auto_y && (als.is_empty() || als == "stretch" || als == "normal");
         let mut final_w = if stretch_w { cw_avail } else { item_w };
+        if std::env::var("GRID_DEBUG").is_ok() {
+            let class = child.node.as_ref().and_then(|n| n.attr("class")).unwrap_or_default();
+            if class.contains("right-container") || class.contains("left-menu") {
+                eprintln!("[grid_item] class={:?} col={} cw={} cw_avail={} has_w={} stretch_w={} item_w={} final_w_before_clamp={}",
+                    class, col, cw, cw_avail, has_w, stretch_w, item_w, final_w);
+            }
+        }
         let mut final_h = if stretch_h { ch_avail } else if let Some(wh) = wrapped_text_h { wh } else { item_h };
         // Apply min/max + padding+border floor (item nemuze byt mensi nez padding+border).
         // Percent values resolvujem proti grid container inner_w/inner_h.
