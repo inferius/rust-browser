@@ -228,7 +228,20 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                                 }
                                 if gc.explicit_width.is_none() { gc_w = gc.rect.width; }
                                 if gc.explicit_height.is_none() { gc_h = gc.rect.height; }
+                                // Po pre-pass restoraci NE jen gc.rect, ale i deti -
+                                // pre-pass zapsala child rect.height z run s gc.rect.width=0
+                                // (1 col, N rows). Bez deep reset by transform-grid
+                                // tf-box rect.h zustaly stale a real-pass je nemusi
+                                // overridovat (block layout grow-only).
                                 gc.rect = saved_gc_rect;
+                                fn deep_reset_rect(b: &mut super::super::layout::LayoutBox) {
+                                    if b.explicit_width.is_none() { b.rect.width = 0.0; }
+                                    if b.explicit_height.is_none() { b.rect.height = 0.0; }
+                                    b.rect.x = 0.0;
+                                    b.rect.y = 0.0;
+                                    for c in b.children.iter_mut() { deep_reset_rect(c); }
+                                }
+                                for c in gc.children.iter_mut() { deep_reset_rect(c); }
                             }
                             _ => {
                                 // Block grandchild: sum ggchild explicit heights, max ggchild widths.

@@ -1174,6 +1174,10 @@ pub fn layout_tree_with_pseudo_cached(
             || html.children.iter().any(|body| body.rect.height > viewport_height));
     if has_overflow && viewport_width > SCROLLBAR_W + 100.0 {
         layout_root = build_box_with_pseudo_cached(root, style_map, pseudo_map, cache);
+        // Reset celou subtree pred re-layout - cache (kdyz hits) vraci stale rect
+        // hodnoty. Bez resetu by layout_block "grow only" logika nedokazala
+        // shrinkovat pri redukci viewport_width o scrollbar (15 px).
+        reset_subtree_rect(&mut layout_root);
         layout_root.rect.width = viewport_width - SCROLLBAR_W;
         layout_root.rect.height = viewport_height;
         layout_dispatch(&mut layout_root);
@@ -1476,7 +1480,13 @@ fn build_box_inner_cached(
                 if !prev_set {
                     LAYOUT_CACHE.with(|tc| *tc.borrow_mut() = None);
                 }
-                return prev.clone();
+                // Cache je pouze pro structure/styles. rect.* (positions/sizes)
+                // pochazi z prev layout_dispatch a stane se stale pri novem
+                // layoutu (napr. po scrollbar reservation re-layout). Reset
+                // rect cele subtree aby novy layout vychazel z 0.
+                let mut cloned = prev.clone();
+                reset_subtree_rect(&mut cloned);
+                return cloned;
             }
         }
     }
@@ -1499,12 +1509,24 @@ fn cache_lookup_subtree(node: &Rc<Node>, style_map: &StyleMap) -> Option<LayoutB
                 if prev.fingerprint == h && h != 0 {
                     let mut clone = prev.clone();
                     clone.fingerprint = h;
+                    reset_subtree_rect(&mut clone);
                     return Some(clone);
                 }
             }
         }
         None
     })
+}
+
+/// Reset rect (x/y/width/height) v cele subtree. Pouziti pri cache hit
+/// nebo re-layout: struktura+styly se prevezmou, ale pozice/velikosti maji
+/// byt prepoctene od nuly. Bez resetu by layout_block "grow only" logika
+/// nedokazala shrinkovat (napr. pri scrollbar reservation second pass).
+fn reset_subtree_rect(bx: &mut LayoutBox) {
+    bx.rect = Rect { x: 0.0, y: 0.0, width: 0.0, height: 0.0 };
+    for ch in bx.children.iter_mut() {
+        reset_subtree_rect(ch);
+    }
 }
 
 fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::cascade::PseudoStyleMap, counters: &mut HashMap<String, i32>) -> LayoutBox {
@@ -2704,6 +2726,30 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         bx.children.insert(0, backdrop_box);
     }
 
+    // Inherit font_size + line_height + bold/italic + colors do text node deti
+    // (text nodes nemaji vlastni cascade entry). Bez teto inheritance flex/grid
+    // pre-pass volaji intrinsic_content_width(text_node) s default font_size=16
+    // misto realneho (napr. 0.7rem = 11.2). Vysledek: pre-pass merici sirka
+    // mismatching s flush_inline merici sirkou -> spurious text wrap.
+    let parent_fs = bx.font_size;
+    let parent_lh = bx.line_height;
+    let parent_bold = bx.bold;
+    let parent_italic = bx.italic;
+    let parent_color = bx.text_color;
+    let parent_family = bx.font_family.clone();
+    for ch in bx.children.iter_mut() {
+        if ch.tag.is_none() {
+            ch.font_size = parent_fs;
+            if (ch.line_height - 1.2).abs() < 0.001 {
+                ch.line_height = parent_lh;
+            }
+            if !ch.bold { ch.bold = parent_bold; }
+            if !ch.italic { ch.italic = parent_italic; }
+            if ch.text_color.is_none() { ch.text_color = parent_color; }
+            if ch.font_family.is_empty() { ch.font_family = parent_family.clone(); }
+        }
+    }
+
     bx
 }
 
@@ -3315,7 +3361,15 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
             advance_h
         };
         line_height = line_height.max(line_h_for_this);
-        let space_w = font_size * 0.27;
+        // space_w odpovida realne glyph width mezery v aktualnim fontu - sjednoceni
+        // s measure_text_width(t), ktery v intrinsic_content_width pre-pass meri
+        // celou string vc. space glyfu. Bez tohoto byly intrinsic measure (s glyph
+        // space) a flush_inline measure (s synthetic 0.27*fs) rozdilne -> spurious
+        // text wrap kdyz pre-pass dal min sirku nez flush_inline potrebuje.
+        let space_w = {
+            let g = measure_text_width_styled(" ", font_size, bx_clone.bold);
+            if g > 0.0 { g } else { font_size * 0.27 }
+        };
 
         if let Some(text) = &bx_clone.text {
             // Detect leading/trailing whitespace pro spravne mezery na hranicich.
@@ -3347,8 +3401,16 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
                 // Pri inner_w <= 0 (pre-pass parent.rect.width=0) NE wrap -
                 // vsech slov v jedne line. Real layout pak prepocita s
                 // spravnym inner_w. Bez teto guard kazde slovo wrap -> 8x lines.
+                // Slop tolerance 0.5 px - text se shoduje mezi pre-pass intrinsic
+                // a flush_inline word-by-word jen v ramci FP ulpu (~1e-6). Pri
+                // exactni rovnosti by ANY epsilon > 0 v measure trigger wrap.
+                // Slop tolerance 0.5 px - text se shoduje mezi pre-pass intrinsic
+                // (measure_text_width(t)) a flush_inline word-by-word jen v ramci
+                // FP ulpu (~1e-6). Pri exactni rovnosti by ANY epsilon > 0 trigger
+                // wrap; tim padem napriklad letter-spacing/text-transform spans
+                // dostavaly h=2x kvuli spurious wrapu na presne hranici.
                 let needs_wrap = inner_w > 0.0
-                    && cursor_x + inter_word_space + w > inner_x + inner_w
+                    && cursor_x + inter_word_space + w > inner_x + inner_w + 0.5
                     && cursor_x > inner_x;
                 if needs_wrap {
                     // Pre-wrap zaznam soucasne line end (cursor_x na konci predchozi line).
@@ -3362,7 +3424,8 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
                     wrapped_text.push(' ');
                 }
                 // Single-word overflow: break_word/anywhere -> rozseka slovo na chars.
-                if break_word && w > (inner_x + inner_w - cursor_x) && w > 0.0 {
+                // Pri inner_w <= 0 (pre-pass) NE break - dochazi single line.
+                if break_word && inner_w > 0.0 && w > (inner_x + inner_w - cursor_x) && w > 0.0 {
                     let mut acc_w = 0.0;
                     let chars: Vec<char> = word.chars().collect();
                     for ch in chars {

@@ -47,6 +47,13 @@ pub fn layout_grid(bx: &mut LayoutBox) {
     // Parse + resolve column tracks
     let mut col_tracks = resolve_tracks(&bx.grid_template_columns, inner_w, col_gap);
     let (mut col_token_kinds, mut col_is_autofit) = parse_track_tokens_with_autofit(&bx.grid_template_columns, inner_w, col_gap);
+    if std::env::var("GRID_DEBUG").is_ok() {
+        let n = bx.node.as_ref()
+            .and_then(|n| n.attr("class"))
+            .unwrap_or_else(|| "?".to_string());
+        eprintln!("[grid_debug] class={:?} gtc={:?} inner_w={} cols={} children={} rect.h_in={}",
+            n, bx.grid_template_columns, inner_w, col_tracks.len(), bx.children.len(), bx.rect.height);
+    }
     if col_tracks.is_empty() { col_tracks = vec![inner_w]; }
     let mut cols_explicit = col_tracks.len();
     // Detekce negativnich grid-column-start beyond -cols-1: musi pridat implicit cols PRED explicit grid.
@@ -1720,7 +1727,10 @@ pub fn layout_grid(bx: &mut LayoutBox) {
             if bx.rect.height < intrinsic_h {
                 bx.rect.height = intrinsic_h;
             }
-        } else if bx.rect.height < total_h {
+        } else {
+            // Vzdy override - bez tohoto pri pre-pass (inner_w=0, rows_pocet=children)
+            // se rect.height nastavila na 8*row_h, a nasledny correct pass (cols=20,
+            // 1 row) ji nedokazal zmensit, takze container zustal multiple row tall.
             bx.rect.height = total_h;
         }
     }
@@ -2076,9 +2086,18 @@ fn parse_track_tokens_with_autofit(s: &str, container: f32, gap: f32) -> (Vec<Tr
                 let count_str = inner[..comma_idx].trim();
                 let inner_tracks = inner[comma_idx+1..].trim();
                 let sub_tokens = parse_track_tokens(inner_tracks);
+                // Pro auto-fill/auto-fit: minmax(min_px, X) pouzije min_px jako
+                // intrinsic min (per CSS Grid §7.2.2.1). Bez toho by minmax(120,1fr)
+                // pri auto-fill = sub_size 0 -> count=1 -> 1 sloupec, items
+                // collapse na ~0 px sirky misto N sloupcu po 120 px.
                 let sub_size: f32 = sub_tokens.iter().map(|t| match t {
                     Track::Fixed(p) => *p,
                     Track::Percent(p) => container * p / 100.0,
+                    Track::Minmax(min_v, _, _) => {
+                        if min_v.is_nan() || *min_v <= -999.0 { 0.0 }
+                        else if *min_v < 0.0 && *min_v >= -1.0 { container * (-min_v) }
+                        else { min_v.max(0.0) }
+                    }
                     _ => 0.0,
                 }).sum();
                 let is_af = count_str == "auto-fit";
@@ -2143,9 +2162,18 @@ fn parse_track_tokens_sized(s: &str, container: f32, gap: f32) -> Vec<Track> {
                 let count_str = inner[..comma_idx].trim();
                 let inner_tracks = inner[comma_idx+1..].trim();
                 let sub_tokens = parse_track_tokens(inner_tracks);
+                // Pro auto-fill/auto-fit: minmax(min_px, X) pouzije min_px jako
+                // intrinsic min (per CSS Grid §7.2.2.1). Bez toho by minmax(120,1fr)
+                // pri auto-fill = sub_size 0 -> count=1 -> 1 sloupec, items
+                // collapse na ~0 px sirky misto N sloupcu po 120 px.
                 let sub_size: f32 = sub_tokens.iter().map(|t| match t {
                     Track::Fixed(p) => *p,
                     Track::Percent(p) => container * p / 100.0,
+                    Track::Minmax(min_v, _, _) => {
+                        if min_v.is_nan() || *min_v <= -999.0 { 0.0 }
+                        else if *min_v < 0.0 && *min_v >= -1.0 { container * (-min_v) }
+                        else { min_v.max(0.0) }
+                    }
                     _ => 0.0,
                 }).sum();
                 let count: usize = match count_str {

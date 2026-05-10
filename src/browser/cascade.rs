@@ -541,6 +541,15 @@ fn resolve_math_func(s: &str) -> String {
             for &name in &names {
                 let nb = name.as_bytes();
                 if idx + nb.len() <= bytes.len() && &bytes[idx..idx + nb.len()] == nb {
+                    // Word-boundary check: predchozi byte nesmi byt alphanumeric/_
+                    // jinak by `max(` matchovalo uvnitr `minmax(...)`, vyrobilo mezivysledek
+                    // `min<num>` a rozbilo CSS Grid minmax().
+                    if idx > 0 {
+                        let prev = bytes[idx - 1];
+                        if prev.is_ascii_alphanumeric() || prev == b'_' || prev == b'-' {
+                            continue;
+                        }
+                    }
                     // Najdi matching )
                     let mut depth = 1;
                     let mut j = idx + nb.len();
