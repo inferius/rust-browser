@@ -1974,6 +1974,13 @@ pub fn layout_grid(bx: &mut LayoutBox) {
             }
         }
     }
+    if std::env::var("GRID_DEBUG").is_ok() {
+        let cls = bx.node.as_ref().and_then(|n| n.attr("class")).unwrap_or_default();
+        if cls.contains("right-container") {
+            eprintln!("[grid_exit] class={:?} bx.rect.width={} bx.rect.height={}",
+                cls, bx.rect.width, bx.rect.height);
+        }
+    }
 }
 
 /// Distribuce free space pro justify/align-content v gridu.
