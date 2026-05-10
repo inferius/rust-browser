@@ -7,10 +7,18 @@ use std::io::Read;
 /// Default User-Agent identifikuje engine.
 pub fn fetch_text_url(url: &str) -> Option<String> {
     if url.starts_with("http://") || url.starts_with("https://") {
+        // UA emuluje moderni Chrome - nektere stranky (Google, ad serverů,
+        // analytika) podavaji stripped/legacy HTML kdyz UA nepoznaji jako
+        // realny browser. Nas branding je hidden v RustWebEngine note ale
+        // zacatek = standardni Chrome string.
         match ureq::get(url)
-            .set("User-Agent", "Mozilla/5.0 RustWebEngine/0.1 (custom layout + JS interpreter)")
-            .set("Accept", "text/html,application/xhtml+xml,application/xml,text/css,*/*;q=0.8")
-            .set("Accept-Language", "en-US,en;q=0.9,cs;q=0.8")
+            .set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 RustWebEngine/0.1")
+            .set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8")
+            .set("Accept-Language", "cs-CZ,cs;q=0.9,en-US;q=0.8,en;q=0.7")
+            .set("Accept-Encoding", "identity")
+            .set("Sec-Ch-Ua", "\"Google Chrome\";v=\"131\", \"Chromium\";v=\"131\", \"Not_A Brand\";v=\"24\"")
+            .set("Sec-Ch-Ua-Mobile", "?0")
+            .set("Sec-Ch-Ua-Platform", "\"Windows\"")
             .timeout(std::time::Duration::from_secs(15))
             .call()
         {
