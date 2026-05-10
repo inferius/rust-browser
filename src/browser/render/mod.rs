@@ -710,6 +710,11 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         /// v tomto set. Drive: jakekoliv layout-prop @keyframes v CSS = perma
         /// invalidace, i kdyz se nikdy nespusti.
         layout_affecting_animations: std::collections::HashSet<String>,
+        /// Ring buffer poslednich N frame timing pro FPS counter overlay.
+        /// Default 60 frame window. Render hori v ms, FPS = 1000 / avg.
+        frame_times_ms: std::collections::VecDeque<f32>,
+        /// Show FPS counter overlay (Ctrl+Shift+F nebo always-on dev mode).
+        show_fps: bool,
         /// Cache cascade output (DOM root ptr hash -> StyleMap).
         cached_cascade_hash: u64,
         cached_style_map: Option<super::cascade::StyleMap>,
@@ -5761,15 +5766,27 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // kdyz se ta keyframe na zadnem elementu nespusti.
             let aff_layout = self.active_animations.iter()
                 .any(|(_, name)| self.layout_affecting_animations.contains(name));
+            // viewport_match: cached.width muze byt viewport_w NEBO viewport_w - 15
+            // (scrollbar reservation). Tolerance 16 px pokryvuje obe varianty.
+            // Drive check `< 0.5` zpusoboval permanentni cache invalidaci na
+            // strankach co overflow vertikalne (cached = vp - 15 vs check vp).
+            // height comparison: cached.rect.height casto > viewport_height
+            // (full document tall). Compare jen kdyz cached < viewport (mala
+            // stranka). Jinak ignore height check.
             let viewport_match = self.cached_layout_root.as_ref().map(|l| {
-                (l.rect.width - viewport_w).abs() < 0.5 && (l.rect.height - viewport_h).abs() < 0.5
+                let dw = (l.rect.width - viewport_w).abs();
+                let dw_ok = dw < 0.5 || (dw - 15.0).abs() < 0.5;
+                dw_ok
             }).unwrap_or(false);
             let layout_cache_valid = cached_some && !aff_layout && viewport_match;
             if std::env::var("PERF_DEBUG").is_ok() && !layout_cache_valid {
-                eprintln!("[cache_invalid] cached_some={} aff_layout={} viewport_match={} (vp_w={}, vp_h={}, cached={:?}, active_anims={})",
+                let anim_names: Vec<&String> = self.active_animations.iter()
+                    .filter(|(_, n)| self.layout_affecting_animations.contains(n))
+                    .map(|(_, n)| n).collect();
+                eprintln!("[cache_invalid] cached_some={} aff_layout={} viewport_match={} (vp_w={}, vp_h={}, cached={:?}, active_anims={}, layout_aff_anim_names={:?})",
                     cached_some, aff_layout, viewport_match, viewport_w, viewport_h,
                     self.cached_layout_root.as_ref().map(|l| (l.rect.width, l.rect.height)),
-                    self.active_animations.len());
+                    self.active_animations.len(), anim_names);
             }
             let _t_layout = std::time::Instant::now();
             // PERF: skip layout_root.clone() kdyz neni potreba mutace. Bez animations
@@ -6385,6 +6402,41 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 }
             }
 
+            // FPS counter overlay (Ctrl+Shift+F toggle nebo PERF_DEBUG=1).
+            // Top-right roh, color-coded: green >50, yellow 30-50, red <30.
+            if self.show_fps && !self.frame_times_ms.is_empty() {
+                let avg_ms = self.frame_times_ms.iter().sum::<f32>() / self.frame_times_ms.len() as f32;
+                let fps = if avg_ms > 0.01 { 1000.0 / avg_ms } else { 999.0 };
+                let max_ms = self.frame_times_ms.iter().cloned().fold(0.0_f32, f32::max);
+                let (rect_w, rect_h) = (130.0_f32, 36.0_f32);
+                let win_w_logical = (r.config.width as f32) / (self.zoom * r.scale_factor);
+                let chrome_h = self.shell_chrome_h;
+                let fps_x = win_w_logical - rect_w - 8.0;
+                let fps_y = chrome_h + 8.0;
+                let color = if fps >= 50.0 { [80, 220, 120, 255] }
+                    else if fps >= 30.0 { [240, 200, 80, 255] }
+                    else { [240, 80, 80, 255] };
+                display_list.push(DisplayCommand::Rect {
+                    x: fps_x, y: fps_y, w: rect_w, h: rect_h,
+                    color: [20, 20, 26, 220], radius: 4.0,
+                });
+                display_list.push(DisplayCommand::Text {
+                    x: fps_x + 8.0, y: fps_y + 4.0,
+                    content: format!("{:.0} FPS  {:.1}ms", fps, avg_ms),
+                    color, font_size: 12.0, bold: true, italic: false,
+                    font_family: "CamingoMono".into(),
+                    strikethrough: false, underline: false,
+                });
+                display_list.push(DisplayCommand::Text {
+                    x: fps_x + 8.0, y: fps_y + 20.0,
+                    content: format!("max {:.1}ms", max_ms),
+                    color: [180, 180, 190, 200],
+                    font_size: 10.0, bold: false, italic: false,
+                    font_family: "CamingoMono".into(),
+                    strikethrough: false, underline: false,
+                });
+            }
+
             // In-window DevTools panel - emit pred scrollbar a po main viewport content.
             // viewport_w/h v logical px (display list je v logical, vp uniform / zoom*scale).
             let viewport_w_logical = (r.config.width as f32) / (self.zoom * r.scale_factor);
@@ -6684,6 +6736,11 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             if frame_ms > 50.0 {
                 eprintln!("[slow frame] {:.1} ms", frame_ms);
             }
+            // Ring buffer poslednich 60 framov pro FPS counter.
+            self.frame_times_ms.push_back(frame_ms);
+            if self.frame_times_ms.len() > 60 {
+                self.frame_times_ms.pop_front();
+            }
             // Performance sample do DevTools.
             let dl_size = self.display_list_buffer.len() as u32;
             self.devtools.performance.push(crate::devtools::model::performance::FrameSample {
@@ -6753,6 +6810,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         css_uses_keyframes: false,
         layout_has_sticky: false,
         layout_affecting_animations: std::collections::HashSet::new(),
+        frame_times_ms: std::collections::VecDeque::with_capacity(60),
+        show_fps: std::env::var("PERF_DEBUG").is_ok(),
         current_path: current_html_path,
         base_url,
         history: initial_url.into_iter().collect(),

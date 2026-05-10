@@ -1167,33 +1167,44 @@ pub fn layout_tree_with_pseudo_cached(
     }
     perf_t("collect_prev_boxes", _t);
     let cache = if prev_map.is_empty() { None } else { Some(&prev_map) };
+    // PERF: skip prvni "scrollbar detection" pass kdyz prev_root uz overflow
+    // mel - rovnou pouz width - 15. Jinak by pri opetovnem rebuilu prelayoutoval
+    // 2x. Detekce z prev: kdyz prev rect.width = viewport - 15 (presne match
+    // s scrollbar adjustment), prev urcite mel overflow.
+    const SCROLLBAR_W: f32 = 15.0;
+    let prev_had_overflow = prev_root.as_ref()
+        .map(|p| (p.rect.width - (viewport_width - SCROLLBAR_W)).abs() < 0.5)
+        .unwrap_or(false);
+    let initial_w = if prev_had_overflow && viewport_width > SCROLLBAR_W + 100.0 {
+        viewport_width - SCROLLBAR_W
+    } else {
+        viewport_width
+    };
     let _t = std::time::Instant::now();
     let mut layout_root = build_box_with_pseudo_cached(root, style_map, pseudo_map, cache);
     perf_t("build_box_with_pseudo_cached #1", _t);
-    layout_root.rect.width = viewport_width;
+    layout_root.rect.width = initial_w;
     layout_root.rect.height = viewport_height;
     let _t = std::time::Instant::now();
     layout_dispatch(&mut layout_root);
     perf_t("layout_dispatch #1", _t);
-    // CSS scrollbar reservation: pri vertical overflow (content > viewport),
-    // browser reserve 15 px scrollbar -> html/body width = viewport - 15.
-    // Detect: po prvnim layoutu zkontroluj html.rect.height. Pokud > viewport_h,
-    // re-layout s 15 px reduced viewport_w.
-    const SCROLLBAR_W: f32 = 15.0;
-    let has_overflow = layout_root.children.iter()
-        .filter_map(|c| if c.tag.as_deref() == Some("html") { Some(c) } else { None })
-        .any(|html| html.rect.height > viewport_height
-            || html.children.iter().any(|body| body.rect.height > viewport_height));
-    if has_overflow && viewport_width > SCROLLBAR_W + 100.0 {
-        if perf { eprintln!("  [layout_tree::scrollbar_repath] running second build+layout pass"); }
-        let _t = std::time::Instant::now();
-        layout_root = build_box_with_pseudo_cached(root, style_map, pseudo_map, cache);
-        perf_t("build_box_with_pseudo_cached #2", _t);
-        layout_root.rect.width = viewport_width - SCROLLBAR_W;
-        layout_root.rect.height = viewport_height;
-        let _t = std::time::Instant::now();
-        layout_dispatch(&mut layout_root);
-        perf_t("layout_dispatch #2", _t);
+    // Detect overflow only kdyz jsme NEPOUZILI scrollbar adjustment uz na input.
+    if !prev_had_overflow {
+        let has_overflow = layout_root.children.iter()
+            .filter_map(|c| if c.tag.as_deref() == Some("html") { Some(c) } else { None })
+            .any(|html| html.rect.height > viewport_height
+                || html.children.iter().any(|body| body.rect.height > viewport_height));
+        if has_overflow && viewport_width > SCROLLBAR_W + 100.0 {
+            if perf { eprintln!("  [layout_tree::scrollbar_repath] running second build+layout pass"); }
+            let _t = std::time::Instant::now();
+            layout_root = build_box_with_pseudo_cached(root, style_map, pseudo_map, cache);
+            perf_t("build_box_with_pseudo_cached #2", _t);
+            layout_root.rect.width = viewport_width - SCROLLBAR_W;
+            layout_root.rect.height = viewport_height;
+            let _t = std::time::Instant::now();
+            layout_dispatch(&mut layout_root);
+            perf_t("layout_dispatch #2", _t);
+        }
     }
     let _t = std::time::Instant::now();
     let anchor_map = collect_anchors(&layout_root);
