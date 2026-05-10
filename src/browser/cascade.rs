@@ -1085,6 +1085,14 @@ pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
         }
     }
 
+    if std::env::var("VAR_DEBUG").is_ok() {
+        let mut keys: Vec<_> = variables.iter().collect();
+        keys.sort_by(|a, b| a.0.cmp(b.0));
+        for (k, v) in keys.iter().take(10) {
+            eprintln!("[var] {} = {}", k, v);
+        }
+        eprintln!("[var] (total {} vars)", variables.len());
+    }
     // Prochazime DOM, pro kazdy element zkontrolujeme vsechny rules
     root.walk(&mut |node| {
         if !matches!(node.kind, NodeKind::Element { .. }) { return; }
