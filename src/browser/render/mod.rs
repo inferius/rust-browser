@@ -6644,16 +6644,17 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             }
 
             // Ulozim layout pro hit test + vrat display_list buffer pro priste.
-            // PERF: pri immutable cestit owned je None - vyhneme se redundantnimu
-            // clone tim ze pouzijeme cached_layout_root primo (clone vyzadovan
-            // pro hit-test API ktere drz vlastni kopii). cached zustava synced.
-            self.layout_root = if let Some(lr) = owned_layout_root {
-                Some(lr)
-            } else {
-                // Cache hit + immutable: layout_root je presny equvialent cached.
-                // Aspon clone jen jednou (vs. dvakrat predtim).
-                self.cached_layout_root.clone()
-            };
+            // PERF: pri owned=None (immutable cesta) self.layout_root zustava
+            // synced z minulosti - cached_layout_root se nemenil. Skip clone.
+            // Mutation cestou (animations/sticky): musime ulozit post-mutation
+            // verzi pro spravny hit-test (sticky offsets).
+            if let Some(lr) = owned_layout_root {
+                self.layout_root = Some(lr);
+            } else if self.layout_root.is_none() {
+                // First-time: pri cache hit + zadnem prev layout_root (rare),
+                // klonujeme z cache jednou.
+                self.layout_root = self.cached_layout_root.clone();
+            }
             self.display_list_buffer = display_list;
             let frame_ms = frame_start.elapsed().as_secs_f32() * 1000.0;
             if frame_ms > 50.0 {
