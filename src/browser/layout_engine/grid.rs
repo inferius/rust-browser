@@ -47,6 +47,16 @@ pub fn layout_grid(bx: &mut LayoutBox) {
     // Parse + resolve column tracks
     let mut col_tracks = resolve_tracks(&bx.grid_template_columns, inner_w, col_gap);
     let (mut col_token_kinds, mut col_is_autofit) = parse_track_tokens_with_autofit(&bx.grid_template_columns, inner_w, col_gap);
+    if std::env::var("GRID_TRACE").is_ok() {
+        let cls = bx.node.as_ref().and_then(|n| n.attr("class")).unwrap_or_default();
+        if cls.contains("transform-grid") {
+            eprintln!("[grid_call] cls={} rect.x={} y={} w={} h={}",
+                cls, bx.rect.x, bx.rect.y, bx.rect.width, bx.rect.height);
+            for (i, c) in bx.children.iter().enumerate().take(2) {
+                eprintln!("  child[{}].rect.x={} y={} w={} h={}", i, c.rect.x, c.rect.y, c.rect.width, c.rect.height);
+            }
+        }
+    }
     if std::env::var("GRID_DEBUG").is_ok() {
         let n = bx.node.as_ref()
             .and_then(|n| n.attr("class"))

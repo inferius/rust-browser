@@ -1174,10 +1174,6 @@ pub fn layout_tree_with_pseudo_cached(
             || html.children.iter().any(|body| body.rect.height > viewport_height));
     if has_overflow && viewport_width > SCROLLBAR_W + 100.0 {
         layout_root = build_box_with_pseudo_cached(root, style_map, pseudo_map, cache);
-        // Reset celou subtree pred re-layout - cache (kdyz hits) vraci stale rect
-        // hodnoty. Bez resetu by layout_block "grow only" logika nedokazala
-        // shrinkovat pri redukci viewport_width o scrollbar (15 px).
-        reset_subtree_rect(&mut layout_root);
         layout_root.rect.width = viewport_width - SCROLLBAR_W;
         layout_root.rect.height = viewport_height;
         layout_dispatch(&mut layout_root);
@@ -3269,7 +3265,22 @@ pub fn layout_block(bx: &mut LayoutBox) {
     let block_pad_t = bx.padding_top.unwrap_or(bx.padding);
     let block_pad_b = bx.padding_bottom.unwrap_or(bx.padding);
     let bound = content_h + block_pad_t + block_pad_b + 2.0 * bx.border_width;
-    if bx.rect.height < bound {
+    // Bound > 0 + bez explicit_height + bez taffy_mode preset + ma node (skip
+    // umely layout_root): override misto grow-only. Bez tohoto by stale h (z
+    // pre-pass kdy parent mel mensi width) prevazila spravne novy bound.
+    // - bound == 0 (empty block bez obsahu): zachovat (placeholder 20 z parent
+    //   iter pro empty divs - HTML5 spec compatible).
+    // - layout_root (bez node): zachovat viewport height set extension.
+    let preserve_grow = bx.explicit_height.is_some()
+        || (bx.taffy_mode && preset_height_taffy > 0.0)
+        || (bound == 0.0 && bx.children.is_empty() && bx.text.is_none())
+        || bx.tag.is_none()
+        || matches!(bx.tag.as_deref(), Some("html") | Some("body"));
+    if preserve_grow {
+        if bx.rect.height < bound {
+            bx.rect.height = bound;
+        }
+    } else {
         bx.rect.height = bound;
     }
     // V taffy_mode: pokud rodic ji uz nastavil (preset > 0), nepresahnout (parent
