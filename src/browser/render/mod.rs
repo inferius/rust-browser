@@ -5748,21 +5748,31 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     (l.rect.width - viewport_w).abs() < 0.5 && (l.rect.height - viewport_h).abs() < 0.5
                 }).unwrap_or(false);
             let _t_layout = std::time::Instant::now();
-            let mut layout_root = if layout_cache_valid {
-                let l = self.cached_layout_root.as_ref().unwrap().clone();
-                perf_t("layout_root clone (cache hit)", _t_layout);
-                l
+            // PERF: skip layout_root.clone() kdyz neni potreba mutace. Bez animations
+            // /transitions/sticky paint walk pres immutable ref. Clone celeho
+            // LayoutBox stromu (5000+ deeply-nested struct s Vec/String/Option fields)
+            // ~5-15 ms zbytecne kdyz se nic nemeni.
+            let needs_layout_mut = self.layout_has_sticky
+                || !self.active_animations.is_empty()
+                || !self.active_transitions.is_empty();
+            // Owned (na cache miss vzdy nove vytvoreny + clone do cache; na cache hit
+            // jen pri mutation potrebe).
+            let mut owned_layout_root: Option<super::layout::LayoutBox> = if layout_cache_valid {
+                if needs_layout_mut {
+                    let l = self.cached_layout_root.as_ref().unwrap().clone();
+                    perf_t("layout_root clone (cache hit + needs mut)", _t_layout);
+                    Some(l)
+                } else {
+                    None  // Use cached as ref (no clone).
+                }
             } else {
                 // Per-element layout cache: pasujeme prev cached_layout_root jako
-                // hint. Pri match fingerprint reuznavaji subtrees (skip style/
-                // struct rebuild). Win pri animation/hover state change kde
-                // vetsina uzlu se nemenila.
+                // hint. Pri match fingerprint reuznavaji subtrees.
                 let prev_root = self.cached_layout_root.as_ref();
                 let lr = layout::layout_tree_with_pseudo_cached(
                     &document_root, &style_map, &pseudo_map,
                     viewport_w, viewport_h, prev_root);
                 perf_t("layout_tree (rebuild)", _t_layout);
-                let _t2 = std::time::Instant::now();
                 // Detekce sticky elementu - jen jednou pri rebuild. Per-frame
                 // apply_sticky walk skip kdyz false (vetsina stranek sticky nema).
                 fn has_sticky_walk(b: &super::layout::LayoutBox) -> bool {
@@ -5771,26 +5781,25 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 }
                 self.layout_has_sticky = has_sticky_walk(&lr);
                 self.cached_layout_root = Some(lr.clone());
-                perf_t("cached_layout_root clone (after rebuild)", _t2);
-                lr
+                Some(lr)
             };
-            // Post-pass: aplikuj animation values na cached layout boxes
-            // (transforms, opacity, colors, filter - paint-only props ktere se
-            // za zivota cache mohou menit kazdy frame).
-            // PERF: skip cely walk pokud zadne keyframes / aktivni animace -
-            // bez nich neni co aplikovat, walk 5000+ node by jen mrhal.
-            if layout_cache_valid && (self.css_uses_keyframes || !self.active_animations.is_empty() || !self.active_transitions.is_empty()) {
-                let _t_anim = std::time::Instant::now();
-                apply_paint_animations(&mut layout_root, &style_map);
-                perf_t("apply_paint_animations", _t_anim);
+            // Mutace na cloned/rebuilt only.
+            if let Some(lr) = owned_layout_root.as_mut() {
+                if layout_cache_valid && (!self.active_animations.is_empty() || !self.active_transitions.is_empty()) {
+                    let _t_anim = std::time::Instant::now();
+                    apply_paint_animations(lr, &style_map);
+                    perf_t("apply_paint_animations", _t_anim);
+                }
+                if self.layout_has_sticky {
+                    let _t_sticky = std::time::Instant::now();
+                    layout::apply_sticky(lr, self.scroll_y);
+                    perf_t("apply_sticky", _t_sticky);
+                }
             }
-            // Apply position: sticky pri current scroll
-            // PERF: skip walk pokud layout neobsahuje sticky elementy.
-            if self.layout_has_sticky {
-                let _t_sticky = std::time::Instant::now();
-                layout::apply_sticky(&mut layout_root, self.scroll_y);
-                perf_t("apply_sticky", _t_sticky);
-            }
+            // Convenience binding: vsechny dalsi reads pres `layout_root` (immutable
+            // ref do owned nebo cached). Bez owned ho rovnou vezmeme z cached.
+            let layout_root: &super::layout::LayoutBox = owned_layout_root.as_ref()
+                .unwrap_or_else(|| self.cached_layout_root.as_ref().expect("cached after layout"));
             // Viewport culling: vyrad off-screen elementy z paint walku
             // (test stranka 7000 px, viewport 900 px = 8x mensi paint cost).
             // Reuse buffer pres frames - alloc-free.
@@ -6635,7 +6644,16 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             }
 
             // Ulozim layout pro hit test + vrat display_list buffer pro priste.
-            self.layout_root = Some(layout_root);
+            // PERF: pri immutable cestit owned je None - vyhneme se redundantnimu
+            // clone tim ze pouzijeme cached_layout_root primo (clone vyzadovan
+            // pro hit-test API ktere drz vlastni kopii). cached zustava synced.
+            self.layout_root = if let Some(lr) = owned_layout_root {
+                Some(lr)
+            } else {
+                // Cache hit + immutable: layout_root je presny equvialent cached.
+                // Aspon clone jen jednou (vs. dvakrat predtim).
+                self.cached_layout_root.clone()
+            };
             self.display_list_buffer = display_list;
             let frame_ms = frame_start.elapsed().as_secs_f32() * 1000.0;
             if frame_ms > 50.0 {
