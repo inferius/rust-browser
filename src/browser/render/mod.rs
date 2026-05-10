@@ -988,7 +988,11 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     if self.css_uses_viewport {
                         self.cached_layout_root = None;
                     }
-                    self.render();
+                    // PERF: nevolame self.render() inline - winit posila pri
+                    // startu vicero Resized eventu (initial + DPI + final).
+                    // request_redraw() je coalescovany -> jeden RedrawRequested
+                    // = jeden layout pass misto N pass.
+                    if let Some(w) = &self.window { w.request_redraw(); }
                 }
                 WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                     if let Some(r) = &mut self.renderer {
@@ -997,7 +1001,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     // Scale factor zmena dela DPI shift glyph atlas - layout
                     // (logical px) zustava stejny.
                     let _ = scale_factor;
-                    self.render();
+                    if let Some(w) = &self.window { w.request_redraw(); }
                 }
                 WindowEvent::CursorMoved { position, .. } => {
                     // Mouse position je physical px. Logical = physical / (zoom * scale_factor).
