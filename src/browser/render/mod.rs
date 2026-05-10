@@ -6208,11 +6208,14 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 }
             }
 
+            perf_t("post_paint::selection", _t_post_paint);
+            let _t_canvas = std::time::Instant::now();
             // Canvas API: emit canvas ops jako DisplayCommands.
             if let Some(interp) = &self.interpreter {
                 let canvas_ops = interp.canvas_ops.borrow();
                 paint_canvas_ops(&layout_root, &canvas_ops, &mut display_list);
             }
+            perf_t("post_paint::canvas_ops", _t_canvas);
             // WebGL canvas - real GPU path je v Renderer::draw_full_frame
             // (run_webgl_frame). paint_webgl_canvases je placeholder pro
             // debug viewer / devtools kontexty bez Renderer.
@@ -6304,6 +6307,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     }
                 }
             }
+            perf_t("post_paint::shifts", _t_canvas);
+            let _t_overlays = std::time::Instant::now();
             // Split point: vsechno za timto bodem se renderuje AZ PO WebGL passu,
             // takze WebGL canvas neprekryje devtools/scrollbar/address bar/find.
             let overlay_split = display_list.len();
@@ -6755,6 +6760,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 });
             }
 
+            let _t_dt_paint = std::time::Instant::now();
             // In-window DevTools panel - emit pred scrollbar a po main viewport content.
             // viewport_w/h v logical px (display list je v logical, vp uniform / zoom*scale).
             let viewport_w_logical = (r.config.width as f32) / (self.zoom * r.scale_factor);
@@ -6770,6 +6776,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 self.mouse_x - self.scroll_x,
                 self.mouse_y - self.scroll_y,
             );
+            perf_t("post_paint::devtools_panel", _t_dt_paint);
             // (Selection rect uz emitnuty PRED build_display_list - rendered POD textem.)
             // Address bar (Ctrl+L) overlay: input top centered + autocomplete.
             // V shell modu se edit dela primo v chrome URL baru, popup zustava
@@ -7031,7 +7038,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // jen (overlay nemam textovy obsah co user vybira).
             self.painted_text_runs = extract_text_runs(page_cmds, &r.atlas, r.zoom);
 
-            perf_t("post_paint (chrome+devtools+selection)", _t_post_paint);
+            perf_t("post_paint::overlays", _t_overlays);
             // Pri WebGL canvas s pending queue, vyuzij webgl-aware draw flow.
             let webgl_states_opt = self.interpreter.as_ref().map(|i| i.webgl_states.clone());
             let _t_gpu = std::time::Instant::now();
