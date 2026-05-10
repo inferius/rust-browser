@@ -2935,6 +2935,16 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                             _ => {}
                         }
                     }
+                    // Ctrl+Shift+F = toggle FPS counter overlay.
+                    if self.modifiers.control_key() && self.modifiers.shift_key() {
+                        if let Key::Character(s) = &key_event.logical_key {
+                            if s.as_str() == "f" || s.as_str() == "F" {
+                                self.show_fps = !self.show_fps;
+                                if let Some(w) = &self.window { w.request_redraw(); }
+                                return;
+                            }
+                        }
+                    }
                     // Ctrl+Shift+T = cycle theme (Auto/Light/Dark).
                     if self.modifiers.control_key() && self.modifiers.shift_key() {
                         if let Key::Character(s) = &key_event.logical_key {
@@ -7134,11 +7144,14 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // dalsi RedrawRequested. Bez tohoto by render() volana z handler
             // (TabClose, NewTab, navigate) prerusila animation loop a stranka
             // by zustala mrtva az do dalsi user input.
+            // FPS counter (Ctrl+Shift+F nebo PERF_DEBUG=1) potrebuje continual
+            // frames i v idle stavu - jinak FPS counter zustane na poslednim
+            // sample misto aktualizace. Stejne pro idle measurement.
             let has_anim = !self.active_animations.is_empty()
                 || !self.active_transitions.is_empty()
                 || (self.scroll_y - self.scroll_target_y).abs() > 0.5
                 || (self.scroll_x - self.scroll_target_x).abs() > 0.5;
-            if has_anim {
+            if has_anim || self.show_fps {
                 if let Some(w) = &self.window { w.request_redraw(); }
             }
         }
