@@ -1153,16 +1153,28 @@ pub fn layout_tree_with_pseudo_cached(
     viewport_height: f32,
     prev_root: Option<&LayoutBox>,
 ) -> LayoutBox {
+    let perf = std::env::var("PERF_DEBUG").is_ok();
+    let perf_t = |label: &str, t: std::time::Instant| {
+        if std::env::var("PERF_DEBUG").is_ok() {
+            eprintln!("  [layout_tree::{}] {:.2} ms", label, t.elapsed().as_secs_f64() * 1000.0);
+        }
+    };
     // Build prev_node_map (node_ptr -> LayoutBox subtree) z prev_root.
+    let _t = std::time::Instant::now();
     let mut prev_map: HashMap<usize, LayoutBox> = HashMap::new();
     if let Some(prev) = prev_root {
         collect_prev_boxes(prev, &mut prev_map);
     }
+    perf_t("collect_prev_boxes", _t);
     let cache = if prev_map.is_empty() { None } else { Some(&prev_map) };
+    let _t = std::time::Instant::now();
     let mut layout_root = build_box_with_pseudo_cached(root, style_map, pseudo_map, cache);
+    perf_t("build_box_with_pseudo_cached #1", _t);
     layout_root.rect.width = viewport_width;
     layout_root.rect.height = viewport_height;
+    let _t = std::time::Instant::now();
     layout_dispatch(&mut layout_root);
+    perf_t("layout_dispatch #1", _t);
     // CSS scrollbar reservation: pri vertical overflow (content > viewport),
     // browser reserve 15 px scrollbar -> html/body width = viewport - 15.
     // Detect: po prvnim layoutu zkontroluj html.rect.height. Pokud > viewport_h,
@@ -1173,14 +1185,25 @@ pub fn layout_tree_with_pseudo_cached(
         .any(|html| html.rect.height > viewport_height
             || html.children.iter().any(|body| body.rect.height > viewport_height));
     if has_overflow && viewport_width > SCROLLBAR_W + 100.0 {
+        if perf { eprintln!("  [layout_tree::scrollbar_repath] running second build+layout pass"); }
+        let _t = std::time::Instant::now();
         layout_root = build_box_with_pseudo_cached(root, style_map, pseudo_map, cache);
+        perf_t("build_box_with_pseudo_cached #2", _t);
         layout_root.rect.width = viewport_width - SCROLLBAR_W;
         layout_root.rect.height = viewport_height;
+        let _t = std::time::Instant::now();
         layout_dispatch(&mut layout_root);
+        perf_t("layout_dispatch #2", _t);
     }
+    let _t = std::time::Instant::now();
     let anchor_map = collect_anchors(&layout_root);
+    perf_t("collect_anchors", _t);
+    let _t = std::time::Instant::now();
     apply_anchor_positioning(&mut layout_root, &anchor_map);
+    perf_t("apply_anchor_positioning", _t);
+    let _t = std::time::Instant::now();
     apply_table_border_collapse(&mut layout_root, false);
+    perf_t("apply_table_border_collapse", _t);
     layout_root
 }
 

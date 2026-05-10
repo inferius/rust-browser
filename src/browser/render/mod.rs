@@ -705,6 +705,11 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         /// Layout obsahuje position: sticky elementy - pak apply_sticky musi mit
         /// mutable layout_root. Bez sticky preskakujeme clone cached_layout_root.
         layout_has_sticky: bool,
+        /// Set jmen keyframes ktere ovlivnuji layout-affecting props (width/height/
+        /// margin/padding/...). Cache invalidate jen kdyz aktivni animace ma name
+        /// v tomto set. Drive: jakekoliv layout-prop @keyframes v CSS = perma
+        /// invalidace, i kdyz se nikdy nespusti.
+        layout_affecting_animations: std::collections::HashSet<String>,
         /// Cache cascade output (DOM root ptr hash -> StyleMap).
         cached_cascade_hash: u64,
         cached_style_map: Option<super::cascade::StyleMap>,
@@ -5388,15 +5393,22 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                     "line-height", "gap", "flex", "grid", "top", "left", "right",
                                     "bottom", "position", "display", "min-width", "max-width",
                                     "min-height", "max-height"];
-                self.animations_affect_layout = parsed.iter().any(|sheet| {
-                    sheet.keyframes.iter().any(|kf| {
-                        kf.frames.iter().any(|(_, decls)| {
+                // Per-keyframe-name flag: animace .name -> layout affecting bool.
+                // Cache invalidace pak jen kdyz aktivni animace s name=layout-affecting.
+                self.layout_affecting_animations.clear();
+                for sheet in &parsed {
+                    for kf in &sheet.keyframes {
+                        let affects = kf.frames.iter().any(|(_, decls)| {
                             decls.iter().any(|d| {
                                 layout_props.iter().any(|p| d.property.starts_with(p))
                             })
-                        })
-                    })
-                });
+                        });
+                        if affects {
+                            self.layout_affecting_animations.insert(kf.name.clone());
+                        }
+                    }
+                }
+                self.animations_affect_layout = !self.layout_affecting_animations.is_empty();
                 // Detekuj zda CSS obsahuje :hover/:focus selektory. Pokud ne,
                 // hover/focus state nema vliv na cascade -> skip re-cascade pri
                 // hover change.
@@ -5742,11 +5754,23 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             let viewport_h = (r.config.height as f32) / (self.zoom * r.scale_factor);
             // Layout cache: rebuild jen kdyz CSS/DOM/viewport zmenil nebo
             // animations modifikuji layout-relevant props (width/height/margin/...).
-            let layout_cache_valid = self.cached_layout_root.is_some()
-                && !self.animations_affect_layout
-                && self.cached_layout_root.as_ref().map(|l| {
-                    (l.rect.width - viewport_w).abs() < 0.5 && (l.rect.height - viewport_h).abs() < 0.5
-                }).unwrap_or(false);
+            let cached_some = self.cached_layout_root.is_some();
+            // Per-name check: invalidate jen kdyz aktivni animace ma name v
+            // layout_affecting_animations set. Drive: jakekoliv @keyframes
+            // s width/height v CSS by spustilo invalidaci kazdy frame, i
+            // kdyz se ta keyframe na zadnem elementu nespusti.
+            let aff_layout = self.active_animations.iter()
+                .any(|(_, name)| self.layout_affecting_animations.contains(name));
+            let viewport_match = self.cached_layout_root.as_ref().map(|l| {
+                (l.rect.width - viewport_w).abs() < 0.5 && (l.rect.height - viewport_h).abs() < 0.5
+            }).unwrap_or(false);
+            let layout_cache_valid = cached_some && !aff_layout && viewport_match;
+            if std::env::var("PERF_DEBUG").is_ok() && !layout_cache_valid {
+                eprintln!("[cache_invalid] cached_some={} aff_layout={} viewport_match={} (vp_w={}, vp_h={}, cached={:?}, active_anims={})",
+                    cached_some, aff_layout, viewport_match, viewport_w, viewport_h,
+                    self.cached_layout_root.as_ref().map(|l| (l.rect.width, l.rect.height)),
+                    self.active_animations.len());
+            }
             let _t_layout = std::time::Instant::now();
             // PERF: skip layout_root.clone() kdyz neni potreba mutace. Bez animations
             // /transitions/sticky paint walk pres immutable ref. Clone celeho
@@ -6728,6 +6752,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         css_uses_transitions: false,
         css_uses_keyframes: false,
         layout_has_sticky: false,
+        layout_affecting_animations: std::collections::HashSet::new(),
         current_path: current_html_path,
         base_url,
         history: initial_url.into_iter().collect(),
