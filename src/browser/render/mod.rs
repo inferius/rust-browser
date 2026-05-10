@@ -6313,6 +6313,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // takze WebGL canvas neprekryje devtools/scrollbar/address bar/find.
             let overlay_split = display_list.len();
 
+            let _t_eh = std::time::Instant::now();
             // Element highlight overlay (Chrome-like padding/margin viz) -
             // jen kdyz panel_open (jinak overlay perzistuje pres zavreni).
             crate::browser::devtools_panel::paint_element_highlight(
@@ -6321,6 +6322,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 &self.devtools,
                 self.scroll_y,
             );
+            perf_t("ovl::element_highlight", _t_eh);
             // Match preview overlay - vykresli orange outline kolem vsech
             // elementu matchujici aktivni selector (toggle ctverec v styles).
             if let Some(sel_str) = self.devtools.match_preview_selector.clone() {
@@ -6347,6 +6349,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     }
                 }
             }
+            let _t_io = std::time::Instant::now();
             // Inspector flex/grid overlays - per active OverlayDescriptor v state.
             crate::browser::devtools_panel::paint_inspector_overlays(
                 &mut display_list,
@@ -6354,6 +6357,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 &self.devtools,
                 self.scroll_y,
             );
+            perf_t("ovl::inspector_overlays", _t_io);
+            let _t_chrome = std::time::Instant::now();
             // Shell chrome bar (tabs + nav) - shell_mode only. Paint here misto
             // self.paint_shell_chrome (borrow konflikt s renderer mut).
             if self.shell_mode {
@@ -6724,6 +6729,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     }
                 }
             }
+            perf_t("ovl::shell_chrome", _t_chrome);
+            let _t_fps_etc = std::time::Instant::now();
 
             // FPS counter overlay (Ctrl+Shift+F toggle nebo PERF_DEBUG=1).
             // Top-right roh, color-coded: green >50, yellow 30-50, red <30.
@@ -6760,6 +6767,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 });
             }
 
+            perf_t("ovl::fps+misc", _t_fps_etc);
             let _t_dt_paint = std::time::Instant::now();
             // In-window DevTools panel - emit pred scrollbar a po main viewport content.
             // viewport_w/h v logical px (display list je v logical, vp uniform / zoom*scale).
@@ -6777,6 +6785,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 self.mouse_y - self.scroll_y,
             );
             perf_t("post_paint::devtools_panel", _t_dt_paint);
+            let _t_addr_overlay = std::time::Instant::now();
             // (Selection rect uz emitnuty PRED build_display_list - rendered POD textem.)
             // Address bar (Ctrl+L) overlay: input top centered + autocomplete.
             // V shell modu se edit dela primo v chrome URL baru, popup zustava
@@ -7038,6 +7047,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // jen (overlay nemam textovy obsah co user vybira).
             self.painted_text_runs = extract_text_runs(page_cmds, &r.atlas, r.zoom);
 
+            perf_t("post_paint::addr_overlay+rest", _t_addr_overlay);
             perf_t("post_paint::overlays", _t_overlays);
             // Pri WebGL canvas s pending queue, vyuzij webgl-aware draw flow.
             let webgl_states_opt = self.interpreter.as_ref().map(|i| i.webgl_states.clone());
