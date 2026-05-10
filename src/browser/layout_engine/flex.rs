@@ -1111,6 +1111,13 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                 if ch_min_c > 0.0 { h = h.max(ch_min_c); }
                 child.rect.height = h.max(pb_h);
                 child.rect.width = w.max(pb_w);
+                if std::env::var("FLEX_DEBUG").is_ok() {
+                    let cls = child.node.as_ref().and_then(|n| n.attr("class")).unwrap_or_default();
+                    if !cls.is_empty() && (cls.contains("list-items") || cls.contains("whore") || cls.contains("hp-items")) {
+                        eprintln!("[flex_col_assign] class={:?} w={} pb_w={} rect.width_after_assign={}",
+                            cls, w, pb_w, child.rect.width);
+                    }
+                }
             }
 
             main_cursor += main_size + it.margin_main_end;
