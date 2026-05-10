@@ -1626,6 +1626,19 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         bx.display = default_display(&tag);
     }
 
+    // HTML `hidden` attribute = display:none (UA stylesheet rule).
+    // Bez tohoto staticky vykreslime modaly/popupy ktere by JS zapnul jen
+    // pri user akci. Realne stranky (google) tim skryvaji desitky elementu.
+    if node.attr("hidden").is_some() {
+        bx.display = Display::None;
+    }
+    // Aria-hidden taky obvykle implikuje skrytost - ale pouzivane i u
+    // visible elementu pri specifickem AT context. Ridit jen pokud explicitly
+    // "true" - ne na "false" nebo prazdny string.
+    if matches!(node.attr("aria-hidden").as_deref(), Some("true")) {
+        bx.display = Display::None;
+    }
+
     bx.tag = node.tag_name();
 
     // Apply browser default styles per tag (user-agent stylesheet)
