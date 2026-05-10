@@ -220,7 +220,13 @@ console.log(greeting, result);
     if args.len() > 1 && (args[1] == "browser" || args[1] == "window" || args[1] == "shell") {
         let mut target: Option<String> = None;
         let mut auto_devtools = false;
-        let shell_mode = args[1] == "shell";
+        // browser + shell = shell mode (chrome bar nahore, persistent URL bar).
+        // window = naked viewport (engine demo, bez chrome).
+        // --no-shell flag forcuje naked variant pro browser.
+        let mut shell_mode = args[1] != "window";
+        for a in &args[2..] {
+            if a == "--no-shell" { shell_mode = false; }
+        }
         for a in &args[2..] {
             if a == "--devtools" || a == "-d" { auto_devtools = true; }
             else if let Some(name) = a.strip_prefix("--profile=") {

@@ -1444,7 +1444,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                 }
                                 ChromeHit::UrlBar => {
                                     self.addr_open = true;
-                                    self.addr_input = crate::devtools::model::text_buffer::SimpleStringBuffer::with_text(self.base_url.clone().unwrap_or_default());
+                                    self.addr_input = crate::devtools::model::text_buffer::SimpleStringBuffer::with_text_selected(self.base_url.clone().unwrap_or_default());
                                     self.render();
                                     return;
                                 }
@@ -2901,7 +2901,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                             if s.as_str() == "l" || s.as_str() == "L" {
                                 // Ctrl+L: toggle address bar.
                                 self.addr_open = true;
-                                self.addr_input = crate::devtools::model::text_buffer::SimpleStringBuffer::with_text(self.base_url.clone().unwrap_or_default());
+                                self.addr_input = crate::devtools::model::text_buffer::SimpleStringBuffer::with_text_selected(self.base_url.clone().unwrap_or_default());
                                 self.render();
                                 return;
                             }

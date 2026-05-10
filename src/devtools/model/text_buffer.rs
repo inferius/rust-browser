@@ -191,6 +191,12 @@ impl SimpleStringBuffer {
         let cursor = text.len();
         Self { text, cursor, anchor: None }
     }
+    /// Init s textem + full selection (anchor=0, cursor=end). Prvni typed char
+    /// pretrhne selection a nahradi cely text. Address bar UX.
+    pub fn with_text_selected(text: String) -> Self {
+        let cursor = text.len();
+        Self { text, cursor, anchor: Some(0) }
+    }
     pub fn clear(&mut self) {
         self.text.clear();
         self.cursor = 0;
