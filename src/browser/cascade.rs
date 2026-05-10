@@ -1065,17 +1065,24 @@ pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
             }
         }
     }
+    // :root globalni custom property collection.
+    // Bere jen rules ktere CISTE selektoruji :root nebo html bez dalsich
+    // class/id constraints. Drive `parts.is_empty()` falesne klasifikovalo
+    // `.theme-dark` selector (parts mohly byt prazdne z parser jine cesty)
+    // a cerne hodnoty z `.theme-dark` prepsaly --bg-app na #121212.
     for sheet in stylesheets {
         for rule in &sheet.rules {
             for sel in &rule.selectors {
-                let is_root = sel.parts.iter().any(|p|
-                    p.tag.as_deref() == Some("html") ||
-                    p.pseudo_classes.iter().any(|pc| pc == "root")
-                ) || sel.parts.is_empty();
-                if !is_root && !sel.parts.iter().any(|p| p.tag.as_deref() == Some(":root")) {
-                    // Selektor :root nebo html
-                    continue;
-                }
+                // Pure :root selector - jedna cast s tag "html" / ":root" /
+                // pseudo "root", zadny class / id / atribut.
+                let is_pure_root = sel.parts.len() == 1 && {
+                    let p = &sel.parts[0];
+                    p.classes.is_empty() && p.id.is_none() && p.attributes.is_empty()
+                        && (p.tag.as_deref() == Some("html")
+                            || p.tag.as_deref() == Some(":root")
+                            || p.pseudo_classes.iter().any(|pc| pc == "root"))
+                };
+                if !is_pure_root { continue; }
                 for decl in &rule.declarations {
                     if decl.property.starts_with("--") {
                         variables.insert(decl.property.clone(), decl.value.clone());
