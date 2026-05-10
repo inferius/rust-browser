@@ -2945,6 +2945,33 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                             }
                         }
                     }
+                    // Ctrl+Shift+D = dump layout tree do souboru pro debug.
+                    // Vypise rect/tag/class/text per box do layout-dump.txt.
+                    if self.modifiers.control_key() && self.modifiers.shift_key() {
+                        if let Key::Character(s) = &key_event.logical_key {
+                            if s.as_str() == "d" || s.as_str() == "D" {
+                                if let Some(layout) = &self.layout_root {
+                                    fn dump(b: &super::layout::LayoutBox, depth: usize, out: &mut String) {
+                                        let indent = "  ".repeat(depth);
+                                        let tag = b.tag.as_deref().unwrap_or("?");
+                                        let txt = b.text.as_deref().unwrap_or("");
+                                        let txt_short: String = txt.chars().take(40).collect();
+                                        out.push_str(&format!(
+                                            "{indent}<{tag}> rect=({:.0},{:.0} {:.0}x{:.0}) display={:?} text={:?}\n",
+                                            b.rect.x, b.rect.y, b.rect.width, b.rect.height,
+                                            b.display, txt_short));
+                                        for ch in &b.children { dump(ch, depth + 1, out); }
+                                    }
+                                    let mut out = String::new();
+                                    dump(layout, 0, &mut out);
+                                    let _ = std::fs::write("layout-dump.txt", out);
+                                    eprintln!("[dump] layout-dump.txt zapsano ({} bytes)",
+                                        std::fs::metadata("layout-dump.txt").map(|m| m.len()).unwrap_or(0));
+                                }
+                                return;
+                            }
+                        }
+                    }
                     // Ctrl+Shift+T = cycle theme (Auto/Light/Dark).
                     if self.modifiers.control_key() && self.modifiers.shift_key() {
                         if let Key::Character(s) = &key_event.logical_key {
