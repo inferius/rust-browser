@@ -1632,11 +1632,22 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if node.attr("hidden").is_some() {
         bx.display = Display::None;
     }
-    // Aria-hidden taky obvykle implikuje skrytost - ale pouzivane i u
-    // visible elementu pri specifickem AT context. Ridit jen pokud explicitly
-    // "true" - ne na "false" nebo prazdny string.
-    if matches!(node.attr("aria-hidden").as_deref(), Some("true")) {
-        bx.display = Display::None;
+    // POZN: aria-hidden NENI display:none - je to accessibility signal pro
+    // screen readery. Visual render ma byt normalni. Predchozi pokus to
+    // zaridit byl chyba (skryval ikonky uvnitr buttonu na google).
+    // <dialog> UA stylesheet: default display:none, [open] -> display:block.
+    // <details> taky podobne ale toggle pres [open] na own children visibility.
+    // Bez tohoto google search pouzivajici <dialog class="spch-dlg"> pro
+    // share modal byl viditelny i bez user interakce.
+    if let Some(tag) = node.tag_name() {
+        match tag.as_str() {
+            "dialog" => {
+                if node.attr("open").is_none() {
+                    bx.display = Display::None;
+                }
+            }
+            _ => {}
+        }
     }
 
     bx.tag = node.tag_name();

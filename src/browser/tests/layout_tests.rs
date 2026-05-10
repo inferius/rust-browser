@@ -3213,9 +3213,11 @@ fn pseudo_backdrop_dialog_closed_no_backdrop() {
     let style_map = cascade::cascade(&doc.root, &[css.clone()]);
     let pseudo_map = cascade::cascade_pseudo(&doc.root, &[css]);
     let root = layout::layout_tree_with_pseudo(&doc.root, &style_map, &pseudo_map, 1024.0, 768.0);
-    let dialog = find_box_by_tag(&root, "dialog").unwrap();
-    let backdrop = dialog.children.iter().find(|c| c.tag.as_deref() == Some("::backdrop"));
-    assert!(backdrop.is_none(), "::backdrop se nevlozi pro dialog bez open");
+    // <dialog> bez [open] ma UA display:none, takze build_box ho vyradi
+    // ze stromu uplne - tim padem ani ::backdrop neexistuje. Closed dialog
+    // = no backdrop = ocekavane chovani.
+    let dialog = find_box_by_tag(&root, "dialog");
+    assert!(dialog.is_none(), "dialog bez [open] = display:none = neni v layout stromu (ani backdrop)");
 }
 
 #[test]
