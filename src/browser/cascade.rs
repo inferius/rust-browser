@@ -765,23 +765,35 @@ fn resolve_calc(s: &str) -> String {
 }
 
 /// Velmi zjednoduseny calc evaluator - vstupy "Npx + Npx", "Nem * 2".
+/// parse_length convertuje em/rem/vw/vh na px - takze acc je vzdy v px.
+/// Vystup MUSI byt v px aby neproslo dalsim em-resolve (38em != 38px).
+/// Vyjimka: vsechny operandy maji "%" suffix -> output %.
 fn eval_calc_expr(expr: &str) -> String {
-    // Najdi unit - pouzij prvni numerickou hodnotu
     let parts: Vec<&str> = expr.split_whitespace().collect();
     if parts.len() < 3 {
         return expr.trim().to_string();
     }
 
-    let mut acc = super::layout::parse_length(parts[0]);
-    let mut unit = "px".to_string();
-    if let Some(u) = ["px", "em", "rem", "%"].iter().find(|u| parts[0].ends_with(*u)) {
-        unit = u.to_string();
-    }
+    // Pure-percent: vsechny numericke operandy konci na %.
+    let all_pct = parts.iter().enumerate()
+        .filter(|(i, _)| i % 2 == 0)  // operandy na sudych indexech
+        .all(|(_, p)| p.ends_with('%'));
+    let unit = if all_pct { "%" } else { "px" };
+
+    // Pro % output potrebujeme suma raw cisel (bez konverze do px).
+    let parse_val = |p: &str| -> f32 {
+        if all_pct {
+            p.trim_end_matches('%').parse::<f32>().unwrap_or(0.0)
+        } else {
+            super::layout::parse_length(p)
+        }
+    };
+    let mut acc = parse_val(parts[0]);
 
     let mut i = 1;
     while i + 1 < parts.len() {
         let op = parts[i];
-        let val = super::layout::parse_length(parts[i+1]);
+        let val = parse_val(parts[i+1]);
         match op {
             "+" => acc += val,
             "-" => acc -= val,
