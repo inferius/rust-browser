@@ -7280,6 +7280,10 @@ struct Renderer {
     /// Cached source bytes per URL pro re-resample pri zoomu (load_image_as
     /// stores, resample_image_for_size cte).
     image_source_bytes: std::collections::HashMap<String, Vec<u8>>,
+    /// Tombstone set: src URL klice ktere selhaly pri fetchu nebo decode.
+    /// load_image_as skip dalsi pokusy aby kazdy frame sync ureq + decode
+    /// nezdrzoval. Resi 1 s lag per frame na strankach s SVG/unknown img.
+    image_load_failed: std::collections::HashSet<String>,
     image_tex: wgpu::Texture,
     image_view: wgpu::TextureView,
     /// @font-face loaded fonts: family -> Font.
@@ -7808,6 +7812,7 @@ impl Renderer {
             atlas_tex, atlas_view, atlas_smp, bind_group_layout, bind_group, atlas,
             image_atlas, image_tex, image_view,
             image_source_bytes: std::collections::HashMap::new(),
+            image_load_failed: std::collections::HashSet::new(),
             font_registry: std::collections::HashMap::new(),
             loaded_font_urls: std::collections::HashSet::new(),
             color_fonts: std::collections::HashMap::new(),
@@ -8716,8 +8721,20 @@ impl Renderer {
     /// Stejne ale fetch_url se lisi od cache key (pro relative URL resolution).
     fn load_image_as(&mut self, cache_key: &str, fetch_url: &str) {
         if self.image_atlas.cache.contains_key(cache_key) { return; }
+        // Tombstone check: predchozi pokus selhal (fetch failed nebo decode
+        // failed) - dalsi frame uz znova nezkousime. Bez tohoto kazdy frame
+        // sync ureq fetch + image::load_from_memory na nesupportovanem
+        // formatu = 1 s lag per frame na realnych strankach (google logo
+        // je SVG, image crate ho neumi decode).
+        if self.image_load_failed.contains(cache_key) { return; }
         let bytes_opt = fetch_image_bytes(fetch_url);
-        let bytes = match bytes_opt { Some(b) => b, None => return };
+        let bytes = match bytes_opt {
+            Some(b) => b,
+            None => {
+                self.image_load_failed.insert(cache_key.to_string());
+                return;
+            }
+        };
         // Cache source bytes pro budouci re-resample pri zoomu.
         self.image_source_bytes.insert(cache_key.to_string(), bytes.clone());
         if let Ok(img) = image::load_from_memory(&bytes) {
@@ -8738,6 +8755,9 @@ impl Renderer {
                 }
             }
             self.image_atlas.add(cache_key, w, h, &raw);
+        } else {
+            // Decode failed (napr. SVG, neznamy format). Tombstone.
+            self.image_load_failed.insert(cache_key.to_string());
         }
     }
     /// Re-resample image atlas entry na target physical size. Pouzity pri zoomu
