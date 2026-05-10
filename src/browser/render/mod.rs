@@ -5492,7 +5492,10 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // Mutace pres Rc::make_mut (deep clones jen kdyz Rc shared > 1).
             let mut style_map: Rc<super::cascade::StyleMap> = Rc::clone(self.cached_style_map.as_ref().unwrap());
             perf_t("style_map clone (Rc)", _t_clone);
-            let pseudo_map = self.cached_pseudo_map.as_ref().cloned().unwrap_or_default();
+            // PERF: zachovat ref na cached pseudo map - pouzivame v layout_tree
+            // call jako &PseudoStyleMap. Drive clone() byla zbytecna kazdy frame.
+            let empty_pseudo: super::cascade::PseudoStyleMap = Default::default();
+            let pseudo_map: &super::cascade::PseudoStyleMap = self.cached_pseudo_map.as_ref().unwrap_or(&empty_pseudo);
 
             // Wire computed styles + matched rules do DevTools state pri selected element.
             // PERF: cele toto je drahe (walk vsech rules x selectors); cache pres
@@ -5836,7 +5839,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 // hint. Pri match fingerprint reuznavaji subtrees.
                 let prev_root = self.cached_layout_root.as_ref();
                 let lr = layout::layout_tree_with_pseudo_cached(
-                    &document_root, &style_map, &pseudo_map,
+                    &document_root, &*style_map, pseudo_map,
                     viewport_w, viewport_h, prev_root);
                 perf_t("layout_tree (rebuild)", _t_layout);
                 // Detekce sticky elementu - jen jednou pri rebuild. Per-frame
