@@ -324,6 +324,10 @@ pub struct LayoutBox {
     /// cache). Hodnota 0 = ne-hashed nebo invalid.
     pub fingerprint: u64,
     pub rect: Rect,
+    /// Pri position: sticky uchovava puvodni rect.y po layout pass.
+    /// apply_sticky modifikuje rect.y per scroll - bez tohoto pole by druhy
+    /// pruchod cetl modifikovany rect.y a interpretoval ho jako original.
+    pub sticky_original_y: Option<f32>,
     pub display: Display,
     pub bg_color: Option<[u8; 4]>,   // RGBA
     pub text_color: Option<[u8; 4]>,
@@ -803,6 +807,7 @@ impl LayoutBox {
         LayoutBox {
             fingerprint: 0,
             rect: Rect { x: 0.0, y: 0.0, width: 0.0, height: 0.0 },
+            sticky_original_y: None,
             display: Display::Block,
             bg_color: None,
             text_color: None,
@@ -1311,8 +1316,14 @@ fn apply_table_border_collapse(bx: &mut LayoutBox, in_collapse_table: bool) {
 pub fn apply_sticky(root: &mut LayoutBox, scroll_y: f32) {
     fn walk(bx: &mut LayoutBox, scroll_y: f32, parent_bottom: f32) {
         if matches!(bx.position, Position::Sticky) {
+            // Init sticky_original_y na prvnim pruchodu - dale uz pouzivame ten,
+            // protoze rect.y modifikujeme pri kazdem scroll. Bez tohoto by druhy
+            // frame cetl shifted rect.y misto puvodni layout pozice.
+            if bx.sticky_original_y.is_none() {
+                bx.sticky_original_y = Some(bx.rect.y);
+            }
+            let original_y = bx.sticky_original_y.unwrap();
             let top = bx.offset_top.unwrap_or(0.0);
-            let original_y = bx.rect.y;
             let viewport_top = scroll_y + top;
             // Pokud element je nad viewport_top, posunout dolu (visible at viewport_top)
             if original_y < viewport_top {
@@ -1320,6 +1331,9 @@ pub fn apply_sticky(root: &mut LayoutBox, scroll_y: f32) {
                 // Don't push past parent bottom
                 let max_y = parent_bottom - bx.rect.height;
                 bx.rect.y = new_y.min(max_y).max(original_y);
+            } else {
+                // Mimo sticky range - reset na original (kdyz scroll_y zpet).
+                bx.rect.y = original_y;
             }
         }
         let pb = bx.rect.y + bx.rect.height;

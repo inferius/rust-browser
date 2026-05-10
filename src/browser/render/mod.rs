@@ -5807,23 +5807,18 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     self.active_animations.len(), all_names, aff_names);
             }
             let _t_layout = std::time::Instant::now();
-            // PERF: skip layout_root.clone() kdyz neni potreba mutace. Bez animations
-            // /transitions/sticky paint walk pres immutable ref. Clone celeho
-            // LayoutBox stromu (5000+ deeply-nested struct s Vec/String/Option fields)
-            // ~5-15 ms zbytecne kdyz se nic nemeni.
+            // PERF: na cache hit + mutace (animations/sticky) MUTUJEME cached_layout_root
+            // PRIMO IN-PLACE misto klonu. Drive: clone celeho stromu (5000+ nodu)
+            // = 1.2 ms / frame. Sticky funguje pres sticky_original_y field
+            // (idempotent), paint animations vzdy prepisuji ze style_map (nove
+            // kazdy frame, bez akumulace).
             let needs_layout_mut = self.layout_has_sticky
                 || !self.active_animations.is_empty()
                 || !self.active_transitions.is_empty();
             // Owned (na cache miss vzdy nove vytvoreny + clone do cache; na cache hit
-            // jen pri mutation potrebe).
+            // BEZ klonu - mutace primo na cached).
             let mut owned_layout_root: Option<super::layout::LayoutBox> = if layout_cache_valid {
-                if needs_layout_mut {
-                    let l = self.cached_layout_root.as_ref().unwrap().clone();
-                    perf_t("layout_root clone (cache hit + needs mut)", _t_layout);
-                    Some(l)
-                } else {
-                    None  // Use cached as ref (no clone).
-                }
+                None  // Mutace primo na cached_layout_root via reference.
             } else {
                 // Per-element layout cache: pasujeme prev cached_layout_root jako
                 // hint. Pri match fingerprint reuznavaji subtrees.
@@ -5842,23 +5837,31 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 self.cached_layout_root = Some(lr.clone());
                 Some(lr)
             };
-            // Mutace na cloned/rebuilt only.
-            if let Some(lr) = owned_layout_root.as_mut() {
-                if layout_cache_valid && (!self.active_animations.is_empty() || !self.active_transitions.is_empty()) {
+            // Mutace: bud cloned (po rebuild) NEBO cached primo (cache hit).
+            // Cache hit + needs_mut: mutujeme cached_layout_root in-place.
+            let lr_mut: &mut super::layout::LayoutBox = if let Some(lr) = owned_layout_root.as_mut() {
+                lr
+            } else {
+                self.cached_layout_root.as_mut().expect("cached present")
+            };
+            if needs_layout_mut {
+                if !self.active_animations.is_empty() || !self.active_transitions.is_empty() {
                     let _t_anim = std::time::Instant::now();
-                    apply_paint_animations(lr, &style_map);
+                    apply_paint_animations(lr_mut, &style_map);
                     perf_t("apply_paint_animations", _t_anim);
                 }
                 if self.layout_has_sticky {
                     let _t_sticky = std::time::Instant::now();
-                    layout::apply_sticky(lr, self.scroll_y);
+                    layout::apply_sticky(lr_mut, self.scroll_y);
                     perf_t("apply_sticky", _t_sticky);
                 }
             }
-            // Convenience binding: vsechny dalsi reads pres `layout_root` (immutable
-            // ref do owned nebo cached). Bez owned ho rovnou vezmeme z cached.
-            let layout_root: &super::layout::LayoutBox = owned_layout_root.as_ref()
-                .unwrap_or_else(|| self.cached_layout_root.as_ref().expect("cached after layout"));
+            // Convenience binding: vsechny dalsi reads pres `layout_root`.
+            let layout_root: &super::layout::LayoutBox = if owned_layout_root.is_some() {
+                owned_layout_root.as_ref().unwrap()
+            } else {
+                self.cached_layout_root.as_ref().expect("cached after layout")
+            };
             // Viewport culling: vyrad off-screen elementy z paint walku
             // (test stranka 7000 px, viewport 900 px = 8x mensi paint cost).
             // Reuse buffer pres frames - alloc-free.
