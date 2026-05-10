@@ -1062,6 +1062,13 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                 let mut h = main_size;
                 let item_has_wrap = !child.flex_wrap.is_empty() && child.flex_wrap != "nowrap";
                 let stretch_cross = matches!(item_align, AlignItems::Stretch) || item_has_wrap;
+                if std::env::var("FLEX_DEBUG").is_ok() {
+                    let cls = child.node.as_ref().and_then(|n| n.attr("class")).unwrap_or_default();
+                    if !cls.is_empty() && (cls.contains("list-items") || cls.contains("whore") || cls.contains("hp-items") || cls.contains("right-container")) {
+                        eprintln!("[flex_col] class={:?} item_align={:?} stretch_cross={} ew={:?} cross_size={} item_cross_size={} m_cs={} m_ce={}",
+                            cls, item_align, stretch_cross, child.explicit_width, cross_size, item_cross_size, it.margin_cross_start, it.margin_cross_end);
+                    }
+                }
                 let mut w = if stretch_cross && child.explicit_width.is_none() {
                     (cross_size - it.margin_cross_start - it.margin_cross_end).max(0.0)
                 } else { item_cross_size };
