@@ -2,6 +2,47 @@
 
 Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 
+## Session N+18: layout pre-pass stale-state fixes + family-aware measure
+
+**2470 tests pass, build clean.**
+
+Web fixture engine-test.json (Chrome export, viewport 3045x2063):
+- Strict 5px:  32 -> 36 (+4)
+- Loose 20px:  57 -> 59 (+2)
+- html h:    14137 -> 9424 (chrome 9274, off jen 150)
+- transform-grid h: 752 -> 80 (chrome 80, exact)
+- s-transforms section: 839 -> 167 (chrome 172, off jen 5)
+
+Klicove fixy:
+1. **resolve_math_func word-boundary** - `min(`/`max(` matchovaly uvnitr
+   `minmax(120px, 1fr)` na offset 3 a vyrabely `min<num>` mezivysledek
+   (`max(120,1fr)` eval rozpadl). CSS Grid auto-fill spadl na 1 sloupec.
+2. **parse_track_tokens minmax handling** - sub_size pro Track::Minmax
+   pouzije min_px (CSS Grid sect 7.2.2.1). Bez toho auto-fill s minmax
+   = 1 sloupec misto N.
+3. **layout_grid h shrink** - non-percent rows override rect.height na
+   total_h. Predtim "grow only" zachoval pre-pass 8-row stack po realne
+   1-row layoutu.
+4. **layout_block h override** - bound > 0 + bez explicit_height/taffy
+   preset/empty + tag.is_some() + ne html/body: rect.height = bound
+   (override pre-pass stale value). Bez tohoto by test-body zustal na
+   h=800 i kdyz transform-grid uvnitr ma h=80.
+5. **measure_text_width_full** family-aware - rozeznava monospace/sans/serif
+   rodiny + load realny font (Courier New, Segoe UI, Times). flush_inline
+   + intrinsic_content_width prepnuty na _full.
+6. **cascade::propagate_inherited** - top-down DOM walk po cascade pass.
+   Inherited CSS props (font-family, color, line-height, ...) propagovany
+   od parent na deti. font-size/font-weight EXCLUDED (UA defaults per tag).
+7. **flush_inline space_w real glyph width** misto `font_size * 0.27`,
+   slop 0.5 px na wrap condition (FP ulpu na presne hranici inner_w).
+8. **build_box_inner inheritance** font_size + line_height + bold/italic
+   + colors + family do text node deti.
+
+Open: pass-rate plateau 8.5%-8.8% kvuli font width mismatch (Times vs
+Chrome Inter) - kazdy span text mereny ~70 px misto chrome 118 px.
+Loose tolerance 20 px nestaci na 50+ px width diff. Bez exact font
+match (real Inter loaded) bude pass-rate omezen tim.
+
 ## Session N+17: Esc full handle + scroll-to-top + loading field
 
 **2448 tests pass, build clean.**
