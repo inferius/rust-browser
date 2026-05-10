@@ -716,8 +716,12 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         /// Show FPS counter overlay (Ctrl+Shift+F nebo always-on dev mode).
         show_fps: bool,
         /// Cache cascade output (DOM root ptr hash -> StyleMap).
+        /// Rc<StyleMap> aby per-frame Rc::clone byl cheap (jen pointer + atomic
+        /// counter). Drive HashMap clone = ~1 ms na 5000 nodu kazdy frame.
+        /// Mutace via Rc::make_mut (clones if shared) - jen kdyz animations
+        /// realne meni styly.
         cached_cascade_hash: u64,
-        cached_style_map: Option<super::cascade::StyleMap>,
+        cached_style_map: Option<Rc<super::cascade::StyleMap>>,
         /// Cache pro matched_rules build - (selected_node, cascade_hash).
         /// Bez zmeny ani jednoho neni potreba pretizet rules walk.
         cached_matched_key: Option<(Option<usize>, u64)>,
@@ -770,7 +774,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         scroll_x: f32,
         start_time: std::time::Instant,
         /// Predchozi cascaded styles - pro detekci transitions.
-        prev_style_map: Option<super::cascade::StyleMap>,
+        prev_style_map: Option<Rc<super::cascade::StyleMap>>,
         /// Track running animations per (node_id, anim_name) - pro dispatch animationstart/end
         active_animations: std::collections::HashSet<(usize, String)>,
         /// Iteration counter per animation pro animationiteration event.
@@ -5478,14 +5482,16 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 // Cascade s viewport pro @media + @container queries.
                 let vw_logical = (r.config.width as f32) / (self.zoom * r.scale_factor);
                 let vh_logical = (r.config.height as f32) / (self.zoom * r.scale_factor);
-                self.cached_style_map = Some(cascade::cascade_with_viewport(
-                    &document_root, stylesheets, vw_logical, vh_logical));
+                self.cached_style_map = Some(Rc::new(cascade::cascade_with_viewport(
+                    &document_root, stylesheets, vw_logical, vh_logical)));
                 self.cached_pseudo_map = Some(cascade::cascade_pseudo(&document_root, stylesheets));
                 self.cached_cascade_hash = cascade_hash;
             }
             let _t_clone = std::time::Instant::now();
-            let mut style_map = self.cached_style_map.as_ref().unwrap().clone();
-            perf_t("style_map clone", _t_clone);
+            // PERF: Rc::clone misto deep HashMap clone. Cheap pointer copy.
+            // Mutace pres Rc::make_mut (deep clones jen kdyz Rc shared > 1).
+            let mut style_map: Rc<super::cascade::StyleMap> = Rc::clone(self.cached_style_map.as_ref().unwrap());
+            perf_t("style_map clone (Rc)", _t_clone);
             let pseudo_map = self.cached_pseudo_map.as_ref().cloned().unwrap_or_default();
 
             // Wire computed styles + matched rules do DevTools state pri selected element.
@@ -5650,7 +5656,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     let active_before = std::mem::take(&mut self.active_transitions);
                     let prev_keys: std::collections::HashSet<(usize, String)> = active_before.iter()
                         .map(|t| (t.node_id, t.property.clone())).collect();
-                    self.active_transitions = cascade::detect_transitions(prev, &style_map, active_before, elapsed);
+                    self.active_transitions = cascade::detect_transitions(&**prev, &*style_map, active_before, elapsed);
                     let now_keys: std::collections::HashSet<(usize, String)> = self.active_transitions.iter()
                         .map(|t| (t.node_id, t.property.clone())).collect();
                     for k in prev_keys.difference(&now_keys) {
@@ -5660,7 +5666,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             }
             // Aplikuj transitions jen kdyz nejake aktivni (skip cely walk pri prazdnem).
             if !self.active_transitions.is_empty() {
-                cascade::apply_transitions(&mut style_map, &self.active_transitions, elapsed);
+                cascade::apply_transitions(Rc::make_mut(&mut style_map), &self.active_transitions, elapsed);
             }
 
             // Dispatch transitionend events
@@ -5685,14 +5691,14 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // Runtime CSS animation: skip cely walk pokud zadne keyframes neexistuji.
             let has_keyframes = stylesheets.iter().any(|s| !s.keyframes.is_empty());
             if has_keyframes {
-                let _animating = cascade::apply_animations(&mut style_map, stylesheets, elapsed);
+                let _animating = cascade::apply_animations(Rc::make_mut(&mut style_map), stylesheets, elapsed);
                 // Per-element pause: aplikuj frozen snapshot (zachytava presnou
                 // fazi pri toggle). Pri prvni paused frame neni snapshot - vezmi
                 // current animated styl + uloz pro dalsi framy.
                 let paused_ids: Vec<usize> = self.paused_animation_nodes.iter().copied().collect();
                 for id in paused_ids {
                     if let Some(snap) = self.paused_node_styles.get(&id) {
-                        style_map.insert(id, snap.clone());
+                        Rc::make_mut(&mut style_map).insert(id, snap.clone());
                     } else if let Some(cur) = style_map.get(&id).cloned() {
                         // First-time pause - snapshot animated styl ted.
                         self.paused_node_styles.insert(id, cur);
@@ -5700,7 +5706,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 }
                 let max_scroll = (style_map.len() as f32).max(1.0);
                 let scroll_progress = if max_scroll > 1.0 { self.scroll_y / max_scroll.max(1.0) } else { 0.0 };
-                let _ = cascade::apply_scroll_animations(&mut style_map, stylesheets, scroll_progress);
+                let _ = cascade::apply_scroll_animations(Rc::make_mut(&mut style_map), stylesheets, scroll_progress);
             }
 
             // Detect animation start/end + iteration events.
@@ -5708,7 +5714,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             let mut current_anims: std::collections::HashSet<(usize, String)> = std::collections::HashSet::new();
             let mut iter_events: Vec<(usize, String, i32)> = Vec::new();
             if has_keyframes {
-                for (node_id, styles) in &style_map {
+                for (node_id, styles) in &*style_map {
                     if let Some(spec) = cascade::AnimationSpec::from_styles(styles) {
                         let t = elapsed - spec.delay_secs;
                         if t >= 0.0 && (spec.iteration_count.is_infinite() || t / spec.duration_secs < spec.iteration_count) {
@@ -5763,15 +5769,16 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             }
 
             // Uloz current style_map pro dalsi frame (transition diff source).
-            // PERF: jen kdyz CSS obsahuje "transition" - jinak detect_transitions
-            // se nikdy netrigguje a clone (5000+ HashMap entries) je zbytecny.
+            // PERF: Rc::clone (pointer copy) misto HashMap clone. Pri animations
+            // mutated style_map uz byla deep-cloned via Rc::make_mut, tak ted
+            // jen Rc::clone na owned variant.
             let _t_prev = std::time::Instant::now();
             if self.css_uses_transitions {
-                self.prev_style_map = Some(style_map.clone());
+                self.prev_style_map = Some(Rc::clone(&style_map));
             } else {
                 self.prev_style_map = None;
             }
-            perf_t("prev_style_map clone", _t_prev);
+            perf_t("prev_style_map clone (Rc)", _t_prev);
 
             // Browser zoom: logical viewport = window / zoom (-> reflow at scaled
             // size). Render shader uniform = same logical dimensions, takze layout
