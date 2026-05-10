@@ -7104,10 +7104,15 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             perf_t("post_paint::overlays", _t_overlays);
             // Pri WebGL canvas s pending queue, vyuzij webgl-aware draw flow.
             let webgl_states_opt = self.interpreter.as_ref().map(|i| i.webgl_states.clone());
+            // Shell chrome top - page render se na nej zarizne scissorem.
+            let chrome_top_logical = if self.shell_mode {
+                let bm_count = crate::devtools::bookmarks::load_bookmarks().len();
+                64.0 + if bm_count > 0 && self.bookmarks_bar_visible { 24.0 } else { 0.0 }
+            } else { 0.0 };
             let _t_gpu = std::time::Instant::now();
             if let Some(states_rc) = &webgl_states_opt {
                 let states = states_rc.borrow();
-                r.draw_full_frame(page_cmds, overlay_cmds, &layout_root, Some(&*states), self.scroll_y);
+                r.draw_full_frame(page_cmds, overlay_cmds, &layout_root, Some(&*states), self.scroll_y, chrome_top_logical);
             } else {
                 r.draw_segments(&display_list);
             }
@@ -8941,6 +8946,7 @@ impl Renderer {
         layout_root: &super::layout::LayoutBox,
         webgl_states: Option<&std::collections::HashMap<usize, std::rc::Rc<std::cell::RefCell<crate::interpreter::WebGLState>>>>,
         scroll_y: f32,
+        chrome_top_logical: f32,
     ) {
         // Update viewport uniform pro main pipeline
         // Browser zoom: vp uniform = logical dims (window/zoom). Vertex px coords
@@ -8962,8 +8968,14 @@ impl Renderer {
         // Main RT view - sem kreslime (ne primo na swap chain)
         let main_rt_view = self.main_rt.create_view(&Default::default());
 
-        // 1. CSS display list (page content) -> main_rt
-        let had_segments = self.draw_segments_into_view(&main_rt_view, cmds);
+        // 1. CSS display list (page content) -> main_rt s scissor pod chrome bar.
+        // Logical chrome_top_logical -> physical px = * zoom * scale_factor.
+        let chrome_top_phys = (chrome_top_logical * self.zoom * self.scale_factor).round() as u32;
+        let page_scissor = if chrome_top_phys > 0 {
+            Some((0u32, chrome_top_phys, self.config.width,
+                  self.config.height.saturating_sub(chrome_top_phys)))
+        } else { None };
+        let had_segments = self.draw_segments_into_view_clipped(&main_rt_view, cmds, true, page_scissor);
 
         // 2. WebGL pass -> main_rt (po page contentu, pred overlay)
         let mut webgl_did_render = false;
@@ -9020,6 +9032,16 @@ impl Renderer {
     /// Clear). Pouzite pro overlay pass po WebGL - chce zachovat existujici
     /// page + WebGL obsah, jen kreslit overlay nad nim.
     fn draw_segments_into_view_ext(&mut self, view: &wgpu::TextureView, cmds: &[DisplayCommand], start_clear: bool) -> bool {
+        self.draw_segments_into_view_clipped(view, cmds, start_clear, None)
+    }
+
+    /// Verze s scissor rect (logical px). Page render pass v shell modu predava
+    /// chrome_h jako top hranici - vse pod chrome bar. Bez clipu by page commands
+    /// po shift do chrome_h .. win_h area mohly stale prelevy do shell pri
+    /// transformacich nebo glyph atlas advancech.
+    fn draw_segments_into_view_clipped(&mut self, view: &wgpu::TextureView,
+                                        cmds: &[DisplayCommand], start_clear: bool,
+                                        scissor: Option<(u32, u32, u32, u32)>) -> bool {
         if cmds.is_empty() { return false; }
         let segments: Vec<Seg> = partition_filter_segments(cmds);
         if segments.is_empty() { return false; }
@@ -9028,7 +9050,7 @@ impl Renderer {
             match seg {
                 Seg::Main(slice) => {
                     let verts = build_vertices(slice, &self.atlas, &self.image_atlas, self.zoom);
-                    self.draw_main_pass(view, &verts, first_pass);
+                    self.draw_main_pass_clipped(view, &verts, first_pass, scissor);
                     first_pass = false;
                 }
                 Seg::Filter { inner, x, y, w, h, radius, color_matrix } => {
@@ -9165,6 +9187,12 @@ impl Renderer {
 
     /// Vykresli main vertex strip do swap chain (pripadne s Clear, pripadne Load).
     fn draw_main_pass(&self, view: &wgpu::TextureView, vertices: &[Vertex], first: bool) {
+        self.draw_main_pass_clipped(view, vertices, first, None);
+    }
+
+    /// Verze s scissor rect (physical px x, y, w, h). Mimo rect cliped.
+    fn draw_main_pass_clipped(&self, view: &wgpu::TextureView, vertices: &[Vertex], first: bool,
+                               scissor: Option<(u32, u32, u32, u32)>) {
         let mut encoder = self.device.create_command_encoder(&Default::default());
         let vbuf = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("vb_main"),
@@ -9189,6 +9217,18 @@ impl Renderer {
                 })],
                 depth_stencil_attachment: None, timestamp_writes: None, occlusion_query_set: None,
             });
+            if let Some((sx, sy, sw, sh)) = scissor {
+                // wgpu vyzaduje scissor uvnitr framebuffer dimenze.
+                let fb_w = self.config.width;
+                let fb_h = self.config.height;
+                let cx = sx.min(fb_w);
+                let cy = sy.min(fb_h);
+                let cw = sw.min(fb_w.saturating_sub(cx));
+                let ch = sh.min(fb_h.saturating_sub(cy));
+                if cw > 0 && ch > 0 {
+                    pass.set_scissor_rect(cx, cy, cw, ch);
+                }
+            }
             if !vertices.is_empty() {
                 pass.set_pipeline(&self.pipeline);
                 pass.set_bind_group(0, &self.bind_group, &[]);
