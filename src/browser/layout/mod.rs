@@ -2489,6 +2489,16 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
                 let text_w = bx.text.as_deref().map(|t| measure_text_width(t, bx.font_size)).unwrap_or(0.0);
                 bx.explicit_width = Some(text_w + 2.0 * bx.padding);
             }
+            // Procenta ukladame jako pomer (0..1) pro pozdejsi resolve proti
+            // parent inner_w v layout pass. parse_length na "100%" vracelo
+            // 16 (default parent_size), coz davalo body height/width = 16
+            // misto plne velikost viewport.
+            _ if v.ends_with('%') => {
+                let pct_str = &v[..v.len() - 1];
+                if let Ok(p) = pct_str.parse::<f32>() {
+                    bx.width_pct = Some(p / 100.0);
+                }
+            }
             _ => {
                 let px = parse_length(v);
                 if px > 0.0 { bx.explicit_width = Some(px); }
@@ -2498,8 +2508,15 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(h) = s.get("height") {
         let v = h.trim();
         if v != "auto" {
-            let px = parse_length(v);
-            if px > 0.0 { bx.explicit_height = Some(px); }
+            if v.ends_with('%') {
+                let pct_str = &v[..v.len() - 1];
+                if let Ok(p) = pct_str.parse::<f32>() {
+                    bx.height_pct = Some(p / 100.0);
+                }
+            } else {
+                let px = parse_length(v);
+                if px > 0.0 { bx.explicit_height = Some(px); }
+            }
         }
     }
     if let Some(v) = s.get("min-width") {
@@ -3280,7 +3297,15 @@ pub fn layout_block(bx: &mut LayoutBox) {
                     cursor_y + collapsed_m_t, &floats, inner_x, inner_w);
                 child.rect.x = inner_x + float_left_off + m_l;
                 child.rect.y = cursor_y + collapsed_m_t;
-                child.rect.width = child.explicit_width.unwrap_or(float_avail_w - m_l - m_r);
+                // Width: explicit_width (px), pak width_pct (% z parent inner_w),
+                // pak fall-back na full available width.
+                child.rect.width = if let Some(px) = child.explicit_width {
+                    px
+                } else if let Some(pct) = child.width_pct {
+                    (float_avail_w - m_l - m_r) * pct
+                } else {
+                    float_avail_w - m_l - m_r
+                };
                 // Clamp dle min-width / max-width
                 if !child.min_width_v.is_empty() && child.min_width_v != "none" {
                     let mn = parse_length(&child.min_width_v.clone());
@@ -3290,9 +3315,20 @@ pub fn layout_block(bx: &mut LayoutBox) {
                     let mx = parse_length(&child.max_width_v.clone());
                     if mx > 0.0 { child.rect.width = child.rect.width.min(mx); }
                 }
-                // explicit_height z CSS height prop; jinak auto (content-based)
+                // explicit_height z CSS height prop; jinak height_pct (% z parent height);
+                // jinak auto (content-based).
                 if let Some(eh) = child.explicit_height {
                     child.rect.height = eh;
+                } else if let Some(pct) = child.height_pct {
+                    // Resolvuje proti parent rect.height. Pri parent height=auto
+                    // (0 / unknown), zustane 0 a fallback do content-based.
+                    let parent_h = bx.rect.height
+                        - bx.padding_top.unwrap_or(bx.padding)
+                        - bx.padding_bottom.unwrap_or(bx.padding)
+                        - 2.0 * bx.border_width;
+                    if parent_h > 0.0 {
+                        child.rect.height = parent_h * pct;
+                    }
                 } else if child.rect.height == 0.0 {
                     child.rect.height = if child.text.is_some() {
                         child.font_size * child.line_height + child.padding * 2.0
