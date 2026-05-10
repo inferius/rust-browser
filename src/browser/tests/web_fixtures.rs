@@ -150,9 +150,11 @@ mod tests {
                 if depth > 8 { return; }
                 let id = b.node.as_ref().and_then(|n| n.attr("id")).unwrap_or_default();
                 let cls = b.node.as_ref().and_then(|n| n.attr("class")).unwrap_or_default();
-                println!("{:indent$}<{}#{}.{}> x={} y={} w={} h={} children={}",
+                println!("{:indent$}<{}#{}.{}> x={} y={} w={} h={} fs={} lh={} children={}",
                     "", b.tag.as_deref().unwrap_or("?"), id, cls,
-                    b.rect.x, b.rect.y, b.rect.width, b.rect.height, b.children.len(), indent = depth * 2);
+                    b.rect.x, b.rect.y, b.rect.width, b.rect.height,
+                    b.font_size, b.line_height,
+                    b.children.len(), indent = depth * 2);
                 for c in &b.children { dump(c, depth + 1); }
             }
             dump(actual_html, 0);
