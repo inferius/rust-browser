@@ -5392,21 +5392,37 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     r.load_font_faces(&sheet.font_faces, self.base_url.as_deref());
                 }
                 // Detect if any keyframes animate layout-affecting properties.
-                // Layout-affecting: width/height/padding/margin/border-width/border-radius
-                // /font-size/line-height/gap/flex-*/grid-*/top/left/right/bottom/position/display.
-                let layout_props = ["width", "height", "padding", "margin", "border", "font-size",
-                                    "line-height", "gap", "flex", "grid", "top", "left", "right",
-                                    "bottom", "position", "display", "min-width", "max-width",
-                                    "min-height", "max-height"];
-                // Per-keyframe-name flag: animace .name -> layout affecting bool.
-                // Cache invalidace pak jen kdyz aktivni animace s name=layout-affecting.
+                // EXACT match - drive starts_with("border") matchovalo "border-color"
+                // (paint-only, ne layout) a triggrovalo false-positive cache invalidace.
+                fn is_layout_affecting_prop(p: &str) -> bool {
+                    matches!(p,
+                        "width" | "height" | "min-width" | "max-width" | "min-height" | "max-height"
+                        | "padding" | "padding-top" | "padding-right" | "padding-bottom" | "padding-left"
+                        | "padding-block" | "padding-block-start" | "padding-block-end"
+                        | "padding-inline" | "padding-inline-start" | "padding-inline-end"
+                        | "margin" | "margin-top" | "margin-right" | "margin-bottom" | "margin-left"
+                        | "margin-block" | "margin-block-start" | "margin-block-end"
+                        | "margin-inline" | "margin-inline-start" | "margin-inline-end"
+                        | "border-width" | "border-top-width" | "border-right-width"
+                        | "border-bottom-width" | "border-left-width"
+                        | "font-size" | "font" | "line-height"
+                        | "gap" | "row-gap" | "column-gap" | "grid-gap"
+                        | "flex" | "flex-basis" | "flex-grow" | "flex-shrink" | "flex-direction" | "flex-wrap"
+                        | "grid" | "grid-template-columns" | "grid-template-rows" | "grid-template-areas"
+                        | "grid-auto-columns" | "grid-auto-rows" | "grid-auto-flow"
+                        | "grid-area" | "grid-column" | "grid-row"
+                        | "grid-column-start" | "grid-column-end" | "grid-row-start" | "grid-row-end"
+                        | "top" | "left" | "right" | "bottom" | "inset"
+                        | "position" | "display" | "float" | "clear"
+                        | "writing-mode" | "direction"
+                        | "box-sizing" | "white-space"
+                        | "column-count" | "column-width" | "columns")
+                }
                 self.layout_affecting_animations.clear();
                 for sheet in &parsed {
                     for kf in &sheet.keyframes {
                         let affects = kf.frames.iter().any(|(_, decls)| {
-                            decls.iter().any(|d| {
-                                layout_props.iter().any(|p| d.property.starts_with(p))
-                            })
+                            decls.iter().any(|d| is_layout_affecting_prop(&d.property))
                         });
                         if affects {
                             self.layout_affecting_animations.insert(kf.name.clone());

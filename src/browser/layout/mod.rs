@@ -1153,6 +1153,10 @@ pub fn layout_tree_with_pseudo_cached(
     viewport_height: f32,
     prev_root: Option<&LayoutBox>,
 ) -> LayoutBox {
+    // Clear subtree hash memo - per-frame valid (style_map se mezi
+    // frames mute pres apply_animations, takze cached hashes z prev frame
+    // jsou stale). Within-frame still helps deduplikovat recursive volani.
+    clear_subtree_hash_cache();
     let perf = std::env::var("PERF_DEBUG").is_ok();
     let perf_t = |label: &str, t: std::time::Instant| {
         if std::env::var("PERF_DEBUG").is_ok() {
@@ -1229,9 +1233,31 @@ fn collect_prev_boxes(bx: &LayoutBox, map: &mut HashMap<usize, LayoutBox>) {
     }
 }
 
-/// Vypocita subtree hash pres DOM walk + style entries + DOM children pointers.
-/// Pri cache check porovname s prev.fingerprint.
+// Vypocita subtree hash pres DOM walk + style entries + DOM children pointers.
+// Pri cache check porovname s prev.fingerprint.
+thread_local! {
+    /// Memo cache pro compute_subtree_hash. Bez nej je hash O(N*depth)
+    /// kvuli rekurzi do children pri kazdem volani. CLEAR pri zmene
+    /// style_map / DOM mutace (cascade rebuild).
+    static SUBTREE_HASH_CACHE: std::cell::RefCell<HashMap<usize, u64>>
+        = std::cell::RefCell::new(HashMap::new());
+}
+
+pub(crate) fn clear_subtree_hash_cache() {
+    SUBTREE_HASH_CACHE.with(|c| c.borrow_mut().clear());
+}
+
 fn compute_subtree_hash(node: &Rc<Node>, style_map: &StyleMap) -> u64 {
+    let id = Rc::as_ptr(node) as usize;
+    if let Some(cached) = SUBTREE_HASH_CACHE.with(|c| c.borrow().get(&id).copied()) {
+        return cached;
+    }
+    let h = compute_subtree_hash_uncached(node, style_map);
+    SUBTREE_HASH_CACHE.with(|c| { c.borrow_mut().insert(id, h); });
+    h
+}
+
+fn compute_subtree_hash_uncached(node: &Rc<Node>, style_map: &StyleMap) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     let id = Rc::as_ptr(node) as usize;
@@ -1252,7 +1278,7 @@ fn compute_subtree_hash(node: &Rc<Node>, style_map: &StyleMap) -> u64 {
             styles.get(k).hash(&mut h);
         }
     }
-    // Children subtree hashes (recursive)
+    // Children subtree hashes (recursive - kazdy compute_subtree_hash je memoized)
     for child in node.children.borrow().iter() {
         compute_subtree_hash(child, style_map).hash(&mut h);
     }
