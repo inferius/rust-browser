@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>Flex debug</title>
+<style>
+body { font-family: sans-serif; padding: 20px; }
+.row { background: #eef; padding: 10px; margin: 10px 0; }
+
+/* Test 1: parent flex, children inline default (a) */
+.t1 { display: flex; }
+.t1 a { color: blue; }
+
+/* Test 2: parent flex, children block override - klic case .pHiOh */
+.t2 { display: flex; }
+.t2 a { display: block; padding: 15px; white-space: nowrap; color: blue; }
+
+/* Test 3: parent flex flex-wrap + space-between */
+.t3 { display: flex; flex-wrap: wrap; justify-content: space-between; }
+.t3 a { display: block; padding: 15px; color: blue; }
+
+/* Test 4: parent block, children inline (defaultni a) */
+.t4 a { color: blue; padding: 15px; }
+</style>
+</head>
+<body>
+<h2>Test 1: flex parent + default inline a</h2>
+<div class="row t1">
+  <a href="#">Reklama</a>
+  <a href="#">Firma</a>
+  <a href="#">Jak funguje Vyhledavani</a>
+</div>
+
+<h2>Test 2: flex parent + display:block children (Google footer case)</h2>
+<div class="row t2">
+  <a href="#">Reklama</a>
+  <a href="#">Firma</a>
+  <a href="#">Jak funguje Vyhledavani</a>
+</div>
+
+<h2>Test 3: flex-wrap + justify-content space-between</h2>
+<div class="row t3">
+  <a href="#">Reklama</a>
+  <a href="#">Firma</a>
+  <a href="#">Jak funguje Vyhledavani</a>
+</div>
+
+<h2>Test 4: block parent + inline children</h2>
+<div class="row t4">
+  <a href="#">Reklama</a>
+  <a href="#">Firma</a>
+  <a href="#">Jak funguje Vyhledavani</a>
+</div>
+
+</body>
+</html>

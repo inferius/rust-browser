@@ -6986,22 +6986,29 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
 
             // Scrollbar rendering: pri page content overflow Y emituj track + thumb.
             // Logical viewport - vertices v logical px.
+            // Shell mode: scrollbar zacina pod chrome bar (tabs+nav+bookmarks),
+            // ne od y=0 - jinak by track preplnoval shell. Real Chrome scrollbar
+            // je take cely v page area pod chrome.
             let panel_h_logical = if self.devtools.panel_open { self.devtools.panel_h.min(viewport_h_logical * 0.7) } else { 0.0 };
+            let chrome_top = if self.shell_mode {
+                let bm_count = crate::devtools::bookmarks::load_bookmarks().len();
+                64.0 + if bm_count > 0 && self.bookmarks_bar_visible { 24.0 } else { 0.0 }
+            } else { 0.0 };
             let viewport_w = viewport_w_logical;
-            let viewport_h = viewport_h_logical - panel_h_logical;
+            let viewport_h = viewport_h_logical - panel_h_logical - chrome_top;
             let total_h = layout_root.rect.height;
             if total_h > viewport_h {
                 let bar_w = 12.0_f32;
                 let bar_x = viewport_w - bar_w;
                 // Track (background).
                 display_list.push(DisplayCommand::Rect {
-                    x: bar_x, y: 0.0, w: bar_w, h: viewport_h,
+                    x: bar_x, y: chrome_top, w: bar_w, h: viewport_h,
                     color: [240, 240, 245, 255], radius: 0.0,
                 });
                 // Thumb.
                 let thumb_h = (viewport_h * viewport_h / total_h).max(40.0);
                 let max_scroll = (total_h - viewport_h).max(1.0);
-                let thumb_y = (self.scroll_y / max_scroll) * (viewport_h - thumb_h);
+                let thumb_y = chrome_top + (self.scroll_y / max_scroll) * (viewport_h - thumb_h);
                 display_list.push(DisplayCommand::Rect {
                     x: bar_x + 2.0, y: thumb_y + 2.0,
                     w: bar_w - 4.0, h: thumb_h - 4.0,
@@ -7012,7 +7019,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             let total_w = layout_root.rect.width;
             if total_w > viewport_w {
                 let bar_h = 12.0_f32;
-                let bar_y = viewport_h - bar_h;
+                let bar_y = chrome_top + viewport_h - bar_h;
                 display_list.push(DisplayCommand::Rect {
                     x: 0.0, y: bar_y, w: viewport_w, h: bar_h,
                     color: [240, 240, 245, 255], radius: 0.0,
