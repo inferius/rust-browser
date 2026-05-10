@@ -7215,7 +7215,10 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         width_height_only_animations: std::collections::HashSet::new(),
         position_only_animations: std::collections::HashSet::new(),
         frame_times_ms: std::collections::VecDeque::with_capacity(60),
-        show_fps: std::env::var("PERF_DEBUG").is_ok(),
+        // FPS overlay default off - Ctrl+Shift+F toggle. Drive default zapnuty
+        // pri PERF_DEBUG=1, ale env var ma byt jen pro logging - overlay je
+        // separate UI feature.
+        show_fps: false,
         current_path: current_html_path,
         base_url,
         history: initial_url.into_iter().collect(),
