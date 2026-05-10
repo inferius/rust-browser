@@ -6,6 +6,20 @@ pub fn parse_length(s: &str) -> f32 {
     parse_length_ctx(s, 1024.0, 768.0, 16.0)
 }
 
+/// Resolve length proti parent containeru. Pri "%" suffix vraci parent * p/100.
+/// Bez % deleguje na parse_length (pixel/em/rem/vw/vh/...).
+/// Empty string / "none" -> 0.
+pub fn parse_length_or_pct(s: &str, parent: f32) -> f32 {
+    let v = s.trim();
+    if v.is_empty() || v == "none" { return 0.0; }
+    if let Some(pct_str) = v.strip_suffix('%') {
+        if let Ok(p) = pct_str.parse::<f32>() {
+            return parent * p / 100.0;
+        }
+    }
+    parse_length(v)
+}
+
 /// Parse delky s viewport kontextem (pro vw/vh/% support).
 pub fn parse_length_ctx(s: &str, vw: f32, vh: f32, parent_size: f32) -> f32 {
     let s = s.trim();

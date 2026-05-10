@@ -374,10 +374,10 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             }
         }
         // Apply min-w/h pred aspect ratio dopoctem
-        let min_w_pre = super::super::layout::parse_length(&ch.min_width_v);
-        let min_h_pre = super::super::layout::parse_length(&ch.min_height_v);
-        let max_w_pre = if ch.max_width_v.is_empty() { f32::INFINITY } else { super::super::layout::parse_length(&ch.max_width_v) };
-        let max_h_pre = if ch.max_height_v.is_empty() { f32::INFINITY } else { super::super::layout::parse_length(&ch.max_height_v) };
+        let min_w_pre = super::super::layout::parse_length_or_pct(&ch.min_width_v, inner_w);
+        let min_h_pre = super::super::layout::parse_length_or_pct(&ch.min_height_v, inner_h_for_gap);
+        let max_w_pre = if ch.max_width_v.is_empty() || ch.max_width_v == "none" { f32::INFINITY } else { super::super::layout::parse_length_or_pct(&ch.max_width_v, inner_w) };
+        let max_h_pre = if ch.max_height_v.is_empty() || ch.max_height_v == "none" { f32::INFINITY } else { super::super::layout::parse_length_or_pct(&ch.max_height_v, inner_h_for_gap) };
         // Min PRED aspect dopoctem - jen pro aspect-ratio kontext, NE pro est_w/est_h
         // (base size pro flex algo). Min se aplikuje az v resolve step.
         let _ = (min_w_pre, min_h_pre); // suppress warning
@@ -465,10 +465,15 @@ pub fn layout_flex(bx: &mut LayoutBox) {
     // Apply min/max width/height na items - ulozit pro resolve_flexible_lengths.
     for (i, &real_idx) in in_flow.iter().enumerate() {
         let ch = &bx.children[real_idx];
-        let cw_min = super::super::layout::parse_length(&ch.min_width_v);
-        let cw_max = if ch.max_width_v.is_empty() { f32::INFINITY } else { super::super::layout::parse_length(&ch.max_width_v) };
-        let ch_min = super::super::layout::parse_length(&ch.min_height_v);
-        let ch_max = if ch.max_height_v.is_empty() { f32::INFINITY } else { super::super::layout::parse_length(&ch.max_height_v) };
+        // Percent values resolvujem proti flex container inner dimensions.
+        let cw_min = super::super::layout::parse_length_or_pct(&ch.min_width_v, inner_w);
+        let cw_max = if ch.max_width_v.is_empty() || ch.max_width_v == "none" {
+            f32::INFINITY
+        } else { super::super::layout::parse_length_or_pct(&ch.max_width_v, inner_w) };
+        let ch_min = super::super::layout::parse_length_or_pct(&ch.min_height_v, inner_h_for_gap);
+        let ch_max = if ch.max_height_v.is_empty() || ch.max_height_v == "none" {
+            f32::INFINITY
+        } else { super::super::layout::parse_length_or_pct(&ch.max_height_v, inner_h_for_gap) };
         let (min_m, max_m, min_c, max_c) = if direction.is_row() {
             (cw_min, cw_max, ch_min, ch_max)
         } else {

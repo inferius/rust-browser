@@ -3970,7 +3970,7 @@ pub(super) fn split_top_level_commas(s: &str) -> Vec<&str> {
 
 mod length;
 #[allow(unused_imports)]
-pub use length::{parse_length, parse_length_ctx};
+pub use length::{parse_length, parse_length_ctx, parse_length_or_pct};
 
 mod shadows;
 pub use shadows::{parse_text_shadow, parse_box_shadow};
