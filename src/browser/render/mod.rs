@@ -489,7 +489,14 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: 
 /// (transform/opacity/color/filter) se menily kazdy frame pres animations.
 fn apply_paint_animations(box_: &mut crate::browser::layout::LayoutBox,
                            style_map: &crate::browser::cascade::StyleMap) {
+    apply_paint_animations_inner(box_, style_map, 0.0);
+}
+
+fn apply_paint_animations_inner(box_: &mut crate::browser::layout::LayoutBox,
+                                 style_map: &crate::browser::cascade::StyleMap,
+                                 parent_width: f32) {
     let node_id = box_.node.as_ref().map(|n| Rc::as_ptr(n) as usize).unwrap_or(0);
+    let original_width = box_.rect.width;
     if let Some(styles) = style_map.get(&node_id) {
         if let Some(o) = styles.get("opacity") {
             if let Ok(v) = o.parse::<f32>() {
@@ -512,9 +519,58 @@ fn apply_paint_animations(box_: &mut crate::browser::layout::LayoutBox,
         if let Some(f) = styles.get("filter") {
             box_.filter = crate::browser::layout::parse_filter_chain(f);
         }
+        // INCREMENTAL LAYOUT: aplikuj animovanou width/height na rect kdyz
+        // element ma overflow:hidden (self-contained, ne reflow). Drive
+        // typewriter potreboval full layout rebuild kazdy frame, ted jen
+        // pricte rect.width upravu.
+        let oh_x = box_.overflow_x.as_str() == "hidden" || box_.overflow_x.as_str() == "clip";
+        let oh_y = box_.overflow_y.as_str() == "hidden" || box_.overflow_y.as_str() == "clip";
+        if oh_x || oh_y {
+            // Pouzijeme cached parent_width pro % rozeznavani.
+            // Width animace: aktualizuj rect.width pri overflow-x:hidden.
+            if oh_x {
+                if let Some(w) = styles.get("width") {
+                    let trimmed = w.trim();
+                    if let Some(pct_str) = trimmed.strip_suffix('%') {
+                        if let Ok(pct) = pct_str.parse::<f32>() {
+                            if parent_width > 0.0 {
+                                box_.rect.width = parent_width * (pct / 100.0);
+                            }
+                        }
+                    } else {
+                        let px = crate::browser::layout::parse_length(trimmed);
+                        if px > 0.0 || trimmed.starts_with('0') {
+                            box_.rect.width = px;
+                        }
+                    }
+                }
+            }
+            if oh_y {
+                if let Some(h) = styles.get("height") {
+                    let trimmed = h.trim();
+                    if let Some(pct_str) = trimmed.strip_suffix('%') {
+                        if let Ok(pct) = pct_str.parse::<f32>() {
+                            // Parent width fallback - real chrome by pouzilo parent height
+                            // ale pro typewriter case staci. Pro vetsi pres potreba
+                            // dalsi argument.
+                            if parent_width > 0.0 {
+                                box_.rect.height = parent_width * (pct / 100.0);
+                            }
+                        }
+                    } else {
+                        let px = crate::browser::layout::parse_length(trimmed);
+                        if px > 0.0 || trimmed.starts_with('0') {
+                            box_.rect.height = px;
+                        }
+                    }
+                }
+            }
+        }
     }
+    let _ = original_width;
+    let our_width = box_.rect.width;
     for ch in &mut box_.children {
-        apply_paint_animations(ch, style_map);
+        apply_paint_animations_inner(ch, style_map, our_width);
     }
 }
 
@@ -710,6 +766,12 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         /// v tomto set. Drive: jakekoliv layout-prop @keyframes v CSS = perma
         /// invalidace, i kdyz se nikdy nespusti.
         layout_affecting_animations: std::collections::HashSet<String>,
+        /// Subset layout_affecting_animations: jmena ktera animuji POUZE
+        /// width/height (zadne jine layout-props). Tyto muzu aplikovat primo
+        /// na rect.width/height (Chrome-style "self-contained layout") kdyz
+        /// element ma overflow:hidden - width change nezpusobi reflow.
+        /// Klic optimalizace pro typewriter (overflow:hidden + anim width).
+        width_height_only_animations: std::collections::HashSet<String>,
         /// Ring buffer poslednich N frame timing pro FPS counter overlay.
         /// Default 60 frame window. Render hori v ms, FPS = 1000 / avg.
         frame_times_ms: std::collections::VecDeque<f32>,
@@ -5422,14 +5484,33 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         | "box-sizing" | "white-space"
                         | "column-count" | "column-width" | "columns")
                 }
+                fn is_width_height_prop(p: &str) -> bool {
+                    matches!(p, "width" | "height" | "min-width" | "max-width"
+                                | "min-height" | "max-height")
+                }
                 self.layout_affecting_animations.clear();
+                self.width_height_only_animations.clear();
                 for sheet in &parsed {
                     for kf in &sheet.keyframes {
-                        let affects = kf.frames.iter().any(|(_, decls)| {
-                            decls.iter().any(|d| is_layout_affecting_prop(&d.property))
-                        });
-                        if affects {
+                        let mut has_layout_aff = false;
+                        let mut has_other_layout_aff = false; // layout-aff but NOT width/height
+                        for (_, decls) in &kf.frames {
+                            for d in decls {
+                                if is_layout_affecting_prop(&d.property) {
+                                    has_layout_aff = true;
+                                    if !is_width_height_prop(&d.property) {
+                                        has_other_layout_aff = true;
+                                    }
+                                }
+                            }
+                        }
+                        if has_layout_aff {
                             self.layout_affecting_animations.insert(kf.name.clone());
+                            if !has_other_layout_aff {
+                                // Animuje POUZE width/height - kandidat na soft layout
+                                // (incremental: aplikujeme na rect, ne re-layout).
+                                self.width_height_only_animations.insert(kf.name.clone());
+                            }
                         }
                     }
                 }
@@ -5795,8 +5876,42 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // layout_affecting_animations set. Drive: jakekoliv @keyframes
             // s width/height v CSS by spustilo invalidaci kazdy frame, i
             // kdyz se ta keyframe na zadnem elementu nespusti.
-            let aff_layout = self.active_animations.iter()
-                .any(|(_, name)| self.layout_affecting_animations.contains(name));
+            //
+            // INCREMENTAL LAYOUT (Chrome-style): pri animaci animujici POUZE
+            // width/height na elementu s overflow:hidden, treat jako "soft"
+            // layout - aplikujeme rect.width/height primo via apply_paint_anims
+            // a NEinvalidujeme cache. Resi typewriter (overflow:hidden + anim
+            // width 0->100%) - drive 121 ms layout per frame, ted 0 ms.
+            fn find_box_by_node_id<'a>(b: &'a super::layout::LayoutBox, id: usize) -> Option<&'a super::layout::LayoutBox> {
+                if let Some(n) = &b.node {
+                    if Rc::as_ptr(n) as usize == id {
+                        return Some(b);
+                    }
+                }
+                for ch in &b.children {
+                    if let Some(found) = find_box_by_node_id(ch, id) {
+                        return Some(found);
+                    }
+                }
+                None
+            }
+            let aff_layout = self.active_animations.iter().any(|(node_id, name)| {
+                if !self.layout_affecting_animations.contains(name) { return false; }
+                // Pokud width/height-only animace + element ma overflow:hidden,
+                // change je self-contained = NE hard invalidace.
+                if self.width_height_only_animations.contains(name) {
+                    if let Some(cache_root) = self.cached_layout_root.as_ref() {
+                        if let Some(bx) = find_box_by_node_id(cache_root, *node_id) {
+                            let oh = bx.overflow_x.as_str() == "hidden"
+                                || bx.overflow_y.as_str() == "hidden"
+                                || bx.overflow_x.as_str() == "clip"
+                                || bx.overflow_y.as_str() == "clip";
+                            if oh { return false; } // soft - skip invalidace
+                        }
+                    }
+                }
+                true // hard layout-affecting - invalidate
+            });
             // viewport_match: cached.width muze byt viewport_w NEBO viewport_w - 15
             // (scrollbar reservation). Tolerance 16 px pokryvuje obe varianty.
             // Drive check `< 0.5` zpusoboval permanentni cache invalidaci na
@@ -6846,6 +6961,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         css_uses_keyframes: false,
         layout_has_sticky: false,
         layout_affecting_animations: std::collections::HashSet::new(),
+        width_height_only_animations: std::collections::HashSet::new(),
         frame_times_ms: std::collections::VecDeque::with_capacity(60),
         show_fps: std::env::var("PERF_DEBUG").is_ok(),
         current_path: current_html_path,
