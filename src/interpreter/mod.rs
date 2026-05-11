@@ -605,6 +605,11 @@ pub struct Interpreter {
     /// Pending XMLHttpRequest callbacks - po send() done event loop drainnnula
     /// + zavolal onload/onreadystatechange. Format: (callback, xhr_this_obj).
     pub pending_xhr_callbacks: Rc<RefCell<Vec<(JsValue, JsValue)>>>,
+    /// requestAnimationFrame callbacks: (id, callback). Drain pri next frame
+    /// (volat z renderer event loop). cancelAnimationFrame(id) -> remove.
+    pub raf_callbacks: Rc<RefCell<Vec<(u32, JsValue)>>>,
+    /// rAF id counter.
+    pub next_raf_id: Rc<RefCell<u32>>,
     /// Aktualni line v exec - update z Stmt::WithLine. 0 pri rucne run.
     pub current_line: u32,
     /// Sdileny debugger state - breakpoints + pause indicator (single-thread Rc/RefCell).
@@ -722,11 +727,15 @@ impl Interpreter {
             Rc::new(RefCell::new(Vec::new()));
         let pending_xhr_callbacks: Rc<RefCell<Vec<(JsValue, JsValue)>>> =
             Rc::new(RefCell::new(Vec::new()));
+        let raf_callbacks: Rc<RefCell<Vec<(u32, JsValue)>>> =
+            Rc::new(RefCell::new(Vec::new()));
+        let next_raf_id: Rc<RefCell<u32>> = Rc::new(RefCell::new(1));
         setup_builtins(
             &global, &task_queue, &next_timer_id, &workers, &next_worker_id,
             &document, &console_log, &network_log, &custom_elements,
             &mutation_observers, &websockets, &next_ws_id,
             &pending_fetches, &pending_xhr_callbacks,
+            &raf_callbacks, &next_raf_id,
         );
         Interpreter {
             global, yield_buffer: None, task_queue, next_timer_id,
@@ -753,7 +762,25 @@ impl Interpreter {
             continue_signal: None,
             pending_fetches,
             pending_xhr_callbacks,
+            raf_callbacks,
+            next_raf_id,
         }
+    }
+
+    /// Drain requestAnimationFrame callbacks - vsechny pending volat s
+    /// timestamp ms (since interpreter start). Volat per frame z renderer.
+    pub fn drain_raf_callbacks(&mut self, timestamp_ms: f64) -> Result<(), JsError> {
+        // Snapshot vsechny pending + clear (kazda rAF callback je one-shot,
+        // pokud si chce dalsi frame, znovu zavola requestAnimationFrame).
+        let callbacks: Vec<(u32, JsValue)> = {
+            let mut q = self.raf_callbacks.borrow_mut();
+            std::mem::take(&mut *q)
+        };
+        for (_id, cb) in callbacks {
+            if matches!(cb, JsValue::Undefined | JsValue::Null) { continue; }
+            let _ = self.call_function(cb, vec![JsValue::Number(timestamp_ms)], None);
+        }
+        Ok(())
     }
 
     /// Drainuj dokoncene async fetch tasks - try_recv kazdy pending,
@@ -856,6 +883,79 @@ impl Interpreter {
         *self.document.borrow_mut() = doc;
     }
 
+    /// Variant pro childList mutace s explicit added/removed nodes.
+    /// Wrapper kolem dispatch_mutation_full pres added/removed lists.
+    pub fn dispatch_mutation_childlist(
+        &mut self,
+        target: &Rc<crate::browser::dom::NodeData>,
+        added: Vec<Rc<crate::browser::dom::NodeData>>,
+        removed: Vec<Rc<crate::browser::dom::NodeData>>,
+    ) {
+        self.dispatch_mutation_full(target, "childList", None, None, added, removed);
+    }
+
+    /// Plna dispatch s vsemi MutationRecord poli. Volat pro vsechny mutace.
+    /// `dispatch_mutation` (legacy) volej tuto s prazdnymi added/removed.
+    pub fn dispatch_mutation_full(
+        &mut self,
+        target: &Rc<crate::browser::dom::NodeData>,
+        record_type: &str,
+        attribute_name: Option<String>,
+        old_value: Option<String>,
+        added: Vec<Rc<crate::browser::dom::NodeData>>,
+        removed: Vec<Rc<crate::browser::dom::NodeData>>,
+    ) {
+        let target_ptr = Rc::as_ptr(target) as usize;
+        let observers: Vec<(JsValue, JsValue)> = self.mutation_observers.borrow().iter()
+            .filter(|(obs_ptr, _, _, subtree)| {
+                if *obs_ptr == target_ptr { return true; }
+                if !subtree { return false; }
+                let mut current = target.parent.borrow().upgrade();
+                while let Some(n) = current {
+                    if Rc::as_ptr(&n) as usize == *obs_ptr { return true; }
+                    current = n.parent.borrow().upgrade();
+                }
+                false
+            })
+            .map(|(_, cb, opts, _)| (cb.clone(), opts.clone()))
+            .collect();
+
+        if observers.is_empty() { return; }
+
+        let added_arr: Vec<JsValue> = added.iter()
+            .map(|n| JsValue::DomNode(Rc::clone(n))).collect();
+        let removed_arr: Vec<JsValue> = removed.iter()
+            .map(|n| JsValue::DomNode(Rc::clone(n))).collect();
+
+        for (cb, _opts) in observers {
+            let mut record = JsObject::new();
+            record.set("type".into(), JsValue::Str(record_type.into()));
+            record.set("target".into(), JsValue::DomNode(Rc::clone(target)));
+            record.set("addedNodes".into(),
+                JsValue::Array(Rc::new(RefCell::new(added_arr.clone()))));
+            record.set("removedNodes".into(),
+                JsValue::Array(Rc::new(RefCell::new(removed_arr.clone()))));
+            if let Some(name) = &attribute_name {
+                record.set("attributeName".into(), JsValue::Str(name.clone()));
+                record.set("attributeNamespace".into(), JsValue::Null);
+            } else {
+                record.set("attributeName".into(), JsValue::Null);
+            }
+            if let Some(old) = &old_value {
+                record.set("oldValue".into(), JsValue::Str(old.clone()));
+            } else {
+                record.set("oldValue".into(), JsValue::Null);
+            }
+            // Sibling links - real spec: previousSibling / nextSibling of removed child.
+            record.set("previousSibling".into(), JsValue::Null);
+            record.set("nextSibling".into(), JsValue::Null);
+            let records = JsValue::Array(Rc::new(RefCell::new(vec![
+                JsValue::Object(Rc::new(RefCell::new(record)))
+            ])));
+            let _ = self.call_function(cb, vec![records], None);
+        }
+    }
+
     /// Dispatch MutationObserver records pro mutation na danem nodu.
     /// Pro kazdeho observera s matching target (nebo ancestor pri subtree=true)
     /// zavolame callback se [{type, target, addedNodes, removedNodes, attributeName, oldValue}].
@@ -916,13 +1016,102 @@ impl Interpreter {
         event_type: &str,
         event_val: JsValue,
     ) -> Result<(), JsError> {
-        let ids: Vec<usize> = node.listeners.borrow().get(event_type)
-            .cloned().unwrap_or_default();
-        for id in ids {
-            let cb = self.event_callbacks.borrow().get(&id).cloned();
-            if let Some(cb) = cb {
-                self.call_function(cb, vec![event_val.clone()], None)?;
+        // Walk parent chain target -> root pro bubble phase.
+        // (Capture phase NOT implementovan: listeners drzi jen callback id bez
+        // capture flag. Defaultni useCapture=false je 99% real-world use case,
+        // bubble plne staci pro event delegation pattern.)
+        let mut chain: Vec<Rc<crate::browser::dom::NodeData>> = Vec::new();
+        chain.push(Rc::clone(node));
+        {
+            let mut cur = node.parent.borrow().upgrade();
+            while let Some(p) = cur {
+                let next = p.parent.borrow().upgrade();
+                chain.push(p);
+                cur = next;
             }
+        }
+        // Vyrob (nebo augment) event object s spravnym target / currentTarget /
+        // stopPropagation / preventDefault. Pokud caller poslal hotovy event,
+        // pridame chybejici pole; jinak vyrob novy.
+        let event_obj = match &event_val {
+            JsValue::Object(o) => Rc::clone(o),
+            _ => {
+                let mut o = JsObject::new();
+                o.set("type".into(), JsValue::Str(event_type.to_string()));
+                Rc::new(RefCell::new(o))
+            }
+        };
+        {
+            let mut e = event_obj.borrow_mut();
+            // Ensure mandatory fields.
+            if matches!(e.get("type"), JsValue::Undefined) {
+                e.set("type".into(), JsValue::Str(event_type.to_string()));
+            }
+            e.set("target".into(), JsValue::DomNode(Rc::clone(node)));
+            if matches!(e.get("bubbles"), JsValue::Undefined) {
+                e.set("bubbles".into(), JsValue::Bool(true));
+            }
+            if matches!(e.get("cancelable"), JsValue::Undefined) {
+                e.set("cancelable".into(), JsValue::Bool(true));
+            }
+            if matches!(e.get("defaultPrevented"), JsValue::Undefined) {
+                e.set("defaultPrevented".into(), JsValue::Bool(false));
+            }
+            if matches!(e.get("__stopped__"), JsValue::Undefined) {
+                e.set("__stopped__".into(), JsValue::Bool(false));
+            }
+            if matches!(e.get("__stopped_immediate__"), JsValue::Undefined) {
+                e.set("__stopped_immediate__".into(), JsValue::Bool(false));
+            }
+            // stopPropagation / preventDefault native fns (capture event_obj
+            // ref pres Rc).
+            let ev_stop = Rc::clone(&event_obj);
+            e.set("stopPropagation".into(), native("stopPropagation", move |_| {
+                ev_stop.borrow_mut().set("__stopped__".into(), JsValue::Bool(true));
+                Ok(JsValue::Undefined)
+            }));
+            let ev_stop_imm = Rc::clone(&event_obj);
+            e.set("stopImmediatePropagation".into(),
+                native("stopImmediatePropagation", move |_| {
+                    let mut x = ev_stop_imm.borrow_mut();
+                    x.set("__stopped__".into(), JsValue::Bool(true));
+                    x.set("__stopped_immediate__".into(), JsValue::Bool(true));
+                    Ok(JsValue::Undefined)
+                }));
+            let ev_prevent = Rc::clone(&event_obj);
+            e.set("preventDefault".into(), native("preventDefault", move |_| {
+                ev_prevent.borrow_mut().set("defaultPrevented".into(), JsValue::Bool(true));
+                Ok(JsValue::Undefined)
+            }));
+        }
+        // Bubble dispatch: target -> root. Pri __stopped__ break.
+        let bubbles = matches!(event_obj.borrow().get("bubbles"), JsValue::Bool(true));
+        for (depth, n) in chain.iter().enumerate() {
+            // currentTarget update.
+            event_obj.borrow_mut().set("currentTarget".into(),
+                JsValue::DomNode(Rc::clone(n)));
+            event_obj.borrow_mut().set("eventPhase".into(),
+                JsValue::Number(if depth == 0 { 2.0 } else { 3.0 })); // AT_TARGET / BUBBLING_PHASE
+            // Snapshot listenery (kopie usize). Pri call_function muze JS
+            // mutate listeners - chranime se kopii.
+            let ids: Vec<usize> = n.listeners.borrow().get(event_type)
+                .cloned().unwrap_or_default();
+            for id in ids {
+                if matches!(event_obj.borrow().get("__stopped_immediate__"), JsValue::Bool(true)) {
+                    return Ok(());
+                }
+                let cb = self.event_callbacks.borrow().get(&id).cloned();
+                if let Some(cb) = cb {
+                    let arg = JsValue::Object(Rc::clone(&event_obj));
+                    self.call_function(cb, vec![arg], Some(JsValue::DomNode(Rc::clone(n))))?;
+                }
+            }
+            // stopPropagation -> nepokracovat bubble do parenta.
+            if matches!(event_obj.borrow().get("__stopped__"), JsValue::Bool(true)) {
+                return Ok(());
+            }
+            // Pokud event nebubbluje, dispatch jen na target.
+            if !bubbles && depth == 0 { break; }
         }
         Ok(())
     }

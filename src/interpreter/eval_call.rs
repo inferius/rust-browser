@@ -1120,8 +1120,8 @@ impl Interpreter {
                             let child = arg_vals.into_iter().next().unwrap_or(JsValue::Undefined);
                             if let JsValue::DomNode(c) = &child {
                                 n.append_child(Rc::clone(c));
-                                // MutationObserver dispatch on parent
-                                self.dispatch_mutation(&n, "childList", None, None);
+                                // MutationObserver dispatch on parent s addedNodes.
+                                self.dispatch_mutation_childlist(&n, vec![Rc::clone(c)], Vec::new());
                                 // Lifecycle: connectedCallback
                                 let child_ptr = Rc::as_ptr(c) as usize;
                                 let instance = self.custom_element_instances.borrow().get(&child_ptr).cloned();
@@ -1151,8 +1151,8 @@ impl Interpreter {
                                     }
                                 }
                                 n.children.borrow_mut().retain(|x| !Rc::ptr_eq(x, c));
-                                // MutationObserver dispatch
-                                self.dispatch_mutation(&n, "childList", None, None);
+                                // MutationObserver dispatch s removedNodes.
+                                self.dispatch_mutation_childlist(&n, Vec::new(), vec![Rc::clone(c)]);
                             }
                             return Ok(child);
                         }

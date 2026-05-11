@@ -851,7 +851,8 @@ fn paint_elements_tab(
 
     // Three-column layout: tree | styles | side panel.
     // split_x = tree | styles boundary; styles_end = win_w - side_panel_w.
-    let default_tree_split = (win_w - state.side_panel_w) * 0.45;
+    // Default tree share 35% (styles ma vic prostoru pro CSS rule listing).
+    let default_tree_split = (win_w - state.side_panel_w) * 0.35;
     let tree_split = if state.elements.split_x < 1.0 { default_tree_split }
                      else { state.elements.split_x.max(200.0).min((win_w - state.side_panel_w - 200.0).max(201.0)) };
     // clamp guard: kdyz win_w < 580, max < min - panic. Ensure max >= 181.
@@ -2298,7 +2299,7 @@ fn paint_styles_pane(
                 }
             }
             for d in &rule.declarations {
-                if sy >= max_y { *state.styles.last_painted_h.borrow_mut() = (sy - y) + 16.0; return; }
+                if sy >= max_y { *state.styles.last_painted_h.borrow_mut() = (sy - y) + scroll + 16.0; return; }
                 // Sub-prop ktery patri pod collapsed shorthand -> skip.
                 if let Some(sh) = shorthand_for(&d.property) {
                     if !expanded.contains(sh) { continue; }
@@ -2361,7 +2362,7 @@ fn paint_styles_pane(
     }
 
     // Computed values - z cascade vystupu (state.styles.computed) + box rect.
-    if sy >= max_y { *state.styles.last_painted_h.borrow_mut() = (sy - y) + 16.0; return; }
+    if sy >= max_y { *state.styles.last_painted_h.borrow_mut() = (sy - y) + scroll + 16.0; return; }
     if in_view(sy) {
         push_text_bold(cmds, pad_x, sy, "Computed".to_string(), pal.text, false);
     }
@@ -2369,7 +2370,7 @@ fn paint_styles_pane(
 
     let filter = state.styles.filter.to_lowercase();
     for (k, v) in &state.styles.computed {
-        if sy >= max_y { *state.styles.last_painted_h.borrow_mut() = (sy - y) + 16.0; return; }
+        if sy >= max_y { *state.styles.last_painted_h.borrow_mut() = (sy - y) + scroll + 16.0; return; }
         if !filter.is_empty() && !k.contains(&filter) { continue; }
         if in_view(sy) {
             push_text(cmds, pad_x, sy, format!("{}:", k), pal.syn_property, false);
@@ -2379,7 +2380,7 @@ fn paint_styles_pane(
     }
 
     // Box info (rect / margin / padding z LayoutBox).
-    if sy >= max_y { *state.styles.last_painted_h.borrow_mut() = (sy - y) + 16.0; return; }
+    if sy >= max_y { *state.styles.last_painted_h.borrow_mut() = (sy - y) + scroll + 16.0; return; }
     sy += 8.0;
     if in_view(sy) {
         push_text_bold(cmds, pad_x, sy, "Box".to_string(), pal.text, false);
@@ -2409,8 +2410,9 @@ fn paint_styles_pane(
         }
         sy += ROW_H;
     }
-    // Track real painted height pro spravny scrollbar + max_scroll v dalsim framu.
-    *state.styles.last_painted_h.borrow_mut() = (sy - y) + 16.0;
+    // Track real painted height pro spravny scrollbar + max_scroll v dalsim
+    // framu. + scroll aby to byl absolutni content height (sy = scrolled y).
+    *state.styles.last_painted_h.borrow_mut() = (sy - y) + scroll + 16.0;
 }
 
 // ─── Console tab ────────────────────────────────────────────────────────

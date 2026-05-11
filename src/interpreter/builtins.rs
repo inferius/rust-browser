@@ -43,6 +43,8 @@ pub fn setup_builtins(
     next_ws_id: &Rc<RefCell<u32>>,
     pending_fetches: &Rc<RefCell<Vec<super::PendingFetch>>>,
     pending_xhr_callbacks: &Rc<RefCell<Vec<(JsValue, JsValue)>>>,
+    raf_callbacks: &Rc<RefCell<Vec<(u32, JsValue)>>>,
+    next_raf_id: &Rc<RefCell<u32>>,
 ) {
     let mut e = env.borrow_mut();
 
@@ -4721,22 +4723,27 @@ pub fn setup_builtins(
         }));
     }
 
-    // requestAnimationFrame / cancelAnimationFrame - stub via setTimeout
+    // requestAnimationFrame / cancelAnimationFrame - real frame-bound dispatch.
+    // Pres pending_raf_callbacks: drain volame per render frame s timestamp.
+    // Predtim byly stub via setTimeout(0) - microtask fire ALE bez frame
+    // semantics (kazdy rAF spustil okamzite v drain_timers, ne pri repaint).
+    // Real-world animation loops `function frame(t) { ...; rAF(frame) }`
+    // potreba frame-bound timestamp + scheduling po render commit.
     {
-        let tq = Rc::clone(task_queue);
-        let id_ctr = Rc::clone(next_timer_id);
+        let raf = Rc::clone(raf_callbacks);
+        let id_ctr = Rc::clone(next_raf_id);
         e.define("requestAnimationFrame", native("requestAnimationFrame", move |a| {
             let cb = a.into_iter().next().unwrap_or(JsValue::Undefined);
             let id = { let mut ctr = id_ctr.borrow_mut(); let id = *ctr; *ctr += 1; id };
-            tq.borrow_mut().push((id, cb, vec![JsValue::Number(0.0)]));
+            raf.borrow_mut().push((id, cb));
             Ok(JsValue::Number(id as f64))
         }));
     }
     {
-        let tq = Rc::clone(task_queue);
+        let raf = Rc::clone(raf_callbacks);
         e.define("cancelAnimationFrame", native("cancelAnimationFrame", move |a| {
             let id = a.into_iter().next().map(|v| v.to_number() as u32).unwrap_or(0);
-            tq.borrow_mut().retain(|(tid, _, _)| *tid != id);
+            raf.borrow_mut().retain(|(rid, _)| *rid != id);
             Ok(JsValue::Undefined)
         }));
     }

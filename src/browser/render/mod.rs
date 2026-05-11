@@ -4528,15 +4528,12 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
 
             let doc_ref = interp.document.clone();
             let base = self.base_url.clone().unwrap_or_default();
-            // External script src= fetch: opt-in pres env var RWE_FETCH_SCRIPTS=1.
-            // Default OFF - jQuery / GTM / analytics scripts manipuluji DOM zpusoby
-            // ktery nas tree-walker zvlada jen castecne, real-world site se
-            // po jejich evaluaci jeste vic rozjede (DOM mutace neuplne, hidden
-            // elements byly odhaleny, scripts inject markup co rozbije layout).
-            // Pri zapnuti dostane uzivatel real JS engine chovani, vc. crash risk.
-            let fetch_external = std::env::var("RWE_FETCH_SCRIPTS")
-                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-                .unwrap_or(false);
+            // External script src= fetch: default ON. Stranky musi frcet
+            // (real engine = real script load). Opt-out pres env var
+            // RWE_NO_SCRIPTS=1 pro debug bez JS noise.
+            let fetch_external = std::env::var("RWE_NO_SCRIPTS")
+                .map(|v| v != "1" && !v.eq_ignore_ascii_case("true"))
+                .unwrap_or(true);
             let script_nodes = doc_ref.borrow().root.get_elements_by_tag("script");
             let mut scripts: Vec<(String, String)> = Vec::with_capacity(script_nodes.len());
             for (i, s) in script_nodes.iter().enumerate() {
@@ -5970,8 +5967,13 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             if let Some(interp) = &mut self.interpreter {
                 let _ = interp.drain_websockets();
                 interp.drain_fetches();
+                // requestAnimationFrame callbacks: vsechny pending volame s
+                // timestamp ms (since start_time). Animace loops `function
+                // frame(t) { ...; rAF(frame) }` ted bezi smoothly per frame.
+                let ts_ms = self.start_time.elapsed().as_secs_f64() * 1000.0;
+                let _ = interp.drain_raf_callbacks(ts_ms);
             }
-            perf_t("drain (ws+fetch)", _t_drain);
+            perf_t("drain (ws+fetch+raf)", _t_drain);
             let _t_async = std::time::Instant::now();
             // Drain async background jobs (image lazy load, file IO, etc).
             self.async_jobs.drain();
