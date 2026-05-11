@@ -3773,15 +3773,24 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
 
         if let Some(text) = &bx_clone.text {
             // Detect leading/trailing whitespace pro spravne mezery na hranicich.
-            let leading_ws = text.starts_with(char::is_whitespace);
-            let trailing_ws = text.ends_with(char::is_whitespace);
+            // NBSP (U+00A0) NEPOCITAM jako whitespace boundary - "x\u{A0}" konci
+            // NBSP ktery musi zustat cast slova, ne sibling space.
+            let is_brk = |c: char| c.is_whitespace() && c != '\u{00A0}';
+            let leading_ws = text.starts_with(is_brk);
+            let trailing_ws = text.ends_with(is_brk);
             // Pre-pridame mezeru kdyz prev mel trailing OR ja mam leading + nejsem prvni.
             let need_pre_space = sib_idx > 0 && (prev_had_trailing_space || leading_ws);
             if need_pre_space && cursor_x > inner_x {
                 cursor_x += space_w;
             }
 
-            let words: Vec<&str> = text.split_whitespace().collect();
+            // Split na BREAKABLE whitespace - NBSP (U+00A0) zachova jako cast
+            // slova (CSS spec: no-break-space drzi cluster, wrap point ne).
+            // Bez tohoto "119&nbsp;520" zalamne na 2. radek + cursor reset zvlast.
+            let is_break_ws = |c: char| c.is_whitespace() && c != '\u{00A0}';
+            let words: Vec<&str> = text.split(is_break_ws)
+                .filter(|s| !s.is_empty())
+                .collect();
             // Strip leading/trailing whitespace z bx.text JEN pro text nody
             // (tag=None). Predtim rendering bx.text=" a " emitoval (mezera + a
             // + mezera) pres rect.x, ale cursor pricital jen "a" - overlap.

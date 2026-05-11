@@ -7286,7 +7286,12 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         // se ulozily real natural dims.
                         if super::layout::take_image_natural_dims_dirty() {
                             need_relayout_after_load = true;
-                            eprintln!("[img-relayout] natural dims fresh for {} -> invalidate layout cache", src);
+                            // Truncate src pri data: URI (base64) - bezi 100k+
+                            // chars co zarvalo by console output.
+                            let src_short = if src.starts_with("data:") && src.len() > 60 {
+                                format!("{}... ({} chars)", &src[..60], src.len())
+                            } else { src.clone() };
+                            eprintln!("[img-relayout] natural dims fresh for {} -> invalidate layout cache", src_short);
                         }
                     }
                     _ => {}
@@ -9026,8 +9031,11 @@ impl Renderer {
             let url = match extract_font_url(&ff.src) {
                 Some(u) => u,
                 None => {
-                    eprintln!("[font-face] SKIP family={} - extract_font_url(src=...) selhal. src={:?}",
-                        ff.family, ff.src);
+                    let src_short: String = if ff.src.len() > 100 {
+                        format!("{}... ({} chars)", &ff.src[..100], ff.src.len())
+                    } else { ff.src.clone() };
+                    eprintln!("[font-face] SKIP family={} - extract_font_url(src=...) selhal. src={}",
+                        ff.family, src_short);
                     continue;
                 }
             };
