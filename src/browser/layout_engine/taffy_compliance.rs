@@ -242,15 +242,15 @@ mod tests {
                     }
                     bx.explicit_height = parse_dim(v, container_h);
                 }
-                "flex-direction" => bx.flex_direction = v.clone(),
-                "flex-wrap" => bx.flex_wrap = v.clone(),
-                "justify-content" => bx.justify_content = v.clone(),
-                "align-items" => bx.align_items = v.clone(),
+                "flex-direction" => bx.flex_direction = crate::browser::layout::FlexDirection::parse(v),
+                "flex-wrap" => bx.flex_wrap = crate::browser::layout::FlexWrap::parse(v),
+                "justify-content" => bx.justify_content = crate::browser::layout::JustifyContent::parse(v),
+                "align-items" => bx.align_items = crate::browser::layout::AlignItems::parse(v),
                 "align-content" => bx.align_content = v.clone(),
                 "align-self" => bx.align_self = v.clone(),
                 "justify-self" => bx.justify_self = v.clone(),
                 "justify-items" => bx.justify_items = v.clone(),
-                "box-sizing" => bx.box_sizing = v.clone(),
+                "box-sizing" => bx.box_sizing = crate::browser::layout::BoxSizing::parse(v),
                 "grid-row-start" => {
                     if let Some(rest) = v.trim().strip_prefix("span ") {
                         bx.grid_row_span = rest.trim().parse().unwrap_or(1);
@@ -416,9 +416,12 @@ mod tests {
                     bx.offset_top = val; bx.offset_bottom = val;
                     bx.offset_left = val; bx.offset_right = val;
                 }
-                "overflow" => { bx.overflow_x = v.clone(); bx.overflow_y = v.clone(); }
-                "overflow-x" => { bx.overflow_x = v.clone(); }
-                "overflow-y" => { bx.overflow_y = v.clone(); }
+                "overflow" => {
+                    bx.overflow_x = crate::browser::layout::Overflow::parse(v);
+                    bx.overflow_y = crate::browser::layout::Overflow::parse(v);
+                }
+                "overflow-x" => { bx.overflow_x = crate::browser::layout::Overflow::parse(v); }
+                "overflow-y" => { bx.overflow_y = crate::browser::layout::Overflow::parse(v); }
                 "scrollbar-width" => {
                     // V taffy fixturach numericka hodnota (npr. "15"). V realnem CSS
                     // jen "auto"/"thin"/"none". Detekuj numerickou.
@@ -436,8 +439,8 @@ mod tests {
         bx.display = display;
         // Heuristika: taffy block fixtures s align-items=baseline / flex-wrap ocekavaji flex layout.
         if matches!(bx.display, Display::Block) {
-            let baseline_marker = bx.align_items.as_str() == "baseline";
-            let wrap_marker = !bx.flex_wrap.is_empty() && bx.flex_wrap != "nowrap";
+            let baseline_marker = matches!(bx.align_items, crate::browser::layout::AlignItems::Baseline);
+            let wrap_marker = !matches!(bx.flex_wrap, crate::browser::layout::FlexWrap::NoWrap);
             if baseline_marker || wrap_marker {
                 bx.display = Display::Flex;
                 if baseline_marker { bx.pseudo_flex = true; }
@@ -447,7 +450,7 @@ mod tests {
         // Taffy default je border-box (jejich fixtures `_border_box_ltr` predpokladaji
         // width = total). My rect je border-box semantics, takze pridavame jen pri
         // explicit content-box.
-        if bx.box_sizing == "content-box" {
+        if !bx.box_sizing.is_border_box() {
             let bw_l = bx.border_left_width.unwrap_or(bx.border_width);
             let bw_r = bx.border_right_width.unwrap_or(bx.border_width);
             let bw_t = bx.border_top_width.unwrap_or(bx.border_width);
@@ -641,8 +644,8 @@ mod tests {
         let pb_t = child.padding_top.unwrap_or(child.padding) + child.border_top_width.unwrap_or(child.border_width);
         if pb_t > 0.0 { return; }
         // Pri overflow non-visible: BFC, no margin collapse with descendants.
-        let blocks_collapse = matches!(child.overflow_x.as_str(), "hidden" | "scroll" | "auto" | "clip")
-            || matches!(child.overflow_y.as_str(), "hidden" | "scroll" | "auto" | "clip");
+        let blocks_collapse = child.overflow_x.clips()
+            || child.overflow_y.clips();
         if blocks_collapse { return; }
         for ch in &child.children {
             if matches!(ch.position, Position::Absolute | Position::Fixed) { continue; }
@@ -668,8 +671,8 @@ mod tests {
         else if m_b < 0.0 { if m_b < *min_neg { *min_neg = m_b; } }
         let pb_b = child.padding_bottom.unwrap_or(child.padding) + child.border_bottom_width.unwrap_or(child.border_width);
         if pb_b > 0.0 { return; }
-        let blocks_collapse = matches!(child.overflow_x.as_str(), "hidden" | "scroll" | "auto" | "clip")
-            || matches!(child.overflow_y.as_str(), "hidden" | "scroll" | "auto" | "clip");
+        let blocks_collapse = child.overflow_x.clips()
+            || child.overflow_y.clips();
         if blocks_collapse { return; }
         // Pri explicit height: parent's bottom edge nemusi adjoinovat last child bottom.
         // Spec: m_b collapse with descendant jen kdyz parent.bottom adjoins child.bottom.
@@ -702,11 +705,11 @@ mod tests {
         let inner_y = bx.rect.y + pad_t;
         // Scrollbar takes space.
         let scrollbar_size = bx.scrollbar_size;
-        let scrollbar_w = if scrollbar_size > 0.0 && (bx.overflow_y == "scroll" || bx.overflow_y == "auto") { scrollbar_size } else { 0.0 };
+        let scrollbar_w = if scrollbar_size > 0.0 && bx.overflow_y.scrollable() { scrollbar_size } else { 0.0 };
         let inner_w = (bx.rect.width - pad_l - pad_r - scrollbar_w).max(0.0);
         // Containing block pro abs = padding-box parenta (uvnitr borderu).
         let parent_w = (bx.rect.width - bw_l - bw_r - scrollbar_w).max(0.0);
-        let parent_h = (bx.rect.height - bw_t - bw_b - if bx.scrollbar_size > 0.0 && (bx.overflow_x == "scroll" || bx.overflow_x == "auto") { bx.scrollbar_size } else { 0.0 }).max(0.0);
+        let parent_h = (bx.rect.height - bw_t - bw_b - if bx.scrollbar_size > 0.0 && bx.overflow_x.scrollable() { bx.scrollbar_size } else { 0.0 }).max(0.0);
         let parent_x = bx.rect.x + bw_l;
         let parent_y = bx.rect.y + bw_t;
         let mut cursor_y = inner_y;
@@ -915,8 +918,8 @@ mod tests {
                 // Margin collapsing: pri no padding/border-top, margin-top prvniho
                 // in-flow grandchildu collapsuje s parent's; podobne bottom.
                 // Pri overflow non-visible: BFC, blocks collapse with descendants.
-                let blocks_bfc = matches!(child.overflow_x.as_str(), "hidden" | "scroll" | "auto" | "clip")
-                    || matches!(child.overflow_y.as_str(), "hidden" | "scroll" | "auto" | "clip");
+                let blocks_bfc = child.overflow_x.clips()
+                    || child.overflow_y.clips();
                 let collapse_top = pad_t_c == 0.0 && !blocks_bfc;
                 let collapse_bottom = pad_b_c == 0.0 && !blocks_bfc;
                 let mut first_in_flow: Option<usize> = None;
@@ -944,7 +947,7 @@ mod tests {
                 }
                 // Pri overflow-x=scroll/auto: horizontal scrollbar bere height.
                 let child_scrollbar_h = if child.scrollbar_size > 0.0
-                    && (child.overflow_x == "scroll" || child.overflow_x == "auto") {
+                    && child.overflow_x.scrollable() {
                     child.scrollbar_size
                 } else { 0.0 };
                 let new_h = content_bottom - child.rect.y + pad_b_c + child_scrollbar_h;
@@ -967,8 +970,8 @@ mod tests {
             // Text content blocks empty passthrough (line box drives layout).
             let has_text_content = child.text.is_some();
             // BFC (overflow != visible) prevents collapse-through.
-            let bfc_blocks_passthrough = matches!(child.overflow_x.as_str(), "hidden" | "scroll" | "auto" | "clip")
-                || matches!(child.overflow_y.as_str(), "hidden" | "scroll" | "auto" | "clip");
+            let bfc_blocks_passthrough = child.overflow_x.clips()
+                || child.overflow_y.clips();
             let is_empty_passthrough = child.rect.height == 0.0 && pad_t_c == 0.0 && pad_b_c == 0.0 && !has_text_content && !bfc_blocks_passthrough;
             if is_empty_passthrough {
                 // Passthrough: merge child.m_b do running pair, cursor_y unchanged.

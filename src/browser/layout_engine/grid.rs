@@ -25,8 +25,8 @@ pub fn layout_grid(bx: &mut LayoutBox) {
     let inner_y = bx.rect.y + pad_t + bx.margin;
     // Scrollbar takes space.
     let scrollbar_size = bx.scrollbar_size;
-    let scrollbar_w = if scrollbar_size > 0.0 && (bx.overflow_y == "scroll" || bx.overflow_y == "auto") { scrollbar_size } else { 0.0 };
-    let scrollbar_h = if scrollbar_size > 0.0 && (bx.overflow_x == "scroll" || bx.overflow_x == "auto") { scrollbar_size } else { 0.0 };
+    let scrollbar_w = if scrollbar_size > 0.0 && bx.overflow_y.scrollable() { scrollbar_size } else { 0.0 };
+    let scrollbar_h = if scrollbar_size > 0.0 && bx.overflow_x.scrollable() { scrollbar_size } else { 0.0 };
     let inner_w = (bx.rect.width - pad_l - pad_r - 2.0 * bx.margin - scrollbar_w).max(0.0);
     let inner_h = (bx.rect.height - pad_t - pad_b - 2.0 * bx.margin - scrollbar_h).max(0.0);
 
@@ -563,7 +563,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                     let pb_r = item.padding_right.unwrap_or(item.padding) + item.border_right_width.unwrap_or(item.border_width);
                     let cw_min_p = item.min_width.resolve(&super::super::layout::ResolveCtx { parent_size: inner_w, font_size: item.font_size, ..Default::default() });
                     // CSS spec: pri overflow != visible v inline axis, auto min-size = 0.
-                    let inline_overflow_blocks = matches!(item.overflow_x.as_str(), "hidden" | "scroll" | "auto" | "clip");
+                    let inline_overflow_blocks = item.overflow_x.clips();
                     let item_max = item.explicit_width.unwrap_or(item.rect.width).max(text_max).max(pb_l + pb_r).max(cw_min_p);
                     let _ = inline_overflow_blocks;
                     // Min-content rekurzivne: pri item bez text + children, walk first
@@ -663,7 +663,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                     t.chars().filter(|c| !matches!(*c, '\u{200B}' | ' ' | '\n' | '\t')).count() as f32 * 10.0
                 } else { 0.0 }
             } else { 0.0 };
-            let inline_overflow_blocks_span = matches!(item.overflow_x.as_str(), "hidden" | "scroll" | "auto" | "clip");
+            let inline_overflow_blocks_span = item.overflow_x.clips();
             let item_min = if inline_overflow_blocks_span { 0.0 } else { text_min };
             let item_max = text_max;
             if item_max <= 0.0 && item_min <= 0.0 { continue; }
@@ -1285,7 +1285,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
     let ac_stretch = (ac.is_empty() || ac == "normal" || ac == "stretch")
         && bx.explicit_height.is_some()
         && rows_explicit_str.is_empty()
-        && bx.align_items == "baseline";
+        && matches!(bx.align_items, super::super::layout::AlignItems::Baseline);
     if ac_stretch && rows > 0 {
         let total_row_pre: f32 = row_tracks.iter().sum::<f32>() + row_gap * (rows.saturating_sub(1) as f32);
         let extra = inner_h - total_row_pre;
@@ -1296,7 +1296,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
     }
     let total_col: f32 = col_tracks.iter().sum::<f32>() + col_gap * (active_cols.saturating_sub(1) as f32);
     let total_row: f32 = row_tracks.iter().sum::<f32>() + row_gap * (rows.saturating_sub(1) as f32);
-    let (jc_start, jc_between) = grid_distribute(&bx.justify_content, inner_w - total_col, active_cols.max(1));
+    let (jc_start, jc_between) = grid_distribute_jc(bx.justify_content, inner_w - total_col, active_cols.max(1));
     let (ac_start, ac_between) = grid_distribute(&bx.align_content, inner_h - total_row, rows);
     let mut col_positions: Vec<f32> = Vec::with_capacity(cols);
     let mut x_cursor = jc_start;
@@ -1506,7 +1506,9 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         let cy = row_positions.get(row).copied().unwrap_or(0.0);
         item_row_info.push((real_idx, row, cy));
         // Resolve item size + alignment v grid area
-        let parent_align_items = bx.align_items.clone();
+        // align_items uz typed AlignItems. Pro pad-thru s align_self (stale String)
+        // konvertuj zpet pres Display. Single alloc per item placement.
+        let parent_align_items = bx.align_items.to_string();
         let parent_justify_items = bx.justify_items.clone();
         let child = &mut bx.children[real_idx];
         // Resolve margin pct proti grid CELL size (CSS spec: percent margin v gridu
@@ -1741,14 +1743,14 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         }
     }
     // Baseline alignment post-pass: per-row max baseline, adjust y v dane row.
-    let parent_align_str = bx.align_items.clone();
+    let parent_align_str = bx.align_items.to_string();
     if parent_align_str == "baseline" {
         // Recursive child_baseline walk pro flex/grid items s flex-direction.
         fn child_baseline(c: &super::super::layout::LayoutBox) -> f32 {
             let c_h = c.explicit_height.unwrap_or(c.rect.height);
             let is_flex_or_grid = matches!(c.display,
                 super::super::layout::Display::Flex | super::super::layout::Display::Grid);
-            let has_flex_attr = !c.flex_direction.is_empty();
+            let has_flex_attr = matches!(c.display, super::super::layout::Display::Flex);
             if is_flex_or_grid || has_flex_attr {
                 if let Some(gc) = c.children.iter().find(|x|
                     !matches!(x.position, super::super::layout::Position::Absolute | super::super::layout::Position::Fixed)
@@ -1854,7 +1856,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
     let cb_y = bx.rect.y + bw_t;
     let cb_w = (bx.rect.width - bw_l - bw_r).max(0.0);
     let cb_h = (bx.rect.height - bw_t - bw_b).max(0.0);
-    let parent_align = bx.align_items.clone();
+    let parent_align = bx.align_items.to_string();
     let parent_justify = bx.justify_items.clone();
     for ch in bx.children.iter_mut() {
         if super::is_out_of_flow(ch) {
@@ -1975,6 +1977,30 @@ fn grid_distribute(value: &str, free: f32, count: usize) -> (f32, f32) {
             else { let g = free / (count + 1) as f32; (g, g) }
         }
         _ => (0.0, 0.0), // start (default)
+    }
+}
+
+/// Typed varianta - direct match na JustifyContent enum (drive String pres
+/// grid_distribute str -> jump table O(1)).
+fn grid_distribute_jc(jc: super::super::layout::JustifyContent, free: f32, count: usize) -> (f32, f32) {
+    use super::super::layout::JustifyContent as JC;
+    if count == 0 { return (0.0, 0.0); }
+    match jc {
+        JC::End | JC::FlexEnd => (free, 0.0),
+        JC::Center => (free / 2.0, 0.0),
+        JC::SpaceBetween => {
+            if count <= 1 || free <= 0.0 { (0.0, 0.0) }
+            else { (0.0, free / (count - 1) as f32) }
+        }
+        JC::SpaceAround => {
+            if free <= 0.0 { (0.0, 0.0) }
+            else { let g = free / count as f32; (g / 2.0, g) }
+        }
+        JC::SpaceEvenly => {
+            if free <= 0.0 { (0.0, 0.0) }
+            else { let g = free / (count + 1) as f32; (g, g) }
+        }
+        JC::FlexStart | JC::Start => (0.0, 0.0),
     }
 }
 

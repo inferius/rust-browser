@@ -215,9 +215,9 @@ mod tests {
         // top-container: flex row, min-height 93, padding 10/20, 1 child h=100
         let mut top = LayoutBox::new();
         top.display = Display::Flex;
-        top.flex_direction = "row".into();
-        top.align_items = "center".into();
-        top.justify_content = "space-between".into();
+        top.flex_direction = crate::browser::layout::FlexDirection::parse("row");
+        top.align_items = crate::browser::layout::AlignItems::parse("center");
+        top.justify_content = crate::browser::layout::JustifyContent::parse("space-between");
         top.padding_top = Some(10.0);
         top.padding_bottom = Some(10.0);
         top.padding_left = Some(20.0);
@@ -226,7 +226,7 @@ mod tests {
         // Add child with explicit h=100 (simulates img.republic-map)
         let mut img_block = LayoutBox::new();
         img_block.display = Display::Flex;
-        img_block.flex_direction = "row".into();
+        img_block.flex_direction = crate::browser::layout::FlexDirection::parse("row");
         let mut img = LayoutBox::new();
         img.display = Display::Block;
         img.explicit_width = Some(100.0);

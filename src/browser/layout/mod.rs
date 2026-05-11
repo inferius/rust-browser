@@ -364,7 +364,7 @@ pub struct LayoutBox {
     pub margin_bottom_auto: bool,
     pub margin_left_auto: bool,
     /// box-sizing: "content-box" (default) | "border-box".
-    pub box_sizing: String,
+    pub box_sizing: BoxSizing,
     pub margin: f32,
     /// CSS border-style: none (default) | solid | dashed | dotted | double | ...
     /// "none" = neukreslit border bez ohledu na width/color (CSS UA default).
@@ -621,10 +621,10 @@ pub struct LayoutBox {
     /// Explicitni CSS height (None = auto / neparsovano).
     pub explicit_height: Option<f32>,
     /// Flex properties (CSS Flexbox L1)
-    pub flex_direction: String,
-    pub flex_wrap: String,
-    pub justify_content: String,
-    pub align_items: String,
+    pub flex_direction: FlexDirection,
+    pub flex_wrap: FlexWrap,
+    pub justify_content: JustifyContent,
+    pub align_items: AlignItems,
     /// align-self per-item (override align-items): auto/start/end/center/stretch/baseline
     pub align_self: String,
     /// justify-self per-item (grid): auto/start/end/center/stretch
@@ -785,9 +785,9 @@ pub struct LayoutBox {
     /// Overflow: hidden/scroll/visible/auto
     pub overflow_hidden: bool,
     /// overflow-x value (string - "visible"/"hidden"/"scroll"/"auto")
-    pub overflow_x: String,
+    pub overflow_x: Overflow,
     /// overflow-y value
-    pub overflow_y: String,
+    pub overflow_y: Overflow,
     /// scrollbar-width numericky (px).
     pub scrollbar_size: f32,
     /// White-space: nowrap zachazi text jako jeden radek
@@ -846,7 +846,7 @@ impl LayoutBox {
             margin_right_auto: false,
             margin_bottom_auto: false,
             margin_left_auto: false,
-            box_sizing: String::new(),
+            box_sizing: BoxSizing::ContentBox,
             margin: 0.0,
             border_style: String::new(), // empty = ne-vykresleny (CSS spec none)
             border_width: 0.0,
@@ -871,8 +871,8 @@ impl LayoutBox {
             text_underline: false,
             text_strikethrough: false,
             overflow_hidden: false,
-            overflow_x: String::new(),
-            overflow_y: String::new(),
+            overflow_x: Overflow::Visible,
+            overflow_y: Overflow::Visible,
             scrollbar_size: 0.0,
             white_space_nowrap: false,
             cursor: None,
@@ -1000,10 +1000,12 @@ impl LayoutBox {
             max_height: CssLength::None,
             explicit_width: None,
             explicit_height: None,
-            flex_direction: String::new(),
-            flex_wrap: String::new(),
-            justify_content: String::new(),
-            align_items: String::new(),
+            flex_direction: FlexDirection::Row,
+            flex_wrap: FlexWrap::NoWrap,
+            justify_content: JustifyContent::FlexStart,
+            // CSS default pre flex/grid container je `stretch`. AlignItems::Stretch
+            // = same default. Drive empty String -> match v parse fell-through.
+            align_items: AlignItems::Stretch,
             align_self: String::new(),
             justify_self: String::new(),
             justify_items: String::new(),
@@ -1506,7 +1508,7 @@ fn layout_dispatch(bx: &mut LayoutBox) {
         Display::Table | Display::TableHeader => Display::Block,
         Display::TableRow => {
             // Aproximace: tr jako flex-row container, td/th uvnitr jsou flex items.
-            if bx.flex_direction.is_empty() { bx.flex_direction = "row".to_string(); }
+            // (FlexDirection::Row je default, bez explicit override netreba reseni.)
             Display::Flex
         }
         Display::TableCell | Display::TableHeaderCell | Display::TableCaption => Display::Block,
@@ -2143,10 +2145,11 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(ac) = s.get("animation-composition") { bx.animation_composition = ac.trim().to_string(); }
     if let Some(ci) = s.get("color-interpolation") { bx.color_interpolation = ci.trim().to_string(); }
     // CSS Flexbox L1 properties
-    if let Some(v) = s.get("flex-direction") { bx.flex_direction = v.trim().to_string(); }
-    if let Some(v) = s.get("flex-wrap") { bx.flex_wrap = v.trim().to_string(); }
-    if let Some(v) = s.get("justify-content") { bx.justify_content = v.trim().to_string(); }
-    if let Some(v) = s.get("align-items") { bx.align_items = v.trim().to_string(); }
+    if let Some(v) = s.get("box-sizing") { bx.box_sizing = BoxSizing::parse(v); }
+    if let Some(v) = s.get("flex-direction") { bx.flex_direction = FlexDirection::parse(v); }
+    if let Some(v) = s.get("flex-wrap") { bx.flex_wrap = FlexWrap::parse(v); }
+    if let Some(v) = s.get("justify-content") { bx.justify_content = JustifyContent::parse(v); }
+    if let Some(v) = s.get("align-items") { bx.align_items = AlignItems::parse(v); }
     if let Some(v) = s.get("align-content") { bx.align_content = v.trim().to_string(); }
     if let Some(v) = s.get("flex-grow") { bx.flex_grow = v.trim().parse().unwrap_or(0.0); }
     if let Some(v) = s.get("flex-shrink") { bx.flex_shrink = v.trim().parse().unwrap_or(1.0); }
@@ -2616,23 +2619,23 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         let parts: Vec<&str> = t.split_whitespace().collect();
         match parts.len() {
             1 => {
-                bx.overflow_x = parts[0].to_string();
-                bx.overflow_y = parts[0].to_string();
+                bx.overflow_x = Overflow::parse(parts[0]);
+                bx.overflow_y = Overflow::parse(parts[0]);
             }
             2 => {
-                bx.overflow_x = parts[0].to_string();
-                bx.overflow_y = parts[1].to_string();
+                bx.overflow_x = Overflow::parse(parts[0]);
+                bx.overflow_y = Overflow::parse(parts[1]);
             }
             _ => {}
         }
     }
     if let Some(ox) = s.get("overflow-x") {
-        bx.overflow_x = ox.trim().to_string();
-        if matches!(bx.overflow_x.as_str(), "hidden" | "clip") { bx.overflow_hidden = true; }
+        bx.overflow_x = Overflow::parse(ox);
+        if bx.overflow_x.hides() { bx.overflow_hidden = true; }
     }
     if let Some(oy) = s.get("overflow-y") {
-        bx.overflow_y = oy.trim().to_string();
-        if matches!(bx.overflow_y.as_str(), "hidden" | "clip") { bx.overflow_hidden = true; }
+        bx.overflow_y = Overflow::parse(oy);
+        if bx.overflow_y.hides() { bx.overflow_hidden = true; }
     }
     // White-space
     if let Some(ws) = s.get("white-space") {
@@ -4161,6 +4164,12 @@ pub use length::{parse_length, parse_length_ctx, parse_length_or_pct};
 
 pub mod css_length;
 pub use css_length::{CssLength, ResolveCtx};
+
+pub mod overflow;
+pub use overflow::Overflow;
+
+pub mod flex_enums;
+pub use flex_enums::{FlexDirection, FlexWrap, JustifyContent, AlignItems, BoxSizing};
 
 mod shadows;
 pub use shadows::{parse_text_shadow, parse_box_shadow};

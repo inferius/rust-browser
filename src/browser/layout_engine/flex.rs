@@ -22,54 +22,7 @@
 /// 7. Pack lines along cross axis (align-content)
 /// 8. Justify items along main axis (justify-content)
 
-use super::super::layout::LayoutBox;
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum FlexDirection {
-    Row,
-    RowReverse,
-    Column,
-    ColumnReverse,
-}
-
-impl FlexDirection {
-    fn is_row(&self) -> bool {
-        matches!(self, FlexDirection::Row | FlexDirection::RowReverse)
-    }
-    fn is_reverse(&self) -> bool {
-        matches!(self, FlexDirection::RowReverse | FlexDirection::ColumnReverse)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum FlexWrap {
-    NoWrap,
-    Wrap,
-    WrapReverse,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum JustifyContent {
-    FlexStart,
-    FlexEnd,
-    Center,
-    SpaceBetween,
-    SpaceAround,
-    SpaceEvenly,
-    /// Box Alignment "start" - pack at start of writing-mode (NOT flex-direction).
-    Start,
-    /// Box Alignment "end" - pack at end of writing-mode.
-    End,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum AlignItems {
-    FlexStart,
-    FlexEnd,
-    Center,
-    Stretch,
-    Baseline,
-}
+use super::super::layout::{LayoutBox, FlexDirection, FlexWrap, JustifyContent, AlignItems};
 
 /// Flex layout entry-point.
 /// Layoutuje `bx.children` v ramci `bx`.
@@ -97,17 +50,17 @@ pub fn layout_flex(bx: &mut LayoutBox) {
     // Scrollbar takes space: overflow-y scroll/auto -> right scrollbar reduces inner_w.
     // overflow-x scroll/auto -> bottom scrollbar reduces inner_h.
     let scrollbar_size = bx.scrollbar_size;
-    let scrollbar_y_takes = scrollbar_size > 0.0 && (bx.overflow_y == "scroll" || bx.overflow_y == "auto");
-    let scrollbar_x_takes = scrollbar_size > 0.0 && (bx.overflow_x == "scroll" || bx.overflow_x == "auto");
+    let scrollbar_y_takes = scrollbar_size > 0.0 && bx.overflow_y.scrollable();
+    let scrollbar_x_takes = scrollbar_size > 0.0 && bx.overflow_x.scrollable();
     let scrollbar_w = if scrollbar_y_takes { scrollbar_size } else { 0.0 };
     let scrollbar_h = if scrollbar_x_takes { scrollbar_size } else { 0.0 };
     let inner_w = (effective_w - pad_l - pad_r - 2.0 * bx.margin - scrollbar_w).max(0.0);
 
-    // Parse CSS props
-    let direction = parse_flex_direction(&bx.flex_direction);
-    let wrap = parse_flex_wrap(&bx.flex_wrap);
-    let justify = parse_justify_content(&bx.justify_content);
-    let align = parse_align_items(&bx.align_items);
+    // CSS flex props - uz typed v cascade. Per-frame parse zmizel.
+    let direction = bx.flex_direction;
+    let wrap = bx.flex_wrap;
+    let justify = bx.justify_content;
+    let align = bx.align_items;
     // Re-resolve gap pct proti inner_w/inner_h (po vypoctu pad+border).
     let inner_h_for_gap = (bx.rect.height - pad_t - pad_b - 2.0 * bx.margin - scrollbar_h).max(0.0);
     let row_gap = if let Some(p) = bx.row_gap_pct {
@@ -153,7 +106,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         ch.rect.width = if let Some(p) = ch.width_pct {
             if parent_intrinsic { 0.0 } else if bx.rect.width > 0.0 {
                 // Pri content-box ch + width_pct: explicit_width uz inflated. Pouzij ho.
-                if ch.box_sizing == "content-box" {
+                if !ch.box_sizing.is_border_box() {
                     ch.explicit_width.unwrap_or_else(|| {
                         let inner_w_pct = (bx.rect.width - pad_l - pad_r - 2.0 * bx.margin).max(0.0);
                         inner_w_pct * p
@@ -171,9 +124,11 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             } else { 0.0 }
         } else { ch.explicit_height.unwrap_or(0.0) };
         let saved_intrinsic = std::mem::replace(&mut ch.taffy_intrinsic_mode, true);
-        // Pri block s flex-direction nebo justify-content: treat as flex pro pre-pass intrinsic.
-        let has_flex_dir = !ch.flex_direction.is_empty();
-        let has_justify = !ch.justify_content.is_empty();
+        // Pri block s non-default flex-direction nebo justify-content: treat as
+        // flex pro pre-pass intrinsic. (Drive empty String detect; ted typed
+        // enums - non-default value indicates user-set.)
+        let has_flex_dir = !matches!(ch.flex_direction, FlexDirection::Row);
+        let has_justify = !matches!(ch.justify_content, JustifyContent::FlexStart);
         let pre_pass_as_flex = matches!(ch.display, super::super::layout::Display::Flex)
             || (matches!(ch.display, super::super::layout::Display::Block) && (has_flex_dir || has_justify));
         // Recursivni layout: nemenime explicit values, jen rect.
@@ -370,7 +325,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                     ch.padding_top.unwrap_or(ch.padding) + ch.padding_bottom.unwrap_or(ch.padding)
                         + ch.border_top_width.unwrap_or(ch.border_width) + ch.border_bottom_width.unwrap_or(ch.border_width)
                 };
-                let basis_final = if ch.box_sizing == "content-box" {
+                let basis_final = if !ch.box_sizing.is_border_box() {
                     b + pb_main_for_basis
                 } else { b };
                 if direction.is_row() { est_w = basis_final; } else { est_h = basis_final; }
@@ -525,8 +480,8 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         } else { 0.0 };
         // CSS Flex L1 §4.5: pri overflow != visible v main axis je auto-min-content = 0.
         // Pri flex-basis = 0 (definite) + min-height set: auto-min jen padding+min-h, ne content.
-        let main_overflow = if direction.is_row() { ch.overflow_x.as_str() } else { ch.overflow_y.as_str() };
-        let main_overflow_blocks = matches!(main_overflow, "hidden" | "scroll" | "auto" | "clip");
+        let main_overflow = if direction.is_row() { ch.overflow_x } else { ch.overflow_y };
+        let main_overflow_blocks = main_overflow.clips();
         let basis_v_check = ch.flex_basis.trim();
         let basis_zero = basis_v_check == "0" || basis_v_check == "0px";
         let main_min_cl = if direction.is_row() { &ch.min_width } else { &ch.min_height };
@@ -545,7 +500,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         };
         // Pri box-sizing=content-box: descendant_min + pb_main (auto-min vc. padding).
         // Pri border-box: descendant_min (padding uz v explicit_width).
-        let min_m_with_intrinsic = if ch.box_sizing == "content-box" && descendant_min_main > 0.0 && pb_main > 0.0 && ch.explicit_width.is_some() && direction.is_row() {
+        let min_m_with_intrinsic = if !ch.box_sizing.is_border_box() && descendant_min_main > 0.0 && pb_main > 0.0 && ch.explicit_width.is_some() && direction.is_row() {
             min_m.max(intrinsic_main + pb_main)
         } else {
             min_m.max(intrinsic_main).max(pb_main)
@@ -639,7 +594,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                 let self_str_b = bx.children[real_idx_b].align_self.clone();
                 let item_align_b = if self_str_b.is_empty() || self_str_b == "auto" {
                     align
-                } else { parse_align_items(&self_str_b) };
+                } else { AlignItems::parse(&self_str_b) };
                 if !matches!(item_align_b, AlignItems::Baseline) { continue; }
                 has_baseline = true;
                 let it_b = items[item_idx];
@@ -647,7 +602,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                 let synth = it_b.cross_size + it_b.margin_cross_start;
                 let is_flex_or_grid = matches!(item_box.display,
                     super::super::layout::Display::Flex | super::super::layout::Display::Grid);
-                let has_flex_attr = !item_box.flex_direction.is_empty();
+                let has_flex_attr = matches!(item_box.display, super::super::layout::Display::Flex);
                 let item_has_children = item_box.children.iter().any(|c|
                     !matches!(c.position, super::super::layout::Position::Absolute | super::super::layout::Position::Fixed)
                     && !matches!(c.display, super::super::layout::Display::None));
@@ -661,7 +616,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                         let c_h = c.explicit_height.unwrap_or(c.rect.height);
                         let is_flex_or_grid = matches!(c.display,
                             super::super::layout::Display::Flex | super::super::layout::Display::Grid);
-                        let has_flex_attr = !c.flex_direction.is_empty();
+                        let has_flex_attr = matches!(c.display, super::super::layout::Display::Flex);
                         if is_flex_or_grid || has_flex_attr {
                             let baseline_first = c.children.iter().find(|x|
                                 !matches!(x.position, super::super::layout::Position::Absolute | super::super::layout::Position::Fixed)
@@ -796,7 +751,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             let self_str = bx.children[real_idx].align_self.clone();
             let item_align = if self_str.is_empty() || self_str == "auto" {
                 align
-            } else { parse_align_items(&self_str) };
+            } else { AlignItems::parse(&self_str) };
             matches!(item_align, AlignItems::Baseline)
         }).map(|(k, _)| k).collect();
         let _all_have_children = !baseline_items_idx.is_empty() && baseline_items_idx.iter().all(|&k| {
@@ -811,7 +766,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             let real_idx = in_flow[line_indices[k]];
             let item = &bx.children[real_idx];
             matches!(item.display, super::super::layout::Display::Flex | super::super::layout::Display::Grid)
-                || !item.flex_direction.is_empty()
+                || matches!(item.display, super::super::layout::Display::Flex)
         });
         let item_baselines: Vec<f32> = line_indices.iter().map(|&item_idx| {
             let it_b = items[item_idx];
@@ -820,7 +775,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             let synth = it_b.cross_size + it_b.margin_cross_start;
             let is_flex_or_grid = matches!(item_box.display,
                 super::super::layout::Display::Flex | super::super::layout::Display::Grid);
-            let has_flex_attr = !item_box.flex_direction.is_empty();
+            let has_flex_attr = matches!(item_box.display, super::super::layout::Display::Flex);
             let item_has_children = item_box.children.iter().any(|c|
                 !matches!(c.position, super::super::layout::Position::Absolute | super::super::layout::Position::Fixed)
                 && !matches!(c.display, super::super::layout::Display::None));
@@ -839,7 +794,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                 let c_h = c.explicit_height.unwrap_or(c.rect.height);
                 let is_flex_or_grid = matches!(c.display,
                     super::super::layout::Display::Flex | super::super::layout::Display::Grid);
-                let has_flex_attr = !c.flex_direction.is_empty();
+                let has_flex_attr = matches!(c.display, super::super::layout::Display::Flex);
                 if is_flex_or_grid || has_flex_attr {
                     // Najdi first in-flow child WITH align-self=baseline; fallback first child.
                     let baseline_first = c.children.iter().find(|x|
@@ -860,7 +815,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             // Prefer first child with align-self=baseline V LINE 1 (CSS spec: container
             // baseline = first item participating in baseline alignment v first line).
             // Greedy line 1 detection: items pridavame dokud sum_main_size <= container_main.
-            let item_box_inner_main = if !item_box.flex_direction.is_empty() && (item_box.flex_direction == "column" || item_box.flex_direction == "column-reverse") {
+            let item_box_inner_main = if matches!(item_box.display, super::super::layout::Display::Flex) && !item_box.flex_direction.is_row() {
                 // Column - main = height. Drive ne aplikujeme line detection.
                 f32::INFINITY
             } else {
@@ -869,7 +824,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                 let item_w = item_box.explicit_width.unwrap_or(it_b.cross_size);
                 (item_w - pad_l_b - pad_r_b).max(0.0)
             };
-            let item_has_wrap = !item_box.flex_wrap.is_empty() && item_box.flex_wrap != "nowrap";
+            let item_has_wrap = !matches!(item_box.flex_wrap, FlexWrap::NoWrap);
             let mut line1_indices: Vec<usize> = Vec::new();
             let mut used = 0.0_f32;
             for (gi, gc) in item_box.children.iter().enumerate() {
@@ -909,7 +864,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             let item_align_b = if self_str_b.is_empty() || self_str_b == "auto" {
                 parent_align_b
             } else {
-                parse_align_items(&self_str_b)
+                AlignItems::parse(&self_str_b)
             };
             if matches!(item_align_b, AlignItems::Baseline) {
                 if item_baselines[k] > line_max_baseline { line_max_baseline = item_baselines[k]; }
@@ -927,7 +882,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                 let self_str_b = bx.children[real_idx_b].align_self.clone();
                 let item_align_b = if self_str_b.is_empty() || self_str_b == "auto" {
                     align
-                } else { parse_align_items(&self_str_b) };
+                } else { AlignItems::parse(&self_str_b) };
                 if matches!(item_align_b, AlignItems::Baseline) {
                     has_baseline = true;
                     let it_full = items[item_idx];
@@ -970,7 +925,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             let item_align = if self_str.is_empty() || self_str == "auto" {
                 align
             } else {
-                parse_align_items(&self_str)
+                AlignItems::parse(&self_str)
             };
             // Baseline alignment v column direction = fallback na start (CSS Flex L1
             // §8.3: "baseline alignment is supported only in row containers; in
@@ -1001,8 +956,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             } else {
                 // Pri item s flex-wrap: stretch cross => cross_offset = 0 (item zabira plnou cross).
                 let real_idx_off = in_flow[item_idx];
-                let item_has_wrap_off = !bx.children[real_idx_off].flex_wrap.is_empty()
-                    && bx.children[real_idx_off].flex_wrap != "nowrap";
+                let item_has_wrap_off = !matches!(bx.children[real_idx_off].flex_wrap, FlexWrap::NoWrap);
                 let effective_item_cross = if item_has_wrap_off {
                     cross_size - it.margin_cross_start - it.margin_cross_end
                 } else {
@@ -1043,7 +997,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                 let mut w = main_size;
                 // Pri item s flex-wrap: stretch cross axis (taffy behavior) - ALE ne pri
                 // baseline-aligned itemu (CSS: baseline neclamp).
-                let item_has_wrap = !child.flex_wrap.is_empty() && child.flex_wrap != "nowrap";
+                let item_has_wrap = !matches!(child.flex_wrap, FlexWrap::NoWrap);
                 let stretch_cross = (matches!(item_align, AlignItems::Stretch) || item_has_wrap)
                     && !matches!(item_align, AlignItems::Baseline);
                 let mut h = if stretch_cross && child.explicit_height.is_none() {
@@ -1068,7 +1022,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                 child.rect.x = inner_x + cross_cursor + cross_offset;
                 child.rect.y = inner_y + main_cursor;
                 let mut h = main_size;
-                let item_has_wrap = !child.flex_wrap.is_empty() && child.flex_wrap != "nowrap";
+                let item_has_wrap = !matches!(child.flex_wrap, FlexWrap::NoWrap);
                 let stretch_cross = matches!(item_align, AlignItems::Stretch) || item_has_wrap;
                 let mut w = if stretch_cross && child.explicit_width.is_none() {
                     (cross_size - it.margin_cross_start - it.margin_cross_end).max(0.0)
@@ -1171,15 +1125,15 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         // Pri column direction expand jen. Pri overflow non-visible v main axis (= column = height):
         // bx zustane na rect.height (drive set), neexpanduj na content (overflow clip).
         let main_overflow_blocks_self = if direction.is_row() {
-            matches!(bx.overflow_x.as_str(), "hidden" | "scroll" | "auto" | "clip")
+            bx.overflow_x.clips()
         } else {
-            matches!(bx.overflow_y.as_str(), "hidden" | "scroll" | "auto" | "clip")
+            bx.overflow_y.clips()
         };
         if bx.taffy_intrinsic_mode {
             bx.rect.height = needed;
         } else if direction.is_row() {
             // Row direction: needed = total_cross. Pri overflow-y (cross) blocks - skip override.
-            let cross_overflow = matches!(bx.overflow_y.as_str(), "hidden" | "scroll" | "auto" | "clip");
+            let cross_overflow = bx.overflow_y.clips();
             if !cross_overflow { bx.rect.height = needed; }
             else if bx.rect.height < needed { /* keep */ }
         } else if bx.rect.height < needed && !main_overflow_blocks_self {
@@ -1233,7 +1187,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                 let m_r_c = ch.margin_right.unwrap_or(ch.margin);
                 let m_b_c = ch.margin_bottom.unwrap_or(ch.margin);
                 let self_str = ch.align_self.clone();
-                let self_align = if self_str.is_empty() || self_str == "auto" { align } else { parse_align_items(&self_str) };
+                let self_align = if self_str.is_empty() || self_str == "auto" { align } else { AlignItems::parse(&self_str) };
                 let is_wrap_reverse = matches!(wrap, FlexWrap::WrapReverse);
                 if direction.is_row() {
                     if no_inset_x {
@@ -1314,7 +1268,10 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             ch.rect.x += off_x;
             ch.rect.y += off_y;
         }
-        let has_flex_attr = !ch.flex_direction.is_empty() || !ch.justify_content.is_empty();
+        // Non-default flex props na block elementu = treat jako flex (drive
+        // String non-empty detect; ted typed - check non-default values).
+        let has_flex_attr = !matches!(ch.flex_direction, FlexDirection::Row)
+            || !matches!(ch.justify_content, JustifyContent::FlexStart);
         match ch.display {
             super::super::layout::Display::Flex => super::flex::layout_flex(ch),
             super::super::layout::Display::Grid => super::grid::layout_grid(ch),
@@ -1578,46 +1535,10 @@ fn compute_align_offset(align: AlignItems, line_cross: f32, item_cross: f32) -> 
     }
 }
 
-fn parse_flex_direction(s: &str) -> FlexDirection {
-    match s {
-        "row-reverse" => FlexDirection::RowReverse,
-        "column" => FlexDirection::Column,
-        "column-reverse" => FlexDirection::ColumnReverse,
-        _ => FlexDirection::Row,
-    }
-}
-
-fn parse_flex_wrap(s: &str) -> FlexWrap {
-    match s {
-        "wrap" => FlexWrap::Wrap,
-        "wrap-reverse" => FlexWrap::WrapReverse,
-        _ => FlexWrap::NoWrap,
-    }
-}
-
-fn parse_justify_content(s: &str) -> JustifyContent {
-    match s {
-        "flex-end" => JustifyContent::FlexEnd,
-        "end" => JustifyContent::End,
-        "start" => JustifyContent::Start,
-        "center" => JustifyContent::Center,
-        "space-between" => JustifyContent::SpaceBetween,
-        "space-around" => JustifyContent::SpaceAround,
-        "space-evenly" => JustifyContent::SpaceEvenly,
-        _ => JustifyContent::FlexStart,
-    }
-}
-
-fn parse_align_items(s: &str) -> AlignItems {
-    match s {
-        "flex-start" | "start" => AlignItems::FlexStart,
-        "flex-end" | "end" => AlignItems::FlexEnd,
-        "center" => AlignItems::Center,
-        "stretch" => AlignItems::Stretch,
-        "baseline" => AlignItems::Baseline,
-        _ => AlignItems::Stretch, // CSS default
-    }
-}
+// PERF: parse_flex_direction/wrap/justify_content/align_items NIK pres
+// free fn - LayoutBox fields uz typed (cascade parsuje JEDNOU). Hot loop
+// reads bx.flex_direction directly. Stari testy v `tests` mod jeste pouzily
+// volnou variantu; preznacuj se na FlexDirection::parse.
 
 
 #[cfg(test)]
@@ -1626,17 +1547,17 @@ mod tests {
     
     #[test]
     fn parse_direction_basic() {
-        assert_eq!(parse_flex_direction("row"), FlexDirection::Row);
-        assert_eq!(parse_flex_direction("row-reverse"), FlexDirection::RowReverse);
-        assert_eq!(parse_flex_direction("column"), FlexDirection::Column);
-        assert_eq!(parse_flex_direction("column-reverse"), FlexDirection::ColumnReverse);
+        assert_eq!(FlexDirection::parse("row"), FlexDirection::Row);
+        assert_eq!(FlexDirection::parse("row-reverse"), FlexDirection::RowReverse);
+        assert_eq!(FlexDirection::parse("column"), FlexDirection::Column);
+        assert_eq!(FlexDirection::parse("column-reverse"), FlexDirection::ColumnReverse);
     }
     
     #[test]
     fn parse_wrap_basic() {
-        assert_eq!(parse_flex_wrap("wrap"), FlexWrap::Wrap);
-        assert_eq!(parse_flex_wrap("nowrap"), FlexWrap::NoWrap);
-        assert_eq!(parse_flex_wrap("wrap-reverse"), FlexWrap::WrapReverse);
+        assert_eq!(FlexWrap::parse("wrap"), FlexWrap::Wrap);
+        assert_eq!(FlexWrap::parse("nowrap"), FlexWrap::NoWrap);
+        assert_eq!(FlexWrap::parse("wrap-reverse"), FlexWrap::WrapReverse);
     }
     
     #[test]

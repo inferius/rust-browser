@@ -13,7 +13,7 @@ mod tests {
         bx.rect.width = width;
         bx.rect.height = height;
         bx.display = Display::Flex;
-        bx.flex_direction = "row".into();
+        bx.flex_direction = crate::browser::layout::FlexDirection::parse("row");
         bx
     }
 
@@ -41,7 +41,7 @@ mod tests {
     #[test]
     fn flex_column_stacks_vertically() {
         let mut parent = make_flex_box(100.0, 300.0);
-        parent.flex_direction = "column".into();
+        parent.flex_direction = crate::browser::layout::FlexDirection::parse("column");
         parent.children.push(make_child(50.0, 30.0));
         parent.children.push(make_child(50.0, 30.0));
         parent.children.push(make_child(50.0, 30.0));
@@ -53,7 +53,7 @@ mod tests {
     #[test]
     fn flex_row_reverse() {
         let mut parent = make_flex_box(300.0, 100.0);
-        parent.flex_direction = "row-reverse".into();
+        parent.flex_direction = crate::browser::layout::FlexDirection::parse("row-reverse");
         parent.children.push(make_child(50.0, 30.0));
         parent.children.push(make_child(50.0, 30.0));
         layout_flex(&mut parent);
@@ -64,7 +64,7 @@ mod tests {
     #[test]
     fn flex_column_reverse() {
         let mut parent = make_flex_box(100.0, 300.0);
-        parent.flex_direction = "column-reverse".into();
+        parent.flex_direction = crate::browser::layout::FlexDirection::parse("column-reverse");
         parent.children.push(make_child(50.0, 30.0));
         parent.children.push(make_child(50.0, 30.0));
         layout_flex(&mut parent);
@@ -76,7 +76,7 @@ mod tests {
     #[test]
     fn flex_no_wrap_overflow() {
         let mut parent = make_flex_box(100.0, 100.0);
-        parent.flex_wrap = "nowrap".into();
+        parent.flex_wrap = crate::browser::layout::FlexWrap::parse("nowrap");
         for _ in 0..3 { parent.children.push(make_child(50.0, 30.0)); }
         layout_flex(&mut parent);
         // Vsechny na 1 line (children y vsichni stejne)
@@ -86,7 +86,7 @@ mod tests {
     #[test]
     fn flex_wrap_to_new_line() {
         let mut parent = make_flex_box(100.0, 100.0);
-        parent.flex_wrap = "wrap".into();
+        parent.flex_wrap = crate::browser::layout::FlexWrap::parse("wrap");
         for _ in 0..3 { parent.children.push(make_child(60.0, 30.0)); }
         layout_flex(&mut parent);
         // 3 itemy 60px do 100px container -> 1 per line
@@ -98,7 +98,7 @@ mod tests {
     #[test]
     fn flex_justify_content_flex_start() {
         let mut parent = make_flex_box(300.0, 100.0);
-        parent.justify_content = "flex-start".into();
+        parent.justify_content = crate::browser::layout::JustifyContent::parse("flex-start");
         parent.children.push(make_child(50.0, 30.0));
         parent.children.push(make_child(50.0, 30.0));
         layout_flex(&mut parent);
@@ -109,7 +109,7 @@ mod tests {
     #[test]
     fn flex_justify_content_center() {
         let mut parent = make_flex_box(300.0, 100.0);
-        parent.justify_content = "center".into();
+        parent.justify_content = crate::browser::layout::JustifyContent::parse("center");
         parent.children.push(make_child(50.0, 30.0));
         parent.children.push(make_child(50.0, 30.0));
         layout_flex(&mut parent);
@@ -120,7 +120,7 @@ mod tests {
     #[test]
     fn flex_justify_content_flex_end() {
         let mut parent = make_flex_box(300.0, 100.0);
-        parent.justify_content = "flex-end".into();
+        parent.justify_content = crate::browser::layout::JustifyContent::parse("flex-end");
         parent.children.push(make_child(50.0, 30.0));
         layout_flex(&mut parent);
         // 1 item 50px, container 300 -> shift 250
@@ -130,7 +130,7 @@ mod tests {
     #[test]
     fn flex_justify_space_between() {
         let mut parent = make_flex_box(300.0, 100.0);
-        parent.justify_content = "space-between".into();
+        parent.justify_content = crate::browser::layout::JustifyContent::parse("space-between");
         parent.children.push(make_child(50.0, 30.0));
         parent.children.push(make_child(50.0, 30.0));
         parent.children.push(make_child(50.0, 30.0));
@@ -144,7 +144,7 @@ mod tests {
     #[test]
     fn flex_justify_space_around() {
         let mut parent = make_flex_box(300.0, 100.0);
-        parent.justify_content = "space-around".into();
+        parent.justify_content = crate::browser::layout::JustifyContent::parse("space-around");
         parent.children.push(make_child(50.0, 30.0));
         parent.children.push(make_child(50.0, 30.0));
         parent.children.push(make_child(50.0, 30.0));
@@ -156,7 +156,7 @@ mod tests {
     #[test]
     fn flex_justify_space_evenly() {
         let mut parent = make_flex_box(300.0, 100.0);
-        parent.justify_content = "space-evenly".into();
+        parent.justify_content = crate::browser::layout::JustifyContent::parse("space-evenly");
         parent.children.push(make_child(50.0, 30.0));
         parent.children.push(make_child(50.0, 30.0));
         parent.children.push(make_child(50.0, 30.0));
@@ -170,7 +170,7 @@ mod tests {
     #[test]
     fn flex_align_items_flex_start() {
         let mut parent = make_flex_box(300.0, 100.0);
-        parent.align_items = "flex-start".into();
+        parent.align_items = crate::browser::layout::AlignItems::parse("flex-start");
         parent.children.push(make_child(50.0, 30.0));
         parent.children.push(make_child(50.0, 50.0));
         layout_flex(&mut parent);
@@ -181,7 +181,7 @@ mod tests {
     #[test]
     fn flex_align_items_center() {
         let mut parent = make_flex_box(300.0, 100.0);
-        parent.align_items = "center".into();
+        parent.align_items = crate::browser::layout::AlignItems::parse("center");
         parent.children.push(make_child(50.0, 30.0));
         parent.children.push(make_child(50.0, 50.0));
         layout_flex(&mut parent);
@@ -192,7 +192,7 @@ mod tests {
     #[test]
     fn flex_align_items_flex_end() {
         let mut parent = make_flex_box(300.0, 100.0);
-        parent.align_items = "flex-end".into();
+        parent.align_items = crate::browser::layout::AlignItems::parse("flex-end");
         parent.children.push(make_child(50.0, 30.0));
         parent.children.push(make_child(50.0, 50.0));
         layout_flex(&mut parent);
@@ -205,7 +205,7 @@ mod tests {
     #[test]
     fn flex_align_items_stretch() {
         let mut parent = make_flex_box(300.0, 100.0);
-        parent.align_items = "stretch".into();
+        parent.align_items = crate::browser::layout::AlignItems::parse("stretch");
         // Itemy bez explicit height
         let mut a = LayoutBox::new();
         a.explicit_width = Some(50.0);
@@ -234,7 +234,7 @@ mod tests {
     #[test]
     fn flex_gap_vertical_in_wrap() {
         let mut parent = make_flex_box(100.0, 300.0);
-        parent.flex_wrap = "wrap".into();
+        parent.flex_wrap = crate::browser::layout::FlexWrap::parse("wrap");
         parent.row_gap = 15.0;
         parent.align_content = "flex-start".into(); // bez stretch
         for _ in 0..3 { parent.children.push(make_child(60.0, 30.0)); }
@@ -289,7 +289,7 @@ mod tests {
     #[test]
     fn flex_shrink_when_overflowing() {
         let mut parent = make_flex_box(100.0, 100.0);
-        parent.flex_wrap = "nowrap".into();
+        parent.flex_wrap = crate::browser::layout::FlexWrap::parse("nowrap");
         let mut a = make_child(80.0, 30.0);
         a.flex_shrink = 1.0;
         let mut b = make_child(80.0, 30.0);
@@ -341,8 +341,8 @@ mod tests {
     #[test]
     fn flex_wrap_multi_line_align_center() {
         let mut parent = make_flex_box(100.0, 300.0);
-        parent.flex_wrap = "wrap".into();
-        parent.justify_content = "center".into();
+        parent.flex_wrap = crate::browser::layout::FlexWrap::parse("wrap");
+        parent.justify_content = crate::browser::layout::JustifyContent::parse("center");
         for _ in 0..4 { parent.children.push(make_child(40.0, 30.0)); }
         layout_flex(&mut parent);
         // 40 + 40 = 80 v 100 = 20 free, center na line shift 10
@@ -353,8 +353,8 @@ mod tests {
     #[test]
     fn flex_column_with_align_items() {
         let mut parent = make_flex_box(200.0, 300.0);
-        parent.flex_direction = "column".into();
-        parent.align_items = "center".into();
+        parent.flex_direction = crate::browser::layout::FlexDirection::parse("column");
+        parent.align_items = crate::browser::layout::AlignItems::parse("center");
         parent.children.push(make_child(50.0, 30.0));
         parent.children.push(make_child(80.0, 30.0));
         layout_flex(&mut parent);
@@ -376,7 +376,7 @@ mod tests {
     #[test]
     fn flex_wrap_updates_height_with_multi_line() {
         let mut parent = make_flex_box(100.0, 0.0);
-        parent.flex_wrap = "wrap".into();
+        parent.flex_wrap = crate::browser::layout::FlexWrap::parse("wrap");
         for _ in 0..3 { parent.children.push(make_child(60.0, 30.0)); }
         layout_flex(&mut parent);
         // 3 lines * 30 = 90 + padding

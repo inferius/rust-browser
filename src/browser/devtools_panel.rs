@@ -3198,7 +3198,7 @@ fn paint_flex_overlay(cmds: &mut Vec<DisplayCommand>, bx: &LayoutBox, scroll_y: 
     // Container dashed border.
     push_dashed_border(cmds, cx, cy, cw, ch, 2.0, purple);
     // Per-item solid border + gap stripes.
-    let row_dir = !bx.flex_direction.contains("column");
+    let row_dir = bx.flex_direction.is_row();
     let mut prev_end: Option<f32> = None;
     for child in &bx.children {
         let cr = &child.rect;

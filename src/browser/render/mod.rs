@@ -586,8 +586,8 @@ fn apply_paint_animations_inner(box_: &mut crate::browser::layout::LayoutBox,
         // element ma overflow:hidden NEBO position != static (self-contained,
         // ne reflow). Drive typewriter potreboval full layout rebuild kazdy
         // frame, ted jen pricte rect.width upravu.
-        let oh_x = box_.overflow_x.as_str() == "hidden" || box_.overflow_x.as_str() == "clip";
-        let oh_y = box_.overflow_y.as_str() == "hidden" || box_.overflow_y.as_str() == "clip";
+        let oh_x = box_.overflow_x.hides();
+        let oh_y = box_.overflow_y.hides();
         let is_oof = !matches!(box_.position, super::layout::Position::Static);
         // Position-only animace (left/top/right/bottom): aplikuj jako offset
         // od baseline. Bez tohoto by slide-anim (left 0->400) trigeroval
@@ -6094,10 +6094,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 if let Some(cache_root) = self.cached_layout_root.as_ref() {
                     if let Some(bx) = find_box_by_node_id(cache_root, *node_id) {
                         let is_oof = !matches!(bx.position, super::layout::Position::Static);
-                        let oh = bx.overflow_x.as_str() == "hidden"
-                            || bx.overflow_y.as_str() == "hidden"
-                            || bx.overflow_x.as_str() == "clip"
-                            || bx.overflow_y.as_str() == "clip";
+                        let oh = bx.overflow_x.hides() || bx.overflow_y.hides();
                         // width/height-only: soft pokud overflow hidden NEBO
                         // position != static (out-of-flow nebo relative -
                         // sibling flow nezavisi na ramecku tohoto elementu).

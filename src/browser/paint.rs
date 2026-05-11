@@ -1716,8 +1716,8 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
     // CPU-side bbox cull - nepatrny precision (commands kompletne outside dropuju,
     // partial overlap necham byt). Resi prelevani content carouselu mimo
     // overflow:hidden container.
-    let oh_x = matches!(bx.overflow_x.as_str(), "hidden" | "clip" | "scroll" | "auto");
-    let oh_y = matches!(bx.overflow_y.as_str(), "hidden" | "clip" | "scroll" | "auto");
+    let oh_x = bx.overflow_x.clips();
+    let oh_y = bx.overflow_y.clips();
     if (oh_x || oh_y) && cmds.len() > children_start {
         let bx_x0 = bx.rect.x;
         let bx_y0 = bx.rect.y;
