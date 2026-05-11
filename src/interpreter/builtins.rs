@@ -42,6 +42,7 @@ pub fn setup_builtins(
     websockets: &Rc<RefCell<HashMap<u32, super::WebSocketState>>>,
     next_ws_id: &Rc<RefCell<u32>>,
     pending_fetches: &Rc<RefCell<Vec<super::PendingFetch>>>,
+    pending_xhr_callbacks: &Rc<RefCell<Vec<(JsValue, JsValue)>>>,
 ) {
     let mut e = env.borrow_mut();
 
@@ -1596,6 +1597,65 @@ pub fn setup_builtins(
     // googleadsense, polyfilly, IIFE) selzou s ReferenceError 'this'.
     e.define("this", window_val.clone());
 
+    // ─── Web analytics / framework stubs ────────────────────────────────────
+    // Real stranky pouzivaji vsechny tyto API bez kontroly existence. Bez stubu
+    // = ReferenceError + cely script crash. Stubs vrati no-op chovani.
+
+    // GTM dataLayer - prazdny array s push() = no-op (push se obrazne dela
+    // bezne, ne-existence layoutu shazi cele inicializaci).
+    e.define("dataLayer", JsValue::Array(Rc::new(RefCell::new(Vec::new()))));
+
+    // gtag(...) - Google Tag, no-op.
+    e.define("gtag", native("gtag", |_| Ok(JsValue::Undefined)));
+
+    // ga(...) - Google Analytics classic, no-op.
+    e.define("ga", native("ga", |_| Ok(JsValue::Undefined)));
+
+    // _gaq / _paq - legacy analytics fronty (Piwik/Matomo style).
+    e.define("_gaq", JsValue::Array(Rc::new(RefCell::new(Vec::new()))));
+    e.define("_paq", JsValue::Array(Rc::new(RefCell::new(Vec::new()))));
+
+    // fbq() - Facebook Pixel, no-op.
+    e.define("fbq", native("fbq", |_| Ok(JsValue::Undefined)));
+
+    // Tracy - PHP framework JS bar (production by mel byt off ale strankam tam
+    // chodi error scripty). Stub jako objekt s no-op metodami.
+    {
+        let mut tracy = JsObject::new();
+        tracy.set("Debug".into(), JsValue::Object(Rc::new(RefCell::new(JsObject::new()))));
+        e.define("Tracy", JsValue::Object(Rc::new(RefCell::new(tracy))));
+    }
+
+    // jQuery `$` - minimal stub. Real jQuery je nemozne emulovat - ale `$`
+    // volana s callbackem (= document.ready handler) je nejcastejsi pattern.
+    // Vse jine vrati prazdny "jQuery collection" placeholder s no-op methods.
+    e.define("$", native("$", |args| {
+        let arg = args.into_iter().next().unwrap_or(JsValue::Undefined);
+        // $(function(){...}) -> spust callback hned (DOMContentLoaded ekv.).
+        if let JsValue::Function(_) = &arg {
+            // Cannot directly invoke from native - return placeholder. JS-side
+            // pattern `$(fn)` cleanly se setTimeout-uje pres DOMContentLoaded
+            // event. Tady minimum: stub collection.
+        }
+        // Vrat empty jQuery-like collection (no-op chainable methods).
+        let mut jq = JsObject::new();
+        jq.set("length".into(), JsValue::Number(0.0));
+        let jq_rc = Rc::new(RefCell::new(jq));
+        // Self-referential chain - kazda methoda vraci same jQuery objekt.
+        for m in &["ready", "on", "off", "click", "submit", "show", "hide",
+                   "addClass", "removeClass", "toggleClass", "attr", "removeAttr",
+                   "html", "text", "val", "css", "append", "prepend", "remove",
+                   "empty", "find", "parent", "children", "siblings", "each",
+                   "data", "trigger", "focus", "blur", "fadeIn", "fadeOut",
+                   "slideDown", "slideUp", "animate", "stop", "load", "ajax",
+                   "get", "post"] {
+            jq_rc.borrow_mut().set((*m).into(),
+                native(m, |_| Ok(JsValue::Undefined)));
+        }
+        Ok(JsValue::Object(jq_rc))
+    }));
+    let jquery_alias = e.get("$").unwrap_or(JsValue::Undefined);
+    e.define("jQuery", jquery_alias);
 
     // ─── fetch - real HTTP client (ureq, blocking) ──────────────────────────
     let net_log_clone = Rc::clone(network_log);
@@ -1660,6 +1720,184 @@ pub fn setup_builtins(
         });
         Ok(JsValue::Object(promise_obj))
     }));
+
+    // ─── XMLHttpRequest - sync + async (sync HTTP via ureq, async fire onload pres
+    // pending_xhr_callbacks event loop drain).
+    let xhr_net_log = Rc::clone(network_log);
+    let xhr_pending_cb = Rc::clone(pending_xhr_callbacks);
+    e.define("XMLHttpRequest", native("XMLHttpRequest", move |_args| {
+        let net_log = Rc::clone(&xhr_net_log);
+        let pending_cb = Rc::clone(&xhr_pending_cb);
+        let xhr_obj = Rc::new(RefCell::new(JsObject::new()));
+        {
+            let mut x = xhr_obj.borrow_mut();
+            // Public XHR state.
+            x.set("readyState".into(), JsValue::Number(0.0));
+            x.set("status".into(), JsValue::Number(0.0));
+            x.set("statusText".into(), JsValue::Str(String::new()));
+            x.set("responseText".into(), JsValue::Str(String::new()));
+            x.set("response".into(), JsValue::Str(String::new()));
+            x.set("responseType".into(), JsValue::Str(String::new()));
+            x.set("responseURL".into(), JsValue::Str(String::new()));
+            x.set("withCredentials".into(), JsValue::Bool(false));
+            x.set("timeout".into(), JsValue::Number(0.0));
+            x.set("onload".into(), JsValue::Undefined);
+            x.set("onerror".into(), JsValue::Undefined);
+            x.set("onreadystatechange".into(), JsValue::Undefined);
+            x.set("onloadend".into(), JsValue::Undefined);
+            // Internal state.
+            x.set("__xhr_method__".into(), JsValue::Str("GET".into()));
+            x.set("__xhr_url__".into(), JsValue::Str(String::new()));
+            x.set("__xhr_async__".into(), JsValue::Bool(true));
+            let headers_obj = JsObject::new();
+            x.set("__xhr_headers__".into(), JsValue::Object(Rc::new(RefCell::new(headers_obj))));
+        }
+
+        // open(method, url, async?)
+        let open_ref = Rc::clone(&xhr_obj);
+        let open_fn = native("XHR.open", move |a| {
+            let mut iter = a.into_iter();
+            let method = iter.next().map(|v| v.to_string()).unwrap_or_else(|| "GET".into()).to_uppercase();
+            let url = iter.next().map(|v| v.to_string()).unwrap_or_default();
+            let async_flag = match iter.next() {
+                None => true,
+                Some(JsValue::Bool(false)) => false,
+                _ => true,
+            };
+            let mut x = open_ref.borrow_mut();
+            x.set("__xhr_method__".into(), JsValue::Str(method));
+            x.set("__xhr_url__".into(), JsValue::Str(url));
+            x.set("__xhr_async__".into(), JsValue::Bool(async_flag));
+            x.set("readyState".into(), JsValue::Number(1.0));
+            Ok(JsValue::Undefined)
+        });
+        xhr_obj.borrow_mut().set("open".into(), open_fn);
+
+        // setRequestHeader(name, value)
+        let sh_ref = Rc::clone(&xhr_obj);
+        let set_header_fn = native("XHR.setRequestHeader", move |a| {
+            let mut iter = a.into_iter();
+            let k = iter.next().map(|v| v.to_string()).unwrap_or_default();
+            let v = iter.next().map(|v| v.to_string()).unwrap_or_default();
+            let x = sh_ref.borrow();
+            if let JsValue::Object(h) = x.get("__xhr_headers__") {
+                h.borrow_mut().set(k, JsValue::Str(v));
+            }
+            Ok(JsValue::Undefined)
+        });
+        xhr_obj.borrow_mut().set("setRequestHeader".into(), set_header_fn);
+
+        // send(body?) - sync ureq blocking, vyplni response + zaregistruje
+        // onload/onreadystatechange do pending_xhr_callbacks pro event loop fire.
+        let send_ref = Rc::clone(&xhr_obj);
+        let send_net_log = Rc::clone(&net_log);
+        let send_pending_cb = Rc::clone(&pending_cb);
+        let send_fn = native("XHR.send", move |a| {
+            let body = a.into_iter().next().and_then(|v| match v {
+                JsValue::Undefined | JsValue::Null => None,
+                JsValue::Str(s) => Some(s),
+                other => Some(other.to_string()),
+            });
+            // Read state.
+            let (method, url, headers): (String, String, Vec<(String, String)>) = {
+                let x = send_ref.borrow();
+                let m = if let JsValue::Str(s) = x.get("__xhr_method__") { s } else { "GET".into() };
+                let u = if let JsValue::Str(s) = x.get("__xhr_url__") { s } else { String::new() };
+                let mut hs = Vec::new();
+                if let JsValue::Object(h) = x.get("__xhr_headers__") {
+                    let hb = h.borrow();
+                    for k in hb.own_keys() {
+                        if let JsValue::Str(v) = hb.get(&k) { hs.push((k, v)); }
+                    }
+                }
+                (m, u, hs)
+            };
+            // URL validation.
+            if !url.starts_with("http://") && !url.starts_with("https://")
+                && !url.starts_with("file://") && !url.starts_with("data:")
+            {
+                send_net_log.borrow_mut().push((url.clone(), 0));
+                let onerror;
+                {
+                    let mut x = send_ref.borrow_mut();
+                    x.set("readyState".into(), JsValue::Number(4.0));
+                    x.set("status".into(), JsValue::Number(0.0));
+                    onerror = x.get("onerror");
+                }
+                if !matches!(onerror, JsValue::Undefined | JsValue::Null) {
+                    send_pending_cb.borrow_mut().push((onerror, JsValue::Object(Rc::clone(&send_ref))));
+                }
+                return Ok(JsValue::Undefined);
+            }
+            // Sync HTTP.
+            let outcome = super::helpers::perform_http_request(
+                &url, &method, &headers, body.as_deref());
+            let (status, status_text, resp_body, _resp_headers) = match outcome {
+                Ok(t) => t,
+                Err(msg) => (0, msg, String::new(), Vec::new()),
+            };
+            send_net_log.borrow_mut().push((url.clone(), status));
+            // Fill XHR state.
+            let (onload, onreadystatechange, onloadend);
+            {
+                let mut x = send_ref.borrow_mut();
+                x.set("status".into(), JsValue::Number(status as f64));
+                x.set("statusText".into(), JsValue::Str(status_text));
+                x.set("responseText".into(), JsValue::Str(resp_body.clone()));
+                x.set("response".into(), JsValue::Str(resp_body));
+                x.set("responseURL".into(), JsValue::Str(url));
+                x.set("readyState".into(), JsValue::Number(4.0));
+                onload = x.get("onload");
+                onreadystatechange = x.get("onreadystatechange");
+                onloadend = x.get("onloadend");
+            }
+            // Push callbacky pro event loop fire (s this = xhr_obj).
+            let xhr_this = JsValue::Object(Rc::clone(&send_ref));
+            if !matches!(onreadystatechange, JsValue::Undefined | JsValue::Null) {
+                send_pending_cb.borrow_mut().push((onreadystatechange, xhr_this.clone()));
+            }
+            if !matches!(onload, JsValue::Undefined | JsValue::Null) {
+                send_pending_cb.borrow_mut().push((onload, xhr_this.clone()));
+            }
+            if !matches!(onloadend, JsValue::Undefined | JsValue::Null) {
+                send_pending_cb.borrow_mut().push((onloadend, xhr_this));
+            }
+            Ok(JsValue::Undefined)
+        });
+        xhr_obj.borrow_mut().set("send".into(), send_fn);
+
+        // abort / getResponseHeader / getAllResponseHeaders / overrideMimeType - stub.
+        xhr_obj.borrow_mut().set("abort".into(),
+            native("XHR.abort", |_| Ok(JsValue::Undefined)));
+        xhr_obj.borrow_mut().set("getResponseHeader".into(),
+            native("XHR.getResponseHeader", |_| Ok(JsValue::Null)));
+        xhr_obj.borrow_mut().set("getAllResponseHeaders".into(),
+            native("XHR.getAllResponseHeaders", |_| Ok(JsValue::Str(String::new()))));
+        xhr_obj.borrow_mut().set("overrideMimeType".into(),
+            native("XHR.overrideMimeType", |_| Ok(JsValue::Undefined)));
+        xhr_obj.borrow_mut().set("addEventListener".into(),
+            native("XHR.addEventListener", {
+                let er = Rc::clone(&xhr_obj);
+                move |a| {
+                    let mut iter = a.into_iter();
+                    let event = iter.next().map(|v| v.to_string()).unwrap_or_default();
+                    let cb = iter.next().unwrap_or(JsValue::Undefined);
+                    let prop = match event.as_str() {
+                        "load" => "onload",
+                        "error" => "onerror",
+                        "readystatechange" => "onreadystatechange",
+                        "loadend" => "onloadend",
+                        _ => return Ok(JsValue::Undefined),
+                    };
+                    er.borrow_mut().set(prop.into(), cb);
+                    Ok(JsValue::Undefined)
+                }
+            }));
+
+        Ok(JsValue::Object(xhr_obj))
+    }));
+    // Alias pro IE pages co testuji existence pres window.ActiveXObject.
+    e.define("ActiveXObject", native("ActiveXObject", |_| Ok(JsValue::Undefined)));
 
     // Konstruktory bez vlastni logiky (logika je v call_new)
     e.define("Map", native("Map", |_| Ok(JsValue::Undefined)));

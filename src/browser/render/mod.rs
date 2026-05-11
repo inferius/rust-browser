@@ -4552,17 +4552,37 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
 
             for (_url, src) in scripts {
                 if src.trim().is_empty() { continue; }
-                if let Ok(lex) = Lexer::parse_str(&src, "<inline>") {
-                    let tokens: Vec<_> = lex.tokens.into_iter()
-                        .filter(|t| !matches!(t.kind,
-                            TokenKind::Whitespace | TokenKind::Newline
-                            | TokenKind::CommentLine(_) | TokenKind::CommentBlock(_)))
-                        .collect();
-                    let mut parser = Parser::new(tokens);
-                    if let Ok(prog) = parser.parse() {
-                        if let Err(e) = interp.run(&prog) {
-                            eprintln!("[script error] {e}");
+                match Lexer::parse_str(&src, "<inline>") {
+                    Ok(lex) => {
+                        let tokens: Vec<_> = lex.tokens.into_iter()
+                            .filter(|t| !matches!(t.kind,
+                                TokenKind::Whitespace | TokenKind::Newline
+                                | TokenKind::CommentLine(_) | TokenKind::CommentBlock(_)))
+                            .collect();
+                        let mut parser = Parser::new(tokens);
+                        match parser.parse() {
+                            Ok(prog) => {
+                                if let Err(e) = interp.run(&prog) {
+                                    let msg = format!("[script error] {e}");
+                                    eprintln!("{msg}");
+                                    // Pushni i do devtools console (predtim sel jen na stderr).
+                                    interp.console_log.borrow_mut()
+                                        .push(("error".into(), msg));
+                                }
+                            }
+                            Err(e) => {
+                                let msg = format!("[parse error] {e:?}");
+                                eprintln!("{msg}");
+                                interp.console_log.borrow_mut()
+                                    .push(("error".into(), msg));
+                            }
                         }
+                    }
+                    Err(e) => {
+                        let msg = format!("[lex error] {e:?}");
+                        eprintln!("{msg}");
+                        interp.console_log.borrow_mut()
+                            .push(("error".into(), msg));
                     }
                 }
             }

@@ -602,6 +602,9 @@ pub struct Interpreter {
     pub mutation_observers: Rc<RefCell<Vec<(usize, JsValue, JsValue, bool)>>>,
     /// Pending mutation records pro batched delivery (microtask queue).
     pub pending_mutation_records: Rc<RefCell<Vec<(usize, JsValue, JsValue)>>>,
+    /// Pending XMLHttpRequest callbacks - po send() done event loop drainnnula
+    /// + zavolal onload/onreadystatechange. Format: (callback, xhr_this_obj).
+    pub pending_xhr_callbacks: Rc<RefCell<Vec<(JsValue, JsValue)>>>,
     /// Aktualni line v exec - update z Stmt::WithLine. 0 pri rucne run.
     pub current_line: u32,
     /// Sdileny debugger state - breakpoints + pause indicator (single-thread Rc/RefCell).
@@ -717,11 +720,13 @@ impl Interpreter {
             Rc::new(RefCell::new(Vec::new()));
         let pending_fetches: Rc<RefCell<Vec<PendingFetch>>> =
             Rc::new(RefCell::new(Vec::new()));
+        let pending_xhr_callbacks: Rc<RefCell<Vec<(JsValue, JsValue)>>> =
+            Rc::new(RefCell::new(Vec::new()));
         setup_builtins(
             &global, &task_queue, &next_timer_id, &workers, &next_worker_id,
             &document, &console_log, &network_log, &custom_elements,
             &mutation_observers, &websockets, &next_ws_id,
-            &pending_fetches,
+            &pending_fetches, &pending_xhr_callbacks,
         );
         Interpreter {
             global, yield_buffer: None, task_queue, next_timer_id,
@@ -747,12 +752,33 @@ impl Interpreter {
             shared_debugger: None,
             continue_signal: None,
             pending_fetches,
+            pending_xhr_callbacks,
         }
     }
 
     /// Drainuj dokoncene async fetch tasks - try_recv kazdy pending,
     /// pri Ok prepne pending Promise -> fulfilled/rejected. Volat z event
     /// loopu kazdy frame (App.render).
+    /// Drain XMLHttpRequest pending callbacky (push pres XHR.send()). Volat z
+    /// event loopu kazdy frame. Kazdy callback dostane this = xhr_obj.
+    pub fn drain_xhr_callbacks(&mut self) -> Result<(), JsError> {
+        loop {
+            let next = {
+                let mut q = self.pending_xhr_callbacks.borrow_mut();
+                if q.is_empty() { None } else { Some(q.remove(0)) }
+            };
+            match next {
+                Some((callback, this)) => {
+                    if !matches!(callback, JsValue::Undefined | JsValue::Null) {
+                        let _ = self.call_function(callback, vec![], Some(this));
+                    }
+                }
+                None => break,
+            }
+        }
+        Ok(())
+    }
+
     pub fn drain_fetches(&mut self) {
         let mut completed: Vec<usize> = Vec::new();
         {
@@ -1078,6 +1104,8 @@ impl Interpreter {
         };
         // Drain timer queue - spust vsechny setTimeout callbacky
         self.drain_timers()?;
+        // Drain XHR onload/onreadystatechange callbacky.
+        self.drain_xhr_callbacks()?;
         // Worker + websocket sync: 50ms sleep dava worker threadum cas dorucit
         // zpravy. Skip pri prazdnych pools - ciste sync programy nemusi cekat.
         let has_workers = !self.workers.borrow().is_empty();
