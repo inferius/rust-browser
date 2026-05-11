@@ -386,21 +386,14 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         }
         resolved
     } else {
-        // Bez template: vezmi explicit_height z dite v row, jinak rozdel inner_h.
+        // Bez template: tracky zacinaj na 0 (resp. explicit_height z dite v row).
+        // Nasledny intrinsic pass (any_auto_row branch ~line 994+) vyplni row_tracks
+        // dle obsahu (by_row). DRIV: fallback_h = inner_h/rows distribuovala parent
+        // height rovnomerne, takze items nemohli SHRINK pod fallback - to nafouklo
+        // top-container z 120 (content+pad) na 2007 (= 6022/3 rows) na mileneckaseznamka.cz.
         let mut out = Vec::with_capacity(rows);
-        let mut any_explicit = false;
         for r in 0..rows {
-            for c in 0..cols {
-                let idx = r * cols + c;
-                if let Some(child) = bx.children.get(idx) {
-                    if child.explicit_height.is_some() { any_explicit = true; }
-                }
-            }
-        }
-        let fallback_h = if any_explicit { 0.0 } else if rows > 0 { (inner_h / rows as f32).max(0.0) } else { inner_h.max(0.0) };
-        for r in 0..rows {
-            let mut h = fallback_h;
-            let mut row_has_explicit = false;
+            let mut h = 0.0_f32;
             for c in 0..cols {
                 let idx = r * cols + c;
                 if let Some(child) = bx.children.get(idx) {
@@ -410,13 +403,9 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                         let pb_b = child.padding_bottom.unwrap_or(child.padding) + child.border_bottom_width.unwrap_or(child.border_width);
                         let real_h = eh.max(pb_t + pb_b);
                         h = h.max(real_h);
-                        row_has_explicit = true;
                     }
                 }
             }
-            // Pri row bez explicit + jine rows maji explicit: 0 floor (auto-sizing
-            // dorovna z items). Drive 50 hardcoded - to bylo nesprapne pro aspect-ratio.
-            if !row_has_explicit && any_explicit { h = 0.0; }
             out.push(h);
         }
         out
@@ -1047,18 +1036,6 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                         _ => {}
                     }
                     let intrinsic_h = measured.rect.height;
-                    if std::env::var("FLEX_DIAG").is_ok() {
-                        if let Some(n) = bx.children[real_idx].node.as_ref() {
-                            let cl = n.attr("class").unwrap_or_default();
-                            if cl.contains("top-container") || cl.contains("right-container")
-                                || cl.contains("development-mode") || cl.contains("top-miniature")
-                                || cl.contains("hp-items") {
-                                eprintln!("[grid-intrinsic] class={} measured_h={:.0} min_h_v={:?} pos={:?} display={:?}",
-                                    cl, intrinsic_h, bx.children[real_idx].min_height_v,
-                                    bx.children[real_idx].position, bx.children[real_idx].display);
-                            }
-                        }
-                    }
                     if intrinsic_h > 0.0 {
                         bx.children[real_idx].rect.height = intrinsic_h;
                     }

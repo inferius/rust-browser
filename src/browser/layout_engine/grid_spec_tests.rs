@@ -74,8 +74,10 @@ mod tests {
     #[test] fn gs_zero_container() { let t = resolve_tracks("1fr 1fr", 0.0, 0.0); assert_eq!(t, vec![0.0, 0.0]); }
 
     // ─── Layout: 2D placement ────────────────────────────────────────────
-    #[test] fn gs_layout_2x2() { let mut p = parent(200.0, 200.0); p.grid_template_columns = "1fr 1fr".into(); for _ in 0..4 { p.children.push(child()); } layout_grid(&mut p); assert_eq!(p.children[0].rect.x, 0.0); assert_eq!(p.children[1].rect.x, 100.0); assert_ne!(p.children[2].rect.y, p.children[0].rect.y); }
-    #[test] fn gs_layout_3x3() { let mut p = parent(300.0, 300.0); p.grid_template_columns = "1fr 1fr 1fr".into(); for _ in 0..9 { p.children.push(child()); } layout_grid(&mut p); assert_eq!(p.children[0].rect.y, p.children[2].rect.y); assert_ne!(p.children[3].rect.y, p.children[0].rect.y); }
+    // POZN: empty children (child()) maji intrinsic h=0 per CSS Grid spec, takze
+    // auto rows collapse na 0. Pro test placement do rows davame sized_child h=50.
+    #[test] fn gs_layout_2x2() { let mut p = parent(200.0, 200.0); p.grid_template_columns = "1fr 1fr".into(); for _ in 0..4 { p.children.push(sized_child(0.0, 50.0)); } layout_grid(&mut p); assert_eq!(p.children[0].rect.x, 0.0); assert_eq!(p.children[1].rect.x, 100.0); assert_ne!(p.children[2].rect.y, p.children[0].rect.y); }
+    #[test] fn gs_layout_3x3() { let mut p = parent(300.0, 300.0); p.grid_template_columns = "1fr 1fr 1fr".into(); for _ in 0..9 { p.children.push(sized_child(0.0, 50.0)); } layout_grid(&mut p); assert_eq!(p.children[0].rect.y, p.children[2].rect.y); assert_ne!(p.children[3].rect.y, p.children[0].rect.y); }
     #[test] fn gs_layout_4x1() { let mut p = parent(400.0, 100.0); p.grid_template_columns = "1fr 1fr 1fr 1fr".into(); for _ in 0..4 { p.children.push(child()); } layout_grid(&mut p); assert_eq!(p.children[3].rect.x, 300.0); }
     #[test] fn gs_layout_1x4() { let mut p = parent(100.0, 400.0); p.grid_template_columns = "1fr".into(); for _ in 0..4 { p.children.push(sized_child(0.0, 50.0)); } layout_grid(&mut p); assert_eq!(p.children[3].rect.y, 150.0); }
 
