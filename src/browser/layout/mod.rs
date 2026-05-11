@@ -1283,10 +1283,33 @@ thread_local! {
 }
 
 /// Public API pro renderer: po load_image populate natural dims cache.
+thread_local! {
+    /// True pri kazdem set_image_natural_dims. Renderer cte + reset.
+    /// Pri zmene cache: invalidate layout cache + trigger redraw (aby img
+    /// s natural unknown -> default 100x100 v 1. pass re-layoutoval po load
+    /// na real aspect 112x65 atd.).
+    pub(crate) static IMAGE_NATURAL_DIMS_DIRTY: std::cell::Cell<bool>
+        = std::cell::Cell::new(false);
+}
+
 pub fn set_image_natural_dims(src: &str, w: f32, h: f32) {
     IMAGE_NATURAL_DIMS.with(|c| {
-        c.borrow_mut().insert(src.to_string(), (w, h));
+        let mut m = c.borrow_mut();
+        let changed = m.get(src).map(|&(ow, oh)| ow != w || oh != h).unwrap_or(true);
+        m.insert(src.to_string(), (w, h));
+        if changed {
+            IMAGE_NATURAL_DIMS_DIRTY.with(|d| d.set(true));
+        }
     });
+}
+
+/// Renderer cte tento flag per frame - pri true invalidate layout cache.
+pub fn take_image_natural_dims_dirty() -> bool {
+    IMAGE_NATURAL_DIMS_DIRTY.with(|d| {
+        let v = d.get();
+        d.set(false);
+        v
+    })
 }
 
 /// Lookup natural dims (None pri zatim nenactenom obrazku).
@@ -3476,6 +3499,19 @@ pub fn layout_block(bx: &mut LayoutBox) {
                     if mx > 0.0 { child.rect.height = child.rect.height.min(mx); }
                 }
                 layout_dispatch(child);
+                // Re-clamp PO layout_dispatch: layout_block / layout_flex set
+                // rect.height na intrinsic content height a tim prepisly pre-
+                // clamp min-height. CSS spec: min-height = lower bound vzdy.
+                // Bez tohoto .top-container { min-height: 93px } po layout
+                // s short content (cca 60px) zustal 60 misto 93.
+                if child.min_height.is_specified() {
+                    let mn = child.min_height.resolve(&ch_ctx_b);
+                    if mn > 0.0 { child.rect.height = child.rect.height.max(mn); }
+                }
+                if child.max_height.is_specified() {
+                    let mx = child.max_height.resolve(&ch_ctx_b);
+                    if mx > 0.0 { child.rect.height = child.rect.height.min(mx); }
+                }
 
                 // TableRow: cells maji vyssi rect.height nez tr default (20px)
                 // diky padding. Pri rendering vyssi cell prelize do dalsi rady

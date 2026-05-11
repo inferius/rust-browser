@@ -230,13 +230,26 @@ impl GlyphAtlas {
         if (ch as u32) < 0x20 {
             return self.font_for(family);
         }
-        // Strip styling prefixy pro family lookup.
-        let raw_family = family
-            .strip_prefix("__bi__:")
-            .or_else(|| family.strip_prefix("__italic__:"))
-            .or_else(|| family.strip_prefix("__bold__:"))
-            .unwrap_or(family);
-        // 1) Primary family - vsechny subsety.
+        // Detect style: __bi__ / __italic__ / __bold__ prefix.
+        let (style_suffix, raw_family) = if let Some(rest) = family.strip_prefix("__bi__:") {
+            ("__bi__", rest)
+        } else if let Some(rest) = family.strip_prefix("__italic__:") {
+            ("__italic__", rest)
+        } else if let Some(rest) = family.strip_prefix("__bold__:") {
+            ("__bold__", rest)
+        } else {
+            ("", family)
+        };
+        // 1) Style-specific subsety primary family (Ubuntu__bold__ pred Ubuntu).
+        if !raw_family.is_empty() && !style_suffix.is_empty() {
+            let styled_key = format!("{}{}", raw_family, style_suffix);
+            if let Some(vec) = self.extra_fonts.get(&styled_key) {
+                for f in vec {
+                    if Self::has_glyph(f, ch) { return f; }
+                }
+            }
+        }
+        // 2) Primary family - vsechny subsety regular.
         if !raw_family.is_empty() {
             // Direct family match (font-family: 'Roboto').
             if let Some(vec) = self.extra_fonts.get(raw_family) {
@@ -248,6 +261,15 @@ impl GlyphAtlas {
             for alt in raw_family.split(',') {
                 let trimmed = alt.trim().trim_matches('"').trim_matches('\'');
                 if trimmed.is_empty() || trimmed == raw_family { continue; }
+                // Take style-specific pres comma list.
+                if !style_suffix.is_empty() {
+                    let sk = format!("{}{}", trimmed, style_suffix);
+                    if let Some(vec) = self.extra_fonts.get(&sk) {
+                        for f in vec {
+                            if Self::has_glyph(f, ch) { return f; }
+                        }
+                    }
+                }
                 if let Some(vec) = self.extra_fonts.get(trimmed) {
                     for f in vec {
                         if Self::has_glyph(f, ch) { return f; }
@@ -277,6 +299,15 @@ impl GlyphAtlas {
     /// prefixy preferuji styled variant.
     pub(super) fn font_for(&self, family: &str) -> &fontdue::Font {
         if let Some(rest) = family.strip_prefix("__bi__:") {
+            // Hledat <family>__bi__ v extra_fonts (registrace per @font-face
+            // weight + italic key). Fallback chain pres bold-only, italic-only,
+            // regular family, system bold-italic.
+            let bi_key = format!("{}__bi__", rest);
+            if let Some(f) = self.extra_fonts.get(&bi_key).and_then(Self::first_font) { return f; }
+            let bold_key = format!("{}__bold__", rest);
+            if let Some(f) = self.extra_fonts.get(&bold_key).and_then(Self::first_font) { return f; }
+            let italic_key = format!("{}__italic__", rest);
+            if let Some(f) = self.extra_fonts.get(&italic_key).and_then(Self::first_font) { return f; }
             if let Some(f) = self.extra_fonts.get(rest).and_then(Self::first_font) { return f; }
             if let Some(f) = &self.font_bold_italic { return f; }
             if let Some(f) = &self.font_italic { return f; }
@@ -284,11 +315,15 @@ impl GlyphAtlas {
             return self.font_for(rest);
         }
         if let Some(rest) = family.strip_prefix("__italic__:") {
+            let italic_key = format!("{}__italic__", rest);
+            if let Some(f) = self.extra_fonts.get(&italic_key).and_then(Self::first_font) { return f; }
             if let Some(f) = self.extra_fonts.get(rest).and_then(Self::first_font) { return f; }
             if let Some(f) = &self.font_italic { return f; }
             return self.font_for(rest);
         }
         if let Some(rest) = family.strip_prefix("__bold__:") {
+            let bold_key = format!("{}__bold__", rest);
+            if let Some(f) = self.extra_fonts.get(&bold_key).and_then(Self::first_font) { return f; }
             if let Some(f) = self.extra_fonts.get(rest).and_then(Self::first_font) { return f; }
             if let Some(b) = &self.font_bold { return b; }
             return self.font_for(rest);

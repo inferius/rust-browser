@@ -7201,6 +7201,9 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 });
             }
             let _t_atlas = std::time::Instant::now();
+            // Flag: pri image load nove natural dims -> trigger relayout next
+            // frame (1. layout pass mel default 100x100, ted ma real 112x65).
+            let mut need_relayout_after_load = false;
             // Pre-rasterize vsechny glyfy do atlasu + nacti images.
             // Pri COLR color font: rasterize char jako RGBA + put do image_atlas
             // pres synthetic key "__colr:{family}:{ch}:{size}". Render path detekuje.
@@ -7277,6 +7280,13 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         let target_w = (*w * self.zoom).round().max(1.0) as u32;
                         let target_h = (*h * self.zoom).round().max(1.0) as u32;
                         r.resample_image_for_size(src, target_w, target_h);
+                        // Pri load image dostala se natural dims do cache - pri
+                        // 1. layout pass byly unknown -> default 100x100. Po
+                        // loadu invalidate layout cache + request redraw aby
+                        // se ulozily real natural dims.
+                        if super::layout::take_image_natural_dims_dirty() {
+                            need_relayout_after_load = true;
+                        }
                     }
                     _ => {}
                 }
@@ -7383,6 +7393,15 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             self.prev_page_hash = page_hash;
             self.prev_shell_hash = shell_hash;
             perf_t("gpu draw + present", _t_gpu);
+
+            // Invalidate layout cache + request redraw next frame pri image
+            // natural dims load (bez tohoto img stale 100x100 i kdyz cache uz
+            // ma natural). One-shot - reset flag pri exit. Without redraw
+            // chain by infinite-loop relayout.
+            if need_relayout_after_load {
+                self.cached_layout_root = None;
+                if let Some(w) = &self.window { w.request_redraw(); }
+            }
 
             // Ulozim layout pro hit test + vrat display_list buffer pro priste.
             // PERF: pri owned=None (immutable cesta) self.layout_root zustava
@@ -9066,16 +9085,43 @@ impl Renderer {
                 }
                 match fontdue::Font::from_bytes(decoded, fontdue::FontSettings::default()) {
                     Ok(font) => {
-                        eprintln!("[font-face] OK family={} registered (extra_fonts subset push)", ff.family);
+                        // Parse font-weight (default 400 = regular). Bold = >= 600.
+                        // Style: italic / oblique.
+                        let weight: u32 = ff.weight.split(|c: char| !c.is_ascii_digit())
+                            .filter(|s| !s.is_empty())
+                            .next()
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(if ff.weight.contains("bold") { 700 } else { 400 });
+                        let italic = ff.style.contains("italic") || ff.style.contains("oblique");
+                        eprintln!("[font-face] OK family={} weight={} italic={} (extra_fonts subset push)",
+                            ff.family, weight, italic);
                         // font_registry stale drzi "primary" font per family (prvni).
                         self.font_registry.entry(ff.family.clone()).or_insert_with(|| font.clone());
-                        // Atlas extra_fonts: Vec<Font> per family - vsechny subsety.
-                        // Pri rasterize lookup atlas::font_for_char itera vsechny
-                        // subsety dokud najde glyph (Google Fonts: 30+ subsets per
-                        // family, kazdy ma jiny unicode-range).
+                        // Atlas extra_fonts ulozi pod 3 keys:
+                        // 1) base family (lookup fallback)
+                        // 2) "<family>__bold__" pri weight >= 600
+                        // 3) "<family>__italic__" pri italic
+                        // 4) "<family>__bi__" pri obojiim
+                        // To umoznuje font_for("__bold__:Ubuntu") nejprve hledat
+                        // "Ubuntu__bold__", pak fallback "Ubuntu" (regular).
                         self.atlas.extra_fonts.entry(ff.family.clone())
                             .or_insert_with(Vec::new)
-                            .push(font);
+                            .push(font.clone());
+                        if weight >= 600 && !italic {
+                            self.atlas.extra_fonts.entry(format!("{}__bold__", ff.family))
+                                .or_insert_with(Vec::new)
+                                .push(font.clone());
+                        }
+                        if italic && weight < 600 {
+                            self.atlas.extra_fonts.entry(format!("{}__italic__", ff.family))
+                                .or_insert_with(Vec::new)
+                                .push(font.clone());
+                        }
+                        if italic && weight >= 600 {
+                            self.atlas.extra_fonts.entry(format!("{}__bi__", ff.family))
+                                .or_insert_with(Vec::new)
+                                .push(font);
+                        }
                         self.loaded_font_urls.insert(url);
                     }
                     Err(e) => {
