@@ -245,7 +245,36 @@ impl GlyphAtlas {
         if (ch as u32) < 0x20 {
             return self.font_for(family);
         }
-        // Detect style: __bi__ / __italic__ / __bold__ prefix.
+        // Compact weight prefix `__wN_<I>__:family` (new format) - delegate na
+        // font_for_weight, ktery dela CSS Fonts L4 nearest-match. Pri ne-match
+        // exact weight + has_glyph, font_for_weight uz fallback chainuje.
+        if let Some(rest) = family.strip_prefix("__w") {
+            if let Some(sep_idx) = rest.find("__:") {
+                let head = &rest[..sep_idx];
+                let raw_family = &rest[sep_idx + 3..];
+                if let Some(underscore) = head.rfind('_') {
+                    let weight_str = &head[..underscore];
+                    let italic_str = &head[underscore + 1..];
+                    if let Ok(weight) = weight_str.parse::<u32>() {
+                        let italic = italic_str == "1";
+                        let primary = self.font_for_weight(raw_family, weight, italic);
+                        if Self::has_glyph(primary, ch) { return primary; }
+                        // Fallback char-coverage chain pres ostatni extra_fonts
+                        // (diakritika / non-Latin chars).
+                        for vec in self.extra_fonts.values() {
+                            for f in vec {
+                                if Self::has_glyph(f, ch) { return f; }
+                            }
+                        }
+                        if let Some(b) = &self.font_bold { if Self::has_glyph(b, ch) { return b; } }
+                        if let Some(i) = &self.font_italic { if Self::has_glyph(i, ch) { return i; } }
+                        if Self::has_glyph(&self.font, ch) { return &self.font; }
+                        return primary;
+                    }
+                }
+            }
+        }
+        // Legacy style: __bi__ / __italic__ / __bold__ prefix.
         let (style_suffix, raw_family) = if let Some(rest) = family.strip_prefix("__bi__:") {
             ("__bi__", rest)
         } else if let Some(rest) = family.strip_prefix("__italic__:") {
