@@ -372,6 +372,10 @@ impl GlyphAtlas {
         for w in &order {
             let key = format!("{}__w{}{}", family, w, suffix);
             if let Some(f) = self.extra_fonts.get(&key).and_then(Self::first_font) {
+                if std::env::var("FONT_DEBUG").is_ok() {
+                    eprintln!("[font_for_weight] family={:?} req_weight={} got_weight={} italic={}",
+                        family, weight, w, italic);
+                }
                 return f;
             }
         }
