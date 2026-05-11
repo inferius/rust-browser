@@ -3789,10 +3789,23 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
             let mar_l_r = bx_clone.margin_left.unwrap_or(bx_clone.margin);
             let mar_r_r = bx_clone.margin_right.unwrap_or(bx_clone.margin);
             let parent_w_for_img = (inner_w - mar_l_r - mar_r_r).max(0.0);
+            let parent_h_for_img = if bx.rect.height > 0.0 { bx.rect.height } else { advance_h };
+            // Img s `max-width: 100%; max-height: 100%` ale bez explicit width:
+            // Chrome chova jako "fill up to max" (natural image > parent ->
+            // shrink to parent). Bez znamy natural size (atlas neni v layout
+            // dostupny) heuristic: max-width 100% + no explicit -> use parent.
+            // Pri natural < max by Chrome zachoval natural, my OVERESTIMATEM na
+            // parent - kompromis pro img heavy stranky kde natural typicky > parent.
+            let is_img_replaced = matches!(bx_clone.tag.as_deref(), Some("img") | Some("video"));
+            let max_w_is_pct = bx_clone.max_width_v.ends_with('%');
+            let max_h_is_pct = bx_clone.max_height_v.ends_with('%');
             let w = if let Some(px) = bx_clone.explicit_width {
                 px
             } else if let Some(pct) = bx_clone.width_pct {
                 parent_w_for_img * pct
+            } else if is_img_replaced && max_w_is_pct {
+                // Fill-to-max heuristic.
+                parse_length_or_pct(&bx_clone.max_width_v, parent_w_for_img)
             } else if bx_clone.rect.width > 0.0 {
                 bx_clone.rect.width
             } else {
@@ -3812,11 +3825,18 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
             } else if let Some(pct) = bx_clone.height_pct {
                 // height_pct relativni k parent rect.height pokud znama.
                 if bx.rect.height > 0.0 { bx.rect.height * pct } else { advance_h }
+            } else if is_img_replaced && max_h_is_pct {
+                parse_length_or_pct(&bx_clone.max_height_v, parent_h_for_img)
             } else if bx_clone.rect.height > 0.0 {
                 bx_clone.rect.height
             } else {
                 advance_h
             };
+            // Apply max-height clamp (pct resolve proti parent_h).
+            let h = if !bx_clone.max_height_v.is_empty() && bx_clone.max_height_v != "none" {
+                let mh = parse_length_or_pct(&bx_clone.max_height_v, parent_h_for_img);
+                if mh > 0.0 { h.min(mh) } else { h }
+            } else { h };
             if sib_idx > 0 && prev_had_trailing_space && cursor_x > inner_x {
                 cursor_x += space_w;
             }
