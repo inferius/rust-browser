@@ -249,17 +249,25 @@ console.log(greeting, result);
             let mut css_combined = String::new();
             for href in extract_stylesheet_hrefs(&html) {
                 let resolved = browser::render::resolve_url(&target, &href);
-                println!("[fetch css] {resolved}");
                 if let Some(c) = browser::render::fetch_text_url(&resolved) {
                     let imported = resolve_css_imports(&c, &resolved, 0);
+                    // Diagnostic: kolik rules + chars parsed per sheet.
+                    let chars = imported.len();
+                    let rules = browser::css_parser::parse_stylesheet(&imported).rules.len();
+                    println!("[fetch css] {resolved} ({chars} chars, {rules} rules)");
                     css_combined.push('\n');
                     css_combined.push_str(&imported);
+                } else {
+                    println!("[fetch css FAIL] {resolved}");
                 }
             }
             // <style> inline blocks taky pridat (s @import resolution).
-            for inline in extract_inline_styles(&html) {
+            for (idx, inline) in extract_inline_styles(&html).into_iter().enumerate() {
+                let resolved = resolve_css_imports(&inline, &target, 0);
+                let rules = browser::css_parser::parse_stylesheet(&resolved).rules.len();
+                println!("[inline style #{idx}] {} chars, {rules} rules", resolved.len());
                 css_combined.push('\n');
-                css_combined.push_str(&resolve_css_imports(&inline, &target, 0));
+                css_combined.push_str(&resolved);
             }
             (html, css_combined, Some(target.clone()), None)
         } else {

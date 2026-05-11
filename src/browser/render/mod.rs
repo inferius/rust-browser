@@ -84,7 +84,7 @@ a { color: #2a4d8f !important; }
 // scripts beti single-thread (UI). Pause = early-abort + rerun kompromis.
 
 mod url;
-pub use url::{fetch_text_url, fetch_image_bytes, resolve_url};
+pub use url::{fetch_text_url, fetch_image_bytes, resolve_url, cached_fetch_bytes};
 
 mod forms;
 use forms::{find_ancestor_form, build_form_request, post_form};
@@ -9007,13 +9007,8 @@ impl Renderer {
                 url.clone()
             };
             let bytes_opt: Option<Vec<u8>> = if final_url.starts_with("http://") || final_url.starts_with("https://") {
-                match ureq::get(&final_url).timeout(std::time::Duration::from_secs(15)).call() {
-                    Ok(resp) => {
-                        let mut buf = Vec::new();
-                        if resp.into_reader().read_to_end(&mut buf).is_ok() { Some(buf) } else { None }
-                    }
-                    Err(e) => { eprintln!("[font-face] HTTP fail {final_url}: {e}"); None }
-                }
+                // Use cached fetch - fonts cachuji se disk + RAM, reload nemusi re-fetch.
+                super::render::cached_fetch_bytes(&final_url)
             } else {
                 let path = if let Some(rest) = final_url.strip_prefix("file:///") {
                     rest.replace('/', std::path::MAIN_SEPARATOR_STR)
