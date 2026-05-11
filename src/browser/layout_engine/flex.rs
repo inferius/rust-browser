@@ -1020,11 +1020,18 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             // Apply to child (item_idx je do in_flow, prevest na real index)
             let real_idx = in_flow[item_idx];
             let child = &mut bx.children[real_idx];
-            // Pre-load child max/min cross + pad/border floor
-            let cw_max_c = if child.max_width_v.is_empty() { f32::INFINITY } else { super::super::layout::parse_length(&child.max_width_v) };
-            let ch_max_c = if child.max_height_v.is_empty() { f32::INFINITY } else { super::super::layout::parse_length(&child.max_height_v) };
-            let cw_min_c = super::super::layout::parse_length(&child.min_width_v);
-            let ch_min_c = super::super::layout::parse_length(&child.min_height_v);
+            // Pre-load child max/min cross + pad/border floor.
+            // Percent values resolvuji se proti container's inner_w / inner_h_for_gap -
+            // bez teto cesty `parse_length("100%")` davalo default 16 a clamp w=16
+            // shrinknul kazdou flex-column item na 16 px wide.
+            let cw_max_c = if child.max_width_v.is_empty() || child.max_width_v == "none" {
+                f32::INFINITY
+            } else { super::super::layout::parse_length_or_pct(&child.max_width_v, inner_w) };
+            let ch_max_c = if child.max_height_v.is_empty() || child.max_height_v == "none" {
+                f32::INFINITY
+            } else { super::super::layout::parse_length_or_pct(&child.max_height_v, inner_h_for_gap) };
+            let cw_min_c = super::super::layout::parse_length_or_pct(&child.min_width_v, inner_w);
+            let ch_min_c = super::super::layout::parse_length_or_pct(&child.min_height_v, inner_h_for_gap);
             let pb_w = child.padding_left.unwrap_or(child.padding) + child.padding_right.unwrap_or(child.padding)
                 + child.border_left_width.unwrap_or(child.border_width) + child.border_right_width.unwrap_or(child.border_width);
             let pb_h = child.padding_top.unwrap_or(child.padding) + child.padding_bottom.unwrap_or(child.padding)
@@ -1062,13 +1069,6 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                 let mut h = main_size;
                 let item_has_wrap = !child.flex_wrap.is_empty() && child.flex_wrap != "nowrap";
                 let stretch_cross = matches!(item_align, AlignItems::Stretch) || item_has_wrap;
-                if std::env::var("FLEX_DEBUG").is_ok() {
-                    let cls = child.node.as_ref().and_then(|n| n.attr("class")).unwrap_or_default();
-                    if !cls.is_empty() && (cls.contains("list-items") || cls.contains("whore") || cls.contains("hp-items") || cls.contains("right-container")) {
-                        eprintln!("[flex_col] class={:?} item_align={:?} stretch_cross={} ew={:?} cross_size={} item_cross_size={} m_cs={} m_ce={}",
-                            cls, item_align, stretch_cross, child.explicit_width, cross_size, item_cross_size, it.margin_cross_start, it.margin_cross_end);
-                    }
-                }
                 let mut w = if stretch_cross && child.explicit_width.is_none() {
                     (cross_size - it.margin_cross_start - it.margin_cross_end).max(0.0)
                 } else { item_cross_size };
@@ -1111,13 +1111,6 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                 if ch_min_c > 0.0 { h = h.max(ch_min_c); }
                 child.rect.height = h.max(pb_h);
                 child.rect.width = w.max(pb_w);
-                if std::env::var("FLEX_DEBUG").is_ok() {
-                    let cls = child.node.as_ref().and_then(|n| n.attr("class")).unwrap_or_default();
-                    if !cls.is_empty() && (cls.contains("list-items") || cls.contains("whore") || cls.contains("hp-items")) {
-                        eprintln!("[flex_col_assign] class={:?} w={} pb_w={} rect.width_after_assign={}",
-                            cls, w, pb_w, child.rect.width);
-                    }
-                }
             }
 
             main_cursor += main_size + it.margin_main_end;
