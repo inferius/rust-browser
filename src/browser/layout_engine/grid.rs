@@ -1281,8 +1281,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
     let active_cols = cols.saturating_sub(collapsed_count);
     // Pri align-content default + explicit container_h + no row template: stretch rows do container.
     // Pri align-items=baseline rows musi byt stretch aby baselines mohly fungovat.
-    let ac = bx.align_content.trim();
-    let ac_stretch = (ac.is_empty() || ac == "normal" || ac == "stretch")
+    let ac_stretch = bx.align_content.is_normal_or_stretch()
         && bx.explicit_height.is_some()
         && rows_explicit_str.is_empty()
         && matches!(bx.align_items, super::super::layout::AlignItems::Baseline);
@@ -1297,7 +1296,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
     let total_col: f32 = col_tracks.iter().sum::<f32>() + col_gap * (active_cols.saturating_sub(1) as f32);
     let total_row: f32 = row_tracks.iter().sum::<f32>() + row_gap * (rows.saturating_sub(1) as f32);
     let (jc_start, jc_between) = grid_distribute_jc(bx.justify_content, inner_w - total_col, active_cols.max(1));
-    let (ac_start, ac_between) = grid_distribute(&bx.align_content, inner_h - total_row, rows);
+    let (ac_start, ac_between) = grid_distribute_ac(bx.align_content, inner_h - total_row, rows);
     let mut col_positions: Vec<f32> = Vec::with_capacity(cols);
     let mut x_cursor = jc_start;
     for (i, w) in col_tracks.iter().enumerate() {
@@ -1573,10 +1572,13 @@ pub fn layout_grid(bx: &mut LayoutBox) {
             } else { None }
         } else { None };
         // justify-self na inline (cols), align-self na block (rows). Default = stretch.
-        let js = if !child.justify_self.is_empty() { child.justify_self.clone() } else { parent_justify_items };
-        let als = if !child.align_self.is_empty() { child.align_self.clone() } else { parent_align_items };
+        let js: String = if !child.justify_self.is_auto() { child.justify_self.to_string() } else { parent_justify_items };
+        // Align: convert AlignSelf -> AlignItems (Auto -> parent_align_items value).
+        // parent_align_items je z bx.align_items pres to_string() prev.
+        let als_str: String = if !child.align_self.is_auto() { child.align_self.to_string() } else { parent_align_items };
         let stretch_w = !has_w && !any_auto_x && (js.is_empty() || js == "stretch" || js == "normal");
-        let stretch_h = !has_h && !any_auto_y && (als.is_empty() || als == "stretch" || als == "normal");
+        let stretch_h = !has_h && !any_auto_y && (als_str.is_empty() || als_str == "stretch" || als_str == "normal");
+        let als = als_str;
         let mut final_w = if stretch_w { cw_avail } else { item_w };
         let mut final_h = if stretch_h { ch_avail } else if let Some(wh) = wrapped_text_h { wh } else { item_h };
         // Apply min/max + padding+border floor (item nemuze byt mensi nez padding+border).
@@ -1767,8 +1769,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         let mut item_below: std::collections::HashMap<usize, f32> = std::collections::HashMap::new();
         for &(real_idx, _row, _cy) in &item_row_info {
             let item = &bx.children[real_idx];
-            let als_str = item.align_self.clone();
-            let item_align = if als_str.is_empty() || als_str == "auto" { parent_align_str.clone() } else { als_str };
+            let item_align = if !item.align_self.is_auto() { item.align_self.to_string() } else { parent_align_str.clone() };
             if item_align != "baseline" { continue; }
             let m_t = item.margin_top.unwrap_or(item.margin);
             let m_b = item.margin_bottom.unwrap_or(item.margin);
@@ -1823,8 +1824,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         for &(real_idx, row, _old_cy) in &item_row_info {
             let new_cy = row_positions_new.get(row).copied().unwrap_or(0.0);
             let item = &mut bx.children[real_idx];
-            let als_str = item.align_self.clone();
-            let item_align = if als_str.is_empty() || als_str == "auto" { parent_align_str.clone() } else { als_str };
+            let item_align = if !item.align_self.is_auto() { item.align_self.to_string() } else { parent_align_str.clone() };
             let m_t = item.margin_top.unwrap_or(item.margin);
             // Preserve relative offset (top/bottom).
             let off_y = if let Some(t) = item.offset_top { t }
@@ -1932,8 +1932,8 @@ pub fn layout_grid(bx: &mut LayoutBox) {
             let m_t_c = ch.margin_top.unwrap_or(ch.margin);
             let m_r_c = ch.margin_right.unwrap_or(ch.margin);
             let m_b_c = ch.margin_bottom.unwrap_or(ch.margin);
-            let js = if !ch.justify_self.is_empty() { ch.justify_self.clone() } else { parent_justify.clone() };
-            let als = if !ch.align_self.is_empty() { ch.align_self.clone() } else { parent_align.clone() };
+            let js: String = if !ch.justify_self.is_auto() { ch.justify_self.to_string() } else { parent_justify.clone() };
+            let als: String = if !ch.align_self.is_auto() { ch.align_self.to_string() } else { parent_align.clone() };
             if no_inset_x {
                 let free = (cb_w - ch.rect.width - m_l_c - m_r_c).max(0.0);
                 let off = match js.as_str() {
@@ -1977,6 +1977,29 @@ fn grid_distribute(value: &str, free: f32, count: usize) -> (f32, f32) {
             else { let g = free / (count + 1) as f32; (g, g) }
         }
         _ => (0.0, 0.0), // start (default)
+    }
+}
+
+/// Typed varianta - direct match na AlignContent enum.
+fn grid_distribute_ac(ac: super::super::layout::AlignContent, free: f32, count: usize) -> (f32, f32) {
+    use super::super::layout::AlignContent as AC;
+    if count == 0 { return (0.0, 0.0); }
+    match ac {
+        AC::End | AC::FlexEnd => (free, 0.0),
+        AC::Center => (free / 2.0, 0.0),
+        AC::SpaceBetween => {
+            if count <= 1 || free <= 0.0 { (0.0, 0.0) }
+            else { (0.0, free / (count - 1) as f32) }
+        }
+        AC::SpaceAround => {
+            if free <= 0.0 { (0.0, 0.0) }
+            else { let g = free / count as f32; (g / 2.0, g) }
+        }
+        AC::SpaceEvenly => {
+            if free <= 0.0 { (0.0, 0.0) }
+            else { let g = free / (count + 1) as f32; (g, g) }
+        }
+        _ => (0.0, 0.0),  // FlexStart / Start / Normal / Stretch -> pack at start
     }
 }
 

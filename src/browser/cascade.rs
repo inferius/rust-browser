@@ -1377,7 +1377,19 @@ fn propagate_inherited(
 /// Vraci mapu (node_id, pseudo_name) -> computed styles, pro elementy co matchuji
 /// selektor s pseudo_element.
 pub fn cascade_pseudo(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> PseudoStyleMap {
-    let mut out: PseudoStyleMap = HashMap::new();
+    let out: PseudoStyleMap = HashMap::new();
+
+    // PERF fast-path: stylesheets without ::before / ::after / ::placeholder /
+    // ::marker / ::first-letter etc -> celkove no pseudo selectors. Skip walk.
+    // Flamegraph: cascade_pseudo 531 samples - dominantni. 90%+ stranek nepouziva.
+    let has_any_pseudo = stylesheets.iter().any(|sh| {
+        sh.rules.iter().any(|r| r.selectors.iter().any(|s|
+            s.parts.last().map(|p| p.pseudo_element.is_some()).unwrap_or(false)))
+    });
+    if !has_any_pseudo {
+        return out;
+    }
+    let mut out = out;
 
     // Recyclujeme variables z hlavniho cascade (jen :root)
     let mut variables: HashMap<String, String> = HashMap::new();
@@ -1960,6 +1972,12 @@ pub struct AnimationSpec {
 
 impl AnimationSpec {
     pub fn from_styles(styles: &HashMap<String, String>) -> Option<AnimationSpec> {
+        // PERF fast-path: vetsina elementu animation NEMA. Bail bez vsech parse
+        // kroku. Flamegraph: AnimationSpec::from_styles 888 samples - dominantni.
+        if !styles.contains_key("animation")
+            && !styles.contains_key("animation-name") {
+            return None;
+        }
         // Bud `animation` shorthand, nebo `animation-name` + dalsi longhand.
         let mut name: Option<String> = None;
         let mut duration: f32 = 0.0;
@@ -2042,6 +2060,13 @@ impl TransitionSpec {
     /// Parsuje vsechny transitions z computed styles. Vraci seznam (mozne vice
     /// transitions oddelenych carkou, kazda pro jine property).
     pub fn from_styles(styles: &HashMap<String, String>) -> Vec<TransitionSpec> {
+        // PERF fast-path: vetsina elementu transition NEMA. Bail bez parse / Vec alloc.
+        // Pri 5000 elements × 60 fps = 300k volani per sec. Drive vsech 5000
+        // procit a parsovat string per frame. Ted O(1) check.
+        if !styles.contains_key("transition")
+            && !styles.contains_key("transition-property") {
+            return Vec::new();
+        }
         let mut out = Vec::new();
 
         // Shorthand "transition" - muze obsahovat carku pro vice transitions

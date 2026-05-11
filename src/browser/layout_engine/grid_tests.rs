@@ -210,7 +210,7 @@ mod tests {
         let mut grid = make_grid_box(925.0, 0.0);  // rect.h=0 -> auto height
         // Make it explicit height=0 so any-auto-row branch fires.
         grid.explicit_height = None;
-        grid.align_content = "flex-start".into();
+        grid.align_content = crate::browser::layout::AlignContent::parse("flex-start");
 
         // top-container: flex row, min-height 93, padding 10/20, 1 child h=100
         let mut top = LayoutBox::new();

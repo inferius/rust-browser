@@ -625,11 +625,13 @@ pub struct LayoutBox {
     pub flex_wrap: FlexWrap,
     pub justify_content: JustifyContent,
     pub align_items: AlignItems,
-    /// align-self per-item (override align-items): auto/start/end/center/stretch/baseline
-    pub align_self: String,
-    /// justify-self per-item (grid): auto/start/end/center/stretch
-    pub justify_self: String,
-    /// justify-items pro grid container (default pro children).
+    /// align-self per-item (override align-items): Auto = use parent's align-items.
+    pub align_self: AlignSelf,
+    /// justify-self per-item (grid): auto/start/end/center/stretch.
+    /// (Drive: String. Migrace incremental - justify-self ma stejne variants jako
+    /// align-self, ale s semantikou justify - reuse AlignSelf enum.)
+    pub justify_self: AlignSelf,
+    /// justify-items pro grid container (default pro children). String zatim.
     pub justify_items: String,
     /// grid-row-start: 1-based line, 0 = auto.
     pub grid_row_start: i32,
@@ -639,7 +641,7 @@ pub struct LayoutBox {
     /// grid-row-span / grid-column-span (alternativni k start/end).
     pub grid_row_span: i32,
     pub grid_column_span: i32,
-    pub align_content: String,
+    pub align_content: AlignContent,
     pub flex_grow: f32,
     pub flex_shrink: f32,
     pub flex_basis: String,
@@ -1006,8 +1008,8 @@ impl LayoutBox {
             // CSS default pre flex/grid container je `stretch`. AlignItems::Stretch
             // = same default. Drive empty String -> match v parse fell-through.
             align_items: AlignItems::Stretch,
-            align_self: String::new(),
-            justify_self: String::new(),
+            align_self: AlignSelf::Auto,
+            justify_self: AlignSelf::Auto,
             justify_items: String::new(),
             grid_row_start: 0,
             grid_row_end: 0,
@@ -1015,7 +1017,7 @@ impl LayoutBox {
             grid_column_end: 0,
             grid_row_span: 0,
             grid_column_span: 0,
-            align_content: String::new(),
+            align_content: AlignContent::Normal,
             flex_grow: 0.0,
             flex_shrink: 1.0,
             flex_basis: String::new(),
@@ -2150,7 +2152,9 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(v) = s.get("flex-wrap") { bx.flex_wrap = FlexWrap::parse(v); }
     if let Some(v) = s.get("justify-content") { bx.justify_content = JustifyContent::parse(v); }
     if let Some(v) = s.get("align-items") { bx.align_items = AlignItems::parse(v); }
-    if let Some(v) = s.get("align-content") { bx.align_content = v.trim().to_string(); }
+    if let Some(v) = s.get("align-content") { bx.align_content = AlignContent::parse(v); }
+    if let Some(v) = s.get("align-self") { bx.align_self = AlignSelf::parse(v); }
+    if let Some(v) = s.get("justify-self") { bx.justify_self = AlignSelf::parse(v); }
     if let Some(v) = s.get("flex-grow") { bx.flex_grow = v.trim().parse().unwrap_or(0.0); }
     if let Some(v) = s.get("flex-shrink") { bx.flex_shrink = v.trim().parse().unwrap_or(1.0); }
     if let Some(v) = s.get("flex-basis") { bx.flex_basis = v.trim().to_string(); }
@@ -4169,7 +4173,7 @@ pub mod overflow;
 pub use overflow::Overflow;
 
 pub mod flex_enums;
-pub use flex_enums::{FlexDirection, FlexWrap, JustifyContent, AlignItems, BoxSizing};
+pub use flex_enums::{FlexDirection, FlexWrap, JustifyContent, AlignItems, AlignSelf, AlignContent, BoxSizing};
 
 mod shadows;
 pub use shadows::{parse_text_shadow, parse_box_shadow};

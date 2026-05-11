@@ -5925,17 +5925,31 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // PERF: skip kompletne kdyz CSS neobsahuje "transition" - prev_style_map
             // je tezky clone (5000+ HashMap entries) a detect_transitions O(N) walk
             // by stejne nasel zadne diffs.
+            // PERF #2: kdyz Rc::ptr_eq(prev, current) = stejna data (cache hit cascade)
+            // -> ZERO diffs garantied. Skip O(N) walk.
             let mut ended_transitions: Vec<(usize, String)> = Vec::new();
             if self.css_uses_transitions {
                 if let Some(prev) = &self.prev_style_map {
-                    let active_before = std::mem::take(&mut self.active_transitions);
-                    let prev_keys: std::collections::HashSet<(usize, String)> = active_before.iter()
-                        .map(|t| (t.node_id, t.property.clone())).collect();
-                    self.active_transitions = cascade::detect_transitions(&**prev, &*style_map, active_before, elapsed);
-                    let now_keys: std::collections::HashSet<(usize, String)> = self.active_transitions.iter()
-                        .map(|t| (t.node_id, t.property.clone())).collect();
-                    for k in prev_keys.difference(&now_keys) {
-                        ended_transitions.push(k.clone());
+                    let same_map = Rc::ptr_eq(prev, &style_map);
+                    if !same_map {
+                        let active_before = std::mem::take(&mut self.active_transitions);
+                        let prev_keys: std::collections::HashSet<(usize, String)> = active_before.iter()
+                            .map(|t| (t.node_id, t.property.clone())).collect();
+                        self.active_transitions = cascade::detect_transitions(&**prev, &*style_map, active_before, elapsed);
+                        let now_keys: std::collections::HashSet<(usize, String)> = self.active_transitions.iter()
+                            .map(|t| (t.node_id, t.property.clone())).collect();
+                        for k in prev_keys.difference(&now_keys) {
+                            ended_transitions.push(k.clone());
+                        }
+                    } else {
+                        // No cascade change -> drop expired active transitions, keep rest.
+                        let active_before = std::mem::take(&mut self.active_transitions);
+                        for at in active_before {
+                            let total = at.spec.duration_secs + at.spec.delay_secs;
+                            if elapsed - at.start_time < total {
+                                self.active_transitions.push(at);
+                            }
+                        }
                     }
                 }
             }

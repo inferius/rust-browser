@@ -559,9 +559,8 @@ pub fn layout_flex(bx: &mut LayoutBox) {
     let nline = resolved_lines.len();
     let total_gap_cross = line_gap * nline.saturating_sub(1) as f32;
     let lines_natural_total: f32 = resolved_lines.iter().map(|l| l.cross_size).sum::<f32>() + total_gap_cross;
-    // align-content: kdyz neset nebo "stretch" -> rozdel container cross rovnomerne mezi lines.
-    let ac = bx.align_content.trim();
-    let stretch_lines = ac.is_empty() || ac == "stretch" || ac == "normal";
+    // align-content: kdyz neset (Normal) nebo Stretch -> rozdel container cross rovnomerne mezi lines.
+    let stretch_lines = bx.align_content.is_normal_or_stretch();
     if container_cross > 0.0 && stretch_lines && lines_natural_total < container_cross && nline > 0 {
         let extra_per_line = (container_cross - lines_natural_total) / nline as f32;
         for line in &mut resolved_lines {
@@ -591,10 +590,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             // Spocti baseline kazdeho item (synth nebo first-child).
             for &item_idx in line_indices.iter() {
                 let real_idx_b = in_flow[item_idx];
-                let self_str_b = bx.children[real_idx_b].align_self.clone();
-                let item_align_b = if self_str_b.is_empty() || self_str_b == "auto" {
-                    align
-                } else { AlignItems::parse(&self_str_b) };
+                let item_align_b = bx.children[real_idx_b].align_self.resolve(align);
                 if !matches!(item_align_b, AlignItems::Baseline) { continue; }
                 has_baseline = true;
                 let it_b = items[item_idx];
@@ -621,7 +617,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                             let baseline_first = c.children.iter().find(|x|
                                 !matches!(x.position, super::super::layout::Position::Absolute | super::super::layout::Position::Fixed)
                                 && !matches!(x.display, super::super::layout::Display::None)
-                                && x.align_self == "baseline");
+                                && matches!(x.align_self, super::super::layout::AlignSelf::Baseline));
                             let gc_opt = baseline_first.or_else(|| c.children.iter().find(|x|
                                 !matches!(x.position, super::super::layout::Position::Absolute | super::super::layout::Position::Fixed)
                                 && !matches!(x.display, super::super::layout::Display::None)));
@@ -636,7 +632,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                     let first_child_baseline = item_box.children.iter().find(|c|
                         !matches!(c.position, super::super::layout::Position::Absolute | super::super::layout::Position::Fixed)
                         && !matches!(c.display, super::super::layout::Display::None)
-                        && c.align_self == "baseline");
+                        && matches!(c.align_self, super::super::layout::AlignSelf::Baseline));
                     let first_child = first_child_baseline.or_else(|| item_box.children.iter().find(|c|
                         !matches!(c.position, super::super::layout::Position::Absolute | super::super::layout::Position::Fixed)
                         && !matches!(c.display, super::super::layout::Display::None)));
@@ -675,18 +671,19 @@ pub fn layout_flex(bx: &mut LayoutBox) {
     let (ac_start, ac_between) = if !stretch_lines && container_cross > 0.0 {
         let used = total_cross;
         let free = (container_cross - used).max(0.0);
-        match ac {
-            "flex-end" | "end" => (free, 0.0),
-            "center" => (free / 2.0, 0.0),
-            "space-between" => {
+        use super::super::layout::AlignContent as AC;
+        match bx.align_content {
+            AC::FlexEnd | AC::End => (free, 0.0),
+            AC::Center => (free / 2.0, 0.0),
+            AC::SpaceBetween => {
                 if nline <= 1 { (0.0, 0.0) }
                 else { (0.0, free / (nline - 1) as f32) }
             }
-            "space-around" => {
+            AC::SpaceAround => {
                 let g = free / nline.max(1) as f32;
                 (g / 2.0, g)
             }
-            "space-evenly" => {
+            AC::SpaceEvenly => {
                 let g = free / (nline + 1) as f32;
                 (g, g)
             }
@@ -748,10 +745,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         // Pri flex/grid display nebo flex-direction: vzdy first-child.
         let baseline_items_idx: Vec<usize> = line_indices.iter().enumerate().filter(|&(_, &item_idx)| {
             let real_idx = in_flow[item_idx];
-            let self_str = bx.children[real_idx].align_self.clone();
-            let item_align = if self_str.is_empty() || self_str == "auto" {
-                align
-            } else { AlignItems::parse(&self_str) };
+            let item_align = bx.children[real_idx].align_self.resolve(align);
             matches!(item_align, AlignItems::Baseline)
         }).map(|(k, _)| k).collect();
         let _all_have_children = !baseline_items_idx.is_empty() && baseline_items_idx.iter().all(|&k| {
@@ -800,7 +794,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                     let baseline_first = c.children.iter().find(|x|
                         !matches!(x.position, super::super::layout::Position::Absolute | super::super::layout::Position::Fixed)
                         && !matches!(x.display, super::super::layout::Display::None)
-                        && x.align_self == "baseline");
+                        && matches!(x.align_self, super::super::layout::AlignSelf::Baseline));
                     let gc_opt = baseline_first.or_else(|| c.children.iter().find(|x|
                         !matches!(x.position, super::super::layout::Position::Absolute | super::super::layout::Position::Fixed)
                         && !matches!(x.display, super::super::layout::Display::None)));
@@ -841,7 +835,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             }
             let first_baseline_child = line1_indices.iter().find_map(|&gi| {
                 let c = &item_box.children[gi];
-                if c.align_self == "baseline" { Some(c) } else { None }
+                if matches!(c.align_self, super::super::layout::AlignSelf::Baseline) { Some(c) } else { None }
             });
             let first_child = first_baseline_child.or_else(|| item_box.children.iter().find(|c|
                 !matches!(c.position, super::super::layout::Position::Absolute | super::super::layout::Position::Fixed)
@@ -859,13 +853,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         let mut line_max_baseline: f32 = 0.0;
         for (k, &item_idx) in line_indices.iter().enumerate() {
             let real_idx_b = in_flow[item_idx];
-            let self_str_b = bx.children[real_idx_b].align_self.clone();
-            let parent_align_b = align;
-            let item_align_b = if self_str_b.is_empty() || self_str_b == "auto" {
-                parent_align_b
-            } else {
-                AlignItems::parse(&self_str_b)
-            };
+            let item_align_b = bx.children[real_idx_b].align_self.resolve(align);
             if matches!(item_align_b, AlignItems::Baseline) {
                 if item_baselines[k] > line_max_baseline { line_max_baseline = item_baselines[k]; }
             }
@@ -879,10 +867,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             let mut has_baseline = false;
             for (k, &item_idx) in line_indices.iter().enumerate() {
                 let real_idx_b = in_flow[item_idx];
-                let self_str_b = bx.children[real_idx_b].align_self.clone();
-                let item_align_b = if self_str_b.is_empty() || self_str_b == "auto" {
-                    align
-                } else { AlignItems::parse(&self_str_b) };
+                let item_align_b = bx.children[real_idx_b].align_self.resolve(align);
                 if matches!(item_align_b, AlignItems::Baseline) {
                     has_baseline = true;
                     let it_full = items[item_idx];
@@ -921,12 +906,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             let item_cross_size = it.cross_size;
             // align-self per item (override align-items)
             let real_idx_for_align = in_flow[item_idx];
-            let self_str = bx.children[real_idx_for_align].align_self.clone();
-            let item_align = if self_str.is_empty() || self_str == "auto" {
-                align
-            } else {
-                AlignItems::parse(&self_str)
-            };
+            let item_align = bx.children[real_idx_for_align].align_self.resolve(align);
             // Baseline alignment v column direction = fallback na start (CSS Flex L1
             // §8.3: "baseline alignment is supported only in row containers; in
             // columns, treat as start").
@@ -1186,8 +1166,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                 let m_t_c = ch.margin_top.unwrap_or(ch.margin);
                 let m_r_c = ch.margin_right.unwrap_or(ch.margin);
                 let m_b_c = ch.margin_bottom.unwrap_or(ch.margin);
-                let self_str = ch.align_self.clone();
-                let self_align = if self_str.is_empty() || self_str == "auto" { align } else { AlignItems::parse(&self_str) };
+                let self_align = ch.align_self.resolve(align);
                 let is_wrap_reverse = matches!(wrap, FlexWrap::WrapReverse);
                 if direction.is_row() {
                     if no_inset_x {
@@ -1200,7 +1179,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                         ch.rect.x = fcb_x + m_l_c + off;
                     }
                     if no_inset_y {
-                        let mut use_align = if !ch.align_self.is_empty() && ch.align_self != "auto" { self_align } else { align };
+                        let mut use_align = if !ch.align_self.is_auto() { self_align } else { align };
                         // Pro abs s explicit cross size, Stretch nedava smysl - default FlexStart.
                         if matches!(use_align, AlignItems::Stretch) { use_align = AlignItems::FlexStart; }
                         let free = (fcb_h - ch.rect.height - m_t_c - m_b_c).max(0.0);
@@ -1230,7 +1209,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                         ch.rect.y = fcb_y + m_t_c + off;
                     }
                     if no_inset_x {
-                        let mut use_align = if !ch.align_self.is_empty() && ch.align_self != "auto" { self_align } else { align };
+                        let mut use_align = if !ch.align_self.is_auto() { self_align } else { align };
                         if matches!(use_align, AlignItems::Stretch) { use_align = AlignItems::FlexStart; }
                         let free = (fcb_w - ch.rect.width - m_l_c - m_r_c).max(0.0);
                         let effective_align = if is_wrap_reverse {

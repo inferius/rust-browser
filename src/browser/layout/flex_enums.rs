@@ -165,6 +165,119 @@ impl fmt::Display for AlignItems {
     }
 }
 
+/// AlignSelf per-item: AlignItems + Auto sentinel (= use parent's align-items).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AlignSelf {
+    Auto,
+    FlexStart,
+    FlexEnd,
+    Center,
+    Stretch,
+    Baseline,
+}
+
+impl Default for AlignSelf {
+    fn default() -> Self { AlignSelf::Auto }
+}
+
+impl AlignSelf {
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "auto" => Self::Auto,
+            "flex-start" | "start" => Self::FlexStart,
+            "flex-end" | "end" => Self::FlexEnd,
+            "center" => Self::Center,
+            "baseline" => Self::Baseline,
+            "stretch" => Self::Stretch,
+            _ => Self::Auto,
+        }
+    }
+    #[inline]
+    pub fn is_auto(&self) -> bool { matches!(self, AlignSelf::Auto) }
+    /// Resolve do AlignItems pres parent align-items (pri Auto).
+    #[inline]
+    pub fn resolve(&self, parent: AlignItems) -> AlignItems {
+        match self {
+            AlignSelf::Auto => parent,
+            AlignSelf::FlexStart => AlignItems::FlexStart,
+            AlignSelf::FlexEnd => AlignItems::FlexEnd,
+            AlignSelf::Center => AlignItems::Center,
+            AlignSelf::Stretch => AlignItems::Stretch,
+            AlignSelf::Baseline => AlignItems::Baseline,
+        }
+    }
+}
+
+impl fmt::Display for AlignSelf {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            AlignSelf::Auto => "auto",
+            AlignSelf::FlexStart => "flex-start",
+            AlignSelf::FlexEnd => "flex-end",
+            AlignSelf::Center => "center",
+            AlignSelf::Stretch => "stretch",
+            AlignSelf::Baseline => "baseline",
+        })
+    }
+}
+
+/// AlignContent (multi-line flex / grid): JustifyContent variants + Stretch + Normal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AlignContent {
+    Normal,
+    FlexStart,
+    FlexEnd,
+    Center,
+    Stretch,
+    SpaceBetween,
+    SpaceAround,
+    SpaceEvenly,
+    Start,
+    End,
+}
+
+impl Default for AlignContent {
+    fn default() -> Self { AlignContent::Normal }
+}
+
+impl AlignContent {
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "flex-start" => Self::FlexStart,
+            "flex-end" => Self::FlexEnd,
+            "start" => Self::Start,
+            "end" => Self::End,
+            "center" => Self::Center,
+            "stretch" => Self::Stretch,
+            "space-between" => Self::SpaceBetween,
+            "space-around" => Self::SpaceAround,
+            "space-evenly" => Self::SpaceEvenly,
+            _ => Self::Normal,
+        }
+    }
+    #[inline]
+    pub fn is_normal_or_stretch(&self) -> bool {
+        matches!(self, AlignContent::Normal | AlignContent::Stretch)
+    }
+}
+
+impl fmt::Display for AlignContent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            AlignContent::Normal => "normal",
+            AlignContent::FlexStart => "flex-start",
+            AlignContent::FlexEnd => "flex-end",
+            AlignContent::Center => "center",
+            AlignContent::Stretch => "stretch",
+            AlignContent::SpaceBetween => "space-between",
+            AlignContent::SpaceAround => "space-around",
+            AlignContent::SpaceEvenly => "space-evenly",
+            AlignContent::Start => "start",
+            AlignContent::End => "end",
+        })
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BoxSizing {
     ContentBox,

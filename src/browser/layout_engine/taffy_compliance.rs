@@ -246,9 +246,9 @@ mod tests {
                 "flex-wrap" => bx.flex_wrap = crate::browser::layout::FlexWrap::parse(v),
                 "justify-content" => bx.justify_content = crate::browser::layout::JustifyContent::parse(v),
                 "align-items" => bx.align_items = crate::browser::layout::AlignItems::parse(v),
-                "align-content" => bx.align_content = v.clone(),
-                "align-self" => bx.align_self = v.clone(),
-                "justify-self" => bx.justify_self = v.clone(),
+                "align-content" => bx.align_content = crate::browser::layout::AlignContent::parse(v),
+                "align-self" => bx.align_self = crate::browser::layout::AlignSelf::parse(v),
+                "justify-self" => bx.justify_self = crate::browser::layout::AlignSelf::parse(v),
                 "justify-items" => bx.justify_items = v.clone(),
                 "box-sizing" => bx.box_sizing = crate::browser::layout::BoxSizing::parse(v),
                 "grid-row-start" => {
