@@ -7161,13 +7161,16 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             r.upload_image_atlas();
             perf_t("atlas warm-up + upload", _t_atlas);
 
-            // Split list na 3 ranges: page (pred WebGL) + overlay (po WebGL, do main_rt)
-            // + shell (browser chrome, do shell_rt).
-            // shell_split >= overlay_split (shell paint je AZ po overlays).
-            let shell_split = shell_split.max(overlay_split);
+            // Split list na page + overlay (vse po overlay_split = do main_rt).
+            // Dual-RT shell separace: ZATIM DISABLED (alpha-blend compose issue
+            // pri overlay shell_rt -> swap chain, shell pixely se neobjevily v
+            // bound swap rt). shell_cmds = prazdny slice -> draw_full_frame
+            // skipne shell_rt render kompletne. Shell zustava bundle v overlay_cmds
+            // do main_rt jako predtim. Phase 2 cache zustava infrastructure ready.
+            let _ = shell_split;
             let page_cmds = &display_list[..overlay_split];
-            let overlay_cmds = &display_list[overlay_split..shell_split];
-            let shell_cmds = &display_list[shell_split..];
+            let overlay_cmds = &display_list[overlay_split..];
+            let shell_cmds: &[DisplayCommand] = &[];
 
             let _t_runs = std::time::Instant::now();
             // Extract TextRun pole pro per-glyph selection (foundation).
@@ -7241,8 +7244,12 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 r.config.width.hash(&mut h);
                 h.finish()
             } else { 0 };
-            let page_skip = page_hash == self.prev_page_hash && self.prev_page_hash != 0;
-            let shell_skip = shell_hash == self.prev_shell_hash && self.prev_shell_hash != 0;
+            // PHASE 2 DISABLED: cache hint always false. Phase 1 dual buffer alone.
+            // Misbehavior observed - shell invisible. Investigate compose alpha-blend
+            // path before re-enable.
+            let _ = (page_hash, shell_hash);
+            let page_skip = false;
+            let shell_skip = false;
             if let Some(states_rc) = &webgl_states_opt {
                 let states = states_rc.borrow();
                 r.draw_full_frame_cached(page_cmds, overlay_cmds, shell_cmds, &layout_root, Some(&*states), self.scroll_y, chrome_top_logical, page_skip, shell_skip);
@@ -9162,16 +9169,20 @@ impl Renderer {
         // Main RT view - sem kreslime (ne primo na swap chain)
         let main_rt_view = self.main_rt.create_view(&Default::default());
 
-        // 1. CSS display list (page content) -> main_rt. Two-way render: shell jde
-        // do shell_rt separately, takze page muze renderit cele okno bez scissor.
-        // Shell se prekryje pri compose alpha-blendem. chrome_top_logical reserved
-        // pro budouci shell/page area tracking.
-        let _ = chrome_top_logical;
+        // 1. CSS display list (page content) -> main_rt s scissor pod chrome bar.
+        // Logical chrome_top_logical -> physical px = * zoom * scale_factor.
+        // (Dual-RT shell_rt zatim disabled - shell zustava v overlay_cmds do
+        // main_rt. Scissor proto pretrvava.)
+        let chrome_top_phys = (chrome_top_logical * self.zoom * self.scale_factor).round() as u32;
+        let page_scissor = if chrome_top_phys > 0 {
+            Some((0u32, chrome_top_phys, self.config.width,
+                  self.config.height.saturating_sub(chrome_top_phys)))
+        } else { None };
         // page_skip -> skip render do main_rt, reuse z minulosti.
         let had_segments = if page_skip {
-            !cmds.is_empty()  // pretend had_segments aby compose vedel pouzit main_rt
+            !cmds.is_empty()
         } else {
-            self.draw_segments_into_view_clipped(&main_rt_view, cmds, true, None)
+            self.draw_segments_into_view_clipped(&main_rt_view, cmds, true, page_scissor)
         };
 
         // 2. WebGL pass -> main_rt (po page contentu, pred overlay)
