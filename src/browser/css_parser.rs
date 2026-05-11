@@ -199,7 +199,8 @@ pub enum AttrOp {
     Contains,      // [name*="value"]
     StartsWith,    // [name^="value"]
     EndsWith,      // [name$="value"]
-    WordContains,  // [name~="value"]
+    WordContains,  // [name~="value"] - whitespace separated
+    DashMatch,     // [name|="value"] - exact or starts s "value-"
 }
 
 #[derive(Debug, Clone)]
@@ -231,6 +232,7 @@ impl std::fmt::Display for SimpleSelector {
                 AttrOp::StartsWith => write!(f, "^=\"{}\"", a.value.as_deref().unwrap_or(""))?,
                 AttrOp::EndsWith => write!(f, "$=\"{}\"", a.value.as_deref().unwrap_or(""))?,
                 AttrOp::WordContains => write!(f, "~=\"{}\"", a.value.as_deref().unwrap_or(""))?,
+                AttrOp::DashMatch => write!(f, "|=\"{}\"", a.value.as_deref().unwrap_or(""))?,
             }
             f.write_str("]")?;
         }
@@ -469,14 +471,38 @@ pub fn parse_stylesheet(source: &str) -> Stylesheet {
         skip_whitespace_and_comments(&mut chars);
         if chars.peek().is_none() { break; }
 
-        // Read selectors / at-rule until '{' or ';'
+        // Read selectors / at-rule until '{' or ';'. Respekt quote/paren tak ze
+        // `;` v url("a;b") / `@import url("data:text/css;base64,...");` nezarezne
+        // selector predcasne.
         let mut selectors_str = String::new();
         let mut has_block = false;
+        let mut sel_quote: Option<char> = None;
+        let mut sel_paren = 0i32;
+        let mut sel_brack = 0i32;
+        let mut sel_prev = ' ';
         while let Some(&c) = chars.peek() {
-            if c == '{' { chars.next(); has_block = true; break; }
-            if c == ';' { chars.next(); break; }
-            selectors_str.push(c);
-            chars.next();
+            if let Some(q) = sel_quote {
+                selectors_str.push(c);
+                chars.next();
+                if sel_prev != '\\' && c == q { sel_quote = None; }
+                sel_prev = c;
+                continue;
+            }
+            match c {
+                '"' | '\'' => { sel_quote = Some(c); selectors_str.push(c); chars.next(); }
+                '(' => { sel_paren += 1; selectors_str.push(c); chars.next(); }
+                ')' => { sel_paren -= 1; selectors_str.push(c); chars.next(); }
+                '[' => { sel_brack += 1; selectors_str.push(c); chars.next(); }
+                ']' => { sel_brack -= 1; selectors_str.push(c); chars.next(); }
+                '{' if sel_paren == 0 && sel_brack == 0 => {
+                    chars.next(); has_block = true; break;
+                }
+                ';' if sel_paren == 0 && sel_brack == 0 => {
+                    chars.next(); break;
+                }
+                _ => { selectors_str.push(c); chars.next(); }
+            }
+            sel_prev = c;
         }
         let selectors_str = selectors_str.trim().to_string();
         if selectors_str.is_empty() { break; }
@@ -1027,10 +1053,80 @@ fn skip_whitespace_and_comments<I: Iterator<Item=char>>(chars: &mut std::iter::P
 
 fn parse_decls_str(block: &str) -> Vec<Declaration> {
     let mut decls = Vec::new();
-    for stmt in block.split(';') {
+    // Top-level split na `;` ale respektuj ("..."), ('...'), (..), [..], /*..*/.
+    // Bez tohoto minified CSS s `;` uvnitr url("data:..;base64,..") nebo
+    // `background-image: url(http://a/b?q=1;p=2)` rozsekalo declarace nesmyslne.
+    let mut stmts: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut depth_paren = 0i32;
+    let mut depth_brack = 0i32;
+    let mut quote: Option<char> = None;
+    let mut in_block_comment = false;
+    let mut prev_ch: char = ' ';
+    for ch in block.chars() {
+        if in_block_comment {
+            if prev_ch == '*' && ch == '/' { in_block_comment = false; }
+            prev_ch = ch;
+            continue;
+        }
+        if let Some(q) = quote {
+            cur.push(ch);
+            // Escape \" / \' uvnitr stringu (CSS spec: backslash escape).
+            if prev_ch != '\\' && ch == q { quote = None; }
+            prev_ch = ch;
+            continue;
+        }
+        if prev_ch == '/' && ch == '*' {
+            // Strip otevirany `/` z cur.
+            cur.pop();
+            in_block_comment = true;
+            prev_ch = ch;
+            continue;
+        }
+        match ch {
+            '"' | '\'' => { quote = Some(ch); cur.push(ch); }
+            '(' => { depth_paren += 1; cur.push(ch); }
+            ')' => { depth_paren -= 1; cur.push(ch); }
+            '[' => { depth_brack += 1; cur.push(ch); }
+            ']' => { depth_brack -= 1; cur.push(ch); }
+            ';' if depth_paren == 0 && depth_brack == 0 => {
+                if !cur.trim().is_empty() { stmts.push(std::mem::take(&mut cur)); }
+                else { cur.clear(); }
+            }
+            _ => cur.push(ch),
+        }
+        prev_ch = ch;
+    }
+    if !cur.trim().is_empty() { stmts.push(cur); }
+
+    for stmt in stmts {
         let stmt = stmt.trim();
         if stmt.is_empty() { continue; }
-        if let Some(colon) = stmt.find(':') {
+        // Najit prvni top-level `:` (mezi prop a value). `:` v hodnote (url("a:b"),
+        // pseudo-attr value) nepocita - quote/paren aware scan.
+        let mut colon: Option<usize> = None;
+        let mut dp = 0i32;
+        let mut db = 0i32;
+        let mut q: Option<char> = None;
+        let mut prev: char = ' ';
+        for (i, ch) in stmt.char_indices() {
+            if let Some(qc) = q {
+                if prev != '\\' && ch == qc { q = None; }
+                prev = ch;
+                continue;
+            }
+            match ch {
+                '"' | '\'' => { q = Some(ch); }
+                '(' => dp += 1,
+                ')' => dp -= 1,
+                '[' => db += 1,
+                ']' => db -= 1,
+                ':' if dp == 0 && db == 0 => { colon = Some(i); break; }
+                _ => {}
+            }
+            prev = ch;
+        }
+        if let Some(colon) = colon {
             let property = stmt[..colon].trim().to_string();
             let mut value = stmt[colon+1..].trim().to_string();
             let mut important = false;
@@ -1243,23 +1339,28 @@ fn parse_single_selector(s: &str) -> Selector {
                     let mut name = String::new();
                     while i < chars.len() && chars[i] != ']' && chars[i] != '=' && chars[i] != '~'
                         && chars[i] != '^' && chars[i] != '$' && chars[i] != '*' && chars[i] != '|'
+                        && !chars[i].is_whitespace()
                     {
                         name.push(chars[i]); i += 1;
                     }
+                    // Skip whitespace mezi name a operator/].
+                    while i < chars.len() && chars[i].is_whitespace() { i += 1; }
                     let name = name.trim().to_string();
                     let mut op = AttrOp::Exists;
                     let mut value: Option<String> = None;
                     if i < chars.len() && chars[i] != ']' {
-                        // Detekce operatoru
+                        // Detekce operatoru (vc. `|=` = DashMatch - lang|=en match `en`/`en-US`).
                         op = match chars[i] {
                             '=' => AttrOp::Equals,
                             '~' => { i += 1; AttrOp::WordContains }
                             '^' => { i += 1; AttrOp::StartsWith }
                             '$' => { i += 1; AttrOp::EndsWith }
                             '*' => { i += 1; AttrOp::Contains }
+                            '|' => { i += 1; AttrOp::DashMatch }
                             _   => AttrOp::Exists,
                         };
                         if i < chars.len() && chars[i] == '=' { i += 1; }
+                        while i < chars.len() && chars[i].is_whitespace() { i += 1; }
                         // Hodnota - mozna v uvozovkach
                         if i < chars.len() && (chars[i] == '"' || chars[i] == '\'') {
                             let quote = chars[i];

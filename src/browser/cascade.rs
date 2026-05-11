@@ -1632,6 +1632,10 @@ pub fn matches_simple(node: &Rc<Node>, sel: &SimpleSelector) -> bool {
             (AttrOp::WordContains, Some(want), Some(got)) => {
                 if !got.split_whitespace().any(|w| w == want) { return false; }
             }
+            (AttrOp::DashMatch, Some(want), Some(got)) => {
+                // [lang|="en"] match "en" or "en-US" / "en-GB" prefixu.
+                if got != want && !got.starts_with(&format!("{want}-")) { return false; }
+            }
             _ => {}
         }
     }
