@@ -2475,11 +2475,23 @@ fn paint_console_tab(
             display_lines.push((*lvl, String::new(), true));
         }
     }
-    // Stick to bottom: render od konce.
-    let max_visible = (log_h / ROW_H) as usize;
-    let start = display_lines.len().saturating_sub(max_visible);
-    for (i, (lvl, line, first)) in display_lines.iter().skip(start).enumerate() {
-        let ey = log_y + 4.0 + (i as f32) * ROW_H;
+    // Scrollbar + viewport-based render. Pri stick_to_bottom rolovat na konec.
+    let total_h = (display_lines.len() as f32) * ROW_H;
+    let max_scroll = (total_h - log_h).max(0.0);
+    let effective_scroll = if state.console.stick_to_bottom {
+        max_scroll
+    } else {
+        state.console.scroll_y.clamp(0.0, max_scroll)
+    };
+    // Visible range computation.
+    let start_idx = (effective_scroll / ROW_H).floor() as usize;
+    let visible_count = ((log_h / ROW_H).ceil() as usize) + 2;
+    let end_idx = (start_idx + visible_count).min(display_lines.len());
+    let pixel_offset = effective_scroll - (start_idx as f32) * ROW_H;
+    for (vis_i, idx) in (start_idx..end_idx).enumerate() {
+        let (lvl, line, first) = &display_lines[idx];
+        let ey = log_y + 4.0 + (vis_i as f32) * ROW_H - pixel_offset;
+        if ey + ROW_H < log_y || ey > log_y + log_h { continue; }
         let color = match lvl {
             LogLevel::Info | LogLevel::Result => pal.log_info,
             LogLevel::Warn => pal.log_warn,
@@ -2494,6 +2506,16 @@ fn paint_console_tab(
             }
         } else { "  " };
         push_text(cmds, 8.0, ey, format!("{}{}", prefix, line), color, false);
+    }
+    // Scrollbar - track + thumb na pravem okraji.
+    if total_h > log_h {
+        let bar_w = SCROLLBAR_W;
+        let bar_x = win_w - bar_w;
+        push_rect(cmds, bar_x, log_y, bar_w, log_h, pal.bg_panel_alt);
+        let thumb_h = (log_h * log_h / total_h).max(20.0);
+        let thumb_y = log_y + (effective_scroll / max_scroll.max(0.001))
+            * (log_h - thumb_h);
+        push_rect(cmds, bar_x + 2.0, thumb_y, bar_w - 4.0, thumb_h, pal.border_strong);
     }
 
     // Input field.

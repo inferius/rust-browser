@@ -108,10 +108,25 @@ fn walk(
             }
         }
         NodeKind::Text(t) => {
+            // Skip text nodes uvnitr <script>/<style>/<noscript>/<template>.
+            // Real JS / CSS source bloky maji tisice chars, devtools elements
+            // tree by je vykreslil jako one giant line co overflow do styles
+            // pane (uzivatel reportoval "div overflow skript").
+            let parent_tag = node.parent.borrow().upgrade()
+                .and_then(|p| match &p.kind {
+                    NodeKind::Element(t) => Some(t.clone()),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            if matches!(parent_tag.as_str(), "script" | "style" | "noscript" | "template") {
+                return;
+            }
             let trimmed = t.trim();
             if !trimmed.is_empty() {
-                let truncated = if trimmed.chars().count() > 200 {
-                    let s: String = trimmed.chars().take(200).collect();
+                // Truncate na 80 chars (drive 200) - pri row width ~400 px
+                // jsou cca 50 znaku.
+                let truncated = if trimmed.chars().count() > 80 {
+                    let s: String = trimmed.chars().take(80).collect();
                     format!("{}...", s)
                 } else {
                     trimmed.to_string()

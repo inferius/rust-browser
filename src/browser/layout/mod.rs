@@ -311,6 +311,7 @@ pub fn default_display(tag: &str) -> Display {
         | "br" | "img" | "input" | "label" | "button" | "select" | "textarea"
         | "canvas" | "svg" | "mark" | "kbd" | "samp" | "var" | "sub" | "sup"
         | "abbr" | "cite" | "q" | "s" | "del" | "ins" | "time" | "data"
+        | "picture" | "video" | "audio" | "iframe" | "object" | "embed"
             => Display::Inline,
         _ => Display::Block,
     }
@@ -3824,12 +3825,32 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
                 .or_else(|| if bx_clone.rect.height > 0.0 { Some(bx_clone.rect.height) } else { None });
             let estimated_w = explicit_w.unwrap_or_else(|| {
                 let inherited_bold = bx_clone.bold;
-                let text_w = (bx_clone.children.iter()
+                // Replaced inline children (img/svg/canvas/picture > img) -
+                // jejich natural/explicit width dotahnout do estimated_w.
+                // Bez tohoto <picture> s <img width=200> mel sum_text_w=0
+                // -> estimated_w padl na font_size (16). Picture sirka 0.
+                let replaced_w: f32 = bx_clone.children.iter()
+                    .map(|c| {
+                        let cw = c.explicit_width.unwrap_or(0.0).max(c.rect.width);
+                        // Picture / img natural dims z thread_local cache.
+                        let natural = c.image_src.as_ref()
+                            .and_then(|s| get_image_natural_dims(s))
+                            .map(|(w, _)| w).unwrap_or(0.0);
+                        cw.max(natural)
+                    })
+                    .sum::<f32>();
+                let text_w = bx_clone.children.iter()
                     .filter_map(|c| c.text.as_ref())
                     .map(|t| measure_text_width_styled(t, font_size, inherited_bold))
-                    .sum::<f32>())
-                    .max(font_size);
-                text_w + pad_l + pad_r
+                    .sum::<f32>();
+                // Pri replaced inner (img/svg/picture) prefer real width. Pri text
+                // jen children pouzij text_w. Pri kombinaci max + sum text content.
+                let combined = if replaced_w > 0.0 {
+                    replaced_w.max(text_w)
+                } else {
+                    text_w.max(font_size)
+                };
+                combined + pad_l + pad_r
             });
             let element_h = explicit_h.unwrap_or(advance_h + pad_t + pad_b);
             // Inline-block s padding (button) je vyssi nez advance_h - line_height

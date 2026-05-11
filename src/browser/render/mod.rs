@@ -2431,6 +2431,10 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                 self.devtools.sources.scroll_y = (self.devtools.sources.scroll_y - scroll_amount_logical).max(0.0);
                             }
                             crate::devtools::Tab::Console => {
+                                // Wheel up = scroll dovrchu (off bottom). Pri
+                                // user-initiated scroll vypni stick_to_bottom
+                                // (jinak by se okamzite vratil zpet na konec).
+                                self.devtools.console.stick_to_bottom = false;
                                 self.devtools.console.scroll_y = (self.devtools.console.scroll_y - scroll_amount_logical).max(0.0);
                             }
                             _ => {}
