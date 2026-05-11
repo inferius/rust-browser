@@ -121,6 +121,17 @@ impl NodeData {
         }
     }
 
+    /// PERF: allocation-free varianta tag_name(). Vraci &str borrow primo z node.
+    /// Pouzij v hot paths (cascade matches_simple).
+    #[inline]
+    pub fn tag_name_ref(&self) -> Option<&str> {
+        if let NodeKind::Element(tag) = &self.kind {
+            Some(tag.as_str())
+        } else {
+            None
+        }
+    }
+
     /// Vrati hodnotu atributu (pokud existuje).
     pub fn attr(&self, name: &str) -> Option<String> {
         self.attributes.borrow().get(name).cloned()

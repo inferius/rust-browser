@@ -1116,7 +1116,10 @@ fn parse_single_selector(s: &str) -> Selector {
                 tag_buf.push(chars[i]);
                 i += 1;
             }
-            if !tag_buf.is_empty() { tag = Some(tag_buf); }
+            // PERF: lowercase pri PARSE time (jednou per selector) misto pri kazdem
+            // matches_simple call (drive `want_tag.to_lowercase()` alocovaný String
+            // milion× per second pri cascade).
+            if !tag_buf.is_empty() { tag = Some(tag_buf.to_lowercase()); }
         }
 
         while i < chars.len() {

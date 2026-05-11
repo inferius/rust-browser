@@ -1306,14 +1306,19 @@ fn compute_subtree_hash_uncached(node: &Rc<Node>, style_map: &StyleMap) -> u64 {
     if node.tag_name().is_none() {
         node.text_content().hash(&mut h);
     }
-    // Styles (sorted klice pro stable hash)
+    // Styles - XOR commutative hash misto sort (drive `keys.collect()` +
+    // `keys.sort()` alocoval Vec + O(N log N) per element. Pro 1000 elements
+    // = 1000× Vec alloc + sort. XOR akumulator je commutative -> order-independent
+    // bez sortovani).
     if let Some(styles) = super::cascade::get_styles(style_map, node) {
-        let mut keys: Vec<&String> = styles.keys().collect();
-        keys.sort();
-        for k in keys {
-            k.hash(&mut h);
-            styles.get(k).hash(&mut h);
+        let mut style_xor = 0u64;
+        for (k, v) in styles.iter() {
+            let mut hh = ahash::AHasher::default();
+            k.hash(&mut hh);
+            v.hash(&mut hh);
+            style_xor ^= hh.finish();
         }
+        style_xor.hash(&mut h);
     }
     // Children subtree hashes (recursive - kazdy compute_subtree_hash je memoized)
     for child in node.children.borrow().iter() {

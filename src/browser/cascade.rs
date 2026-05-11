@@ -1045,6 +1045,53 @@ fn find_container_size(
     None
 }
 
+/// Quick-reject klasifikator pro selectory: extracted z rightmost simple part.
+/// Per-node check je O(num_classes + 1) namisto full matches_selector walk.
+#[derive(Default)]
+struct SelectorKey {
+    /// Some pri tag != "*", lowercased. None = univerzalni / pseudo.
+    tag: Option<String>,
+    /// Some pri id na rightmost part.
+    id: Option<String>,
+    /// Classes na rightmost part. Vsechny musi byt na node.
+    classes: Vec<String>,
+}
+
+impl SelectorKey {
+    fn from_selector(sel: &super::css_parser::Selector) -> Self {
+        let mut k = SelectorKey::default();
+        if let Some(last) = sel.parts.last() {
+            if let Some(t) = &last.tag {
+                if t != "*" && t != "&" {
+                    k.tag = Some(t.clone());
+                }
+            }
+            k.id = last.id.clone();
+            k.classes = last.classes.clone();
+        }
+        k
+    }
+
+    /// Quick-reject: nevyhneme se follow-up full matches_selector pri true.
+    #[inline]
+    fn might_match(&self, node_tag: &str, node_id: Option<&str>, node_classes: &str) -> bool {
+        if let Some(t) = &self.tag {
+            if t != node_tag { return false; }
+        }
+        if let Some(id) = &self.id {
+            if node_id != Some(id.as_str()) { return false; }
+        }
+        for required_class in &self.classes {
+            let mut found = false;
+            for c in node_classes.split_whitespace() {
+                if c == required_class.as_str() { found = true; break; }
+            }
+            if !found { return false; }
+        }
+        true
+    }
+}
+
 /// Aplikuje stylesheet na DOM strom, vrati StyleMap.
 pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
     let mut style_map: StyleMap = HashMap::new();
@@ -1100,6 +1147,37 @@ pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
         }
         eprintln!("[var] (total {} vars)", variables.len());
     }
+    // PERF: precompute selector keys (rightmost simple part) per rule -
+    // quick reject O(num_classes+1) misto plne matches_selector walk per node.
+    // Vsechny selektory v rule sdilet keys (rule muze mit multiple selectors
+    // comma-separated, kazdy ma vlastni key). Iterate paralel s sel uvnitr loop.
+    // For each sheet:
+    //   sheet_keys[i] = Vec<SelectorKey> jeden per sel v rule i (po flatten rules).
+    let mut layered_keys: Vec<Vec<Vec<SelectorKey>>> = Vec::with_capacity(stylesheets.len()); // [sheet][rule_in_layer][sel]
+    let mut unlayered_keys: Vec<Vec<Vec<SelectorKey>>> = Vec::with_capacity(stylesheets.len()); // [sheet][rule][sel]
+    let mut scope_keys: Vec<Vec<Vec<Vec<SelectorKey>>>> = Vec::with_capacity(stylesheets.len()); // [sheet][scope][rule][sel]
+    for sheet in stylesheets {
+        // Layered (flat across all layers - lookup by index pak v cascade loop).
+        let mut sheet_layered: Vec<Vec<SelectorKey>> = Vec::new();
+        for (_, rules) in &sheet.layered_rules {
+            for rule in rules {
+                sheet_layered.push(rule.selectors.iter().map(SelectorKey::from_selector).collect());
+            }
+        }
+        layered_keys.push(sheet_layered);
+        // Unlayered.
+        let sheet_unlayered: Vec<Vec<SelectorKey>> = sheet.rules.iter()
+            .map(|r| r.selectors.iter().map(SelectorKey::from_selector).collect())
+            .collect();
+        unlayered_keys.push(sheet_unlayered);
+        // Scopes.
+        let sheet_scopes: Vec<Vec<Vec<SelectorKey>>> = sheet.scopes.iter()
+            .map(|sc| sc.rules.iter()
+                .map(|r| r.selectors.iter().map(SelectorKey::from_selector).collect())
+                .collect())
+            .collect();
+        scope_keys.push(sheet_scopes);
+    }
     // Prochazime DOM, pro kazdy element zkontrolujeme vsechny rules
     root.walk(&mut |node| {
         if !matches!(node.kind, NodeKind::Element { .. }) { return; }
@@ -1107,26 +1185,36 @@ pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
         let mut matched_decls: Vec<((u32, u32, u32, usize), &super::css_parser::Declaration)> = Vec::new();
         let mut order = 0;
 
-        for sheet in stylesheets {
+        // PERF: precompute node identity ONCE per node. tag_name_ref vraci &str
+        // (drive `.tag_name()` clone'oval String per call).
+        let node_tag = node.tag_name_ref().unwrap_or("");
+        let node_id_str = node.attr("id");
+        let node_id_opt = node_id_str.as_deref();
+        let node_classes = node.attr("class").unwrap_or_default();
+
+        for (sheet_idx, sheet) in stylesheets.iter().enumerate() {
             // Layered rules nejprve (nizsi prio) - per CSS Cascade Layers L5.
-            // Layer order: pozdejsi v `layer_order` ma vyssi prio v ramci layered.
-            // Vsechny layered jsou pod unlayered.
+            let mut layered_rule_idx = 0usize;
             for (layer_name, rules) in &sheet.layered_rules {
                 let layer_priority = sheet.layer_order.iter().position(|n| n == layer_name)
                     .unwrap_or(0) as u32;
                 for rule in rules {
-                    for sel in &rule.selectors {
+                    let rule_keys = &layered_keys[sheet_idx][layered_rule_idx];
+                    layered_rule_idx += 1;
+                    for (sel_idx, sel) in rule.selectors.iter().enumerate() {
                         if sel.parts.last().map(|p| p.pseudo_element.is_some()).unwrap_or(false) {
+                            continue;
+                        }
+                        // Quick reject before expensive matches_selector walk.
+                        if !rule_keys[sel_idx].might_match(&node_tag, node_id_opt, &node_classes) {
                             continue;
                         }
                         if matches_selector(node, sel) {
                             let spec = specificity(sel);
                             for decl in &rule.declarations {
-                                // Layer priority je nizsi nez unlayered (kterym dame "important_offset" 0)
-                                // Layered: priority bit = 0, dale layer_priority pro razeni mezi layery
                                 let key = (
                                     if decl.important { 1 } else { 0 },
-                                    layer_priority, // nizsi 1. komponent => layered jdou nahoru
+                                    layer_priority,
                                     spec.0 * 1000 + spec.1 + spec.2,
                                     order,
                                 );
@@ -1138,11 +1226,13 @@ pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
                 }
             }
             // Unlayered (default) - nejvyssi prio (po !important).
-            // Pouzivame layer_priority = u32::MAX aby unlayered prepsalo layered.
-            for rule in &sheet.rules {
-                for sel in &rule.selectors {
-                    // Pseudo-element selektory aplikujem v cascade_pseudo, ne tady
+            for (rule_idx, rule) in sheet.rules.iter().enumerate() {
+                let rule_keys = &unlayered_keys[sheet_idx][rule_idx];
+                for (sel_idx, sel) in rule.selectors.iter().enumerate() {
                     if sel.parts.last().map(|p| p.pseudo_element.is_some()).unwrap_or(false) {
+                        continue;
+                    }
+                    if !rule_keys[sel_idx].might_match(&node_tag, node_id_opt, &node_classes) {
                         continue;
                     }
                     if matches_selector(node, sel) {
@@ -1150,7 +1240,7 @@ pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
                         for decl in &rule.declarations {
                             let key = (
                                 if decl.important { 1 } else { 0 },
-                                u32::MAX, // unlayered = nejvyssi
+                                u32::MAX,
                                 spec.0 * 1000 + spec.1 + spec.2,
                                 order,
                             );
@@ -1160,15 +1250,18 @@ pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
                     }
                 }
             }
-            // @scope rules - aplikuje se pokud je node descendant root_selector
-            // a NENI descendant limit_selector.
-            for scope in &sheet.scopes {
+            // @scope rules.
+            for (scope_idx, scope) in sheet.scopes.iter().enumerate() {
                 if !node_in_scope(node, &scope.root_selector, scope.limit_selector.as_deref()) {
                     continue;
                 }
-                for rule in &scope.rules {
-                    for sel in &rule.selectors {
+                for (rule_idx, rule) in scope.rules.iter().enumerate() {
+                    let rule_keys = &scope_keys[sheet_idx][scope_idx][rule_idx];
+                    for (sel_idx, sel) in rule.selectors.iter().enumerate() {
                         if sel.parts.last().map(|p| p.pseudo_element.is_some()).unwrap_or(false) {
+                            continue;
+                        }
+                        if !rule_keys[sel_idx].might_match(&node_tag, node_id_opt, &node_classes) {
                             continue;
                         }
                         if matches_selector(node, sel) {
@@ -1177,7 +1270,7 @@ pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
                                 let key = (
                                     if decl.important { 1 } else { 0 },
                                     u32::MAX,
-                                    spec.0 * 1000 + spec.1 + spec.2 + 1, // +1 = lehka prioritizace nad nescoped
+                                    spec.0 * 1000 + spec.1 + spec.2 + 1,
                                     order,
                                 );
                                 matched_decls.push(((key.0, key.1, key.2, key.3), decl));
@@ -1464,13 +1557,16 @@ pub fn matches_selector(node: &Rc<Node>, sel: &Selector) -> bool {
 pub fn matches_simple(node: &Rc<Node>, sel: &SimpleSelector) -> bool {
     use super::css_parser::AttrOp;
 
-    let tag = match node.tag_name() {
+    // PERF: tag_name_ref() vraci &str - bez String clone per call.
+    let tag = match node.tag_name_ref() {
         Some(t) => t,
         None => return false,
     };
 
     if let Some(want_tag) = &sel.tag {
-        if want_tag != "*" && want_tag.to_lowercase() != tag {
+        // PERF: want_tag uz lowercased pri parse (selectors::parse). tag z
+        // tag_name() take lowercased v DOM build. Bez to_lowercase() per match.
+        if want_tag != "*" && want_tag != tag {
             return false;
         }
     }
@@ -1483,11 +1579,14 @@ pub fn matches_simple(node: &Rc<Node>, sel: &SimpleSelector) -> bool {
 
     if !sel.classes.is_empty() {
         let class_attr = node.attr("class").unwrap_or_default();
-        let classes: Vec<&str> = class_attr.split_whitespace().collect();
+        // PERF: alloc-free contains check pres split_whitespace iter.
+        // Drive `classes.collect::<Vec>` + `classes.contains` allocoval Vec per match.
         for required in &sel.classes {
-            if !classes.contains(&required.as_str()) {
-                return false;
+            let mut found = false;
+            for c in class_attr.split_whitespace() {
+                if c == required.as_str() { found = true; break; }
             }
+            if !found { return false; }
         }
     }
 
@@ -1557,7 +1656,7 @@ pub fn matches_simple(node: &Rc<Node>, sel: &SimpleSelector) -> bool {
                     let children = p.children.borrow();
                     let same_tag: Vec<_> = children.iter()
                         .filter(|c| matches!(c.kind, NodeKind::Element(_)))
-                        .filter(|c| c.tag_name().as_deref() == Some(tag.as_str()))
+                        .filter(|c| c.tag_name().as_deref() == Some(tag))
                         .collect();
                     let pos = same_tag.iter().position(|c| Rc::ptr_eq(c, node));
                     let pos = match pos { Some(p) => p, None => return false };
@@ -1585,14 +1684,14 @@ pub fn matches_simple(node: &Rc<Node>, sel: &SimpleSelector) -> bool {
             }
             "optional" => {
                 // :optional - jen na form input/select/textarea co NEMA required
-                let is_form = matches!(tag.as_str(), "input" | "select" | "textarea");
+                let is_form = matches!(tag, "input" | "select" | "textarea");
                 if !is_form || node.attr("required").is_some() { return false; }
             }
             "disabled" => {
                 if node.attr("disabled").is_none() { return false; }
             }
             "enabled" => {
-                let is_form = matches!(tag.as_str(), "input" | "select" | "textarea" | "button");
+                let is_form = matches!(tag, "input" | "select" | "textarea" | "button");
                 if !is_form || node.attr("disabled").is_some() { return false; }
             }
             "checked" => {
@@ -1600,7 +1699,7 @@ pub fn matches_simple(node: &Rc<Node>, sel: &SimpleSelector) -> bool {
                 if node.attr("checked").is_none() { return false; }
             }
             "read-only" => {
-                let is_form = matches!(tag.as_str(), "input" | "textarea");
+                let is_form = matches!(tag, "input" | "textarea");
                 if !is_form { return false; }
                 // readonly attribut nebo not text-like input
                 if node.attr("readonly").is_none() {
@@ -1608,7 +1707,7 @@ pub fn matches_simple(node: &Rc<Node>, sel: &SimpleSelector) -> bool {
                 }
             }
             "read-write" => {
-                let is_form = matches!(tag.as_str(), "input" | "textarea");
+                let is_form = matches!(tag, "input" | "textarea");
                 if !is_form || node.attr("readonly").is_some() || node.attr("disabled").is_some() {
                     return false;
                 }
@@ -1630,12 +1729,12 @@ pub fn matches_simple(node: &Rc<Node>, sel: &SimpleSelector) -> bool {
             }
             "open" => {
                 // :open - <details>/<dialog>/<select>/<input> co jsou otevrene
-                let tag = tag.as_str();
+                let tag = tag;
                 if !matches!(tag, "details" | "dialog" | "select" | "input") { return false; }
                 if node.attr("open").is_none() { return false; }
             }
             "closed" => {
-                let tag = tag.as_str();
+                let tag = tag;
                 if !matches!(tag, "details" | "dialog") { return false; }
                 if node.attr("open").is_some() { return false; }
             }
@@ -1661,7 +1760,7 @@ pub fn matches_simple(node: &Rc<Node>, sel: &SimpleSelector) -> bool {
             "user-valid" => {
                 // Selectors L5: :user-valid - prvek byl uzivatelem zmenen + je validni
                 // Aproximace: pokud ma data-user-valid="true" attribute, OR same logic jako :valid
-                let is_form = matches!(tag.as_str(), "input" | "select" | "textarea");
+                let is_form = matches!(tag, "input" | "select" | "textarea");
                 if !is_form { return false; }
                 if node.attr("data-user-valid").as_deref() != Some("true") {
                     if node.attr("required").is_some() {
@@ -1671,7 +1770,7 @@ pub fn matches_simple(node: &Rc<Node>, sel: &SimpleSelector) -> bool {
                 }
             }
             "user-invalid" => {
-                let is_form = matches!(tag.as_str(), "input" | "select" | "textarea");
+                let is_form = matches!(tag, "input" | "select" | "textarea");
                 if !is_form { return false; }
                 if node.attr("data-user-invalid").as_deref() != Some("true") {
                     let mut is_invalid = false;
@@ -1684,7 +1783,7 @@ pub fn matches_simple(node: &Rc<Node>, sel: &SimpleSelector) -> bool {
             }
             "valid" => {
                 // :valid match pokud form input s required ma neprazdnou hodnotu
-                let is_form = matches!(tag.as_str(), "input" | "select" | "textarea" | "form");
+                let is_form = matches!(tag, "input" | "select" | "textarea" | "form");
                 if !is_form { return false; }
                 if node.attr("required").is_some() {
                     let val = node.attr("value").unwrap_or_default();
@@ -1699,7 +1798,7 @@ pub fn matches_simple(node: &Rc<Node>, sel: &SimpleSelector) -> bool {
                 }
             }
             "invalid" => {
-                let is_form = matches!(tag.as_str(), "input" | "select" | "textarea" | "form");
+                let is_form = matches!(tag, "input" | "select" | "textarea" | "form");
                 if !is_form { return false; }
                 let mut is_invalid = false;
                 if node.attr("required").is_some() {
@@ -1716,7 +1815,7 @@ pub fn matches_simple(node: &Rc<Node>, sel: &SimpleSelector) -> bool {
             }
             "default" => {
                 // :default match pro default-checked input + button[type=submit]
-                let is_default = match tag.as_str() {
+                let is_default = match tag {
                     "button" => node.attr("type").as_deref().unwrap_or("submit") == "submit",
                     "input" => node.attr("checked").is_some(),
                     _ => false,

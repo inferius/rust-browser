@@ -267,7 +267,8 @@ fn extract_text_runs(
 }
 
 fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: &ImageAtlas, zoom: f32) -> Vec<Vertex> {
-    let mut verts = Vec::new();
+    // PERF: pre-alloc capacity estimate (6 verts per cmd avg).
+    let mut verts = Vec::with_capacity(commands.len() * 6);
     for cmd in commands {
         match cmd {
             DisplayCommand::Rect { x, y, w, h, color, radius } => {
