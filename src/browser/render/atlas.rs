@@ -339,6 +339,12 @@ impl GlyphAtlas {
         if let Some(rest) = family.strip_prefix("__bold__:") {
             let bold_key = format!("{}__bold__", rest);
             if let Some(f) = self.extra_fonts.get(&bold_key).and_then(Self::first_font) { return f; }
+            // CSS comma list (font-family: "Ubuntu", "Roboto", sans-serif).
+            for alt in rest.split(',') {
+                let trimmed = alt.trim().trim_matches('"').trim_matches('\'');
+                let bk = format!("{}__bold__", trimmed);
+                if let Some(f) = self.extra_fonts.get(&bk).and_then(Self::first_font) { return f; }
+            }
             if let Some(f) = self.extra_fonts.get(rest).and_then(Self::first_font) { return f; }
             if let Some(b) = &self.font_bold { return b; }
             return self.font_for(rest);

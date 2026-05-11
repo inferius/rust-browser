@@ -1297,10 +1297,14 @@ pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
         for (_, decl) in matched_decls {
             let resolved = resolve_value_with_funcs(&decl.value, &variables, &functions);
             let resolved = resolve_attr_in_value(&resolved, node);
-            // revert / revert-layer / unset / initial: odstranit prop z computed map
-            // (ucinne resetuje na UA/inherited default). Vymazeme pokud jiz v map je.
+            // CSS-wide keywords: inherit / initial / unset / revert / revert-layer.
+            // `inherit` = remove + propagate_inherited dosadi parent (pro inherited
+            // props). `initial` / `unset` / `revert` ucinne reset na default.
+            // Bez handling `inherit` zustal jako literal string v mapa ->
+            // bx.font_family = "inherit" -> lookup atlas "inherit" -> None ->
+            // system default font, ne real parent.
             let kw = resolved.trim();
-            if matches!(kw, "unset" | "initial" | "revert" | "revert-layer") {
+            if matches!(kw, "inherit" | "unset" | "initial" | "revert" | "revert-layer") {
                 styles.remove(&decl.property);
                 continue;
             }
@@ -1317,7 +1321,7 @@ pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
                         let resolved = resolve_value(&val, &variables);
                         let resolved = resolve_attr_in_value(&resolved, node);
                         let kw = resolved.trim();
-                        if matches!(kw, "unset" | "initial" | "revert" | "revert-layer") {
+                        if matches!(kw, "inherit" | "unset" | "initial" | "revert" | "revert-layer") {
                             styles.remove(&prop);
                             continue;
                         }
