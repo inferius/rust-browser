@@ -2,6 +2,79 @@
 
 Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
 
+## Session N+19: mileneckaseznamka.cz fixes + dual render arch
+
+**2471 tests pass, build clean.**
+
+Real-world web debugging (`https://www.mileneckaseznamka.cz`):
+
+1. **Grid auto-row fallback nafukoval row tracky** (`c2b4fa4`)
+   - `fallback_h = inner_h / rows` distribuoval container vysku rovnomerne
+   - Nasledny intrinsic pass row_tracks updatoval JEN nahoru -> fallback nemohl
+     SHRINKovat na intrinsic.
+   - Real: right-container.h=6022, 3 in-flow items, 6022/3=**2007**.
+     top-container intrinsic=120 (min-height:93px + content+padding) ale row
+     zustal 2007 -> top-container.rect.height=2007 misto 93. Cely page rozjety.
+   - Fix: fallback_h = 0. Auto rows shrinknou na intrinsic per spec.
+   - Update grid_spec_tests::gs_layout_2x2/3x3 (drive prazdne child() rely on
+     fallback - ted sized_child(0, 50)).
+
+2. **position:absolute na display:inline** (`a961cc8`)
+   - `#lost_pwd_button { position: absolute; right: 7px; top: 47px }`
+   - display=inline -> padl do inline_buffer + flush_inline a contribuoval
+     h=100 do parent content size. .login-section z 231 na 340.
+   - Fix: layout_block - matches!(child.position, Absolute|Fixed) check PRED
+     display dispatch. Treat as block, OOF, neposouva cursor_y.
+
+3. **position:fixed CB = viewport** (`a961cc8`)
+   - .development-mode-enabled-warning {position:fixed; top:0; left:10px}
+   - Driv sedela pri parent's inner_box (= x=345) misto pri viewport edge.
+   - Fix: flex/grid/block OOF check is_fixed - pak CB = MATH_VIEWPORT (0,0,vw,vh)
+     misto cb_x/y/w/h parenta. MATH_VIEWPORT nastaven v cascade_with_viewport.
+
+4. **Dual render pass** (`f480dfa` + `4d2e41f`)
+   - **Phase 1** (`f480dfa`): shell_rt: wgpu::Texture pridana Renderer.
+     Browser chrome (tabs, addr bar, scrollbars) jde do shell_rt separately,
+     page content do main_rt. Compose: main_rt -> swap, pak shell_rt
+     alpha-blend pres page. shell_split index v render() oznacuje hranici.
+     draw_full_frame ma shell_cmds parametr. Shell_rt clearovan transparent
+     (a=0) aby alpha-blend compose nezakryl page mimo shell area. Removed
+     chrome_top page scissor (page muze full window, shell overlay sam).
+   - **Phase 2** (`4d2e41f`): per-buffer state hash cache.
+     prev_page_hash + prev_shell_hash polozky v Renderer. Per-frame hashing:
+     - page_hash: scroll, zoom, viewport, cascade_hash, frame_counter,
+       devtools state (panel_open, tab, selected, find_open, sel anchor)
+     - shell_hash: active tab, addr_open, addr_input, bookmarks visible,
+       tab list state, url len, tooltip
+     Pri match s prev -> skip render do toho RT. draw_full_frame_cached
+     nova varianta (page_skip, shell_skip). Backwards-compat
+     draw_full_frame wrapper s skip=false.
+     Idle frames = no render work, just compose cached -> swap.
+     Shell hover bez page change = skip page render. Page scroll bez shell
+     change = skip shell render.
+
+**Co zbyva na mileneckaseznamka.cz** (visualni issues z screenshot, nepodarilo
+se v teto session):
+
+- **Diakritika boxes** (š/ž/ř/ě/ď). Font glyph rendering. Roboto variable font
+  ma diakritiku ale asi atlas mapuje spatne. Investigate: atlas.rs + font
+  loading. Maybe codepoint -> glyph_id mismatch pri variable font.
+- **Yellow profile cards prazdne** = `.skeleton-card` (placeholder). Real data
+  nacita JS pres `fetch(/api/...)` -> JSON -> insert do DOM. User rekl fetch
+  je jednoduchy REST API. Pokud fetch nefunguje, run engine + check
+  network/console log. Engine ma `fetch` impl pres ureq.
+- **Photos in top-miniature** rozhazene texty. Carousel jsou img elementy
+  ktere maji byt vedle sebe v animated divu. Investigate: img loading +
+  lazy load (`data-src` pattern), animation transform.
+- **Logo h 114 vs Chrome 92**. full-logo-img content h=70 ours vs 48 Chrome.
+  Image natural size issue. Investigate: image decode dimensions for
+  `/images/full-logo.png` (or whatever path).
+
+Spustit `cargo run -- browser https://www.mileneckaseznamka.cz/` -> Ctrl+Shift+D
+dump -> compare s chrome-dump-fixed.txt.
+
+---
+
 ## Session N+18: layout pre-pass stale-state fixes + family-aware measure
 
 **2470 tests pass, build clean.**
