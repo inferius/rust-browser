@@ -41,9 +41,10 @@ pub fn layout_grid(bx: &mut LayoutBox) {
     } else { bx.column_gap };
 
     // grid-auto-flow detect early.
+    // dense varianta (CSS Grid §8.5) parsuje ale neimplementuje - po
+    // placement nepocita backtracking pres earlier free cells.
     let auto_flow_str = bx.grid_auto_flow.trim();
     let column_flow = auto_flow_str.contains("column");
-    let dense_flow = auto_flow_str.contains("dense");
     // Parse + resolve column tracks
     let mut col_tracks = resolve_tracks(&bx.grid_template_columns, inner_w, col_gap);
     let (mut col_token_kinds, mut col_is_autofit) = parse_track_tokens_with_autofit(&bx.grid_template_columns, inner_w, col_gap);
@@ -219,7 +220,6 @@ pub fn layout_grid(bx: &mut LayoutBox) {
             }
         }
     }
-    let _ = (column_flow, dense_flow);
     let cols = col_tracks.len();
     // Helper: resolve grid-column-start s prepend offsetem.
     let _resolve_col_start = |start: i32| -> Option<usize> {
@@ -249,7 +249,6 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         _ => false,
     }).collect();
 
-    let _ = (column_flow, dense_flow);
     // In-flow item count (abs/fixed/display:none vyradit pri vypoctu rows).
     let _in_flow_count = bx.children.iter()
         .filter(|c| !super::is_out_of_flow(c) && !matches!(c.display, super::super::layout::Display::None))
