@@ -1868,14 +1868,21 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                 ch.rect.width = 0.0; ch.rect.height = 0.0;
                 continue;
             }
-            // Pri grid-row/col placement, CB v dane axe vychazi z grid track positions.
-            let mut ab_cb_x = cb_x;
-            let mut ab_cb_y = cb_y;
-            let mut ab_cb_w = cb_w;
-            let mut ab_cb_h = cb_h;
+            // Position: fixed -> CB = initial containing block (= viewport, ne parent).
+            // Bez tohoto by .development-mode-enabled-warning {position:fixed;top:0;left:10px}
+            // sedela inside right-container's inner_box (= x=345) misto pri viewport edge (=10).
+            let is_fixed = matches!(ch.position, super::super::layout::Position::Fixed);
+            let (vw, vh) = super::super::cascade::MATH_VIEWPORT.with(|c| *c.borrow());
+            let (mut ab_cb_x, mut ab_cb_y, mut ab_cb_w, mut ab_cb_h) = if is_fixed && vw > 0.0 && vh > 0.0 {
+                (0.0, 0.0, vw, vh)
+            } else {
+                (cb_x, cb_y, cb_w, cb_h)
+            };
             // CSS spec: pri grid-col-start ale no end, CB konci na border-box edge.
             let has_col_end = ch.grid_column_end > 0 || ch.grid_column_span > 0;
             let has_row_end = ch.grid_row_end > 0 || ch.grid_row_span > 0;
+            // Fixed: skip grid-track CB override (CB je viewport, ne grid cell).
+            if !is_fixed {
             // Only end (no start): CB od border-edge do track end.
             if ch.grid_column_start == 0 && ch.grid_column_end > 0 {
                 let c_idx = ((ch.grid_column_end - 1) as usize).min(cols.saturating_sub(1));
@@ -1918,6 +1925,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                     ab_cb_h = (bx.rect.y + bx.rect.height - track_y).max(0.0);
                 }
             }
+            } // !is_fixed
             super::layout_absolute_child(ch, ab_cb_x, ab_cb_y, ab_cb_w, ab_cb_h);
             // Override pri zadnem insetu: respektuj justify-self / align-self.
             let no_inset_x = ch.offset_left.is_none() && ch.offset_right.is_none();

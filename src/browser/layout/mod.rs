@@ -3221,6 +3221,55 @@ pub fn layout_block(bx: &mut LayoutBox) {
         let float_v = bx.children[i].float_value.clone();
         let clear_v = bx.children[i].clear_value.clone();
 
+        // CSS Position: absolute / fixed - out-of-flow. Treat as block, skip flow
+        // advance. Bez tohoto byl display:inline + position:absolute prvek
+        // (napr. .login-section #lost_pwd_button) zacleneny do inline flow a
+        // jeho intrinsic h=100 nafouklo parent content height.
+        if matches!(bx.children[i].position, Position::Absolute | Position::Fixed) {
+            if !inline_buffer.is_empty() {
+                cursor_y = flush_inline(bx, &inline_buffer, inner_x, cursor_y, inner_w);
+                inline_buffer.clear();
+            }
+            // Fixed: CB = viewport, ne parent.
+            let is_fixed = matches!(bx.children[i].position, Position::Fixed);
+            let (vw, vh) = super::cascade::MATH_VIEWPORT.with(|c| *c.borrow());
+            let (cb_x, cb_y, cb_w, cb_h) = if is_fixed && vw > 0.0 && vh > 0.0 {
+                (0.0, 0.0, vw, vh)
+            } else {
+                (inner_x, inner_y, inner_w, bx.rect.height
+                    - bx.padding_top.unwrap_or(bx.padding)
+                    - bx.padding_bottom.unwrap_or(bx.padding)
+                    - 2.0 * bx.border_width)
+            };
+            let child = &mut bx.children[i];
+            // Width: explicit / auto -> shrink-to-fit (use cb_w upper bound).
+            child.rect.width = child.explicit_width.unwrap_or_else(|| {
+                if let Some(p) = child.width_pct { cb_w * p } else { cb_w }
+            });
+            if let Some(eh) = child.explicit_height {
+                child.rect.height = eh;
+            }
+            // Apply offset (top/left/right/bottom) relative to CB.
+            child.rect.x = cb_x + child.offset_left.unwrap_or(0.0);
+            child.rect.y = cb_y + child.offset_top.unwrap_or(0.0);
+            if let Some(r) = child.offset_right {
+                child.rect.x = cb_x + cb_w - r - child.rect.width;
+            }
+            // Treat display:inline as block for layout (inline OOF rare edge case).
+            let saved_display = child.display;
+            if matches!(child.display, Display::Inline) {
+                child.display = Display::Block;
+            }
+            layout_dispatch(child);
+            child.display = saved_display;
+            if let Some(b) = bx.children[i].offset_bottom {
+                let h = bx.children[i].rect.height;
+                bx.children[i].rect.y = cb_y + cb_h - b - h;
+            }
+            i += 1;
+            continue;
+        }
+
         // CSS clear: posun cursor_y pod aktivni floats odpovidajici strany.
         if clear_v == "left" || clear_v == "right" || clear_v == "both" {
             for (_fx, fy, _fw, fh, side) in &floats {

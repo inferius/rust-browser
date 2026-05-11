@@ -1199,7 +1199,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         if mnh > 0.0 && bx.rect.height < mnh { bx.rect.height = mnh; }
     }
 
-    // 8. Position absolute/fixed children (CB = padding-box parenta)
+    // 8. Position absolute/fixed children (CB = padding-box parenta; fixed = viewport)
     let cb_x = bx.rect.x + bw_l;
     let cb_y = bx.rect.y + bw_t;
     let cb_w = (bx.rect.width - bw_l - bw_r).max(0.0);
@@ -1212,9 +1212,15 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                 ch.rect.width = 0.0; ch.rect.height = 0.0;
                 continue;
             }
+            // Fixed: CB = initial CB (viewport), ne parent.
+            let is_fixed = matches!(ch.position, super::super::layout::Position::Fixed);
+            let (vw, vh) = super::super::cascade::MATH_VIEWPORT.with(|c| *c.borrow());
+            let (fcb_x, fcb_y, fcb_w, fcb_h) = if is_fixed && vw > 0.0 && vh > 0.0 {
+                (0.0, 0.0, vw, vh)
+            } else { (cb_x, cb_y, cb_w, cb_h) };
             // Pre-layout: pokud abs nema inset v dane ose, pouzij flex-container
             // alignment (justify-content / align-items) pro static position.
-            super::layout_absolute_child(ch, cb_x, cb_y, cb_w, cb_h);
+            super::layout_absolute_child(ch, fcb_x, fcb_y, fcb_w, fcb_h);
             // Override pri zadnem insetu: respektuj justify-content / align-items / align-self.
             let no_inset_x = ch.offset_left.is_none() && ch.offset_right.is_none();
             let no_inset_y = ch.offset_top.is_none() && ch.offset_bottom.is_none();
@@ -1228,19 +1234,19 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                 let is_wrap_reverse = matches!(wrap, FlexWrap::WrapReverse);
                 if direction.is_row() {
                     if no_inset_x {
-                        let free = (cb_w - ch.rect.width - m_l_c - m_r_c).max(0.0);
+                        let free = (fcb_w - ch.rect.width - m_l_c - m_r_c).max(0.0);
                         let off = match justify {
                             JustifyContent::FlexEnd => free,
                             JustifyContent::Center => free / 2.0,
                             _ => 0.0,
                         };
-                        ch.rect.x = cb_x + m_l_c + off;
+                        ch.rect.x = fcb_x + m_l_c + off;
                     }
                     if no_inset_y {
                         let mut use_align = if !ch.align_self.is_empty() && ch.align_self != "auto" { self_align } else { align };
                         // Pro abs s explicit cross size, Stretch nedava smysl - default FlexStart.
                         if matches!(use_align, AlignItems::Stretch) { use_align = AlignItems::FlexStart; }
-                        let free = (cb_h - ch.rect.height - m_t_c - m_b_c).max(0.0);
+                        let free = (fcb_h - ch.rect.height - m_t_c - m_b_c).max(0.0);
                         // Wrap-reverse flips cross start/end.
                         let effective_align = if is_wrap_reverse {
                             match use_align {
@@ -1254,22 +1260,22 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                             AlignItems::Center => free / 2.0,
                             _ => 0.0,
                         };
-                        ch.rect.y = cb_y + m_t_c + off;
+                        ch.rect.y = fcb_y + m_t_c + off;
                     }
                 } else {
                     if no_inset_y {
-                        let free = (cb_h - ch.rect.height - m_t_c - m_b_c).max(0.0);
+                        let free = (fcb_h - ch.rect.height - m_t_c - m_b_c).max(0.0);
                         let off = match justify {
                             JustifyContent::FlexEnd => free,
                             JustifyContent::Center => free / 2.0,
                             _ => 0.0,
                         };
-                        ch.rect.y = cb_y + m_t_c + off;
+                        ch.rect.y = fcb_y + m_t_c + off;
                     }
                     if no_inset_x {
                         let mut use_align = if !ch.align_self.is_empty() && ch.align_self != "auto" { self_align } else { align };
                         if matches!(use_align, AlignItems::Stretch) { use_align = AlignItems::FlexStart; }
-                        let free = (cb_w - ch.rect.width - m_l_c - m_r_c).max(0.0);
+                        let free = (fcb_w - ch.rect.width - m_l_c - m_r_c).max(0.0);
                         let effective_align = if is_wrap_reverse {
                             match use_align {
                                 AlignItems::FlexStart => AlignItems::FlexEnd,
@@ -1282,7 +1288,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                             AlignItems::Center => free / 2.0,
                             _ => 0.0,
                         };
-                        ch.rect.x = cb_x + m_l_c + off;
+                        ch.rect.x = fcb_x + m_l_c + off;
                     }
                 }
             }
