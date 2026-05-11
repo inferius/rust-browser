@@ -1330,14 +1330,45 @@ pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
         style_map.insert(node_id(node), styles);
     });
 
+    // UA tag defaults pro h1-h6 font-size + font-weight - musi byt v cascade
+    // entry PRED propagate_inherited, jinak parent font-size inherit overrida
+    // tag default (h2 v `body { font-size: 13px }` dostane 13 misto UA 24).
+    apply_ua_tag_defaults(root, &mut style_map);
     // Inheritance pass: pro kazdy element, ktery NEMA explicit hodnotu pro
     // inherited CSS prop (font-*, color, text-*, line-height, ...), prevezme
     // hodnotu od parent. CSS spec: inherited props automaticky kaskaduji.
-    // Bez tohoto by spany na stranky s body { font-family: Courier } nedostavaly
-    // Courier - mereni pak na nasem default Times davalo zcela jine sirky.
     propagate_inherited(root, &mut style_map, None);
 
     style_map
+}
+
+/// Aplikuje UA tag defaults (font-size pro h1-h6, font-weight bold) do
+/// cascade entry. Volat PRED propagate_inherited - inherit pak respektuje
+/// tag-specific UA values.
+fn apply_ua_tag_defaults(node: &Rc<Node>, style_map: &mut StyleMap) {
+    if let Some(tag) = node.tag_name_ref() {
+        let id = node_id(node);
+        let entry = style_map.entry(id).or_default();
+        let (fs, bold) = match tag {
+            "h1" => (Some("2em"), true),
+            "h2" => (Some("1.5em"), true),
+            "h3" => (Some("1.17em"), true),
+            "h4" => (Some("1em"), true),
+            "h5" => (Some("0.83em"), true),
+            "h6" => (Some("0.67em"), true),
+            "strong" | "b" => (None, true),
+            _ => (None, false),
+        };
+        if let Some(v) = fs {
+            entry.entry("font-size".into()).or_insert_with(|| v.to_string());
+        }
+        if bold {
+            entry.entry("font-weight".into()).or_insert_with(|| "bold".to_string());
+        }
+    }
+    for ch in node.children.borrow().iter() {
+        apply_ua_tag_defaults(ch, style_map);
+    }
 }
 
 /// Recurse top-down a propaguj inherited props od parent na deti.
@@ -1346,18 +1377,23 @@ fn propagate_inherited(
     style_map: &mut StyleMap,
     parent_styles: Option<&HashMap<String, String>>,
 ) {
-    // Inherited CSS props - subset bez tech, ktere maji UA defaults v
-    // build_box (font-size pro h1-h6, font-weight pro h1-h6+strong+b, atd.).
-    // Inherit jen vec, kde UA defaults nejsou specificke per-tag.
-    // font-family je nejdulezitejsi (mereni text widths) - kazda stranka by
-    // mela specificky font.
+    // Inherited CSS props per CSS spec. `font-size`, `font-weight`, `font-stretch`
+    // jsou inherited (NE jen aproximace pres UA tag defaults v build_box). Bez
+    // toho `body { font-size: 13px }` se NEPROPAGOVAL do deti - cascade vracela
+    // chybejici font-size, layoutbox zustal default 16. (Pri h1-h6 UA tag
+    // defaults v `apply_default_tag_styles` overrida bx.font_size jen pri
+    // ne-CSS-specified value; entry mapy uz inherit-only, kdykoli rule s
+    // explicit font-size winsne, jinak parent value.)
     const INHERITED: &[&str] = &[
-        "font-family", "font-style", "font-variant",
+        "font-family", "font-size", "font-weight", "font-style", "font-stretch",
+        "font-variant", "font-feature-settings", "font-variation-settings",
         "color", "line-height", "letter-spacing", "word-spacing",
         "text-align",
         "text-indent", "text-transform", "white-space", "word-break", "overflow-wrap",
         "direction", "writing-mode", "visibility", "cursor", "list-style", "list-style-type",
         "list-style-position", "list-style-image", "quotes", "tab-size",
+        // CSS variables (--foo) inherit. Bez tohoto :root vars nebyly available
+        // pri deeper cascade lookup pres var() resolution v deti rules.
     ];
     if matches!(node.kind, NodeKind::Element { .. }) {
         let id = node_id(node);
@@ -1369,6 +1405,15 @@ fn propagate_inherited(
                     if let Some(v) = parent.get(prop) {
                         entry.insert(prop.into(), v.clone());
                     }
+                }
+            }
+            // CSS custom properties (--foo) inherit per CSS Variables spec.
+            // Bez tohoto deep child v stromu nemel pristup k :root --vars
+            // pro var() resolution -> rules s var(--text-primary) vracely
+            // empty/initial value.
+            for (k, v) in parent.iter() {
+                if k.starts_with("--") && !entry.contains_key(k) {
+                    entry.insert(k.clone(), v.clone());
                 }
             }
         }
