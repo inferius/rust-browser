@@ -119,6 +119,8 @@ pub fn compute_transform_matrix(ops: &[TransformOp], parent_perspective: Option<
 /// matrix3d s non-zero z, translate3d s nonzero z).
 /// Pure 2D transformy (Translate/Scale/Rotate Z) nepotrebuji RT pipeline.
 pub fn needs_3d_pipeline(ops: &[TransformOp], parent_perspective: Option<f32>) -> bool {
+    // PERF fast-path: 99% elementu nema transform. Bail without iter.
+    if ops.is_empty() && parent_perspective.is_none() { return false; }
     if parent_perspective.is_some() {
         // Perspective wrapper trebuje 3D jen pokud transform aspon nejak meni Z
         for op in ops {

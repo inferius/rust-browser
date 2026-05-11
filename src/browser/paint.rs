@@ -1046,25 +1046,35 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
     // Predame own perspective do children (s fallbackem na parent)
     let child_perspective = bx.perspective.or(parent_perspective);
 
-    // Apply opacity multiply + filter chain + clip-path na vsechny barvy.
-    // PERF: iterate &bx.filter primo (drive `bx.filter.clone()` cloned Vec per
-    // paint_box call - vetsina boxu nema filter, alocace zbytecna).
+    // PERF: vetsina boxu (99%+) nema filter ani backdrop_filter. Fast-path
+    // bail bez iter/sum kdyz oba empty.
     let alpha_mul = (bx.opacity * 255.0) as u8;
-    let blur_radius: f32 = bx.filter.iter().filter_map(|op| match op {
-        crate::browser::layout::FilterOp::Blur(r) => Some(*r),
-        _ => None,
-    }).sum();
-    // Drop-shadow detection - jen kdyz filter neprazdny.
-    let _has_drop_shadow = bx.filter.iter().any(|op| matches!(op,
-        crate::browser::layout::FilterOp::DropShadow { .. }));
+    let filter_empty = bx.filter.is_empty();
+    let backdrop_empty = bx.backdrop_filter.is_empty();
+    let blur_radius: f32 = if filter_empty { 0.0 } else {
+        bx.filter.iter().filter_map(|op| match op {
+            crate::browser::layout::FilterOp::Blur(r) => Some(*r),
+            _ => None,
+        }).sum()
+    };
 
     // Backdrop-filter: outer marker - snapshotne scenu, pak element obsah nahoru.
-    let backdrop_blur: f32 = bx.backdrop_filter.iter().filter_map(|op| match op {
-        crate::browser::layout::FilterOp::Blur(r) => Some(*r),
-        _ => None,
-    }).sum();
-    let backdrop_matrix = crate::browser::layout::compute_color_matrix(&bx.backdrop_filter);
-    let has_backdrop_filter = !bx.backdrop_filter.is_empty();
+    let backdrop_blur: f32 = if backdrop_empty { 0.0 } else {
+        bx.backdrop_filter.iter().filter_map(|op| match op {
+            crate::browser::layout::FilterOp::Blur(r) => Some(*r),
+            _ => None,
+        }).sum()
+    };
+    let backdrop_matrix = if backdrop_empty {
+        // Identity bez compose loop.
+        [1.0, 0.0, 0.0, 0.0, 0.0,
+         0.0, 1.0, 0.0, 0.0, 0.0,
+         0.0, 0.0, 1.0, 0.0, 0.0,
+         0.0, 0.0, 0.0, 1.0, 0.0]
+    } else {
+        crate::browser::layout::compute_color_matrix(&bx.backdrop_filter)
+    };
+    let has_backdrop_filter = !backdrop_empty;
     if has_backdrop_filter {
         let pad = 2.0 * backdrop_blur;
         cmds.push(DisplayCommand::BackdropFilterBegin {
@@ -1080,9 +1090,19 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
     // Filter subtree: emit FilterBegin marker pokud chain obsahuje neco
     // co RT pipeline umi - blur (run_blur_passes) NEBO non-identity color
     // matrix (compose shader). Bbox se rozsiri o 2*blur_radius.
-    let color_matrix = crate::browser::layout::compute_color_matrix(&bx.filter);
+    // PERF: fast-path - skip compute pri prazdnem chainu (vetsina elementu).
+    let (color_matrix, needs_color);
+    if filter_empty {
+        color_matrix = [1.0, 0.0, 0.0, 0.0, 0.0,
+                        0.0, 1.0, 0.0, 0.0, 0.0,
+                        0.0, 0.0, 1.0, 0.0, 0.0,
+                        0.0, 0.0, 0.0, 1.0, 0.0];
+        needs_color = false;
+    } else {
+        color_matrix = crate::browser::layout::compute_color_matrix(&bx.filter);
+        needs_color = !crate::browser::layout::is_identity_matrix(&color_matrix);
+    }
     let needs_blur = blur_radius >= 0.5;
-    let needs_color = !crate::browser::layout::is_identity_matrix(&color_matrix);
     let has_subtree_filter = needs_blur || needs_color;
     if has_subtree_filter {
         let pad = 2.0 * blur_radius;
