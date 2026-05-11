@@ -89,8 +89,6 @@ pub use url::{fetch_text_url, fetch_image_bytes, resolve_url, cached_fetch_bytes
 mod forms;
 use forms::{find_ancestor_form, build_form_request, post_form};
 
-mod dirty;
-pub use dirty::DirtyRegion;
 
 mod segments;
 pub use segments::{Seg, partition_filter_segments};
@@ -814,12 +812,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         /// Reuse display list buffer napric frames (alloc-free).
         display_list_buffer: Vec<super::paint::DisplayCommand>,
         /// Dual render Phase 2: per-buffer state hash pro detekci no-change.
-        /// Page hash zahrnuje: scroll_y, zoom, cascade_hash (uz includes hover/focus).
-        /// Shell hash zahrnuje: active_tab, addr_open, addr_input len, hovered_tab,
-        /// base_url. Pri match s prev -> skip render do toho RT (reuse texture).
-        /// Compose vzdy ze stejnych RT.
-        prev_page_hash: u64,
-        prev_shell_hash: u64,
         /// Cached layout_root - reuse pri ne-layout-affecting animations.
         cached_layout_root: Option<super::layout::LayoutBox>,
         /// True kdyz animations modify layout-affecting props.
@@ -7279,65 +7271,9 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 64.0 + if bm_count > 0 && self.bookmarks_bar_visible { 24.0 } else { 0.0 }
             } else { 0.0 };
             let _t_gpu = std::time::Instant::now();
-            // Dual render Phase 2 - compute per-buffer state hash.
-            // Page invalidation: scroll, zoom, cascade (uz includes hover/focus
-            // pokud CSS uses :hover / :focus), animation tick, viewport size.
-            // Pokud match s prev_page_hash -> skip page render (reuse main_rt).
-            let page_hash = {
-                use std::hash::{Hash, Hasher};
-                let mut h = ahash::AHasher::default();
-                self.scroll_y.to_bits().hash(&mut h);
-                self.scroll_x.to_bits().hash(&mut h);
-                self.zoom.to_bits().hash(&mut h);
-                r.config.width.hash(&mut h);
-                r.config.height.hash(&mut h);
-                self.cached_cascade_hash.hash(&mut h);
-                // Page hash zahrnuje pocet animation tick frames (WebGL re-draws)
-                // a zda jsou aktivni anim (paint depends on anim tick state).
-                self.devtools.frame_counter.hash(&mut h);
-                // Devtools panel state - overlay paint je bundle s page render
-                // (do main_rt). Pokud devtools state se zmeni (panel toggle,
-                // find query, selection), musi re-render.
-                self.devtools.panel_open.hash(&mut h);
-                (self.devtools.tab as u8).hash(&mut h);
-                self.devtools.panel_h.to_bits().hash(&mut h);
-                self.devtools.elements.selected.hash(&mut h);
-                self.find_open.hash(&mut h);
-                self.find_query.text.chars().count().hash(&mut h);
-                // self_page_sel_anchor / self_page_sel_current uz drive cached
-                // do local var pred draw (line 5570) - reuse pro hash.
-                self_page_sel_anchor.map(|(x, y)| (x.to_bits(), y.to_bits())).hash(&mut h);
-                self_page_sel_current.map(|(x, y)| (x.to_bits(), y.to_bits())).hash(&mut h);
-                h.finish()
-            };
-            // Shell invalidation: active tab, addr bar state, hovered tab, url,
-            // tab list (count + titles), bookmarks bar visible.
-            let shell_hash = if self.shell_mode {
-                use std::hash::{Hash, Hasher};
-                let mut h = ahash::AHasher::default();
-                self.tabs.active.hash(&mut h);
-                self.addr_open.hash(&mut h);
-                if self.addr_open {
-                    self.addr_input.text.len().hash(&mut h);
-                    self.addr_input.cursor.hash(&mut h);
-                }
-                self.bookmarks_bar_visible.hash(&mut h);
-                self.tabs.tabs.len().hash(&mut h);
-                for t in &self.tabs.tabs {
-                    t.title.len().hash(&mut h);
-                    t.loading.hash(&mut h);
-                    t.pinned.hash(&mut h);
-                }
-                self.base_url.as_deref().unwrap_or("").len().hash(&mut h);
-                // Hover state na shell tab (tooltip / active tab indicator).
-                self.shell_tab_tooltip.as_ref().map(|(s, _, _)| s.len()).unwrap_or(0).hash(&mut h);
-                r.config.width.hash(&mut h);
-                h.finish()
-            } else { 0 };
-            // PHASE 2 DISABLED: cache hint always false. Phase 1 dual buffer alone.
-            // Misbehavior observed - shell invisible. Investigate compose alpha-blend
-            // path before re-enable.
-            let _ = (page_hash, shell_hash);
+            // Phase 2 dual-render cache (page_skip / shell_skip) disabled -
+            // compose alpha-blend bug zpusoboval invisible shell. Phase 1
+            // dual-buffer (samostatne main_rt + shell_rt) stale aktivni.
             let page_skip = false;
             let shell_skip = false;
             if let Some(states_rc) = &webgl_states_opt {
@@ -7346,8 +7282,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             } else {
                 r.draw_full_frame_cached(page_cmds, overlay_cmds, shell_cmds, &layout_root, None, self.scroll_y, chrome_top_logical, page_skip, shell_skip);
             }
-            self.prev_page_hash = page_hash;
-            self.prev_shell_hash = shell_hash;
             perf_t("gpu draw + present", _t_gpu);
 
             // Invalidate layout cache + request redraw next frame pri image
@@ -7456,8 +7390,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         bookmark_picker: None,
         cached_pseudo_map: None,
         display_list_buffer: Vec::with_capacity(2048),
-        prev_page_hash: 0,
-        prev_shell_hash: 0,
         cached_layout_root: None,
         animations_affect_layout: false,
         css_uses_hover: false,
@@ -7653,9 +7585,6 @@ struct Renderer {
     transform_bind_group_layout: wgpu::BindGroupLayout,
     /// Uniform pro transform matrix + center + viewport + uv_box (8x vec4 = 128 bytes)
     transform_uniform_buf: wgpu::Buffer,
-    /// Dirty region tracker - oblast ktera potrebuje prekresleni.
-    /// Pouzivano pro budouci incremental rendering optimalizaci.
-    pub dirty_region: DirtyRegion,
 }
 
 impl Renderer {
@@ -8162,7 +8091,6 @@ impl Renderer {
             webgl_uniform_bgls: std::collections::HashMap::new(),
             webgl_textures: std::collections::HashMap::new(),
             webgl_default_sampler: None,
-            dirty_region: DirtyRegion::new(),
         }
     }
 
@@ -9307,10 +9235,6 @@ impl Renderer {
         // px/vp pak skaluje obsah o zoom faktor pri compose do framebufferu.
         let vp = [self.config.width as f32 / (self.zoom * self.scale_factor), self.config.height as f32 / (self.zoom * self.scale_factor), self.zoom, 0.0];
         self.queue.write_buffer(&self.uniform_buf, 0, bytemuck::cast_slice(&vp));
-
-        // Dirty rect: cely frame je dirty (aktualne full-redraw)
-        self.dirty_region.mark_all(self.config.width as f32, self.config.height as f32);
-        let _dirty = self.dirty_region.take(); // reserved pro future incremental render
 
         // Acquire frame
         let frame = match self.surface.get_current_texture() {

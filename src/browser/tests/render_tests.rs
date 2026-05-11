@@ -1570,64 +1570,6 @@ fn backdrop_filter_layout_box_field() {
     }
 }
 
-// --- DirtyRegion tracking ---
-
-#[test]
-fn dirty_region_starts_clean() {
-    let dr = crate::browser::render::DirtyRegion::new();
-    assert!(!dr.is_dirty());
-    assert!(dr.rect.is_none());
-}
-
-#[test]
-fn dirty_region_mark_sets_dirty() {
-    let mut dr = crate::browser::render::DirtyRegion::new();
-    dr.mark(10.0, 20.0, 100.0, 50.0);
-    assert!(dr.is_dirty());
-    assert_eq!(dr.rect, Some([10.0, 20.0, 100.0, 50.0]));
-}
-
-#[test]
-fn dirty_region_mark_union() {
-    let mut dr = crate::browser::render::DirtyRegion::new();
-    dr.mark(0.0, 0.0, 50.0, 50.0);
-    dr.mark(30.0, 30.0, 50.0, 50.0);
-    let r = dr.rect.unwrap();
-    // Union: x=0, y=0, w=80, h=80
-    assert_eq!(r[0], 0.0);
-    assert_eq!(r[1], 0.0);
-    assert_eq!(r[2], 80.0);
-    assert_eq!(r[3], 80.0);
-}
-
-#[test]
-fn dirty_region_take_clears() {
-    let mut dr = crate::browser::render::DirtyRegion::new();
-    dr.mark(5.0, 5.0, 10.0, 10.0);
-    let taken = dr.take();
-    assert!(taken.is_some());
-    assert!(!dr.is_dirty());
-}
-
-#[test]
-fn dirty_region_mark_all() {
-    let mut dr = crate::browser::render::DirtyRegion::new();
-    dr.mark_all(1024.0, 768.0);
-    assert_eq!(dr.rect, Some([0.0, 0.0, 1024.0, 768.0]));
-}
-
-#[test]
-fn dirty_region_contained_rect_expands_to_outer() {
-    let mut dr = crate::browser::render::DirtyRegion::new();
-    dr.mark(100.0, 100.0, 200.0, 200.0); // x:100-300, y:100-300
-    dr.mark(50.0, 50.0, 50.0, 50.0);     // x:50-100, y:50-100
-    let r = dr.rect.unwrap();
-    assert_eq!(r[0], 50.0);  // min x
-    assert_eq!(r[1], 50.0);  // min y
-    assert_eq!(r[2], 250.0); // w = 300-50
-    assert_eq!(r[3], 250.0); // h = 300-50
-}
-
 // ─── Image atlas / fetch tests ─────────────────────────────────────────
 
 #[test]
