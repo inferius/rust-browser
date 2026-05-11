@@ -27,5 +27,25 @@ pub mod selection;
 pub mod textrun;
 pub mod async_jobs;
 
+/// Vraci true pokud je v env nastaveno RWE_VERBOSE (libovolna hodnota).
+/// Gating debug/info eprintln spamu - errors vystupuji vzdy.
+/// OnceLock cache - env::var precteni 1x per process.
+pub fn rwe_verbose() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var("RWE_VERBOSE").is_ok())
+}
+
+/// Verbose eprintln - vystupuje jen pri RWE_VERBOSE env. Pouzit pro
+/// debug/info zpravy ktere by jinak spamovaly stderr (font load OK,
+/// startup info, zoom, addr bar, history navigation).
+#[macro_export]
+macro_rules! vlog {
+    ($($arg:tt)*) => {
+        if $crate::browser::rwe_verbose() {
+            eprintln!($($arg)*);
+        }
+    };
+}
+
 #[cfg(test)]
 mod tests;

@@ -1535,7 +1535,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                     return;
                                 }
                                 ChromeHit::UrlBar => {
-                                    eprintln!("[addr] open via UrlBar click");
+                                    crate::vlog!("[addr] open via UrlBar click");
                                     self.addr_open = true;
                                     self.addr_input = crate::devtools::model::text_buffer::SimpleStringBuffer::with_text_selected(self.base_url.clone().unwrap_or_default());
                                     self.render();
@@ -3044,7 +3044,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                             }
                             if s.as_str() == "l" || s.as_str() == "L" {
                                 // Ctrl+L: toggle address bar.
-                                eprintln!("[addr] open via Ctrl+L");
+                                crate::vlog!("[addr] open via Ctrl+L");
                                 self.addr_open = true;
                                 self.addr_input = crate::devtools::model::text_buffer::SimpleStringBuffer::with_text_selected(self.base_url.clone().unwrap_or_default());
                                 self.render();
@@ -5549,7 +5549,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             let _perf_debug = std::env::var("PERF_DEBUG").is_ok();
             let perf_t = |label: &str, t: std::time::Instant| {
                 if std::env::var("PERF_DEBUG").is_ok() {
-                    eprintln!("[perf] {} {:.2} ms", label, t.elapsed().as_secs_f64() * 1000.0);
+                    crate::vlog!("[perf] {} {:.2} ms", label, t.elapsed().as_secs_f64() * 1000.0);
                 }
             };
             let _ = perf_t;
@@ -6166,7 +6166,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     .map(|(_, n)| n).collect();
                 let all_names: Vec<&String> = self.active_animations.iter()
                     .map(|(_, n)| n).collect();
-                eprintln!("[cache_invalid] cached_some={} aff_layout={} viewport_match={} (vp_w={}, vp_h={}, cached={:?}, active_anims_total={}, all_names={:?}, aff_names={:?})",
+                crate::vlog!("[cache_invalid] cached_some={} aff_layout={} viewport_match={} (vp_w={}, vp_h={}, cached={:?}, active_anims_total={}, all_names={:?}, aff_names={:?})",
                     cached_some, aff_layout, viewport_match, viewport_w, viewport_h,
                     self.cached_layout_root.as_ref().map(|l| (l.rect.width, l.rect.height)),
                     self.active_animations.len(), all_names, aff_names);
@@ -7233,7 +7233,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                             let src_short = if src.starts_with("data:") && src.len() > 60 {
                                 format!("{}... ({} chars)", &src[..60], src.len())
                             } else { src.clone() };
-                            eprintln!("[img-relayout] natural dims fresh for {} -> invalidate layout cache", src_short);
+                            crate::vlog!("[img-relayout] natural dims fresh for {} -> invalidate layout cache", src_short);
                         }
                     }
                     _ => {}
@@ -7627,11 +7627,11 @@ impl Renderer {
             )).expect("device")
         };
         let dual_source_blend = device.features().contains(wgpu::Features::DUAL_SOURCE_BLENDING);
-        eprintln!("[render] dual_source_blending: {}", dual_source_blend);
+        crate::vlog!("[render] dual_source_blending: {}", dual_source_blend);
         let size = window.inner_size();
         let scale_factor = window.scale_factor();
         let surface_caps = surface.get_capabilities(&adapter);
-        eprintln!("[render] window inner_size = {}x{} physical, scale_factor = {} (logical = {}x{})",
+        crate::vlog!("[render] window inner_size = {}x{} physical, scale_factor = {} (logical = {}x{})",
             size.width, size.height, scale_factor,
             (size.width as f64 / scale_factor) as u32,
             (size.height as f64 / scale_factor) as u32);
@@ -7645,7 +7645,7 @@ impl Renderer {
         let present_mode = preferred_modes.iter().copied()
             .find(|m| surface_caps.present_modes.contains(m))
             .unwrap_or(wgpu::PresentMode::Fifo);
-        eprintln!("[render] present_mode = {:?} (available: {:?})", present_mode, surface_caps.present_modes);
+        crate::vlog!("[render] present_mode = {:?} (available: {:?})", present_mode, surface_caps.present_modes);
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_caps.formats[0],
@@ -8935,7 +8935,7 @@ impl Renderer {
                 std::fs::read(&path).ok()
             };
             if let Some(bytes) = bytes_opt {
-                eprintln!("[font-face] fetched family={} url={} bytes={}",
+                crate::vlog!("[font-face] fetched family={} url={} bytes={}",
                     ff.family, final_url, bytes.len());
                 // WOFF/WOFF2 dekomprese (no-op pri TTF/OTF bytes).
                 let decoded = super::woff::maybe_decode_woff(&bytes);
@@ -8974,7 +8974,7 @@ impl Renderer {
                             .and_then(|s| s.parse().ok())
                             .unwrap_or(if ff.weight.contains("bold") { 700 } else { 400 });
                         let italic = ff.style.contains("italic") || ff.style.contains("oblique");
-                        eprintln!("[font-face] OK family={} weight={} italic={} (extra_fonts subset push)",
+                        crate::vlog!("[font-face] OK family={} weight={} italic={} (extra_fonts subset push)",
                             ff.family, weight, italic);
                         // font_registry stale drzi "primary" font per family (prvni).
                         self.font_registry.entry(ff.family.clone()).or_insert_with(|| font.clone());
@@ -9143,7 +9143,7 @@ impl Renderer {
         self.config.width = w;
         self.config.height = h;
         self.surface.configure(&self.device, &self.config);
-        eprintln!("[render] resize physical = {}x{} (scale_factor={}, logical = {}x{})",
+        crate::vlog!("[render] resize physical = {}x{} (scale_factor={}, logical = {}x{})",
             w, h, self.scale_factor,
             (w as f32 / self.scale_factor) as u32,
             (h as f32 / self.scale_factor) as u32);
