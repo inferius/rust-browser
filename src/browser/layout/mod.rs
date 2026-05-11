@@ -3937,9 +3937,14 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
                         cw.max(natural)
                     })
                     .sum::<f32>();
+                // Family-aware measure - bez tohoto Bold "119\u{a0}514" pres
+                // Ubuntu Bold mereny pres system Times Bold (uzsi metrics) ->
+                // sirka 58 misto real 65 -> fc-blue box uzsi nez render.
+                let inherited_italic = bx_clone.italic;
+                let inherited_family = bx_clone.font_family.clone();
                 let text_w = bx_clone.children.iter()
                     .filter_map(|c| c.text.as_ref())
-                    .map(|t| measure_text_width_styled(t, font_size, inherited_bold))
+                    .map(|t| measure_text_width_full(t, font_size, inherited_bold, inherited_italic, &inherited_family))
                     .sum::<f32>();
                 // Pri replaced inner (img/svg/picture) prefer real width. Pri text
                 // jen children pouzij text_w. Pri kombinaci max + sum text content.
