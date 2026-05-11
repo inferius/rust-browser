@@ -16,3 +16,4 @@ flex2.txt
 
 # HTTP cache (fonts, CSS, images stahnute z webu)
 /.cache/
+dump.txt
