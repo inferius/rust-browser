@@ -1332,17 +1332,33 @@ struct ResolvedLine {
 /// padding/margin/border. Pro <button>Primary</button> = "Primary" width
 /// + button.padding * 2 + border * 2.
 fn intrinsic_content_width(bx: &LayoutBox) -> f32 {
+    use super::super::layout::Display;
     let pad_l = bx.padding_left.unwrap_or(bx.padding);
     let pad_r = bx.padding_right.unwrap_or(bx.padding);
     let chrome = pad_l + pad_r + 2.0 * bx.border_width;
     if let Some(t) = &bx.text {
         return super::super::layout::measure_text_width_full(t, bx.font_size, bx.bold, bx.italic, &bx.font_family) + chrome;
     }
-    // Sum descendant max-content widths.
-    let max_child: f32 = bx.children.iter()
-        .map(|c| intrinsic_content_width(c))
-        .fold(0.0_f32, f32::max);
-    if max_child > 0.0 { max_child + chrome } else { chrome }
+    // CSS spec max-content:
+    // - Inline flow (text nodes + inline children): SUM child widths (vsechna
+    //   na stejne lince).
+    // - Block flow (block children): MAX child width (kazdy na vlastni lince).
+    // Detekce: pokud aspon 1 child neni Block/Flex/Grid -> inline flow.
+    let any_inline = bx.children.iter().any(|c| matches!(c.display,
+        Display::Inline | Display::InlineBlock | Display::InlineFlex | Display::InlineGrid)
+        || c.tag.is_none() // text node
+    );
+    let aggregate: f32 = if any_inline {
+        // Sum text + inline children, max nad block siblings (rare).
+        bx.children.iter()
+            .map(|c| intrinsic_content_width(c))
+            .sum::<f32>()
+    } else {
+        bx.children.iter()
+            .map(|c| intrinsic_content_width(c))
+            .fold(0.0_f32, f32::max)
+    };
+    if aggregate > 0.0 { aggregate + chrome } else { chrome }
 }
 
 fn collect_lines(items: &[FlexItem], container_main: f32, wrap: FlexWrap, gap: f32) -> Vec<Vec<usize>> {
