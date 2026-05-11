@@ -806,6 +806,13 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         cached_stylesheets: Option<Vec<super::css_parser::Stylesheet>>,
         /// Reuse display list buffer napric frames (alloc-free).
         display_list_buffer: Vec<super::paint::DisplayCommand>,
+        /// Dual render Phase 2: per-buffer state hash pro detekci no-change.
+        /// Page hash zahrnuje: scroll_y, zoom, cascade_hash (uz includes hover/focus).
+        /// Shell hash zahrnuje: active_tab, addr_open, addr_input len, hovered_tab,
+        /// base_url. Pri match s prev -> skip render do toho RT (reuse texture).
+        /// Compose vzdy ze stejnych RT.
+        prev_page_hash: u64,
+        prev_shell_hash: u64,
         /// Cached layout_root - reuse pri ne-layout-affecting animations.
         cached_layout_root: Option<super::layout::LayoutBox>,
         /// True kdyz animations modify layout-affecting props.
@@ -7179,12 +7186,71 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 64.0 + if bm_count > 0 && self.bookmarks_bar_visible { 24.0 } else { 0.0 }
             } else { 0.0 };
             let _t_gpu = std::time::Instant::now();
+            // Dual render Phase 2 - compute per-buffer state hash.
+            // Page invalidation: scroll, zoom, cascade (uz includes hover/focus
+            // pokud CSS uses :hover / :focus), animation tick, viewport size.
+            // Pokud match s prev_page_hash -> skip page render (reuse main_rt).
+            let page_hash = {
+                use std::hash::{Hash, Hasher};
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                self.scroll_y.to_bits().hash(&mut h);
+                self.scroll_x.to_bits().hash(&mut h);
+                self.zoom.to_bits().hash(&mut h);
+                r.config.width.hash(&mut h);
+                r.config.height.hash(&mut h);
+                self.cached_cascade_hash.hash(&mut h);
+                // Page hash zahrnuje pocet animation tick frames (WebGL re-draws)
+                // a zda jsou aktivni anim (paint depends on anim tick state).
+                self.devtools.frame_counter.hash(&mut h);
+                // Devtools panel state - overlay paint je bundle s page render
+                // (do main_rt). Pokud devtools state se zmeni (panel toggle,
+                // find query, selection), musi re-render.
+                self.devtools.panel_open.hash(&mut h);
+                (self.devtools.tab as u8).hash(&mut h);
+                self.devtools.panel_h.to_bits().hash(&mut h);
+                self.devtools.elements.selected.hash(&mut h);
+                self.find_open.hash(&mut h);
+                self.find_query.text.chars().count().hash(&mut h);
+                // self_page_sel_anchor / self_page_sel_current uz drive cached
+                // do local var pred draw (line 5570) - reuse pro hash.
+                self_page_sel_anchor.map(|(x, y)| (x.to_bits(), y.to_bits())).hash(&mut h);
+                self_page_sel_current.map(|(x, y)| (x.to_bits(), y.to_bits())).hash(&mut h);
+                h.finish()
+            };
+            // Shell invalidation: active tab, addr bar state, hovered tab, url,
+            // tab list (count + titles), bookmarks bar visible.
+            let shell_hash = if self.shell_mode {
+                use std::hash::{Hash, Hasher};
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                self.tabs.active.hash(&mut h);
+                self.addr_open.hash(&mut h);
+                if self.addr_open {
+                    self.addr_input.text.len().hash(&mut h);
+                    self.addr_input.cursor.hash(&mut h);
+                }
+                self.bookmarks_bar_visible.hash(&mut h);
+                self.tabs.tabs.len().hash(&mut h);
+                for t in &self.tabs.tabs {
+                    t.title.len().hash(&mut h);
+                    t.loading.hash(&mut h);
+                    t.pinned.hash(&mut h);
+                }
+                self.base_url.as_deref().unwrap_or("").len().hash(&mut h);
+                // Hover state na shell tab (tooltip / active tab indicator).
+                self.shell_tab_tooltip.as_ref().map(|(s, _, _)| s.len()).unwrap_or(0).hash(&mut h);
+                r.config.width.hash(&mut h);
+                h.finish()
+            } else { 0 };
+            let page_skip = page_hash == self.prev_page_hash && self.prev_page_hash != 0;
+            let shell_skip = shell_hash == self.prev_shell_hash && self.prev_shell_hash != 0;
             if let Some(states_rc) = &webgl_states_opt {
                 let states = states_rc.borrow();
-                r.draw_full_frame(page_cmds, overlay_cmds, shell_cmds, &layout_root, Some(&*states), self.scroll_y, chrome_top_logical);
+                r.draw_full_frame_cached(page_cmds, overlay_cmds, shell_cmds, &layout_root, Some(&*states), self.scroll_y, chrome_top_logical, page_skip, shell_skip);
             } else {
-                r.draw_full_frame(page_cmds, overlay_cmds, shell_cmds, &layout_root, None, self.scroll_y, chrome_top_logical);
+                r.draw_full_frame_cached(page_cmds, overlay_cmds, shell_cmds, &layout_root, None, self.scroll_y, chrome_top_logical, page_skip, shell_skip);
             }
+            self.prev_page_hash = page_hash;
+            self.prev_shell_hash = shell_hash;
             perf_t("gpu draw + present", _t_gpu);
 
             // Ulozim layout pro hit test + vrat display_list buffer pro priste.
@@ -7284,6 +7350,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         bookmark_picker: None,
         cached_pseudo_map: None,
         display_list_buffer: Vec::with_capacity(2048),
+        prev_page_hash: 0,
+        prev_shell_hash: 0,
         cached_layout_root: None,
         animations_affect_layout: false,
         css_uses_hover: false,
@@ -9044,6 +9112,7 @@ impl Renderer {
     /// + WebGL canvas pass v ramci JEDNOHO swap chain frame.
     /// Vse kreslime do main_rt (intermediate RT), na konci compose -> swap chain.
     /// Backdrop-filter muze cist obsah main_rt (scena za elementem).
+    /// Backwards-compat wrapper (no cache hint - always re-render).
     pub fn draw_full_frame(
         &mut self,
         cmds: &[DisplayCommand],
@@ -9053,6 +9122,25 @@ impl Renderer {
         webgl_states: Option<&std::collections::HashMap<usize, std::rc::Rc<std::cell::RefCell<crate::interpreter::WebGLState>>>>,
         scroll_y: f32,
         chrome_top_logical: f32,
+    ) {
+        self.draw_full_frame_cached(cmds, overlay_cmds, shell_cmds, layout_root,
+            webgl_states, scroll_y, chrome_top_logical, false, false);
+    }
+
+    /// Dual render varianta s cache hints: page_skip/shell_skip = true -> skip
+    /// render do toho RT, reuse texture obsah z minuleho framu. Compose
+    /// posklada vzdy z obou RT (cached + fresh).
+    pub fn draw_full_frame_cached(
+        &mut self,
+        cmds: &[DisplayCommand],
+        overlay_cmds: &[DisplayCommand],
+        shell_cmds: &[DisplayCommand],
+        layout_root: &super::layout::LayoutBox,
+        webgl_states: Option<&std::collections::HashMap<usize, std::rc::Rc<std::cell::RefCell<crate::interpreter::WebGLState>>>>,
+        scroll_y: f32,
+        chrome_top_logical: f32,
+        page_skip: bool,
+        shell_skip: bool,
     ) {
         // Update viewport uniform pro main pipeline
         // Browser zoom: vp uniform = logical dims (window/zoom). Vertex px coords
@@ -9079,27 +9167,41 @@ impl Renderer {
         // Shell se prekryje pri compose alpha-blendem. chrome_top_logical reserved
         // pro budouci shell/page area tracking.
         let _ = chrome_top_logical;
-        let had_segments = self.draw_segments_into_view_clipped(&main_rt_view, cmds, true, None);
+        // page_skip -> skip render do main_rt, reuse z minulosti.
+        let had_segments = if page_skip {
+            !cmds.is_empty()  // pretend had_segments aby compose vedel pouzit main_rt
+        } else {
+            self.draw_segments_into_view_clipped(&main_rt_view, cmds, true, None)
+        };
 
         // 2. WebGL pass -> main_rt (po page contentu, pred overlay)
         let mut webgl_did_render = false;
         if let Some(states) = webgl_states {
-            if !states.is_empty() {
+            if !states.is_empty() && !page_skip {
                 webgl_did_render = self.run_webgl_frame(layout_root, &main_rt_view, states, scroll_y);
+            } else if !states.is_empty() && page_skip {
+                webgl_did_render = true;  // reuse signal
             }
         }
 
         // 3. Overlay (devtools, scrollbars, addr/find bar) -> main_rt PO WebGL,
         // aby UI prvky neprekryl WebGL clear color. start_clear=false zachova
         // existujici page + WebGL obsah.
-        let had_overlay = if !overlay_cmds.is_empty() {
+        let had_overlay = if !overlay_cmds.is_empty() && !page_skip {
             self.draw_segments_into_view_ext(&main_rt_view, overlay_cmds, false)
+        } else if !overlay_cmds.is_empty() {
+            true  // reuse signal
         } else { false };
 
         // 4. Shell pass (browser chrome: tabs, addr bar, scrollbars) -> shell_rt.
         // Separate target umozni page main_rt cache + shell-only redraw nezavisle.
+        // shell_skip -> reuse shell_rt content z minulosti.
         let shell_rt_view = self.shell_rt.create_view(&Default::default());
-        let had_shell = if !shell_cmds.is_empty() {
+        let had_shell = if shell_cmds.is_empty() {
+            false
+        } else if shell_skip {
+            true  // reuse signal
+        } else {
             // Explicit clear shell_rt to transparent (0,0,0,0) PRED render, aby
             // alpha-blend compose neperokryl page mimo shell area.
             {
@@ -9119,7 +9221,7 @@ impl Renderer {
             }
             // Render shell_cmds s start_clear=false (uz mame transparent clear).
             self.draw_segments_into_view_ext(&shell_rt_view, shell_cmds, false)
-        } else { false };
+        };
 
         // 5. Composit main_rt -> swap chain, pak shell_rt overlay nad page.
         // compose_view_to_swap pouziva transform_pipeline (BlendState::ALPHA_BLENDING)
