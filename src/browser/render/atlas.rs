@@ -257,10 +257,67 @@ impl GlyphAtlas {
                     let italic_str = &head[underscore + 1..];
                     if let Ok(weight) = weight_str.parse::<u32>() {
                         let italic = italic_str == "1";
-                        let primary = self.font_for_weight(raw_family, weight, italic);
-                        if Self::has_glyph(primary, ch) { return primary; }
-                        // Fallback char-coverage chain pres ostatni extra_fonts
-                        // (diakritika / non-Latin chars).
+                        // Iter VSECH subsets requested weight (Google Fonts splits
+                        // family do unicode-range subsets - cyrillic-ext, latin,
+                        // latin-ext, ...). Prvni s glyph wins. Bez tohoto Vec.first
+                        // mohl byt cyrillic-ext bez ASCII 'a' -> fallback heavy
+                        // weight chain.
+                        let suffix = if italic { "__i__" } else { "__" };
+                        let opp_suffix = if italic { "__" } else { "__i__" };
+                        let order: Vec<u32> = if weight < 400 {
+                            let mut v: Vec<u32> = (100..=weight).rev().collect();
+                            v.extend([400, 500, 600, 700, 800, 900].iter().copied());
+                            v
+                        } else if weight <= 500 {
+                            let mut v = vec![weight];
+                            if weight != 500 { v.push(500); }
+                            if weight != 400 { v.push(400); }
+                            v.extend([300, 200, 100, 600, 700, 800, 900].iter().copied());
+                            v
+                        } else {
+                            let mut v = vec![weight];
+                            for w in [600, 700, 800, 900] { if w != weight { v.push(w); } }
+                            v.extend([500, 400, 300, 200, 100].iter().copied());
+                            v
+                        };
+                        // Try requested italic - vsech weight buckets, vsech subsets.
+                        for w in &order {
+                            let key = format!("{}__w{}{}", raw_family, w, suffix);
+                            if let Some(vec) = self.extra_fonts.get(&key) {
+                                for f in vec {
+                                    if Self::has_glyph(f, ch) { return f; }
+                                }
+                            }
+                        }
+                        // Try opposite italic.
+                        for w in &order {
+                            let key = format!("{}__w{}{}", raw_family, w, opp_suffix);
+                            if let Some(vec) = self.extra_fonts.get(&key) {
+                                for f in vec {
+                                    if Self::has_glyph(f, ch) { return f; }
+                                }
+                            }
+                        }
+                        // Try base family bez weight key.
+                        if let Some(vec) = self.extra_fonts.get(raw_family) {
+                            for f in vec {
+                                if Self::has_glyph(f, ch) { return f; }
+                            }
+                        }
+                        // CSS comma list - try each alt s same weight chain.
+                        for alt in raw_family.split(',') {
+                            let trimmed = alt.trim().trim_matches('"').trim_matches('\'');
+                            if trimmed.is_empty() || trimmed == raw_family { continue; }
+                            for w in &order {
+                                let key = format!("{}__w{}{}", trimmed, w, suffix);
+                                if let Some(vec) = self.extra_fonts.get(&key) {
+                                    for f in vec {
+                                        if Self::has_glyph(f, ch) { return f; }
+                                    }
+                                }
+                            }
+                        }
+                        // Fallback char-coverage chain pres ostatni extra_fonts.
                         for vec in self.extra_fonts.values() {
                             for f in vec {
                                 if Self::has_glyph(f, ch) { return f; }
@@ -269,7 +326,7 @@ impl GlyphAtlas {
                         if let Some(b) = &self.font_bold { if Self::has_glyph(b, ch) { return b; } }
                         if let Some(i) = &self.font_italic { if Self::has_glyph(i, ch) { return i; } }
                         if Self::has_glyph(&self.font, ch) { return &self.font; }
-                        return primary;
+                        return self.font_for_weight(raw_family, weight, italic);
                     }
                 }
             }
@@ -371,13 +428,7 @@ impl GlyphAtlas {
         // Try styled variant per requested italic.
         for w in &order {
             let key = format!("{}__w{}{}", family, w, suffix);
-            if let Some(f) = self.extra_fonts.get(&key).and_then(Self::first_font) {
-                if std::env::var("FONT_DEBUG").is_ok() {
-                    eprintln!("[font_for_weight] family={:?} req_weight={} got_weight={} italic={}",
-                        family, weight, w, italic);
-                }
-                return f;
-            }
+            if let Some(f) = self.extra_fonts.get(&key).and_then(Self::first_font) { return f; }
         }
         // Try opposite italic (italic 400 -> regular 400) v ramci weight nearest.
         let opp_suffix = if italic { "__" } else { "__i__" };
