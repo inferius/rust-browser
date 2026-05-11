@@ -87,8 +87,11 @@ pub fn layout_flex(bx: &mut LayoutBox) {
     let inner_y = bx.rect.y + pad_t + bx.margin;
     // Pri taffy_intrinsic_mode + rect.width=0 (pre-pass) pouzij min-width jako floor
     // pro container width - jinak by se items wrapovaly do nul-sirky.
-    let bx_min_w = super::super::layout::parse_length(&bx.min_width_v);
-    let bx_min_h = super::super::layout::parse_length(&bx.min_height_v);
+    // ResolveCtx pro self: parent_size 0 (zatim neznamy - tyto values typicky px
+    // nebo neset). Pri % by tahle hodnota byla 0 = no min - acceptable degenerate.
+    let self_ctx_w = super::super::layout::ResolveCtx { parent_size: 0.0, font_size: bx.font_size, ..Default::default() };
+    let bx_min_w = bx.min_width.resolve(&self_ctx_w);
+    let bx_min_h = bx.min_height.resolve(&self_ctx_w);
     let effective_w = if bx.rect.width == 0.0 && bx_min_w > 0.0 { bx_min_w } else { bx.rect.width };
     let effective_h = if bx.rect.height == 0.0 && bx_min_h > 0.0 { bx_min_h } else { bx.rect.height };
     // Scrollbar takes space: overflow-y scroll/auto -> right scrollbar reduces inner_w.
@@ -374,10 +377,12 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             }
         }
         // Apply min-w/h pred aspect ratio dopoctem
-        let min_w_pre = super::super::layout::parse_length_or_pct(&ch.min_width_v, inner_w);
-        let min_h_pre = super::super::layout::parse_length_or_pct(&ch.min_height_v, inner_h_for_gap);
-        let max_w_pre = if ch.max_width_v.is_empty() || ch.max_width_v == "none" { f32::INFINITY } else { super::super::layout::parse_length_or_pct(&ch.max_width_v, inner_w) };
-        let max_h_pre = if ch.max_height_v.is_empty() || ch.max_height_v == "none" { f32::INFINITY } else { super::super::layout::parse_length_or_pct(&ch.max_height_v, inner_h_for_gap) };
+        let ctx_w = super::super::layout::ResolveCtx { parent_size: inner_w, font_size: ch.font_size, ..Default::default() };
+        let ctx_h = super::super::layout::ResolveCtx { parent_size: inner_h_for_gap, font_size: ch.font_size, ..Default::default() };
+        let min_w_pre = ch.min_width.resolve(&ctx_w);
+        let min_h_pre = ch.min_height.resolve(&ctx_h);
+        let max_w_pre = ch.max_width.resolve_max(&ctx_w);
+        let max_h_pre = ch.max_height.resolve_max(&ctx_h);
         // Min PRED aspect dopoctem - jen pro aspect-ratio kontext, NE pro est_w/est_h
         // (base size pro flex algo). Min se aplikuje az v resolve step.
         let _ = (min_w_pre, min_h_pre); // suppress warning
@@ -466,14 +471,12 @@ pub fn layout_flex(bx: &mut LayoutBox) {
     for (i, &real_idx) in in_flow.iter().enumerate() {
         let ch = &bx.children[real_idx];
         // Percent values resolvujem proti flex container inner dimensions.
-        let cw_min = super::super::layout::parse_length_or_pct(&ch.min_width_v, inner_w);
-        let cw_max = if ch.max_width_v.is_empty() || ch.max_width_v == "none" {
-            f32::INFINITY
-        } else { super::super::layout::parse_length_or_pct(&ch.max_width_v, inner_w) };
-        let ch_min = super::super::layout::parse_length_or_pct(&ch.min_height_v, inner_h_for_gap);
-        let ch_max = if ch.max_height_v.is_empty() || ch.max_height_v == "none" {
-            f32::INFINITY
-        } else { super::super::layout::parse_length_or_pct(&ch.max_height_v, inner_h_for_gap) };
+        let cw_ctx = super::super::layout::ResolveCtx { parent_size: inner_w, font_size: ch.font_size, ..Default::default() };
+        let ch_ctx = super::super::layout::ResolveCtx { parent_size: inner_h_for_gap, font_size: ch.font_size, ..Default::default() };
+        let cw_min = ch.min_width.resolve(&cw_ctx);
+        let cw_max = ch.max_width.resolve_max(&cw_ctx);
+        let ch_min = ch.min_height.resolve(&ch_ctx);
+        let ch_max = ch.max_height.resolve_max(&ch_ctx);
         let (min_m, max_m, min_c, max_c) = if direction.is_row() {
             (cw_min, cw_max, ch_min, ch_max)
         } else {
@@ -526,8 +529,8 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         let main_overflow_blocks = matches!(main_overflow, "hidden" | "scroll" | "auto" | "clip");
         let basis_v_check = ch.flex_basis.trim();
         let basis_zero = basis_v_check == "0" || basis_v_check == "0px";
-        let main_min_v = if direction.is_row() { ch.min_width_v.as_str() } else { ch.min_height_v.as_str() };
-        let has_main_min = !main_min_v.is_empty();
+        let main_min_cl = if direction.is_row() { &ch.min_width } else { &ch.min_height };
+        let has_main_min = main_min_cl.is_specified();
         let intrinsic_main = if main_overflow_blocks { 0.0 }
                             else if basis_zero && has_main_min { 0.0 }
                             else if ch.explicit_width.is_some() && direction.is_row() { descendant_min_main }
@@ -570,9 +573,9 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         // Pri specified min > basis a wrap container: hypothetical = min (CSS Flex L1 §9.3.4).
         // V wrap mode min wins (forces wrap), v nowrap zachovat shrink kompatibilitu.
         let specified_min = if direction.is_row() {
-            super::super::layout::parse_length(&ch.min_width_v)
+            ch.min_width.resolve(&cw_ctx)
         } else {
-            super::super::layout::parse_length(&ch.min_height_v)
+            ch.min_height.resolve(&ch_ctx)
         };
         if !matches!(wrap, FlexWrap::NoWrap) && specified_min > items[i].main_size {
             items[i].main_size = specified_min;
@@ -613,9 +616,9 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         // Single line nowrap: line zabira container cross.
         // Pri explicit/max-bound cross je line PRESNE container (items overflow).
         let has_bound_cross = if direction.is_row() {
-            bx.explicit_height.is_some() || !bx.max_height_v.is_empty()
+            bx.explicit_height.is_some() || bx.max_height.is_specified()
         } else {
-            bx.explicit_width.is_some() || !bx.max_width_v.is_empty()
+            bx.explicit_width.is_some() || bx.max_width.is_specified()
         };
         if has_bound_cross {
             resolved_lines[0].cross_size = container_cross;
@@ -1024,14 +1027,12 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             // Percent values resolvuji se proti container's inner_w / inner_h_for_gap -
             // bez teto cesty `parse_length("100%")` davalo default 16 a clamp w=16
             // shrinknul kazdou flex-column item na 16 px wide.
-            let cw_max_c = if child.max_width_v.is_empty() || child.max_width_v == "none" {
-                f32::INFINITY
-            } else { super::super::layout::parse_length_or_pct(&child.max_width_v, inner_w) };
-            let ch_max_c = if child.max_height_v.is_empty() || child.max_height_v == "none" {
-                f32::INFINITY
-            } else { super::super::layout::parse_length_or_pct(&child.max_height_v, inner_h_for_gap) };
-            let cw_min_c = super::super::layout::parse_length_or_pct(&child.min_width_v, inner_w);
-            let ch_min_c = super::super::layout::parse_length_or_pct(&child.min_height_v, inner_h_for_gap);
+            let cw_ctx_c = super::super::layout::ResolveCtx { parent_size: inner_w, font_size: child.font_size, ..Default::default() };
+            let ch_ctx_c = super::super::layout::ResolveCtx { parent_size: inner_h_for_gap, font_size: child.font_size, ..Default::default() };
+            let cw_max_c = child.max_width.resolve_max(&cw_ctx_c);
+            let ch_max_c = child.max_height.resolve_max(&ch_ctx_c);
+            let cw_min_c = child.min_width.resolve(&cw_ctx_c);
+            let ch_min_c = child.min_height.resolve(&ch_ctx_c);
             let pb_w = child.padding_left.unwrap_or(child.padding) + child.padding_right.unwrap_or(child.padding)
                 + child.border_left_width.unwrap_or(child.border_width) + child.border_right_width.unwrap_or(child.border_width);
             let pb_h = child.padding_top.unwrap_or(child.padding) + child.padding_bottom.unwrap_or(child.padding)
@@ -1183,7 +1184,8 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             else if bx.rect.height < needed { /* keep */ }
         } else if bx.rect.height < needed && !main_overflow_blocks_self {
             // Pri rect.height >= min-height (parent uz set spravnou hodnotu), neexpanduj.
-            let mnh_self = super::super::layout::parse_length(&bx.min_height_v);
+            let self_ctx_h = super::super::layout::ResolveCtx { parent_size: bx.rect.height, font_size: bx.font_size, ..Default::default() };
+            let mnh_self = bx.min_height.resolve(&self_ctx_h);
             if mnh_self > 0.0 && bx.rect.height >= mnh_self {
                 // Keep rect.height (parent sized respecting min-height).
             } else {
@@ -1191,11 +1193,12 @@ pub fn layout_flex(bx: &mut LayoutBox) {
             }
         }
         // Apply max/min-height clamp na container kdyz auto.
-        if !bx.max_height_v.is_empty() {
-            let mh = super::super::layout::parse_length(&bx.max_height_v);
+        let self_ctx_h = super::super::layout::ResolveCtx { parent_size: bx.rect.height, font_size: bx.font_size, ..Default::default() };
+        if bx.max_height.is_specified() {
+            let mh = bx.max_height.resolve(&self_ctx_h);
             if mh > 0.0 && bx.rect.height > mh { bx.rect.height = mh; }
         }
-        let mnh = super::super::layout::parse_length(&bx.min_height_v);
+        let mnh = bx.min_height.resolve(&self_ctx_h);
         if mnh > 0.0 && bx.rect.height < mnh { bx.rect.height = mnh; }
     }
 

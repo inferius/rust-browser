@@ -125,6 +125,9 @@ fn layout_absolute_child_inner(child: &mut LayoutBox, parent_x: f32, parent_y: f
     } else if child.rect.height > 0.0 { child.rect.height }
     else if text_h_int > 0.0 { text_h_int }
     else { 0.0 };
+    // ResolveCtx pro abs child - parent_size = parent_w/h passed in.
+    let abs_ctx_w = crate::browser::layout::ResolveCtx { parent_size: parent_w, font_size: child.font_size, ..Default::default() };
+    let abs_ctx_h = crate::browser::layout::ResolveCtx { parent_size: parent_h, font_size: child.font_size, ..Default::default() };
     // Aspect ratio override pri "fill" sizing (inset bez explicit dimensi).
     if let Some(ar) = child.aspect_ratio {
         if ar > 0.0 {
@@ -132,14 +135,14 @@ fn layout_absolute_child_inner(child: &mut LayoutBox, parent_x: f32, parent_y: f
             let has_explicit_h = child.explicit_height.is_some();
             // Min/max jako preferred pri zadnem w/h.
             if w == 0.0 && !has_explicit_w {
-                let cw_max_p = if child.max_width_v.is_empty() { 0.0 } else { crate::browser::layout::parse_length(&child.max_width_v) };
-                let cw_min_p = crate::browser::layout::parse_length(&child.min_width_v);
+                let cw_max_p = if child.max_width.is_specified() { child.max_width.resolve(&abs_ctx_w) } else { 0.0 };
+                let cw_min_p = child.min_width.resolve(&abs_ctx_w);
                 if cw_min_p > 0.0 { w = cw_min_p; }
                 else if cw_max_p > 0.0 { w = cw_max_p; }
             }
             if h == 0.0 && !has_explicit_h {
-                let ch_max_p = if child.max_height_v.is_empty() { 0.0 } else { crate::browser::layout::parse_length(&child.max_height_v) };
-                let ch_min_p = crate::browser::layout::parse_length(&child.min_height_v);
+                let ch_max_p = if child.max_height.is_specified() { child.max_height.resolve(&abs_ctx_h) } else { 0.0 };
+                let ch_min_p = child.min_height.resolve(&abs_ctx_h);
                 if ch_min_p > 0.0 { h = ch_min_p; }
                 else if ch_max_p > 0.0 { h = ch_max_p; }
             }
@@ -157,10 +160,10 @@ fn layout_absolute_child_inner(child: &mut LayoutBox, parent_x: f32, parent_y: f
         }
     }
     // Apply min/max width/height + dopocet drugeho rozmeru z aspect-ratio kdyz min/max active
-    let cw_min = crate::browser::layout::parse_length(&child.min_width_v);
-    let cw_max = if child.max_width_v.is_empty() { f32::INFINITY } else { crate::browser::layout::parse_length(&child.max_width_v) };
-    let ch_min = crate::browser::layout::parse_length(&child.min_height_v);
-    let ch_max = if child.max_height_v.is_empty() { f32::INFINITY } else { crate::browser::layout::parse_length(&child.max_height_v) };
+    let cw_min = child.min_width.resolve(&abs_ctx_w);
+    let cw_max = child.max_width.resolve_max(&abs_ctx_w);
+    let ch_min = child.min_height.resolve(&abs_ctx_h);
+    let ch_max = child.max_height.resolve_max(&abs_ctx_h);
     // Apply max first then min, takze min wins kdyz min > max (CSS spec).
     w = w.min(cw_max);
     h = h.min(ch_max);

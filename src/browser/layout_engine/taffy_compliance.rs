@@ -190,6 +190,17 @@ mod tests {
         v.parse().ok()
     }
 
+    /// Resolve CSS min/max value: pct vs container -> Px immediate, jinak proxy
+    /// pres CssLength::parse. Pri test fixtures kde nemame proper cascade.
+    fn resolve_pct_to_px(v: &str, container: f32) -> crate::browser::layout::CssLength {
+        if let Some(num) = v.trim().strip_suffix('%') {
+            if let Ok(pct) = num.parse::<f32>() {
+                return crate::browser::layout::CssLength::Px(container * pct / 100.0);
+            }
+        }
+        crate::browser::layout::CssLength::parse(v)
+    }
+
     fn convert_to_layout(node: &TestNode, container_w: f32, container_h: f32, default_display: Display) -> Option<LayoutBox> {
         // Pomoc: pri parsovani top/bottom percent musime znat zda parent ma explicit
         // height. CSS spec: pri auto CB height percent inset top/bottom = 0.
@@ -332,31 +343,19 @@ mod tests {
                         bx.aspect_ratio = Some(r);
                     }
                 }
-                // Min/max ulozit jako "Npx" abychom mohli snadno re-parse pres parse_length.
-                // Percent prepocitat ihned proti container_w/h.
+                // Min/max - pretrim na CssLength. Percent prepocitat ihned proti
+                // container_w/h aby resolve(ctx) na callsite mohl pouzit parent=0.
                 "min-width" => {
-                    if let Some(num) = v.trim().strip_suffix('%') {
-                        let pct: f32 = num.parse().unwrap_or(0.0);
-                        bx.min_width_v = format!("{}px", container_w * pct / 100.0);
-                    } else { bx.min_width_v = v.clone(); }
+                    bx.min_width = resolve_pct_to_px(v, container_w);
                 }
                 "min-height" => {
-                    if let Some(num) = v.trim().strip_suffix('%') {
-                        let pct: f32 = num.parse().unwrap_or(0.0);
-                        bx.min_height_v = format!("{}px", container_h * pct / 100.0);
-                    } else { bx.min_height_v = v.clone(); }
+                    bx.min_height = resolve_pct_to_px(v, container_h);
                 }
                 "max-width" => {
-                    if let Some(num) = v.trim().strip_suffix('%') {
-                        let pct: f32 = num.parse().unwrap_or(0.0);
-                        bx.max_width_v = format!("{}px", container_w * pct / 100.0);
-                    } else { bx.max_width_v = v.clone(); }
+                    bx.max_width = resolve_pct_to_px(v, container_w);
                 }
                 "max-height" => {
-                    if let Some(num) = v.trim().strip_suffix('%') {
-                        let pct: f32 = num.parse().unwrap_or(0.0);
-                        bx.max_height_v = format!("{}px", container_h * pct / 100.0);
-                    } else { bx.max_height_v = v.clone(); }
+                    bx.max_height = resolve_pct_to_px(v, container_h);
                 }
                 "padding-left" => bx.padding_left = parse_dim(v, container_w),
                 "padding-right" => bx.padding_right = parse_dim(v, container_w),
@@ -472,21 +471,22 @@ mod tests {
             // Content-box prepocita i min/max-width/height (CSS spec).
             let pw = pl + pr;
             let ph = pt + pb;
-            if !bx.min_width_v.is_empty() {
-                let v = crate::browser::layout::parse_length(&bx.min_width_v);
-                bx.min_width_v = format!("{}px", v + pw);
+            let zero_ctx = crate::browser::layout::ResolveCtx::default();
+            if bx.min_width.is_specified() {
+                let v = bx.min_width.resolve(&zero_ctx);
+                bx.min_width = crate::browser::layout::CssLength::Px(v + pw);
             }
-            if !bx.max_width_v.is_empty() {
-                let v = crate::browser::layout::parse_length(&bx.max_width_v);
-                bx.max_width_v = format!("{}px", v + pw);
+            if bx.max_width.is_specified() {
+                let v = bx.max_width.resolve(&zero_ctx);
+                bx.max_width = crate::browser::layout::CssLength::Px(v + pw);
             }
-            if !bx.min_height_v.is_empty() {
-                let v = crate::browser::layout::parse_length(&bx.min_height_v);
-                bx.min_height_v = format!("{}px", v + ph);
+            if bx.min_height.is_specified() {
+                let v = bx.min_height.resolve(&zero_ctx);
+                bx.min_height = crate::browser::layout::CssLength::Px(v + ph);
             }
-            if !bx.max_height_v.is_empty() {
-                let v = crate::browser::layout::parse_length(&bx.max_height_v);
-                bx.max_height_v = format!("{}px", v + ph);
+            if bx.max_height.is_specified() {
+                let v = bx.max_height.resolve(&zero_ctx);
+                bx.max_height = crate::browser::layout::CssLength::Px(v + ph);
             }
         }
         for child in &node.children {
@@ -773,8 +773,9 @@ mod tests {
                              }
                              else { (inner_w - m_l - m_r).max(0.0) };
             // Apply min/max width + padding+border floor
-            let cw_min = crate::browser::layout::parse_length(&child.min_width_v);
-            let cw_max = if child.max_width_v.is_empty() { f32::INFINITY } else { crate::browser::layout::parse_length(&child.max_width_v) };
+            let tcw_ctx = crate::browser::layout::ResolveCtx { parent_size: inner_w, font_size: child.font_size, ..Default::default() };
+            let cw_min = child.min_width.resolve(&tcw_ctx);
+            let cw_max = child.max_width.resolve_max(&tcw_ctx);
             let pb_lc = child.padding_left.unwrap_or(child.padding) + child.border_left_width.unwrap_or(child.border_width);
             let pb_rc = child.padding_right.unwrap_or(child.padding) + child.border_right_width.unwrap_or(child.border_width);
             let pb_tc = child.padding_top.unwrap_or(child.padding) + child.border_top_width.unwrap_or(child.border_width);
@@ -837,8 +838,8 @@ mod tests {
             let wrapped_text_h = if child.taffy_mode && child.text.is_some() && !is_vertical_text {
                 if let Some(t) = &child.text {
                     let avail_w = child.explicit_width.unwrap_or(w);
-                    let mw = if !child.max_width_v.is_empty() {
-                        let m = crate::browser::layout::parse_length(&child.max_width_v);
+                    let mw = if child.max_width.is_specified() {
+                        let m = child.max_width.resolve(&tcw_ctx);
                         avail_w.min(m)
                     } else { avail_w };
                     let total_text_w = t.chars().filter(|c| !matches!(*c, '\u{200B}' | ' ' | '\n' | '\t')).count() as f32 * 10.0;
@@ -875,8 +876,11 @@ mod tests {
             } else if text_h_intrinsic > 0.0 { text_h_intrinsic }
             else { 0.0 };
             // Apply min/max height
-            let ch_min = crate::browser::layout::parse_length(&child.min_height_v);
-            let ch_max = if child.max_height_v.is_empty() { f32::INFINITY } else { crate::browser::layout::parse_length(&child.max_height_v) };
+            // (taffy convert path: inner_h jen pres bx.rect.height - pad - border).
+            let inner_h_for_pct = (bx.rect.height - pad_t - bx.padding_bottom.unwrap_or(bx.padding) - 2.0 * bx.border_width).max(0.0);
+            let tch_ctx = crate::browser::layout::ResolveCtx { parent_size: inner_h_for_pct, font_size: child.font_size, ..Default::default() };
+            let ch_min = child.min_height.resolve(&tch_ctx);
+            let ch_max = child.max_height.resolve_max(&tch_ctx);
             let h_before = h_val;
             h_val = h_val.min(ch_max);
             if ch_min > 0.0 { h_val = h_val.max(ch_min); }
@@ -888,8 +892,8 @@ mod tests {
                     if ar > 0.0 && child.explicit_width.is_none() {
                         let new_w = h_val * ar;
                         // Re-clamp na max-width
-                        let cw_max2 = if child.max_width_v.is_empty() { f32::INFINITY } else { crate::browser::layout::parse_length(&child.max_width_v) };
-                        let cw_min2 = crate::browser::layout::parse_length(&child.min_width_v);
+                        let cw_max2 = child.max_width.resolve_max(&tcw_ctx);
+                        let cw_min2 = child.min_width.resolve(&tcw_ctx);
                         let mut w2 = new_w.min(cw_max2);
                         if cw_min2 > 0.0 { w2 = w2.max(cw_min2); }
                         child.rect.width = w2;

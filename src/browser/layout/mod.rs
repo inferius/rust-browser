@@ -608,10 +608,14 @@ pub struct LayoutBox {
     /// Image rendering hints
     pub image_rendering: String,
     /// CSS Sizing L4 - aspect-ratio uz mam
-    pub min_width_v: String,
-    pub max_width_v: String,
-    pub min_height_v: String,
-    pub max_height_v: String,
+    /// CSS sizing constraints - parsed CssLength (Auto / None / Px / Percent / ...).
+    /// `resolve(ctx)` na callsite s explicit parent_size + font_size.
+    /// Driv `*_v: String` + parse_length(s) at every use site - error-prone
+    /// (default parent_size=16 silently converted "100%" -> 16 px).
+    pub min_width: CssLength,
+    pub max_width: CssLength,
+    pub min_height: CssLength,
+    pub max_height: CssLength,
     /// Explicitni CSS width (None = auto / neparsovano).
     pub explicit_width: Option<f32>,
     /// Explicitni CSS height (None = auto / neparsovano).
@@ -990,10 +994,10 @@ impl LayoutBox {
             object_position: String::new(),
             background_blend_mode: String::new(),
             image_rendering: String::new(),
-            min_width_v: String::new(),
-            max_width_v: String::new(),
-            min_height_v: String::new(),
-            max_height_v: String::new(),
+            min_width: CssLength::Auto,
+            max_width: CssLength::None,
+            min_height: CssLength::Auto,
+            max_height: CssLength::None,
             explicit_width: None,
             explicit_height: None,
             flex_direction: String::new(),
@@ -2541,22 +2545,11 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
             }
         }
     }
-    if let Some(v) = s.get("min-width") {
-        let pv = v.trim();
-        bx.min_width_v = pv.to_string();
-    }
-    if let Some(v) = s.get("max-width") {
-        let pv = v.trim();
-        bx.max_width_v = pv.to_string();
-    }
-    if let Some(v) = s.get("min-height") {
-        let pv = v.trim();
-        bx.min_height_v = pv.to_string();
-    }
-    if let Some(v) = s.get("max-height") {
-        let pv = v.trim();
-        bx.max_height_v = pv.to_string();
-    }
+    // Length values - parsed into typed CssLength on cascade.
+    if let Some(v) = s.get("min-width") { bx.min_width = CssLength::parse(v); }
+    if let Some(v) = s.get("max-width") { bx.max_width = CssLength::parse(v); }
+    if let Some(v) = s.get("min-height") { bx.min_height = CssLength::parse(v); }
+    if let Some(v) = s.get("max-height") { bx.max_height = CssLength::parse(v); }
     // Line-height: cislo (multiplier) nebo length (px)
     if let Some(lh) = s.get("line-height") {
         let trimmed = lh.trim();
@@ -3389,21 +3382,16 @@ pub fn layout_block(bx: &mut LayoutBox) {
                 // Clamp dle min-width / max-width. Procenta resolve proti
                 // parent inner_w (jinak parse_length da default 16 -> clamp
                 // na 16 a layout cely zkolaboval).
+                // (Drive lokalni `pct_or_len` helper - zastaraly, CssLength dela
+                // totez s spravnym unit handlingem.)
                 let parent_w_for_pct = float_avail_w - m_l - m_r;
-                fn pct_or_len(v: &str, parent: f32) -> f32 {
-                    if let Some(pct_str) = v.trim().strip_suffix('%') {
-                        if let Ok(p) = pct_str.parse::<f32>() {
-                            return parent * p / 100.0;
-                        }
-                    }
-                    parse_length(v)
-                }
-                if !child.min_width_v.is_empty() && child.min_width_v != "none" {
-                    let mn = pct_or_len(&child.min_width_v.clone(), parent_w_for_pct);
+                let cw_ctx_b = ResolveCtx { parent_size: parent_w_for_pct, font_size: child.font_size, ..Default::default() };
+                if child.min_width.is_specified() {
+                    let mn = child.min_width.resolve(&cw_ctx_b);
                     if mn > 0.0 { child.rect.width = child.rect.width.max(mn); }
                 }
-                if !child.max_width_v.is_empty() && child.max_width_v != "none" {
-                    let mx = pct_or_len(&child.max_width_v.clone(), parent_w_for_pct);
+                if child.max_width.is_specified() {
+                    let mx = child.max_width.resolve(&cw_ctx_b);
                     if mx > 0.0 { child.rect.width = child.rect.width.min(mx); }
                 }
                 // explicit_height z CSS height prop; jinak height_pct (% z parent height);
@@ -3436,12 +3424,13 @@ pub fn layout_block(bx: &mut LayoutBox) {
                     - bx.padding_top.unwrap_or(bx.padding)
                     - bx.padding_bottom.unwrap_or(bx.padding)
                     - 2.0 * bx.border_width).max(0.0);
-                if !child.min_height_v.is_empty() && child.min_height_v != "none" {
-                    let mn = pct_or_len(&child.min_height_v.clone(), parent_h_for_pct);
+                let ch_ctx_b = ResolveCtx { parent_size: parent_h_for_pct, font_size: child.font_size, ..Default::default() };
+                if child.min_height.is_specified() {
+                    let mn = child.min_height.resolve(&ch_ctx_b);
                     if mn > 0.0 { child.rect.height = child.rect.height.max(mn); }
                 }
-                if !child.max_height_v.is_empty() && child.max_height_v != "none" {
-                    let mx = pct_or_len(&child.max_height_v.clone(), parent_h_for_pct);
+                if child.max_height.is_specified() {
+                    let mx = child.max_height.resolve(&ch_ctx_b);
                     if mx > 0.0 { child.rect.height = child.rect.height.min(mx); }
                 }
                 layout_dispatch(child);
@@ -3829,17 +3818,11 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
             //   pri natural 800x600 + max-w 175 + max-h 175 -> jedna z os
             //   prizpusobi do max, druha proporcionalne mensi.
             let is_img_replaced = matches!(bx_clone.tag.as_deref(), Some("img") | Some("video"));
-            // Resolve max values (Infinity pri none/empty).
-            let max_w_resolved = if bx_clone.max_width_v.is_empty() || bx_clone.max_width_v == "none" {
-                f32::INFINITY
-            } else {
-                parse_length_or_pct(&bx_clone.max_width_v, parent_w_for_img)
-            };
-            let max_h_resolved = if bx_clone.max_height_v.is_empty() || bx_clone.max_height_v == "none" {
-                f32::INFINITY
-            } else {
-                parse_length_or_pct(&bx_clone.max_height_v, parent_h_for_img)
-            };
+            // Resolve max values (Infinity pri none/auto - CssLength::resolve_max).
+            let img_ctx_w = ResolveCtx { parent_size: parent_w_for_img, font_size: bx_clone.font_size, ..Default::default() };
+            let img_ctx_h = ResolveCtx { parent_size: parent_h_for_img, font_size: bx_clone.font_size, ..Default::default() };
+            let max_w_resolved = bx_clone.max_width.resolve_max(&img_ctx_w);
+            let max_h_resolved = bx_clone.max_height.resolve_max(&img_ctx_h);
             // Lookup natural dims pro img/video (None pokud zatim nenacten).
             let natural_dims: Option<(f32, f32)> = if is_img_replaced {
                 bx_clone.image_src.as_ref()
@@ -3901,16 +3884,16 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
                 (w_calc, h_calc)
             };
             // Apply min-width clamp (max uz aplikovan v aspect-aware vypoctu).
-            let w = if !bx_clone.min_width_v.is_empty() && bx_clone.min_width_v != "none" {
-                let mn = parse_length_or_pct(&bx_clone.min_width_v, parent_w_for_img);
+            let w = if bx_clone.min_width.is_specified() {
+                let mn = bx_clone.min_width.resolve(&img_ctx_w);
                 if mn > 0.0 { w_pre.max(mn) } else { w_pre }
             } else { w_pre };
             // Pro non-img cesty aplikuj max separately (img cesta uz scale dela).
             let w = if !is_img_replaced && max_w_resolved.is_finite() {
                 w.min(max_w_resolved)
             } else { w };
-            let h = if !bx_clone.min_height_v.is_empty() && bx_clone.min_height_v != "none" {
-                let mn = parse_length_or_pct(&bx_clone.min_height_v, parent_h_for_img);
+            let h = if bx_clone.min_height.is_specified() {
+                let mn = bx_clone.min_height.resolve(&img_ctx_h);
                 if mn > 0.0 { h_pre.max(mn) } else { h_pre }
             } else { h_pre };
             let h = if !is_img_replaced && max_h_resolved.is_finite() {
@@ -4148,6 +4131,9 @@ pub(super) fn split_top_level_commas(s: &str) -> Vec<&str> {
 mod length;
 #[allow(unused_imports)]
 pub use length::{parse_length, parse_length_ctx, parse_length_or_pct};
+
+pub mod css_length;
+pub use css_length::{CssLength, ResolveCtx};
 
 mod shadows;
 pub use shadows::{parse_text_shadow, parse_box_shadow};

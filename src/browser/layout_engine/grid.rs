@@ -561,7 +561,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                     } else { 0.0 };
                     let pb_l = item.padding_left.unwrap_or(item.padding) + item.border_left_width.unwrap_or(item.border_width);
                     let pb_r = item.padding_right.unwrap_or(item.padding) + item.border_right_width.unwrap_or(item.border_width);
-                    let cw_min_p = super::super::layout::parse_length(&item.min_width_v);
+                    let cw_min_p = item.min_width.resolve(&super::super::layout::ResolveCtx { parent_size: inner_w, font_size: item.font_size, ..Default::default() });
                     // CSS spec: pri overflow != visible v inline axis, auto min-size = 0.
                     let inline_overflow_blocks = matches!(item.overflow_x.as_str(), "hidden" | "scroll" | "auto" | "clip");
                     let item_max = item.explicit_width.unwrap_or(item.rect.width).max(text_max).max(pb_l + pb_r).max(cw_min_p);
@@ -1540,8 +1540,8 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         let wrapped_text_h = if child.taffy_mode && child.text.is_some() {
             if let Some(t) = &child.text {
                 let avail_w = child.explicit_width.unwrap_or(cw_avail);
-                let max_w = if !child.max_width_v.is_empty() {
-                    let mw = super::super::layout::parse_length(&child.max_width_v);
+                let max_w = if child.max_width.is_specified() {
+                    let mw = child.max_width.resolve(&super::super::layout::ResolveCtx { parent_size: cw_avail, font_size: child.font_size, ..Default::default() });
                     avail_w.min(mw)
                 } else { avail_w };
                 if max_w > 0.0 && text_w > max_w {
@@ -1581,18 +1581,14 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         // Percent values resolvujem proti grid container inner_w/inner_h.
         // Bez tohoto by max-width: 100% z parse_length vracelo 16 (default
         // parent_size) a item zustaval clampnuty na 16 px.
-        fn pct_or_px(v: &str, parent: f32) -> f32 {
-            if let Some(pct_str) = v.trim().strip_suffix('%') {
-                if let Ok(p) = pct_str.parse::<f32>() {
-                    return parent * p / 100.0;
-                }
-            }
-            super::super::layout::parse_length(v)
-        }
-        let cw_min = if child.min_width_v.is_empty() || child.min_width_v == "none" { 0.0 } else { pct_or_px(&child.min_width_v, cw_avail) };
-        let cw_max = if child.max_width_v.is_empty() || child.max_width_v == "none" { f32::INFINITY } else { pct_or_px(&child.max_width_v, cw_avail) };
-        let ch_min = if child.min_height_v.is_empty() || child.min_height_v == "none" { 0.0 } else { pct_or_px(&child.min_height_v, ch_avail) };
-        let ch_max = if child.max_height_v.is_empty() || child.max_height_v == "none" { f32::INFINITY } else { pct_or_px(&child.max_height_v, ch_avail) };
+        // (Drive lokalni `pct_or_px` helper - zastaraly, CssLength + ResolveCtx
+        // dela totez s correct unit handling.)
+        let cw_grid_ctx = super::super::layout::ResolveCtx { parent_size: cw_avail, font_size: child.font_size, ..Default::default() };
+        let ch_grid_ctx = super::super::layout::ResolveCtx { parent_size: ch_avail, font_size: child.font_size, ..Default::default() };
+        let cw_min = child.min_width.resolve(&cw_grid_ctx);
+        let cw_max = child.max_width.resolve_max(&cw_grid_ctx);
+        let ch_min = child.min_height.resolve(&ch_grid_ctx);
+        let ch_max = child.max_height.resolve_max(&ch_grid_ctx);
         let pb_l = child.padding_left.unwrap_or(child.padding) + child.border_left_width.unwrap_or(child.border_width);
         let pb_r = child.padding_right.unwrap_or(child.padding) + child.border_right_width.unwrap_or(child.border_width);
         let pb_t = child.padding_top.unwrap_or(child.padding) + child.border_top_width.unwrap_or(child.border_width);

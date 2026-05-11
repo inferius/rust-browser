@@ -222,7 +222,7 @@ mod tests {
         top.padding_bottom = Some(10.0);
         top.padding_left = Some(20.0);
         top.padding_right = Some(20.0);
-        top.min_height_v = "93px".into();
+        top.min_height = crate::browser::layout::CssLength::Px(93.0);
         // Add child with explicit h=100 (simulates img.republic-map)
         let mut img_block = LayoutBox::new();
         img_block.display = Display::Flex;
