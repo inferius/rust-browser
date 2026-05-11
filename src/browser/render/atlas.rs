@@ -74,14 +74,13 @@ pub(super) struct GlyphAtlas {
     pub(super) extra_fonts: std::collections::HashMap<String, fontdue::Font>,
     /// Atlas pixely (shedy: 0=transparent, 255=opaque)
     pub(super) pixels: Vec<u8>,
-    /// (family, char, font_size) -> glyph info. Family "" = default.
-    /// Pri bold se pouzije family "__bold__" jako klic.
-    pub(super) cache: std::collections::HashMap<(String, char, u32), GlyphInfo>,
-    /// Fast-path lookup pres precomputed hash. Driv `family.to_string()`
-    /// alokoval String pri kazdem add() i pri cache hit, coz na strankach
-    /// s ~20k chars per frame stalo ~20 ms per frame. Hash check skip
-    /// alokaci pri pre-cached glyph. Hash kolize fallback na slow path.
-    pub(super) cache_hashes: std::collections::HashSet<u64>,
+    /// Primary cache: (family_hash u64, char, font_size) -> GlyphInfo.
+    /// Family stored hashed (FxHash by predef) - vyhne se String::to_string()
+    /// na hot path text render (drive ~10k alocs/frame).
+    pub(super) cache: std::collections::HashMap<(u64, char, u32), GlyphInfo, ahash::RandomState>,
+    /// Family hash -> original String (pro rasterize, kde potrebujem font lookup).
+    /// Inserted at first add(); read-only po vlozeni.
+    pub(super) family_names: std::collections::HashMap<u64, String, ahash::RandomState>,
     /// Volna pozice pro dalsi glyph
     pub(super) cursor_x: u32,
     pub(super) cursor_y: u32,
@@ -192,8 +191,8 @@ impl GlyphAtlas {
             font_bold_italic,
             extra_fonts,
             pixels: vec![0u8; (ATLAS_SIZE * ATLAS_SIZE) as usize],
-            cache: std::collections::HashMap::new(),
-            cache_hashes: std::collections::HashSet::new(),
+            cache: std::collections::HashMap::with_hasher(ahash::RandomState::new()),
+            family_names: std::collections::HashMap::with_hasher(ahash::RandomState::new()),
             cursor_x: 0,
             cursor_y: 0,
             row_height: 0,
@@ -238,8 +237,27 @@ impl GlyphAtlas {
         &self.font
     }
 
+    /// Hash family name pres ahash. Pouziva se jako stable lookup key bez
+    /// String allokace. Caller muze cache predcomputed hash + lookup pres
+    /// `get_hashed` pri opakovanym lookup s same family v hot loopu.
+    #[inline]
+    pub(super) fn hash_family(family: &str) -> u64 {
+        use std::hash::{BuildHasher, Hash, Hasher};
+        let s = ahash::RandomState::with_seeds(0xdead_beef_5555_aaaa, 0xfeed_face_cafe_d00d,
+                                                0x1234_5678_9abc_def0, 0xface_b00c_0000_1111);
+        let mut h = s.build_hasher();
+        family.hash(&mut h);
+        h.finish()
+    }
+
     pub(super) fn get(&self, family: &str, ch: char, size: u32) -> Option<&GlyphInfo> {
-        self.cache.get(&(family.to_string(), ch, size))
+        self.cache.get(&(Self::hash_family(family), ch, size))
+    }
+
+    /// Lookup s pre-hashovany family. Caller spocte hash JEDNOU pred char loopem.
+    #[inline]
+    pub(super) fn get_hashed(&self, family_hash: u64, ch: char, size: u32) -> Option<&GlyphInfo> {
+        self.cache.get(&(family_hash, ch, size))
     }
 
     /// Rasterize glyph and add to atlas.
@@ -248,21 +266,12 @@ impl GlyphAtlas {
     /// (ClearType-style, sharp text na maly fonty).
     pub(super) fn add(&mut self, family: &str, ch: char, size: u32) {
         const LCD_THRESHOLD: u32 = 24;
-        // Fast path - precomputed hash lookup bez String alokace.
-        // Hash kolize fallback na slow path (vzacne, prijatelne).
-        let hash_key = {
-            use std::hash::{Hash, Hasher};
-            let mut h = std::collections::hash_map::DefaultHasher::new();
-            family.hash(&mut h);
-            ch.hash(&mut h);
-            size.hash(&mut h);
-            h.finish()
-        };
-        if self.cache_hashes.contains(&hash_key) { return; }
-        let key = (family.to_string(), ch, size);
-        if self.cache.contains_key(&key) {
-            self.cache_hashes.insert(hash_key);
-            return;
+        let family_hash = Self::hash_family(family);
+        let key = (family_hash, ch, size);
+        if self.cache.contains_key(&key) { return; }
+        // Lazy populate family_names pri prvni vlozeni (rare, jen unique families).
+        if !self.family_names.contains_key(&family_hash) {
+            self.family_names.insert(family_hash, family.to_string());
         }
         let font = self.font_for(family);
         let lcd = size < LCD_THRESHOLD;
@@ -308,7 +317,6 @@ impl GlyphAtlas {
             lcd,
         };
         self.cache.insert(key, info);
-        self.cache_hashes.insert(hash_key);
         self.cursor_x += atlas_w + 1;
         self.row_height = self.row_height.max(h);
     }

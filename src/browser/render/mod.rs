@@ -307,30 +307,47 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: 
                 let z = zoom.max(0.0001);
                 let physical_size = (*font_size * z).round().max(1.0) as u32;
                 let inv_z = 1.0 / z;
+                // PERF: precompute lookup_family + family_hash JEDNOU per Text
+                // command (drive format! per char = N allocs/text). family_hash
+                // pak primo lookup do atlas.cache bez String alocace.
+                let lookup_family: String = match (*bold, *italic) {
+                    (true, true) if atlas.font_bold_italic.is_some() =>
+                        format!("__bi__:{}", font_family),
+                    (false, true) if atlas.font_italic.is_some() =>
+                        format!("__italic__:{}", font_family),
+                    (true, _) if atlas.font_bold.is_some() =>
+                        format!("__bold__:{}", font_family),
+                    _ => font_family.clone(),
+                };
+                let family_hash = super::render::atlas::GlyphAtlas::hash_family(&lookup_family);
+                // COLR emoji key prefix - drive format per char, ted pre-build
+                // base + concat char u32 + size jen pri lookup. Skip kdyz no
+                // COLR fonts (image_atlas typicky empty pro normal pages).
+                let has_color_fonts = !image_atlas.cache.is_empty();
+                let colr_prefix: String = if has_color_fonts {
+                    format!("__colr:{}:", font_family)
+                } else { String::new() };
                 for ch in content.chars() {
                     if ch == '\n' {
                         pen_y += line_advance;
                         pen_x = start_x;
                         continue;
                     }
-                    let colr_key = format!("__colr:{}:{}:{}", font_family, ch as u32, *font_size as u32);
-                    if let Some(info) = image_atlas.get(&colr_key) {
-                        let gx = pen_x.round();
-                        let gy = (pen_y - info.height).round();
-                        push_image(&mut verts, gx, gy, info.width, info.height, info.uv0, info.uv1, 0.0);
-                        pen_x += info.width;
-                        continue;
+                    if has_color_fonts {
+                        // Compose final key via push (alloc, ale jen pri color font hit).
+                        let mut colr_key = colr_prefix.clone();
+                        colr_key.push_str(&(ch as u32).to_string());
+                        colr_key.push(':');
+                        colr_key.push_str(&(*font_size as u32).to_string());
+                        if let Some(info) = image_atlas.get(&colr_key) {
+                            let gx = pen_x.round();
+                            let gy = (pen_y - info.height).round();
+                            push_image(&mut verts, gx, gy, info.width, info.height, info.uv0, info.uv1, 0.0);
+                            pen_x += info.width;
+                            continue;
+                        }
                     }
-                    let lookup_family = match (*bold, *italic) {
-                        (true, true) if atlas.font_bold_italic.is_some() =>
-                            format!("__bi__:{}", font_family),
-                        (false, true) if atlas.font_italic.is_some() =>
-                            format!("__italic__:{}", font_family),
-                        (true, _) if atlas.font_bold.is_some() =>
-                            format!("__bold__:{}", font_family),
-                        _ => font_family.clone(),
-                    };
-                    if let Some(g) = atlas.get(&lookup_family, ch, physical_size) {
+                    if let Some(g) = atlas.get_hashed(family_hash, ch, physical_size) {
                         // Glyf metrics v physical -> dele inv_z na logical.
                         let g_w = g.width * inv_z;
                         let g_h = g.height * inv_z;
@@ -5585,7 +5602,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // CSS hash pro cache invalidation.
             let css_hash = {
                 use std::hash::{Hash, Hasher};
-                let mut h = std::collections::hash_map::DefaultHasher::new();
+                let mut h = ahash::AHasher::default();
                 self.css.hash(&mut h);
                 h.finish()
             };
@@ -5593,7 +5610,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             let reading_css = if self.reading_mode_on { READING_MODE_CSS } else { "" };
             let combined_hash = if self.reading_mode_on {
                 use std::hash::{Hash, Hasher};
-                let mut h = std::collections::hash_map::DefaultHasher::new();
+                let mut h = ahash::AHasher::default();
                 self.css.hash(&mut h);
                 "rmode".hash(&mut h);
                 h.finish()
@@ -5704,7 +5721,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             let stylesheets = self.cached_stylesheets.as_ref().unwrap();
             let cascade_hash = {
                 use std::hash::{Hash, Hasher};
-                let mut h = std::collections::hash_map::DefaultHasher::new();
+                let mut h = ahash::AHasher::default();
                 (Rc::as_ptr(&document_root) as usize).hash(&mut h);
                 css_hash.hash(&mut h);
                 ((self.zoom * 1000.0) as i64).hash(&mut h);
@@ -7106,7 +7123,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         // minulych framu = vsechny chars uz v atlasu, skip.
                         let cmd_hash = {
                             use std::hash::{Hash, Hasher};
-                            let mut h = std::collections::hash_map::DefaultHasher::new();
+                            let mut h = ahash::AHasher::default();
                             content.hash(&mut h);
                             (*font_size as u32).hash(&mut h);
                             font_family.hash(&mut h);
@@ -7121,37 +7138,42 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                             continue;
                         }
                         r.text_cmd_warmed.insert(cmd_hash);
+                        // PERF: hoist key_family format out of char loop (drive
+                        // alocoval String per char). Use precomputed for all chars.
+                        let key_family: String = match (*bold, *italic) {
+                            (true, true) if r.atlas.font_bold_italic.is_some() =>
+                                format!("__bi__:{}", font_family),
+                            (false, true) if r.atlas.font_italic.is_some() =>
+                                format!("__italic__:{}", font_family),
+                            (true, _) if r.atlas.font_bold.is_some() =>
+                                format!("__bold__:{}", font_family),
+                            _ => font_family.clone(),
+                        };
+                        let phys = (*font_size * self.zoom).round().max(1.0) as u32;
+                        // Has color font check (Rc clone uvnitr loopu nepotrebny -
+                        // pri color font path projedeme).
+                        let color_font: Option<_> = r.color_fonts.get(font_family).cloned();
+                        let color_font_obj: Option<_> = if color_font.is_some() {
+                            r.font_registry.get(font_family).cloned()
+                        } else { None };
                         for ch in content.chars() {
                             // Pokus o color glyph rasterization.
                             let mut color_added = false;
-                            if let Some(colr) = r.color_fonts.get(font_family).cloned() {
-                                if let Some(font) = r.font_registry.get(font_family).cloned() {
-                                    let glyph_id = font.lookup_glyph_index(ch);
-                                    if glyph_id != 0 && colr.base_to_layers.contains_key(&glyph_id) {
-                                        let key = format!("__colr:{}:{}:{}", font_family, ch as u32, *font_size as u32);
-                                        if !r.image_atlas.contains(&key) {
-                                            if let Some((w, h, _, _, rgba)) = super::emoji_fonts::rasterize_color_glyph(
-                                                &font, glyph_id, *font_size, &colr, *color,
-                                            ) {
-                                                r.image_atlas.add(&key, w as u32, h as u32, &rgba);
-                                            }
+                            if let (Some(colr), Some(font)) = (color_font.as_ref(), color_font_obj.as_ref()) {
+                                let glyph_id = font.lookup_glyph_index(ch);
+                                if glyph_id != 0 && colr.base_to_layers.contains_key(&glyph_id) {
+                                    let key = format!("__colr:{}:{}:{}", font_family, ch as u32, *font_size as u32);
+                                    if !r.image_atlas.contains(&key) {
+                                        if let Some((w, h, _, _, rgba)) = super::emoji_fonts::rasterize_color_glyph(
+                                            font, glyph_id, *font_size, colr, *color,
+                                        ) {
+                                            r.image_atlas.add(&key, w as u32, h as u32, &rgba);
                                         }
-                                        color_added = true;
                                     }
+                                    color_added = true;
                                 }
                             }
                             if !color_added {
-                                // Atlas key prefixovany dle bold/italic kombinace.
-                                let key_family = match (*bold, *italic) {
-                                    (true, true) if r.atlas.font_bold_italic.is_some() =>
-                                        format!("__bi__:{}", font_family),
-                                    (false, true) if r.atlas.font_italic.is_some() =>
-                                        format!("__italic__:{}", font_family),
-                                    (true, _) if r.atlas.font_bold.is_some() =>
-                                        format!("__bold__:{}", font_family),
-                                    _ => font_family.clone(),
-                                };
-                                let phys = (*font_size * self.zoom).round().max(1.0) as u32;
                                 r.atlas.add(&key_family, ch, phys);
                             }
                         }
@@ -7209,7 +7231,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // Pokud match s prev_page_hash -> skip page render (reuse main_rt).
             let page_hash = {
                 use std::hash::{Hash, Hasher};
-                let mut h = std::collections::hash_map::DefaultHasher::new();
+                let mut h = ahash::AHasher::default();
                 self.scroll_y.to_bits().hash(&mut h);
                 self.scroll_x.to_bits().hash(&mut h);
                 self.zoom.to_bits().hash(&mut h);
@@ -7238,7 +7260,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // tab list (count + titles), bookmarks bar visible.
             let shell_hash = if self.shell_mode {
                 use std::hash::{Hash, Hasher};
-                let mut h = std::collections::hash_map::DefaultHasher::new();
+                let mut h = ahash::AHasher::default();
                 self.tabs.active.hash(&mut h);
                 self.addr_open.hash(&mut h);
                 if self.addr_open {

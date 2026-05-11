@@ -30,8 +30,7 @@ pub(super) fn push_rect_rounded(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f32,
     let tr = make(x + w, y);
     let bl = make(x,     y + h);
     let br = make(x + w, y + h);
-    verts.push(tl); verts.push(tr); verts.push(bl);
-    verts.push(bl); verts.push(tr); verts.push(br);
+    verts.extend_from_slice(&[tl, tr, bl, bl, tr, br]);
 }
 
 pub(super) fn push_rect(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f32, h: f32,
@@ -55,8 +54,7 @@ pub(super) fn push_skewed_quad(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f32, 
     let tr = mk(x + skew + w, y,     uv1[0], uv0[1]);
     let bl = mk(x,            y + h, uv0[0], uv1[1]);
     let br = mk(x + w,        y + h, uv1[0], uv1[1]);
-    verts.push(tl); verts.push(tr); verts.push(bl);
-    verts.push(bl); verts.push(tr); verts.push(br);
+    verts.extend_from_slice(&[tl, tr, bl, bl, tr, br]);
 }
 
 pub(super) fn push_rect_uv(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f32, h: f32,
@@ -78,8 +76,7 @@ pub(super) fn push_rect_uv(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f32, h: f
     let tr = mk(x + w, y,     uv1[0], uv0[1]);
     let bl = mk(x,     y + h, uv0[0], uv1[1]);
     let br = mk(x + w, y + h, uv1[0], uv1[1]);
-    verts.push(tl); verts.push(tr); verts.push(bl);
-    verts.push(bl); verts.push(tr); verts.push(br);
+    verts.extend_from_slice(&[tl, tr, bl, bl, tr, br]);
 }
 
 
@@ -182,8 +179,7 @@ pub(super) fn push_blurred_rect(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f32,
     let tr = mk(x + w + extra, y - extra);
     let bl = mk(x - extra,     y + h + extra);
     let br = mk(x + w + extra, y + h + extra);
-    verts.push(tl); verts.push(tr); verts.push(bl);
-    verts.push(bl); verts.push(tr); verts.push(br);
+    verts.extend_from_slice(&[tl, tr, bl, bl, tr, br]);
 }
 
 /// Image quad: mode 4, sample z image atlasu pres UV. SDF rounded corners pri radius>0.
@@ -210,8 +206,7 @@ pub(super) fn push_image(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f32, h: f32
     let tr = mk(x + w, y,     uv1[0], uv0[1]);
     let bl = mk(x,     y + h, uv0[0], uv1[1]);
     let br = mk(x + w, y + h, uv1[0], uv1[1]);
-    verts.push(tl); verts.push(tr); verts.push(bl);
-    verts.push(bl); verts.push(tr); verts.push(br);
+    verts.extend_from_slice(&[tl, tr, bl, bl, tr, br]);
 }
 
 /// Gradient quad: kazdy vertex ma uv.x = projekce na gradient axis (0..1).
@@ -247,8 +242,7 @@ pub(super) fn push_gradient(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f32, h: 
     let tr = mk(x + w, y);
     let bl = mk(x,     y + h);
     let br = mk(x + w, y + h);
-    verts.push(tl); verts.push(tr); verts.push(bl);
-    verts.push(bl); verts.push(tr); verts.push(br);
+    verts.extend_from_slice(&[tl, tr, bl, bl, tr, br]);
 }
 
 /// Radial gradient quad. Mode 6.
@@ -279,8 +273,7 @@ pub(super) fn push_radial_gradient(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f
     let tr = mk(x + w, y);
     let bl = mk(x,     y + h);
     let br = mk(x + w, y + h);
-    verts.push(tl); verts.push(tr); verts.push(bl);
-    verts.push(bl); verts.push(tr); verts.push(br);
+    verts.extend_from_slice(&[tl, tr, bl, bl, tr, br]);
 }
 
 /// Conic gradient quad. Mode 7.
@@ -310,8 +303,7 @@ pub(super) fn push_conic_gradient(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f3
     let tr = mk(x + w, y);
     let bl = mk(x,     y + h);
     let br = mk(x + w, y + h);
-    verts.push(tl); verts.push(tr); verts.push(bl);
-    verts.push(bl); verts.push(tr); verts.push(br);
+    verts.extend_from_slice(&[tl, tr, bl, bl, tr, br]);
 }
 
 /// Multi-stop linear gradient pres CPU tesselaci.
@@ -564,8 +556,7 @@ pub(super) fn push_shadow(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f32, h: f3
     let tr = mk(x + w + extra, y - extra);
     let bl = mk(x - extra,     y + h + extra);
     let br = mk(x + w + extra, y + h + extra);
-    verts.push(tl); verts.push(tr); verts.push(bl);
-    verts.push(bl); verts.push(tr); verts.push(br);
+    verts.extend_from_slice(&[tl, tr, bl, bl, tr, br]);
 }
 
 /// Inset box-shadow: stin uvnitr boxu, fade smerem dovnitr od okraju + offset.
@@ -595,8 +586,7 @@ pub(super) fn push_inset_shadow(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f32,
     let tr = mk(x + w, y);
     let bl = mk(x,     y + h);
     let br = mk(x + w, y + h);
-    verts.push(tl); verts.push(tr); verts.push(bl);
-    verts.push(bl); verts.push(tr); verts.push(br);
+    verts.extend_from_slice(&[tl, tr, bl, bl, tr, br]);
 }
 
 /// Normalizuje sRGB byte barvu na linear-space [0..1] floats.

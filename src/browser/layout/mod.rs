@@ -1296,7 +1296,7 @@ fn compute_subtree_hash(node: &Rc<Node>, style_map: &StyleMap) -> u64 {
 
 fn compute_subtree_hash_uncached(node: &Rc<Node>, style_map: &StyleMap) -> u64 {
     use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
+    let mut h = ahash::AHasher::default();
     let id = Rc::as_ptr(node) as usize;
     id.hash(&mut h);
     if let Some(tag) = node.tag_name() {
@@ -3992,24 +3992,11 @@ pub fn measure_text_width_full(text: &str, font_size: f32, bold: bool, italic: b
         ])
     });
 
-    // Family lookup: parse CSS font-family list (comma-separated alternatives,
-    // last is generic family). Hledame primo monospace/sans-serif keywords i
-    // zname rodiny.
-    let f_lower = family.to_lowercase();
-    let is_mono = f_lower.contains("monospace")
-        || f_lower.contains("courier")
-        || f_lower.contains("consolas")
-        || f_lower.contains("monaco")
-        || f_lower.contains("menlo");
-    let is_sans = !is_mono && (
-        f_lower.contains("sans-serif")
-        || f_lower.contains("arial")
-        || f_lower.contains("helvetica")
-        || f_lower.contains("segoe")
-        || f_lower.contains("verdana")
-        || f_lower.contains("inter")
-        || f_lower.contains("roboto")
-        || f_lower.contains("system-ui"));
+    // PERF: family classification cached pres thread_local HashMap. Bez teto
+    // cache `family.to_lowercase()` + 13 `.contains()` checks per measure call
+    // (= per inline word measure, hundreds per layout). Common families
+    // resolve O(1) po prvnim hitu.
+    let (is_mono, is_sans) = classify_family_cached(family);
 
     let active_font: Option<&fontdue::Font> = if is_mono {
         if bold { mono_bold_opt.as_ref().or(mono_opt.as_ref()) } else { mono_opt.as_ref() }
@@ -4034,6 +4021,36 @@ pub fn measure_text_width_full(text: &str, font_size: f32, bold: bool, italic: b
             text.chars().count() as f32 * avg_char_w
         }
     }
+}
+
+/// Family classification: (is_monospace, is_sans_serif). Cached per family
+/// string. False+False = serif/unknown fallback.
+fn classify_family_cached(family: &str) -> (bool, bool) {
+    thread_local! {
+        static CACHE: std::cell::RefCell<std::collections::HashMap<String, (bool, bool), ahash::RandomState>>
+            = std::cell::RefCell::new(std::collections::HashMap::with_hasher(ahash::RandomState::new()));
+    }
+    if let Some(v) = CACHE.with(|c| c.borrow().get(family).copied()) {
+        return v;
+    }
+    let f_lower = family.to_lowercase();
+    let is_mono = f_lower.contains("monospace")
+        || f_lower.contains("courier")
+        || f_lower.contains("consolas")
+        || f_lower.contains("monaco")
+        || f_lower.contains("menlo");
+    let is_sans = !is_mono && (
+        f_lower.contains("sans-serif")
+        || f_lower.contains("arial")
+        || f_lower.contains("helvetica")
+        || f_lower.contains("segoe")
+        || f_lower.contains("verdana")
+        || f_lower.contains("inter")
+        || f_lower.contains("roboto")
+        || f_lower.contains("system-ui"));
+    let v = (is_mono, is_sans);
+    CACHE.with(|c| c.borrow_mut().insert(family.to_string(), v));
+    v
 }
 
 fn load_font_first(paths: &[&str]) -> Option<fontdue::Font> {
