@@ -61,20 +61,22 @@ Real `XMLHttpRequest` builtin v `setup_builtins`:
 - `drain_xhr_callbacks()` v `run()` po `drain_timers`.
 - `ActiveXObject` alias (IE legacy).
 
-### Web analytics / framework stubs
+### External `<script src=...>` fetch (real engine, ne stuby)
 
-Stranky bezne pouzivaji bez existence check - ReferenceError = cely script padne.
-Stubs:
-- `dataLayer = []` (GTM)
-- `gtag(...)` no-op
-- `ga(...)` no-op
-- `_gaq = []`, `_paq = []` (Piwik/Matomo legacy)
-- `fbq(...)` no-op (Facebook Pixel)
-- `Tracy = { Debug: {} }` (Nette PHP framework debug bar)
-- `$` / `jQuery` - minimal stub: vraci collection objekt s 40+ no-op methods
-  (`ready`, `on`, `click`, `addClass`, `html`, `val`, `css`, `find`, `each`,
-  `data`, `trigger`, `fadeIn`, `animate`, `ajax`, ...). Real jQuery emulace
-  nemozne, ale alesponcekoli `$(fn)` nebo `$('selector').addClass(...)` nesegfaultne.
+Predtim `run_inline_scripts` cetl JEN `s.text_content()` - pri externim
+`<script src="https://code.jquery.com/jquery.js">` byl text empty, src ignored.
+Nasledne stranky padaly s `ReferenceError 'jQuery is not defined'`.
+
+Fix v `render/mod.rs::run_inline_scripts`:
+- Pro kazdy `<script>` element: pokud ma `src=...` -> resolve_url(base, src) +
+  `fetch_text_url(abs_url)`. Push do `interp.network_log` s 200/0 status.
+- Pri fetch fail: console_log error "[script fetch failed]".
+- Inline scripts (bez src) -> text_content jako predtim.
+- Real jQuery / GTM / Tracy / analytics se ted natahaji ze stranky a evaluuji
+  jako normalni JS - zadne fake stuby.
+
+(Drive jsem pridal jQuery `$` no-op stub + Tracy + dataLayer + gtag + ga + fbq -
+to bylo wrong approach. Vyhozeno - real engine = real script load.)
 
 ### `<br>` linebreak fix
 

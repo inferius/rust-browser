@@ -1597,66 +1597,6 @@ pub fn setup_builtins(
     // googleadsense, polyfilly, IIFE) selzou s ReferenceError 'this'.
     e.define("this", window_val.clone());
 
-    // ─── Web analytics / framework stubs ────────────────────────────────────
-    // Real stranky pouzivaji vsechny tyto API bez kontroly existence. Bez stubu
-    // = ReferenceError + cely script crash. Stubs vrati no-op chovani.
-
-    // GTM dataLayer - prazdny array s push() = no-op (push se obrazne dela
-    // bezne, ne-existence layoutu shazi cele inicializaci).
-    e.define("dataLayer", JsValue::Array(Rc::new(RefCell::new(Vec::new()))));
-
-    // gtag(...) - Google Tag, no-op.
-    e.define("gtag", native("gtag", |_| Ok(JsValue::Undefined)));
-
-    // ga(...) - Google Analytics classic, no-op.
-    e.define("ga", native("ga", |_| Ok(JsValue::Undefined)));
-
-    // _gaq / _paq - legacy analytics fronty (Piwik/Matomo style).
-    e.define("_gaq", JsValue::Array(Rc::new(RefCell::new(Vec::new()))));
-    e.define("_paq", JsValue::Array(Rc::new(RefCell::new(Vec::new()))));
-
-    // fbq() - Facebook Pixel, no-op.
-    e.define("fbq", native("fbq", |_| Ok(JsValue::Undefined)));
-
-    // Tracy - PHP framework JS bar (production by mel byt off ale strankam tam
-    // chodi error scripty). Stub jako objekt s no-op metodami.
-    {
-        let mut tracy = JsObject::new();
-        tracy.set("Debug".into(), JsValue::Object(Rc::new(RefCell::new(JsObject::new()))));
-        e.define("Tracy", JsValue::Object(Rc::new(RefCell::new(tracy))));
-    }
-
-    // jQuery `$` - minimal stub. Real jQuery je nemozne emulovat - ale `$`
-    // volana s callbackem (= document.ready handler) je nejcastejsi pattern.
-    // Vse jine vrati prazdny "jQuery collection" placeholder s no-op methods.
-    e.define("$", native("$", |args| {
-        let arg = args.into_iter().next().unwrap_or(JsValue::Undefined);
-        // $(function(){...}) -> spust callback hned (DOMContentLoaded ekv.).
-        if let JsValue::Function(_) = &arg {
-            // Cannot directly invoke from native - return placeholder. JS-side
-            // pattern `$(fn)` cleanly se setTimeout-uje pres DOMContentLoaded
-            // event. Tady minimum: stub collection.
-        }
-        // Vrat empty jQuery-like collection (no-op chainable methods).
-        let mut jq = JsObject::new();
-        jq.set("length".into(), JsValue::Number(0.0));
-        let jq_rc = Rc::new(RefCell::new(jq));
-        // Self-referential chain - kazda methoda vraci same jQuery objekt.
-        for m in &["ready", "on", "off", "click", "submit", "show", "hide",
-                   "addClass", "removeClass", "toggleClass", "attr", "removeAttr",
-                   "html", "text", "val", "css", "append", "prepend", "remove",
-                   "empty", "find", "parent", "children", "siblings", "each",
-                   "data", "trigger", "focus", "blur", "fadeIn", "fadeOut",
-                   "slideDown", "slideUp", "animate", "stop", "load", "ajax",
-                   "get", "post"] {
-            jq_rc.borrow_mut().set((*m).into(),
-                native(m, |_| Ok(JsValue::Undefined)));
-        }
-        Ok(JsValue::Object(jq_rc))
-    }));
-    let jquery_alias = e.get("$").unwrap_or(JsValue::Undefined);
-    e.define("jQuery", jquery_alias);
-
     // ─── fetch - real HTTP client (ureq, blocking) ──────────────────────────
     let net_log_clone = Rc::clone(network_log);
     let pending_fetches_clone = Rc::clone(pending_fetches);
@@ -1896,9 +1836,6 @@ pub fn setup_builtins(
 
         Ok(JsValue::Object(xhr_obj))
     }));
-    // Alias pro IE pages co testuji existence pres window.ActiveXObject.
-    e.define("ActiveXObject", native("ActiveXObject", |_| Ok(JsValue::Undefined)));
-
     // Konstruktory bez vlastni logiky (logika je v call_new)
     e.define("Map", native("Map", |_| Ok(JsValue::Undefined)));
     e.define("Set", native("Set", |_| Ok(JsValue::Undefined)));

@@ -4527,19 +4527,51 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             use crate::tokens::TokenKind;
 
             let doc_ref = interp.document.clone();
-            let scripts: Vec<(String, String)> = doc_ref.borrow().root
-                .get_elements_by_tag("script")
-                .iter()
-                .enumerate()
-                .map(|(i, s)| {
-                    let url = s.attr("src").unwrap_or_else(|| format!("<inline #{}>", i + 1));
-                    (url, s.text_content())
-                })
-                .collect();
+            let base = self.base_url.clone().unwrap_or_default();
+            // Posbiraj scripts: external (src=...) -> fetch HTTP, inline -> text_content.
+            // Bez external fetch jQuery / analytics / framework JS nikdy nezatahnuty
+            // -> stranky padaji s ReferenceError 'jQuery is not defined' etc.
+            let script_nodes = doc_ref.borrow().root.get_elements_by_tag("script");
+            let mut scripts: Vec<(String, String)> = Vec::with_capacity(script_nodes.len());
+            for (i, s) in script_nodes.iter().enumerate() {
+                if let Some(src_attr) = s.attr("src") {
+                    let src_attr = src_attr.trim().to_string();
+                    if src_attr.is_empty() { continue; }
+                    let abs_url = if src_attr.starts_with("http://")
+                        || src_attr.starts_with("https://")
+                        || src_attr.starts_with("file://")
+                    {
+                        src_attr.clone()
+                    } else if !base.is_empty() {
+                        super::render::resolve_url(&base, &src_attr)
+                    } else {
+                        src_attr.clone()
+                    };
+                    match super::render::fetch_text_url(&abs_url) {
+                        Some(body) => {
+                            interp.network_log.borrow_mut().push((abs_url.clone(), 200));
+                            scripts.push((abs_url, body));
+                        }
+                        None => {
+                            interp.network_log.borrow_mut().push((abs_url.clone(), 0));
+                            interp.console_log.borrow_mut().push((
+                                "error".into(),
+                                format!("[script fetch failed] {abs_url}"),
+                            ));
+                        }
+                    }
+                } else {
+                    // Inline script - text content uvnitr <script>...</script>.
+                    let url = format!("<inline #{}>", i + 1);
+                    let body = s.text_content();
+                    if !body.trim().is_empty() {
+                        scripts.push((url, body));
+                    }
+                }
+            }
 
             // Registruj scripts do DevTools sources panel + try fetch source map.
             use crate::devtools::model::sources::SourceLang;
-            let base = self.base_url.clone().unwrap_or_default();
             for (url, src) in &scripts {
                 if src.trim().is_empty() { continue; }
                 let id = self.devtools.sources.add_file(url.clone(), src.clone(), SourceLang::JavaScript);
