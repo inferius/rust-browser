@@ -1061,14 +1061,21 @@ pub fn layout_flex(bx: &mut LayoutBox) {
     let width_is_pct_intrinsic = bx.taffy_intrinsic_mode && bx.width_pct.is_some();
     if (bx.explicit_width.is_none() || width_is_pct_intrinsic) && bx.rect.width == 0.0 {
         let needed_w = if direction.is_row() {
-            let main_used: f32 = resolved_lines.iter()
-                .map(|l| l.main_sizes.iter().enumerate()
-                    .map(|(k, s)| s + items[l.main_sizes.iter().nth(0).map(|_| k).unwrap_or(0)].margin_main_start
-                        + items[l.main_sizes.iter().nth(0).map(|_| k).unwrap_or(0)].margin_main_end)
-                    .sum::<f32>()
-                    + main_gap * (l.main_sizes.len().saturating_sub(1) as f32))
-                .fold(0.0_f32, f32::max);
-            main_used + pad_l + pad_r
+            // Per line: suma main_sizes + per-item margin start/end + gaps mezi.
+            // Pozn: items[real_idx] kde real_idx = lines[li][k]; ne items[k]
+            // (k je pozice v line, ne globalni items index).
+            let mut max_main: f32 = 0.0;
+            for (li, line) in resolved_lines.iter().enumerate() {
+                let line_indices = &lines[li];
+                let mut sum: f32 = 0.0;
+                for (k, s) in line.main_sizes.iter().enumerate() {
+                    let it = &items[line_indices[k]];
+                    sum += s + it.margin_main_start + it.margin_main_end;
+                }
+                sum += main_gap * (line.main_sizes.len().saturating_sub(1) as f32);
+                if sum > max_main { max_main = sum; }
+            }
+            max_main + pad_l + pad_r
         } else {
             // Column: cross axis = width
             total_cross + pad_l + pad_r
