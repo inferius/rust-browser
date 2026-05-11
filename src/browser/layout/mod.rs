@@ -1312,6 +1312,53 @@ pub fn take_image_natural_dims_dirty() -> bool {
     })
 }
 
+thread_local! {
+    /// @font-face fonts registrovany renderem pres register_measure_font.
+    /// measure_text_width_full lookup primary - aby measure pouzil STEJNY
+    /// font co render. Bez tohoto Ubuntu Bold rasterizovan v atlas (sirsi
+    /// glyphs), ale measure_text_width_full pouzival Times Bold (uzsi) ->
+    /// cursor_x advance < real glyph width -> dalsi text prekrizen pres
+    /// bold span.
+    /// Key format: "<family>" / "<family>__bold__" / "<family>__italic__" / "<family>__bi__".
+    pub(crate) static MEASURE_FONTS: std::cell::RefCell<HashMap<String, fontdue::Font>>
+        = std::cell::RefCell::new(HashMap::new());
+}
+
+/// Renderer pri @font-face load registruje font pro measure. Pri parsing
+/// font-weight: 600 (bold) variant ulozit pod "<family>__bold__" key etc.
+/// Layout measure_text_width_full pak prefer tento font pred system fonts.
+pub fn register_measure_font(key: &str, font: fontdue::Font) {
+    MEASURE_FONTS.with(|m| {
+        m.borrow_mut().insert(key.to_string(), font);
+    });
+}
+
+/// Lookup pro measure_text_width_full. Vraci cloned font (fontdue::Font je
+/// Clone via Arc-uvnitr, levne).
+pub(crate) fn measure_font_for(family: &str, bold: bool, italic: bool) -> Option<fontdue::Font> {
+    MEASURE_FONTS.with(|m| {
+        let map = m.borrow();
+        // Style-specific key first.
+        let style_suffix = match (bold, italic) {
+            (true, true) => "__bi__",
+            (true, false) => "__bold__",
+            (false, true) => "__italic__",
+            (false, false) => "",
+        };
+        // Iterate kazdy comma-separated alt (CSS font-family list).
+        for alt in family.split(',') {
+            let trimmed = alt.trim().trim_matches('"').trim_matches('\'');
+            if trimmed.is_empty() { continue; }
+            if !style_suffix.is_empty() {
+                let styled = format!("{}{}", trimmed, style_suffix);
+                if let Some(f) = map.get(&styled) { return Some(f.clone()); }
+            }
+            if let Some(f) = map.get(trimmed) { return Some(f.clone()); }
+        }
+        None
+    })
+}
+
 /// Lookup natural dims (None pri zatim nenactenom obrazku).
 pub fn get_image_natural_dims(src: &str) -> Option<(f32, f32)> {
     IMAGE_NATURAL_DIMS.with(|c| c.borrow().get(src).copied())
@@ -4139,13 +4186,19 @@ pub fn measure_text_width_full(text: &str, font_size: f32, bold: bool, italic: b
         ])
     });
 
+    // PRIORITY: pri @font-face registrovany font (Ubuntu, Roboto, atd. pres
+    // register_measure_font) prefer ho pred system fallback. Bez tohoto bold
+    // mereni pres Times Bold (system), render pres Ubuntu Bold (@font-face) =
+    // sirka neshodi, dalsi span overlaps.
+    let registered = measure_font_for(family, bold, italic);
+
     // PERF: family classification cached pres thread_local HashMap. Bez teto
     // cache `family.to_lowercase()` + 13 `.contains()` checks per measure call
     // (= per inline word measure, hundreds per layout). Common families
     // resolve O(1) po prvnim hitu.
     let (is_mono, is_sans) = classify_family_cached(family);
 
-    let active_font: Option<&fontdue::Font> = if is_mono {
+    let system_font: Option<&fontdue::Font> = if is_mono {
         if bold { mono_bold_opt.as_ref().or(mono_opt.as_ref()) } else { mono_opt.as_ref() }
     } else if is_sans {
         if bold { sans_bold_opt.as_ref().or(sans_opt.as_ref()) } else { sans_opt.as_ref() }
@@ -4153,7 +4206,9 @@ pub fn measure_text_width_full(text: &str, font_size: f32, bold: bool, italic: b
         if bold { font_bold_opt.as_ref().or(font_opt.as_ref()) } else { font_opt.as_ref() }
     };
     // Fallback chain: pokud zvolena varianta nenalezena, defaultni font.
-    let active_font = active_font.or(font_opt.as_ref());
+    let system_font = system_font.or(font_opt.as_ref());
+    // Active = @font-face registered preferred, system fallback.
+    let active_font: Option<&fontdue::Font> = registered.as_ref().or(system_font);
     let fake_bold_pad = if bold && active_font.map(|f| !std::ptr::eq(f, font_opt.as_ref().unwrap_or(f))).unwrap_or(false) { 0.0 } else if bold { 1.0 } else { 0.0 };
     let _ = fake_bold_pad; // reset - simple semantics: bez fake-bold pad, mereno z bold font kdyz dostupne
 

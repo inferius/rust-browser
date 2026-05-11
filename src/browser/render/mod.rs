@@ -7286,6 +7286,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         // se ulozily real natural dims.
                         if super::layout::take_image_natural_dims_dirty() {
                             need_relayout_after_load = true;
+                            eprintln!("[img-relayout] natural dims fresh for {} -> invalidate layout cache", src);
                         }
                     }
                     _ => {}
@@ -9107,20 +9108,29 @@ impl Renderer {
                         self.atlas.extra_fonts.entry(ff.family.clone())
                             .or_insert_with(Vec::new)
                             .push(font.clone());
+                        // Register pro layout measure_text_width_full - aby
+                        // mereni pouzilo STEJNY font co render rasterizuje.
+                        crate::browser::layout::register_measure_font(&ff.family, font.clone());
                         if weight >= 600 && !italic {
                             self.atlas.extra_fonts.entry(format!("{}__bold__", ff.family))
                                 .or_insert_with(Vec::new)
                                 .push(font.clone());
+                            crate::browser::layout::register_measure_font(
+                                &format!("{}__bold__", ff.family), font.clone());
                         }
                         if italic && weight < 600 {
                             self.atlas.extra_fonts.entry(format!("{}__italic__", ff.family))
                                 .or_insert_with(Vec::new)
                                 .push(font.clone());
+                            crate::browser::layout::register_measure_font(
+                                &format!("{}__italic__", ff.family), font.clone());
                         }
                         if italic && weight >= 600 {
                             self.atlas.extra_fonts.entry(format!("{}__bi__", ff.family))
                                 .or_insert_with(Vec::new)
-                                .push(font);
+                                .push(font.clone());
+                            crate::browser::layout::register_measure_font(
+                                &format!("{}__bi__", ff.family), font);
                         }
                         self.loaded_font_urls.insert(url);
                     }
