@@ -6444,6 +6444,10 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             let _t_chrome = std::time::Instant::now();
             // Shell chrome bar (tabs + nav) - shell_mode only. Paint here misto
             // self.paint_shell_chrome (borrow konflikt s renderer mut).
+            // shell_split marker: vsechno za timto bodem se renderuje do shell_rt
+            // (separate render target od page main_rt). Two-way render dela compose
+            // teprve na konci: main_rt + shell_rt -> swap chain.
+            let shell_split = display_list.len();
             if self.shell_mode {
                 let win_w_logical = (r.config.width as f32) / (self.zoom * r.scale_factor);
                 let win_h_logical = (r.config.height as f32) / (self.zoom * r.scale_factor);
@@ -7150,8 +7154,13 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             r.upload_image_atlas();
             perf_t("atlas warm-up + upload", _t_atlas);
 
-            // Split list na page (pred WebGL) + overlay (po WebGL).
-            let (page_cmds, overlay_cmds) = display_list.split_at(overlay_split);
+            // Split list na 3 ranges: page (pred WebGL) + overlay (po WebGL, do main_rt)
+            // + shell (browser chrome, do shell_rt).
+            // shell_split >= overlay_split (shell paint je AZ po overlays).
+            let shell_split = shell_split.max(overlay_split);
+            let page_cmds = &display_list[..overlay_split];
+            let overlay_cmds = &display_list[overlay_split..shell_split];
+            let shell_cmds = &display_list[shell_split..];
 
             let _t_runs = std::time::Instant::now();
             // Extract TextRun pole pro per-glyph selection (foundation).
@@ -7172,9 +7181,9 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             let _t_gpu = std::time::Instant::now();
             if let Some(states_rc) = &webgl_states_opt {
                 let states = states_rc.borrow();
-                r.draw_full_frame(page_cmds, overlay_cmds, &layout_root, Some(&*states), self.scroll_y, chrome_top_logical);
+                r.draw_full_frame(page_cmds, overlay_cmds, shell_cmds, &layout_root, Some(&*states), self.scroll_y, chrome_top_logical);
             } else {
-                r.draw_segments(&display_list);
+                r.draw_full_frame(page_cmds, overlay_cmds, shell_cmds, &layout_root, None, self.scroll_y, chrome_top_logical);
             }
             perf_t("gpu draw + present", _t_gpu);
 
@@ -7431,6 +7440,12 @@ struct Renderer {
     /// snapshotuje obsah tohoto RT. Na konci framu composit main_rt -> swap chain.
     /// Usage: TEXTURE_BINDING | RENDER_ATTACHMENT | COPY_SRC
     main_rt: wgpu::Texture,
+    /// Shell RT - browser chrome (tabs / address bar / scrollbars / find overlay).
+    /// Dvouvrstvy render: page content -> main_rt, shell chrome -> shell_rt,
+    /// pak compose obojiho do swap chainu (shell pres page s alpha blend).
+    /// Tohle umozni page cache/incremental + shell vzdy responsive (60fps),
+    /// nezavisle na page paint cost.
+    shell_rt: wgpu::Texture,
     /// Blur pipeline + bind group layout (separate od main)
     blur_pipeline: wgpu::RenderPipeline,
     blur_bind_group_layout: wgpu::BindGroupLayout,
@@ -7735,6 +7750,18 @@ impl Renderer {
                 | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
+        // Shell RT - browser chrome only.
+        let shell_rt = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("shell_rt"),
+            size: wgpu::Extent3d { width: config.width.max(1), height: config.height.max(1), depth_or_array_layers: 1 },
+            mip_level_count: 1, sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: offscreen_format,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
 
         // Blur shader + pipeline
         let blur_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -7949,6 +7976,7 @@ impl Renderer {
             offscreen_tex, offscreen_view,
             offscreen_tex_b, offscreen_view_b,
             main_rt,
+            shell_rt,
             blur_pipeline, blur_bind_group_layout, blur_uniform_buf,
             compose_pipeline, compose_bind_group_layout, compose_uniform_buf,
             transform_pipeline, transform_bind_group_layout, transform_uniform_buf,
@@ -8981,6 +9009,17 @@ impl Renderer {
                 | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
+        self.shell_rt = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("shell_rt"),
+            size: wgpu::Extent3d { width: w.max(1), height: h.max(1), depth_or_array_layers: 1 },
+            mip_level_count: 1, sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: fmt,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
     }
 
     fn upload_atlas(&self) {
@@ -9009,6 +9048,7 @@ impl Renderer {
         &mut self,
         cmds: &[DisplayCommand],
         overlay_cmds: &[DisplayCommand],
+        shell_cmds: &[DisplayCommand],
         layout_root: &super::layout::LayoutBox,
         webgl_states: Option<&std::collections::HashMap<usize, std::rc::Rc<std::cell::RefCell<crate::interpreter::WebGLState>>>>,
         scroll_y: f32,
@@ -9034,14 +9074,12 @@ impl Renderer {
         // Main RT view - sem kreslime (ne primo na swap chain)
         let main_rt_view = self.main_rt.create_view(&Default::default());
 
-        // 1. CSS display list (page content) -> main_rt s scissor pod chrome bar.
-        // Logical chrome_top_logical -> physical px = * zoom * scale_factor.
-        let chrome_top_phys = (chrome_top_logical * self.zoom * self.scale_factor).round() as u32;
-        let page_scissor = if chrome_top_phys > 0 {
-            Some((0u32, chrome_top_phys, self.config.width,
-                  self.config.height.saturating_sub(chrome_top_phys)))
-        } else { None };
-        let had_segments = self.draw_segments_into_view_clipped(&main_rt_view, cmds, true, page_scissor);
+        // 1. CSS display list (page content) -> main_rt. Two-way render: shell jde
+        // do shell_rt separately, takze page muze renderit cele okno bez scissor.
+        // Shell se prekryje pri compose alpha-blendem. chrome_top_logical reserved
+        // pro budouci shell/page area tracking.
+        let _ = chrome_top_logical;
+        let had_segments = self.draw_segments_into_view_clipped(&main_rt_view, cmds, true, None);
 
         // 2. WebGL pass -> main_rt (po page contentu, pred overlay)
         let mut webgl_did_render = false;
@@ -9058,11 +9096,41 @@ impl Renderer {
             self.draw_segments_into_view_ext(&main_rt_view, overlay_cmds, false)
         } else { false };
 
-        // 4. Composit main_rt -> swap chain
-        if had_segments || webgl_did_render || had_overlay {
+        // 4. Shell pass (browser chrome: tabs, addr bar, scrollbars) -> shell_rt.
+        // Separate target umozni page main_rt cache + shell-only redraw nezavisle.
+        let shell_rt_view = self.shell_rt.create_view(&Default::default());
+        let had_shell = if !shell_cmds.is_empty() {
+            // Explicit clear shell_rt to transparent (0,0,0,0) PRED render, aby
+            // alpha-blend compose neperokryl page mimo shell area.
+            {
+                let mut encoder = self.device.create_command_encoder(&Default::default());
+                let _ = encoder.begin_render_pass(&wgpu::RenderPassDescriptor { multiview_mask: None,
+                    label: Some("shell_rt_clear"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment { depth_slice: None,
+                        view: &shell_rt_view, resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 0.0 }),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None, timestamp_writes: None, occlusion_query_set: None,
+                });
+                self.queue.submit(std::iter::once(encoder.finish()));
+            }
+            // Render shell_cmds s start_clear=false (uz mame transparent clear).
+            self.draw_segments_into_view_ext(&shell_rt_view, shell_cmds, false)
+        } else { false };
+
+        // 5. Composit main_rt -> swap chain, pak shell_rt overlay nad page.
+        // compose_view_to_swap pouziva transform_pipeline (BlendState::ALPHA_BLENDING)
+        // + LoadOp::Load. Druhy compose alpha-blend shell pres page.
+        if had_segments || webgl_did_render || had_overlay || had_shell {
             let vw = self.config.width as f32;
             let vh = self.config.height as f32;
             self.compose_view_to_swap(&swap_view, &main_rt_view, 0.0, 0.0, vw, vh);
+            if had_shell {
+                self.compose_view_to_swap(&swap_view, &shell_rt_view, 0.0, 0.0, vw, vh);
+            }
         } else {
             // Nic nekresleno - clear swap chain primo
             let mut encoder = self.device.create_command_encoder(&Default::default());
