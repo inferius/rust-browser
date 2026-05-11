@@ -3804,8 +3804,8 @@ fn hit_test_elements(
     }
     let body_y = content_y + search_h;
     let body_h = content_h - search_h;
-    // Three-column geometry.
-    let default_tree_split = (win_w - state.side_panel_w) * 0.45;
+    // Three-column geometry. Musi se shodovat s paint_elements_tab (35% default).
+    let default_tree_split = (win_w - state.side_panel_w) * 0.35;
     let tree_split = if state.elements.split_x < 1.0 { default_tree_split }
                      else { state.elements.split_x.max(200.0).min((win_w - state.side_panel_w - 200.0).max(201.0)) };
     // clamp guard: kdyz win_w < 580, max < min - panic. Ensure max >= 181.
@@ -3813,8 +3813,8 @@ fn hit_test_elements(
     let side_panel_w = state.side_panel_w.clamp(180.0, max_side);
     let styles_end = win_w - side_panel_w;
 
-    // Tree splitter zone.
-    if (mouse_x - tree_split).abs() < SPLITTER_HIT_PX && mouse_y >= body_y && mouse_y < body_y + body_h {
+    // Tree splitter zone. Wider hit zone (8 px) pro snadnejsi grab.
+    if (mouse_x - tree_split).abs() < SPLITTER_HIT_PX.max(8.0) && mouse_y >= body_y && mouse_y < body_y + body_h {
         return DevtoolsHit::SplitterDrag;
     }
     // Side panel splitter zone.

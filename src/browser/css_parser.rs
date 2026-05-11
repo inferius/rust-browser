@@ -1088,7 +1088,44 @@ fn split_top_level_comma(s: &str) -> Vec<String> {
     split_top_level(s, |c| c == ',')
 }
 
+/// Vlozi whitespace okolo top-level combinator znaku (`>`, `+`, `~`) tak aby
+/// nasledny whitespace-split ten symbol oddelil. Bez tohoto `.a>.b`, `.a+.b`
+/// padly do split jako jeden token a parser je necetl jako Combinator -> child
+/// combinator selectory ignoroval (nektere styly se neaplikovaly, viz
+/// mileneckaseznamka.cz `.min-box > .text-box`).
+/// Pozor: `~`, `+`, `>` uvnitr `[attr~="..."]` / `[attr+="..."]` NE-rozsekat -
+/// tracking depth_brack > 0.
+fn pad_combinators(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 8);
+    let mut depth_paren = 0i32;
+    let mut depth_brack = 0i32;
+    let mut quote: Option<char> = None;
+    for ch in s.chars() {
+        if let Some(q) = quote {
+            out.push(ch);
+            if ch == q { quote = None; }
+            continue;
+        }
+        match ch {
+            '"' | '\'' => { quote = Some(ch); out.push(ch); }
+            '(' => { depth_paren += 1; out.push(ch); }
+            ')' => { depth_paren -= 1; out.push(ch); }
+            '[' => { depth_brack += 1; out.push(ch); }
+            ']' => { depth_brack -= 1; out.push(ch); }
+            '>' | '+' | '~' if depth_paren == 0 && depth_brack == 0 => {
+                out.push(' ');
+                out.push(ch);
+                out.push(' ');
+            }
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
 fn parse_single_selector(s: &str) -> Selector {
+    let s_padded = pad_combinators(s);
+    let s = s_padded.as_str();
     let mut parts = Vec::new();
     let mut current_combinator: Option<Combinator> = None;
     for token in split_top_level_whitespace(s) {
