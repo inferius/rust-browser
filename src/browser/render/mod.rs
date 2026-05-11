@@ -3465,7 +3465,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         }
         fn shell_chrome_h_active(&self) -> f32 {
             if !self.shell_mode { return 0.0; }
-            let bm_count = crate::devtools::bookmarks::load_bookmarks().len();
+            let bm_count = crate::devtools::bookmarks::bookmarks_count();
             // Base: tab strip 28 + nav 36 = 64. Bookmarks bar 24 navic (kdyz visible + nejaky bm).
             64.0 + if bm_count > 0 && self.bookmarks_bar_visible { 24.0 } else { 0.0 }
         }
@@ -6442,7 +6442,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // Shell mode: shift page commands dolu o chrome_h aby content
             // nezacinal pod chrome bar.
             if self.shell_mode {
-                let bm_count = crate::devtools::bookmarks::load_bookmarks().len();
+                let bm_count = crate::devtools::bookmarks::bookmarks_count();
                 let dy = 64.0 + if bm_count > 0 && self.bookmarks_bar_visible { 24.0 } else { 0.0 };
                 for cmd in display_list.iter_mut() {
                     use DisplayCommand::*;
@@ -6467,7 +6467,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // devtools highlight rect kreslen v layout-coords (y=10) ale paint
             // jiz posunul page (y=74) -> uzivatel vidi highlight jinde.
             let chrome_dy_for_highlight = if self.shell_mode {
-                let bm_count = crate::devtools::bookmarks::load_bookmarks().len();
+                let bm_count = crate::devtools::bookmarks::bookmarks_count();
                 64.0 + if bm_count > 0 && self.bookmarks_bar_visible { 24.0 } else { 0.0 }
             } else { 0.0 };
             let chrome_dx_for_highlight = -self.scroll_x;
@@ -6547,7 +6547,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 let loadings: Vec<bool> = self.tabs.tabs.iter().map(|t| t.loading).collect();
                 let groups: Vec<Option<[u8; 4]>> = self.tabs.tabs.iter()
                     .map(|t| t.group_color).collect();
-                let bm_count = crate::devtools::bookmarks::load_bookmarks().len();
+                let bm_count = crate::devtools::bookmarks::bookmarks_count();
                 let chrome_h = 64.0 + if bm_count > 0 && self.bookmarks_bar_visible { 24.0 } else { 0.0 };
                 let anim_t = self.start_time.elapsed().as_secs_f32();
                 // Pri otevrenem addr baru zobrazujeme rozeditovany text v chrome
@@ -7106,7 +7106,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // je take cely v page area pod chrome.
             let panel_h_logical = if self.devtools.panel_open { self.devtools.panel_h.min(viewport_h_logical * 0.7) } else { 0.0 };
             let chrome_top = if self.shell_mode {
-                let bm_count = crate::devtools::bookmarks::load_bookmarks().len();
+                let bm_count = crate::devtools::bookmarks::bookmarks_count();
                 64.0 + if bm_count > 0 && self.bookmarks_bar_visible { 24.0 } else { 0.0 }
             } else { 0.0 };
             let viewport_w = viewport_w_logical;
@@ -7267,7 +7267,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             let webgl_states_opt = self.interpreter.as_ref().map(|i| i.webgl_states.clone());
             // Shell chrome top - page render se na nej zarizne scissorem.
             let chrome_top_logical = if self.shell_mode {
-                let bm_count = crate::devtools::bookmarks::load_bookmarks().len();
+                let bm_count = crate::devtools::bookmarks::bookmarks_count();
                 64.0 + if bm_count > 0 && self.bookmarks_bar_visible { 24.0 } else { 0.0 }
             } else { 0.0 };
             let _t_gpu = std::time::Instant::now();

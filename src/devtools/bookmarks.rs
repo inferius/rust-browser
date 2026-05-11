@@ -41,6 +41,15 @@ pub fn load_bookmarks() -> Vec<Bookmark> {
     result
 }
 
+/// Cheap pocet bookmark zaznamu bez klonovani cele Vec. Pouzit kdyz
+/// caller potrebuje pouze .len() (paint shell chrome height check).
+pub fn bookmarks_count() -> usize {
+    if let Some(n) = BOOKMARKS_CACHE.with(|c| c.borrow().as_ref().map(|v| v.len())) {
+        return n;
+    }
+    load_bookmarks().len()
+}
+
 pub fn save_bookmarks(bms: &[Bookmark]) {
     invalidate_cache();
     let Some(path) = bookmarks_path() else { return };
