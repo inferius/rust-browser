@@ -199,6 +199,34 @@ impl GlyphAtlas {
         }
     }
 
+    /// True pokud font umi rasterizovat dany char (= ma glyph index != 0).
+    /// Pouzite pro fallback chain pri diakritice (Times Roman nema CP > U+00FF).
+    #[inline]
+    pub(super) fn has_glyph(font: &fontdue::Font, ch: char) -> bool {
+        font.lookup_glyph_index(ch) != 0
+    }
+
+    /// Vrati font ktery umi rasterizovat dany char. Iteruje primary family,
+    /// pak vsechny extra_fonts, pak system fonts, az najde glyph. Pouziva se
+    /// pro diakritiku/CJK/symbols co primary font nema (Times Roman nema CP > U+00FF).
+    pub(super) fn font_for_char(&self, family: &str, ch: char) -> &fontdue::Font {
+        let primary = self.font_for(family);
+        if Self::has_glyph(primary, ch) { return primary; }
+        // ASCII space / control - vsechny fonts maji = primary OK.
+        if (ch as u32) < 0x20 { return primary; }
+        // Iterate extra_fonts hledat fallback.
+        for f in self.extra_fonts.values() {
+            if Self::has_glyph(f, ch) { return f; }
+        }
+        // System fonts last resort.
+        if let Some(b) = &self.font_bold { if Self::has_glyph(b, ch) { return b; } }
+        if let Some(i) = &self.font_italic { if Self::has_glyph(i, ch) { return i; } }
+        if let Some(bi) = &self.font_bold_italic { if Self::has_glyph(bi, ch) { return bi; } }
+        // Default font fallback (i kdyz neumi - prazdny glyph lepsi nez crash).
+        if Self::has_glyph(&self.font, ch) { return &self.font; }
+        primary
+    }
+
     /// Vrati referenci na font dle family. "" nebo neznamy -> default.
     /// Family s prefixem "__bold__:" -> bold variant pokud k dispozici.
     /// Pri comma-separated seznamu (CSS font-family fallback) iteruje
@@ -273,7 +301,9 @@ impl GlyphAtlas {
         if !self.family_names.contains_key(&family_hash) {
             self.family_names.insert(family_hash, family.to_string());
         }
-        let font = self.font_for(family);
+        // font_for_char dela fallback chain pri primary fontu chybejicim
+        // glyph (Times Roman nema CP > U+00FF -> diakritika fallne na default).
+        let font = self.font_for_char(family, ch);
         let lcd = size < LCD_THRESHOLD;
         let (metrics, bitmap) = if lcd {
             font.rasterize_subpixel(ch, size as f32)

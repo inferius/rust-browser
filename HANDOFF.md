@@ -1,6 +1,125 @@
 # RustWebEngine - HANDOFF pro dalsi vlakno
 
-Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`.
+Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`, `debug_utils.md`.
+
+## Session N+20: debug helpers + mileneckaseznamka.cz dalsi vlna fixes
+
+**2497 tests pass, build clean.**
+
+Autonomous session - vlakno fixovalo veci v neprítomnosti uzivatele.
+
+### Debug helpers (`src/debug_bp.rs` + `debug_utils.md`)
+
+Globalni breakpoint helper modul. Tri cesty zastavit proces na konkretnim elementu:
+
+1. **Env var filter + IDE BP na sink fn**:
+   - `BP_TAG=img BP_CLASS=photo-box cargo run -- browser url`
+   - IDE BP na prazdny `breakpoint_layout()` / `breakpoint_paint()` /
+     `breakpoint_cascade()` / `breakpoint_build()` v `src/debug_bp.rs`.
+   - Sink fn se zavola jen pri match -> stop pres filter.
+   - Wired call sites: `layout/mod.rs:build_box_inner` + `flush_inline` img branch,
+     `paint.rs:paint_box`, `cascade.rs:cascade()` walk.
+
+2. **Conditional BP na konkretni line**:
+   - BP na zvolene line, condition: `crate::debug_bp::lb_is_id(bx, "photo-box")`
+   - Predicates: `lb_is_id/class/tag/match`, `node_is_id/class/tag`, generic
+     `should_break(tag, id, class)`.
+   - Vsechny `#[inline(never)]` - optimizer je nezahodi.
+
+3. **Active trap inline**:
+   - `debug_bp::break_if("img", "photo-box", "")` - SIGTRAP/int3 kdy match.
+   - `debug_bp::debug_break()` - raw trap bez podminky.
+
+Macros: `bp_here!`, `bp_layout!`, `bp_paint!`, `bp_cascade!`, `bp_build!`.
+
+Viz `debug_utils.md` pro plnou dokumentaci + RustRover workflow.
+
+### Image sizing - photo-box height:100% fix
+
+`mod.rs:3293` abs/fixed positioning handler resolvoval jen `explicit_height`,
+ne `height_pct`. photo-box `position:absolute; height:100%` zustaval h=0, img
+uvnitr cetl parent_h=0 a spadl na advance_h=24. Fix: pridana branch
+`else if let Some(p) = child.height_pct { child.rect.height = cb_h * p; }`.
+
+### Devtools console capture native errors
+
+`[script error]` chyby chodily jen na stderr - DevTools panel byl prazdny.
+Fix: pri `interp.run()` Err -> push do `interp.console_log` jako "error" level.
+DevToolsState mirror loop sam pripoji do console panel. Take parse + lex
+errors capture.
+
+### XMLHttpRequest stub (sync + async)
+
+Real `XMLHttpRequest` builtin v `setup_builtins`:
+- `open(method, url, async?)`, `send(body?)`, `setRequestHeader`, `abort`,
+  `getResponseHeader`, `getAllResponseHeaders`, `overrideMimeType`,
+  `addEventListener` ("load"/"error"/"readystatechange"/"loadend").
+- Sync ureq HTTP (jako fetch). Status, responseText, response, readyState.
+- onload/onreadystatechange/onerror/onloadend - fire pres `pending_xhr_callbacks`
+  drain v event loop.
+- `Interpreter` field `pending_xhr_callbacks: Rc<RefCell<Vec<(JsValue, JsValue)>>>`.
+- `drain_xhr_callbacks()` v `run()` po `drain_timers`.
+- `ActiveXObject` alias (IE legacy).
+
+### Web analytics / framework stubs
+
+Stranky bezne pouzivaji bez existence check - ReferenceError = cely script padne.
+Stubs:
+- `dataLayer = []` (GTM)
+- `gtag(...)` no-op
+- `ga(...)` no-op
+- `_gaq = []`, `_paq = []` (Piwik/Matomo legacy)
+- `fbq(...)` no-op (Facebook Pixel)
+- `Tracy = { Debug: {} }` (Nette PHP framework debug bar)
+- `$` / `jQuery` - minimal stub: vraci collection objekt s 40+ no-op methods
+  (`ready`, `on`, `click`, `addClass`, `html`, `val`, `css`, `find`, `each`,
+  `data`, `trigger`, `fadeIn`, `animate`, `ajax`, ...). Real jQuery emulace
+  nemozne, ale alesponcekoli `$(fn)` nebo `$('selector').addClass(...)` nesegfaultne.
+
+### `<br>` linebreak fix
+
+flush_inline iterace ignorovala `<br>` (display:inline, no text, no children) -
+padlo do replaced inline branch s rect 0. Fix: explicit handler na zacatku
+loopu - emit force linebreak (`cursor_y += line_height; cursor_x = inner_x`).
+
+### `ul`/`ol` UA padding-inline-start gating
+
+Default `ul/ol { padding-left: 40px }` se aplikoval i pri `display: flex`.
+Mileneckaseznamka.cz nav menu mel children pushed +40px doprava. Chrome dela
+UA padding jen pri block/list-item display. Fix: gate UA padding za
+`matches!(bx.display, Block | ListItem)`.
+
+### Diakritika fallback
+
+Times Roman ma ASCII subset - chybeji Czech znaky (ř, ě, č, í). Pri rasterize
+fontdue vraci empty glyph + 0 advance -> text vypadal jako `P_ezdivka` +
+overlap.
+
+Two-stage fix:
+1. **`atlas.rs`**: `font_for_char(family, ch)` - iteruje primary -> extra_fonts
+   -> bold/italic variants -> default font, vraci ten s `lookup_glyph_index(ch) != 0`.
+   Pouzite v `add()`.
+2. **`measure_text_width_full`**: pri advance==0 + glyph_index==0 -> fallback
+   chain (sans/default/bold/mono). Posledni resort `font_size * 0.5`.
+
+### Text overlap (inline span s children)
+
+cursor_x advance pouzival pre-pass `estimated_w` (sum text children widths).
+layout_block uvnitr inline elementu mohl resize rect.width vetsi (nesting,
+padding, text wrap). Bez re-read overlap dalsi sibling pres real width.
+Fix: po `layout_block(&mut bx.children[idx])` re-read `bx.children[idx].rect.width`,
+pouzij `max(estimated_w)`.
+
+### NEzbyva (parking pro tve review)
+
+1. Carousel ne-animuje ale CPU - perf hot path apply_paint_animations.
+2. Web fonts @font-face fetch + register.
+3. SVG zubaty - polygon AA pri small features.
+4. Buttons Registrovat/Prihlasit styling - mozna cascade specificity / pseudo-class.
+5. Profile fetch ne-funguje na strance - mozna XHR async callback fire ordering.
+
+Vsechny tyto vyzaduji navrhove rozhodnuti nebo konkretni HTML/CSS sample
+ke krokovani (= ted vime jak: `BP_CLASS=*` env + IDE BP).
 
 ## Session N+19: mileneckaseznamka.cz fixes + dual render arch
 
