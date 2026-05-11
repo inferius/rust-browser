@@ -205,6 +205,21 @@ fn selector_nth_child() {
 }
 
 #[test]
+fn selector_nth_child_negative_a() {
+    // :nth-child(-n+3) = prvni 3 deti. Test ze parse_an_plus_b zvlada
+    // "-n+3" pattern (a_str = "-", a = -1; rest = "+3", b = 3).
+    let doc = parse_html("<html><body><ul><li>1</li><li>2</li><li>3</li><li>4</li><li>5</li></ul></body></html>", "");
+    let css = parse_stylesheet("li:nth-child(-n+3) { color: blue; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let lis = doc.root.get_elements_by_tag("li");
+    assert_eq!(cascade::get_styles(&map, &lis[0]).unwrap().get("color").map(|s| s.as_str()), Some("blue"));
+    assert_eq!(cascade::get_styles(&map, &lis[1]).unwrap().get("color").map(|s| s.as_str()), Some("blue"));
+    assert_eq!(cascade::get_styles(&map, &lis[2]).unwrap().get("color").map(|s| s.as_str()), Some("blue"));
+    assert!(cascade::get_styles(&map, &lis[3]).unwrap().get("color").is_none());
+    assert!(cascade::get_styles(&map, &lis[4]).unwrap().get("color").is_none());
+}
+
+#[test]
 fn selector_first_of_type() {
     let doc = parse_html("<html><body><h1>a</h1><p>1</p><p>2</p></body></html>", "");
     let css = parse_stylesheet("p:first-of-type { color: red; }");
