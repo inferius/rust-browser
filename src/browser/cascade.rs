@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 use super::dom::{Node, NodeKind};
-use super::css_parser::{Stylesheet, Selector, SimpleSelector, Combinator, specificity};
+use super::css_parser::{Stylesheet, Selector, SimpleSelector, Combinator, Rule, specificity};
 
 // Runtime UI state pres thread-local. Nastavuje render loop pred kazdym
 // cascade pass; matches_selector cte pro :hover / :active / :focus / :focus-within.
@@ -1351,8 +1351,6 @@ pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
 /// tag-specific UA values.
 fn apply_ua_tag_defaults(node: &Rc<Node>, style_map: &mut StyleMap) {
     if let Some(tag) = node.tag_name_ref() {
-        let id = node_id(node);
-        let entry = style_map.entry(id).or_default();
         let (fs, bold) = match tag {
             "h1" => (Some("2em"), true),
             "h2" => (Some("1.5em"), true),
@@ -1363,11 +1361,14 @@ fn apply_ua_tag_defaults(node: &Rc<Node>, style_map: &mut StyleMap) {
             "strong" | "b" => (None, true),
             _ => (None, false),
         };
-        if let Some(v) = fs {
-            entry.entry("font-size".into()).or_insert_with(|| v.to_string());
-        }
-        if bold {
-            entry.entry("font-weight".into()).or_insert_with(|| "bold".to_string());
+        if fs.is_some() || bold {
+            let entry = style_map.entry(node_id(node)).or_default();
+            if let Some(v) = fs {
+                entry.entry("font-size".into()).or_insert_with(|| v.to_string());
+            }
+            if bold {
+                entry.entry("font-weight".into()).or_insert_with(|| "bold".to_string());
+            }
         }
     }
     for ch in node.children.borrow().iter() {
@@ -1439,9 +1440,18 @@ pub fn cascade_pseudo(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> PseudoStyl
     // PERF fast-path: stylesheets without ::before / ::after / ::placeholder /
     // ::marker / ::first-letter etc -> celkove no pseudo selectors. Skip walk.
     // Flamegraph: cascade_pseudo 531 samples - dominantni. 90%+ stranek nepouziva.
+    // Musi prochazet VSECHNY zdroje rules (unlayered + layered + scope +
+    // starting-style + @media + @container), jinak pseudo v @layer nebo @media
+    // by se ztratil v fast-path.
+    let rule_has_pseudo = |r: &Rule| r.selectors.iter().any(|s|
+        s.parts.last().map(|p| p.pseudo_element.is_some()).unwrap_or(false));
     let has_any_pseudo = stylesheets.iter().any(|sh| {
-        sh.rules.iter().any(|r| r.selectors.iter().any(|s|
-            s.parts.last().map(|p| p.pseudo_element.is_some()).unwrap_or(false)))
+        sh.rules.iter().any(&rule_has_pseudo)
+            || sh.layered_rules.iter().any(|(_, rs)| rs.iter().any(&rule_has_pseudo))
+            || sh.scopes.iter().any(|sc| sc.rules.iter().any(&rule_has_pseudo))
+            || sh.starting_style_rules.iter().any(&rule_has_pseudo)
+            || sh.media_queries.iter().any(|mq| mq.rules.iter().any(&rule_has_pseudo))
+            || sh.container_queries.iter().any(|cq| cq.rules.iter().any(&rule_has_pseudo))
     });
     if !has_any_pseudo {
         return out;
