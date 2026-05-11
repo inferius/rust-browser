@@ -390,6 +390,9 @@ pub struct LayoutBox {
     pub offset_right: Option<f32>,
     pub offset_bottom: Option<f32>,
     pub offset_left: Option<f32>,
+    /// CSS z-index integer (None = auto). Aplikuje se pri position != static.
+    /// Pri stejnem parent paint sortuje children podle z (vyssi vise).
+    pub z_index: Option<i32>,
     /// Opacity 0..1
     pub opacity: f32,
     /// Underline / strikethrough flagy
@@ -859,6 +862,7 @@ impl LayoutBox {
             offset_right: None,
             offset_bottom: None,
             offset_left: None,
+            z_index: None,
             opacity: 1.0,
             text_underline: false,
             text_strikethrough: false,
@@ -1252,6 +1256,24 @@ thread_local! {
     /// style_map / DOM mutace (cascade rebuild).
     static SUBTREE_HASH_CACHE: std::cell::RefCell<HashMap<usize, u64>>
         = std::cell::RefCell::new(HashMap::new());
+    /// Image natural dims cache - src URL -> (natural_w, natural_h). Renderer
+    /// populates pri load_image z ImageAtlas. Layout cte v flush_inline pro
+    /// img/video replaced inline elementy aby spravne aplikoval max-width/height
+    /// + aspect ratio. Bez tohoto img natural unknown -> default 100 fallback.
+    pub(crate) static IMAGE_NATURAL_DIMS: std::cell::RefCell<HashMap<String, (f32, f32)>>
+        = std::cell::RefCell::new(HashMap::new());
+}
+
+/// Public API pro renderer: po load_image populate natural dims cache.
+pub fn set_image_natural_dims(src: &str, w: f32, h: f32) {
+    IMAGE_NATURAL_DIMS.with(|c| {
+        c.borrow_mut().insert(src.to_string(), (w, h));
+    });
+}
+
+/// Lookup natural dims (None pri zatim nenactenom obrazku).
+pub fn get_image_natural_dims(src: &str) -> Option<(f32, f32)> {
+    IMAGE_NATURAL_DIMS.with(|c| c.borrow().get(src).copied())
 }
 
 pub(crate) fn clear_subtree_hash_cache() {
@@ -2558,6 +2580,15 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
             _ => Position::Static,
         };
     }
+    // z-index: integer pro stacking order. "auto" / parse fail = None.
+    if let Some(zv) = s.get("z-index") {
+        let zt = zv.trim();
+        if zt != "auto" {
+            if let Ok(n) = zt.parse::<i32>() {
+                bx.z_index = Some(n);
+            }
+        }
+    }
     // Top/right/bottom/left offsety
     if let Some(v) = s.get("top")    { bx.offset_top    = Some(parse_length(v)); }
     if let Some(v) = s.get("right")  { bx.offset_right  = Some(parse_length(v)); }
@@ -3790,52 +3821,100 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
             let mar_r_r = bx_clone.margin_right.unwrap_or(bx_clone.margin);
             let parent_w_for_img = (inner_w - mar_l_r - mar_r_r).max(0.0);
             let parent_h_for_img = if bx.rect.height > 0.0 { bx.rect.height } else { advance_h };
-            // Img s `max-width: 100%; max-height: 100%` ale bez explicit width:
-            // Chrome chova jako "fill up to max" (natural image > parent ->
-            // shrink to parent). Bez znamy natural size (atlas neni v layout
-            // dostupny) heuristic: max-width 100% + no explicit -> use parent.
-            // Pri natural < max by Chrome zachoval natural, my OVERESTIMATEM na
-            // parent - kompromis pro img heavy stranky kde natural typicky > parent.
+            // Img/video replaced inline element sizing per CSS spec:
+            // - Natural dims z nacteneho obrazku (IMAGE_NATURAL_DIMS thread_local
+            //   populated z renderer load_image).
+            // - explicit_width/height (CSS width/height) wins.
+            // - max-width/height clamp ZACHOVAVA aspect ratio (per spec):
+            //   pri natural 800x600 + max-w 175 + max-h 175 -> jedna z os
+            //   prizpusobi do max, druha proporcionalne mensi.
             let is_img_replaced = matches!(bx_clone.tag.as_deref(), Some("img") | Some("video"));
-            let max_w_is_pct = bx_clone.max_width_v.ends_with('%');
-            let max_h_is_pct = bx_clone.max_height_v.ends_with('%');
-            let w = if let Some(px) = bx_clone.explicit_width {
-                px
-            } else if let Some(pct) = bx_clone.width_pct {
-                parent_w_for_img * pct
-            } else if is_img_replaced && max_w_is_pct {
-                // Fill-to-max heuristic.
-                parse_length_or_pct(&bx_clone.max_width_v, parent_w_for_img)
-            } else if bx_clone.rect.width > 0.0 {
-                bx_clone.rect.width
+            // Resolve max values (Infinity pri none/empty).
+            let max_w_resolved = if bx_clone.max_width_v.is_empty() || bx_clone.max_width_v == "none" {
+                f32::INFINITY
             } else {
-                font_size
+                parse_length_or_pct(&bx_clone.max_width_v, parent_w_for_img)
             };
-            // Apply max-width/min-width clamp (pct resolve proti parent_w).
-            let w = if !bx_clone.max_width_v.is_empty() && bx_clone.max_width_v != "none" {
-                let mx = parse_length_or_pct(&bx_clone.max_width_v, parent_w_for_img);
-                if mx > 0.0 { w.min(mx) } else { w }
-            } else { w };
+            let max_h_resolved = if bx_clone.max_height_v.is_empty() || bx_clone.max_height_v == "none" {
+                f32::INFINITY
+            } else {
+                parse_length_or_pct(&bx_clone.max_height_v, parent_h_for_img)
+            };
+            // Lookup natural dims pro img/video (None pokud zatim nenacten).
+            let natural_dims: Option<(f32, f32)> = if is_img_replaced {
+                bx_clone.image_src.as_ref()
+                    .and_then(|s| get_image_natural_dims(s))
+            } else { None };
+            // Compute w/h zachovavajici aspect ratio kdyz natural znaty + bez
+            // explicit dims. Fallback heuristic kdy natural unknown: max-w/h
+            // (pri obou pct = square box-fill, nepokazi aspect kdyz parent ctverec).
+            let (w_pre, h_pre) = if is_img_replaced
+                && bx_clone.explicit_width.is_none() && bx_clone.explicit_height.is_none()
+                && bx_clone.width_pct.is_none() && bx_clone.height_pct.is_none()
+            {
+                if let Some((nw, nh)) = natural_dims {
+                    // Natural znaty. Scale fit-within max-w/max-h zachovavaje aspect.
+                    let scale_w = if max_w_resolved.is_finite() { max_w_resolved / nw } else { 1.0 };
+                    let scale_h = if max_h_resolved.is_finite() { max_h_resolved / nh } else { 1.0 };
+                    let scale = scale_w.min(scale_h).min(1.0);  // never upscale.
+                    (nw * scale, nh * scale)
+                } else if max_w_resolved.is_finite() && max_h_resolved.is_finite() {
+                    // Natural unknown + obe max nastavene: pouzij min jako square fit
+                    // (zachovava 1:1 aspect, neroztahuje img v nesymetrickem boxu).
+                    let s = max_w_resolved.min(max_h_resolved);
+                    (s, s)
+                } else if max_w_resolved.is_finite() {
+                    // Jen max-w: img bude max_w x default placeholder (cca natural).
+                    let nw_def = bx_clone.rect.width.max(100.0);
+                    let nh_def = bx_clone.rect.height.max(100.0);
+                    let ratio = nh_def / nw_def;
+                    (max_w_resolved, max_w_resolved * ratio)
+                } else if max_h_resolved.is_finite() {
+                    let nw_def = bx_clone.rect.width.max(100.0);
+                    let nh_def = bx_clone.rect.height.max(100.0);
+                    let ratio = nw_def / nh_def;
+                    (max_h_resolved * ratio, max_h_resolved)
+                } else {
+                    // Natural unknown + no max: stay at default rect.width/height.
+                    (bx_clone.rect.width.max(font_size), bx_clone.rect.height.max(advance_h))
+                }
+            } else {
+                // Non-replaced / has explicit dim -> pouziva existing path.
+                let w_calc = if let Some(px) = bx_clone.explicit_width {
+                    px
+                } else if let Some(pct) = bx_clone.width_pct {
+                    parent_w_for_img * pct
+                } else if bx_clone.rect.width > 0.0 {
+                    bx_clone.rect.width
+                } else {
+                    font_size
+                };
+                let h_calc = if let Some(px) = bx_clone.explicit_height {
+                    px
+                } else if let Some(pct) = bx_clone.height_pct {
+                    if bx.rect.height > 0.0 { bx.rect.height * pct } else { advance_h }
+                } else if bx_clone.rect.height > 0.0 {
+                    bx_clone.rect.height
+                } else {
+                    advance_h
+                };
+                (w_calc, h_calc)
+            };
+            // Apply min-width clamp (max uz aplikovan v aspect-aware vypoctu).
             let w = if !bx_clone.min_width_v.is_empty() && bx_clone.min_width_v != "none" {
                 let mn = parse_length_or_pct(&bx_clone.min_width_v, parent_w_for_img);
-                if mn > 0.0 { w.max(mn) } else { w }
+                if mn > 0.0 { w_pre.max(mn) } else { w_pre }
+            } else { w_pre };
+            // Pro non-img cesty aplikuj max separately (img cesta uz scale dela).
+            let w = if !is_img_replaced && max_w_resolved.is_finite() {
+                w.min(max_w_resolved)
             } else { w };
-            let h = if let Some(px) = bx_clone.explicit_height {
-                px
-            } else if let Some(pct) = bx_clone.height_pct {
-                // height_pct relativni k parent rect.height pokud znama.
-                if bx.rect.height > 0.0 { bx.rect.height * pct } else { advance_h }
-            } else if is_img_replaced && max_h_is_pct {
-                parse_length_or_pct(&bx_clone.max_height_v, parent_h_for_img)
-            } else if bx_clone.rect.height > 0.0 {
-                bx_clone.rect.height
-            } else {
-                advance_h
-            };
-            // Apply max-height clamp (pct resolve proti parent_h).
-            let h = if !bx_clone.max_height_v.is_empty() && bx_clone.max_height_v != "none" {
-                let mh = parse_length_or_pct(&bx_clone.max_height_v, parent_h_for_img);
-                if mh > 0.0 { h.min(mh) } else { h }
+            let h = if !bx_clone.min_height_v.is_empty() && bx_clone.min_height_v != "none" {
+                let mn = parse_length_or_pct(&bx_clone.min_height_v, parent_h_for_img);
+                if mn > 0.0 { h_pre.max(mn) } else { h_pre }
+            } else { h_pre };
+            let h = if !is_img_replaced && max_h_resolved.is_finite() {
+                h.min(max_h_resolved)
             } else { h };
             if sib_idx > 0 && prev_had_trailing_space && cursor_x > inner_x {
                 cursor_x += space_w;

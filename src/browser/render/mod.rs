@@ -519,6 +519,9 @@ fn try_decode_svg_into_atlas(bytes: &[u8], cache_key: &str,
     let scale_y = (target_h as f32) / (h as f32);
     let transform = tiny_skia::Transform::from_scale(scale_x, scale_y);
     resvg::render(&tree, transform, &mut pixmap.as_mut());
+    // Natural dims (z SVG view box, ne rasterized target). Layout pak
+    // pri max-width/height clamp aplikuje proper aspect ratio.
+    crate::browser::layout::set_image_natural_dims(cache_key, w as f32, h as f32);
     atlas.add(cache_key, target_w, target_h, pixmap.data());
     true
 }
@@ -8984,6 +8987,9 @@ impl Renderer {
             let rgba = img.to_rgba8();
             let (w, h) = (rgba.width(), rgba.height());
             let raw = rgba.into_raw();
+            // Natural dims do layout thread_local cache. flush_inline pri img
+            // s max-width/height uses pro proper aspect-preserving resize.
+            super::layout::set_image_natural_dims(cache_key, w as f32, h as f32);
             // Velke obrazky downscalujem aby se vesly do atlasu
             if w > IMAGE_ATLAS_SIZE / 2 || h > IMAGE_ATLAS_SIZE / 2 {
                 let max = IMAGE_ATLAS_SIZE / 2;

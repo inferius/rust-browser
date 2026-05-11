@@ -1682,11 +1682,75 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
         emit_svg_children(bx, cmds);
     }
 
+    // z-index aware children order: stably sort by (effective z-index).
+    // Bez tohoto stacking = DOM order. Pri z-index nastavenem dochazi
+    // k overlap chybam (carousel cards prelevani do bocnich panelu).
+    // CSS spec: items with auto z-index drzi DOM order vuci sobe,
+    // pak items s explicit z (vyssi vise).
+    let has_z = bx.children.iter().any(|c|
+        c.z_index.is_some() && !matches!(c.position,
+            super::layout::Position::Static));
+    let children_order: Vec<usize> = if has_z {
+        let mut indices: Vec<usize> = (0..bx.children.len()).collect();
+        indices.sort_by_key(|&i| {
+            let ch = &bx.children[i];
+            // CSS: z-index pouziva se jen na position != static. Static items
+            // jdou s parent stack.
+            let is_positioned = !matches!(ch.position, super::layout::Position::Static);
+            let z = if is_positioned { ch.z_index.unwrap_or(0) } else { 0 };
+            (z, i as i32)  // secondary: DOM order
+        });
+        indices
+    } else {
+        (0..bx.children.len()).collect()
+    };
+
+    let children_start = cmds.len();
     // Recursivne deti - auto-grow stack pro deep DOMs.
-    for ch in &bx.children {
+    for &ci in &children_order {
+        let ch = &bx.children[ci];
         stacker::maybe_grow(32 * 1024, 8 * 1024 * 1024, || {
             paint_box(ch, cmds, child_perspective);
         });
+    }
+
+    // Overflow:hidden / clip: filter out commands jejichz bbox je MIMO bx.rect.
+    // CPU-side bbox cull - nepatrny precision (commands kompletne outside dropuju,
+    // partial overlap necham byt). Resi prelevani content carouselu mimo
+    // overflow:hidden container.
+    let oh_x = matches!(bx.overflow_x.as_str(), "hidden" | "clip" | "scroll" | "auto");
+    let oh_y = matches!(bx.overflow_y.as_str(), "hidden" | "clip" | "scroll" | "auto");
+    if (oh_x || oh_y) && cmds.len() > children_start {
+        let bx_x0 = bx.rect.x;
+        let bx_y0 = bx.rect.y;
+        let bx_x1 = bx.rect.x + bx.rect.width;
+        let bx_y1 = bx.rect.y + bx.rect.height;
+        let cull_x_min = if oh_x { bx_x0 } else { f32::NEG_INFINITY };
+        let cull_x_max = if oh_x { bx_x1 } else { f32::INFINITY };
+        let cull_y_min = if oh_y { bx_y0 } else { f32::NEG_INFINITY };
+        let cull_y_max = if oh_y { bx_y1 } else { f32::INFINITY };
+        let cmd_outside = |c: &DisplayCommand| -> bool {
+            use DisplayCommand::*;
+            let (x, y, w, h) = match c {
+                Rect { x, y, w, h, .. } => (*x, *y, *w, *h),
+                Text { x, y, font_size, content, .. } => {
+                    let est_w = content.chars().count() as f32 * font_size * 0.6;
+                    (*x, *y, est_w, *font_size * 1.4)
+                }
+                Image { x, y, w, h, .. } => (*x, *y, *w, *h),
+                Gradient { x, y, w, h, .. } => (*x, *y, *w, *h),
+                Shadow { x, y, w, h, .. } => (*x, *y, *w, *h),
+                Border { x, y, w, h, .. } => (*x, *y, *w, *h),
+                _ => return false,  // markers, polygons, transform begin/end - nedotvkat
+            };
+            x + w < cull_x_min || x > cull_x_max
+                || y + h < cull_y_min || y > cull_y_max
+        };
+        cmds[children_start..].iter().enumerate()
+            .filter(|(_, c)| cmd_outside(c))
+            .map(|(i, _)| children_start + i)
+            .collect::<Vec<_>>()
+            .into_iter().rev().for_each(|i| { cmds.remove(i); });
     }
 
     // CSS Multi-column Layout L1 - column-rule mezi sloupci. Vykresleno PO
