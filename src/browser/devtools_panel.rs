@@ -3310,6 +3310,26 @@ pub fn paint_element_highlight_offset(
     let Some(node_id) = state.elements.hovered else { return };
     let Some(bx) = find_layout_box(layout_root, node_id) else { return };
 
+    // Akumuluj CSS transform translate z ancestoru (paint je shifty
+    // commands child boxu pri box.transforms, layout rect zustava na
+    // baseline -> bez tohoto highlight v animated containerech off).
+    let (anc_tx, anc_ty) = collect_ancestor_translate(layout_root, node_id);
+    // Take own transform (apply to self).
+    let (own_tx, own_ty) = {
+        let mut tx = 0.0; let mut ty = 0.0;
+        for op in &bx.transforms {
+            use crate::browser::layout::TransformOp;
+            match op {
+                TransformOp::Translate(x, y) => { tx += x; ty += y; }
+                TransformOp::Translate3D { x, y, .. } => { tx += x; ty += y; }
+                _ => {}
+            }
+        }
+        (tx, ty)
+    };
+    let total_tx = anc_tx + own_tx;
+    let total_ty = anc_ty + own_ty;
+
     // Rect obsahu = bx.rect (uz po margin/padding pripravne v build_box).
     // Asymmetric margin/padding: top/right/bottom/left wins, jinak shorthand.
     let r = &bx.rect;
@@ -3323,8 +3343,8 @@ pub fn paint_element_highlight_offset(
     let m_l = bx.margin_left.unwrap_or(bx.margin);
     let bw = bx.border_width.max(0.0);
 
-    let content_x = r.x + chrome_dx;
-    let content_y = r.y - scroll_y + chrome_dy;
+    let content_x = r.x + chrome_dx + total_tx;
+    let content_y = r.y - scroll_y + chrome_dy + total_ty;
     let content_w = r.width;
     let content_h = r.height;
 
@@ -4309,6 +4329,39 @@ pub fn find_layout_box(bx: &LayoutBox, node_id: usize) -> Option<&LayoutBox> {
         }
     }
     None
+}
+
+/// Akumuluje translate(x, y) z CSS transform op chainu vsech ancestru
+/// elementu node_id. Paint aplikuje transforms jako shift na all commands
+/// uvnitr box scope -> devtools highlight musi take akumulovat aby
+/// odpovidal painted pozici (jinak `.animate-pc { transform: translateX(-2000) }`
+/// posune content carouselu mimo, ale highlight zustane na baseline x).
+/// Pro v1: jen translate / translate3d. Rotace/scale = TODO.
+fn collect_ancestor_translate(root: &LayoutBox, target_node_id: usize) -> (f32, f32) {
+    fn walk(bx: &LayoutBox, target: usize, acc: &mut (f32, f32)) -> bool {
+        let is_target = bx.node.as_ref()
+            .map(|n| Rc::as_ptr(n) as usize == target)
+            .unwrap_or(false);
+        if is_target { return true; }
+        for ch in &bx.children {
+            if walk(ch, target, acc) {
+                // Found in subtree - akumuluj NASE transformy (ancestor).
+                for op in &bx.transforms {
+                    use crate::browser::layout::TransformOp;
+                    match op {
+                        TransformOp::Translate(tx, ty) => { acc.0 += tx; acc.1 += ty; }
+                        TransformOp::Translate3D { x, y, .. } => { acc.0 += x; acc.1 += y; }
+                        _ => {}  // rotate/scale = TODO
+                    }
+                }
+                return true;
+            }
+        }
+        false
+    }
+    let mut acc = (0.0, 0.0);
+    walk(root, target_node_id, &mut acc);
+    acc
 }
 
 pub fn find_box_rect_by_id(bx: &LayoutBox, node_id: usize, scroll_y: f32) -> Option<(f32, f32, f32, f32)> {
