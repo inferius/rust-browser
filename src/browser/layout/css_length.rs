@@ -36,12 +36,21 @@ pub struct ResolveCtx {
 
 impl Default for ResolveCtx {
     fn default() -> Self {
+        // CRITICAL: viewport_w/h ctene z MATH_VIEWPORT thread-local (set
+        // cascade_with_viewport pri layout). Bez tohoto vsechny callsity ktery
+        // pouzily `..Default::default()` (cca 20 mist v flex/grid/block) by
+        // resolvovaly `100vw` / `50vh` proti HARDCODED 1024/768 = max-width
+        // ignorovalo realny viewport -> rozjete sizy na 1280px window.
+        let (vw, vh) = super::super::cascade::MATH_VIEWPORT.with(|c| *c.borrow());
+        // Fallback (cascade_with_viewport jeste ne-volane): 1024/768.
+        let vw = if vw > 0.0 { vw } else { 1024.0 };
+        let vh = if vh > 0.0 { vh } else { 768.0 };
         ResolveCtx {
             parent_size: 0.0,
             font_size: 16.0,
             root_font_size: 16.0,
-            viewport_w: 1024.0,
-            viewport_h: 768.0,
+            viewport_w: vw,
+            viewport_h: vh,
         }
     }
 }
