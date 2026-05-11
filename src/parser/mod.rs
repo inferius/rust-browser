@@ -840,7 +840,21 @@ impl Parser {
                 _ => return Err(self.err("Destrukturovani neni podporovano v klasickem for")),
             };
             let init_val = if self.eat_op(OperatorEnum::Assign) { Some(self.parse_assign_expr()?) } else { None };
-            let init = Some(ForInit::Var { kind, decls: vec![VarDecl { pattern: Pattern::Ident(name), init: init_val }] });
+            let mut decls = vec![VarDecl { pattern: Pattern::Ident(name), init: init_val }];
+            // Multi-declarator: `for (let i = 0, j = 10; ...)`. Bez tohoto
+            // minified JS s comma-separated init padl na expect_op(Semi).
+            self.skip_trivia();
+            while self.eat_op(OperatorEnum::Comma) {
+                self.skip_trivia();
+                let p = self.parse_pattern()?;
+                self.skip_trivia();
+                let iv = if self.eat_op(OperatorEnum::Assign) {
+                    Some(self.parse_assign_expr()?)
+                } else { None };
+                decls.push(VarDecl { pattern: p, init: iv });
+                self.skip_trivia();
+            }
+            let init = Some(ForInit::Var { kind, decls });
             self.expect_op(OperatorEnum::Semi)?;
             let test = if matches!(self.kind(), TokenKind::Operator(OperatorEnum::Semi)) { None }
             else { Some(self.parse_expr()?) };

@@ -4607,7 +4607,18 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                 }
                             }
                             Err(e) => {
-                                let msg = format!("[parse error] {e:?}");
+                                // Pridat context kolem error location: extract
+                                // line z `src` + ukaz nearby chars.
+                                let snippet = src.lines().nth(e.line.saturating_sub(1) as usize)
+                                    .map(|l| {
+                                        let col = (e.column as usize).saturating_sub(1);
+                                        let start = col.saturating_sub(30);
+                                        let end = (col + 30).min(l.len());
+                                        let bs = l.get(start..end).unwrap_or("");
+                                        format!(" near: ...{}...", bs)
+                                    })
+                                    .unwrap_or_default();
+                                let msg = format!("[parse error] {e:?}{snippet}");
                                 eprintln!("{msg}");
                                 interp.console_log.borrow_mut()
                                     .push(("error".into(), msg));
