@@ -323,6 +323,158 @@ console.log(greeting, result);
         return;
     }
 
+    // Dump mode: cargo run -- dump <url|path> [out.txt] [--selector=.foo]
+    // Vystup: full layout box tree + matched CSS rules + computed styles per box.
+    // Diff vs Chrome devtools `getComputedStyle()` ukaze co chyba.
+    if args.len() > 1 && args[1] == "dump" {
+        let target = args.get(2).cloned().unwrap_or_else(|| "static/test.html".to_string());
+        let out_path = args.iter().skip(3).find(|a| !a.starts_with("--"))
+            .cloned().unwrap_or_else(|| "dump.txt".to_string());
+        let selector_filter = args.iter()
+            .find_map(|a| a.strip_prefix("--selector=").map(String::from));
+
+        let is_url = target.starts_with("http://") || target.starts_with("https://");
+        let (html, css, base_url) = if is_url {
+            println!("[fetch] {target}");
+            let html = match browser::render::fetch_text_url(&target) {
+                Some(s) => s,
+                None => { eprintln!("Nelze fetch {target}"); return; }
+            };
+            let mut css = String::new();
+            for href in extract_stylesheet_hrefs(&html) {
+                let resolved = browser::render::resolve_url(&target, &href);
+                if let Some(c) = browser::render::fetch_text_url(&resolved) {
+                    css.push('\n');
+                    css.push_str(&resolve_css_imports(&c, &resolved, 0));
+                }
+            }
+            for inline in extract_inline_styles(&html) {
+                css.push('\n');
+                css.push_str(&resolve_css_imports(&inline, &target, 0));
+            }
+            (html, css, target.clone())
+        } else {
+            let html = match std::fs::read_to_string(&target) {
+                Ok(s) => s,
+                Err(e) => { eprintln!("Nelze read {target}: {e}"); return; }
+            };
+            let css_path = target.replace(".html", ".css");
+            let mut css = std::fs::read_to_string(&css_path).unwrap_or_default();
+            for inline in extract_inline_styles(&html) {
+                css.push('\n'); css.push_str(&inline);
+            }
+            (html, css, format!("file:///{target}"))
+        };
+
+        let doc = browser::html_parser::parse_html(&html, &base_url);
+        let stylesheets = vec![browser::css_parser::parse_stylesheet(&css)];
+        let viewport_w = 1280.0;
+        let viewport_h = 900.0;
+        let style_map = browser::cascade::cascade_with_viewport(
+            &doc.root, &stylesheets, viewport_w, viewport_h);
+        let mut layout_root = browser::layout::layout_tree(
+            &doc.root, &style_map, viewport_w, viewport_h);
+        let _ = &stylesheets; // pouzite vys pri cascade
+
+        // Walk layout tree + dump kazdy box.
+        let mut out = String::new();
+        out.push_str(&format!("# Dump: {target}\n"));
+        out.push_str(&format!("# Stylesheets: {}\n", stylesheets.len()));
+        let total_rules: usize = stylesheets.iter().map(|s| s.rules.len()).sum();
+        out.push_str(&format!("# Total rules: {total_rules}\n"));
+        if let Some(sel) = &selector_filter {
+            out.push_str(&format!("# Filter selector: {sel}\n"));
+        }
+        out.push_str("\n");
+
+        let filter_sel = selector_filter.as_ref()
+            .map(|s| browser::css_parser::parse_selectors(s));
+
+        fn dump_box(
+            bx: &browser::layout::LayoutBox,
+            depth: usize,
+            out: &mut String,
+            style_map: &browser::cascade::StyleMap,
+            filter: Option<&Vec<browser::css_parser::Selector>>,
+            _stylesheets: &[browser::css_parser::Stylesheet],
+        ) {
+            let indent = "  ".repeat(depth);
+            let tag = bx.tag.as_deref().unwrap_or("(text)");
+            let id = bx.node.as_ref().and_then(|n| n.attr("id")).unwrap_or_default();
+            let class = bx.node.as_ref().and_then(|n| n.attr("class")).unwrap_or_default();
+            let match_filter = if let Some(sels) = filter {
+                if let Some(node) = &bx.node {
+                    sels.iter().any(|s| browser::cascade::matches_selector(node, s))
+                } else { false }
+            } else { true };
+
+            if match_filter {
+                out.push_str(&format!(
+                    "{indent}[{tag}#{id} .{class} rect=({:.0},{:.0},{:.0}x{:.0})]\n",
+                    bx.rect.x, bx.rect.y, bx.rect.width, bx.rect.height
+                ));
+                // Matched CSS rules: selektor + zda matchne.
+                if let Some(node) = &bx.node {
+                    out.push_str(&format!("{indent}  --- matched rules ---\n"));
+                    let mut matched_count = 0;
+                    for sheet in _stylesheets {
+                        for rule in &sheet.rules {
+                            for sel in &rule.selectors {
+                                if browser::cascade::matches_selector(node, sel) {
+                                    matched_count += 1;
+                                    out.push_str(&format!("{indent}    {} {{\n", sel));
+                                    for d in &rule.declarations {
+                                        let imp = if d.important { " !important" } else { "" };
+                                        out.push_str(&format!("{indent}      {}: {}{imp};\n",
+                                            d.property, d.value));
+                                    }
+                                    out.push_str(&format!("{indent}    }}\n"));
+                                    break; // jeden match na rule staci
+                                }
+                            }
+                        }
+                    }
+                    out.push_str(&format!("{indent}  --- {matched_count} rules matched ---\n"));
+                    out.push_str(&format!("{indent}  --- computed styles ---\n"));
+                    let styles = browser::cascade::get_styles(style_map, node);
+                    if let Some(s) = styles {
+                        let mut keys: Vec<&String> = s.keys().collect();
+                        keys.sort();
+                        for k in keys {
+                            let v = &s[k];
+                            out.push_str(&format!("{indent}    {k}: {v}\n"));
+                        }
+                    }
+                }
+                // LayoutBox derived state.
+                out.push_str(&format!("{indent}  --- LayoutBox state ---\n"));
+                out.push_str(&format!("{indent}    display: {:?}\n", bx.display));
+                out.push_str(&format!("{indent}    position: {:?}\n", bx.position));
+                out.push_str(&format!("{indent}    flex_direction: {:?}\n", bx.flex_direction));
+                out.push_str(&format!("{indent}    justify_content: {:?}\n", bx.justify_content));
+                out.push_str(&format!("{indent}    align_items: {:?}\n", bx.align_items));
+                out.push_str(&format!("{indent}    width_pct: {:?}\n", bx.width_pct));
+                out.push_str(&format!("{indent}    height_pct: {:?}\n", bx.height_pct));
+                out.push_str(&format!("{indent}    explicit_w/h: {:?}/{:?}\n",
+                    bx.explicit_width, bx.explicit_height));
+                if bx.bold { out.push_str(&format!("{indent}    bold: true\n")); }
+                out.push_str(&format!("{indent}    font-size: {}\n", bx.font_size));
+            }
+            for child in &bx.children {
+                dump_box(child, depth + 1, out, style_map, filter, _stylesheets);
+            }
+        }
+        dump_box(&mut layout_root, 0, &mut out, &style_map, filter_sel.as_ref(), &stylesheets);
+        let _ = layout_root; // suppres unused mut warning
+
+        if let Err(e) = std::fs::write(&out_path, &out) {
+            eprintln!("Nelze zapsat {out_path}: {e}");
+            return;
+        }
+        println!("[dump] {out_path} ({} bytes, {} rules)", out.len(), total_rules);
+        return;
+    }
+
     let source = r#"
 function foo(a, b) {
     return a + b;
