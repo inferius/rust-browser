@@ -3589,41 +3589,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         out.join("; ")
     }
 
-    fn paint_shell_chrome_inline(list: &mut Vec<DisplayCommand>, win_w: f32, chrome_h: f32, url: &str) {
-        paint_shell_chrome_full(list, win_w, chrome_h, url, None, 0);
-    }
-
-    fn paint_shell_chrome_full(list: &mut Vec<DisplayCommand>, win_w: f32, chrome_h: f32,
-                                url: &str, tab_titles: Option<&[String]>, active: usize) {
-        paint_shell_chrome_with_favicons(list, win_w, chrome_h, url, tab_titles, active, None);
-    }
-
-    fn paint_shell_chrome_with_favicons(list: &mut Vec<DisplayCommand>, win_w: f32, chrome_h: f32,
-                                         url: &str, tab_titles: Option<&[String]>, active: usize,
-                                         favicon_urls: Option<&[Option<String>]>) {
-        paint_shell_chrome_with_pins(list, win_w, chrome_h, url, tab_titles, active, favicon_urls, None);
-    }
-
-    fn paint_shell_chrome_with_pins(list: &mut Vec<DisplayCommand>, win_w: f32, chrome_h: f32,
-                                    url: &str, tab_titles: Option<&[String]>, active: usize,
-                                    favicon_urls: Option<&[Option<String>]>,
-                                    pinned: Option<&[bool]>) {
-        paint_shell_chrome_with_loading(list, win_w, chrome_h, url, tab_titles, active,
-                                        favicon_urls, pinned, None, 0.0);
-    }
-
-    /// Verze co podporuje per-tab loading flag + animacni fazi (sekundy od startu)
-    /// pro busy spinner.
-    fn paint_shell_chrome_with_loading(list: &mut Vec<DisplayCommand>, win_w: f32, chrome_h: f32,
-                                       url: &str, tab_titles: Option<&[String]>, active: usize,
-                                       favicon_urls: Option<&[Option<String>]>,
-                                       pinned: Option<&[bool]>,
-                                       loading: Option<&[bool]>, anim_t: f32) {
-        paint_shell_chrome_with_groups(list, win_w, chrome_h, url, tab_titles, active,
-                                       favicon_urls, pinned, loading, anim_t, None);
-    }
-
-    /// Verze s tab group colors - top-edge stripe.
+    /// Paint top chrome (tab strip + nav bar + bookmarks bar).
     fn paint_shell_chrome_with_groups(list: &mut Vec<DisplayCommand>, win_w: f32, chrome_h: f32,
                                       url: &str, tab_titles: Option<&[String]>, active: usize,
                                       favicon_urls: Option<&[Option<String>]>,
@@ -8271,12 +8237,6 @@ impl Renderer {
         self.webgl_textures.contains_key(&texture_id)
     }
 
-    /// Ensure uniform buffer + bind group layout pro program (legacy - jen uniform).
-    /// Pri buffer_size=0 nedela nic. Idempotent.
-    pub fn ensure_webgl_uniform_resources(&mut self, program_id: u32, buffer_size: u64) {
-        self.ensure_webgl_full_resources(program_id, buffer_size, None, &[], &[]);
-    }
-
     /// Ensure full bind group layout - uniform buffer + texture entries + sampler entries.
     /// Vse na groupe 0 dle naga binding indexu. Idempotent (cache).
     pub fn ensure_webgl_full_resources(
@@ -8397,7 +8357,7 @@ impl Renderer {
 
     /// Build wgpu pipeline z cached shader modules + vertex layout dle attribs.
     /// Cached per program_id. Vraci true pokud build success (nebo cache hit).
-    /// Pokud uniform_bgl exists pro program (po ensure_webgl_uniform_resources),
+    /// Pokud uniform_bgl exists pro program (po ensure_webgl_full_resources),
     /// pridava se k pipeline layout.
     pub fn ensure_webgl_pipeline(&mut self, program_id: u32, attribs: &[(u32, crate::interpreter::WebGLAttribSlot)]) -> bool {
         if self.webgl_pipelines.contains_key(&program_id) {
@@ -9326,21 +9286,6 @@ impl Renderer {
     /// + WebGL canvas pass v ramci JEDNOHO swap chain frame.
     /// Vse kreslime do main_rt (intermediate RT), na konci compose -> swap chain.
     /// Backdrop-filter muze cist obsah main_rt (scena za elementem).
-    /// Backwards-compat wrapper (no cache hint - always re-render).
-    pub fn draw_full_frame(
-        &mut self,
-        cmds: &[DisplayCommand],
-        overlay_cmds: &[DisplayCommand],
-        shell_cmds: &[DisplayCommand],
-        layout_root: &super::layout::LayoutBox,
-        webgl_states: Option<&std::collections::HashMap<usize, std::rc::Rc<std::cell::RefCell<crate::interpreter::WebGLState>>>>,
-        scroll_y: f32,
-        chrome_top_logical: f32,
-    ) {
-        self.draw_full_frame_cached(cmds, overlay_cmds, shell_cmds, layout_root,
-            webgl_states, scroll_y, chrome_top_logical, false, false);
-    }
-
     /// Dual render varianta s cache hints: page_skip/shell_skip = true -> skip
     /// render do toho RT, reuse texture obsah z minuleho framu. Compose
     /// posklada vzdy z obou RT (cached + fresh).
@@ -9406,7 +9351,7 @@ impl Renderer {
         // aby UI prvky neprekryl WebGL clear color. start_clear=false zachova
         // existujici page + WebGL obsah.
         let had_overlay = if !overlay_cmds.is_empty() && !page_skip {
-            self.draw_segments_into_view_ext(&main_rt_view, overlay_cmds, false)
+            self.draw_segments_into_view_clipped(&main_rt_view, overlay_cmds, false, None)
         } else if !overlay_cmds.is_empty() {
             true  // reuse signal
         } else { false };
@@ -9438,7 +9383,7 @@ impl Renderer {
                 self.queue.submit(std::iter::once(encoder.finish()));
             }
             // Render shell_cmds s start_clear=false (uz mame transparent clear).
-            self.draw_segments_into_view_ext(&shell_rt_view, shell_cmds, false)
+            self.draw_segments_into_view_clipped(&shell_rt_view, shell_cmds, false, None)
         };
 
         // 5. Composit main_rt -> swap chain, pak shell_rt overlay nad page.
@@ -9478,21 +9423,9 @@ impl Renderer {
     /// Vraci true pokud aspon jedna pass byla provedena (pro frame fallback clear).
     /// Pro BackdropFilter: view musi byt main_rt (COPY_SRC) - snapshotuje obsah
     /// pres copy_texture_to_texture pred aplikaci filtru.
-    fn draw_segments_into_view(&mut self, view: &wgpu::TextureView, cmds: &[DisplayCommand]) -> bool {
-        self.draw_segments_into_view_ext(view, cmds, true)
-    }
-
     /// Pri start_clear=false neclearuje texturu pri prvni passi (Load namisto
-    /// Clear). Pouzite pro overlay pass po WebGL - chce zachovat existujici
-    /// page + WebGL obsah, jen kreslit overlay nad nim.
-    fn draw_segments_into_view_ext(&mut self, view: &wgpu::TextureView, cmds: &[DisplayCommand], start_clear: bool) -> bool {
-        self.draw_segments_into_view_clipped(view, cmds, start_clear, None)
-    }
-
-    /// Verze s scissor rect (logical px). Page render pass v shell modu predava
-    /// chrome_h jako top hranici - vse pod chrome bar. Bez clipu by page commands
-    /// po shift do chrome_h .. win_h area mohly stale prelevy do shell pri
-    /// transformacich nebo glyph atlas advancech.
+    /// Clear), pouzite pro overlay pass po WebGL.
+    /// Pri Some scissor (logical px) clipuje render pass na rect.
     fn draw_segments_into_view_clipped(&mut self, view: &wgpu::TextureView,
                                         cmds: &[DisplayCommand], start_clear: bool,
                                         scissor: Option<(u32, u32, u32, u32)>) -> bool {
@@ -9618,7 +9551,7 @@ impl Renderer {
             _ => return,
         };
         let view = frame.texture.create_view(&Default::default());
-        let had_segments = self.draw_segments_into_view(&view, cmds);
+        let had_segments = self.draw_segments_into_view_clipped(&view, cmds, true, None);
         if !had_segments {
             let mut encoder = self.device.create_command_encoder(&Default::default());
             {
