@@ -282,7 +282,7 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: 
                 push_rect(&mut verts, *x, *y, bw, *h, c, [0.0, 0.0], 0.0);
                 push_rect(&mut verts, *x + *w - bw, *y, bw, *h, c, [0.0, 0.0], 0.0);
             }
-            DisplayCommand::Text { x, y, content, color, font_size, bold, italic, font_family, strikethrough, underline } => {
+            DisplayCommand::Text { x, y, content, color, font_size, bold, font_weight: _, italic, font_family, strikethrough, underline } => {
                 let c = normalize_color(color);
                 let mut pen_x = *x;
                 let mut pen_y = *y + *font_size;
@@ -3695,7 +3695,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     list.push(DisplayCommand::Text {
                         x: tx + 4.0, y: 6.0, content: "📌".to_string(),
                         color: [254, 191, 84, 255],
-                        font_size: 11.0, bold: false, italic: false,
+                        font_size: 11.0, bold: false, font_weight: 400, italic: false,
                         font_family: "Inter".into(),
                         strikethrough: false, underline: false,
                     });
@@ -3748,7 +3748,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     list.push(DisplayCommand::Text {
                         x: tx + text_x_off, y: 8.0, content: trunc,
                         color: [251, 251, 254, 255],
-                        font_size: 13.0, bold: i == active, italic: false,
+                        font_size: 13.0, bold: i == active, font_weight: if i == active {700} else {400}, italic: false,
                         font_family: "Inter".into(),
                         strikethrough: false, underline: false,
                     });
@@ -3760,7 +3760,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     list.push(DisplayCommand::Text {
                         x: tx + chip_w - 14.0, y: 8.0, content: "x".to_string(),
                         color: [220, 220, 230, 255],
-                        font_size: 12.0, bold: true, italic: false,
+                        font_size: 12.0, bold: true, font_weight: 700, italic: false,
                         font_family: "Inter".into(),
                         strikethrough: false, underline: false,
                     });
@@ -3771,7 +3771,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             list.push(DisplayCommand::Text {
                 x: tx + 4.0, y: 6.0, content: "+".to_string(),
                 color: [191, 191, 201, 255],
-                font_size: 18.0, bold: true, italic: false,
+                font_size: 18.0, bold: true, font_weight: 700, italic: false,
                 font_family: "Inter".into(),
                 strikethrough: false, underline: false,
             });
@@ -3782,7 +3782,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             list.push(DisplayCommand::Text {
                 x: 12.0, y: ny + 8.0, content: "<".to_string(),
                 color: [251, 251, 254, 255],
-                font_size: 16.0, bold: true, italic: false,
+                font_size: 16.0, bold: true, font_weight: 700, italic: false,
                 font_family: "CamingoMono".into(),
                 strikethrough: false, underline: false,
             });
@@ -3790,7 +3790,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             list.push(DisplayCommand::Text {
                 x: 32.0, y: ny + 8.0, content: ">".to_string(),
                 color: [251, 251, 254, 255],
-                font_size: 16.0, bold: true, italic: false,
+                font_size: 16.0, bold: true, font_weight: 700, italic: false,
                 font_family: "CamingoMono".into(),
                 strikethrough: false, underline: false,
             });
@@ -3798,7 +3798,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             list.push(DisplayCommand::Text {
                 x: 52.0, y: ny + 8.0, content: "↻".to_string(),
                 color: [251, 251, 254, 255],
-                font_size: 14.0, bold: false, italic: false,
+                font_size: 14.0, bold: false, font_weight: 400, italic: false,
                 font_family: "CamingoMono".into(),
                 strikethrough: false, underline: false,
             });
@@ -3809,7 +3809,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             list.push(DisplayCommand::Text {
                 x: win_w - 76.0, y: ny + 8.0, content: "★".to_string(),
                 color: star_color,
-                font_size: 16.0, bold: false, italic: false,
+                font_size: 16.0, bold: false, font_weight: 400, italic: false,
                 font_family: "Inter".into(),
                 strikethrough: false, underline: false,
             });
@@ -3822,7 +3822,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             list.push(DisplayCommand::Text {
                 x: dt_x + 6.0, y: ny + 8.0, content: "F12".to_string(),
                 color: [191, 191, 201, 255],
-                font_size: 11.0, bold: true, italic: false,
+                font_size: 11.0, bold: true, font_weight: 700, italic: false,
                 font_family: "Inter".into(),
                 strikethrough: false, underline: false,
             });
@@ -3836,7 +3836,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             list.push(DisplayCommand::Text {
                 x: url_x + 8.0, y: ny + 9.0, content: url.to_string(),
                 color: [251, 251, 254, 255],
-                font_size: 12.0, bold: false, italic: false,
+                font_size: 12.0, bold: false, font_weight: 400, italic: false,
                 font_family: "CamingoMono".into(),
                 strikethrough: false, underline: false,
             });
@@ -3863,7 +3863,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     list.push(DisplayCommand::Text {
                         x: bx_x + 6.0, y: bm_y + 5.0,
                         content: title_trunc, color: [191, 191, 201, 255],
-                        font_size: 11.0, bold: false, italic: false,
+                        font_size: 11.0, bold: false, font_weight: 400, italic: false,
                         font_family: "Inter".into(),
                         strikethrough: false, underline: false,
                     });
@@ -6473,7 +6473,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                 x: popup_x + pad_l, y: opt_y + 6.0,
                                 content: txt,
                                 color: [40, 40, 50, 255],
-                                font_size: 14.0, bold: false,
+                                font_size: 14.0, bold: false, font_weight: 400,
                                 italic: false,
                                 font_family: String::new(),
                                 strikethrough: false, underline: false,
@@ -6591,7 +6591,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         x: win_w_logical - 56.0, y: 6.0,
                         content: format!("{:.0}%", self.zoom * 100.0),
                         color: [255, 255, 255, 255],
-                        font_size: 12.0, bold: true, italic: false,
+                        font_size: 12.0, bold: true, font_weight: 700, italic: false,
                         font_family: "Inter".into(),
                         strikethrough: false, underline: false,
                     });
@@ -6643,7 +6643,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         x: url_x + 8.0, y: ny + 9.0,
                         content: self.addr_input.text.clone(),
                         color: [251, 251, 254, 255],
-                        font_size: 12.0, bold: false, italic: false,
+                        font_size: 12.0, bold: false, font_weight: 400, italic: false,
                         font_family: "Inter".into(),
                         strikethrough: false, underline: false,
                     });
@@ -6692,7 +6692,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     display_list.push(DisplayCommand::Text {
                         x: btn_x + 10.0, y: btn_y + 6.0, content: "↑".to_string(),
                         color: [255, 255, 255, 255],
-                        font_size: 18.0, bold: true, italic: false,
+                        font_size: 18.0, bold: true, font_weight: 700, italic: false,
                         font_family: "Inter".into(),
                         strikethrough: false, underline: false,
                     });
@@ -6714,7 +6714,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     display_list.push(DisplayCommand::Text {
                         x: px + 16.0, y: py + 14.0, content: "Pridat zalozku".to_string(),
                         color: [251, 251, 254, 255],
-                        font_size: 16.0, bold: true, italic: false,
+                        font_size: 16.0, bold: true, font_weight: 700, italic: false,
                         font_family: "Inter".into(),
                         strikethrough: false, underline: false,
                     });
@@ -6723,7 +6723,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         x: px + 16.0, y: py + 44.0,
                         content: format!("URL: {}", p.url.chars().take(50).collect::<String>()),
                         color: [161, 161, 174, 255],
-                        font_size: 11.0, bold: false, italic: false,
+                        font_size: 11.0, bold: false, font_weight: 400, italic: false,
                         font_family: "Inter".into(),
                         strikethrough: false, underline: false,
                     });
@@ -6732,7 +6732,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     display_list.push(DisplayCommand::Text {
                         x: px + 16.0, y: py + 70.0, content: "Nazev".to_string(),
                         color: [191, 191, 201, 255],
-                        font_size: 12.0, bold: true, italic: false,
+                        font_size: 12.0, bold: true, font_weight: 700, italic: false,
                         font_family: "Inter".into(),
                         strikethrough: false, underline: false,
                     });
@@ -6746,7 +6746,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     display_list.push(DisplayCommand::Text {
                         x: px + 22.0, y: inp_y + 5.0, content: p.title_buffer.clone(),
                         color: [251, 251, 254, 255],
-                        font_size: 13.0, bold: false, italic: false,
+                        font_size: 13.0, bold: false, font_weight: 400, italic: false,
                         font_family: "Inter".into(),
                         strikethrough: false, underline: false,
                     });
@@ -6762,7 +6762,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     display_list.push(DisplayCommand::Text {
                         x: px + 16.0, y: py + 124.0, content: "Slozka (volitelne)".to_string(),
                         color: [191, 191, 201, 255],
-                        font_size: 12.0, bold: true, italic: false,
+                        font_size: 12.0, bold: true, font_weight: 700, italic: false,
                         font_family: "Inter".into(),
                         strikethrough: false, underline: false,
                     });
@@ -6780,7 +6780,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         color: if p.folder_buffer.is_empty() && !folder_focused {
                             [109, 109, 124, 255]
                         } else { [251, 251, 254, 255] },
-                        font_size: 13.0, bold: false, italic: false,
+                        font_size: 13.0, bold: false, font_weight: 400, italic: false,
                         font_family: "Inter".into(),
                         strikethrough: false, underline: false,
                     });
@@ -6796,7 +6796,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         x: px + 16.0, y: py + pop_h - 28.0,
                         content: "Tab: zmena pole | Enter: ulozit | Esc: zrusit".to_string(),
                         color: [109, 109, 124, 255],
-                        font_size: 11.0, bold: false, italic: true,
+                        font_size: 11.0, bold: false, font_weight: 400, italic: true,
                         font_family: "Inter".into(),
                         strikethrough: false, underline: false,
                     });
@@ -6820,7 +6820,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     display_list.push(DisplayCommand::Text {
                         x: mx + 20.0, y: my + 16.0, content: "Klavesove zkratky".to_string(),
                         color: [251, 251, 254, 255],
-                        font_size: 18.0, bold: true, italic: false,
+                        font_size: 18.0, bold: true, font_weight: 700, italic: false,
                         font_family: "Inter".into(),
                         strikethrough: false, underline: false,
                     });
@@ -6852,14 +6852,14 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         display_list.push(DisplayCommand::Text {
                             x: mx + 20.0, y: row_y, content: k.to_string(),
                             color: [254, 191, 84, 255],
-                            font_size: 13.0, bold: true, italic: false,
+                            font_size: 13.0, bold: true, font_weight: 700, italic: false,
                             font_family: "CamingoMono".into(),
                             strikethrough: false, underline: false,
                         });
                         display_list.push(DisplayCommand::Text {
                             x: mx + 160.0, y: row_y, content: v.to_string(),
                             color: [191, 191, 201, 255],
-                            font_size: 13.0, bold: false, italic: false,
+                            font_size: 13.0, bold: false, font_weight: 400, italic: false,
                             font_family: "Inter".into(),
                             strikethrough: false, underline: false,
                         });
@@ -6868,7 +6868,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         x: mx + 20.0, y: my + mh - 28.0,
                         content: "Esc zavre".to_string(),
                         color: [109, 109, 124, 255],
-                        font_size: 11.0, bold: false, italic: true,
+                        font_size: 11.0, bold: false, font_weight: 400, italic: true,
                         font_family: "Inter".into(),
                         strikethrough: false, underline: false,
                     });
@@ -6884,7 +6884,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     display_list.push(DisplayCommand::Text {
                         x: tx + 8.0, y: *y + 4.0, content: txt.clone(),
                         color: [251, 251, 254, 255],
-                        font_size: 12.0, bold: false, italic: false,
+                        font_size: 12.0, bold: false, font_weight: 400, italic: false,
                         font_family: "Inter".into(),
                         strikethrough: false, underline: false,
                     });
@@ -6900,7 +6900,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     display_list.push(DisplayCommand::Text {
                         x: bx + 10.0, y: by + 3.0, content: "Reading mode".to_string(),
                         color: [42, 41, 50, 255],
-                        font_size: 11.0, bold: true, italic: false,
+                        font_size: 11.0, bold: true, font_weight: 700, italic: false,
                         font_family: "Inter".into(),
                         strikethrough: false, underline: false,
                     });
@@ -6924,7 +6924,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         display_list.push(DisplayCommand::Text {
                             x: 12.0, y: sb_y + 3.0, content: url_short,
                             color: [191, 191, 201, 255],
-                            font_size: 12.0, bold: false, italic: false,
+                            font_size: 12.0, bold: false, font_weight: 400, italic: false,
                             font_family: "Inter".into(),
                             strikethrough: false, underline: false,
                         });
@@ -6939,7 +6939,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         display_list.push(DisplayCommand::Text {
                             x: win_w_logical - zw + 6.0, y: sb_y + 3.0, content: txt,
                             color: [254, 191, 84, 255],
-                            font_size: 12.0, bold: true, italic: false,
+                            font_size: 12.0, bold: true, font_weight: 700, italic: false,
                             font_family: "CamingoMono".into(),
                             strikethrough: false, underline: false,
                         });
@@ -6970,7 +6970,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 display_list.push(DisplayCommand::Text {
                     x: fps_x + 8.0, y: fps_y + 4.0,
                     content: format!("{:.0} FPS  {:.1}ms", fps, avg_ms),
-                    color, font_size: 12.0, bold: true, italic: false,
+                    color, font_size: 12.0, bold: true, font_weight: 700, italic: false,
                     font_family: "CamingoMono".into(),
                     strikethrough: false, underline: false,
                 });
@@ -6978,7 +6978,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     x: fps_x + 8.0, y: fps_y + 20.0,
                     content: format!("max {:.1}ms", max_ms),
                     color: [180, 180, 190, 200],
-                    font_size: 10.0, bold: false, italic: false,
+                    font_size: 10.0, bold: false, font_weight: 400, italic: false,
                     font_family: "CamingoMono".into(),
                     strikethrough: false, underline: false,
                 });
@@ -7022,7 +7022,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 display_list.push(DisplayCommand::Text {
                     x: bar_x + 12.0, y: bar_y + 10.0,
                     content: label.clone(), color: [255, 255, 255, 255],
-                    font_size: 14.0, bold: false, italic: false,
+                    font_size: 14.0, bold: false, font_weight: 400, italic: false,
                     font_family: "Inter".into(),
                     strikethrough: false, underline: false,
                 });
@@ -7068,14 +7068,14 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                             display_list.push(DisplayCommand::Text {
                                 x: bar_x + 12.0, y: iy + 6.0, content: icon.to_string(),
                                 color: [191, 191, 201, 255],
-                                font_size: 14.0, bold: false, italic: false,
+                                font_size: 14.0, bold: false, font_weight: 400, italic: false,
                                 font_family: "Inter".into(),
                                 strikethrough: false, underline: false,
                             });
                             display_list.push(DisplayCommand::Text {
                                 x: bar_x + 32.0, y: iy + 4.0, content: title.clone(),
                                 color: [255, 255, 255, 255],
-                                font_size: 13.0, bold: true, italic: false,
+                                font_size: 13.0, bold: true, font_weight: 700, italic: false,
                                 font_family: "Inter".into(),
                                 strikethrough: false, underline: false,
                             });
@@ -7083,7 +7083,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                             display_list.push(DisplayCommand::Text {
                                 x: bar_x + 32.0, y: iy + 16.0, content: url_short,
                                 color: [161, 161, 174, 255],
-                                font_size: 11.0, bold: false, italic: false,
+                                font_size: 11.0, bold: false, font_weight: 400, italic: false,
                                 font_family: "Inter".into(),
                                 strikethrough: false, underline: false,
                             });
@@ -7120,7 +7120,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     x: bar_x + 12.0, y: bar_y + 10.0,
                     content: format!("Find: {}", self.find_query.text),
                     color: [255, 255, 255, 255],
-                    font_size: 14.0, bold: false, italic: false,
+                    font_size: 14.0, bold: false, font_weight: 400, italic: false,
                     font_family: "Inter".into(),
                     strikethrough: false, underline: false,
                 });
@@ -7131,7 +7131,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     color: if matches.is_empty() && !self.find_query.text.is_empty() {
                         [255, 117, 100, 255]
                     } else { [191, 191, 201, 255] },
-                    font_size: 12.0, bold: true, italic: false,
+                    font_size: 12.0, bold: true, font_weight: 700, italic: false,
                     font_family: "Inter".into(),
                     strikethrough: false, underline: false,
                 });
@@ -7140,7 +7140,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     x: bar_x + bar_w - 50.0, y: bar_y + 10.0,
                     content: "↑".to_string(),
                     color: [191, 191, 201, 255],
-                    font_size: 14.0, bold: false, italic: false,
+                    font_size: 14.0, bold: false, font_weight: 400, italic: false,
                     font_family: "Inter".into(),
                     strikethrough: false, underline: false,
                 });
@@ -7148,7 +7148,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     x: bar_x + bar_w - 32.0, y: bar_y + 10.0,
                     content: "↓".to_string(),
                     color: [191, 191, 201, 255],
-                    font_size: 14.0, bold: false, italic: false,
+                    font_size: 14.0, bold: false, font_weight: 400, italic: false,
                     font_family: "Inter".into(),
                     strikethrough: false, underline: false,
                 });
@@ -7213,7 +7213,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // pres synthetic key "__colr:{family}:{ch}:{size}". Render path detekuje.
             for cmd in &display_list {
                 match cmd {
-                    DisplayCommand::Text { content, font_size, font_family, color, bold, italic, .. } => {
+                    DisplayCommand::Text { content, font_size, font_family, color, bold, font_weight, italic, .. } => {
                         // Per-Text-cmd cache. Pri identickem text+style ze
                         // minulych framu = vsechny chars uz v atlasu, skip.
                         let cmd_hash = {
@@ -7222,10 +7222,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                             content.hash(&mut h);
                             (*font_size as u32).hash(&mut h);
                             font_family.hash(&mut h);
-                            bold.hash(&mut h);
+                            font_weight.hash(&mut h);
                             italic.hash(&mut h);
-                            // Color je v key kvuli COLR rasterize ktery
-                            // bake-uje barvu do glyph bitmapy.
                             color.hash(&mut h);
                             h.finish()
                         };
@@ -7233,17 +7231,13 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                             continue;
                         }
                         r.text_cmd_warmed.insert(cmd_hash);
-                        // PERF: hoist key_family format out of char loop (drive
-                        // alocoval String per char). Use precomputed for all chars.
-                        let key_family: String = match (*bold, *italic) {
-                            (true, true) if r.atlas.font_bold_italic.is_some() =>
-                                format!("__bi__:{}", font_family),
-                            (false, true) if r.atlas.font_italic.is_some() =>
-                                format!("__italic__:{}", font_family),
-                            (true, _) if r.atlas.font_bold.is_some() =>
-                                format!("__bold__:{}", font_family),
-                            _ => font_family.clone(),
-                        };
+                        // Compact key encoding weight + italic: `__wN_I__:family`.
+                        // Atlas font_for parsuje + dispatch font_for_weight pro
+                        // CSS Fonts L4 nearest-match algorithm. Bez tohoto weight
+                        // 500 spadl na first font Vec (= weight 300 light Ubuntu).
+                        let _ = bold;
+                        let italic_i = if *italic { 1u8 } else { 0u8 };
+                        let key_family = format!("__w{}_{}__:{}", font_weight, italic_i, font_family);
                         let phys = (*font_size * self.zoom).round().max(1.0) as u32;
                         // Has color font check (Rc clone uvnitr loopu nepotrebny -
                         // pri color font path projedeme).
@@ -9120,9 +9114,23 @@ impl Renderer {
                         self.atlas.extra_fonts.entry(ff.family.clone())
                             .or_insert_with(Vec::new)
                             .push(font.clone());
-                        // Register pro layout measure_text_width_full - aby
-                        // mereni pouzilo STEJNY font co render rasterizuje.
                         crate::browser::layout::register_measure_font(&ff.family, font.clone());
+                        // Per-weight + italic key (CSS Fonts L4 nearest-match):
+                        // `<family>__w<weight>__` regular
+                        // `<family>__w<weight>__i__` italic
+                        // Pri lookup font_for(family, weight, italic) atlas hleda
+                        // exact key, jinak nearest available weight.
+                        let weight_key = if italic {
+                            format!("{}__w{}__i__", ff.family, weight)
+                        } else {
+                            format!("{}__w{}__", ff.family, weight)
+                        };
+                        self.atlas.extra_fonts.entry(weight_key.clone())
+                            .or_insert_with(Vec::new)
+                            .push(font.clone());
+                        crate::browser::layout::register_measure_font(&weight_key, font.clone());
+                        // Legacy keys (__bold__ / __italic__ / __bi__) - back-compat
+                        // s call sites co nemaji weight info.
                         if weight >= 600 && !italic {
                             self.atlas.extra_fonts.entry(format!("{}__bold__", ff.family))
                                 .or_insert_with(Vec::new)

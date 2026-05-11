@@ -116,22 +116,22 @@ fn apply_default_tag_styles(bx: &mut LayoutBox, tag: &str) {
     }
     match tag {
         // Headings: font-size + margin top/bottom em-based.
-        "h1" => { bx.font_size = 32.0; bx.bold = true;
+        "h1" => { bx.font_size = 32.0; bx.bold = true; bx.font_weight = 700;
                   bx.margin_top = bx.margin_top.or(Some(21.44));   // 0.67em * 32
                   bx.margin_bottom = bx.margin_bottom.or(Some(21.44)); }
-        "h2" => { bx.font_size = 24.0; bx.bold = true;
+        "h2" => { bx.font_size = 24.0; bx.bold = true; bx.font_weight = 700;
                   bx.margin_top = bx.margin_top.or(Some(19.92));   // 0.83em * 24
                   bx.margin_bottom = bx.margin_bottom.or(Some(19.92)); }
-        "h3" => { bx.font_size = 18.72; bx.bold = true;
+        "h3" => { bx.font_size = 18.72; bx.bold = true; bx.font_weight = 700;
                   bx.margin_top = bx.margin_top.or(Some(18.72));   // 1em
                   bx.margin_bottom = bx.margin_bottom.or(Some(18.72)); }
-        "h4" => { bx.font_size = 16.0; bx.bold = true;
+        "h4" => { bx.font_size = 16.0; bx.bold = true; bx.font_weight = 700;
                   bx.margin_top = bx.margin_top.or(Some(21.28));   // 1.33em
                   bx.margin_bottom = bx.margin_bottom.or(Some(21.28)); }
-        "h5" => { bx.font_size = 13.28; bx.bold = true;
+        "h5" => { bx.font_size = 13.28; bx.bold = true; bx.font_weight = 700;
                   bx.margin_top = bx.margin_top.or(Some(22.18));   // 1.67em
                   bx.margin_bottom = bx.margin_bottom.or(Some(22.18)); }
-        "h6" => { bx.font_size = 10.72; bx.bold = true;
+        "h6" => { bx.font_size = 10.72; bx.bold = true; bx.font_weight = 700;
                   bx.margin_top = bx.margin_top.or(Some(24.94));   // 2.33em
                   bx.margin_bottom = bx.margin_bottom.or(Some(24.94)); }
         "p" => {
@@ -139,7 +139,7 @@ fn apply_default_tag_styles(bx: &mut LayoutBox, tag: &str) {
             bx.margin_top = bx.margin_top.or(Some(16.0));
             bx.margin_bottom = bx.margin_bottom.or(Some(16.0));
         }
-        "b" | "strong" => { bx.bold = true; }
+        "b" | "strong" => { bx.bold = true; bx.font_weight = 700; }
         "i" | "em" | "cite" | "var" | "address" | "dfn" => { bx.italic = true; }
         "u" | "ins" => { bx.text_underline = true; }
         "s" | "strike" | "del" => { /* line-through render TBD */ }
@@ -198,7 +198,7 @@ fn apply_default_tag_styles(bx: &mut LayoutBox, tag: &str) {
         }
         "th" => {
             // Table header: bold + center text.
-            bx.bold = true;
+            bx.bold = true; bx.font_weight = 700;
             if bx.text_align == TextAlign::Left { bx.text_align = TextAlign::Center; }
             // Cells flex-grow=1 default - bez explicit width se rovnomerne
             // rozdistribuuji na sirku tabulky (CSS3 auto table layout aproximace).
@@ -389,6 +389,10 @@ pub struct LayoutBox {
     pub font_size: f32,
     pub text_align: TextAlign,
     pub bold: bool,
+    /// CSS font-weight 1..1000. Default 400 (normal). Bold = 700 (>= 600 alias).
+    /// Pri @font-face s vice weight variants atlas hleda nejblizsi match per
+    /// CSS Fonts L4 spec - hot path: 500 prefer 500 > 400 > 300 > 600.
+    pub font_weight: u32,
     /// font-style: italic / oblique. Ramp pres skew transform v rendereru
     /// (real italic font variant je TODO).
     pub italic: bool,
@@ -870,6 +874,7 @@ impl LayoutBox {
             font_size: 16.0,
             text_align: TextAlign::Left,
             bold: false,
+            font_weight: 400,
             italic: false,
             border_radius: 0.0,
             line_height: 1.2,
@@ -1334,24 +1339,57 @@ pub fn register_measure_font(key: &str, font: fontdue::Font) {
 }
 
 /// Lookup pro measure_text_width_full. Vraci cloned font (fontdue::Font je
-/// Clone via Arc-uvnitr, levne).
+/// Clone via Arc-uvnitr, levne). bool bold = legacy wrapper for weight=700.
 pub(crate) fn measure_font_for(family: &str, bold: bool, italic: bool) -> Option<fontdue::Font> {
+    measure_font_for_weight(family, if bold { 700 } else { 400 }, italic)
+}
+
+/// Weight-aware lookup pres MEASURE_FONTS thread_local. CSS Fonts L4 nearest:
+/// hleda exact `<family>__w<weight>__[i__]` key, jinak nearest weight.
+pub(crate) fn measure_font_for_weight(family: &str, weight: u32, italic: bool) -> Option<fontdue::Font> {
     MEASURE_FONTS.with(|m| {
         let map = m.borrow();
-        // Style-specific key first.
-        let style_suffix = match (bold, italic) {
-            (true, true) => "__bi__",
-            (true, false) => "__bold__",
-            (false, true) => "__italic__",
-            (false, false) => "",
+        // Weight search order per CSS Fonts L4.
+        let order: Vec<u32> = if weight < 400 {
+            let mut v: Vec<u32> = (100..=weight).rev().collect();
+            v.extend([400, 500, 600, 700, 800, 900].iter().copied());
+            v
+        } else if weight <= 500 {
+            let mut v = vec![weight];
+            if weight != 500 { v.push(500); }
+            if weight != 400 { v.push(400); }
+            v.extend([300, 200, 100, 600, 700, 800, 900].iter().copied());
+            v
+        } else {
+            let mut v = vec![weight];
+            for w in [600, 700, 800, 900] { if w != weight { v.push(w); } }
+            v.extend([500, 400, 300, 200, 100].iter().copied());
+            v
         };
-        // Iterate kazdy comma-separated alt (CSS font-family list).
+        let suffix = if italic { "__i__" } else { "__" };
+        let opp_suffix = if italic { "__" } else { "__i__" };
         for alt in family.split(',') {
             let trimmed = alt.trim().trim_matches('"').trim_matches('\'');
             if trimmed.is_empty() { continue; }
-            if !style_suffix.is_empty() {
-                let styled = format!("{}{}", trimmed, style_suffix);
-                if let Some(f) = map.get(&styled) { return Some(f.clone()); }
+            // Try styled (italic match).
+            for w in &order {
+                let key = format!("{}__w{}{}", trimmed, w, suffix);
+                if let Some(f) = map.get(&key) { return Some(f.clone()); }
+            }
+            // Try opposite italic.
+            for w in &order {
+                let key = format!("{}__w{}{}", trimmed, w, opp_suffix);
+                if let Some(f) = map.get(&key) { return Some(f.clone()); }
+            }
+            // Legacy keys.
+            if weight >= 600 && italic {
+                if let Some(f) = map.get(&format!("{}__bi__", trimmed)) { return Some(f.clone()); }
+            }
+            if weight >= 600 {
+                if let Some(f) = map.get(&format!("{}__bold__", trimmed)) { return Some(f.clone()); }
+            }
+            if italic {
+                if let Some(f) = map.get(&format!("{}__italic__", trimmed)) { return Some(f.clone()); }
             }
             if let Some(f) = map.get(trimmed) { return Some(f.clone()); }
         }
@@ -2621,9 +2659,22 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
             _ => TextAlign::Left,
         };
     }
-    // Font weight - bold per HTML semantika
+    // Font weight - numeric 1..1000 + keywords (normal=400, bold=700, lighter, bolder).
     if let Some(fw) = s.get("font-weight") {
-        bx.bold = fw.contains("bold") || fw.parse::<u32>().map(|n| n >= 600).unwrap_or(false);
+        let v = fw.trim();
+        let weight: u32 = if let Ok(n) = v.parse::<u32>() {
+            n
+        } else {
+            match v {
+                "bold" => 700,
+                "bolder" => 700,
+                "lighter" => 300,
+                "normal" => 400,
+                _ => 400,
+            }
+        };
+        bx.font_weight = weight;
+        bx.bold = weight >= 600;
     }
     // Font style: italic / oblique.
     if let Some(fs) = s.get("font-style") {
@@ -3694,6 +3745,7 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
     let mut cursor_y = start_y;
     let parent_font_size = bx.font_size;
     let parent_bold = bx.bold;
+    let parent_weight = bx.font_weight;
     let parent_italic = bx.italic;
     let parent_color = bx.text_color;
     let parent_underline = bx.text_underline;
@@ -3722,6 +3774,10 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
         }
         if !bx.children[idx].bold && parent_bold {
             bx.children[idx].bold = parent_bold;
+        }
+        // font_weight inherit (pri 400 default = ne-explicit).
+        if bx.children[idx].font_weight == 400 && parent_weight != 400 {
+            bx.children[idx].font_weight = parent_weight;
         }
         if !bx.children[idx].italic && parent_italic {
             bx.children[idx].italic = true;
@@ -3775,7 +3831,7 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
         // space) a flush_inline measure (s synthetic 0.27*fs) rozdilne -> spurious
         // text wrap kdyz pre-pass dal min sirku nez flush_inline potrebuje.
         let space_w = {
-            let g = measure_text_width_full(" ", font_size, bx_clone.bold, bx_clone.italic, &bx_clone.font_family);
+            let g = measure_text_width_weight(" ", font_size, bx_clone.font_weight, bx_clone.italic, &bx_clone.font_family);
             if g > 0.0 { g } else { font_size * 0.27 }
         };
 
@@ -3829,7 +3885,7 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
             // pri wrapovanem textu (cursor_x pri exitu = jen last line end).
             let mut max_line_end_x: f32 = cursor_x;
             for (wi, word) in words.iter().enumerate() {
-                let w = measure_text_width_full(word, font_size, bx_clone.bold, bx_clone.italic, &bx_clone.font_family);
+                let w = measure_text_width_weight(word, font_size, bx_clone.font_weight, bx_clone.italic, &bx_clone.font_family);
                 let inter_word_space = if wi > 0 { space_w } else { 0.0 };
                 // Pri inner_w <= 0 (pre-pass parent.rect.width=0) NE wrap -
                 // vsech slov v jedne line. Real layout pak prepocita s
@@ -3862,7 +3918,7 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
                     let mut acc_w = 0.0;
                     let chars: Vec<char> = word.chars().collect();
                     for ch in chars {
-                        let ch_w = measure_text_width_full(&ch.to_string(), font_size, bx_clone.bold, bx_clone.italic, &bx_clone.font_family);
+                        let ch_w = measure_text_width_weight(&ch.to_string(), font_size, bx_clone.font_weight, bx_clone.italic, &bx_clone.font_family);
                         if cursor_x + acc_w + ch_w > inner_x + inner_w && cursor_x > inner_x {
                             cursor_y += line_height;
                             cursor_x = inner_x;
@@ -4165,6 +4221,15 @@ pub fn measure_text_width_styled(text: &str, font_size: f32, bold: bool) -> f32 
 /// by Courier-New text mereny default Times davalo zcela odlisne sirky -
 /// kazdy span text na stranky s monospace body by nasel jine wrap pointy.
 pub fn measure_text_width_full(text: &str, font_size: f32, bold: bool, italic: bool, family: &str) -> f32 {
+    measure_text_width_impl(text, font_size, if bold { 700 } else { 400 }, italic, family)
+}
+
+pub fn measure_text_width_weight(text: &str, font_size: f32, weight: u32, italic: bool, family: &str) -> f32 {
+    measure_text_width_impl(text, font_size, weight, italic, family)
+}
+
+fn measure_text_width_impl(text: &str, font_size: f32, weight: u32, italic: bool, family: &str) -> f32 {
+    let bold = weight >= 600;
     use std::sync::OnceLock;
     static FONT: OnceLock<Option<fontdue::Font>> = OnceLock::new();
     static FONT_BOLD: OnceLock<Option<fontdue::Font>> = OnceLock::new();
@@ -4228,7 +4293,7 @@ pub fn measure_text_width_full(text: &str, font_size: f32, bold: bool, italic: b
     // register_measure_font) prefer ho pred system fallback. Bez tohoto bold
     // mereni pres Times Bold (system), render pres Ubuntu Bold (@font-face) =
     // sirka neshodi, dalsi span overlaps.
-    let registered = measure_font_for(family, bold, italic);
+    let registered = measure_font_for_weight(family, weight, italic);
 
     // PERF: family classification cached pres thread_local HashMap. Bez teto
     // cache `family.to_lowercase()` + 13 `.contains()` checks per measure call

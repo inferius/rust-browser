@@ -174,6 +174,8 @@ pub enum DisplayCommand {
         content: String,
         color: [u8; 4],
         font_size: f32,
+        /// CSS font-weight 1..1000. bold field alias pri >= 600.
+        font_weight: u32,
         bold: bool,
         /// italic - render pres skew x = 0.2 * y (fake italic).
         italic: bool,
@@ -574,7 +576,7 @@ fn emit_svg_children_xform(bx: &LayoutBox, parent_xform: &[f32; 6], cmds: &mut V
                 if !content.trim().is_empty() {
                     cmds.push(DisplayCommand::Text {
                         x: ax, y: ay - font_size, content,
-                        color: fill, font_size, bold: false,
+                        color: fill, font_size, bold: false, font_weight: 400,
                         italic: false,
                         font_family: String::new(),
                         strikethrough: false, underline: false,
@@ -1609,6 +1611,7 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
                 color: with_alpha(color),
                 font_size: bx.font_size,
                 bold: bx.bold,
+                font_weight: bx.font_weight,
                 italic: bx.italic,
                 font_family: bx.font_family.clone(),
                 strikethrough: false, underline: false,
@@ -1624,6 +1627,7 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
             color: text_color,
             font_size: bx.font_size,
             bold: bx.bold,
+            font_weight: bx.font_weight,
             italic: bx.italic,
             font_family: bx.font_family.clone(),
             strikethrough: is_strike_tag,

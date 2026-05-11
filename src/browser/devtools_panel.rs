@@ -124,7 +124,7 @@ const ICON_SETTINGS: char = '\u{E8B8}'; // settings gear
 fn push_icon(cmds: &mut Vec<DisplayCommand>, x: f32, y: f32, ch: char, color: [u8; 4]) {
     cmds.push(DisplayCommand::Text {
         x, y, content: ch.to_string(), color,
-        font_size: ICON_SIZE, bold: false, italic: false,
+        font_size: ICON_SIZE, bold: false, font_weight: 400, italic: false,
         font_family: ICON_FONT.into(),
         strikethrough: false, underline: false,
     });
@@ -1538,7 +1538,7 @@ fn paint_side_fonts(
             x: pad_x + 8.0, y: sy + 8.0,
             content: preview.to_string(),
             color: pal.text,
-            font_size: preview_size, bold: bx.bold, italic: bx.italic,
+            font_size: preview_size, bold: bx.bold, font_weight: bx.font_weight, italic: bx.italic,
             font_family: preview_family,
             strikethrough: false, underline: false,
         });
@@ -4442,7 +4442,7 @@ fn push_rect_border(cmds: &mut Vec<DisplayCommand>, x: f32, y: f32, w: f32, h: f
 fn push_text(cmds: &mut Vec<DisplayCommand>, x: f32, y: f32, content: String, color: [u8; 4], italic: bool) {
     cmds.push(DisplayCommand::Text {
         x, y, content, color,
-        font_size: FONT_SIZE, bold: false,
+        font_size: FONT_SIZE, bold: false, font_weight: 400,
         italic,
         font_family: if italic { DT_FONT_ITALIC.into() } else { DT_FONT.into() },
         strikethrough: false, underline: false,
@@ -4454,7 +4454,7 @@ fn push_text(cmds: &mut Vec<DisplayCommand>, x: f32, y: f32, content: String, co
 fn push_text_bold(cmds: &mut Vec<DisplayCommand>, x: f32, y: f32, content: String, color: [u8; 4], italic: bool) {
     cmds.push(DisplayCommand::Text {
         x, y, content, color,
-        font_size: FONT_SIZE, bold: true,
+        font_size: FONT_SIZE, bold: true, font_weight: 700,
         italic,
         font_family: if italic { DT_UI_FONT_ITALIC.into() } else { DT_UI_FONT_BOLD.into() },
         strikethrough: false, underline: false,
@@ -4465,7 +4465,7 @@ fn push_text_bold(cmds: &mut Vec<DisplayCommand>, x: f32, y: f32, content: Strin
 fn push_text_code_bold(cmds: &mut Vec<DisplayCommand>, x: f32, y: f32, content: String, color: [u8; 4], italic: bool) {
     cmds.push(DisplayCommand::Text {
         x, y, content, color,
-        font_size: FONT_SIZE, bold: true,
+        font_size: FONT_SIZE, bold: true, font_weight: 700,
         italic,
         font_family: DT_FONT_BOLD.into(),
         strikethrough: false, underline: false,
@@ -4476,7 +4476,7 @@ fn push_text_code_bold(cmds: &mut Vec<DisplayCommand>, x: f32, y: f32, content: 
 fn push_ui_text(cmds: &mut Vec<DisplayCommand>, x: f32, y: f32, content: String, color: [u8; 4], bold: bool) {
     cmds.push(DisplayCommand::Text {
         x, y, content, color,
-        font_size: FONT_SIZE, bold,
+        font_size: FONT_SIZE, bold, font_weight: if bold {700} else {400},
         italic: false,
         font_family: if bold { DT_UI_FONT_BOLD.into() } else { DT_UI_FONT.into() },
         strikethrough: false, underline: false,
@@ -4486,7 +4486,7 @@ fn push_ui_text(cmds: &mut Vec<DisplayCommand>, x: f32, y: f32, content: String,
 fn push_ui_text_italic(cmds: &mut Vec<DisplayCommand>, x: f32, y: f32, content: String, color: [u8; 4]) {
     cmds.push(DisplayCommand::Text {
         x, y, content, color,
-        font_size: FONT_SIZE, bold: false,
+        font_size: FONT_SIZE, bold: false, font_weight: 400,
         italic: true,
         font_family: DT_UI_FONT_ITALIC.into(),
         strikethrough: false, underline: false,
@@ -4496,7 +4496,7 @@ fn push_ui_text_italic(cmds: &mut Vec<DisplayCommand>, x: f32, y: f32, content: 
 fn push_text_italic(cmds: &mut Vec<DisplayCommand>, x: f32, y: f32, content: String, color: [u8; 4], _bold: bool) {
     cmds.push(DisplayCommand::Text {
         x, y, content, color,
-        font_size: FONT_SIZE, bold: false,
+        font_size: FONT_SIZE, bold: false, font_weight: 400,
         italic: true,
         font_family: DT_FONT_ITALIC.into(),
         strikethrough: false, underline: false,
@@ -4506,7 +4506,7 @@ fn push_text_italic(cmds: &mut Vec<DisplayCommand>, x: f32, y: f32, content: Str
 fn push_text_underline(cmds: &mut Vec<DisplayCommand>, x: f32, y: f32, content: String, color: [u8; 4], strikethrough: bool) {
     cmds.push(DisplayCommand::Text {
         x, y, content, color,
-        font_size: FONT_SIZE, bold: false,
+        font_size: FONT_SIZE, bold: false, font_weight: 400,
         italic: false,
         font_family: DT_FONT.into(),
         strikethrough,

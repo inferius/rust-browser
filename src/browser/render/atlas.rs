@@ -307,12 +307,103 @@ impl GlyphAtlas {
         &self.font
     }
 
+    /// CSS Fonts L4 nearest-match algorithm pres @font-face weight variants.
+    /// Pri exact `<family>__w<weight>__[i__]` key v extra_fonts use. Jinak
+    /// fallback dle CSS spec:
+    /// - weight < 400: prefer weight, klesat (250->200->150->100), pak 400+.
+    /// - weight == 400/500: prefer requested, then 500/400, then klesat.
+    /// - weight >= 500 (light path) - prefer up to 500.
+    /// - weight >= 600: prefer requested, then higher, then lower.
+    pub(super) fn font_for_weight(&self, family: &str, weight: u32, italic: bool) -> &fontdue::Font {
+        let suffix = if italic { "__i__" } else { "__" };
+        // Search order per CSS Fonts L4 spec:
+        // Build search list of weight buckets to try.
+        let order: Vec<u32> = if weight < 400 {
+            // Lower than 400: prefer requested, descending, then ascending from 400+.
+            let mut v: Vec<u32> = (100..=weight).rev().collect();
+            v.extend([400, 500, 600, 700, 800, 900].iter().copied());
+            v
+        } else if weight <= 500 {
+            // 400 or 500: prefer 400/500 chain, then descending light, then ascending heavy.
+            let mut v = vec![weight];
+            if weight != 500 { v.push(500); }
+            if weight != 400 { v.push(400); }
+            v.extend([300, 200, 100, 600, 700, 800, 900].iter().copied());
+            v
+        } else {
+            // >= 600 (bold path): prefer requested, then heavier, then lighter.
+            let mut v = vec![weight];
+            for w in [600, 700, 800, 900] {
+                if w != weight { v.push(w); }
+            }
+            v.extend([500, 400, 300, 200, 100].iter().copied());
+            v
+        };
+        // Try styled variant per requested italic.
+        for w in &order {
+            let key = format!("{}__w{}{}", family, w, suffix);
+            if let Some(f) = self.extra_fonts.get(&key).and_then(Self::first_font) {
+                return f;
+            }
+        }
+        // Try opposite italic (italic 400 -> regular 400) v ramci weight nearest.
+        let opp_suffix = if italic { "__" } else { "__i__" };
+        for w in &order {
+            let key = format!("{}__w{}{}", family, w, opp_suffix);
+            if let Some(f) = self.extra_fonts.get(&key).and_then(Self::first_font) {
+                return f;
+            }
+        }
+        // Try regular family bez weight suffix (legacy / unknown weights).
+        if let Some(f) = self.extra_fonts.get(family).and_then(Self::first_font) { return f; }
+        // CSS comma list.
+        for alt in family.split(',') {
+            let trimmed = alt.trim().trim_matches('"').trim_matches('\'');
+            for w in &order {
+                let key = format!("{}__w{}{}", trimmed, w, suffix);
+                if let Some(f) = self.extra_fonts.get(&key).and_then(Self::first_font) {
+                    return f;
+                }
+            }
+            if let Some(f) = self.extra_fonts.get(trimmed).and_then(Self::first_font) { return f; }
+        }
+        // System fallback.
+        if weight >= 600 && italic {
+            if let Some(f) = &self.font_bold_italic { return f; }
+        }
+        if italic {
+            if let Some(f) = &self.font_italic { return f; }
+        }
+        if weight >= 600 {
+            if let Some(f) = &self.font_bold { return f; }
+        }
+        &self.font
+    }
+
     /// Vrati referenci na "primary" font dle family (= prvni subset z Vec
     /// pokud @font-face, jinak system font). Pouziti pro initial metrics,
     /// pre-rasterize pass. Pro per-char glyph rasterize pouzij font_for_char.
     /// "" nebo neznamy -> default. "__bold__:" / "__italic__:" / "__bi__:"
     /// prefixy preferuji styled variant.
     pub(super) fn font_for(&self, family: &str) -> &fontdue::Font {
+        // New compact prefix: `__wN_<I>__:family` kde N = weight 1..1000,
+        // I = 0/1 (italic). Pri match call do CSS Fonts L4 nearest-match.
+        if let Some(rest) = family.strip_prefix("__w") {
+            // Parse N + I:family.
+            if let Some(sep_idx) = rest.find("__:") {
+                let head = &rest[..sep_idx];
+                let raw_family = &rest[sep_idx + 3..];
+                // head = "N_I" - split na "_".
+                if let Some(underscore) = head.rfind('_') {
+                    let weight_str = &head[..underscore];
+                    let italic_str = &head[underscore + 1..];
+                    if let Ok(weight) = weight_str.parse::<u32>() {
+                        let italic = italic_str == "1";
+                        return self.font_for_weight(raw_family, weight, italic);
+                    }
+                }
+            }
+        }
         if let Some(rest) = family.strip_prefix("__bi__:") {
             // Hledat <family>__bi__ v extra_fonts (registrace per @font-face
             // weight + italic key). Fallback chain pres bold-only, italic-only,
