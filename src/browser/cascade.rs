@@ -1192,6 +1192,14 @@ pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
         let node_id_opt = node_id_str.as_deref();
         let node_classes = node.attr("class").unwrap_or_default();
 
+        // Debug breakpoint hook: BP_TAG/BP_ID/BP_CLASS env vars + IDE breakpoint
+        // na `breakpoint_cascade` v src/debug_bp.rs.
+        if crate::debug_bp::bp_enabled()
+            && crate::debug_bp::bp_match(node_tag, node_id_opt.unwrap_or(""), &node_classes)
+        {
+            crate::debug_bp::breakpoint_cascade();
+        }
+
         for (sheet_idx, sheet) in stylesheets.iter().enumerate() {
             // Layered rules nejprve (nizsi prio) - per CSS Cascade Layers L5.
             let mut layered_rule_idx = 0usize;

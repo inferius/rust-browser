@@ -1027,6 +1027,16 @@ pub fn parse_svg_path(d: &str) -> Vec<(f32, f32)> {
 fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective: Option<f32>) {
     // Viewport culling - skip cely subtree mimo viewport (+ buffer).
     if culled_out(bx) { return; }
+    // Debug breakpoint hook: BP_TAG/BP_ID/BP_CLASS env vars + IDE breakpoint
+    // na `breakpoint_paint` v src/debug_bp.rs.
+    if crate::debug_bp::bp_enabled() {
+        let tag = bx.tag.as_deref().unwrap_or("");
+        let id = bx.node.as_ref().and_then(|n| n.attr("id")).unwrap_or_default();
+        let class = bx.node.as_ref().and_then(|n| n.attr("class")).unwrap_or_default();
+        if crate::debug_bp::bp_match(tag, &id, &class) {
+            crate::debug_bp::breakpoint_paint();
+        }
+    }
     // Index PRED jakymkoliv emit pro tento box - transform 2D apply pres
     // cmds[box_start..] (vse co tento box vyemituje vc. children).
     let box_start = cmds.len();

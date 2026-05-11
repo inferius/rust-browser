@@ -151,7 +151,16 @@ fn apply_default_tag_styles(bx: &mut LayoutBox, tag: &str) {
             bx.text_underline = true;
         }
         "ul" | "ol" => {
-            bx.padding_left = bx.padding_left.or(Some(40.0));
+            // CSS UA stylesheet padding-inline-start: 40px - ale jen kdyz
+            // ul/ol drzi default block/list-item layout. Site casto dela
+            // `nav ul { display: flex; padding: 0 }` reset - pokud explicitni
+            // display je flex/grid/inline-*, UA padding NE-aplikujeme (children
+            // by se posunuly o 40 px doprava, viz mileneckaseznamka.cz menu).
+            // Chrome dela stejne - flex container ma marker outside, neuvazuje
+            // padding-inline-start pro layout marker space.
+            if matches!(bx.display, Display::Block | Display::ListItem) {
+                bx.padding_left = bx.padding_left.or(Some(40.0));
+            }
             bx.margin_top = bx.margin_top.or(Some(16.0));
             bx.margin_bottom = bx.margin_bottom.or(Some(16.0));
         }
@@ -1646,6 +1655,16 @@ fn reset_subtree_rect(bx: &mut LayoutBox) {
 }
 
 fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::cascade::PseudoStyleMap, counters: &mut HashMap<String, i32>) -> LayoutBox {
+    // Debug breakpoint hook: BP_TAG/BP_ID/BP_CLASS env vars + IDE breakpoint na
+    // `breakpoint_build` v src/debug_bp.rs.
+    if crate::debug_bp::bp_enabled() {
+        let tag = node.tag_name().unwrap_or_default();
+        let id = node.attr("id").unwrap_or_default();
+        let class = node.attr("class").unwrap_or_default();
+        if crate::debug_bp::bp_match(&tag, &id, &class) {
+            crate::debug_bp::breakpoint_build();
+        }
+    }
     // Reset list-item counter pri novem ol/ul (CSS spec: kazdy list ma vlastni counter).
     if let Some(tag) = node.tag_name() {
         if tag == "ol" || tag == "ul" {
@@ -3289,6 +3308,11 @@ pub fn layout_block(bx: &mut LayoutBox) {
             });
             if let Some(eh) = child.explicit_height {
                 child.rect.height = eh;
+            } else if let Some(p) = child.height_pct {
+                // height: N% na abs/fixed -> resolvuj proti CB height. Bez toho
+                // photo-box (position:absolute; height:100%) zustal h=0, img
+                // uvnitr cetl parent_h=0 a spadl na advance_h=24.
+                child.rect.height = cb_h * p;
             }
             // Apply offset (top/left/right/bottom) relative to CB.
             child.rect.x = cb_x + child.offset_left.unwrap_or(0.0);
@@ -3647,6 +3671,22 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
             if g > 0.0 { g } else { font_size * 0.27 }
         };
 
+        // <br> = force linebreak. CSS spec: prazdny inline element ktery
+        // vyemituje newline na konci current line + cursor reset na start
+        // dalsi line. Bez tohoto br se choval jako prazdny inline = ignored.
+        if bx_clone.tag.as_deref() == Some("br") {
+            // Zarid aby br box mel non-zero rect pro hit-test / devtools.
+            bx.children[idx].rect.x = cursor_x;
+            bx.children[idx].rect.y = cursor_y;
+            bx.children[idx].rect.width = 0.0;
+            bx.children[idx].rect.height = advance_h;
+            cursor_y += line_height;
+            cursor_x = inner_x;
+            line_height = line_height_default;
+            prev_had_trailing_space = false;
+            continue;
+        }
+
         if let Some(text) = &bx_clone.text {
             // Detect leading/trailing whitespace pro spravne mezery na hranicich.
             let leading_ws = text.starts_with(char::is_whitespace);
@@ -3811,7 +3851,14 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
             bx.children[idx].rect.height = element_h;
             // Layout vnoreny obsah - layout_block pouzije rect + padding.
             layout_block(&mut bx.children[idx]);
-            cursor_x += estimated_w + mar_r;
+            // Po layout_block re-read rect.width - layout muze vnitrek vetsi
+            // (text wrap, padding, deeper nesting) nez pre-pass estimated_w.
+            // Bez re-read by cursor_x advanced jen o estimated_w -> overlap
+            // nasledujiciho inline sibling pres real sirku tohoto elementu.
+            // Mileneckaseznamka.cz "Celkem 29498" + "Inzeraty 119 504" - bold
+            // span s deeper children dostal real width vetsi nez sum chars.
+            let real_w = bx.children[idx].rect.width.max(estimated_w);
+            cursor_x += real_w + mar_r;
             // Inline element bez text trailing -> default no trailing space.
             prev_had_trailing_space = false;
         } else {
@@ -3835,6 +3882,17 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
             //   pri natural 800x600 + max-w 175 + max-h 175 -> jedna z os
             //   prizpusobi do max, druha proporcionalne mensi.
             let is_img_replaced = matches!(bx_clone.tag.as_deref(), Some("img") | Some("video"));
+            // Debug breakpoint hook pro img sizing (BP_TAG=img / BP_CLASS=... + IDE BP).
+            if is_img_replaced && crate::debug_bp::bp_enabled() {
+                let class = bx_clone.node.as_ref()
+                    .and_then(|n| n.attr("class")).unwrap_or_default();
+                let id = bx_clone.node.as_ref()
+                    .and_then(|n| n.attr("id")).unwrap_or_default();
+                let tag = bx_clone.tag.as_deref().unwrap_or("");
+                if crate::debug_bp::bp_match(tag, &id, &class) {
+                    crate::debug_bp::breakpoint_layout();
+                }
+            }
             // Resolve max values (Infinity pri none/auto - CssLength::resolve_max).
             let img_ctx_w = ResolveCtx { parent_size: parent_w_for_img, font_size: bx_clone.font_size, ..Default::default() };
             let img_ctx_h = ResolveCtx { parent_size: parent_h_for_img, font_size: bx_clone.font_size, ..Default::default() };
@@ -4057,6 +4115,15 @@ pub fn measure_text_width_full(text: &str, font_size: f32, bold: bool, italic: b
             }
             let font_ptr = font as *const _ as usize;
             let fs_bits = font_size.to_bits();
+            // Fallback chain pro chars co primary font neumi (diakritika v Times
+            // Roman ASCII subset, CJK v Latin fontu). Iteruje pres dostupne fonts
+            // dokud najde non-zero advance.
+            let fallback_fonts: [Option<&fontdue::Font>; 4] = [
+                sans_opt.as_ref(),
+                font_opt.as_ref(),
+                font_bold_opt.as_ref(),
+                mono_opt.as_ref(),
+            ];
             let mut total = 0.0_f32;
             for ch in text.chars() {
                 let key = (font_ptr, ch, fs_bits);
@@ -4064,7 +4131,22 @@ pub fn measure_text_width_full(text: &str, font_size: f32, bold: bool, italic: b
                 let aw = if let Some(v) = cached {
                     v
                 } else {
-                    let v = font.metrics(ch, font_size).advance_width;
+                    let mut v = font.metrics(ch, font_size).advance_width;
+                    // Pri 0 advance (glyph index = 0 = missing) -> fallback chain.
+                    // ASCII space/control skip (legitimne 0 advance for control).
+                    if v <= 0.0 && (ch as u32) >= 0x20 && font.lookup_glyph_index(ch) == 0 {
+                        for fb in &fallback_fonts {
+                            if let Some(ff) = fb {
+                                if std::ptr::eq(*ff, font) { continue; }
+                                if ff.lookup_glyph_index(ch) != 0 {
+                                    v = ff.metrics(ch, font_size).advance_width;
+                                    if v > 0.0 { break; }
+                                }
+                            }
+                        }
+                        // Last resort: nominal char width (0.5em).
+                        if v <= 0.0 { v = font_size * 0.5; }
+                    }
                     ADVANCE_CACHE.with(|c| c.borrow_mut().insert(key, v));
                     v
                 };
