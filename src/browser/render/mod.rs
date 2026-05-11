@@ -4528,13 +4528,20 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
 
             let doc_ref = interp.document.clone();
             let base = self.base_url.clone().unwrap_or_default();
-            // Posbiraj scripts: external (src=...) -> fetch HTTP, inline -> text_content.
-            // Bez external fetch jQuery / analytics / framework JS nikdy nezatahnuty
-            // -> stranky padaji s ReferenceError 'jQuery is not defined' etc.
+            // External script src= fetch: opt-in pres env var RWE_FETCH_SCRIPTS=1.
+            // Default OFF - jQuery / GTM / analytics scripts manipuluji DOM zpusoby
+            // ktery nas tree-walker zvlada jen castecne, real-world site se
+            // po jejich evaluaci jeste vic rozjede (DOM mutace neuplne, hidden
+            // elements byly odhaleny, scripts inject markup co rozbije layout).
+            // Pri zapnuti dostane uzivatel real JS engine chovani, vc. crash risk.
+            let fetch_external = std::env::var("RWE_FETCH_SCRIPTS")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false);
             let script_nodes = doc_ref.borrow().root.get_elements_by_tag("script");
             let mut scripts: Vec<(String, String)> = Vec::with_capacity(script_nodes.len());
             for (i, s) in script_nodes.iter().enumerate() {
                 if let Some(src_attr) = s.attr("src") {
+                    if !fetch_external { continue; }
                     let src_attr = src_attr.trim().to_string();
                     if src_attr.is_empty() { continue; }
                     let abs_url = if src_attr.starts_with("http://")
@@ -8979,7 +8986,14 @@ impl Renderer {
     fn load_font_faces(&mut self, font_faces: &[crate::browser::css_parser::FontFace], base_url: Option<&str>) {
         use crate::browser::css_parser::extract_font_url;
         for ff in font_faces {
-            let url = match extract_font_url(&ff.src) { Some(u) => u, None => continue };
+            let url = match extract_font_url(&ff.src) {
+                Some(u) => u,
+                None => {
+                    eprintln!("[font-face] SKIP family={} - extract_font_url(src=...) selhal. src={:?}",
+                        ff.family, ff.src);
+                    continue;
+                }
+            };
             if self.loaded_font_urls.contains(&url) { continue; }
             // Resolve relativni URL proti page base_url. Pokud HTTPS/HTTP -
             // ureq fetch. Jinak FS read (s static/ fallback pro relativni).
@@ -9009,6 +9023,8 @@ impl Renderer {
                 std::fs::read(&path).ok()
             };
             if let Some(bytes) = bytes_opt {
+                eprintln!("[font-face] fetched family={} url={} bytes={}",
+                    ff.family, final_url, bytes.len());
                 // WOFF/WOFF2 dekomprese (no-op pri TTF/OTF bytes).
                 let decoded = super::woff::maybe_decode_woff(&bytes);
                 // Variable font detection: log axes pri prvnim nahrani.
@@ -9036,12 +9052,20 @@ impl Renderer {
                         }
                     }
                 }
-                if let Ok(font) = fontdue::Font::from_bytes(decoded, fontdue::FontSettings::default()) {
-                    self.font_registry.insert(ff.family.clone(), font.clone());
-                    // Sdilet do atlasu pro rasterize lookup
-                    self.atlas.extra_fonts.insert(ff.family.clone(), font);
-                    self.loaded_font_urls.insert(url);
+                match fontdue::Font::from_bytes(decoded, fontdue::FontSettings::default()) {
+                    Ok(font) => {
+                        eprintln!("[font-face] OK family={} registered (extra_fonts)", ff.family);
+                        self.font_registry.insert(ff.family.clone(), font.clone());
+                        // Sdilet do atlasu pro rasterize lookup
+                        self.atlas.extra_fonts.insert(ff.family.clone(), font);
+                        self.loaded_font_urls.insert(url);
+                    }
+                    Err(e) => {
+                        eprintln!("[font-face] FAIL fontdue::from_bytes family={}: {e:?}", ff.family);
+                    }
                 }
+            } else {
+                eprintln!("[font-face] FAIL fetch family={} url={}", ff.family, final_url);
             }
         }
     }
