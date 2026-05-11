@@ -200,4 +200,46 @@ mod tests {
         assert!((parent.children[1].rect.width - 200.0).abs() < 1.0);
         assert!((parent.children[2].rect.width - 100.0).abs() < 1.0);
     }
+
+    /// Repro from mileneckaseznamka.cz - right-container display=grid (auto-flow row)
+    /// has top-container with display=flex + min-height:93px. Grid auto-row should
+    /// size to top-container intrinsic (~120) NOT inflate to viewport h.
+    #[test]
+    fn grid_auto_row_flex_child_intrinsic_not_inflated() {
+        // Outer grid: 1 row implicit, 1 col, no template -> grid-auto-rows: auto
+        let mut grid = make_grid_box(925.0, 0.0);  // rect.h=0 -> auto height
+        // Make it explicit height=0 so any-auto-row branch fires.
+        grid.explicit_height = None;
+        grid.align_content = "flex-start".into();
+
+        // top-container: flex row, min-height 93, padding 10/20, 1 child h=100
+        let mut top = LayoutBox::new();
+        top.display = Display::Flex;
+        top.flex_direction = "row".into();
+        top.align_items = "center".into();
+        top.justify_content = "space-between".into();
+        top.padding_top = Some(10.0);
+        top.padding_bottom = Some(10.0);
+        top.padding_left = Some(20.0);
+        top.padding_right = Some(20.0);
+        top.min_height_v = "93px".into();
+        // Add child with explicit h=100 (simulates img.republic-map)
+        let mut img_block = LayoutBox::new();
+        img_block.display = Display::Flex;
+        img_block.flex_direction = "row".into();
+        let mut img = LayoutBox::new();
+        img.display = Display::Block;
+        img.explicit_width = Some(100.0);
+        img.explicit_height = Some(100.0);
+        img_block.children.push(img);
+        top.children.push(img_block);
+
+        grid.children.push(top);
+        layout_grid(&mut grid);
+
+        let h = grid.children[0].rect.height;
+        eprintln!("top-container rect.h={:.0} grid.h={:.0}", h, grid.rect.height);
+        assert!(h >= 93.0 && h <= 200.0,
+            "top-container rect.h should be ~120 (content+padding) or >=93 (min-height), got {}", h);
+    }
 }

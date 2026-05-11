@@ -1047,6 +1047,18 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                         _ => {}
                     }
                     let intrinsic_h = measured.rect.height;
+                    if std::env::var("FLEX_DIAG").is_ok() {
+                        if let Some(n) = bx.children[real_idx].node.as_ref() {
+                            let cl = n.attr("class").unwrap_or_default();
+                            if cl.contains("top-container") || cl.contains("right-container")
+                                || cl.contains("development-mode") || cl.contains("top-miniature")
+                                || cl.contains("hp-items") {
+                                eprintln!("[grid-intrinsic] class={} measured_h={:.0} min_h_v={:?} pos={:?} display={:?}",
+                                    cl, intrinsic_h, bx.children[real_idx].min_height_v,
+                                    bx.children[real_idx].position, bx.children[real_idx].display);
+                            }
+                        }
+                    }
                     if intrinsic_h > 0.0 {
                         bx.children[real_idx].rect.height = intrinsic_h;
                     }
