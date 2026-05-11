@@ -3782,12 +3782,41 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
             // video, iframe, input). Pouziva explicit_width/explicit_height
             // z attributu nebo CSS. Bez teto branch zustane rect 0,0 a element
             // se renderoval v levem hornim rohu.
-            let w = bx_clone.explicit_width
-                .or_else(|| if bx_clone.rect.width > 0.0 { Some(bx_clone.rect.width) } else { None })
-                .unwrap_or(font_size);
-            let h = bx_clone.explicit_height
-                .or_else(|| if bx_clone.rect.height > 0.0 { Some(bx_clone.rect.height) } else { None })
-                .unwrap_or(advance_h);
+            // Width: explicit_width (px) wins, pak width_pct (% z parent inner_w),
+            // pak natural rect.width, pak font_size fallback.
+            // Mileneckaseznamka.cz: .photo-box img { width: 100% } -> width_pct=1.0,
+            // bez tohoto se img drzelo na natural 100x100 misto plne photo-box.
+            let mar_l_r = bx_clone.margin_left.unwrap_or(bx_clone.margin);
+            let mar_r_r = bx_clone.margin_right.unwrap_or(bx_clone.margin);
+            let parent_w_for_img = (inner_w - mar_l_r - mar_r_r).max(0.0);
+            let w = if let Some(px) = bx_clone.explicit_width {
+                px
+            } else if let Some(pct) = bx_clone.width_pct {
+                parent_w_for_img * pct
+            } else if bx_clone.rect.width > 0.0 {
+                bx_clone.rect.width
+            } else {
+                font_size
+            };
+            // Apply max-width/min-width clamp (pct resolve proti parent_w).
+            let w = if !bx_clone.max_width_v.is_empty() && bx_clone.max_width_v != "none" {
+                let mx = parse_length_or_pct(&bx_clone.max_width_v, parent_w_for_img);
+                if mx > 0.0 { w.min(mx) } else { w }
+            } else { w };
+            let w = if !bx_clone.min_width_v.is_empty() && bx_clone.min_width_v != "none" {
+                let mn = parse_length_or_pct(&bx_clone.min_width_v, parent_w_for_img);
+                if mn > 0.0 { w.max(mn) } else { w }
+            } else { w };
+            let h = if let Some(px) = bx_clone.explicit_height {
+                px
+            } else if let Some(pct) = bx_clone.height_pct {
+                // height_pct relativni k parent rect.height pokud znama.
+                if bx.rect.height > 0.0 { bx.rect.height * pct } else { advance_h }
+            } else if bx_clone.rect.height > 0.0 {
+                bx_clone.rect.height
+            } else {
+                advance_h
+            };
             if sib_idx > 0 && prev_had_trailing_space && cursor_x > inner_x {
                 cursor_x += space_w;
             }

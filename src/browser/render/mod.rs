@@ -6406,11 +6406,22 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             let _t_eh = std::time::Instant::now();
             // Element highlight overlay (Chrome-like padding/margin viz) -
             // jen kdyz panel_open (jinak overlay perzistuje pres zavreni).
-            crate::browser::devtools_panel::paint_element_highlight(
+            // Shell mode: page paint shifted by +chrome_h, highlight musi take
+            // (overlay_cmds nejsou shifted v glob loop drive). Bez tohoto
+            // devtools highlight rect kreslen v layout-coords (y=10) ale paint
+            // jiz posunul page (y=74) -> uzivatel vidi highlight jinde.
+            let chrome_dy_for_highlight = if self.shell_mode {
+                let bm_count = crate::devtools::bookmarks::load_bookmarks().len();
+                64.0 + if bm_count > 0 && self.bookmarks_bar_visible { 24.0 } else { 0.0 }
+            } else { 0.0 };
+            let chrome_dx_for_highlight = -self.scroll_x;
+            crate::browser::devtools_panel::paint_element_highlight_offset(
                 &mut display_list,
                 &layout_root,
                 &self.devtools,
                 self.scroll_y,
+                chrome_dx_for_highlight,
+                chrome_dy_for_highlight,
             );
             perf_t("ovl::element_highlight", _t_eh);
             // Match preview overlay - vykresli orange outline kolem vsech

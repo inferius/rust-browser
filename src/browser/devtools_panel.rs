@@ -3288,6 +3288,20 @@ pub fn paint_element_highlight(
     state: &DevToolsState,
     scroll_y: f32,
 ) {
+    paint_element_highlight_offset(cmds, layout_root, state, scroll_y, 0.0, 0.0);
+}
+
+/// Verze s explicit chrome offset - shell mode posune highlight stejne jako
+/// page paint. Bez tohoto devtools highlight rect kreslen v layout-coords
+/// (y=10) ale paint posunul page o +chrome_h (y=74) -> mismatch v zobrazeni.
+pub fn paint_element_highlight_offset(
+    cmds: &mut Vec<DisplayCommand>,
+    layout_root: &LayoutBox,
+    state: &DevToolsState,
+    scroll_y: f32,
+    chrome_dx: f32,
+    chrome_dy: f32,
+) {
     // Highlight jen pri hoveru v devtools tree (Firefox-style). Selected
     // element ZUSTAVA v tree highlighted ale na page overlay pouze pri hover.
     // Driv hovered.or(selected) -> trvaly visualni overlay. Ted hovered only.
@@ -3309,8 +3323,8 @@ pub fn paint_element_highlight(
     let m_l = bx.margin_left.unwrap_or(bx.margin);
     let bw = bx.border_width.max(0.0);
 
-    let content_x = r.x;
-    let content_y = r.y - scroll_y;
+    let content_x = r.x + chrome_dx;
+    let content_y = r.y - scroll_y + chrome_dy;
     let content_w = r.width;
     let content_h = r.height;
 
