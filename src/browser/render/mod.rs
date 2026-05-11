@@ -9054,10 +9054,16 @@ impl Renderer {
                 }
                 match fontdue::Font::from_bytes(decoded, fontdue::FontSettings::default()) {
                     Ok(font) => {
-                        eprintln!("[font-face] OK family={} registered (extra_fonts)", ff.family);
-                        self.font_registry.insert(ff.family.clone(), font.clone());
-                        // Sdilet do atlasu pro rasterize lookup
-                        self.atlas.extra_fonts.insert(ff.family.clone(), font);
+                        eprintln!("[font-face] OK family={} registered (extra_fonts subset push)", ff.family);
+                        // font_registry stale drzi "primary" font per family (prvni).
+                        self.font_registry.entry(ff.family.clone()).or_insert_with(|| font.clone());
+                        // Atlas extra_fonts: Vec<Font> per family - vsechny subsety.
+                        // Pri rasterize lookup atlas::font_for_char itera vsechny
+                        // subsety dokud najde glyph (Google Fonts: 30+ subsets per
+                        // family, kazdy ma jiny unicode-range).
+                        self.atlas.extra_fonts.entry(ff.family.clone())
+                            .or_insert_with(Vec::new)
+                            .push(font);
                         self.loaded_font_urls.insert(url);
                     }
                     Err(e) => {

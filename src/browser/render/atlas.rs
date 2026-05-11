@@ -70,8 +70,13 @@ pub(super) struct GlyphAtlas {
     pub(super) font_italic: Option<fontdue::Font>,
     /// Bold + italic kombinace (timesbi.ttf etc.).
     pub(super) font_bold_italic: Option<fontdue::Font>,
-    /// @font-face loaded fonty: family name -> Font
-    pub(super) extra_fonts: std::collections::HashMap<String, fontdue::Font>,
+    /// @font-face loaded fonty: family name -> Vec<Font>. Vec drzi vsechny
+    /// subsety daneho family (Google Fonts dela per unicode-range chunks - 30+
+    /// woff2 souboru per family). Pri rasterize lookup itera vsechny subsety
+    /// dokud najde font ktery ma glyph pro dany char. Bez Vec posledni
+    /// register override predchozi -> Czech latin-ext subset pretazeny latin
+    /// subsetem = diakritika fallback na default Times Roman.
+    pub(super) extra_fonts: std::collections::HashMap<String, Vec<fontdue::Font>>,
     /// Atlas pixely (shedy: 0=transparent, 255=opaque)
     pub(super) pixels: Vec<u8>,
     /// Primary cache: (family_hash u64, char, font_size) -> GlyphInfo.
@@ -176,7 +181,7 @@ impl GlyphAtlas {
             });
             if let Some(data) = data {
                 if let Ok(f) = fontdue::Font::from_bytes(data, fontdue::FontSettings::default()) {
-                    extra_fonts.insert(family.to_string(), f);
+                    extra_fonts.entry(family.to_string()).or_insert_with(Vec::new).push(f);
                 } else {
                     eprintln!("[fonts] {} parse failed", family);
                 }
@@ -206,61 +211,94 @@ impl GlyphAtlas {
         font.lookup_glyph_index(ch) != 0
     }
 
-    /// Vrati font ktery umi rasterizovat dany char. Iteruje primary family,
-    /// pak vsechny extra_fonts, pak system fonts, az najde glyph. Pouziva se
-    /// pro diakritiku/CJK/symbols co primary font nema (Times Roman nema CP > U+00FF).
+    /// Helper - prvni font z Vec (pokud existuje neprazdny). Pouzite v
+    /// font_for() pro "give me primary font for this family" semantics.
+    #[inline]
+    fn first_font<'a>(vec: &'a Vec<fontdue::Font>) -> Option<&'a fontdue::Font> {
+        vec.first()
+    }
+
+    /// Vrati font ktery umi rasterizovat dany char. Postup:
+    /// 1) Itera vsechny subsety primary family (Google Fonts: 30+ woff2 per family,
+    ///    kazdy subset jiny unicode-range).
+    /// 2) Pri commaseparated CSS list (`"Roboto", "Arial", sans-serif`) zkousi
+    ///    kazdy alternative.
+    /// 3) Pak vsechny ostatni extra_fonts + system fonts.
+    /// 4) Last resort default font (i kdyz neumi - prazdny glyph lepsi crash).
     pub(super) fn font_for_char(&self, family: &str, ch: char) -> &fontdue::Font {
-        let primary = self.font_for(family);
-        if Self::has_glyph(primary, ch) { return primary; }
-        // ASCII space / control - vsechny fonts maji = primary OK.
-        if (ch as u32) < 0x20 { return primary; }
-        // Iterate extra_fonts hledat fallback.
-        for f in self.extra_fonts.values() {
-            if Self::has_glyph(f, ch) { return f; }
+        // ASCII space / control: vse umi - vrat primary.
+        if (ch as u32) < 0x20 {
+            return self.font_for(family);
         }
-        // System fonts last resort.
+        // Strip styling prefixy pro family lookup.
+        let raw_family = family
+            .strip_prefix("__bi__:")
+            .or_else(|| family.strip_prefix("__italic__:"))
+            .or_else(|| family.strip_prefix("__bold__:"))
+            .unwrap_or(family);
+        // 1) Primary family - vsechny subsety.
+        if !raw_family.is_empty() {
+            // Direct family match (font-family: 'Roboto').
+            if let Some(vec) = self.extra_fonts.get(raw_family) {
+                for f in vec {
+                    if Self::has_glyph(f, ch) { return f; }
+                }
+            }
+            // CSS comma list (font-family: "Roboto", "Arial", sans-serif).
+            for alt in raw_family.split(',') {
+                let trimmed = alt.trim().trim_matches('"').trim_matches('\'');
+                if trimmed.is_empty() || trimmed == raw_family { continue; }
+                if let Some(vec) = self.extra_fonts.get(trimmed) {
+                    for f in vec {
+                        if Self::has_glyph(f, ch) { return f; }
+                    }
+                }
+            }
+        }
+        // 2) Vsechny ostatni extra_fonts (jine families - last-resort
+        //    Czech znaky z jineho fontu, kdyz primary subset nepokryva).
+        for vec in self.extra_fonts.values() {
+            for f in vec {
+                if Self::has_glyph(f, ch) { return f; }
+            }
+        }
+        // 3) System fonts.
         if let Some(b) = &self.font_bold { if Self::has_glyph(b, ch) { return b; } }
         if let Some(i) = &self.font_italic { if Self::has_glyph(i, ch) { return i; } }
         if let Some(bi) = &self.font_bold_italic { if Self::has_glyph(bi, ch) { return bi; } }
-        // Default font fallback (i kdyz neumi - prazdny glyph lepsi nez crash).
-        if Self::has_glyph(&self.font, ch) { return &self.font; }
-        primary
+        // 4) Default font (primary fallback bez glyph check - cluster glyph 0).
+        &self.font
     }
 
-    /// Vrati referenci na font dle family. "" nebo neznamy -> default.
-    /// Family s prefixem "__bold__:" -> bold variant pokud k dispozici.
-    /// Pri comma-separated seznamu (CSS font-family fallback) iteruje
-    /// kazdy alternative a vraci prvni nalezeny @font-face entry.
+    /// Vrati referenci na "primary" font dle family (= prvni subset z Vec
+    /// pokud @font-face, jinak system font). Pouziti pro initial metrics,
+    /// pre-rasterize pass. Pro per-char glyph rasterize pouzij font_for_char.
+    /// "" nebo neznamy -> default. "__bold__:" / "__italic__:" / "__bi__:"
+    /// prefixy preferuji styled variant.
     pub(super) fn font_for(&self, family: &str) -> &fontdue::Font {
-        // Combinace bold+italic: __bi__: prefix.
-        // CRITICAL: extra_fonts (explicit family name jako "Inter-Bold") MUSI
-        // mit prioritu pred system bold variant. Drive: __bold__:Inter-Bold
-        // by se skoncilo na font_bold (Times Bold) a ignorovat Inter-Bold.
         if let Some(rest) = family.strip_prefix("__bi__:") {
-            // Prvne explicit family v extra_fonts (napr. "Inter-Bold").
-            if let Some(f) = self.extra_fonts.get(rest) { return f; }
-            // Fallback na system bold-italic > italic > bold > regular.
+            if let Some(f) = self.extra_fonts.get(rest).and_then(Self::first_font) { return f; }
             if let Some(f) = &self.font_bold_italic { return f; }
             if let Some(f) = &self.font_italic { return f; }
             if let Some(f) = &self.font_bold { return f; }
             return self.font_for(rest);
         }
         if let Some(rest) = family.strip_prefix("__italic__:") {
-            if let Some(f) = self.extra_fonts.get(rest) { return f; }
+            if let Some(f) = self.extra_fonts.get(rest).and_then(Self::first_font) { return f; }
             if let Some(f) = &self.font_italic { return f; }
             return self.font_for(rest);
         }
         if let Some(rest) = family.strip_prefix("__bold__:") {
-            if let Some(f) = self.extra_fonts.get(rest) { return f; }
+            if let Some(f) = self.extra_fonts.get(rest).and_then(Self::first_font) { return f; }
             if let Some(b) = &self.font_bold { return b; }
             return self.font_for(rest);
         }
         if family.is_empty() { return &self.font; }
-        if let Some(f) = self.extra_fonts.get(family) { return f; }
+        if let Some(f) = self.extra_fonts.get(family).and_then(Self::first_font) { return f; }
         // CSS font-family seznam: "Roboto", "Arial", sans-serif - try each.
         for alt in family.split(',') {
             let trimmed = alt.trim().trim_matches('"').trim_matches('\'');
-            if let Some(f) = self.extra_fonts.get(trimmed) { return f; }
+            if let Some(f) = self.extra_fonts.get(trimmed).and_then(Self::first_font) { return f; }
         }
         &self.font
     }
