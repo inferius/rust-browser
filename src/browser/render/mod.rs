@@ -230,19 +230,14 @@ fn extract_text_runs(
 ) -> Vec<crate::browser::textrun::TextRun> {
     let mut runs = Vec::new();
     for cmd in commands {
-        if let DisplayCommand::Text { x, y, content, font_size, bold, italic, font_family, .. } = cmd {
+        if let DisplayCommand::Text { x, y, content, font_size, font_weight, italic, font_family, .. } = cmd {
             let z = zoom.max(0.0001);
             let physical_size = (*font_size * z).round().max(1.0) as u32;
             let inv_z = 1.0 / z;
-            let lookup_family = match (*bold, *italic) {
-                (true, true) if atlas.font_bold_italic.is_some() =>
-                    format!("__bi__:{}", font_family),
-                (false, true) if atlas.font_italic.is_some() =>
-                    format!("__italic__:{}", font_family),
-                (true, _) if atlas.font_bold.is_some() =>
-                    format!("__bold__:{}", font_family),
-                _ => font_family.clone(),
-            };
+            // Use same compact key format jako atlas.add emit (line ~7240).
+            // Mismatch = atlas miss -> advance fallback font_size*0.5.
+            let italic_i = if *italic { 1u8 } else { 0u8 };
+            let lookup_family = format!("__w{}_{}__:{}", font_weight, italic_i, font_family);
             let mut cumulative: Vec<f32> = Vec::with_capacity(content.chars().count() + 1);
             cumulative.push(0.0);
             let mut acc = 0.0;
@@ -282,7 +277,7 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: 
                 push_rect(&mut verts, *x, *y, bw, *h, c, [0.0, 0.0], 0.0);
                 push_rect(&mut verts, *x + *w - bw, *y, bw, *h, c, [0.0, 0.0], 0.0);
             }
-            DisplayCommand::Text { x, y, content, color, font_size, bold, font_weight: _, italic, font_family, strikethrough, underline } => {
+            DisplayCommand::Text { x, y, content, color, font_size, bold, font_weight, italic, font_family, strikethrough, underline } => {
                 let c = normalize_color(color);
                 let mut pen_x = *x;
                 let mut pen_y = *y + *font_size;
@@ -308,18 +303,9 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: 
                 let z = zoom.max(0.0001);
                 let physical_size = (*font_size * z).round().max(1.0) as u32;
                 let inv_z = 1.0 / z;
-                // PERF: precompute lookup_family + family_hash JEDNOU per Text
-                // command (drive format! per char = N allocs/text). family_hash
-                // pak primo lookup do atlas.cache bez String alocace.
-                let lookup_family: String = match (*bold, *italic) {
-                    (true, true) if atlas.font_bold_italic.is_some() =>
-                        format!("__bi__:{}", font_family),
-                    (false, true) if atlas.font_italic.is_some() =>
-                        format!("__italic__:{}", font_family),
-                    (true, _) if atlas.font_bold.is_some() =>
-                        format!("__bold__:{}", font_family),
-                    _ => font_family.clone(),
-                };
+                // Compact weight + italic key shoduje atlas.add emit.
+                let italic_i = if *italic { 1u8 } else { 0u8 };
+                let lookup_family: String = format!("__w{}_{}__:{}", font_weight, italic_i, font_family);
                 let family_hash = super::render::atlas::GlyphAtlas::hash_family(&lookup_family);
                 // COLR emoji key prefix - drive format per char, ted pre-build
                 // base + concat char u32 + size jen pri lookup. Skip kdyz no
