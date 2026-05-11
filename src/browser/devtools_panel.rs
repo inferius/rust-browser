@@ -4031,84 +4031,8 @@ fn hit_test_elements(
     }
     let split_x = tree_split;
 
-    // CRITICAL: tree handling JEN pri mouse_x < tree_split. Drive klik
-    // v styles pane (mezi tree_split a styles_end) propadl do tree row
-    // computation -> vybral element pod prstem misto styles handling.
-    if mouse_x >= tree_split {
-        // Styles pane area (middle column). Klik na value/swatch/var/edit
-        // zones uz se kontroluju v early returns nize. Default = PanelArea
-        // (zachyti propagation, neprosi do page).
-        // Swatch zone hit (color picker open).
-        let zones = state.styles.swatch_zones.borrow();
-        for (zx, zy, zw, zh, col, prop) in zones.iter() {
-            if mouse_x >= *zx && mouse_x < zx + zw
-               && mouse_y >= *zy && mouse_y < zy + zh {
-                return DevtoolsHit::OpenColorPicker {
-                    anchor_x: *zx,
-                    anchor_y: zy + zh + 4.0,
-                    color: *col,
-                    property: prop.clone(),
-                };
-            }
-        }
-        drop(zones);
-        // Decl value zone (existing rules).
-        let vz = state.styles.decl_value_zones.borrow();
-        for (zx, zy, zw, zh, ri, prop) in vz.iter() {
-            if mouse_x >= *zx && mouse_x < zx + zw
-               && mouse_y >= *zy && mouse_y < zy + zh {
-                return DevtoolsHit::EditDeclValue(*ri, prop.clone());
-            }
-        }
-        drop(vz);
-        // Inline value zone (klik value v "prvek {}" sekci).
-        let iv = state.styles.inline_value_zones.borrow();
-        for (zx, zy, zw, zh, prop) in iv.iter() {
-            if mouse_x >= *zx && mouse_x < zx + zw
-               && mouse_y >= *zy && mouse_y < zy + zh {
-                return DevtoolsHit::EditInlineValue(prop.clone());
-            }
-        }
-        drop(iv);
-        // "+ pridat" inline button.
-        if let Some((zx, zy, zw, zh)) = *state.styles.inline_add_btn_zone.borrow() {
-            if mouse_x >= zx && mouse_x < zx + zw
-               && mouse_y >= zy && mouse_y < zy + zh {
-                return DevtoolsHit::AddInlineDecl;
-            }
-        }
-        // Match preview toggle ctverecek.
-        let mz = state.styles.match_toggle_zones.borrow();
-        for (zx, zy, zw, zh, sel) in mz.iter() {
-            if mouse_x >= *zx && mouse_x < zx + zw
-               && mouse_y >= *zy && mouse_y < zy + zh {
-                return DevtoolsHit::ToggleMatchPreview(sel.clone());
-            }
-        }
-        drop(mz);
-        // Source link.
-        let sl = state.styles.source_link_zones.borrow();
-        for (zx, zy, zw, zh, lab) in sl.iter() {
-            if mouse_x >= *zx && mouse_x < zx + zw
-               && mouse_y >= *zy && mouse_y < zy + zh {
-                return DevtoolsHit::OpenSourceLink(lab.clone());
-            }
-        }
-        drop(sl);
-        // Var chip.
-        let vc = state.styles.var_zones.borrow();
-        for (zx, zy, zw, zh, name) in vc.iter() {
-            if mouse_x >= *zx && mouse_x < zx + zw
-               && mouse_y >= *zy && mouse_y < zy + zh {
-                return DevtoolsHit::JumpToVar(name.clone());
-            }
-        }
-        drop(vc);
-        // Default styles pane area - zachyti klik (no propagation na page).
-        return DevtoolsHit::PanelArea;
-    }
-
-    // Tree pane (mouse_x < tree_split).
+    // Tree pane (mouse_x < tree_split). Styles pane (mouse_x >= tree_split)
+    // se resi vyse v early return; tady uz vime ze klik je v tree.
     let rows = &state.elements.rows;
     let total_h = rows.len() as f32 * ROW_H;
     if total_h > body_h {
