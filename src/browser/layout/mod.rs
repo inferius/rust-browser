@@ -3852,11 +3852,26 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
                 && bx_clone.explicit_width.is_none() && bx_clone.explicit_height.is_none()
                 && bx_clone.width_pct.is_none() && bx_clone.height_pct.is_none()
             {
+                // Detect "fill parent" intent: BOTH max-width AND max-height jsou
+                // procenta. To je nejcastejsi pattern .photo-box img / hero
+                // images / responsive thumbnails kde site spravne expanduje
+                // img na container size. Pro maly natural (icon-sized) i Chrome
+                // odpovida fill behavior. CSS spec technicky stale "no upscale",
+                // ale real-world site-design ocekava expand. Heuristic match.
+                let fill_intent = is_img_replaced
+                    && bx_clone.max_width.is_percent()
+                    && bx_clone.max_height.is_percent();
                 if let Some((nw, nh)) = natural_dims {
                     // Natural znaty. Scale fit-within max-w/max-h zachovavaje aspect.
                     let scale_w = if max_w_resolved.is_finite() { max_w_resolved / nw } else { 1.0 };
                     let scale_h = if max_h_resolved.is_finite() { max_h_resolved / nh } else { 1.0 };
-                    let scale = scale_w.min(scale_h).min(1.0);  // never upscale.
+                    // Pri fill_intent allow upscale (scale > 1.0). Bez intent
+                    // standard CSS clamp = never upscale.
+                    let scale = if fill_intent {
+                        scale_w.min(scale_h)
+                    } else {
+                        scale_w.min(scale_h).min(1.0)
+                    };
                     (nw * scale, nh * scale)
                 } else if max_w_resolved.is_finite() && max_h_resolved.is_finite() {
                     // Natural unknown + obe max nastavene: pouzij min jako square fit
