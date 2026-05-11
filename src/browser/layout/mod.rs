@@ -1923,13 +1923,19 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if matches!(node.kind, NodeKind::Text(_)) {
         bx.display = Display::Inline;
         if let NodeKind::Text(t) = &node.kind {
-            // CSS white-space: normal - sloucit whitespace runs do single space,
-            // ALE zachovat leading/trailing space (boundary preserve) - jinak inline
-            // text bez deli mezi sousedy.
+            // CSS white-space: normal - sloucit BREAKABLE whitespace runs do
+            // single space. NBSP (U+00A0) je NE-collapsable + ne-break - zachovan
+            // jako samostatny char. Bez tohoto "119\u{a0}525" -> "119 525" (ASCII)
+            // -> flush_inline split na 2 words "119" "525" -> wrap point mezi
+            // nimi -> cislo zalamne.
             let mut collapsed = String::with_capacity(t.len());
             let mut prev_ws = false;
             for c in t.chars() {
-                if c.is_whitespace() {
+                if c == '\u{00A0}' {
+                    // NBSP zachovany doslovne (no collapse, no normalize).
+                    collapsed.push(c);
+                    prev_ws = false;
+                } else if c.is_whitespace() {
                     if !prev_ws { collapsed.push(' '); }
                     prev_ws = true;
                 } else {
