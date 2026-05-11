@@ -1282,7 +1282,7 @@ thread_local! {
         = std::cell::RefCell::new(HashMap::new());
 }
 
-/// Public API pro renderer: po load_image populate natural dims cache.
+// Public API pro renderer: po load_image populate natural dims cache.
 thread_local! {
     /// True pri kazdem set_image_natural_dims. Renderer cte + reset.
     /// Pri zmene cache: invalidate layout cache + trigger redraw (aby img
@@ -2064,6 +2064,24 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
             "capitalize" => TextTransform::Capitalize,
             _            => TextTransform::None,
         };
+    }
+    // text-decoration shorthand: `none` / `underline` / `line-through` / kombi.
+    // Plus parsuje sub-props (color + style + thickness). Bez tohoto UA default
+    // `<a>` underline neresilo override `text-decoration: none` v page CSS ->
+    // tlacitka `<a class="btn">` mela underline.
+    if let Some(td) = s.get("text-decoration").or_else(|| s.get("text-decoration-line")) {
+        let v = td.trim().to_lowercase();
+        // Multi-value: "underline solid red" - hledat keywordy.
+        let has_none = v.split_whitespace().any(|t| t == "none");
+        let has_underline = v.split_whitespace().any(|t| t == "underline");
+        let has_strike = v.split_whitespace().any(|t| t == "line-through");
+        if has_none {
+            bx.text_underline = false;
+            bx.text_strikethrough = false;
+        } else {
+            if has_underline { bx.text_underline = true; }
+            if has_strike { bx.text_strikethrough = true; }
+        }
     }
     // text-decoration L4 detail props
     if let Some(c) = s.get("text-decoration-color") {

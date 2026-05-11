@@ -181,7 +181,22 @@ impl GlyphAtlas {
             });
             if let Some(data) = data {
                 if let Ok(f) = fontdue::Font::from_bytes(data, fontdue::FontSettings::default()) {
-                    extra_fonts.entry(family.to_string()).or_insert_with(Vec::new).push(f);
+                    extra_fonts.entry(family.to_string()).or_insert_with(Vec::new).push(f.clone());
+                    // Register tez pro layout measure_text_width_full - bez
+                    // tohoto Inter/CamingoMono measure pouzival system sans/serif
+                    // (jine metrics) -> rect width neshodi render glyph width.
+                    crate::browser::layout::register_measure_font(family, f.clone());
+                    // Pro <family>-Bold / <family>-Italic - take pridat styled key
+                    // aby `__bold__:Inter` lookup uspesny (Inter-Bold = bold variant).
+                    if family.ends_with("-Bold") {
+                        let base = &family[..family.len() - 5];
+                        crate::browser::layout::register_measure_font(
+                            &format!("{}__bold__", base), f);
+                    } else if family.ends_with("-Italic") {
+                        let base = &family[..family.len() - 7];
+                        crate::browser::layout::register_measure_font(
+                            &format!("{}__italic__", base), f);
+                    }
                 } else {
                     eprintln!("[fonts] {} parse failed", family);
                 }
