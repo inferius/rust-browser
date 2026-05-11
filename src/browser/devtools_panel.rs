@@ -2298,11 +2298,22 @@ fn paint_styles_pane(
                     hidden_shorthands.insert(d.property.clone());
                 }
             }
+            // Set vsech shorthand parents pritomnych v teto rule (pro detekci
+            // sub-prop ne-zobrazi kdyz parent shorthand existuje v rule).
+            // Bez tohoto rule co dela JEN `font-size: 22px` (bez `font:`)
+            // shorthand_for("font-size") = Some("font") -> skip. Bug v UI:
+            // mileneckaseznamka.cz `.text-box > div { color, font-size,
+            // font-weight, text-shadow }` zobrazoval jen color + text-shadow.
+            let parent_shorthands_in_rule: std::collections::HashSet<String> =
+                rule.declarations.iter().map(|d| d.property.clone()).collect();
             for d in &rule.declarations {
                 if sy >= max_y { *state.styles.last_painted_h.borrow_mut() = (sy - y) + scroll + 16.0; return; }
-                // Sub-prop ktery patri pod collapsed shorthand -> skip.
+                // Sub-prop ktery patri pod collapsed shorthand -> skip JEN
+                // pokud ten shorthand je v teto rule explicit deklarovan.
                 if let Some(sh) = shorthand_for(&d.property) {
-                    if !expanded.contains(sh) { continue; }
+                    if parent_shorthands_in_rule.contains(sh) && !expanded.contains(sh) {
+                        continue;
+                    }
                 }
                 // Shorthand expanded -> skip self (sub-props nahrazuji).
                 if hidden_shorthands.contains(&d.property) { continue; }
