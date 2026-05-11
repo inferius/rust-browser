@@ -1045,30 +1045,25 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
     // Predame own perspective do children (s fallbackem na parent)
     let child_perspective = bx.perspective.or(parent_perspective);
 
-    // Apply opacity multiply + filter chain + clip-path na vsechny barvy
+    // Apply opacity multiply + filter chain + clip-path na vsechny barvy.
+    // PERF: iterate &bx.filter primo (drive `bx.filter.clone()` cloned Vec per
+    // paint_box call - vetsina boxu nema filter, alocace zbytecna).
     let alpha_mul = (bx.opacity * 255.0) as u8;
-    let filter = bx.filter.clone();
-    // Detect blur radius z filter chain (jedna z filterop) - aplikuje multi-tap
-    let blur_radius: f32 = filter.iter().filter_map(|op| match op {
+    let blur_radius: f32 = bx.filter.iter().filter_map(|op| match op {
         crate::browser::layout::FilterOp::Blur(r) => Some(*r),
         _ => None,
     }).sum();
-    // Detect drop-shadow operations
-    let drop_shadows: Vec<(f32, f32, f32, [u8; 4])> = filter.iter().filter_map(|op| match op {
-        crate::browser::layout::FilterOp::DropShadow { ox, oy, blur, color } => Some((*ox, *oy, *blur, *color)),
-        _ => None,
-    }).collect();
-    let _ = drop_shadows;
+    // Drop-shadow detection - jen kdyz filter neprazdny.
+    let _has_drop_shadow = bx.filter.iter().any(|op| matches!(op,
+        crate::browser::layout::FilterOp::DropShadow { .. }));
 
     // Backdrop-filter: outer marker - snapshotne scenu, pak element obsah nahoru.
-    // Musi byt pred FilterBegin (wraps cely element vcetne filter subtre).
-    let backdrop = bx.backdrop_filter.clone();
-    let backdrop_blur: f32 = backdrop.iter().filter_map(|op| match op {
+    let backdrop_blur: f32 = bx.backdrop_filter.iter().filter_map(|op| match op {
         crate::browser::layout::FilterOp::Blur(r) => Some(*r),
         _ => None,
     }).sum();
-    let backdrop_matrix = crate::browser::layout::compute_color_matrix(&backdrop);
-    let has_backdrop_filter = !backdrop.is_empty();
+    let backdrop_matrix = crate::browser::layout::compute_color_matrix(&bx.backdrop_filter);
+    let has_backdrop_filter = !bx.backdrop_filter.is_empty();
     if has_backdrop_filter {
         let pad = 2.0 * backdrop_blur;
         cmds.push(DisplayCommand::BackdropFilterBegin {
@@ -1084,7 +1079,7 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
     // Filter subtree: emit FilterBegin marker pokud chain obsahuje neco
     // co RT pipeline umi - blur (run_blur_passes) NEBO non-identity color
     // matrix (compose shader). Bbox se rozsiri o 2*blur_radius.
-    let color_matrix = crate::browser::layout::compute_color_matrix(&filter);
+    let color_matrix = crate::browser::layout::compute_color_matrix(&bx.filter);
     let needs_blur = blur_radius >= 0.5;
     let needs_color = !crate::browser::layout::is_identity_matrix(&color_matrix);
     let has_subtree_filter = needs_blur || needs_color;
@@ -1122,26 +1117,29 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
         // Subtree filtry resi RT pipeline + compose shader -> CPU chain skip
         // (jinak by se aplikoval dvakrat). Pro elementy bez subtree filteru
         // (napr. pouze drop-shadow) ponechame CPU chain.
-        if filter.is_empty() || has_subtree_filter {
+        if bx.filter.is_empty() || has_subtree_filter {
             after_alpha
         } else {
-            crate::browser::layout::apply_filter_chain(after_alpha, &filter)
+            crate::browser::layout::apply_filter_chain(after_alpha, &bx.filter)
         }
     };
 
-    // Filter drop-shadow - emit shadow pred bg (per CSS spec)
-    for (ox, oy, blur, color) in &drop_shadows {
-        cmds.push(DisplayCommand::Shadow {
-            x: bx.rect.x + ox,
-            y: bx.rect.y + oy,
-            w: bx.rect.width,
-            h: bx.rect.height,
-            offset_x: *ox, offset_y: *oy,
-            blur: *blur, spread: 0.0,
-            color: *color,
-            radius: bx.border_radius,
-            inset: false,
-        });
+    // Filter drop-shadow - emit shadow pred bg (per CSS spec).
+    // PERF: iterate &bx.filter primo bez Vec collect.
+    for op in &bx.filter {
+        if let crate::browser::layout::FilterOp::DropShadow { ox, oy, blur, color } = op {
+            cmds.push(DisplayCommand::Shadow {
+                x: bx.rect.x + ox,
+                y: bx.rect.y + oy,
+                w: bx.rect.width,
+                h: bx.rect.height,
+                offset_x: *ox, offset_y: *oy,
+                blur: *blur, spread: 0.0,
+                color: *color,
+                radius: bx.border_radius,
+                inset: false,
+            });
+        }
     }
     // Box shadow - emit pred bg.
     // Inset: shadow uvnitr boxu, ne vne. Bbox = box, ne expanded.

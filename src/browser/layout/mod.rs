@@ -1303,8 +1303,13 @@ fn compute_subtree_hash_uncached(node: &Rc<Node>, style_map: &StyleMap) -> u64 {
         tag.hash(&mut h);
     }
     // Text node check - hash text obsahu (text uzly nemaji tag).
-    if node.tag_name().is_none() {
-        node.text_content().hash(&mut h);
+    // PERF: pres text_content_ref pro direct &str borrow (drive text_content()
+    // walked subtree + alocoval String, vola se z compute_subtree_hash pro
+    // KAZDY text node).
+    if node.tag_name_ref().is_none() {
+        if let super::dom::NodeKind::Text(t) = &node.kind {
+            t.hash(&mut h);
+        }
     }
     // Styles - XOR commutative hash misto sort (drive `keys.collect()` +
     // `keys.sort()` alocoval Vec + O(N log N) per element. Pro 1000 elements
