@@ -15,13 +15,34 @@ pub fn bookmarks_path() -> Option<PathBuf> {
     Some(dir.join("bookmarks.json"))
 }
 
+// PERF: load_bookmarks called 10+× per frame z renderu (paint_shell_chrome,
+// devtools tabs, bookmarks bar visibility check, chrome_h compute etc.). Drive
+// file I/O + JSON parse na kazdy call. Cache result, invalidate pres
+// invalidate_cache() pri save/add/remove.
+thread_local! {
+    static BOOKMARKS_CACHE: std::cell::RefCell<Option<Vec<Bookmark>>>
+        = const { std::cell::RefCell::new(None) };
+}
+
+pub fn invalidate_cache() {
+    BOOKMARKS_CACHE.with(|c| *c.borrow_mut() = None);
+}
+
 pub fn load_bookmarks() -> Vec<Bookmark> {
-    let Some(path) = bookmarks_path() else { return Vec::new() };
-    let Ok(content) = std::fs::read_to_string(&path) else { return Vec::new() };
-    parse_bookmarks_json(&content)
+    if let Some(cached) = BOOKMARKS_CACHE.with(|c| c.borrow().clone()) {
+        return cached;
+    }
+    let result = (|| {
+        let Some(path) = bookmarks_path() else { return Vec::new() };
+        let Ok(content) = std::fs::read_to_string(&path) else { return Vec::new() };
+        parse_bookmarks_json(&content)
+    })();
+    BOOKMARKS_CACHE.with(|c| *c.borrow_mut() = Some(result.clone()));
+    result
 }
 
 pub fn save_bookmarks(bms: &[Bookmark]) {
+    invalidate_cache();
     let Some(path) = bookmarks_path() else { return };
     let mut json = String::from("[\n");
     for (i, b) in bms.iter().enumerate() {

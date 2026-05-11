@@ -4029,9 +4029,33 @@ pub fn measure_text_width_full(text: &str, font_size: f32, bold: bool, italic: b
 
     match active_font {
         Some(font) => {
-            text.chars().map(|ch| {
-                font.metrics(ch, font_size).advance_width
-            }).sum()
+            // PERF: per-char advance memo cache. Drive `font.metrics(ch, fs)` per
+            // call (fontdue HashMap lookup ~100 ns each). Pri 898 samples
+            // measure_text_width_full v flame = ~30% paint time. Cache key
+            // = (font ptr, char, font_size bits) -> advance_width f32.
+            thread_local! {
+                static ADVANCE_CACHE: std::cell::RefCell<
+                    std::collections::HashMap<(usize, char, u32), f32, ahash::RandomState>
+                > = std::cell::RefCell::new(
+                    std::collections::HashMap::with_hasher(ahash::RandomState::new())
+                );
+            }
+            let font_ptr = font as *const _ as usize;
+            let fs_bits = font_size.to_bits();
+            let mut total = 0.0_f32;
+            for ch in text.chars() {
+                let key = (font_ptr, ch, fs_bits);
+                let cached = ADVANCE_CACHE.with(|c| c.borrow().get(&key).copied());
+                let aw = if let Some(v) = cached {
+                    v
+                } else {
+                    let v = font.metrics(ch, font_size).advance_width;
+                    ADVANCE_CACHE.with(|c| c.borrow_mut().insert(key, v));
+                    v
+                };
+                total += aw;
+            }
+            total
         }
         None => {
             let avg_char_w = font_size * 0.55;

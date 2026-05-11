@@ -69,10 +69,22 @@ pub fn profile_dir(name: &str) -> Option<PathBuf> {
     Some(dir)
 }
 
+// PERF: ensure_profile_dir called dozens of times per frame z bookmarks_path,
+// devtools persist etc. Drive `dir.exists()` = stat syscall per call.
+// Cache "already ensured" set - jednou per profile name, hotov.
+thread_local! {
+    static ENSURED_PROFILES: std::cell::RefCell<std::collections::HashSet<String>>
+        = std::cell::RefCell::new(std::collections::HashSet::new());
+}
+
 pub fn ensure_profile_dir(name: &str) -> Option<PathBuf> {
     let dir = profile_dir(name)?;
-    if !dir.exists() {
-        std::fs::create_dir_all(&dir).ok()?;
+    let already_ensured = ENSURED_PROFILES.with(|c| c.borrow().contains(name));
+    if !already_ensured {
+        if !dir.exists() {
+            std::fs::create_dir_all(&dir).ok()?;
+        }
+        ENSURED_PROFILES.with(|c| c.borrow_mut().insert(name.to_string()));
     }
     Some(dir)
 }
