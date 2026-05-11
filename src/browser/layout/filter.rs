@@ -199,13 +199,16 @@ pub fn apply_filter_chain(rgba: [u8; 4], chain: &[FilterOp]) -> [u8; 4] {
 /// Vraci identity (1,0,0,0,0; 0,1,0,0,0; 0,0,1,0,0; 0,0,0,1,0) pro prazdny chain.
 /// Blur a DropShadow se ignoruji (jine fazy pipeline).
 pub fn compute_color_matrix(chain: &[FilterOp]) -> [f32; 20] {
-    // Identity
-    let mut m: [f32; 20] = [
+    // PERF: fast-path pro prazdny filter chain (99% elementu). Return identity
+    // bez compose loop. Drive vola paint_box 2× per element (filter+backdrop).
+    const IDENTITY: [f32; 20] = [
         1.0, 0.0, 0.0, 0.0, 0.0,
         0.0, 1.0, 0.0, 0.0, 0.0,
         0.0, 0.0, 1.0, 0.0, 0.0,
         0.0, 0.0, 0.0, 1.0, 0.0,
     ];
+    if chain.is_empty() { return IDENTITY; }
+    let mut m: [f32; 20] = IDENTITY;
     // Compose: new = filter_matrix * current
     let compose = |m: &mut [f32; 20], f: [f32; 20]| {
         let mut r = [0.0_f32; 20];

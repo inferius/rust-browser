@@ -278,6 +278,144 @@ impl fmt::Display for AlignContent {
     }
 }
 
+/// CSS object-fit: replaced element scaling within content box.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ObjectFit {
+    Fill,
+    Contain,
+    Cover,
+    None,
+    ScaleDown,
+}
+
+impl Default for ObjectFit {
+    fn default() -> Self { ObjectFit::Fill }
+}
+
+impl ObjectFit {
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "contain" => Self::Contain,
+            "cover" => Self::Cover,
+            "none" => Self::None,
+            "scale-down" => Self::ScaleDown,
+            _ => Self::Fill,
+        }
+    }
+}
+
+impl fmt::Display for ObjectFit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            ObjectFit::Fill => "fill",
+            ObjectFit::Contain => "contain",
+            ObjectFit::Cover => "cover",
+            ObjectFit::None => "none",
+            ObjectFit::ScaleDown => "scale-down",
+        })
+    }
+}
+
+/// CSS border-collapse: separate (default) | collapse.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BorderCollapse {
+    Separate,
+    Collapse,
+}
+
+impl Default for BorderCollapse {
+    fn default() -> Self { BorderCollapse::Separate }
+}
+
+impl BorderCollapse {
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "collapse" => Self::Collapse,
+            _ => Self::Separate,
+        }
+    }
+    #[inline]
+    pub fn is_collapse(&self) -> bool { matches!(self, Self::Collapse) }
+}
+
+impl fmt::Display for BorderCollapse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            BorderCollapse::Separate => "separate",
+            BorderCollapse::Collapse => "collapse",
+        })
+    }
+}
+
+/// CSS table-layout: auto (default) | fixed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TableLayout {
+    Auto,
+    Fixed,
+}
+
+impl Default for TableLayout {
+    fn default() -> Self { TableLayout::Auto }
+}
+
+impl TableLayout {
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "fixed" => Self::Fixed,
+            _ => Self::Auto,
+        }
+    }
+}
+
+impl fmt::Display for TableLayout {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            TableLayout::Auto => "auto",
+            TableLayout::Fixed => "fixed",
+        })
+    }
+}
+
+/// CSS image-rendering hint pro upscaling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ImageRendering {
+    Auto,
+    Smooth,
+    HighQuality,
+    CrispEdges,
+    Pixelated,
+}
+
+impl Default for ImageRendering {
+    fn default() -> Self { ImageRendering::Auto }
+}
+
+impl ImageRendering {
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "smooth" => Self::Smooth,
+            "high-quality" => Self::HighQuality,
+            "crisp-edges" => Self::CrispEdges,
+            "pixelated" => Self::Pixelated,
+            _ => Self::Auto,
+        }
+    }
+    #[inline]
+    pub fn is_pixelated(&self) -> bool { matches!(self, Self::Pixelated | Self::CrispEdges) }
+}
+
+impl fmt::Display for ImageRendering {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            ImageRendering::Auto => "auto",
+            ImageRendering::Smooth => "smooth",
+            ImageRendering::HighQuality => "high-quality",
+            ImageRendering::CrispEdges => "crisp-edges",
+            ImageRendering::Pixelated => "pixelated",
+        })
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BoxSizing {
     ContentBox,

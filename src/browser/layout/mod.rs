@@ -601,12 +601,12 @@ pub struct LayoutBox {
     pub float_value: String,
     pub clear_value: String,
     /// Image fitting (object-fit / object-position)
-    pub object_fit: String,
+    pub object_fit: ObjectFit,
     pub object_position: String,
     /// Mix blend / background blend
     pub background_blend_mode: String,
     /// Image rendering hints
-    pub image_rendering: String,
+    pub image_rendering: ImageRendering,
     /// CSS Sizing L4 - aspect-ratio uz mam
     /// CSS sizing constraints - parsed CssLength (Auto / None / Px / Percent / ...).
     /// `resolve(ctx)` na callsite s explicit parent_size + font_size.
@@ -654,8 +654,8 @@ pub struct LayoutBox {
     pub block_size_v: String,
     pub inline_size_v: String,
     /// table-layout, border-collapse, border-spacing, caption-side, empty-cells
-    pub table_layout: String,
-    pub border_collapse: String,
+    pub table_layout: TableLayout,
+    pub border_collapse: BorderCollapse,
     pub border_spacing: String,
     pub caption_side: String,
     pub empty_cells: String,
@@ -992,10 +992,10 @@ impl LayoutBox {
             string_set: String::new(),
             float_value: String::new(),
             clear_value: String::new(),
-            object_fit: String::new(),
+            object_fit: ObjectFit::Fill,
             object_position: String::new(),
             background_blend_mode: String::new(),
-            image_rendering: String::new(),
+            image_rendering: ImageRendering::Auto,
             min_width: CssLength::Auto,
             max_width: CssLength::None,
             min_height: CssLength::Auto,
@@ -1027,8 +1027,8 @@ impl LayoutBox {
             column_gap_pct: None,
             block_size_v: String::new(),
             inline_size_v: String::new(),
-            table_layout: String::new(),
-            border_collapse: String::new(),
+            table_layout: TableLayout::Auto,
+            border_collapse: BorderCollapse::Separate,
             border_spacing: String::new(),
             caption_side: String::new(),
             empty_cells: String::new(),
@@ -1339,7 +1339,7 @@ fn compute_subtree_hash_uncached(node: &Rc<Node>, style_map: &StyleMap) -> u64 {
 /// Pri border-collapse:collapse na <table> child td/th get 1px border default.
 fn apply_table_border_collapse(bx: &mut LayoutBox, in_collapse_table: bool) {
     let is_table = matches!(bx.tag.as_deref(), Some("table"));
-    let collapse_here = is_table && bx.border_collapse == "collapse";
+    let collapse_here = is_table && bx.border_collapse.is_collapse();
     let inherit = in_collapse_table || collapse_here;
     let is_cell = matches!(bx.tag.as_deref(), Some("td") | Some("th"));
     if inherit && is_cell && bx.border_color.is_none() && bx.border_width == 0.0 {
@@ -2432,12 +2432,12 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(v) = s.get("string-set") { bx.string_set = v.trim().to_string(); }
     if let Some(v) = s.get("float") { bx.float_value = v.trim().to_string(); }
     if let Some(v) = s.get("clear") { bx.clear_value = v.trim().to_string(); }
-    if let Some(v) = s.get("object-fit") { bx.object_fit = v.trim().to_string(); }
+    if let Some(v) = s.get("object-fit") { bx.object_fit = ObjectFit::parse(v); }
     if let Some(v) = s.get("object-position") { bx.object_position = v.trim().to_string(); }
     if let Some(v) = s.get("background-blend-mode") { bx.background_blend_mode = v.trim().to_string(); }
-    if let Some(v) = s.get("image-rendering") { bx.image_rendering = v.trim().to_string(); }
-    if let Some(v) = s.get("table-layout") { bx.table_layout = v.trim().to_string(); }
-    if let Some(v) = s.get("border-collapse") { bx.border_collapse = v.trim().to_string(); }
+    if let Some(v) = s.get("image-rendering") { bx.image_rendering = ImageRendering::parse(v); }
+    if let Some(v) = s.get("table-layout") { bx.table_layout = TableLayout::parse(v); }
+    if let Some(v) = s.get("border-collapse") { bx.border_collapse = BorderCollapse::parse(v); }
     if let Some(v) = s.get("border-spacing") { bx.border_spacing = v.trim().to_string(); }
     if let Some(v) = s.get("caption-side") { bx.caption_side = v.trim().to_string(); }
     if let Some(v) = s.get("empty-cells") { bx.empty_cells = v.trim().to_string(); }
@@ -4197,7 +4197,8 @@ pub mod overflow;
 pub use overflow::Overflow;
 
 pub mod flex_enums;
-pub use flex_enums::{FlexDirection, FlexWrap, JustifyContent, AlignItems, AlignSelf, AlignContent, BoxSizing};
+pub use flex_enums::{FlexDirection, FlexWrap, JustifyContent, AlignItems, AlignSelf, AlignContent, BoxSizing,
+                       ObjectFit, BorderCollapse, TableLayout, ImageRendering};
 
 mod shadows;
 pub use shadows::{parse_text_shadow, parse_box_shadow};

@@ -541,7 +541,8 @@ pub fn layout_flex(bx: &mut LayoutBox) {
     let lines = collect_lines(&items, container_main, wrap, if direction.is_row() { col_gap } else { row_gap });
 
     // 4. Resolve flexible lengths per line. V intrinsic_mode pouzij max-content (no shrink).
-    let mut resolved_lines: Vec<ResolvedLine> = Vec::new();
+    // PERF: pre-alloc capacity (typicky 1 line nowrap, vetsinou < 10 pri wrap).
+    let mut resolved_lines: Vec<ResolvedLine> = Vec::with_capacity(lines.len());
     for line_indices in &lines {
         let effective_container_main = if bx.taffy_intrinsic_mode {
             let total: f32 = line_indices.iter().map(|&i| items[i].main_size).sum();
@@ -1354,15 +1355,16 @@ fn collect_lines(items: &[FlexItem], container_main: f32, wrap: FlexWrap, gap: f
     if container_main <= 0.0 {
         return vec![(0..items.len()).collect()];
     }
-    let mut lines: Vec<Vec<usize>> = Vec::new();
-    let mut current: Vec<usize> = Vec::new();
+    // PERF: pre-alloc capacity (typicky nowrap = 1 line, wrap rarely > items/2).
+    let mut lines: Vec<Vec<usize>> = Vec::with_capacity(2);
+    let mut current: Vec<usize> = Vec::with_capacity(items.len());
     let mut used = 0.0_f32;
     for (i, item) in items.iter().enumerate() {
         let item_total = item.main_size + item.margin_main_start + item.margin_main_end;
         let with_gap = if current.is_empty() { item_total } else { item_total + gap };
         if !current.is_empty() && used + with_gap > container_main {
             lines.push(current);
-            current = Vec::new();
+            current = Vec::with_capacity(items.len() / 2);
             current.push(i);
             used = item_total;
         } else {

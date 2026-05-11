@@ -274,7 +274,8 @@ pub enum DisplayCommand {
 
 /// Vrati display list - sekvence primitiv pro renderer.
 pub fn build_display_list(root: &LayoutBox) -> Vec<DisplayCommand> {
-    let mut commands = Vec::new();
+    // PERF: pre-alloc 1024 capacity (typicke pages 500-2000 commands).
+    let mut commands = Vec::with_capacity(1024);
     paint_box(root, &mut commands, None);
     commands
 }
@@ -289,7 +290,7 @@ thread_local! {
 /// Boxy mimo (scroll_y - 200, scroll_y + viewport_h + 200) se preskocej.
 /// Sticky/Fixed/Absolute pozice elementy nikdy nepreskoceny (mohou byt jinde).
 pub fn build_display_list_culled(root: &LayoutBox, scroll_y: f32, viewport_h: f32) -> Vec<DisplayCommand> {
-    let mut commands = Vec::new();
+    let mut commands = Vec::with_capacity(1024);
     build_display_list_culled_into(root, scroll_y, viewport_h, &mut commands);
     commands
 }
@@ -1165,13 +1166,15 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
     // Image - emit Image command (img tag - cover boxu). Object-fit/position
     // emit ImageFit pokud nastaveny (renderer prepocita src/dest mapping).
     if let Some(src) = &bx.image_src {
-        let fit = bx.object_fit.trim();
-        if !fit.is_empty() && fit != "fill" {
+        // PERF: bx.object_fit uz typed (drive String trim per element). Display
+        // cmd zatim drzi String pro compat - to_string emit jen kdyz non-Fill.
+        let needs_fit = !matches!(bx.object_fit, crate::browser::layout::ObjectFit::Fill);
+        if needs_fit {
             cmds.push(DisplayCommand::ImageFit {
                 x: bx.rect.x, y: bx.rect.y, w: bx.rect.width, h: bx.rect.height,
                 src: src.clone(),
                 radius: bx.border_radius,
-                object_fit: fit.to_string(),
+                object_fit: bx.object_fit.to_string(),
                 object_position: bx.object_position.trim().to_string(),
             });
         } else {
