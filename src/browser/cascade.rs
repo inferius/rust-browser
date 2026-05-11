@@ -764,10 +764,14 @@ fn resolve_calc(s: &str) -> String {
     out
 }
 
-/// Velmi zjednoduseny calc evaluator - vstupy "Npx + Npx", "Nem * 2".
+/// Zjednoduseny calc evaluator - vstupy "Npx + Npx", "Nem * 2",
+/// "10px + 2 * 3px" (= 16px, ne 36px - * ma vyssi precedence).
 /// parse_length convertuje em/rem/vw/vh na px - takze acc je vzdy v px.
 /// Vystup MUSI byt v px aby neproslo dalsim em-resolve (38em != 38px).
 /// Vyjimka: vsechny operandy maji "%" suffix -> output %.
+///
+/// Two-pass: prvni prochazi */-operatory zleva doprava (kombinuje pary
+/// na 1 vysledek), pak druha pass dela +- nad vyslednym seznamem.
 fn eval_calc_expr(expr: &str) -> String {
     let parts: Vec<&str> = expr.split_whitespace().collect();
     if parts.len() < 3 {
@@ -776,11 +780,10 @@ fn eval_calc_expr(expr: &str) -> String {
 
     // Pure-percent: vsechny numericke operandy konci na %.
     let all_pct = parts.iter().enumerate()
-        .filter(|(i, _)| i % 2 == 0)  // operandy na sudych indexech
+        .filter(|(i, _)| i % 2 == 0)
         .all(|(_, p)| p.ends_with('%'));
     let unit = if all_pct { "%" } else { "px" };
 
-    // Pro % output potrebujeme suma raw cisel (bez konverze do px).
     let parse_val = |p: &str| -> f32 {
         if all_pct {
             p.trim_end_matches('%').parse::<f32>().unwrap_or(0.0)
@@ -788,20 +791,32 @@ fn eval_calc_expr(expr: &str) -> String {
             super::layout::parse_length(p)
         }
     };
-    let mut acc = parse_val(parts[0]);
 
+    // Pass 1: resolve * / left-to-right, build [(val, next_op_or_none)] seq.
+    // Pri "a * b + c": [a, "*", b, "+", c] -> [(a*b), ("+"), (c)].
+    let mut vals: Vec<f32> = vec![parse_val(parts[0])];
+    let mut ops: Vec<&str> = Vec::new();
     let mut i = 1;
     while i + 1 < parts.len() {
         let op = parts[i];
-        let val = parse_val(parts[i+1]);
+        let val = parse_val(parts[i + 1]);
         match op {
-            "+" => acc += val,
-            "-" => acc -= val,
-            "*" => acc *= val,
-            "/" => if val != 0.0 { acc /= val; },
+            "*" => { let last = vals.last_mut().unwrap(); *last *= val; }
+            "/" => { let last = vals.last_mut().unwrap(); if val != 0.0 { *last /= val; } }
+            "+" | "-" => { ops.push(op); vals.push(val); }
             _ => break,
         }
         i += 2;
+    }
+
+    // Pass 2: resolve + / - left-to-right.
+    let mut acc = vals[0];
+    for (k, op) in ops.iter().enumerate() {
+        match *op {
+            "+" => acc += vals[k + 1],
+            "-" => acc -= vals[k + 1],
+            _ => {}
+        }
     }
     format!("{}{}", acc, unit)
 }
