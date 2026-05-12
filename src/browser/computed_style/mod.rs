@@ -237,6 +237,12 @@ pub struct ComputedStyle {
     pub grid_template_rows: String,
     pub grid_template_areas: String,
     pub grid_auto_flow: GridAutoFlow,
+
+    // ─── Grid item placement (batch 31) ───────────────────────────────
+    pub grid_column_start: GridLine,
+    pub grid_column_end: GridLine,
+    pub grid_row_start: GridLine,
+    pub grid_row_end: GridLine,
 }
 
 impl Default for ComputedStyle {
@@ -382,7 +388,35 @@ impl ComputedStyle {
             grid_template_rows: String::new(),
             grid_template_areas: String::new(),
             grid_auto_flow: GridAutoFlow::Row,
+            grid_column_start: GridLine::Auto,
+            grid_column_end: GridLine::Auto,
+            grid_row_start: GridLine::Auto,
+            grid_row_end: GridLine::Auto,
         }
+    }
+}
+
+/// CSS grid-line value (CSS Grid L1 §8.3). Auto | <int> | span <int> | <ident>.
+#[derive(Debug, Clone, PartialEq)]
+pub enum GridLine {
+    Auto,
+    Line(i32),                  // integer index (1-based, neg = from-end)
+    Span(i32),                  // span N tracks
+    Named(String),              // named line
+    SpanNamed(String),          // span ident
+}
+
+impl GridLine {
+    pub fn parse(s: &str) -> Self {
+        let t = s.trim();
+        if t.eq_ignore_ascii_case("auto") || t.is_empty() { return Self::Auto; }
+        if let Some(rest) = t.strip_prefix("span ").or_else(|| t.strip_prefix("span\t")) {
+            let r = rest.trim();
+            if let Ok(n) = r.parse::<i32>() { return Self::Span(n.max(1)); }
+            return Self::SpanNamed(r.to_string());
+        }
+        if let Ok(n) = t.parse::<i32>() { return Self::Line(n); }
+        Self::Named(t.to_string())
     }
 }
 

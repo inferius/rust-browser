@@ -3188,3 +3188,39 @@ fn cascade_typed_grid_template_areas() {
     let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
     assert!(cs.grid_template_areas.contains("header header"));
 }
+
+// ─── L5 step 3 batch 31: grid item placement ──────────────────────────
+
+#[test]
+fn cascade_typed_grid_lines_integer() {
+    use crate::browser::computed_style::GridLine;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { grid-column-start: 2; grid-column-end: 4; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.grid_column_start, GridLine::Line(2));
+    assert_eq!(cs.grid_column_end, GridLine::Line(4));
+}
+
+#[test]
+fn cascade_typed_grid_lines_span() {
+    use crate::browser::computed_style::GridLine;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { grid-row-end: span 3; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.grid_row_end, GridLine::Span(3));
+}
+
+#[test]
+fn cascade_typed_grid_lines_named() {
+    use crate::browser::computed_style::GridLine;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { grid-row-start: sidebar-start; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.grid_row_start, GridLine::Named("sidebar-start".into()));
+}
