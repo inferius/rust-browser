@@ -8978,22 +8978,14 @@ impl Renderer {
                             ff.family, weight, italic);
                         // font_registry stale drzi "primary" font per family (prvni).
                         self.font_registry.entry(ff.family.clone()).or_insert_with(|| font.clone());
-                        // Atlas extra_fonts ulozi pod 3 keys:
-                        // 1) base family (lookup fallback)
-                        // 2) "<family>__bold__" pri weight >= 600
-                        // 3) "<family>__italic__" pri italic
-                        // 4) "<family>__bi__" pri obojiim
-                        // To umoznuje font_for("__bold__:Ubuntu") nejprve hledat
-                        // "Ubuntu__bold__", pak fallback "Ubuntu" (regular).
+                        // Atlas extra_fonts ulozi pod 2 keys:
+                        // 1) base family - fallback pri lookup bez weight info
+                        // 2) "<family>__w<weight>__[i__]" - per CSS Fonts L4
+                        //    nearest-match weight lookup (font_for_weight).
                         self.atlas.extra_fonts.entry(ff.family.clone())
                             .or_insert_with(Vec::new)
                             .push(font.clone());
                         crate::browser::layout::register_measure_font(&ff.family, font.clone());
-                        // Per-weight + italic key (CSS Fonts L4 nearest-match):
-                        // `<family>__w<weight>__` regular
-                        // `<family>__w<weight>__i__` italic
-                        // Pri lookup font_for(family, weight, italic) atlas hleda
-                        // exact key, jinak nearest available weight.
                         let weight_key = if italic {
                             format!("{}__w{}__i__", ff.family, weight)
                         } else {
@@ -9002,30 +8994,7 @@ impl Renderer {
                         self.atlas.extra_fonts.entry(weight_key.clone())
                             .or_insert_with(Vec::new)
                             .push(font.clone());
-                        crate::browser::layout::register_measure_font(&weight_key, font.clone());
-                        // Legacy keys (__bold__ / __italic__ / __bi__) - back-compat
-                        // s call sites co nemaji weight info.
-                        if weight >= 600 && !italic {
-                            self.atlas.extra_fonts.entry(format!("{}__bold__", ff.family))
-                                .or_insert_with(Vec::new)
-                                .push(font.clone());
-                            crate::browser::layout::register_measure_font(
-                                &format!("{}__bold__", ff.family), font.clone());
-                        }
-                        if italic && weight < 600 {
-                            self.atlas.extra_fonts.entry(format!("{}__italic__", ff.family))
-                                .or_insert_with(Vec::new)
-                                .push(font.clone());
-                            crate::browser::layout::register_measure_font(
-                                &format!("{}__italic__", ff.family), font.clone());
-                        }
-                        if italic && weight >= 600 {
-                            self.atlas.extra_fonts.entry(format!("{}__bi__", ff.family))
-                                .or_insert_with(Vec::new)
-                                .push(font.clone());
-                            crate::browser::layout::register_measure_font(
-                                &format!("{}__bi__", ff.family), font);
-                        }
+                        crate::browser::layout::register_measure_font(&weight_key, font);
                         self.loaded_font_urls.insert(url);
                     }
                     Err(e) => {

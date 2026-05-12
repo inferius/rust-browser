@@ -1449,16 +1449,7 @@ pub(crate) fn measure_font_for_weight(family: &str, weight: u32, italic: bool) -
                 let key = format!("{}__w{}{}", trimmed, w, opp_suffix);
                 if let Some(f) = map.get(&key) { return Some(f.clone()); }
             }
-            // Legacy keys.
-            if weight >= 600 && italic {
-                if let Some(f) = map.get(&format!("{}__bi__", trimmed)) { return Some(f.clone()); }
-            }
-            if weight >= 600 {
-                if let Some(f) = map.get(&format!("{}__bold__", trimmed)) { return Some(f.clone()); }
-            }
-            if italic {
-                if let Some(f) = map.get(&format!("{}__italic__", trimmed)) { return Some(f.clone()); }
-            }
+            // Base family bez weight info (fallback).
             if let Some(f) = map.get(trimmed) { return Some(f.clone()); }
         }
         None
