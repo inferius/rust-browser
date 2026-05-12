@@ -2923,3 +2923,49 @@ fn cascade_typed_caption_side_bottom() {
     let cs = out.computed.get(&(std::rc::Rc::as_ptr(&t) as usize)).unwrap();
     assert_eq!(cs.caption_side, CaptionSide::Bottom);
 }
+
+// ─── L5 step 3 batch 24: object-fit/-position + aspect-ratio + resize ──
+
+#[test]
+fn cascade_typed_object_fit_cover() {
+    use crate::browser::computed_style::ObjectFit;
+    let doc = parse_html("<html><body><img></body></html>", "");
+    let css = parse_stylesheet("img { object-fit: cover; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let i = doc.root.find(|n| n.tag_name().as_deref() == Some("img")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&i) as usize)).unwrap();
+    assert_eq!(cs.object_fit, ObjectFit::Cover);
+}
+
+#[test]
+fn cascade_typed_object_position_keywords() {
+    use crate::browser::computed_style::Length;
+    let doc = parse_html("<html><body><img></body></html>", "");
+    let css = parse_stylesheet("img { object-position: right top; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let i = doc.root.find(|n| n.tag_name().as_deref() == Some("img")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&i) as usize)).unwrap();
+    assert_eq!(cs.object_position_x, Length::Percent(100.0));
+    assert_eq!(cs.object_position_y, Length::Percent(0.0));
+}
+
+#[test]
+fn cascade_typed_aspect_ratio_pair() {
+    let doc = parse_html("<html><body><img></body></html>", "");
+    let css = parse_stylesheet("img { aspect-ratio: 16 / 9; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let i = doc.root.find(|n| n.tag_name().as_deref() == Some("img")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&i) as usize)).unwrap();
+    assert!((cs.aspect_ratio.unwrap() - 16.0/9.0).abs() < 0.001);
+}
+
+#[test]
+fn cascade_typed_resize_both() {
+    use crate::browser::computed_style::Resize;
+    let doc = parse_html("<html><body><textarea></textarea></body></html>", "");
+    let css = parse_stylesheet("textarea { resize: both; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let t = doc.root.find(|n| n.tag_name().as_deref() == Some("textarea")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&t) as usize)).unwrap();
+    assert_eq!(cs.resize, Resize::Both);
+}

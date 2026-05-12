@@ -20,7 +20,8 @@ use super::computed_style::{
     PositionKind, PropertyId, CascadeOrigin, Specificity as CsSpec,
     BorderCollapse as CsBorderCollapse, CaptionSide as CsCaptionSide,
     ListStyleImage as CsListStyleImage, ListStylePosition as CsListStylePosition,
-    ListStyleType as CsListStyleType, TableLayout as CsTableLayout,
+    ListStyleType as CsListStyleType, ObjectFit as CsObjectFit, Resize as CsResize,
+    TableLayout as CsTableLayout,
     TextAlign as CsTextAlign, TextDecorationLine as CsTextDecorationLine,
     TextDecorationStyle as CsTextDecorationStyle, TextOverflow as CsTextOverflow,
     TextTransform as CsTextTransform, VerticalAlign as CsVerticalAlign,
@@ -1359,6 +1360,48 @@ pub fn cascade_with_viewport_typed(
         if let Some(v) = props.get("caption-side") {
             if let Some(c) = CsCaptionSide::parse(v) { cs.caption_side = c; }
         }
+        // Batch 24: object-fit/-position + aspect-ratio + resize.
+        if let Some(v) = props.get("object-fit") {
+            if let Some(o) = CsObjectFit::parse(v) { cs.object_fit = o; }
+        }
+        if let Some(v) = props.get("object-position") {
+            let parts: Vec<&str> = v.split_whitespace().collect();
+            let parse_pos = |s: &str| -> Option<Length> {
+                match s.to_lowercase().as_str() {
+                    "left" | "top" => Some(Length::Percent(0.0)),
+                    "center" => Some(Length::Percent(50.0)),
+                    "right" | "bottom" => Some(Length::Percent(100.0)),
+                    _ => Length::parse(s),
+                }
+            };
+            match parts.len() {
+                1 => {
+                    if let Some(l) = parse_pos(parts[0]) {
+                        cs.object_position_x = l.clone();
+                        cs.object_position_y = l;
+                    }
+                }
+                _ => {
+                    if let Some(l) = parse_pos(parts[0]) { cs.object_position_x = l; }
+                    if let Some(l) = parse_pos(parts[1]) { cs.object_position_y = l; }
+                }
+            }
+        }
+        if let Some(v) = props.get("aspect-ratio") {
+            let t = v.trim().to_lowercase();
+            if t == "auto" {
+                cs.aspect_ratio = None;
+            } else if let Some((a, b)) = t.split_once('/') {
+                let a: f32 = a.trim().parse().unwrap_or(0.0);
+                let b: f32 = b.trim().parse().unwrap_or(0.0);
+                if b > 0.0 { cs.aspect_ratio = Some(a / b); }
+            } else if let Ok(n) = t.parse::<f32>() {
+                if n > 0.0 { cs.aspect_ratio = Some(n); }
+            }
+        }
+        if let Some(v) = props.get("resize") {
+            if let Some(r) = CsResize::parse(v) { cs.resize = r; }
+        }
         computed.insert(*node_id, cs);
         // Konvertuj kazdou property na CascadeDecl s validity flag pro
         // batch 1 props (color/opacity/visibility/cursor) - parse Result
@@ -1472,6 +1515,19 @@ pub fn cascade_with_viewport_typed(
                 },
                 PropertyId::TableLayout => CsTableLayout::parse(raw_val).is_some(),
                 PropertyId::CaptionSide => CsCaptionSide::parse(raw_val).is_some(),
+                PropertyId::ObjectFit => CsObjectFit::parse(raw_val).is_some(),
+                // ObjectPosition: keyword nebo length per part - vzdy valid pri 1-2 tokens.
+                PropertyId::ObjectPosition => {
+                    let parts: Vec<&str> = raw_val.split_whitespace().collect();
+                    !parts.is_empty() && parts.len() <= 2
+                },
+                PropertyId::AspectRatio => {
+                    let t = raw_val.trim().to_lowercase();
+                    t == "auto" || t.split_once('/').map(|(a, b)|
+                        a.trim().parse::<f32>().is_ok() && b.trim().parse::<f32>().is_ok()
+                    ).unwrap_or_else(|| t.parse::<f32>().is_ok())
+                },
+                PropertyId::Resize => CsResize::parse(raw_val).is_some(),
                 // Cursor::parse vzdy uspeje (Custom fallback) - vsechny valid.
                 _ => true,
             };

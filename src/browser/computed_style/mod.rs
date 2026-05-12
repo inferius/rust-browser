@@ -194,6 +194,13 @@ pub struct ComputedStyle {
     pub border_spacing_v: Length,
     pub table_layout: TableLayout,
     pub caption_side: CaptionSide,
+
+    // ─── Replaced + resize + ratio (batch 24) ─────────────────────────
+    pub object_fit: ObjectFit,
+    pub object_position_x: Length,
+    pub object_position_y: Length,
+    pub aspect_ratio: Option<f32>,    // None = auto
+    pub resize: Resize,
 }
 
 impl Default for ComputedStyle {
@@ -310,7 +317,60 @@ impl ComputedStyle {
             border_spacing_v: Length::Px(0.0),
             table_layout: TableLayout::Auto,
             caption_side: CaptionSide::Top,
+            object_fit: ObjectFit::Fill,
+            object_position_x: Length::Percent(50.0),
+            object_position_y: Length::Percent(50.0),
+            aspect_ratio: None,
+            resize: Resize::None,
         }
+    }
+}
+
+/// CSS `object-fit` (CSS Images L3 §5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObjectFit {
+    Fill,
+    Contain,
+    Cover,
+    None,
+    ScaleDown,
+}
+
+impl ObjectFit {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s.trim().to_lowercase().as_str() {
+            "fill" => Self::Fill,
+            "contain" => Self::Contain,
+            "cover" => Self::Cover,
+            "none" => Self::None,
+            "scale-down" => Self::ScaleDown,
+            _ => return None,
+        })
+    }
+}
+
+/// CSS `resize` (CSS UI L4 §6.4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Resize {
+    None,
+    Both,
+    Horizontal,
+    Vertical,
+    Block,
+    Inline,
+}
+
+impl Resize {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s.trim().to_lowercase().as_str() {
+            "none" => Self::None,
+            "both" => Self::Both,
+            "horizontal" => Self::Horizontal,
+            "vertical" => Self::Vertical,
+            "block" => Self::Block,
+            "inline" => Self::Inline,
+            _ => return None,
+        })
     }
 }
 
