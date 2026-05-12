@@ -246,6 +246,29 @@ impl GlyphAtlas {
                     let italic_str = &head[underscore + 1..];
                     if let Ok(weight) = weight_str.parse::<u32>() {
                         let italic = italic_str == "1";
+                        // Empty raw_family = caller bez explicit font-family.
+                        // Skip extra_fonts walk (Inter / @font-face by ji shadowed
+                        // system default Times) a vrat system font - shoduje s
+                        // measure_text_width_weight default fallback.
+                        if raw_family.is_empty() {
+                            if italic && weight >= 600 {
+                                if let Some(f) = &self.font_bold_italic { if Self::has_glyph(f, ch) { return f; } }
+                            }
+                            if italic {
+                                if let Some(f) = &self.font_italic { if Self::has_glyph(f, ch) { return f; } }
+                            }
+                            if weight >= 600 {
+                                if let Some(f) = &self.font_bold { if Self::has_glyph(f, ch) { return f; } }
+                            }
+                            if Self::has_glyph(&self.font, ch) { return &self.font; }
+                            // Char ne v system Times -> fallback extra_fonts walk.
+                            for vec in self.extra_fonts.values() {
+                                for f in vec {
+                                    if Self::has_glyph(f, ch) { return f; }
+                                }
+                            }
+                            return &self.font;
+                        }
                         // Iter VSECH subsets requested weight (Google Fonts splits
                         // family do unicode-range subsets - cyrillic-ext, latin,
                         // latin-ext, ...). Prvni s glyph wins. Bez tohoto Vec.first
