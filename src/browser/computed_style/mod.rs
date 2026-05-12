@@ -255,6 +255,12 @@ pub struct ComputedStyle {
     pub text_shadow: String,         // raw chain
     pub clip_path: String,           // raw shape (parser v layout/shape_fn)
     pub scroll_behavior: ScrollBehavior,
+
+    // ─── Background layers (batch 34) ─────────────────────────────────
+    pub background_image: String,    // raw multi-layer (parser v layout/backgrounds)
+    pub background_position: String,
+    pub background_size: String,
+    pub background_repeat: String,
 }
 
 impl Default for ComputedStyle {
@@ -412,6 +418,10 @@ impl ComputedStyle {
             text_shadow: "none".into(),
             clip_path: "none".into(),
             scroll_behavior: ScrollBehavior::Auto,
+            background_image: "none".into(),
+            background_position: "0% 0%".into(),
+            background_size: "auto".into(),
+            background_repeat: "repeat".into(),
         }
     }
 }

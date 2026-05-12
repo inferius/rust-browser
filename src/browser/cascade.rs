@@ -1564,6 +1564,19 @@ pub fn cascade_with_viewport_typed(
         if let Some(v) = props.get("scroll-behavior") {
             if let Some(b) = CsScrollBehavior::parse(v) { cs.scroll_behavior = b; }
         }
+        // Batch 34: background image/position/size/repeat.
+        if let Some(v) = props.get("background-image") {
+            cs.background_image = v.clone();
+        }
+        if let Some(v) = props.get("background-position") {
+            cs.background_position = v.clone();
+        }
+        if let Some(v) = props.get("background-size") {
+            cs.background_size = v.clone();
+        }
+        if let Some(v) = props.get("background-repeat") {
+            cs.background_repeat = v.clone();
+        }
         computed.insert(*node_id, cs);
         // Konvertuj kazdou property na CascadeDecl s validity flag pro
         // batch 1 props (color/opacity/visibility/cursor) - parse Result

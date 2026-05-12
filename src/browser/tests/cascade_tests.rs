@@ -3302,3 +3302,40 @@ fn cascade_typed_scroll_behavior_smooth() {
     let cs = out.computed.get(&(std::rc::Rc::as_ptr(&h) as usize)).unwrap();
     assert_eq!(cs.scroll_behavior, ScrollBehavior::Smooth);
 }
+
+// ─── L5 step 3 batch 34: background image/position/size/repeat ────────
+
+#[test]
+fn cascade_typed_background_image_url() {
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { background-image: url(\"hero.jpg\"); }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert!(cs.background_image.contains("hero.jpg"));
+}
+
+#[test]
+fn cascade_typed_background_position_size_repeat() {
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet(
+        "div { background-position: center top; background-size: cover; \
+         background-repeat: no-repeat; }"
+    );
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.background_position, "center top");
+    assert_eq!(cs.background_size, "cover");
+    assert_eq!(cs.background_repeat, "no-repeat");
+}
+
+#[test]
+fn cascade_typed_background_gradient() {
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { background-image: linear-gradient(to right, red, blue); }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert!(cs.background_image.contains("linear-gradient"));
+}
