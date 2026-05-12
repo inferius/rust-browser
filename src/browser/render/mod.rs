@@ -538,8 +538,23 @@ fn apply_paint_animations_inner(box_: &mut crate::browser::layout::LayoutBox,
     let original_width = box_.rect.width;
     // Baseline rect: pri prvni apply zachyti pozici PRED jakoukoli animaci.
     // Dalsi frames cti baseline misto current rect aby se animace neakumulovala.
+    //
+    // CRITICAL: layout_block aplikuje shift_subtree(child, offset_left, offset_top)
+    // pro Position::Relative + offset_left/top. Pri animation tick, cascade map
+    // ma left/top zapsane Z aktualniho keyframe progress -> layout pass uz
+    // posunul rect. Pak apply_paint_animations rect.x = baseline + parsed_left
+    // by aplikoval offset DRUHE = double-shift.
+    //
+    // Fix: baseline.x = rect.x - layout_applied_offset_left. Tj. baseline =
+    // "kde by box byl bez animace". Pak rect.x = baseline + current_left =
+    // single shift.
     if box_.anim_baseline.is_none() {
-        box_.anim_baseline = Some(box_.rect);
+        let layout_dx = box_.offset_left.unwrap_or(0.0);
+        let layout_dy = box_.offset_top.unwrap_or(0.0);
+        let mut base = box_.rect;
+        base.x -= layout_dx;
+        base.y -= layout_dy;
+        box_.anim_baseline = Some(base);
     }
     let baseline = box_.anim_baseline.unwrap_or(box_.rect);
     // Inherit parent shift do static children (text node uvnitr position:relative
