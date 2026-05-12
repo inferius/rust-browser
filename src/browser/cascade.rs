@@ -8,9 +8,10 @@ use std::rc::Rc;
 use super::dom::{Node, NodeKind};
 use super::css_parser::{Stylesheet, Selector, SimpleSelector, Combinator, Rule, specificity};
 use super::computed_style::{
-    BoxSizing as CsBoxSizing, CascadeOutput, CascadeDecl, Color, ComputedStyle,
-    ComputedStyleMap, Cursor, DeclarationsMap, Direction as CsDirection,
-    Display as CsDisplay, FontFamily, GenericFamily, Length, LineHeight,
+    BoxSizing as CsBoxSizing, CascadeOutput, CascadeDecl, Clear as CsClear,
+    Color, ComputedStyle, ComputedStyleMap, Cursor, DeclarationsMap,
+    Direction as CsDirection, Display as CsDisplay, Float as CsFloat,
+    FontFamily, GenericFamily, Length, LineHeight, Overflow as CsOverflow,
     OverflowWrap, PointerEvents as CsPointerEvents, PositionKind, PropertyId,
     CascadeOrigin, Specificity as CsSpec, TextAlign as CsTextAlign, Visibility,
     WhiteSpace, WordBreak, WritingMode as CsWritingMode, ZIndex,
@@ -98,6 +99,18 @@ pub fn expand_shorthand(prop: &str, value: &str, out: &mut HashMap<String, Strin
         out.insert("row-gap".into(), row.into());
         out.insert("column-gap".into(), col.into());
         out.insert("gap".into(), value.into());
+        return;
+    }
+    if prop == "overflow" {
+        // overflow: <val> -> -x + -y. overflow: <x> <y> -> rozdelit.
+        let parts: Vec<&str> = value.split_whitespace().collect();
+        let (x, y) = match parts.len() {
+            1 => (parts[0], parts[0]),
+            _ => (parts[0], parts[1]),
+        };
+        out.insert("overflow-x".into(), x.into());
+        out.insert("overflow-y".into(), y.into());
+        out.insert("overflow".into(), value.into());
         return;
     }
     if prop == "inset" {
@@ -1071,6 +1084,21 @@ pub fn cascade_with_viewport_typed(
         if let Some(v) = props.get("pointer-events") {
             if let Some(p) = CsPointerEvents::parse(v) { cs.pointer_events = p; }
         }
+        // Batch 11: overflow + overflow-x/y + float + clear. CSS spec:
+        // `overflow: hidden` rozkladame na -x/-y v expand_shorthand drive.
+        // Tady cti longhandy.
+        if let Some(v) = props.get("overflow-x") {
+            if let Some(o) = CsOverflow::parse(v) { cs.overflow_x = o; }
+        }
+        if let Some(v) = props.get("overflow-y") {
+            if let Some(o) = CsOverflow::parse(v) { cs.overflow_y = o; }
+        }
+        if let Some(v) = props.get("float") {
+            if let Some(f) = CsFloat::parse(v) { cs.float = f; }
+        }
+        if let Some(v) = props.get("clear") {
+            if let Some(c) = CsClear::parse(v) { cs.clear = c; }
+        }
         computed.insert(*node_id, cs);
         // Konvertuj kazdou property na CascadeDecl s validity flag pro
         // batch 1 props (color/opacity/visibility/cursor) - parse Result
@@ -1111,6 +1139,10 @@ pub fn cascade_with_viewport_typed(
                 PropertyId::Direction => CsDirection::parse(raw_val).is_some(),
                 PropertyId::BoxSizing => CsBoxSizing::parse(raw_val).is_some(),
                 PropertyId::PointerEvents => CsPointerEvents::parse(raw_val).is_some(),
+                PropertyId::Overflow | PropertyId::OverflowX | PropertyId::OverflowY
+                    => CsOverflow::parse(raw_val).is_some(),
+                PropertyId::Float => CsFloat::parse(raw_val).is_some(),
+                PropertyId::Clear => CsClear::parse(raw_val).is_some(),
                 // Cursor::parse vzdy uspeje (Custom fallback) - vsechny valid.
                 _ => true,
             };

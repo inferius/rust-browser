@@ -2234,3 +2234,65 @@ fn cascade_typed_writing_mode_invalid_marked() {
     let w = decls.iter().find(|d| d.raw_value == "sideways-diagonal").unwrap();
     assert!(!w.valid);
 }
+
+// ─── L5 step 3 batch 11: overflow-x/-y + float + clear ────────────────
+
+#[test]
+fn cascade_typed_overflow_xy() {
+    use crate::browser::computed_style::Overflow;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { overflow-x: scroll; overflow-y: hidden; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.overflow_x, Overflow::Scroll);
+    assert_eq!(cs.overflow_y, Overflow::Hidden);
+    assert!(cs.overflow_x.is_scrollable());
+    assert!(!cs.overflow_y.is_scrollable());
+}
+
+#[test]
+fn cascade_typed_overflow_shorthand() {
+    use crate::browser::computed_style::Overflow;
+    // overflow: auto rozkladame v expand_shorthand drive cascade.
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { overflow: auto; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.overflow_x, Overflow::Auto);
+    assert_eq!(cs.overflow_y, Overflow::Auto);
+}
+
+#[test]
+fn cascade_typed_float_right() {
+    use crate::browser::computed_style::Float;
+    let doc = parse_html("<html><body><img></body></html>", "");
+    let css = parse_stylesheet("img { float: right; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let i = doc.root.find(|n| n.tag_name().as_deref() == Some("img")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&i) as usize)).unwrap();
+    assert_eq!(cs.float, Float::Right);
+}
+
+#[test]
+fn cascade_typed_clear_both() {
+    use crate::browser::computed_style::Clear;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { clear: both; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.clear, Clear::Both);
+}
+
+#[test]
+fn cascade_typed_overflow_invalid_marked() {
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { overflow-x: floppy; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let decls = out.declarations.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    let o = decls.iter().find(|d| d.raw_value == "floppy").unwrap();
+    assert!(!o.valid);
+}

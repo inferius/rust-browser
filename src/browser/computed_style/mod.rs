@@ -115,6 +115,12 @@ pub struct ComputedStyle {
     pub direction: Direction,
     pub box_sizing: BoxSizing,
     pub pointer_events: PointerEvents,
+
+    // ─── Overflow / Float (batch 11) ──────────────────────────────────
+    pub overflow_x: Overflow,
+    pub overflow_y: Overflow,
+    pub float: Float,
+    pub clear: Clear,
 }
 
 impl Default for ComputedStyle {
@@ -172,6 +178,113 @@ impl ComputedStyle {
             direction: Direction::Ltr,
             box_sizing: BoxSizing::ContentBox,
             pointer_events: PointerEvents::Auto,
+            overflow_x: Overflow::Visible,
+            overflow_y: Overflow::Visible,
+            float: Float::None,
+            clear: Clear::None,
+        }
+    }
+}
+
+/// CSS `overflow` (CSS Overflow L3 §3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Overflow {
+    Visible,
+    Hidden,
+    Scroll,
+    Auto,
+    Clip,
+}
+
+impl Overflow {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s.trim().to_lowercase().as_str() {
+            "visible" => Self::Visible,
+            "hidden" => Self::Hidden,
+            "scroll" => Self::Scroll,
+            "auto" => Self::Auto,
+            "clip" => Self::Clip,
+            _ => return None,
+        })
+    }
+    pub fn css_string(self) -> &'static str {
+        match self {
+            Self::Visible => "visible",
+            Self::Hidden => "hidden",
+            Self::Scroll => "scroll",
+            Self::Auto => "auto",
+            Self::Clip => "clip",
+        }
+    }
+    /// Pri Auto/Scroll/Hidden je box scrollable nebo clipped.
+    pub fn is_scrollable(self) -> bool {
+        matches!(self, Self::Auto | Self::Scroll)
+    }
+}
+
+/// CSS `float` (CSS Floats L1 §2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Float {
+    None,
+    Left,
+    Right,
+    InlineStart,
+    InlineEnd,
+}
+
+impl Float {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s.trim().to_lowercase().as_str() {
+            "none" => Self::None,
+            "left" => Self::Left,
+            "right" => Self::Right,
+            "inline-start" => Self::InlineStart,
+            "inline-end" => Self::InlineEnd,
+            _ => return None,
+        })
+    }
+    pub fn css_string(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Left => "left",
+            Self::Right => "right",
+            Self::InlineStart => "inline-start",
+            Self::InlineEnd => "inline-end",
+        }
+    }
+}
+
+/// CSS `clear` (CSS Floats L1 §3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Clear {
+    None,
+    Left,
+    Right,
+    Both,
+    InlineStart,
+    InlineEnd,
+}
+
+impl Clear {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s.trim().to_lowercase().as_str() {
+            "none" => Self::None,
+            "left" => Self::Left,
+            "right" => Self::Right,
+            "both" => Self::Both,
+            "inline-start" => Self::InlineStart,
+            "inline-end" => Self::InlineEnd,
+            _ => return None,
+        })
+    }
+    pub fn css_string(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Left => "left",
+            Self::Right => "right",
+            Self::Both => "both",
+            Self::InlineStart => "inline-start",
+            Self::InlineEnd => "inline-end",
         }
     }
 }
