@@ -2411,3 +2411,73 @@ fn cascade_typed_justify_invalid_marked() {
     let j = decls.iter().find(|d| d.raw_value == "spaced-out").unwrap();
     assert!(!j.valid);
 }
+
+// ─── L5 step 3 batch 14: flex_basis/order/row_gap/column_gap ──────────
+
+#[test]
+fn cascade_typed_flex_basis_length() {
+    use crate::browser::computed_style::{FlexBasis, Length};
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { flex-basis: 200px; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.flex_basis, FlexBasis::Length(Length::Px(200.0)));
+}
+
+#[test]
+fn cascade_typed_flex_basis_auto() {
+    use crate::browser::computed_style::FlexBasis;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { flex-basis: auto; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.flex_basis, FlexBasis::Auto);
+}
+
+#[test]
+fn cascade_typed_flex_basis_content() {
+    use crate::browser::computed_style::FlexBasis;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { flex-basis: content; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.flex_basis, FlexBasis::Content);
+}
+
+#[test]
+fn cascade_typed_order_negative() {
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { order: -1; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.order, -1);
+}
+
+#[test]
+fn cascade_typed_row_column_gap() {
+    use crate::browser::computed_style::Length;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { row-gap: 8px; column-gap: 16px; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.row_gap, Length::Px(8.0));
+    assert_eq!(cs.column_gap, Length::Px(16.0));
+}
+
+#[test]
+fn cascade_typed_gap_shorthand_expand() {
+    use crate::browser::computed_style::Length;
+    // gap: <row> <col> -> row-gap + column-gap (existing expand_shorthand).
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { gap: 10px 20px; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.row_gap, Length::Px(10.0));
+    assert_eq!(cs.column_gap, Length::Px(20.0));
+}

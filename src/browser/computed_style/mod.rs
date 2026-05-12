@@ -133,6 +133,12 @@ pub struct ComputedStyle {
     pub align_items: AlignItems,
     pub align_content: AlignContent,
     pub align_self: AlignSelf,
+
+    // ─── Flex item + gap (batch 14) ───────────────────────────────────
+    pub flex_basis: FlexBasis,
+    pub order: i32,
+    pub row_gap: Length,
+    pub column_gap: Length,
 }
 
 impl Default for ComputedStyle {
@@ -202,6 +208,34 @@ impl ComputedStyle {
             align_items: AlignItems::Stretch,
             align_content: AlignContent::Normal,
             align_self: AlignSelf::Auto,
+            flex_basis: FlexBasis::Auto,
+            order: 0,
+            row_gap: Length::Px(0.0),
+            column_gap: Length::Px(0.0),
+        }
+    }
+}
+
+/// CSS `flex-basis` (CSS Flexbox L1 §7.2). Auto | Content | <length>.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FlexBasis {
+    Auto,
+    Content,
+    Length(Length),
+}
+
+impl FlexBasis {
+    pub fn parse(s: &str) -> Option<Self> {
+        let t = s.trim();
+        if t.eq_ignore_ascii_case("auto") { return Some(Self::Auto); }
+        if t.eq_ignore_ascii_case("content") { return Some(Self::Content); }
+        Length::parse(t).map(Self::Length)
+    }
+    pub fn css_string(&self) -> String {
+        match self {
+            Self::Auto => "auto".into(),
+            Self::Content => "content".into(),
+            Self::Length(_) => "<length>".into(),
         }
     }
 }

@@ -12,9 +12,10 @@ use super::computed_style::{
     AlignSelf as CsAlignSelf, BoxSizing as CsBoxSizing, CascadeOutput, CascadeDecl,
     Clear as CsClear, Color, ComputedStyle, ComputedStyleMap, Cursor,
     DeclarationsMap, Direction as CsDirection, Display as CsDisplay,
-    FlexDirection as CsFlexDirection, FlexWrap as CsFlexWrap, Float as CsFloat,
-    FontFamily, GenericFamily, JustifyContent as CsJustifyContent, Length,
-    LineHeight, Overflow as CsOverflow, OverflowWrap, PointerEvents as CsPointerEvents,
+    FlexBasis as CsFlexBasis, FlexDirection as CsFlexDirection,
+    FlexWrap as CsFlexWrap, Float as CsFloat, FontFamily, GenericFamily,
+    JustifyContent as CsJustifyContent, Length, LineHeight,
+    Overflow as CsOverflow, OverflowWrap, PointerEvents as CsPointerEvents,
     PositionKind, PropertyId, CascadeOrigin, Specificity as CsSpec,
     TextAlign as CsTextAlign, Visibility, WhiteSpace, WordBreak,
     WritingMode as CsWritingMode, ZIndex,
@@ -1128,6 +1129,19 @@ pub fn cascade_with_viewport_typed(
         if let Some(v) = props.get("align-self") {
             if let Some(a) = CsAlignSelf::parse(v) { cs.align_self = a; }
         }
+        // Batch 14: flex_basis/order/row_gap/column_gap.
+        if let Some(v) = props.get("flex-basis") {
+            if let Some(b) = CsFlexBasis::parse(v) { cs.flex_basis = b; }
+        }
+        if let Some(v) = props.get("order") {
+            if let Ok(n) = v.trim().parse::<i32>() { cs.order = n; }
+        }
+        if let Some(v) = props.get("row-gap") {
+            if let Some(l) = Length::parse(v) { cs.row_gap = l; }
+        }
+        if let Some(v) = props.get("column-gap") {
+            if let Some(l) = Length::parse(v) { cs.column_gap = l; }
+        }
         computed.insert(*node_id, cs);
         // Konvertuj kazdou property na CascadeDecl s validity flag pro
         // batch 1 props (color/opacity/visibility/cursor) - parse Result
@@ -1180,6 +1194,10 @@ pub fn cascade_with_viewport_typed(
                 PropertyId::AlignItems => CsAlignItems::parse(raw_val).is_some(),
                 PropertyId::AlignContent => CsAlignContent::parse(raw_val).is_some(),
                 PropertyId::AlignSelf => CsAlignSelf::parse(raw_val).is_some(),
+                PropertyId::FlexBasis => CsFlexBasis::parse(raw_val).is_some(),
+                PropertyId::Order => raw_val.trim().parse::<i32>().is_ok(),
+                PropertyId::RowGap | PropertyId::ColumnGap
+                    => Length::parse(raw_val).is_some(),
                 // Cursor::parse vzdy uspeje (Custom fallback) - vsechny valid.
                 _ => true,
             };
