@@ -2774,3 +2774,60 @@ fn cascade_typed_text_decoration_thickness() {
     let cs = out.computed.get(&(std::rc::Rc::as_ptr(&u) as usize)).unwrap();
     assert_eq!(cs.text_decoration_thickness, Length::Px(3.0));
 }
+
+// ─── L5 step 3 batch 21: text-indent/-transform/-overflow + vert-align ──
+
+#[test]
+fn cascade_typed_text_indent_em() {
+    use crate::browser::computed_style::Length;
+    let doc = parse_html("<html><body><p></p></body></html>", "");
+    let css = parse_stylesheet("p { text-indent: 2em; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let p = doc.root.find(|n| n.tag_name().as_deref() == Some("p")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&p) as usize)).unwrap();
+    assert_eq!(cs.text_indent, Length::Em(2.0));
+}
+
+#[test]
+fn cascade_typed_text_transform_uppercase() {
+    use crate::browser::computed_style::TextTransform;
+    let doc = parse_html("<html><body><p></p></body></html>", "");
+    let css = parse_stylesheet("p { text-transform: uppercase; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let p = doc.root.find(|n| n.tag_name().as_deref() == Some("p")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&p) as usize)).unwrap();
+    assert_eq!(cs.text_transform, TextTransform::Uppercase);
+}
+
+#[test]
+fn cascade_typed_text_overflow_ellipsis() {
+    use crate::browser::computed_style::TextOverflow;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { text-overflow: ellipsis; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.text_overflow, TextOverflow::Ellipsis);
+}
+
+#[test]
+fn cascade_typed_vertical_align_middle() {
+    use crate::browser::computed_style::VerticalAlign;
+    let doc = parse_html("<html><body><img></body></html>", "");
+    let css = parse_stylesheet("img { vertical-align: middle; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let i = doc.root.find(|n| n.tag_name().as_deref() == Some("img")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&i) as usize)).unwrap();
+    assert_eq!(cs.vertical_align, VerticalAlign::Middle);
+}
+
+#[test]
+fn cascade_typed_vertical_align_length() {
+    use crate::browser::computed_style::{VerticalAlign, Length};
+    let doc = parse_html("<html><body><img></body></html>", "");
+    let css = parse_stylesheet("img { vertical-align: -4px; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let i = doc.root.find(|n| n.tag_name().as_deref() == Some("img")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&i) as usize)).unwrap();
+    assert_eq!(cs.vertical_align, VerticalAlign::Length(Length::Px(-4.0)));
+}

@@ -19,8 +19,9 @@ use super::computed_style::{
     Overflow as CsOverflow, OverflowWrap, PointerEvents as CsPointerEvents,
     PositionKind, PropertyId, CascadeOrigin, Specificity as CsSpec,
     TextAlign as CsTextAlign, TextDecorationLine as CsTextDecorationLine,
-    TextDecorationStyle as CsTextDecorationStyle, Visibility, WhiteSpace,
-    WordBreak, WritingMode as CsWritingMode, ZIndex,
+    TextDecorationStyle as CsTextDecorationStyle, TextOverflow as CsTextOverflow,
+    TextTransform as CsTextTransform, VerticalAlign as CsVerticalAlign,
+    Visibility, WhiteSpace, WordBreak, WritingMode as CsWritingMode, ZIndex,
 };
 
 // Runtime UI state pres thread-local. Nastavuje render loop pred kazdym
@@ -1303,6 +1304,19 @@ pub fn cascade_with_viewport_typed(
                 cs.text_decoration_thickness = l;
             }
         }
+        // Batch 21: text-indent/-transform/-overflow + vertical-align.
+        if let Some(v) = props.get("text-indent") {
+            if let Some(l) = Length::parse(v) { cs.text_indent = l; }
+        }
+        if let Some(v) = props.get("text-transform") {
+            if let Some(t) = CsTextTransform::parse(v) { cs.text_transform = t; }
+        }
+        if let Some(v) = props.get("text-overflow") {
+            if let Some(t) = CsTextOverflow::parse(v) { cs.text_overflow = t; }
+        }
+        if let Some(v) = props.get("vertical-align") {
+            if let Some(va) = CsVerticalAlign::parse(v) { cs.vertical_align = va; }
+        }
         computed.insert(*node_id, cs);
         // Konvertuj kazdou property na CascadeDecl s validity flag pro
         // batch 1 props (color/opacity/visibility/cursor) - parse Result
@@ -1401,6 +1415,10 @@ pub fn cascade_with_viewport_typed(
                     raw_val.trim().eq_ignore_ascii_case("auto")
                         || Length::parse(raw_val).is_some()
                 },
+                PropertyId::TextIndent => Length::parse(raw_val).is_some(),
+                PropertyId::TextTransform => CsTextTransform::parse(raw_val).is_some(),
+                PropertyId::TextOverflow => CsTextOverflow::parse(raw_val).is_some(),
+                PropertyId::VerticalAlign => CsVerticalAlign::parse(raw_val).is_some(),
                 // Cursor::parse vzdy uspeje (Custom fallback) - vsechny valid.
                 _ => true,
             };

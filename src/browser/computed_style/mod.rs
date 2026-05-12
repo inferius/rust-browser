@@ -175,6 +175,12 @@ pub struct ComputedStyle {
     pub text_decoration_style: TextDecorationStyle,
     pub text_decoration_color: Color,
     pub text_decoration_thickness: Length,
+
+    // ─── Text misc (batch 21) ─────────────────────────────────────────
+    pub text_indent: Length,
+    pub text_transform: TextTransform,
+    pub text_overflow: TextOverflow,
+    pub vertical_align: VerticalAlign,
 }
 
 impl Default for ComputedStyle {
@@ -278,6 +284,119 @@ impl ComputedStyle {
             text_decoration_style: TextDecorationStyle::Solid,
             text_decoration_color: Color::CurrentColor,
             text_decoration_thickness: Length::Auto,
+            text_indent: Length::Px(0.0),
+            text_transform: TextTransform::None,
+            text_overflow: TextOverflow::Clip,
+            vertical_align: VerticalAlign::Baseline,
+        }
+    }
+}
+
+/// CSS `text-transform` (CSS Text L3 §3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextTransform {
+    None,
+    Capitalize,
+    Uppercase,
+    Lowercase,
+    FullWidth,
+    FullSizeKana,
+}
+
+impl TextTransform {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s.trim().to_lowercase().as_str() {
+            "none" => Self::None,
+            "capitalize" => Self::Capitalize,
+            "uppercase" => Self::Uppercase,
+            "lowercase" => Self::Lowercase,
+            "full-width" => Self::FullWidth,
+            "full-size-kana" => Self::FullSizeKana,
+            _ => return None,
+        })
+    }
+    pub fn css_string(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Capitalize => "capitalize",
+            Self::Uppercase => "uppercase",
+            Self::Lowercase => "lowercase",
+            Self::FullWidth => "full-width",
+            Self::FullSizeKana => "full-size-kana",
+        }
+    }
+}
+
+/// CSS `text-overflow` (CSS UI L4 §6.2). Subset.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TextOverflow {
+    Clip,
+    Ellipsis,
+    Custom(String),
+}
+
+impl TextOverflow {
+    pub fn parse(s: &str) -> Option<Self> {
+        let t = s.trim();
+        Some(match t.to_lowercase().as_str() {
+            "clip" => Self::Clip,
+            "ellipsis" => Self::Ellipsis,
+            _ => {
+                // String literal '...' nebo unquoted treat jako Custom.
+                if t.is_empty() { return None; }
+                Self::Custom(t.to_string())
+            }
+        })
+    }
+    pub fn css_string(&self) -> String {
+        match self {
+            Self::Clip => "clip".into(),
+            Self::Ellipsis => "ellipsis".into(),
+            Self::Custom(s) => s.clone(),
+        }
+    }
+}
+
+/// CSS `vertical-align` (CSS Inline L3 §3.2).
+#[derive(Debug, Clone, PartialEq)]
+pub enum VerticalAlign {
+    Baseline,
+    Sub,
+    Super,
+    Top,
+    TextTop,
+    Middle,
+    Bottom,
+    TextBottom,
+    Length(Length),
+}
+
+impl VerticalAlign {
+    pub fn parse(s: &str) -> Option<Self> {
+        let t = s.trim();
+        match t.to_lowercase().as_str() {
+            "baseline" => Some(Self::Baseline),
+            "sub" => Some(Self::Sub),
+            "super" => Some(Self::Super),
+            "top" => Some(Self::Top),
+            "text-top" => Some(Self::TextTop),
+            "middle" => Some(Self::Middle),
+            "bottom" => Some(Self::Bottom),
+            "text-bottom" => Some(Self::TextBottom),
+            _ => Length::parse(t).map(Self::Length),
+        }
+    }
+    pub fn css_string(&self) -> &'static str {
+        match self {
+            Self::Baseline => "baseline",
+            Self::Sub => "sub",
+            Self::Super => "super",
+            Self::Top => "top",
+            Self::TextTop => "text-top",
+            Self::Middle => "middle",
+            Self::Bottom => "bottom",
+            Self::TextBottom => "text-bottom",
+            Self::Length(_) => "<length>",
         }
     }
 }
