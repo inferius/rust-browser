@@ -173,6 +173,144 @@ impl WritingMode {
     }
 }
 
+/// Aplikuje HTML attribute-based defaults pro tag-specific replaced + form
+/// elementy (img/canvas/svg/video/audio/select/textarea/progress/meter).
+/// L2 split: extrahnuto z build_box_inner pro citelnost.
+fn apply_tag_html_attrs(bx: &mut LayoutBox, node: &Rc<Node>) {
+    // Img tag: precti src + width/height
+    if bx.tag.as_deref() == Some("img") {
+        bx.image_src = node.attr("src");
+        if let Some(w) = node.attr("width").and_then(|w| w.parse::<f32>().ok()) {
+            bx.rect.width = w;
+        }
+        if let Some(h) = node.attr("height").and_then(|h| h.parse::<f32>().ok()) {
+            bx.rect.height = h;
+        }
+        if bx.rect.height == 0.0 { bx.rect.height = 100.0; }
+        if bx.rect.width == 0.0 { bx.rect.width = 100.0; }
+    }
+
+    // Canvas tag: precti width/height attributes
+    if bx.tag.as_deref() == Some("canvas") {
+        if let Some(w) = node.attr("width").and_then(|w| w.parse::<f32>().ok()) {
+            bx.rect.width = w;
+        }
+        if let Some(h) = node.attr("height").and_then(|h| h.parse::<f32>().ok()) {
+            bx.rect.height = h;
+        }
+    }
+    // SVG tag: viewport z width/height attrs. explicit_* aby block/flex layout
+    // respektoval SVG dimensions (jinak SVG roztaha na rodicovsky container).
+    if bx.tag.as_deref() == Some("svg") {
+        if let Some(w) = node.attr("width").and_then(|w| w.parse::<f32>().ok()) {
+            bx.rect.width = w;
+            bx.explicit_width = Some(w);
+        }
+        if let Some(h) = node.attr("height").and_then(|h| h.parse::<f32>().ok()) {
+            bx.rect.height = h;
+            bx.explicit_height = Some(h);
+        }
+        // SVG children: spocti rect z SVG atributu (x/y/cx/cy/r/rx/ry/x1/y1...)
+        // a uloz na child LayoutBox pro proper devtools highlight + hit-test.
+        // Pozice je relative to SVG box (paint pridava svg.rect.x/y origin).
+        for child in bx.children.iter_mut() {
+            let child_node = match &child.node { Some(n) => Rc::clone(n), None => continue };
+            let attr_f = |name: &str, default: f32| -> f32 {
+                child_node.attr(name).and_then(|v| v.parse().ok()).unwrap_or(default)
+            };
+            let tag = child.tag.clone().unwrap_or_default();
+            let (cx_off, cy_off, cw, ch) = match tag.as_str() {
+                "rect" => (
+                    attr_f("x", 0.0), attr_f("y", 0.0),
+                    attr_f("width", 0.0), attr_f("height", 0.0),
+                ),
+                "circle" => {
+                    let cx = attr_f("cx", 0.0); let cy = attr_f("cy", 0.0);
+                    let r = attr_f("r", 0.0);
+                    (cx - r, cy - r, 2.0 * r, 2.0 * r)
+                }
+                "ellipse" => {
+                    let cx = attr_f("cx", 0.0); let cy = attr_f("cy", 0.0);
+                    let rx = attr_f("rx", 0.0); let ry = attr_f("ry", 0.0);
+                    (cx - rx, cy - ry, 2.0 * rx, 2.0 * ry)
+                }
+                "line" => {
+                    let x1 = attr_f("x1", 0.0); let y1 = attr_f("y1", 0.0);
+                    let x2 = attr_f("x2", 0.0); let y2 = attr_f("y2", 0.0);
+                    (x1.min(x2), y1.min(y2), (x2 - x1).abs(), (y2 - y1).abs())
+                }
+                "text" => {
+                    let x = attr_f("x", 0.0); let y = attr_f("y", 0.0);
+                    let fs = attr_f("font-size", 14.0);
+                    (x, y - fs, fs * 8.0, fs)  // Approx text rect.
+                }
+                _ => continue,
+            };
+            child.rect.x = bx.rect.x + cx_off;
+            child.rect.y = bx.rect.y + cy_off;
+            child.rect.width = cw;
+            child.rect.height = ch;
+        }
+    }
+    // Video tag: replaced element (zatim bez decode - jen layout box + placeholder).
+    // Default 300x150 per HTML spec, ale poster image / controls renderovany v paint.
+    if bx.tag.as_deref() == Some("video") {
+        if let Some(w) = node.attr("width").and_then(|w| w.parse::<f32>().ok()) {
+            bx.rect.width = w;
+        }
+        if let Some(h) = node.attr("height").and_then(|h| h.parse::<f32>().ok()) {
+            bx.rect.height = h;
+        }
+        if bx.rect.width == 0.0 { bx.rect.width = 300.0; }
+        if bx.rect.height == 0.0 { bx.rect.height = 150.0; }
+        // poster atribut - obrazek zobrazeny pred prehravanim. Pouzijeme bg image.
+        if let Some(poster) = node.attr("poster") {
+            bx.image_src = Some(poster);
+        }
+    }
+    // Audio tag: replaced element. Default browser controls bar = 300x40.
+    if bx.tag.as_deref() == Some("audio") {
+        if bx.rect.width == 0.0 { bx.rect.width = 300.0; }
+        if bx.rect.height == 0.0 { bx.rect.height = 40.0; }
+    }
+    // <select>: dropdown closed. Vyber selected <option> a renderuj jako text.
+    // Default size: 120x24.
+    if bx.tag.as_deref() == Some("select") {
+        if bx.rect.width == 0.0 { bx.rect.width = 120.0; }
+        if bx.rect.height == 0.0 { bx.rect.height = 24.0; }
+        // Najdi selected option (nebo first).
+        let options = node.children.borrow();
+        let mut selected_text: Option<String> = None;
+        let mut first_text: Option<String> = None;
+        for ch in options.iter() {
+            if ch.tag_name().as_deref() == Some("option") {
+                let txt = ch.text_content();
+                if first_text.is_none() { first_text = Some(txt.clone()); }
+                if ch.attr("selected").is_some() {
+                    selected_text = Some(txt);
+                    break;
+                }
+            }
+        }
+        bx.text = selected_text.or(first_text);
+    }
+    // <textarea>: multi-line input. Default 200x50.
+    if bx.tag.as_deref() == Some("textarea") {
+        if bx.rect.width == 0.0 { bx.rect.width = 200.0; }
+        if bx.rect.height == 0.0 { bx.rect.height = 60.0; }
+    }
+    // <progress>: progress bar.
+    if bx.tag.as_deref() == Some("progress") {
+        if bx.rect.width == 0.0 { bx.rect.width = 160.0; }
+        if bx.rect.height == 0.0 { bx.rect.height = 14.0; }
+    }
+    // <meter>: meter bar.
+    if bx.tag.as_deref() == Some("meter") {
+        if bx.rect.width == 0.0 { bx.rect.width = 80.0; }
+        if bx.rect.height == 0.0 { bx.rect.height = 14.0; }
+    }
+}
+
 /// Aplikuje default styles per tag (browser user-agent stylesheet).
 /// Inspirovano Chrome/Firefox UA stylesheet (margin/padding em-based).
 fn apply_default_tag_styles(bx: &mut LayoutBox, tag: &str) {
@@ -1676,138 +1814,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         apply_default_tag_styles(&mut bx, &tag);
     }
 
-    // Img tag: precti src + width/height
-    if bx.tag.as_deref() == Some("img") {
-        bx.image_src = node.attr("src");
-        if let Some(w) = node.attr("width").and_then(|w| w.parse::<f32>().ok()) {
-            bx.rect.width = w;
-        }
-        if let Some(h) = node.attr("height").and_then(|h| h.parse::<f32>().ok()) {
-            bx.rect.height = h;
-        }
-        if bx.rect.height == 0.0 { bx.rect.height = 100.0; }
-        if bx.rect.width == 0.0 { bx.rect.width = 100.0; }
-    }
-
-    // Canvas tag: precti width/height attributes
-    if bx.tag.as_deref() == Some("canvas") {
-        if let Some(w) = node.attr("width").and_then(|w| w.parse::<f32>().ok()) {
-            bx.rect.width = w;
-        }
-        if let Some(h) = node.attr("height").and_then(|h| h.parse::<f32>().ok()) {
-            bx.rect.height = h;
-        }
-    }
-    // SVG tag: viewport z width/height attrs. explicit_* aby block/flex layout
-    // respektoval SVG dimensions (jinak SVG roztaha na rodicovsky container).
-    if bx.tag.as_deref() == Some("svg") {
-        if let Some(w) = node.attr("width").and_then(|w| w.parse::<f32>().ok()) {
-            bx.rect.width = w;
-            bx.explicit_width = Some(w);
-        }
-        if let Some(h) = node.attr("height").and_then(|h| h.parse::<f32>().ok()) {
-            bx.rect.height = h;
-            bx.explicit_height = Some(h);
-        }
-        // SVG children: spocti rect z SVG atributu (x/y/cx/cy/r/rx/ry/x1/y1...)
-        // a uloz na child LayoutBox pro proper devtools highlight + hit-test.
-        // Pozice je relative to SVG box (paint pridava svg.rect.x/y origin).
-        for child in bx.children.iter_mut() {
-            let child_node = match &child.node { Some(n) => Rc::clone(n), None => continue };
-            let attr_f = |name: &str, default: f32| -> f32 {
-                child_node.attr(name).and_then(|v| v.parse().ok()).unwrap_or(default)
-            };
-            let tag = child.tag.clone().unwrap_or_default();
-            let (cx_off, cy_off, cw, ch) = match tag.as_str() {
-                "rect" => (
-                    attr_f("x", 0.0), attr_f("y", 0.0),
-                    attr_f("width", 0.0), attr_f("height", 0.0),
-                ),
-                "circle" => {
-                    let cx = attr_f("cx", 0.0); let cy = attr_f("cy", 0.0);
-                    let r = attr_f("r", 0.0);
-                    (cx - r, cy - r, 2.0 * r, 2.0 * r)
-                }
-                "ellipse" => {
-                    let cx = attr_f("cx", 0.0); let cy = attr_f("cy", 0.0);
-                    let rx = attr_f("rx", 0.0); let ry = attr_f("ry", 0.0);
-                    (cx - rx, cy - ry, 2.0 * rx, 2.0 * ry)
-                }
-                "line" => {
-                    let x1 = attr_f("x1", 0.0); let y1 = attr_f("y1", 0.0);
-                    let x2 = attr_f("x2", 0.0); let y2 = attr_f("y2", 0.0);
-                    (x1.min(x2), y1.min(y2), (x2 - x1).abs(), (y2 - y1).abs())
-                }
-                "text" => {
-                    let x = attr_f("x", 0.0); let y = attr_f("y", 0.0);
-                    let fs = attr_f("font-size", 14.0);
-                    (x, y - fs, fs * 8.0, fs)  // Approx text rect.
-                }
-                _ => continue,
-            };
-            child.rect.x = bx.rect.x + cx_off;
-            child.rect.y = bx.rect.y + cy_off;
-            child.rect.width = cw;
-            child.rect.height = ch;
-        }
-    }
-    // Video tag: replaced element (zatim bez decode - jen layout box + placeholder).
-    // Default 300x150 per HTML spec, ale poster image / controls renderovany v paint.
-    if bx.tag.as_deref() == Some("video") {
-        if let Some(w) = node.attr("width").and_then(|w| w.parse::<f32>().ok()) {
-            bx.rect.width = w;
-        }
-        if let Some(h) = node.attr("height").and_then(|h| h.parse::<f32>().ok()) {
-            bx.rect.height = h;
-        }
-        if bx.rect.width == 0.0 { bx.rect.width = 300.0; }
-        if bx.rect.height == 0.0 { bx.rect.height = 150.0; }
-        // poster atribut - obrazek zobrazeny pred prehravanim. Pouzijeme bg image.
-        if let Some(poster) = node.attr("poster") {
-            bx.image_src = Some(poster);
-        }
-    }
-    // Audio tag: replaced element. Default browser controls bar = 300x40.
-    if bx.tag.as_deref() == Some("audio") {
-        if bx.rect.width == 0.0 { bx.rect.width = 300.0; }
-        if bx.rect.height == 0.0 { bx.rect.height = 40.0; }
-    }
-    // <select>: dropdown closed. Vyber selected <option> a renderuj jako text.
-    // Default size: 120x24.
-    if bx.tag.as_deref() == Some("select") {
-        if bx.rect.width == 0.0 { bx.rect.width = 120.0; }
-        if bx.rect.height == 0.0 { bx.rect.height = 24.0; }
-        // Najdi selected option (nebo first).
-        let options = node.children.borrow();
-        let mut selected_text: Option<String> = None;
-        let mut first_text: Option<String> = None;
-        for ch in options.iter() {
-            if ch.tag_name().as_deref() == Some("option") {
-                let txt = ch.text_content();
-                if first_text.is_none() { first_text = Some(txt.clone()); }
-                if ch.attr("selected").is_some() {
-                    selected_text = Some(txt);
-                    break;
-                }
-            }
-        }
-        bx.text = selected_text.or(first_text);
-    }
-    // <textarea>: multi-line input. Default 200x50.
-    if bx.tag.as_deref() == Some("textarea") {
-        if bx.rect.width == 0.0 { bx.rect.width = 200.0; }
-        if bx.rect.height == 0.0 { bx.rect.height = 60.0; }
-    }
-    // <progress>: progress bar.
-    if bx.tag.as_deref() == Some("progress") {
-        if bx.rect.width == 0.0 { bx.rect.width = 160.0; }
-        if bx.rect.height == 0.0 { bx.rect.height = 14.0; }
-    }
-    // <meter>: meter bar.
-    if bx.tag.as_deref() == Some("meter") {
-        if bx.rect.width == 0.0 { bx.rect.width = 80.0; }
-        if bx.rect.height == 0.0 { bx.rect.height = 14.0; }
-    }
+    apply_tag_html_attrs(&mut bx, node);
 
     if matches!(node.kind, NodeKind::Text(_)) {
         bx.display = Display::Inline;
