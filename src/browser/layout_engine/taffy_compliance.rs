@@ -429,7 +429,7 @@ mod tests {
                     else { bx.scrollbar_width = v.clone(); }
                 }
                 "writing-mode" => {
-                    bx.writing_mode = v.clone();
+                    bx.writing_mode = crate::browser::layout::WritingMode::parse(&v);
                 }
                 "direction" if v == "rtl" => return None,
                 "direction" => {}
@@ -828,7 +828,7 @@ mod tests {
             // Aspect-ratio: dopocet height z width
             let has_explicit_h = child.explicit_height.is_some();
             let is_vertical_text = child.taffy_mode && child.text.is_some()
-                && matches!(child.writing_mode.as_str(), "vertical-lr" | "vertical-rl");
+                && child.writing_mode.is_vertical();
             let text_h_intrinsic = if child.taffy_mode && child.text.is_some() {
                 if is_vertical_text {
                     // Vertical: vyska = pocet znaku * 10

@@ -291,7 +291,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         // Inline axis (delka textu) je vertikalni, block axis je horizontalni.
         // Pro intrinsic sizing text bloku to znamena swap est_w <-> est_h.
         let ch_vertical_text = ch.taffy_mode && ch.text.is_some()
-            && matches!(ch.writing_mode.as_str(), "vertical-lr" | "vertical-rl");
+            && ch.writing_mode.is_vertical();
         if ch_vertical_text && ch.explicit_width.is_none() && ch.explicit_height.is_none() {
             std::mem::swap(&mut est_w, &mut est_h);
         }

@@ -102,6 +102,38 @@ impl Display {
     }
 }
 
+/// CSS writing-mode property - smer toku textu.
+/// horizontal-tb: text vodorovne, lines top-bottom (default).
+/// vertical-rl: text vertikalne, columns right-to-left (japonstina, cinstina).
+/// vertical-lr: text vertikalne, columns left-to-right.
+/// sideways-rl / sideways-lr: text rotace 90deg + columns RL/LR (CSS L4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WritingMode {
+    #[default]
+    HorizontalTb,
+    VerticalRl,
+    VerticalLr,
+    SidewaysRl,
+    SidewaysLr,
+}
+
+impl WritingMode {
+    pub fn parse(s: &str) -> Self {
+        match s.trim() {
+            "vertical-rl" => WritingMode::VerticalRl,
+            "vertical-lr" => WritingMode::VerticalLr,
+            "sideways-rl" => WritingMode::SidewaysRl,
+            "sideways-lr" => WritingMode::SidewaysLr,
+            _ => WritingMode::HorizontalTb,
+        }
+    }
+
+    /// True pokud je text orientovan vertikalne (vertical-* nebo sideways-*).
+    pub fn is_vertical(self) -> bool {
+        !matches!(self, WritingMode::HorizontalTb)
+    }
+}
+
 /// Aplikuje default styles per tag (browser user-agent stylesheet).
 /// Inspirovano Chrome/Firefox UA stylesheet (margin/padding em-based).
 fn apply_default_tag_styles(bx: &mut LayoutBox, tag: &str) {
@@ -484,7 +516,7 @@ pub struct LayoutBox {
     /// direction: ltr (default) | rtl
     pub direction: String,
     /// writing-mode: horizontal-tb (default) | vertical-rl | vertical-lr
-    pub writing_mode: String,
+    pub writing_mode: WritingMode,
     /// content-visibility: visible (default) | auto | hidden
     pub content_visibility: String,
     /// contain-intrinsic-size: <length>
@@ -934,7 +966,7 @@ impl LayoutBox {
             mask_image: None,
             shape_outside: None,
             direction: String::new(),
-            writing_mode: String::new(),
+            writing_mode: WritingMode::default(),
             content_visibility: String::new(),
             contain_intrinsic_size: 0.0,
             counter_reset: Vec::new(),
@@ -2484,7 +2516,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         }
     }
     if let Some(wm) = s.get("writing-mode") {
-        bx.writing_mode = wm.trim().to_string();
+        bx.writing_mode = WritingMode::parse(wm);
     }
     if let Some(cv) = s.get("content-visibility") {
         bx.content_visibility = cv.trim().to_string();
@@ -3267,7 +3299,7 @@ fn layout_block_vertical(bx: &mut LayoutBox) {
     let inner_y = bx.rect.y + bx.padding + bx.border_width;
     let inner_h = bx.rect.height - 2.0 * (bx.padding + bx.border_width);
     // Pro vertical-rl startujeme od prava; pro lr od leva.
-    let right_to_left = bx.writing_mode == "vertical-rl";
+    let right_to_left = matches!(bx.writing_mode, WritingMode::VerticalRl);
 
     let mut cursor_x = if right_to_left {
         inner_x + (bx.rect.width - 2.0 * (bx.padding + bx.border_width))
@@ -3380,7 +3412,7 @@ fn layout_block_multicol(bx: &mut LayoutBox) {
 
 pub fn layout_block(bx: &mut LayoutBox) {
     // writing-mode: vertical-rl / vertical-lr - block axis zmena na X
-    let vertical = matches!(bx.writing_mode.as_str(), "vertical-rl" | "vertical-lr");
+    let vertical = bx.writing_mode.is_vertical();
     if vertical {
         layout_block_vertical(bx);
         return;
