@@ -1,0 +1,17 @@
+{
+  "viewport": {"width": 1889, "height": 1945, "dpr": 1},
+  "html_source": "<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\"><title>letter_spacing</title>\n<style>\n* { box-sizing: border-box; margin: 0; padding: 0; }\nbody { font-family: Arial; padding: 20px; font-size: 16px; }\n.tight { letter-spacing: -1px; }\n.normal { letter-spacing: normal; }\n.wide { letter-spacing: 4px; }\n.em-wide { letter-spacing: 0.2em; }\n.box { padding: 8px; margin-bottom: 6px; background: #eef; display: inline-block; }\n</style>\n</head><body>\n<div id=\"a\" class=\"box tight\">TIGHT TEXT</div>\n<div id=\"b\" class=\"box normal\">NORMAL TEXT</div>\n<div id=\"c\" class=\"box wide\">WIDE TEXT</div>\n<div id=\"d\" class=\"box em-wide\">EM WIDE</div>\n</body></html>",
+  "css_inline": "\n* { box-sizing: border-box; margin: 0; padding: 0; }\nbody { font-family: Arial; padding: 20px; font-size: 16px; }\n.tight { letter-spacing: -1px; }\n.normal { letter-spacing: normal; }\n.wide { letter-spacing: 4px; }\n.em-wide { letter-spacing: 0.2em; }\n.box { padding: 8px; margin-bottom: 6px; background: #eef; display: inline-block; }\n",
+  "tree": {
+    "tag": "html", "id": "", "classes": [], "rect": {"x": 0, "y": 0, "w": 1889, "h": 80},
+    "children": [
+      {"tag": "head", "id": "", "classes": [], "rect": {"x": 0, "y": 0, "w": 0, "h": 0}, "children": []},
+      {"tag": "body", "id": "", "classes": [], "rect": {"x": 0, "y": 0, "w": 1889, "h": 80}, "children": [
+        {"tag": "div", "id": "a", "classes": ["box", "tight"], "rect": {"x": 20, "y": 20, "w": 99, "h": 34}, "children": []},
+        {"tag": "div", "id": "b", "classes": ["box", "normal"], "rect": {"x": 123, "y": 20, "w": 129, "h": 34}, "children": []},
+        {"tag": "div", "id": "c", "classes": ["box", "wide"], "rect": {"x": 257, "y": 20, "w": 139, "h": 34}, "children": []},
+        {"tag": "div", "id": "d", "classes": ["box", "em-wide"], "rect": {"x": 400, "y": 20, "w": 109, "h": 34}, "children": []}
+      ]}
+    ]
+  }
+}

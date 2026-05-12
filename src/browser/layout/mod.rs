@@ -2887,6 +2887,8 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     let parent_italic = bx.italic;
     let parent_color = bx.text_color;
     let parent_family = bx.font_family.clone();
+    let parent_ls = bx.letter_spacing;
+    let parent_weight = bx.font_weight;
     for ch in bx.children.iter_mut() {
         if ch.tag.is_none() {
             ch.font_size = parent_fs;
@@ -2897,6 +2899,11 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
             if !ch.italic { ch.italic = parent_italic; }
             if ch.text_color.is_none() { ch.text_color = parent_color; }
             if ch.font_family.is_empty() { ch.font_family = parent_family.clone(); }
+            // letter-spacing: inherited per CSS Text L3. Text nodes nemaji
+            // vlastni cascade record; propagace nutna pro intrinsic width
+            // (engine-test .test-title 0.15em LS chybi v measure 14*1.68 ~24px).
+            if ch.letter_spacing == 0.0 { ch.letter_spacing = parent_ls; }
+            if ch.font_weight == 400 { ch.font_weight = parent_weight; }
         }
     }
 
@@ -3672,7 +3679,7 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
         // space) a flush_inline measure (s synthetic 0.27*fs) rozdilne -> spurious
         // text wrap kdyz pre-pass dal min sirku nez flush_inline potrebuje.
         let space_w = {
-            let g = measure_text_width_weight(" ", font_size, bx_clone.effective_weight(), bx_clone.italic, &bx_clone.font_family);
+            let g = measure_text_width_full(" ", font_size, bx_clone.effective_weight(), bx_clone.italic, &bx_clone.font_family, bx_clone.letter_spacing);
             if g > 0.0 { g } else { font_size * 0.27 }
         };
 
@@ -3726,7 +3733,7 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
             // pri wrapovanem textu (cursor_x pri exitu = jen last line end).
             let mut max_line_end_x: f32 = cursor_x;
             for (wi, word) in words.iter().enumerate() {
-                let w = measure_text_width_weight(word, font_size, bx_clone.effective_weight(), bx_clone.italic, &bx_clone.font_family);
+                let w = measure_text_width_full(word, font_size, bx_clone.effective_weight(), bx_clone.italic, &bx_clone.font_family, bx_clone.letter_spacing);
                 let inter_word_space = if wi > 0 { space_w } else { 0.0 };
                 // Pri inner_w <= 0 (pre-pass parent.rect.width=0) NE wrap -
                 // vsech slov v jedne line. Real layout pak prepocita s
@@ -3759,7 +3766,7 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
                     let mut acc_w = 0.0;
                     let chars: Vec<char> = word.chars().collect();
                     for ch in chars {
-                        let ch_w = measure_text_width_weight(&ch.to_string(), font_size, bx_clone.effective_weight(), bx_clone.italic, &bx_clone.font_family);
+                        let ch_w = measure_text_width_full(&ch.to_string(), font_size, bx_clone.effective_weight(), bx_clone.italic, &bx_clone.font_family, bx_clone.letter_spacing);
                         if cursor_x + acc_w + ch_w > inner_x + inner_w && cursor_x > inner_x {
                             cursor_y += line_height;
                             cursor_x = inner_x;
@@ -3859,7 +3866,7 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
                 let inherited_family = bx_clone.font_family.clone();
                 let text_w = bx_clone.children.iter()
                     .filter_map(|c| c.text.as_ref())
-                    .map(|t| measure_text_width_weight(t, font_size, if inherited_bold { 700 } else { 400 }, inherited_italic, &inherited_family))
+                    .map(|t| measure_text_width_full(t, font_size, if inherited_bold { 700 } else { 400 }, inherited_italic, &inherited_family, bx_clone.letter_spacing))
                     .sum::<f32>();
                 // Pri replaced inner (img/svg/picture) prefer real width. Pri text
                 // jen children pouzij text_w. Pri kombinaci max + sum text content.
@@ -4059,6 +4066,13 @@ pub fn measure_text_width(text: &str, font_size: f32) -> f32 {
 /// default Times davalo zcela odlisne sirky - kazdy span text na stranky s
 /// monospace body by nasel jine wrap pointy.
 pub fn measure_text_width_weight(text: &str, font_size: f32, weight: u32, italic: bool, family: &str) -> f32 {
+    measure_text_width_full(text, font_size, weight, italic, family, 0.0)
+}
+
+/// S letter-spacing prispevkem (CSS Text L3 §10). Pripocita ls k advance
+/// kazdeho char vc. trailing (Chrome chovani). Volajte z paint/layout pres
+/// box.letter_spacing.
+pub fn measure_text_width_full(text: &str, font_size: f32, weight: u32, italic: bool, family: &str, letter_spacing: f32) -> f32 {
     let bold = weight >= 600;
     use std::sync::OnceLock;
     static FONT: OnceLock<Option<fontdue::Font>> = OnceLock::new();
@@ -4195,13 +4209,13 @@ pub fn measure_text_width_weight(text: &str, font_size: f32, weight: u32, italic
                     ADVANCE_CACHE.with(|c| c.borrow_mut().insert(key, v));
                     v
                 };
-                total += aw;
+                total += aw + letter_spacing;
             }
             total
         }
         None => {
             let avg_char_w = font_size * 0.55;
-            text.chars().count() as f32 * avg_char_w
+            text.chars().count() as f32 * (avg_char_w + letter_spacing)
         }
     }
 }

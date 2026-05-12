@@ -3717,9 +3717,10 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                             let line_start_x = bx0;
                             let italic = b.italic;
                             let fam = b.font_family.clone();
+                            let ls = b.letter_spacing;
                             let line_w: f32 = line.chars().map(|ch|
-                                super::layout::measure_text_width_weight(
-                                    &ch.to_string(), b.font_size, weight, italic, &fam)).sum();
+                                super::layout::measure_text_width_full(
+                                    &ch.to_string(), b.font_size, weight, italic, &fam, ls)).sum();
                             let (x_lo, x_hi) = if is_first_line && is_last_line {
                                 (sx.min(ex), sx.max(ex))
                             } else if is_first_line {
@@ -3736,8 +3737,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                             let mut start_byte: Option<usize> = None;
                             let mut end_byte: usize = line.len();
                             for (byte_off, ch) in line.char_indices() {
-                                let adv = super::layout::measure_text_width_weight(
-                                    &ch.to_string(), b.font_size, weight, italic, &fam);
+                                let adv = super::layout::measure_text_width_full(
+                                    &ch.to_string(), b.font_size, weight, italic, &fam, ls);
                                 let mid = acc + adv * 0.5;
                                 if start_byte.is_none() && mid >= sel_left {
                                     start_byte = Some(byte_off);
@@ -6088,9 +6089,10 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                     // last_line -> [line_start, end.x]; middle -> full.
                                     let italic = b.italic;
                                     let fam = b.font_family.clone();
+                                    let ls = b.letter_spacing;
                                     let line_w = line.chars().map(|ch|
-                                        super::layout::measure_text_width_weight(
-                                            &ch.to_string(), b.font_size, weight, italic, &fam)).sum::<f32>();
+                                        super::layout::measure_text_width_full(
+                                            &ch.to_string(), b.font_size, weight, italic, &fam, ls)).sum::<f32>();
                                     let line_start_x = if li == 0 { bx0 } else {
                                         // Wrapped line - zacina od inner_x parentu.
                                         // Approximaceuze rect.x (typicky inner_x p).
@@ -6118,8 +6120,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                     let mut hl_start: Option<f32> = None;
                                     let mut hl_end: f32 = line_w;
                                     for ch in line.chars() {
-                                        let adv = super::layout::measure_text_width_weight(
-                                            &ch.to_string(), b.font_size, weight, italic, &fam);
+                                        let adv = super::layout::measure_text_width_full(
+                                            &ch.to_string(), b.font_size, weight, italic, &fam, ls);
                                         let mid = acc + adv * 0.5;
                                         if hl_start.is_none() && mid >= sel_left {
                                             hl_start = Some(acc);

@@ -389,4 +389,13 @@ mod tests {
     fn web_fixture_position_abs_pct() {
         run_fixture("tests/fixtures/web/position_abs_pct.json", 2.0, 0.0);
     }
+
+    /// letter-spacing - 4 variants (tight -1px, normal, wide 4px, em-wide 0.2em).
+    /// Inline-block boxy s text content - width per letter-spacing applied.
+    /// Regression test pre measure_text_width_full s letter_spacing param.
+    #[test]
+    #[ignore]
+    fn web_fixture_letter_spacing() {
+        run_fixture("tests/fixtures/web/letter_spacing.json", 5.0, 0.0);
+    }
 }
