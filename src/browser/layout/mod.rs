@@ -581,7 +581,6 @@ pub struct LayoutBox {
     /// pointer-events: auto | none
     pub pointer_events: PointerEvents,
     /// user-select: auto | none | text | all
-    pub user_select: String,
     /// caret-color
     pub caret_color: Option<[u8; 4]>,
     /// resize: none | both | horizontal | vertical
@@ -640,15 +639,9 @@ pub struct LayoutBox {
     pub position_anchor: String,
     /// inset-area (top / left / center / start / end / span-* keywords)
     pub inset_area: String,
-    /// CSS Scroll-driven Animations - animation-timeline
-    pub animation_timeline: String,
-    /// scroll-timeline-name / scroll-timeline-axis
-    pub scroll_timeline_name: String,
-    pub scroll_timeline_axis: String,
-    /// view-timeline-name / view-timeline-axis / view-timeline-inset
-    pub view_timeline_name: String,
-    pub view_timeline_axis: String,
-    pub view_timeline_inset: String,
+    // animation-timeline / scroll-timeline-*/view-timeline-* CSS Scroll-driven
+    // Animations - parse + never read (unused = removed). Pri implementaci
+    // scroll-driven animations bude potreba pridat zpet.
     /// CSS View Transitions L1 - view-transition-name
     pub view_transition_name: String,
     /// CSS Containment L3 - container-type (uz mam string), pridam container
@@ -1018,7 +1011,6 @@ impl LayoutBox {
             isolation: String::new(),
             mix_blend_mode: String::new(),
             pointer_events: PointerEvents::default(),
-            user_select: String::new(),
             caret_color: None,
             resize: String::new(),
             touch_action: String::new(),
@@ -1050,12 +1042,6 @@ impl LayoutBox {
             anchor_name: String::new(),
             position_anchor: String::new(),
             inset_area: String::new(),
-            animation_timeline: String::new(),
-            scroll_timeline_name: String::new(),
-            scroll_timeline_axis: String::new(),
-            view_timeline_name: String::new(),
-            view_timeline_axis: String::new(),
-            view_timeline_inset: String::new(),
             view_transition_name: String::new(),
             container_type: String::new(),
             container_name: String::new(),
@@ -2586,7 +2572,6 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(v) = s.get("isolation") { bx.isolation = v.trim().to_string(); }
     if let Some(v) = s.get("mix-blend-mode") { bx.mix_blend_mode = v.trim().to_string(); }
     if let Some(v) = s.get("pointer-events") { bx.pointer_events = PointerEvents::parse(v); }
-    if let Some(v) = s.get("user-select") { bx.user_select = v.trim().to_string(); }
     if let Some(v) = s.get("caret-color") {
         if v.trim() != "auto" { bx.caret_color = parse_color(v); }
     }
@@ -2627,12 +2612,6 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(v) = s.get("anchor-name") { bx.anchor_name = v.trim().to_string(); }
     if let Some(v) = s.get("position-anchor") { bx.position_anchor = v.trim().to_string(); }
     if let Some(v) = s.get("inset-area") { bx.inset_area = v.trim().to_string(); }
-    if let Some(v) = s.get("animation-timeline") { bx.animation_timeline = v.trim().to_string(); }
-    if let Some(v) = s.get("scroll-timeline-name") { bx.scroll_timeline_name = v.trim().to_string(); }
-    if let Some(v) = s.get("scroll-timeline-axis") { bx.scroll_timeline_axis = v.trim().to_string(); }
-    if let Some(v) = s.get("view-timeline-name") { bx.view_timeline_name = v.trim().to_string(); }
-    if let Some(v) = s.get("view-timeline-axis") { bx.view_timeline_axis = v.trim().to_string(); }
-    if let Some(v) = s.get("view-timeline-inset") { bx.view_timeline_inset = v.trim().to_string(); }
     if let Some(v) = s.get("view-transition-name") { bx.view_transition_name = v.trim().to_string(); }
     if let Some(v) = s.get("container-type") { bx.container_type = v.trim().to_string(); }
     if let Some(v) = s.get("container-name") { bx.container_name = v.trim().to_string(); }
