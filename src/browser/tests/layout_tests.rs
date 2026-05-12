@@ -1033,7 +1033,6 @@ fn anchor_scope_position_visibility() {
     let root = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
     let d = find_box_by_tag(&root, "div").unwrap();
     assert_eq!(d.anchor_scope, "--my");
-    assert_eq!(d.position_visibility, "anchors-visible");
 }
 
 #[test]

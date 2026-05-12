@@ -800,7 +800,6 @@ pub struct LayoutBox {
     /// CSS Anchor L1 - anchor-scope: <name> | none | all.
     pub anchor_scope: String,
     /// CSS Position L4 - position-visibility: always | anchors-visible | no-overflow.
-    pub position_visibility: String,
     /// CSS Display L4 - reading-flow: normal | flex-visual | flex-flow | grid-rows | grid-columns | grid-order.
     pub reading_flow: String,
     /// CSS Display L4 - reading-order.
@@ -1090,7 +1089,6 @@ impl LayoutBox {
             contain_intrinsic_block_size: 0.0,
             contain_intrinsic_inline_size: 0.0,
             anchor_scope: String::new(),
-            position_visibility: String::new(),
             reading_flow: String::new(),
             reading_order: String::new(),
             composite_op: String::new(),
@@ -2361,7 +2359,6 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(v) = s.get("contain-intrinsic-inline-size") { bx.contain_intrinsic_inline_size = parse_length(v); }
     // CSS Anchor L1 / Position L4
     if let Some(v) = s.get("anchor-scope") { bx.anchor_scope = v.trim().to_string(); }
-    if let Some(v) = s.get("position-visibility") { bx.position_visibility = v.trim().to_string(); }
     // CSS Display L4 - reading flow / order
     if let Some(v) = s.get("reading-flow") { bx.reading_flow = v.trim().to_string(); }
     if let Some(v) = s.get("reading-order") { bx.reading_order = v.trim().to_string(); }
