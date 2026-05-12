@@ -225,6 +225,12 @@ pub struct ComputedStyle {
     pub transform_origin_x: Length,
     pub transform_origin_y: Length,
     pub perspective: Length,         // None = no perspective; px > 0 = vanishing dist
+
+    // ─── Filter + blend (batch 29) ────────────────────────────────────
+    pub filter: String,              // raw chain (parser v layout/filter)
+    pub backdrop_filter: String,     // raw chain
+    pub mix_blend_mode: BlendMode,
+    pub isolation: Isolation,
 }
 
 impl Default for ComputedStyle {
@@ -362,7 +368,73 @@ impl ComputedStyle {
             transform_origin_x: Length::Percent(50.0),
             transform_origin_y: Length::Percent(50.0),
             perspective: Length::None,
+            filter: "none".into(),
+            backdrop_filter: "none".into(),
+            mix_blend_mode: BlendMode::Normal,
+            isolation: Isolation::Auto,
         }
+    }
+}
+
+/// CSS `mix-blend-mode` (CSS Compositing L1 §5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlendMode {
+    Normal,
+    Multiply,
+    Screen,
+    Overlay,
+    Darken,
+    Lighten,
+    ColorDodge,
+    ColorBurn,
+    HardLight,
+    SoftLight,
+    Difference,
+    Exclusion,
+    Hue,
+    Saturation,
+    Color,
+    Luminosity,
+}
+
+impl BlendMode {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s.trim().to_lowercase().as_str() {
+            "normal" => Self::Normal,
+            "multiply" => Self::Multiply,
+            "screen" => Self::Screen,
+            "overlay" => Self::Overlay,
+            "darken" => Self::Darken,
+            "lighten" => Self::Lighten,
+            "color-dodge" => Self::ColorDodge,
+            "color-burn" => Self::ColorBurn,
+            "hard-light" => Self::HardLight,
+            "soft-light" => Self::SoftLight,
+            "difference" => Self::Difference,
+            "exclusion" => Self::Exclusion,
+            "hue" => Self::Hue,
+            "saturation" => Self::Saturation,
+            "color" => Self::Color,
+            "luminosity" => Self::Luminosity,
+            _ => return None,
+        })
+    }
+}
+
+/// CSS `isolation` (CSS Compositing L1 §4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Isolation {
+    Auto,
+    Isolate,
+}
+
+impl Isolation {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s.trim().to_lowercase().as_str() {
+            "auto" => Self::Auto,
+            "isolate" => Self::Isolate,
+            _ => return None,
+        })
     }
 }
 

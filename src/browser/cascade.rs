@@ -21,6 +21,7 @@ use super::computed_style::{
     AnimationDirection as CsAnimationDirection,
     AnimationFillMode as CsAnimationFillMode,
     AnimationPlayState as CsAnimationPlayState,
+    BlendMode as CsBlendMode, Isolation as CsIsolation,
     BorderCollapse as CsBorderCollapse, CaptionSide as CsCaptionSide,
     ListStyleImage as CsListStyleImage, ListStylePosition as CsListStylePosition,
     ListStyleType as CsListStyleType, ObjectFit as CsObjectFit, Resize as CsResize,
@@ -1495,6 +1496,19 @@ pub fn cascade_with_viewport_typed(
             } else if let Some(l) = Length::parse(v) {
                 cs.perspective = l;
             }
+        }
+        // Batch 29: filter/backdrop-filter + mix-blend-mode + isolation.
+        if let Some(v) = props.get("filter") {
+            cs.filter = v.clone();
+        }
+        if let Some(v) = props.get("backdrop-filter") {
+            cs.backdrop_filter = v.clone();
+        }
+        if let Some(v) = props.get("mix-blend-mode") {
+            if let Some(b) = CsBlendMode::parse(v) { cs.mix_blend_mode = b; }
+        }
+        if let Some(v) = props.get("isolation") {
+            if let Some(i) = CsIsolation::parse(v) { cs.isolation = i; }
         }
         computed.insert(*node_id, cs);
         // Konvertuj kazdou property na CascadeDecl s validity flag pro

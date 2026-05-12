@@ -3121,3 +3121,37 @@ fn cascade_typed_perspective_px() {
     let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
     assert_eq!(cs.perspective, Length::Px(1000.0));
 }
+
+// ─── L5 step 3 batch 29: filter + blend + isolation ───────────────────
+
+#[test]
+fn cascade_typed_filter_raw() {
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { filter: blur(4px) saturate(1.5); }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.filter, "blur(4px) saturate(1.5)");
+}
+
+#[test]
+fn cascade_typed_mix_blend_mode() {
+    use crate::browser::computed_style::BlendMode;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { mix-blend-mode: multiply; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.mix_blend_mode, BlendMode::Multiply);
+}
+
+#[test]
+fn cascade_typed_isolation_isolate() {
+    use crate::browser::computed_style::Isolation;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { isolation: isolate; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.isolation, Isolation::Isolate);
+}
