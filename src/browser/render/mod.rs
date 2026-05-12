@@ -232,15 +232,12 @@ fn extract_text_runs(
             let z = zoom.max(0.0001);
             let physical_size = (*font_size * z).round().max(1.0) as u32;
             let inv_z = 1.0 / z;
-            // Use same compact key format jako atlas.add emit (line ~7240).
-            // Mismatch = atlas miss -> advance fallback font_size*0.5.
-            let italic_i = if *italic { 1u8 } else { 0u8 };
-            let lookup_family = format!("__w{}_{}__:{}", font_weight, italic_i, font_family);
+            // Styled lookup - atlas encoduje (family, weight, italic) interne.
             let mut cumulative: Vec<f32> = Vec::with_capacity(content.chars().count() + 1);
             cumulative.push(0.0);
             let mut acc = 0.0;
             for ch in content.chars() {
-                let advance = atlas.get(&lookup_family, ch, physical_size)
+                let advance = atlas.get_styled(font_family, *font_weight, *italic, ch, physical_size)
                     .map(|g| g.advance * inv_z)
                     .unwrap_or(*font_size * 0.5);
                 acc += advance;
@@ -301,9 +298,8 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: 
                 let z = zoom.max(0.0001);
                 let physical_size = (*font_size * z).round().max(1.0) as u32;
                 let inv_z = 1.0 / z;
-                // Compact weight + italic key shoduje atlas.add emit.
-                let italic_i = if *italic { 1u8 } else { 0u8 };
-                let lookup_family: String = format!("__w{}_{}__:{}", font_weight, italic_i, font_family);
+                // Styled cache key - compose pres atlas helper (encoding interne).
+                let lookup_family: String = super::render::atlas::GlyphAtlas::compose_styled(font_family, *font_weight, *italic);
                 let family_hash = super::render::atlas::GlyphAtlas::hash_family(&lookup_family);
                 // COLR emoji key prefix - drive format per char, ted pre-build
                 // base + concat char u32 + size jen pri lookup. Skip kdyz no
@@ -7175,13 +7171,10 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                             continue;
                         }
                         r.text_cmd_warmed.insert(cmd_hash);
-                        // Compact key encoding weight + italic: `__wN_I__:family`.
-                        // Atlas font_for parsuje + dispatch font_for_weight pro
-                        // CSS Fonts L4 nearest-match algorithm. Bez tohoto weight
-                        // 500 spadl na first font Vec (= weight 300 light Ubuntu).
+                        // Styled lookup - atlas encoduje (family, weight, italic)
+                        // pres compose_styled. Bez tohoto weight 500 spadl na
+                        // first font Vec (= weight 300 light Ubuntu).
                         let _ = bold;
-                        let italic_i = if *italic { 1u8 } else { 0u8 };
-                        let key_family = format!("__w{}_{}__:{}", font_weight, italic_i, font_family);
                         let phys = (*font_size * self.zoom).round().max(1.0) as u32;
                         // Has color font check (Rc clone uvnitr loopu nepotrebny -
                         // pri color font path projedeme).
@@ -7207,7 +7200,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                 }
                             }
                             if !color_added {
-                                r.atlas.add(&key_family, ch, phys);
+                                r.atlas.add_styled(font_family, *font_weight, *italic, ch, phys);
                             }
                         }
                     }

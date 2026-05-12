@@ -482,6 +482,29 @@ impl GlyphAtlas {
         self.cache.get(&(family_hash, ch, size))
     }
 
+    /// Encode (family, weight, italic) na compact prefix string pro cache
+    /// keys + font_for lookup. Format: `__w<N>_<I>__:family` kde N=weight,
+    /// I=italic (0/1). Caller pak passuje string do get/add - cache klic je
+    /// hash(string), neni allocace pri lookup pres hash_family.
+    pub(super) fn compose_styled(family: &str, weight: u32, italic: bool) -> String {
+        let italic_i = if italic { 1u8 } else { 0u8 };
+        format!("__w{}_{}__:{}", weight, italic_i, family)
+    }
+
+    /// Styled glyph lookup - typed wrapper nad get(compose_styled(...), ch, size).
+    #[inline]
+    pub(super) fn get_styled(&self, family: &str, weight: u32, italic: bool, ch: char, size: u32) -> Option<&GlyphInfo> {
+        let key = Self::compose_styled(family, weight, italic);
+        self.get(&key, ch, size)
+    }
+
+    /// Styled glyph rasterize + cache. Typed wrapper nad add(compose_styled(...), ch, size).
+    #[inline]
+    pub(super) fn add_styled(&mut self, family: &str, weight: u32, italic: bool, ch: char, size: u32) {
+        let key = Self::compose_styled(family, weight, italic);
+        self.add(&key, ch, size);
+    }
+
     /// Rasterize glyph and add to atlas.
     /// Pri size < LCD_THRESHOLD pouzij fontdue rasterize_subpixel = 3x sirka
     /// swizzled RGB. Render shader 3-tap sample = LCD subpixel rendering
