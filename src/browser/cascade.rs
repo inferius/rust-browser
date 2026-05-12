@@ -22,7 +22,8 @@ use super::computed_style::{
     AnimationFillMode as CsAnimationFillMode,
     AnimationPlayState as CsAnimationPlayState,
     BlendMode as CsBlendMode, GridAutoFlow as CsGridAutoFlow, GridLine as CsGridLine,
-    Isolation as CsIsolation,
+    Isolation as CsIsolation, JustifyItems as CsJustifyItems,
+    JustifySelf as CsJustifySelf,
     BorderCollapse as CsBorderCollapse, CaptionSide as CsCaptionSide,
     ListStyleImage as CsListStyleImage, ListStylePosition as CsListStylePosition,
     ListStyleType as CsListStyleType, ObjectFit as CsObjectFit, Resize as CsResize,
@@ -1536,6 +1537,19 @@ pub fn cascade_with_viewport_typed(
         }
         if let Some(v) = props.get("grid-row-end") {
             cs.grid_row_end = CsGridLine::parse(v);
+        }
+        // Batch 32: grid-auto-cols/rows + justify-items/-self.
+        if let Some(v) = props.get("grid-auto-columns") {
+            cs.grid_auto_columns = v.clone();
+        }
+        if let Some(v) = props.get("grid-auto-rows") {
+            cs.grid_auto_rows = v.clone();
+        }
+        if let Some(v) = props.get("justify-items") {
+            if let Some(j) = CsJustifyItems::parse(v) { cs.justify_items = j; }
+        }
+        if let Some(v) = props.get("justify-self") {
+            if let Some(j) = CsJustifySelf::parse(v) { cs.justify_self = j; }
         }
         computed.insert(*node_id, cs);
         // Konvertuj kazdou property na CascadeDecl s validity flag pro

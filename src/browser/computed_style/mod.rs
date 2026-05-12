@@ -243,6 +243,12 @@ pub struct ComputedStyle {
     pub grid_column_end: GridLine,
     pub grid_row_start: GridLine,
     pub grid_row_end: GridLine,
+
+    // ─── Grid implicit + justify (batch 32) ───────────────────────────
+    pub grid_auto_columns: String,    // raw track
+    pub grid_auto_rows: String,
+    pub justify_items: JustifyItems,
+    pub justify_self: JustifySelf,
 }
 
 impl Default for ComputedStyle {
@@ -392,7 +398,91 @@ impl ComputedStyle {
             grid_column_end: GridLine::Auto,
             grid_row_start: GridLine::Auto,
             grid_row_end: GridLine::Auto,
+            grid_auto_columns: "auto".into(),
+            grid_auto_rows: "auto".into(),
+            justify_items: JustifyItems::Normal,
+            justify_self: JustifySelf::Auto,
         }
+    }
+}
+
+/// CSS `justify-items` (CSS Box Alignment L3 §6.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JustifyItems {
+    Normal,
+    Stretch,
+    Start,
+    End,
+    Center,
+    FlexStart,
+    FlexEnd,
+    Left,
+    Right,
+    Baseline,
+    SelfStart,
+    SelfEnd,
+    Legacy,
+}
+
+impl JustifyItems {
+    pub fn parse(s: &str) -> Option<Self> {
+        // "legacy left" / "legacy right" / "legacy center" -> Legacy.
+        let t = s.trim().to_lowercase();
+        if t.starts_with("legacy") { return Some(Self::Legacy); }
+        Some(match t.as_str() {
+            "normal" => Self::Normal,
+            "stretch" => Self::Stretch,
+            "start" => Self::Start,
+            "end" => Self::End,
+            "center" => Self::Center,
+            "flex-start" => Self::FlexStart,
+            "flex-end" => Self::FlexEnd,
+            "left" => Self::Left,
+            "right" => Self::Right,
+            "baseline" => Self::Baseline,
+            "self-start" => Self::SelfStart,
+            "self-end" => Self::SelfEnd,
+            _ => return None,
+        })
+    }
+}
+
+/// CSS `justify-self` (CSS Box Alignment L3 §6.3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JustifySelf {
+    Auto,
+    Normal,
+    Stretch,
+    Start,
+    End,
+    Center,
+    FlexStart,
+    FlexEnd,
+    Left,
+    Right,
+    Baseline,
+    SelfStart,
+    SelfEnd,
+}
+
+impl JustifySelf {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s.trim().to_lowercase().as_str() {
+            "auto" => Self::Auto,
+            "normal" => Self::Normal,
+            "stretch" => Self::Stretch,
+            "start" => Self::Start,
+            "end" => Self::End,
+            "center" => Self::Center,
+            "flex-start" => Self::FlexStart,
+            "flex-end" => Self::FlexEnd,
+            "left" => Self::Left,
+            "right" => Self::Right,
+            "baseline" => Self::Baseline,
+            "self-start" => Self::SelfStart,
+            "self-end" => Self::SelfEnd,
+            _ => return None,
+        })
     }
 }
 
