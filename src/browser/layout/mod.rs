@@ -607,6 +607,9 @@ pub struct LayoutBox {
     pub outline_style: String,
     pub outline_color: Option<[u8; 4]>,
     pub outline_offset: f32,
+    pub clear_value: String,
+    pub justify_items: String,
+    pub object_position: String,
     /// margin-trim
     /// CSS Anchor Positioning L1 - anchor-name (e.g. "--my-anchor")
     pub anchor_name: String,
@@ -620,11 +623,7 @@ pub struct LayoutBox {
     /// CSS View Transitions L1 - view-transition-name
     /// CSS Containment L3 - container-type (uz mam string), pridam container
     /// page-break-before / -after / -inside
-    pub page_break_after: String,
     /// break-before / -after / -inside (CSS Fragmentation L3)
-    pub break_before: String,
-    pub break_after: String,
-    pub break_inside: String,
     pub orphans: i32,
     pub widows: i32,
     /// counter-set (CSS L3)
@@ -639,10 +638,8 @@ pub struct LayoutBox {
     /// CSS Generated content L3
     /// CSS Logical Properties: float-block, clear-block (rare)
     pub float_value: String,
-    pub clear_value: String,
     /// Image fitting (object-fit / object-position)
     pub object_fit: ObjectFit,
-    pub object_position: String,
     /// Mix blend / background blend
     pub background_blend_mode: String,
     /// Image rendering hints
@@ -672,7 +669,6 @@ pub struct LayoutBox {
     /// align-self, ale s semantikou justify - reuse AlignSelf enum.)
     pub justify_self: AlignSelf,
     /// justify-items pro grid container (default pro children). String zatim.
-    pub justify_items: String,
     /// grid-row-start: 1-based line, 0 = auto.
     pub grid_row_start: i32,
     pub grid_row_end: i32,
@@ -691,15 +687,11 @@ pub struct LayoutBox {
     pub row_gap_pct: Option<f32>,
     pub column_gap_pct: Option<f32>,
     /// CSS Logical Properties continued
-    pub block_size_v: String,
-    pub inline_size_v: String,
     /// table-layout, border-collapse, border-spacing, caption-side, empty-cells
     pub table_layout: TableLayout,
     pub border_collapse: BorderCollapse,
     /// vertical-align
     /// CSS Backgrounds L4
-    pub background_origin_v: String,
-    pub background_clip_v: String,
     /// CSS Backgrounds L3 - border-image source URL.
     pub border_image_source: Option<String>,
     /// border-image-slice: top right bottom left (procenta nebo cisla).
@@ -944,22 +936,19 @@ impl LayoutBox {
             outline_style: String::new(),
             outline_color: None,
             outline_offset: 0.0,
+            clear_value: String::new(),
+            justify_items: String::new(),
+            object_position: String::new(),
             anchor_name: String::new(),
             position_anchor: String::new(),
             inset_area: String::new(),
-            page_break_after: String::new(),
-            break_before: String::new(),
-            break_after: String::new(),
-            break_inside: String::new(),
             orphans: 2,
             widows: 2,
             counter_set: Vec::new(),
             line_height_step: 0.0,
             speak: String::new(),
             float_value: String::new(),
-            clear_value: String::new(),
             object_fit: ObjectFit::Fill,
-            object_position: String::new(),
             background_blend_mode: String::new(),
             image_rendering: ImageRendering::Auto,
             min_width: CssLength::Auto,
@@ -976,7 +965,6 @@ impl LayoutBox {
             align_items: AlignItems::Stretch,
             align_self: AlignSelf::Auto,
             justify_self: AlignSelf::Auto,
-            justify_items: String::new(),
             grid_row_start: 0,
             grid_row_end: 0,
             grid_column_start: 0,
@@ -991,12 +979,8 @@ impl LayoutBox {
             column_gap: 0.0,
             row_gap_pct: None,
             column_gap_pct: None,
-            block_size_v: String::new(),
-            inline_size_v: String::new(),
             table_layout: TableLayout::Auto,
             border_collapse: BorderCollapse::Separate,
-            background_origin_v: String::new(),
-            background_clip_v: String::new(),
             border_image_source: None,
             border_image_slice: [0.0; 4],
             border_image_width: [1.0; 4],
@@ -2394,10 +2378,6 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(v) = s.get("anchor-name") { bx.anchor_name = v.trim().to_string(); }
     if let Some(v) = s.get("position-anchor") { bx.position_anchor = v.trim().to_string(); }
     if let Some(v) = s.get("inset-area") { bx.inset_area = v.trim().to_string(); }
-    if let Some(v) = s.get("page-break-after")  { bx.page_break_after  = v.trim().to_string(); }
-    if let Some(v) = s.get("break-before") { bx.break_before = v.trim().to_string(); }
-    if let Some(v) = s.get("break-after")  { bx.break_after  = v.trim().to_string(); }
-    if let Some(v) = s.get("break-inside") { bx.break_inside = v.trim().to_string(); }
     if let Some(v) = s.get("orphans") { bx.orphans = v.trim().parse().unwrap_or(2); }
     if let Some(v) = s.get("widows") { bx.widows = v.trim().parse().unwrap_or(2); }
     if let Some(v) = s.get("counter-set") { bx.counter_set = parse_counter(v); }
@@ -2405,8 +2385,9 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(v) = s.get("speak") { bx.speak = v.trim().to_string(); }
     if let Some(v) = s.get("float") { bx.float_value = v.trim().to_string(); }
     if let Some(v) = s.get("clear") { bx.clear_value = v.trim().to_string(); }
-    if let Some(v) = s.get("object-fit") { bx.object_fit = ObjectFit::parse(v); }
     if let Some(v) = s.get("object-position") { bx.object_position = v.trim().to_string(); }
+    if let Some(v) = s.get("justify-items") { bx.justify_items = v.trim().to_string(); }
+    if let Some(v) = s.get("object-fit") { bx.object_fit = ObjectFit::parse(v); }
     if let Some(v) = s.get("image-rendering") { bx.image_rendering = ImageRendering::parse(v); }
     if let Some(v) = s.get("table-layout") { bx.table_layout = TableLayout::parse(v); }
     if let Some(v) = s.get("border-collapse") { bx.border_collapse = BorderCollapse::parse(v); }
