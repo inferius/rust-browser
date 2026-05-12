@@ -1,0 +1,20 @@
+{
+  "viewport": {"width": 1889, "height": 1945, "dpr": 1},
+  "html_source": "<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\"><title>grid_nested_fr</title>\n<style>\n* { box-sizing: border-box; margin: 0; padding: 0; }\nbody { font-family: Arial; }\n.outer {\n  display: grid;\n  grid-template-columns: 310px 1fr;\n  width: 100%;\n}\n.right {\n  display: grid;\n  grid-template-rows: 100px 1fr;\n  background: #fee;\n}\n.top { background: #efe; padding: 8px; }\n.bottom { background: #eef; padding: 8px; }\n.left { background: #ddd; padding: 8px; height: 400px; }\n</style>\n</head><body>\n<div class=\"outer\">\n  <div id=\"a\" class=\"left\">left 310px</div>\n  <div id=\"b\" class=\"right\">\n    <div id=\"c\" class=\"top\">top 100px</div>\n    <div id=\"d\" class=\"bottom\">bottom 1fr</div>\n  </div>\n</div>\n</body></html>",
+  "css_inline": "\n* { box-sizing: border-box; margin: 0; padding: 0; }\nbody { font-family: Arial; }\n.outer {\n  display: grid;\n  grid-template-columns: 310px 1fr;\n  width: 100%;\n}\n.right {\n  display: grid;\n  grid-template-rows: 100px 1fr;\n  background: #fee;\n}\n.top { background: #efe; padding: 8px; }\n.bottom { background: #eef; padding: 8px; }\n.left { background: #ddd; padding: 8px; height: 400px; }\n",
+  "tree": {
+    "tag": "html", "id": "", "classes": [], "rect": {"x": 0, "y": 0, "w": 1889, "h": 400},
+    "children": [
+      {"tag": "head", "id": "", "classes": [], "rect": {"x": 0, "y": 0, "w": 0, "h": 0}, "children": []},
+      {"tag": "body", "id": "", "classes": [], "rect": {"x": 0, "y": 0, "w": 1889, "h": 400}, "children": [
+        {"tag": "div", "id": "", "classes": ["outer"], "rect": {"x": 0, "y": 0, "w": 1889, "h": 400}, "children": [
+          {"tag": "div", "id": "a", "classes": ["left"], "rect": {"x": 0, "y": 0, "w": 310, "h": 400}, "children": []},
+          {"tag": "div", "id": "b", "classes": ["right"], "rect": {"x": 310, "y": 0, "w": 1579, "h": 400}, "children": [
+            {"tag": "div", "id": "c", "classes": ["top"], "rect": {"x": 310, "y": 0, "w": 1579, "h": 100}, "children": []},
+            {"tag": "div", "id": "d", "classes": ["bottom"], "rect": {"x": 310, "y": 100, "w": 1579, "h": 300}, "children": []}
+          ]}
+        ]}
+      ]}
+    ]
+  }
+}

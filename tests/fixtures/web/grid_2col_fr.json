@@ -1,0 +1,17 @@
+{
+  "viewport": {"width": 1889, "height": 1945, "dpr": 1},
+  "html_source": "<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\"><title>grid_2col_fr</title>\n<style>\n* { box-sizing: border-box; margin: 0; padding: 0; }\nbody { font-family: Arial; }\n.container {\n  display: grid;\n  grid-template-columns: 310px 1fr;\n  width: 100%;\n}\n.sidebar {\n  background: #eef;\n  padding: 10px;\n  height: 200px;\n}\n.content {\n  background: #fee;\n  padding: 10px;\n  height: 200px;\n}\n</style>\n</head><body>\n<div class=\"container\">\n  <div id=\"a\" class=\"sidebar\">sidebar 310px</div>\n  <div id=\"b\" class=\"content\">content 1fr (rest)</div>\n</div>\n</body></html>",
+  "css_inline": "\n* { box-sizing: border-box; margin: 0; padding: 0; }\nbody { font-family: Arial; }\n.container {\n  display: grid;\n  grid-template-columns: 310px 1fr;\n  width: 100%;\n}\n.sidebar {\n  background: #eef;\n  padding: 10px;\n  height: 200px;\n}\n.content {\n  background: #fee;\n  padding: 10px;\n  height: 200px;\n}\n",
+  "tree": {
+    "tag": "html", "id": "", "classes": [], "rect": {"x": 0, "y": 0, "w": 1889, "h": 200},
+    "children": [
+      {"tag": "head", "id": "", "classes": [], "rect": {"x": 0, "y": 0, "w": 0, "h": 0}, "children": []},
+      {"tag": "body", "id": "", "classes": [], "rect": {"x": 0, "y": 0, "w": 1889, "h": 200}, "children": [
+        {"tag": "div", "id": "", "classes": ["container"], "rect": {"x": 0, "y": 0, "w": 1889, "h": 200}, "children": [
+          {"tag": "div", "id": "a", "classes": ["sidebar"], "rect": {"x": 0, "y": 0, "w": 310, "h": 200}, "children": []},
+          {"tag": "div", "id": "b", "classes": ["content"], "rect": {"x": 310, "y": 0, "w": 1579, "h": 200}, "children": []}
+        ]}
+      ]}
+    ]
+  }
+}

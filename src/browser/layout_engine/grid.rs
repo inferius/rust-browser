@@ -551,16 +551,24 @@ pub fn layout_grid(bx: &mut LayoutBox) {
     }
 
     // Pre-pass: pre items bez explicit size, recursivne layout pro intrinsic.
+    // Save explicit_w/h pred + restore po - stretch hack v real layout (line
+    // 1680+) by poisonoval explicit pri pre-pass kdy cw_avail=16 (parent
+    // rect.w=0). Bez restore by real layout videl explicit_w=Some(16) misto
+    // None a clampoval cely item na 16px. Reportovany bug v nested grid.
     for &i in &in_flow {
         let ch = &mut bx.children[i];
         if ch.explicit_width.is_some() && ch.explicit_height.is_some() { continue; }
         if ch.children.is_empty() { continue; }
         let saved_x = ch.rect.x; let saved_y = ch.rect.y;
+        let saved_explicit_w = ch.explicit_width;
+        let saved_explicit_h = ch.explicit_height;
         ch.rect.x = 0.0; ch.rect.y = 0.0;
         if ch.explicit_width.is_none() { ch.rect.width = 0.0; }
         if ch.explicit_height.is_none() { ch.rect.height = 0.0; }
         super::dispatch_layout(ch, false);
         ch.rect.x = saved_x; ch.rect.y = saved_y;
+        ch.explicit_width = saved_explicit_w;
+        ch.explicit_height = saved_explicit_h;
     }
 
     // Auto track sizing: pro auto cols/rows, najdi max item intrinsic width/height a expand track.
@@ -1674,14 +1682,16 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         child.rect.width = final_w;
         child.rect.height = final_h;
         // Bez tohoto layout_block dispatched nize prepise rect.height z content
-        // (text intrinsic). Grid spec: pri stretch align/justify ITEM dostane
-        // FULL track size. Set explicit dimensions tak ze layout_block respektuje.
-        // Pri user CSS height/width = jiz Some -> zachovan (override).
-        if stretch_h && child.explicit_height.is_none() {
+        // (text intrinsic). Grid spec: pri stretch align ITEM dostane FULL track
+        // size. Set explicit_height tak ze layout_block respektuje. NEdelej totez
+        // pro width - layout_block sirku neprepisuje, a pri grid pre-pass (s
+        // parent.rect.w=0 -> cw_avail=16) by se item navzdy poisonoval
+        // explicit_width=Some(16) a real layout videl jako "user-set" hodnotu.
+        // Skip hack pri parent pre-pass (rect.width=0 -> nase volajici outer
+        // pre-pass): bx.rect.height byl jen placeholder, neulozit do explicit.
+        let in_pre_pass = bx.rect.width <= 0.0 || bx.rect.height <= 0.0;
+        if stretch_h && child.explicit_height.is_none() && !in_pre_pass {
             child.explicit_height = Some(final_h);
-        }
-        if stretch_w && child.explicit_width.is_none() {
-            child.explicit_width = Some(final_w);
         }
         // Subgrid (CSS Grid L2): pri grid-template-rows/columns = "subgrid",
         // misto vlastnich tracku pouzij parent's tracks v ramci grid area item.

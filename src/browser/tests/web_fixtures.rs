@@ -363,4 +363,21 @@ mod tests {
     fn web_fixture_flex_column() {
         run_fixture("tests/fixtures/web/flex_column.json", 2.0, 0.0);
     }
+
+    /// Grid 2-col 310px + 1fr - typicky layout sidebar + content.
+    /// Test pres mileneckaseznamka.cz reportovany bug: 1fr nerozpina content
+    /// na celou volnou sirku.
+    #[test]
+    #[ignore]
+    fn web_fixture_grid_2col_fr() {
+        run_fixture("tests/fixtures/web/grid_2col_fr.json", 2.0, 0.0);
+    }
+
+    /// Grid nested - outer 2 col + inner grid 2 row. Test 1fr roztazeni
+    /// v inner gridu kdyz parent ma auto height.
+    #[test]
+    #[ignore]
+    fn web_fixture_grid_nested_fr() {
+        run_fixture("tests/fixtures/web/grid_nested_fr.json", 2.0, 0.0);
+    }
 }
