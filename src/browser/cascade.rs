@@ -1003,6 +1003,19 @@ pub fn cascade_with_viewport_typed(
         if let Some(v) = props.get("padding-left") {
             if let Some(l) = Length::parse(v) { cs.padding_left = l; }
         }
+        // Batch 6: width/height/min-width/min-height.
+        if let Some(v) = props.get("width") {
+            if let Some(l) = Length::parse(v) { cs.width = l; }
+        }
+        if let Some(v) = props.get("height") {
+            if let Some(l) = Length::parse(v) { cs.height = l; }
+        }
+        if let Some(v) = props.get("min-width") {
+            if let Some(l) = Length::parse(v) { cs.min_width = l; }
+        }
+        if let Some(v) = props.get("min-height") {
+            if let Some(l) = Length::parse(v) { cs.min_height = l; }
+        }
         computed.insert(*node_id, cs);
         // Konvertuj kazdou property na CascadeDecl s validity flag pro
         // batch 1 props (color/opacity/visibility/cursor) - parse Result
@@ -1027,6 +1040,8 @@ pub fn cascade_with_viewport_typed(
                 | PropertyId::MarginBottom | PropertyId::MarginLeft
                 | PropertyId::PaddingTop | PropertyId::PaddingRight
                 | PropertyId::PaddingBottom | PropertyId::PaddingLeft
+                | PropertyId::Width | PropertyId::Height
+                | PropertyId::MinWidth | PropertyId::MinHeight
                     => Length::parse(raw_val).is_some(),
                 // Cursor::parse vzdy uspeje (Custom fallback) - vsechny valid.
                 _ => true,

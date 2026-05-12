@@ -1946,3 +1946,51 @@ fn cascade_typed_padding_invalid_marked() {
     let p = decls.iter().find(|d| d.raw_value == "nope").unwrap();
     assert!(!p.valid);
 }
+
+// ─── L5 step 3 batch 6: width/height/min-width/min-height ─────────────
+
+#[test]
+fn cascade_typed_width_height() {
+    use crate::browser::computed_style::Length;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { width: 300px; height: 200px; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&div) as usize)).unwrap();
+    assert_eq!(cs.width, Length::Px(300.0));
+    assert_eq!(cs.height, Length::Px(200.0));
+}
+
+#[test]
+fn cascade_typed_width_auto() {
+    use crate::browser::computed_style::Length;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { width: auto; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&div) as usize)).unwrap();
+    assert_eq!(cs.width, Length::Auto);
+}
+
+#[test]
+fn cascade_typed_min_dimensions() {
+    use crate::browser::computed_style::Length;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { min-width: 100px; min-height: 50%; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&div) as usize)).unwrap();
+    assert_eq!(cs.min_width, Length::Px(100.0));
+    assert_eq!(cs.min_height, Length::Percent(50.0));
+}
+
+#[test]
+fn cascade_typed_width_invalid_marked() {
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { width: garbage; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let decls = out.declarations.get(&(std::rc::Rc::as_ptr(&div) as usize)).unwrap();
+    let w = decls.iter().find(|d| d.raw_value == "garbage").unwrap();
+    assert!(!w.valid);
+}
