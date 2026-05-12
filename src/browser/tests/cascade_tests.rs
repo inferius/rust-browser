@@ -1825,3 +1825,70 @@ fn cascade_typed_font_size_invalid_marked() {
     let fs = decls.iter().find(|d| d.raw_value == "chunky").unwrap();
     assert!(!fs.valid, "font-size:chunky marked invalid");
 }
+
+// ─── L5 step 3 batch 4: margin-top/right/bottom/left ──────────────────
+
+#[test]
+fn cascade_typed_margin_longhands() {
+    use crate::browser::computed_style::Length;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet(
+        "div { margin-top: 10px; margin-right: 20px; margin-bottom: 30px; margin-left: 40px; }"
+    );
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&div) as usize)).unwrap();
+    assert_eq!(cs.margin_top, Length::Px(10.0));
+    assert_eq!(cs.margin_right, Length::Px(20.0));
+    assert_eq!(cs.margin_bottom, Length::Px(30.0));
+    assert_eq!(cs.margin_left, Length::Px(40.0));
+}
+
+#[test]
+fn cascade_typed_margin_shorthand_expand() {
+    use crate::browser::computed_style::Length;
+    // expand_shorthand v cascade rozdeli `margin: 10px 20px` na 4 longhandy.
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { margin: 10px 20px; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&div) as usize)).unwrap();
+    assert_eq!(cs.margin_top, Length::Px(10.0));
+    assert_eq!(cs.margin_right, Length::Px(20.0));
+    assert_eq!(cs.margin_bottom, Length::Px(10.0));
+    assert_eq!(cs.margin_left, Length::Px(20.0));
+}
+
+#[test]
+fn cascade_typed_margin_auto() {
+    use crate::browser::computed_style::Length;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { margin-left: auto; margin-right: auto; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&div) as usize)).unwrap();
+    assert_eq!(cs.margin_left, Length::Auto);
+    assert_eq!(cs.margin_right, Length::Auto);
+}
+
+#[test]
+fn cascade_typed_margin_percent() {
+    use crate::browser::computed_style::Length;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { margin-top: 25%; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&div) as usize)).unwrap();
+    assert_eq!(cs.margin_top, Length::Percent(25.0));
+}
+
+#[test]
+fn cascade_typed_margin_invalid_marked() {
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { margin-top: chunky; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let decls = out.declarations.get(&(std::rc::Rc::as_ptr(&div) as usize)).unwrap();
+    let m = decls.iter().find(|d| d.raw_value == "chunky").unwrap();
+    assert!(!m.valid);
+}

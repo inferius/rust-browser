@@ -975,6 +975,21 @@ pub fn cascade_with_viewport_typed(
         if let Some(v) = props.get("line-height") {
             cs.line_height = parse_line_height(v);
         }
+        // Batch 4: margin-top/right/bottom/left. Shorthand `margin` rozkladame
+        // pres expand_shorthand drive cascade (samostatne entries), takze tady
+        // jen longhandy. `auto` -> Length::Auto.
+        if let Some(v) = props.get("margin-top") {
+            if let Some(l) = Length::parse(v) { cs.margin_top = l; }
+        }
+        if let Some(v) = props.get("margin-right") {
+            if let Some(l) = Length::parse(v) { cs.margin_right = l; }
+        }
+        if let Some(v) = props.get("margin-bottom") {
+            if let Some(l) = Length::parse(v) { cs.margin_bottom = l; }
+        }
+        if let Some(v) = props.get("margin-left") {
+            if let Some(l) = Length::parse(v) { cs.margin_left = l; }
+        }
         computed.insert(*node_id, cs);
         // Konvertuj kazdou property na CascadeDecl s validity flag pro
         // batch 1 props (color/opacity/visibility/cursor) - parse Result
@@ -995,6 +1010,9 @@ pub fn cascade_with_viewport_typed(
                 PropertyId::FontWeight => is_valid_font_weight(raw_val),
                 PropertyId::FontStyle => is_valid_font_style(raw_val),
                 PropertyId::LineHeight => is_valid_line_height(raw_val),
+                PropertyId::MarginTop | PropertyId::MarginRight
+                | PropertyId::MarginBottom | PropertyId::MarginLeft
+                    => Length::parse(raw_val).is_some(),
                 // Cursor::parse vzdy uspeje (Custom fallback) - vsechny valid.
                 _ => true,
             };
