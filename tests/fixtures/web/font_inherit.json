@@ -1,0 +1,23 @@
+{
+  "viewport": {"width": 1889, "height": 1945, "dpr": 1},
+  "html_source": "<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\"><title>font_inherit</title>\n<style>\n* { box-sizing: border-box; margin: 0; padding: 0; }\nbody { font-family: Arial; font-size: 16px; line-height: 1.5; color: #333; }\n.outer { padding: 10px; width: 400px; font-size: 14px; }\n.mid { padding: 8px; font-weight: 700; }\n.inner { padding: 6px; font-style: italic; }\n.override { font-size: 22px; }\n</style>\n</head><body>\n<div class=\"outer\">\n  <div class=\"mid\">\n    <div id=\"a\" class=\"inner\">14px bold italic from chain</div>\n  </div>\n</div>\n<div class=\"outer\">\n  <div class=\"mid\">\n    <div id=\"b\" class=\"inner override\">22px bold italic override</div>\n  </div>\n</div>\n</body></html>",
+  "css_inline": "\n* { box-sizing: border-box; margin: 0; padding: 0; }\nbody { font-family: Arial; font-size: 16px; line-height: 1.5; color: #333; }\n.outer { padding: 10px; width: 400px; font-size: 14px; }\n.mid { padding: 8px; font-weight: 700; }\n.inner { padding: 6px; font-style: italic; }\n.override { font-size: 22px; }\n",
+  "tree": {
+    "tag": "html", "id": "", "classes": [], "rect": {"x": 0, "y": 0, "w": 1889, "h": 150},
+    "children": [
+      {"tag": "head", "id": "", "classes": [], "rect": {"x": 0, "y": 0, "w": 0, "h": 0}, "children": []},
+      {"tag": "body", "id": "", "classes": [], "rect": {"x": 0, "y": 0, "w": 1889, "h": 150}, "children": [
+        {"tag": "div", "id": "", "classes": ["outer"], "rect": {"x": 0, "y": 0, "w": 400, "h": 69}, "children": [
+          {"tag": "div", "id": "", "classes": ["mid"], "rect": {"x": 10, "y": 10, "w": 380, "h": 49}, "children": [
+            {"tag": "div", "id": "a", "classes": ["inner"], "rect": {"x": 18, "y": 18, "w": 364, "h": 33}, "children": []}
+          ]}
+        ]},
+        {"tag": "div", "id": "", "classes": ["outer"], "rect": {"x": 0, "y": 69, "w": 400, "h": 81}, "children": [
+          {"tag": "div", "id": "", "classes": ["mid"], "rect": {"x": 10, "y": 79, "w": 380, "h": 61}, "children": [
+            {"tag": "div", "id": "b", "classes": ["inner", "override"], "rect": {"x": 18, "y": 87, "w": 364, "h": 45}, "children": []}
+          ]}
+        ]}
+      ]}
+    ]
+  }
+}

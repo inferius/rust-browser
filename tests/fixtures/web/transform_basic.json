@@ -1,0 +1,17 @@
+{
+  "viewport": {"width": 1889, "height": 1945, "dpr": 1},
+  "html_source": "<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\"><title>transform_basic</title>\n<style>\n* { box-sizing: border-box; margin: 0; padding: 0; }\nbody { font-family: Arial; padding: 20px; }\n.box { width: 100px; height: 60px; background: #eef; margin: 30px; display: inline-block; }\n.t1 { transform: translate(20px, 10px); }\n.t2 { transform: scale(1.5); }\n.t3 { transform: rotate(0deg); }\n</style>\n</head><body>\n<div id=\"a\" class=\"box\">No transform</div>\n<div id=\"b\" class=\"box t1\">translate</div>\n<div id=\"c\" class=\"box t2\">scale</div>\n<div id=\"d\" class=\"box t3\">rotate 0</div>\n</body></html>",
+  "css_inline": "\n* { box-sizing: border-box; margin: 0; padding: 0; }\nbody { font-family: Arial; padding: 20px; }\n.box { width: 100px; height: 60px; background: #eef; margin: 30px; display: inline-block; }\n.t1 { transform: translate(20px, 10px); }\n.t2 { transform: scale(1.5); }\n.t3 { transform: rotate(0deg); }\n",
+  "tree": {
+    "tag": "html", "id": "", "classes": [], "rect": {"x": 0, "y": 0, "w": 1889, "h": 160},
+    "children": [
+      {"tag": "head", "id": "", "classes": [], "rect": {"x": 0, "y": 0, "w": 0, "h": 0}, "children": []},
+      {"tag": "body", "id": "", "classes": [], "rect": {"x": 0, "y": 0, "w": 1889, "h": 160}, "children": [
+        {"tag": "div", "id": "a", "classes": ["box"], "rect": {"x": 50, "y": 50, "w": 100, "h": 60}, "children": []},
+        {"tag": "div", "id": "b", "classes": ["box", "t1"], "rect": {"x": 234, "y": 60, "w": 100, "h": 60}, "children": []},
+        {"tag": "div", "id": "c", "classes": ["box", "t2"], "rect": {"x": 354, "y": 35, "w": 150, "h": 90}, "children": []},
+        {"tag": "div", "id": "d", "classes": ["box", "t3"], "rect": {"x": 543, "y": 50, "w": 100, "h": 60}, "children": []}
+      ]}
+    ]
+  }
+}

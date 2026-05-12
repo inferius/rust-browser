@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>media_query</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: Arial; }
+.box { padding: 10px; background: #eef; margin: 8px; width: 300px; height: 40px; }
+.wide { width: 200px; }
+@media (min-width: 1000px) {
+  .wide { width: 500px; background: #fee; }
+}
+@media (min-width: 1500px) {
+  .wide { height: 80px; }
+}
+</style>
+</head><body>
+<div id="a" class="box">Always 300x40</div>
+<div id="b" class="box wide">Wide pri viewport >= 1000</div>
+</body></html>

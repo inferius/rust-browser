@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>background_layers</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: Arial; padding: 10px; }
+.box { width: 200px; height: 60px; margin: 10px; padding: 8px; }
+.solid { background: #c00; }
+.named { background: tomato; }
+.rgb { background: rgb(0, 128, 255); }
+.rgba { background: rgba(0, 200, 0, 0.5); }
+.hsl { background: hsl(120, 60%, 50%); }
+.grad { background: linear-gradient(to right, red, blue); }
+</style>
+</head><body>
+<div id="a" class="box solid">solid hex</div>
+<div id="b" class="box named">named tomato</div>
+<div id="c" class="box rgb">rgb()</div>
+<div id="d" class="box rgba">rgba()</div>
+<div id="e" class="box hsl">hsl()</div>
+<div id="f" class="box grad">gradient</div>
+</body></html>

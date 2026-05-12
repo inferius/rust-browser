@@ -1,0 +1,19 @@
+{
+  "viewport": {"width": 1889, "height": 1945, "dpr": 1},
+  "html_source": "<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\"><title>multicol_basic</title>\n<style>\n* { box-sizing: border-box; margin: 0; padding: 0; }\nbody { font-family: Arial; padding: 10px; }\n.cols { column-count: 3; column-gap: 20px; width: 600px; }\n.cols p { background: #eef; padding: 6px; margin-bottom: 8px; break-inside: avoid; }\n.single { width: 300px; padding: 10px; background: #ffe; }\n</style>\n</head><body>\n<div class=\"cols\">\n  <p id=\"p1\">Lorem ipsum dolor sit amet.</p>\n  <p id=\"p2\">Second paragraph here.</p>\n  <p id=\"p3\">Third paragraph item.</p>\n</div>\n<div id=\"d4\" class=\"single\">Single column fallback</div>\n</body></html>",
+  "css_inline": "\n* { box-sizing: border-box; margin: 0; padding: 0; }\nbody { font-family: Arial; padding: 10px; }\n.cols { column-count: 3; column-gap: 20px; width: 600px; }\n.cols p { background: #eef; padding: 6px; margin-bottom: 8px; break-inside: avoid; }\n.single { width: 300px; padding: 10px; background: #ffe; }\n",
+  "tree": {
+    "tag": "html", "id": "", "classes": [], "rect": {"x": 0, "y": 0, "w": 1889, "h": 106},
+    "children": [
+      {"tag": "head", "id": "", "classes": [], "rect": {"x": 0, "y": 0, "w": 0, "h": 0}, "children": []},
+      {"tag": "body", "id": "", "classes": [], "rect": {"x": 0, "y": 0, "w": 1889, "h": 106}, "children": [
+        {"tag": "div", "id": "", "classes": ["cols"], "rect": {"x": 10, "y": 10, "w": 600, "h": 48}, "children": [
+          {"tag": "p", "id": "p1", "classes": [], "rect": {"x": 10, "y": 10, "w": 187, "h": 48}, "children": []},
+          {"tag": "p", "id": "p2", "classes": [], "rect": {"x": 217, "y": 10, "w": 187, "h": 30}, "children": []},
+          {"tag": "p", "id": "p3", "classes": [], "rect": {"x": 423, "y": 10, "w": 187, "h": 30}, "children": []}
+        ]},
+        {"tag": "div", "id": "d4", "classes": ["single"], "rect": {"x": 10, "y": 58, "w": 300, "h": 38}, "children": []}
+      ]}
+    ]
+  }
+}

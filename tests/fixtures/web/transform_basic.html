@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>transform_basic</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: Arial; padding: 20px; }
+.box { width: 100px; height: 60px; background: #eef; margin: 30px; display: inline-block; }
+.t1 { transform: translate(20px, 10px); }
+.t2 { transform: scale(1.5); }
+.t3 { transform: rotate(0deg); }
+</style>
+</head><body>
+<div id="a" class="box">No transform</div>
+<div id="b" class="box t1">translate</div>
+<div id="c" class="box t2">scale</div>
+<div id="d" class="box t3">rotate 0</div>
+</body></html>

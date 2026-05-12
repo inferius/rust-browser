@@ -1,0 +1,19 @@
+{
+  "viewport": {"width": 1889, "height": 1945, "dpr": 1},
+  "html_source": "<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\"><title>background_layers</title>\n<style>\n* { box-sizing: border-box; margin: 0; padding: 0; }\nbody { font-family: Arial; padding: 10px; }\n.box { width: 200px; height: 60px; margin: 10px; padding: 8px; }\n.solid { background: #c00; }\n.named { background: tomato; }\n.rgb { background: rgb(0, 128, 255); }\n.rgba { background: rgba(0, 200, 0, 0.5); }\n.hsl { background: hsl(120, 60%, 50%); }\n.grad { background: linear-gradient(to right, red, blue); }\n</style>\n</head><body>\n<div id=\"a\" class=\"box solid\">solid hex</div>\n<div id=\"b\" class=\"box named\">named tomato</div>\n<div id=\"c\" class=\"box rgb\">rgb()</div>\n<div id=\"d\" class=\"box rgba\">rgba()</div>\n<div id=\"e\" class=\"box hsl\">hsl()</div>\n<div id=\"f\" class=\"box grad\">gradient</div>\n</body></html>",
+  "css_inline": "\n* { box-sizing: border-box; margin: 0; padding: 0; }\nbody { font-family: Arial; padding: 10px; }\n.box { width: 200px; height: 60px; margin: 10px; padding: 8px; }\n.solid { background: #c00; }\n.named { background: tomato; }\n.rgb { background: rgb(0, 128, 255); }\n.rgba { background: rgba(0, 200, 0, 0.5); }\n.hsl { background: hsl(120, 60%, 50%); }\n.grad { background: linear-gradient(to right, red, blue); }\n",
+  "tree": {
+    "tag": "html", "id": "", "classes": [], "rect": {"x": 0, "y": 0, "w": 1889, "h": 450},
+    "children": [
+      {"tag": "head", "id": "", "classes": [], "rect": {"x": 0, "y": 0, "w": 0, "h": 0}, "children": []},
+      {"tag": "body", "id": "", "classes": [], "rect": {"x": 0, "y": 0, "w": 1889, "h": 450}, "children": [
+        {"tag": "div", "id": "a", "classes": ["box", "solid"], "rect": {"x": 20, "y": 20, "w": 200, "h": 60}, "children": []},
+        {"tag": "div", "id": "b", "classes": ["box", "named"], "rect": {"x": 20, "y": 90, "w": 200, "h": 60}, "children": []},
+        {"tag": "div", "id": "c", "classes": ["box", "rgb"], "rect": {"x": 20, "y": 160, "w": 200, "h": 60}, "children": []},
+        {"tag": "div", "id": "d", "classes": ["box", "rgba"], "rect": {"x": 20, "y": 230, "w": 200, "h": 60}, "children": []},
+        {"tag": "div", "id": "e", "classes": ["box", "hsl"], "rect": {"x": 20, "y": 300, "w": 200, "h": 60}, "children": []},
+        {"tag": "div", "id": "f", "classes": ["box", "grad"], "rect": {"x": 20, "y": 370, "w": 200, "h": 60}, "children": []}
+      ]}
+    ]
+  }
+}

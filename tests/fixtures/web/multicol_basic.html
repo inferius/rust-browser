@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>multicol_basic</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: Arial; padding: 10px; }
+.cols { column-count: 3; column-gap: 20px; width: 600px; }
+.cols p { background: #eef; padding: 6px; margin-bottom: 8px; break-inside: avoid; }
+.single { width: 300px; padding: 10px; background: #ffe; }
+</style>
+</head><body>
+<div class="cols">
+  <p id="p1">Lorem ipsum dolor sit amet.</p>
+  <p id="p2">Second paragraph here.</p>
+  <p id="p3">Third paragraph item.</p>
+</div>
+<div id="d4" class="single">Single column fallback</div>
+</body></html>

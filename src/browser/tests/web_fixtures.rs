@@ -303,4 +303,55 @@ mod tests {
     fn web_fixture_pseudo_before() {
         run_fixture("tests/fixtures/web/pseudo_before.json", 2.0, 0.0);
     }
+
+    // ─── L5 prep fixtures (cascade ComputedStyle migration safety net) ──
+
+    /// @media (min-width) - .wide sirka/vyska zavisi na viewport.
+    /// Pri 1889 viewport ocekavame oba media queries fire (1000 + 1500).
+    #[test]
+    #[ignore]
+    fn web_fixture_media_query() {
+        run_fixture("tests/fixtures/web/media_query.json", 2.0, 0.0);
+    }
+
+    /// transform: translate/scale/rotate - getBoundingClientRect odrazi
+    /// post-transform geometry (scale(1.5) = 1.5x dimensions).
+    #[test]
+    #[ignore]
+    fn web_fixture_transform_basic() {
+        run_fixture("tests/fixtures/web/transform_basic.json", 2.0, 0.0);
+    }
+
+    /// background s ruznymi color formaty (#hex, named, rgb, rgba, hsl,
+    /// linear-gradient) - verifikuje layout zustava beze zmeny vstupem.
+    /// Po L5 doplnit verify cascade typed Color hodnoty.
+    #[test]
+    #[ignore]
+    fn web_fixture_background_layers() {
+        run_fixture("tests/fixtures/web/background_layers.json", 2.0, 0.0);
+    }
+
+    /// Font inheritance chain - body 16px -> .outer 14px -> .mid font-weight:700
+    /// -> .inner font-style:italic. .override resetuje font-size na 22px.
+    #[test]
+    #[ignore]
+    fn web_fixture_font_inherit() {
+        run_fixture("tests/fixtures/web/font_inherit.json", 2.0, 0.0);
+    }
+
+    /// position: absolute + top/left/bottom/right + 50% percent offset.
+    /// Verifikuje resolution offsetu proti positioned ancestoru.
+    #[test]
+    #[ignore]
+    fn web_fixture_position_abs() {
+        run_fixture("tests/fixtures/web/position_abs.json", 2.0, 0.0);
+    }
+
+    /// column-count: 3 - multi-column layout split do 3 sloupcu.
+    /// p s break-inside:avoid drzi pohromade.
+    #[test]
+    #[ignore]
+    fn web_fixture_multicol_basic() {
+        run_fixture("tests/fixtures/web/multicol_basic.json", 5.0, 0.0);
+    }
 }

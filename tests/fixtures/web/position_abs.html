@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>position_abs</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: Arial; padding: 20px; }
+.container { position: relative; width: 400px; height: 200px; background: #eef; margin-bottom: 10px; }
+.tl { position: absolute; top: 10px; left: 10px; width: 80px; height: 40px; background: #c00; }
+.br { position: absolute; bottom: 10px; right: 10px; width: 80px; height: 40px; background: #060; }
+.fixed-c { position: absolute; top: 50%; left: 50%; width: 60px; height: 30px; background: #00c; }
+</style>
+</head><body>
+<div class="container">
+  <div id="a" class="tl">top-left</div>
+  <div id="b" class="br">bottom-right</div>
+  <div id="c" class="fixed-c">middle</div>
+</div>
+</body></html>

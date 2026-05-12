@@ -1,0 +1,18 @@
+{
+  "viewport": {"width": 1889, "height": 1945, "dpr": 1},
+  "html_source": "<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\"><title>position_abs</title>\n<style>\n* { box-sizing: border-box; margin: 0; padding: 0; }\nbody { font-family: Arial; padding: 20px; }\n.container { position: relative; width: 400px; height: 200px; background: #eef; margin-bottom: 10px; }\n.tl { position: absolute; top: 10px; left: 10px; width: 80px; height: 40px; background: #c00; }\n.br { position: absolute; bottom: 10px; right: 10px; width: 80px; height: 40px; background: #060; }\n.fixed-c { position: absolute; top: 50%; left: 50%; width: 60px; height: 30px; background: #00c; }\n</style>\n</head><body>\n<div class=\"container\">\n  <div id=\"a\" class=\"tl\">top-left</div>\n  <div id=\"b\" class=\"br\">bottom-right</div>\n  <div id=\"c\" class=\"fixed-c\">middle</div>\n</div>\n</body></html>",
+  "css_inline": "\n* { box-sizing: border-box; margin: 0; padding: 0; }\nbody { font-family: Arial; padding: 20px; }\n.container { position: relative; width: 400px; height: 200px; background: #eef; margin-bottom: 10px; }\n.tl { position: absolute; top: 10px; left: 10px; width: 80px; height: 40px; background: #c00; }\n.br { position: absolute; bottom: 10px; right: 10px; width: 80px; height: 40px; background: #060; }\n.fixed-c { position: absolute; top: 50%; left: 50%; width: 60px; height: 30px; background: #00c; }\n",
+  "tree": {
+    "tag": "html", "id": "", "classes": [], "rect": {"x": 0, "y": 0, "w": 1889, "h": 250},
+    "children": [
+      {"tag": "head", "id": "", "classes": [], "rect": {"x": 0, "y": 0, "w": 0, "h": 0}, "children": []},
+      {"tag": "body", "id": "", "classes": [], "rect": {"x": 0, "y": 0, "w": 1889, "h": 250}, "children": [
+        {"tag": "div", "id": "", "classes": ["container"], "rect": {"x": 20, "y": 20, "w": 400, "h": 200}, "children": [
+          {"tag": "div", "id": "a", "classes": ["tl"], "rect": {"x": 30, "y": 30, "w": 80, "h": 40}, "children": []},
+          {"tag": "div", "id": "b", "classes": ["br"], "rect": {"x": 330, "y": 170, "w": 80, "h": 40}, "children": []},
+          {"tag": "div", "id": "c", "classes": ["fixed-c"], "rect": {"x": 220, "y": 120, "w": 60, "h": 30}, "children": []}
+        ]}
+      ]}
+    ]
+  }
+}
