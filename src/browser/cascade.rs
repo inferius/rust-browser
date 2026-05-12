@@ -106,6 +106,26 @@ pub fn expand_shorthand(prop: &str, value: &str, out: &mut HashMap<String, Strin
         out.insert("gap".into(), value.into());
         return;
     }
+    // border-radius shorthand: 1-4 values -> 4 corners.
+    // 1 -> all, 2 -> tl/br=v1, tr/bl=v2, 3 -> tl=v1, tr/bl=v2, br=v3,
+    // 4 -> tl tr br bl. Ignore "/" syntax pro elliptical radii.
+    if prop == "border-radius" {
+        let main = value.split('/').next().unwrap_or(value);
+        let parts: Vec<&str> = main.split_whitespace().collect();
+        if parts.is_empty() { return; }
+        let (tl, tr, br, bl) = match parts.len() {
+            1 => (parts[0], parts[0], parts[0], parts[0]),
+            2 => (parts[0], parts[1], parts[0], parts[1]),
+            3 => (parts[0], parts[1], parts[2], parts[1]),
+            _ => (parts[0], parts[1], parts[2], parts[3]),
+        };
+        out.insert("border-top-left-radius".into(), tl.into());
+        out.insert("border-top-right-radius".into(), tr.into());
+        out.insert("border-bottom-right-radius".into(), br.into());
+        out.insert("border-bottom-left-radius".into(), bl.into());
+        out.insert(prop.into(), value.into());
+        return;
+    }
     // border-width / border-style / border-color: 1-4 parts -> per-side.
     if matches!(prop, "border-width" | "border-style" | "border-color") {
         let parts: Vec<&str> = value.split_whitespace().collect();
@@ -1223,6 +1243,19 @@ pub fn cascade_with_viewport_typed(
         if let Some(v) = props.get("border-left-style") {
             if let Some(s) = CsBorderStyle::parse(v) { cs.border_left_style = s; }
         }
+        // Batch 18: border-*-radius. Shorthand expand drive (line 121).
+        if let Some(v) = props.get("border-top-left-radius") {
+            if let Some(l) = Length::parse(v) { cs.border_top_left_radius = l; }
+        }
+        if let Some(v) = props.get("border-top-right-radius") {
+            if let Some(l) = Length::parse(v) { cs.border_top_right_radius = l; }
+        }
+        if let Some(v) = props.get("border-bottom-right-radius") {
+            if let Some(l) = Length::parse(v) { cs.border_bottom_right_radius = l; }
+        }
+        if let Some(v) = props.get("border-bottom-left-radius") {
+            if let Some(l) = Length::parse(v) { cs.border_bottom_left_radius = l; }
+        }
         computed.insert(*node_id, cs);
         // Konvertuj kazdou property na CascadeDecl s validity flag pro
         // batch 1 props (color/opacity/visibility/cursor) - parse Result
@@ -1296,6 +1329,10 @@ pub fn cascade_with_viewport_typed(
                 | PropertyId::BorderBottomStyle | PropertyId::BorderLeftStyle
                 | PropertyId::BorderStyle
                     => CsBorderStyle::parse(raw_val).is_some(),
+                PropertyId::BorderTopLeftRadius | PropertyId::BorderTopRightRadius
+                | PropertyId::BorderBottomRightRadius | PropertyId::BorderBottomLeftRadius
+                | PropertyId::BorderRadius
+                    => Length::parse(raw_val).is_some(),
                 // Cursor::parse vzdy uspeje (Custom fallback) - vsechny valid.
                 _ => true,
             };

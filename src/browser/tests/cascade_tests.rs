@@ -2635,3 +2635,50 @@ fn cascade_typed_border_style_invalid_marked() {
     let s = decls.iter().find(|d| d.raw_value == "pretty").unwrap();
     assert!(!s.valid);
 }
+
+// ─── L5 step 3 batch 18: border-radius ────────────────────────────────
+
+#[test]
+fn cascade_typed_border_radius_corners() {
+    use crate::browser::computed_style::Length;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet(
+        "div { border-top-left-radius: 2px; border-top-right-radius: 4px; \
+         border-bottom-right-radius: 6px; border-bottom-left-radius: 8px; }"
+    );
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.border_top_left_radius, Length::Px(2.0));
+    assert_eq!(cs.border_top_right_radius, Length::Px(4.0));
+    assert_eq!(cs.border_bottom_right_radius, Length::Px(6.0));
+    assert_eq!(cs.border_bottom_left_radius, Length::Px(8.0));
+}
+
+#[test]
+fn cascade_typed_border_radius_shorthand_all() {
+    use crate::browser::computed_style::Length;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { border-radius: 10px; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.border_top_left_radius, Length::Px(10.0));
+    assert_eq!(cs.border_top_right_radius, Length::Px(10.0));
+    assert_eq!(cs.border_bottom_right_radius, Length::Px(10.0));
+    assert_eq!(cs.border_bottom_left_radius, Length::Px(10.0));
+}
+
+#[test]
+fn cascade_typed_border_radius_shorthand_4values() {
+    use crate::browser::computed_style::Length;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { border-radius: 1px 2px 3px 4px; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.border_top_left_radius, Length::Px(1.0));
+    assert_eq!(cs.border_top_right_radius, Length::Px(2.0));
+    assert_eq!(cs.border_bottom_right_radius, Length::Px(3.0));
+    assert_eq!(cs.border_bottom_left_radius, Length::Px(4.0));
+}

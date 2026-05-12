@@ -157,6 +157,12 @@ pub struct ComputedStyle {
     pub border_right_style: BorderStyle,
     pub border_bottom_style: BorderStyle,
     pub border_left_style: BorderStyle,
+
+    // ─── Border radius (batch 18) ─────────────────────────────────────
+    pub border_top_left_radius: Length,
+    pub border_top_right_radius: Length,
+    pub border_bottom_right_radius: Length,
+    pub border_bottom_left_radius: Length,
 }
 
 impl Default for ComputedStyle {
@@ -248,6 +254,10 @@ impl ComputedStyle {
             border_right_style: BorderStyle::None,
             border_bottom_style: BorderStyle::None,
             border_left_style: BorderStyle::None,
+            border_top_left_radius: Length::Px(0.0),
+            border_top_right_radius: Length::Px(0.0),
+            border_bottom_right_radius: Length::Px(0.0),
+            border_bottom_left_radius: Length::Px(0.0),
         }
     }
 }
