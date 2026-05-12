@@ -671,6 +671,61 @@ fn paint_transform_marker_includes_matrix() {
     panic!("TransformBegin nenalezen");
 }
 
+/// 4 rot-boxes v flex row, kazdy ma transform. Vsechny 4 musi byt v
+/// display list (TransformBegin za rotate*, Rect za scale + Rect.r-0).
+/// Drive: rozbity transform 3D pipeline mohl zpusobit, ze nektera Transform
+/// segment vypadne (segment partition error nebo paint skip).
+#[test]
+fn paint_transform_3d_row_all_emit() {
+    let cmds = build_dl(
+        r#"<html><body><div class="row">
+            <div class="t-rx"></div>
+            <div class="t-ry"></div>
+            <div class="t-rxy"></div>
+            <div class="t-persp"></div>
+        </div></body></html>"#,
+        r#"
+            .row { display: flex; }
+            .row > div { width: 80px; height: 60px; background: #2997ff; }
+            .t-rx    { transform: rotateX(45deg); }
+            .t-ry    { transform: rotateY(45deg); }
+            .t-rxy   { transform: rotateX(30deg) rotateY(30deg); }
+            .t-persp { transform: perspective(600px) rotateY(35deg); }
+        "#,
+    );
+    // Pocitej Transform Begin/End - 4 elementy = 4 begin + 4 end.
+    let begins = count_transform_begins(&cmds);
+    let ends = count_transform_ends(&cmds);
+    assert_eq!(begins, 4, "4 transform 3D elementu musi emit 4 TransformBegin");
+    assert_eq!(ends, 4, "TransformEnd musi byt 4");
+}
+
+#[test]
+fn paint_transform_3d_perspective_chain_matrix_w_nonidentity() {
+    // perspective(600px) rotateY(35deg) - perspective ovlivni m[14]/m[15],
+    // rotateY ovlivni m[0], m[2], m[8], m[10].
+    let cmds = build_dl(
+        r#"<html><body><div></div></body></html>"#,
+        r#"div { width: 80px; height: 60px; background: red;
+                transform: perspective(600px) rotateY(35deg); }"#,
+    );
+    for cmd in &cmds {
+        if let DisplayCommand::TransformBegin { matrix, .. } = cmd {
+            // m[0] = cos(35deg) ~= 0.819
+            assert!((matrix[0] - 35.0_f32.to_radians().cos()).abs() < 1e-3,
+                "m[0] = cos(35) expected, got {}", matrix[0]);
+            // m[14] = -cos(35)/600 (perspective * rotateY compose)
+            // Perspective alone = -1/600 at m[14]; multiplied by rotateY
+            // row3*col2 sum daje -cos(angle)/600.
+            let expected = -35.0_f32.to_radians().cos() / 600.0;
+            assert!((matrix[14] - expected).abs() < 1e-4,
+                "m[14] expected ~{} (= -cos(35)/600), got {}", expected, matrix[14]);
+            return;
+        }
+    }
+    panic!("TransformBegin nenalezen pri perspective+rotateY");
+}
+
 // ─── Polygon clip-path ──────────────────────────────────────────────────
 
 #[test]
