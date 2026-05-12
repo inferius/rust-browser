@@ -7,6 +7,10 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use super::dom::{Node, NodeKind};
 use super::css_parser::{Stylesheet, Selector, SimpleSelector, Combinator, Rule, specificity};
+use super::computed_style::{
+    CascadeOutput, CascadeDecl, ComputedStyle, ComputedStyleMap, DeclarationsMap,
+    PropertyId, CascadeOrigin, Specificity as CsSpec,
+};
 
 // Runtime UI state pres thread-local. Nastavuje render loop pred kazdym
 // cascade pass; matches_selector cte pro :hover / :active / :focus / :focus-within.
@@ -910,6 +914,46 @@ fn resolve_viewport_units(s: &str, vw: f32, vh: f32) -> String {
         }
     }
     out
+}
+
+/// L5 dual-write cascade variant. Vraci CascadeOutput { style_map, computed,
+/// declarations } - bundle pro postupnou migraci layout/paint na typed
+/// ComputedStyle.
+///
+/// Stage 2c: style_map vyplnen z legacy cascade. computed prazdny
+/// (Default::initial). declarations konvertovany z style_map jako "valid"
+/// stub bez specificity tracking. Stage 3 zlepsi populace.
+pub fn cascade_with_viewport_typed(
+    root: &Rc<Node>,
+    stylesheets: &[Stylesheet],
+    viewport_w: f32, viewport_h: f32,
+) -> CascadeOutput {
+    let style_map = cascade_with_viewport(root, stylesheets, viewport_w, viewport_h);
+    let mut computed: ComputedStyleMap = HashMap::new();
+    let mut declarations: DeclarationsMap = HashMap::new();
+    for (node_id, props) in &style_map {
+        // Stage 2c stub: ComputedStyle::initial() per element. Stage 3
+        // resolve actual typed values per property (font_size, color, ...).
+        computed.insert(*node_id, ComputedStyle::initial());
+        // Konvertuj kazdou property na CascadeDecl. Validity = `Some` parse.
+        // Specificity prazdna (stage 2c), order = enumerate.
+        let mut decls: Vec<CascadeDecl> = Vec::with_capacity(props.len());
+        for (idx, (raw_name, raw_val)) in props.iter().enumerate() {
+            let property = PropertyId::parse(raw_name);
+            let valid = property != PropertyId::Unknown;
+            decls.push(CascadeDecl {
+                property,
+                raw_value: raw_val.clone(),
+                valid,
+                important: false,
+                specificity: CsSpec::ZERO,
+                origin: CascadeOrigin::Author,
+                source_order: idx as u32,
+            });
+        }
+        declarations.insert(*node_id, decls);
+    }
+    CascadeOutput { style_map, computed, declarations }
 }
 
 /// Per-element container query evaluation: container_sizes je mapa

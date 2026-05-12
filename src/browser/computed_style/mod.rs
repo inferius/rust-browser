@@ -27,6 +27,31 @@ pub use length::Length;
 pub use property::PropertyId;
 pub use cascade_decl::{CascadeDecl, CascadeOrigin, Specificity};
 
+use std::collections::HashMap;
+
+/// Per-element typed computed style. Node ptr (Rc::as_ptr usize) -> resolved
+/// ComputedStyle. L5 stage 2c: definovan, naplnovan v stage 3 dual-write
+/// z cascade. layout/paint zatim cte z StyleMap (HashMap<String,String>).
+pub type ComputedStyleMap = std::collections::HashMap<usize, ComputedStyle>;
+
+/// Per-element collected declarations (vsechny, vc. invalid). Pro devtools
+/// strikethrough display - layout neuses, ulozeno cisto pro devtools UI
+/// (L5 stage 5).
+pub type DeclarationsMap = std::collections::HashMap<usize, Vec<CascadeDecl>>;
+
+/// Cascade output bundle. Dual-write step zachova obe puvodni HashMap +
+/// nove typed mapping pro postupnou migraci.
+#[derive(Debug, Default)]
+pub struct CascadeOutput {
+    /// Legacy stringly mapping. Layout/paint/animations zatim cti odsud.
+    /// Po stage 4 dropnout.
+    pub style_map: HashMap<usize, HashMap<String, String>>,
+    /// Typed computed styles. Po stage 3 plnit; po stage 4 main API.
+    pub computed: ComputedStyleMap,
+    /// All declarations vc. invalid. Pro devtools (stage 5).
+    pub declarations: DeclarationsMap,
+}
+
 /// Resolved computed style per element (CSS Cascade L4 §4.1 specified->
 /// computed value mapping).
 ///

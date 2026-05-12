@@ -1537,3 +1537,31 @@ fn container_query_no_container_skipped() {
     let color = styles.and_then(|s| s.get("color")).cloned().unwrap_or_default();
     assert!(color.trim() != "red", "Bez container ancestor query NEMATCH");
 }
+
+// ─── L5 step 2c: cascade_with_viewport_typed smoke test ────────────────
+
+#[test]
+fn cascade_typed_dual_write_smoke() {
+    use crate::browser::computed_style::PropertyId;
+    let doc = parse_html("<html><body><p>x</p></body></html>", "");
+    let css = parse_stylesheet("p { color: red; font-size: 14px; bogus-prop: 5px; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+
+    let p = doc.root.find(|n| n.tag_name().as_deref() == Some("p")).unwrap();
+    let node_id = std::rc::Rc::as_ptr(&p) as usize;
+
+    // style_map (legacy) ma color
+    let styles = out.style_map.get(&node_id).expect("style_map entry");
+    assert_eq!(styles.get("color").map(|s| s.as_str()), Some("red"));
+
+    // computed je initial (stage 2c stub - bez populace)
+    assert!(out.computed.contains_key(&node_id), "computed entry per node");
+
+    // declarations ma 3 props, bogus-prop = Unknown/invalid
+    let decls = out.declarations.get(&node_id).expect("declarations entry");
+    let color_decl = decls.iter().find(|d| d.property == PropertyId::Color).unwrap();
+    assert!(color_decl.valid);
+    assert_eq!(color_decl.raw_value, "red");
+    let bogus = decls.iter().find(|d| d.raw_value == "5px" && !d.valid);
+    assert!(bogus.is_some(), "bogus-prop captured as invalid");
+}
