@@ -540,9 +540,7 @@ pub struct LayoutBox {
     /// overscroll-behavior: "auto" | "contain" | "none"
     pub overscroll_behavior: String,
     /// scroll-snap-type: "none" | "x mandatory" | "y proximity" / ...
-    pub scroll_snap_type: String,
     /// scroll-snap-align: "none" | "start" | "end" | "center"
-    pub scroll_snap_align: String,
     /// scroll-padding (top right bottom left v px)
     pub scroll_padding: [f32; 4],
     /// scroll-margin
@@ -698,13 +696,10 @@ pub struct LayoutBox {
     pub border_image_width: [f32; 4],
     /// border-image-repeat: stretch (default) | repeat | round | space (per axis).
     /// CSS Text Decor L4 - text-emphasis: <style> <color>.
-    pub text_emphasis_style: String,
     pub text_emphasis_color: Option<[u8; 4]>,
     /// CSS Text Decor L3 - text-decoration-skip-ink: auto | none | all.
-    pub text_decoration_skip_ink: String,
     /// CSS Forms L1 - field-sizing: fixed (default) | content.
     /// CSS Animations L2 - interpolate-size: numeric-only (default) | allow-keywords.
-    pub interpolate_size: String,
     /// CSS Multi-column Layout L1 - column-count: 1+ (auto = 1 default).
     /// Pri > 1: layout_block rozdeli flow children rovnomerne do N sloupcu.
     pub column_count: u32,
@@ -729,11 +724,7 @@ pub struct LayoutBox {
     pub shape_margin: f32,
     pub shape_image_threshold: f32,
     /// CSS Overflow L4 - scrollbar-gutter: auto | stable [both-edges].
-    pub scrollbar_gutter: String,
     /// CSS SVG markers - marker-start/mid/end (SVG paths).
-    pub marker_start: String,
-    pub marker_mid: String,
-    pub marker_end: String,
     /// CSS Backgrounds L4 - background-position-x / -y separately.
     /// CSS Images L3 - image-orientation: from-image | none | <angle>.
     /// CSS Text L4 - hyphenate-character / hyphenate-limit-chars.
@@ -903,8 +894,6 @@ impl LayoutBox {
             scrollbar_width: String::new(),
             scrollbar_color: None,
             overscroll_behavior: String::new(),
-            scroll_snap_type: String::new(),
-            scroll_snap_align: String::new(),
             scroll_padding: [0.0; 4],
             scroll_margin: [0.0; 4],
             mask_image: None,
@@ -974,10 +963,7 @@ impl LayoutBox {
             border_image_source: None,
             border_image_slice: [0.0; 4],
             border_image_width: [1.0; 4],
-            text_emphasis_style: String::new(),
             text_emphasis_color: None,
-            text_decoration_skip_ink: String::new(),
-            interpolate_size: String::new(),
             column_count: 1,
             column_gap_multicol: 16.0,
             column_rule_width: 0.0,
@@ -993,10 +979,6 @@ impl LayoutBox {
             grid_auto_flow: String::new(),
             shape_margin: 0.0,
             shape_image_threshold: 0.0,
-            scrollbar_gutter: String::new(),
-            marker_start: String::new(),
-            marker_mid: String::new(),
-            marker_end: String::new(),
             inset: [None; 4],
             contain_intrinsic_block_size: 0.0,
             contain_intrinsic_inline_size: 0.0,
@@ -2067,27 +2049,17 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         bx.mix_blend_mode = mbm.trim().to_string();
     }
     // text-emphasis
-    if let Some(tes) = s.get("text-emphasis-style") {
-        bx.text_emphasis_style = tes.trim().to_string();
-    }
     if let Some(tec) = s.get("text-emphasis-color") {
         bx.text_emphasis_color = parse_color(tec);
     }
     if let Some(te) = s.get("text-emphasis") {
         // Shorthand "<style> <color>"
         let parts: Vec<&str> = te.split_whitespace().collect();
-        if !parts.is_empty() { bx.text_emphasis_style = parts[0].to_string(); }
         if parts.len() >= 2 { bx.text_emphasis_color = parse_color(parts[1]); }
     }
     // text-decoration-skip-ink
-    if let Some(tdsi) = s.get("text-decoration-skip-ink") {
-        bx.text_decoration_skip_ink = tdsi.trim().to_string();
-    }
     // field-sizing (CSS Forms L1)
     // interpolate-size (CSS Animations L2)
-    if let Some(is_) = s.get("interpolate-size") {
-        bx.interpolate_size = is_.trim().to_string();
-    }
     // CSS Grid L2 - named lines / areas (parser-only, taffy resolvuje track sizes)
     if let Some(gtc) = s.get("grid-template-columns") {
         bx.grid_template_columns = gtc.trim().to_string();
@@ -2125,11 +2097,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         bx.shape_image_threshold = sit.trim().parse().unwrap_or(0.0);
     }
     // CSS Overflow L4
-    if let Some(sg) = s.get("scrollbar-gutter") { bx.scrollbar_gutter = sg.trim().to_string(); }
     // SVG markers
-    if let Some(m) = s.get("marker-start") { bx.marker_start = m.trim().to_string(); }
-    if let Some(m) = s.get("marker-mid") { bx.marker_mid = m.trim().to_string(); }
-    if let Some(m) = s.get("marker-end") { bx.marker_end = m.trim().to_string(); }
     // CSS Backgrounds L4 - position-x / -y
     // CSS Images L3
     // hyphenate-* (Text L4)
@@ -2268,12 +2236,6 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         bx.overscroll_behavior = ob.trim().to_string();
     }
     // scroll-snap
-    if let Some(sst) = s.get("scroll-snap-type") {
-        bx.scroll_snap_type = sst.trim().to_string();
-    }
-    if let Some(ssa) = s.get("scroll-snap-align") {
-        bx.scroll_snap_align = ssa.trim().to_string();
-    }
     let parse_4 = |v: &str| -> [f32; 4] {
         let parts: Vec<&str> = v.split_whitespace().collect();
         match parts.len() {
