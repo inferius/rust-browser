@@ -1565,3 +1565,86 @@ fn cascade_typed_dual_write_smoke() {
     let bogus = decls.iter().find(|d| d.raw_value == "5px" && !d.valid);
     assert!(bogus.is_some(), "bogus-prop captured as invalid");
 }
+
+// ─── L5 step 3 batch 1: color/opacity/visibility/cursor populace ──────
+
+#[test]
+fn cascade_typed_color_populace() {
+    use crate::browser::computed_style::Color;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { color: #ff0000; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&div) as usize)).unwrap();
+    assert_eq!(cs.color, Color::Rgba { r: 255, g: 0, b: 0, a: 255 });
+}
+
+#[test]
+fn cascade_typed_opacity_clamp() {
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    // 1.5 nad max - clamp na 1.0
+    let css = parse_stylesheet("div { opacity: 1.5; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&div) as usize)).unwrap();
+    assert!((cs.opacity - 1.0).abs() < 0.001);
+}
+
+#[test]
+fn cascade_typed_opacity_invalid_keeps_initial() {
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { opacity: garbage; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&div) as usize)).unwrap();
+    // Invalid -> initial 1.0 (CSS spec discard)
+    assert!((cs.opacity - 1.0).abs() < 0.001);
+}
+
+#[test]
+fn cascade_typed_visibility() {
+    use crate::browser::computed_style::Visibility;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { visibility: hidden; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&div) as usize)).unwrap();
+    assert_eq!(cs.visibility, Visibility::Hidden);
+}
+
+#[test]
+fn cascade_typed_cursor_keyword() {
+    use crate::browser::computed_style::Cursor;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { cursor: pointer; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&div) as usize)).unwrap();
+    assert_eq!(cs.cursor, Cursor::Pointer);
+}
+
+#[test]
+fn cascade_typed_cursor_custom_fallback() {
+    use crate::browser::computed_style::Cursor;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { cursor: zoom-in; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&div) as usize)).unwrap();
+    // Cursor::Custom("zoom-in") - neznamy keyword zachycen
+    match &cs.cursor {
+        Cursor::Custom(s) => assert_eq!(s, "zoom-in"),
+        other => panic!("expected Custom, got {:?}", other),
+    }
+}
+
+#[test]
+fn cascade_typed_visibility_invalid_marked() {
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { visibility: blah; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let decls = out.declarations.get(&(std::rc::Rc::as_ptr(&div) as usize)).unwrap();
+    let vis = decls.iter().find(|d| d.raw_value == "blah").unwrap();
+    assert!(!vis.valid, "visibility:blah marked invalid pro devtools strikethrough");
+}

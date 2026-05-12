@@ -96,6 +96,8 @@ pub struct ComputedStyle {
 
     // ─── Visual ─────────────────────────────────────────────────────────
     pub opacity: f32,                          // 0..1, default 1
+    pub visibility: Visibility,
+    pub cursor: Cursor,
 }
 
 impl Default for ComputedStyle {
@@ -138,6 +140,89 @@ impl ComputedStyle {
             bottom: Length::Auto,
             left: Length::Auto,
             opacity: 1.0,
+            visibility: Visibility::Visible,
+            cursor: Cursor::Auto,
+        }
+    }
+}
+
+/// CSS `visibility` (CSS Display L3 §11). Inherited.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Visibility {
+    Visible,
+    Hidden,
+    Collapse,
+}
+
+impl Visibility {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s.trim().to_lowercase().as_str() {
+            "visible" => Self::Visible,
+            "hidden" => Self::Hidden,
+            "collapse" => Self::Collapse,
+            _ => return None,
+        })
+    }
+    pub fn css_string(self) -> &'static str {
+        match self {
+            Self::Visible => "visible",
+            Self::Hidden => "hidden",
+            Self::Collapse => "collapse",
+        }
+    }
+}
+
+/// CSS `cursor` (CSS UI L4 §8.1). Inherited. Subset typed; ostatni Custom.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Cursor {
+    Auto,
+    Default,
+    Pointer,
+    Text,
+    Move,
+    NotAllowed,
+    Grab,
+    Grabbing,
+    Wait,
+    Help,
+    Crosshair,
+    Progress,
+    Custom(String),     // url() nebo neznamy keyword
+}
+
+impl Cursor {
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_lowercase().as_str() {
+            "auto" => Self::Auto,
+            "default" => Self::Default,
+            "pointer" => Self::Pointer,
+            "text" => Self::Text,
+            "move" => Self::Move,
+            "not-allowed" => Self::NotAllowed,
+            "grab" => Self::Grab,
+            "grabbing" => Self::Grabbing,
+            "wait" => Self::Wait,
+            "help" => Self::Help,
+            "crosshair" => Self::Crosshair,
+            "progress" => Self::Progress,
+            other => Self::Custom(other.to_string()),
+        }
+    }
+    pub fn css_string(&self) -> String {
+        match self {
+            Self::Auto => "auto".into(),
+            Self::Default => "default".into(),
+            Self::Pointer => "pointer".into(),
+            Self::Text => "text".into(),
+            Self::Move => "move".into(),
+            Self::NotAllowed => "not-allowed".into(),
+            Self::Grab => "grab".into(),
+            Self::Grabbing => "grabbing".into(),
+            Self::Wait => "wait".into(),
+            Self::Help => "help".into(),
+            Self::Crosshair => "crosshair".into(),
+            Self::Progress => "progress".into(),
+            Self::Custom(s) => s.clone(),
         }
     }
 }

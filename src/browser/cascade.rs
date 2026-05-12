@@ -8,8 +8,8 @@ use std::rc::Rc;
 use super::dom::{Node, NodeKind};
 use super::css_parser::{Stylesheet, Selector, SimpleSelector, Combinator, Rule, specificity};
 use super::computed_style::{
-    CascadeOutput, CascadeDecl, ComputedStyle, ComputedStyleMap, DeclarationsMap,
-    PropertyId, CascadeOrigin, Specificity as CsSpec,
+    CascadeOutput, CascadeDecl, Color, ComputedStyle, ComputedStyleMap, Cursor,
+    DeclarationsMap, PropertyId, CascadeOrigin, Specificity as CsSpec, Visibility,
 };
 
 // Runtime UI state pres thread-local. Nastavuje render loop pred kazdym
@@ -932,15 +932,39 @@ pub fn cascade_with_viewport_typed(
     let mut computed: ComputedStyleMap = HashMap::new();
     let mut declarations: DeclarationsMap = HashMap::new();
     for (node_id, props) in &style_map {
-        // Stage 2c stub: ComputedStyle::initial() per element. Stage 3
-        // resolve actual typed values per property (font_size, color, ...).
-        computed.insert(*node_id, ComputedStyle::initial());
-        // Konvertuj kazdou property na CascadeDecl. Validity = `Some` parse.
-        // Specificity prazdna (stage 2c), order = enumerate.
+        let mut cs = ComputedStyle::initial();
+        // Stage 3 batch 1: populace color/opacity/visibility/cursor.
+        // Pri invalid value -> keep initial (CSS spec discard invalid).
+        if let Some(v) = props.get("color") {
+            if let Some(c) = Color::parse(v) { cs.color = c; }
+        }
+        if let Some(v) = props.get("opacity") {
+            if let Ok(n) = v.trim().parse::<f32>() {
+                cs.opacity = n.clamp(0.0, 1.0);
+            }
+        }
+        if let Some(v) = props.get("visibility") {
+            if let Some(vis) = Visibility::parse(v) { cs.visibility = vis; }
+        }
+        if let Some(v) = props.get("cursor") {
+            cs.cursor = Cursor::parse(v);
+        }
+        computed.insert(*node_id, cs);
+        // Konvertuj kazdou property na CascadeDecl s validity flag pro
+        // batch 1 props (color/opacity/visibility/cursor) - parse Result
+        // urcuje valid. Ostatni props zatim valid=true pokud PropertyId
+        // known (Unknown = invalid).
         let mut decls: Vec<CascadeDecl> = Vec::with_capacity(props.len());
         for (idx, (raw_name, raw_val)) in props.iter().enumerate() {
             let property = PropertyId::parse(raw_name);
-            let valid = property != PropertyId::Unknown;
+            let valid = match property {
+                PropertyId::Unknown => false,
+                PropertyId::Color => Color::parse(raw_val).is_some(),
+                PropertyId::Opacity => raw_val.trim().parse::<f32>().is_ok(),
+                PropertyId::Visibility => Visibility::parse(raw_val).is_some(),
+                // Cursor::parse vzdy uspeje (Custom fallback) - vsechny valid.
+                _ => true,
+            };
             decls.push(CascadeDecl {
                 property,
                 raw_value: raw_val.clone(),
