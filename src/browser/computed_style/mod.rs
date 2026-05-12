@@ -187,6 +187,13 @@ pub struct ComputedStyle {
     pub list_style_position: ListStylePosition,
     pub list_style_image: ListStyleImage,
     pub tab_size: f32,
+
+    // ─── Table (batch 23) ─────────────────────────────────────────────
+    pub border_collapse: BorderCollapse,
+    pub border_spacing_h: Length,
+    pub border_spacing_v: Length,
+    pub table_layout: TableLayout,
+    pub caption_side: CaptionSide,
 }
 
 impl Default for ComputedStyle {
@@ -298,7 +305,63 @@ impl ComputedStyle {
             list_style_position: ListStylePosition::Outside,
             list_style_image: ListStyleImage::None,
             tab_size: 8.0,
+            border_collapse: BorderCollapse::Separate,
+            border_spacing_h: Length::Px(0.0),
+            border_spacing_v: Length::Px(0.0),
+            table_layout: TableLayout::Auto,
+            caption_side: CaptionSide::Top,
         }
+    }
+}
+
+/// CSS `border-collapse` (CSS Tables L3 §6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BorderCollapse {
+    Separate,
+    Collapse,
+}
+
+impl BorderCollapse {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s.trim().to_lowercase().as_str() {
+            "separate" => Self::Separate,
+            "collapse" => Self::Collapse,
+            _ => return None,
+        })
+    }
+}
+
+/// CSS `table-layout` (CSS Tables L3 §3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TableLayout {
+    Auto,
+    Fixed,
+}
+
+impl TableLayout {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s.trim().to_lowercase().as_str() {
+            "auto" => Self::Auto,
+            "fixed" => Self::Fixed,
+            _ => return None,
+        })
+    }
+}
+
+/// CSS `caption-side` (CSS Tables L3 §10).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaptionSide {
+    Top,
+    Bottom,
+}
+
+impl CaptionSide {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s.trim().to_lowercase().as_str() {
+            "top" => Self::Top,
+            "bottom" => Self::Bottom,
+            _ => return None,
+        })
     }
 }
 

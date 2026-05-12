@@ -18,8 +18,9 @@ use super::computed_style::{
     JustifyContent as CsJustifyContent, Length, LineHeight,
     Overflow as CsOverflow, OverflowWrap, PointerEvents as CsPointerEvents,
     PositionKind, PropertyId, CascadeOrigin, Specificity as CsSpec,
+    BorderCollapse as CsBorderCollapse, CaptionSide as CsCaptionSide,
     ListStyleImage as CsListStyleImage, ListStylePosition as CsListStylePosition,
-    ListStyleType as CsListStyleType,
+    ListStyleType as CsListStyleType, TableLayout as CsTableLayout,
     TextAlign as CsTextAlign, TextDecorationLine as CsTextDecorationLine,
     TextDecorationStyle as CsTextDecorationStyle, TextOverflow as CsTextOverflow,
     TextTransform as CsTextTransform, VerticalAlign as CsVerticalAlign,
@@ -1332,6 +1333,32 @@ pub fn cascade_with_viewport_typed(
         if let Some(v) = props.get("tab-size") {
             if let Ok(n) = v.trim().parse::<f32>() { cs.tab_size = n.max(0.0); }
         }
+        // Batch 23: table props.
+        if let Some(v) = props.get("border-collapse") {
+            if let Some(b) = CsBorderCollapse::parse(v) { cs.border_collapse = b; }
+        }
+        if let Some(v) = props.get("border-spacing") {
+            // 1 nebo 2 values: <h> <v> nebo <both>.
+            let parts: Vec<&str> = v.split_whitespace().collect();
+            match parts.len() {
+                1 => {
+                    if let Some(l) = Length::parse(parts[0]) {
+                        cs.border_spacing_h = l.clone();
+                        cs.border_spacing_v = l;
+                    }
+                }
+                _ => {
+                    if let Some(l) = Length::parse(parts[0]) { cs.border_spacing_h = l; }
+                    if let Some(l) = Length::parse(parts[1]) { cs.border_spacing_v = l; }
+                }
+            }
+        }
+        if let Some(v) = props.get("table-layout") {
+            if let Some(t) = CsTableLayout::parse(v) { cs.table_layout = t; }
+        }
+        if let Some(v) = props.get("caption-side") {
+            if let Some(c) = CsCaptionSide::parse(v) { cs.caption_side = c; }
+        }
         computed.insert(*node_id, cs);
         // Konvertuj kazdou property na CascadeDecl s validity flag pro
         // batch 1 props (color/opacity/visibility/cursor) - parse Result
@@ -1438,6 +1465,13 @@ pub fn cascade_with_viewport_typed(
                 PropertyId::ListStylePosition => CsListStylePosition::parse(raw_val).is_some(),
                 PropertyId::ListStyleImage => CsListStyleImage::parse(raw_val).is_some(),
                 PropertyId::TabSize => raw_val.trim().parse::<f32>().is_ok(),
+                PropertyId::BorderCollapse => CsBorderCollapse::parse(raw_val).is_some(),
+                PropertyId::BorderSpacing => {
+                    let parts: Vec<&str> = raw_val.split_whitespace().collect();
+                    !parts.is_empty() && parts.iter().all(|p| Length::parse(p).is_some())
+                },
+                PropertyId::TableLayout => CsTableLayout::parse(raw_val).is_some(),
+                PropertyId::CaptionSide => CsCaptionSide::parse(raw_val).is_some(),
                 // Cursor::parse vzdy uspeje (Custom fallback) - vsechny valid.
                 _ => true,
             };

@@ -2876,3 +2876,50 @@ fn cascade_typed_tab_size() {
     let cs = out.computed.get(&(std::rc::Rc::as_ptr(&p) as usize)).unwrap();
     assert!((cs.tab_size - 4.0).abs() < 0.001);
 }
+
+// ─── L5 step 3 batch 23: table props ──────────────────────────────────
+
+#[test]
+fn cascade_typed_border_collapse() {
+    use crate::browser::computed_style::BorderCollapse;
+    let doc = parse_html("<html><body><table></table></body></html>", "");
+    let css = parse_stylesheet("table { border-collapse: collapse; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let t = doc.root.find(|n| n.tag_name().as_deref() == Some("table")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&t) as usize)).unwrap();
+    assert_eq!(cs.border_collapse, BorderCollapse::Collapse);
+}
+
+#[test]
+fn cascade_typed_border_spacing_pair() {
+    use crate::browser::computed_style::Length;
+    let doc = parse_html("<html><body><table></table></body></html>", "");
+    let css = parse_stylesheet("table { border-spacing: 4px 8px; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let t = doc.root.find(|n| n.tag_name().as_deref() == Some("table")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&t) as usize)).unwrap();
+    assert_eq!(cs.border_spacing_h, Length::Px(4.0));
+    assert_eq!(cs.border_spacing_v, Length::Px(8.0));
+}
+
+#[test]
+fn cascade_typed_table_layout_fixed() {
+    use crate::browser::computed_style::TableLayout;
+    let doc = parse_html("<html><body><table></table></body></html>", "");
+    let css = parse_stylesheet("table { table-layout: fixed; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let t = doc.root.find(|n| n.tag_name().as_deref() == Some("table")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&t) as usize)).unwrap();
+    assert_eq!(cs.table_layout, TableLayout::Fixed);
+}
+
+#[test]
+fn cascade_typed_caption_side_bottom() {
+    use crate::browser::computed_style::CaptionSide;
+    let doc = parse_html("<html><body><table></table></body></html>", "");
+    let css = parse_stylesheet("table { caption-side: bottom; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let t = doc.root.find(|n| n.tag_name().as_deref() == Some("table")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&t) as usize)).unwrap();
+    assert_eq!(cs.caption_side, CaptionSide::Bottom);
+}
