@@ -2682,3 +2682,44 @@ fn cascade_typed_border_radius_shorthand_4values() {
     assert_eq!(cs.border_bottom_right_radius, Length::Px(3.0));
     assert_eq!(cs.border_bottom_left_radius, Length::Px(4.0));
 }
+
+// ─── L5 step 3 batch 19: outline ──────────────────────────────────────
+
+#[test]
+fn cascade_typed_outline_props() {
+    use crate::browser::computed_style::{BorderStyle, Color, Length};
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet(
+        "div { outline-width: 2px; outline-style: solid; \
+         outline-color: red; outline-offset: 4px; }"
+    );
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.outline_width, Length::Px(2.0));
+    assert_eq!(cs.outline_style, BorderStyle::Solid);
+    assert_eq!(cs.outline_color, Color::Rgba { r: 255, g: 0, b: 0, a: 255 });
+    assert_eq!(cs.outline_offset, Length::Px(4.0));
+}
+
+#[test]
+fn cascade_typed_outline_width_thick() {
+    use crate::browser::computed_style::Length;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { outline-width: thick; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.outline_width, Length::Px(5.0));
+}
+
+#[test]
+fn cascade_typed_outline_offset_negative() {
+    use crate::browser::computed_style::Length;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { outline-offset: -2px; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.outline_offset, Length::Px(-2.0));
+}

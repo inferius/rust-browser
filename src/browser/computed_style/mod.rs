@@ -163,6 +163,12 @@ pub struct ComputedStyle {
     pub border_top_right_radius: Length,
     pub border_bottom_right_radius: Length,
     pub border_bottom_left_radius: Length,
+
+    // ─── Outline (batch 19) ───────────────────────────────────────────
+    pub outline_width: Length,
+    pub outline_style: BorderStyle,
+    pub outline_color: Color,
+    pub outline_offset: Length,
 }
 
 impl Default for ComputedStyle {
@@ -258,6 +264,10 @@ impl ComputedStyle {
             border_top_right_radius: Length::Px(0.0),
             border_bottom_right_radius: Length::Px(0.0),
             border_bottom_left_radius: Length::Px(0.0),
+            outline_width: Length::Px(3.0), // medium
+            outline_style: BorderStyle::None,
+            outline_color: Color::CurrentColor,
+            outline_offset: Length::Px(0.0),
         }
     }
 }

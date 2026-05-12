@@ -1256,6 +1256,31 @@ pub fn cascade_with_viewport_typed(
         if let Some(v) = props.get("border-bottom-left-radius") {
             if let Some(l) = Length::parse(v) { cs.border_bottom_left_radius = l; }
         }
+        // Batch 19: outline (width/style/color/offset). Outline shorthand uz
+        // pres existing expand_shorthand "outline" parses parts.
+        if let Some(v) = props.get("outline-width") {
+            let t = v.trim().to_lowercase();
+            let l = match t.as_str() {
+                "thin" => Some(Length::Px(1.0)),
+                "medium" => Some(Length::Px(3.0)),
+                "thick" => Some(Length::Px(5.0)),
+                _ => Length::parse(&t),
+            };
+            if let Some(l) = l { cs.outline_width = l; }
+        }
+        if let Some(v) = props.get("outline-style") {
+            if let Some(s) = CsBorderStyle::parse(v) { cs.outline_style = s; }
+        }
+        if let Some(v) = props.get("outline-color") {
+            if v.trim().eq_ignore_ascii_case("currentcolor") {
+                cs.outline_color = Color::CurrentColor;
+            } else if let Some(c) = Color::parse(v) {
+                cs.outline_color = c;
+            }
+        }
+        if let Some(v) = props.get("outline-offset") {
+            if let Some(l) = Length::parse(v) { cs.outline_offset = l; }
+        }
         computed.insert(*node_id, cs);
         // Konvertuj kazdou property na CascadeDecl s validity flag pro
         // batch 1 props (color/opacity/visibility/cursor) - parse Result
@@ -1333,6 +1358,17 @@ pub fn cascade_with_viewport_typed(
                 | PropertyId::BorderBottomRightRadius | PropertyId::BorderBottomLeftRadius
                 | PropertyId::BorderRadius
                     => Length::parse(raw_val).is_some(),
+                PropertyId::OutlineWidth => {
+                    let t = raw_val.trim().to_lowercase();
+                    matches!(t.as_str(), "thin" | "medium" | "thick")
+                        || Length::parse(raw_val).is_some()
+                },
+                PropertyId::OutlineStyle => CsBorderStyle::parse(raw_val).is_some(),
+                PropertyId::OutlineColor => {
+                    raw_val.trim().eq_ignore_ascii_case("currentcolor")
+                        || Color::parse(raw_val).is_some()
+                },
+                PropertyId::OutlineOffset => Length::parse(raw_val).is_some(),
                 // Cursor::parse vzdy uspeje (Custom fallback) - vsechny valid.
                 _ => true,
             };
