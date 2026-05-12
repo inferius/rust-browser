@@ -526,12 +526,14 @@ fn try_decode_svg_into_atlas(bytes: &[u8], cache_key: &str,
 
 fn apply_paint_animations(box_: &mut crate::browser::layout::LayoutBox,
                            style_map: &crate::browser::cascade::StyleMap) {
-    apply_paint_animations_inner(box_, style_map, 0.0);
+    apply_paint_animations_inner(box_, style_map, 0.0, 0.0, 0.0);
 }
 
 fn apply_paint_animations_inner(box_: &mut crate::browser::layout::LayoutBox,
                                  style_map: &crate::browser::cascade::StyleMap,
-                                 parent_width: f32) {
+                                 parent_width: f32,
+                                 parent_delta_x: f32,
+                                 parent_delta_y: f32) {
     let node_id = box_.node.as_ref().map(|n| Rc::as_ptr(n) as usize).unwrap_or(0);
     let original_width = box_.rect.width;
     // Baseline rect: pri prvni apply zachyti pozici PRED jakoukoli animaci.
@@ -540,6 +542,15 @@ fn apply_paint_animations_inner(box_: &mut crate::browser::layout::LayoutBox,
         box_.anim_baseline = Some(box_.rect);
     }
     let baseline = box_.anim_baseline.unwrap_or(box_.rect);
+    // Inherit parent shift do static children (text node uvnitr position:relative
+    // boxu ktery se anim-posunul). Pri animace box.left 0->400 musi text uvnitr
+    // shifted tez. Out-of-flow children maji vlastni baseline + abs pozici,
+    // parent shift se neaplikuje (handled v left/right/top/bottom branchi nize).
+    let is_static_self = matches!(box_.position, super::layout::Position::Static);
+    if is_static_self && (parent_delta_x != 0.0 || parent_delta_y != 0.0) {
+        box_.rect.x = baseline.x + parent_delta_x;
+        box_.rect.y = baseline.y + parent_delta_y;
+    }
     if let Some(styles) = style_map.get(&node_id) {
         if let Some(o) = styles.get("opacity") {
             if let Ok(v) = o.parse::<f32>() {
@@ -637,8 +648,12 @@ fn apply_paint_animations_inner(box_: &mut crate::browser::layout::LayoutBox,
     }
     let _ = original_width;
     let our_width = box_.rect.width;
+    // Delta = current rect - baseline rect. Predat do recursive apply
+    // aby static children shifted spolu se self.
+    let our_delta_x = box_.rect.x - baseline.x;
+    let our_delta_y = box_.rect.y - baseline.y;
     for ch in &mut box_.children {
-        apply_paint_animations_inner(ch, style_map, our_width);
+        apply_paint_animations_inner(ch, style_map, our_width, our_delta_x, our_delta_y);
     }
 }
 
