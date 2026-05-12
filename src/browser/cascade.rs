@@ -9,7 +9,8 @@ use super::dom::{Node, NodeKind};
 use super::css_parser::{Stylesheet, Selector, SimpleSelector, Combinator, Rule, specificity};
 use super::computed_style::{
     AlignContent as CsAlignContent, AlignItems as CsAlignItems,
-    AlignSelf as CsAlignSelf, BoxSizing as CsBoxSizing, CascadeOutput, CascadeDecl,
+    AlignSelf as CsAlignSelf, BorderStyle as CsBorderStyle,
+    BoxSizing as CsBoxSizing, CascadeOutput, CascadeDecl,
     Clear as CsClear, Color, ComputedStyle, ComputedStyleMap, Cursor,
     DeclarationsMap, Direction as CsDirection, Display as CsDisplay,
     FlexBasis as CsFlexBasis, FlexDirection as CsFlexDirection,
@@ -1208,6 +1209,20 @@ pub fn cascade_with_viewport_typed(
         if let Some(v) = props.get("border-left-color") {
             if let Some(c) = parse_border_color(v) { cs.border_left_color = c; }
         }
+        // Batch 17: border-*-style. Expand_shorthand drive nahradila
+        // `border-style: solid` -> 4 longhandy.
+        if let Some(v) = props.get("border-top-style") {
+            if let Some(s) = CsBorderStyle::parse(v) { cs.border_top_style = s; }
+        }
+        if let Some(v) = props.get("border-right-style") {
+            if let Some(s) = CsBorderStyle::parse(v) { cs.border_right_style = s; }
+        }
+        if let Some(v) = props.get("border-bottom-style") {
+            if let Some(s) = CsBorderStyle::parse(v) { cs.border_bottom_style = s; }
+        }
+        if let Some(v) = props.get("border-left-style") {
+            if let Some(s) = CsBorderStyle::parse(v) { cs.border_left_style = s; }
+        }
         computed.insert(*node_id, cs);
         // Konvertuj kazdou property na CascadeDecl s validity flag pro
         // batch 1 props (color/opacity/visibility/cursor) - parse Result
@@ -1277,6 +1292,10 @@ pub fn cascade_with_viewport_typed(
                     raw_val.trim().eq_ignore_ascii_case("currentcolor")
                         || Color::parse(raw_val).is_some()
                 },
+                PropertyId::BorderTopStyle | PropertyId::BorderRightStyle
+                | PropertyId::BorderBottomStyle | PropertyId::BorderLeftStyle
+                | PropertyId::BorderStyle
+                    => CsBorderStyle::parse(raw_val).is_some(),
                 // Cursor::parse vzdy uspeje (Custom fallback) - vsechny valid.
                 _ => true,
             };

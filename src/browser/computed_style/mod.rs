@@ -151,6 +151,12 @@ pub struct ComputedStyle {
     pub border_right_color: Color,
     pub border_bottom_color: Color,
     pub border_left_color: Color,
+
+    // ─── Border styles (batch 17) ─────────────────────────────────────
+    pub border_top_style: BorderStyle,
+    pub border_right_style: BorderStyle,
+    pub border_bottom_style: BorderStyle,
+    pub border_left_style: BorderStyle,
 }
 
 impl Default for ComputedStyle {
@@ -238,6 +244,57 @@ impl ComputedStyle {
             border_right_color: Color::CurrentColor,
             border_bottom_color: Color::CurrentColor,
             border_left_color: Color::CurrentColor,
+            border_top_style: BorderStyle::None,
+            border_right_style: BorderStyle::None,
+            border_bottom_style: BorderStyle::None,
+            border_left_style: BorderStyle::None,
+        }
+    }
+}
+
+/// CSS `border-*-style` (CSS Backgrounds L3 §3.4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BorderStyle {
+    None,
+    Hidden,
+    Dotted,
+    Dashed,
+    Solid,
+    Double,
+    Groove,
+    Ridge,
+    Inset,
+    Outset,
+}
+
+impl BorderStyle {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s.trim().to_lowercase().as_str() {
+            "none" => Self::None,
+            "hidden" => Self::Hidden,
+            "dotted" => Self::Dotted,
+            "dashed" => Self::Dashed,
+            "solid" => Self::Solid,
+            "double" => Self::Double,
+            "groove" => Self::Groove,
+            "ridge" => Self::Ridge,
+            "inset" => Self::Inset,
+            "outset" => Self::Outset,
+            _ => return None,
+        })
+    }
+    pub fn css_string(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Hidden => "hidden",
+            Self::Dotted => "dotted",
+            Self::Dashed => "dashed",
+            Self::Solid => "solid",
+            Self::Double => "double",
+            Self::Groove => "groove",
+            Self::Ridge => "ridge",
+            Self::Inset => "inset",
+            Self::Outset => "outset",
         }
     }
 }

@@ -2593,3 +2593,45 @@ fn cascade_typed_border_color_invalid_marked() {
     let b = decls.iter().find(|d| d.raw_value == "notacolor").unwrap();
     assert!(!b.valid);
 }
+
+// ─── L5 step 3 batch 17: border styles ────────────────────────────────
+
+#[test]
+fn cascade_typed_border_styles() {
+    use crate::browser::computed_style::BorderStyle;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet(
+        "div { border-top-style: solid; border-right-style: dashed; \
+         border-bottom-style: dotted; border-left-style: double; }"
+    );
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.border_top_style, BorderStyle::Solid);
+    assert_eq!(cs.border_right_style, BorderStyle::Dashed);
+    assert_eq!(cs.border_bottom_style, BorderStyle::Dotted);
+    assert_eq!(cs.border_left_style, BorderStyle::Double);
+}
+
+#[test]
+fn cascade_typed_border_style_shorthand() {
+    use crate::browser::computed_style::BorderStyle;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { border-style: groove; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.border_top_style, BorderStyle::Groove);
+    assert_eq!(cs.border_left_style, BorderStyle::Groove);
+}
+
+#[test]
+fn cascade_typed_border_style_invalid_marked() {
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { border-top-style: pretty; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let decls = out.declarations.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    let s = decls.iter().find(|d| d.raw_value == "pretty").unwrap();
+    assert!(!s.valid);
+}
