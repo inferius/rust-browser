@@ -1,0 +1,20 @@
+{
+  "viewport": {"width": 1889, "height": 1945, "dpr": 1},
+  "html_source": "<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\"><title>grid_implicit</title>\n<style>\n* { box-sizing: border-box; margin: 0; padding: 0; }\nbody { font-family: Arial; font-size: 16px; }\n.grid {\n  display: grid;\n  grid-template-columns: 100px 100px;\n  grid-template-rows: 50px;\n  grid-auto-rows: 40px;\n  gap: 6px;\n  width: 206px;\n}\n.cell { background: #cdc; }\n</style>\n</head><body>\n<div class=\"grid\">\n  <div id=\"a\" class=\"cell\">A</div>\n  <div id=\"b\" class=\"cell\">B</div>\n  <div id=\"c\" class=\"cell\">C</div>\n  <div id=\"d\" class=\"cell\">D</div>\n  <div id=\"e\" class=\"cell\">E</div>\n</div>\n</body></html>",
+  "css_inline": "\n* { box-sizing: border-box; margin: 0; padding: 0; }\nbody { font-family: Arial; font-size: 16px; }\n.grid {\n  display: grid;\n  grid-template-columns: 100px 100px;\n  grid-template-rows: 50px;\n  grid-auto-rows: 40px;\n  gap: 6px;\n  width: 206px;\n}\n.cell { background: #cdc; }\n",
+  "tree": {
+    "tag": "html", "id": "", "classes": [], "rect": {"x": 0, "y": 0, "w": 1889, "h": 142},
+    "children": [
+      {"tag": "head", "id": "", "classes": [], "rect": {"x": 0, "y": 0, "w": 0, "h": 0}, "children": []},
+      {"tag": "body", "id": "", "classes": [], "rect": {"x": 0, "y": 0, "w": 1889, "h": 142}, "children": [
+        {"tag": "div", "id": "", "classes": ["grid"], "rect": {"x": 0, "y": 0, "w": 206, "h": 142}, "children": [
+          {"tag": "div", "id": "a", "classes": ["cell"], "rect": {"x": 0, "y": 0, "w": 100, "h": 50}, "children": []},
+          {"tag": "div", "id": "b", "classes": ["cell"], "rect": {"x": 106, "y": 0, "w": 100, "h": 50}, "children": []},
+          {"tag": "div", "id": "c", "classes": ["cell"], "rect": {"x": 0, "y": 56, "w": 100, "h": 40}, "children": []},
+          {"tag": "div", "id": "d", "classes": ["cell"], "rect": {"x": 106, "y": 56, "w": 100, "h": 40}, "children": []},
+          {"tag": "div", "id": "e", "classes": ["cell"], "rect": {"x": 0, "y": 102, "w": 100, "h": 40}, "children": []}
+        ]}
+      ]}
+    ]
+  }
+}

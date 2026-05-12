@@ -236,4 +236,25 @@ mod tests {
     fn web_fixture_grid_minmax() {
         run_fixture("tests/fixtures/web/grid_minmax.json", 2.0, 0.0);
     }
+
+    /// repeat(auto-fit, minmax(120px, 1fr)) - dynamic col count z container width.
+    #[test]
+    #[ignore]
+    fn web_fixture_grid_auto_fit() {
+        run_fixture("tests/fixtures/web/grid_auto_fit.json", 2.0, 0.0);
+    }
+
+    /// grid-auto-rows: 40px - implicit rows pri overflow do row 3+.
+    #[test]
+    #[ignore]
+    fn web_fixture_grid_implicit() {
+        run_fixture("tests/fixtures/web/grid_implicit.json", 2.0, 0.0);
+    }
+
+    /// Negative grid line indices (-1 = end, -2 = end-1, 1/-1 = whole width).
+    #[test]
+    #[ignore]
+    fn web_fixture_grid_negative() {
+        run_fixture("tests/fixtures/web/grid_negative.json", 2.0, 0.0);
+    }
 }

@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>grid_implicit</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: Arial; font-size: 16px; }
+.grid {
+  display: grid;
+  grid-template-columns: 100px 100px;
+  grid-template-rows: 50px;
+  grid-auto-rows: 40px;
+  gap: 6px;
+  width: 206px;
+}
+.cell { background: #cdc; }
+</style>
+</head><body>
+<div class="grid">
+  <div id="a" class="cell">A</div>
+  <div id="b" class="cell">B</div>
+  <div id="c" class="cell">C</div>
+  <div id="d" class="cell">D</div>
+  <div id="e" class="cell">E</div>
+</div>
+</body></html>
