@@ -40,6 +40,13 @@ fn layout_absolute_child_inner(child: &mut LayoutBox, parent_x: f32, parent_y: f
     let cb_y = parent_y;
     let cb_w = parent_w;
     let cb_h = parent_h;
+    // Resolve % offsets proti CB. CSS spec: % na top/bottom = CB height,
+    // % na left/right = CB width. Bez tohoto top:50% / left:50% by zustaly
+    // 0 z parse_length (no parent context). Pct -> px materializace tady.
+    if let Some(p) = child.offset_top_pct { child.offset_top = Some(p * cb_h); }
+    if let Some(p) = child.offset_bottom_pct { child.offset_bottom = Some(p * cb_h); }
+    if let Some(p) = child.offset_left_pct { child.offset_left = Some(p * cb_w); }
+    if let Some(p) = child.offset_right_pct { child.offset_right = Some(p * cb_w); }
     // Pre-pass intrinsic: pri abs item bez explicit size (a bez plne sady inset) + has children.
     let needs_w = child.explicit_width.is_none() && !(child.offset_left.is_some() && child.offset_right.is_some());
     let needs_h = child.explicit_height.is_none() && !(child.offset_top.is_some() && child.offset_bottom.is_some());

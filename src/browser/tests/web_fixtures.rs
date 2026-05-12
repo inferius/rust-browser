@@ -380,4 +380,13 @@ mod tests {
     fn web_fixture_grid_nested_fr() {
         run_fixture("tests/fixtures/web/grid_nested_fr.json", 2.0, 0.0);
     }
+
+    /// Position absolute s % offsety - top/left/bottom/right pct edge cases.
+    /// Test pre regression position_abs % offset resolution proti CB.
+    /// Verifies top:25%/left:25%, bottom:25%/right:25%, all 4 % insets.
+    #[test]
+    #[ignore]
+    fn web_fixture_position_abs_pct() {
+        run_fixture("tests/fixtures/web/position_abs_pct.json", 2.0, 0.0);
+    }
 }

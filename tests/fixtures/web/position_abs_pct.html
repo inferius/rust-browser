@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>position_abs_pct</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: Arial; padding: 10px; }
+.cb { position: relative; width: 500px; height: 300px; background: #eef; }
+.tl-pct { position: absolute; top: 25%; left: 25%; width: 60px; height: 30px; background: #c00; }
+.br-pct { position: absolute; bottom: 25%; right: 25%; width: 60px; height: 30px; background: #060; }
+.full-pct { position: absolute; top: 10%; left: 10%; right: 10%; bottom: 10%; background: #00c; }
+</style>
+</head><body>
+<div class="cb">
+  <div id="a" class="tl-pct">top-left %</div>
+  <div id="b" class="br-pct">bottom-right %</div>
+  <div id="c" class="full-pct">full %</div>
+</div>
+</body></html>

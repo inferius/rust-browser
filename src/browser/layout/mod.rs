@@ -767,6 +767,13 @@ pub struct LayoutBox {
     pub offset_right: Option<f32>,
     pub offset_bottom: Option<f32>,
     pub offset_left: Option<f32>,
+    /// Offset pct (0..1) - pri Some, resolve proti containing block (CB).
+    /// CSS spec: % na top/bottom resolvuje proti CB height, % na left/right
+    /// proti CB width.
+    pub offset_top_pct: Option<f32>,
+    pub offset_right_pct: Option<f32>,
+    pub offset_bottom_pct: Option<f32>,
+    pub offset_left_pct: Option<f32>,
     /// CSS z-index integer (None = auto). Aplikuje se pri position != static.
     /// Pri stejnem parent paint sortuje children podle z (vyssi vise).
     pub z_index: Option<i32>,
@@ -1142,6 +1149,10 @@ impl LayoutBox {
             offset_right: None,
             offset_bottom: None,
             offset_left: None,
+            offset_top_pct: None,
+            offset_right_pct: None,
+            offset_bottom_pct: None,
+            offset_left_pct: None,
             z_index: None,
             opacity: 1.0,
             text_underline: false,
@@ -2661,11 +2672,39 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
             }
         }
     }
-    // Top/right/bottom/left offsety
-    if let Some(v) = s.get("top")    { bx.offset_top    = Some(parse_length(v)); }
-    if let Some(v) = s.get("right")  { bx.offset_right  = Some(parse_length(v)); }
-    if let Some(v) = s.get("bottom") { bx.offset_bottom = Some(parse_length(v)); }
-    if let Some(v) = s.get("left")   { bx.offset_left   = Some(parse_length(v)); }
+    // Top/right/bottom/left offsety. % suffix ulozime do *_pct pro resolve
+    // proti CB pri abs/fixed positioning. Bez tohoto by parse_length vratila
+    // 0 (no parent context) a `top: 50%` by se chovalo jako 0.
+    let parse_offset = |v: &str| -> (Option<f32>, Option<f32>) {
+        let t = v.trim();
+        if t == "auto" || t.is_empty() { return (None, None); }
+        if let Some(pct_str) = t.strip_suffix('%') {
+            if let Ok(p) = pct_str.parse::<f32>() {
+                return (None, Some(p / 100.0));
+            }
+        }
+        (Some(parse_length(t)), None)
+    };
+    if let Some(v) = s.get("top") {
+        let (px, pct) = parse_offset(v);
+        bx.offset_top = px;
+        bx.offset_top_pct = pct;
+    }
+    if let Some(v) = s.get("right") {
+        let (px, pct) = parse_offset(v);
+        bx.offset_right = px;
+        bx.offset_right_pct = pct;
+    }
+    if let Some(v) = s.get("bottom") {
+        let (px, pct) = parse_offset(v);
+        bx.offset_bottom = px;
+        bx.offset_bottom_pct = pct;
+    }
+    if let Some(v) = s.get("left") {
+        let (px, pct) = parse_offset(v);
+        bx.offset_left = px;
+        bx.offset_left_pct = pct;
+    }
     // Opacity
     if let Some(o) = s.get("opacity") {
         bx.opacity = o.trim().parse::<f32>().unwrap_or(1.0).clamp(0.0, 1.0);
@@ -3225,6 +3264,32 @@ pub fn layout_block(bx: &mut LayoutBox) {
                 // uvnitr cetl parent_h=0 a spadl na advance_h=24.
                 child.rect.height = cb_h * p;
             }
+            // Resolve % offsets proti CB pred applikaci (CSS spec).
+            if let Some(p) = child.offset_top_pct { child.offset_top = Some(p * cb_h); }
+            if let Some(p) = child.offset_bottom_pct { child.offset_bottom = Some(p * cb_h); }
+            if let Some(p) = child.offset_left_pct { child.offset_left = Some(p * cb_w); }
+            if let Some(p) = child.offset_right_pct { child.offset_right = Some(p * cb_w); }
+            // Inset-based sizing: pri obou L+R / T+B + bez explicit dim, width
+            // resp. height = CB - insets (CSS spec). Bez tohoto cb_w fallback
+            // by daval defaultni sirku a offset_right pak posunul box mimo CB.
+            // Po dispatch by layout_block jinak prepsal rect.height na content
+            // intrinsic - takze ulozime explicit_height aby preserve_grow fired.
+            let inset_w_temp = if child.explicit_width.is_none() {
+                if let (Some(l), Some(r)) = (child.offset_left, child.offset_right) {
+                    let w = (cb_w - l - r).max(0.0);
+                    child.rect.width = w;
+                    child.explicit_width = Some(w);
+                    true
+                } else { false }
+            } else { false };
+            let inset_h_temp = if child.explicit_height.is_none() {
+                if let (Some(t), Some(b)) = (child.offset_top, child.offset_bottom) {
+                    let h = (cb_h - t - b).max(0.0);
+                    child.rect.height = h;
+                    child.explicit_height = Some(h);
+                    true
+                } else { false }
+            } else { false };
             // Apply offset (top/left/right/bottom) relative to CB.
             child.rect.x = cb_x + child.offset_left.unwrap_or(0.0);
             child.rect.y = cb_y + child.offset_top.unwrap_or(0.0);
@@ -3238,6 +3303,10 @@ pub fn layout_block(bx: &mut LayoutBox) {
             }
             layout_dispatch(child);
             child.display = saved_display;
+            // Restore explicit_w/h pokud nastaveny jen pres inset-derived (CSS:
+            // tyto by mely byt computed values bez fallback do user-set rules).
+            if inset_w_temp { child.explicit_width = None; }
+            if inset_h_temp { child.explicit_height = None; }
             if let Some(b) = bx.children[i].offset_bottom {
                 let h = bx.children[i].rect.height;
                 bx.children[i].rect.y = cb_y + cb_h - b - h;
@@ -3484,17 +3553,23 @@ pub fn layout_block(bx: &mut LayoutBox) {
     // - bound == 0 (empty block bez obsahu): zachovat (placeholder 20 z parent
     //   iter pro empty divs - HTML5 spec compatible).
     // - layout_root (bez node): zachovat viewport height set extension.
-    let preserve_grow = bx.explicit_height.is_some()
-        || (bx.taffy_mode && preset_height_taffy > 0.0)
-        || (bound == 0.0 && bx.children.is_empty() && bx.text.is_none())
-        || bx.tag.is_none()
-        || matches!(bx.tag.as_deref(), Some("html") | Some("body"));
-    if preserve_grow {
-        if bx.rect.height < bound {
+    // Explicit user-set height: rigid (CSS spec: content overflows, height
+    // nestoupne). Bez teto ridge by browser zvetsil box pri 2-line text wrap
+    // za hranicemi user-set height: 30 -> renderoval h=38 misto 30.
+    if let Some(eh) = bx.explicit_height {
+        bx.rect.height = eh;
+    } else {
+        let preserve_grow = (bx.taffy_mode && preset_height_taffy > 0.0)
+            || (bound == 0.0 && bx.children.is_empty() && bx.text.is_none())
+            || bx.tag.is_none()
+            || matches!(bx.tag.as_deref(), Some("html") | Some("body"));
+        if preserve_grow {
+            if bx.rect.height < bound {
+                bx.rect.height = bound;
+            }
+        } else {
             bx.rect.height = bound;
         }
-    } else {
-        bx.rect.height = bound;
     }
     // V taffy_mode: pokud rodic ji uz nastavil (preset > 0), nepresahnout (parent
     // constraint - flex/grid item v constrained kontextu nesmi rust nad parent).
