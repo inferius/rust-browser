@@ -3013,3 +3013,31 @@ fn cascade_typed_transition_delay() {
     let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
     assert_eq!(cs.transition_delay, vec![0.2]);
 }
+
+// ─── L5 step 3 batch 26: animation timing ─────────────────────────────
+
+#[test]
+fn cascade_typed_animation_name_list() {
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { animation-name: slideIn, fadeOut; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.animation_name, vec!["slideIn".to_string(), "fadeOut".to_string()]);
+}
+
+#[test]
+fn cascade_typed_animation_duration_timing_delay() {
+    use crate::browser::computed_style::TimingFunction;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet(
+        "div { animation-duration: 2s; animation-timing-function: linear; \
+         animation-delay: 100ms; }"
+    );
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.animation_duration, vec![2.0]);
+    assert_eq!(cs.animation_timing_function, vec![TimingFunction::Linear]);
+    assert_eq!(cs.animation_delay, vec![0.1]);
+}

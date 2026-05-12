@@ -1418,6 +1418,23 @@ pub fn cascade_with_viewport_typed(
             let lst = super::computed_style::parse_time_list(v);
             if !lst.is_empty() { cs.transition_delay = lst; }
         }
+        // Batch 26: animation timing (name/duration/timing/delay).
+        if let Some(v) = props.get("animation-name") {
+            let names: Vec<String> = v.split(',').map(|p| p.trim().to_string()).collect();
+            if !names.is_empty() { cs.animation_name = names; }
+        }
+        if let Some(v) = props.get("animation-duration") {
+            let lst = super::computed_style::parse_time_list(v);
+            if !lst.is_empty() { cs.animation_duration = lst; }
+        }
+        if let Some(v) = props.get("animation-timing-function") {
+            let lst = super::computed_style::parse_timing_function_list(v);
+            if !lst.is_empty() { cs.animation_timing_function = lst; }
+        }
+        if let Some(v) = props.get("animation-delay") {
+            let lst = super::computed_style::parse_time_list(v);
+            if !lst.is_empty() { cs.animation_delay = lst; }
+        }
         computed.insert(*node_id, cs);
         // Konvertuj kazdou property na CascadeDecl s validity flag pro
         // batch 1 props (color/opacity/visibility/cursor) - parse Result

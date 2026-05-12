@@ -207,6 +207,12 @@ pub struct ComputedStyle {
     pub transition_duration: Vec<f32>,        // seconds
     pub transition_timing_function: Vec<TimingFunction>,
     pub transition_delay: Vec<f32>,           // seconds
+
+    // ─── Animations: timing (batch 26) ────────────────────────────────
+    pub animation_name: Vec<String>,
+    pub animation_duration: Vec<f32>,
+    pub animation_timing_function: Vec<TimingFunction>,
+    pub animation_delay: Vec<f32>,
 }
 
 impl Default for ComputedStyle {
@@ -332,6 +338,10 @@ impl ComputedStyle {
             transition_duration: vec![0.0],
             transition_timing_function: vec![TimingFunction::Ease],
             transition_delay: vec![0.0],
+            animation_name: vec!["none".into()],
+            animation_duration: vec![0.0],
+            animation_timing_function: vec![TimingFunction::Ease],
+            animation_delay: vec![0.0],
         }
     }
 }
