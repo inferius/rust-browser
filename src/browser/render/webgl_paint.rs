@@ -38,9 +38,15 @@ pub fn paint_webgl_canvases(
                         }
                     }
                 }
-                // Aplikace: pokud bylo Clear + last_clear_color, fill canvas.
-                let bg_color = if had_clear {
-                    last_clear_color.or(Some(state.clear_color))
+                // Sticky persist: pri Clear updateme sticky state. Dalsi frames
+                // (s prazdnym queue) emituji Rect z sticky_cleared/clear_color.
+                if had_clear {
+                    state.sticky_cleared = true;
+                    state.sticky_clear_color = last_clear_color.unwrap_or(state.clear_color);
+                }
+                // Aplikace: emituj fill ze sticky state (drzi clear napric paints).
+                let bg_color = if state.sticky_cleared {
+                    Some(state.sticky_clear_color)
                 } else {
                     None
                 };

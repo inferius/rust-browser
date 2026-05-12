@@ -1744,12 +1744,21 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
     };
 
     let children_start = cmds.len();
-    // Recursivne deti - auto-grow stack pro deep DOMs.
-    for &ci in &children_order {
-        let ch = &bx.children[ci];
-        stacker::maybe_grow(32 * 1024, 8 * 1024 * 1024, || {
-            paint_box(ch, cmds, child_perspective);
-        });
+    // SVG shape children (rect/circle/text/...) jsou nakresleny pres emit_svg_children
+    // s spravnymi SVG-space coordinates. Layout boxes pro tyto childeren existuji
+    // jen pro devtools highlight + hit-test, jejich rect.x/y nesedi s render
+    // pozicemi (set v build-time pred layout positioning). Skipnout rekurzi
+    // aby se text node "SVG text" nevkreslil pres regular paint_inline_or_text
+    // path na chybnem absolute (= build-time) x.
+    let is_svg_root = bx.tag.as_deref() == Some("svg");
+    if !is_svg_root {
+        // Recursivne deti - auto-grow stack pro deep DOMs.
+        for &ci in &children_order {
+            let ch = &bx.children[ci];
+            stacker::maybe_grow(32 * 1024, 8 * 1024 * 1024, || {
+                paint_box(ch, cmds, child_perspective);
+            });
+        }
     }
 
     // Overflow:hidden / clip: filter out commands jejichz bbox je MIMO bx.rect.

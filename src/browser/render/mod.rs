@@ -527,18 +527,26 @@ fn try_decode_svg_into_atlas(bytes: &[u8], cache_key: &str,
     true
 }
 
-fn apply_paint_animations(box_: &mut crate::browser::layout::LayoutBox,
+pub(crate) fn apply_paint_animations(box_: &mut crate::browser::layout::LayoutBox,
                            style_map: &crate::browser::cascade::StyleMap) {
-    apply_paint_animations_inner(box_, style_map, 0.0, 0.0, 0.0);
+    apply_paint_animations_inner(box_, style_map, 0.0, 0.0, 0.0, 0.0, 0.0);
 }
 
 fn apply_paint_animations_inner(box_: &mut crate::browser::layout::LayoutBox,
                                  style_map: &crate::browser::cascade::StyleMap,
                                  parent_width: f32,
                                  parent_delta_x: f32,
-                                 parent_delta_y: f32) {
+                                 parent_delta_y: f32,
+                                 // Akumulator layout-applied shiftu od ancestoru.
+                                 // shift_subtree(Relative ancestor) posunul nase rect.x
+                                 // o jeho offset_left BEZ rebuildu kdyz layout cached.
+                                 // Baseline init odecte tento amount aby dostal "kde by
+                                 // box byl bez ancestor animace".
+                                 parent_layout_dx: f32,
+                                 parent_layout_dy: f32) {
     let node_id = box_.node.as_ref().map(|n| Rc::as_ptr(n) as usize).unwrap_or(0);
     let original_width = box_.rect.width;
+    let _ = parent_delta_x; let _ = parent_delta_y; // pouziti via static-shift block nize
     // Baseline rect: pri prvni apply zachyti pozici PRED jakoukoli animaci.
     // Dalsi frames cti baseline misto current rect aby se animace neakumulovala.
     //
@@ -552,11 +560,22 @@ fn apply_paint_animations_inner(box_: &mut crate::browser::layout::LayoutBox,
     // "kde by box byl bez animace". Pak rect.x = baseline + current_left =
     // single shift.
     if box_.anim_baseline.is_none() {
+        // 1) Vlastni position:relative offset (z cascade.left/.top - shift_subtree
+        //    aplikovan PRI layout buildu) odecist od rect, abychom dostali "kde by
+        //    box byl bez animace".
+        // 2) Parent_layout_dx: layout shift_subtree pri Relative ancestor
+        //    posunul nase rect o ancestor.offset_left BEZ rebuildu (kdyz cache hit).
+        //    Tato hodnota neni soucasti rect.x "v plnu" + animation, je to layout-
+        //    applied shift z minulosti. Odecist od rect aby baseline = "kde by box
+        //    byl bez animace ANI parent animace".
+        //    Pozn: parent_delta_x (= parent's our_delta po apply_paint) je BEZ uziti
+        //    pro nase baseline init, protoze nase rect.x neni jeste shifted o
+        //    parent's current animated delta - jen o parent's layout_dx.
         let layout_dx = box_.offset_left.unwrap_or(0.0);
         let layout_dy = box_.offset_top.unwrap_or(0.0);
         let mut base = box_.rect;
-        base.x -= layout_dx;
-        base.y -= layout_dy;
+        base.x -= layout_dx + parent_layout_dx;
+        base.y -= layout_dy + parent_layout_dy;
         box_.anim_baseline = Some(base);
     }
     let baseline = box_.anim_baseline.unwrap_or(box_.rect);
@@ -670,8 +689,20 @@ fn apply_paint_animations_inner(box_: &mut crate::browser::layout::LayoutBox,
     // aby static children shifted spolu se self.
     let our_delta_x = box_.rect.x - baseline.x;
     let our_delta_y = box_.rect.y - baseline.y;
+    // Akumulator layout_dx pro descendants. Shift_subtree pri Relative se
+    // propaguje cascade-style cely subtree. Static box NE pridava shift; out-
+    // of-flow (Absolute/Fixed) je out-of-flow, ne participuje v parent shift.
+    let our_layout_dx = parent_layout_dx + match box_.position {
+        super::layout::Position::Relative => box_.offset_left.unwrap_or(0.0),
+        _ => 0.0,
+    };
+    let our_layout_dy = parent_layout_dy + match box_.position {
+        super::layout::Position::Relative => box_.offset_top.unwrap_or(0.0),
+        _ => 0.0,
+    };
     for ch in &mut box_.children {
-        apply_paint_animations_inner(ch, style_map, our_width, our_delta_x, our_delta_y);
+        apply_paint_animations_inner(ch, style_map, our_width, our_delta_x, our_delta_y,
+            our_layout_dx, our_layout_dy);
     }
 }
 

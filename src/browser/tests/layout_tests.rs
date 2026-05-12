@@ -2263,6 +2263,55 @@ fn apply_animations_interpolates_at_half_duration() {
     assert_eq!(left, "50px", "expected left=50px at t=1s of 2s linear, got {left}");
 }
 
+/// Regrese: pri animation `left 0->400` na position:relative parentu musi
+/// text child shifted SOUCASNE (= rect.x match parent.rect.x). Drive:
+/// double-shift kdyz cache miss + parent_delta jako baseline subtract
+/// (parent_delta byl post-cascade, ale text shift byl layout-time = OLD).
+/// Fix: parent_layout_dx accumulator (= parent.offset_left pri Relative).
+#[test]
+fn anim_static_text_child_follows_relative_parent_shift() {
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade, layout};
+    let doc = parse_html(r#"<html><body><div id="box">hello</div></body></html>"#, "");
+    let css = parse_stylesheet(r#"
+        body { margin: 0; padding: 0; }
+        #box { position: relative; width: 80px; height: 40px;
+               background: blue; color: white; animation: slide 1s linear; }
+        @keyframes slide { 0% { left: 0px; } 100% { left: 100px; } }
+    "#);
+    let mut map = cascade::cascade(&doc.root, &[css.clone()]);
+    // t=0.5s -> 50% -> left = 50px.
+    cascade::apply_animations(&mut map, &[css], 0.5);
+    let mut layout_root = layout::layout_tree(&doc.root, &map, 1280.0, 900.0);
+    // Layout shifted box + text by offset_left = 50.
+    // apply_paint_animations: baseline init subtracts layout_dx + parent_layout_dx.
+    // Pak applies cascade.left from style_map (same 50px) -> rect.x = baseline + 50.
+    crate::browser::render::apply_paint_animations(&mut layout_root, &map);
+    // Najdi #box LayoutBox v tree.
+    fn find_by_id<'a>(b: &'a layout::LayoutBox, id: &str) -> Option<&'a layout::LayoutBox> {
+        if b.node.as_ref().and_then(|n| n.attr("id")).as_deref() == Some(id) { return Some(b); }
+        for ch in &b.children {
+            if let Some(f) = find_by_id(ch, id) { return Some(f); }
+        }
+        None
+    }
+    let box_ = find_by_id(&layout_root, "box").expect("#box found");
+    // Hledame text node ("hello") - tag=None, text=Some("hello").
+    fn find_text<'a>(b: &'a layout::LayoutBox, content: &str) -> Option<&'a layout::LayoutBox> {
+        if b.tag.is_none() && b.text.as_deref() == Some(content) { return Some(b); }
+        for ch in &b.children {
+            if let Some(f) = find_text(ch, content) { return Some(f); }
+        }
+        None
+    }
+    let text = find_text(&layout_root, "hello").expect("text node 'hello' found");
+    // Text.rect.x by mel byt v ramci box rect (= rect.x do rect.x+width).
+    assert!(
+        text.rect.x >= box_.rect.x - 0.5 && text.rect.x <= box_.rect.x + box_.rect.width + 0.5,
+        "text.rect.x ({}) musi byt v boxu [{}..{}]; box anim left=50 = double-shift bug regression",
+        text.rect.x, box_.rect.x, box_.rect.x + box_.rect.width,
+    );
+}
+
 // ─── Color matrix ───────────────────────────────────────────────────────
 
 fn approx_eq_mat(a: &[f32; 20], b: &[f32; 20], eps: f32) -> bool {

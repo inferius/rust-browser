@@ -1212,6 +1212,11 @@ pub(crate) struct WebGLState {
     pub attrib_locations: std::collections::HashMap<u32, String>,
     /// Recorded draw commands queue (phase 3b: renderer drain + real wgpu emit).
     pub draw_queue: Vec<WebGLDrawCmd>,
+    /// Sticky clear state - once JS volal clear(COLOR_BUFFER_BIT), canvas
+    /// drzi posledni clear barvu pri kazdem repaint dokud nedo dalsi clear/draw.
+    /// Bez tohoto pri prvnim paint canvas modry, dalsi paint queue prazdny -> blank.
+    pub sticky_cleared: bool,
+    pub sticky_clear_color: [f32; 4],
 }
 
 pub(crate) struct WebGLShader {
@@ -1484,6 +1489,8 @@ impl WebGLState {
             uniform_locations: std::collections::HashMap::new(),
             attrib_locations: std::collections::HashMap::new(),
             draw_queue: Vec::new(),
+            sticky_cleared: false,
+            sticky_clear_color: [0.0, 0.0, 0.0, 0.0],
         }
     }
 
