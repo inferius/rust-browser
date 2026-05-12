@@ -102,6 +102,24 @@ impl Display {
     }
 }
 
+/// CSS direction property - inline text flow direction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Direction {
+    #[default]
+    Ltr,
+    Rtl,
+}
+
+impl Direction {
+    pub fn parse(s: &str) -> Self {
+        match s.trim() {
+            "rtl" => Direction::Rtl,
+            _ => Direction::Ltr,
+        }
+    }
+    pub fn is_rtl(self) -> bool { matches!(self, Direction::Rtl) }
+}
+
 /// CSS writing-mode property - smer toku textu.
 /// horizontal-tb: text vodorovne, lines top-bottom (default).
 /// vertical-rl: text vertikalne, columns right-to-left (japonstina, cinstina).
@@ -514,7 +532,7 @@ pub struct LayoutBox {
     /// shape-outside: circle()/ellipse()/inset()/polygon()/url()
     pub shape_outside: Option<String>,
     /// direction: ltr (default) | rtl
-    pub direction: String,
+    pub direction: Direction,
     /// writing-mode: horizontal-tb (default) | vertical-rl | vertical-lr
     pub writing_mode: WritingMode,
     /// content-visibility: visible (default) | auto | hidden
@@ -965,7 +983,7 @@ impl LayoutBox {
             scroll_margin: [0.0; 4],
             mask_image: None,
             shape_outside: None,
-            direction: String::new(),
+            direction: Direction::default(),
             writing_mode: WritingMode::default(),
             content_visibility: String::new(),
             contain_intrinsic_size: 0.0,
@@ -2509,9 +2527,9 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         if so.trim() != "none" { bx.shape_outside = Some(so.trim().to_string()); }
     }
     if let Some(d) = s.get("direction") {
-        bx.direction = d.trim().to_string();
+        bx.direction = Direction::parse(d);
         // RTL: text-align default = right (pokud nezadany)
-        if bx.direction == "rtl" && s.get("text-align").is_none() {
+        if bx.direction.is_rtl() && s.get("text-align").is_none() {
             bx.text_align = TextAlign::Right;
         }
     }
