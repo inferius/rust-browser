@@ -1,0 +1,20 @@
+{
+  "viewport": {"width": 1889, "height": 1945, "dpr": 1},
+  "html_source": "<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\"><title>flex_column</title>\n<style>\n* { box-sizing: border-box; margin: 0; padding: 0; }\nbody { font-family: Arial; padding: 20px; }\n.col-wrap {\n  display: flex;\n  flex-direction: column;\n  gap: 30px;\n  width: 400px;\n}\n.item {\n  background: #eef;\n  padding: 10px;\n}\n.h100 { height: 100px; }\n.h150 { height: 150px; }\n.h-auto-tall { padding: 20px; }\n.tall-inner { height: 80px; background: #fee; }\n</style>\n</head><body>\n<div class=\"col-wrap\">\n  <div id=\"a\" class=\"item h100\">Item 1: 100px</div>\n  <div id=\"b\" class=\"item h150\">Item 2: 150px</div>\n  <div id=\"c\" class=\"item h-auto-tall\">\n    <div class=\"tall-inner\">Item 3: auto-height with nested 80px</div>\n  </div>\n</div>\n</body></html>",
+  "css_inline": "\n* { box-sizing: border-box; margin: 0; padding: 0; }\nbody { font-family: Arial; padding: 20px; }\n.col-wrap {\n  display: flex;\n  flex-direction: column;\n  gap: 30px;\n  width: 400px;\n}\n.item {\n  background: #eef;\n  padding: 10px;\n}\n.h100 { height: 100px; }\n.h150 { height: 150px; }\n.h-auto-tall { padding: 20px; }\n.tall-inner { height: 80px; background: #fee; }\n",
+  "tree": {
+    "tag": "html", "id": "", "classes": [], "rect": {"x": 0, "y": 0, "w": 1889, "h": 470},
+    "children": [
+      {"tag": "head", "id": "", "classes": [], "rect": {"x": 0, "y": 0, "w": 0, "h": 0}, "children": []},
+      {"tag": "body", "id": "", "classes": [], "rect": {"x": 0, "y": 0, "w": 1889, "h": 470}, "children": [
+        {"tag": "div", "id": "", "classes": ["col-wrap"], "rect": {"x": 20, "y": 20, "w": 400, "h": 430}, "children": [
+          {"tag": "div", "id": "a", "classes": ["item", "h100"], "rect": {"x": 20, "y": 20, "w": 400, "h": 100}, "children": []},
+          {"tag": "div", "id": "b", "classes": ["item", "h150"], "rect": {"x": 20, "y": 150, "w": 400, "h": 150}, "children": []},
+          {"tag": "div", "id": "c", "classes": ["item", "h-auto-tall"], "rect": {"x": 20, "y": 330, "w": 400, "h": 120}, "children": [
+            {"tag": "div", "id": "", "classes": ["tall-inner"], "rect": {"x": 40, "y": 350, "w": 360, "h": 80}, "children": []}
+          ]}
+        ]}
+      ]}
+    ]
+  }
+}

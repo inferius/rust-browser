@@ -354,4 +354,13 @@ mod tests {
     fn web_fixture_multicol_basic() {
         run_fixture("tests/fixtures/web/multicol_basic.json", 5.0, 0.0);
     }
+
+    /// Flex column - 3 items s ruznymi heights (100, 150, auto s nested 80).
+    /// Test pre engine-test.html regression: #main je flex column s sections
+    /// jako items - main axis = column, item h podle content.
+    #[test]
+    #[ignore]
+    fn web_fixture_flex_column() {
+        run_fixture("tests/fixtures/web/flex_column.json", 2.0, 0.0);
+    }
 }

@@ -411,6 +411,11 @@ pub fn layout_flex(bx: &mut LayoutBox) {
     // 2. Container main size
     let inner_h = (effective_h - pad_t - pad_b - 2.0 * bx.margin - scrollbar_h).max(0.0);
     let container_main = if direction.is_row() { inner_w } else { inner_h };
+    // Indefinite main: column + bez explicit_height + bx.rect.height=0 = no
+    // shrink (CSS Flex L1 §9.2: indefinite main constraint -> use max-content
+    // basis). Bez teto fixy items s flex_shrink:1 (default) collapse na pb_h
+    // pri parent.rect.height=0 (typicke pri block parent volajicim flex child
+    // bez prep-size). Spravne: items zachova flex-basis (= explicit_height).
 
     // Apply min/max width/height na items - ulozit pro resolve_flexible_lengths.
     for (i, &real_idx) in in_flow.iter().enumerate() {
@@ -532,9 +537,16 @@ pub fn layout_flex(bx: &mut LayoutBox) {
 
     // 4. Resolve flexible lengths per line. V intrinsic_mode pouzij max-content (no shrink).
     // PERF: pre-alloc capacity (typicky 1 line nowrap, vetsinou < 10 pri wrap).
+    // Indefinite main: column + bez explicit_height = bx.rect.height pochazi z
+    // parent layout placeholderu (typicky 20px nebo content-based 0). Use max-
+    // content basis = no shrink. CSS Flex L1 §9.2 "definite size" check.
+    let indefinite_main = !direction.is_row()
+        && bx.explicit_height.is_none()
+        && bx.height_pct.is_none()
+        && !bx.taffy_intrinsic_mode;
     let mut resolved_lines: Vec<ResolvedLine> = Vec::with_capacity(lines.len());
     for line_indices in &lines {
-        let effective_container_main = if bx.taffy_intrinsic_mode {
+        let effective_container_main = if bx.taffy_intrinsic_mode || indefinite_main {
             let total: f32 = line_indices.iter().map(|&i| items[i].main_size).sum();
             let gaps = (line_indices.len().saturating_sub(1) as f32) * if direction.is_row() { col_gap } else { row_gap };
             total + gaps
@@ -1256,14 +1268,16 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         }
     }
 
-    // 10. POST-LAYOUT REFLOW: aplikuje JEN pri column auto-height +
-    // vsech items auto-height (zadny explicit_height + flex_grow=0). Bez teto
-    // podminky kazi justify-content + column-reverse + fixed-height stack.
-    // Ucel: opravit auto-height items prekryv pri column main_size pre-pass=0.
-    if !direction.is_row() && bx.explicit_height.is_none()
+    // 10. POST-LAYOUT REFLOW: column + FlexStart + ne-ColumnReverse + zadny
+    // flex_grow item -> re-pack y dle real rect.height po dispatch. Items
+    // s auto-height i s explicit-height (ktere mohou prerust pri grid stretch
+    // parent: child gets explicit_height from grid track size, but section
+    // sub-content extends rect via layout_block bound). Bez tohoto u column
+    // s pre-pass intrinsic main_size != real po dispatch -> sibling overlap.
+    if !direction.is_row()
        && matches!(justify, JustifyContent::FlexStart)
        && !matches!(direction, FlexDirection::ColumnReverse)
-       && bx.children.iter().all(|c| c.explicit_height.is_none() && c.flex_grow == 0.0)
+       && bx.children.iter().all(|c| c.flex_grow == 0.0)
     {
         let pad_t = bx.padding_top.unwrap_or(bx.padding);
         let inner_y_local = bx.rect.y + pad_t + bx.border_width;

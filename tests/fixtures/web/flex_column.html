@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>flex_column</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: Arial; padding: 20px; }
+.col-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 30px;
+  width: 400px;
+}
+.item {
+  background: #eef;
+  padding: 10px;
+}
+.h100 { height: 100px; }
+.h150 { height: 150px; }
+.h-auto-tall { padding: 20px; }
+.tall-inner { height: 80px; background: #fee; }
+</style>
+</head><body>
+<div class="col-wrap">
+  <div id="a" class="item h100">Item 1: 100px</div>
+  <div id="b" class="item h150">Item 2: 150px</div>
+  <div id="c" class="item h-auto-tall">
+    <div class="tall-inner">Item 3: auto-height with nested 80px</div>
+  </div>
+</div>
+</body></html>
