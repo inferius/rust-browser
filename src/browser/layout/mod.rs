@@ -526,7 +526,6 @@ pub struct LayoutBox {
     /// aspect-ratio: width / height. None = auto.
     pub aspect_ratio: Option<f32>,
     /// color-scheme: "light" | "dark" | "light dark" | "normal" - preference.
-    pub color_scheme: String,
     /// accent-color: vlastni barva accent (form controls).
     pub accent_color: Option<[u8; 4]>,
     /// CSS Containment - bitfield: layout / paint / size / style.
@@ -641,7 +640,6 @@ pub struct LayoutBox {
     /// Image fitting (object-fit / object-position)
     pub object_fit: ObjectFit,
     /// Mix blend / background blend
-    pub background_blend_mode: String,
     /// Image rendering hints
     pub image_rendering: ImageRendering,
     /// CSS Sizing L4 - aspect-ratio uz mam
@@ -699,14 +697,12 @@ pub struct LayoutBox {
     /// border-image-width: top right bottom left (px nebo numbers = multiplier).
     pub border_image_width: [f32; 4],
     /// border-image-repeat: stretch (default) | repeat | round | space (per axis).
-    pub border_image_repeat: String,
     /// CSS Text Decor L4 - text-emphasis: <style> <color>.
     pub text_emphasis_style: String,
     pub text_emphasis_color: Option<[u8; 4]>,
     /// CSS Text Decor L3 - text-decoration-skip-ink: auto | none | all.
     pub text_decoration_skip_ink: String,
     /// CSS Forms L1 - field-sizing: fixed (default) | content.
-    pub field_sizing: String,
     /// CSS Animations L2 - interpolate-size: numeric-only (default) | allow-keywords.
     pub interpolate_size: String,
     /// CSS Multi-column Layout L1 - column-count: 1+ (auto = 1 default).
@@ -725,7 +721,6 @@ pub struct LayoutBox {
     /// grid-template-areas: ASCII art layout per row.
     pub grid_template_areas: String,
     /// grid-area / grid-column / grid-row positioning string.
-    pub grid_area: String,
     pub grid_column: String,
     pub grid_row: String,
     pub grid_auto_columns: String,
@@ -740,8 +735,6 @@ pub struct LayoutBox {
     pub marker_mid: String,
     pub marker_end: String,
     /// CSS Backgrounds L4 - background-position-x / -y separately.
-    pub background_position_x: String,
-    pub background_position_y: String,
     /// CSS Images L3 - image-orientation: from-image | none | <angle>.
     /// CSS Text L4 - hyphenate-character / hyphenate-limit-chars.
     /// CSS Inline L3 - text-box-trim / text-box-edge.
@@ -765,7 +758,6 @@ pub struct LayoutBox {
     pub contain_intrinsic_block_size: f32,
     pub contain_intrinsic_inline_size: f32,
     /// CSS Anchor L1 - anchor-scope: <name> | none | all.
-    pub anchor_scope: String,
     /// CSS Position L4 - position-visibility: always | anchors-visible | no-overflow.
     /// CSS Display L4 - reading-flow: normal | flex-visual | flex-flow | grid-rows | grid-columns | grid-order.
     /// CSS Display L4 - reading-order.
@@ -905,7 +897,6 @@ impl LayoutBox {
             letter_spacing: 0.0,
             word_spacing: 0.0,
             aspect_ratio: None,
-            color_scheme: String::new(),
             accent_color: None,
             contain: 0,
             scroll_behavior: String::new(),
@@ -949,7 +940,6 @@ impl LayoutBox {
             speak: String::new(),
             float_value: String::new(),
             object_fit: ObjectFit::Fill,
-            background_blend_mode: String::new(),
             image_rendering: ImageRendering::Auto,
             min_width: CssLength::Auto,
             max_width: CssLength::None,
@@ -984,11 +974,9 @@ impl LayoutBox {
             border_image_source: None,
             border_image_slice: [0.0; 4],
             border_image_width: [1.0; 4],
-            border_image_repeat: String::new(),
             text_emphasis_style: String::new(),
             text_emphasis_color: None,
             text_decoration_skip_ink: String::new(),
-            field_sizing: String::new(),
             interpolate_size: String::new(),
             column_count: 1,
             column_gap_multicol: 16.0,
@@ -998,7 +986,6 @@ impl LayoutBox {
             grid_template_columns: String::new(),
             grid_template_rows: String::new(),
             grid_template_areas: String::new(),
-            grid_area: String::new(),
             grid_column: String::new(),
             grid_row: String::new(),
             grid_auto_columns: String::new(),
@@ -1010,12 +997,9 @@ impl LayoutBox {
             marker_start: String::new(),
             marker_mid: String::new(),
             marker_end: String::new(),
-            background_position_x: String::new(),
-            background_position_y: String::new(),
             inset: [None; 4],
             contain_intrinsic_block_size: 0.0,
             contain_intrinsic_inline_size: 0.0,
-            anchor_scope: String::new(),
             box_shadow: None,
             transform: None,
             transforms: Vec::new(),
@@ -2036,9 +2020,6 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         if ws.trim() != "normal" { bx.word_spacing = parse_length(ws); }
     }
     // color-scheme
-    if let Some(cs) = s.get("color-scheme") {
-        bx.color_scheme = cs.trim().to_string();
-    }
     // accent-color
     if let Some(ac) = s.get("accent-color") {
         if ac.trim() != "auto" {
@@ -2081,15 +2062,9 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
             _ => [1.0; 4],
         };
     }
-    if let Some(br) = s.get("border-image-repeat") {
-        bx.border_image_repeat = br.trim().to_string();
-    }
     // CSS Compositing L1
     if let Some(mbm) = s.get("mix-blend-mode") {
         bx.mix_blend_mode = mbm.trim().to_string();
-    }
-    if let Some(bbm) = s.get("background-blend-mode") {
-        bx.background_blend_mode = bbm.trim().to_string();
     }
     // text-emphasis
     if let Some(tes) = s.get("text-emphasis-style") {
@@ -2109,9 +2084,6 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         bx.text_decoration_skip_ink = tdsi.trim().to_string();
     }
     // field-sizing (CSS Forms L1)
-    if let Some(fs) = s.get("field-sizing") {
-        bx.field_sizing = fs.trim().to_string();
-    }
     // interpolate-size (CSS Animations L2)
     if let Some(is_) = s.get("interpolate-size") {
         bx.interpolate_size = is_.trim().to_string();
@@ -2125,9 +2097,6 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     }
     if let Some(gta) = s.get("grid-template-areas") {
         bx.grid_template_areas = gta.trim().to_string();
-    }
-    if let Some(ga) = s.get("grid-area") {
-        bx.grid_area = ga.trim().to_string();
     }
     if let Some(gc) = s.get("grid-column") {
         bx.grid_column = gc.trim().to_string();
@@ -2162,8 +2131,6 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(m) = s.get("marker-mid") { bx.marker_mid = m.trim().to_string(); }
     if let Some(m) = s.get("marker-end") { bx.marker_end = m.trim().to_string(); }
     // CSS Backgrounds L4 - position-x / -y
-    if let Some(bpx) = s.get("background-position-x") { bx.background_position_x = bpx.trim().to_string(); }
-    if let Some(bpy) = s.get("background-position-y") { bx.background_position_y = bpy.trim().to_string(); }
     // CSS Images L3
     // hyphenate-* (Text L4)
     // CSS Inline L3
@@ -2256,7 +2223,6 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(v) = s.get("contain-intrinsic-block-size") { bx.contain_intrinsic_block_size = parse_length(v); }
     if let Some(v) = s.get("contain-intrinsic-inline-size") { bx.contain_intrinsic_inline_size = parse_length(v); }
     // CSS Anchor L1 / Position L4
-    if let Some(v) = s.get("anchor-scope") { bx.anchor_scope = v.trim().to_string(); }
     // CSS Display L4 - reading flow / order
     // CSS Compositing L1 - composite-op
     // CSS Speech L1 (voice-family extra)
