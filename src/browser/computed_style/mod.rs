@@ -20,10 +20,12 @@
 pub mod color;
 pub mod length;
 pub mod property;
+pub mod cascade_decl;
 
 pub use color::Color;
 pub use length::Length;
 pub use property::PropertyId;
+pub use cascade_decl::{CascadeDecl, CascadeOrigin, Specificity};
 
 /// Resolved computed style per element (CSS Cascade L4 §4.1 specified->
 /// computed value mapping).
