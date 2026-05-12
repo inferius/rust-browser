@@ -242,8 +242,8 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         Some(Track::MinContent) => true,
         Some(Track::FitContent(_)) => true,
         Some(Track::Minmax(_, max, false)) if !max.is_finite() => true,
-        Some(Track::Minmax(min, _, false)) if min.is_nan() => true,
-        Some(Track::Minmax(min, _, false)) if (*min - (-1000.0)).abs() < 0.5 => true,
+        Some(Track::Minmax(min, _, false)) if sentinel_is_max_content(*min) => true,
+        Some(Track::Minmax(min, _, false)) if sentinel_is_min_content(*min) => true,
         // Fallback (no template): treat jako auto.
         None => bx.grid_template_columns.is_empty(),
         _ => false,
@@ -623,10 +623,9 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                 let arg_resolved = if *arg < 0.0 { inner_w * (-arg) } else { *arg };
                 max_content.min(arg_resolved.max(min_content))
             } else if let Some(Track::Minmax(min, _, false)) = col_token_kinds.get(c_idx) {
-                if min.is_nan() { max_content }
-                else if (*min - (-1000.0)).abs() < 0.5 { min_content }
-                else if *min < 0.0 && *min > -2.0 {
-                    // percent min
+                if sentinel_is_max_content(*min) { max_content }
+                else if sentinel_is_min_content(*min) { min_content }
+                else if sentinel_is_percent(*min) {
                     (inner_w * (-min)).max(min_content)
                 }
                 else {
@@ -674,8 +673,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                 match col_token_kinds.get(c) {
                     Some(Track::Auto) | Some(Track::MaxContent) | Some(Track::MinContent) | Some(Track::FitContent(_)) => true,
                     Some(Track::Minmax(min_v, _, _)) => {
-                        // -1000 = min-content, NaN = max-content, 0 = auto.
-                        min_v.is_nan() || (*min_v - (-1000.0)).abs() < 0.5 || *min_v == 0.0
+                        sentinel_is_max_content(*min_v) || sentinel_is_min_content(*min_v) || *min_v == 0.0
                     }
                     _ => false,
                 }
@@ -684,7 +682,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
             let is_mc_min = |c: usize| -> bool {
                 match col_token_kinds.get(c) {
                     Some(Track::MaxContent) => true,
-                    Some(Track::Minmax(min_v, _, _)) => min_v.is_nan(),
+                    Some(Track::Minmax(min_v, _, _)) => sentinel_is_max_content(*min_v),
                     _ => false,
                 }
             };
@@ -743,7 +741,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                         match col_token_kinds.get(c) {
                             Some(Track::MinContent) | Some(Track::MaxContent) => true,
                             Some(Track::Minmax(min_v, _, _)) => {
-                                min_v.is_nan() || (*min_v - (-1000.0)).abs() < 0.5
+                                sentinel_is_max_content(*min_v) || sentinel_is_min_content(*min_v)
                             }
                             _ => false,
                         }
@@ -751,7 +749,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                     let mcc_indices: Vec<usize> = span_indices.iter().copied().filter(|&c| {
                         match col_token_kinds.get(c) {
                             Some(Track::MaxContent) => true,
-                            Some(Track::Minmax(min_v, _, _)) => min_v.is_nan(),
+                            Some(Track::Minmax(min_v, _, _)) => sentinel_is_max_content(*min_v),
                             _ => false,
                         }
                     }).collect();
@@ -794,9 +792,9 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                     col_tracks[c_idx] += share;
                     // Pri Minmax s finite max: clamp na max(item_min, max_r).
                     if let Some(Track::Minmax(_, max_v, false)) = col_token_kinds.get(c_idx) {
-                        let max_r = if max_v.is_nan() { f32::INFINITY }
-                                    else if (*max_v - (-1000.0)).abs() < 0.5 { f32::INFINITY }
-                                    else if *max_v < 0.0 && *max_v > -2.0 { inner_w * (-max_v) }
+                        let max_r = if sentinel_is_max_content(*max_v) { f32::INFINITY }
+                                    else if sentinel_is_min_content(*max_v) { f32::INFINITY }
+                                    else if sentinel_is_percent(*max_v) { inner_w * (-max_v) }
                                     else { *max_v };
                         if max_r.is_finite() && col_tracks[c_idx] > max_r {
                             // Pri item_min > max: zachova item_min (CSS spec - min wins).
@@ -928,14 +926,12 @@ pub fn layout_grid(bx: &mut LayoutBox) {
                     for c_idx in 0..cols {
                         if is_fr_track[c_idx] { continue; }
                         if let Some(Track::Minmax(min_v, max_v, false)) = col_token_kinds.get(c_idx) {
-                            if max_v.is_finite() && !max_v.is_nan() {
-                                // -1000 = min-content sentinel
-                                let is_min_content = (*max_v - (-1000.0)).abs() < 0.5;
-                                if is_min_content { continue; }
-                                let max_r = if *max_v < 0.0 && *max_v > -2.0 { inner_w * (-max_v) } else { *max_v };
-                                let min_r = if min_v.is_nan() { col_tracks[c_idx] }
-                                            else if (*min_v - (-1000.0)).abs() < 0.5 { col_tracks[c_idx] }
-                                            else if *min_v < 0.0 && *min_v > -2.0 { inner_w * (-min_v) }
+                            if max_v.is_finite() && !sentinel_is_max_content(*max_v) {
+                                if sentinel_is_min_content(*max_v) { continue; }
+                                let max_r = if sentinel_is_percent(*max_v) { inner_w * (-max_v) } else { *max_v };
+                                let min_r = if sentinel_is_max_content(*min_v) { col_tracks[c_idx] }
+                                            else if sentinel_is_min_content(*min_v) { col_tracks[c_idx] }
+                                            else if sentinel_is_percent(*min_v) { inner_w * (-min_v) }
                                             else { *min_v };
                                 let grow_room = (max_r - col_tracks[c_idx].max(min_r)).max(0.0);
                                 let grow = grow_room.min(available_for_fr);
@@ -2055,10 +2051,7 @@ pub fn resolve_tracks(s: &str, container_size: f32, gap: f32) -> Vec<f32> {
             Track::MinContent => auto_count += 1,
             Track::FitContent(_) => auto_count += 1,
             Track::Minmax(min, max, is_fr) => {
-                let min_resolved = if min.is_nan() { 0.0 }
-                                   else if (*min - (-1000.0)).abs() < 0.5 { 0.0 }
-                                   else if *min < 0.0 && *min > -2.0 { container_size * (-min) }
-                                   else { *min };
+                let min_resolved = sentinel_resolve_or(*min, container_size, 0.0, 0.0);
                 if *is_fr {
                     fixed_total += min_resolved;
                     fr_total += *max;
@@ -2086,13 +2079,9 @@ pub fn resolve_tracks(s: &str, container_size: f32, gap: f32) -> Vec<f32> {
         Track::MinContent => auto_base,
         Track::FitContent(_) => auto_base,
         Track::Minmax(min, max, is_fr) => {
-            let min_r = if min.is_nan() { 0.0 }
-                        else if (*min - (-1000.0)).abs() < 0.5 { 0.0 }
-                        else if *min < 0.0 && *min > -2.0 { container_size * (-min) }
-                        else { *min };
-            let max_r = if max.is_nan() { f32::INFINITY }
-                        else if (*max - (-1000.0)).abs() < 0.5 { f32::INFINITY }
-                        else if *max < 0.0 && *max > -2.0 { container_size * (-max) }
+            let min_r = sentinel_resolve_or(*min, container_size, 0.0, 0.0);
+            let max_r = if sentinel_is_max_content(*max) || sentinel_is_min_content(*max) { f32::INFINITY }
+                        else if sentinel_is_percent(*max) { container_size * (-max) }
                         else { *max };
             if *is_fr {
                 let v = min_r + fr_base * max;
@@ -2115,11 +2104,52 @@ enum Track {
     MaxContent,
     /// min-content keyword.
     MinContent,
-    /// minmax(min_px, max_px or fr) - vlastne flexible s rozsahem.
+    /// minmax(min, max, max_je_fr).
+    ///
+    /// `min` a `max` jsou f32 s **sentinel encoding** (legacy - viz pomocniky
+    /// nize `sentinel_*` fns):
+    ///   f32::NAN       = max-content
+    ///   ~-1000.0       = min-content (test `sentinel_is_min_content`)
+    ///   -1.0..0.0      = percent ratio (negate a multiplikovat container)
+    ///   0.0..f32::MAX  = px (resp. fr cislo pri max_je_fr=true)
+    /// f32::INFINITY je v max smyslu "no upper bound" (max-content equivalent).
+    ///
+    /// CSS Grid §7.2 - migrace na proper enum MinSizing/MaxSizing je TODO,
+    /// pro ted helpers `sentinel_*` decoduji kazdy sentinel v jednom miste.
     Minmax(f32, f32, bool /* max je fr */),
     /// fit-content(<value>): clamp(min-content, max(min-content, arg), max-content).
     /// arg ulozeno: kladne = px, zaporne = -percent (0..-1).
     FitContent(f32),
+}
+
+/// Sentinel decoder fns pro Track::Minmax min/max f32 values.
+/// Centralizuje historicky shluk `is_nan()` / `(v - (-1000.0)).abs() < 0.5`
+/// testu rozesetych po 20+ mistech.
+const MIN_CONTENT_SENTINEL: f32 = -1000.0;
+
+#[inline]
+fn sentinel_is_max_content(v: f32) -> bool { v.is_nan() }
+#[inline]
+fn sentinel_is_min_content(v: f32) -> bool { (v - MIN_CONTENT_SENTINEL).abs() < 0.5 }
+#[inline]
+fn sentinel_is_percent(v: f32) -> bool {
+    // -1.0..0.0 (exclusive bounds) - ne NaN, ne min-content sentinel.
+    !v.is_nan() && v > MIN_CONTENT_SENTINEL + 0.5 && v < 0.0
+}
+/// Vrati hodnotu v px z sentinel f32 + container size + min/max kontextu.
+/// `intrinsic_fallback` se vrati pri max-content/min-content (caller ma sit
+/// pro intrinsic mereni). Pri auto vraci `auto_fallback`.
+#[inline]
+fn sentinel_resolve_or(v: f32, container: f32, intrinsic_fallback: f32, auto_fallback: f32) -> f32 {
+    if sentinel_is_max_content(v) || sentinel_is_min_content(v) {
+        intrinsic_fallback
+    } else if sentinel_is_percent(v) {
+        container * (-v)
+    } else if v == 0.0 {
+        auto_fallback
+    } else {
+        v
+    }
 }
 
 /// Vraci (tokens, is_auto_fit_per_token).
@@ -2156,8 +2186,8 @@ fn parse_track_tokens_with_autofit(s: &str, container: f32, gap: f32) -> (Vec<Tr
                     Track::Fixed(p) => *p,
                     Track::Percent(p) => container * p / 100.0,
                     Track::Minmax(min_v, _, _) => {
-                        if min_v.is_nan() || *min_v <= -999.0 { 0.0 }
-                        else if *min_v < 0.0 && *min_v >= -1.0 { container * (-min_v) }
+                        if sentinel_is_max_content(*min_v) || sentinel_is_min_content(*min_v) { 0.0 }
+                        else if sentinel_is_percent(*min_v) { container * (-min_v) }
                         else { min_v.max(0.0) }
                     }
                     _ => 0.0,
@@ -2232,8 +2262,8 @@ fn parse_track_tokens_sized(s: &str, container: f32, gap: f32) -> Vec<Track> {
                     Track::Fixed(p) => *p,
                     Track::Percent(p) => container * p / 100.0,
                     Track::Minmax(min_v, _, _) => {
-                        if min_v.is_nan() || *min_v <= -999.0 { 0.0 }
-                        else if *min_v < 0.0 && *min_v >= -1.0 { container * (-min_v) }
+                        if sentinel_is_max_content(*min_v) || sentinel_is_min_content(*min_v) { 0.0 }
+                        else if sentinel_is_percent(*min_v) { container * (-min_v) }
                         else { min_v.max(0.0) }
                     }
                     _ => 0.0,
