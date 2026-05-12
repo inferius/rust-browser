@@ -9,7 +9,8 @@ use super::dom::{Node, NodeKind};
 use super::css_parser::{Stylesheet, Selector, SimpleSelector, Combinator, Rule, specificity};
 use super::computed_style::{
     CascadeOutput, CascadeDecl, Color, ComputedStyle, ComputedStyleMap, Cursor,
-    DeclarationsMap, PropertyId, CascadeOrigin, Specificity as CsSpec, Visibility,
+    DeclarationsMap, Display as CsDisplay, PositionKind, PropertyId,
+    CascadeOrigin, Specificity as CsSpec, Visibility, ZIndex,
 };
 
 // Runtime UI state pres thread-local. Nastavuje render loop pred kazdym
@@ -949,6 +950,16 @@ pub fn cascade_with_viewport_typed(
         if let Some(v) = props.get("cursor") {
             cs.cursor = Cursor::parse(v);
         }
+        // Batch 2: display/position/z_index.
+        if let Some(v) = props.get("display") {
+            if let Some(d) = CsDisplay::parse(v) { cs.display = d; }
+        }
+        if let Some(v) = props.get("position") {
+            if let Some(p) = PositionKind::parse(v) { cs.position = p; }
+        }
+        if let Some(v) = props.get("z-index") {
+            if let Some(z) = ZIndex::parse(v) { cs.z_index = z; }
+        }
         computed.insert(*node_id, cs);
         // Konvertuj kazdou property na CascadeDecl s validity flag pro
         // batch 1 props (color/opacity/visibility/cursor) - parse Result
@@ -962,6 +973,9 @@ pub fn cascade_with_viewport_typed(
                 PropertyId::Color => Color::parse(raw_val).is_some(),
                 PropertyId::Opacity => raw_val.trim().parse::<f32>().is_ok(),
                 PropertyId::Visibility => Visibility::parse(raw_val).is_some(),
+                PropertyId::Display => CsDisplay::parse(raw_val).is_some(),
+                PropertyId::Position => PositionKind::parse(raw_val).is_some(),
+                PropertyId::ZIndex => ZIndex::parse(raw_val).is_some(),
                 // Cursor::parse vzdy uspeje (Custom fallback) - vsechny valid.
                 _ => true,
             };

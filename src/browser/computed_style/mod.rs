@@ -98,6 +98,11 @@ pub struct ComputedStyle {
     pub opacity: f32,                          // 0..1, default 1
     pub visibility: Visibility,
     pub cursor: Cursor,
+
+    // ─── Display / Position (batch 2) ─────────────────────────────────
+    pub display: Display,
+    pub position: PositionKind,
+    pub z_index: ZIndex,
 }
 
 impl Default for ComputedStyle {
@@ -142,6 +147,11 @@ impl ComputedStyle {
             opacity: 1.0,
             visibility: Visibility::Visible,
             cursor: Cursor::Auto,
+            // background-color initial = transparent. Stejna hodnota jako
+            // ComputedStyle.background_color drive (rgba 0,0,0,0).
+            display: Display::Inline,           // CSS spec initial pro non-replaced
+            position: PositionKind::Static,
+            z_index: ZIndex::Auto,
         }
     }
 }
@@ -168,6 +178,139 @@ impl Visibility {
             Self::Visible => "visible",
             Self::Hidden => "hidden",
             Self::Collapse => "collapse",
+        }
+    }
+}
+
+/// CSS `display` (CSS Display L3). Subset reflektujici layout backend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Display {
+    None,
+    Block,
+    Inline,
+    InlineBlock,
+    Flex,
+    InlineFlex,
+    Grid,
+    InlineGrid,
+    Contents,
+    Table,
+    TableRow,
+    TableCell,
+    TableHeaderCell,
+    TableRowGroup,
+    TableHeaderGroup,
+    TableFooterGroup,
+    TableColumn,
+    TableColumnGroup,
+    TableCaption,
+    ListItem,
+    Ruby,
+}
+
+impl Display {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s.trim().to_lowercase().as_str() {
+            "none" => Self::None,
+            "block" => Self::Block,
+            "inline" => Self::Inline,
+            "inline-block" => Self::InlineBlock,
+            "flex" => Self::Flex,
+            "inline-flex" => Self::InlineFlex,
+            "grid" => Self::Grid,
+            "inline-grid" => Self::InlineGrid,
+            "contents" => Self::Contents,
+            "table" => Self::Table,
+            "table-row" => Self::TableRow,
+            "table-cell" => Self::TableCell,
+            "table-header-cell" => Self::TableHeaderCell,
+            "table-row-group" => Self::TableRowGroup,
+            "table-header-group" => Self::TableHeaderGroup,
+            "table-footer-group" => Self::TableFooterGroup,
+            "table-column" => Self::TableColumn,
+            "table-column-group" => Self::TableColumnGroup,
+            "table-caption" => Self::TableCaption,
+            "list-item" => Self::ListItem,
+            "ruby" => Self::Ruby,
+            _ => return None,
+        })
+    }
+    pub fn css_string(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Block => "block",
+            Self::Inline => "inline",
+            Self::InlineBlock => "inline-block",
+            Self::Flex => "flex",
+            Self::InlineFlex => "inline-flex",
+            Self::Grid => "grid",
+            Self::InlineGrid => "inline-grid",
+            Self::Contents => "contents",
+            Self::Table => "table",
+            Self::TableRow => "table-row",
+            Self::TableCell => "table-cell",
+            Self::TableHeaderCell => "table-header-cell",
+            Self::TableRowGroup => "table-row-group",
+            Self::TableHeaderGroup => "table-header-group",
+            Self::TableFooterGroup => "table-footer-group",
+            Self::TableColumn => "table-column",
+            Self::TableColumnGroup => "table-column-group",
+            Self::TableCaption => "table-caption",
+            Self::ListItem => "list-item",
+            Self::Ruby => "ruby",
+        }
+    }
+}
+
+/// CSS `position` (CSS Position L3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PositionKind {
+    Static,
+    Relative,
+    Absolute,
+    Fixed,
+    Sticky,
+}
+
+impl PositionKind {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s.trim().to_lowercase().as_str() {
+            "static" => Self::Static,
+            "relative" => Self::Relative,
+            "absolute" => Self::Absolute,
+            "fixed" => Self::Fixed,
+            "sticky" => Self::Sticky,
+            _ => return None,
+        })
+    }
+    pub fn css_string(self) -> &'static str {
+        match self {
+            Self::Static => "static",
+            Self::Relative => "relative",
+            Self::Absolute => "absolute",
+            Self::Fixed => "fixed",
+            Self::Sticky => "sticky",
+        }
+    }
+}
+
+/// CSS `z-index` (CSS Position L3 §9.9). `auto` ne stack context.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ZIndex {
+    Auto,
+    Value(i32),
+}
+
+impl ZIndex {
+    pub fn parse(s: &str) -> Option<Self> {
+        let t = s.trim();
+        if t.eq_ignore_ascii_case("auto") { return Some(Self::Auto); }
+        t.parse::<i32>().ok().map(Self::Value)
+    }
+    pub fn css_string(self) -> String {
+        match self {
+            Self::Auto => "auto".into(),
+            Self::Value(n) => n.to_string(),
         }
     }
 }

@@ -1648,3 +1648,71 @@ fn cascade_typed_visibility_invalid_marked() {
     let vis = decls.iter().find(|d| d.raw_value == "blah").unwrap();
     assert!(!vis.valid, "visibility:blah marked invalid pro devtools strikethrough");
 }
+
+// ─── L5 step 3 batch 2: display/position/z_index populace ─────────────
+
+#[test]
+fn cascade_typed_display() {
+    use crate::browser::computed_style::Display as CsDisplay;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { display: flex; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&div) as usize)).unwrap();
+    assert_eq!(cs.display, CsDisplay::Flex);
+}
+
+#[test]
+fn cascade_typed_display_inline_block() {
+    use crate::browser::computed_style::Display as CsDisplay;
+    let doc = parse_html("<html><body><span></span></body></html>", "");
+    let css = parse_stylesheet("span { display: inline-block; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let span = doc.root.find(|n| n.tag_name().as_deref() == Some("span")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&span) as usize)).unwrap();
+    assert_eq!(cs.display, CsDisplay::InlineBlock);
+}
+
+#[test]
+fn cascade_typed_position() {
+    use crate::browser::computed_style::PositionKind;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { position: absolute; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&div) as usize)).unwrap();
+    assert_eq!(cs.position, PositionKind::Absolute);
+}
+
+#[test]
+fn cascade_typed_zindex_value() {
+    use crate::browser::computed_style::ZIndex;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { z-index: 42; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&div) as usize)).unwrap();
+    assert_eq!(cs.z_index, ZIndex::Value(42));
+}
+
+#[test]
+fn cascade_typed_zindex_auto() {
+    use crate::browser::computed_style::ZIndex;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { z-index: auto; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&div) as usize)).unwrap();
+    assert_eq!(cs.z_index, ZIndex::Auto);
+}
+
+#[test]
+fn cascade_typed_position_invalid_marked() {
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { position: floaty; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let decls = out.declarations.get(&(std::rc::Rc::as_ptr(&div) as usize)).unwrap();
+    let pos = decls.iter().find(|d| d.raw_value == "floaty").unwrap();
+    assert!(!pos.valid, "position:floaty marked invalid");
+}
