@@ -3375,3 +3375,36 @@ fn cascade_typed_caret_color() {
     let cs = out.computed.get(&(std::rc::Rc::as_ptr(&i) as usize)).unwrap();
     assert_eq!(cs.caret_color, Color::Rgba { r: 255, g: 0, b: 0, a: 255 });
 }
+
+// ─── L5 step 3 batch 36: appearance + content + counters ──────────────
+
+#[test]
+fn cascade_typed_appearance_none() {
+    use crate::browser::computed_style::Appearance;
+    let doc = parse_html("<html><body><button></button></body></html>", "");
+    let css = parse_stylesheet("button { appearance: none; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let b = doc.root.find(|n| n.tag_name().as_deref() == Some("button")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&b) as usize)).unwrap();
+    assert_eq!(cs.appearance, Appearance::None);
+}
+
+#[test]
+fn cascade_typed_content_string() {
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div::before { content: \"hi\"; }");
+    let _out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    // content je pres pseudo - tady jen overujeme ze parse nepadla.
+    // Pseudo storage je v PseudoStyleMap (separate api).
+}
+
+#[test]
+fn cascade_typed_counter_reset_increment() {
+    let doc = parse_html("<html><body><ol></ol></body></html>", "");
+    let css = parse_stylesheet("ol { counter-reset: section 0; counter-increment: section 1; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let o = doc.root.find(|n| n.tag_name().as_deref() == Some("ol")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&o) as usize)).unwrap();
+    assert!(cs.counter_reset.contains("section"));
+    assert!(cs.counter_increment.contains("section"));
+}

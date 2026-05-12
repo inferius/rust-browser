@@ -267,6 +267,12 @@ pub struct ComputedStyle {
     pub background_clip: BackgroundClip,
     pub background_origin: BackgroundClip,    // stejny enum (border/padding/content-box)
     pub caret_color: Color,
+
+    // ─── Appearance + counters (batch 36) ─────────────────────────────
+    pub appearance: Appearance,
+    pub content: String,                 // raw (pseudo-element content)
+    pub counter_reset: String,           // raw "name N" list
+    pub counter_increment: String,       // raw "name N" list
 }
 
 impl Default for ComputedStyle {
@@ -432,6 +438,46 @@ impl ComputedStyle {
             background_clip: BackgroundClip::BorderBox,
             background_origin: BackgroundClip::PaddingBox,
             caret_color: Color::CurrentColor,    // auto = currentColor
+            appearance: Appearance::Auto,
+            content: "normal".into(),
+            counter_reset: "none".into(),
+            counter_increment: "none".into(),
+        }
+    }
+}
+
+/// CSS `appearance` (CSS UI L4 §3.3). Subset: Auto/None/Custom.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Appearance {
+    Auto,
+    None,
+    Button,
+    Textfield,
+    MenuList,
+    Checkbox,
+    Radio,
+    SearchField,
+    PushButton,
+    SquareButton,
+    Listbox,
+    Custom(String),
+}
+
+impl Appearance {
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_lowercase().as_str() {
+            "auto" => Self::Auto,
+            "none" => Self::None,
+            "button" => Self::Button,
+            "textfield" => Self::Textfield,
+            "menulist" => Self::MenuList,
+            "checkbox" => Self::Checkbox,
+            "radio" => Self::Radio,
+            "searchfield" => Self::SearchField,
+            "push-button" => Self::PushButton,
+            "square-button" => Self::SquareButton,
+            "listbox" => Self::Listbox,
+            other => Self::Custom(other.to_string()),
         }
     }
 }

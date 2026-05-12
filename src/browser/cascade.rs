@@ -22,7 +22,8 @@ use super::computed_style::{
     AnimationFillMode as CsAnimationFillMode,
     AnimationPlayState as CsAnimationPlayState,
     BlendMode as CsBlendMode, GridAutoFlow as CsGridAutoFlow, GridLine as CsGridLine,
-    BackgroundAttachment as CsBackgroundAttachment, BackgroundClip as CsBackgroundClip,
+    Appearance as CsAppearance, BackgroundAttachment as CsBackgroundAttachment,
+    BackgroundClip as CsBackgroundClip,
     Isolation as CsIsolation, JustifyItems as CsJustifyItems,
     JustifySelf as CsJustifySelf, ScrollBehavior as CsScrollBehavior,
     BorderCollapse as CsBorderCollapse, CaptionSide as CsCaptionSide,
@@ -1595,6 +1596,19 @@ pub fn cascade_with_viewport_typed(
             } else if let Some(c) = Color::parse(v) {
                 cs.caret_color = c;
             }
+        }
+        // Batch 36: appearance + content + counters.
+        if let Some(v) = props.get("appearance").or_else(|| props.get("-webkit-appearance")) {
+            cs.appearance = CsAppearance::parse(v);
+        }
+        if let Some(v) = props.get("content") {
+            cs.content = v.clone();
+        }
+        if let Some(v) = props.get("counter-reset") {
+            cs.counter_reset = v.clone();
+        }
+        if let Some(v) = props.get("counter-increment") {
+            cs.counter_increment = v.clone();
         }
         computed.insert(*node_id, cs);
         // Konvertuj kazdou property na CascadeDecl s validity flag pro
