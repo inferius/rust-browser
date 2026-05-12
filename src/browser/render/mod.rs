@@ -556,6 +556,17 @@ fn apply_paint_animations_inner(box_: &mut crate::browser::layout::LayoutBox,
                 parent_delta_x, parent_delta_y, box_.rect.x);
         }
     }
+    // Debug: log slide-anim box pri kazde invocation - vis baseline, current
+    // styles.left, computed rect.x.
+    let is_slide = box_.node.as_ref()
+        .and_then(|n| n.attr("class"))
+        .map(|c| c.contains("slide"))
+        .unwrap_or(false);
+    if is_slide {
+        let left_v = style_map.get(&node_id).and_then(|s| s.get("left")).cloned().unwrap_or_default();
+        crate::vlog!("[anim-slide] PRE  baseline.x={} rect.x={} styles.left={:?} parent_delta_x={}",
+            baseline.x, box_.rect.x, left_v, parent_delta_x);
+    }
     if let Some(styles) = style_map.get(&node_id) {
         if let Some(o) = styles.get("opacity") {
             if let Ok(v) = o.parse::<f32>() {
@@ -657,6 +668,10 @@ fn apply_paint_animations_inner(box_: &mut crate::browser::layout::LayoutBox,
     // aby static children shifted spolu se self.
     let our_delta_x = box_.rect.x - baseline.x;
     let our_delta_y = box_.rect.y - baseline.y;
+    if is_slide {
+        crate::vlog!("[anim-slide] POST baseline.x={} rect.x={} our_delta_x={}",
+            baseline.x, box_.rect.x, our_delta_x);
+    }
     for ch in &mut box_.children {
         apply_paint_animations_inner(ch, style_map, our_width, our_delta_x, our_delta_y);
     }
