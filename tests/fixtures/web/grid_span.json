@@ -1,0 +1,21 @@
+{
+  "viewport": {"width": 1889, "height": 1945, "dpr": 1},
+  "html_source": "<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\"><title>grid_span</title>\n<style>\n* { box-sizing: border-box; margin: 0; padding: 0; }\nbody { font-family: Arial; font-size: 16px; }\n.grid {\n  display: grid;\n  grid-template-columns: repeat(4, 80px);\n  grid-template-rows: repeat(3, 50px);\n  gap: 5px;\n  width: 335px;\n}\n.cell { background: #bbb; }\n#big { grid-column: span 2; grid-row: span 2; background: #f88; }\n#wide { grid-column: 1 / -1; background: #88f; }\n</style>\n</head><body>\n<div class=\"grid\">\n  <div id=\"big\" class=\"cell\">big</div>\n  <div id=\"x1\" class=\"cell\">x1</div>\n  <div id=\"x2\" class=\"cell\">x2</div>\n  <div id=\"x3\" class=\"cell\">x3</div>\n  <div id=\"x4\" class=\"cell\">x4</div>\n  <div id=\"wide\" class=\"cell\">wide</div>\n</div>\n</body></html>",
+  "css_inline": "\n* { box-sizing: border-box; margin: 0; padding: 0; }\nbody { font-family: Arial; font-size: 16px; }\n.grid {\n  display: grid;\n  grid-template-columns: repeat(4, 80px);\n  grid-template-rows: repeat(3, 50px);\n  gap: 5px;\n  width: 335px;\n}\n.cell { background: #bbb; }\n#big { grid-column: span 2; grid-row: span 2; background: #f88; }\n#wide { grid-column: 1 / -1; background: #88f; }\n",
+  "tree": {
+    "tag": "html", "id": "", "classes": [], "rect": {"x": 0, "y": 0, "w": 1889, "h": 160},
+    "children": [
+      {"tag": "head", "id": "", "classes": [], "rect": {"x": 0, "y": 0, "w": 0, "h": 0}, "children": []},
+      {"tag": "body", "id": "", "classes": [], "rect": {"x": 0, "y": 0, "w": 1889, "h": 160}, "children": [
+        {"tag": "div", "id": "", "classes": ["grid"], "rect": {"x": 0, "y": 0, "w": 335, "h": 160}, "children": [
+          {"tag": "div", "id": "big", "classes": ["cell"], "rect": {"x": 0, "y": 0, "w": 165, "h": 105}, "children": []},
+          {"tag": "div", "id": "x1", "classes": ["cell"], "rect": {"x": 170, "y": 0, "w": 80, "h": 50}, "children": []},
+          {"tag": "div", "id": "x2", "classes": ["cell"], "rect": {"x": 255, "y": 0, "w": 80, "h": 50}, "children": []},
+          {"tag": "div", "id": "x3", "classes": ["cell"], "rect": {"x": 170, "y": 55, "w": 80, "h": 50}, "children": []},
+          {"tag": "div", "id": "x4", "classes": ["cell"], "rect": {"x": 255, "y": 55, "w": 80, "h": 50}, "children": []},
+          {"tag": "div", "id": "wide", "classes": ["cell"], "rect": {"x": 0, "y": 110, "w": 335, "h": 50}, "children": []}
+        ]}
+      ]}
+    ]
+  }
+}

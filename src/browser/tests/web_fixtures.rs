@@ -204,4 +204,36 @@ mod tests {
     fn web_fixture_engine_test_loose() {
         run_fixture("tests/fixtures/web/engine-test.json", 20.0, 0.0);
     }
+
+    /// Grid coverage fixtures - Chrome reference rects pres tests/fixtures/web/.
+    /// Pre-M3 baseline. Min_pass aktualni level (regression guard nez pod nej
+    /// propadnout). Po M3 / grid bug fixes expected 100%.
+    #[test]
+    #[ignore]
+    fn web_fixture_grid_basic() {
+        run_fixture("tests/fixtures/web/grid_basic.json", 2.0, 40.0);
+    }
+
+    /// Auto-placement s 1 row-locked item (#a grid-column:2) + 4 auto items.
+    /// Chrome doc order: skip obsazene cele, fill remaining row/col-major.
+    #[test]
+    #[ignore]
+    fn web_fixture_grid_auto_flow() {
+        run_fixture("tests/fixtures/web/grid_auto_flow.json", 2.0, 0.0);
+    }
+
+    /// span 2 + span -1 (whole row). Multi-col span sizing + occupied
+    /// region detection pri dalsich items.
+    #[test]
+    #[ignore]
+    fn web_fixture_grid_span() {
+        run_fixture("tests/fixtures/web/grid_span.json", 2.0, 0.0);
+    }
+
+    /// minmax(100, 200) + fr units distribution.
+    #[test]
+    #[ignore]
+    fn web_fixture_grid_minmax() {
+        run_fixture("tests/fixtures/web/grid_minmax.json", 2.0, 0.0);
+    }
 }

@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>grid_span</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: Arial; font-size: 16px; }
+.grid {
+  display: grid;
+  grid-template-columns: repeat(4, 80px);
+  grid-template-rows: repeat(3, 50px);
+  gap: 5px;
+  width: 335px;
+}
+.cell { background: #bbb; }
+#big { grid-column: span 2; grid-row: span 2; background: #f88; }
+#wide { grid-column: 1 / -1; background: #88f; }
+</style>
+</head><body>
+<div class="grid">
+  <div id="big" class="cell">big</div>
+  <div id="x1" class="cell">x1</div>
+  <div id="x2" class="cell">x2</div>
+  <div id="x3" class="cell">x3</div>
+  <div id="x4" class="cell">x4</div>
+  <div id="wide" class="cell">wide</div>
+</div>
+</body></html>
