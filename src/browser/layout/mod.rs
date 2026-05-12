@@ -751,47 +751,24 @@ pub struct LayoutBox {
     pub background_position_x: String,
     pub background_position_y: String,
     /// CSS Images L3 - image-orientation: from-image | none | <angle>.
-    pub image_orientation: String,
     /// CSS Text L4 - hyphenate-character / hyphenate-limit-chars.
-    pub hyphenate_character: String,
-    pub hyphenate_limit_chars: String,
     /// CSS Inline L3 - text-box-trim / text-box-edge.
-    pub text_box_trim: String,
-    pub text_box_edge: String,
     /// CSS Logical Props L1 - inset shorthand (top right bottom left).
     pub inset: [Option<f32>; 4],
     /// CSS Pseudo L4 - dialog / popover anchor positioning extensions
-    pub anchor_default: String,
     /// CSS Position L3 - position-area: top, top-left, ...
-    pub position_area: String,
     /// CSS Position L4 - position-try-fallbacks: a, b, c.
-    pub position_try_fallbacks: String,
     /// CSS Text L4 - text-spacing.
-    pub text_spacing: String,
     /// CSS Text L4 - text-autospace.
-    pub text_autospace: String,
     /// CSS Inline L3 - vertical-align extends.
-    pub initial_letter: String,
-    pub ruby_overhang: String,
-    pub ruby_merge: String,
     /// CSS Math L1 - MathML props.
-    pub math_shift: String,
     /// CSS Transitions L2 - transition-behavior: normal | allow-discrete.
-    pub transition_behavior: String,
     /// CSS Animations L2 - animation-composition: replace | add | accumulate.
-    pub animation_composition: String,
     /// CSS Color L4 - color-interpolation, color-interpolation-filters.
-    pub color_interpolation: String,
     /// CSS Lists L3 - lazy lookup pres animation-name pak counter manipulation
-    pub lazy_counters: String,
     /// CSS Scroll-Driven Animations L1 (extras nad existujici impl)
-    pub timeline_scope: String,
-    pub animation_range_start: String,
-    pub animation_range_end: String,
     /// CSS Carousels - scroll-marker / scroll-button
-    pub scroll_marker_group: String,
     /// CSS Filter Effects L2 - filter alternative names.
-    pub backdrop_filter_string: String,
     /// CSS Containment L2 - contain-intrinsic-block-size / contain-intrinsic-inline-size.
     pub contain_intrinsic_block_size: f32,
     pub contain_intrinsic_inline_size: f32,
@@ -799,16 +776,11 @@ pub struct LayoutBox {
     pub anchor_scope: String,
     /// CSS Position L4 - position-visibility: always | anchors-visible | no-overflow.
     /// CSS Display L4 - reading-flow: normal | flex-visual | flex-flow | grid-rows | grid-columns | grid-order.
-    pub reading_flow: String,
     /// CSS Display L4 - reading-order.
-    pub reading_order: String,
     /// CSS Filter Effects L1 - filter-tagged composite output.
-    pub composite_op: String,
     /// CSS UI L4 - cursor advanced (uz hotov pro keywords; pridame zoom-in/out).
-    pub cursor_extra: String,
     /// CSS Lists L3 - list-style-position: outside (default) | inside.
     /// CSS Speech L1 - voice-family.
-    pub voice_family: String,
     /// Box shadow: (offset_x, offset_y, blur, spread, color)
     /// (offset_x, offset_y, blur, spread, color, inset)
     pub box_shadow: Option<(f32, f32, f32, f32, [u8; 4], bool)>,
@@ -1056,38 +1028,10 @@ impl LayoutBox {
             marker_end: String::new(),
             background_position_x: String::new(),
             background_position_y: String::new(),
-            image_orientation: String::new(),
-            hyphenate_character: String::new(),
-            hyphenate_limit_chars: String::new(),
-            text_box_trim: String::new(),
-            text_box_edge: String::new(),
             inset: [None; 4],
-            anchor_default: String::new(),
-            position_area: String::new(),
-            position_try_fallbacks: String::new(),
-            text_spacing: String::new(),
-            text_autospace: String::new(),
-            initial_letter: String::new(),
-            ruby_overhang: String::new(),
-            ruby_merge: String::new(),
-            math_shift: String::new(),
-            transition_behavior: String::new(),
-            animation_composition: String::new(),
-            color_interpolation: String::new(),
-            lazy_counters: String::new(),
-            timeline_scope: String::new(),
-            animation_range_start: String::new(),
-            animation_range_end: String::new(),
-            scroll_marker_group: String::new(),
-            backdrop_filter_string: String::new(),
             contain_intrinsic_block_size: 0.0,
             contain_intrinsic_inline_size: 0.0,
             anchor_scope: String::new(),
-            reading_flow: String::new(),
-            reading_order: String::new(),
-            composite_op: String::new(),
-            cursor_extra: String::new(),
-            voice_family: String::new(),
             box_shadow: None,
             transform: None,
             transforms: Vec::new(),
@@ -2237,30 +2181,13 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(bpx) = s.get("background-position-x") { bx.background_position_x = bpx.trim().to_string(); }
     if let Some(bpy) = s.get("background-position-y") { bx.background_position_y = bpy.trim().to_string(); }
     // CSS Images L3
-    if let Some(io) = s.get("image-orientation") { bx.image_orientation = io.trim().to_string(); }
     // hyphenate-* (Text L4)
-    if let Some(hc) = s.get("hyphenate-character") { bx.hyphenate_character = hc.trim().trim_matches('"').trim_matches('\'').to_string(); }
-    if let Some(hlc) = s.get("hyphenate-limit-chars") { bx.hyphenate_limit_chars = hlc.trim().to_string(); }
     // CSS Inline L3
-    if let Some(t) = s.get("text-box-trim") { bx.text_box_trim = t.trim().to_string(); }
-    if let Some(t) = s.get("text-box-edge") { bx.text_box_edge = t.trim().to_string(); }
     // CSS Position L3 - position-area / try-fallbacks
-    if let Some(pa) = s.get("position-area") { bx.position_area = pa.trim().to_string(); }
-    if let Some(ptf) = s.get("position-try-fallbacks") { bx.position_try_fallbacks = ptf.trim().to_string(); }
-    if let Some(ad) = s.get("anchor-default") { bx.anchor_default = ad.trim().to_string(); }
     // CSS Text L4 - text-spacing
-    if let Some(ts2) = s.get("text-spacing") { bx.text_spacing = ts2.trim().to_string(); }
-    if let Some(ta) = s.get("text-autospace") { bx.text_autospace = ta.trim().to_string(); }
-    if let Some(il) = s.get("initial-letter") { bx.initial_letter = il.trim().to_string(); }
     // CSS Ruby L1 (extras)
-    if let Some(ro) = s.get("ruby-overhang") { bx.ruby_overhang = ro.trim().to_string(); }
-    if let Some(rm) = s.get("ruby-merge") { bx.ruby_merge = rm.trim().to_string(); }
     // CSS Math L1 (extras)
-    if let Some(msh) = s.get("math-shift") { bx.math_shift = msh.trim().to_string(); }
     // CSS Transitions L2 / Animations L2
-    if let Some(tb) = s.get("transition-behavior") { bx.transition_behavior = tb.trim().to_string(); }
-    if let Some(ac) = s.get("animation-composition") { bx.animation_composition = ac.trim().to_string(); }
-    if let Some(ci) = s.get("color-interpolation") { bx.color_interpolation = ci.trim().to_string(); }
     // CSS Flexbox L1 properties
     if let Some(v) = s.get("box-sizing") { bx.box_sizing = BoxSizing::parse(v); }
     if let Some(v) = s.get("flex-direction") { bx.flex_direction = FlexDirection::parse(v); }
@@ -2339,25 +2266,16 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         }
     }
     // CSS Scroll-Driven Animations L1 extras
-    if let Some(v) = s.get("timeline-scope") { bx.timeline_scope = v.trim().to_string(); }
-    if let Some(v) = s.get("animation-range-start") { bx.animation_range_start = v.trim().to_string(); }
-    if let Some(v) = s.get("animation-range-end") { bx.animation_range_end = v.trim().to_string(); }
     // CSS Carousels (Scroll Driven Animations + scroll-marker)
-    if let Some(v) = s.get("scroll-marker-group") { bx.scroll_marker_group = v.trim().to_string(); }
     // CSS Filters L2 backdrop-filter raw string (parsovan jinde do filter ops)
-    if let Some(v) = s.get("backdrop-filter") { bx.backdrop_filter_string = v.trim().to_string(); }
     // CSS Containment intrinsic sizes
     if let Some(v) = s.get("contain-intrinsic-block-size") { bx.contain_intrinsic_block_size = parse_length(v); }
     if let Some(v) = s.get("contain-intrinsic-inline-size") { bx.contain_intrinsic_inline_size = parse_length(v); }
     // CSS Anchor L1 / Position L4
     if let Some(v) = s.get("anchor-scope") { bx.anchor_scope = v.trim().to_string(); }
     // CSS Display L4 - reading flow / order
-    if let Some(v) = s.get("reading-flow") { bx.reading_flow = v.trim().to_string(); }
-    if let Some(v) = s.get("reading-order") { bx.reading_order = v.trim().to_string(); }
     // CSS Compositing L1 - composite-op
-    if let Some(v) = s.get("composite") { bx.composite_op = v.trim().to_string(); }
     // CSS Speech L1 (voice-family extra)
-    if let Some(v) = s.get("voice-family") { bx.voice_family = v.trim().to_string(); }
     // inset shorthand: top right bottom left
     if let Some(ins) = s.get("inset") {
         let parts: Vec<&str> = ins.split_whitespace().collect();
