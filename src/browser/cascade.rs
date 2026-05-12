@@ -10,11 +10,12 @@ use super::css_parser::{Stylesheet, Selector, SimpleSelector, Combinator, Rule, 
 use super::computed_style::{
     BoxSizing as CsBoxSizing, CascadeOutput, CascadeDecl, Clear as CsClear,
     Color, ComputedStyle, ComputedStyleMap, Cursor, DeclarationsMap,
-    Direction as CsDirection, Display as CsDisplay, Float as CsFloat,
-    FontFamily, GenericFamily, Length, LineHeight, Overflow as CsOverflow,
-    OverflowWrap, PointerEvents as CsPointerEvents, PositionKind, PropertyId,
-    CascadeOrigin, Specificity as CsSpec, TextAlign as CsTextAlign, Visibility,
-    WhiteSpace, WordBreak, WritingMode as CsWritingMode, ZIndex,
+    Direction as CsDirection, Display as CsDisplay, FlexDirection as CsFlexDirection,
+    FlexWrap as CsFlexWrap, Float as CsFloat, FontFamily, GenericFamily, Length,
+    LineHeight, Overflow as CsOverflow, OverflowWrap, PointerEvents as CsPointerEvents,
+    PositionKind, PropertyId, CascadeOrigin, Specificity as CsSpec,
+    TextAlign as CsTextAlign, Visibility, WhiteSpace, WordBreak,
+    WritingMode as CsWritingMode, ZIndex,
 };
 
 // Runtime UI state pres thread-local. Nastavuje render loop pred kazdym
@@ -1099,6 +1100,19 @@ pub fn cascade_with_viewport_typed(
         if let Some(v) = props.get("clear") {
             if let Some(c) = CsClear::parse(v) { cs.clear = c; }
         }
+        // Batch 12: flex_direction/flex_wrap/flex_grow/flex_shrink.
+        if let Some(v) = props.get("flex-direction") {
+            if let Some(f) = CsFlexDirection::parse(v) { cs.flex_direction = f; }
+        }
+        if let Some(v) = props.get("flex-wrap") {
+            if let Some(f) = CsFlexWrap::parse(v) { cs.flex_wrap = f; }
+        }
+        if let Some(v) = props.get("flex-grow") {
+            if let Ok(n) = v.trim().parse::<f32>() { cs.flex_grow = n.max(0.0); }
+        }
+        if let Some(v) = props.get("flex-shrink") {
+            if let Ok(n) = v.trim().parse::<f32>() { cs.flex_shrink = n.max(0.0); }
+        }
         computed.insert(*node_id, cs);
         // Konvertuj kazdou property na CascadeDecl s validity flag pro
         // batch 1 props (color/opacity/visibility/cursor) - parse Result
@@ -1143,6 +1157,10 @@ pub fn cascade_with_viewport_typed(
                     => CsOverflow::parse(raw_val).is_some(),
                 PropertyId::Float => CsFloat::parse(raw_val).is_some(),
                 PropertyId::Clear => CsClear::parse(raw_val).is_some(),
+                PropertyId::FlexDirection => CsFlexDirection::parse(raw_val).is_some(),
+                PropertyId::FlexWrap => CsFlexWrap::parse(raw_val).is_some(),
+                PropertyId::FlexGrow | PropertyId::FlexShrink
+                    => raw_val.trim().parse::<f32>().is_ok(),
                 // Cursor::parse vzdy uspeje (Custom fallback) - vsechny valid.
                 _ => true,
             };

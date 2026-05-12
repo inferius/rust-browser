@@ -121,6 +121,12 @@ pub struct ComputedStyle {
     pub overflow_y: Overflow,
     pub float: Float,
     pub clear: Clear,
+
+    // ─── Flex (batch 12) ──────────────────────────────────────────────
+    pub flex_direction: FlexDirection,
+    pub flex_wrap: FlexWrap,
+    pub flex_grow: f32,
+    pub flex_shrink: f32,
 }
 
 impl Default for ComputedStyle {
@@ -182,6 +188,68 @@ impl ComputedStyle {
             overflow_y: Overflow::Visible,
             float: Float::None,
             clear: Clear::None,
+            flex_direction: FlexDirection::Row,
+            flex_wrap: FlexWrap::Nowrap,
+            flex_grow: 0.0,
+            flex_shrink: 1.0,
+        }
+    }
+}
+
+/// CSS `flex-direction` (CSS Flexbox L1 §5.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FlexDirection {
+    Row,
+    RowReverse,
+    Column,
+    ColumnReverse,
+}
+
+impl FlexDirection {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s.trim().to_lowercase().as_str() {
+            "row" => Self::Row,
+            "row-reverse" => Self::RowReverse,
+            "column" => Self::Column,
+            "column-reverse" => Self::ColumnReverse,
+            _ => return None,
+        })
+    }
+    pub fn css_string(self) -> &'static str {
+        match self {
+            Self::Row => "row",
+            Self::RowReverse => "row-reverse",
+            Self::Column => "column",
+            Self::ColumnReverse => "column-reverse",
+        }
+    }
+    pub fn is_row(self) -> bool {
+        matches!(self, Self::Row | Self::RowReverse)
+    }
+}
+
+/// CSS `flex-wrap` (CSS Flexbox L1 §6.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FlexWrap {
+    Nowrap,
+    Wrap,
+    WrapReverse,
+}
+
+impl FlexWrap {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s.trim().to_lowercase().as_str() {
+            "nowrap" => Self::Nowrap,
+            "wrap" => Self::Wrap,
+            "wrap-reverse" => Self::WrapReverse,
+            _ => return None,
+        })
+    }
+    pub fn css_string(self) -> &'static str {
+        match self {
+            Self::Nowrap => "nowrap",
+            Self::Wrap => "wrap",
+            Self::WrapReverse => "wrap-reverse",
         }
     }
 }

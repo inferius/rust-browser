@@ -2296,3 +2296,61 @@ fn cascade_typed_overflow_invalid_marked() {
     let o = decls.iter().find(|d| d.raw_value == "floppy").unwrap();
     assert!(!o.valid);
 }
+
+// ─── L5 step 3 batch 12: flex_direction/flex_wrap/flex_grow/flex_shrink
+
+#[test]
+fn cascade_typed_flex_direction_column() {
+    use crate::browser::computed_style::FlexDirection;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { flex-direction: column; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.flex_direction, FlexDirection::Column);
+    assert!(!cs.flex_direction.is_row());
+}
+
+#[test]
+fn cascade_typed_flex_wrap_wrap_reverse() {
+    use crate::browser::computed_style::FlexWrap;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { flex-wrap: wrap-reverse; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.flex_wrap, FlexWrap::WrapReverse);
+}
+
+#[test]
+fn cascade_typed_flex_grow_shrink() {
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { flex-grow: 2; flex-shrink: 0; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert!((cs.flex_grow - 2.0).abs() < 0.001);
+    assert!((cs.flex_shrink - 0.0).abs() < 0.001);
+}
+
+#[test]
+fn cascade_typed_flex_grow_negative_clamped() {
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { flex-grow: -1; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    // CSS spec: negative invalid -> clamp na 0 (max(0)).
+    assert!((cs.flex_grow - 0.0).abs() < 0.001);
+}
+
+#[test]
+fn cascade_typed_flex_direction_invalid_marked() {
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { flex-direction: diagonal; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let decls = out.declarations.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    let f = decls.iter().find(|d| d.raw_value == "diagonal").unwrap();
+    assert!(!f.valid);
+}
