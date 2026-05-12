@@ -257,4 +257,21 @@ mod tests {
     fn web_fixture_grid_negative() {
         run_fixture("tests/fixtures/web/grid_negative.json", 2.0, 0.0);
     }
+
+    // ─── Block / flex fixtures (pre-L2 build_box safety net) ───────────────
+
+    /// Block layout - margin + padding + nested div s border.
+    /// Pre-L2 baseline pro build_box_inner refactor.
+    #[test]
+    #[ignore]
+    fn web_fixture_block_basic() {
+        run_fixture("tests/fixtures/web/block_basic.json", 2.0, 0.0);
+    }
+
+    /// Flex row - fixed widths + flex:1 grow + gap.
+    #[test]
+    #[ignore]
+    fn web_fixture_flex_basic() {
+        run_fixture("tests/fixtures/web/flex_basic.json", 2.0, 0.0);
+    }
 }
