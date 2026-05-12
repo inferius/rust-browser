@@ -231,6 +231,12 @@ pub struct ComputedStyle {
     pub backdrop_filter: String,     // raw chain
     pub mix_blend_mode: BlendMode,
     pub isolation: Isolation,
+
+    // ─── Grid template (batch 30) ─────────────────────────────────────
+    pub grid_template_columns: String,    // raw track list (parser v layout_engine/grid)
+    pub grid_template_rows: String,
+    pub grid_template_areas: String,
+    pub grid_auto_flow: GridAutoFlow,
 }
 
 impl Default for ComputedStyle {
@@ -372,7 +378,37 @@ impl ComputedStyle {
             backdrop_filter: "none".into(),
             mix_blend_mode: BlendMode::Normal,
             isolation: Isolation::Auto,
+            grid_template_columns: String::new(),
+            grid_template_rows: String::new(),
+            grid_template_areas: String::new(),
+            grid_auto_flow: GridAutoFlow::Row,
         }
+    }
+}
+
+/// CSS `grid-auto-flow` (CSS Grid L1 §6.3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GridAutoFlow {
+    Row,
+    Column,
+    RowDense,
+    ColumnDense,
+}
+
+impl GridAutoFlow {
+    pub fn parse(s: &str) -> Option<Self> {
+        let t = s.trim().to_lowercase();
+        let parts: Vec<&str> = t.split_whitespace().collect();
+        let has_dense = parts.iter().any(|p| *p == "dense");
+        let is_col = parts.iter().any(|p| *p == "column");
+        let is_row = parts.iter().any(|p| *p == "row");
+        if !has_dense && !is_col && !is_row { return None; }
+        Some(match (is_col, has_dense) {
+            (true, true) => Self::ColumnDense,
+            (true, false) => Self::Column,
+            (false, true) => Self::RowDense,
+            (false, false) => Self::Row,
+        })
     }
 }
 

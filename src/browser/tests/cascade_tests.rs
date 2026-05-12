@@ -3155,3 +3155,36 @@ fn cascade_typed_isolation_isolate() {
     let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
     assert_eq!(cs.isolation, Isolation::Isolate);
 }
+
+// ─── L5 step 3 batch 30: grid template ────────────────────────────────
+
+#[test]
+fn cascade_typed_grid_template_columns_raw() {
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { grid-template-columns: 200px 1fr 100px; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.grid_template_columns, "200px 1fr 100px");
+}
+
+#[test]
+fn cascade_typed_grid_auto_flow_column_dense() {
+    use crate::browser::computed_style::GridAutoFlow;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { grid-auto-flow: column dense; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.grid_auto_flow, GridAutoFlow::ColumnDense);
+}
+
+#[test]
+fn cascade_typed_grid_template_areas() {
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { grid-template-areas: \"header header\" \"side main\"; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert!(cs.grid_template_areas.contains("header header"));
+}

@@ -21,7 +21,7 @@ use super::computed_style::{
     AnimationDirection as CsAnimationDirection,
     AnimationFillMode as CsAnimationFillMode,
     AnimationPlayState as CsAnimationPlayState,
-    BlendMode as CsBlendMode, Isolation as CsIsolation,
+    BlendMode as CsBlendMode, GridAutoFlow as CsGridAutoFlow, Isolation as CsIsolation,
     BorderCollapse as CsBorderCollapse, CaptionSide as CsCaptionSide,
     ListStyleImage as CsListStyleImage, ListStylePosition as CsListStylePosition,
     ListStyleType as CsListStyleType, ObjectFit as CsObjectFit, Resize as CsResize,
@@ -1509,6 +1509,19 @@ pub fn cascade_with_viewport_typed(
         }
         if let Some(v) = props.get("isolation") {
             if let Some(i) = CsIsolation::parse(v) { cs.isolation = i; }
+        }
+        // Batch 30: grid-template-cols/rows/areas + auto-flow.
+        if let Some(v) = props.get("grid-template-columns") {
+            cs.grid_template_columns = v.clone();
+        }
+        if let Some(v) = props.get("grid-template-rows") {
+            cs.grid_template_rows = v.clone();
+        }
+        if let Some(v) = props.get("grid-template-areas") {
+            cs.grid_template_areas = v.clone();
+        }
+        if let Some(v) = props.get("grid-auto-flow") {
+            if let Some(f) = CsGridAutoFlow::parse(v) { cs.grid_auto_flow = f; }
         }
         computed.insert(*node_id, cs);
         // Konvertuj kazdou property na CascadeDecl s validity flag pro
