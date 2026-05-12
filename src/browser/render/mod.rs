@@ -4280,6 +4280,10 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             self.scroll_x = 0.0;
             self.scroll_target_x = 0.0;
             self.start_time = std::time::Instant::now();
+            // animation_origin reset - bez tohoto CSS animations elapsed
+            // pri prvni snimek nove stranky != 0 (zachoval z predchoziho
+            // browse sessions). Slide-anim startovala uprostred iteration.
+            self.animation_origin = self.start_time;
             self.prev_style_map = None;
             self.active_animations.clear();
             self.animation_iterations.clear();
@@ -5420,6 +5424,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             self.scroll_x = 0.0;
             self.scroll_target_x = 0.0;
                 self.start_time = std::time::Instant::now();
+                self.animation_origin = self.start_time;
                 self.prev_style_map = None;
                 self.active_animations.clear();
                 self.animation_iterations.clear();
