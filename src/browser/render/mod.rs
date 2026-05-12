@@ -550,6 +550,11 @@ fn apply_paint_animations_inner(box_: &mut crate::browser::layout::LayoutBox,
     if is_static_self && (parent_delta_x != 0.0 || parent_delta_y != 0.0) {
         box_.rect.x = baseline.x + parent_delta_x;
         box_.rect.y = baseline.y + parent_delta_y;
+        if box_.text.is_some() {
+            crate::vlog!("[anim-shift] text={:?} delta=({}, {}) new_x={}",
+                box_.text.as_ref().map(|t| t.chars().take(20).collect::<String>()).unwrap_or_default(),
+                parent_delta_x, parent_delta_y, box_.rect.x);
+        }
     }
     if let Some(styles) = style_map.get(&node_id) {
         if let Some(o) = styles.get("opacity") {
