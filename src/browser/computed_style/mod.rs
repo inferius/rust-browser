@@ -219,6 +219,12 @@ pub struct ComputedStyle {
     pub animation_direction: Vec<AnimationDirection>,
     pub animation_fill_mode: Vec<AnimationFillMode>,
     pub animation_play_state: Vec<AnimationPlayState>,
+
+    // ─── Transform (batch 28) ─────────────────────────────────────────
+    pub transform: String,           // raw CSS chain (parser v layout/transform_parse)
+    pub transform_origin_x: Length,
+    pub transform_origin_y: Length,
+    pub perspective: Length,         // None = no perspective; px > 0 = vanishing dist
 }
 
 impl Default for ComputedStyle {
@@ -352,6 +358,10 @@ impl ComputedStyle {
             animation_direction: vec![AnimationDirection::Normal],
             animation_fill_mode: vec![AnimationFillMode::None],
             animation_play_state: vec![AnimationPlayState::Running],
+            transform: "none".into(),
+            transform_origin_x: Length::Percent(50.0),
+            transform_origin_y: Length::Percent(50.0),
+            perspective: Length::None,
         }
     }
 }

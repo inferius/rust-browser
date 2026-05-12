@@ -1462,6 +1462,40 @@ pub fn cascade_with_viewport_typed(
                 .filter_map(|p| CsAnimationPlayState::parse(p)).collect();
             if !lst.is_empty() { cs.animation_play_state = lst; }
         }
+        // Batch 28: transform + transform-origin + perspective.
+        if let Some(v) = props.get("transform") {
+            cs.transform = v.clone();
+        }
+        if let Some(v) = props.get("transform-origin") {
+            let parts: Vec<&str> = v.split_whitespace().collect();
+            let parse_pos = |s: &str| -> Option<Length> {
+                match s.to_lowercase().as_str() {
+                    "left" | "top" => Some(Length::Percent(0.0)),
+                    "center" => Some(Length::Percent(50.0)),
+                    "right" | "bottom" => Some(Length::Percent(100.0)),
+                    _ => Length::parse(s),
+                }
+            };
+            match parts.len() {
+                1 => {
+                    if let Some(l) = parse_pos(parts[0]) {
+                        cs.transform_origin_x = l.clone();
+                        cs.transform_origin_y = l;
+                    }
+                }
+                _ => {
+                    if let Some(l) = parse_pos(parts[0]) { cs.transform_origin_x = l; }
+                    if let Some(l) = parse_pos(parts[1]) { cs.transform_origin_y = l; }
+                }
+            }
+        }
+        if let Some(v) = props.get("perspective") {
+            if v.trim().eq_ignore_ascii_case("none") {
+                cs.perspective = Length::None;
+            } else if let Some(l) = Length::parse(v) {
+                cs.perspective = l;
+            }
+        }
         computed.insert(*node_id, cs);
         // Konvertuj kazdou property na CascadeDecl s validity flag pro
         // batch 1 props (color/opacity/visibility/cursor) - parse Result

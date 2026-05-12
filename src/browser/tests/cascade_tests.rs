@@ -3086,3 +3086,38 @@ fn cascade_typed_animation_play_state_paused() {
     let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
     assert_eq!(cs.animation_play_state, vec![AnimationPlayState::Paused]);
 }
+
+// ─── L5 step 3 batch 28: transform + transform-origin + perspective ────
+
+#[test]
+fn cascade_typed_transform_raw_passthrough() {
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { transform: rotate(45deg) translate(10px); }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.transform, "rotate(45deg) translate(10px)");
+}
+
+#[test]
+fn cascade_typed_transform_origin_keywords() {
+    use crate::browser::computed_style::Length;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { transform-origin: top right; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.transform_origin_x, Length::Percent(0.0));
+    assert_eq!(cs.transform_origin_y, Length::Percent(100.0));
+}
+
+#[test]
+fn cascade_typed_perspective_px() {
+    use crate::browser::computed_style::Length;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { perspective: 1000px; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.perspective, Length::Px(1000.0));
+}
