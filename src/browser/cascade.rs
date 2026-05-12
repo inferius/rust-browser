@@ -2525,11 +2525,6 @@ pub fn apply_animations(
         let progress = apply_easing(local, &spec.timing_function);
 
         let interp_vals = interpolate_keyframes(frames, progress);
-        if spec.name == "slide-anim" {
-            let left_v = interp_vals.get("left").cloned().unwrap_or_default();
-            crate::vlog!("[anim-interp] slide-anim t={} total_p={} iter={} local={} progress={} -> left={:?}",
-                t, total_progress, iter_idx, local, progress, left_v);
-        }
         for (k, v) in interp_vals { styles.insert(k, v); }
         any_active = true;
     }
