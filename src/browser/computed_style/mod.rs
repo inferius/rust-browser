@@ -261,6 +261,12 @@ pub struct ComputedStyle {
     pub background_position: String,
     pub background_size: String,
     pub background_repeat: String,
+
+    // ─── Background extras + caret (batch 35) ─────────────────────────
+    pub background_attachment: BackgroundAttachment,
+    pub background_clip: BackgroundClip,
+    pub background_origin: BackgroundClip,    // stejny enum (border/padding/content-box)
+    pub caret_color: Color,
 }
 
 impl Default for ComputedStyle {
@@ -422,7 +428,51 @@ impl ComputedStyle {
             background_position: "0% 0%".into(),
             background_size: "auto".into(),
             background_repeat: "repeat".into(),
+            background_attachment: BackgroundAttachment::Scroll,
+            background_clip: BackgroundClip::BorderBox,
+            background_origin: BackgroundClip::PaddingBox,
+            caret_color: Color::CurrentColor,    // auto = currentColor
         }
+    }
+}
+
+/// CSS `background-attachment` (CSS Backgrounds L3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackgroundAttachment {
+    Scroll,
+    Fixed,
+    Local,
+}
+
+impl BackgroundAttachment {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s.trim().to_lowercase().as_str() {
+            "scroll" => Self::Scroll,
+            "fixed" => Self::Fixed,
+            "local" => Self::Local,
+            _ => return None,
+        })
+    }
+}
+
+/// CSS `background-clip` + `background-origin` (CSS Backgrounds L3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackgroundClip {
+    BorderBox,
+    PaddingBox,
+    ContentBox,
+    Text,
+}
+
+impl BackgroundClip {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s.trim().to_lowercase().as_str() {
+            "border-box" => Self::BorderBox,
+            "padding-box" => Self::PaddingBox,
+            "content-box" => Self::ContentBox,
+            "text" => Self::Text,
+            _ => return None,
+        })
     }
 }
 

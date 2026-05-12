@@ -3339,3 +3339,39 @@ fn cascade_typed_background_gradient() {
     let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
     assert!(cs.background_image.contains("linear-gradient"));
 }
+
+// ─── L5 step 3 batch 35: bg attachment/clip/origin + caret-color ──────
+
+#[test]
+fn cascade_typed_background_attachment_fixed() {
+    use crate::browser::computed_style::BackgroundAttachment;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { background-attachment: fixed; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.background_attachment, BackgroundAttachment::Fixed);
+}
+
+#[test]
+fn cascade_typed_background_clip_origin() {
+    use crate::browser::computed_style::BackgroundClip;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { background-clip: padding-box; background-origin: content-box; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.background_clip, BackgroundClip::PaddingBox);
+    assert_eq!(cs.background_origin, BackgroundClip::ContentBox);
+}
+
+#[test]
+fn cascade_typed_caret_color() {
+    use crate::browser::computed_style::Color;
+    let doc = parse_html("<html><body><input/></body></html>", "");
+    let css = parse_stylesheet("input { caret-color: red; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let i = doc.root.find(|n| n.tag_name().as_deref() == Some("input")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&i) as usize)).unwrap();
+    assert_eq!(cs.caret_color, Color::Rgba { r: 255, g: 0, b: 0, a: 255 });
+}

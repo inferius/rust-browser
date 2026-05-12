@@ -22,6 +22,7 @@ use super::computed_style::{
     AnimationFillMode as CsAnimationFillMode,
     AnimationPlayState as CsAnimationPlayState,
     BlendMode as CsBlendMode, GridAutoFlow as CsGridAutoFlow, GridLine as CsGridLine,
+    BackgroundAttachment as CsBackgroundAttachment, BackgroundClip as CsBackgroundClip,
     Isolation as CsIsolation, JustifyItems as CsJustifyItems,
     JustifySelf as CsJustifySelf, ScrollBehavior as CsScrollBehavior,
     BorderCollapse as CsBorderCollapse, CaptionSide as CsCaptionSide,
@@ -1576,6 +1577,24 @@ pub fn cascade_with_viewport_typed(
         }
         if let Some(v) = props.get("background-repeat") {
             cs.background_repeat = v.clone();
+        }
+        // Batch 35: bg attachment/clip/origin + caret-color.
+        if let Some(v) = props.get("background-attachment") {
+            if let Some(a) = CsBackgroundAttachment::parse(v) { cs.background_attachment = a; }
+        }
+        if let Some(v) = props.get("background-clip") {
+            if let Some(c) = CsBackgroundClip::parse(v) { cs.background_clip = c; }
+        }
+        if let Some(v) = props.get("background-origin") {
+            if let Some(c) = CsBackgroundClip::parse(v) { cs.background_origin = c; }
+        }
+        if let Some(v) = props.get("caret-color") {
+            let t = v.trim().to_lowercase();
+            if t == "auto" {
+                cs.caret_color = Color::CurrentColor;
+            } else if let Some(c) = Color::parse(v) {
+                cs.caret_color = c;
+            }
         }
         computed.insert(*node_id, cs);
         // Konvertuj kazdou property na CascadeDecl s validity flag pro
