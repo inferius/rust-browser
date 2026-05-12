@@ -1054,9 +1054,8 @@ fn list_style_position_resize() {
     let css = parse_stylesheet("ul { list-style-position: inside; resize: both; }");
     let map = cascade::cascade(&doc.root, &[css]);
     let root = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
-    let u = find_box_by_tag(&root, "ul").unwrap();
-    assert_eq!(u.list_style_position_v, "inside");
-    assert_eq!(u.resize_v, "both");
+    let _u = find_box_by_tag(&root, "ul").unwrap();
+    // list_style_position_v + resize_v fields odstraneny (dead stringly).
 }
 
 #[test]

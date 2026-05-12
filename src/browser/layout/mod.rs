@@ -577,8 +577,6 @@ pub struct LayoutBox {
     /// user-select: auto | none | text | all
     /// caret-color
     pub caret_color: Option<[u8; 4]>,
-    /// resize: none | both | horizontal | vertical
-    pub resize: String,
     /// touch-action: auto | none | pan-x | pan-y | manipulation
     /// hyphens: none | manual | auto
     /// tab-size: <integer> | <length>
@@ -809,9 +807,6 @@ pub struct LayoutBox {
     /// CSS UI L4 - cursor advanced (uz hotov pro keywords; pridame zoom-in/out).
     pub cursor_extra: String,
     /// CSS Lists L3 - list-style-position: outside (default) | inside.
-    pub list_style_position_v: String,
-    /// CSS UI L4 - resize: none | both | horizontal | vertical | block | inline.
-    pub resize_v: String,
     /// CSS Speech L1 - voice-family.
     pub voice_family: String,
     /// Box shadow: (offset_x, offset_y, blur, spread, color)
@@ -968,7 +963,6 @@ impl LayoutBox {
             mix_blend_mode: String::new(),
             pointer_events: PointerEvents::default(),
             caret_color: None,
-            resize: String::new(),
             tab_size: 8.0,
             word_break: String::new(),
             overflow_wrap: String::new(),
@@ -1093,8 +1087,6 @@ impl LayoutBox {
             reading_order: String::new(),
             composite_op: String::new(),
             cursor_extra: String::new(),
-            list_style_position_v: String::new(),
-            resize_v: String::new(),
             voice_family: String::new(),
             box_shadow: None,
             transform: None,
@@ -2364,9 +2356,6 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(v) = s.get("reading-order") { bx.reading_order = v.trim().to_string(); }
     // CSS Compositing L1 - composite-op
     if let Some(v) = s.get("composite") { bx.composite_op = v.trim().to_string(); }
-    // CSS UI L4 - resize / list-style-position
-    if let Some(v) = s.get("resize") { bx.resize_v = v.trim().to_string(); }
-    if let Some(v) = s.get("list-style-position") { bx.list_style_position_v = v.trim().to_string(); }
     // CSS Speech L1 (voice-family extra)
     if let Some(v) = s.get("voice-family") { bx.voice_family = v.trim().to_string(); }
     // inset shorthand: top right bottom left
@@ -2468,7 +2457,6 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(v) = s.get("caret-color") {
         if v.trim() != "auto" { bx.caret_color = parse_color(v); }
     }
-    if let Some(v) = s.get("resize") { bx.resize = v.trim().to_string(); }
     if let Some(v) = s.get("tab-size") {
         if let Ok(n) = v.trim().parse::<f32>() { bx.tab_size = n; }
         else { bx.tab_size = parse_length(v); }
