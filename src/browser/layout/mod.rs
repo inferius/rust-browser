@@ -557,7 +557,6 @@ pub struct LayoutBox {
     /// writing-mode: horizontal-tb (default) | vertical-rl | vertical-lr
     pub writing_mode: WritingMode,
     /// content-visibility: visible (default) | auto | hidden
-    pub content_visibility: String,
     /// contain-intrinsic-size: <length>
     pub contain_intrinsic_size: f32,
     /// counter-reset: name [n] [, name n]
@@ -565,17 +564,12 @@ pub struct LayoutBox {
     /// counter-increment: name [n] [, name n]
     pub counter_increment: Vec<(String, i32)>,
     /// backface-visibility: visible (default) | hidden
-    pub backface_visibility: String,
     /// transform-style: flat (default) | preserve-3d
-    pub transform_style: String,
     /// perspective: <length> | none
     pub perspective: Option<f32>,
     /// text-emphasis: <style> <color>
-    pub text_emphasis: String,
     /// will-change: <prop list>
-    pub will_change: String,
     /// isolation: auto | isolate
-    pub isolation: String,
     /// mix-blend-mode: normal | multiply | screen | overlay | darken | lighten | ...
     pub mix_blend_mode: String,
     /// pointer-events: auto | none
@@ -586,9 +580,7 @@ pub struct LayoutBox {
     /// resize: none | both | horizontal | vertical
     pub resize: String,
     /// touch-action: auto | none | pan-x | pan-y | manipulation
-    pub touch_action: String,
     /// hyphens: none | manual | auto
-    pub hyphens: String,
     /// tab-size: <integer> | <length>
     pub tab_size: f32,
     /// word-break: normal | break-all | keep-all
@@ -596,43 +588,28 @@ pub struct LayoutBox {
     /// overflow-wrap: normal | break-word | anywhere
     pub overflow_wrap: String,
     /// text-wrap: wrap | nowrap | balance | pretty
-    pub text_wrap: String,
     /// text-align-last: auto | left | right | center | justify
-    pub text_align_last: String,
     /// list-style-type: disc | circle | square | decimal | none | ...
     pub list_style_type: String,
     /// list-style-position: outside | inside
-    pub list_style_position: String,
     /// list-style-image: url(...) | none
     pub list_style_image: Option<String>,
     /// font-stretch
-    pub font_stretch: String,
     /// font-variant
-    pub font_variant: String,
     /// font-size-adjust
-    pub font_size_adjust: String,
     /// font-feature-settings
-    pub font_feature_settings: String,
     /// font-variation-settings
-    pub font_variation_settings: String,
     /// font-display (z @font-face, ale lze ulozit i na element)
-    pub font_display: String,
     /// text-orientation: mixed | upright | sideways
-    pub text_orientation: String,
     /// text-combine-upright
-    pub text_combine_upright: String,
     /// ruby-position / ruby-align
-    pub ruby_position: String,
-    pub ruby_align: String,
     /// quotes
-    pub quotes: String,
     /// outline (= border outside box)
     pub outline_width: f32,
     pub outline_style: String,
     pub outline_color: Option<[u8; 4]>,
     pub outline_offset: f32,
     /// margin-trim
-    pub margin_trim: String,
     /// CSS Anchor Positioning L1 - anchor-name (e.g. "--my-anchor")
     pub anchor_name: String,
     /// position-anchor: <name>
@@ -643,14 +620,9 @@ pub struct LayoutBox {
     // Animations - parse + never read (unused = removed). Pri implementaci
     // scroll-driven animations bude potreba pridat zpet.
     /// CSS View Transitions L1 - view-transition-name
-    pub view_transition_name: String,
     /// CSS Containment L3 - container-type (uz mam string), pridam container
-    pub container_type: String,
-    pub container_name: String,
     /// page-break-before / -after / -inside
-    pub page_break_before: String,
     pub page_break_after: String,
-    pub page_break_inside: String,
     /// break-before / -after / -inside (CSS Fragmentation L3)
     pub break_before: String,
     pub break_after: String,
@@ -660,30 +632,13 @@ pub struct LayoutBox {
     /// counter-set (CSS L3)
     pub counter_set: Vec<(String, i32)>,
     /// print-color-adjust / forced-color-adjust
-    pub print_color_adjust: String,
-    pub forced_color_adjust: String,
     /// font-synthesis variants
-    pub font_synthesis: String,
-    pub font_kerning: String,
-    pub font_language_override: String,
-    pub font_optical_sizing: String,
-    pub font_smooth: String,
     /// CSS Text L4
-    pub white_space_collapse: String,
-    pub text_spacing_trim: String,
-    pub text_size_adjust: String,
     pub line_height_step: f32,
     /// math-style / math-depth (CSS MathML / Math L1)
-    pub math_style: String,
-    pub math_depth: String,
     /// CSS speech (aural)
     pub speak: String,
-    pub speak_as: String,
     /// CSS Generated content L3
-    pub bookmark_label: String,
-    pub bookmark_level: String,
-    pub bookmark_state: String,
-    pub string_set: String,
     /// CSS Logical Properties: float-block, clear-block (rare)
     pub float_value: String,
     pub clear_value: String,
@@ -743,11 +698,7 @@ pub struct LayoutBox {
     /// table-layout, border-collapse, border-spacing, caption-side, empty-cells
     pub table_layout: TableLayout,
     pub border_collapse: BorderCollapse,
-    pub border_spacing: String,
-    pub caption_side: String,
-    pub empty_cells: String,
     /// vertical-align
-    pub vertical_align: String,
     /// CSS Backgrounds L4
     pub background_origin_v: String,
     pub background_clip_v: String,
@@ -1011,80 +962,35 @@ impl LayoutBox {
             shape_outside: None,
             direction: Direction::default(),
             writing_mode: WritingMode::default(),
-            content_visibility: String::new(),
             contain_intrinsic_size: 0.0,
             counter_reset: Vec::new(),
             counter_increment: Vec::new(),
-            backface_visibility: String::new(),
-            transform_style: String::new(),
             perspective: None,
-            text_emphasis: String::new(),
-            will_change: String::new(),
-            isolation: String::new(),
             mix_blend_mode: String::new(),
             pointer_events: PointerEvents::default(),
             caret_color: None,
             resize: String::new(),
-            touch_action: String::new(),
-            hyphens: String::new(),
             tab_size: 8.0,
             word_break: String::new(),
             overflow_wrap: String::new(),
-            text_wrap: String::new(),
-            text_align_last: String::new(),
             list_style_type: String::new(),
-            list_style_position: String::new(),
             list_style_image: None,
-            font_stretch: String::new(),
-            font_variant: String::new(),
-            font_size_adjust: String::new(),
-            font_feature_settings: String::new(),
-            font_variation_settings: String::new(),
-            font_display: String::new(),
-            text_orientation: String::new(),
-            text_combine_upright: String::new(),
-            ruby_position: String::new(),
-            ruby_align: String::new(),
-            quotes: String::new(),
             outline_width: 0.0,
             outline_style: String::new(),
             outline_color: None,
             outline_offset: 0.0,
-            margin_trim: String::new(),
             anchor_name: String::new(),
             position_anchor: String::new(),
             inset_area: String::new(),
-            view_transition_name: String::new(),
-            container_type: String::new(),
-            container_name: String::new(),
-            page_break_before: String::new(),
             page_break_after: String::new(),
-            page_break_inside: String::new(),
             break_before: String::new(),
             break_after: String::new(),
             break_inside: String::new(),
             orphans: 2,
             widows: 2,
             counter_set: Vec::new(),
-            print_color_adjust: String::new(),
-            forced_color_adjust: String::new(),
-            font_synthesis: String::new(),
-            font_kerning: String::new(),
-            font_language_override: String::new(),
-            font_optical_sizing: String::new(),
-            font_smooth: String::new(),
-            white_space_collapse: String::new(),
-            text_spacing_trim: String::new(),
-            text_size_adjust: String::new(),
             line_height_step: 0.0,
-            math_style: String::new(),
-            math_depth: String::new(),
             speak: String::new(),
-            speak_as: String::new(),
-            bookmark_label: String::new(),
-            bookmark_level: String::new(),
-            bookmark_state: String::new(),
-            string_set: String::new(),
             float_value: String::new(),
             clear_value: String::new(),
             object_fit: ObjectFit::Fill,
@@ -1124,10 +1030,6 @@ impl LayoutBox {
             inline_size_v: String::new(),
             table_layout: TableLayout::Auto,
             border_collapse: BorderCollapse::Separate,
-            border_spacing: String::new(),
-            caption_side: String::new(),
-            empty_cells: String::new(),
-            vertical_align: String::new(),
             background_origin_v: String::new(),
             background_clip_v: String::new(),
             border_image_source: None,
@@ -2546,9 +2448,6 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(wm) = s.get("writing-mode") {
         bx.writing_mode = WritingMode::parse(wm);
     }
-    if let Some(cv) = s.get("content-visibility") {
-        bx.content_visibility = cv.trim().to_string();
-    }
     if let Some(cis) = s.get("contain-intrinsic-size") {
         bx.contain_intrinsic_size = parse_length(cis);
     }
@@ -2565,99 +2464,49 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     };
     if let Some(v) = s.get("counter-reset") { bx.counter_reset = parse_counter(v); }
     if let Some(v) = s.get("counter-increment") { bx.counter_increment = parse_counter(v); }
-    if let Some(v) = s.get("backface-visibility") { bx.backface_visibility = v.trim().to_string(); }
-    if let Some(v) = s.get("transform-style") { bx.transform_style = v.trim().to_string(); }
     if let Some(v) = s.get("perspective") {
         if v.trim() != "none" { bx.perspective = Some(parse_length(v)); }
     }
-    if let Some(v) = s.get("text-emphasis") { bx.text_emphasis = v.trim().to_string(); }
-    if let Some(v) = s.get("will-change") { bx.will_change = v.trim().to_string(); }
-    if let Some(v) = s.get("isolation") { bx.isolation = v.trim().to_string(); }
-    if let Some(v) = s.get("mix-blend-mode") { bx.mix_blend_mode = v.trim().to_string(); }
     if let Some(v) = s.get("pointer-events") { bx.pointer_events = PointerEvents::parse(v); }
     if let Some(v) = s.get("caret-color") {
         if v.trim() != "auto" { bx.caret_color = parse_color(v); }
     }
     if let Some(v) = s.get("resize") { bx.resize = v.trim().to_string(); }
-    if let Some(v) = s.get("touch-action") { bx.touch_action = v.trim().to_string(); }
-    if let Some(v) = s.get("hyphens") { bx.hyphens = v.trim().to_string(); }
     if let Some(v) = s.get("tab-size") {
         if let Ok(n) = v.trim().parse::<f32>() { bx.tab_size = n; }
         else { bx.tab_size = parse_length(v); }
     }
     if let Some(v) = s.get("word-break") { bx.word_break = v.trim().to_string(); }
     if let Some(v) = s.get("overflow-wrap").or(s.get("word-wrap")) { bx.overflow_wrap = v.trim().to_string(); }
-    if let Some(v) = s.get("text-wrap") { bx.text_wrap = v.trim().to_string(); }
-    if let Some(v) = s.get("text-align-last") { bx.text_align_last = v.trim().to_string(); }
     if let Some(v) = s.get("list-style-type") { bx.list_style_type = v.trim().to_string(); }
-    if let Some(v) = s.get("list-style-position") { bx.list_style_position = v.trim().to_string(); }
     if let Some(v) = s.get("list-style-image") {
         if v.trim() != "none" { bx.list_style_image = Some(v.trim().to_string()); }
     }
-    if let Some(v) = s.get("font-stretch") { bx.font_stretch = v.trim().to_string(); }
-    if let Some(v) = s.get("font-variant") { bx.font_variant = v.trim().to_string(); }
-    if let Some(v) = s.get("font-size-adjust") { bx.font_size_adjust = v.trim().to_string(); }
-    if let Some(v) = s.get("font-feature-settings") { bx.font_feature_settings = v.trim().to_string(); }
-    if let Some(v) = s.get("font-variation-settings") { bx.font_variation_settings = v.trim().to_string(); }
-    if let Some(v) = s.get("font-display") { bx.font_display = v.trim().to_string(); }
-    if let Some(v) = s.get("text-orientation") { bx.text_orientation = v.trim().to_string(); }
-    if let Some(v) = s.get("text-combine-upright") { bx.text_combine_upright = v.trim().to_string(); }
-    if let Some(v) = s.get("ruby-position") { bx.ruby_position = v.trim().to_string(); }
-    if let Some(v) = s.get("ruby-align") { bx.ruby_align = v.trim().to_string(); }
-    if let Some(v) = s.get("quotes") { bx.quotes = v.trim().to_string(); }
     if let Some(v) = s.get("outline-width") { bx.outline_width = parse_length(v); }
     if let Some(v) = s.get("outline-style") { bx.outline_style = v.trim().to_string(); }
     if let Some(v) = s.get("outline-color") {
         if v.trim() != "currentColor" { bx.outline_color = parse_color(v); }
     }
     if let Some(v) = s.get("outline-offset") { bx.outline_offset = parse_length(v); }
-    if let Some(v) = s.get("margin-trim") { bx.margin_trim = v.trim().to_string(); }
     if let Some(v) = s.get("anchor-name") { bx.anchor_name = v.trim().to_string(); }
     if let Some(v) = s.get("position-anchor") { bx.position_anchor = v.trim().to_string(); }
     if let Some(v) = s.get("inset-area") { bx.inset_area = v.trim().to_string(); }
-    if let Some(v) = s.get("view-transition-name") { bx.view_transition_name = v.trim().to_string(); }
-    if let Some(v) = s.get("container-type") { bx.container_type = v.trim().to_string(); }
-    if let Some(v) = s.get("container-name") { bx.container_name = v.trim().to_string(); }
-    if let Some(v) = s.get("page-break-before") { bx.page_break_before = v.trim().to_string(); }
     if let Some(v) = s.get("page-break-after")  { bx.page_break_after  = v.trim().to_string(); }
-    if let Some(v) = s.get("page-break-inside") { bx.page_break_inside = v.trim().to_string(); }
     if let Some(v) = s.get("break-before") { bx.break_before = v.trim().to_string(); }
     if let Some(v) = s.get("break-after")  { bx.break_after  = v.trim().to_string(); }
     if let Some(v) = s.get("break-inside") { bx.break_inside = v.trim().to_string(); }
     if let Some(v) = s.get("orphans") { bx.orphans = v.trim().parse().unwrap_or(2); }
     if let Some(v) = s.get("widows") { bx.widows = v.trim().parse().unwrap_or(2); }
     if let Some(v) = s.get("counter-set") { bx.counter_set = parse_counter(v); }
-    if let Some(v) = s.get("print-color-adjust") { bx.print_color_adjust = v.trim().to_string(); }
-    if let Some(v) = s.get("forced-color-adjust") { bx.forced_color_adjust = v.trim().to_string(); }
-    if let Some(v) = s.get("font-synthesis") { bx.font_synthesis = v.trim().to_string(); }
-    if let Some(v) = s.get("font-kerning") { bx.font_kerning = v.trim().to_string(); }
-    if let Some(v) = s.get("font-language-override") { bx.font_language_override = v.trim().to_string(); }
-    if let Some(v) = s.get("font-optical-sizing") { bx.font_optical_sizing = v.trim().to_string(); }
-    if let Some(v) = s.get("font-smooth").or(s.get("-webkit-font-smoothing")) { bx.font_smooth = v.trim().to_string(); }
-    if let Some(v) = s.get("white-space-collapse") { bx.white_space_collapse = v.trim().to_string(); }
-    if let Some(v) = s.get("text-spacing-trim") { bx.text_spacing_trim = v.trim().to_string(); }
-    if let Some(v) = s.get("text-size-adjust").or(s.get("-webkit-text-size-adjust")) { bx.text_size_adjust = v.trim().to_string(); }
     if let Some(v) = s.get("line-height-step") { bx.line_height_step = parse_length(v); }
-    if let Some(v) = s.get("math-style") { bx.math_style = v.trim().to_string(); }
-    if let Some(v) = s.get("math-depth") { bx.math_depth = v.trim().to_string(); }
     if let Some(v) = s.get("speak") { bx.speak = v.trim().to_string(); }
-    if let Some(v) = s.get("speak-as") { bx.speak_as = v.trim().to_string(); }
-    if let Some(v) = s.get("bookmark-label") { bx.bookmark_label = v.trim().to_string(); }
-    if let Some(v) = s.get("bookmark-level") { bx.bookmark_level = v.trim().to_string(); }
-    if let Some(v) = s.get("bookmark-state") { bx.bookmark_state = v.trim().to_string(); }
-    if let Some(v) = s.get("string-set") { bx.string_set = v.trim().to_string(); }
     if let Some(v) = s.get("float") { bx.float_value = v.trim().to_string(); }
     if let Some(v) = s.get("clear") { bx.clear_value = v.trim().to_string(); }
     if let Some(v) = s.get("object-fit") { bx.object_fit = ObjectFit::parse(v); }
     if let Some(v) = s.get("object-position") { bx.object_position = v.trim().to_string(); }
-    if let Some(v) = s.get("background-blend-mode") { bx.background_blend_mode = v.trim().to_string(); }
     if let Some(v) = s.get("image-rendering") { bx.image_rendering = ImageRendering::parse(v); }
     if let Some(v) = s.get("table-layout") { bx.table_layout = TableLayout::parse(v); }
     if let Some(v) = s.get("border-collapse") { bx.border_collapse = BorderCollapse::parse(v); }
-    if let Some(v) = s.get("border-spacing") { bx.border_spacing = v.trim().to_string(); }
-    if let Some(v) = s.get("caption-side") { bx.caption_side = v.trim().to_string(); }
-    if let Some(v) = s.get("empty-cells") { bx.empty_cells = v.trim().to_string(); }
-    if let Some(v) = s.get("vertical-align") { bx.vertical_align = v.trim().to_string(); }
     // contain - CSS Containment L3
     if let Some(c) = s.get("contain") {
         let mut bits = 0u8;
