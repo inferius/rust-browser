@@ -18,6 +18,8 @@ use super::computed_style::{
     JustifyContent as CsJustifyContent, Length, LineHeight,
     Overflow as CsOverflow, OverflowWrap, PointerEvents as CsPointerEvents,
     PositionKind, PropertyId, CascadeOrigin, Specificity as CsSpec,
+    ListStyleImage as CsListStyleImage, ListStylePosition as CsListStylePosition,
+    ListStyleType as CsListStyleType,
     TextAlign as CsTextAlign, TextDecorationLine as CsTextDecorationLine,
     TextDecorationStyle as CsTextDecorationStyle, TextOverflow as CsTextOverflow,
     TextTransform as CsTextTransform, VerticalAlign as CsVerticalAlign,
@@ -1317,6 +1319,19 @@ pub fn cascade_with_viewport_typed(
         if let Some(v) = props.get("vertical-align") {
             if let Some(va) = CsVerticalAlign::parse(v) { cs.vertical_align = va; }
         }
+        // Batch 22: list-style-type/-position/-image + tab-size.
+        if let Some(v) = props.get("list-style-type") {
+            cs.list_style_type = CsListStyleType::parse(v);
+        }
+        if let Some(v) = props.get("list-style-position") {
+            if let Some(p) = CsListStylePosition::parse(v) { cs.list_style_position = p; }
+        }
+        if let Some(v) = props.get("list-style-image") {
+            if let Some(i) = CsListStyleImage::parse(v) { cs.list_style_image = i; }
+        }
+        if let Some(v) = props.get("tab-size") {
+            if let Ok(n) = v.trim().parse::<f32>() { cs.tab_size = n.max(0.0); }
+        }
         computed.insert(*node_id, cs);
         // Konvertuj kazdou property na CascadeDecl s validity flag pro
         // batch 1 props (color/opacity/visibility/cursor) - parse Result
@@ -1419,6 +1434,10 @@ pub fn cascade_with_viewport_typed(
                 PropertyId::TextTransform => CsTextTransform::parse(raw_val).is_some(),
                 PropertyId::TextOverflow => CsTextOverflow::parse(raw_val).is_some(),
                 PropertyId::VerticalAlign => CsVerticalAlign::parse(raw_val).is_some(),
+                // ListStyleType::parse vzdy uspeje (Custom fallback)
+                PropertyId::ListStylePosition => CsListStylePosition::parse(raw_val).is_some(),
+                PropertyId::ListStyleImage => CsListStyleImage::parse(raw_val).is_some(),
+                PropertyId::TabSize => raw_val.trim().parse::<f32>().is_ok(),
                 // Cursor::parse vzdy uspeje (Custom fallback) - vsechny valid.
                 _ => true,
             };

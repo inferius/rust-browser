@@ -181,6 +181,12 @@ pub struct ComputedStyle {
     pub text_transform: TextTransform,
     pub text_overflow: TextOverflow,
     pub vertical_align: VerticalAlign,
+
+    // ─── List + tab (batch 22) ────────────────────────────────────────
+    pub list_style_type: ListStyleType,
+    pub list_style_position: ListStylePosition,
+    pub list_style_image: ListStyleImage,
+    pub tab_size: f32,
 }
 
 impl Default for ComputedStyle {
@@ -288,7 +294,92 @@ impl ComputedStyle {
             text_transform: TextTransform::None,
             text_overflow: TextOverflow::Clip,
             vertical_align: VerticalAlign::Baseline,
+            list_style_type: ListStyleType::Disc,
+            list_style_position: ListStylePosition::Outside,
+            list_style_image: ListStyleImage::None,
+            tab_size: 8.0,
         }
+    }
+}
+
+/// CSS `list-style-type` (CSS Lists L3). Subset; rare types -> Custom.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ListStyleType {
+    None,
+    Disc,
+    Circle,
+    Square,
+    Decimal,
+    DecimalLeadingZero,
+    LowerAlpha,
+    UpperAlpha,
+    LowerRoman,
+    UpperRoman,
+    LowerGreek,
+    LowerLatin,
+    UpperLatin,
+    Armenian,
+    Georgian,
+    Custom(String),
+}
+
+impl ListStyleType {
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_lowercase().as_str() {
+            "none" => Self::None,
+            "disc" => Self::Disc,
+            "circle" => Self::Circle,
+            "square" => Self::Square,
+            "decimal" => Self::Decimal,
+            "decimal-leading-zero" => Self::DecimalLeadingZero,
+            "lower-alpha" => Self::LowerAlpha,
+            "upper-alpha" => Self::UpperAlpha,
+            "lower-roman" => Self::LowerRoman,
+            "upper-roman" => Self::UpperRoman,
+            "lower-greek" => Self::LowerGreek,
+            "lower-latin" => Self::LowerLatin,
+            "upper-latin" => Self::UpperLatin,
+            "armenian" => Self::Armenian,
+            "georgian" => Self::Georgian,
+            other => Self::Custom(other.to_string()),
+        }
+    }
+}
+
+/// CSS `list-style-position` (CSS Lists L3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListStylePosition {
+    Inside,
+    Outside,
+}
+
+impl ListStylePosition {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s.trim().to_lowercase().as_str() {
+            "inside" => Self::Inside,
+            "outside" => Self::Outside,
+            _ => return None,
+        })
+    }
+}
+
+/// CSS `list-style-image` (CSS Lists L3). None | url().
+#[derive(Debug, Clone, PartialEq)]
+pub enum ListStyleImage {
+    None,
+    Url(String),
+}
+
+impl ListStyleImage {
+    pub fn parse(s: &str) -> Option<Self> {
+        let t = s.trim();
+        if t.eq_ignore_ascii_case("none") { return Some(Self::None); }
+        // url(...) extrakt.
+        if let Some(inner) = t.strip_prefix("url(").and_then(|x| x.strip_suffix(')')) {
+            let url = inner.trim().trim_matches('"').trim_matches('\'').to_string();
+            return Some(Self::Url(url));
+        }
+        None
     }
 }
 

@@ -2831,3 +2831,48 @@ fn cascade_typed_vertical_align_length() {
     let cs = out.computed.get(&(std::rc::Rc::as_ptr(&i) as usize)).unwrap();
     assert_eq!(cs.vertical_align, VerticalAlign::Length(Length::Px(-4.0)));
 }
+
+// ─── L5 step 3 batch 22: list-style + tab-size ────────────────────────
+
+#[test]
+fn cascade_typed_list_style_type() {
+    use crate::browser::computed_style::ListStyleType;
+    let doc = parse_html("<html><body><ul></ul></body></html>", "");
+    let css = parse_stylesheet("ul { list-style-type: square; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let u = doc.root.find(|n| n.tag_name().as_deref() == Some("ul")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&u) as usize)).unwrap();
+    assert_eq!(cs.list_style_type, ListStyleType::Square);
+}
+
+#[test]
+fn cascade_typed_list_style_image_url() {
+    use crate::browser::computed_style::ListStyleImage;
+    let doc = parse_html("<html><body><ul></ul></body></html>", "");
+    let css = parse_stylesheet("ul { list-style-image: url(\"bullet.png\"); }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let u = doc.root.find(|n| n.tag_name().as_deref() == Some("ul")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&u) as usize)).unwrap();
+    assert_eq!(cs.list_style_image, ListStyleImage::Url("bullet.png".into()));
+}
+
+#[test]
+fn cascade_typed_list_style_position_inside() {
+    use crate::browser::computed_style::ListStylePosition;
+    let doc = parse_html("<html><body><ul></ul></body></html>", "");
+    let css = parse_stylesheet("ul { list-style-position: inside; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let u = doc.root.find(|n| n.tag_name().as_deref() == Some("ul")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&u) as usize)).unwrap();
+    assert_eq!(cs.list_style_position, ListStylePosition::Inside);
+}
+
+#[test]
+fn cascade_typed_tab_size() {
+    let doc = parse_html("<html><body><pre></pre></body></html>", "");
+    let css = parse_stylesheet("pre { tab-size: 4; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let p = doc.root.find(|n| n.tag_name().as_deref() == Some("pre")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&p) as usize)).unwrap();
+    assert!((cs.tab_size - 4.0).abs() < 0.001);
+}
