@@ -274,4 +274,33 @@ mod tests {
     fn web_fixture_flex_basic() {
         run_fixture("tests/fixtures/web/flex_basic.json", 2.0, 0.0);
     }
+
+    // ─── Cascade / inheritance fixtures (L5 ComputedStyle safety net) ─────
+
+    /// Inheritance basic - body sets font-size/color/line-height, descendants
+    /// inherit. .small overrides font-size, .bold overrides font-weight.
+    /// Verifies cascade inheritance + per-child override chain.
+    #[test]
+    #[ignore]
+    fn web_fixture_inheritance_basic() {
+        run_fixture("tests/fixtures/web/inheritance_basic.json", 2.0, 0.0);
+    }
+
+    /// Text wrap - 200px column s long text -> multi-line p; 80px short s
+    /// short words -> word per line. Verifies inline wrapping at multiple
+    /// container widths.
+    #[test]
+    #[ignore]
+    fn web_fixture_text_wrap() {
+        run_fixture("tests/fixtures/web/text_wrap.json", 5.0, 0.0);
+    }
+
+    /// ::before + ::after pseudo content - red ">> " prefix per .item,
+    /// green " [tag]" suffix per .tag. Verifies pseudo element generation
+    /// doesn't break parent layout rects.
+    #[test]
+    #[ignore]
+    fn web_fixture_pseudo_before() {
+        run_fixture("tests/fixtures/web/pseudo_before.json", 2.0, 0.0);
+    }
 }

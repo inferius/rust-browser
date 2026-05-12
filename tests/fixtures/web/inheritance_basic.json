@@ -1,0 +1,18 @@
+{
+  "viewport": {"width": 1889, "height": 1945, "dpr": 1},
+  "html_source": "<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\"><title>inheritance_basic</title>\n<style>\n* { box-sizing: border-box; margin: 0; padding: 0; }\nbody { font-family: Arial; font-size: 20px; color: #c00; line-height: 1.5; }\n.wrap { width: 400px; padding: 10px; background: #eee; }\n.box { padding: 8px; background: #fff; margin-bottom: 8px; }\n.bold { font-weight: 700; }\n.small { font-size: 12px; }\n</style>\n</head><body>\n<div class=\"wrap\">\n  <div id=\"b1\" class=\"box\">Inherits body 20px red</div>\n  <div id=\"b2\" class=\"box bold\">Bold inherits 20px red</div>\n  <div id=\"b3\" class=\"box small\">Small 12px inherits red</div>\n</div>\n</body></html>",
+  "css_inline": "\n* { box-sizing: border-box; margin: 0; padding: 0; }\nbody { font-family: Arial; font-size: 20px; color: #c00; line-height: 1.5; }\n.wrap { width: 400px; padding: 10px; background: #eee; }\n.box { padding: 8px; background: #fff; margin-bottom: 8px; }\n.bold { font-weight: 700; }\n.small { font-size: 12px; }\n",
+  "tree": {
+    "tag": "html", "id": "", "classes": [], "rect": {"x": 0, "y": 0, "w": 1889, "h": 170},
+    "children": [
+      {"tag": "head", "id": "", "classes": [], "rect": {"x": 0, "y": 0, "w": 0, "h": 0}, "children": []},
+      {"tag": "body", "id": "", "classes": [], "rect": {"x": 0, "y": 0, "w": 1889, "h": 170}, "children": [
+        {"tag": "div", "id": "", "classes": ["wrap"], "rect": {"x": 0, "y": 0, "w": 400, "h": 170}, "children": [
+          {"tag": "div", "id": "b1", "classes": ["box"], "rect": {"x": 10, "y": 10, "w": 380, "h": 46}, "children": []},
+          {"tag": "div", "id": "b2", "classes": ["box", "bold"], "rect": {"x": 10, "y": 64, "w": 380, "h": 46}, "children": []},
+          {"tag": "div", "id": "b3", "classes": ["box", "small"], "rect": {"x": 10, "y": 118, "w": 380, "h": 34}, "children": []}
+        ]}
+      ]}
+    ]
+  }
+}

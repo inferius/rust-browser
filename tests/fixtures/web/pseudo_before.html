@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>pseudo_before</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: Arial; font-size: 16px; }
+.item { padding: 8px; background: #eef; margin-bottom: 6px; width: 300px; }
+.item::before {
+  content: ">> ";
+  color: #c00;
+  font-weight: bold;
+}
+.tag::after {
+  content: " [tag]";
+  color: #060;
+  font-size: 12px;
+}
+</style>
+</head><body>
+<div id="a" class="item">First</div>
+<div id="b" class="item tag">Second</div>
+<div id="c" class="item">Third</div>
+</body></html>

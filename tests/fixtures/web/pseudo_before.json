@@ -1,0 +1,16 @@
+{
+  "viewport": {"width": 1889, "height": 1945, "dpr": 1},
+  "html_source": "<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\"><title>pseudo_before</title>\n<style>\n* { box-sizing: border-box; margin: 0; padding: 0; }\nbody { font-family: Arial; font-size: 16px; }\n.item { padding: 8px; background: #eef; margin-bottom: 6px; width: 300px; }\n.item::before {\n  content: \">> \";\n  color: #c00;\n  font-weight: bold;\n}\n.tag::after {\n  content: \" [tag]\";\n  color: #060;\n  font-size: 12px;\n}\n</style>\n</head><body>\n<div id=\"a\" class=\"item\">First</div>\n<div id=\"b\" class=\"item tag\">Second</div>\n<div id=\"c\" class=\"item\">Third</div>\n</body></html>",
+  "css_inline": "\n* { box-sizing: border-box; margin: 0; padding: 0; }\nbody { font-family: Arial; font-size: 16px; }\n.item { padding: 8px; background: #eef; margin-bottom: 6px; width: 300px; }\n.item::before { content: \">> \"; color: #c00; font-weight: bold; }\n.tag::after { content: \" [tag]\"; color: #060; font-size: 12px; }\n",
+  "tree": {
+    "tag": "html", "id": "", "classes": [], "rect": {"x": 0, "y": 0, "w": 1889, "h": 120},
+    "children": [
+      {"tag": "head", "id": "", "classes": [], "rect": {"x": 0, "y": 0, "w": 0, "h": 0}, "children": []},
+      {"tag": "body", "id": "", "classes": [], "rect": {"x": 0, "y": 0, "w": 1889, "h": 114}, "children": [
+        {"tag": "div", "id": "a", "classes": ["item"], "rect": {"x": 0, "y": 0, "w": 300, "h": 34}, "children": []},
+        {"tag": "div", "id": "b", "classes": ["item", "tag"], "rect": {"x": 0, "y": 40, "w": 300, "h": 34}, "children": []},
+        {"tag": "div", "id": "c", "classes": ["item"], "rect": {"x": 0, "y": 80, "w": 300, "h": 34}, "children": []}
+      ]}
+    ]
+  }
+}
