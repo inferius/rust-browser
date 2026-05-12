@@ -2151,10 +2151,8 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(ti) = s.get("text-indent") {
         bx.text_indent = parse_length(ti);
     }
-    // letter-spacing / word-spacing
-    if let Some(ls) = s.get("letter-spacing") {
-        if ls.trim() != "normal" { bx.letter_spacing = parse_length(ls); }
-    }
+    // letter-spacing / word-spacing: parsuje POZDEJI po font-size resolution
+    // (em proti font-size). Viz move na konec cascade props loop.
     if let Some(ws) = s.get("word-spacing") {
         if ws.trim() != "normal" { bx.word_spacing = parse_length(ws); }
     }
@@ -2556,6 +2554,21 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(bc) = s.get("border-color") { bx.border_color = parse_color(bc); }
     if let Some(bs) = s.get("border-style") { bx.border_style = bs.trim().to_string(); }
     if let Some(fs) = s.get("font-size") { bx.font_size = parse_length(fs); bx.font_size_explicit = true; }
+    // letter-spacing PO font-size: em jednotky resolvuje proti font_size
+    // aktualniho elementu (CSS spec). parse_length default em=16 by daval
+    // 0.15em -> 2.4 misto 0.15 * fs (= 1.68 pri fs=11.2).
+    if let Some(ls) = s.get("letter-spacing") {
+        if ls.trim() != "normal" {
+            let v = ls.trim();
+            if let Some(num) = v.strip_suffix("em") {
+                if let Ok(n) = num.trim().parse::<f32>() {
+                    bx.letter_spacing = n * bx.font_size;
+                }
+            } else {
+                bx.letter_spacing = parse_length(v);
+            }
+        }
+    }
     // Text align
     if let Some(ta) = s.get("text-align") {
         bx.text_align = match ta.trim() {
