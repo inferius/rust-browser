@@ -8,11 +8,12 @@ use std::rc::Rc;
 use super::dom::{Node, NodeKind};
 use super::css_parser::{Stylesheet, Selector, SimpleSelector, Combinator, Rule, specificity};
 use super::computed_style::{
-    CascadeOutput, CascadeDecl, Color, ComputedStyle, ComputedStyleMap, Cursor,
-    DeclarationsMap, Display as CsDisplay, FontFamily, GenericFamily, Length,
-    LineHeight, OverflowWrap, PositionKind, PropertyId, CascadeOrigin,
-    Specificity as CsSpec, TextAlign as CsTextAlign, Visibility, WhiteSpace,
-    WordBreak, ZIndex,
+    BoxSizing as CsBoxSizing, CascadeOutput, CascadeDecl, Color, ComputedStyle,
+    ComputedStyleMap, Cursor, DeclarationsMap, Direction as CsDirection,
+    Display as CsDisplay, FontFamily, GenericFamily, Length, LineHeight,
+    OverflowWrap, PointerEvents as CsPointerEvents, PositionKind, PropertyId,
+    CascadeOrigin, Specificity as CsSpec, TextAlign as CsTextAlign, Visibility,
+    WhiteSpace, WordBreak, WritingMode as CsWritingMode, ZIndex,
 };
 
 // Runtime UI state pres thread-local. Nastavuje render loop pred kazdym
@@ -1057,6 +1058,19 @@ pub fn cascade_with_viewport_typed(
         if let Some(v) = props.get("overflow-wrap").or_else(|| props.get("word-wrap")) {
             if let Some(o) = OverflowWrap::parse(v) { cs.overflow_wrap = o; }
         }
+        // Batch 10: writing-mode/direction/box-sizing/pointer-events.
+        if let Some(v) = props.get("writing-mode") {
+            if let Some(w) = CsWritingMode::parse(v) { cs.writing_mode = w; }
+        }
+        if let Some(v) = props.get("direction") {
+            if let Some(d) = CsDirection::parse(v) { cs.direction = d; }
+        }
+        if let Some(v) = props.get("box-sizing") {
+            if let Some(b) = CsBoxSizing::parse(v) { cs.box_sizing = b; }
+        }
+        if let Some(v) = props.get("pointer-events") {
+            if let Some(p) = CsPointerEvents::parse(v) { cs.pointer_events = p; }
+        }
         computed.insert(*node_id, cs);
         // Konvertuj kazdou property na CascadeDecl s validity flag pro
         // batch 1 props (color/opacity/visibility/cursor) - parse Result
@@ -1093,6 +1107,10 @@ pub fn cascade_with_viewport_typed(
                 PropertyId::WhiteSpace => WhiteSpace::parse(raw_val).is_some(),
                 PropertyId::WordBreak => WordBreak::parse(raw_val).is_some(),
                 PropertyId::OverflowWrap => OverflowWrap::parse(raw_val).is_some(),
+                PropertyId::WritingMode => CsWritingMode::parse(raw_val).is_some(),
+                PropertyId::Direction => CsDirection::parse(raw_val).is_some(),
+                PropertyId::BoxSizing => CsBoxSizing::parse(raw_val).is_some(),
+                PropertyId::PointerEvents => CsPointerEvents::parse(raw_val).is_some(),
                 // Cursor::parse vzdy uspeje (Custom fallback) - vsechny valid.
                 _ => true,
             };

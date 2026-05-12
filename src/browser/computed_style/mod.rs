@@ -109,6 +109,12 @@ pub struct ComputedStyle {
     pub white_space: WhiteSpace,
     pub word_break: WordBreak,
     pub overflow_wrap: OverflowWrap,
+
+    // ─── Writing / Box (batch 10) ─────────────────────────────────────
+    pub writing_mode: WritingMode,
+    pub direction: Direction,
+    pub box_sizing: BoxSizing,
+    pub pointer_events: PointerEvents,
 }
 
 impl Default for ComputedStyle {
@@ -162,6 +168,116 @@ impl ComputedStyle {
             white_space: WhiteSpace::Normal,
             word_break: WordBreak::Normal,
             overflow_wrap: OverflowWrap::Normal,
+            writing_mode: WritingMode::HorizontalTb,
+            direction: Direction::Ltr,
+            box_sizing: BoxSizing::ContentBox,
+            pointer_events: PointerEvents::Auto,
+        }
+    }
+}
+
+/// CSS `writing-mode` (CSS Writing Modes L3 §3.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WritingMode {
+    HorizontalTb,
+    VerticalRl,
+    VerticalLr,
+    SidewaysRl,
+    SidewaysLr,
+}
+
+impl WritingMode {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s.trim().to_lowercase().as_str() {
+            "horizontal-tb" => Self::HorizontalTb,
+            "vertical-rl" => Self::VerticalRl,
+            "vertical-lr" => Self::VerticalLr,
+            "sideways-rl" => Self::SidewaysRl,
+            "sideways-lr" => Self::SidewaysLr,
+            _ => return None,
+        })
+    }
+    pub fn css_string(self) -> &'static str {
+        match self {
+            Self::HorizontalTb => "horizontal-tb",
+            Self::VerticalRl => "vertical-rl",
+            Self::VerticalLr => "vertical-lr",
+            Self::SidewaysRl => "sideways-rl",
+            Self::SidewaysLr => "sideways-lr",
+        }
+    }
+}
+
+/// CSS `direction` (CSS Writing Modes L3 §2.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    Ltr,
+    Rtl,
+}
+
+impl Direction {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s.trim().to_lowercase().as_str() {
+            "ltr" => Self::Ltr,
+            "rtl" => Self::Rtl,
+            _ => return None,
+        })
+    }
+    pub fn css_string(self) -> &'static str {
+        match self {
+            Self::Ltr => "ltr",
+            Self::Rtl => "rtl",
+        }
+    }
+}
+
+/// CSS `box-sizing` (CSS UI L4 §6.7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BoxSizing {
+    ContentBox,
+    BorderBox,
+}
+
+impl BoxSizing {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s.trim().to_lowercase().as_str() {
+            "content-box" => Self::ContentBox,
+            "border-box" => Self::BorderBox,
+            _ => return None,
+        })
+    }
+    pub fn css_string(self) -> &'static str {
+        match self {
+            Self::ContentBox => "content-box",
+            Self::BorderBox => "border-box",
+        }
+    }
+}
+
+/// CSS `pointer-events` (CSS UI L4 §3.1). Subset - mostly Auto vs None.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PointerEvents {
+    Auto,
+    None,
+}
+
+impl PointerEvents {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s.trim().to_lowercase().as_str() {
+            "auto" => Self::Auto,
+            "none" => Self::None,
+            // SVG values (visiblePainted, visibleFill, etc.) treat as Auto
+            // pro non-SVG context. Vsechny ostatni neznamy -> None match
+            // failure.
+            "visible" | "visiblepainted" | "visiblefill" | "visiblestroke"
+                | "painted" | "fill" | "stroke" | "all" => Self::Auto,
+            _ => return None,
+        })
+    }
+    pub fn css_string(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::None => "none",
         }
     }
 }

@@ -2165,3 +2165,72 @@ fn cascade_typed_text_align_invalid_marked() {
     let t = decls.iter().find(|d| d.raw_value == "middlish").unwrap();
     assert!(!t.valid);
 }
+
+// ─── L5 step 3 batch 10: writing_mode/direction/box_sizing/pointer_events
+
+#[test]
+fn cascade_typed_writing_mode() {
+    use crate::browser::computed_style::WritingMode;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { writing-mode: vertical-rl; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.writing_mode, WritingMode::VerticalRl);
+}
+
+#[test]
+fn cascade_typed_direction_rtl() {
+    use crate::browser::computed_style::Direction;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { direction: rtl; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.direction, Direction::Rtl);
+}
+
+#[test]
+fn cascade_typed_box_sizing_border_box() {
+    use crate::browser::computed_style::BoxSizing;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { box-sizing: border-box; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.box_sizing, BoxSizing::BorderBox);
+}
+
+#[test]
+fn cascade_typed_pointer_events_none() {
+    use crate::browser::computed_style::PointerEvents;
+    let doc = parse_html("<html><body><button></button></body></html>", "");
+    let css = parse_stylesheet("button { pointer-events: none; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let b = doc.root.find(|n| n.tag_name().as_deref() == Some("button")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&b) as usize)).unwrap();
+    assert_eq!(cs.pointer_events, PointerEvents::None);
+}
+
+#[test]
+fn cascade_typed_pointer_events_svg_keyword_maps_auto() {
+    use crate::browser::computed_style::PointerEvents;
+    let doc = parse_html("<html><body><svg></svg></body></html>", "");
+    let css = parse_stylesheet("svg { pointer-events: visiblePainted; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let s = doc.root.find(|n| n.tag_name().as_deref() == Some("svg")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&s) as usize)).unwrap();
+    // SVG-specific keywords mapped to Auto pro non-SVG layout.
+    assert_eq!(cs.pointer_events, PointerEvents::Auto);
+}
+
+#[test]
+fn cascade_typed_writing_mode_invalid_marked() {
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { writing-mode: sideways-diagonal; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let decls = out.declarations.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    let w = decls.iter().find(|d| d.raw_value == "sideways-diagonal").unwrap();
+    assert!(!w.valid);
+}
