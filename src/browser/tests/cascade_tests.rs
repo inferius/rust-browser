@@ -3041,3 +3041,48 @@ fn cascade_typed_animation_duration_timing_delay() {
     assert_eq!(cs.animation_timing_function, vec![TimingFunction::Linear]);
     assert_eq!(cs.animation_delay, vec![0.1]);
 }
+
+// ─── L5 step 3 batch 27: animation control ────────────────────────────
+
+#[test]
+fn cascade_typed_animation_iteration_infinite() {
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { animation-iteration-count: infinite; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert!(cs.animation_iteration_count[0].is_infinite());
+}
+
+#[test]
+fn cascade_typed_animation_direction_alternate() {
+    use crate::browser::computed_style::AnimationDirection;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { animation-direction: alternate; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.animation_direction, vec![AnimationDirection::Alternate]);
+}
+
+#[test]
+fn cascade_typed_animation_fill_mode_forwards() {
+    use crate::browser::computed_style::AnimationFillMode;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { animation-fill-mode: forwards; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.animation_fill_mode, vec![AnimationFillMode::Forwards]);
+}
+
+#[test]
+fn cascade_typed_animation_play_state_paused() {
+    use crate::browser::computed_style::AnimationPlayState;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { animation-play-state: paused; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.animation_play_state, vec![AnimationPlayState::Paused]);
+}

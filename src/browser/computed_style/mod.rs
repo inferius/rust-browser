@@ -213,6 +213,12 @@ pub struct ComputedStyle {
     pub animation_duration: Vec<f32>,
     pub animation_timing_function: Vec<TimingFunction>,
     pub animation_delay: Vec<f32>,
+
+    // ─── Animations: control (batch 27) ───────────────────────────────
+    pub animation_iteration_count: Vec<f32>,     // f32 = inf via f32::INFINITY
+    pub animation_direction: Vec<AnimationDirection>,
+    pub animation_fill_mode: Vec<AnimationFillMode>,
+    pub animation_play_state: Vec<AnimationPlayState>,
 }
 
 impl Default for ComputedStyle {
@@ -342,7 +348,70 @@ impl ComputedStyle {
             animation_duration: vec![0.0],
             animation_timing_function: vec![TimingFunction::Ease],
             animation_delay: vec![0.0],
+            animation_iteration_count: vec![1.0],
+            animation_direction: vec![AnimationDirection::Normal],
+            animation_fill_mode: vec![AnimationFillMode::None],
+            animation_play_state: vec![AnimationPlayState::Running],
         }
+    }
+}
+
+/// CSS `animation-direction`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnimationDirection {
+    Normal,
+    Reverse,
+    Alternate,
+    AlternateReverse,
+}
+
+impl AnimationDirection {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s.trim().to_lowercase().as_str() {
+            "normal" => Self::Normal,
+            "reverse" => Self::Reverse,
+            "alternate" => Self::Alternate,
+            "alternate-reverse" => Self::AlternateReverse,
+            _ => return None,
+        })
+    }
+}
+
+/// CSS `animation-fill-mode`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnimationFillMode {
+    None,
+    Forwards,
+    Backwards,
+    Both,
+}
+
+impl AnimationFillMode {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s.trim().to_lowercase().as_str() {
+            "none" => Self::None,
+            "forwards" => Self::Forwards,
+            "backwards" => Self::Backwards,
+            "both" => Self::Both,
+            _ => return None,
+        })
+    }
+}
+
+/// CSS `animation-play-state`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnimationPlayState {
+    Running,
+    Paused,
+}
+
+impl AnimationPlayState {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s.trim().to_lowercase().as_str() {
+            "running" => Self::Running,
+            "paused" => Self::Paused,
+            _ => return None,
+        })
     }
 }
 

@@ -18,6 +18,9 @@ use super::computed_style::{
     JustifyContent as CsJustifyContent, Length, LineHeight,
     Overflow as CsOverflow, OverflowWrap, PointerEvents as CsPointerEvents,
     PositionKind, PropertyId, CascadeOrigin, Specificity as CsSpec,
+    AnimationDirection as CsAnimationDirection,
+    AnimationFillMode as CsAnimationFillMode,
+    AnimationPlayState as CsAnimationPlayState,
     BorderCollapse as CsBorderCollapse, CaptionSide as CsCaptionSide,
     ListStyleImage as CsListStyleImage, ListStylePosition as CsListStylePosition,
     ListStyleType as CsListStyleType, ObjectFit as CsObjectFit, Resize as CsResize,
@@ -1434,6 +1437,30 @@ pub fn cascade_with_viewport_typed(
         if let Some(v) = props.get("animation-delay") {
             let lst = super::computed_style::parse_time_list(v);
             if !lst.is_empty() { cs.animation_delay = lst; }
+        }
+        // Batch 27: animation control.
+        if let Some(v) = props.get("animation-iteration-count") {
+            let lst: Vec<f32> = v.split(',').map(|p| {
+                let t = p.trim();
+                if t.eq_ignore_ascii_case("infinite") { f32::INFINITY }
+                else { t.parse().unwrap_or(1.0) }
+            }).collect();
+            if !lst.is_empty() { cs.animation_iteration_count = lst; }
+        }
+        if let Some(v) = props.get("animation-direction") {
+            let lst: Vec<CsAnimationDirection> = v.split(',')
+                .filter_map(|p| CsAnimationDirection::parse(p)).collect();
+            if !lst.is_empty() { cs.animation_direction = lst; }
+        }
+        if let Some(v) = props.get("animation-fill-mode") {
+            let lst: Vec<CsAnimationFillMode> = v.split(',')
+                .filter_map(|p| CsAnimationFillMode::parse(p)).collect();
+            if !lst.is_empty() { cs.animation_fill_mode = lst; }
+        }
+        if let Some(v) = props.get("animation-play-state") {
+            let lst: Vec<CsAnimationPlayState> = v.split(',')
+                .filter_map(|p| CsAnimationPlayState::parse(p)).collect();
+            if !lst.is_empty() { cs.animation_play_state = lst; }
         }
         computed.insert(*node_id, cs);
         // Konvertuj kazdou property na CascadeDecl s validity flag pro
