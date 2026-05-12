@@ -22,8 +22,7 @@ pub fn layout_absolute_child_with_parent(child: &mut LayoutBox, parent: &LayoutB
     let bw_t = parent.border_top_width.unwrap_or(parent.border_width);
     let bw_b = parent.border_bottom_width.unwrap_or(parent.border_width);
     // Scrollbar zmenuje containing block pro abs items.
-    let sb_w = if parent.scrollbar_size > 0.0 && parent.overflow_y.scrollable() { parent.scrollbar_size } else { 0.0 };
-    let sb_h = if parent.scrollbar_size > 0.0 && parent.overflow_x.scrollable() { parent.scrollbar_size } else { 0.0 };
+    let (sb_w, sb_h) = scrollbar_takes(parent);
     let cb_x = parent.rect.x + bw_l;
     let cb_y = parent.rect.y + bw_t;
     let cb_w = (parent.rect.width - bw_l - bw_r - sb_w).max(0.0);
@@ -248,6 +247,29 @@ fn layout_absolute_child_inner(child: &mut LayoutBox, parent_x: f32, parent_y: f
 /// Vraci true kdyz position je out-of-flow (abs/fixed).
 pub fn is_out_of_flow(bx: &LayoutBox) -> bool {
     matches!(bx.position, Position::Absolute | Position::Fixed)
+}
+
+/// Spocita sirku/vysku scrollbar prostoru ktery zabira (overflow scrollable).
+/// Vraci (scrollbar_w, scrollbar_h) - aplikuje se na inner content area.
+pub(crate) fn scrollbar_takes(bx: &LayoutBox) -> (f32, f32) {
+    let sb = bx.scrollbar_size;
+    if sb <= 0.0 { return (0.0, 0.0); }
+    let sb_w = if bx.overflow_y.scrollable() { sb } else { 0.0 };
+    let sb_h = if bx.overflow_x.scrollable() { sb } else { 0.0 };
+    (sb_w, sb_h)
+}
+
+/// Resolve row + column gap proti inner content size. Pri row_gap_pct +
+/// indefinite parent height -> 0 (per CSS spec). Pri column_gap_pct *
+/// inner_w. Jinak vrati bx.row_gap / bx.column_gap (raw px).
+pub(crate) fn resolve_gaps(bx: &LayoutBox, inner_w: f32, inner_h: f32) -> (f32, f32) {
+    let row_gap = if let Some(p) = bx.row_gap_pct {
+        if bx.explicit_height.is_none() { 0.0 } else { inner_h * p }
+    } else { bx.row_gap.max(0.0) };
+    let col_gap = if let Some(p) = bx.column_gap_pct {
+        inner_w * p
+    } else { bx.column_gap.max(0.0) };
+    (row_gap, col_gap)
 }
 
 #[cfg(test)]

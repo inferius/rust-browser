@@ -49,11 +49,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
     let effective_h = if bx.rect.height == 0.0 && bx_min_h > 0.0 { bx_min_h } else { bx.rect.height };
     // Scrollbar takes space: overflow-y scroll/auto -> right scrollbar reduces inner_w.
     // overflow-x scroll/auto -> bottom scrollbar reduces inner_h.
-    let scrollbar_size = bx.scrollbar_size;
-    let scrollbar_y_takes = scrollbar_size > 0.0 && bx.overflow_y.scrollable();
-    let scrollbar_x_takes = scrollbar_size > 0.0 && bx.overflow_x.scrollable();
-    let scrollbar_w = if scrollbar_y_takes { scrollbar_size } else { 0.0 };
-    let scrollbar_h = if scrollbar_x_takes { scrollbar_size } else { 0.0 };
+    let (scrollbar_w, scrollbar_h) = super::scrollbar_takes(bx);
     let inner_w = (effective_w - pad_l - pad_r - 2.0 * bx.margin - scrollbar_w).max(0.0);
 
     // CSS flex props - uz typed v cascade. Per-frame parse zmizel.
@@ -63,13 +59,7 @@ pub fn layout_flex(bx: &mut LayoutBox) {
     let align = bx.align_items;
     // Re-resolve gap pct proti inner_w/inner_h (po vypoctu pad+border).
     let inner_h_for_gap = (bx.rect.height - pad_t - pad_b - 2.0 * bx.margin - scrollbar_h).max(0.0);
-    let row_gap = if let Some(p) = bx.row_gap_pct {
-        // Indefinite height -> 0.
-        if bx.explicit_height.is_none() { 0.0 } else { inner_h_for_gap * p }
-    } else { bx.row_gap.max(0.0) };
-    let col_gap = if let Some(p) = bx.column_gap_pct {
-        inner_w * p
-    } else { bx.column_gap.max(0.0) };
+    let (row_gap, col_gap) = super::resolve_gaps(bx, inner_w, inner_h_for_gap);
 
     if bx.children.is_empty() { return; }
 

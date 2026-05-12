@@ -24,21 +24,14 @@ pub fn layout_grid(bx: &mut LayoutBox) {
     let inner_x = bx.rect.x + pad_l + bx.margin;
     let inner_y = bx.rect.y + pad_t + bx.margin;
     // Scrollbar takes space.
-    let scrollbar_size = bx.scrollbar_size;
-    let scrollbar_w = if scrollbar_size > 0.0 && bx.overflow_y.scrollable() { scrollbar_size } else { 0.0 };
-    let scrollbar_h = if scrollbar_size > 0.0 && bx.overflow_x.scrollable() { scrollbar_size } else { 0.0 };
+    let (scrollbar_w, scrollbar_h) = super::scrollbar_takes(bx);
     let inner_w = (bx.rect.width - pad_l - pad_r - 2.0 * bx.margin - scrollbar_w).max(0.0);
     let inner_h = (bx.rect.height - pad_t - pad_b - 2.0 * bx.margin - scrollbar_h).max(0.0);
 
     if bx.children.is_empty() { return; }
 
     // Re-resolve gap pct proti inner content dimension.
-    let row_gap = if let Some(p) = bx.row_gap_pct {
-        if bx.explicit_height.is_none() { 0.0 } else { inner_h * p }
-    } else { bx.row_gap };
-    let col_gap = if let Some(p) = bx.column_gap_pct {
-        inner_w * p
-    } else { bx.column_gap };
+    let (row_gap, col_gap) = super::resolve_gaps(bx, inner_w, inner_h);
 
     // grid-auto-flow detect early.
     // dense varianta (CSS Grid §8.5) parsuje ale neimplementuje - po
