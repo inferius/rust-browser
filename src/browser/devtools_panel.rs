@@ -1409,7 +1409,7 @@ fn paint_side_computed(
             }
             push_text(cmds, text_x, sy, format!("{}:", k), pal.syn_property, false);
             let mut value_x = text_x + 132.0;
-            if let Some(c) = parse_css_color(v.trim()) {
+            if let Some(c) = super::layout::parse_color(v.trim()) {
                 push_rect(cmds, value_x, sy + 3.0, 12.0, 12.0, c);
                 push_rect_border(cmds, value_x, sy + 3.0, 12.0, 12.0, pal.border);
                 value_x += 16.0;
@@ -1956,7 +1956,7 @@ fn paint_decl_line(
     let value_start_x = cx;
 
     // Color swatch detection - prefix value parsing.
-    if let Some(c) = parse_css_color(value.trim()) {
+    if let Some(c) = super::layout::parse_color(value.trim()) {
         push_rect(cmds, cx, y + 3.0, 12.0, 12.0, c);
         push_rect(cmds, cx, y + 3.0, 12.0, 1.0, pal.border);
         push_rect(cmds, cx, y + 14.0, 12.0, 1.0, pal.border);
@@ -2011,62 +2011,12 @@ fn paint_decl_line(
     }
 }
 
-/// Test-exposed wrapper.
+/// Test-exposed wrapper - deleguje na browser::layout::parse_color
+/// (CSS Color L4 superset: hex 3/4/6/8, named, rgb/rgba, hsl/hsla, hwb,
+/// oklab, lab, color(), color-mix(), ...).
 #[cfg(test)]
 pub fn parse_css_color_for_test(s: &str) -> Option<[u8; 4]> {
-    parse_css_color(s)
-}
-
-/// Parse CSS color literal -> RGBA. Pokrita: #rgb, #rrggbb, #rrggbbaa,
-/// rgb()/rgba(), hsl()/hsla() (heuristic), nazvy ('red'/'blue'/...).
-fn parse_css_color(s: &str) -> Option<[u8; 4]> {
-    let s = s.trim();
-    if s.starts_with('#') {
-        let hex = &s[1..];
-        let parse2 = |p: &str| u8::from_str_radix(p, 16).ok();
-        match hex.len() {
-            3 => {
-                let r = parse2(&format!("{}{}", &hex[0..1], &hex[0..1]))?;
-                let g = parse2(&format!("{}{}", &hex[1..2], &hex[1..2]))?;
-                let b = parse2(&format!("{}{}", &hex[2..3], &hex[2..3]))?;
-                Some([r, g, b, 255])
-            }
-            6 => Some([parse2(&hex[0..2])?, parse2(&hex[2..4])?, parse2(&hex[4..6])?, 255]),
-            8 => Some([parse2(&hex[0..2])?, parse2(&hex[2..4])?, parse2(&hex[4..6])?, parse2(&hex[6..8])?]),
-            _ => None,
-        }
-    } else if s.starts_with("rgb(") || s.starts_with("rgba(") {
-        let open = s.find('(')?;
-        let close = s.find(')')?;
-        let parts: Vec<&str> = s[open+1..close].split(',').collect();
-        if parts.len() < 3 { return None; }
-        let r = parts[0].trim().parse::<f32>().ok()? as u8;
-        let g = parts[1].trim().parse::<f32>().ok()? as u8;
-        let b = parts[2].trim().parse::<f32>().ok()? as u8;
-        let a = parts.get(3).and_then(|p| p.trim().parse::<f32>().ok())
-            .map(|f| (f * 255.0) as u8).unwrap_or(255);
-        Some([r, g, b, a])
-    } else {
-        // Named colors - pokryte zakladni.
-        let named = match s.to_lowercase().as_str() {
-            "red" => [255, 0, 0, 255],
-            "green" => [0, 128, 0, 255],
-            "blue" => [0, 0, 255, 255],
-            "white" => [255, 255, 255, 255],
-            "black" => [0, 0, 0, 255],
-            "yellow" => [255, 255, 0, 255],
-            "cyan" => [0, 255, 255, 255],
-            "magenta" => [255, 0, 255, 255],
-            "gray" | "grey" => [128, 128, 128, 255],
-            "orange" => [255, 165, 0, 255],
-            "purple" => [128, 0, 128, 255],
-            "pink" => [255, 192, 203, 255],
-            "brown" => [165, 42, 42, 255],
-            "transparent" => [0, 0, 0, 0],
-            _ => return None,
-        };
-        Some(named)
-    }
+    super::layout::parse_color(s)
 }
 
 fn paint_styles_pane(
