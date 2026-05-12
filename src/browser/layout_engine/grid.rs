@@ -378,19 +378,28 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         }
         resolved
     } else {
-        // Bez template: tracky zacinaj na 0 (resp. explicit_height z dite v row).
-        // Nasledny intrinsic pass (any_auto_row branch ~line 994+) vyplni row_tracks
-        // dle obsahu (by_row). DRIV: fallback_h = inner_h/rows distribuovala parent
-        // height rovnomerne, takze items nemohli SHRINK pod fallback - to nafouklo
-        // top-container z 120 (content+pad) na 2007 (= 6022/3 rows) na mileneckaseznamka.cz.
+        // Bez template: pouzij grid-auto-rows cycle pro vsechny rows. Pokud
+        // grid-auto-rows tez prazdne, fallback na intrinsic z children
+        // (explicit_height max per row).
+        //
+        // Drive: jen children iter bez auto-rows. grid-auto-rows: 60px tedy
+        // skoncilo s row_tracks = [0, 0] pri 2 rows (= items maji
+        // explicit_height = None) -> items dostali text intrinsic 19.2 namisto
+        // 60. Po: auto_row_cycle aplikovan -> [60, 60].
+        let auto_pre: Vec<f32> = if !bx.grid_auto_rows.is_empty() {
+            resolve_tracks(&bx.grid_auto_rows, inner_h, row_gap)
+        } else { Vec::new() };
+        let cycle_len = auto_pre.len();
         let mut out = Vec::with_capacity(rows);
         for r in 0..rows {
-            let mut h = 0.0_f32;
+            let auto_h = if cycle_len > 0 { auto_pre[r % cycle_len] } else { 0.0 };
+            let mut h = auto_h;
+            // Children intrinsic override pri jejich explicit_height vetsim
+            // nez auto-row value (typicke grid-auto-rows: 60 ale .cell h: 80).
             for c in 0..cols {
                 let idx = r * cols + c;
                 if let Some(child) = bx.children.get(idx) {
                     if let Some(eh) = child.explicit_height {
-                        // Floor by padding+border (item nemuze byt mensi).
                         let pb_t = child.padding_top.unwrap_or(child.padding) + child.border_top_width.unwrap_or(child.border_width);
                         let pb_b = child.padding_bottom.unwrap_or(child.padding) + child.border_bottom_width.unwrap_or(child.border_width);
                         let real_h = eh.max(pb_t + pb_b);
