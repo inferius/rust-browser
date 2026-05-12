@@ -273,6 +273,12 @@ pub struct ComputedStyle {
     pub content: String,                 // raw (pseudo-element content)
     pub counter_reset: String,           // raw "name N" list
     pub counter_increment: String,       // raw "name N" list
+
+    // ─── Multi-column (batch 37) ──────────────────────────────────────
+    pub column_count: ColumnCount,       // Auto | Integer(u32)
+    pub column_width: Length,            // Auto | <length>
+    pub column_fill: ColumnFill,
+    pub column_span: ColumnSpan,
 }
 
 impl Default for ComputedStyle {
@@ -442,7 +448,62 @@ impl ComputedStyle {
             content: "normal".into(),
             counter_reset: "none".into(),
             counter_increment: "none".into(),
+            column_count: ColumnCount::Auto,
+            column_width: Length::Auto,
+            column_fill: ColumnFill::Balance,
+            column_span: ColumnSpan::None,
         }
+    }
+}
+
+/// CSS `column-count` (CSS Multi-column L1 §3.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColumnCount {
+    Auto,
+    Integer(u32),
+}
+
+impl ColumnCount {
+    pub fn parse(s: &str) -> Option<Self> {
+        let t = s.trim().to_lowercase();
+        if t == "auto" { return Some(Self::Auto); }
+        t.parse::<u32>().ok().map(|n| Self::Integer(n.max(1)))
+    }
+}
+
+/// CSS `column-fill` (CSS Multi-column L1 §5.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColumnFill {
+    Auto,
+    Balance,
+    BalanceAll,
+}
+
+impl ColumnFill {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s.trim().to_lowercase().as_str() {
+            "auto" => Self::Auto,
+            "balance" => Self::Balance,
+            "balance-all" => Self::BalanceAll,
+            _ => return None,
+        })
+    }
+}
+
+/// CSS `column-span` (CSS Multi-column L1 §6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColumnSpan {
+    None,
+    All,
+}
+
+impl ColumnSpan {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s.trim().to_lowercase().as_str() {
+            "none" => Self::None,
+            "all" => Self::All,
+            _ => return None,
+        })
     }
 }
 

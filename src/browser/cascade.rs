@@ -24,6 +24,7 @@ use super::computed_style::{
     BlendMode as CsBlendMode, GridAutoFlow as CsGridAutoFlow, GridLine as CsGridLine,
     Appearance as CsAppearance, BackgroundAttachment as CsBackgroundAttachment,
     BackgroundClip as CsBackgroundClip,
+    ColumnCount as CsColumnCount, ColumnFill as CsColumnFill, ColumnSpan as CsColumnSpan,
     Isolation as CsIsolation, JustifyItems as CsJustifyItems,
     JustifySelf as CsJustifySelf, ScrollBehavior as CsScrollBehavior,
     BorderCollapse as CsBorderCollapse, CaptionSide as CsCaptionSide,
@@ -1609,6 +1610,23 @@ pub fn cascade_with_viewport_typed(
         }
         if let Some(v) = props.get("counter-increment") {
             cs.counter_increment = v.clone();
+        }
+        // Batch 37: multi-column.
+        if let Some(v) = props.get("column-count") {
+            if let Some(c) = CsColumnCount::parse(v) { cs.column_count = c; }
+        }
+        if let Some(v) = props.get("column-width") {
+            if v.trim().eq_ignore_ascii_case("auto") {
+                cs.column_width = Length::Auto;
+            } else if let Some(l) = Length::parse(v) {
+                cs.column_width = l;
+            }
+        }
+        if let Some(v) = props.get("column-fill") {
+            if let Some(f) = CsColumnFill::parse(v) { cs.column_fill = f; }
+        }
+        if let Some(v) = props.get("column-span") {
+            if let Some(s) = CsColumnSpan::parse(v) { cs.column_span = s; }
         }
         computed.insert(*node_id, cs);
         // Konvertuj kazdou property na CascadeDecl s validity flag pro

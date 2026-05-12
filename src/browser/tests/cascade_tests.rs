@@ -3408,3 +3408,39 @@ fn cascade_typed_counter_reset_increment() {
     assert!(cs.counter_reset.contains("section"));
     assert!(cs.counter_increment.contains("section"));
 }
+
+// ─── L5 step 3 batch 37: multi-column ─────────────────────────────────
+
+#[test]
+fn cascade_typed_column_count() {
+    use crate::browser::computed_style::ColumnCount;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { column-count: 3; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.column_count, ColumnCount::Integer(3));
+}
+
+#[test]
+fn cascade_typed_column_width() {
+    use crate::browser::computed_style::Length;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { column-width: 200px; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.column_width, Length::Px(200.0));
+}
+
+#[test]
+fn cascade_typed_column_fill_span() {
+    use crate::browser::computed_style::{ColumnFill, ColumnSpan};
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { column-fill: balance-all; column-span: all; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.column_fill, ColumnFill::BalanceAll);
+    assert_eq!(cs.column_span, ColumnSpan::All);
+}
