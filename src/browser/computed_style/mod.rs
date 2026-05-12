@@ -127,6 +127,12 @@ pub struct ComputedStyle {
     pub flex_wrap: FlexWrap,
     pub flex_grow: f32,
     pub flex_shrink: f32,
+
+    // ─── Flex/Grid alignment (batch 13) ───────────────────────────────
+    pub justify_content: JustifyContent,
+    pub align_items: AlignItems,
+    pub align_content: AlignContent,
+    pub align_self: AlignSelf,
 }
 
 impl Default for ComputedStyle {
@@ -192,6 +198,210 @@ impl ComputedStyle {
             flex_wrap: FlexWrap::Nowrap,
             flex_grow: 0.0,
             flex_shrink: 1.0,
+            justify_content: JustifyContent::FlexStart,
+            align_items: AlignItems::Stretch,
+            align_content: AlignContent::Normal,
+            align_self: AlignSelf::Auto,
+        }
+    }
+}
+
+/// CSS `justify-content` (CSS Box Alignment L3 §6.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JustifyContent {
+    Normal,
+    FlexStart,
+    FlexEnd,
+    Start,
+    End,
+    Center,
+    SpaceBetween,
+    SpaceAround,
+    SpaceEvenly,
+    Stretch,
+    Left,
+    Right,
+}
+
+impl JustifyContent {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s.trim().to_lowercase().as_str() {
+            "normal" => Self::Normal,
+            "flex-start" => Self::FlexStart,
+            "flex-end" => Self::FlexEnd,
+            "start" => Self::Start,
+            "end" => Self::End,
+            "center" => Self::Center,
+            "space-between" => Self::SpaceBetween,
+            "space-around" => Self::SpaceAround,
+            "space-evenly" => Self::SpaceEvenly,
+            "stretch" => Self::Stretch,
+            "left" => Self::Left,
+            "right" => Self::Right,
+            _ => return None,
+        })
+    }
+    pub fn css_string(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::FlexStart => "flex-start",
+            Self::FlexEnd => "flex-end",
+            Self::Start => "start",
+            Self::End => "end",
+            Self::Center => "center",
+            Self::SpaceBetween => "space-between",
+            Self::SpaceAround => "space-around",
+            Self::SpaceEvenly => "space-evenly",
+            Self::Stretch => "stretch",
+            Self::Left => "left",
+            Self::Right => "right",
+        }
+    }
+}
+
+/// CSS `align-items` (CSS Box Alignment L3 §5.3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AlignItems {
+    Normal,
+    Stretch,
+    FlexStart,
+    FlexEnd,
+    Start,
+    End,
+    Center,
+    Baseline,
+    SelfStart,
+    SelfEnd,
+}
+
+impl AlignItems {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s.trim().to_lowercase().as_str() {
+            "normal" => Self::Normal,
+            "stretch" => Self::Stretch,
+            "flex-start" => Self::FlexStart,
+            "flex-end" => Self::FlexEnd,
+            "start" => Self::Start,
+            "end" => Self::End,
+            "center" => Self::Center,
+            "baseline" => Self::Baseline,
+            "self-start" => Self::SelfStart,
+            "self-end" => Self::SelfEnd,
+            _ => return None,
+        })
+    }
+    pub fn css_string(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::Stretch => "stretch",
+            Self::FlexStart => "flex-start",
+            Self::FlexEnd => "flex-end",
+            Self::Start => "start",
+            Self::End => "end",
+            Self::Center => "center",
+            Self::Baseline => "baseline",
+            Self::SelfStart => "self-start",
+            Self::SelfEnd => "self-end",
+        }
+    }
+}
+
+/// CSS `align-content` (CSS Box Alignment L3 §5.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AlignContent {
+    Normal,
+    FlexStart,
+    FlexEnd,
+    Start,
+    End,
+    Center,
+    SpaceBetween,
+    SpaceAround,
+    SpaceEvenly,
+    Stretch,
+    Baseline,
+}
+
+impl AlignContent {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s.trim().to_lowercase().as_str() {
+            "normal" => Self::Normal,
+            "flex-start" => Self::FlexStart,
+            "flex-end" => Self::FlexEnd,
+            "start" => Self::Start,
+            "end" => Self::End,
+            "center" => Self::Center,
+            "space-between" => Self::SpaceBetween,
+            "space-around" => Self::SpaceAround,
+            "space-evenly" => Self::SpaceEvenly,
+            "stretch" => Self::Stretch,
+            "baseline" => Self::Baseline,
+            _ => return None,
+        })
+    }
+    pub fn css_string(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::FlexStart => "flex-start",
+            Self::FlexEnd => "flex-end",
+            Self::Start => "start",
+            Self::End => "end",
+            Self::Center => "center",
+            Self::SpaceBetween => "space-between",
+            Self::SpaceAround => "space-around",
+            Self::SpaceEvenly => "space-evenly",
+            Self::Stretch => "stretch",
+            Self::Baseline => "baseline",
+        }
+    }
+}
+
+/// CSS `align-self` (CSS Box Alignment L3 §5.4). Auto = follow align-items.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AlignSelf {
+    Auto,
+    Normal,
+    Stretch,
+    FlexStart,
+    FlexEnd,
+    Start,
+    End,
+    Center,
+    Baseline,
+    SelfStart,
+    SelfEnd,
+}
+
+impl AlignSelf {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s.trim().to_lowercase().as_str() {
+            "auto" => Self::Auto,
+            "normal" => Self::Normal,
+            "stretch" => Self::Stretch,
+            "flex-start" => Self::FlexStart,
+            "flex-end" => Self::FlexEnd,
+            "start" => Self::Start,
+            "end" => Self::End,
+            "center" => Self::Center,
+            "baseline" => Self::Baseline,
+            "self-start" => Self::SelfStart,
+            "self-end" => Self::SelfEnd,
+            _ => return None,
+        })
+    }
+    pub fn css_string(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Normal => "normal",
+            Self::Stretch => "stretch",
+            Self::FlexStart => "flex-start",
+            Self::FlexEnd => "flex-end",
+            Self::Start => "start",
+            Self::End => "end",
+            Self::Center => "center",
+            Self::Baseline => "baseline",
+            Self::SelfStart => "self-start",
+            Self::SelfEnd => "self-end",
         }
     }
 }

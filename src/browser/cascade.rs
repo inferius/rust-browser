@@ -8,10 +8,12 @@ use std::rc::Rc;
 use super::dom::{Node, NodeKind};
 use super::css_parser::{Stylesheet, Selector, SimpleSelector, Combinator, Rule, specificity};
 use super::computed_style::{
-    BoxSizing as CsBoxSizing, CascadeOutput, CascadeDecl, Clear as CsClear,
-    Color, ComputedStyle, ComputedStyleMap, Cursor, DeclarationsMap,
-    Direction as CsDirection, Display as CsDisplay, FlexDirection as CsFlexDirection,
-    FlexWrap as CsFlexWrap, Float as CsFloat, FontFamily, GenericFamily, Length,
+    AlignContent as CsAlignContent, AlignItems as CsAlignItems,
+    AlignSelf as CsAlignSelf, BoxSizing as CsBoxSizing, CascadeOutput, CascadeDecl,
+    Clear as CsClear, Color, ComputedStyle, ComputedStyleMap, Cursor,
+    DeclarationsMap, Direction as CsDirection, Display as CsDisplay,
+    FlexDirection as CsFlexDirection, FlexWrap as CsFlexWrap, Float as CsFloat,
+    FontFamily, GenericFamily, JustifyContent as CsJustifyContent, Length,
     LineHeight, Overflow as CsOverflow, OverflowWrap, PointerEvents as CsPointerEvents,
     PositionKind, PropertyId, CascadeOrigin, Specificity as CsSpec,
     TextAlign as CsTextAlign, Visibility, WhiteSpace, WordBreak,
@@ -1113,6 +1115,19 @@ pub fn cascade_with_viewport_typed(
         if let Some(v) = props.get("flex-shrink") {
             if let Ok(n) = v.trim().parse::<f32>() { cs.flex_shrink = n.max(0.0); }
         }
+        // Batch 13: justify-content/align-items/align-content/align-self.
+        if let Some(v) = props.get("justify-content") {
+            if let Some(j) = CsJustifyContent::parse(v) { cs.justify_content = j; }
+        }
+        if let Some(v) = props.get("align-items") {
+            if let Some(a) = CsAlignItems::parse(v) { cs.align_items = a; }
+        }
+        if let Some(v) = props.get("align-content") {
+            if let Some(a) = CsAlignContent::parse(v) { cs.align_content = a; }
+        }
+        if let Some(v) = props.get("align-self") {
+            if let Some(a) = CsAlignSelf::parse(v) { cs.align_self = a; }
+        }
         computed.insert(*node_id, cs);
         // Konvertuj kazdou property na CascadeDecl s validity flag pro
         // batch 1 props (color/opacity/visibility/cursor) - parse Result
@@ -1161,6 +1176,10 @@ pub fn cascade_with_viewport_typed(
                 PropertyId::FlexWrap => CsFlexWrap::parse(raw_val).is_some(),
                 PropertyId::FlexGrow | PropertyId::FlexShrink
                     => raw_val.trim().parse::<f32>().is_ok(),
+                PropertyId::JustifyContent => CsJustifyContent::parse(raw_val).is_some(),
+                PropertyId::AlignItems => CsAlignItems::parse(raw_val).is_some(),
+                PropertyId::AlignContent => CsAlignContent::parse(raw_val).is_some(),
+                PropertyId::AlignSelf => CsAlignSelf::parse(raw_val).is_some(),
                 // Cursor::parse vzdy uspeje (Custom fallback) - vsechny valid.
                 _ => true,
             };

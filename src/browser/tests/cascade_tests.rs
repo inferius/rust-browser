@@ -2354,3 +2354,60 @@ fn cascade_typed_flex_direction_invalid_marked() {
     let f = decls.iter().find(|d| d.raw_value == "diagonal").unwrap();
     assert!(!f.valid);
 }
+
+// ─── L5 step 3 batch 13: justify-content/align-items/-content/-self ────
+
+#[test]
+fn cascade_typed_justify_content_space_between() {
+    use crate::browser::computed_style::JustifyContent;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { justify-content: space-between; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.justify_content, JustifyContent::SpaceBetween);
+}
+
+#[test]
+fn cascade_typed_align_items_baseline() {
+    use crate::browser::computed_style::AlignItems;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { align-items: baseline; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.align_items, AlignItems::Baseline);
+}
+
+#[test]
+fn cascade_typed_align_content_stretch() {
+    use crate::browser::computed_style::AlignContent;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { align-content: stretch; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.align_content, AlignContent::Stretch);
+}
+
+#[test]
+fn cascade_typed_align_self_flex_end() {
+    use crate::browser::computed_style::AlignSelf;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { align-self: flex-end; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.align_self, AlignSelf::FlexEnd);
+}
+
+#[test]
+fn cascade_typed_justify_invalid_marked() {
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { justify-content: spaced-out; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let decls = out.declarations.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    let j = decls.iter().find(|d| d.raw_value == "spaced-out").unwrap();
+    assert!(!j.valid);
+}
