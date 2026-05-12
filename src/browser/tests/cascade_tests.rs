@@ -1716,3 +1716,112 @@ fn cascade_typed_position_invalid_marked() {
     let pos = decls.iter().find(|d| d.raw_value == "floaty").unwrap();
     assert!(!pos.valid, "position:floaty marked invalid");
 }
+
+// ─── L5 step 3 batch 3: font_size/font_weight/font_style/line_height ───
+
+#[test]
+fn cascade_typed_font_size_px() {
+    use crate::browser::computed_style::Length;
+    let doc = parse_html("<html><body><p>x</p></body></html>", "");
+    let css = parse_stylesheet("p { font-size: 14px; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let p = doc.root.find(|n| n.tag_name().as_deref() == Some("p")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&p) as usize)).unwrap();
+    assert_eq!(cs.font_size, Length::Px(14.0));
+}
+
+#[test]
+fn cascade_typed_font_size_em() {
+    use crate::browser::computed_style::Length;
+    let doc = parse_html("<html><body><p>x</p></body></html>", "");
+    let css = parse_stylesheet("p { font-size: 1.5em; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let p = doc.root.find(|n| n.tag_name().as_deref() == Some("p")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&p) as usize)).unwrap();
+    // Em zachova jednotku - resolve az pri layout context.
+    assert_eq!(cs.font_size, Length::Em(1.5));
+}
+
+#[test]
+fn cascade_typed_font_weight_numeric() {
+    let doc = parse_html("<html><body><strong>x</strong></body></html>", "");
+    let css = parse_stylesheet("strong { font-weight: 800; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let s = doc.root.find(|n| n.tag_name().as_deref() == Some("strong")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&s) as usize)).unwrap();
+    assert_eq!(cs.font_weight, 800);
+}
+
+#[test]
+fn cascade_typed_font_weight_bold_keyword() {
+    let doc = parse_html("<html><body><b>x</b></body></html>", "");
+    let css = parse_stylesheet("b { font-weight: bold; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let b = doc.root.find(|n| n.tag_name().as_deref() == Some("b")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&b) as usize)).unwrap();
+    assert_eq!(cs.font_weight, 700);
+}
+
+#[test]
+fn cascade_typed_font_style_italic() {
+    let doc = parse_html("<html><body><i>x</i></body></html>", "");
+    let css = parse_stylesheet("i { font-style: italic; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let i = doc.root.find(|n| n.tag_name().as_deref() == Some("i")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&i) as usize)).unwrap();
+    assert!(cs.font_style_italic);
+}
+
+#[test]
+fn cascade_typed_font_style_oblique() {
+    let doc = parse_html("<html><body><i>x</i></body></html>", "");
+    let css = parse_stylesheet("i { font-style: oblique 5deg; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let i = doc.root.find(|n| n.tag_name().as_deref() == Some("i")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&i) as usize)).unwrap();
+    assert!(cs.font_style_italic);
+}
+
+#[test]
+fn cascade_typed_line_height_normal() {
+    use crate::browser::computed_style::LineHeight;
+    let doc = parse_html("<html><body><p>x</p></body></html>", "");
+    let css = parse_stylesheet("p { line-height: normal; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let p = doc.root.find(|n| n.tag_name().as_deref() == Some("p")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&p) as usize)).unwrap();
+    assert_eq!(cs.line_height, LineHeight::Normal);
+}
+
+#[test]
+fn cascade_typed_line_height_multiplier() {
+    use crate::browser::computed_style::LineHeight;
+    let doc = parse_html("<html><body><p>x</p></body></html>", "");
+    let css = parse_stylesheet("p { line-height: 1.5; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let p = doc.root.find(|n| n.tag_name().as_deref() == Some("p")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&p) as usize)).unwrap();
+    assert_eq!(cs.line_height, LineHeight::Multiplier(1.5));
+}
+
+#[test]
+fn cascade_typed_line_height_length() {
+    use crate::browser::computed_style::{LineHeight, Length};
+    let doc = parse_html("<html><body><p>x</p></body></html>", "");
+    let css = parse_stylesheet("p { line-height: 24px; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let p = doc.root.find(|n| n.tag_name().as_deref() == Some("p")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&p) as usize)).unwrap();
+    assert_eq!(cs.line_height, LineHeight::Length(Length::Px(24.0)));
+}
+
+#[test]
+fn cascade_typed_font_size_invalid_marked() {
+    let doc = parse_html("<html><body><p>x</p></body></html>", "");
+    let css = parse_stylesheet("p { font-size: chunky; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let p = doc.root.find(|n| n.tag_name().as_deref() == Some("p")).unwrap();
+    let decls = out.declarations.get(&(std::rc::Rc::as_ptr(&p) as usize)).unwrap();
+    let fs = decls.iter().find(|d| d.raw_value == "chunky").unwrap();
+    assert!(!fs.valid, "font-size:chunky marked invalid");
+}

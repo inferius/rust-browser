@@ -9,8 +9,8 @@ use super::dom::{Node, NodeKind};
 use super::css_parser::{Stylesheet, Selector, SimpleSelector, Combinator, Rule, specificity};
 use super::computed_style::{
     CascadeOutput, CascadeDecl, Color, ComputedStyle, ComputedStyleMap, Cursor,
-    DeclarationsMap, Display as CsDisplay, PositionKind, PropertyId,
-    CascadeOrigin, Specificity as CsSpec, Visibility, ZIndex,
+    DeclarationsMap, Display as CsDisplay, Length, LineHeight, PositionKind,
+    PropertyId, CascadeOrigin, Specificity as CsSpec, Visibility, ZIndex,
 };
 
 // Runtime UI state pres thread-local. Nastavuje render loop pred kazdym
@@ -960,6 +960,21 @@ pub fn cascade_with_viewport_typed(
         if let Some(v) = props.get("z-index") {
             if let Some(z) = ZIndex::parse(v) { cs.z_index = z; }
         }
+        // Batch 3: font_size + font_weight + font_style + line_height.
+        if let Some(v) = props.get("font-size") {
+            if let Some(l) = Length::parse(v) { cs.font_size = l; }
+        }
+        if let Some(v) = props.get("font-weight") {
+            cs.font_weight = parse_font_weight(v);
+        }
+        if let Some(v) = props.get("font-style") {
+            // italic | oblique | normal. Engine treats italic+oblique=true.
+            let lv = v.trim().to_lowercase();
+            cs.font_style_italic = lv == "italic" || lv.starts_with("oblique");
+        }
+        if let Some(v) = props.get("line-height") {
+            cs.line_height = parse_line_height(v);
+        }
         computed.insert(*node_id, cs);
         // Konvertuj kazdou property na CascadeDecl s validity flag pro
         // batch 1 props (color/opacity/visibility/cursor) - parse Result
@@ -976,6 +991,10 @@ pub fn cascade_with_viewport_typed(
                 PropertyId::Display => CsDisplay::parse(raw_val).is_some(),
                 PropertyId::Position => PositionKind::parse(raw_val).is_some(),
                 PropertyId::ZIndex => ZIndex::parse(raw_val).is_some(),
+                PropertyId::FontSize => Length::parse(raw_val).is_some(),
+                PropertyId::FontWeight => is_valid_font_weight(raw_val),
+                PropertyId::FontStyle => is_valid_font_style(raw_val),
+                PropertyId::LineHeight => is_valid_line_height(raw_val),
                 // Cursor::parse vzdy uspeje (Custom fallback) - vsechny valid.
                 _ => true,
             };
@@ -992,6 +1011,48 @@ pub fn cascade_with_viewport_typed(
         declarations.insert(*node_id, decls);
     }
     CascadeOutput { style_map, computed, declarations }
+}
+
+// ─── L5 batch 3 helpers ─────────────────────────────────────────────
+
+/// Parse `font-weight`: keyword (normal/bold/bolder/lighter) nebo cislo
+/// 1..1000. Invalid -> default 400.
+fn parse_font_weight(v: &str) -> u32 {
+    let t = v.trim().to_lowercase();
+    if let Ok(n) = t.parse::<u32>() { return n.clamp(1, 1000); }
+    match t.as_str() {
+        "bold" | "bolder" => 700,
+        "lighter" => 300,
+        "normal" => 400,
+        _ => 400,
+    }
+}
+
+fn is_valid_font_weight(v: &str) -> bool {
+    let t = v.trim().to_lowercase();
+    matches!(t.as_str(), "normal" | "bold" | "bolder" | "lighter")
+        || t.parse::<u32>().is_ok()
+}
+
+fn is_valid_font_style(v: &str) -> bool {
+    let t = v.trim().to_lowercase();
+    t == "normal" || t == "italic" || t.starts_with("oblique")
+}
+
+/// Parse line-height: `normal` | <number> | <length>.
+fn parse_line_height(v: &str) -> LineHeight {
+    let t = v.trim();
+    if t.eq_ignore_ascii_case("normal") { return LineHeight::Normal; }
+    if let Ok(n) = t.parse::<f32>() { return LineHeight::Multiplier(n); }
+    if let Some(l) = Length::parse(t) { return LineHeight::Length(l); }
+    LineHeight::Normal
+}
+
+fn is_valid_line_height(v: &str) -> bool {
+    let t = v.trim();
+    if t.eq_ignore_ascii_case("normal") { return true; }
+    if t.parse::<f32>().is_ok() { return true; }
+    Length::parse(t).is_some()
 }
 
 /// Per-element container query evaluation: container_sizes je mapa
