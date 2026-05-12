@@ -103,6 +103,12 @@ pub struct ComputedStyle {
     pub display: Display,
     pub position: PositionKind,
     pub z_index: ZIndex,
+
+    // ─── Text properties (batch 9) ────────────────────────────────────
+    pub text_align: TextAlign,
+    pub white_space: WhiteSpace,
+    pub word_break: WordBreak,
+    pub overflow_wrap: OverflowWrap,
 }
 
 impl Default for ComputedStyle {
@@ -152,6 +158,138 @@ impl ComputedStyle {
             display: Display::Inline,           // CSS spec initial pro non-replaced
             position: PositionKind::Static,
             z_index: ZIndex::Auto,
+            text_align: TextAlign::Start,
+            white_space: WhiteSpace::Normal,
+            word_break: WordBreak::Normal,
+            overflow_wrap: OverflowWrap::Normal,
+        }
+    }
+}
+
+/// CSS `text-align` (CSS Text L4 §7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextAlign {
+    Start,
+    End,
+    Left,
+    Right,
+    Center,
+    Justify,
+    MatchParent,
+}
+
+impl TextAlign {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s.trim().to_lowercase().as_str() {
+            "start" => Self::Start,
+            "end" => Self::End,
+            "left" => Self::Left,
+            "right" => Self::Right,
+            "center" => Self::Center,
+            "justify" => Self::Justify,
+            "match-parent" => Self::MatchParent,
+            _ => return None,
+        })
+    }
+    pub fn css_string(self) -> &'static str {
+        match self {
+            Self::Start => "start",
+            Self::End => "end",
+            Self::Left => "left",
+            Self::Right => "right",
+            Self::Center => "center",
+            Self::Justify => "justify",
+            Self::MatchParent => "match-parent",
+        }
+    }
+}
+
+/// CSS `white-space` (CSS Text L4 §3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WhiteSpace {
+    Normal,
+    Nowrap,
+    Pre,
+    PreWrap,
+    PreLine,
+    BreakSpaces,
+}
+
+impl WhiteSpace {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s.trim().to_lowercase().as_str() {
+            "normal" => Self::Normal,
+            "nowrap" => Self::Nowrap,
+            "pre" => Self::Pre,
+            "pre-wrap" => Self::PreWrap,
+            "pre-line" => Self::PreLine,
+            "break-spaces" => Self::BreakSpaces,
+            _ => return None,
+        })
+    }
+    pub fn css_string(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::Nowrap => "nowrap",
+            Self::Pre => "pre",
+            Self::PreWrap => "pre-wrap",
+            Self::PreLine => "pre-line",
+            Self::BreakSpaces => "break-spaces",
+        }
+    }
+}
+
+/// CSS `word-break` (CSS Text L4 §5.3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WordBreak {
+    Normal,
+    BreakAll,
+    KeepAll,
+    BreakWord,
+}
+
+impl WordBreak {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s.trim().to_lowercase().as_str() {
+            "normal" => Self::Normal,
+            "break-all" => Self::BreakAll,
+            "keep-all" => Self::KeepAll,
+            "break-word" => Self::BreakWord,
+            _ => return None,
+        })
+    }
+    pub fn css_string(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::BreakAll => "break-all",
+            Self::KeepAll => "keep-all",
+            Self::BreakWord => "break-word",
+        }
+    }
+}
+
+/// CSS `overflow-wrap` / `word-wrap` (CSS Text L4 §5.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OverflowWrap {
+    Normal,
+    BreakWord,
+    Anywhere,
+}
+
+impl OverflowWrap {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s.trim().to_lowercase().as_str() {
+            "normal" => Self::Normal,
+            "break-word" => Self::BreakWord,
+            "anywhere" => Self::Anywhere,
+            _ => return None,
+        })
+    }
+    pub fn css_string(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::BreakWord => "break-word",
+            Self::Anywhere => "anywhere",
         }
     }
 }

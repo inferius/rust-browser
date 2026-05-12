@@ -10,8 +10,9 @@ use super::css_parser::{Stylesheet, Selector, SimpleSelector, Combinator, Rule, 
 use super::computed_style::{
     CascadeOutput, CascadeDecl, Color, ComputedStyle, ComputedStyleMap, Cursor,
     DeclarationsMap, Display as CsDisplay, FontFamily, GenericFamily, Length,
-    LineHeight, PositionKind, PropertyId, CascadeOrigin, Specificity as CsSpec,
-    Visibility, ZIndex,
+    LineHeight, OverflowWrap, PositionKind, PropertyId, CascadeOrigin,
+    Specificity as CsSpec, TextAlign as CsTextAlign, Visibility, WhiteSpace,
+    WordBreak, ZIndex,
 };
 
 // Runtime UI state pres thread-local. Nastavuje render loop pred kazdym
@@ -1043,6 +1044,19 @@ pub fn cascade_with_viewport_typed(
         if let Some(v) = props.get("font-family") {
             cs.font_family = parse_font_family(v);
         }
+        // Batch 9: text-align/white-space/word-break/overflow-wrap.
+        if let Some(v) = props.get("text-align") {
+            if let Some(t) = CsTextAlign::parse(v) { cs.text_align = t; }
+        }
+        if let Some(v) = props.get("white-space") {
+            if let Some(w) = WhiteSpace::parse(v) { cs.white_space = w; }
+        }
+        if let Some(v) = props.get("word-break") {
+            if let Some(w) = WordBreak::parse(v) { cs.word_break = w; }
+        }
+        if let Some(v) = props.get("overflow-wrap").or_else(|| props.get("word-wrap")) {
+            if let Some(o) = OverflowWrap::parse(v) { cs.overflow_wrap = o; }
+        }
         computed.insert(*node_id, cs);
         // Konvertuj kazdou property na CascadeDecl s validity flag pro
         // batch 1 props (color/opacity/visibility/cursor) - parse Result
@@ -1075,6 +1089,10 @@ pub fn cascade_with_viewport_typed(
                     => Length::parse(raw_val).is_some(),
                 PropertyId::BackgroundColor => Color::parse(raw_val).is_some(),
                 PropertyId::FontFamily => !raw_val.trim().is_empty(),
+                PropertyId::TextAlign => CsTextAlign::parse(raw_val).is_some(),
+                PropertyId::WhiteSpace => WhiteSpace::parse(raw_val).is_some(),
+                PropertyId::WordBreak => WordBreak::parse(raw_val).is_some(),
+                PropertyId::OverflowWrap => OverflowWrap::parse(raw_val).is_some(),
                 // Cursor::parse vzdy uspeje (Custom fallback) - vsechny valid.
                 _ => true,
             };

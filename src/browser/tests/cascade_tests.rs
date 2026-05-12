@@ -2095,3 +2095,73 @@ fn cascade_typed_font_family_monospace_generic() {
     let cs = out.computed.get(&(std::rc::Rc::as_ptr(&c) as usize)).unwrap();
     assert_eq!(cs.font_family, vec![FontFamily::Generic(GenericFamily::Monospace)]);
 }
+
+// ─── L5 step 3 batch 9: text-align/white-space/word-break/overflow-wrap
+
+#[test]
+fn cascade_typed_text_align() {
+    use crate::browser::computed_style::TextAlign as TA;
+    let doc = parse_html("<html><body><p></p></body></html>", "");
+    let css = parse_stylesheet("p { text-align: center; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let p = doc.root.find(|n| n.tag_name().as_deref() == Some("p")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&p) as usize)).unwrap();
+    assert_eq!(cs.text_align, TA::Center);
+}
+
+#[test]
+fn cascade_typed_white_space_pre() {
+    use crate::browser::computed_style::WhiteSpace;
+    let doc = parse_html("<html><body><pre></pre></body></html>", "");
+    let css = parse_stylesheet("pre { white-space: pre; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let p = doc.root.find(|n| n.tag_name().as_deref() == Some("pre")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&p) as usize)).unwrap();
+    assert_eq!(cs.white_space, WhiteSpace::Pre);
+}
+
+#[test]
+fn cascade_typed_word_break_break_all() {
+    use crate::browser::computed_style::WordBreak;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { word-break: break-all; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.word_break, WordBreak::BreakAll);
+}
+
+#[test]
+fn cascade_typed_overflow_wrap_break_word() {
+    use crate::browser::computed_style::OverflowWrap;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { overflow-wrap: break-word; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.overflow_wrap, OverflowWrap::BreakWord);
+}
+
+#[test]
+fn cascade_typed_overflow_wrap_word_wrap_alias() {
+    use crate::browser::computed_style::OverflowWrap;
+    // word-wrap je legacy alias pro overflow-wrap. Cascade get_styles
+    // returns oboje pod stejnym klicem? Test verifies behavior.
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { word-wrap: anywhere; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.overflow_wrap, OverflowWrap::Anywhere);
+}
+
+#[test]
+fn cascade_typed_text_align_invalid_marked() {
+    let doc = parse_html("<html><body><p></p></body></html>", "");
+    let css = parse_stylesheet("p { text-align: middlish; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let p = doc.root.find(|n| n.tag_name().as_deref() == Some("p")).unwrap();
+    let decls = out.declarations.get(&(std::rc::Rc::as_ptr(&p) as usize)).unwrap();
+    let t = decls.iter().find(|d| d.raw_value == "middlish").unwrap();
+    assert!(!t.valid);
+}
