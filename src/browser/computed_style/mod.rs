@@ -139,6 +139,12 @@ pub struct ComputedStyle {
     pub order: i32,
     pub row_gap: Length,
     pub column_gap: Length,
+
+    // ─── Border widths (batch 15) ─────────────────────────────────────
+    pub border_top_width: Length,
+    pub border_right_width: Length,
+    pub border_bottom_width: Length,
+    pub border_left_width: Length,
 }
 
 impl Default for ComputedStyle {
@@ -212,6 +218,14 @@ impl ComputedStyle {
             order: 0,
             row_gap: Length::Px(0.0),
             column_gap: Length::Px(0.0),
+            // CSS spec: border-*-width initial = `medium` = 3px. Engine
+            // pouziva 0 default (UA stylesheet) - bez border declaration
+            // engine ne-vykresluje border. Spravne: pouzit 0 jako "no
+            // explicit border" sentinel; border-style:none neg overrides.
+            border_top_width: Length::Px(0.0),
+            border_right_width: Length::Px(0.0),
+            border_bottom_width: Length::Px(0.0),
+            border_left_width: Length::Px(0.0),
         }
     }
 }

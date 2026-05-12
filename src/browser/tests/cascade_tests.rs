@@ -2481,3 +2481,59 @@ fn cascade_typed_gap_shorthand_expand() {
     assert_eq!(cs.row_gap, Length::Px(10.0));
     assert_eq!(cs.column_gap, Length::Px(20.0));
 }
+
+// ─── L5 step 3 batch 15: border-*-width ───────────────────────────────
+
+#[test]
+fn cascade_typed_border_widths() {
+    use crate::browser::computed_style::Length;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet(
+        "div { border-top-width: 1px; border-right-width: 2px; \
+         border-bottom-width: 3px; border-left-width: 4px; }"
+    );
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.border_top_width, Length::Px(1.0));
+    assert_eq!(cs.border_right_width, Length::Px(2.0));
+    assert_eq!(cs.border_bottom_width, Length::Px(3.0));
+    assert_eq!(cs.border_left_width, Length::Px(4.0));
+}
+
+#[test]
+fn cascade_typed_border_width_keywords() {
+    use crate::browser::computed_style::Length;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { border-top-width: thin; border-right-width: medium; border-bottom-width: thick; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.border_top_width, Length::Px(1.0));
+    assert_eq!(cs.border_right_width, Length::Px(3.0));
+    assert_eq!(cs.border_bottom_width, Length::Px(5.0));
+}
+
+#[test]
+fn cascade_typed_border_width_shorthand() {
+    use crate::browser::computed_style::Length;
+    // border-width: 5px expand to all 4 sides (uz mame v expand_shorthand).
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { border-width: 5px; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.border_top_width, Length::Px(5.0));
+    assert_eq!(cs.border_left_width, Length::Px(5.0));
+}
+
+#[test]
+fn cascade_typed_border_width_invalid_marked() {
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { border-top-width: chunky; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let decls = out.declarations.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    let b = decls.iter().find(|d| d.raw_value == "chunky").unwrap();
+    assert!(!b.valid);
+}

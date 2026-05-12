@@ -105,6 +105,29 @@ pub fn expand_shorthand(prop: &str, value: &str, out: &mut HashMap<String, Strin
         out.insert("gap".into(), value.into());
         return;
     }
+    // border-width / border-style / border-color: 1-4 parts -> per-side.
+    if matches!(prop, "border-width" | "border-style" | "border-color") {
+        let parts: Vec<&str> = value.split_whitespace().collect();
+        if parts.is_empty() { return; }
+        let (t, r, b, l) = match parts.len() {
+            1 => (parts[0], parts[0], parts[0], parts[0]),
+            2 => (parts[0], parts[1], parts[0], parts[1]),
+            3 => (parts[0], parts[1], parts[2], parts[1]),
+            _ => (parts[0], parts[1], parts[2], parts[3]),
+        };
+        let suffix = match prop {
+            "border-width" => "width",
+            "border-style" => "style",
+            "border-color" => "color",
+            _ => unreachable!(),
+        };
+        out.insert(format!("border-top-{suffix}"), t.into());
+        out.insert(format!("border-right-{suffix}"), r.into());
+        out.insert(format!("border-bottom-{suffix}"), b.into());
+        out.insert(format!("border-left-{suffix}"), l.into());
+        out.insert(prop.into(), value.into());
+        return;
+    }
     if prop == "overflow" {
         // overflow: <val> -> -x + -y. overflow: <x> <y> -> rozdelit.
         let parts: Vec<&str> = value.split_whitespace().collect();
@@ -1142,6 +1165,29 @@ pub fn cascade_with_viewport_typed(
         if let Some(v) = props.get("column-gap") {
             if let Some(l) = Length::parse(v) { cs.column_gap = l; }
         }
+        // Batch 15: border-*-width. CSS keywords (thin/medium/thick)
+        // mapped: thin=1px, medium=3px, thick=5px (browser convention).
+        let parse_border_width = |v: &str| -> Option<Length> {
+            let t = v.trim().to_lowercase();
+            match t.as_str() {
+                "thin" => Some(Length::Px(1.0)),
+                "medium" => Some(Length::Px(3.0)),
+                "thick" => Some(Length::Px(5.0)),
+                _ => Length::parse(&t),
+            }
+        };
+        if let Some(v) = props.get("border-top-width") {
+            if let Some(l) = parse_border_width(v) { cs.border_top_width = l; }
+        }
+        if let Some(v) = props.get("border-right-width") {
+            if let Some(l) = parse_border_width(v) { cs.border_right_width = l; }
+        }
+        if let Some(v) = props.get("border-bottom-width") {
+            if let Some(l) = parse_border_width(v) { cs.border_bottom_width = l; }
+        }
+        if let Some(v) = props.get("border-left-width") {
+            if let Some(l) = parse_border_width(v) { cs.border_left_width = l; }
+        }
         computed.insert(*node_id, cs);
         // Konvertuj kazdou property na CascadeDecl s validity flag pro
         // batch 1 props (color/opacity/visibility/cursor) - parse Result
@@ -1198,6 +1244,13 @@ pub fn cascade_with_viewport_typed(
                 PropertyId::Order => raw_val.trim().parse::<i32>().is_ok(),
                 PropertyId::RowGap | PropertyId::ColumnGap
                     => Length::parse(raw_val).is_some(),
+                PropertyId::BorderTopWidth | PropertyId::BorderRightWidth
+                | PropertyId::BorderBottomWidth | PropertyId::BorderLeftWidth
+                | PropertyId::BorderWidth => {
+                    let t = raw_val.trim().to_lowercase();
+                    matches!(t.as_str(), "thin" | "medium" | "thick")
+                        || Length::parse(raw_val).is_some()
+                },
                 // Cursor::parse vzdy uspeje (Custom fallback) - vsechny valid.
                 _ => true,
             };
