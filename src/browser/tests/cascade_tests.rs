@@ -2969,3 +2969,47 @@ fn cascade_typed_resize_both() {
     let cs = out.computed.get(&(std::rc::Rc::as_ptr(&t) as usize)).unwrap();
     assert_eq!(cs.resize, Resize::Both);
 }
+
+// ─── L5 step 3 batch 25: transitions ──────────────────────────────────
+
+#[test]
+fn cascade_typed_transition_duration_list() {
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { transition-duration: 1s, 500ms, 0.25s; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.transition_duration, vec![1.0, 0.5, 0.25]);
+}
+
+#[test]
+fn cascade_typed_transition_timing_ease_in_out() {
+    use crate::browser::computed_style::TimingFunction;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { transition-timing-function: ease-in-out; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.transition_timing_function, vec![TimingFunction::EaseInOut]);
+}
+
+#[test]
+fn cascade_typed_transition_timing_cubic_bezier() {
+    use crate::browser::computed_style::TimingFunction;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { transition-timing-function: cubic-bezier(0.25, 0.1, 0.25, 1.0); }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.transition_timing_function, vec![TimingFunction::CubicBezier(0.25, 0.1, 0.25, 1.0)]);
+}
+
+#[test]
+fn cascade_typed_transition_delay() {
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { transition-delay: 200ms; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.transition_delay, vec![0.2]);
+}

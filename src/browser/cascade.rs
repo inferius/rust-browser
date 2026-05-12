@@ -1402,6 +1402,22 @@ pub fn cascade_with_viewport_typed(
         if let Some(v) = props.get("resize") {
             if let Some(r) = CsResize::parse(v) { cs.resize = r; }
         }
+        // Batch 25: transition-property/duration/timing-function/delay.
+        if let Some(v) = props.get("transition-property") {
+            cs.transition_property = v.clone();
+        }
+        if let Some(v) = props.get("transition-duration") {
+            let lst = super::computed_style::parse_time_list(v);
+            if !lst.is_empty() { cs.transition_duration = lst; }
+        }
+        if let Some(v) = props.get("transition-timing-function") {
+            let lst = super::computed_style::parse_timing_function_list(v);
+            if !lst.is_empty() { cs.transition_timing_function = lst; }
+        }
+        if let Some(v) = props.get("transition-delay") {
+            let lst = super::computed_style::parse_time_list(v);
+            if !lst.is_empty() { cs.transition_delay = lst; }
+        }
         computed.insert(*node_id, cs);
         // Konvertuj kazdou property na CascadeDecl s validity flag pro
         // batch 1 props (color/opacity/visibility/cursor) - parse Result

@@ -201,6 +201,12 @@ pub struct ComputedStyle {
     pub object_position_y: Length,
     pub aspect_ratio: Option<f32>,    // None = auto
     pub resize: Resize,
+
+    // ─── Transitions (batch 25) ───────────────────────────────────────
+    pub transition_property: String,         // raw CSS comma-list (all|none|<ident>)
+    pub transition_duration: Vec<f32>,        // seconds
+    pub transition_timing_function: Vec<TimingFunction>,
+    pub transition_delay: Vec<f32>,           // seconds
 }
 
 impl Default for ComputedStyle {
@@ -322,8 +328,113 @@ impl ComputedStyle {
             object_position_y: Length::Percent(50.0),
             aspect_ratio: None,
             resize: Resize::None,
+            transition_property: "all".into(),
+            transition_duration: vec![0.0],
+            transition_timing_function: vec![TimingFunction::Ease],
+            transition_delay: vec![0.0],
         }
     }
+}
+
+/// CSS `<easing-function>` (CSS Easing L1).
+#[derive(Debug, Clone, PartialEq)]
+pub enum TimingFunction {
+    Linear,
+    Ease,
+    EaseIn,
+    EaseOut,
+    EaseInOut,
+    StepStart,
+    StepEnd,
+    Steps(u32, StepPosition),
+    CubicBezier(f32, f32, f32, f32),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StepPosition {
+    Start,
+    End,
+    JumpStart,
+    JumpEnd,
+    JumpNone,
+    JumpBoth,
+}
+
+impl TimingFunction {
+    pub fn parse(s: &str) -> Option<Self> {
+        let t = s.trim().to_lowercase();
+        match t.as_str() {
+            "linear" => return Some(Self::Linear),
+            "ease" => return Some(Self::Ease),
+            "ease-in" => return Some(Self::EaseIn),
+            "ease-out" => return Some(Self::EaseOut),
+            "ease-in-out" => return Some(Self::EaseInOut),
+            "step-start" => return Some(Self::StepStart),
+            "step-end" => return Some(Self::StepEnd),
+            _ => {}
+        }
+        if let Some(inner) = t.strip_prefix("cubic-bezier(").and_then(|x| x.strip_suffix(')')) {
+            let parts: Vec<f32> = inner.split(',').filter_map(|p| p.trim().parse().ok()).collect();
+            if parts.len() == 4 {
+                return Some(Self::CubicBezier(parts[0], parts[1], parts[2], parts[3]));
+            }
+        }
+        if let Some(inner) = t.strip_prefix("steps(").and_then(|x| x.strip_suffix(')')) {
+            let parts: Vec<&str> = inner.split(',').map(|p| p.trim()).collect();
+            if let Ok(n) = parts.first().map_or("", |v| v).parse::<u32>() {
+                let pos = match parts.get(1).copied().unwrap_or("end") {
+                    "start" | "jump-start" => StepPosition::JumpStart,
+                    "end" | "jump-end" => StepPosition::JumpEnd,
+                    "jump-none" => StepPosition::JumpNone,
+                    "jump-both" => StepPosition::JumpBoth,
+                    _ => StepPosition::JumpEnd,
+                };
+                return Some(Self::Steps(n, pos));
+            }
+        }
+        None
+    }
+}
+
+/// Parse `<time>` value (s/ms). 1.5s, 200ms.
+fn parse_time(s: &str) -> Option<f32> {
+    let t = s.trim().to_lowercase();
+    if let Some(num) = t.strip_suffix("ms") {
+        return num.trim().parse::<f32>().ok().map(|n| n / 1000.0);
+    }
+    if let Some(num) = t.strip_suffix('s') {
+        return num.trim().parse::<f32>().ok();
+    }
+    None
+}
+
+/// Parse comma-separated time list. "1s, 2s, 200ms" -> [1.0, 2.0, 0.2].
+pub fn parse_time_list(s: &str) -> Vec<f32> {
+    s.split(',').filter_map(|p| parse_time(p)).collect()
+}
+
+/// Parse comma-separated timing-function list.
+pub fn parse_timing_function_list(s: &str) -> Vec<TimingFunction> {
+    // Simple split by top-level comma (cubic-bezier obsahuje vnitrni carky).
+    let mut out = Vec::new();
+    let mut depth = 0i32;
+    let mut start = 0;
+    let bytes = s.as_bytes();
+    for (i, &b) in bytes.iter().enumerate() {
+        match b {
+            b'(' => depth += 1,
+            b')' => depth -= 1,
+            b',' if depth == 0 => {
+                if let Some(t) = TimingFunction::parse(&s[start..i]) { out.push(t); }
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    if start < s.len() {
+        if let Some(t) = TimingFunction::parse(&s[start..]) { out.push(t); }
+    }
+    out
 }
 
 /// CSS `object-fit` (CSS Images L3 §5).
