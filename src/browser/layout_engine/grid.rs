@@ -457,11 +457,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         ch.rect.x = 0.0; ch.rect.y = 0.0;
         if ch.explicit_width.is_none() { ch.rect.width = 0.0; }
         if ch.explicit_height.is_none() { ch.rect.height = 0.0; }
-        match ch.display {
-            super::super::layout::Display::Flex => super::flex::layout_flex(ch),
-            super::super::layout::Display::Grid => super::grid::layout_grid(ch),
-            _ => {}
-        }
+        super::dispatch_layout(ch, false);
         ch.rect.x = saved_x; ch.rect.y = saved_y;
     }
 
@@ -1699,11 +1695,7 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         }
         // Dispatch podle child.display (block/flex/grid) - layout_block jen flowuje
         // grandchildren, neresi grid/flex inner.
-        match child.display {
-            super::super::layout::Display::Flex => super::flex::layout_flex(child),
-            super::super::layout::Display::Grid => super::grid::layout_grid(child),
-            _ => super::super::layout::layout_block(child),
-        }
+        super::dispatch_layout(child, true);
     }
 
     // Update parent height jen kdyz neni explicit set (auto height grow z obsahu).

@@ -237,16 +237,30 @@ fn layout_absolute_child_inner(child: &mut LayoutBox, parent_x: f32, parent_y: f
     } else {
         cb_y + m_t
     };
-    match child.display {
-        Display::Flex => flex::layout_flex(child),
-        Display::Grid => grid::layout_grid(child),
-        _ => {}
-    }
+    dispatch_layout(child, false);
 }
 
 /// Vraci true kdyz position je out-of-flow (abs/fixed).
 pub fn is_out_of_flow(bx: &LayoutBox) -> bool {
     matches!(bx.position, Position::Absolute | Position::Fixed)
+}
+
+/// Dispatch layout do flex/grid/block podle bx.display.
+/// `block_fallback=true` -> Display::Block + ostatni -> volej layout_block(bx).
+/// `block_fallback=false` -> Display::Block + ostatni -> no-op (rect zachova).
+///
+/// Centralizace 4 ruznych match-display volani v layout_engine
+/// (flex.rs post-pass, grid.rs post-pass, mod.rs abs child).
+pub(crate) fn dispatch_layout(bx: &mut LayoutBox, block_fallback: bool) {
+    match bx.display {
+        Display::Flex => flex::layout_flex(bx),
+        Display::Grid => grid::layout_grid(bx),
+        _ => {
+            if block_fallback {
+                crate::browser::layout::layout_block(bx);
+            }
+        }
+    }
 }
 
 /// Spocita sirku/vysku scrollbar prostoru ktery zabira (overflow scrollable).

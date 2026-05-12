@@ -1249,11 +1249,10 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         // String non-empty detect; ted typed - check non-default values).
         let has_flex_attr = !matches!(ch.flex_direction, FlexDirection::Row)
             || !matches!(ch.justify_content, JustifyContent::FlexStart);
-        match ch.display {
-            super::super::layout::Display::Flex => super::flex::layout_flex(ch),
-            super::super::layout::Display::Grid => super::grid::layout_grid(ch),
-            super::super::layout::Display::Block if has_flex_attr => super::flex::layout_flex(ch),
-            _ => super::super::layout::layout_block(ch),
+        if matches!(ch.display, super::super::layout::Display::Block) && has_flex_attr {
+            super::flex::layout_flex(ch);
+        } else {
+            super::dispatch_layout(ch, true);
         }
     }
 
