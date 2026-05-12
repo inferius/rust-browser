@@ -249,6 +249,12 @@ pub struct ComputedStyle {
     pub grid_auto_rows: String,
     pub justify_items: JustifyItems,
     pub justify_self: JustifySelf,
+
+    // ─── Shadows + clip + scroll (batch 33) ───────────────────────────
+    pub box_shadow: String,          // raw chain (parser v layout/shadows)
+    pub text_shadow: String,         // raw chain
+    pub clip_path: String,           // raw shape (parser v layout/shape_fn)
+    pub scroll_behavior: ScrollBehavior,
 }
 
 impl Default for ComputedStyle {
@@ -402,7 +408,28 @@ impl ComputedStyle {
             grid_auto_rows: "auto".into(),
             justify_items: JustifyItems::Normal,
             justify_self: JustifySelf::Auto,
+            box_shadow: "none".into(),
+            text_shadow: "none".into(),
+            clip_path: "none".into(),
+            scroll_behavior: ScrollBehavior::Auto,
         }
+    }
+}
+
+/// CSS `scroll-behavior` (CSS OM View L4 §3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollBehavior {
+    Auto,
+    Smooth,
+}
+
+impl ScrollBehavior {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s.trim().to_lowercase().as_str() {
+            "auto" => Self::Auto,
+            "smooth" => Self::Smooth,
+            _ => return None,
+        })
     }
 }
 

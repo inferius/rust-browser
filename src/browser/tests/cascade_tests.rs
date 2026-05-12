@@ -3259,3 +3259,46 @@ fn cascade_typed_justify_self_stretch() {
     let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
     assert_eq!(cs.justify_self, JustifySelf::Stretch);
 }
+
+// ─── L5 step 3 batch 33: shadows + clip-path + scroll-behavior ────────
+
+#[test]
+fn cascade_typed_box_shadow_raw() {
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { box-shadow: 0 4px 8px rgba(0,0,0,0.3); }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert!(cs.box_shadow.contains("4px"));
+}
+
+#[test]
+fn cascade_typed_text_shadow_raw() {
+    let doc = parse_html("<html><body><h1></h1></body></html>", "");
+    let css = parse_stylesheet("h1 { text-shadow: 1px 1px 2px black; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let h = doc.root.find(|n| n.tag_name().as_deref() == Some("h1")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&h) as usize)).unwrap();
+    assert!(cs.text_shadow.contains("black"));
+}
+
+#[test]
+fn cascade_typed_clip_path_raw() {
+    let doc = parse_html("<html><body><img></body></html>", "");
+    let css = parse_stylesheet("img { clip-path: circle(50%); }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let i = doc.root.find(|n| n.tag_name().as_deref() == Some("img")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&i) as usize)).unwrap();
+    assert_eq!(cs.clip_path, "circle(50%)");
+}
+
+#[test]
+fn cascade_typed_scroll_behavior_smooth() {
+    use crate::browser::computed_style::ScrollBehavior;
+    let doc = parse_html("<html><body><html></html></body></html>", "");
+    let css = parse_stylesheet("html { scroll-behavior: smooth; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let h = doc.root.find(|n| n.tag_name().as_deref() == Some("html")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&h) as usize)).unwrap();
+    assert_eq!(cs.scroll_behavior, ScrollBehavior::Smooth);
+}

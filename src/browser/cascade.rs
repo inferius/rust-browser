@@ -23,7 +23,7 @@ use super::computed_style::{
     AnimationPlayState as CsAnimationPlayState,
     BlendMode as CsBlendMode, GridAutoFlow as CsGridAutoFlow, GridLine as CsGridLine,
     Isolation as CsIsolation, JustifyItems as CsJustifyItems,
-    JustifySelf as CsJustifySelf,
+    JustifySelf as CsJustifySelf, ScrollBehavior as CsScrollBehavior,
     BorderCollapse as CsBorderCollapse, CaptionSide as CsCaptionSide,
     ListStyleImage as CsListStyleImage, ListStylePosition as CsListStylePosition,
     ListStyleType as CsListStyleType, ObjectFit as CsObjectFit, Resize as CsResize,
@@ -1550,6 +1550,19 @@ pub fn cascade_with_viewport_typed(
         }
         if let Some(v) = props.get("justify-self") {
             if let Some(j) = CsJustifySelf::parse(v) { cs.justify_self = j; }
+        }
+        // Batch 33: shadows + clip-path + scroll-behavior.
+        if let Some(v) = props.get("box-shadow") {
+            cs.box_shadow = v.clone();
+        }
+        if let Some(v) = props.get("text-shadow") {
+            cs.text_shadow = v.clone();
+        }
+        if let Some(v) = props.get("clip-path") {
+            cs.clip_path = v.clone();
+        }
+        if let Some(v) = props.get("scroll-behavior") {
+            if let Some(b) = CsScrollBehavior::parse(v) { cs.scroll_behavior = b; }
         }
         computed.insert(*node_id, cs);
         // Konvertuj kazdou property na CascadeDecl s validity flag pro
