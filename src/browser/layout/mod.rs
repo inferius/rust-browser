@@ -904,6 +904,18 @@ pub struct LayoutBox {
 }
 
 impl LayoutBox {
+    /// Effective font weight: kombinuje font_weight (z cascade explicit)
+    /// + bold flag (inherited bool z parent bez weight propagation).
+    /// Drive boxy mely jen `bold` field, inheritance ho nastavila pres
+    /// `parent_bold` ale font_weight zustal 400 default. Pri lookup
+    /// fontu pres font_weight by dostali REGULAR misto BOLD. Tato fn
+    /// vraci 700 kdyz bold=true a font_weight nebyl explicitly set.
+    pub fn effective_weight(&self) -> u32 {
+        if self.font_weight != 400 { self.font_weight }
+        else if self.bold { 700 }
+        else { 400 }
+    }
+
     pub fn new() -> Self {
         LayoutBox {
             fingerprint: 0,
@@ -3886,7 +3898,7 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
         // space) a flush_inline measure (s synthetic 0.27*fs) rozdilne -> spurious
         // text wrap kdyz pre-pass dal min sirku nez flush_inline potrebuje.
         let space_w = {
-            let g = measure_text_width_weight(" ", font_size, bx_clone.font_weight, bx_clone.italic, &bx_clone.font_family);
+            let g = measure_text_width_weight(" ", font_size, bx_clone.effective_weight(), bx_clone.italic, &bx_clone.font_family);
             if g > 0.0 { g } else { font_size * 0.27 }
         };
 
@@ -3940,7 +3952,7 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
             // pri wrapovanem textu (cursor_x pri exitu = jen last line end).
             let mut max_line_end_x: f32 = cursor_x;
             for (wi, word) in words.iter().enumerate() {
-                let w = measure_text_width_weight(word, font_size, bx_clone.font_weight, bx_clone.italic, &bx_clone.font_family);
+                let w = measure_text_width_weight(word, font_size, bx_clone.effective_weight(), bx_clone.italic, &bx_clone.font_family);
                 let inter_word_space = if wi > 0 { space_w } else { 0.0 };
                 // Pri inner_w <= 0 (pre-pass parent.rect.width=0) NE wrap -
                 // vsech slov v jedne line. Real layout pak prepocita s
@@ -3973,7 +3985,7 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
                     let mut acc_w = 0.0;
                     let chars: Vec<char> = word.chars().collect();
                     for ch in chars {
-                        let ch_w = measure_text_width_weight(&ch.to_string(), font_size, bx_clone.font_weight, bx_clone.italic, &bx_clone.font_family);
+                        let ch_w = measure_text_width_weight(&ch.to_string(), font_size, bx_clone.effective_weight(), bx_clone.italic, &bx_clone.font_family);
                         if cursor_x + acc_w + ch_w > inner_x + inner_w && cursor_x > inner_x {
                             cursor_y += line_height;
                             cursor_x = inner_x;

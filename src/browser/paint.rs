@@ -1552,7 +1552,7 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
         // Family + bold + italic aware - bez tohoto text-align center bold
         // text pres measure_text_width (Times Regular metrics) misaligned vs
         // render Ubuntu Bold (sirsi glyfy) -> centering offset spatne.
-        let text_w = measure_text_width_weight(text, bx.font_size, bx.font_weight, bx.italic, &bx.font_family);
+        let text_w = measure_text_width_weight(text, bx.font_size, bx.effective_weight(), bx.italic, &bx.font_family);
         let inner_w = bx.rect.width - 2.0 * bx.padding;
         let align_offset = match bx.text_align {
             TextAlign::Left | TextAlign::Justify => 0.0,
@@ -1611,7 +1611,7 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
                 color: with_alpha(color),
                 font_size: bx.font_size,
                 bold: bx.bold,
-                font_weight: bx.font_weight,
+                font_weight: bx.effective_weight(),
                 italic: bx.italic,
                 font_family: bx.font_family.clone(),
                 strikethrough: false, underline: false,

@@ -3908,7 +3908,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     let by1 = by0 + b.rect.height;
                     if by1 >= sy && by0 <= ey {
                         let lh = (b.line_height * b.font_size).max(b.font_size * 1.2);
-                        let weight = b.font_weight;
+                        let weight = b.effective_weight();
                         let lines: Vec<&str> = text.split('\n').collect();
                         for (li, line) in lines.iter().enumerate() {
                             let line_y = by0 + (li as f32) * lh;
@@ -6269,7 +6269,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                             // Vertical box ne v selection rozsah -> skip.
                             if by1 < sy || by0 > ey { /* skip */ }
                             else {
-                                let weight = b.font_weight;
+                                let weight = b.effective_weight();
                                 // Lines z text (\n split). Pri flush_inline byly inserted.
                                 let lines: Vec<&str> = text.split('\n').collect();
                                 let n_lines = lines.len();
