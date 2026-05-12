@@ -2537,3 +2537,59 @@ fn cascade_typed_border_width_invalid_marked() {
     let b = decls.iter().find(|d| d.raw_value == "chunky").unwrap();
     assert!(!b.valid);
 }
+
+// ─── L5 step 3 batch 16: border-*-color ───────────────────────────────
+
+#[test]
+fn cascade_typed_border_colors() {
+    use crate::browser::computed_style::Color;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet(
+        "div { border-top-color: red; border-right-color: blue; \
+         border-bottom-color: #00ff00; border-left-color: rgb(128, 128, 128); }"
+    );
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.border_top_color, Color::Rgba { r: 255, g: 0, b: 0, a: 255 });
+    assert_eq!(cs.border_right_color, Color::Rgba { r: 0, g: 0, b: 255, a: 255 });
+    assert_eq!(cs.border_bottom_color, Color::Rgba { r: 0, g: 255, b: 0, a: 255 });
+    assert_eq!(cs.border_left_color, Color::Rgba { r: 128, g: 128, b: 128, a: 255 });
+}
+
+#[test]
+fn cascade_typed_border_color_currentcolor() {
+    use crate::browser::computed_style::Color;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { border-top-color: currentColor; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.border_top_color, Color::CurrentColor);
+}
+
+#[test]
+fn cascade_typed_border_color_shorthand() {
+    use crate::browser::computed_style::Color;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { border-color: red green; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    // 2-value: top/bottom = red, right/left = green.
+    assert_eq!(cs.border_top_color, Color::Rgba { r: 255, g: 0, b: 0, a: 255 });
+    assert_eq!(cs.border_right_color, Color::Rgba { r: 0, g: 128, b: 0, a: 255 });
+    assert_eq!(cs.border_bottom_color, Color::Rgba { r: 255, g: 0, b: 0, a: 255 });
+    assert_eq!(cs.border_left_color, Color::Rgba { r: 0, g: 128, b: 0, a: 255 });
+}
+
+#[test]
+fn cascade_typed_border_color_invalid_marked() {
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { border-top-color: notacolor; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let decls = out.declarations.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    let b = decls.iter().find(|d| d.raw_value == "notacolor").unwrap();
+    assert!(!b.valid);
+}

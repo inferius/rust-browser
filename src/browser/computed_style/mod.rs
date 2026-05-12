@@ -145,6 +145,12 @@ pub struct ComputedStyle {
     pub border_right_width: Length,
     pub border_bottom_width: Length,
     pub border_left_width: Length,
+
+    // ─── Border colors (batch 16) ─────────────────────────────────────
+    pub border_top_color: Color,
+    pub border_right_color: Color,
+    pub border_bottom_color: Color,
+    pub border_left_color: Color,
 }
 
 impl Default for ComputedStyle {
@@ -226,6 +232,12 @@ impl ComputedStyle {
             border_right_width: Length::Px(0.0),
             border_bottom_width: Length::Px(0.0),
             border_left_width: Length::Px(0.0),
+            // CSS spec: border-*-color initial = currentColor (= text color).
+            // Engine drz currentColor sentinel, paint resolve proti cs.color.
+            border_top_color: Color::CurrentColor,
+            border_right_color: Color::CurrentColor,
+            border_bottom_color: Color::CurrentColor,
+            border_left_color: Color::CurrentColor,
         }
     }
 }

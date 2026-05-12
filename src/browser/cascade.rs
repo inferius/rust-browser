@@ -1188,6 +1188,26 @@ pub fn cascade_with_viewport_typed(
         if let Some(v) = props.get("border-left-width") {
             if let Some(l) = parse_border_width(v) { cs.border_left_width = l; }
         }
+        // Batch 16: border-*-color. currentColor keyword -> CurrentColor.
+        let parse_border_color = |v: &str| -> Option<Color> {
+            let t = v.trim();
+            if t.eq_ignore_ascii_case("currentcolor") {
+                return Some(Color::CurrentColor);
+            }
+            Color::parse(t)
+        };
+        if let Some(v) = props.get("border-top-color") {
+            if let Some(c) = parse_border_color(v) { cs.border_top_color = c; }
+        }
+        if let Some(v) = props.get("border-right-color") {
+            if let Some(c) = parse_border_color(v) { cs.border_right_color = c; }
+        }
+        if let Some(v) = props.get("border-bottom-color") {
+            if let Some(c) = parse_border_color(v) { cs.border_bottom_color = c; }
+        }
+        if let Some(v) = props.get("border-left-color") {
+            if let Some(c) = parse_border_color(v) { cs.border_left_color = c; }
+        }
         computed.insert(*node_id, cs);
         // Konvertuj kazdou property na CascadeDecl s validity flag pro
         // batch 1 props (color/opacity/visibility/cursor) - parse Result
@@ -1250,6 +1270,12 @@ pub fn cascade_with_viewport_typed(
                     let t = raw_val.trim().to_lowercase();
                     matches!(t.as_str(), "thin" | "medium" | "thick")
                         || Length::parse(raw_val).is_some()
+                },
+                PropertyId::BorderTopColor | PropertyId::BorderRightColor
+                | PropertyId::BorderBottomColor | PropertyId::BorderLeftColor
+                | PropertyId::BorderColor => {
+                    raw_val.trim().eq_ignore_ascii_case("currentcolor")
+                        || Color::parse(raw_val).is_some()
                 },
                 // Cursor::parse vzdy uspeje (Custom fallback) - vsechny valid.
                 _ => true,
