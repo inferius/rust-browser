@@ -1659,6 +1659,16 @@ pub fn layout_grid(bx: &mut LayoutBox) {
         }
         child.rect.width = final_w;
         child.rect.height = final_h;
+        // Bez tohoto layout_block dispatched nize prepise rect.height z content
+        // (text intrinsic). Grid spec: pri stretch align/justify ITEM dostane
+        // FULL track size. Set explicit dimensions tak ze layout_block respektuje.
+        // Pri user CSS height/width = jiz Some -> zachovan (override).
+        if stretch_h && child.explicit_height.is_none() {
+            child.explicit_height = Some(final_h);
+        }
+        if stretch_w && child.explicit_width.is_none() {
+            child.explicit_width = Some(final_w);
+        }
         // Subgrid (CSS Grid L2): pri grid-template-rows/columns = "subgrid",
         // misto vlastnich tracku pouzij parent's tracks v ramci grid area item.
         // Substituce pred recursive layout_grid.

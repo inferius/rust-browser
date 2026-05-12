@@ -2061,11 +2061,44 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(gta) = s.get("grid-template-areas") {
         bx.grid_template_areas = gta.trim().to_string();
     }
+    // grid-column / grid-row shorthand: parse "N", "N / M", "span N", "N / span M".
+    // Bez tohoto start/end nastavi jen taffy_compliance test shim, real layout
+    // pres grid-column-start/end separately. Multi-col span chybi.
+    fn parse_grid_line(s: &str) -> (i32, i32, i32) {
+        // Vraci (start, end, span). 0 = auto.
+        let s = s.trim();
+        if s.is_empty() || s == "auto" { return (0, 0, 0); }
+        let parts: Vec<&str> = s.splitn(2, '/').map(|p| p.trim()).collect();
+        let parse_one = |p: &str| -> (i32, i32) {
+            // Vrati (line, span). Line=0 znamena auto (s span > 0).
+            if let Some(rest) = p.strip_prefix("span ") {
+                let n: i32 = rest.trim().parse().unwrap_or(1);
+                (0, n.max(1))
+            } else if p == "auto" {
+                (0, 0)
+            } else {
+                (p.parse().unwrap_or(0), 0)
+            }
+        };
+        let (s_line, s_span) = parse_one(parts[0]);
+        let (e_line, e_span) = if parts.len() > 1 { parse_one(parts[1]) } else { (0, 0) };
+        // span ma prioritu pred end pri "1 / span 2" => start=1, span=2.
+        let span = if e_span > 0 { e_span } else if s_span > 0 { s_span } else { 0 };
+        (s_line, e_line, span)
+    }
     if let Some(gc) = s.get("grid-column") {
         bx.grid_column = gc.trim().to_string();
+        let (st, en, sp) = parse_grid_line(gc);
+        if st != 0 { bx.grid_column_start = st; }
+        if en != 0 { bx.grid_column_end = en; }
+        if sp != 0 { bx.grid_column_span = sp; }
     }
     if let Some(gr) = s.get("grid-row") {
         bx.grid_row = gr.trim().to_string();
+        let (st, en, sp) = parse_grid_line(gr);
+        if st != 0 { bx.grid_row_start = st; }
+        if en != 0 { bx.grid_row_end = en; }
+        if sp != 0 { bx.grid_row_span = sp; }
     }
     if let Some(gac) = s.get("grid-auto-columns") {
         bx.grid_auto_columns = gac.trim().to_string();
