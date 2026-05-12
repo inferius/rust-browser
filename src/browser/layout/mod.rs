@@ -102,6 +102,27 @@ impl Display {
     }
 }
 
+/// CSS pointer-events property - hit-test bypass.
+/// auto = default (event captures), none = pass through (no hit).
+/// Ostatni SVG-specific values (visiblePainted/fill/stroke/all/...) zatim
+/// aproximovany na PointerEvents::Auto.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PointerEvents {
+    #[default]
+    Auto,
+    None,
+}
+
+impl PointerEvents {
+    pub fn parse(s: &str) -> Self {
+        match s.trim() {
+            "none" => PointerEvents::None,
+            _ => PointerEvents::Auto,
+        }
+    }
+    pub fn is_none(self) -> bool { matches!(self, PointerEvents::None) }
+}
+
 /// CSS direction property - inline text flow direction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Direction {
@@ -558,7 +579,7 @@ pub struct LayoutBox {
     /// mix-blend-mode: normal | multiply | screen | overlay | darken | lighten | ...
     pub mix_blend_mode: String,
     /// pointer-events: auto | none
-    pub pointer_events: String,
+    pub pointer_events: PointerEvents,
     /// user-select: auto | none | text | all
     pub user_select: String,
     /// caret-color
@@ -996,7 +1017,7 @@ impl LayoutBox {
             will_change: String::new(),
             isolation: String::new(),
             mix_blend_mode: String::new(),
-            pointer_events: String::new(),
+            pointer_events: PointerEvents::default(),
             user_select: String::new(),
             caret_color: None,
             resize: String::new(),
@@ -1194,7 +1215,7 @@ impl LayoutBox {
     /// Hit test: vrati nejdetailnejsi (deepest) box obsahujici (x, y).
     pub fn hit_test(&self, x: f32, y: f32) -> Option<&LayoutBox> {
         // pointer-events: none -> element ignored pri hit test (vc deti pokud none nezruseno)
-        if self.pointer_events == "none" {
+        if self.pointer_events.is_none() {
             return None;
         }
         // visibility: hidden -> taky skip hit test
@@ -2564,7 +2585,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(v) = s.get("will-change") { bx.will_change = v.trim().to_string(); }
     if let Some(v) = s.get("isolation") { bx.isolation = v.trim().to_string(); }
     if let Some(v) = s.get("mix-blend-mode") { bx.mix_blend_mode = v.trim().to_string(); }
-    if let Some(v) = s.get("pointer-events") { bx.pointer_events = v.trim().to_string(); }
+    if let Some(v) = s.get("pointer-events") { bx.pointer_events = PointerEvents::parse(v); }
     if let Some(v) = s.get("user-select") { bx.user_select = v.trim().to_string(); }
     if let Some(v) = s.get("caret-color") {
         if v.trim() != "auto" { bx.caret_color = parse_color(v); }
