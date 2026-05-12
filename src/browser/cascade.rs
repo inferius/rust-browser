@@ -990,6 +990,19 @@ pub fn cascade_with_viewport_typed(
         if let Some(v) = props.get("margin-left") {
             if let Some(l) = Length::parse(v) { cs.margin_left = l; }
         }
+        // Batch 5: padding-top/right/bottom/left.
+        if let Some(v) = props.get("padding-top") {
+            if let Some(l) = Length::parse(v) { cs.padding_top = l; }
+        }
+        if let Some(v) = props.get("padding-right") {
+            if let Some(l) = Length::parse(v) { cs.padding_right = l; }
+        }
+        if let Some(v) = props.get("padding-bottom") {
+            if let Some(l) = Length::parse(v) { cs.padding_bottom = l; }
+        }
+        if let Some(v) = props.get("padding-left") {
+            if let Some(l) = Length::parse(v) { cs.padding_left = l; }
+        }
         computed.insert(*node_id, cs);
         // Konvertuj kazdou property na CascadeDecl s validity flag pro
         // batch 1 props (color/opacity/visibility/cursor) - parse Result
@@ -1012,6 +1025,8 @@ pub fn cascade_with_viewport_typed(
                 PropertyId::LineHeight => is_valid_line_height(raw_val),
                 PropertyId::MarginTop | PropertyId::MarginRight
                 | PropertyId::MarginBottom | PropertyId::MarginLeft
+                | PropertyId::PaddingTop | PropertyId::PaddingRight
+                | PropertyId::PaddingBottom | PropertyId::PaddingLeft
                     => Length::parse(raw_val).is_some(),
                 // Cursor::parse vzdy uspeje (Custom fallback) - vsechny valid.
                 _ => true,

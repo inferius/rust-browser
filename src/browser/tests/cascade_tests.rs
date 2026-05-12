@@ -1892,3 +1892,57 @@ fn cascade_typed_margin_invalid_marked() {
     let m = decls.iter().find(|d| d.raw_value == "chunky").unwrap();
     assert!(!m.valid);
 }
+
+// ─── L5 step 3 batch 5: padding-top/right/bottom/left ─────────────────
+
+#[test]
+fn cascade_typed_padding_longhands() {
+    use crate::browser::computed_style::Length;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet(
+        "div { padding-top: 5px; padding-right: 10px; padding-bottom: 15px; padding-left: 20px; }"
+    );
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&div) as usize)).unwrap();
+    assert_eq!(cs.padding_top, Length::Px(5.0));
+    assert_eq!(cs.padding_right, Length::Px(10.0));
+    assert_eq!(cs.padding_bottom, Length::Px(15.0));
+    assert_eq!(cs.padding_left, Length::Px(20.0));
+}
+
+#[test]
+fn cascade_typed_padding_shorthand_one() {
+    use crate::browser::computed_style::Length;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { padding: 8px; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&div) as usize)).unwrap();
+    assert_eq!(cs.padding_top, Length::Px(8.0));
+    assert_eq!(cs.padding_right, Length::Px(8.0));
+    assert_eq!(cs.padding_bottom, Length::Px(8.0));
+    assert_eq!(cs.padding_left, Length::Px(8.0));
+}
+
+#[test]
+fn cascade_typed_padding_percent() {
+    use crate::browser::computed_style::Length;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { padding-left: 10%; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&div) as usize)).unwrap();
+    assert_eq!(cs.padding_left, Length::Percent(10.0));
+}
+
+#[test]
+fn cascade_typed_padding_invalid_marked() {
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { padding-top: nope; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let decls = out.declarations.get(&(std::rc::Rc::as_ptr(&div) as usize)).unwrap();
+    let p = decls.iter().find(|d| d.raw_value == "nope").unwrap();
+    assert!(!p.valid);
+}
