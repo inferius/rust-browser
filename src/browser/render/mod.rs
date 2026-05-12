@@ -3908,7 +3908,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     let by1 = by0 + b.rect.height;
                     if by1 >= sy && by0 <= ey {
                         let lh = (b.line_height * b.font_size).max(b.font_size * 1.2);
-                        let bold = b.bold;
+                        let weight = b.font_weight;
                         let lines: Vec<&str> = text.split('\n').collect();
                         for (li, line) in lines.iter().enumerate() {
                             let line_y = by0 + (li as f32) * lh;
@@ -3920,8 +3920,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                             let italic = b.italic;
                             let fam = b.font_family.clone();
                             let line_w: f32 = line.chars().map(|ch|
-                                super::layout::measure_text_width_full(
-                                    &ch.to_string(), b.font_size, bold, italic, &fam)).sum();
+                                super::layout::measure_text_width_weight(
+                                    &ch.to_string(), b.font_size, weight, italic, &fam)).sum();
                             let (x_lo, x_hi) = if is_first_line && is_last_line {
                                 (sx.min(ex), sx.max(ex))
                             } else if is_first_line {
@@ -3938,8 +3938,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                             let mut start_byte: Option<usize> = None;
                             let mut end_byte: usize = line.len();
                             for (byte_off, ch) in line.char_indices() {
-                                let adv = super::layout::measure_text_width_full(
-                                    &ch.to_string(), b.font_size, bold, italic, &fam);
+                                let adv = super::layout::measure_text_width_weight(
+                                    &ch.to_string(), b.font_size, weight, italic, &fam);
                                 let mid = acc + adv * 0.5;
                                 if start_byte.is_none() && mid >= sel_left {
                                     start_byte = Some(byte_off);
@@ -6269,7 +6269,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                             // Vertical box ne v selection rozsah -> skip.
                             if by1 < sy || by0 > ey { /* skip */ }
                             else {
-                                let bold = b.bold;
+                                let weight = b.font_weight;
                                 // Lines z text (\n split). Pri flush_inline byly inserted.
                                 let lines: Vec<&str> = text.split('\n').collect();
                                 let n_lines = lines.len();
@@ -6286,8 +6286,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                     let italic = b.italic;
                                     let fam = b.font_family.clone();
                                     let line_w = line.chars().map(|ch|
-                                        super::layout::measure_text_width_full(
-                                            &ch.to_string(), b.font_size, bold, italic, &fam)).sum::<f32>();
+                                        super::layout::measure_text_width_weight(
+                                            &ch.to_string(), b.font_size, weight, italic, &fam)).sum::<f32>();
                                     let line_start_x = if li == 0 { bx0 } else {
                                         // Wrapped line - zacina od inner_x parentu.
                                         // Approximaceuze rect.x (typicky inner_x p).
@@ -6315,8 +6315,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                     let mut hl_start: Option<f32> = None;
                                     let mut hl_end: f32 = line_w;
                                     for ch in line.chars() {
-                                        let adv = super::layout::measure_text_width_full(
-                                            &ch.to_string(), b.font_size, bold, italic, &fam);
+                                        let adv = super::layout::measure_text_width_weight(
+                                            &ch.to_string(), b.font_size, weight, italic, &fam);
                                         let mid = acc + adv * 0.5;
                                         if hl_start.is_none() && mid >= sel_left {
                                             hl_start = Some(acc);

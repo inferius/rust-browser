@@ -4073,7 +4073,7 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
                 let inherited_family = bx_clone.font_family.clone();
                 let text_w = bx_clone.children.iter()
                     .filter_map(|c| c.text.as_ref())
-                    .map(|t| measure_text_width_full(t, font_size, inherited_bold, inherited_italic, &inherited_family))
+                    .map(|t| measure_text_width_weight(t, font_size, if inherited_bold { 700 } else { 400 }, inherited_italic, &inherited_family))
                     .sum::<f32>();
                 // Pri replaced inner (img/svg/picture) prefer real width. Pri text
                 // jen children pouzij text_w. Pri kombinaci max + sum text content.
@@ -4261,29 +4261,18 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
     cursor_y + line_height
 }
 
-/// Real vypocet sirky textu pres globalni shared font.
-/// Fallback na heuristiku kdyz font neni dostupny.
+/// Default-style sirka textu - convenience wrapper pro callers bez weight/
+/// italic/family kontext (testy + intrinsic ASCII measure).
 pub fn measure_text_width(text: &str, font_size: f32) -> f32 {
-    measure_text_width_styled(text, font_size, false)
+    measure_text_width_weight(text, font_size, 400, false, "")
 }
 
-pub fn measure_text_width_styled(text: &str, font_size: f32, bold: bool) -> f32 {
-    measure_text_width_full(text, font_size, bold, false, "")
-}
-
-/// Family-aware measure: vyhleda monospace/serif/sans-serif font dle CSS
-/// font-family list. Pri zadnem matchu fallback na default (Times). Bez tohoto
-/// by Courier-New text mereny default Times davalo zcela odlisne sirky -
-/// kazdy span text na stranky s monospace body by nasel jine wrap pointy.
-pub fn measure_text_width_full(text: &str, font_size: f32, bold: bool, italic: bool, family: &str) -> f32 {
-    measure_text_width_impl(text, font_size, if bold { 700 } else { 400 }, italic, family)
-}
-
+/// Canonical measure: vyhleda monospace/serif/sans-serif font dle CSS
+/// font-family list + bere weight (CSS Fonts L4 nearest-match). Pri zadnem
+/// matchu fallback na default (Times). Bez tohoto by Courier-New text mereny
+/// default Times davalo zcela odlisne sirky - kazdy span text na stranky s
+/// monospace body by nasel jine wrap pointy.
 pub fn measure_text_width_weight(text: &str, font_size: f32, weight: u32, italic: bool, family: &str) -> f32 {
-    measure_text_width_impl(text, font_size, weight, italic, family)
-}
-
-fn measure_text_width_impl(text: &str, font_size: f32, weight: u32, italic: bool, family: &str) -> f32 {
     let bold = weight >= 600;
     use std::sync::OnceLock;
     static FONT: OnceLock<Option<fontdue::Font>> = OnceLock::new();

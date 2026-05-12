@@ -2,7 +2,7 @@
 /// Display list je sekvence primitiv ktere wgpu rendered pak vykresli.
 
 use std::rc::Rc;
-use super::layout::{LayoutBox, TextAlign, measure_text_width_full, BgPosition, BgSize};
+use super::layout::{LayoutBox, TextAlign, measure_text_width_weight, BgPosition, BgSize};
 
 /// Vypocti final rozmer background image podle bg-size.
 /// Pro `cover` / `contain` potrebujeme znat puvodni rozmer - default 100x100 jako placeholder
@@ -1552,7 +1552,7 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
         // Family + bold + italic aware - bez tohoto text-align center bold
         // text pres measure_text_width (Times Regular metrics) misaligned vs
         // render Ubuntu Bold (sirsi glyfy) -> centering offset spatne.
-        let text_w = measure_text_width_full(text, bx.font_size, bx.bold, bx.italic, &bx.font_family);
+        let text_w = measure_text_width_weight(text, bx.font_size, bx.font_weight, bx.italic, &bx.font_family);
         let inner_w = bx.rect.width - 2.0 * bx.padding;
         let align_offset = match bx.text_align {
             TextAlign::Left | TextAlign::Justify => 0.0,
