@@ -2723,3 +2723,54 @@ fn cascade_typed_outline_offset_negative() {
     let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
     assert_eq!(cs.outline_offset, Length::Px(-2.0));
 }
+
+// ─── L5 step 3 batch 20: text-decoration ──────────────────────────────
+
+#[test]
+fn cascade_typed_text_decoration_underline() {
+    use crate::browser::computed_style::TextDecorationLine;
+    let doc = parse_html("<html><body><a></a></body></html>", "");
+    let css = parse_stylesheet("a { text-decoration-line: underline; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let a = doc.root.find(|n| n.tag_name().as_deref() == Some("a")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&a) as usize)).unwrap();
+    assert_eq!(cs.text_decoration_line, TextDecorationLine::UNDERLINE);
+    assert!(cs.text_decoration_line.has_underline());
+    assert!(!cs.text_decoration_line.has_line_through());
+}
+
+#[test]
+fn cascade_typed_text_decoration_combined() {
+    use crate::browser::computed_style::TextDecorationLine;
+    let doc = parse_html("<html><body><s></s></body></html>", "");
+    let css = parse_stylesheet("s { text-decoration-line: underline line-through; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let s = doc.root.find(|n| n.tag_name().as_deref() == Some("s")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&s) as usize)).unwrap();
+    assert!(cs.text_decoration_line.has_underline());
+    assert!(cs.text_decoration_line.has_line_through());
+    assert_eq!(cs.text_decoration_line, TextDecorationLine(5)); // 1|4
+}
+
+#[test]
+fn cascade_typed_text_decoration_style_color() {
+    use crate::browser::computed_style::{TextDecorationStyle, Color};
+    let doc = parse_html("<html><body><u></u></body></html>", "");
+    let css = parse_stylesheet("u { text-decoration-style: wavy; text-decoration-color: red; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let u = doc.root.find(|n| n.tag_name().as_deref() == Some("u")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&u) as usize)).unwrap();
+    assert_eq!(cs.text_decoration_style, TextDecorationStyle::Wavy);
+    assert_eq!(cs.text_decoration_color, Color::Rgba { r: 255, g: 0, b: 0, a: 255 });
+}
+
+#[test]
+fn cascade_typed_text_decoration_thickness() {
+    use crate::browser::computed_style::Length;
+    let doc = parse_html("<html><body><u></u></body></html>", "");
+    let css = parse_stylesheet("u { text-decoration-thickness: 3px; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let u = doc.root.find(|n| n.tag_name().as_deref() == Some("u")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&u) as usize)).unwrap();
+    assert_eq!(cs.text_decoration_thickness, Length::Px(3.0));
+}

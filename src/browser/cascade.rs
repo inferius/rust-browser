@@ -18,8 +18,9 @@ use super::computed_style::{
     JustifyContent as CsJustifyContent, Length, LineHeight,
     Overflow as CsOverflow, OverflowWrap, PointerEvents as CsPointerEvents,
     PositionKind, PropertyId, CascadeOrigin, Specificity as CsSpec,
-    TextAlign as CsTextAlign, Visibility, WhiteSpace, WordBreak,
-    WritingMode as CsWritingMode, ZIndex,
+    TextAlign as CsTextAlign, TextDecorationLine as CsTextDecorationLine,
+    TextDecorationStyle as CsTextDecorationStyle, Visibility, WhiteSpace,
+    WordBreak, WritingMode as CsWritingMode, ZIndex,
 };
 
 // Runtime UI state pres thread-local. Nastavuje render loop pred kazdym
@@ -1281,6 +1282,27 @@ pub fn cascade_with_viewport_typed(
         if let Some(v) = props.get("outline-offset") {
             if let Some(l) = Length::parse(v) { cs.outline_offset = l; }
         }
+        // Batch 20: text-decoration (line/style/color/thickness).
+        if let Some(v) = props.get("text-decoration-line") {
+            if let Some(l) = CsTextDecorationLine::parse(v) { cs.text_decoration_line = l; }
+        }
+        if let Some(v) = props.get("text-decoration-style") {
+            if let Some(s) = CsTextDecorationStyle::parse(v) { cs.text_decoration_style = s; }
+        }
+        if let Some(v) = props.get("text-decoration-color") {
+            if v.trim().eq_ignore_ascii_case("currentcolor") {
+                cs.text_decoration_color = Color::CurrentColor;
+            } else if let Some(c) = Color::parse(v) {
+                cs.text_decoration_color = c;
+            }
+        }
+        if let Some(v) = props.get("text-decoration-thickness") {
+            if v.trim().eq_ignore_ascii_case("auto") {
+                cs.text_decoration_thickness = Length::Auto;
+            } else if let Some(l) = Length::parse(v) {
+                cs.text_decoration_thickness = l;
+            }
+        }
         computed.insert(*node_id, cs);
         // Konvertuj kazdou property na CascadeDecl s validity flag pro
         // batch 1 props (color/opacity/visibility/cursor) - parse Result
@@ -1369,6 +1391,16 @@ pub fn cascade_with_viewport_typed(
                         || Color::parse(raw_val).is_some()
                 },
                 PropertyId::OutlineOffset => Length::parse(raw_val).is_some(),
+                PropertyId::TextDecorationLine => CsTextDecorationLine::parse(raw_val).is_some(),
+                PropertyId::TextDecorationStyle => CsTextDecorationStyle::parse(raw_val).is_some(),
+                PropertyId::TextDecorationColor => {
+                    raw_val.trim().eq_ignore_ascii_case("currentcolor")
+                        || Color::parse(raw_val).is_some()
+                },
+                PropertyId::TextDecorationThickness => {
+                    raw_val.trim().eq_ignore_ascii_case("auto")
+                        || Length::parse(raw_val).is_some()
+                },
                 // Cursor::parse vzdy uspeje (Custom fallback) - vsechny valid.
                 _ => true,
             };

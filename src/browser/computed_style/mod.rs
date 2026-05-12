@@ -169,6 +169,12 @@ pub struct ComputedStyle {
     pub outline_style: BorderStyle,
     pub outline_color: Color,
     pub outline_offset: Length,
+
+    // ─── Text decoration (batch 20) ───────────────────────────────────
+    pub text_decoration_line: TextDecorationLine,
+    pub text_decoration_style: TextDecorationStyle,
+    pub text_decoration_color: Color,
+    pub text_decoration_thickness: Length,
 }
 
 impl Default for ComputedStyle {
@@ -268,6 +274,83 @@ impl ComputedStyle {
             outline_style: BorderStyle::None,
             outline_color: Color::CurrentColor,
             outline_offset: Length::Px(0.0),
+            text_decoration_line: TextDecorationLine::NONE,
+            text_decoration_style: TextDecorationStyle::Solid,
+            text_decoration_color: Color::CurrentColor,
+            text_decoration_thickness: Length::Auto,
+        }
+    }
+}
+
+/// CSS `text-decoration-line` bitflag (CSS Text Decoration L3 §2.2).
+/// `none` = bitflags::empty(). Combinations: underline + line-through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextDecorationLine(pub u8);
+
+impl TextDecorationLine {
+    pub const NONE: Self = TextDecorationLine(0);
+    pub const UNDERLINE: Self = TextDecorationLine(1);
+    pub const OVERLINE: Self = TextDecorationLine(2);
+    pub const LINE_THROUGH: Self = TextDecorationLine(4);
+    pub const BLINK: Self = TextDecorationLine(8);
+
+    pub fn parse(s: &str) -> Option<Self> {
+        let t = s.trim().to_lowercase();
+        if t == "none" { return Some(Self::NONE); }
+        let mut bits = 0u8;
+        for tok in t.split_whitespace() {
+            match tok {
+                "underline" => bits |= 1,
+                "overline" => bits |= 2,
+                "line-through" => bits |= 4,
+                "blink" => bits |= 8,
+                _ => return None,
+            }
+        }
+        Some(TextDecorationLine(bits))
+    }
+    pub fn has_underline(self) -> bool { (self.0 & 1) != 0 }
+    pub fn has_overline(self) -> bool { (self.0 & 2) != 0 }
+    pub fn has_line_through(self) -> bool { (self.0 & 4) != 0 }
+    pub fn css_string(self) -> String {
+        if self.0 == 0 { return "none".into(); }
+        let mut parts = Vec::new();
+        if self.has_underline() { parts.push("underline"); }
+        if self.has_overline() { parts.push("overline"); }
+        if self.has_line_through() { parts.push("line-through"); }
+        if (self.0 & 8) != 0 { parts.push("blink"); }
+        parts.join(" ")
+    }
+}
+
+/// CSS `text-decoration-style` (CSS Text Decoration L3 §2.3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextDecorationStyle {
+    Solid,
+    Double,
+    Dotted,
+    Dashed,
+    Wavy,
+}
+
+impl TextDecorationStyle {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s.trim().to_lowercase().as_str() {
+            "solid" => Self::Solid,
+            "double" => Self::Double,
+            "dotted" => Self::Dotted,
+            "dashed" => Self::Dashed,
+            "wavy" => Self::Wavy,
+            _ => return None,
+        })
+    }
+    pub fn css_string(self) -> &'static str {
+        match self {
+            Self::Solid => "solid",
+            Self::Double => "double",
+            Self::Dotted => "dotted",
+            Self::Dashed => "dashed",
+            Self::Wavy => "wavy",
         }
     }
 }
