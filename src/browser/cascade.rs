@@ -407,22 +407,7 @@ fn resolve_if_function(s: &str) -> String {
     out
 }
 
-/// Split top-level commas (respektuje zavorky).
-fn split_top_level_commas(s: &str) -> Vec<&str> {
-    let bytes = s.as_bytes();
-    let mut parts = Vec::new();
-    let mut depth = 0i32;
-    let mut start = 0usize;
-    for (i, &b) in bytes.iter().enumerate() {
-        match b { b'(' => depth += 1, b')' => depth -= 1, _ => {} }
-        if depth == 0 && b == b',' {
-            parts.push(&s[start..i]);
-            start = i + 1;
-        }
-    }
-    if start < bytes.len() { parts.push(&s[start..]); }
-    parts
-}
+use super::layout::split_top_level_commas;
 
 /// env(safe-area-inset-top, fallback) - bez safe-area kontextu vrati fallback nebo 0px.
 fn resolve_env(s: &str) -> String {
@@ -2157,8 +2142,8 @@ impl TransitionSpec {
 
         // Shorthand "transition" - muze obsahovat carku pro vice transitions
         if let Some(short) = styles.get("transition") {
-            for entry in split_top_level_commas_str(short) {
-                if let Some(spec) = Self::parse_one(&entry) {
+            for entry in split_top_level_commas(short) {
+                if let Some(spec) = Self::parse_one(entry.trim()) {
                     out.push(spec);
                 }
             }
@@ -2216,26 +2201,6 @@ impl TransitionSpec {
         if duration <= 0.0 { return None; }
         Some(TransitionSpec { property, duration_secs: duration, timing_function: timing, delay_secs: delay })
     }
-}
-
-/// Split na top-level carce (string varianta, navrat Vec<String>).
-fn split_top_level_commas_str(s: &str) -> Vec<String> {
-    let mut tokens = Vec::new();
-    let mut cur = String::new();
-    let mut depth = 0i32;
-    for ch in s.chars() {
-        match ch {
-            '(' => { depth += 1; cur.push(ch); }
-            ')' => { depth -= 1; cur.push(ch); }
-            ',' if depth == 0 => {
-                if !cur.trim().is_empty() { tokens.push(std::mem::take(&mut cur).trim().to_string()); }
-                cur.clear();
-            }
-            _ => cur.push(ch),
-        }
-    }
-    if !cur.trim().is_empty() { tokens.push(cur.trim().to_string()); }
-    tokens
 }
 
 /// Tokenize string respektujici vyvazene zavorky (pro cubic-bezier/steps).
