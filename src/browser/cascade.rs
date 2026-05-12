@@ -193,6 +193,23 @@ pub fn expand_shorthand(prop: &str, value: &str, out: &mut HashMap<String, Strin
         out.insert("inset".into(), value.into());
         return;
     }
+    // scroll-margin / scroll-padding shorthand expand do 4 sides.
+    if matches!(prop, "scroll-margin" | "scroll-padding") {
+        let parts: Vec<&str> = value.split_whitespace().collect();
+        if parts.is_empty() { return; }
+        let (t, r, b, l) = match parts.len() {
+            1 => (parts[0], parts[0], parts[0], parts[0]),
+            2 => (parts[0], parts[1], parts[0], parts[1]),
+            3 => (parts[0], parts[1], parts[2], parts[1]),
+            _ => (parts[0], parts[1], parts[2], parts[3]),
+        };
+        out.insert(format!("{prop}-top"), t.into());
+        out.insert(format!("{prop}-right"), r.into());
+        out.insert(format!("{prop}-bottom"), b.into());
+        out.insert(format!("{prop}-left"), l.into());
+        out.insert(prop.into(), value.into());
+        return;
+    }
     match prop {
         "margin" | "padding" => {
             let parts: Vec<&str> = value.split_whitespace().collect();
@@ -1627,6 +1644,19 @@ pub fn cascade_with_viewport_typed(
         }
         if let Some(v) = props.get("column-span") {
             if let Some(s) = CsColumnSpan::parse(v) { cs.column_span = s; }
+        }
+        // Batch 38: scroll-margin top/right/bottom/left.
+        if let Some(v) = props.get("scroll-margin-top") {
+            if let Some(l) = Length::parse(v) { cs.scroll_margin_top = l; }
+        }
+        if let Some(v) = props.get("scroll-margin-right") {
+            if let Some(l) = Length::parse(v) { cs.scroll_margin_right = l; }
+        }
+        if let Some(v) = props.get("scroll-margin-bottom") {
+            if let Some(l) = Length::parse(v) { cs.scroll_margin_bottom = l; }
+        }
+        if let Some(v) = props.get("scroll-margin-left") {
+            if let Some(l) = Length::parse(v) { cs.scroll_margin_left = l; }
         }
         computed.insert(*node_id, cs);
         // Konvertuj kazdou property na CascadeDecl s validity flag pro

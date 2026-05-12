@@ -279,6 +279,12 @@ pub struct ComputedStyle {
     pub column_width: Length,            // Auto | <length>
     pub column_fill: ColumnFill,
     pub column_span: ColumnSpan,
+
+    // ─── Scroll margin (batch 38) ─────────────────────────────────────
+    pub scroll_margin_top: Length,
+    pub scroll_margin_right: Length,
+    pub scroll_margin_bottom: Length,
+    pub scroll_margin_left: Length,
 }
 
 impl Default for ComputedStyle {
@@ -452,6 +458,10 @@ impl ComputedStyle {
             column_width: Length::Auto,
             column_fill: ColumnFill::Balance,
             column_span: ColumnSpan::None,
+            scroll_margin_top: Length::Px(0.0),
+            scroll_margin_right: Length::Px(0.0),
+            scroll_margin_bottom: Length::Px(0.0),
+            scroll_margin_left: Length::Px(0.0),
         }
     }
 }
