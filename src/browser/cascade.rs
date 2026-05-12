@@ -1658,6 +1658,19 @@ pub fn cascade_with_viewport_typed(
         if let Some(v) = props.get("scroll-margin-left") {
             if let Some(l) = Length::parse(v) { cs.scroll_margin_left = l; }
         }
+        // Batch 39: scroll-padding top/right/bottom/left.
+        if let Some(v) = props.get("scroll-padding-top") {
+            if let Some(l) = Length::parse(v) { cs.scroll_padding_top = l; }
+        }
+        if let Some(v) = props.get("scroll-padding-right") {
+            if let Some(l) = Length::parse(v) { cs.scroll_padding_right = l; }
+        }
+        if let Some(v) = props.get("scroll-padding-bottom") {
+            if let Some(l) = Length::parse(v) { cs.scroll_padding_bottom = l; }
+        }
+        if let Some(v) = props.get("scroll-padding-left") {
+            if let Some(l) = Length::parse(v) { cs.scroll_padding_left = l; }
+        }
         computed.insert(*node_id, cs);
         // Konvertuj kazdou property na CascadeDecl s validity flag pro
         // batch 1 props (color/opacity/visibility/cursor) - parse Result

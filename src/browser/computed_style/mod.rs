@@ -285,6 +285,12 @@ pub struct ComputedStyle {
     pub scroll_margin_right: Length,
     pub scroll_margin_bottom: Length,
     pub scroll_margin_left: Length,
+
+    // ─── Scroll padding (batch 39) ────────────────────────────────────
+    pub scroll_padding_top: Length,
+    pub scroll_padding_right: Length,
+    pub scroll_padding_bottom: Length,
+    pub scroll_padding_left: Length,
 }
 
 impl Default for ComputedStyle {
@@ -462,6 +468,10 @@ impl ComputedStyle {
             scroll_margin_right: Length::Px(0.0),
             scroll_margin_bottom: Length::Px(0.0),
             scroll_margin_left: Length::Px(0.0),
+            scroll_padding_top: Length::Auto,
+            scroll_padding_right: Length::Auto,
+            scroll_padding_bottom: Length::Auto,
+            scroll_padding_left: Length::Auto,
         }
     }
 }

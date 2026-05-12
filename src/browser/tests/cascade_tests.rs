@@ -3472,3 +3472,19 @@ fn cascade_typed_scroll_margin_longhands() {
     assert_eq!(cs.scroll_margin_top, Length::Px(4.0));
     assert_eq!(cs.scroll_margin_left, Length::Px(16.0));
 }
+
+// ─── L5 step 3 batch 39: scroll-padding ───────────────────────────────
+
+#[test]
+fn cascade_typed_scroll_padding_shorthand() {
+    use crate::browser::computed_style::Length;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { scroll-padding: 12px 24px; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.scroll_padding_top, Length::Px(12.0));
+    assert_eq!(cs.scroll_padding_right, Length::Px(24.0));
+    assert_eq!(cs.scroll_padding_bottom, Length::Px(12.0));
+    assert_eq!(cs.scroll_padding_left, Length::Px(24.0));
+}
