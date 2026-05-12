@@ -291,6 +291,12 @@ pub struct ComputedStyle {
     pub scroll_padding_right: Length,
     pub scroll_padding_bottom: Length,
     pub scroll_padding_left: Length,
+
+    // ─── Scroll snap + overscroll (batch 40) ──────────────────────────
+    pub scroll_snap_type: String,         // raw "<axis> <strictness>"
+    pub scroll_snap_align: ScrollSnapAlign,
+    pub overscroll_behavior_x: OverscrollBehavior,
+    pub overscroll_behavior_y: OverscrollBehavior,
 }
 
 impl Default for ComputedStyle {
@@ -472,7 +478,52 @@ impl ComputedStyle {
             scroll_padding_right: Length::Auto,
             scroll_padding_bottom: Length::Auto,
             scroll_padding_left: Length::Auto,
+            scroll_snap_type: "none".into(),
+            scroll_snap_align: ScrollSnapAlign::None,
+            overscroll_behavior_x: OverscrollBehavior::Auto,
+            overscroll_behavior_y: OverscrollBehavior::Auto,
         }
+    }
+}
+
+/// CSS `scroll-snap-align` (CSS Scroll Snap L1 §6.2). `<block> <inline>`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollSnapAlign {
+    None,
+    Start,
+    End,
+    Center,
+}
+
+impl ScrollSnapAlign {
+    pub fn parse(s: &str) -> Option<Self> {
+        // Pri 2-value (block+inline) bere prvni token.
+        Some(match s.split_whitespace().next().unwrap_or("").to_lowercase().as_str() {
+            "none" => Self::None,
+            "start" => Self::Start,
+            "end" => Self::End,
+            "center" => Self::Center,
+            _ => return None,
+        })
+    }
+}
+
+/// CSS `overscroll-behavior` (CSS Overscroll L1 §3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OverscrollBehavior {
+    Auto,
+    Contain,
+    None,
+}
+
+impl OverscrollBehavior {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s.trim().to_lowercase().as_str() {
+            "auto" => Self::Auto,
+            "contain" => Self::Contain,
+            "none" => Self::None,
+            _ => return None,
+        })
     }
 }
 

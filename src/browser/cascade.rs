@@ -25,6 +25,7 @@ use super::computed_style::{
     Appearance as CsAppearance, BackgroundAttachment as CsBackgroundAttachment,
     BackgroundClip as CsBackgroundClip,
     ColumnCount as CsColumnCount, ColumnFill as CsColumnFill, ColumnSpan as CsColumnSpan,
+    OverscrollBehavior as CsOverscrollBehavior, ScrollSnapAlign as CsScrollSnapAlign,
     Isolation as CsIsolation, JustifyItems as CsJustifyItems,
     JustifySelf as CsJustifySelf, ScrollBehavior as CsScrollBehavior,
     BorderCollapse as CsBorderCollapse, CaptionSide as CsCaptionSide,
@@ -1670,6 +1671,19 @@ pub fn cascade_with_viewport_typed(
         }
         if let Some(v) = props.get("scroll-padding-left") {
             if let Some(l) = Length::parse(v) { cs.scroll_padding_left = l; }
+        }
+        // Batch 40: scroll-snap-* + overscroll-behavior-*.
+        if let Some(v) = props.get("scroll-snap-type") {
+            cs.scroll_snap_type = v.clone();
+        }
+        if let Some(v) = props.get("scroll-snap-align") {
+            if let Some(a) = CsScrollSnapAlign::parse(v) { cs.scroll_snap_align = a; }
+        }
+        if let Some(v) = props.get("overscroll-behavior-x") {
+            if let Some(b) = CsOverscrollBehavior::parse(v) { cs.overscroll_behavior_x = b; }
+        }
+        if let Some(v) = props.get("overscroll-behavior-y") {
+            if let Some(b) = CsOverscrollBehavior::parse(v) { cs.overscroll_behavior_y = b; }
         }
         computed.insert(*node_id, cs);
         // Konvertuj kazdou property na CascadeDecl s validity flag pro

@@ -3488,3 +3488,38 @@ fn cascade_typed_scroll_padding_shorthand() {
     assert_eq!(cs.scroll_padding_bottom, Length::Px(12.0));
     assert_eq!(cs.scroll_padding_left, Length::Px(24.0));
 }
+
+// ─── L5 step 3 batch 40: scroll-snap + overscroll-behavior ────────────
+
+#[test]
+fn cascade_typed_scroll_snap_align_start() {
+    use crate::browser::computed_style::ScrollSnapAlign;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { scroll-snap-align: start; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.scroll_snap_align, ScrollSnapAlign::Start);
+}
+
+#[test]
+fn cascade_typed_overscroll_behavior_contain() {
+    use crate::browser::computed_style::OverscrollBehavior;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { overscroll-behavior-y: contain; overscroll-behavior-x: none; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.overscroll_behavior_y, OverscrollBehavior::Contain);
+    assert_eq!(cs.overscroll_behavior_x, OverscrollBehavior::None);
+}
+
+#[test]
+fn cascade_typed_scroll_snap_type_raw() {
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { scroll-snap-type: x mandatory; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 800.0, 600.0);
+    let d = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&d) as usize)).unwrap();
+    assert_eq!(cs.scroll_snap_type, "x mandatory");
+}
