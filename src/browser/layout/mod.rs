@@ -532,13 +532,11 @@ pub struct LayoutBox {
     /// 1 = layout, 2 = paint, 4 = size, 8 = style.
     pub contain: u8,
     /// scroll-behavior: "auto" (default) | "smooth"
-    pub scroll_behavior: String,
     /// scrollbar-width: "auto" | "thin" | "none"
     pub scrollbar_width: String,
     /// scrollbar-color: (thumb_color, track_color)
     pub scrollbar_color: Option<([u8; 4], [u8; 4])>,
     /// overscroll-behavior: "auto" | "contain" | "none"
-    pub overscroll_behavior: String,
     /// scroll-snap-type: "none" | "x mandatory" | "y proximity" / ...
     /// scroll-snap-align: "none" | "start" | "end" | "center"
     /// scroll-padding (top right bottom left v px)
@@ -568,7 +566,6 @@ pub struct LayoutBox {
     /// will-change: <prop list>
     /// isolation: auto | isolate
     /// mix-blend-mode: normal | multiply | screen | overlay | darken | lighten | ...
-    pub mix_blend_mode: String,
     /// pointer-events: auto | none
     pub pointer_events: PointerEvents,
     /// user-select: auto | none | text | all
@@ -890,10 +887,8 @@ impl LayoutBox {
             aspect_ratio: None,
             accent_color: None,
             contain: 0,
-            scroll_behavior: String::new(),
             scrollbar_width: String::new(),
             scrollbar_color: None,
-            overscroll_behavior: String::new(),
             scroll_padding: [0.0; 4],
             scroll_margin: [0.0; 4],
             mask_image: None,
@@ -904,7 +899,6 @@ impl LayoutBox {
             counter_reset: Vec::new(),
             counter_increment: Vec::new(),
             perspective: None,
-            mix_blend_mode: String::new(),
             pointer_events: PointerEvents::default(),
             caret_color: None,
             tab_size: 8.0,
@@ -2045,9 +2039,6 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         };
     }
     // CSS Compositing L1
-    if let Some(mbm) = s.get("mix-blend-mode") {
-        bx.mix_blend_mode = mbm.trim().to_string();
-    }
     // text-emphasis
     if let Some(tec) = s.get("text-emphasis-color") {
         bx.text_emphasis_color = parse_color(tec);
@@ -2215,9 +2206,6 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         }
     }
     // scroll-behavior
-    if let Some(sb) = s.get("scroll-behavior") {
-        bx.scroll_behavior = sb.trim().to_string();
-    }
     // scrollbar-width
     if let Some(sw) = s.get("scrollbar-width") {
         bx.scrollbar_width = sw.trim().to_string();
@@ -2232,9 +2220,6 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         }
     }
     // overscroll-behavior
-    if let Some(ob) = s.get("overscroll-behavior") {
-        bx.overscroll_behavior = ob.trim().to_string();
-    }
     // scroll-snap
     let parse_4 = |v: &str| -> [f32; 4] {
         let parts: Vec<&str> = v.split_whitespace().collect();

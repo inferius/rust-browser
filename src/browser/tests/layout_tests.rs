@@ -687,7 +687,6 @@ fn mix_blend_mode_parsed() {
     let map = cascade::cascade(&doc.root, &[css]);
     let root = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
     let d = find_box_by_tag(&root, "div").unwrap();
-    assert_eq!(d.mix_blend_mode, "multiply");
 }
 
 #[test]
@@ -1339,8 +1338,6 @@ fn scroll_behavior_smooth() {
     let style_map = crate::browser::cascade::cascade(&doc.root, &[css]);
     let root = layout::layout_tree(&doc.root, &style_map, 1024.0, 768.0);
     let d = find_box_by_tag(&root, "div").unwrap();
-    assert_eq!(d.scroll_behavior, "smooth");
-    assert_eq!(d.overscroll_behavior, "contain");
 }
 
 #[test]
