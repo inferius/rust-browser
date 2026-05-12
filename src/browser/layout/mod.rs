@@ -387,6 +387,11 @@ pub struct LayoutBox {
     pub border_left_width: Option<f32>,
     pub border_color: Option<[u8; 4]>,
     pub font_size: f32,
+    /// True kdyz font_size byl explicitly set z cascade (ne default).
+    /// Pouzite v inline inheritance: parent fs propaguje na inline child JEN
+    /// kdyz child sam nema explicit fs - drive resilo `(fs - 16.0).abs() < 0.001`
+    /// sentinel test ktery selhal pri user CSS `font-size: 16px`.
+    pub font_size_explicit: bool,
     pub text_align: TextAlign,
     pub bold: bool,
     /// CSS font-weight 1..1000. Default 400 (normal). Bold = 700 (>= 600 alias).
@@ -398,6 +403,10 @@ pub struct LayoutBox {
     pub italic: bool,
     pub border_radius: f32,
     pub line_height: f32,
+    /// True kdyz line_height byl explicitly set z cascade (analogicky
+    /// font_size_explicit). Drive `(lh - 1.2).abs() < 0.001` sentinel test
+    /// selhal pri user CSS `line-height: 1.2`.
+    pub line_height_explicit: bool,
     pub position: Position,
     /// Top/right/bottom/left offsety pro positioned elements (None = auto).
     pub offset_top: Option<f32>,
@@ -872,12 +881,14 @@ impl LayoutBox {
             border_left_width: None,
             border_color: None,
             font_size: 16.0,
+            font_size_explicit: false,
             text_align: TextAlign::Left,
             bold: false,
             font_weight: 400,
             italic: false,
             border_radius: 0.0,
             line_height: 1.2,
+            line_height_explicit: false,
             position: Position::Static,
             offset_top: None,
             offset_right: None,
@@ -2649,7 +2660,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(b) = s.get("border-width") { bx.border_width = parse_length(b); }
     if let Some(bc) = s.get("border-color") { bx.border_color = parse_color(bc); }
     if let Some(bs) = s.get("border-style") { bx.border_style = bs.trim().to_string(); }
-    if let Some(fs) = s.get("font-size") { bx.font_size = parse_length(fs); }
+    if let Some(fs) = s.get("font-size") { bx.font_size = parse_length(fs); bx.font_size_explicit = true; }
     // Text align
     if let Some(ta) = s.get("text-align") {
         bx.text_align = match ta.trim() {
@@ -2737,11 +2748,13 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         let trimmed = lh.trim();
         if let Ok(num) = trimmed.parse::<f32>() {
             bx.line_height = num;
+            bx.line_height_explicit = true;
         } else if trimmed.ends_with("px") || trimmed.ends_with("em") || trimmed.ends_with("rem") {
             // V px - prevest na multiplier
             let px = parse_length(trimmed);
             if bx.font_size > 0.0 {
                 bx.line_height = px / bx.font_size;
+                bx.line_height_explicit = true;
             }
         }
     }
@@ -3086,7 +3099,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     for ch in bx.children.iter_mut() {
         if ch.tag.is_none() {
             ch.font_size = parent_fs;
-            if (ch.line_height - 1.2).abs() < 0.001 {
+            if !ch.line_height_explicit {
                 ch.line_height = parent_lh;
             }
             if !ch.bold { ch.bold = parent_bold; }
@@ -3767,9 +3780,10 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
         // pokud sami nemaji explicit value.
         let is_text_node = bx.children[idx].tag.is_none();
         // Text node: vzdy override font_size z parentu (nema vlastni cascade).
-        // Inline element: jen kdyz nema explicit font-size (heuristic: != 16
-        // znamena ze cascade ho prepsala) - bug edge case pri parent=16.
-        if is_text_node || (bx.children[idx].font_size - 16.0).abs() < 0.001 {
+        // Inline element: jen kdyz nema explicit font-size z cascade
+        // (font_size_explicit flag - drive sentinel test selhal pri user
+        // CSS font-size: 16px).
+        if is_text_node || !bx.children[idx].font_size_explicit {
             bx.children[idx].font_size = parent_font_size;
         }
         if !bx.children[idx].bold && parent_bold {
@@ -3805,7 +3819,7 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
         // text uvnitr potrebuje stejnou line-height pro vertical center
         // (paint v_offset z line_height_px).
         let is_text_node_lh = bx.children[idx].tag.is_none();
-        if is_text_node_lh || (bx.children[idx].line_height - 1.2).abs() < 0.001 {
+        if is_text_node_lh || !bx.children[idx].line_height_explicit {
             bx.children[idx].line_height = parent_line_height;
         }
         let bx_clone = bx.children[idx].clone();
