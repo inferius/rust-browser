@@ -9,8 +9,9 @@ use super::dom::{Node, NodeKind};
 use super::css_parser::{Stylesheet, Selector, SimpleSelector, Combinator, Rule, specificity};
 use super::computed_style::{
     CascadeOutput, CascadeDecl, Color, ComputedStyle, ComputedStyleMap, Cursor,
-    DeclarationsMap, Display as CsDisplay, Length, LineHeight, PositionKind,
-    PropertyId, CascadeOrigin, Specificity as CsSpec, Visibility, ZIndex,
+    DeclarationsMap, Display as CsDisplay, FontFamily, GenericFamily, Length,
+    LineHeight, PositionKind, PropertyId, CascadeOrigin, Specificity as CsSpec,
+    Visibility, ZIndex,
 };
 
 // Runtime UI state pres thread-local. Nastavuje render loop pred kazdym
@@ -1029,6 +1030,19 @@ pub fn cascade_with_viewport_typed(
         if let Some(v) = props.get("right") {
             if let Some(l) = Length::parse(v) { cs.right = l; }
         }
+        // Batch 8: bottom/left offsety + background_color + font_family.
+        if let Some(v) = props.get("bottom") {
+            if let Some(l) = Length::parse(v) { cs.bottom = l; }
+        }
+        if let Some(v) = props.get("left") {
+            if let Some(l) = Length::parse(v) { cs.left = l; }
+        }
+        if let Some(v) = props.get("background-color") {
+            if let Some(c) = Color::parse(v) { cs.background_color = c; }
+        }
+        if let Some(v) = props.get("font-family") {
+            cs.font_family = parse_font_family(v);
+        }
         computed.insert(*node_id, cs);
         // Konvertuj kazdou property na CascadeDecl s validity flag pro
         // batch 1 props (color/opacity/visibility/cursor) - parse Result
@@ -1057,7 +1071,10 @@ pub fn cascade_with_viewport_typed(
                 | PropertyId::MinWidth | PropertyId::MinHeight
                 | PropertyId::MaxWidth | PropertyId::MaxHeight
                 | PropertyId::Top | PropertyId::Right
+                | PropertyId::Bottom | PropertyId::Left
                     => Length::parse(raw_val).is_some(),
+                PropertyId::BackgroundColor => Color::parse(raw_val).is_some(),
+                PropertyId::FontFamily => !raw_val.trim().is_empty(),
                 // Cursor::parse vzdy uspeje (Custom fallback) - vsechny valid.
                 _ => true,
             };
@@ -1116,6 +1133,30 @@ fn is_valid_line_height(v: &str) -> bool {
     if t.eq_ignore_ascii_case("normal") { return true; }
     if t.parse::<f32>().is_ok() { return true; }
     Length::parse(t).is_some()
+}
+
+/// Parse `font-family` comma-separated list. Quoted strings -> Named bez
+/// uvozovek. Bareword -> Generic pokud match keyword, jinak Named.
+fn parse_font_family(v: &str) -> Vec<FontFamily> {
+    let mut out = Vec::new();
+    for raw in v.split(',') {
+        let trimmed = raw.trim();
+        // Strip pairs of matching quotes (single nebo double).
+        let stripped = if (trimmed.starts_with('"') && trimmed.ends_with('"'))
+            || (trimmed.starts_with('\'') && trimmed.ends_with('\''))
+        {
+            if trimmed.len() >= 2 { &trimmed[1..trimmed.len()-1] } else { trimmed }
+        } else {
+            trimmed
+        };
+        if stripped.is_empty() { continue; }
+        if let Some(g) = GenericFamily::parse(stripped) {
+            out.push(FontFamily::Generic(g));
+        } else {
+            out.push(FontFamily::Named(stripped.to_string()));
+        }
+    }
+    out
 }
 
 /// Per-element container query evaluation: container_sizes je mapa

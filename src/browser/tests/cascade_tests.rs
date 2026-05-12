@@ -2042,3 +2042,56 @@ fn cascade_typed_top_auto() {
     let cs = out.computed.get(&(std::rc::Rc::as_ptr(&div) as usize)).unwrap();
     assert_eq!(cs.top, Length::Auto);
 }
+
+// ─── L5 step 3 batch 8: bottom/left + background_color + font_family ──
+
+#[test]
+fn cascade_typed_bottom_left() {
+    use crate::browser::computed_style::Length;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { bottom: 5px; left: 0; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 1024.0, 768.0);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&div) as usize)).unwrap();
+    assert_eq!(cs.bottom, Length::Px(5.0));
+    assert_eq!(cs.left, Length::Px(0.0));
+}
+
+#[test]
+fn cascade_typed_background_color() {
+    use crate::browser::computed_style::Color;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { background-color: blue; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 1024.0, 768.0);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&div) as usize)).unwrap();
+    assert_eq!(cs.background_color, Color::Rgba { r: 0, g: 0, b: 255, a: 255 });
+}
+
+#[test]
+fn cascade_typed_font_family_named() {
+    use crate::browser::computed_style::{FontFamily, GenericFamily};
+    let doc = parse_html("<html><body><p></p></body></html>", "");
+    let css = parse_stylesheet(r#"p { font-family: "Arial", sans-serif; }"#);
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 1024.0, 768.0);
+    let p = doc.root.find(|n| n.tag_name().as_deref() == Some("p")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&p) as usize)).unwrap();
+    // "Arial" je Named (after strip quotes), sans-serif je Generic.
+    assert_eq!(cs.font_family.len(), 2);
+    match &cs.font_family[0] {
+        FontFamily::Named(s) => assert_eq!(s, "Arial"),
+        other => panic!("expected Named, got {:?}", other),
+    }
+    assert_eq!(cs.font_family[1], FontFamily::Generic(GenericFamily::SansSerif));
+}
+
+#[test]
+fn cascade_typed_font_family_monospace_generic() {
+    use crate::browser::computed_style::{FontFamily, GenericFamily};
+    let doc = parse_html("<html><body><code></code></body></html>", "");
+    let css = parse_stylesheet("code { font-family: monospace; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 1024.0, 768.0);
+    let c = doc.root.find(|n| n.tag_name().as_deref() == Some("code")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&c) as usize)).unwrap();
+    assert_eq!(cs.font_family, vec![FontFamily::Generic(GenericFamily::Monospace)]);
+}
