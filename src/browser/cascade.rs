@@ -1016,6 +1016,19 @@ pub fn cascade_with_viewport_typed(
         if let Some(v) = props.get("min-height") {
             if let Some(l) = Length::parse(v) { cs.min_height = l; }
         }
+        // Batch 7: max-width/max-height + top/right offsety.
+        if let Some(v) = props.get("max-width") {
+            if let Some(l) = Length::parse(v) { cs.max_width = l; }
+        }
+        if let Some(v) = props.get("max-height") {
+            if let Some(l) = Length::parse(v) { cs.max_height = l; }
+        }
+        if let Some(v) = props.get("top") {
+            if let Some(l) = Length::parse(v) { cs.top = l; }
+        }
+        if let Some(v) = props.get("right") {
+            if let Some(l) = Length::parse(v) { cs.right = l; }
+        }
         computed.insert(*node_id, cs);
         // Konvertuj kazdou property na CascadeDecl s validity flag pro
         // batch 1 props (color/opacity/visibility/cursor) - parse Result
@@ -1042,6 +1055,8 @@ pub fn cascade_with_viewport_typed(
                 | PropertyId::PaddingBottom | PropertyId::PaddingLeft
                 | PropertyId::Width | PropertyId::Height
                 | PropertyId::MinWidth | PropertyId::MinHeight
+                | PropertyId::MaxWidth | PropertyId::MaxHeight
+                | PropertyId::Top | PropertyId::Right
                     => Length::parse(raw_val).is_some(),
                 // Cursor::parse vzdy uspeje (Custom fallback) - vsechny valid.
                 _ => true,

@@ -1994,3 +1994,51 @@ fn cascade_typed_width_invalid_marked() {
     let w = decls.iter().find(|d| d.raw_value == "garbage").unwrap();
     assert!(!w.valid);
 }
+
+// ─── L5 step 3 batch 7: max-width/max-height + top/right ──────────────
+
+#[test]
+fn cascade_typed_max_dimensions() {
+    use crate::browser::computed_style::Length;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { max-width: 800px; max-height: 600px; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 1024.0, 768.0);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&div) as usize)).unwrap();
+    assert_eq!(cs.max_width, Length::Px(800.0));
+    assert_eq!(cs.max_height, Length::Px(600.0));
+}
+
+#[test]
+fn cascade_typed_max_none() {
+    use crate::browser::computed_style::Length;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { max-width: none; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 1024.0, 768.0);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&div) as usize)).unwrap();
+    assert_eq!(cs.max_width, Length::None);
+}
+
+#[test]
+fn cascade_typed_top_right_offsety() {
+    use crate::browser::computed_style::Length;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { top: 10px; right: 25%; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 1024.0, 768.0);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&div) as usize)).unwrap();
+    assert_eq!(cs.top, Length::Px(10.0));
+    assert_eq!(cs.right, Length::Percent(25.0));
+}
+
+#[test]
+fn cascade_typed_top_auto() {
+    use crate::browser::computed_style::Length;
+    let doc = parse_html("<html><body><div></div></body></html>", "");
+    let css = parse_stylesheet("div { top: auto; }");
+    let out = cascade::cascade_with_viewport_typed(&doc.root, &[css], 1024.0, 768.0);
+    let div = doc.root.find(|n| n.tag_name().as_deref() == Some("div")).unwrap();
+    let cs = out.computed.get(&(std::rc::Rc::as_ptr(&div) as usize)).unwrap();
+    assert_eq!(cs.top, Length::Auto);
+}
