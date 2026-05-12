@@ -2554,6 +2554,18 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(bc) = s.get("border-color") { bx.border_color = parse_color(bc); }
     if let Some(bs) = s.get("border-style") { bx.border_style = bs.trim().to_string(); }
     if let Some(fs) = s.get("font-size") { bx.font_size = parse_length(fs); bx.font_size_explicit = true; }
+    // line-height: "normal" je font-specific (CSS spec deleguje na font OS/2
+    // metrics). Approximace: sans-serif (Arial, Helvetica) ~1.15, monospace
+    // ~1.20, serif ~1.20. Pri normal hodnote (= explicit "normal" v CSS) +
+    // bez explicit numeric override, set 1.15 pro sans-serif aby Chrome
+    // textovy height matchoval (16px * 1.15 = 18.4 vs engine default 19.2).
+    if !bx.line_height_explicit {
+        let fam_l = bx.font_family.to_lowercase();
+        let is_sans = fam_l.contains("arial") || fam_l.contains("helvetica")
+            || fam_l.contains("sans-serif") || fam_l.contains("verdana")
+            || fam_l.contains("ubuntu") || fam_l.contains("roboto");
+        if is_sans { bx.line_height = 1.15; }
+    }
     // letter-spacing PO font-size: em jednotky resolvuje proti font_size
     // aktualniho elementu (CSS spec). parse_length default em=16 by daval
     // 0.15em -> 2.4 misto 0.15 * fs (= 1.68 pri fs=11.2).
@@ -3671,12 +3683,13 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
         }
         let bx_clone = bx.children[idx].clone();
         let font_size = bx_clone.font_size;
-        // CSS normal line-height = 1.2 (browsers convention). 1.4 byl prilis
-        // velky padding -> tlacitka mela visual extra space below text.
-        // Pri smaller-font inline elementu (.btn 14 v body 16) advance_h pouzij
-        // bx_clone vlastni line_height, ne parent default.
+        // CSS normal line-height je font-specific (cascade default 1.2; sans-
+        // serif rules override na 1.15 v build_box_inner). Bez floor mensi
+        // explicit line-height (1.0, 1.1) by se taky brutalne aplikoval -
+        // floor zachovan jako safety, ale snizen na 1.0 (mensi nez 100% =
+        // nepouzitelne pro readability).
         let own_lh_px = bx_clone.line_height * font_size;
-        let advance_h = own_lh_px.max(font_size * 1.2);
+        let advance_h = own_lh_px.max(font_size);
         // Inline replaced element s explicit_height (svg, img s height attr,
         // canvas, iframe) - line_height musi pokryt celou jejich vysku, jinak
         // section content_h ignoruje a section nedosahne pod SVG/img.
