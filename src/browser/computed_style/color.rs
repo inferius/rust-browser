@@ -31,6 +31,15 @@ pub enum Color {
 }
 
 impl Color {
+    /// CSS <color> parse. Currentne wrappuje existing `layout::parse_color`
+    /// (vraci [u8;4] sRGB) a normalizuje na `Rgba` variant. Po L5 stage 3
+    /// nahradit za native parser ktery zachova puvodni color space (Hsl,
+    /// Oklab, ...) pro animation interp + relative color.
+    pub fn parse(s: &str) -> Option<Self> {
+        crate::browser::layout::parse_color(s)
+            .map(|[r, g, b, a]| Color::Rgba { r, g, b, a })
+    }
+
     /// sRGB rgba u8 - pro renderer (GPU prijima sRGB).
     /// Pro non-sRGB spaces dela approximaci (proper conversion = TODO).
     pub fn to_rgba_u8(self) -> [u8; 4] {
@@ -178,5 +187,28 @@ mod tests {
         // Unresolved CurrentColor = black
         let c = Color::CurrentColor;
         assert_eq!(c.to_rgba_u8(), [0, 0, 0, 255]);
+    }
+
+    #[test]
+    fn parse_hex() {
+        assert_eq!(Color::parse("#c00"), Some(Color::Rgba { r: 204, g: 0, b: 0, a: 255 }));
+        assert_eq!(Color::parse("#ff0000"), Some(Color::Rgba { r: 255, g: 0, b: 0, a: 255 }));
+    }
+
+    #[test]
+    fn parse_named() {
+        assert_eq!(Color::parse("red"), Some(Color::Rgba { r: 255, g: 0, b: 0, a: 255 }));
+        assert_eq!(Color::parse("transparent"), Some(Color::Rgba { r: 0, g: 0, b: 0, a: 0 }));
+    }
+
+    #[test]
+    fn parse_rgb() {
+        assert_eq!(Color::parse("rgb(0, 128, 255)"), Some(Color::Rgba { r: 0, g: 128, b: 255, a: 255 }));
+    }
+
+    #[test]
+    fn parse_invalid() {
+        assert_eq!(Color::parse("not-a-color"), None);
+        assert_eq!(Color::parse(""), None);
     }
 }

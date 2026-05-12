@@ -19,9 +19,11 @@
 
 pub mod color;
 pub mod length;
+pub mod property;
 
 pub use color::Color;
 pub use length::Length;
+pub use property::PropertyId;
 
 /// Resolved computed style per element (CSS Cascade L4 §4.1 specified->
 /// computed value mapping).
