@@ -2352,8 +2352,13 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(rgba) = read_typed_color(s, cs_opt, "text-decoration-color", |cs| cs.text_decoration_color) {
         bx.text_decoration_color = Some(rgba);
     }
-    if let Some(st) = s.get("text-decoration-style") {
-        bx.text_decoration_style = st.trim().to_string();
+    // L5 step 4 batch 20: text-decoration-style typed.
+    if s.contains_key("text-decoration-style") {
+        bx.text_decoration_style = if let Some(cs) = cs_opt {
+            cs.text_decoration_style.css_string().to_string()
+        } else {
+            s.get("text-decoration-style").unwrap().trim().to_string()
+        };
     }
     if s.contains_key("text-decoration-thickness") {
         if let Some(cs) = cs_opt {
@@ -2450,9 +2455,9 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         };
     }
     // CSS Compositing L1
-    // text-emphasis
-    if let Some(tec) = s.get("text-emphasis-color") {
-        bx.text_emphasis_color = parse_color(tec);
+    // text-emphasis - L5 step 4 batch 20: text-emphasis-color typed.
+    if let Some(rgba) = read_typed_color(s, cs_opt, "text-emphasis-color", |cs| cs.text_emphasis_color) {
+        bx.text_emphasis_color = Some(rgba);
     }
     if let Some(te) = s.get("text-emphasis") {
         // Shorthand "<style> <color>"
