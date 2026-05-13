@@ -2,6 +2,134 @@
 
 Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`, `debug_utils.md`.
 
+## Session N+21: Shell-as-crate refactor (Edge/CEF model)
+
+**2706 testy pass, 0 warnings, 7 commitu na branche `inferius-dev/serene-bassi-0a7b83`.**
+
+Cilem session: extrahovat shell (browser chrome) jako samostatnou crate `rwe-shell`, engine zustane pure embeddable renderer. Model = WebView2 / WKWebView / Servo WebView.
+
+### Cargo workspace setup
+
+Root `Cargo.toml` = `[workspace]` + members `crates/engine` + `crates/shell`.
+default-members = engine (puvodni `cargo run` chovani zachovano).
+
+```
+crates/engine/  -> lib `rwe_engine` + bin `rwe-engine` (puvodni kod)
+crates/shell/   -> lib `rwe_shell` + bin `rwe-shell` (novy host)
+static/         -> root (test fixtures, accessible z obou bins z cwd=root)
+```
+
+`tests/` presunuto do `crates/engine/tests/` (fixtures used by taffy compliance + web fixtures testy).
+
+### Embeddable API kontrakt (`embed` module)
+
+Engine vystavuje:
+
+- `embed::Engine` - sdilene `Arc<Device>`/`Arc<Queue>` + atlas placeholders + `EngineSettings`. `new(device, queue)` pro host integraci, `new_headless()` pro state-only testy.
+- `embed::WebView` - per-tab page state: DOM, stylesheets, JS interpreter, layout cache, scroll, viewport, offscreen RT.
+- `embed::InputEvent` / `EventResponse` / `KeyModifiers` / `MouseButton` / `CursorIcon` / `NavigationRequest`/`Method`/`Target`/`Result` - neutralni input/output typy (no winit dep ve WebView API).
+- `embed::loader` - sdilene page resource fns (resolve_css_imports, extract_*, `load_page(url) -> LoadedPage`).
+
+### WebView lifecycle
+
+```rust
+let device = Arc::new(renderer.device().clone());
+let queue = Arc::new(renderer.queue().clone());
+let engine = Arc::new(Engine::new(device, queue));
+let mut webview = WebView::new(engine, 1280, 900);
+webview.load_html(html, css, base_url);
+// each frame:
+webview.handle_input(InputEvent::Scroll { ... });
+let view = webview.render_via(&mut renderer).unwrap();
+renderer.present_external_to_swap_chain(view);
+```
+
+WebView pub fns:
+- `new(engine, w, h)`
+- `load_html(html, css, base_url) -> NavigationResult` - parse + run scripts
+- `load_dom(html, css, base_url) -> NavigationResult` - parse BEZ scripts (mirror sync)
+- `load_url(url) -> Option<NavigationResult>` - http/file dispatch via loader
+- `handle_input(event) -> EventResponse` - scroll + resize implemented, click/key Phase 99
+- `render() -> Option<&TextureView>` - clear-only (headless-friendly)
+- `render_via(&mut Renderer) -> Option<&TextureView>` - real paint (cascade -> layout -> display list -> draw)
+- `resize(w, h, scale_factor)` + `set_scroll` + `set_zoom`
+- low-level: `document()`, `interpreter()`/`_mut()`, `take_interpreter()`/`set_interpreter()`, `stylesheets()`, `html()`/`css()` (raw source preserve), `local_path()`/`set_local_path()`, `target_view()`/`target_texture()`
+
+### Renderer expose pub API (engine internals)
+
+`browser::render::Renderer`:
+- `pub struct` + `pub fn new(window)` + `pub fn resize_surface(w, h)`
+- `pub fn device() / queue() / surface_size() / scale_factor_value()`
+- `pub fn draw_segments_into_view_clipped(view, cmds, start_clear, scissor) -> bool`
+- `pub fn present_external_to_swap_chain(src_view) -> bool` - acquire swap chain, compose fullscreen, present
+
+### Shell crate runtime (Phase 4c+5 minimal)
+
+`crates/shell/src/app.rs` - `ShellApp` s vlastnim winit `ApplicationHandler`:
+- `resumed`: vytvori Window + Renderer + Engine(z renderer device/queue) + WebView + load_html
+- `window_event::Resized` -> renderer.resize_surface + webview.resize
+- `window_event::RedrawRequested` -> webview.render_via + renderer.present_external_to_swap_chain
+- `window_event::CursorMoved` -> webview.handle_input(MouseMove)
+- `window_event::MouseWheel` -> webview.handle_input(Scroll) + redraw
+
+`crates/shell/src/lib.rs`:
+- `pub fn run_window(html, css, base_url, local_path) -> Result<()>`
+
+`crates/shell/src/main.rs`:
+- default = shell::run_window pres embed API (no chrome)
+- `legacy` arg = delegate na engine::run_cli (puvodni chrome bar)
+
+### App.webview mirror (Phase 4a)
+
+Engine `App` ma `webview: Option<WebView>` field. Sync v `resumed` + `reload_from_html` pres `load_dom` (no double-script-run). Mirror je read-only - pristup pres `App::webview() -> Option<&WebView>`. App.interpreter zustava primary; WebView je side-effect populated.
+
+Phase 99 invertne: WebView authoritative, App reads delegated.
+
+### CLI cheat sheet
+
+```powershell
+# Engine bin (puvodni rezimy, default cargo run)
+cargo run                            # JS demo (CLI dispatcher)
+cargo run -- debug src.js out.html   # debug viewer HTML
+cargo run -- devtools src.html       # static devtools HTML
+cargo run -- browser src.html        # browser s chrome (App primary)
+cargo run -- browser --no-shell      # naked viewport (engine demo)
+cargo run -- dump src.html           # layout/cascade dump
+
+# Shell bin (Phase 4c+ runtime)
+cargo run -p rwe-shell                       # WebView render path (no chrome)
+cargo run -p rwe-shell -- static/test.html
+cargo run -p rwe-shell -- legacy             # delegate na engine browser (chrome bar)
+```
+
+### Co Phase 99 udela
+
+Plnohodnotny shell crate (parita s engine browser mode):
+
+1. **Chrome paint v shell crate** - presunout `render/tabs.rs` + `render/shell_chrome.rs` + souvisejici App.chrome_state z engine do shell::ShellState. Shell composit shader = WebView texture + chrome paint nad to.
+2. **Multi-tab v shell crate** - Vec<WebView> per ShellApp. Tab switching, session save/restore.
+3. **Mouse click + keyboard dispatch do JS** - WebView::handle_input pro MouseDown/Up potrebuje hit-test pres layout tree + lookup DOM addEventListener registry + dispatch synthesized Event. Stejne pro KeyDown/Up.
+4. **AddressBar/Find/Bookmarks** v shell crate - ShellState + paint + winit text input routing.
+5. **WebView authoritative polarity invert** - App.html/css/interpreter mazat, App.webview primary. Currently mirror sync = redundant work pri kazdem reload.
+6. **Engine multi-process izolace** - Phase 99 dle puvodniho planu. wgpu Device sharing zustane (Chrome model = separate renderer process + shared GPU process, ne separate device).
+7. **App single-tab focus** - po shell extract App ztratit `shell_mode`, `tabs`, `addr_open`, `find_open`, `history`, `bookmarks_bar_visible`.
+
+### Commits (Phase 1-5)
+
+```
+d1fd9a6 refactor: workspace skeleton - crates/engine + crates/shell (Phase 1)
+131ffae chore: default-members = engine pro `cargo run` bez -p
+2a0eb4d refactor(engine): embed API kontrakt - Engine + WebView stubs (Phase 2)
+55910a7 feat(engine): WebView::load_html/load_url + loader helpers (Phase 3)
+b200ff3 feat(engine): App.webview mirror field + sync (Phase 4a)
+673db37 feat(engine): WebView offscreen RT + clear-only render (Phase 4b step 1)
+8c0bbd9 feat(engine): WebView::render_via - real paint pipeline (Phase 4b step 2)
+7a3a1e1 feat(shell): vlastni Window + Renderer + WebView runtime (Phase 4c)
+a68356a feat(shell+engine): scroll + mouse move input dispatch (Phase 5 minimal)
+```
+
+---
+
 ## Session N+20: debug helpers + mileneckaseznamka.cz dalsi vlna fixes
 
 **2497 tests pass, build clean.**

@@ -6,6 +6,28 @@ Rust implementace **JS enginu + browseru od nuly**. Cilem je funkcni prohlizec -
 
 Inspirace Servo (html5ever, selectors, cssparser) ale interpreter, layout pomocnik (taffy obal), paint, rendering jsou vlastni.
 
+## Workspace layout (od Session N+21)
+
+Cargo workspace s 2 crates:
+
+```
+crates/engine/  -> lib `rwe_engine` + bin `rwe-engine` (renderer + JS interp + DOM)
+crates/shell/   -> lib `rwe_shell` + bin `rwe-shell` (host: vlastni Window + chrome UI)
+static/         -> test fixtures (workspace root)
+```
+
+`default-members = ["crates/engine"]` v root Cargo.toml -> `cargo run` bez `-p` = engine bin (zachovava puvodni CLI rezimy).
+
+Embeddable API contract v `crates/engine/src/embed/`:
+- `Engine` (shared `Arc<Device>`/`Arc<Queue>` + atlas placeholders + `EngineSettings`)
+- `WebView` (per-tab DOM/CSS/JS interp/layout/scroll/offscreen RT)
+- `InputEvent` / `EventResponse` neutralni typy (no winit dep)
+- `loader::load_page(url)` http/file dispatch
+
+Edge/CEF model: shell crate je samostatny host enginu. WebView renderuje do offscreen texture (`render_via(&mut Renderer)`), shell kompozituje pres `Renderer::present_external_to_swap_chain`.
+
+Detaily v HANDOFF.md Session N+21.
+
 ## Globalni preference (z user CLAUDE.md)
 
 - **Cesky** v komunikaci a komentarich. Diakritika OK (a/c/e/...).
@@ -151,17 +173,25 @@ HANDOFF.md                 - Stav projektu + TODO + posledni session changes
 TODO.md / TODO_CSS.md      - Otevrene tasks
 ```
 
-## CLI rezimy (main.rs)
+## CLI rezimy
 
 ```bash
-cargo run                                        # Default: tokenize + parse + interpret inline JS
+# Engine bin (default cargo run = engine = -p rwe-engine implicit)
+cargo run                                        # JS demo: tokenize + parse + interpret inline JS
 cargo run -- debug [src.js] [out.html]           # Debug viewer: tokeny + AST do HTML
 cargo run -- devtools [src.html] [out.html]      # DevTools-like nahled (4 panely) + spusti <script> a zachyti console+network
 cargo run -- browser [src.html] [--devtools]     # Render do okna pres wgpu (default static/test.html). --devtools auto-otevri devtools.html
-cargo run -- window [src.html]                   # Alias pro browser
+cargo run -- window [src.html]                   # Alias pro browser --no-shell
+cargo run -- dump [src.html] [--selector=.foo]   # Layout/cascade dump
+
+# Shell bin (Phase 4c+ runtime - vlastni Window + WebView pres embed API)
+cargo run -p rwe-shell                           # WebView render path (no chrome bar)
+cargo run -p rwe-shell -- static/test.html
+cargo run -p rwe-shell -- legacy                 # delegate na engine browser (chrome bar)
 ```
 
-Entry point je `browser::render::run_window_with_options(html, css, current_html_path, auto_devtools, base_url)`.
+Engine entry point (browser rezim): `embed::Engine::run_standalone` (wrapper okolo `browser::render::run_window_with_options`).
+Shell entry point: `rwe_shell::run_window(html, css, base_url, local_path)`.
 
 ## Architektonicke volby + duvody
 
@@ -269,9 +299,11 @@ Viz HANDOFF.md.
 ## Build / test
 
 ```bash
-cargo build              # Dev profile, debuginfo, no opt
-cargo test               # Vsechny unit testy (lexer, parser, browser, debug_view)
-cargo run -- browser     # Otevri okno s static/test.html
+cargo build              # Engine bin (default member)
+cargo build --workspace  # Engine + shell bins
+cargo test --workspace   # Vsechny unit testy (2706 pass aktualne)
+cargo run -- browser     # Engine browser rezim (chrome bar - puvodni)
+cargo run -p rwe-shell   # Shell crate runtime (WebView pipeline, no chrome)
 ```
 
-Aktualne 0 warnings.
+Aktualne 0 warnings, 2706 testu pass.
