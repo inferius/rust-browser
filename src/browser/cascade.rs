@@ -1454,6 +1454,30 @@ pub fn cascade_with_viewport_typed(
             let lst = super::computed_style::parse_time_list(v);
             if !lst.is_empty() { cs.transition_delay = lst; }
         }
+        // L5 step 4 Phase 3 fix: parse `animation` shorthand do typed cs.animation_* longhandy.
+        // Cascade nema expand_shorthand pro animation - rely on AnimationSpec::from_styles.
+        if props.get("animation").is_some() && props.get("animation-name").is_none() {
+            if let Some(spec) = AnimationSpec::from_styles(props) {
+                cs.animation_name = vec![spec.name.clone()];
+                cs.animation_duration = vec![spec.duration_secs];
+                cs.animation_delay = vec![spec.delay_secs];
+                cs.animation_iteration_count = vec![spec.iteration_count];
+                if let Some(tf) = crate::browser::computed_style::TimingFunction::parse(&spec.timing_function) {
+                    cs.animation_timing_function = vec![tf];
+                }
+                if let Some(d) = crate::browser::computed_style::AnimationDirection::parse(&spec.direction) {
+                    cs.animation_direction = vec![d];
+                }
+                if let Some(fm) = crate::browser::computed_style::AnimationFillMode::parse(&spec.fill_mode) {
+                    cs.animation_fill_mode = vec![fm];
+                }
+                if let Some(ps) = crate::browser::computed_style::AnimationPlayState::parse(&spec.play_state) {
+                    cs.animation_play_state = vec![ps];
+                }
+                cs.mark_set(PropertyId::AnimationName);
+                cs.mark_set(PropertyId::AnimationDuration);
+            }
+        }
         // Batch 26: animation timing (name/duration/timing/delay).
         if let Some(v) = props.get("animation-name") {
             let names: Vec<String> = v.split(',').map(|p| p.trim().to_string()).collect();

@@ -2163,9 +2163,35 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     let cs_for_node: Option<ComputedStyle> = computed_style_for(_node_id_for_cs);
     let cs_opt: Option<&ComputedStyle> = cs_for_node.as_ref();
 
-    // Display
-    if let Some(disp) = s.get("display") {
-        bx.display = Display::from_str(disp);
+    // Display - L5 step 4 Phase 3: typed cs.display cross-type match.
+    let display_set = cs_opt.map(|cs| cs.is_set(PropertyId::Display))
+        .unwrap_or_else(|| s.contains_key("display"));
+    if display_set {
+        if let Some(cs) = cs_opt {
+            use super::computed_style::Display as Cd;
+            bx.display = match cs.display {
+                Cd::None => Display::None,
+                Cd::Block => Display::Block,
+                Cd::Inline => Display::Inline,
+                Cd::InlineBlock => Display::InlineBlock,
+                Cd::Flex => Display::Flex,
+                Cd::InlineFlex => Display::InlineFlex,
+                Cd::Grid => Display::Grid,
+                Cd::InlineGrid => Display::InlineGrid,
+                Cd::Contents => Display::Contents,
+                Cd::Table => Display::Table,
+                Cd::TableRow => Display::TableRow,
+                Cd::TableCell => Display::TableCell,
+                Cd::TableHeaderCell => Display::TableHeaderCell,
+                Cd::TableRowGroup | Cd::TableHeaderGroup | Cd::TableFooterGroup => Display::TableHeader,
+                Cd::TableColumn | Cd::TableColumnGroup => Display::TableHeader,
+                Cd::TableCaption => Display::TableCaption,
+                Cd::ListItem => Display::ListItem,
+                Cd::Ruby => Display::Ruby,
+            };
+        } else {
+            bx.display = Display::from_str(s.get("display").unwrap());
+        }
     } else if let Some(tag) = node.tag_name() {
         bx.display = default_display(&tag);
     }
