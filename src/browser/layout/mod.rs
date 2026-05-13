@@ -3374,20 +3374,21 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
             L::Calc(_) => CssLength::Calc(String::new()),
         }
     };
-    let read_minmax = |key: &str, pick: fn(&ComputedStyle) -> &super::computed_style::Length|
+    // L5 step 4 Phase 3 fix: gate cs.is_set, ne s.get raw (empty style_map post drop).
+    let read_minmax = |key: &str, prop: PropertyId, pick: fn(&ComputedStyle) -> &super::computed_style::Length|
         -> Option<CssLength>
     {
-        s.get(key)?;
+        if !prop_is_set(s, cs_opt, key, prop) { return None; }
         Some(if let Some(cs) = cs_opt {
             cs_length_to_css(pick(cs))
         } else {
             CssLength::parse(s.get(key).unwrap())
         })
     };
-    if let Some(v) = read_minmax("min-width",  |cs| &cs.min_width)  { bx.min_width  = v; }
-    if let Some(v) = read_minmax("max-width",  |cs| &cs.max_width)  { bx.max_width  = v; }
-    if let Some(v) = read_minmax("min-height", |cs| &cs.min_height) { bx.min_height = v; }
-    if let Some(v) = read_minmax("max-height", |cs| &cs.max_height) { bx.max_height = v; }
+    if let Some(v) = read_minmax("min-width",  PropertyId::MinWidth,  |cs| &cs.min_width)  { bx.min_width  = v; }
+    if let Some(v) = read_minmax("max-width",  PropertyId::MaxWidth,  |cs| &cs.max_width)  { bx.max_width  = v; }
+    if let Some(v) = read_minmax("min-height", PropertyId::MinHeight, |cs| &cs.min_height) { bx.min_height = v; }
+    if let Some(v) = read_minmax("max-height", PropertyId::MaxHeight, |cs| &cs.max_height) { bx.max_height = v; }
     // Line-height: cislo (multiplier) nebo length (px) - L5 step 4 batch 2: typed LineHeight enum.
     if prop_set_kn(s, cs_opt, "line-height") {
         if let Some(cs) = cs_opt {
@@ -3478,20 +3479,21 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         }
         (Some(parse_length(t)), None)
     };
-    let read_offset = |key: &str, pick: fn(&ComputedStyle) -> &super::computed_style::Length|
+    // L5 step 4 Phase 3 fix: gate cs.is_set, ne s.get raw.
+    let read_offset = |key: &str, prop: PropertyId, pick: fn(&ComputedStyle) -> &super::computed_style::Length|
         -> Option<(Option<f32>, Option<f32>)>
     {
-        s.get(key)?;
+        if !prop_is_set(s, cs_opt, key, prop) { return None; }
         Some(if let Some(cs) = cs_opt {
             typed_offset(pick(cs))
         } else {
             parse_offset(s.get(key).unwrap())
         })
     };
-    if let Some((px, pct)) = read_offset("top",    |cs| &cs.top)    { bx.offset_top    = px; bx.offset_top_pct    = pct; }
-    if let Some((px, pct)) = read_offset("right",  |cs| &cs.right)  { bx.offset_right  = px; bx.offset_right_pct  = pct; }
-    if let Some((px, pct)) = read_offset("bottom", |cs| &cs.bottom) { bx.offset_bottom = px; bx.offset_bottom_pct = pct; }
-    if let Some((px, pct)) = read_offset("left",   |cs| &cs.left)   { bx.offset_left   = px; bx.offset_left_pct   = pct; }
+    if let Some((px, pct)) = read_offset("top",    PropertyId::Top,    |cs| &cs.top)    { bx.offset_top    = px; bx.offset_top_pct    = pct; }
+    if let Some((px, pct)) = read_offset("right",  PropertyId::Right,  |cs| &cs.right)  { bx.offset_right  = px; bx.offset_right_pct  = pct; }
+    if let Some((px, pct)) = read_offset("bottom", PropertyId::Bottom, |cs| &cs.bottom) { bx.offset_bottom = px; bx.offset_bottom_pct = pct; }
+    if let Some((px, pct)) = read_offset("left",   PropertyId::Left,   |cs| &cs.left)   { bx.offset_left   = px; bx.offset_left_pct   = pct; }
     // Opacity - L5 step 4 batch 1: typed cs.opacity (pre-parsed + clamped), jinak parse fallback.
     if let Some(o) = read_typed_opacity(s, cs_opt) {
         bx.opacity = o;
