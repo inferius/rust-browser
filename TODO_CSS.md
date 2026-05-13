@@ -401,4 +401,64 @@ allocations / frame time.
 
 ---
 
-Last updated: 2026-05-05
+## L5 step 4 typed cascade migration (Session N+21)
+
+**Pipeline migrace cele renderer cesty z HashMap<String,String> na typed ComputedStyle.**
+
+### Hotove
+- [x] CascadeOutput { computed: ComputedStyleMap, declarations } - bez style_map field.
+- [x] cascade_with_viewport_typed produkuje typed cs primary output.
+- [x] PropertyId 250+ variants (`#[repr(u16)]` + as_index pro bitset).
+- [x] PropertySet bitset [u64; 8] = 512 bits (HashSet predtim) - cs.is_set/mark_set.
+- [x] ComputedStyle ~210 typed pole + 26 raw shorthand storage pro layout reads.
+- [x] EXPERIMENTAL CSS L4/L5 17 typed enums storage + cascade populate + devtools.
+- [x] Render typed-only pipeline: cascade, layout, animation, transition, scroll-anim, paint, devtools.
+- [x] Renderer cached_style_map + prev_style_map + paused_node_styles fields DROPPED.
+- [x] Legacy cascade::apply_{animations,transitions,scroll_animations} DELETED.
+- [x] Visual regression test framework + 5 baseline goldens.
+
+### EXPERIMENTAL CSS L4/L5 - storage done, layout/paint TBD
+
+Typed enums + cascade populate hotov. Layout/paint impl PARTIAL (markers v doc).
+
+**Full impl:**
+- [x] text-wrap:nowrap -> white_space_nowrap (CSS Text L4)
+- [x] content-visibility:hidden -> Display::None (CSS Containment L3)
+- [x] animation-timeline:scroll -> apply_scroll_animations_typed (CSS Scroll-Driven Anim L1)
+
+**Storage only (cascade typed + devtools, layout/paint pending):**
+- [ ] text-wrap balance/pretty/stable (advanced linebreak algo)
+- [ ] text-wrap-style auto/balance/pretty/stable
+- [ ] text-wrap-mode wrap/nowrap
+- [ ] content-visibility:auto (viewport-relative optimization)
+- [ ] container-type normal/inline-size/size (@container query runtime)
+- [ ] field-sizing fixed/content (input/textarea auto-size)
+- [ ] print-color-adjust economy/exact (print pipeline)
+- [ ] forced-color-adjust auto/none (Windows high contrast detection)
+- [ ] color-scheme light/dark/normal/light-dark (native form rendering)
+- [ ] math-style normal/compact (math layout)
+- [ ] math-depth (math layout)
+- [ ] ruby-position over/under/inter-character/alternate (ruby pipeline)
+- [ ] ruby-align start/center/space-between/space-around (ruby pipeline)
+- [ ] text-box-trim none/trim-start/trim-end/trim-both (line-box trimming)
+- [ ] text-box-edge leading/text/cap/ex/ideographic/ideographic-ink
+- [ ] anchor-name + position-anchor + inset-area (CSS Anchor Positioning L1 runtime)
+- [ ] view-transition-name (CSS View Transitions L1 browser pipeline)
+- [ ] view-timeline-name + view-timeline-axis (element entry/exit)
+- [ ] scroll-timeline-name + scroll-timeline-axis (named scroll containers)
+- [ ] scroll-marker-group (CSS Overflow L4)
+
+### Architecturalne decisions
+
+- **Standalone cascade typed**: SKIP. cascade_with_viewport_typed interne vola
+  cascade_with_viewport (legacy) pro StyleMap intermediate. Intermediate je
+  transient (~50ms life cycle, GC po typed populate). Rewrite by duplicate
+  ~600 LOC selector matching + specificity + @media + var() logic.
+  Decision: keep code reuse, intermediate prijatelne.
+
+- **PARTIAL markers v doc comments**: kazda EXPERIMENTAL spec ma `PARTIAL:`
+  marker s popisem ze layout/paint impl pending. Pri full impl odebrat marker.
+
+---
+
+Last updated: 2026-05-13 (L5 step 4 Phase 3 kompletni)

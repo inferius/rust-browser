@@ -2,6 +2,101 @@
 
 Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`, `debug_utils.md`.
 
+## Session N+21: L5 step 4 Phase 3 - drop cached_style_map kompletne
+
+**2694 tests pass, build clean, zero warnings v production.**
+
+Multi-batch sezeni (51 commits) dokoncilo L5 step 4 - migrace cele
+renderer pipeline z `HashMap<String,String>` (StyleMap) na typed
+`ComputedStyle` (ComputedStyleMap). Final goal Phase 3 dropnut
+`cached_style_map` field z Renderer - **HOTOVO**.
+
+### Architektonicke zmeny
+
+**Renderer typed-only pipeline:**
+1. `cascade_with_viewport_typed` -> `CascadeOutput { computed, declarations }` (BEZ style_map field).
+2. `cached_computed_map: Rc<ComputedStyleMap>` primary cache.
+3. `apply_animations_typed(cmap, ...)` - mutuje cs typed fields per frame.
+4. `detect_transitions_typed(prev_cmap, cur_cmap, ...)` - typed diff.
+5. `apply_transitions_typed(cmap, ...)` - typed value interp.
+6. `apply_scroll_animations_typed` - scroll-driven anim typed.
+7. `apply_paint_animations(box, cmap)` - cte typed cs fields.
+8. `paused_node_cs: HashMap<usize, ComputedStyle>` - typed snapshot.
+9. Animation events detection - `AnimationSpec::from_cs(&cs)`.
+10. Devtools panel - `cs.to_devtools_entries()`.
+
+**Dropnute Renderer fields:**
+- `cached_style_map: Option<Rc<StyleMap>>` GONE
+- `prev_style_map: Option<Rc<StyleMap>>` GONE
+- `paused_node_styles: HashMap<usize, HashMap<String,String>>` GONE
+
+**Dropnute CascadeOutput field:**
+- `style_map` GONE - jen `computed` + `declarations`
+
+**Dropnute legacy cascade fns:**
+- `cascade::apply_animations(StyleMap, ...)` DELETED
+- `cascade::apply_transitions(StyleMap, ...)` DELETED
+- `cascade::apply_scroll_animations(StyleMap, ...)` DELETED
+- `render::apply_paint_animations_styles` compat shim DELETED
+
+### Layout build_box_inner migrace
+
+- 200+ site reads migrovany na typed: 22 batchu pres Phase 2 + Phase 3 audit
+- `cs.is_set(PropertyId)` bitset gate misto `s.contains_key()`
+- Helpery: `read_typed_color`, `read_typed_length`, `read_typed_f32`,
+  `read_typed_opacity`, `read_raw_str`, `prop_set_kn`, `prop_is_set`
+- Thread-local `ACTIVE_COMPUTED_MAP` + `ComputedMapGuard` RAII pres `layout_tree_typed*`
+- Empty StyleMap predan layout - layout cte exclusively z cs
+
+### ComputedStyle rozsireni
+
+- ~210 typed pole (originalnich 165 + 19 Phase A + 26 raw shorthand storage + 17 CSS L4/L5)
+- `explicit_set: PropertySet` = `[u64; 8]` 512-bit bitset (HashSet predtim)
+- PropertyId `#[repr(u16)]` + `as_index()` pro bit operations
+- `PROPERTY_ID_BITSET_WORDS = 8` (256 free slotu pro future props)
+
+### EXPERIMENTAL CSS L4/L5 typed (17 specs)
+
+Typed enums + cascade populate + devtools display:
+- CSS Text L4: TextWrap, TextWrapStyle, TextWrapMode
+- CSS Containment L3: ContentVisibility, ContainerType
+- CSS Forms L1: FieldSizing
+- CSS Color L4: PrintColorAdjust, ForcedColorAdjust, ColorScheme
+- CSS Math L3: MathStyle
+- CSS Ruby L1: RubyPosition, RubyAlign
+- CSS Inline L3: TextBoxTrim, TextBoxEdge
+- CSS Anchor Positioning L1: anchor_name, position_anchor, inset_area (raw)
+- CSS View Transitions L1: view_transition_name (raw)
+- CSS Scroll-Driven Animations L1: view/scroll_timeline_*, animation_timeline_l5
+
+Layout/paint impl PARTIAL (markers v doc comments). text-wrap:nowrap,
+content-visibility:hidden, animation-timeline:scroll FULL impl. Ostatni
+storage only (cascade + devtools + getComputedStyle); layout/paint TBD
+v dalsich session.
+
+### Visual regression test framework
+
+`src/browser/tests/visual_snapshot.rs`:
+- LayoutBox tree serialize (tag + rect + display + position + bg/color + transform + text)
+- DisplayList serialize (Rect/Text/Image/Gradient/Shadow/Border/FilterBegin/End)
+- Golden file compare s `UPDATE_GOLDEN=1 cargo test visual_snapshot` workflow
+- 5 baseline testu, 6 golden files v `src/browser/tests/golden/`
+- Catches future layout/paint regrese
+
+### Pre-existing race (NEPHASE 3 SCOPE)
+
+User report: prvni render po `cargo run` ma jine fonts/styling nez druhe
+otevreni. Refresh stranky nepomaha. Pravdepodobne pre-existing race
+mezi atlas font load + render thread + OS file cache.
+**Investigation TBD** - mimo Phase 3 scope.
+
+### Commit history
+
+Branch `inferius-dev/zealous-gagarin-4c6e36`, 51 commitu od master
+(`3751ac6`). Phase 1 plumbing -> Phase 2 batches 1-22 reads migrate ->
+Phase A/B/C/D/E/F/G CS rozsireni + EXPERIMENTAL specs + devtools adapter ->
+Phase G+H+ helpers fix -> Phase 3 Step A-G full drop.
+
 ## Session N+20: debug helpers + mileneckaseznamka.cz dalsi vlna fixes
 
 **2497 tests pass, build clean.**

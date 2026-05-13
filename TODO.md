@@ -323,6 +323,44 @@ Vsechny moduly viz `TODO_CSS.md`. Hlavni chybejici:
 
 ## Engine architectural
 
+### L5 step 4 typed ComputedStyle pipeline (Session N+21)
+- [x] Cascade output: `CascadeOutput { computed: ComputedStyleMap, declarations }` - bez StyleMap field.
+- [x] Layout build_box_inner cte exclusively z typed cs (200+ sites migrovano).
+- [x] Animation pipeline typed: apply_animations_typed + apply_animated_value_to_cs.
+- [x] Transitions typed: detect_transitions_typed + apply_transitions_typed.
+- [x] Scroll-driven anim typed: apply_scroll_animations_typed.
+- [x] Paint animations typed: apply_paint_animations(box, cmap).
+- [x] Paused snapshot typed: paused_node_cs.
+- [x] Animation events: AnimationSpec::from_cs.
+- [x] Devtools adapter: cs.to_devtools_entries().
+- [x] PropertySet bitset: [u64; 8] 512-bit (HashSet predtim).
+- [x] Renderer fields cached_style_map + prev_style_map + paused_node_styles DROPPED.
+- [x] Legacy cascade::apply_{animations,transitions,scroll_animations} DELETED.
+- [x] EXPERIMENTAL CSS L4/L5 17 typed enums (storage + cascade + devtools).
+- [x] Visual regression test framework s golden compare (5 baseline testu).
+
+### L5 step 4 reziduum (future work)
+- [ ] **Standalone cascade typed bez intermediate StyleMap** - 600 LOC duplikat.
+  cascade_with_viewport_typed interne vola cascade_with_viewport pro StyleMap
+  intermediate (transient, GC po populate). Real standalone = rewrite selector
+  matching + specificity + @media + var() etc. Decision: keep intermediate
+  (architectural decision doc v cascade.rs:924).
+- [ ] EXPERIMENTAL CSS L4/L5 layout/paint impl per spec:
+  - [ ] text-wrap balance/pretty algorithms (advanced linebreak)
+  - [ ] content-visibility:auto viewport-relative optimization
+  - [ ] field-sizing:content input/textarea auto-size
+  - [ ] print-color-adjust pri tisku
+  - [ ] forced-color-adjust Windows high contrast
+  - [ ] color-scheme native form/scrollbar dark mode
+  - [ ] Math layout (math-style, math-depth)
+  - [ ] Ruby layout pipeline (ruby-position, ruby-align)
+  - [ ] Text-box-trim line-box trimming
+  - [ ] Anchor Positioning L1 runtime (anchor() fn + position resolve)
+  - [ ] View Transitions L1 browser pipeline
+  - [ ] Scroll-Driven Animations L1 view-timeline (element entry/exit)
+- [ ] Visual snapshot test corpus expand (cover all `static/` + nove `test/` HTML).
+- [ ] First-vs-second render font/style bug investigation (pre-existing race).
+
 ### Recursion vs iteration
 - [x] Linker stack 64 MB (Windows main thread default = 1 MB).
 - [x] Stacker crate auto-grow na hot recursion paths (dom::walk, layout::build_box_inner,
@@ -347,13 +385,17 @@ Vsechny moduly viz `TODO_CSS.md`. Hlavni chybejici:
 - [x] 168 layout unit testu.
 - [x] 1978/1988 (99.5%) taffy XML compliance, 0 FAIL.
 
+### Hotove (rozsireni)
+- [x] LayoutBox + DisplayList snapshot tests (visual regression) - 5 baseline, golden compare.
+
 ### Chybi
 - [ ] WPT (Web Platform Tests) integrace.
 - [ ] CSS WG test suites runner.
 - [ ] JS conformance tests (test262 subset).
-- [ ] Snapshot rendering tests (pixel diff).
+- [ ] Snapshot rendering tests (pixel diff) - Chrome reference s tolerancou.
+- [ ] Visual snapshot corpus expand (cover all `static/` HTML + nove `test/` folder).
 - [ ] Fuzzing (HTML/CSS/JS parsers).
 
 ---
 
-Last updated: 2026-05-06
+Last updated: 2026-05-13 (L5 step 4 Phase 3 kompletni - typed cascade pipeline)
