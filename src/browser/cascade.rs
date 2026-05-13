@@ -3832,6 +3832,36 @@ pub fn apply_scroll_animations(
     any_active
 }
 
+/// L5 step 4 Phase 3 Step B: typed apply_scroll_animations - mutates
+/// ComputedStyleMap pres apply_animated_value_to_cs (typed setter).
+/// Trigger pres cs.animation_timeline_l5 = "scroll" / "scroll(...)".
+pub fn apply_scroll_animations_typed(
+    cmap: &mut crate::browser::computed_style::ComputedStyleMap,
+    stylesheets: &[Stylesheet],
+    scroll_progress: f32,
+) -> bool {
+    use super::layout::interpolate_keyframes;
+    let mut any_active = false;
+    for cs in cmap.values_mut() {
+        // Detect scroll-driven animation pres typed cs.animation_timeline_l5.
+        let timeline = cs.animation_timeline_l5.trim();
+        if !timeline.starts_with("scroll(") && timeline != "scroll" { continue; }
+        let spec = match AnimationSpec::from_cs(cs) {
+            Some(s) => s, None => continue,
+        };
+        let frames = stylesheets.iter()
+            .flat_map(|s| s.keyframes.iter())
+            .find(|k| k.name == spec.name);
+        let frames = match frames { Some(k) => &k.frames, None => continue };
+        let progress = scroll_progress.clamp(0.0, 1.0);
+        for (k, v) in interpolate_keyframes(frames, progress) {
+            apply_animated_value_to_cs(cs, &k, &v);
+        }
+        any_active = true;
+    }
+    any_active
+}
+
 /// Aplikuje runtime CSS animace na StyleMap pri zadanem elapsed time (sekundy).
 /// Pro kazdy element s `animation` / `animation-name`:
 ///   1. Najdi @keyframes by name v stylesheets.

@@ -5858,8 +5858,13 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         }
                     }
                 }
-                // Scroll-driven animations: TODO typed verze. Skip pro Phase F drop.
-                // apply_scroll_animations legacy fn vyzaduje style_map. Migrace v dalsi fazi.
+                // L5 step 4 Phase 3 Step B: typed scroll-driven animations.
+                if let Some(cm) = self.cached_computed_map.as_mut() {
+                    // Total scrollable height heuristic - element count fallback.
+                    let max_scroll = (Rc::make_mut(cm).len() as f32).max(1.0);
+                    let scroll_progress = if max_scroll > 1.0 { self.scroll_y / max_scroll.max(1.0) } else { 0.0 };
+                    let _ = cascade::apply_scroll_animations_typed(Rc::make_mut(cm), stylesheets, scroll_progress);
+                }
             }
             perf_t("apply_animations + scroll_anims", _t_anim_apply);
 
