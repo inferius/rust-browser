@@ -2487,13 +2487,38 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     // CSS Math L1 (extras)
     // CSS Transitions L2 / Animations L2
     // CSS Flexbox L1 properties
-    if let Some(v) = s.get("box-sizing") { bx.box_sizing = BoxSizing::parse(v); }
-    if let Some(v) = s.get("flex-direction") { bx.flex_direction = FlexDirection::parse(v); }
-    if let Some(v) = s.get("flex-wrap") { bx.flex_wrap = FlexWrap::parse(v); }
-    if let Some(v) = s.get("justify-content") { bx.justify_content = JustifyContent::parse(v); }
-    if let Some(v) = s.get("align-items") { bx.align_items = AlignItems::parse(v); }
-    if let Some(v) = s.get("align-content") { bx.align_content = AlignContent::parse(v); }
-    if let Some(v) = s.get("align-self") { bx.align_self = AlignSelf::parse(v); }
+    // L5 step 4 batch 12: cross-type enum migrations via cs.X.css_string() round-trip.
+    // Layout enums (BoxSizing, FlexDirection, ...) jsou layout-internal s vlastnim
+    // parse(); ComputedStyle ma parallel typed enums s ekvivalentnim shape. Round-trip
+    // pres &'static str eliminuje runtime trim + lowercase pri cs aktivni.
+    if s.contains_key("box-sizing") {
+        let raw = cs_opt.map(|cs| cs.box_sizing.css_string()).unwrap_or_else(|| s.get("box-sizing").unwrap().as_str());
+        bx.box_sizing = BoxSizing::parse(raw);
+    }
+    if s.contains_key("flex-direction") {
+        let raw = cs_opt.map(|cs| cs.flex_direction.css_string()).unwrap_or_else(|| s.get("flex-direction").unwrap().as_str());
+        bx.flex_direction = FlexDirection::parse(raw);
+    }
+    if s.contains_key("flex-wrap") {
+        let raw = cs_opt.map(|cs| cs.flex_wrap.css_string()).unwrap_or_else(|| s.get("flex-wrap").unwrap().as_str());
+        bx.flex_wrap = FlexWrap::parse(raw);
+    }
+    if s.contains_key("justify-content") {
+        let raw = cs_opt.map(|cs| cs.justify_content.css_string()).unwrap_or_else(|| s.get("justify-content").unwrap().as_str());
+        bx.justify_content = JustifyContent::parse(raw);
+    }
+    if s.contains_key("align-items") {
+        let raw = cs_opt.map(|cs| cs.align_items.css_string()).unwrap_or_else(|| s.get("align-items").unwrap().as_str());
+        bx.align_items = AlignItems::parse(raw);
+    }
+    if s.contains_key("align-content") {
+        let raw = cs_opt.map(|cs| cs.align_content.css_string()).unwrap_or_else(|| s.get("align-content").unwrap().as_str());
+        bx.align_content = AlignContent::parse(raw);
+    }
+    if s.contains_key("align-self") {
+        let raw = cs_opt.map(|cs| cs.align_self.css_string()).unwrap_or_else(|| s.get("align-self").unwrap().as_str());
+        bx.align_self = AlignSelf::parse(raw);
+    }
     if let Some(v) = s.get("justify-self") { bx.justify_self = AlignSelf::parse(v); }
     // L5 step 4 batch 9: flex-grow + flex-shrink z typed f32.
     if let Some(v) = read_typed_f32(s, cs_opt, "flex-grow", |cs| cs.flex_grow, |raw| raw.trim().parse().unwrap_or(0.0)) {
@@ -2640,15 +2665,17 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(so) = s.get("shape-outside") {
         if so.trim() != "none" { bx.shape_outside = Some(so.trim().to_string()); }
     }
-    if let Some(d) = s.get("direction") {
-        bx.direction = Direction::parse(d);
-        // RTL: text-align default = right (pokud nezadany)
+    // L5 step 4 batch 12: direction + writing-mode cross-type.
+    if s.contains_key("direction") {
+        let raw = cs_opt.map(|cs| cs.direction.css_string()).unwrap_or_else(|| s.get("direction").unwrap().as_str());
+        bx.direction = Direction::parse(raw);
         if bx.direction.is_rtl() && s.get("text-align").is_none() {
             bx.text_align = TextAlign::Right;
         }
     }
-    if let Some(wm) = s.get("writing-mode") {
-        bx.writing_mode = WritingMode::parse(wm);
+    if s.contains_key("writing-mode") {
+        let raw = cs_opt.map(|cs| cs.writing_mode.css_string()).unwrap_or_else(|| s.get("writing-mode").unwrap().as_str());
+        bx.writing_mode = WritingMode::parse(raw);
     }
     if let Some(cis) = s.get("contain-intrinsic-size") {
         bx.contain_intrinsic_size = parse_length(cis);
@@ -2679,7 +2706,11 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
             if v.trim() != "none" { bx.perspective = Some(parse_length(v)); }
         }
     }
-    if let Some(v) = s.get("pointer-events") { bx.pointer_events = PointerEvents::parse(v); }
+    // L5 step 4 batch 12: pointer-events cross-type.
+    if s.contains_key("pointer-events") {
+        let raw = cs_opt.map(|cs| cs.pointer_events.css_string()).unwrap_or_else(|| s.get("pointer-events").unwrap().as_str());
+        bx.pointer_events = PointerEvents::parse(raw);
+    }
     // L5 step 4 batch 8: caret-color z typed Color.
     if s.contains_key("caret-color") {
         if let Some(cs) = cs_opt {
@@ -2738,7 +2769,21 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(v) = s.get("clear") { bx.clear_value = v.trim().to_string(); }
     if let Some(v) = s.get("object-position") { bx.object_position = v.trim().to_string(); }
     if let Some(v) = s.get("justify-items") { bx.justify_items = v.trim().to_string(); }
-    if let Some(v) = s.get("object-fit") { bx.object_fit = ObjectFit::parse(v); }
+    // L5 step 4 batch 12: object-fit cross-type via inline match (cs::ObjectFit nema css_string).
+    if s.contains_key("object-fit") {
+        if let Some(cs) = cs_opt {
+            use super::computed_style::ObjectFit as Of;
+            bx.object_fit = match cs.object_fit {
+                Of::Fill => ObjectFit::Fill,
+                Of::Contain => ObjectFit::Contain,
+                Of::Cover => ObjectFit::Cover,
+                Of::None => ObjectFit::None,
+                Of::ScaleDown => ObjectFit::ScaleDown,
+            };
+        } else {
+            bx.object_fit = ObjectFit::parse(s.get("object-fit").unwrap());
+        }
+    }
     if let Some(v) = s.get("image-rendering") { bx.image_rendering = ImageRendering::parse(v); }
     if let Some(v) = s.get("table-layout") { bx.table_layout = TableLayout::parse(v); }
     if let Some(v) = s.get("border-collapse") { bx.border_collapse = BorderCollapse::parse(v); }
@@ -2835,9 +2880,10 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
             }
         }
     }
-    // Text align
-    if let Some(ta) = s.get("text-align") {
-        bx.text_align = match ta.trim() {
+    // Text align - L5 step 4 batch 12: cs.text_align cross-type.
+    if s.contains_key("text-align") {
+        let raw = cs_opt.map(|cs| cs.text_align.css_string()).unwrap_or_else(|| s.get("text-align").unwrap().as_str());
+        bx.text_align = match raw.trim() {
             "center"  => TextAlign::Center,
             "right"   => TextAlign::Right,
             "justify" => TextAlign::Justify,
