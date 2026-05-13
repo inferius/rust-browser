@@ -297,6 +297,114 @@ pub struct ComputedStyle {
     pub scroll_snap_align: ScrollSnapAlign,
     pub overscroll_behavior_x: OverscrollBehavior,
     pub overscroll_behavior_y: OverscrollBehavior,
+
+    // ─── L5 step 4 batch 18: chybejici pole pro Phase 3 unblock ──────
+    pub letter_spacing: LetterSpacing,
+    pub word_spacing: LetterSpacing,             // stejna shape (Normal | Length)
+    pub accent_color: AccentColor,               // Auto | Color
+    pub scrollbar_width: ScrollbarWidth,
+    pub scrollbar_color: ScrollbarColor,         // Auto | (thumb, track)
+    pub image_rendering: ImageRendering,
+    pub text_underline_offset: Length,           // Auto = Length::Auto
+    pub line_height_step: Length,
+    pub speak: SpeakKind,
+    pub mask_image: String,                      // raw multi-layer
+    pub shape_outside: ShapeOutsideVal,
+    pub shape_margin: Length,
+    pub shape_image_threshold: f32,              // 0..1
+    pub contain_intrinsic_block_size: Length,
+    pub contain_intrinsic_inline_size: Length,
+    pub contain_intrinsic_size: Length,
+    pub orphans: u32,
+    pub widows: u32,
+    pub border_image_source: String,             // raw url() / gradient
+    pub border_image_slice: String,
+    pub border_image_width: String,
+    pub text_emphasis: String,                   // shorthand raw
+    pub text_emphasis_color: Color,
+
+    // ─── EXPERIMENTAL: CSS L4/L5 / nove specs (Phase B) ───────────────
+    // Tyto pole jsou pripraveny pro budouci typed migraci. Cascade NAPLNUJE
+    // raw string z deklarace, layout/paint zatim NEMA implementaci. Hodnota
+    // existuje pro getComputedStyle + devtools display; rendering ignoruje.
+    // POZN: pri pridavani implementace zkontrolovat CS field type + odebrat
+    // EXPERIMENTAL marker.
+
+    /// EXPERIMENTAL CSS Anchor Positioning L1 (CR 2024): anchor-name.
+    /// Definuje implicit anchor cilek pro position-anchor v descendantech.
+    pub experimental_anchor_name: String,
+    /// EXPERIMENTAL CSS Anchor Positioning L1: position-anchor.
+    /// Explicit anchor name pro anchored element.
+    pub experimental_position_anchor: String,
+    /// EXPERIMENTAL CSS Anchor Positioning L1: inset-area.
+    /// Grid-like rozmistovani vuci anchor.
+    pub experimental_inset_area: String,
+
+    /// EXPERIMENTAL CSS View Transitions L1: view-transition-name.
+    pub experimental_view_transition_name: String,
+
+    /// EXPERIMENTAL CSS Scroll-Driven Animations L1: view-timeline-name.
+    pub experimental_view_timeline_name: String,
+    /// EXPERIMENTAL CSS Scroll-Driven Animations L1: view-timeline-axis.
+    pub experimental_view_timeline_axis: String,
+    /// EXPERIMENTAL CSS Scroll-Driven Animations L1: scroll-timeline-name.
+    pub experimental_scroll_timeline_name: String,
+    /// EXPERIMENTAL CSS Scroll-Driven Animations L1: scroll-timeline-axis.
+    pub experimental_scroll_timeline_axis: String,
+    /// EXPERIMENTAL CSS Scroll-Driven Animations L1: animation-timeline.
+    pub experimental_animation_timeline: String,
+
+    /// EXPERIMENTAL CSS Containment L3: content-visibility.
+    /// auto | hidden | visible - hide off-screen optimization.
+    pub experimental_content_visibility: String,
+    /// EXPERIMENTAL CSS Containment L3: container.
+    pub experimental_container: String,
+    /// EXPERIMENTAL CSS Containment L3: container-type.
+    /// inline-size | size | normal
+    pub experimental_container_type: String,
+    /// EXPERIMENTAL CSS Containment L3: container-name.
+    pub experimental_container_name: String,
+
+    /// EXPERIMENTAL CSS Text L4: text-wrap. balance | pretty | wrap | nowrap | stable
+    pub experimental_text_wrap: String,
+    /// EXPERIMENTAL CSS Text L4: text-wrap-style.
+    pub experimental_text_wrap_style: String,
+    /// EXPERIMENTAL CSS Text L4: text-wrap-mode.
+    pub experimental_text_wrap_mode: String,
+
+    /// EXPERIMENTAL CSS Inline L3: text-box-trim. none | trim-start | trim-end | trim-both
+    pub experimental_text_box_trim: String,
+    /// EXPERIMENTAL CSS Inline L3: text-box-edge.
+    pub experimental_text_box_edge: String,
+
+    /// EXPERIMENTAL CSS Forms L1: field-sizing. fixed | content
+    pub experimental_field_sizing: String,
+
+    /// EXPERIMENTAL CSS Color L4: print-color-adjust. economy | exact
+    pub experimental_print_color_adjust: String,
+    /// EXPERIMENTAL CSS Color L4: forced-color-adjust. auto | none
+    pub experimental_forced_color_adjust: String,
+    /// EXPERIMENTAL CSS Color L4: color-scheme. light | dark | normal
+    pub experimental_color_scheme: String,
+
+    /// EXPERIMENTAL CSS Math L3: math-style. compact | normal
+    pub experimental_math_style: String,
+    /// EXPERIMENTAL CSS Math L3: math-depth.
+    pub experimental_math_depth: String,
+
+    /// EXPERIMENTAL CSS Ruby L1: ruby-position. over | under | inter-character | alternate
+    pub experimental_ruby_position: String,
+    /// EXPERIMENTAL CSS Ruby L1: ruby-align.
+    pub experimental_ruby_align: String,
+
+    /// EXPERIMENTAL CSS Pseudo-classes L4: @starting-style support (no field needed,
+    /// jen marker ze parser dokaze rozpoznat. Cascade prozatim ignoruje.)
+    /// Marker komentar - skutecna podpora vyzaduje samostatny cascade pass.
+
+    /// EXPERIMENTAL CSS Cascading L6: @scope - cascade ignores.
+
+    /// EXPERIMENTAL CSS Overflow L4: scroll-marker / scroll-button-controls.
+    pub experimental_scroll_marker_group: String,
 }
 
 impl Default for ComputedStyle {
@@ -482,9 +590,205 @@ impl ComputedStyle {
             scroll_snap_align: ScrollSnapAlign::None,
             overscroll_behavior_x: OverscrollBehavior::Auto,
             overscroll_behavior_y: OverscrollBehavior::Auto,
+            // L5 step 4 batch 18 defaults.
+            letter_spacing: LetterSpacing::Normal,
+            word_spacing: LetterSpacing::Normal,
+            accent_color: AccentColor::Auto,
+            scrollbar_width: ScrollbarWidth::Auto,
+            scrollbar_color: ScrollbarColor::Auto,
+            image_rendering: ImageRendering::Auto,
+            text_underline_offset: Length::Auto,
+            line_height_step: Length::Px(0.0),
+            speak: SpeakKind::Normal,
+            mask_image: String::new(),
+            shape_outside: ShapeOutsideVal::None,
+            shape_margin: Length::Px(0.0),
+            shape_image_threshold: 0.0,
+            contain_intrinsic_block_size: Length::None,
+            contain_intrinsic_inline_size: Length::None,
+            contain_intrinsic_size: Length::None,
+            orphans: 2,
+            widows: 2,
+            border_image_source: "none".into(),
+            border_image_slice: "100%".into(),
+            border_image_width: "1".into(),
+            text_emphasis: String::new(),
+            text_emphasis_color: Color::CurrentColor,
+            // EXPERIMENTAL defaults
+            experimental_anchor_name: String::new(),
+            experimental_position_anchor: String::new(),
+            experimental_inset_area: String::new(),
+            experimental_view_transition_name: "none".into(),
+            experimental_view_timeline_name: "none".into(),
+            experimental_view_timeline_axis: "block".into(),
+            experimental_scroll_timeline_name: "none".into(),
+            experimental_scroll_timeline_axis: "block".into(),
+            experimental_animation_timeline: "auto".into(),
+            experimental_content_visibility: "visible".into(),
+            experimental_container: String::new(),
+            experimental_container_type: "normal".into(),
+            experimental_container_name: String::new(),
+            experimental_text_wrap: "wrap".into(),
+            experimental_text_wrap_style: "auto".into(),
+            experimental_text_wrap_mode: "wrap".into(),
+            experimental_text_box_trim: "none".into(),
+            experimental_text_box_edge: "leading".into(),
+            experimental_field_sizing: "fixed".into(),
+            experimental_print_color_adjust: "economy".into(),
+            experimental_forced_color_adjust: "auto".into(),
+            experimental_color_scheme: "normal".into(),
+            experimental_math_style: "normal".into(),
+            experimental_math_depth: "auto".into(),
+            experimental_ruby_position: "alternate".into(),
+            experimental_ruby_align: "space-around".into(),
+            experimental_scroll_marker_group: "none".into(),
         }
     }
 }
+
+// ─── L5 step 4 batch 18: nove typed enums + value types ───────────────────
+
+/// CSS `letter-spacing` / `word-spacing` (CSS Text L4 §10).
+/// `normal` -> 0 podle font metrics; jinak <length>.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LetterSpacing {
+    Normal,
+    Length(Length),
+}
+
+impl LetterSpacing {
+    pub fn parse(s: &str) -> Self {
+        let t = s.trim();
+        if t.eq_ignore_ascii_case("normal") { return Self::Normal; }
+        Length::parse(t).map(Self::Length).unwrap_or(Self::Normal)
+    }
+}
+
+/// CSS `accent-color` (CSS UI L4 §10). `auto` | <color>.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AccentColor {
+    Auto,
+    Color(Color),
+}
+
+impl AccentColor {
+    pub fn parse(s: &str) -> Self {
+        let t = s.trim();
+        if t.eq_ignore_ascii_case("auto") { return Self::Auto; }
+        Color::parse(t).map(Self::Color).unwrap_or(Self::Auto)
+    }
+}
+
+/// CSS `scrollbar-width` (CSS Scrollbars L1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollbarWidth {
+    Auto,
+    Thin,
+    None,
+}
+
+impl ScrollbarWidth {
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "thin" => Self::Thin,
+            "none" => Self::None,
+            _ => Self::Auto,
+        }
+    }
+    pub fn css_string(self) -> &'static str {
+        match self { Self::Auto => "auto", Self::Thin => "thin", Self::None => "none" }
+    }
+}
+
+/// CSS `scrollbar-color` (CSS Scrollbars L1). `auto` | <color> <color>.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ScrollbarColor {
+    Auto,
+    Pair { thumb: Color, track: Color },
+}
+
+impl ScrollbarColor {
+    pub fn parse(s: &str) -> Self {
+        let t = s.trim();
+        if t.eq_ignore_ascii_case("auto") { return Self::Auto; }
+        let parts: Vec<&str> = t.split_whitespace().collect();
+        if parts.len() >= 2 {
+            if let (Some(thumb), Some(track)) = (Color::parse(parts[0]), Color::parse(parts[1])) {
+                return Self::Pair { thumb, track };
+            }
+        }
+        Self::Auto
+    }
+}
+
+/// CSS `image-rendering` (CSS Images L3 §5.4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageRendering {
+    Auto,
+    Smooth,
+    HighQuality,
+    CrispEdges,
+    Pixelated,
+}
+
+impl ImageRendering {
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "smooth" => Self::Smooth,
+            "high-quality" => Self::HighQuality,
+            "crisp-edges" => Self::CrispEdges,
+            "pixelated" => Self::Pixelated,
+            _ => Self::Auto,
+        }
+    }
+    pub fn css_string(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Smooth => "smooth",
+            Self::HighQuality => "high-quality",
+            Self::CrispEdges => "crisp-edges",
+            Self::Pixelated => "pixelated",
+        }
+    }
+}
+
+/// CSS `speak` (CSS Speech L1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpeakKind {
+    Normal,
+    None,
+    Always,
+}
+
+impl SpeakKind {
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "none" => Self::None,
+            "always" => Self::Always,
+            _ => Self::Normal,
+        }
+    }
+    pub fn css_string(self) -> &'static str {
+        match self { Self::Normal => "normal", Self::None => "none", Self::Always => "always" }
+    }
+}
+
+/// CSS `shape-outside` (CSS Shapes L1 §3). Float wrapping shape.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ShapeOutsideVal {
+    None,
+    /// Raw shape ftring (basic-shape, image, box) - parser layout dela.
+    Raw(String),
+}
+
+impl ShapeOutsideVal {
+    pub fn parse(s: &str) -> Self {
+        let t = s.trim();
+        if t.eq_ignore_ascii_case("none") || t.is_empty() { return Self::None; }
+        Self::Raw(t.to_string())
+    }
+}
+
 
 /// CSS `scroll-snap-align` (CSS Scroll Snap L1 §6.2). `<block> <inline>`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

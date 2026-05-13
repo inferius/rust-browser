@@ -1685,6 +1685,112 @@ pub fn cascade_with_viewport_typed(
         if let Some(v) = props.get("overscroll-behavior-y") {
             if let Some(b) = CsOverscrollBehavior::parse(v) { cs.overscroll_behavior_y = b; }
         }
+        // L5 step 4 batch 18: nove typed pole.
+        if let Some(v) = props.get("letter-spacing") {
+            cs.letter_spacing = crate::browser::computed_style::LetterSpacing::parse(v);
+        }
+        if let Some(v) = props.get("word-spacing") {
+            cs.word_spacing = crate::browser::computed_style::LetterSpacing::parse(v);
+        }
+        if let Some(v) = props.get("accent-color") {
+            cs.accent_color = crate::browser::computed_style::AccentColor::parse(v);
+        }
+        if let Some(v) = props.get("scrollbar-width") {
+            cs.scrollbar_width = crate::browser::computed_style::ScrollbarWidth::parse(v);
+        }
+        if let Some(v) = props.get("scrollbar-color") {
+            cs.scrollbar_color = crate::browser::computed_style::ScrollbarColor::parse(v);
+        }
+        if let Some(v) = props.get("image-rendering") {
+            cs.image_rendering = crate::browser::computed_style::ImageRendering::parse(v);
+        }
+        if let Some(v) = props.get("text-underline-offset") {
+            let t = v.trim();
+            if t.eq_ignore_ascii_case("auto") {
+                cs.text_underline_offset = Length::Auto;
+            } else if let Some(l) = Length::parse(t) {
+                cs.text_underline_offset = l;
+            }
+        }
+        if let Some(v) = props.get("line-height-step") {
+            if let Some(l) = Length::parse(v) { cs.line_height_step = l; }
+        }
+        if let Some(v) = props.get("speak") {
+            cs.speak = crate::browser::computed_style::SpeakKind::parse(v);
+        }
+        if let Some(v) = props.get("mask-image") {
+            cs.mask_image = v.clone();
+        }
+        if let Some(v) = props.get("shape-outside") {
+            cs.shape_outside = crate::browser::computed_style::ShapeOutsideVal::parse(v);
+        }
+        if let Some(v) = props.get("shape-margin") {
+            if let Some(l) = Length::parse(v) { cs.shape_margin = l; }
+        }
+        if let Some(v) = props.get("shape-image-threshold") {
+            if let Ok(n) = v.trim().parse::<f32>() {
+                cs.shape_image_threshold = n.clamp(0.0, 1.0);
+            }
+        }
+        if let Some(v) = props.get("contain-intrinsic-block-size") {
+            if let Some(l) = Length::parse(v) { cs.contain_intrinsic_block_size = l; }
+        }
+        if let Some(v) = props.get("contain-intrinsic-inline-size") {
+            if let Some(l) = Length::parse(v) { cs.contain_intrinsic_inline_size = l; }
+        }
+        if let Some(v) = props.get("contain-intrinsic-size") {
+            if let Some(l) = Length::parse(v) { cs.contain_intrinsic_size = l; }
+        }
+        if let Some(v) = props.get("orphans") {
+            if let Ok(n) = v.trim().parse::<u32>() { cs.orphans = n; }
+        }
+        if let Some(v) = props.get("widows") {
+            if let Ok(n) = v.trim().parse::<u32>() { cs.widows = n; }
+        }
+        if let Some(v) = props.get("border-image-source") {
+            cs.border_image_source = v.clone();
+        }
+        if let Some(v) = props.get("border-image-slice") {
+            cs.border_image_slice = v.clone();
+        }
+        if let Some(v) = props.get("border-image-width") {
+            cs.border_image_width = v.clone();
+        }
+        if let Some(v) = props.get("text-emphasis") {
+            cs.text_emphasis = v.clone();
+        }
+        if let Some(v) = props.get("text-emphasis-color") {
+            if let Some(c) = Color::parse(v) { cs.text_emphasis_color = c; }
+        }
+        // EXPERIMENTAL CSS L4/L5 - raw string populate. Implementace v layout/paint
+        // dodelat v dalsich session - prozatim getComputedStyle + devtools display.
+        if let Some(v) = props.get("anchor-name") { cs.experimental_anchor_name = v.clone(); }
+        if let Some(v) = props.get("position-anchor") { cs.experimental_position_anchor = v.clone(); }
+        if let Some(v) = props.get("inset-area") { cs.experimental_inset_area = v.clone(); }
+        if let Some(v) = props.get("view-transition-name") { cs.experimental_view_transition_name = v.clone(); }
+        if let Some(v) = props.get("view-timeline-name") { cs.experimental_view_timeline_name = v.clone(); }
+        if let Some(v) = props.get("view-timeline-axis") { cs.experimental_view_timeline_axis = v.clone(); }
+        if let Some(v) = props.get("scroll-timeline-name") { cs.experimental_scroll_timeline_name = v.clone(); }
+        if let Some(v) = props.get("scroll-timeline-axis") { cs.experimental_scroll_timeline_axis = v.clone(); }
+        if let Some(v) = props.get("animation-timeline") { cs.experimental_animation_timeline = v.clone(); }
+        if let Some(v) = props.get("content-visibility") { cs.experimental_content_visibility = v.clone(); }
+        if let Some(v) = props.get("container") { cs.experimental_container = v.clone(); }
+        if let Some(v) = props.get("container-type") { cs.experimental_container_type = v.clone(); }
+        if let Some(v) = props.get("container-name") { cs.experimental_container_name = v.clone(); }
+        if let Some(v) = props.get("text-wrap") { cs.experimental_text_wrap = v.clone(); }
+        if let Some(v) = props.get("text-wrap-style") { cs.experimental_text_wrap_style = v.clone(); }
+        if let Some(v) = props.get("text-wrap-mode") { cs.experimental_text_wrap_mode = v.clone(); }
+        if let Some(v) = props.get("text-box-trim") { cs.experimental_text_box_trim = v.clone(); }
+        if let Some(v) = props.get("text-box-edge") { cs.experimental_text_box_edge = v.clone(); }
+        if let Some(v) = props.get("field-sizing") { cs.experimental_field_sizing = v.clone(); }
+        if let Some(v) = props.get("print-color-adjust") { cs.experimental_print_color_adjust = v.clone(); }
+        if let Some(v) = props.get("forced-color-adjust") { cs.experimental_forced_color_adjust = v.clone(); }
+        if let Some(v) = props.get("color-scheme") { cs.experimental_color_scheme = v.clone(); }
+        if let Some(v) = props.get("math-style") { cs.experimental_math_style = v.clone(); }
+        if let Some(v) = props.get("math-depth") { cs.experimental_math_depth = v.clone(); }
+        if let Some(v) = props.get("ruby-position") { cs.experimental_ruby_position = v.clone(); }
+        if let Some(v) = props.get("ruby-align") { cs.experimental_ruby_align = v.clone(); }
+        if let Some(v) = props.get("scroll-marker-group") { cs.experimental_scroll_marker_group = v.clone(); }
         computed.insert(*node_id, cs);
         // Konvertuj kazdou property na CascadeDecl s validity flag pro
         // batch 1 props (color/opacity/visibility/cursor) - parse Result
