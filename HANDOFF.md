@@ -77,7 +77,7 @@ WebView pub fns:
 
 `crates/shell/src/main.rs`:
 - default = shell::run_window pres embed API (no chrome)
-- `legacy` arg = delegate na engine::run_cli (puvodni chrome bar)
+- Bez chrome bar - pro chrome experience pouzij `cargo run -p rwe-engine -- browser`
 
 ### App.webview mirror (Phase 4a)
 
@@ -99,7 +99,8 @@ cargo run -- dump src.html           # layout/cascade dump
 # Shell bin (Phase 4c+ runtime)
 cargo run -p rwe-shell                       # WebView render path (no chrome)
 cargo run -p rwe-shell -- static/test.html
-cargo run -p rwe-shell -- legacy             # delegate na engine browser (chrome bar)
+# Plnohodnotny chrome (tabs/addr/find/bookmarks) zatim pres engine bin:
+cargo run -p rwe-engine -- browser           # puvodni chrome bar
 ```
 
 ### Co Phase 99 udela
