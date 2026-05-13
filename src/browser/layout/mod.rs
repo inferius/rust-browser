@@ -2759,9 +2759,14 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
             }
         }
     }
-    if let Some(v) = s.get("column-rule-width") { bx.column_rule_width = parse_length(v); }
-    if let Some(v) = s.get("column-rule-style") { bx.column_rule_style = v.trim().to_string(); }
-    if let Some(v) = s.get("column-rule-color") {
+    // L5 step 4 Phase 3 fix: column-rule-* gate cs.is_set.
+    if let Some(v) = read_raw_str(s, cs_opt, "column-rule-width", PropertyId::ColumnRuleWidth, |cs| &cs.column_rule_width_raw) {
+        bx.column_rule_width = parse_length(v);
+    }
+    if let Some(v) = read_raw_str(s, cs_opt, "column-rule-style", PropertyId::ColumnRuleStyle, |cs| &cs.column_rule_style_raw) {
+        bx.column_rule_style = v.trim().to_string();
+    }
+    if let Some(v) = read_raw_str(s, cs_opt, "column-rule-color", PropertyId::ColumnRuleColor, |cs| &cs.column_rule_color_raw) {
         if let Some(c) = parse_color(v.trim()) { bx.column_rule_color = c; }
     }
     if let Some(v) = read_raw_str(s, cs_opt, "gap", PropertyId::Gap, |cs| &cs.gap_shorthand) {
@@ -2886,7 +2891,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if prop_set_kn(s, cs_opt, "direction") {
         let raw = cs_opt.map(|cs| cs.direction.css_string()).unwrap_or_else(|| s.get("direction").unwrap().as_str());
         bx.direction = Direction::parse(raw);
-        if bx.direction.is_rtl() && s.get("text-align").is_none() {
+        if bx.direction.is_rtl() && !prop_is_set(s, cs_opt, "text-align", PropertyId::TextAlign) {
             bx.text_align = TextAlign::Right;
         }
     }
@@ -3532,18 +3537,18 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
             Co::Clip => Overflow::Clip,
         }
     };
-    if s.contains_key("overflow-x") {
+    if prop_set_kn(s, cs_opt, "overflow-x") {
         bx.overflow_x = if let Some(cs) = cs_opt { cs_overflow_to_layout(cs.overflow_x) }
                         else { Overflow::parse(s.get("overflow-x").unwrap()) };
         if bx.overflow_x.hides() { bx.overflow_hidden = true; }
     }
-    if s.contains_key("overflow-y") {
+    if prop_set_kn(s, cs_opt, "overflow-y") {
         bx.overflow_y = if let Some(cs) = cs_opt { cs_overflow_to_layout(cs.overflow_y) }
                         else { Overflow::parse(s.get("overflow-y").unwrap()) };
         if bx.overflow_y.hides() { bx.overflow_hidden = true; }
     }
     // White-space - L5 step 4 batch 15: cs.white_space (WhiteSpace enum).
-    if s.contains_key("white-space") {
+    if prop_set_kn(s, cs_opt, "white-space") {
         bx.white_space_nowrap = if let Some(cs) = cs_opt {
             matches!(cs.white_space, super::computed_style::WhiteSpace::Nowrap)
         } else {
@@ -3572,17 +3577,22 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         }
     }
     // Cursor - L5 step 4 batch 15: cs.cursor (Cursor enum) -> css_string.
-    if s.contains_key("cursor") {
+    if prop_set_kn(s, cs_opt, "cursor") {
         bx.cursor = Some(if let Some(cs) = cs_opt {
             cs.cursor.css_string()
         } else {
             s.get("cursor").unwrap().trim().to_string()
         });
     }
-    // Default underline pro <a> tag (pokud nebyla explicitne odebrana)
+    // Default underline pro <a> tag (pokud nebyla explicitne odebrana) - L5 step 4 Phase 3.
     if let Some(tag) = bx.tag.clone() {
-        if tag == "a" && s.get("text-decoration").is_none() {
-            bx.text_underline = true;
+        if tag == "a" {
+            let td_set = cs_opt.map(|cs|
+                cs.is_set(PropertyId::TextDecoration) || cs.is_set(PropertyId::TextDecorationLine)
+            ).unwrap_or_else(|| prop_set_kn(s, cs_opt, "text-decoration") || prop_set_kn(s, cs_opt, "text-decoration-line"));
+            if !td_set {
+                bx.text_underline = true;
+            }
         }
     }
 
@@ -3621,10 +3631,36 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
             _ => "disc",
         };
         // CSS list-style-type je inherited - pokud li nema explicit, podivej
-        // se na rodicovsky <ol>/<ul> v style_map. Bez tohoto upper-roman na
-        // ol class neaplikuje na li children.
+        // se na rodicovsky <ol>/<ul>. L5 step 4 Phase 3: pres typed cs lookup
+        // misto style_map (cs.list_style_type enum -> serialize string).
         let parent_list_style = parent_node.as_ref().and_then(|p| {
             let pid = std::rc::Rc::as_ptr(p) as usize;
+            // Typed cesta: active_computed_map + cs.list_style_type.
+            if let Some(cm) = active_computed_map() {
+                if let Some(cs) = cm.get(&pid) {
+                    if cs.is_set(PropertyId::ListStyleType) {
+                        use super::computed_style::ListStyleType as Lst;
+                        return Some(match &cs.list_style_type {
+                            Lst::None => "none".to_string(),
+                            Lst::Disc => "disc".to_string(),
+                            Lst::Circle => "circle".to_string(),
+                            Lst::Square => "square".to_string(),
+                            Lst::Decimal => "decimal".to_string(),
+                            Lst::DecimalLeadingZero => "decimal-leading-zero".to_string(),
+                            Lst::LowerAlpha => "lower-alpha".to_string(),
+                            Lst::UpperAlpha => "upper-alpha".to_string(),
+                            Lst::LowerRoman => "lower-roman".to_string(),
+                            Lst::UpperRoman => "upper-roman".to_string(),
+                            Lst::LowerGreek => "lower-greek".to_string(),
+                            Lst::LowerLatin => "lower-latin".to_string(),
+                            Lst::UpperLatin => "upper-latin".to_string(),
+                            Lst::Armenian => "armenian".to_string(),
+                            Lst::Georgian => "georgian".to_string(),
+                            Lst::Custom(s) => s.clone(),
+                        });
+                    }
+                }
+            }
             style_map.get(&pid).and_then(|s| s.get("list-style-type")).cloned()
         });
         let style = if !bx.list_style_type.is_empty() {

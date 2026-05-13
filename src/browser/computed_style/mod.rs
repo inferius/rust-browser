@@ -460,6 +460,10 @@ pub struct ComputedStyle {
     /// Border-image multi-component raw.
     pub border_image_outset_raw: String,
     pub border_image_repeat_raw: String,
+    /// Column-rule longhandy raw (cs nema typed fields pro tyto).
+    pub column_rule_width_raw: String,
+    pub column_rule_style_raw: String,
+    pub column_rule_color_raw: String,
 
     /// L5 step 4 Phase G: mnozina PropertyId ktere byly EXPLICITLY nastaveny
     /// pres CSS deklaraci (cascade). Pouziva se misto `s.contains_key("X")`
@@ -729,6 +733,9 @@ impl ComputedStyle {
             background_attachment_raw: String::new(),
             border_image_outset_raw: String::new(),
             border_image_repeat_raw: String::new(),
+            column_rule_width_raw: String::new(),
+            column_rule_style_raw: String::new(),
+            column_rule_color_raw: String::new(),
             explicit_set: HashSet::new(),
         }
     }

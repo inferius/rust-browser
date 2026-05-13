@@ -1887,6 +1887,9 @@ pub fn cascade_with_viewport_typed(
         if let Some(v) = props.get("background-attachment") { cs.background_attachment_raw = v.clone(); }
         if let Some(v) = props.get("border-image-outset") { cs.border_image_outset_raw = v.clone(); }
         if let Some(v) = props.get("border-image-repeat") { cs.border_image_repeat_raw = v.clone(); }
+        if let Some(v) = props.get("column-rule-width") { cs.column_rule_width_raw = v.clone(); }
+        if let Some(v) = props.get("column-rule-style") { cs.column_rule_style_raw = v.clone(); }
+        if let Some(v) = props.get("column-rule-color") { cs.column_rule_color_raw = v.clone(); }
         computed.insert(*node_id, cs);
         // Konvertuj kazdou property na CascadeDecl s validity flag pro
         // batch 1 props (color/opacity/visibility/cursor) - parse Result
