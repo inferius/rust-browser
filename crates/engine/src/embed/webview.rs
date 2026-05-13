@@ -351,6 +351,49 @@ impl WebView {
         self.target_view.as_ref()
     }
 
+    /// Renderuj page do offscreen texture pres dany Renderer. Real paint pass:
+    /// cascade -> layout -> display list -> Renderer draw segments. Vrati view.
+    ///
+    /// Phase 4b step 2 dependence: Renderer drzi GPU pipelines + atlas, WebView
+    /// si ho pujci na cas renderu. Phase 5 sloti tyto resources do Engine struct
+    /// (sdilene Arc<>) a `WebView::render` bude self-contained.
+    ///
+    /// `renderer.config.width/height/scale_factor` MUSI odpovidat WebView viewport
+    /// (jeden vp uniform). Hostujici aplikace `resize` WebView na renderer config
+    /// pred `render_via` call.
+    pub fn render_via(
+        &mut self,
+        renderer: &mut crate::browser::render::Renderer,
+    ) -> Option<&wgpu::TextureView> {
+        if self.target_texture.is_none() {
+            self.ensure_target_texture();
+        }
+        let target_view = self.target_view.as_ref()?;
+        let doc = self.document.as_ref()?;
+
+        let viewport_w = self.viewport_w / self.zoom.max(0.01);
+        let viewport_h = self.viewport_h / self.zoom.max(0.01);
+
+        // 1. Cascade - resolve CSS styles per element.
+        let style_map = crate::browser::cascade::cascade_with_viewport(
+            &doc.root, &self.stylesheets, viewport_w, viewport_h);
+
+        // 2. Layout - compute boxes.
+        let layout_root = crate::browser::layout::layout_tree(
+            &doc.root, &style_map, viewport_w, viewport_h);
+
+        // 3. Paint - generate display list (culled na viewport).
+        let display_list = crate::browser::paint::build_display_list_culled(
+            &layout_root, self.scroll_y, viewport_h);
+
+        // 4. Renderer kresli display list do target_view.
+        let _had = renderer.draw_segments_into_view_clipped(
+            target_view, &display_list, true, None);
+
+        self.dirty = false;
+        self.target_view.as_ref()
+    }
+
     /// Aktivni offscreen render target view (vyrobeny v `render`).
     /// Pouziti: host kompozici - blit tuto texturu do swap chain.
     pub fn target_view(&self) -> Option<&wgpu::TextureView> {

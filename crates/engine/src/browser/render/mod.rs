@@ -7380,7 +7380,7 @@ fn open_in_default_browser(path: &std::path::Path) {
 
 // ─── Renderer ───────────────────────────────────────────────────────────
 
-struct Renderer {
+pub struct Renderer {
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -9209,7 +9209,7 @@ impl Renderer {
     /// Pri start_clear=false neclearuje texturu pri prvni passi (Load namisto
     /// Clear), pouzite pro overlay pass po WebGL.
     /// Pri Some scissor (logical px) clipuje render pass na rect.
-    fn draw_segments_into_view_clipped(&mut self, view: &wgpu::TextureView,
+    pub fn draw_segments_into_view_clipped(&mut self, view: &wgpu::TextureView,
                                         cmds: &[DisplayCommand], start_clear: bool,
                                         scissor: Option<(u32, u32, u32, u32)>) -> bool {
         if cmds.is_empty() { return false; }
