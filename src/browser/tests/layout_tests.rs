@@ -2285,7 +2285,7 @@ fn anim_static_text_child_follows_relative_parent_shift() {
     // Layout shifted box + text by offset_left = 50.
     // apply_paint_animations: baseline init subtracts layout_dx + parent_layout_dx.
     // Pak applies cascade.left from style_map (same 50px) -> rect.x = baseline + 50.
-    crate::browser::render::apply_paint_animations(&mut layout_root, &map);
+    crate::browser::render::apply_paint_animations_styles(&mut layout_root, &map);
     // Najdi #box LayoutBox v tree.
     fn find_by_id<'a>(b: &'a layout::LayoutBox, id: &str) -> Option<&'a layout::LayoutBox> {
         if b.node.as_ref().and_then(|n| n.attr("id")).as_deref() == Some(id) { return Some(b); }

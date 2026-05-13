@@ -527,13 +527,33 @@ fn try_decode_svg_into_atlas(bytes: &[u8], cache_key: &str,
     true
 }
 
+/// L5 step 4 Phase 3: typed apply_paint_animations - cte z ComputedStyleMap
+/// (animation tick mutoval cs typed fields).
 pub(crate) fn apply_paint_animations(box_: &mut crate::browser::layout::LayoutBox,
+                           computed_map: &crate::browser::computed_style::ComputedStyleMap) {
+    apply_paint_animations_inner(box_, computed_map, 0.0, 0.0, 0.0, 0.0, 0.0);
+}
+
+/// L5 step 4 Phase 3: legacy compat - prijima &StyleMap (HashMap) misto typed.
+/// Konvertuje pro existing testy. Synthesize cs z style_map values via
+/// apply_animated_value_to_cs.
+#[allow(dead_code)]
+pub(crate) fn apply_paint_animations_styles(box_: &mut crate::browser::layout::LayoutBox,
                            style_map: &crate::browser::cascade::StyleMap) {
-    apply_paint_animations_inner(box_, style_map, 0.0, 0.0, 0.0, 0.0, 0.0);
+    // Build ComputedStyleMap z style_map - kazdy node z props.
+    let mut cm = crate::browser::computed_style::ComputedStyleMap::new();
+    for (node_id, props) in style_map {
+        let mut cs = crate::browser::computed_style::ComputedStyle::initial();
+        for (k, v) in props {
+            crate::browser::cascade::apply_animated_value_to_cs(&mut cs, k, v);
+        }
+        cm.insert(*node_id, cs);
+    }
+    apply_paint_animations(box_, &cm);
 }
 
 fn apply_paint_animations_inner(box_: &mut crate::browser::layout::LayoutBox,
-                                 style_map: &crate::browser::cascade::StyleMap,
+                                 computed_map: &crate::browser::computed_style::ComputedStyleMap,
                                  parent_width: f32,
                                  parent_delta_x: f32,
                                  parent_delta_y: f32,
@@ -587,96 +607,73 @@ fn apply_paint_animations_inner(box_: &mut crate::browser::layout::LayoutBox,
         box_.rect.x = baseline.x + parent_delta_x;
         box_.rect.y = baseline.y + parent_delta_y;
     }
-    if let Some(styles) = style_map.get(&node_id) {
-        if let Some(o) = styles.get("opacity") {
-            if let Ok(v) = o.parse::<f32>() {
-                box_.opacity = v;
-            }
+    if let Some(cs) = computed_map.get(&node_id) {
+        use crate::browser::computed_style::{PropertyId, Length};
+        // L5 step 4 Phase 3: cte z TYPED cs po apply_animations_typed mutaci.
+        // is_set marker rozliseje "explicitne anim/cascade-set" vs initial default.
+        if cs.is_set(PropertyId::Opacity) {
+            box_.opacity = cs.opacity;
         }
-        if let Some(c) = styles.get("color") {
-            if let Some(rgb) = crate::browser::layout::parse_color(c) {
-                box_.text_color = Some(rgb);
-            }
+        if cs.is_set(PropertyId::Color) {
+            box_.text_color = Some(cs.color.to_rgba_u8());
         }
-        if let Some(c) = styles.get("background-color") {
-            if let Some(rgb) = crate::browser::layout::parse_color(c) {
-                box_.bg_color = Some(rgb);
-            }
+        if cs.is_set(PropertyId::BackgroundColor) {
+            box_.bg_color = Some(cs.background_color.to_rgba_u8());
         }
-        if let Some(t) = styles.get("transform") {
-            box_.transforms = crate::browser::layout::parse_transform_chain(t);
+        if cs.is_set(PropertyId::Transform) {
+            box_.transforms = crate::browser::layout::parse_transform_chain(&cs.transform);
         }
-        if let Some(f) = styles.get("filter") {
-            box_.filter = crate::browser::layout::parse_filter_chain(f);
+        if cs.is_set(PropertyId::Filter) {
+            box_.filter = crate::browser::layout::parse_filter_chain(&cs.filter);
         }
-        // INCREMENTAL LAYOUT: aplikuj animovanou width/height na rect kdyz
-        // element ma overflow:hidden NEBO position != static (self-contained,
-        // ne reflow). Drive typewriter potreboval full layout rebuild kazdy
-        // frame, ted jen pricte rect.width upravu.
         let oh_x = box_.overflow_x.hides();
         let oh_y = box_.overflow_y.hides();
         let is_oof = !matches!(box_.position, super::layout::Position::Static);
-        // Position-only animace (left/top/right/bottom): aplikuj jako offset
-        // od baseline. Bez tohoto by slide-anim (left 0->400) trigeroval
-        // hard layout kazdy frame (~12 ms na test.html).
+        // Position-only animace (left/top/right/bottom).
         if is_oof {
-            if let Some(l) = styles.get("left") {
-                let px = crate::browser::layout::parse_length(l.trim());
+            if cs.is_set(PropertyId::Left) {
+                let px = cs.left.resolve_or(0.0, 16.0, 16.0, 1024.0, 768.0);
                 box_.rect.x = baseline.x + px;
-            } else if let Some(r) = styles.get("right") {
-                let px = crate::browser::layout::parse_length(r.trim());
+            } else if cs.is_set(PropertyId::Right) {
+                let px = cs.right.resolve_or(0.0, 16.0, 16.0, 1024.0, 768.0);
                 box_.rect.x = baseline.x - px;
             } else {
                 box_.rect.x = baseline.x;
             }
-            if let Some(t) = styles.get("top") {
-                let px = crate::browser::layout::parse_length(t.trim());
+            if cs.is_set(PropertyId::Top) {
+                let px = cs.top.resolve_or(0.0, 16.0, 16.0, 1024.0, 768.0);
                 box_.rect.y = baseline.y + px;
-            } else if let Some(b) = styles.get("bottom") {
-                let px = crate::browser::layout::parse_length(b.trim());
+            } else if cs.is_set(PropertyId::Bottom) {
+                let px = cs.bottom.resolve_or(0.0, 16.0, 16.0, 1024.0, 768.0);
                 box_.rect.y = baseline.y - px;
             } else {
                 box_.rect.y = baseline.y;
             }
         }
         if oh_x || oh_y || is_oof {
-            // Pouzijeme cached parent_width pro % rozeznavani.
-            // Width animace: aktualizuj rect.width pri overflow-x:hidden NEBO
-            // pri position != static (out-of-flow nebo relative).
-            if oh_x || is_oof {
-                if let Some(w) = styles.get("width") {
-                    let trimmed = w.trim();
-                    if let Some(pct_str) = trimmed.strip_suffix('%') {
-                        if let Ok(pct) = pct_str.parse::<f32>() {
-                            if parent_width > 0.0 {
-                                box_.rect.width = parent_width * (pct / 100.0);
-                            }
+            if (oh_x || is_oof) && cs.is_set(PropertyId::Width) {
+                match &cs.width {
+                    Length::Percent(p) => {
+                        if parent_width > 0.0 {
+                            box_.rect.width = parent_width * (p / 100.0);
                         }
-                    } else {
-                        let px = crate::browser::layout::parse_length(trimmed);
-                        if px > 0.0 || trimmed.starts_with('0') {
-                            box_.rect.width = px;
-                        }
+                    }
+                    other => {
+                        let px = other.resolve_or(0.0, 16.0, 16.0, 1024.0, 768.0);
+                        if px > 0.0 { box_.rect.width = px; }
                     }
                 }
             }
-            if oh_y || is_oof {
-                if let Some(h) = styles.get("height") {
-                    let trimmed = h.trim();
-                    if let Some(pct_str) = trimmed.strip_suffix('%') {
-                        if let Ok(pct) = pct_str.parse::<f32>() {
-                            // Parent width fallback - real chrome by pouzilo parent height
-                            // ale pro typewriter case staci. Pro vetsi pres potreba
-                            // dalsi argument.
-                            if parent_width > 0.0 {
-                                box_.rect.height = parent_width * (pct / 100.0);
-                            }
+            if (oh_y || is_oof) && cs.is_set(PropertyId::Height) {
+                match &cs.height {
+                    Length::Percent(p) => {
+                        if parent_width > 0.0 {
+                            box_.rect.height = parent_width * (p / 100.0);
                         }
-                    } else {
-                        let px = crate::browser::layout::parse_length(trimmed);
-                        if px > 0.0 || trimmed.starts_with('0') {
-                            box_.rect.height = px;
-                        }
+                    }
+                    other => {
+                        let px = other.resolve_or(0.0, 16.0, 16.0, 1024.0, 768.0);
+                        if px > 0.0 { box_.rect.height = px; }
                     }
                 }
             }
@@ -700,7 +697,7 @@ fn apply_paint_animations_inner(box_: &mut crate::browser::layout::LayoutBox,
         _ => 0.0,
     };
     for ch in &mut box_.children {
-        apply_paint_animations_inner(ch, style_map, our_width, our_delta_x, our_delta_y,
+        apply_paint_animations_inner(ch, computed_map, our_width, our_delta_x, our_delta_y,
             our_layout_dx, our_layout_dy);
     }
 }
@@ -5859,6 +5856,11 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             let _t_anim_apply = std::time::Instant::now();
             if has_keyframes {
                 let _animating = cascade::apply_animations(Rc::make_mut(&mut style_map), stylesheets, elapsed);
+                // L5 step 4 Phase 3: dual-write apply_animations_typed do cached_computed_map.
+                // apply_paint_animations cte z cs typed (po teto mutaci).
+                if let Some(cm) = self.cached_computed_map.as_mut() {
+                    let _ = cascade::apply_animations_typed(Rc::make_mut(cm), stylesheets, elapsed);
+                }
                 // Per-element pause: aplikuj frozen snapshot (zachytava presnou
                 // fazi pri toggle). Pri prvni paused frame neni snapshot - vezmi
                 // current animated styl + uloz pro dalsi framy.
@@ -6086,7 +6088,12 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             if needs_layout_mut {
                 if !self.active_animations.is_empty() || !self.active_transitions.is_empty() {
                     let _t_anim = std::time::Instant::now();
-                    apply_paint_animations(lr_mut, &style_map);
+                    // L5 step 4 Phase 3: cte z cached_computed_map (typed).
+                    // apply_animations_typed do nej zapsala anim values per frame.
+                    let empty_cm = crate::browser::computed_style::ComputedStyleMap::new();
+                    let cm: &crate::browser::computed_style::ComputedStyleMap =
+                        self.cached_computed_map.as_ref().map(|c| c.as_ref()).unwrap_or(&empty_cm);
+                    apply_paint_animations(lr_mut, cm);
                     perf_t("apply_paint_animations", _t_anim);
                 }
                 if self.layout_has_sticky {

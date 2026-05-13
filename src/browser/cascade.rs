@@ -3595,6 +3595,151 @@ pub fn apply_scroll_animations(
 ///   3. Interpoluj keyframes a override do ComputedStyle.
 ///
 /// Vrati true pokud nejaka animace probiha (= caller by mel re-redrawit).
+/// L5 step 4 Phase 3: aplikuj interp_keyframes hodnotu na typed ComputedStyle.
+/// Match na property name -> parse value -> set typed field. Pri unknown
+/// property no-op. Pouziva apply_animations_typed pro per-frame anim values.
+pub fn apply_animated_value_to_cs(cs: &mut crate::browser::computed_style::ComputedStyle, prop: &str, value: &str) {
+    use crate::browser::computed_style::{Color, Length};
+    let v = value.trim();
+    match prop {
+        "opacity" => {
+            if let Ok(n) = v.parse::<f32>() { cs.opacity = n.clamp(0.0, 1.0); }
+        }
+        "color" => { if let Some(c) = Color::parse(v) { cs.color = c; } }
+        "background-color" => { if let Some(c) = Color::parse(v) { cs.background_color = c; } }
+        "border-top-color"   => { if let Some(c) = Color::parse(v) { cs.border_top_color = c; } }
+        "border-right-color" => { if let Some(c) = Color::parse(v) { cs.border_right_color = c; } }
+        "border-bottom-color"=> { if let Some(c) = Color::parse(v) { cs.border_bottom_color = c; } }
+        "border-left-color"  => { if let Some(c) = Color::parse(v) { cs.border_left_color = c; } }
+        "outline-color" => { if let Some(c) = Color::parse(v) { cs.outline_color = c; } }
+        "caret-color" => { if let Some(c) = Color::parse(v) { cs.caret_color = c; } }
+        "text-decoration-color" => { if let Some(c) = Color::parse(v) { cs.text_decoration_color = c; } }
+        "text-emphasis-color" => { if let Some(c) = Color::parse(v) { cs.text_emphasis_color = c; } }
+        // Length-based (resolve later v layout dispatch with real ctx).
+        "width"  => { if let Some(l) = Length::parse(v) { cs.width = l; } }
+        "height" => { if let Some(l) = Length::parse(v) { cs.height = l; } }
+        "min-width"  => { if let Some(l) = Length::parse(v) { cs.min_width = l; } }
+        "min-height" => { if let Some(l) = Length::parse(v) { cs.min_height = l; } }
+        "max-width"  => { if let Some(l) = Length::parse(v) { cs.max_width = l; } }
+        "max-height" => { if let Some(l) = Length::parse(v) { cs.max_height = l; } }
+        "top" => { if let Some(l) = Length::parse(v) { cs.top = l; } }
+        "right" => { if let Some(l) = Length::parse(v) { cs.right = l; } }
+        "bottom" => { if let Some(l) = Length::parse(v) { cs.bottom = l; } }
+        "left" => { if let Some(l) = Length::parse(v) { cs.left = l; } }
+        "margin-top"    => { if let Some(l) = Length::parse(v) { cs.margin_top = l; } }
+        "margin-right"  => { if let Some(l) = Length::parse(v) { cs.margin_right = l; } }
+        "margin-bottom" => { if let Some(l) = Length::parse(v) { cs.margin_bottom = l; } }
+        "margin-left"   => { if let Some(l) = Length::parse(v) { cs.margin_left = l; } }
+        "padding-top"    => { if let Some(l) = Length::parse(v) { cs.padding_top = l; } }
+        "padding-right"  => { if let Some(l) = Length::parse(v) { cs.padding_right = l; } }
+        "padding-bottom" => { if let Some(l) = Length::parse(v) { cs.padding_bottom = l; } }
+        "padding-left"   => { if let Some(l) = Length::parse(v) { cs.padding_left = l; } }
+        "font-size" => { if let Some(l) = Length::parse(v) { cs.font_size = l; } }
+        "border-top-width"    => { if let Some(l) = Length::parse(v) { cs.border_top_width = l; } }
+        "border-right-width"  => { if let Some(l) = Length::parse(v) { cs.border_right_width = l; } }
+        "border-bottom-width" => { if let Some(l) = Length::parse(v) { cs.border_bottom_width = l; } }
+        "border-left-width"   => { if let Some(l) = Length::parse(v) { cs.border_left_width = l; } }
+        "outline-width" => { if let Some(l) = Length::parse(v) { cs.outline_width = l; } }
+        "outline-offset" => { if let Some(l) = Length::parse(v) { cs.outline_offset = l; } }
+        "row-gap"    => { if let Some(l) = Length::parse(v) { cs.row_gap = l; } }
+        "column-gap" => { if let Some(l) = Length::parse(v) { cs.column_gap = l; } }
+        "border-top-left-radius"     => { if let Some(l) = Length::parse(v) { cs.border_top_left_radius = l; } }
+        "border-top-right-radius"    => { if let Some(l) = Length::parse(v) { cs.border_top_right_radius = l; } }
+        "border-bottom-right-radius" => { if let Some(l) = Length::parse(v) { cs.border_bottom_right_radius = l; } }
+        "border-bottom-left-radius"  => { if let Some(l) = Length::parse(v) { cs.border_bottom_left_radius = l; } }
+        // Raw String fields (cascade-typed).
+        "transform" => { cs.transform = v.to_string(); }
+        "filter" => { cs.filter = v.to_string(); }
+        "backdrop-filter" => { cs.backdrop_filter = v.to_string(); }
+        "clip-path" => { cs.clip_path = v.to_string(); }
+        "box-shadow" => { cs.box_shadow = v.to_string(); }
+        "text-shadow" => { cs.text_shadow = v.to_string(); }
+        // f32 fields.
+        "flex-grow" => { if let Ok(n) = v.parse::<f32>() { cs.flex_grow = n; } }
+        "flex-shrink" => { if let Ok(n) = v.parse::<f32>() { cs.flex_shrink = n; } }
+        _ => {} // Unknown anim prop - ignore.
+    }
+    // Mark as set (animated overlay = is_set).
+    let pid = crate::browser::computed_style::PropertyId::parse(prop);
+    if pid != crate::browser::computed_style::PropertyId::Unknown {
+        cs.mark_set(pid);
+    }
+}
+
+/// L5 step 4 Phase 3: typed apply_animations - mutates ComputedStyleMap per
+/// frame s interpolated keyframe values. Pri animation tick:
+/// 1. Spec parse z cs (animation_* typed Vec<>).
+/// 2. interpolate_keyframes -> Vec<(prop_name, value_str)>.
+/// 3. apply_animated_value_to_cs aplikuje na cs typed field.
+pub fn apply_animations_typed(
+    cmap: &mut crate::browser::computed_style::ComputedStyleMap,
+    stylesheets: &[Stylesheet],
+    elapsed_secs: f32,
+) -> bool {
+    use super::layout::interpolate_keyframes;
+    let mut any_active = false;
+
+    for cs in cmap.values_mut() {
+        let spec = match AnimationSpec::from_cs(cs) {
+            Some(s) => s, None => continue,
+        };
+        let frames = stylesheets.iter()
+            .flat_map(|s| s.keyframes.iter())
+            .find(|k| k.name == spec.name);
+        let frames = match frames { Some(k) => &k.frames, None => continue };
+        let t = elapsed_secs - spec.delay_secs;
+        if t < 0.0 {
+            if spec.fill_mode == "backwards" || spec.fill_mode == "both" {
+                let initial = match spec.direction.as_str() {
+                    "reverse" | "alternate-reverse" => 1.0,
+                    _ => 0.0,
+                };
+                for (k, v) in interpolate_keyframes(frames, initial) {
+                    apply_animated_value_to_cs(cs, &k, &v);
+                }
+                any_active = true;
+            }
+            continue;
+        }
+        if spec.play_state == "paused" {
+            for (k, v) in interpolate_keyframes(frames, 0.0) {
+                apply_animated_value_to_cs(cs, &k, &v);
+            }
+            continue;
+        }
+        let total_progress = t / spec.duration_secs;
+        if total_progress >= spec.iteration_count {
+            if spec.fill_mode == "forwards" || spec.fill_mode == "both" {
+                let final_progress = match spec.direction.as_str() {
+                    "reverse" => 0.0,
+                    "alternate" if (spec.iteration_count as i32) % 2 == 0 => 0.0,
+                    "alternate-reverse" if (spec.iteration_count as i32) % 2 == 0 => 1.0,
+                    _ => 1.0,
+                };
+                for (k, v) in interpolate_keyframes(frames, final_progress) {
+                    apply_animated_value_to_cs(cs, &k, &v);
+                }
+            }
+            continue;
+        }
+        let iter_idx = total_progress.floor() as i32;
+        let mut local = total_progress.fract();
+        let reverse = match spec.direction.as_str() {
+            "reverse" => true,
+            "alternate" => iter_idx % 2 == 1,
+            "alternate-reverse" => iter_idx % 2 == 0,
+            _ => false,
+        };
+        if reverse { local = 1.0 - local; }
+        let progress = apply_easing(local, &spec.timing_function);
+        for (k, v) in interpolate_keyframes(frames, progress) {
+            apply_animated_value_to_cs(cs, &k, &v);
+        }
+        any_active = true;
+    }
+    any_active
+}
+
 pub fn apply_animations(
     style_map: &mut StyleMap,
     stylesheets: &[Stylesheet],
