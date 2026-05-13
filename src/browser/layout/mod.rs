@@ -2838,7 +2838,32 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
                                v.trim().to_string()
                            };
     }
-    if let Some(v) = s.get("list-style-type") { bx.list_style_type = v.trim().to_string(); }
+    // L5 step 4 batch 22: list-style-type typed.
+    if s.contains_key("list-style-type") {
+        bx.list_style_type = if let Some(cs) = cs_opt {
+            use super::computed_style::ListStyleType as Lst;
+            match &cs.list_style_type {
+                Lst::None => "none".to_string(),
+                Lst::Disc => "disc".to_string(),
+                Lst::Circle => "circle".to_string(),
+                Lst::Square => "square".to_string(),
+                Lst::Decimal => "decimal".to_string(),
+                Lst::DecimalLeadingZero => "decimal-leading-zero".to_string(),
+                Lst::LowerAlpha => "lower-alpha".to_string(),
+                Lst::UpperAlpha => "upper-alpha".to_string(),
+                Lst::LowerRoman => "lower-roman".to_string(),
+                Lst::UpperRoman => "upper-roman".to_string(),
+                Lst::LowerGreek => "lower-greek".to_string(),
+                Lst::LowerLatin => "lower-latin".to_string(),
+                Lst::UpperLatin => "upper-latin".to_string(),
+                Lst::Armenian => "armenian".to_string(),
+                Lst::Georgian => "georgian".to_string(),
+                Lst::Custom(s) => s.clone(),
+            }
+        } else {
+            s.get("list-style-type").unwrap().trim().to_string()
+        };
+    }
     if let Some(v) = s.get("list-style-image") {
         if v.trim() != "none" { bx.list_style_image = Some(v.trim().to_string()); }
     }
