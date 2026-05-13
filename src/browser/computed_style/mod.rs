@@ -330,29 +330,29 @@ pub struct ComputedStyle {
     // POZN: pri pridavani implementace zkontrolovat CS field type + odebrat
     // EXPERIMENTAL marker.
 
-    /// EXPERIMENTAL CSS Anchor Positioning L1 (CR 2024): anchor-name.
-    /// Definuje implicit anchor cilek pro position-anchor v descendantech.
-    pub experimental_anchor_name: String,
-    /// EXPERIMENTAL CSS Anchor Positioning L1: position-anchor.
-    /// Explicit anchor name pro anchored element.
-    pub experimental_position_anchor: String,
-    /// EXPERIMENTAL CSS Anchor Positioning L1: inset-area.
-    /// Grid-like rozmistovani vuci anchor.
-    pub experimental_inset_area: String,
+    /// CSS Anchor Positioning L1 (CR 2024): anchor-name.
+    /// PARTIAL: storage + devtools display ANO. Layout anchor() fn + position
+    /// resolution NOT impl - pole pro cilek elementu.
+    pub anchor_name: String,
+    /// CSS Anchor Positioning L1: position-anchor. PARTIAL: storage only.
+    pub position_anchor: String,
+    /// CSS Anchor Positioning L1: inset-area. PARTIAL: storage only.
+    pub inset_area: String,
 
-    /// EXPERIMENTAL CSS View Transitions L1: view-transition-name.
-    pub experimental_view_transition_name: String,
+    /// CSS View Transitions L1: view-transition-name. PARTIAL: storage only.
+    /// Pri navigation triggeruje cross-document transition (BROWSER impl required).
+    pub view_transition_name: String,
 
-    /// EXPERIMENTAL CSS Scroll-Driven Animations L1: view-timeline-name.
-    pub experimental_view_timeline_name: String,
-    /// EXPERIMENTAL CSS Scroll-Driven Animations L1: view-timeline-axis.
-    pub experimental_view_timeline_axis: String,
-    /// EXPERIMENTAL CSS Scroll-Driven Animations L1: scroll-timeline-name.
-    pub experimental_scroll_timeline_name: String,
-    /// EXPERIMENTAL CSS Scroll-Driven Animations L1: scroll-timeline-axis.
-    pub experimental_scroll_timeline_axis: String,
-    /// EXPERIMENTAL CSS Scroll-Driven Animations L1: animation-timeline.
-    pub experimental_animation_timeline: String,
+    /// CSS Scroll-Driven Animations L1: view-timeline-name. PARTIAL: storage only.
+    pub view_timeline_name: String,
+    /// CSS Scroll-Driven Animations L1: view-timeline-axis. PARTIAL.
+    pub view_timeline_axis: String,
+    /// CSS Scroll-Driven Animations L1: scroll-timeline-name. PARTIAL.
+    pub scroll_timeline_name: String,
+    /// CSS Scroll-Driven Animations L1: scroll-timeline-axis. PARTIAL.
+    pub scroll_timeline_axis: String,
+    /// CSS Scroll-Driven Animations L1: animation-timeline. PARTIAL.
+    pub animation_timeline_l5: String,
 
     /// CSS Containment L3: content-visibility (partial impl: hidden hides
     /// element. auto = visible (viewport-relative optimization NOT impl)).
@@ -629,15 +629,15 @@ impl ComputedStyle {
             text_emphasis: String::new(),
             text_emphasis_color: Color::CurrentColor,
             // EXPERIMENTAL defaults
-            experimental_anchor_name: String::new(),
-            experimental_position_anchor: String::new(),
-            experimental_inset_area: String::new(),
-            experimental_view_transition_name: "none".into(),
-            experimental_view_timeline_name: "none".into(),
-            experimental_view_timeline_axis: "block".into(),
-            experimental_scroll_timeline_name: "none".into(),
-            experimental_scroll_timeline_axis: "block".into(),
-            experimental_animation_timeline: "auto".into(),
+            anchor_name: String::new(),
+            position_anchor: String::new(),
+            inset_area: String::new(),
+            view_transition_name: "none".into(),
+            view_timeline_name: "none".into(),
+            view_timeline_axis: "block".into(),
+            scroll_timeline_name: "none".into(),
+            scroll_timeline_axis: "block".into(),
+            animation_timeline_l5: "auto".into(),
             content_visibility: ContentVisibility::Visible,
             container: String::new(),
             container_type: ContainerType::Normal,
@@ -729,17 +729,17 @@ impl ComputedStyle {
         out.push(("text-transform".into(), self.text_transform.css_string().into()));
         out.push(("cursor".into(), self.cursor.css_string()));
         // ─── EXPERIMENTAL (raw strings, marker prefix v devtools UI) ─
-        if !self.experimental_anchor_name.is_empty() {
-            out.push(("anchor-name".into(), self.experimental_anchor_name.clone()));
+        if !self.anchor_name.is_empty() {
+            out.push(("anchor-name".into(), self.anchor_name.clone()));
         }
-        if !self.experimental_position_anchor.is_empty() {
-            out.push(("position-anchor".into(), self.experimental_position_anchor.clone()));
+        if !self.position_anchor.is_empty() {
+            out.push(("position-anchor".into(), self.position_anchor.clone()));
         }
-        if !self.experimental_inset_area.is_empty() {
-            out.push(("inset-area".into(), self.experimental_inset_area.clone()));
+        if !self.inset_area.is_empty() {
+            out.push(("inset-area".into(), self.inset_area.clone()));
         }
-        if self.experimental_view_transition_name != "none" {
-            out.push(("view-transition-name".into(), self.experimental_view_transition_name.clone()));
+        if self.view_transition_name != "none" {
+            out.push(("view-transition-name".into(), self.view_transition_name.clone()));
         }
         if !matches!(self.content_visibility, ContentVisibility::Visible) {
             out.push(("content-visibility".into(), self.content_visibility.css_string().to_string()));

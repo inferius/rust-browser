@@ -1773,15 +1773,15 @@ pub fn cascade_with_viewport_typed(
         }
         // EXPERIMENTAL CSS L4/L5 - raw string populate. Implementace v layout/paint
         // dodelat v dalsich session - prozatim getComputedStyle + devtools display.
-        if let Some(v) = props.get("anchor-name") { cs.experimental_anchor_name = v.clone(); }
-        if let Some(v) = props.get("position-anchor") { cs.experimental_position_anchor = v.clone(); }
-        if let Some(v) = props.get("inset-area") { cs.experimental_inset_area = v.clone(); }
-        if let Some(v) = props.get("view-transition-name") { cs.experimental_view_transition_name = v.clone(); }
-        if let Some(v) = props.get("view-timeline-name") { cs.experimental_view_timeline_name = v.clone(); }
-        if let Some(v) = props.get("view-timeline-axis") { cs.experimental_view_timeline_axis = v.clone(); }
-        if let Some(v) = props.get("scroll-timeline-name") { cs.experimental_scroll_timeline_name = v.clone(); }
-        if let Some(v) = props.get("scroll-timeline-axis") { cs.experimental_scroll_timeline_axis = v.clone(); }
-        if let Some(v) = props.get("animation-timeline") { cs.experimental_animation_timeline = v.clone(); }
+        if let Some(v) = props.get("anchor-name") { cs.anchor_name = v.clone(); }
+        if let Some(v) = props.get("position-anchor") { cs.position_anchor = v.clone(); }
+        if let Some(v) = props.get("inset-area") { cs.inset_area = v.clone(); }
+        if let Some(v) = props.get("view-transition-name") { cs.view_transition_name = v.clone(); }
+        if let Some(v) = props.get("view-timeline-name") { cs.view_timeline_name = v.clone(); }
+        if let Some(v) = props.get("view-timeline-axis") { cs.view_timeline_axis = v.clone(); }
+        if let Some(v) = props.get("scroll-timeline-name") { cs.scroll_timeline_name = v.clone(); }
+        if let Some(v) = props.get("scroll-timeline-axis") { cs.scroll_timeline_axis = v.clone(); }
+        if let Some(v) = props.get("animation-timeline") { cs.animation_timeline_l5 = v.clone(); }
         if let Some(v) = props.get("content-visibility") {
             cs.content_visibility = crate::browser::computed_style::ContentVisibility::parse(v);
         }
