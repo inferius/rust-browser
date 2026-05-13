@@ -2286,11 +2286,38 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(ts) = s.get("text-shadow") {
         bx.text_shadow = parse_text_shadow(ts);
     }
-    // font-family - vez prvni z comma-separated list (CSS spec: try in order)
-    if let Some(ff) = s.get("font-family") {
-        let first = ff.split(',').next().unwrap_or("").trim()
-            .trim_matches('"').trim_matches('\'');
-        bx.font_family = first.to_string();
+    // font-family - vez prvni z comma-separated list (CSS spec: try in order).
+    // L5 step 4 batch 17: cs.font_family (Vec<FontFamily>) typed prvni entry.
+    if s.contains_key("font-family") {
+        bx.font_family = if let Some(cs) = cs_opt {
+            use super::computed_style::FontFamily as Ff;
+            cs.font_family.first().map(|f| match f {
+                Ff::Named(name) => name.clone(),
+                Ff::Generic(g) => {
+                    use super::computed_style::GenericFamily as G;
+                    match g {
+                        G::Serif => "serif".to_string(),
+                        G::SansSerif => "sans-serif".to_string(),
+                        G::Monospace => "monospace".to_string(),
+                        G::Cursive => "cursive".to_string(),
+                        G::Fantasy => "fantasy".to_string(),
+                        G::SystemUi => "system-ui".to_string(),
+                        G::UiSerif => "ui-serif".to_string(),
+                        G::UiSansSerif => "ui-sans-serif".to_string(),
+                        G::UiMonospace => "ui-monospace".to_string(),
+                        G::UiRounded => "ui-rounded".to_string(),
+                        G::Emoji => "emoji".to_string(),
+                        G::Math => "math".to_string(),
+                        G::Fangsong => "fangsong".to_string(),
+                    }
+                }
+            }).unwrap_or_default()
+        } else {
+            let ff = s.get("font-family").unwrap();
+            let first = ff.split(',').next().unwrap_or("").trim()
+                .trim_matches('"').trim_matches('\'');
+            first.to_string()
+        };
     }
     // text-transform - L5 step 4 batch 16: cs.text_transform cross-type.
     if s.contains_key("text-transform") {
