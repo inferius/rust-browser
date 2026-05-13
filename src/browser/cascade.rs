@@ -1785,9 +1785,11 @@ pub fn cascade_with_viewport_typed(
         if let Some(v) = props.get("content-visibility") {
             cs.content_visibility = crate::browser::computed_style::ContentVisibility::parse(v);
         }
-        if let Some(v) = props.get("container") { cs.experimental_container = v.clone(); }
-        if let Some(v) = props.get("container-type") { cs.experimental_container_type = v.clone(); }
-        if let Some(v) = props.get("container-name") { cs.experimental_container_name = v.clone(); }
+        if let Some(v) = props.get("container") { cs.container = v.clone(); }
+        if let Some(v) = props.get("container-type") {
+            cs.container_type = crate::browser::computed_style::ContainerType::parse(v);
+        }
+        if let Some(v) = props.get("container-name") { cs.container_name = v.clone(); }
         if let Some(v) = props.get("text-wrap") {
             cs.text_wrap = crate::browser::computed_style::TextWrap::parse(v);
         }
@@ -1798,13 +1800,25 @@ pub fn cascade_with_viewport_typed(
         if let Some(v) = props.get("field-sizing") {
             cs.field_sizing = crate::browser::computed_style::FieldSizing::parse(v);
         }
-        if let Some(v) = props.get("print-color-adjust") { cs.experimental_print_color_adjust = v.clone(); }
-        if let Some(v) = props.get("forced-color-adjust") { cs.experimental_forced_color_adjust = v.clone(); }
-        if let Some(v) = props.get("color-scheme") { cs.experimental_color_scheme = v.clone(); }
-        if let Some(v) = props.get("math-style") { cs.experimental_math_style = v.clone(); }
-        if let Some(v) = props.get("math-depth") { cs.experimental_math_depth = v.clone(); }
-        if let Some(v) = props.get("ruby-position") { cs.experimental_ruby_position = v.clone(); }
-        if let Some(v) = props.get("ruby-align") { cs.experimental_ruby_align = v.clone(); }
+        if let Some(v) = props.get("print-color-adjust") {
+            cs.print_color_adjust = crate::browser::computed_style::PrintColorAdjust::parse(v);
+        }
+        if let Some(v) = props.get("forced-color-adjust") {
+            cs.forced_color_adjust = crate::browser::computed_style::ForcedColorAdjust::parse(v);
+        }
+        if let Some(v) = props.get("color-scheme") {
+            cs.color_scheme = crate::browser::computed_style::ColorScheme::parse(v);
+        }
+        if let Some(v) = props.get("math-style") {
+            cs.math_style = crate::browser::computed_style::MathStyle::parse(v);
+        }
+        if let Some(v) = props.get("math-depth") { cs.math_depth = v.clone(); }
+        if let Some(v) = props.get("ruby-position") {
+            cs.ruby_position = crate::browser::computed_style::RubyPosition::parse(v);
+        }
+        if let Some(v) = props.get("ruby-align") {
+            cs.ruby_align = crate::browser::computed_style::RubyAlign::parse(v);
+        }
         if let Some(v) = props.get("scroll-marker-group") { cs.experimental_scroll_marker_group = v.clone(); }
         computed.insert(*node_id, cs);
         // Konvertuj kazdou property na CascadeDecl s validity flag pro

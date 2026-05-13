@@ -357,13 +357,14 @@ pub struct ComputedStyle {
     /// CSS Containment L3: content-visibility (partial impl: hidden hides
     /// element. auto = visible (viewport-relative optimization NOT impl)).
     pub content_visibility: ContentVisibility,
-    /// EXPERIMENTAL CSS Containment L3: container.
-    pub experimental_container: String,
-    /// EXPERIMENTAL CSS Containment L3: container-type.
-    /// inline-size | size | normal
-    pub experimental_container_type: String,
-    /// EXPERIMENTAL CSS Containment L3: container-name.
-    pub experimental_container_name: String,
+    /// CSS Containment L3: container shorthand (raw - cascade expands).
+    /// PARTIAL: @container queries cascade-side ANO; runtime container size
+    /// invalidation NOT impl.
+    pub container: String,
+    /// CSS Containment L3: container-type. normal | inline-size | size.
+    pub container_type: ContainerType,
+    /// CSS Containment L3: container-name. Custom ident (raw).
+    pub container_name: String,
 
     /// CSS Text L4: text-wrap (partial impl: nowrap/wrap mapped na white-space).
     /// balance/pretty/stable advanced line-break NOT implemented = behaves as wrap.
@@ -381,22 +382,25 @@ pub struct ComputedStyle {
     /// CSS Forms L1: field-sizing. content = auto-size to text.
     pub field_sizing: FieldSizing,
 
-    /// EXPERIMENTAL CSS Color L4: print-color-adjust. economy | exact
-    pub experimental_print_color_adjust: String,
-    /// EXPERIMENTAL CSS Color L4: forced-color-adjust. auto | none
-    pub experimental_forced_color_adjust: String,
-    /// EXPERIMENTAL CSS Color L4: color-scheme. light | dark | normal
-    pub experimental_color_scheme: String,
+    /// CSS Color L4: print-color-adjust (typed). PARTIAL: layout/paint
+    /// pri tisku NOT implemented; field zachycen pres cascade + devtools.
+    pub print_color_adjust: PrintColorAdjust,
+    /// CSS Color L4: forced-color-adjust (typed). PARTIAL: Windows high
+    /// contrast detection NOT implemented; respect future toggle.
+    pub forced_color_adjust: ForcedColorAdjust,
+    /// CSS Color L4: color-scheme (typed). PARTIAL: scrollbar / form control
+    /// dark rendering NOT implemented; passed na browser shell hint.
+    pub color_scheme: ColorScheme,
 
-    /// EXPERIMENTAL CSS Math L3: math-style. compact | normal
-    pub experimental_math_style: String,
-    /// EXPERIMENTAL CSS Math L3: math-depth.
-    pub experimental_math_depth: String,
+    /// CSS Math L3: math-style. compact | normal. PARTIAL: math layout NOT impl.
+    pub math_style: MathStyle,
+    /// CSS Math L3: math-depth (raw - keyword/integer/relative). PARTIAL.
+    pub math_depth: String,
 
-    /// EXPERIMENTAL CSS Ruby L1: ruby-position. over | under | inter-character | alternate
-    pub experimental_ruby_position: String,
-    /// EXPERIMENTAL CSS Ruby L1: ruby-align.
-    pub experimental_ruby_align: String,
+    /// CSS Ruby L1: ruby-position (typed). PARTIAL: ruby layout NOT fully impl.
+    pub ruby_position: RubyPosition,
+    /// CSS Ruby L1: ruby-align. PARTIAL.
+    pub ruby_align: RubyAlign,
 
     /// EXPERIMENTAL CSS Pseudo-classes L4: @starting-style support (no field needed,
     /// jen marker ze parser dokaze rozpoznat. Cascade prozatim ignoruje.)
@@ -632,22 +636,22 @@ impl ComputedStyle {
             experimental_scroll_timeline_axis: "block".into(),
             experimental_animation_timeline: "auto".into(),
             content_visibility: ContentVisibility::Visible,
-            experimental_container: String::new(),
-            experimental_container_type: "normal".into(),
-            experimental_container_name: String::new(),
+            container: String::new(),
+            container_type: ContainerType::Normal,
+            container_name: String::new(),
             text_wrap: TextWrap::Wrap,
             experimental_text_wrap_style: "auto".into(),
             experimental_text_wrap_mode: "wrap".into(),
             experimental_text_box_trim: "none".into(),
             experimental_text_box_edge: "leading".into(),
             field_sizing: FieldSizing::Fixed,
-            experimental_print_color_adjust: "economy".into(),
-            experimental_forced_color_adjust: "auto".into(),
-            experimental_color_scheme: "normal".into(),
-            experimental_math_style: "normal".into(),
-            experimental_math_depth: "auto".into(),
-            experimental_ruby_position: "alternate".into(),
-            experimental_ruby_align: "space-around".into(),
+            print_color_adjust: PrintColorAdjust::Economy,
+            forced_color_adjust: ForcedColorAdjust::Auto,
+            color_scheme: ColorScheme::Normal,
+            math_style: MathStyle::Normal,
+            math_depth: "auto".into(),
+            ruby_position: RubyPosition::Alternate,
+            ruby_align: RubyAlign::SpaceAround,
             experimental_scroll_marker_group: "none".into(),
             explicit_set: HashSet::new(),
         }
@@ -844,6 +848,178 @@ impl ContentVisibility {
             Self::Visible => "visible",
             Self::Hidden => "hidden",
             Self::Auto => "auto",
+        }
+    }
+}
+
+/// CSS Containment L3: container-type. normal | inline-size | size.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContainerType {
+    Normal,
+    InlineSize,
+    Size,
+}
+
+impl ContainerType {
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "inline-size" => Self::InlineSize,
+            "size" => Self::Size,
+            _ => Self::Normal,
+        }
+    }
+    pub fn css_string(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::InlineSize => "inline-size",
+            Self::Size => "size",
+        }
+    }
+}
+
+/// CSS Math L3: math-style. compact reduces vertical size of math elements.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MathStyle {
+    Normal,
+    Compact,
+}
+
+impl MathStyle {
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "compact" => Self::Compact,
+            _ => Self::Normal,
+        }
+    }
+    pub fn css_string(self) -> &'static str {
+        match self { Self::Normal => "normal", Self::Compact => "compact" }
+    }
+}
+
+/// CSS Ruby L1: ruby-position. Over (above) | Under | InterCharacter | Alternate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RubyPosition {
+    Over,
+    Under,
+    InterCharacter,
+    Alternate,
+}
+
+impl RubyPosition {
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "over" => Self::Over,
+            "under" => Self::Under,
+            "inter-character" => Self::InterCharacter,
+            _ => Self::Alternate,
+        }
+    }
+    pub fn css_string(self) -> &'static str {
+        match self {
+            Self::Over => "over",
+            Self::Under => "under",
+            Self::InterCharacter => "inter-character",
+            Self::Alternate => "alternate",
+        }
+    }
+}
+
+/// CSS Ruby L1: ruby-align. Start | Center | SpaceBetween | SpaceAround.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RubyAlign {
+    Start,
+    Center,
+    SpaceBetween,
+    SpaceAround,
+}
+
+impl RubyAlign {
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "start" => Self::Start,
+            "center" => Self::Center,
+            "space-between" => Self::SpaceBetween,
+            _ => Self::SpaceAround,
+        }
+    }
+    pub fn css_string(self) -> &'static str {
+        match self {
+            Self::Start => "start",
+            Self::Center => "center",
+            Self::SpaceBetween => "space-between",
+            Self::SpaceAround => "space-around",
+        }
+    }
+}
+
+/// CSS Color L4: print-color-adjust. economy (UA strip backgrounds for print)
+/// | exact (preserve all colors). Partial impl - browser print pipeline TBD.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrintColorAdjust {
+    Economy,
+    Exact,
+}
+
+impl PrintColorAdjust {
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "exact" => Self::Exact,
+            _ => Self::Economy,
+        }
+    }
+    pub fn css_string(self) -> &'static str {
+        match self { Self::Economy => "economy", Self::Exact => "exact" }
+    }
+}
+
+/// CSS Color L4: forced-color-adjust. auto = honor system colors v high contrast;
+/// none = ignore. Partial impl - high contrast mode detection TBD.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForcedColorAdjust {
+    Auto,
+    None,
+}
+
+impl ForcedColorAdjust {
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "none" => Self::None,
+            _ => Self::Auto,
+        }
+    }
+    pub fn css_string(self) -> &'static str {
+        match self { Self::Auto => "auto", Self::None => "none" }
+    }
+}
+
+/// CSS Color L4: color-scheme. light | dark | normal | "light dark" (both).
+/// Partial impl - native form/scrollbar dark rendering TBD.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColorScheme {
+    Normal,
+    Light,
+    Dark,
+    /// `light dark` shorthand - browser picks based on user pref.
+    LightDark,
+}
+
+impl ColorScheme {
+    pub fn parse(s: &str) -> Self {
+        let t = s.trim().to_ascii_lowercase();
+        let parts: Vec<&str> = t.split_whitespace().collect();
+        match parts.as_slice() {
+            ["light"] => Self::Light,
+            ["dark"] => Self::Dark,
+            ["light", "dark"] | ["dark", "light"] => Self::LightDark,
+            _ => Self::Normal,
+        }
+    }
+    pub fn css_string(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::Light => "light",
+            Self::Dark => "dark",
+            Self::LightDark => "light dark",
         }
     }
 }
