@@ -12,6 +12,7 @@
 //! podporuje). Pri dalsim feature work pridat.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u16)]
 pub enum PropertyId {
     // ─── Color / Background ───────────────────────────────────────────
     Color,
@@ -306,7 +307,18 @@ pub enum PropertyId {
     Unknown,
 }
 
+/// L5 step 4 Phase 3 Step G: max PropertyId variants pro bitset sizing.
+/// 246 aktualnich variants + headroom -> [u64; 8] = 512 bits.
+pub const PROPERTY_ID_BITSET_WORDS: usize = 8;
+
 impl PropertyId {
+    /// L5 step 4 Phase 3 Step G: discriminant index pro bitset operace.
+    /// Bezi pres `#[repr(u16)]` cast. Variants sekvencni, fits u16.
+    #[inline]
+    pub fn as_index(self) -> usize {
+        self as u16 as usize
+    }
+
     /// Z CSS kebab-case nazvu na PropertyId.
     /// Vraci `Unknown` pri neznamem property (cascade ignoruje).
     pub fn parse(s: &str) -> Self {

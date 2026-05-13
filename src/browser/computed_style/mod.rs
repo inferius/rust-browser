@@ -24,10 +24,39 @@ pub mod cascade_decl;
 
 pub use color::Color;
 pub use length::Length;
-pub use property::PropertyId;
+pub use property::{PropertyId, PROPERTY_ID_BITSET_WORDS};
 pub use cascade_decl::{CascadeDecl, CascadeOrigin, Specificity};
 
-use std::collections::HashSet;
+/// L5 step 4 Phase 3 Step G: bitset replace HashSet<PropertyId>. Stack-allocated
+/// [u64; 8] = 512 bits. 246 current variants + headroom. O(1) ops via bit shift.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PropertySet([u64; PROPERTY_ID_BITSET_WORDS]);
+
+impl PropertySet {
+    #[inline]
+    pub fn new() -> Self { Self([0u64; PROPERTY_ID_BITSET_WORDS]) }
+    #[inline]
+    pub fn insert(&mut self, prop: PropertyId) {
+        let idx = prop.as_index();
+        let word = idx / 64;
+        let bit = idx % 64;
+        if word < PROPERTY_ID_BITSET_WORDS {
+            self.0[word] |= 1u64 << bit;
+        }
+    }
+    #[inline]
+    pub fn contains(&self, prop: PropertyId) -> bool {
+        let idx = prop.as_index();
+        let word = idx / 64;
+        let bit = idx % 64;
+        if word >= PROPERTY_ID_BITSET_WORDS { return false; }
+        (self.0[word] & (1u64 << bit)) != 0
+    }
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.0.iter().all(|w| *w == 0)
+    }
+}
 
 /// Per-element typed computed style. Node ptr (Rc::as_ptr usize) -> resolved
 /// ComputedStyle. L5 stage 2c: definovan, naplnovan v stage 3 dual-write
@@ -467,11 +496,9 @@ pub struct ComputedStyle {
     pub column_rule_style_raw: String,
     pub column_rule_color_raw: String,
 
-    /// L5 step 4 Phase G: mnozina PropertyId ktere byly EXPLICITLY nastaveny
-    /// pres CSS deklaraci (cascade). Pouziva se misto `s.contains_key("X")`
-    /// gates - distinguishes "explicitne CSS-set" vs "initial default".
-    /// Vyhoda: dropujeme HashMap<String,String> z build path.
-    pub explicit_set: HashSet<PropertyId>,
+    /// L5 step 4 Phase G+G: bitset PropertyId set. Pouziva PropertySet
+    /// [u64; 8] = 512 bits. Stack-alloc, O(1) ops. Saves ~100B per cs vs HashSet.
+    pub explicit_set: PropertySet,
 }
 
 impl Default for ComputedStyle {
@@ -738,19 +765,18 @@ impl ComputedStyle {
             column_rule_width_raw: String::new(),
             column_rule_style_raw: String::new(),
             column_rule_color_raw: String::new(),
-            explicit_set: HashSet::new(),
+            explicit_set: PropertySet::new(),
         }
     }
 
     /// L5 step 4 Phase G: kontrola zda byla property explicitne nastavena.
-    /// Nahrazuje `s.contains_key("X")` gate v build_box_inner po drop style_map.
+    /// Bitset O(1) check.
     #[inline]
     pub fn is_set(&self, prop: PropertyId) -> bool {
-        self.explicit_set.contains(&prop)
+        self.explicit_set.contains(prop)
     }
 
-    /// L5 step 4 Phase G: oznac property jako explicitne nastavenou. Volane
-    /// cascade pri populace typed pole z deklarace.
+    /// L5 step 4 Phase G: oznac property jako explicitne nastavenou.
     #[inline]
     pub fn mark_set(&mut self, prop: PropertyId) {
         self.explicit_set.insert(prop);
