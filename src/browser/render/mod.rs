@@ -6049,8 +6049,13 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 let computed_for_layout = self.cached_computed_map.as_ref()
                     .map(Rc::clone)
                     .unwrap_or_else(|| Rc::new(super::computed_style::ComputedStyleMap::new()));
+                // L5 step 4 Phase 3 attempt: predat EMPTY style_map -> layout cte cs only
+                // (kdyz cs_opt aktivni). Bez aktivniho cs by tests selhaly - vyzaduje
+                // cs.is_set + typed reads vsude. Cached_style_map zustava alive
+                // pro apply_animations + apply_paint_animations (per-frame anim values).
+                let empty_style_map: super::cascade::StyleMap = Default::default();
                 let mut lr = layout::layout_tree_with_pseudo_cached_typed(
-                    &document_root, &*style_map, pseudo_map, computed_for_layout,
+                    &document_root, &empty_style_map, pseudo_map, computed_for_layout,
                     viewport_w, viewport_h, prev_root);
                 perf_t("layout_tree (rebuild)", _t_layout);
                 // Reset anim_baseline po hard layout - novy rect = nova
