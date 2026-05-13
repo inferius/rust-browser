@@ -2148,29 +2148,31 @@ fn transition_detect_change_creates_active() {
 
 #[test]
 fn transition_apply_interpolates_numeric() {
-    use crate::browser::cascade::{ActiveTransition, TransitionSpec, apply_transitions};
-    use std::collections::HashMap;
+    // L5 step 4 Phase 3: typed apply_transitions.
+    use crate::browser::cascade::{ActiveTransition, TransitionSpec, apply_transitions_typed};
+    use crate::browser::computed_style::{ComputedStyle, ComputedStyleMap};
 
-    let mut style_map: cascade::StyleMap = HashMap::new();
-    let mut styles: HashMap<String, String> = HashMap::new();
-    styles.insert("opacity".into(), "1".into());
-    style_map.insert(99, styles);
+    let mut cmap = ComputedStyleMap::new();
+    let mut cs = ComputedStyle::initial();
+    cs.opacity = 1.0;
+    cmap.insert(99, cs);
 
     let active = vec![ActiveTransition {
         node_id: 99,
-        property: "opacity".into(),
+        property: "left".into(),
         from_value: "0px".into(),
         to_value: "100px".into(),
         spec: TransitionSpec {
-            property: "opacity".into(),
+            property: "left".into(),
             duration_secs: 1.0,
             timing_function: "linear".into(),
             delay_secs: 0.0,
         },
         start_time: 0.0,
     }];
-    apply_transitions(&mut style_map, &active, 0.5);
-    let v = style_map.get(&99).unwrap().get("opacity").unwrap();
+    apply_transitions_typed(&mut cmap, &active, 0.5);
+    let cs = cmap.get(&99).unwrap();
+    let v = cascade::read_animated_value_from_cs(cs, "left").unwrap();
     // 50px na 50% prubehu (linear)
     assert_eq!(v, "50px");
 }
@@ -2205,12 +2207,13 @@ fn animation_fill_mode_forwards_holds_last_frame() {
         #x { animation: slide 1s linear forwards; left: 0px; position: relative; }
         @keyframes slide { 0% { left: 0px; } 100% { left: 100px; } }
     "#);
-    let mut map = cascade::cascade(&doc.root, &[css.clone()]);
-    // Po skonceni (5s > 1s) s forwards drzi 100px
-    cascade::apply_animations(&mut map, &[css], 5.0);
+    // L5 step 4: typed cascade + apply_animations_typed.
+    let mut out = cascade::cascade_with_viewport_typed(&doc.root, &[css.clone()], 1024.0, 768.0);
+    cascade::apply_animations_typed(&mut out.computed, &[css], 5.0);
     let div = doc.root.get_elements_by_tag("div");
-    let s = cascade::get_styles(&map, &div[0]).unwrap();
-    assert_eq!(s.get("left").map(|v| v.as_str()), Some("100px"));
+    let nid = std::rc::Rc::as_ptr(&div[0]) as usize;
+    let cs = out.computed.get(&nid).unwrap();
+    assert_eq!(cascade::read_animated_value_from_cs(cs, "left").as_deref(), Some("100px"));
 }
 
 #[test]
@@ -2221,11 +2224,12 @@ fn animation_paused_freezes_at_zero() {
         #x { animation: slide 1s linear; animation-play-state: paused; left: 0px; }
         @keyframes slide { 0% { left: 0px; } 100% { left: 100px; } }
     "#);
-    let mut map = cascade::cascade(&doc.root, &[css.clone()]);
-    cascade::apply_animations(&mut map, &[css], 0.5);
+    let mut out = cascade::cascade_with_viewport_typed(&doc.root, &[css.clone()], 1024.0, 768.0);
+    cascade::apply_animations_typed(&mut out.computed, &[css], 0.5);
     let div = doc.root.get_elements_by_tag("div");
-    let s = cascade::get_styles(&map, &div[0]).unwrap();
-    assert_eq!(s.get("left").map(|v| v.as_str()), Some("0px"));
+    let nid = std::rc::Rc::as_ptr(&div[0]) as usize;
+    let cs = out.computed.get(&nid).unwrap();
+    assert_eq!(cascade::read_animated_value_from_cs(cs, "left").as_deref(), Some("0px"));
 }
 
 #[test]
@@ -2251,15 +2255,15 @@ fn apply_animations_interpolates_at_half_duration() {
             100% { left: 100px; }
         }
     "#);
-    let mut map = cascade::cascade(&doc.root, &[css.clone()]);
+    let mut out = cascade::cascade_with_viewport_typed(&doc.root, &[css.clone()], 1024.0, 768.0);
     // V case 1.0s (50% z 2s) - linearne -> left 50px
-    let active = cascade::apply_animations(&mut map, &[css], 1.0);
+    let active = cascade::apply_animations_typed(&mut out.computed, &[css], 1.0);
     assert!(active);
-    // Najdi div node a jeho styles
     let divs = doc.root.get_elements_by_tag("div");
     let div = divs.first().unwrap();
-    let styles = cascade::get_styles(&map, div).unwrap();
-    let left = styles.get("left").map(|s| s.as_str()).unwrap_or("");
+    let nid = std::rc::Rc::as_ptr(div) as usize;
+    let cs = out.computed.get(&nid).unwrap();
+    let left = cascade::read_animated_value_from_cs(cs, "left").unwrap_or_default();
     assert_eq!(left, "50px", "expected left=50px at t=1s of 2s linear, got {left}");
 }
 
@@ -2278,14 +2282,15 @@ fn anim_static_text_child_follows_relative_parent_shift() {
                background: blue; color: white; animation: slide 1s linear; }
         @keyframes slide { 0% { left: 0px; } 100% { left: 100px; } }
     "#);
-    let mut map = cascade::cascade(&doc.root, &[css.clone()]);
-    // t=0.5s -> 50% -> left = 50px.
-    cascade::apply_animations(&mut map, &[css], 0.5);
-    let mut layout_root = layout::layout_tree(&doc.root, &map, 1280.0, 900.0);
-    // Layout shifted box + text by offset_left = 50.
-    // apply_paint_animations: baseline init subtracts layout_dx + parent_layout_dx.
-    // Pak applies cascade.left from style_map (same 50px) -> rect.x = baseline + 50.
-    crate::browser::render::apply_paint_animations_styles(&mut layout_root, &map);
+    // L5 step 4: typed pipeline.
+    let mut out = cascade::cascade_with_viewport_typed(&doc.root, &[css.clone()], 1280.0, 900.0);
+    cascade::apply_animations_typed(&mut out.computed, &[css.clone()], 0.5);
+    let style_map = cascade::cascade(&doc.root, &[css.clone()]);
+    let computed = std::rc::Rc::new(out.computed);
+    let mut layout_root = layout::layout_tree_typed(
+        &doc.root, &style_map, std::rc::Rc::clone(&computed),
+        1280.0, 900.0);
+    crate::browser::render::apply_paint_animations(&mut layout_root, &computed);
     // Najdi #box LayoutBox v tree.
     fn find_by_id<'a>(b: &'a layout::LayoutBox, id: &str) -> Option<&'a layout::LayoutBox> {
         if b.node.as_ref().and_then(|n| n.attr("id")).as_deref() == Some(id) { return Some(b); }

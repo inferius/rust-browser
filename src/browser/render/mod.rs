@@ -534,24 +534,6 @@ pub(crate) fn apply_paint_animations(box_: &mut crate::browser::layout::LayoutBo
     apply_paint_animations_inner(box_, computed_map, 0.0, 0.0, 0.0, 0.0, 0.0);
 }
 
-/// L5 step 4 Phase 3: legacy compat - prijima &StyleMap (HashMap) misto typed.
-/// Konvertuje pro existing testy. Synthesize cs z style_map values via
-/// apply_animated_value_to_cs.
-#[allow(dead_code)]
-pub(crate) fn apply_paint_animations_styles(box_: &mut crate::browser::layout::LayoutBox,
-                           style_map: &crate::browser::cascade::StyleMap) {
-    // Build ComputedStyleMap z style_map - kazdy node z props.
-    let mut cm = crate::browser::computed_style::ComputedStyleMap::new();
-    for (node_id, props) in style_map {
-        let mut cs = crate::browser::computed_style::ComputedStyle::initial();
-        for (k, v) in props {
-            crate::browser::cascade::apply_animated_value_to_cs(&mut cs, k, v);
-        }
-        cm.insert(*node_id, cs);
-    }
-    apply_paint_animations(box_, &cm);
-}
-
 fn apply_paint_animations_inner(box_: &mut crate::browser::layout::LayoutBox,
                                  computed_map: &crate::browser::computed_style::ComputedStyleMap,
                                  parent_width: f32,

@@ -3618,42 +3618,6 @@ pub fn detect_transitions(
     result
 }
 
-/// Aplikuje aktivni transitions na current style map - interpoluje hodnoty.
-pub fn apply_transitions(
-    style_map: &mut StyleMap,
-    active: &[ActiveTransition],
-    elapsed_secs: f32,
-) {
-    for at in active {
-        let t = elapsed_secs - at.start_time - at.spec.delay_secs;
-        if t < 0.0 { continue; }
-        let raw_progress = (t / at.spec.duration_secs).clamp(0.0, 1.0);
-        let progress = apply_easing(raw_progress, &at.spec.timing_function);
-
-        // Interpoluj hodnotu - pres parse_length jako f32
-        let from = super::layout::parse_length(&at.from_value);
-        let to = super::layout::parse_length(&at.to_value);
-        let interpolated = if from != 0.0 || to != 0.0 {
-            // Numericka prop: interpoluj
-            let v = from + (to - from) * progress;
-            // Zachovaj jednotku z to_value (heuristika)
-            let unit = ["px", "em", "rem", "%", "vw", "vh", "deg", "rad"]
-                .iter()
-                .find(|u| at.to_value.ends_with(*u))
-                .copied()
-                .unwrap_or("px");
-            format!("{v}{unit}")
-        } else {
-            // Non-numericka - krokove (snap)
-            if progress < 0.5 { at.from_value.clone() } else { at.to_value.clone() }
-        };
-
-        if let Some(styles) = style_map.get_mut(&at.node_id) {
-            styles.insert(at.property.clone(), interpolated);
-        }
-    }
-}
-
 /// L5 step 4 Phase 3: getter pro typed cs.X -> CSS string per prop name.
 /// Mirror apply_animated_value_to_cs. Pro transitions detect typed.
 pub fn read_animated_value_from_cs(cs: &crate::browser::computed_style::ComputedStyle, prop: &str) -> Option<String> {
@@ -3806,32 +3770,6 @@ pub fn apply_transitions_typed(
 
 /// Aplikuje scroll-driven animations - misto time elapsed pouzij scroll progress.
 /// `scroll_progress` = scroll_y / max_scroll (0..1).
-pub fn apply_scroll_animations(
-    style_map: &mut StyleMap,
-    stylesheets: &[Stylesheet],
-    scroll_progress: f32,
-) -> bool {
-    use super::layout::interpolate_keyframes;
-    let mut any_active = false;
-    for styles in style_map.values_mut() {
-        // Detect animation-timeline pres styles
-        let timeline = styles.get("animation-timeline").cloned().unwrap_or_default();
-        if !timeline.starts_with("scroll(") && timeline != "scroll" { continue; }
-        let spec = match AnimationSpec::from_styles(styles) {
-            Some(s) => s, None => continue,
-        };
-        let frames = stylesheets.iter()
-            .flat_map(|s| s.keyframes.iter())
-            .find(|k| k.name == spec.name);
-        let frames = match frames { Some(k) => &k.frames, None => continue };
-        let progress = scroll_progress.clamp(0.0, 1.0);
-        let interp_vals = interpolate_keyframes(frames, progress);
-        for (k, v) in interp_vals { styles.insert(k, v); }
-        any_active = true;
-    }
-    any_active
-}
-
 /// L5 step 4 Phase 3 Step B: typed apply_scroll_animations - mutates
 /// ComputedStyleMap pres apply_animated_value_to_cs (typed setter).
 /// Trigger pres cs.animation_timeline_l5 = "scroll" / "scroll(...)".
@@ -4014,90 +3952,3 @@ pub fn apply_animations_typed(
     any_active
 }
 
-pub fn apply_animations(
-    style_map: &mut StyleMap,
-    stylesheets: &[Stylesheet],
-    elapsed_secs: f32,
-) -> bool {
-    use super::layout::interpolate_keyframes;
-    let mut any_active = false;
-
-    for styles in style_map.values_mut() {
-        let spec = match AnimationSpec::from_styles(styles) {
-            Some(s) => s, None => continue,
-        };
-
-        // Najdi keyframes
-        let frames = stylesheets.iter()
-            .flat_map(|s| s.keyframes.iter())
-            .find(|k| k.name == spec.name);
-        let frames = match frames { Some(k) => &k.frames, None => continue };
-
-        // Cas po zaciatku animace (bez delay)
-        let t = elapsed_secs - spec.delay_secs;
-
-        // Pred zacatkem (delay zatim probiha)
-        if t < 0.0 {
-            // animation-fill-mode: backwards / both -> aplikuj prvni snimek pred zacatkem
-            if spec.fill_mode == "backwards" || spec.fill_mode == "both" {
-                let initial = match spec.direction.as_str() {
-                    "reverse" | "alternate-reverse" => 1.0,
-                    _ => 0.0,
-                };
-                let interp_vals = interpolate_keyframes(frames, initial);
-                for (k, v) in interp_vals { styles.insert(k, v); }
-                any_active = true;
-            }
-            continue;
-        }
-
-        // Paused: pouzij fixed progress 0 (nebo posledni - zatim 0 pro jednoduchost)
-        if spec.play_state == "paused" {
-            // Pouzij prvni snimek
-            let interp_vals = interpolate_keyframes(frames, 0.0);
-            for (k, v) in interp_vals { styles.insert(k, v); }
-            continue;
-        }
-
-        // Iter count check - dokonceni
-        let total_progress = t / spec.duration_secs;
-        if total_progress >= spec.iteration_count {
-            // Animace dokoncena
-            // animation-fill-mode: forwards / both -> drz posledni snimek
-            // jinak (none / backwards) -> nepouzivat keyframes (vrati se na puvodni styl)
-            if spec.fill_mode == "forwards" || spec.fill_mode == "both" {
-                let final_progress = match spec.direction.as_str() {
-                    "reverse" => 0.0,
-                    "alternate" if (spec.iteration_count as i32) % 2 == 0 => 0.0,
-                    "alternate-reverse" if (spec.iteration_count as i32) % 2 == 0 => 1.0,
-                    _ => 1.0,
-                };
-                let interp_vals = interpolate_keyframes(frames, final_progress);
-                for (k, v) in interp_vals { styles.insert(k, v); }
-            }
-            continue;
-        }
-
-        // Aktivni iteration
-        let iter_idx = total_progress.floor() as i32;
-        let mut local = total_progress.fract(); // 0..1 v ramci aktualni iterace
-
-        // Direction handling
-        let reverse = match spec.direction.as_str() {
-            "reverse" => true,
-            "alternate" => iter_idx % 2 == 1,
-            "alternate-reverse" => iter_idx % 2 == 0,
-            _ => false,
-        };
-        if reverse { local = 1.0 - local; }
-
-        // Easing
-        let progress = apply_easing(local, &spec.timing_function);
-
-        let interp_vals = interpolate_keyframes(frames, progress);
-        for (k, v) in interp_vals { styles.insert(k, v); }
-        any_active = true;
-    }
-
-    any_active
-}

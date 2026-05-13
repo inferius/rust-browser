@@ -134,19 +134,21 @@ fn animations_unit_preservation() {
     "#.to_string();
     let doc = crate::browser::html_parser::parse_html(&html, "");
     let sheets = vec![crate::browser::css_parser::parse_stylesheet(&css)];
-    let mut style_map = crate::browser::cascade::cascade(&doc.root, &sheets);
-    let _ = crate::browser::cascade::apply_animations(&mut style_map, &sheets, 1.0);
-    // Najdi prvni element s class=a.
+    // L5 step 4: typed cascade + apply_animations_typed.
+    let mut out = crate::browser::cascade::cascade_with_viewport_typed(&doc.root, &sheets, 1024.0, 768.0);
+    let _ = crate::browser::cascade::apply_animations_typed(&mut out.computed, &sheets, 1.0);
     let mut found = false;
     doc.root.walk(&mut |n: &std::rc::Rc<crate::browser::dom::Node>| {
         if n.attr("class").as_deref() == Some("a") {
             found = true;
             let id = std::rc::Rc::as_ptr(n) as usize;
-            let styles = style_map.get(&id).unwrap();
-            assert_eq!(styles.get("left").map(|s| s.as_str()), Some("200px"),
-                "left ma byt '200px' got {:?}", styles.get("left"));
-            assert_eq!(styles.get("opacity").map(|s| s.as_str()), Some("0.5"),
-                "opacity ma byt '0.5' (bez px) got {:?}", styles.get("opacity"));
+            let cs = out.computed.get(&id).unwrap();
+            let left = crate::browser::cascade::read_animated_value_from_cs(cs, "left");
+            assert_eq!(left.as_deref(), Some("200px"),
+                "left ma byt '200px' got {:?}", left);
+            let opacity = crate::browser::cascade::read_animated_value_from_cs(cs, "opacity");
+            assert_eq!(opacity.as_deref(), Some("0.5"),
+                "opacity ma byt '0.5' got {:?}", opacity);
         }
     });
     assert!(found, "<.a> element not found");
