@@ -1793,10 +1793,18 @@ pub fn cascade_with_viewport_typed(
         if let Some(v) = props.get("text-wrap") {
             cs.text_wrap = crate::browser::computed_style::TextWrap::parse(v);
         }
-        if let Some(v) = props.get("text-wrap-style") { cs.experimental_text_wrap_style = v.clone(); }
-        if let Some(v) = props.get("text-wrap-mode") { cs.experimental_text_wrap_mode = v.clone(); }
-        if let Some(v) = props.get("text-box-trim") { cs.experimental_text_box_trim = v.clone(); }
-        if let Some(v) = props.get("text-box-edge") { cs.experimental_text_box_edge = v.clone(); }
+        if let Some(v) = props.get("text-wrap-style") {
+            cs.text_wrap_style = crate::browser::computed_style::TextWrapStyle::parse(v);
+        }
+        if let Some(v) = props.get("text-wrap-mode") {
+            cs.text_wrap_mode = crate::browser::computed_style::TextWrapMode::parse(v);
+        }
+        if let Some(v) = props.get("text-box-trim") {
+            cs.text_box_trim = crate::browser::computed_style::TextBoxTrim::parse(v);
+        }
+        if let Some(v) = props.get("text-box-edge") {
+            cs.text_box_edge = crate::browser::computed_style::TextBoxEdge::parse(v);
+        }
         if let Some(v) = props.get("field-sizing") {
             cs.field_sizing = crate::browser::computed_style::FieldSizing::parse(v);
         }

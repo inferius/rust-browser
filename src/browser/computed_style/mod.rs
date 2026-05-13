@@ -369,15 +369,18 @@ pub struct ComputedStyle {
     /// CSS Text L4: text-wrap (partial impl: nowrap/wrap mapped na white-space).
     /// balance/pretty/stable advanced line-break NOT implemented = behaves as wrap.
     pub text_wrap: TextWrap,
-    /// EXPERIMENTAL CSS Text L4: text-wrap-style.
-    pub experimental_text_wrap_style: String,
-    /// EXPERIMENTAL CSS Text L4: text-wrap-mode.
-    pub experimental_text_wrap_mode: String,
+    /// CSS Text L4: text-wrap-style (typed). auto | balance | pretty | stable.
+    /// PARTIAL: text-wrap-style algorithms (balance/pretty) NOT impl.
+    pub text_wrap_style: TextWrapStyle,
+    /// CSS Text L4: text-wrap-mode (typed). wrap | nowrap. Mirror text-wrap subset.
+    pub text_wrap_mode: TextWrapMode,
 
-    /// EXPERIMENTAL CSS Inline L3: text-box-trim. none | trim-start | trim-end | trim-both
-    pub experimental_text_box_trim: String,
-    /// EXPERIMENTAL CSS Inline L3: text-box-edge.
-    pub experimental_text_box_edge: String,
+    /// CSS Inline L3: text-box-trim (typed). none | trim-start | trim-end | trim-both.
+    /// PARTIAL: line-box trimming NOT impl (no metric adjustment).
+    pub text_box_trim: TextBoxTrim,
+    /// CSS Inline L3: text-box-edge (typed). leading | text | cap | ex | ideographic | ideographic-ink.
+    /// PARTIAL: edge adjustments NOT impl.
+    pub text_box_edge: TextBoxEdge,
 
     /// CSS Forms L1: field-sizing. content = auto-size to text.
     pub field_sizing: FieldSizing,
@@ -640,10 +643,10 @@ impl ComputedStyle {
             container_type: ContainerType::Normal,
             container_name: String::new(),
             text_wrap: TextWrap::Wrap,
-            experimental_text_wrap_style: "auto".into(),
-            experimental_text_wrap_mode: "wrap".into(),
-            experimental_text_box_trim: "none".into(),
-            experimental_text_box_edge: "leading".into(),
+            text_wrap_style: TextWrapStyle::Auto,
+            text_wrap_mode: TextWrapMode::Wrap,
+            text_box_trim: TextBoxTrim::None,
+            text_box_edge: TextBoxEdge::Leading,
             field_sizing: FieldSizing::Fixed,
             print_color_adjust: PrintColorAdjust::Economy,
             forced_color_adjust: ForcedColorAdjust::Auto,
@@ -848,6 +851,100 @@ impl ContentVisibility {
             Self::Visible => "visible",
             Self::Hidden => "hidden",
             Self::Auto => "auto",
+        }
+    }
+}
+
+/// CSS Text L4: text-wrap-style. auto/balance/pretty/stable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextWrapStyle {
+    Auto,
+    Balance,
+    Pretty,
+    Stable,
+}
+impl TextWrapStyle {
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "balance" => Self::Balance,
+            "pretty" => Self::Pretty,
+            "stable" => Self::Stable,
+            _ => Self::Auto,
+        }
+    }
+    pub fn css_string(self) -> &'static str {
+        match self { Self::Auto=>"auto", Self::Balance=>"balance", Self::Pretty=>"pretty", Self::Stable=>"stable" }
+    }
+}
+
+/// CSS Text L4: text-wrap-mode. wrap | nowrap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextWrapMode {
+    Wrap,
+    Nowrap,
+}
+impl TextWrapMode {
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "nowrap" => Self::Nowrap,
+            _ => Self::Wrap,
+        }
+    }
+    pub fn css_string(self) -> &'static str {
+        match self { Self::Wrap=>"wrap", Self::Nowrap=>"nowrap" }
+    }
+}
+
+/// CSS Inline L3: text-box-trim. line-box trimming directive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextBoxTrim {
+    None,
+    TrimStart,
+    TrimEnd,
+    TrimBoth,
+}
+impl TextBoxTrim {
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "trim-start" => Self::TrimStart,
+            "trim-end" => Self::TrimEnd,
+            "trim-both" => Self::TrimBoth,
+            _ => Self::None,
+        }
+    }
+    pub fn css_string(self) -> &'static str {
+        match self {
+            Self::None=>"none", Self::TrimStart=>"trim-start",
+            Self::TrimEnd=>"trim-end", Self::TrimBoth=>"trim-both",
+        }
+    }
+}
+
+/// CSS Inline L3: text-box-edge. leading | text | cap | ex | ideographic | ideographic-ink.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextBoxEdge {
+    Leading,
+    Text,
+    Cap,
+    Ex,
+    Ideographic,
+    IdeographicInk,
+}
+impl TextBoxEdge {
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "text" => Self::Text,
+            "cap" => Self::Cap,
+            "ex" => Self::Ex,
+            "ideographic" => Self::Ideographic,
+            "ideographic-ink" => Self::IdeographicInk,
+            _ => Self::Leading,
+        }
+    }
+    pub fn css_string(self) -> &'static str {
+        match self {
+            Self::Leading=>"leading", Self::Text=>"text", Self::Cap=>"cap", Self::Ex=>"ex",
+            Self::Ideographic=>"ideographic", Self::IdeographicInk=>"ideographic-ink",
         }
     }
 }
