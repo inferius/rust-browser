@@ -644,6 +644,115 @@ impl ComputedStyle {
             experimental_scroll_marker_group: "none".into(),
         }
     }
+
+    /// L5 step 4 Phase D: Devtools adapter. Serializuj typed ComputedStyle do
+    /// `Vec<(name, value)>` pro Devtools "Styles" / "Computed" panel display.
+    /// Pouziva css_string() metody kde dostupne, raw String fields prepojuje
+    /// primo. Nezahrnuje vsechna pole - jen ta s alphanumeric mapping
+    /// (subset pro UX, neni round-trip-able zpet do CSS).
+    pub fn to_devtools_entries(&self) -> Vec<(String, String)> {
+        let mut out: Vec<(String, String)> = Vec::with_capacity(160);
+        // ─── Color / Background ─
+        out.push(("color".into(), color_css_string(self.color)));
+        out.push(("background-color".into(), color_css_string(self.background_color)));
+        // ─── Font ─
+        out.push(("font-size".into(), length_css_string(&self.font_size)));
+        out.push(("font-weight".into(), self.font_weight.to_string()));
+        out.push(("font-style".into(), if self.font_style_italic { "italic".into() } else { "normal".into() }));
+        out.push(("line-height".into(), match &self.line_height {
+            LineHeight::Normal => "normal".into(),
+            LineHeight::Multiplier(m) => m.to_string(),
+            LineHeight::Length(l) => length_css_string(l),
+        }));
+        // ─── Box model ─
+        out.push(("margin-top".into(), length_css_string(&self.margin_top)));
+        out.push(("margin-right".into(), length_css_string(&self.margin_right)));
+        out.push(("margin-bottom".into(), length_css_string(&self.margin_bottom)));
+        out.push(("margin-left".into(), length_css_string(&self.margin_left)));
+        out.push(("padding-top".into(), length_css_string(&self.padding_top)));
+        out.push(("padding-right".into(), length_css_string(&self.padding_right)));
+        out.push(("padding-bottom".into(), length_css_string(&self.padding_bottom)));
+        out.push(("padding-left".into(), length_css_string(&self.padding_left)));
+        out.push(("width".into(), length_css_string(&self.width)));
+        out.push(("height".into(), length_css_string(&self.height)));
+        out.push(("min-width".into(), length_css_string(&self.min_width)));
+        out.push(("max-width".into(), length_css_string(&self.max_width)));
+        out.push(("min-height".into(), length_css_string(&self.min_height)));
+        out.push(("max-height".into(), length_css_string(&self.max_height)));
+        out.push(("top".into(), length_css_string(&self.top)));
+        out.push(("right".into(), length_css_string(&self.right)));
+        out.push(("bottom".into(), length_css_string(&self.bottom)));
+        out.push(("left".into(), length_css_string(&self.left)));
+        // ─── Visual ─
+        out.push(("opacity".into(), self.opacity.to_string()));
+        out.push(("visibility".into(), self.visibility.css_string().into()));
+        out.push(("display".into(), self.display.css_string().into()));
+        out.push(("position".into(), self.position.css_string().into()));
+        out.push(("z-index".into(), self.z_index.css_string()));
+        out.push(("overflow-x".into(), self.overflow_x.css_string().into()));
+        out.push(("overflow-y".into(), self.overflow_y.css_string().into()));
+        out.push(("text-align".into(), self.text_align.css_string().into()));
+        out.push(("white-space".into(), self.white_space.css_string().into()));
+        out.push(("word-break".into(), self.word_break.css_string().into()));
+        out.push(("overflow-wrap".into(), self.overflow_wrap.css_string().into()));
+        out.push(("writing-mode".into(), self.writing_mode.css_string().into()));
+        out.push(("direction".into(), self.direction.css_string().into()));
+        out.push(("text-transform".into(), self.text_transform.css_string().into()));
+        out.push(("cursor".into(), self.cursor.css_string()));
+        // ─── EXPERIMENTAL (raw strings, marker prefix v devtools UI) ─
+        if !self.experimental_anchor_name.is_empty() {
+            out.push(("anchor-name".into(), self.experimental_anchor_name.clone()));
+        }
+        if !self.experimental_position_anchor.is_empty() {
+            out.push(("position-anchor".into(), self.experimental_position_anchor.clone()));
+        }
+        if !self.experimental_inset_area.is_empty() {
+            out.push(("inset-area".into(), self.experimental_inset_area.clone()));
+        }
+        if self.experimental_view_transition_name != "none" {
+            out.push(("view-transition-name".into(), self.experimental_view_transition_name.clone()));
+        }
+        if self.experimental_content_visibility != "visible" {
+            out.push(("content-visibility".into(), self.experimental_content_visibility.clone()));
+        }
+        if self.experimental_text_wrap != "wrap" {
+            out.push(("text-wrap".into(), self.experimental_text_wrap.clone()));
+        }
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
+    }
+}
+
+/// Helper: Length -> CSS string pro devtools display.
+fn length_css_string(l: &Length) -> String {
+    match l {
+        Length::Px(v) => format!("{}px", v),
+        Length::Em(v) => format!("{}em", v),
+        Length::Rem(v) => format!("{}rem", v),
+        Length::Vw(v) => format!("{}vw", v),
+        Length::Vh(v) => format!("{}vh", v),
+        Length::Vmin(v) => format!("{}vmin", v),
+        Length::Vmax(v) => format!("{}vmax", v),
+        Length::Percent(v) => format!("{}%", v),
+        Length::Ch(v) => format!("{}ch", v),
+        Length::Ex(v) => format!("{}ex", v),
+        Length::Auto => "auto".into(),
+        Length::None => "none".into(),
+        Length::MinContent => "min-content".into(),
+        Length::MaxContent => "max-content".into(),
+        Length::FitContent(_) => "fit-content".into(),
+        Length::Calc(_) => "calc(...)".into(),
+    }
+}
+
+/// Helper: Color -> CSS string pro devtools.
+fn color_css_string(c: Color) -> String {
+    let [r, g, b, a] = c.to_rgba_u8();
+    if a == 255 {
+        format!("rgb({}, {}, {})", r, g, b)
+    } else {
+        format!("rgba({}, {}, {}, {})", r, g, b, a as f32 / 255.0)
+    }
 }
 
 // ─── L5 step 4 batch 18: nove typed enums + value types ───────────────────

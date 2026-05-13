@@ -5633,7 +5633,17 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             let matched_cache_key = (self.devtools.elements.selected, cascade_hash);
             let need_rebuild_matched = self.cached_matched_key != Some(matched_cache_key);
             if let Some(sel) = self.devtools.elements.selected {
-                if let Some(decl_map) = style_map.get(&sel) {
+                // L5 step 4 Phase D: prefer ComputedStyleMap (typed -> to_devtools_entries)
+                // s fallback na legacy style_map. ComputedStyleMap drzi resolved
+                // typed hodnoty po cascade pasovani; devtools UI ukazuje skoro
+                // 1:1 stejny set. Lega style_map cesta zustava pro testy +
+                // nodes bez aktualniho ComputedStyle.
+                let typed_entries = self.cached_computed_map.as_ref()
+                    .and_then(|cm| cm.get(&sel))
+                    .map(|cs| cs.to_devtools_entries());
+                if let Some(entries) = typed_entries {
+                    self.devtools.styles.computed = entries;
+                } else if let Some(decl_map) = style_map.get(&sel) {
                     let mut entries: Vec<(String, String)> = decl_map.iter()
                         .map(|(k, v)| (k.clone(), v.clone()))
                         .collect();
