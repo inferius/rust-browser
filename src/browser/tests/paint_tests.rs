@@ -726,6 +726,36 @@ fn paint_transform_3d_perspective_chain_matrix_w_nonidentity() {
     panic!("TransformBegin nenalezen pri perspective+rotateY");
 }
 
+/// Regrese: SVG text element musi byt nakreslen JEN pres emit_svg_children
+/// (s SVG-space coords + SVG.rect.x/y origin). Drive: paint_box rekurzivne
+/// emitoval text node pres bx.children paint = inline text rendered ABSOLUTNE
+/// na build-time SVG.rect.x (= 0) -> text mimo SVG box.
+/// Fix: paint_box skipne children loop pro tag="svg".
+#[test]
+fn paint_svg_text_emitted_once_not_double() {
+    let cmds = build_dl(
+        r#"<html><body><svg width="400" height="80">
+            <text x="290" y="65" fill="purple" font-size="14">SVG text</text>
+        </svg></body></html>"#,
+        r#"body { margin: 0; padding: 50px; } svg { display: block; }"#,
+    );
+    // "SVG text" Text cmd musi byt JEN jednou (emit_svg_children), ne 2x.
+    let svg_text_count = cmds.iter().filter(|c| {
+        if let DisplayCommand::Text { content, .. } = c {
+            content == "SVG text"
+        } else { false }
+    }).count();
+    assert_eq!(svg_text_count, 1, "SVG text musi byt emit JEN jednou, ne pres regular paint_inline_or_text");
+    // x musi byt > 0 (= SVG.rect.x + 290) - SVG je na padding 50, takze x je ~340.
+    for cmd in &cmds {
+        if let DisplayCommand::Text { content, x, .. } = cmd {
+            if content == "SVG text" {
+                assert!(*x > 100.0, "SVG text x={} musi byt v SVG-space (svg.rect.x + 290), ne 290 absolutne", x);
+            }
+        }
+    }
+}
+
 // ─── Polygon clip-path ──────────────────────────────────────────────────
 
 #[test]

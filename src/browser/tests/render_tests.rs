@@ -475,6 +475,35 @@ fn paint_webgl_clear_emits_rect() {
     }
 }
 
+/// Regrese: sticky_cleared - po prvnim Clear musi DALSI paint (s prazdnou
+/// queue) tez emit clear color Rect. Drive: paint_webgl_canvases drained
+/// queue, dalsi paint queue prazdna -> bez emit -> WebGL canvas blank.
+#[test]
+fn paint_webgl_sticky_clear_persists_across_paints() {
+    let node = NodeData::new_element("canvas", HashMap::new());
+    let ptr = Rc::as_ptr(&node) as usize;
+    let bx = make_canvas_layout_box(Rc::clone(&node));
+    let mut state = WebGLState::new();
+    state.draw_queue.push(WebGLDrawCmd::ClearColor([0.0, 0.5, 1.0, 1.0]));
+    state.draw_queue.push(WebGLDrawCmd::Clear(0x4000));
+    let state_rc = Rc::new(RefCell::new(state));
+    let mut states: HashMap<usize, Rc<RefCell<WebGLState>>> = HashMap::new();
+    states.insert(ptr, Rc::clone(&state_rc));
+
+    // Frame 1: queue ma ClearColor + Clear -> emit Rect, sticky_cleared=true.
+    let mut cmds1: Vec<DisplayCommand> = Vec::new();
+    paint_webgl_canvases(&bx, &states, &mut cmds1);
+    assert!(cmds1.iter().any(|c| matches!(c, DisplayCommand::Rect { .. })),
+        "frame 1 must emit clear Rect");
+    assert!(state_rc.borrow().sticky_cleared, "sticky_cleared=true after Clear");
+
+    // Frame 2: queue prazdna - sticky drzi clear color, emit Rect AGAIN.
+    let mut cmds2: Vec<DisplayCommand> = Vec::new();
+    paint_webgl_canvases(&bx, &states, &mut cmds2);
+    assert!(cmds2.iter().any(|c| matches!(c, DisplayCommand::Rect { color, .. } if color[2] == 255)),
+        "frame 2 (empty queue) must STILL emit Rect with cyan/blue color z sticky_clear_color");
+}
+
 #[test]
 fn paint_webgl_clear_drains_queue() {
     let node = NodeData::new_element("canvas", HashMap::new());
