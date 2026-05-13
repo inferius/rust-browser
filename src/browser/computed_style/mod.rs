@@ -349,7 +349,9 @@ pub struct ComputedStyle {
     pub scroll_timeline_name: String,
     /// CSS Scroll-Driven Animations L1: scroll-timeline-axis. PARTIAL.
     pub scroll_timeline_axis: String,
-    /// CSS Scroll-Driven Animations L1: animation-timeline. PARTIAL.
+    /// CSS Scroll-Driven Animations L1: animation-timeline. IMPL: "scroll"
+    /// trigger scroll-driven keyframe interp via apply_scroll_animations_typed.
+    /// Named timelines / view-timeline (element entry/exit) NOT impl.
     pub animation_timeline_l5: String,
 
     /// CSS Containment L3: content-visibility (partial impl: hidden hides
