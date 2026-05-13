@@ -2292,9 +2292,11 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
             .trim_matches('"').trim_matches('\'');
         bx.font_family = first.to_string();
     }
-    // text-transform
-    if let Some(tt) = s.get("text-transform") {
-        bx.text_transform = match tt.trim() {
+    // text-transform - L5 step 4 batch 16: cs.text_transform cross-type.
+    if s.contains_key("text-transform") {
+        let raw = cs_opt.map(|cs| cs.text_transform.css_string())
+                        .unwrap_or_else(|| s.get("text-transform").unwrap().as_str());
+        bx.text_transform = match raw.trim() {
             "uppercase"  => TextTransform::Uppercase,
             "lowercase"  => TextTransform::Lowercase,
             "capitalize" => TextTransform::Capitalize,
