@@ -2612,8 +2612,17 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         bx.column_gap_multicol = g;
     }
     // Multi-column Layout L1: column-count + columns shorthand + column-rule.
-    if let Some(v) = s.get("column-count") {
-        bx.column_count = v.trim().parse::<u32>().unwrap_or(1).max(1);
+    // L5 step 4 batch 21: column-count z typed ColumnCount enum.
+    if s.contains_key("column-count") {
+        if let Some(cs) = cs_opt {
+            use super::computed_style::ColumnCount as Cc;
+            bx.column_count = match cs.column_count {
+                Cc::Auto => 1,
+                Cc::Integer(n) => n.max(1),
+            };
+        } else {
+            bx.column_count = s.get("column-count").unwrap().trim().parse::<u32>().unwrap_or(1).max(1);
+        }
     }
     if let Some(v) = s.get("columns") {
         // shorthand: column-width column-count (any order, auto allowed).
@@ -3152,10 +3161,40 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         }
     }
     // Length values - parsed into typed CssLength on cascade.
-    if let Some(v) = s.get("min-width") { bx.min_width = CssLength::parse(v); }
-    if let Some(v) = s.get("max-width") { bx.max_width = CssLength::parse(v); }
-    if let Some(v) = s.get("min-height") { bx.min_height = CssLength::parse(v); }
-    if let Some(v) = s.get("max-height") { bx.max_height = CssLength::parse(v); }
+    // L5 step 4 batch 21: min/max-width/height typed cross-type CssLength <- Length.
+    let cs_length_to_css = |l: &super::computed_style::Length| -> CssLength {
+        use super::computed_style::Length as L;
+        match l {
+            L::Auto => CssLength::Auto,
+            L::None => CssLength::None,
+            L::Px(v) => CssLength::Px(*v),
+            L::Em(v) => CssLength::Em(*v),
+            L::Rem(v) => CssLength::Rem(*v),
+            L::Vw(v) => CssLength::Vw(*v),
+            L::Vh(v) => CssLength::Vh(*v),
+            L::Vmin(v) => CssLength::VMin(*v),
+            L::Vmax(v) => CssLength::VMax(*v),
+            // Length::Percent stores number (50 = 50%); CssLength::Percent stores ratio (0.5 = 50%).
+            L::Percent(v) => CssLength::Percent(*v / 100.0),
+            // Ch/Ex/MinContent/MaxContent/FitContent/Calc -> Auto best-effort (CssLength nema).
+            L::Ch(_) | L::Ex(_) | L::MinContent | L::MaxContent | L::FitContent(_) => CssLength::Auto,
+            L::Calc(_) => CssLength::Calc(String::new()),
+        }
+    };
+    let read_minmax = |key: &str, pick: fn(&ComputedStyle) -> &super::computed_style::Length|
+        -> Option<CssLength>
+    {
+        s.get(key)?;
+        Some(if let Some(cs) = cs_opt {
+            cs_length_to_css(pick(cs))
+        } else {
+            CssLength::parse(s.get(key).unwrap())
+        })
+    };
+    if let Some(v) = read_minmax("min-width",  |cs| &cs.min_width)  { bx.min_width  = v; }
+    if let Some(v) = read_minmax("max-width",  |cs| &cs.max_width)  { bx.max_width  = v; }
+    if let Some(v) = read_minmax("min-height", |cs| &cs.min_height) { bx.min_height = v; }
+    if let Some(v) = read_minmax("max-height", |cs| &cs.max_height) { bx.max_height = v; }
     // Line-height: cislo (multiplier) nebo length (px) - L5 step 4 batch 2: typed LineHeight enum.
     if s.contains_key("line-height") {
         if let Some(cs) = cs_opt {
