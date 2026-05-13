@@ -21,6 +21,11 @@ pub mod debug_view;
 pub mod devtools;
 pub mod debug_bp;
 
+// Embeddable API contract - stable high-level facade pro hostujici aplikace
+// (shell crate, third-party UI). Phase 2 = stubs, Phase 3-5 = naplnuje.
+pub mod embed;
+pub use embed::{Engine, EventResponse, InputEvent, WebView};
+
 use lexer::base::Lexer;
 use parser::Parser;
 use interpreter::Interpreter;
