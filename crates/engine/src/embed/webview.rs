@@ -301,8 +301,38 @@ impl WebView {
 
     /// Zpracuj input event. Vrati `EventResponse` se zmenami pro hostujici
     /// aplikaci (dirty flag, cursor change, navigation request, ...).
-    pub fn handle_input(&mut self, _event: InputEvent) -> EventResponse {
-        todo!("Phase 4: presunout input handling z App")
+    ///
+    /// Phase 5 minimal implementacne: scroll + mouse move + resize. Click/key
+    /// dispatch do JS event listeneru = Phase 99 (vyzaduje hit-test pres
+    /// layout tree + DOM addEventListener registry).
+    pub fn handle_input(&mut self, event: InputEvent) -> EventResponse {
+        let mut response = EventResponse::default();
+        match event {
+            InputEvent::Scroll { dx, dy, .. } => {
+                let (x, y) = self.scroll();
+                let new_x = (x + dx).max(0.0);
+                let new_y = (y + dy).max(0.0);
+                self.set_scroll(new_x, new_y);
+                response.dirty = self.dirty;
+            }
+            InputEvent::MouseMove { x: _, y: _, .. } => {
+                // Phase 99: hit-test layout tree + :hover state machine.
+                // Pro ted no-op (dirty zustane).
+            }
+            InputEvent::MouseDown { .. } | InputEvent::MouseUp { .. } => {
+                // Phase 99: hit-test + dispatch click events do JS listeneru.
+            }
+            InputEvent::MouseLeave => {}
+            InputEvent::KeyDown { .. } | InputEvent::KeyUp { .. } | InputEvent::TextInput { .. } => {
+                // Phase 99: keyboard event dispatch + focused element input.
+            }
+            InputEvent::FocusChanged { .. } => {}
+            InputEvent::Resize { width, height, scale_factor } => {
+                self.resize(width, height, scale_factor);
+                response.dirty = true;
+            }
+        }
+        response
     }
 
     /// Renderuj page do offscreen texture. Pokud `dirty == false`, vrati
@@ -507,6 +537,7 @@ impl WebView {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::embed::event::KeyModifiers;
 
     fn fresh() -> WebView {
         WebView::new(Arc::new(Engine::new_headless()), 1280, 720)
@@ -636,6 +667,41 @@ mod tests {
         assert!(!eng.has_gpu());
         assert!(eng.device().is_none());
         assert!(eng.queue().is_none());
+    }
+
+    #[test]
+    fn handle_input_scroll_updates_position() {
+        let mut wv = fresh();
+        wv.dirty = false;
+        let resp = wv.handle_input(InputEvent::Scroll {
+            dx: 0.0, dy: 50.0, x: 100.0, y: 100.0,
+            modifiers: KeyModifiers::default(),
+        });
+        assert!(resp.dirty, "scroll musi dirty webview");
+        assert_eq!(wv.scroll(), (0.0, 50.0));
+    }
+
+    #[test]
+    fn handle_input_scroll_clamps_negative() {
+        let mut wv = fresh();
+        // Pri scroll na negativni hodnotu clampujem na 0.
+        wv.handle_input(InputEvent::Scroll {
+            dx: -100.0, dy: -100.0, x: 0.0, y: 0.0,
+            modifiers: KeyModifiers::default(),
+        });
+        assert_eq!(wv.scroll(), (0.0, 0.0));
+    }
+
+    #[test]
+    fn handle_input_resize_dirty() {
+        let mut wv = fresh();
+        wv.dirty = false;
+        let resp = wv.handle_input(InputEvent::Resize {
+            width: 800, height: 600, scale_factor: 1.0,
+        });
+        assert!(resp.dirty);
+        assert_eq!(wv.viewport_w, 800.0);
+        assert_eq!(wv.viewport_h, 600.0);
     }
 
     #[test]

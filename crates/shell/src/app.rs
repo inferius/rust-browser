@@ -11,12 +11,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use winit::application::ApplicationHandler;
-use winit::event::WindowEvent;
+use winit::event::{MouseScrollDelta, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
 use winit::window::{Window, WindowId};
 
 use rwe_engine::browser::render::Renderer;
-use rwe_engine::embed::{Engine, WebView};
+use rwe_engine::embed::{Engine, InputEvent, KeyModifiers, WebView};
 
 pub struct ShellApp {
     html: String,
@@ -28,6 +28,9 @@ pub struct ShellApp {
     renderer: Option<Renderer>,
     engine: Option<Arc<Engine>>,
     webview: Option<WebView>,
+
+    mouse_x: f32,
+    mouse_y: f32,
 }
 
 impl ShellApp {
@@ -43,6 +46,8 @@ impl ShellApp {
             renderer: None,
             engine: None,
             webview: None,
+            mouse_x: 0.0,
+            mouse_y: 0.0,
         }
     }
 
@@ -115,8 +120,36 @@ impl ApplicationHandler for ShellApp {
             WindowEvent::RedrawRequested => {
                 self.redraw();
             }
+            WindowEvent::CursorMoved { position, .. } => {
+                let scale = self.renderer.as_ref().map(|r| r.scale_factor_value()).unwrap_or(1.0);
+                self.mouse_x = position.x as f32 / scale;
+                self.mouse_y = position.y as f32 / scale;
+                if let Some(wv) = &mut self.webview {
+                    let _ = wv.handle_input(InputEvent::MouseMove {
+                        x: self.mouse_x,
+                        y: self.mouse_y,
+                        modifiers: KeyModifiers::default(),
+                    });
+                }
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                let (dx, dy) = match delta {
+                    MouseScrollDelta::LineDelta(x, y) => (x * -60.0, y * -60.0),
+                    MouseScrollDelta::PixelDelta(p) => (-(p.x as f32), -(p.y as f32)),
+                };
+                let webview = match &mut self.webview { Some(w) => w, None => return };
+                let response = webview.handle_input(InputEvent::Scroll {
+                    dx, dy,
+                    x: self.mouse_x,
+                    y: self.mouse_y,
+                    modifiers: KeyModifiers::default(),
+                });
+                if response.dirty {
+                    if let Some(w) = &self.window { w.request_redraw(); }
+                }
+            }
             _ => {
-                // Input/scroll/devtools = Phase 5. Zatim no-op.
+                // Click/key dispatch do JS = Phase 99 (hit-test + addEventListener).
             }
         }
     }
