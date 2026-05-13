@@ -260,15 +260,24 @@ pub fn expand_shorthand(prop: &str, value: &str, out: &mut HashMap<String, Strin
             out.insert("background".into(), value.into());
         }
         "font" => {
-            // "16px Arial" / "bold 14px Verdana" - parse size + family
+            // "16px Arial" / "bold 14px Verdana" / "16px Arial, sans-serif"
+            // - parse size + weight + style + family. Family tokens po font-size.
+            let mut size_seen = false;
+            let mut family_parts: Vec<&str> = Vec::new();
             for p in value.split_whitespace() {
-                if p.ends_with("px") || p.ends_with("em") || p.ends_with("rem") {
+                if !size_seen && (p.ends_with("px") || p.ends_with("em") || p.ends_with("rem")) {
                     out.insert("font-size".into(), p.into());
-                } else if p == "bold" {
+                    size_seen = true;
+                } else if !size_seen && p == "bold" {
                     out.insert("font-weight".into(), "bold".into());
-                } else if p == "italic" {
+                } else if !size_seen && p == "italic" {
                     out.insert("font-style".into(), "italic".into());
+                } else if size_seen {
+                    family_parts.push(p);
                 }
+            }
+            if !family_parts.is_empty() {
+                out.insert("font-family".into(), family_parts.join(" "));
             }
             out.insert("font".into(), value.into());
         }
