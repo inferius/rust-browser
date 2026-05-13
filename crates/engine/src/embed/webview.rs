@@ -14,9 +14,13 @@ use std::sync::Arc;
 use crate::browser::dom::Document;
 use crate::browser::css_parser::Stylesheet;
 use crate::interpreter::Interpreter;
+use crate::lexer::base::Lexer;
+use crate::parser::Parser;
+use crate::tokens::TokenKind;
 
 use super::engine::Engine;
 use super::event::{EventResponse, InputEvent, NavigationResult};
+use super::loader;
 
 /// Stav per-tab page. Hostujici aplikace drzi jeden `WebView` per logicky tab.
 ///
@@ -98,18 +102,153 @@ impl WebView {
 
     /// Nahraj HTML + CSS string. `base_url` se pouzije pro relative
     /// `<link rel=stylesheet>` a `<img src=...>` resolve.
-    ///
-    /// Phase 2 stub - Phase 3 sem presune logiku z `App::reload_from_html`.
-    pub fn load_html(&mut self, _html: &str, _css: &str, _base_url: Option<String>) -> NavigationResult {
-        todo!("Phase 3: presunout App::reload_from_html state setup")
+    pub fn load_html(&mut self, html: &str, css: &str, base_url: Option<String>) -> NavigationResult {
+        let base = base_url.clone().unwrap_or_else(|| "about:blank".to_string());
+        let doc = crate::browser::html_parser::parse_html(html, &base);
+
+        // Stylesheets - parse CSS string (uz agregovany hostujici aplikaci nebo
+        // load_url helpery). Kazdy WebView drzi 1 logicky stylesheet collection.
+        let stylesheet = crate::browser::css_parser::parse_stylesheet(css);
+        let stylesheet_count = if stylesheet.rules.is_empty() { 0 } else { 1 };
+
+        // Init interpreter + set document.
+        let interp = Interpreter::new();
+        // Document v interpreter needs clone - parse_html znovu pro nezavislou ref
+        // (puvodne kod taky reparseoval pro interp + render).
+        let interp_doc = crate::browser::html_parser::parse_html(html, &base);
+        interp.set_document(interp_doc);
+
+        // Title z parsed dokumentu (po parse_html je vyplnen z <title>).
+        self.title = doc.title.clone();
+
+        // Page state commit.
+        self.document = Some(doc);
+        self.stylesheets = vec![stylesheet];
+        self.base_url = base_url.clone();
+        self.dirty = true;
+
+        // Run <script> inline + external (pres fetch_text_url) - musi byt po
+        // set_document protoze DOM API je dostupne JS only po interp.set_document.
+        self.interpreter = Some(interp);
+        self.run_scripts();
+
+        // Po JS muze byt title prepsany pres `document.title = ...`. Refresh.
+        if let Some(interp) = &self.interpreter {
+            let doc_title = interp.document.borrow().title.clone();
+            if !doc_title.is_empty() {
+                self.title = doc_title;
+            }
+        }
+
+        NavigationResult {
+            url: base,
+            status: 200,
+            stylesheet_count,
+            local_path: self.local_path.clone(),
+        }
     }
 
-    /// Naviguj na URL. `http(s)://` jde pres ureq, `file://` cte z disku,
-    /// `about:blank` -> empty document.
+    /// Naviguj na URL. `http(s)://` jde pres ureq, lokalni paths cte z disku.
+    /// Helper z `embed::loader` agregue CSS z `<link rel=stylesheet>`, `<style>`,
+    /// co-located `.css`.
     ///
-    /// Phase 2 stub.
-    pub fn load_url(&mut self, _url: &str) -> NavigationResult {
-        todo!("Phase 3: presunout fetch + load_html pipeline z lib::run_cli")
+    /// Vrati `None` pokud fetch/read selze - WebView state se nemeni.
+    pub fn load_url(&mut self, url: &str) -> Option<NavigationResult> {
+        let loaded = loader::load_page(url)?;
+        // Update local_path PRED load_html aby ho NavigationResult vratil.
+        self.local_path = loaded.local_path.clone();
+        let mut result = self.load_html(&loaded.html, &loaded.css, loaded.base_url);
+        result.local_path = loaded.local_path;
+        Some(result)
+    }
+
+    /// Spusti vsechny inline + external `<script>` tagy z dokumentu pres
+    /// aktualni interpreter. Volane interne z `load_html` po set_document.
+    fn run_scripts(&mut self) {
+        let interp = match self.interpreter.as_mut() {
+            Some(i) => i,
+            None => return,
+        };
+        let doc_ref = interp.document.clone();
+        let base = self.base_url.clone().unwrap_or_default();
+        let fetch_external = std::env::var("RWE_NO_SCRIPTS")
+            .map(|v| v != "1" && !v.eq_ignore_ascii_case("true"))
+            .unwrap_or(true);
+
+        let script_nodes = doc_ref.borrow().root.get_elements_by_tag("script");
+        let mut scripts: Vec<(String, String)> = Vec::with_capacity(script_nodes.len());
+        for (i, s) in script_nodes.iter().enumerate() {
+            if let Some(src_attr) = s.attr("src") {
+                if !fetch_external { continue; }
+                let src_attr = src_attr.trim().to_string();
+                if src_attr.is_empty() { continue; }
+                let abs_url = if src_attr.starts_with("http://")
+                    || src_attr.starts_with("https://")
+                    || src_attr.starts_with("file://")
+                {
+                    src_attr.clone()
+                } else if !base.is_empty() {
+                    crate::browser::render::resolve_url(&base, &src_attr)
+                } else {
+                    src_attr.clone()
+                };
+                match crate::browser::render::fetch_text_url(&abs_url) {
+                    Some(body) => {
+                        interp.network_log.borrow_mut().push((abs_url.clone(), 200));
+                        scripts.push((abs_url, body));
+                    }
+                    None => {
+                        interp.network_log.borrow_mut().push((abs_url.clone(), 0));
+                        interp.console_log.borrow_mut().push((
+                            "error".into(),
+                            format!("[script fetch failed] {abs_url}"),
+                        ));
+                    }
+                }
+            } else {
+                let url = format!("<inline #{}>", i + 1);
+                let body = s.text_content();
+                if !body.trim().is_empty() {
+                    scripts.push((url, body));
+                }
+            }
+        }
+
+        for (_url, src) in scripts {
+            if src.trim().is_empty() { continue; }
+            match Lexer::parse_str(&src, "<inline>") {
+                Ok(lex) => {
+                    let tokens: Vec<_> = lex.tokens.into_iter()
+                        .filter(|t| !matches!(t.kind,
+                            TokenKind::Whitespace | TokenKind::Newline
+                            | TokenKind::CommentLine(_) | TokenKind::CommentBlock(_)))
+                        .collect();
+                    let mut parser = Parser::new(tokens);
+                    match parser.parse() {
+                        Ok(prog) => {
+                            if let Err(e) = interp.run(&prog) {
+                                let msg = format!("[script error] {e}");
+                                eprintln!("{msg}");
+                                interp.console_log.borrow_mut()
+                                    .push(("error".into(), msg));
+                            }
+                        }
+                        Err(e) => {
+                            let msg = format!("[parser error] line {} col {}: {}",
+                                e.line, e.column, e.msg);
+                            eprintln!("{msg}");
+                            interp.console_log.borrow_mut()
+                                .push(("error".into(), msg));
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("[lexer error] {e}");
+                    interp.console_log.borrow_mut()
+                        .push(("error".into(), format!("[lexer error] {e}")));
+                }
+            }
+        }
     }
 
     /// Zmena velikosti viewportu. Trigger relayout pri pristim `render()`.
@@ -134,9 +273,20 @@ impl WebView {
     }
 
     /// Velikost dokumentu (content w / h) pro scrollbar sizing v shellu.
+    /// Spousti layout pres aktualni viewport + cascade. Pomerne drahe -
+    /// hostujici aplikace by ho mela volat opportunisticky (po load_html
+    /// / resize), ne kazdy frame.
     pub fn page_size(&self) -> (f32, f32) {
-        // Phase 5: vrati posledni layout root content extent.
-        (self.viewport_w, self.viewport_h)
+        let doc = match &self.document { Some(d) => d, None => return (0.0, 0.0) };
+        let viewport_w = self.viewport_w / self.zoom;
+        let viewport_h = self.viewport_h / self.zoom;
+        let style_map = crate::browser::cascade::cascade_with_viewport(
+            &doc.root, &self.stylesheets, viewport_w, viewport_h);
+        let layout_root = crate::browser::layout::layout_tree(
+            &doc.root, &style_map, viewport_w, viewport_h);
+        let content_w = layout_root.rect.width.max(viewport_w);
+        let content_h = layout_root.rect.height.max(viewport_h);
+        (content_w, content_h)
     }
 
     /// Nastav scroll position.
@@ -188,4 +338,115 @@ impl WebView {
 
     /// Engine reference (pro custom rendering hostujici aplikace).
     pub fn engine(&self) -> &Arc<Engine> { &self.engine }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fresh() -> WebView {
+        WebView::new(Arc::new(Engine::new_headless()), 1280, 720)
+    }
+
+    #[test]
+    fn new_webview_is_empty() {
+        let wv = fresh();
+        assert!(wv.document().is_none());
+        assert!(wv.interpreter().is_none());
+        assert!(wv.stylesheets().is_empty());
+        assert_eq!(wv.title(), "");
+        assert_eq!(wv.scroll(), (0.0, 0.0));
+        assert_eq!(wv.zoom(), 1.0);
+    }
+
+    #[test]
+    fn load_html_populates_state() {
+        let mut wv = fresh();
+        let html = "<html><head><title>Test Page</title></head>\
+                    <body><h1>Hello</h1></body></html>";
+        let css = "h1 { color: red; }";
+        let result = wv.load_html(html, css, Some("file:///tmp/test.html".to_string()));
+
+        assert_eq!(result.status, 200);
+        assert_eq!(result.stylesheet_count, 1);
+        assert!(wv.document().is_some());
+        assert!(wv.interpreter().is_some());
+        assert_eq!(wv.title(), "Test Page");
+        assert_eq!(wv.base_url(), Some("file:///tmp/test.html"));
+        assert!(!wv.stylesheets().is_empty());
+        assert!(wv.dirty);
+    }
+
+    #[test]
+    fn load_html_runs_inline_script() {
+        let mut wv = fresh();
+        let html = "<html><body>\
+                    <script>console.log('hello from script');</script>\
+                    </body></html>";
+        wv.load_html(html, "", None);
+        let interp = wv.interpreter().expect("interpreter must exist");
+        let logs = interp.console_log.borrow();
+        let found = logs.iter().any(|(_, msg)| msg.contains("hello from script"));
+        assert!(found, "script output missing in console_log: {:?}", *logs);
+    }
+
+    #[test]
+    fn load_html_picks_up_js_title_assignment() {
+        let mut wv = fresh();
+        let html = "<html><head><title>Initial</title></head>\
+                    <body><script>document.title = 'Updated';</script></body></html>";
+        wv.load_html(html, "", None);
+        assert_eq!(wv.title(), "Updated");
+    }
+
+    #[test]
+    fn set_zoom_clamps_range() {
+        let mut wv = fresh();
+        wv.set_zoom(10.0);
+        assert_eq!(wv.zoom(), 5.0);
+        wv.set_zoom(0.01);
+        assert_eq!(wv.zoom(), 0.25);
+        wv.set_zoom(1.5);
+        assert_eq!(wv.zoom(), 1.5);
+    }
+
+    #[test]
+    fn set_scroll_marks_dirty() {
+        let mut wv = fresh();
+        wv.dirty = false;
+        wv.set_scroll(0.0, 0.0);
+        assert!(!wv.dirty, "no-op scroll should not dirty");
+        wv.set_scroll(0.0, 100.0);
+        assert!(wv.dirty, "scroll change must dirty");
+        assert_eq!(wv.scroll(), (0.0, 100.0));
+    }
+
+    #[test]
+    fn resize_updates_viewport_and_dirty() {
+        let mut wv = fresh();
+        wv.dirty = false;
+        wv.resize(800, 600, 1.5);
+        assert_eq!(wv.viewport_w, 800.0);
+        assert_eq!(wv.viewport_h, 600.0);
+        assert_eq!(wv.scale_factor, 1.5);
+        assert!(wv.dirty);
+    }
+
+    #[test]
+    fn page_size_nonempty_after_load() {
+        let mut wv = fresh();
+        let html = "<html><body><div style=\"width:200px;height:300px\">x</div></body></html>";
+        wv.load_html(html, "", None);
+        let (w, h) = wv.page_size();
+        assert!(w >= wv.viewport_w, "content w {w} < viewport_w {}", wv.viewport_w);
+        assert!(h >= wv.viewport_h, "content h {h} < viewport_h {}", wv.viewport_h);
+    }
+
+    #[test]
+    fn engine_headless_has_no_gpu() {
+        let eng = Engine::new_headless();
+        assert!(!eng.has_gpu());
+        assert!(eng.device().is_none());
+        assert!(eng.queue().is_none());
+    }
 }

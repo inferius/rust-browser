@@ -31,77 +31,9 @@ use parser::Parser;
 use interpreter::Interpreter;
 use tokens::TokenKind;
 
-/// Resolve @import statements v CSS. Pro kazdy `@import "url";` nebo `@import url("url");`
-/// fetchne externi CSS proti `base_url` a pripoji obsah pred toto pravidlo.
-/// Recursivni - nested @imports v fetched CSS se taky resolvuji (max depth 5).
-fn resolve_css_imports(css: &str, base_url: &str, depth: u32) -> String {
-    if depth > 5 { return css.to_string(); }
-    let mut out = String::with_capacity(css.len());
-    let mut bytes = css.bytes().peekable();
-    let mut buf = String::new();
-    while let Some(b) = bytes.next() {
-        buf.push(b as char);
-        if buf.ends_with("@import") {
-            // Skip @import.
-            buf.truncate(buf.len() - 7);
-            out.push_str(&buf);
-            buf.clear();
-            // Read until ';' (end of @import).
-            let mut rest = String::new();
-            while let Some(b) = bytes.next() {
-                if b == b';' { break; }
-                rest.push(b as char);
-            }
-            // Extract URL from rest. Forms: "url" / 'url' / url("url") / url("url") layer(name) media...
-            let trimmed = rest.trim();
-            let url_part = if let Some(stripped) = trimmed.strip_prefix("url(") {
-                if let Some(end) = stripped.find(')') {
-                    stripped[..end].trim().trim_matches('"').trim_matches('\'').to_string()
-                } else { String::new() }
-            } else if trimmed.starts_with('"') || trimmed.starts_with('\'') {
-                let q = &trimmed[..1];
-                let after = &trimmed[1..];
-                if let Some(end) = after.find(q) {
-                    after[..end].to_string()
-                } else { String::new() }
-            } else { String::new() };
-            if !url_part.is_empty() {
-                let resolved = browser::render::resolve_url(base_url, &url_part);
-                println!("[fetch @import] {resolved}");
-                if let Some(c) = browser::render::fetch_text_url(&resolved) {
-                    let nested = resolve_css_imports(&c, &resolved, depth + 1);
-                    out.push('\n');
-                    out.push_str(&nested);
-                }
-            }
-            // Pokracujem dalsim CSS.
-        }
-    }
-    out.push_str(&buf);
-    out
-}
-
-/// Extract <link rel="stylesheet" href="..."> hrefs z HTML.
-fn extract_stylesheet_hrefs(html: &str) -> Vec<String> {
-    let document = browser::html_parser::parse_html(html, "about:blank");
-    let mut out = Vec::new();
-    for link in document.root.get_elements_by_tag("link") {
-        let rel = link.attr("rel").unwrap_or_default().to_lowercase();
-        if rel.contains("stylesheet") {
-            if let Some(href) = link.attr("href") {
-                out.push(href);
-            }
-        }
-    }
-    out
-}
-
-/// Extract inline <style> ... </style> blocky.
-fn extract_inline_styles(html: &str) -> Vec<String> {
-    let document = browser::html_parser::parse_html(html, "about:blank");
-    document.root.get_elements_by_tag("style")
-        .iter().map(|s| s.text_content()).collect()
-}
+// Page resource loader helpers (resolve_css_imports, extract_stylesheet_hrefs,
+// extract_inline_styles) presunute do `embed::loader` pro sdileni s WebView.
+use embed::loader::{extract_inline_styles, extract_stylesheet_hrefs, resolve_css_imports};
 
 /// CLI dispatcher. Volano z bin/main.rs shim.
 /// V Phase 1 je tohle ekvivalent puvodniho `real_main` z src/main.rs.

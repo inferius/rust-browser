@@ -35,6 +35,7 @@
 
 pub mod engine;
 pub mod event;
+pub mod loader;
 pub mod webview;
 
 pub use engine::{Engine, EngineSettings};

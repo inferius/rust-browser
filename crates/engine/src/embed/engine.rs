@@ -22,9 +22,12 @@ use std::sync::Arc;
 pub struct Engine {
     /// GPU device sdileny pres vsechny WebView. `Arc` umoznuje hostujici
     /// aplikaci pouzit stejne device pro vlastni rendering (chrome UI).
-    pub(crate) device: Arc<wgpu::Device>,
-    /// GPU queue, taky shared.
-    pub(crate) queue: Arc<wgpu::Queue>,
+    ///
+    /// `None` = headless mode (Phase 3 testy, server-side parsing/layout
+    /// bez GPU). WebView::render vyzaduje device - pri None vrati None.
+    pub(crate) device: Option<Arc<wgpu::Device>>,
+    /// GPU queue, taky shared. `None` v headless mode.
+    pub(crate) queue: Option<Arc<wgpu::Queue>>,
     /// Glyph atlas pro vsechny webviews. Phase 5 sem migruje GlyphAtlas struct.
     pub(crate) _glyph_atlas: (),
     /// Image RGBA atlas, shared cache.
@@ -68,8 +71,22 @@ impl Engine {
     /// se presune v Phase 5.
     pub fn new(device: Arc<wgpu::Device>, queue: Arc<wgpu::Queue>) -> Self {
         Self {
-            device,
-            queue,
+            device: Some(device),
+            queue: Some(queue),
+            _glyph_atlas: (),
+            _image_atlas: (),
+            _font_registry: (),
+            settings: EngineSettings::default(),
+        }
+    }
+
+    /// Headless Engine bez GPU resources. Pouziti: unit testy WebView pro
+    /// page state setup (load_html / interpreter / layout) bez wgpu init.
+    /// `render()` na WebView vrati None pokud device chybi.
+    pub fn new_headless() -> Self {
+        Self {
+            device: None,
+            queue: None,
             _glyph_atlas: (),
             _image_atlas: (),
             _font_registry: (),
@@ -81,10 +98,14 @@ impl Engine {
     pub fn settings(&self) -> &EngineSettings { &self.settings }
 
     /// Pristup k device pro custom rendering (shell chrome paint, ...).
-    pub fn device(&self) -> &wgpu::Device { &self.device }
+    /// `None` v headless mode.
+    pub fn device(&self) -> Option<&wgpu::Device> { self.device.as_deref() }
 
-    /// Pristup k queue pro submit hostujici aplikace.
-    pub fn queue(&self) -> &wgpu::Queue { &self.queue }
+    /// Pristup k queue pro submit hostujici aplikace. `None` v headless mode.
+    pub fn queue(&self) -> Option<&wgpu::Queue> { self.queue.as_deref() }
+
+    /// `true` pokud engine ma plne GPU resources (ne headless).
+    pub fn has_gpu(&self) -> bool { self.device.is_some() && self.queue.is_some() }
 
     /// Standalone run - engine si sam udela window + surface a spousti 1
     /// WebView fullscreen. Pro testovani enginu + `rwe-engine` bin (debug,
