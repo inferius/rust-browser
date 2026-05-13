@@ -939,6 +939,9 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         /// Per-node frozen style snapshot - pri pause toggle uchova soucasny
         /// (animated) styl, kazdy frame se aplikuje misto fresh anim tick.
         paused_node_styles: std::collections::HashMap<usize, std::collections::HashMap<String, String>>,
+        /// L5 step 4 Phase 3 Step D: typed paused snapshot. ComputedStyle clone
+        /// per paused element. Restore = clone do cmap pri kazdy frame.
+        paused_node_cs: std::collections::HashMap<usize, super::computed_style::ComputedStyle>,
         /// Drag timeline scrubber state - pri MouseDown na track v Animations
         /// panelu zacne drag. Pri pohybu mysi se animation_origin shifte tak
         /// aby progress odpovidal pozici kursoru na track.
@@ -1229,6 +1232,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                         self.animation_pause_start = Some(now);
                                     }
                                     self.paused_node_styles.clear();
+                                    self.paused_node_cs.clear();
                                     self.render();
                                     return;
                                 }
@@ -1939,6 +1943,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                     }
                                     // Pri scrub clear paused snapshots (force re-snapshot na novou fazi).
                                     self.paused_node_styles.clear();
+                                    self.paused_node_cs.clear();
                                 }
                                 DevtoolsHit::AnimationsAction(action) => {
                                     use std::time::{Instant, Duration};
@@ -1950,13 +1955,18 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                                 if self.paused_animation_nodes.contains(&sel) {
                                                     self.paused_animation_nodes.remove(&sel);
                                                     self.paused_node_styles.remove(&sel);
+                                                    self.paused_node_cs.remove(&sel);
                                                 } else {
                                                     self.paused_animation_nodes.insert(sel);
-                                                    // Snapshot current style_map[sel] z minuleho framu
-                                                    // (cached). Bude reused jako frozen.
                                                     if let Some(sm) = &self.cached_style_map {
                                                         if let Some(style) = sm.get(&sel) {
                                                             self.paused_node_styles.insert(sel, style.clone());
+                                                        }
+                                                    }
+                                                    // L5 step 4 Phase 3 Step D: typed snapshot parallel.
+                                                    if let Some(cm) = &self.cached_computed_map {
+                                                        if let Some(cs) = cm.get(&sel) {
+                                                            self.paused_node_cs.insert(sel, cs.clone());
                                                         }
                                                     }
                                                 }
@@ -5868,12 +5878,22 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 // fazi pri toggle). Pri prvni paused frame neni snapshot - vezmi
                 // current animated styl + uloz pro dalsi framy.
                 let paused_ids: Vec<usize> = self.paused_animation_nodes.iter().copied().collect();
-                for id in paused_ids {
-                    if let Some(snap) = self.paused_node_styles.get(&id) {
-                        Rc::make_mut(&mut style_map).insert(id, snap.clone());
-                    } else if let Some(cur) = style_map.get(&id).cloned() {
-                        // First-time pause - snapshot animated styl ted.
-                        self.paused_node_styles.insert(id, cur);
+                for id in &paused_ids {
+                    if let Some(snap) = self.paused_node_styles.get(id) {
+                        Rc::make_mut(&mut style_map).insert(*id, snap.clone());
+                    } else if let Some(cur) = style_map.get(id).cloned() {
+                        self.paused_node_styles.insert(*id, cur);
+                    }
+                }
+                // L5 step 4 Phase 3 Step D: typed paused snapshot parallel.
+                if let Some(cm) = self.cached_computed_map.as_mut() {
+                    let cm_mut = Rc::make_mut(cm);
+                    for id in &paused_ids {
+                        if let Some(snap) = self.paused_node_cs.get(id) {
+                            cm_mut.insert(*id, snap.clone());
+                        } else if let Some(cur) = cm_mut.get(id).cloned() {
+                            self.paused_node_cs.insert(*id, cur);
+                        }
                     }
                 }
                 let max_scroll = (style_map.len() as f32).max(1.0);
@@ -5886,19 +5906,22 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // Skip cely walk pri zadnych keyframes - test na to ze stranka vubec nema animations.
             let mut current_anims: std::collections::HashSet<(usize, String)> = std::collections::HashSet::new();
             let mut iter_events: Vec<(usize, String, i32)> = Vec::new();
+            // L5 step 4 Phase 3 Step E: typed events detection - walk cmap, spec z cs.
             if has_keyframes {
-                for (node_id, styles) in &*style_map {
-                    if let Some(spec) = cascade::AnimationSpec::from_styles(styles) {
-                        let t = elapsed - spec.delay_secs;
-                        if t >= 0.0 && (spec.iteration_count.is_infinite() || t / spec.duration_secs < spec.iteration_count) {
-                            let key = (*node_id, spec.name.clone());
-                            current_anims.insert(key.clone());
-                            let cur_iter = (t / spec.duration_secs).floor() as i32;
-                            let prev_iter = self.animation_iterations.get(&key).copied().unwrap_or(-1);
-                            if cur_iter > prev_iter && cur_iter > 0 {
-                                iter_events.push((*node_id, spec.name.clone(), cur_iter));
+                if let Some(cm) = self.cached_computed_map.as_ref() {
+                    for (node_id, cs) in cm.iter() {
+                        if let Some(spec) = cascade::AnimationSpec::from_cs(cs) {
+                            let t = elapsed - spec.delay_secs;
+                            if t >= 0.0 && (spec.iteration_count.is_infinite() || t / spec.duration_secs < spec.iteration_count) {
+                                let key = (*node_id, spec.name.clone());
+                                current_anims.insert(key.clone());
+                                let cur_iter = (t / spec.duration_secs).floor() as i32;
+                                let prev_iter = self.animation_iterations.get(&key).copied().unwrap_or(-1);
+                                if cur_iter > prev_iter && cur_iter > 0 {
+                                    iter_events.push((*node_id, spec.name.clone(), cur_iter));
+                                }
+                                self.animation_iterations.insert(key, cur_iter);
                             }
-                            self.animation_iterations.insert(key, cur_iter);
                         }
                     }
                 }
@@ -7263,6 +7286,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         animation_pause_start: None,
         paused_animation_nodes: std::collections::HashSet::new(),
         paused_node_styles: std::collections::HashMap::new(),
+        paused_node_cs: std::collections::HashMap::new(),
         animations_scrubber_drag: false,
         painted_text_runs: Vec::new(),
         async_jobs: crate::browser::async_jobs::AsyncJobsRegistry::new(),
