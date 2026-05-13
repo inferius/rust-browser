@@ -71,6 +71,44 @@ fn read_typed_opacity(
     }
 }
 
+/// L5 step 4 helper: precti Length z typed ComputedStyle a resolvuj na px.
+/// Pouziva stejne default kontexty jako legacy parse_length (vw=1024, vh=768,
+/// font=16, parent=0 pro %). Po L5 stage 5 vsude predame realny kontext.
+///
+/// Pri Length::Auto / None vraci 0.0 (matches parse_length behavior). Pro
+/// rozliseni Auto vs explicit 0 viz read_typed_length_or.
+#[inline]
+fn read_typed_length(
+    s: &HashMap<String, String>,
+    cs_opt: Option<&ComputedStyle>,
+    key: &str,
+    pick: impl Fn(&ComputedStyle) -> &super::computed_style::Length,
+) -> Option<f32> {
+    let raw = s.get(key)?;
+    if let Some(cs) = cs_opt {
+        Some(pick(cs).resolve_or(0.0, 16.0, 16.0, 1024.0, 768.0))
+    } else {
+        Some(parse_length(raw))
+    }
+}
+
+/// L5 step 4 helper: precti f32 hodnotu z typed ComputedStyle, jinak parse z stringly.
+#[inline]
+fn read_typed_f32(
+    s: &HashMap<String, String>,
+    cs_opt: Option<&ComputedStyle>,
+    key: &str,
+    pick: impl Fn(&ComputedStyle) -> f32,
+    parse_fallback: impl Fn(&str) -> f32,
+) -> Option<f32> {
+    let raw = s.get(key)?;
+    if let Some(cs) = cs_opt {
+        Some(pick(cs))
+    } else {
+        Some(parse_fallback(raw))
+    }
+}
+
 /// RAII guard - nastavi thread-local na dobu scope, na drop obnovi stary.
 struct ComputedMapGuard {
     prev: Option<Rc<ComputedStyleMap>>,
@@ -2700,7 +2738,11 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(b) = s.get("border-width") { bx.border_width = parse_length(b); }
     if let Some(bc) = s.get("border-color") { bx.border_color = parse_color(bc); }
     if let Some(bs) = s.get("border-style") { bx.border_style = bs.trim().to_string(); }
-    if let Some(fs) = s.get("font-size") { bx.font_size = parse_length(fs); bx.font_size_explicit = true; }
+    // L5 step 4 batch 2: font-size z typed Length.
+    if let Some(fs_px) = read_typed_length(s, cs_opt, "font-size", |cs| &cs.font_size) {
+        bx.font_size = fs_px;
+        bx.font_size_explicit = true;
+    }
     // line-height: "normal" je font-specific (CSS spec deleguje na font OS/2
     // metrics). Approximace: sans-serif (Arial, Helvetica) ~1.15, monospace
     // ~1.20, serif ~1.20. Pri normal hodnote (= explicit "normal" v CSS) +
@@ -2738,26 +2780,35 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         };
     }
     // Font weight - numeric 1..1000 + keywords (normal=400, bold=700, lighter, bolder).
-    if let Some(fw) = s.get("font-weight") {
-        let v = fw.trim();
-        let weight: u32 = if let Ok(n) = v.parse::<u32>() {
-            n
+    // L5 step 4 batch 2: font-weight z typed u32.
+    if s.contains_key("font-weight") {
+        let weight: u32 = if let Some(cs) = cs_opt {
+            cs.font_weight
         } else {
-            match v {
-                "bold" => 700,
-                "bolder" => 700,
-                "lighter" => 300,
-                "normal" => 400,
-                _ => 400,
+            let v = s.get("font-weight").unwrap().trim();
+            if let Ok(n) = v.parse::<u32>() {
+                n
+            } else {
+                match v {
+                    "bold" | "bolder" => 700,
+                    "lighter" => 300,
+                    "normal" => 400,
+                    _ => 400,
+                }
             }
         };
         bx.font_weight = weight;
         bx.bold = weight >= 600;
     }
-    // Font style: italic / oblique.
-    if let Some(fs) = s.get("font-style") {
-        let v = fs.trim();
-        bx.italic = v == "italic" || v == "oblique";
+    // Font style: italic / oblique - L5 step 4 batch 2: typed bool.
+    if s.contains_key("font-style") {
+        let italic = if let Some(cs) = cs_opt {
+            cs.font_style_italic
+        } else {
+            let v = s.get("font-style").unwrap().trim();
+            v == "italic" || v == "oblique"
+        };
+        bx.italic = italic;
     }
     // Border radius
     if let Some(br) = s.get("border-radius") {
@@ -2810,18 +2861,35 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(v) = s.get("max-width") { bx.max_width = CssLength::parse(v); }
     if let Some(v) = s.get("min-height") { bx.min_height = CssLength::parse(v); }
     if let Some(v) = s.get("max-height") { bx.max_height = CssLength::parse(v); }
-    // Line-height: cislo (multiplier) nebo length (px)
-    if let Some(lh) = s.get("line-height") {
-        let trimmed = lh.trim();
-        if let Ok(num) = trimmed.parse::<f32>() {
-            bx.line_height = num;
-            bx.line_height_explicit = true;
-        } else if trimmed.ends_with("px") || trimmed.ends_with("em") || trimmed.ends_with("rem") {
-            // V px - prevest na multiplier
-            let px = parse_length(trimmed);
-            if bx.font_size > 0.0 {
-                bx.line_height = px / bx.font_size;
+    // Line-height: cislo (multiplier) nebo length (px) - L5 step 4 batch 2: typed LineHeight enum.
+    if s.contains_key("line-height") {
+        if let Some(cs) = cs_opt {
+            use super::computed_style::LineHeight as Lh;
+            match &cs.line_height {
+                Lh::Normal => { /* nech default 1.2 fall-through */ }
+                Lh::Multiplier(m) => {
+                    bx.line_height = *m;
+                    bx.line_height_explicit = true;
+                }
+                Lh::Length(_) => {
+                    let px = cs.line_height.resolve(bx.font_size);
+                    if bx.font_size > 0.0 {
+                        bx.line_height = px / bx.font_size;
+                        bx.line_height_explicit = true;
+                    }
+                }
+            }
+        } else {
+            let trimmed = s.get("line-height").unwrap().trim();
+            if let Ok(num) = trimmed.parse::<f32>() {
+                bx.line_height = num;
                 bx.line_height_explicit = true;
+            } else if trimmed.ends_with("px") || trimmed.ends_with("em") || trimmed.ends_with("rem") {
+                let px = parse_length(trimmed);
+                if bx.font_size > 0.0 {
+                    bx.line_height = px / bx.font_size;
+                    bx.line_height_explicit = true;
+                }
             }
         }
     }
