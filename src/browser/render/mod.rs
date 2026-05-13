@@ -917,7 +917,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         /// Mutace via Rc::make_mut (clones if shared) - jen kdyz animations
         /// realne meni styly.
         cached_cascade_hash: u64,
-        cached_style_map: Option<Rc<super::cascade::StyleMap>>,
         /// L5 step 4 Phase 3: prev frame's ComputedStyleMap pro detect_transitions_typed.
         prev_computed_map: Option<Rc<super::computed_style::ComputedStyleMap>>,
         /// L5 step 4: typed ComputedStyle cache souvisi se cached_style_map.
@@ -938,7 +937,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         paused_animation_nodes: std::collections::HashSet<usize>,
         /// Per-node frozen style snapshot - pri pause toggle uchova soucasny
         /// (animated) styl, kazdy frame se aplikuje misto fresh anim tick.
-        paused_node_styles: std::collections::HashMap<usize, std::collections::HashMap<String, String>>,
         /// L5 step 4 Phase 3 Step D: typed paused snapshot. ComputedStyle clone
         /// per paused element. Restore = clone do cmap pri kazdy frame.
         paused_node_cs: std::collections::HashMap<usize, super::computed_style::ComputedStyle>,
@@ -980,7 +978,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         scroll_x: f32,
         start_time: std::time::Instant,
         /// Predchozi cascaded styles - pro detekci transitions.
-        prev_style_map: Option<Rc<super::cascade::StyleMap>>,
         /// Track running animations per (node_id, anim_name) - pro dispatch animationstart/end
         active_animations: std::collections::HashSet<(usize, String)>,
         /// Iteration counter per animation pro animationiteration event.
@@ -1231,7 +1228,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                     if self.devtools.animations_paused {
                                         self.animation_pause_start = Some(now);
                                     }
-                                    self.paused_node_styles.clear();
                                     self.paused_node_cs.clear();
                                     self.render();
                                     return;
@@ -1511,7 +1507,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                             if mx >= bx && mx <= bx + 100.0 && my_screen >= 4.0 && my_screen <= 24.0 {
                                 self.reading_mode_on = false;
                                 self.cached_stylesheets = None;
-                                self.cached_style_map = None;
                                 self.cached_computed_map = None;
                                 self.cached_pseudo_map = None;
                                 self.cached_layout_root = None;
@@ -1942,7 +1937,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                         self.animation_pause_start = Some(now);
                                     }
                                     // Pri scrub clear paused snapshots (force re-snapshot na novou fazi).
-                                    self.paused_node_styles.clear();
                                     self.paused_node_cs.clear();
                                 }
                                 DevtoolsHit::AnimationsAction(action) => {
@@ -1954,16 +1948,10 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                             if let Some(sel) = self.devtools.elements.selected {
                                                 if self.paused_animation_nodes.contains(&sel) {
                                                     self.paused_animation_nodes.remove(&sel);
-                                                    self.paused_node_styles.remove(&sel);
                                                     self.paused_node_cs.remove(&sel);
                                                 } else {
                                                     self.paused_animation_nodes.insert(sel);
-                                                    if let Some(sm) = &self.cached_style_map {
-                                                        if let Some(style) = sm.get(&sel) {
-                                                            self.paused_node_styles.insert(sel, style.clone());
-                                                        }
-                                                    }
-                                                    // L5 step 4 Phase 3 Step D: typed snapshot parallel.
+                                                    // L5 step 4 Phase 3 Step D: typed snapshot only.
                                                     if let Some(cm) = &self.cached_computed_map {
                                                         if let Some(cs) = cm.get(&sel) {
                                                             self.paused_node_cs.insert(sel, cs.clone());
@@ -3168,7 +3156,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                             if (s.as_str() == "r" || s.as_str() == "R") && self.modifiers.alt_key() {
                                 self.reading_mode_on = !self.reading_mode_on;
                                 self.cached_stylesheets = None;
-                                self.cached_style_map = None;
                                 self.cached_computed_map = None;
                                 self.cached_pseudo_map = None;
                                 self.cached_layout_root = None;
@@ -4108,7 +4095,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // pri prvni snimek nove stranky != 0 (zachoval z predchoziho
             // browse sessions). Slide-anim startovala uprostred iteration.
             self.animation_origin = self.start_time;
-            self.prev_style_map = None;
             self.active_animations.clear();
             self.animation_iterations.clear();
             self.active_transitions.clear();
@@ -4206,7 +4192,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             self.run_inline_scripts(&mut tmp);
             self.interpreter = Some(tmp);
             self.cached_layout_root = None;
-            self.cached_style_map = None;
             self.cached_computed_map = None;
         }
 
@@ -4599,7 +4584,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 }
             }
             // Invalidate caches - cascade + layout musi rebuilt.
-            self.cached_style_map = None;
             self.cached_computed_map = None;
             self.cached_layout_root = None;
             crate::browser::devtools_panel::rebuild_tree(&mut self.devtools, &root);
@@ -5037,7 +5021,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             }
             // Cache invalidace - nove DOM/document.
             self.cached_layout_root = None;
-            self.cached_style_map = None;
             self.cached_computed_map = None;
             self.cached_pseudo_map = None;
             self.cached_matched_key = None;
@@ -5252,7 +5235,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             self.scroll_target_x = 0.0;
                 self.start_time = std::time::Instant::now();
                 self.animation_origin = self.start_time;
-                self.prev_style_map = None;
                 self.active_animations.clear();
                 self.animation_iterations.clear();
                 self.active_transitions.clear();
@@ -5580,7 +5562,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     || self.css.contains("lvw") || self.css.contains("lvh");
                 self.cached_stylesheets = Some(parsed);
                 self.cached_stylesheets_hash = combined_hash;
-                self.cached_style_map = None;
                 self.cached_computed_map = None;
                 self.cached_pseudo_map = None;
                 self.cached_layout_root = None;
@@ -5606,7 +5587,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 }
                 h.finish()
             };
-            if self.cached_style_map.is_none() || self.cached_cascade_hash != cascade_hash {
+            if self.cached_computed_map.is_none() || self.cached_cascade_hash != cascade_hash {
                 let _t_cascade = std::time::Instant::now();
                 // Cascade s viewport pro @media + @container queries.
                 let vw_logical = (r.config.width as f32) / (self.zoom * r.scale_factor);
@@ -5616,7 +5597,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 // na cs.field. computed je naplnen v cascade_with_viewport_typed (stage 3 batches).
                 let out = cascade::cascade_with_viewport_typed(
                     &document_root, stylesheets, vw_logical, vh_logical);
-                self.cached_style_map = Some(Rc::new(out.style_map));
+                // L5 step 4 Phase 3 Step F: drop style_map z renderer.
+                // out.style_map zustava v CascadeOutput pro back-compat ale render ne-ulozit.
                 self.cached_computed_map = Some(Rc::new(out.computed));
                 perf_t("cascade::cascade_with_viewport_typed", _t_cascade);
                 let _t_pseudo = std::time::Instant::now();
@@ -5624,11 +5606,9 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 perf_t("cascade::cascade_pseudo", _t_pseudo);
                 self.cached_cascade_hash = cascade_hash;
             }
-            let _t_clone = std::time::Instant::now();
-            // PERF: Rc::clone misto deep HashMap clone. Cheap pointer copy.
-            // Mutace pres Rc::make_mut (deep clones jen kdyz Rc shared > 1).
-            let mut style_map: Rc<super::cascade::StyleMap> = Rc::clone(self.cached_style_map.as_ref().unwrap());
-            perf_t("style_map clone (Rc)", _t_clone);
+            // L5 step 4 Phase 3 Step F: style_map dropnut z renderer. Vsechny
+            // cesty migruly na cached_computed_map (typed). style_map zustava
+            // jen dummy empty pro back-compat legacy funkce calls.
             // PERF: zachovat ref na cached pseudo map - pouzivame v layout_tree
             // call jako &PseudoStyleMap. Drive clone() byla zbytecna kazdy frame.
             let empty_pseudo: super::cascade::PseudoStyleMap = Default::default();
@@ -5651,12 +5631,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     .and_then(|cm| cm.get(&sel))
                     .map(|cs| cs.to_devtools_entries());
                 if let Some(entries) = typed_entries {
-                    self.devtools.styles.computed = entries;
-                } else if let Some(decl_map) = style_map.get(&sel) {
-                    let mut entries: Vec<(String, String)> = decl_map.iter()
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                        .collect();
-                    entries.sort_by(|a, b| a.0.cmp(&b.0));
                     self.devtools.styles.computed = entries;
                 } else {
                     self.devtools.styles.computed.clear();
@@ -5868,24 +5842,12 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             let has_keyframes = stylesheets.iter().any(|s| !s.keyframes.is_empty());
             let _t_anim_apply = std::time::Instant::now();
             if has_keyframes {
-                let _animating = cascade::apply_animations(Rc::make_mut(&mut style_map), stylesheets, elapsed);
-                // L5 step 4 Phase 3: dual-write apply_animations_typed do cached_computed_map.
-                // apply_paint_animations cte z cs typed (po teto mutaci).
+                // L5 step 4 Phase 3 Step F: apply_animations_typed jen.
                 if let Some(cm) = self.cached_computed_map.as_mut() {
                     let _ = cascade::apply_animations_typed(Rc::make_mut(cm), stylesheets, elapsed);
                 }
-                // Per-element pause: aplikuj frozen snapshot (zachytava presnou
-                // fazi pri toggle). Pri prvni paused frame neni snapshot - vezmi
-                // current animated styl + uloz pro dalsi framy.
+                // Per-element pause: typed snapshot.
                 let paused_ids: Vec<usize> = self.paused_animation_nodes.iter().copied().collect();
-                for id in &paused_ids {
-                    if let Some(snap) = self.paused_node_styles.get(id) {
-                        Rc::make_mut(&mut style_map).insert(*id, snap.clone());
-                    } else if let Some(cur) = style_map.get(id).cloned() {
-                        self.paused_node_styles.insert(*id, cur);
-                    }
-                }
-                // L5 step 4 Phase 3 Step D: typed paused snapshot parallel.
                 if let Some(cm) = self.cached_computed_map.as_mut() {
                     let cm_mut = Rc::make_mut(cm);
                     for id in &paused_ids {
@@ -5896,9 +5858,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         }
                     }
                 }
-                let max_scroll = (style_map.len() as f32).max(1.0);
-                let scroll_progress = if max_scroll > 1.0 { self.scroll_y / max_scroll.max(1.0) } else { 0.0 };
-                let _ = cascade::apply_scroll_animations(Rc::make_mut(&mut style_map), stylesheets, scroll_progress);
+                // Scroll-driven animations: TODO typed verze. Skip pro Phase F drop.
+                // apply_scroll_animations legacy fn vyzaduje style_map. Migrace v dalsi fazi.
             }
             perf_t("apply_animations + scroll_anims", _t_anim_apply);
 
@@ -5970,13 +5931,10 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // jen Rc::clone na owned variant.
             let _t_prev = std::time::Instant::now();
             if self.css_uses_transitions {
-                self.prev_style_map = Some(Rc::clone(&style_map));
-                // L5 step 4 Phase 3: typed prev cmap pro detect_transitions_typed.
                 if let Some(cm) = &self.cached_computed_map {
                     self.prev_computed_map = Some(Rc::clone(cm));
                 }
             } else {
-                self.prev_style_map = None;
                 self.prev_computed_map = None;
             }
             perf_t("prev_style_map clone (Rc)", _t_prev);
@@ -7278,14 +7236,12 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         cached_stylesheets_hash: 0,
         cached_stylesheets: None,
         cached_cascade_hash: 0,
-        cached_style_map: None,
         prev_computed_map: None,
         cached_computed_map: None,
         cached_matched_key: None,
         animation_origin: std::time::Instant::now(),
         animation_pause_start: None,
         paused_animation_nodes: std::collections::HashSet::new(),
-        paused_node_styles: std::collections::HashMap::new(),
         paused_node_cs: std::collections::HashMap::new(),
         animations_scrubber_drag: false,
         painted_text_runs: Vec::new(),
@@ -7324,7 +7280,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         scroll_y: 0.0,
         scroll_x: 0.0,
         start_time: std::time::Instant::now(),
-        prev_style_map: None,
         active_transitions: Vec::new(),
         active_animations: std::collections::HashSet::new(),
         animation_iterations: std::collections::HashMap::new(),
