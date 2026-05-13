@@ -2730,8 +2730,18 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
             else { bx.tab_size = parse_length(v); }
         }
     }
-    if let Some(v) = s.get("word-break") { bx.word_break = v.trim().to_string(); }
-    if let Some(v) = s.get("overflow-wrap").or(s.get("word-wrap")) { bx.overflow_wrap = v.trim().to_string(); }
+    // L5 step 4 batch 15: word-break + overflow-wrap z typed enums css_string.
+    if s.contains_key("word-break") {
+        bx.word_break = if let Some(cs) = cs_opt { cs.word_break.css_string().to_string() }
+                        else { s.get("word-break").unwrap().trim().to_string() };
+    }
+    if s.contains_key("overflow-wrap") || s.contains_key("word-wrap") {
+        bx.overflow_wrap = if let Some(cs) = cs_opt { cs.overflow_wrap.css_string().to_string() }
+                           else {
+                               let v = s.get("overflow-wrap").or(s.get("word-wrap")).unwrap();
+                               v.trim().to_string()
+                           };
+    }
     if let Some(v) = s.get("list-style-type") { bx.list_style_type = v.trim().to_string(); }
     if let Some(v) = s.get("list-style-image") {
         if v.trim() != "none" { bx.list_style_image = Some(v.trim().to_string()); }
@@ -2765,8 +2775,15 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(v) = s.get("counter-set") { bx.counter_set = parse_counter(v); }
     if let Some(v) = s.get("line-height-step") { bx.line_height_step = parse_length(v); }
     if let Some(v) = s.get("speak") { bx.speak = v.trim().to_string(); }
-    if let Some(v) = s.get("float") { bx.float_value = v.trim().to_string(); }
-    if let Some(v) = s.get("clear") { bx.clear_value = v.trim().to_string(); }
+    // L5 step 4 batch 15: float + clear z typed enums css_string.
+    if s.contains_key("float") {
+        bx.float_value = if let Some(cs) = cs_opt { cs.float.css_string().to_string() }
+                         else { s.get("float").unwrap().trim().to_string() };
+    }
+    if s.contains_key("clear") {
+        bx.clear_value = if let Some(cs) = cs_opt { cs.clear.css_string().to_string() }
+                         else { s.get("clear").unwrap().trim().to_string() };
+    }
     if let Some(v) = s.get("object-position") { bx.object_position = v.trim().to_string(); }
     if let Some(v) = s.get("justify-items") { bx.justify_items = v.trim().to_string(); }
     // L5 step 4 batch 12: object-fit cross-type via inline match (cs::ObjectFit nema css_string).
@@ -3166,13 +3183,21 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
                         else { Overflow::parse(s.get("overflow-y").unwrap()) };
         if bx.overflow_y.hides() { bx.overflow_hidden = true; }
     }
-    // White-space
-    if let Some(ws) = s.get("white-space") {
-        bx.white_space_nowrap = ws.trim() == "nowrap";
+    // White-space - L5 step 4 batch 15: cs.white_space (WhiteSpace enum).
+    if s.contains_key("white-space") {
+        bx.white_space_nowrap = if let Some(cs) = cs_opt {
+            matches!(cs.white_space, super::computed_style::WhiteSpace::Nowrap)
+        } else {
+            s.get("white-space").unwrap().trim() == "nowrap"
+        };
     }
-    // Cursor
-    if let Some(cur) = s.get("cursor") {
-        bx.cursor = Some(cur.trim().to_string());
+    // Cursor - L5 step 4 batch 15: cs.cursor (Cursor enum) -> css_string.
+    if s.contains_key("cursor") {
+        bx.cursor = Some(if let Some(cs) = cs_opt {
+            cs.cursor.css_string()
+        } else {
+            s.get("cursor").unwrap().trim().to_string()
+        });
     }
     // Default underline pro <a> tag (pokud nebyla explicitne odebrana)
     if let Some(tag) = bx.tag.clone() {
