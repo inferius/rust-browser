@@ -921,6 +921,11 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         /// realne meni styly.
         cached_cascade_hash: u64,
         cached_style_map: Option<Rc<super::cascade::StyleMap>>,
+        /// L5 step 4: typed ComputedStyle cache souvisi se cached_style_map.
+        /// Naplnen z cascade_with_viewport_typed; predan do layout_tree_typed
+        /// pro typed reads behem build_box_inner. Bez tohohle vstupu reads
+        /// padaji na legacy s.get() parse path.
+        cached_computed_map: Option<Rc<super::computed_style::ComputedStyleMap>>,
         /// Cache pro matched_rules build - (selected_node, cascade_hash).
         /// Bez zmeny ani jednoho neni potreba pretizet rules walk.
         cached_matched_key: Option<(Option<usize>, u64)>,
@@ -1504,6 +1509,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                 self.reading_mode_on = false;
                                 self.cached_stylesheets = None;
                                 self.cached_style_map = None;
+                                self.cached_computed_map = None;
                                 self.cached_pseudo_map = None;
                                 self.cached_layout_root = None;
                                 self.render();
@@ -3154,6 +3160,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                 self.reading_mode_on = !self.reading_mode_on;
                                 self.cached_stylesheets = None;
                                 self.cached_style_map = None;
+                                self.cached_computed_map = None;
                                 self.cached_pseudo_map = None;
                                 self.cached_layout_root = None;
                                 self.render();
@@ -4191,6 +4198,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             self.interpreter = Some(tmp);
             self.cached_layout_root = None;
             self.cached_style_map = None;
+            self.cached_computed_map = None;
         }
 
         /// Notify worker thread pres Condvar - po klik Continue/Step.
@@ -4583,6 +4591,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             }
             // Invalidate caches - cascade + layout musi rebuilt.
             self.cached_style_map = None;
+            self.cached_computed_map = None;
             self.cached_layout_root = None;
             crate::browser::devtools_panel::rebuild_tree(&mut self.devtools, &root);
             self.devtools.focus = crate::devtools::focus::FocusTarget::Page;
@@ -5020,6 +5029,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // Cache invalidace - nove DOM/document.
             self.cached_layout_root = None;
             self.cached_style_map = None;
+            self.cached_computed_map = None;
             self.cached_pseudo_map = None;
             self.cached_matched_key = None;
         }
@@ -5562,6 +5572,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 self.cached_stylesheets = Some(parsed);
                 self.cached_stylesheets_hash = combined_hash;
                 self.cached_style_map = None;
+                self.cached_computed_map = None;
                 self.cached_pseudo_map = None;
                 self.cached_layout_root = None;
             }
@@ -5591,9 +5602,14 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 // Cascade s viewport pro @media + @container queries.
                 let vw_logical = (r.config.width as f32) / (self.zoom * r.scale_factor);
                 let vh_logical = (r.config.height as f32) / (self.zoom * r.scale_factor);
-                self.cached_style_map = Some(Rc::new(cascade::cascade_with_viewport(
-                    &document_root, stylesheets, vw_logical, vh_logical)));
-                perf_t("cascade::cascade_with_viewport", _t_cascade);
+                // L5 step 4: typed cascade vraci CascadeOutput { style_map, computed, declarations }.
+                // Layout reads stale primarne s.get() na style_map; postupne batches presunou
+                // na cs.field. computed je naplnen v cascade_with_viewport_typed (stage 3 batches).
+                let out = cascade::cascade_with_viewport_typed(
+                    &document_root, stylesheets, vw_logical, vh_logical);
+                self.cached_style_map = Some(Rc::new(out.style_map));
+                self.cached_computed_map = Some(Rc::new(out.computed));
+                perf_t("cascade::cascade_with_viewport_typed", _t_cascade);
                 let _t_pseudo = std::time::Instant::now();
                 self.cached_pseudo_map = Some(cascade::cascade_pseudo(&document_root, stylesheets));
                 perf_t("cascade::cascade_pseudo", _t_pseudo);
@@ -6017,8 +6033,14 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 // Per-element layout cache: pasujeme prev cached_layout_root jako
                 // hint. Pri match fingerprint reuznavaji subtrees.
                 let prev_root = self.cached_layout_root.as_ref();
-                let mut lr = layout::layout_tree_with_pseudo_cached(
-                    &document_root, &*style_map, pseudo_map,
+                // L5 step 4: typed variant - cached_computed_map predan dovnitr
+                // pres ComputedMapGuard, build_box_inner / paint helper reads
+                // ji vidi pres layout::computed_style_for(node_id).
+                let computed_for_layout = self.cached_computed_map.as_ref()
+                    .map(Rc::clone)
+                    .unwrap_or_else(|| Rc::new(super::computed_style::ComputedStyleMap::new()));
+                let mut lr = layout::layout_tree_with_pseudo_cached_typed(
+                    &document_root, &*style_map, pseudo_map, computed_for_layout,
                     viewport_w, viewport_h, prev_root);
                 perf_t("layout_tree (rebuild)", _t_layout);
                 // Reset anim_baseline po hard layout - novy rect = nova
@@ -7206,6 +7228,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         cached_stylesheets: None,
         cached_cascade_hash: 0,
         cached_style_map: None,
+        cached_computed_map: None,
         cached_matched_key: None,
         animation_origin: std::time::Instant::now(),
         animation_pause_start: None,

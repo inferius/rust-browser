@@ -7,6 +7,51 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use super::dom::{Node, NodeKind};
 use super::cascade::StyleMap;
+use super::computed_style::ComputedStyleMap;
+
+// L5 step 4 plumbing: thread-local typed cascade output sdileny pres build_box_inner
+// stack. Aktivni jen behem layout_tree_typed* volani. Bez aktivni mapy reads
+// padaji zpet na legacy s.get("X") parse path (StyleMap fallback).
+thread_local! {
+    static ACTIVE_COMPUTED_MAP: std::cell::RefCell<Option<Rc<ComputedStyleMap>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Vrati ComputedStyle pro dany node_id z thread-local mapy, jinak None.
+/// Helper pro build_box_inner / paint reads behem L5 step 4 batches.
+#[allow(dead_code)]
+pub(crate) fn computed_style_for(node_id: usize)
+    -> Option<super::computed_style::ComputedStyle>
+{
+    ACTIVE_COMPUTED_MAP.with(|cell| {
+        cell.borrow().as_ref().and_then(|m| m.get(&node_id).cloned())
+    })
+}
+
+/// Vrati Rc<ComputedStyleMap> kdyz je aktivni, jinak None.
+#[allow(dead_code)]
+pub(crate) fn active_computed_map() -> Option<Rc<ComputedStyleMap>> {
+    ACTIVE_COMPUTED_MAP.with(|cell| cell.borrow().clone())
+}
+
+/// RAII guard - nastavi thread-local na dobu scope, na drop obnovi stary.
+struct ComputedMapGuard {
+    prev: Option<Rc<ComputedStyleMap>>,
+}
+
+impl ComputedMapGuard {
+    fn new(map: Rc<ComputedStyleMap>) -> Self {
+        let prev = ACTIVE_COMPUTED_MAP.with(|cell| cell.borrow_mut().replace(map));
+        ComputedMapGuard { prev }
+    }
+}
+
+impl Drop for ComputedMapGuard {
+    fn drop(&mut self) {
+        let prev = self.prev.take();
+        ACTIVE_COMPUTED_MAP.with(|cell| *cell.borrow_mut() = prev);
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Display {
@@ -1412,6 +1457,64 @@ pub fn layout_tree_with_pseudo_cached(
     apply_table_border_collapse(&mut layout_root, false);
     perf_t("apply_table_border_collapse", _t);
     layout_root
+}
+
+// ─── L5 step 4: typed layout_tree variants ─────────────────────────────────
+//
+// Migrace s.get("CSS-prop") -> typed ComputedStyle access probiha v batches.
+// Vstupy typed: layout_tree_typed* prijmaji `&Rc<ComputedStyleMap>` navic.
+// Bezem volani nastavi thread-local ACTIVE_COMPUTED_MAP, build_box_inner
+// + paint helper reads ji vidi pres computed_style_for(node_id).
+// Po skonceni call thread-local restored - mimo layout_tree* je None
+// (= legacy s.get(parse) path).
+//
+// Stare layout_tree* fns nemoduifikovany, volat se daji bez ComputedStyleMap.
+// Render postupne presune calls na _typed variants.
+
+/// Typed variant: layout_tree s ComputedStyleMap pristupne reads.
+pub fn layout_tree_typed(
+    root: &Rc<Node>,
+    style_map: &StyleMap,
+    computed_map: Rc<ComputedStyleMap>,
+    viewport_width: f32,
+    viewport_height: f32,
+) -> LayoutBox {
+    let empty_pseudo = super::cascade::PseudoStyleMap::new();
+    layout_tree_with_pseudo_cached_typed(
+        root, style_map, &empty_pseudo, computed_map,
+        viewport_width, viewport_height, None,
+    )
+}
+
+/// Typed variant: layout_tree_with_pseudo s ComputedStyleMap.
+pub fn layout_tree_with_pseudo_typed(
+    root: &Rc<Node>,
+    style_map: &StyleMap,
+    pseudo_map: &super::cascade::PseudoStyleMap,
+    computed_map: Rc<ComputedStyleMap>,
+    viewport_width: f32,
+    viewport_height: f32,
+) -> LayoutBox {
+    layout_tree_with_pseudo_cached_typed(
+        root, style_map, pseudo_map, computed_map,
+        viewport_width, viewport_height, None,
+    )
+}
+
+/// Typed variant: layout_tree_with_pseudo_cached s ComputedStyleMap aktivni
+/// pres build_box_inner stack. Po dokonceni stack restored.
+pub fn layout_tree_with_pseudo_cached_typed(
+    root: &Rc<Node>,
+    style_map: &StyleMap,
+    pseudo_map: &super::cascade::PseudoStyleMap,
+    computed_map: Rc<ComputedStyleMap>,
+    viewport_width: f32,
+    viewport_height: f32,
+    prev_root: Option<&LayoutBox>,
+) -> LayoutBox {
+    let _guard = ComputedMapGuard::new(computed_map);
+    layout_tree_with_pseudo_cached(root, style_map, pseudo_map,
+        viewport_width, viewport_height, prev_root)
 }
 
 /// Walk prev LayoutBox tree, sber kazdy node_ptr -> LayoutBox subtree.
