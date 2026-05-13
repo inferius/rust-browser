@@ -10,3 +10,4 @@ mod dom_tests;
 mod devtools_panel_tests;
 mod engine_test_diagnostic;
 mod web_fixtures;
+mod visual_snapshot;

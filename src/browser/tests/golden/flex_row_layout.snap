@@ -1,0 +1,10 @@
+? rect=(0.0,0.0,1024.0x768.0) display=Block pos=Static
+  html rect=(0.0,0.0,1024.0x36.0) display=Block pos=Static
+    body rect=(8.0,8.0,1008.0x20.0) display=Block pos=Static
+      div rect=(8.0,8.0,300.0x20.0) display=Flex pos=Static
+        div rect=(8.0,8.0,100.6x19.2) display=Block pos=Static bg=#ff0000ff
+          ? rect=(8.0,8.0,11.6x19.2) display=Inline pos=Static text="A"
+        div rect=(108.6,8.0,99.7x19.2) display=Block pos=Static bg=#008000ff
+          ? rect=(108.6,8.0,10.7x19.2) display=Inline pos=Static text="B"
+        div rect=(208.3,8.0,99.7x19.2) display=Block pos=Static bg=#0000ffff
+          ? rect=(208.3,8.0,10.7x19.2) display=Inline pos=Static text="C"

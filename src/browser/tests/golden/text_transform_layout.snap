@@ -1,0 +1,5 @@
+? rect=(0.0,0.0,1024.0x768.0) display=Block pos=Static
+  html rect=(0.0,0.0,1024.0x67.2) display=Block pos=Static
+    body rect=(8.0,8.0,1008.0x51.2) display=Block pos=Static
+      p rect=(8.0,24.0,1008.0x19.2) display=Block pos=Static
+        ? rect=(8.0,24.0,73.3x19.2) display=Inline pos=Static text="hello world"
