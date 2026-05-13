@@ -6051,13 +6051,11 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 let computed_for_layout = self.cached_computed_map.as_ref()
                     .map(Rc::clone)
                     .unwrap_or_else(|| Rc::new(super::computed_style::ComputedStyleMap::new()));
-                // L5 step 4 Phase 3: predat REAL style_map. Empty test prosel
-                // unit-test corpus, ale realne stranky vizualne broken
-                // (shorthand parses, pseudo-elements, raw String fields jako
-                // transform/filter/gradients vyzaduji s.get raw value).
-                // Phase 3 drop bude vyzadovat migrate 43 unmigrated sites.
+                // L5 step 4 Phase 3 Step A.2: empty StyleMap after mass migrate.
+                // Vsechny shorthand + raw String + gate sites migrovany na cs.
+                let empty_style_map: super::cascade::StyleMap = Default::default();
                 let mut lr = layout::layout_tree_with_pseudo_cached_typed(
-                    &document_root, &*style_map, pseudo_map, computed_for_layout,
+                    &document_root, &empty_style_map, pseudo_map, computed_for_layout,
                     viewport_w, viewport_h, prev_root);
                 perf_t("layout_tree (rebuild)", _t_layout);
                 // Reset anim_baseline po hard layout - novy rect = nova

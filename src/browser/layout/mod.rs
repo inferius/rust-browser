@@ -118,6 +118,23 @@ fn prop_is_set(
     if let Some(cs) = cs_opt { cs.is_set(prop) } else { s.contains_key(key) }
 }
 
+/// L5 step 4 Phase 3: gate helper bez explicit PropertyId - parse z key.
+/// Pomalejsi (parse pri call), ale pohodlnejsi pro mass-replace.
+#[inline]
+fn prop_set_kn(
+    s: &HashMap<String, String>,
+    cs_opt: Option<&ComputedStyle>,
+    key: &str,
+) -> bool {
+    if let Some(cs) = cs_opt {
+        let pid = PropertyId::parse(key);
+        if pid == PropertyId::Unknown { return false; }
+        cs.is_set(pid)
+    } else {
+        s.contains_key(key)
+    }
+}
+
 /// L5 step 4 Phase 3: raw string helper. Pro shorthand + raw String CS fields
 /// kde parse stage stejna (cs ulozi raw value, layout parse later). cs.is_set
 /// gate + cs.X.as_str() value, jinak s.get fallback.
@@ -2325,7 +2342,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     }
     // font-family - vez prvni z comma-separated list (CSS spec: try in order).
     // L5 step 4 batch 17: cs.font_family (Vec<FontFamily>) typed prvni entry.
-    if s.contains_key("font-family") {
+    if prop_set_kn(s, cs_opt, "font-family") {
         bx.font_family = if let Some(cs) = cs_opt {
             use super::computed_style::FontFamily as Ff;
             cs.font_family.first().map(|f| match f {
@@ -2357,7 +2374,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         };
     }
     // text-transform - L5 step 4 batch 16: cs.text_transform cross-type.
-    if s.contains_key("text-transform") {
+    if prop_set_kn(s, cs_opt, "text-transform") {
         let raw = cs_opt.map(|cs| cs.text_transform.css_string())
                         .unwrap_or_else(|| s.get("text-transform").unwrap().as_str());
         bx.text_transform = match raw.trim() {
@@ -2404,14 +2421,14 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         bx.text_decoration_color = Some(rgba);
     }
     // L5 step 4 batch 20: text-decoration-style typed.
-    if s.contains_key("text-decoration-style") {
+    if prop_set_kn(s, cs_opt, "text-decoration-style") {
         bx.text_decoration_style = if let Some(cs) = cs_opt {
             cs.text_decoration_style.css_string().to_string()
         } else {
             s.get("text-decoration-style").unwrap().trim().to_string()
         };
     }
-    if s.contains_key("text-decoration-thickness") {
+    if prop_set_kn(s, cs_opt, "text-decoration-thickness") {
         if let Some(cs) = cs_opt {
             use super::computed_style::Length as L;
             match &cs.text_decoration_thickness {
@@ -2424,7 +2441,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         }
     }
     // L5 step 4 batch 19: text-underline-offset typed (Length::Auto -> default).
-    if s.contains_key("text-underline-offset") {
+    if prop_set_kn(s, cs_opt, "text-underline-offset") {
         if let Some(cs) = cs_opt {
             use super::computed_style::Length as L;
             match &cs.text_underline_offset {
@@ -2443,7 +2460,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     // letter-spacing / word-spacing: parsuje POZDEJI po font-size resolution
     // (em proti font-size). Viz move na konec cascade props loop.
     // L5 step 4 batch 19: word-spacing + accent-color typed.
-    if s.contains_key("word-spacing") {
+    if prop_set_kn(s, cs_opt, "word-spacing") {
         if let Some(cs) = cs_opt {
             use super::computed_style::LetterSpacing as Ls;
             if let Ls::Length(l) = &cs.word_spacing {
@@ -2455,7 +2472,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
             if ws.trim() != "normal" { bx.word_spacing = parse_length(ws); }
         }
     }
-    if s.contains_key("accent-color") {
+    if prop_set_kn(s, cs_opt, "accent-color") {
         if let Some(cs) = cs_opt {
             use super::computed_style::AccentColor as Ac;
             if let Ac::Color(c) = &cs.accent_color {
@@ -2585,7 +2602,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         bx.grid_auto_flow = gaf.trim().to_string();
     }
     // CSS Shapes L1 - L5 step 4 batch 19: typed.
-    if s.contains_key("shape-outside") {
+    if prop_set_kn(s, cs_opt, "shape-outside") {
         if let Some(cs) = cs_opt {
             use super::computed_style::ShapeOutsideVal as So;
             if let So::Raw(raw) = &cs.shape_outside {
@@ -2600,7 +2617,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(v) = read_typed_length(s, cs_opt, "shape-margin", PropertyId::ShapeMargin, |cs| &cs.shape_margin) {
         bx.shape_margin = v;
     }
-    if s.contains_key("shape-image-threshold") {
+    if prop_set_kn(s, cs_opt, "shape-image-threshold") {
         bx.shape_image_threshold = if let Some(cs) = cs_opt { cs.shape_image_threshold }
                                     else { s.get("shape-image-threshold").unwrap().trim().parse().unwrap_or(0.0) };
     }
@@ -2620,36 +2637,36 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     // Layout enums (BoxSizing, FlexDirection, ...) jsou layout-internal s vlastnim
     // parse(); ComputedStyle ma parallel typed enums s ekvivalentnim shape. Round-trip
     // pres &'static str eliminuje runtime trim + lowercase pri cs aktivni.
-    if s.contains_key("box-sizing") {
+    if prop_set_kn(s, cs_opt, "box-sizing") {
         let raw = cs_opt.map(|cs| cs.box_sizing.css_string()).unwrap_or_else(|| s.get("box-sizing").unwrap().as_str());
         bx.box_sizing = BoxSizing::parse(raw);
     }
-    if s.contains_key("flex-direction") {
+    if prop_set_kn(s, cs_opt, "flex-direction") {
         let raw = cs_opt.map(|cs| cs.flex_direction.css_string()).unwrap_or_else(|| s.get("flex-direction").unwrap().as_str());
         bx.flex_direction = FlexDirection::parse(raw);
     }
-    if s.contains_key("flex-wrap") {
+    if prop_set_kn(s, cs_opt, "flex-wrap") {
         let raw = cs_opt.map(|cs| cs.flex_wrap.css_string()).unwrap_or_else(|| s.get("flex-wrap").unwrap().as_str());
         bx.flex_wrap = FlexWrap::parse(raw);
     }
-    if s.contains_key("justify-content") {
+    if prop_set_kn(s, cs_opt, "justify-content") {
         let raw = cs_opt.map(|cs| cs.justify_content.css_string()).unwrap_or_else(|| s.get("justify-content").unwrap().as_str());
         bx.justify_content = JustifyContent::parse(raw);
     }
-    if s.contains_key("align-items") {
+    if prop_set_kn(s, cs_opt, "align-items") {
         let raw = cs_opt.map(|cs| cs.align_items.css_string()).unwrap_or_else(|| s.get("align-items").unwrap().as_str());
         bx.align_items = AlignItems::parse(raw);
     }
-    if s.contains_key("align-content") {
+    if prop_set_kn(s, cs_opt, "align-content") {
         let raw = cs_opt.map(|cs| cs.align_content.css_string()).unwrap_or_else(|| s.get("align-content").unwrap().as_str());
         bx.align_content = AlignContent::parse(raw);
     }
-    if s.contains_key("align-self") {
+    if prop_set_kn(s, cs_opt, "align-self") {
         let raw = cs_opt.map(|cs| cs.align_self.css_string()).unwrap_or_else(|| s.get("align-self").unwrap().as_str());
         bx.align_self = AlignSelf::parse(raw);
     }
     // L5 step 4 Phase F: justify-self cross-type via cs.justify_self.css_string().
-    if s.contains_key("justify-self") {
+    if prop_set_kn(s, cs_opt, "justify-self") {
         let raw = cs_opt.map(|cs| cs.justify_self.css_string())
             .unwrap_or_else(|| s.get("justify-self").unwrap().as_str());
         bx.justify_self = AlignSelf::parse(raw);
@@ -2662,7 +2679,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         bx.flex_shrink = v;
     }
     // L5 step 4 Phase F: flex-basis (raw String stored in bx + cs FlexBasis enum).
-    if s.contains_key("flex-basis") {
+    if prop_set_kn(s, cs_opt, "flex-basis") {
         bx.flex_basis = if let Some(cs) = cs_opt {
             cs.flex_basis.css_string()
         } else {
@@ -2673,7 +2690,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(v) = read_typed_length(s, cs_opt, "row-gap", PropertyId::RowGap, |cs| &cs.row_gap) {
         bx.row_gap = v;
     }
-    if s.contains_key("column-gap") {
+    if prop_set_kn(s, cs_opt, "column-gap") {
         let g = if let Some(cs) = cs_opt {
             cs.column_gap.resolve_or(0.0, 16.0, 16.0, 1024.0, 768.0)
         } else {
@@ -2684,7 +2701,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     }
     // Multi-column Layout L1: column-count + columns shorthand + column-rule.
     // L5 step 4 batch 21: column-count z typed ColumnCount enum.
-    if s.contains_key("column-count") {
+    if prop_set_kn(s, cs_opt, "column-count") {
         if let Some(cs) = cs_opt {
             use super::computed_style::ColumnCount as Cc;
             bx.column_count = match cs.column_count {
@@ -2789,14 +2806,14 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     // scroll-behavior
     // scrollbar-width
     // L5 step 4 batch 19: scrollbar-width + scrollbar-color typed.
-    if s.contains_key("scrollbar-width") {
+    if prop_set_kn(s, cs_opt, "scrollbar-width") {
         bx.scrollbar_width = if let Some(cs) = cs_opt {
             cs.scrollbar_width.css_string().to_string()
         } else {
             s.get("scrollbar-width").unwrap().trim().to_string()
         };
     }
-    if s.contains_key("scrollbar-color") {
+    if prop_set_kn(s, cs_opt, "scrollbar-color") {
         if let Some(cs) = cs_opt {
             use super::computed_style::ScrollbarColor as Sc;
             if let Sc::Pair { thumb, track } = &cs.scrollbar_color {
@@ -2840,14 +2857,14 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         if so.trim() != "none" { bx.shape_outside = Some(so.trim().to_string()); }
     }
     // L5 step 4 batch 12: direction + writing-mode cross-type.
-    if s.contains_key("direction") {
+    if prop_set_kn(s, cs_opt, "direction") {
         let raw = cs_opt.map(|cs| cs.direction.css_string()).unwrap_or_else(|| s.get("direction").unwrap().as_str());
         bx.direction = Direction::parse(raw);
         if bx.direction.is_rtl() && s.get("text-align").is_none() {
             bx.text_align = TextAlign::Right;
         }
     }
-    if s.contains_key("writing-mode") {
+    if prop_set_kn(s, cs_opt, "writing-mode") {
         let raw = cs_opt.map(|cs| cs.writing_mode.css_string()).unwrap_or_else(|| s.get("writing-mode").unwrap().as_str());
         bx.writing_mode = WritingMode::parse(raw);
     }
@@ -2872,7 +2889,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         bx.counter_increment = parse_counter(v);
     }
     // L5 step 4 batch 10: perspective z typed Length.
-    if s.contains_key("perspective") {
+    if prop_set_kn(s, cs_opt, "perspective") {
         if let Some(cs) = cs_opt {
             use super::computed_style::Length as L;
             match &cs.perspective {
@@ -2885,12 +2902,12 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         }
     }
     // L5 step 4 batch 12: pointer-events cross-type.
-    if s.contains_key("pointer-events") {
+    if prop_set_kn(s, cs_opt, "pointer-events") {
         let raw = cs_opt.map(|cs| cs.pointer_events.css_string()).unwrap_or_else(|| s.get("pointer-events").unwrap().as_str());
         bx.pointer_events = PointerEvents::parse(raw);
     }
     // L5 step 4 batch 8: caret-color z typed Color.
-    if s.contains_key("caret-color") {
+    if prop_set_kn(s, cs_opt, "caret-color") {
         if let Some(cs) = cs_opt {
             bx.caret_color = Some(cs.caret_color.to_rgba_u8());
         } else {
@@ -2899,7 +2916,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         }
     }
     // L5 step 4 batch 7: tab-size z typed f32.
-    if s.contains_key("tab-size") {
+    if prop_set_kn(s, cs_opt, "tab-size") {
         if let Some(cs) = cs_opt {
             bx.tab_size = cs.tab_size;
         } else {
@@ -2909,11 +2926,11 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         }
     }
     // L5 step 4 batch 15: word-break + overflow-wrap z typed enums css_string.
-    if s.contains_key("word-break") {
+    if prop_set_kn(s, cs_opt, "word-break") {
         bx.word_break = if let Some(cs) = cs_opt { cs.word_break.css_string().to_string() }
                         else { s.get("word-break").unwrap().trim().to_string() };
     }
-    if s.contains_key("overflow-wrap") || s.contains_key("word-wrap") {
+    if prop_set_kn(s, cs_opt, "overflow-wrap") || prop_set_kn(s, cs_opt, "word-wrap") {
         bx.overflow_wrap = if let Some(cs) = cs_opt { cs.overflow_wrap.css_string().to_string() }
                            else {
                                let v = s.get("overflow-wrap").or(s.get("word-wrap")).unwrap();
@@ -2921,7 +2938,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
                            };
     }
     // L5 step 4 batch 22: list-style-type typed.
-    if s.contains_key("list-style-type") {
+    if prop_set_kn(s, cs_opt, "list-style-type") {
         bx.list_style_type = if let Some(cs) = cs_opt {
             use super::computed_style::ListStyleType as Lst;
             match &cs.list_style_type {
@@ -2947,7 +2964,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         };
     }
     // L5 step 4 Phase F: list-style-image typed (cs.list_style_image enum).
-    if s.contains_key("list-style-image") {
+    if prop_set_kn(s, cs_opt, "list-style-image") {
         if let Some(cs) = cs_opt {
             use super::computed_style::ListStyleImage as Lsi;
             if let Lsi::Url(url) = &cs.list_style_image {
@@ -2963,14 +2980,14 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         bx.outline_width = v;
     }
     // L5 step 4 Phase F: outline-style cross-type cs.outline_style (BorderStyle).
-    if s.contains_key("outline-style") {
+    if prop_set_kn(s, cs_opt, "outline-style") {
         bx.outline_style = if let Some(cs) = cs_opt {
             cs.outline_style.css_string().to_string()
         } else {
             s.get("outline-style").unwrap().trim().to_string()
         };
     }
-    if s.contains_key("outline-color") {
+    if prop_set_kn(s, cs_opt, "outline-color") {
         // CurrentColor variant skip (resolve proti parent color v cascade by mel naplnit Rgba,
         // ale puvodni text checkoval string "currentColor" - tady ekvivalent pres CurrentColor variant).
         if let Some(cs) = cs_opt {
@@ -2987,24 +3004,24 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         bx.outline_offset = v;
     }
     // L5 step 4 Phase E: CSS Anchor Positioning L1 typed reads (PARTIAL impl).
-    if s.contains_key("anchor-name") {
+    if prop_set_kn(s, cs_opt, "anchor-name") {
         bx.anchor_name = cs_opt.map(|cs| cs.anchor_name.clone())
             .unwrap_or_else(|| s.get("anchor-name").unwrap().trim().to_string());
     }
-    if s.contains_key("position-anchor") {
+    if prop_set_kn(s, cs_opt, "position-anchor") {
         bx.position_anchor = cs_opt.map(|cs| cs.position_anchor.clone())
             .unwrap_or_else(|| s.get("position-anchor").unwrap().trim().to_string());
     }
-    if s.contains_key("inset-area") {
+    if prop_set_kn(s, cs_opt, "inset-area") {
         bx.inset_area = cs_opt.map(|cs| cs.inset_area.clone())
             .unwrap_or_else(|| s.get("inset-area").unwrap().trim().to_string());
     }
     // L5 step 4 batch 19: orphans + widows z typed u32.
-    if s.contains_key("orphans") {
+    if prop_set_kn(s, cs_opt, "orphans") {
         bx.orphans = if let Some(cs) = cs_opt { cs.orphans as i32 }
                      else { s.get("orphans").unwrap().trim().parse().unwrap_or(2) };
     }
-    if s.contains_key("widows") {
+    if prop_set_kn(s, cs_opt, "widows") {
         bx.widows = if let Some(cs) = cs_opt { cs.widows as i32 }
                     else { s.get("widows").unwrap().trim().parse().unwrap_or(2) };
     }
@@ -3015,16 +3032,16 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(v) = read_typed_length(s, cs_opt, "line-height-step", PropertyId::LineHeightStep, |cs| &cs.line_height_step) {
         bx.line_height_step = v;
     }
-    if s.contains_key("speak") {
+    if prop_set_kn(s, cs_opt, "speak") {
         bx.speak = if let Some(cs) = cs_opt { cs.speak.css_string().to_string() }
                    else { s.get("speak").unwrap().trim().to_string() };
     }
     // L5 step 4 batch 15: float + clear z typed enums css_string.
-    if s.contains_key("float") {
+    if prop_set_kn(s, cs_opt, "float") {
         bx.float_value = if let Some(cs) = cs_opt { cs.float.css_string().to_string() }
                          else { s.get("float").unwrap().trim().to_string() };
     }
-    if s.contains_key("clear") {
+    if prop_set_kn(s, cs_opt, "clear") {
         bx.clear_value = if let Some(cs) = cs_opt { cs.clear.css_string().to_string() }
                          else { s.get("clear").unwrap().trim().to_string() };
     }
@@ -3032,7 +3049,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         bx.object_position = v.trim().to_string();
     }
     // L5 step 4 Phase F: justify-items typed.
-    if s.contains_key("justify-items") {
+    if prop_set_kn(s, cs_opt, "justify-items") {
         bx.justify_items = if let Some(cs) = cs_opt {
             cs.justify_items.css_string().to_string()
         } else {
@@ -3040,7 +3057,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         };
     }
     // L5 step 4 batch 12: object-fit cross-type via inline match (cs::ObjectFit nema css_string).
-    if s.contains_key("object-fit") {
+    if prop_set_kn(s, cs_opt, "object-fit") {
         if let Some(cs) = cs_opt {
             use super::computed_style::ObjectFit as Of;
             bx.object_fit = match cs.object_fit {
@@ -3055,7 +3072,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         }
     }
     // L5 step 4 batch 19: image-rendering typed cross-type.
-    if s.contains_key("image-rendering") {
+    if prop_set_kn(s, cs_opt, "image-rendering") {
         if let Some(cs) = cs_opt {
             use super::computed_style::ImageRendering as Ir;
             bx.image_rendering = match cs.image_rendering {
@@ -3070,7 +3087,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         }
     }
     // L5 step 4 batch 13: table-layout, border-collapse cross-type inline match.
-    if s.contains_key("table-layout") {
+    if prop_set_kn(s, cs_opt, "table-layout") {
         if let Some(cs) = cs_opt {
             use super::computed_style::TableLayout as Tl;
             bx.table_layout = match cs.table_layout { Tl::Auto => TableLayout::Auto, Tl::Fixed => TableLayout::Fixed };
@@ -3078,7 +3095,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
             bx.table_layout = TableLayout::parse(s.get("table-layout").unwrap());
         }
     }
-    if s.contains_key("border-collapse") {
+    if prop_set_kn(s, cs_opt, "border-collapse") {
         if let Some(cs) = cs_opt {
             use super::computed_style::BorderCollapse as Bc;
             bx.border_collapse = match cs.border_collapse { Bc::Separate => BorderCollapse::Separate, Bc::Collapse => BorderCollapse::Collapse };
@@ -3103,7 +3120,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         bx.contain = bits;
     }
     // aspect-ratio: "16 / 9" / "1.5" / "auto" - L5 step 4 batch 9: cs.aspect_ratio Option<f32>.
-    if s.contains_key("aspect-ratio") {
+    if prop_set_kn(s, cs_opt, "aspect-ratio") {
         if let Some(cs) = cs_opt {
             bx.aspect_ratio = cs.aspect_ratio;
         } else {
@@ -3174,7 +3191,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     // aktualniho elementu (CSS spec). parse_length default em=16 by daval
     // 0.15em -> 2.4 misto 0.15 * fs (= 1.68 pri fs=11.2).
     // L5 step 4 batch 19: letter-spacing typed (resolve em proti aktualnimu font_size).
-    if s.contains_key("letter-spacing") {
+    if prop_set_kn(s, cs_opt, "letter-spacing") {
         if let Some(cs) = cs_opt {
             use super::computed_style::{LetterSpacing as Ls, Length as L};
             if let Ls::Length(l) = &cs.letter_spacing {
@@ -3199,7 +3216,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         }
     }
     // Text align - L5 step 4 batch 12: cs.text_align cross-type.
-    if s.contains_key("text-align") {
+    if prop_set_kn(s, cs_opt, "text-align") {
         let raw = cs_opt.map(|cs| cs.text_align.css_string()).unwrap_or_else(|| s.get("text-align").unwrap().as_str());
         bx.text_align = match raw.trim() {
             "center"  => TextAlign::Center,
@@ -3210,7 +3227,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     }
     // Font weight - numeric 1..1000 + keywords (normal=400, bold=700, lighter, bolder).
     // L5 step 4 batch 2: font-weight z typed u32.
-    if s.contains_key("font-weight") {
+    if prop_set_kn(s, cs_opt, "font-weight") {
         let weight: u32 = if let Some(cs) = cs_opt {
             cs.font_weight
         } else {
@@ -3230,7 +3247,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         bx.bold = weight >= 600;
     }
     // Font style: italic / oblique - L5 step 4 batch 2: typed bool.
-    if s.contains_key("font-style") {
+    if prop_set_kn(s, cs_opt, "font-style") {
         let italic = if let Some(cs) = cs_opt {
             cs.font_style_italic
         } else {
@@ -3248,7 +3265,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     // min-content: shrink-to-fit odhadem z textu. max-content: max-intrinsic.
     // fit-content: clamp na dostupnou sirku.
     // L5 step 4 batch 5: width/height typed Length variants.
-    if s.contains_key("width") {
+    if prop_set_kn(s, cs_opt, "width") {
         if let Some(cs) = cs_opt {
             use super::computed_style::Length as L;
             match &cs.width {
@@ -3284,7 +3301,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
             }
         }
     }
-    if s.contains_key("height") {
+    if prop_set_kn(s, cs_opt, "height") {
         if let Some(cs) = cs_opt {
             use super::computed_style::Length as L;
             match &cs.height {
@@ -3346,7 +3363,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(v) = read_minmax("min-height", |cs| &cs.min_height) { bx.min_height = v; }
     if let Some(v) = read_minmax("max-height", |cs| &cs.max_height) { bx.max_height = v; }
     // Line-height: cislo (multiplier) nebo length (px) - L5 step 4 batch 2: typed LineHeight enum.
-    if s.contains_key("line-height") {
+    if prop_set_kn(s, cs_opt, "line-height") {
         if let Some(cs) = cs_opt {
             use super::computed_style::LineHeight as Lh;
             match &cs.line_height {
@@ -3378,7 +3395,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         }
     }
     // Position - L5 step 4 batch 6: typed PositionKind.
-    if s.contains_key("position") {
+    if prop_set_kn(s, cs_opt, "position") {
         bx.position = if let Some(cs) = cs_opt {
             use super::computed_style::PositionKind as Pk;
             match cs.position {
@@ -3399,7 +3416,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         };
     }
     // z-index: integer pro stacking order - L5 step 4 batch 6: typed ZIndex.
-    if s.contains_key("z-index") {
+    if prop_set_kn(s, cs_opt, "z-index") {
         if let Some(cs) = cs_opt {
             use super::computed_style::ZIndex as Zi;
             match cs.z_index {
