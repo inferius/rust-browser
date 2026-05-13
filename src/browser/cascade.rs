@@ -921,6 +921,21 @@ fn eval_calc_expr(expr: &str) -> String {
 /// Pro @container: zatim aproximace - container size je root viewport. Pro
 /// presnou implementaci by se musel evaluovat per-element po layout pass
 /// (kruhova zavislost s layoutem).
+/// L5 step 4 Phase 3 Step A: cascade_with_viewport produces StyleMap legacy
+/// format. Production render path NEUZIVA - misto toho cascade_with_viewport_typed
+/// (vraci CascadeOutput { computed, declarations }).
+///
+/// Tato fn zustava VEREJNA pro:
+/// - Tests cascade_tests / layout_tests / paint_tests (legitimate raw access).
+/// - Devtools edge cases (CSS variables / @keyframes capture).
+/// - Internal use cascade_with_viewport_typed.
+///
+/// Architectural note: style_map je transient intermediate v typed wrapper.
+/// Vytvori se, populates cs typed fields, GC. NE persists post-cascade.
+/// Plne standalone typed cascade (bez StyleMap intermediate) by vyzadovala
+/// duplicate ~600 LOC selector matching + specificity + @media + var() logic.
+/// Pomer cena/prinos: duplicate kod vs intermediate alloc trvajici ~50ms.
+/// Decision: keep intermediate. Code reuse > strict separation.
 pub fn cascade_with_viewport(root: &Rc<Node>, stylesheets: &[Stylesheet],
                               viewport_w: f32, viewport_h: f32) -> StyleMap {
     // Set viewport pro thread-local pouzity v eval_math_func k konverzi
