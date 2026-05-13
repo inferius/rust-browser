@@ -412,7 +412,8 @@ pub struct ComputedStyle {
     /// EXPERIMENTAL CSS Cascading L6: @scope - cascade ignores.
 
     /// EXPERIMENTAL CSS Overflow L4: scroll-marker / scroll-button-controls.
-    pub experimental_scroll_marker_group: String,
+    /// CSS Overflow L4: scroll-marker-group. PARTIAL: storage only.
+    pub scroll_marker_group: String,
 
     /// L5 step 4 Phase G: mnozina PropertyId ktere byly EXPLICITLY nastaveny
     /// pres CSS deklaraci (cascade). Pouziva se misto `s.contains_key("X")`
@@ -655,7 +656,7 @@ impl ComputedStyle {
             math_depth: "auto".into(),
             ruby_position: RubyPosition::Alternate,
             ruby_align: RubyAlign::SpaceAround,
-            experimental_scroll_marker_group: "none".into(),
+            scroll_marker_group: "none".into(),
             explicit_set: HashSet::new(),
         }
     }

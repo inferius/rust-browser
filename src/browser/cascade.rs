@@ -1827,7 +1827,7 @@ pub fn cascade_with_viewport_typed(
         if let Some(v) = props.get("ruby-align") {
             cs.ruby_align = crate::browser::computed_style::RubyAlign::parse(v);
         }
-        if let Some(v) = props.get("scroll-marker-group") { cs.experimental_scroll_marker_group = v.clone(); }
+        if let Some(v) = props.get("scroll-marker-group") { cs.scroll_marker_group = v.clone(); }
         computed.insert(*node_id, cs);
         // Konvertuj kazdou property na CascadeDecl s validity flag pro
         // batch 1 props (color/opacity/visibility/cursor) - parse Result
