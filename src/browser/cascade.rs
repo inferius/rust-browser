@@ -3213,6 +3213,31 @@ impl AnimationSpec {
             fill_mode, play_state,
         })
     }
+
+    /// L5 step 4 Phase H: typed verze - cte z ComputedStyle. Tahne prvni entry
+    /// z Vec<*> pro vsechny anim-* longhandy. Multi-animation support tu zatim
+    /// neni - viz from_styles komentar.
+    pub fn from_cs(cs: &crate::browser::computed_style::ComputedStyle) -> Option<AnimationSpec> {
+        let name = cs.animation_name.first()?.clone();
+        if name == "none" || name.is_empty() { return None; }
+        let duration = cs.animation_duration.first().copied().unwrap_or(0.0);
+        if duration <= 0.0 { return None; }
+        let timing = cs.animation_timing_function.first()
+            .map(|t| t.css_string()).unwrap_or_else(|| "linear".into());
+        let iter = cs.animation_iteration_count.first().copied().unwrap_or(1.0);
+        let direction = cs.animation_direction.first()
+            .map(|d| d.css_string().to_string()).unwrap_or_else(|| "normal".into());
+        let delay = cs.animation_delay.first().copied().unwrap_or(0.0);
+        let fill_mode = cs.animation_fill_mode.first()
+            .map(|f| f.css_string().to_string()).unwrap_or_else(|| "none".into());
+        let play_state = cs.animation_play_state.first()
+            .map(|p| p.css_string().to_string()).unwrap_or_else(|| "running".into());
+        Some(AnimationSpec {
+            name, duration_secs: duration, timing_function: timing,
+            iteration_count: iter, direction, delay_secs: delay,
+            fill_mode, play_state,
+        })
+    }
 }
 
 /// CSS Transitions L1 parsovany shorthand.

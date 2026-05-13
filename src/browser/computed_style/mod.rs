@@ -1350,6 +1350,14 @@ impl AnimationDirection {
             _ => return None,
         })
     }
+    pub fn css_string(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::Reverse => "reverse",
+            Self::Alternate => "alternate",
+            Self::AlternateReverse => "alternate-reverse",
+        }
+    }
 }
 
 /// CSS `animation-fill-mode`.
@@ -1371,6 +1379,14 @@ impl AnimationFillMode {
             _ => return None,
         })
     }
+    pub fn css_string(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Forwards => "forwards",
+            Self::Backwards => "backwards",
+            Self::Both => "both",
+        }
+    }
 }
 
 /// CSS `animation-play-state`.
@@ -1387,6 +1403,12 @@ impl AnimationPlayState {
             "paused" => Self::Paused,
             _ => return None,
         })
+    }
+    pub fn css_string(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Paused => "paused",
+        }
     }
 }
 
@@ -1447,6 +1469,27 @@ impl TimingFunction {
             }
         }
         None
+    }
+    pub fn css_string(&self) -> String {
+        match self {
+            Self::Linear => "linear".into(),
+            Self::Ease => "ease".into(),
+            Self::EaseIn => "ease-in".into(),
+            Self::EaseOut => "ease-out".into(),
+            Self::EaseInOut => "ease-in-out".into(),
+            Self::StepStart => "step-start".into(),
+            Self::StepEnd => "step-end".into(),
+            Self::Steps(n, pos) => {
+                let p = match pos {
+                    StepPosition::Start | StepPosition::JumpStart => "jump-start",
+                    StepPosition::End | StepPosition::JumpEnd => "jump-end",
+                    StepPosition::JumpNone => "jump-none",
+                    StepPosition::JumpBoth => "jump-both",
+                };
+                format!("steps({}, {})", n, p)
+            }
+            Self::CubicBezier(a, b, c, d) => format!("cubic-bezier({},{},{},{})", a, b, c, d),
+        }
     }
 }
 
