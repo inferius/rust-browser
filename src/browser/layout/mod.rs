@@ -118,6 +118,27 @@ fn prop_is_set(
     if let Some(cs) = cs_opt { cs.is_set(prop) } else { s.contains_key(key) }
 }
 
+/// L5 step 4 Phase 3: raw string helper. Pro shorthand + raw String CS fields
+/// kde parse stage stejna (cs ulozi raw value, layout parse later). cs.is_set
+/// gate + cs.X.as_str() value, jinak s.get fallback.
+#[inline]
+fn read_raw_str<'a>(
+    s: &'a HashMap<String, String>,
+    cs_opt: Option<&'a ComputedStyle>,
+    key: &str,
+    prop: PropertyId,
+    cs_pick: impl Fn(&'a ComputedStyle) -> &'a str,
+) -> Option<&'a str> {
+    if let Some(cs) = cs_opt {
+        if !cs.is_set(prop) { return None; }
+        let v = cs_pick(cs);
+        if v.is_empty() { return None; }
+        Some(v)
+    } else {
+        s.get(key).map(|v| v.as_str())
+    }
+}
+
 /// RAII guard - nastavi thread-local na dobu scope, na drop obnovi stary.
 struct ComputedMapGuard {
     prev: Option<Rc<ComputedStyleMap>>,
@@ -2195,18 +2216,24 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         }
     }
 
-    // Color parsing - if linear-gradient, parse jako gradient, jinak solid color.
-    // Background shorthand s gradient HODNOTOU musi prepsat puvodni background-color
-    // (nelze pouze fallback - cascade ne-cleartoval background-color pri shorthand
-    // override). Preferujeme "background" pri gradient/image, jinak background-color.
-    let bg_shorthand = s.get("background").map(|v| v.as_str()).unwrap_or("");
-    let bg_is_gradient = bg_shorthand.contains("linear-gradient(")
-        || bg_shorthand.contains("radial-gradient(")
-        || bg_shorthand.contains("conic-gradient(");
+    // L5 step 4 Phase 3: Background shorthand z cs.background_shorthand.
+    let bg_shorthand_s = cs_opt.map(|cs| cs.background_shorthand.as_str())
+        .unwrap_or_else(|| s.get("background").map(|v| v.as_str()).unwrap_or(""));
+    let bg_is_gradient = bg_shorthand_s.contains("linear-gradient(")
+        || bg_shorthand_s.contains("radial-gradient(")
+        || bg_shorthand_s.contains("conic-gradient(");
     let bg_value = if bg_is_gradient {
-        Some(bg_shorthand.to_string())
+        Some(bg_shorthand_s.to_string())
     } else {
-        s.get("background-color").or(s.get("background")).cloned()
+        // background-color: typed cs.background_color, serialize via to_rgba_u8 ne staci -
+        // potrebujeme kontrolovat is_set kvuli default transparent vs explicit transparent.
+        let from_cs = cs_opt.and_then(|cs| {
+            if cs.is_set(PropertyId::BackgroundColor) {
+                let [r, g, b, a] = cs.background_color.to_rgba_u8();
+                Some(format!("rgba({},{},{},{})", r, g, b, a as f32 / 255.0))
+            } else { None }
+        });
+        from_cs.or_else(|| s.get("background-color").or(s.get("background")).cloned())
     };
     if let Some(c) = bg_value {
         if c.contains("linear-gradient(") || c.contains("radial-gradient(") || c.contains("conic-gradient(") {
@@ -2222,36 +2249,37 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         // background-repeat:   r1, r2, r3
         // ... atd.
         // Vyrobi N layeru kde N = max poctu z prop.
-        let images: Vec<String> = s.get("background-image")
-            .map(|v| split_top_level_commas_string(v))
-            .unwrap_or_default();
-        let positions: Vec<String> = s.get("background-position")
-            .map(|v| split_top_level_commas_string(v))
-            .unwrap_or_default();
-        let sizes: Vec<String> = s.get("background-size")
-            .map(|v| split_top_level_commas_string(v))
-            .unwrap_or_default();
-        let repeats: Vec<String> = s.get("background-repeat")
-            .map(|v| split_top_level_commas_string(v))
-            .unwrap_or_default();
-        let clips: Vec<String> = s.get("background-clip")
-            .map(|v| split_top_level_commas_string(v))
-            .unwrap_or_default();
-        let origins: Vec<String> = s.get("background-origin")
-            .map(|v| split_top_level_commas_string(v))
-            .unwrap_or_default();
-        let attachments: Vec<String> = s.get("background-attachment")
-            .map(|v| split_top_level_commas_string(v))
-            .unwrap_or_default();
+        // L5 step 4 Phase 3: prefer cs raw String fields, fallback s.get.
+        let read_bg = |key: &str, cs_pick: fn(&ComputedStyle) -> &str| -> Vec<String> {
+            let raw = cs_opt.map(cs_pick).unwrap_or("");
+            if !raw.is_empty() {
+                split_top_level_commas_string(raw)
+            } else {
+                s.get(key).map(|v| split_top_level_commas_string(v)).unwrap_or_default()
+            }
+        };
+        let images = read_bg("background-image", |cs| &cs.background_image);
+        let positions = read_bg("background-position", |cs| &cs.background_position);
+        let sizes = read_bg("background-size", |cs| &cs.background_size);
+        let repeats = read_bg("background-repeat", |cs| &cs.background_repeat);
+        let clips = read_bg("background-clip", |cs| &cs.background_clip_raw);
+        let origins = read_bg("background-origin", |cs| &cs.background_origin_raw);
+        let attachments = read_bg("background-attachment", |cs| &cs.background_attachment_raw);
 
         let count = [images.len(), positions.len(), sizes.len(), repeats.len()]
             .iter().max().copied().unwrap_or(0).max(1);
 
         for i in 0..count {
             let mut layer = BgLayer::default();
-            // Color jen na posledni layer (CSS spec)
+            // Color jen na posledni layer (CSS spec) - L5 step 4 Phase 3 typed.
             if i == count - 1 {
-                if let Some(c) = s.get("background-color") { layer.color = parse_color(c); }
+                if let Some(cs) = cs_opt {
+                    if cs.is_set(PropertyId::BackgroundColor) {
+                        layer.color = Some(cs.background_color.to_rgba_u8());
+                    }
+                } else if let Some(c) = s.get("background-color") {
+                    layer.color = parse_color(c);
+                }
             }
             if let Some(img) = images.get(i) {
                 let img = img.trim();
@@ -2277,22 +2305,22 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         }
     }
     // Box shadow
-    if let Some(sh) = s.get("box-shadow") {
+    if let Some(sh) = read_raw_str(s, cs_opt, "box-shadow", PropertyId::BoxShadow, |cs| &cs.box_shadow) {
         bx.box_shadow = parse_box_shadow(sh);
     }
     // Filter chain + backdrop-filter
-    if let Some(f) = s.get("filter") {
+    if let Some(f) = read_raw_str(s, cs_opt, "filter", PropertyId::Filter, |cs| &cs.filter) {
         bx.filter = parse_filter_chain(f);
     }
-    if let Some(f) = s.get("backdrop-filter") {
+    if let Some(f) = read_raw_str(s, cs_opt, "backdrop-filter", PropertyId::BackdropFilter, |cs| &cs.backdrop_filter) {
         bx.backdrop_filter = parse_filter_chain(f);
     }
     // clip-path
-    if let Some(cp) = s.get("clip-path") {
+    if let Some(cp) = read_raw_str(s, cs_opt, "clip-path", PropertyId::ClipPath, |cs| &cs.clip_path) {
         bx.clip_path = parse_clip_path(cp);
     }
     // text-shadow: parsuje "offset_x offset_y blur color"
-    if let Some(ts) = s.get("text-shadow") {
+    if let Some(ts) = read_raw_str(s, cs_opt, "text-shadow", PropertyId::TextShadow, |cs| &cs.text_shadow) {
         bx.text_shadow = parse_text_shadow(ts);
     }
     // font-family - vez prvni z comma-separated list (CSS spec: try in order).
@@ -2343,7 +2371,21 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     // Plus parsuje sub-props (color + style + thickness). Bez tohoto UA default
     // `<a>` underline neresilo override `text-decoration: none` v page CSS ->
     // tlacitka `<a class="btn">` mela underline.
-    if let Some(td) = s.get("text-decoration").or_else(|| s.get("text-decoration-line")) {
+    // text-decoration-line first try, fallback shorthand.
+    let td_line_opt = if let Some(cs) = cs_opt {
+        if cs.is_set(PropertyId::TextDecorationLine) {
+            // Hybrid: serialize cs typed na owned String, ulozit do thread_local kvuli lifetime.
+            // Simpler: pass owned via closure. read_raw_str expects &str lifetime - skip wrapper.
+            if cs.text_decoration_line.has_underline() { Some("underline") }
+            else if cs.text_decoration_line.has_line_through() { Some("line-through") }
+            else if cs.text_decoration_line.has_overline() { Some("overline") }
+            else { None }
+        } else { None }
+    } else {
+        s.get("text-decoration-line").map(|v| v.as_str())
+    };
+    let td_short_opt = read_raw_str(s, cs_opt, "text-decoration", PropertyId::TextDecoration, |cs| &cs.text_decoration_shorthand);
+    if let Some(td) = td_line_opt.or(td_short_opt) {
         let v = td.trim().to_lowercase();
         // Multi-value: "underline solid red" - hledat keywordy.
         let has_none = v.split_whitespace().any(|t| t == "none");
@@ -2428,7 +2470,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         }
     }
     // border-image: url(...) <slice> / <width> [/ <outset>] <repeat>
-    if let Some(src) = s.get("border-image-source") {
+    if let Some(src) = read_raw_str(s, cs_opt, "border-image-source", PropertyId::BorderImageSource, |cs| &cs.border_image_source) {
         let v = src.trim();
         if v != "none" {
             // strip url(...) -> URL
@@ -2438,7 +2480,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
             bx.border_image_source = Some(url);
         }
     }
-    if let Some(sl) = s.get("border-image-slice") {
+    if let Some(sl) = read_raw_str(s, cs_opt, "border-image-slice", PropertyId::BorderImageSlice, |cs| &cs.border_image_slice) {
         let parts: Vec<&str> = sl.split_whitespace().filter(|p| *p != "fill").collect();
         let nums: Vec<f32> = parts.iter().map(|p| {
             p.trim_end_matches('%').parse::<f32>().unwrap_or(0.0)
@@ -2451,7 +2493,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
             _ => [0.0; 4],
         };
     }
-    if let Some(bw) = s.get("border-image-width") {
+    if let Some(bw) = read_raw_str(s, cs_opt, "border-image-width", PropertyId::BorderImageWidth, |cs| &cs.border_image_width) {
         let nums: Vec<f32> = bw.split_whitespace()
             .map(|p| p.trim_end_matches("px").parse::<f32>().unwrap_or(1.0))
             .collect();
@@ -2468,7 +2510,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(rgba) = read_typed_color(s, cs_opt, "text-emphasis-color", PropertyId::TextEmphasisColor, |cs| cs.text_emphasis_color) {
         bx.text_emphasis_color = Some(rgba);
     }
-    if let Some(te) = s.get("text-emphasis") {
+    if let Some(te) = read_raw_str(s, cs_opt, "text-emphasis", PropertyId::TextEmphasis, |cs| &cs.text_emphasis) {
         // Shorthand "<style> <color>"
         let parts: Vec<&str> = te.split_whitespace().collect();
         if parts.len() >= 2 { bx.text_emphasis_color = parse_color(parts[1]); }
@@ -2477,13 +2519,13 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     // field-sizing (CSS Forms L1)
     // interpolate-size (CSS Animations L2)
     // CSS Grid L2 - named lines / areas (parser-only, taffy resolvuje track sizes)
-    if let Some(gtc) = s.get("grid-template-columns") {
+    if let Some(gtc) = read_raw_str(s, cs_opt, "grid-template-columns", PropertyId::GridTemplateColumns, |cs| &cs.grid_template_columns) {
         bx.grid_template_columns = gtc.trim().to_string();
     }
-    if let Some(gtr) = s.get("grid-template-rows") {
+    if let Some(gtr) = read_raw_str(s, cs_opt, "grid-template-rows", PropertyId::GridTemplateRows, |cs| &cs.grid_template_rows) {
         bx.grid_template_rows = gtr.trim().to_string();
     }
-    if let Some(gta) = s.get("grid-template-areas") {
+    if let Some(gta) = read_raw_str(s, cs_opt, "grid-template-areas", PropertyId::GridTemplateAreas, |cs| &cs.grid_template_areas) {
         bx.grid_template_areas = gta.trim().to_string();
     }
     // grid-column / grid-row shorthand: parse "N", "N / M", "span N", "N / span M".
@@ -2511,27 +2553,35 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         let span = if e_span > 0 { e_span } else if s_span > 0 { s_span } else { 0 };
         (s_line, e_line, span)
     }
-    if let Some(gc) = s.get("grid-column") {
+    if let Some(gc) = read_raw_str(s, cs_opt, "grid-column", PropertyId::GridColumn, |cs| &cs.grid_column_raw) {
         bx.grid_column = gc.trim().to_string();
         let (st, en, sp) = parse_grid_line(gc);
         if st != 0 { bx.grid_column_start = st; }
         if en != 0 { bx.grid_column_end = en; }
         if sp != 0 { bx.grid_column_span = sp; }
     }
-    if let Some(gr) = s.get("grid-row") {
+    if let Some(gr) = read_raw_str(s, cs_opt, "grid-row", PropertyId::GridRow, |cs| &cs.grid_row_raw) {
         bx.grid_row = gr.trim().to_string();
         let (st, en, sp) = parse_grid_line(gr);
         if st != 0 { bx.grid_row_start = st; }
         if en != 0 { bx.grid_row_end = en; }
         if sp != 0 { bx.grid_row_span = sp; }
     }
-    if let Some(gac) = s.get("grid-auto-columns") {
+    if let Some(gac) = read_raw_str(s, cs_opt, "grid-auto-columns", PropertyId::GridAutoColumns, |cs| &cs.grid_auto_columns) {
         bx.grid_auto_columns = gac.trim().to_string();
     }
-    if let Some(gar) = s.get("grid-auto-rows") {
+    if let Some(gar) = read_raw_str(s, cs_opt, "grid-auto-rows", PropertyId::GridAutoRows, |cs| &cs.grid_auto_rows) {
         bx.grid_auto_rows = gar.trim().to_string();
     }
-    if let Some(gaf) = s.get("grid-auto-flow") {
+    if let Some(gaf) = read_raw_str(s, cs_opt, "grid-auto-flow", PropertyId::GridAutoFlow, |cs| {
+        // grid_auto_flow je typed enum v CS, ne raw String. Convert na css_string.
+        match cs.grid_auto_flow {
+            super::computed_style::GridAutoFlow::Row => "row",
+            super::computed_style::GridAutoFlow::Column => "column",
+            super::computed_style::GridAutoFlow::RowDense => "row dense",
+            super::computed_style::GridAutoFlow::ColumnDense => "column dense",
+        }
+    }) {
         bx.grid_auto_flow = gaf.trim().to_string();
     }
     // CSS Shapes L1 - L5 step 4 batch 19: typed.
@@ -2645,7 +2695,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
             bx.column_count = s.get("column-count").unwrap().trim().parse::<u32>().unwrap_or(1).max(1);
         }
     }
-    if let Some(v) = s.get("columns") {
+    if let Some(v) = read_raw_str(s, cs_opt, "columns", PropertyId::Columns, |cs| &cs.columns_shorthand) {
         // shorthand: column-width column-count (any order, auto allowed).
         for tok in v.split_whitespace() {
             if let Ok(n) = tok.parse::<u32>() {
@@ -2654,7 +2704,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
             // column-width ignorovan pro ted; jen count + auto.
         }
     }
-    if let Some(v) = s.get("column-rule") {
+    if let Some(v) = read_raw_str(s, cs_opt, "column-rule", PropertyId::ColumnRule, |cs| &cs.column_rule_shorthand) {
         // shorthand: <width> <style> <color>
         for tok in v.split_whitespace() {
             if tok.ends_with("px") || tok.ends_with("em") {
@@ -2671,7 +2721,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(v) = s.get("column-rule-color") {
         if let Some(c) = parse_color(v.trim()) { bx.column_rule_color = c; }
     }
-    if let Some(v) = s.get("gap") {
+    if let Some(v) = read_raw_str(s, cs_opt, "gap", PropertyId::Gap, |cs| &cs.gap_shorthand) {
         let parts: Vec<&str> = v.split_whitespace().collect();
         if parts.len() == 1 {
             let g = parse_length(parts[0]);
@@ -2681,7 +2731,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
             bx.column_gap = parse_length(parts[1]);
         }
     }
-    if let Some(v) = s.get("flex") {
+    if let Some(v) = read_raw_str(s, cs_opt, "flex", PropertyId::Flex, |cs| &cs.flex_shorthand) {
         let v = v.trim();
         match v {
             "none" => { bx.flex_grow = 0.0; bx.flex_shrink = 0.0; bx.flex_basis = "auto".into(); }
@@ -2717,7 +2767,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     // CSS Compositing L1 - composite-op
     // CSS Speech L1 (voice-family extra)
     // inset shorthand: top right bottom left
-    if let Some(ins) = s.get("inset") {
+    if let Some(ins) = read_raw_str(s, cs_opt, "inset", PropertyId::Inset, |cs| &cs.inset_shorthand) {
         let parts: Vec<&str> = ins.split_whitespace().collect();
         let parse_one = |p: &str| -> Option<f32> {
             if p == "auto" { return None; }
@@ -2774,12 +2824,19 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
             _ => [0.0; 4],
         }
     };
-    if let Some(sp) = s.get("scroll-padding") { bx.scroll_padding = parse_4(sp); }
-    if let Some(sm) = s.get("scroll-margin")  { bx.scroll_margin  = parse_4(sm); }
-    if let Some(m) = s.get("mask-image") {
+    if let Some(sp) = read_raw_str(s, cs_opt, "scroll-padding", PropertyId::ScrollPadding, |cs| &cs.scroll_padding_shorthand) { bx.scroll_padding = parse_4(sp); }
+    if let Some(sm) = read_raw_str(s, cs_opt, "scroll-margin",  PropertyId::ScrollMargin,  |cs| &cs.scroll_margin_shorthand) { bx.scroll_margin  = parse_4(sm); }
+    if let Some(m) = read_raw_str(s, cs_opt, "mask-image", PropertyId::MaskImage, |cs| &cs.mask_image) {
         if m.trim() != "none" { bx.mask_image = Some(m.trim().to_string()); }
     }
-    if let Some(so) = s.get("shape-outside") {
+    // L5 step 4 Phase 3: duplicate shape-outside site - typed cs primary, fallback raw.
+    if let Some(cs) = cs_opt {
+        if cs.is_set(PropertyId::ShapeOutside) {
+            if let super::computed_style::ShapeOutsideVal::Raw(raw) = &cs.shape_outside {
+                bx.shape_outside = Some(raw.clone());
+            }
+        }
+    } else if let Some(so) = s.get("shape-outside") {
         if so.trim() != "none" { bx.shape_outside = Some(so.trim().to_string()); }
     }
     // L5 step 4 batch 12: direction + writing-mode cross-type.
@@ -2808,8 +2865,12 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         }
         out
     };
-    if let Some(v) = s.get("counter-reset") { bx.counter_reset = parse_counter(v); }
-    if let Some(v) = s.get("counter-increment") { bx.counter_increment = parse_counter(v); }
+    if let Some(v) = read_raw_str(s, cs_opt, "counter-reset", PropertyId::CounterReset, |cs| &cs.counter_reset_raw) {
+        bx.counter_reset = parse_counter(v);
+    }
+    if let Some(v) = read_raw_str(s, cs_opt, "counter-increment", PropertyId::CounterIncrement, |cs| &cs.counter_increment_raw) {
+        bx.counter_increment = parse_counter(v);
+    }
     // L5 step 4 batch 10: perspective z typed Length.
     if s.contains_key("perspective") {
         if let Some(cs) = cs_opt {
@@ -2947,7 +3008,9 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         bx.widows = if let Some(cs) = cs_opt { cs.widows as i32 }
                     else { s.get("widows").unwrap().trim().parse().unwrap_or(2) };
     }
-    if let Some(v) = s.get("counter-set") { bx.counter_set = parse_counter(v); }
+    if let Some(v) = read_raw_str(s, cs_opt, "counter-set", PropertyId::CounterSet, |cs| &cs.counter_set_raw) {
+        bx.counter_set = parse_counter(v);
+    }
     // L5 step 4 batch 19: line-height-step + speak typed.
     if let Some(v) = read_typed_length(s, cs_opt, "line-height-step", PropertyId::LineHeightStep, |cs| &cs.line_height_step) {
         bx.line_height_step = v;
@@ -2965,7 +3028,9 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         bx.clear_value = if let Some(cs) = cs_opt { cs.clear.css_string().to_string() }
                          else { s.get("clear").unwrap().trim().to_string() };
     }
-    if let Some(v) = s.get("object-position") { bx.object_position = v.trim().to_string(); }
+    if let Some(v) = read_raw_str(s, cs_opt, "object-position", PropertyId::ObjectPosition, |cs| &cs.object_position_raw) {
+        bx.object_position = v.trim().to_string();
+    }
     // L5 step 4 Phase F: justify-items typed.
     if s.contains_key("justify-items") {
         bx.justify_items = if let Some(cs) = cs_opt {
@@ -3022,7 +3087,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         }
     }
     // contain - CSS Containment L3
-    if let Some(c) = s.get("contain") {
+    if let Some(c) = read_raw_str(s, cs_opt, "contain", PropertyId::Contain, |cs| &cs.contain_shorthand) {
         let mut bits = 0u8;
         for tok in c.split_whitespace() {
             match tok {
@@ -3056,7 +3121,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         }
     }
     // Transform - single + chain
-    if let Some(tr) = s.get("transform") {
+    if let Some(tr) = read_raw_str(s, cs_opt, "transform", PropertyId::Transform, |cs| &cs.transform) {
         bx.transform = parse_transform(tr);
         bx.transforms = parse_transform_chain(tr);
     }
@@ -3079,9 +3144,15 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(v) = read_typed_length(s, cs_opt, "margin-right",  PropertyId::MarginRight,  |cs| &cs.margin_right)  { bx.margin_right  = Some(v); }
     if let Some(v) = read_typed_length(s, cs_opt, "margin-bottom", PropertyId::MarginBottom, |cs| &cs.margin_bottom) { bx.margin_bottom = Some(v); }
     if let Some(v) = read_typed_length(s, cs_opt, "margin-left",   PropertyId::MarginLeft,   |cs| &cs.margin_left)   { bx.margin_left   = Some(v); }
-    if let Some(b) = s.get("border-width") { bx.border_width = parse_length(b); }
-    if let Some(bc) = s.get("border-color") { bx.border_color = parse_color(bc); }
-    if let Some(bs) = s.get("border-style") { bx.border_style = bs.trim().to_string(); }
+    if let Some(b) = read_raw_str(s, cs_opt, "border-width", PropertyId::BorderWidth, |cs| &cs.border_width_shorthand) {
+        bx.border_width = parse_length(b);
+    }
+    if let Some(bc) = read_raw_str(s, cs_opt, "border-color", PropertyId::BorderColor, |cs| &cs.border_color_shorthand) {
+        bx.border_color = parse_color(bc);
+    }
+    if let Some(bs) = read_raw_str(s, cs_opt, "border-style", PropertyId::BorderStyle, |cs| &cs.border_style_shorthand) {
+        bx.border_style = bs.trim().to_string();
+    }
     // L5 step 4 batch 2: font-size z typed Length.
     if let Some(fs_px) = read_typed_length(s, cs_opt, "font-size", PropertyId::FontSize, |cs| &cs.font_size) {
         bx.font_size = fs_px;
@@ -3382,16 +3453,14 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(o) = read_typed_opacity(s, cs_opt) {
         bx.opacity = o;
     }
-    // Text-decoration
-    if let Some(td) = s.get("text-decoration") {
+    // Text-decoration shorthand - L5 step 4 Phase 3: raw shorthand z cs.
+    if let Some(td) = read_raw_str(s, cs_opt, "text-decoration", PropertyId::TextDecoration, |cs| &cs.text_decoration_shorthand) {
         let t = td.to_lowercase();
         if t.contains("underline")    { bx.text_underline = true; }
         if t.contains("line-through") { bx.text_strikethrough = true; }
     }
-    // Overflow
-    // overflow shorthand: "hidden" | "visible" | "scroll" | "auto" | "clip"
-    // alebo dve hodnoty "hidden auto" (x y).
-    if let Some(ov) = s.get("overflow") {
+    // Overflow shorthand - L5 step 4 Phase 3.
+    if let Some(ov) = read_raw_str(s, cs_opt, "overflow", PropertyId::Overflow, |cs| &cs.overflow_shorthand) {
         let t = ov.trim();
         bx.overflow_hidden = matches!(t, "hidden" | "clip");
         let parts: Vec<&str> = t.split_whitespace().collect();

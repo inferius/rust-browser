@@ -1828,6 +1828,32 @@ pub fn cascade_with_viewport_typed(
             cs.ruby_align = crate::browser::computed_style::RubyAlign::parse(v);
         }
         if let Some(v) = props.get("scroll-marker-group") { cs.scroll_marker_group = v.clone(); }
+        // L5 step 4 Phase 3: raw shorthand storage pro layout shorthand sites.
+        if let Some(v) = props.get("flex") { cs.flex_shorthand = v.clone(); }
+        if let Some(v) = props.get("columns") { cs.columns_shorthand = v.clone(); }
+        if let Some(v) = props.get("column-rule") { cs.column_rule_shorthand = v.clone(); }
+        if let Some(v) = props.get("scroll-padding") { cs.scroll_padding_shorthand = v.clone(); }
+        if let Some(v) = props.get("scroll-margin") { cs.scroll_margin_shorthand = v.clone(); }
+        if let Some(v) = props.get("gap") { cs.gap_shorthand = v.clone(); }
+        if let Some(v) = props.get("inset") { cs.inset_shorthand = v.clone(); }
+        if let Some(v) = props.get("text-decoration") { cs.text_decoration_shorthand = v.clone(); }
+        if let Some(v) = props.get("overflow") { cs.overflow_shorthand = v.clone(); }
+        if let Some(v) = props.get("border-width") { cs.border_width_shorthand = v.clone(); }
+        if let Some(v) = props.get("border-style") { cs.border_style_shorthand = v.clone(); }
+        if let Some(v) = props.get("border-color") { cs.border_color_shorthand = v.clone(); }
+        if let Some(v) = props.get("background") { cs.background_shorthand = v.clone(); }
+        if let Some(v) = props.get("contain") { cs.contain_shorthand = v.clone(); }
+        if let Some(v) = props.get("counter-reset") { cs.counter_reset_raw = v.clone(); }
+        if let Some(v) = props.get("counter-increment") { cs.counter_increment_raw = v.clone(); }
+        if let Some(v) = props.get("counter-set") { cs.counter_set_raw = v.clone(); }
+        if let Some(v) = props.get("object-position") { cs.object_position_raw = v.clone(); }
+        if let Some(v) = props.get("grid-column") { cs.grid_column_raw = v.clone(); }
+        if let Some(v) = props.get("grid-row") { cs.grid_row_raw = v.clone(); }
+        if let Some(v) = props.get("background-clip") { cs.background_clip_raw = v.clone(); }
+        if let Some(v) = props.get("background-origin") { cs.background_origin_raw = v.clone(); }
+        if let Some(v) = props.get("background-attachment") { cs.background_attachment_raw = v.clone(); }
+        if let Some(v) = props.get("border-image-outset") { cs.border_image_outset_raw = v.clone(); }
+        if let Some(v) = props.get("border-image-repeat") { cs.border_image_repeat_raw = v.clone(); }
         computed.insert(*node_id, cs);
         // Konvertuj kazdou property na CascadeDecl s validity flag pro
         // batch 1 props (color/opacity/visibility/cursor) - parse Result

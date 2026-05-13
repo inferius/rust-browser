@@ -208,6 +208,8 @@ pub enum PropertyId {
     Counter,
     CounterReset,
     CounterIncrement,
+    CounterSet,
+    Contain,
     ListStyle,
     ListStyleType,
     ListStylePosition,
@@ -253,6 +255,8 @@ pub enum PropertyId {
     BorderImageWidth,
     TextEmphasis,
     TextEmphasisColor,
+    ScrollPadding,
+    ScrollMargin,
 
     // ─── EXPERIMENTAL CSS L4/L5 - parser-recognized, layout/paint pending ─
     /// EXPERIMENTAL CSS Anchor Positioning L1: anchor-name.
@@ -479,6 +483,8 @@ impl PropertyId {
             "content" => Self::Content,
             "counter-reset" => Self::CounterReset,
             "counter-increment" => Self::CounterIncrement,
+            "counter-set" => Self::CounterSet,
+            "contain" => Self::Contain,
             "list-style" => Self::ListStyle,
             "list-style-type" => Self::ListStyleType,
             "list-style-position" => Self::ListStylePosition,
@@ -523,6 +529,8 @@ impl PropertyId {
             "border-image-width" => Self::BorderImageWidth,
             "text-emphasis" => Self::TextEmphasis,
             "text-emphasis-color" => Self::TextEmphasisColor,
+            "scroll-padding" => Self::ScrollPadding,
+            "scroll-margin" => Self::ScrollMargin,
             // EXPERIMENTAL CSS L4/L5 - parser recognized.
             "anchor-name" => Self::ExperimentalAnchorName,
             "position-anchor" => Self::ExperimentalPositionAnchor,
@@ -732,6 +740,8 @@ impl PropertyId {
             Self::Counter => "counter",
             Self::CounterReset => "counter-reset",
             Self::CounterIncrement => "counter-increment",
+            Self::CounterSet => "counter-set",
+            Self::Contain => "contain",
             Self::ListStyle => "list-style",
             Self::ListStyleType => "list-style-type",
             Self::ListStylePosition => "list-style-position",
@@ -776,6 +786,8 @@ impl PropertyId {
             Self::BorderImageWidth => "border-image-width",
             Self::TextEmphasis => "text-emphasis",
             Self::TextEmphasisColor => "text-emphasis-color",
+            Self::ScrollPadding => "scroll-padding",
+            Self::ScrollMargin => "scroll-margin",
             // EXPERIMENTAL.
             Self::ExperimentalAnchorName => "anchor-name",
             Self::ExperimentalPositionAnchor => "position-anchor",

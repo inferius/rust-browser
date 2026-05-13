@@ -415,6 +415,54 @@ pub struct ComputedStyle {
     /// CSS Overflow L4: scroll-marker-group. PARTIAL: storage only.
     pub scroll_marker_group: String,
 
+    // ─── L5 step 4 Phase 3: raw shorthand storage pro shorthand sites v build_box_inner.
+    // Cascade dovni shorthand expansion pro gap/inset/border-radius/place-*/atd,
+    // ale NEPCHODI: flex, columns, column-rule, scroll-padding, scroll-margin.
+    // Pro tyto musi layout parse raw shorthand. CS drzi raw string pro reach.
+    /// CSS `flex` shorthand: <grow> <shrink> <basis>.
+    pub flex_shorthand: String,
+    /// CSS `columns` shorthand: <width> <count>.
+    pub columns_shorthand: String,
+    /// CSS `column-rule` shorthand: <width> <style> <color>.
+    pub column_rule_shorthand: String,
+    /// CSS `scroll-padding` shorthand: 1-4 hodnoty.
+    pub scroll_padding_shorthand: String,
+    /// CSS `scroll-margin` shorthand: 1-4 hodnoty.
+    pub scroll_margin_shorthand: String,
+    /// CSS `gap` shorthand: row + column. (cascade expands ale layout obcas re-parse.)
+    pub gap_shorthand: String,
+    /// CSS `inset` shorthand: top/right/bottom/left.
+    pub inset_shorthand: String,
+    /// CSS `text-decoration` shorthand: line/style/color/thickness.
+    pub text_decoration_shorthand: String,
+    /// CSS `overflow` shorthand: x + y.
+    pub overflow_shorthand: String,
+    /// CSS `border-width` / `border-style` / `border-color` shorthand (4 sides).
+    pub border_width_shorthand: String,
+    pub border_style_shorthand: String,
+    pub border_color_shorthand: String,
+    /// CSS `background` shorthand (color + image + position + size + repeat + ...).
+    /// Layout dela gradient detection pres tento raw string.
+    pub background_shorthand: String,
+    /// CSS `contain` shorthand.
+    pub contain_shorthand: String,
+    /// CSS counter shorthandy.
+    pub counter_reset_raw: String,
+    pub counter_increment_raw: String,
+    pub counter_set_raw: String,
+    /// CSS `object-position` raw (cs ma typed x/y, ale layout drzi raw).
+    pub object_position_raw: String,
+    /// CSS `grid-column`/`grid-row` shorthandy (cs ma start/end typed).
+    pub grid_column_raw: String,
+    pub grid_row_raw: String,
+    /// Background multi-layer raw storage (cs ma single typed; tady raw pro layout split).
+    pub background_clip_raw: String,
+    pub background_origin_raw: String,
+    pub background_attachment_raw: String,
+    /// Border-image multi-component raw.
+    pub border_image_outset_raw: String,
+    pub border_image_repeat_raw: String,
+
     /// L5 step 4 Phase G: mnozina PropertyId ktere byly EXPLICITLY nastaveny
     /// pres CSS deklaraci (cascade). Pouziva se misto `s.contains_key("X")`
     /// gates - distinguishes "explicitne CSS-set" vs "initial default".
@@ -657,6 +705,32 @@ impl ComputedStyle {
             ruby_position: RubyPosition::Alternate,
             ruby_align: RubyAlign::SpaceAround,
             scroll_marker_group: "none".into(),
+            // L5 step 4 Phase 3 raw shorthand storage.
+            flex_shorthand: String::new(),
+            columns_shorthand: String::new(),
+            column_rule_shorthand: String::new(),
+            scroll_padding_shorthand: String::new(),
+            scroll_margin_shorthand: String::new(),
+            gap_shorthand: String::new(),
+            inset_shorthand: String::new(),
+            text_decoration_shorthand: String::new(),
+            overflow_shorthand: String::new(),
+            border_width_shorthand: String::new(),
+            border_style_shorthand: String::new(),
+            border_color_shorthand: String::new(),
+            background_shorthand: String::new(),
+            contain_shorthand: String::new(),
+            counter_reset_raw: String::new(),
+            counter_increment_raw: String::new(),
+            counter_set_raw: String::new(),
+            object_position_raw: String::new(),
+            grid_column_raw: String::new(),
+            grid_row_raw: String::new(),
+            background_clip_raw: String::new(),
+            background_origin_raw: String::new(),
+            background_attachment_raw: String::new(),
+            border_image_outset_raw: String::new(),
+            border_image_repeat_raw: String::new(),
             explicit_set: HashSet::new(),
         }
     }
