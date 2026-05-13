@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use super::dom::{Node, NodeKind};
 use super::cascade::StyleMap;
-use super::computed_style::{ComputedStyle, ComputedStyleMap};
+use super::computed_style::{ComputedStyle, ComputedStyleMap, PropertyId};
 
 // L5 step 4 plumbing: thread-local typed cascade output sdileny pres build_box_inner
 // stack. Aktivni jen behem layout_tree_typed* volani. Bez aktivni mapy reads
@@ -34,79 +34,88 @@ pub(crate) fn active_computed_map() -> Option<Rc<ComputedStyleMap>> {
     ACTIVE_COMPUTED_MAP.with(|cell| cell.borrow().clone())
 }
 
-/// L5 step 4 helper: precti barvu z typed ComputedStyle pokud key v style mape
-/// existuje. Pokud cs_opt = None (= legacy testy bez typed cascade), padne
-/// zpet na parse_color z stringly value.
-///
-/// Gate `s.contains_key(key)` zachovava semantiku legacy `if let Some(v) =
-/// s.get(key)` - properties ktere CSS nedeklaruje (a nejsou inherit-shifted
-/// do style_map) zustanou na bx default, nezapise se initial Color.
+/// L5 step 4 Phase G+: helper - precti barvu z typed ComputedStyle.
+/// Gate pres cs.is_set(prop) kdyz cs_opt aktivni, jinak fallback s.contains_key.
+/// Toto dovoli build_box_inner pracovat bez style_map (Phase 3 drop foundation).
 #[inline]
 fn read_typed_color(
     s: &HashMap<String, String>,
     cs_opt: Option<&ComputedStyle>,
     key: &str,
+    prop: PropertyId,
     pick: impl Fn(&ComputedStyle) -> super::computed_style::Color,
 ) -> Option<[u8; 4]> {
-    let raw = s.get(key)?;
     if let Some(cs) = cs_opt {
+        if !cs.is_set(prop) { return None; }
         Some(pick(cs).to_rgba_u8())
     } else {
+        let raw = s.get(key)?;
         parse_color(raw)
     }
 }
 
-/// L5 step 4 helper: precti opacity z typed ComputedStyle pokud key v style mape.
-/// Stejna logika gate jako read_typed_color.
+/// L5 step 4 Phase G+: opacity helper. Gate cs.is_set | s.contains_key.
 #[inline]
 fn read_typed_opacity(
     s: &HashMap<String, String>,
     cs_opt: Option<&ComputedStyle>,
 ) -> Option<f32> {
-    let raw = s.get("opacity")?;
     if let Some(cs) = cs_opt {
+        if !cs.is_set(PropertyId::Opacity) { return None; }
         Some(cs.opacity)
     } else {
+        let raw = s.get("opacity")?;
         Some(raw.trim().parse::<f32>().unwrap_or(1.0).clamp(0.0, 1.0))
     }
 }
 
-/// L5 step 4 helper: precti Length z typed ComputedStyle a resolvuj na px.
-/// Pouziva stejne default kontexty jako legacy parse_length (vw=1024, vh=768,
-/// font=16, parent=0 pro %). Po L5 stage 5 vsude predame realny kontext.
-///
-/// Pri Length::Auto / None vraci 0.0 (matches parse_length behavior). Pro
-/// rozliseni Auto vs explicit 0 viz read_typed_length_or.
+/// L5 step 4 Phase G+: Length helper. Gate cs.is_set | s.contains_key.
 #[inline]
 fn read_typed_length(
     s: &HashMap<String, String>,
     cs_opt: Option<&ComputedStyle>,
     key: &str,
+    prop: PropertyId,
     pick: impl Fn(&ComputedStyle) -> &super::computed_style::Length,
 ) -> Option<f32> {
-    let raw = s.get(key)?;
     if let Some(cs) = cs_opt {
+        if !cs.is_set(prop) { return None; }
         Some(pick(cs).resolve_or(0.0, 16.0, 16.0, 1024.0, 768.0))
     } else {
+        let raw = s.get(key)?;
         Some(parse_length(raw))
     }
 }
 
-/// L5 step 4 helper: precti f32 hodnotu z typed ComputedStyle, jinak parse z stringly.
+/// L5 step 4 Phase G+: f32 helper. Gate cs.is_set | s.contains_key.
 #[inline]
 fn read_typed_f32(
     s: &HashMap<String, String>,
     cs_opt: Option<&ComputedStyle>,
     key: &str,
+    prop: PropertyId,
     pick: impl Fn(&ComputedStyle) -> f32,
     parse_fallback: impl Fn(&str) -> f32,
 ) -> Option<f32> {
-    let raw = s.get(key)?;
     if let Some(cs) = cs_opt {
+        if !cs.is_set(prop) { return None; }
         Some(pick(cs))
     } else {
+        let raw = s.get(key)?;
         Some(parse_fallback(raw))
     }
+}
+
+/// L5 step 4 Phase G: gate helper. cs.is_set(prop) when cs_opt aktivni,
+/// jinak s.contains_key(key). Use pri replace `s.contains_key("X")` checks.
+#[inline]
+fn prop_is_set(
+    s: &HashMap<String, String>,
+    cs_opt: Option<&ComputedStyle>,
+    key: &str,
+    prop: PropertyId,
+) -> bool {
+    if let Some(cs) = cs_opt { cs.is_set(prop) } else { s.contains_key(key) }
 }
 
 /// RAII guard - nastavi thread-local na dobu scope, na drop obnovi stary.
@@ -2349,7 +2358,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         }
     }
     // text-decoration L4 detail props - L5 step 4 batch 11: typed.
-    if let Some(rgba) = read_typed_color(s, cs_opt, "text-decoration-color", |cs| cs.text_decoration_color) {
+    if let Some(rgba) = read_typed_color(s, cs_opt, "text-decoration-color", PropertyId::TextDecorationColor, |cs| cs.text_decoration_color) {
         bx.text_decoration_color = Some(rgba);
     }
     // L5 step 4 batch 20: text-decoration-style typed.
@@ -2386,7 +2395,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         }
     }
     // L5 step 4 batch 7: text-indent z typed Length.
-    if let Some(v) = read_typed_length(s, cs_opt, "text-indent", |cs| &cs.text_indent) {
+    if let Some(v) = read_typed_length(s, cs_opt, "text-indent", PropertyId::TextIndent, |cs| &cs.text_indent) {
         bx.text_indent = v;
     }
     // letter-spacing / word-spacing: parsuje POZDEJI po font-size resolution
@@ -2456,7 +2465,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     }
     // CSS Compositing L1
     // text-emphasis - L5 step 4 batch 20: text-emphasis-color typed.
-    if let Some(rgba) = read_typed_color(s, cs_opt, "text-emphasis-color", |cs| cs.text_emphasis_color) {
+    if let Some(rgba) = read_typed_color(s, cs_opt, "text-emphasis-color", PropertyId::TextEmphasisColor, |cs| cs.text_emphasis_color) {
         bx.text_emphasis_color = Some(rgba);
     }
     if let Some(te) = s.get("text-emphasis") {
@@ -2538,7 +2547,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
             if v != "none" { bx.shape_outside = Some(v.to_string()); }
         }
     }
-    if let Some(v) = read_typed_length(s, cs_opt, "shape-margin", |cs| &cs.shape_margin) {
+    if let Some(v) = read_typed_length(s, cs_opt, "shape-margin", PropertyId::ShapeMargin, |cs| &cs.shape_margin) {
         bx.shape_margin = v;
     }
     if s.contains_key("shape-image-threshold") {
@@ -2596,10 +2605,10 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         bx.justify_self = AlignSelf::parse(raw);
     }
     // L5 step 4 batch 9: flex-grow + flex-shrink z typed f32.
-    if let Some(v) = read_typed_f32(s, cs_opt, "flex-grow", |cs| cs.flex_grow, |raw| raw.trim().parse().unwrap_or(0.0)) {
+    if let Some(v) = read_typed_f32(s, cs_opt, "flex-grow", PropertyId::FlexGrow, |cs| cs.flex_grow, |raw| raw.trim().parse().unwrap_or(0.0)) {
         bx.flex_grow = v;
     }
-    if let Some(v) = read_typed_f32(s, cs_opt, "flex-shrink", |cs| cs.flex_shrink, |raw| raw.trim().parse().unwrap_or(1.0)) {
+    if let Some(v) = read_typed_f32(s, cs_opt, "flex-shrink", PropertyId::FlexShrink, |cs| cs.flex_shrink, |raw| raw.trim().parse().unwrap_or(1.0)) {
         bx.flex_shrink = v;
     }
     // L5 step 4 Phase F: flex-basis (raw String stored in bx + cs FlexBasis enum).
@@ -2611,7 +2620,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         };
     }
     // L5 step 4 batch 9: row-gap + column-gap z typed Length.
-    if let Some(v) = read_typed_length(s, cs_opt, "row-gap", |cs| &cs.row_gap) {
+    if let Some(v) = read_typed_length(s, cs_opt, "row-gap", PropertyId::RowGap, |cs| &cs.row_gap) {
         bx.row_gap = v;
     }
     if s.contains_key("column-gap") {
@@ -2697,10 +2706,10 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     // CSS Filters L2 backdrop-filter raw string (parsovan jinde do filter ops)
     // CSS Containment intrinsic sizes
     // L5 step 4 batch 19: contain-intrinsic-* typed Length.
-    if let Some(v) = read_typed_length(s, cs_opt, "contain-intrinsic-block-size", |cs| &cs.contain_intrinsic_block_size) {
+    if let Some(v) = read_typed_length(s, cs_opt, "contain-intrinsic-block-size", PropertyId::ContainIntrinsicBlockSize, |cs| &cs.contain_intrinsic_block_size) {
         bx.contain_intrinsic_block_size = v;
     }
-    if let Some(v) = read_typed_length(s, cs_opt, "contain-intrinsic-inline-size", |cs| &cs.contain_intrinsic_inline_size) {
+    if let Some(v) = read_typed_length(s, cs_opt, "contain-intrinsic-inline-size", PropertyId::ContainIntrinsicInlineSize, |cs| &cs.contain_intrinsic_inline_size) {
         bx.contain_intrinsic_inline_size = v;
     }
     // CSS Anchor L1 / Position L4
@@ -2785,7 +2794,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         let raw = cs_opt.map(|cs| cs.writing_mode.css_string()).unwrap_or_else(|| s.get("writing-mode").unwrap().as_str());
         bx.writing_mode = WritingMode::parse(raw);
     }
-    if let Some(v) = read_typed_length(s, cs_opt, "contain-intrinsic-size", |cs| &cs.contain_intrinsic_size) {
+    if let Some(v) = read_typed_length(s, cs_opt, "contain-intrinsic-size", PropertyId::ContainIntrinsicSize, |cs| &cs.contain_intrinsic_size) {
         bx.contain_intrinsic_size = v;
     }
     let parse_counter = |v: &str| -> Vec<(String, i32)> {
@@ -2889,7 +2898,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         }
     }
     // L5 step 4 batch 8: outline-width/offset z typed Length, outline-color typed Color.
-    if let Some(v) = read_typed_length(s, cs_opt, "outline-width", |cs| &cs.outline_width) {
+    if let Some(v) = read_typed_length(s, cs_opt, "outline-width", PropertyId::OutlineWidth, |cs| &cs.outline_width) {
         bx.outline_width = v;
     }
     // L5 step 4 Phase F: outline-style cross-type cs.outline_style (BorderStyle).
@@ -2913,7 +2922,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
             if v.trim() != "currentColor" { bx.outline_color = parse_color(v); }
         }
     }
-    if let Some(v) = read_typed_length(s, cs_opt, "outline-offset", |cs| &cs.outline_offset) {
+    if let Some(v) = read_typed_length(s, cs_opt, "outline-offset", PropertyId::OutlineOffset, |cs| &cs.outline_offset) {
         bx.outline_offset = v;
     }
     // L5 step 4 Phase E: EXPERIMENTAL CSS Anchor Positioning L1 typed reads.
@@ -2940,7 +2949,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     }
     if let Some(v) = s.get("counter-set") { bx.counter_set = parse_counter(v); }
     // L5 step 4 batch 19: line-height-step + speak typed.
-    if let Some(v) = read_typed_length(s, cs_opt, "line-height-step", |cs| &cs.line_height_step) {
+    if let Some(v) = read_typed_length(s, cs_opt, "line-height-step", PropertyId::LineHeightStep, |cs| &cs.line_height_step) {
         bx.line_height_step = v;
     }
     if s.contains_key("speak") {
@@ -3052,7 +3061,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         bx.transforms = parse_transform_chain(tr);
     }
     // L5 step 4 batch 1: text `color` z typed ComputedStyle (fast path), jinak parse fallback.
-    if let Some(rgba) = read_typed_color(s, cs_opt, "color", |cs| cs.color) {
+    if let Some(rgba) = read_typed_color(s, cs_opt, "color", PropertyId::Color, |cs| cs.color) {
         bx.text_color = Some(rgba);
     }
 
@@ -3060,21 +3069,21 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     // L5 step 4 batch 3+4: padding + margin z typed Length.
     let padding_v = s.get("padding-top").or(s.get("padding"));
     if let Some(p) = padding_v { bx.padding = parse_length(p); }
-    if let Some(v) = read_typed_length(s, cs_opt, "padding-top",    |cs| &cs.padding_top)    { bx.padding_top    = Some(v); }
-    if let Some(v) = read_typed_length(s, cs_opt, "padding-right",  |cs| &cs.padding_right)  { bx.padding_right  = Some(v); }
-    if let Some(v) = read_typed_length(s, cs_opt, "padding-bottom", |cs| &cs.padding_bottom) { bx.padding_bottom = Some(v); }
-    if let Some(v) = read_typed_length(s, cs_opt, "padding-left",   |cs| &cs.padding_left)   { bx.padding_left   = Some(v); }
+    if let Some(v) = read_typed_length(s, cs_opt, "padding-top",    PropertyId::PaddingTop,    |cs| &cs.padding_top)    { bx.padding_top    = Some(v); }
+    if let Some(v) = read_typed_length(s, cs_opt, "padding-right",  PropertyId::PaddingRight,  |cs| &cs.padding_right)  { bx.padding_right  = Some(v); }
+    if let Some(v) = read_typed_length(s, cs_opt, "padding-bottom", PropertyId::PaddingBottom, |cs| &cs.padding_bottom) { bx.padding_bottom = Some(v); }
+    if let Some(v) = read_typed_length(s, cs_opt, "padding-left",   PropertyId::PaddingLeft,   |cs| &cs.padding_left)   { bx.padding_left   = Some(v); }
     let margin_v = s.get("margin-top").or(s.get("margin"));
     if let Some(m) = margin_v { bx.margin = parse_length(m); }
-    if let Some(v) = read_typed_length(s, cs_opt, "margin-top",    |cs| &cs.margin_top)    { bx.margin_top    = Some(v); }
-    if let Some(v) = read_typed_length(s, cs_opt, "margin-right",  |cs| &cs.margin_right)  { bx.margin_right  = Some(v); }
-    if let Some(v) = read_typed_length(s, cs_opt, "margin-bottom", |cs| &cs.margin_bottom) { bx.margin_bottom = Some(v); }
-    if let Some(v) = read_typed_length(s, cs_opt, "margin-left",   |cs| &cs.margin_left)   { bx.margin_left   = Some(v); }
+    if let Some(v) = read_typed_length(s, cs_opt, "margin-top",    PropertyId::MarginTop,    |cs| &cs.margin_top)    { bx.margin_top    = Some(v); }
+    if let Some(v) = read_typed_length(s, cs_opt, "margin-right",  PropertyId::MarginRight,  |cs| &cs.margin_right)  { bx.margin_right  = Some(v); }
+    if let Some(v) = read_typed_length(s, cs_opt, "margin-bottom", PropertyId::MarginBottom, |cs| &cs.margin_bottom) { bx.margin_bottom = Some(v); }
+    if let Some(v) = read_typed_length(s, cs_opt, "margin-left",   PropertyId::MarginLeft,   |cs| &cs.margin_left)   { bx.margin_left   = Some(v); }
     if let Some(b) = s.get("border-width") { bx.border_width = parse_length(b); }
     if let Some(bc) = s.get("border-color") { bx.border_color = parse_color(bc); }
     if let Some(bs) = s.get("border-style") { bx.border_style = bs.trim().to_string(); }
     // L5 step 4 batch 2: font-size z typed Length.
-    if let Some(fs_px) = read_typed_length(s, cs_opt, "font-size", |cs| &cs.font_size) {
+    if let Some(fs_px) = read_typed_length(s, cs_opt, "font-size", PropertyId::FontSize, |cs| &cs.font_size) {
         bx.font_size = fs_px;
         bx.font_size_explicit = true;
     }
@@ -3161,7 +3170,7 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     }
     // Border radius - L5 step 4 batch 10: typed cs.border_top_left_radius (4 corners
     // CSS shorthand expands na vsechny, layout drzi 1 f32 z top_left jako reprezentant).
-    if let Some(v) = read_typed_length(s, cs_opt, "border-radius", |cs| &cs.border_top_left_radius) {
+    if let Some(v) = read_typed_length(s, cs_opt, "border-radius", PropertyId::BorderRadius, |cs| &cs.border_top_left_radius) {
         bx.border_radius = v;
     }
     // Explicit width / height z CSS (auto = None, min/max-content = special).
