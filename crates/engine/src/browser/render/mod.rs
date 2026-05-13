@@ -7478,7 +7478,7 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    fn new(window: std::sync::Arc<winit::window::Window>) -> Self {
+    pub fn new(window: std::sync::Arc<winit::window::Window>) -> Self {
         let instance = wgpu::Instance::default();
         let surface = instance.create_surface(window.clone()).unwrap();
         let adapter = pollster::block_on(instance.request_adapter(
@@ -9518,6 +9518,85 @@ impl Renderer {
     /// Composit offscreen_tex_a do swap chain pres scissor (x, y, w, h).
     /// Aplikuje 4x5 color matrix (identity = passthrough).
     /// Pouziva fullscreen triangle + alpha blend; scissor omezi vystup na bbox.
+    /// Acquire swap chain texture + composite extern target view (typicky
+    /// WebView offscreen RT) fullscreen do swap chain + present. Pouziti:
+    /// shell crate / hostujici aplikace renderuje WebView do offscreen,
+    /// pak vola tuto fn aby se zobrazil v okne.
+    ///
+    /// Vrati `false` pokud surface get_current_texture selhal nebo
+    /// compose pipeline neni dostupna.
+    pub fn present_external_to_swap_chain(&self, src_view: &wgpu::TextureView) -> bool {
+        let frame = match self.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
+            _ => return false,
+        };
+        let swap_view = frame.texture.create_view(&Default::default());
+
+        // Identity color matrix - sample src_view bez tonal modifikace.
+        let identity: [f32; 20] = [
+            1.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0,
+            0.0, 0.0, 0.0, 1.0,
+            0.0, 0.0, 0.0, 0.0,
+        ];
+        self.queue.write_buffer(&self.compose_uniform_buf, 0, bytemuck::cast_slice(&identity));
+
+        let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("present_external_bg"),
+            layout: &self.compose_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(src_view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.atlas_smp) },
+                wgpu::BindGroupEntry { binding: 2, resource: self.compose_uniform_buf.as_entire_binding() },
+            ],
+        });
+
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
+                label: Some("present_external_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    depth_slice: None,
+                    view: &swap_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.95, g: 0.95, b: 0.97, a: 1.0 }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(&self.compose_pipeline);
+            pass.set_bind_group(0, &bg, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        self.queue.submit(std::iter::once(encoder.finish()));
+        frame.present();
+        true
+    }
+
+    /// Pristup k device Renderer pro hostujici aplikaci (custom rendering,
+    /// shader compile, buffer create). Sdileny zaroven s WebView pres Engine.
+    pub fn device(&self) -> &wgpu::Device { &self.device }
+
+    /// Pristup ke queue Renderer pro hostujici aplikaci (submit, ...).
+    pub fn queue(&self) -> &wgpu::Queue { &self.queue }
+
+    /// Aktualni surface config (width, height, scale_factor).
+    pub fn surface_size(&self) -> (u32, u32) { (self.config.width, self.config.height) }
+
+    /// HiDPI scale_factor (CSS px -> physical px).
+    pub fn scale_factor_value(&self) -> f32 { self.scale_factor }
+
+    /// Resize surface + interni RTs - hostujici aplikace vola na winit Resized.
+    pub fn resize_surface(&mut self, w: u32, h: u32) {
+        self.resize(w.max(1), h.max(1));
+    }
+
     fn compose_offscreen(&self, view: &wgpu::TextureView, x: f32, y: f32, w: f32, h: f32, color_matrix: &[f32; 20], first: bool) {
         // Upload color matrix do uniform: 5x vec4 (rgba per row + offset)
         // Layout: [row0_rgba, row1_rgba, row2_rgba, row3_rgba, offset_rgba]

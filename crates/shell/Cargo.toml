@@ -14,3 +14,9 @@ path = "src/main.rs"
 [dependencies]
 # Engine library - core renderer + layout + interpreter.
 rwe-engine = { path = "../engine" }
+
+# winit reexpose - shell vlastni Window + EventLoop. Same verze jako engine.
+winit = "0.30"
+# wgpu - shell pouziva Renderer pres engine, ale potrebuje wgpu types pri
+# texture/view manipulation.
+wgpu = "29"

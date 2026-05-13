@@ -3138,6 +3138,8 @@ name = "rwe-shell"
 version = "0.1.0"
 dependencies = [
  "rwe-engine",
+ "wgpu",
+ "winit",
 ]
 
 [[package]]
