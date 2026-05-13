@@ -1550,12 +1550,12 @@ fn cascade_typed_dual_write_smoke() {
     let p = doc.root.find(|n| n.tag_name().as_deref() == Some("p")).unwrap();
     let node_id = std::rc::Rc::as_ptr(&p) as usize;
 
-    // style_map (legacy) ma color
-    let styles = out.style_map.get(&node_id).expect("style_map entry");
-    assert_eq!(styles.get("color").map(|s| s.as_str()), Some("red"));
-
-    // computed je initial (stage 2c stub - bez populace)
-    assert!(out.computed.contains_key(&node_id), "computed entry per node");
+    // L5 step 4 Phase G: out.style_map dropped, computed primary.
+    // cs.color je typed populated (red), cs.is_set(Color) true.
+    let cs = out.computed.get(&node_id).expect("computed entry");
+    assert!(cs.is_set(PropertyId::Color));
+    let [r, g, b, _] = cs.color.to_rgba_u8();
+    assert!(r > 0 && g == 0 && b == 0, "red color set");
 
     // declarations ma 3 props, bogus-prop = Unknown/invalid
     let decls = out.declarations.get(&node_id).expect("declarations entry");

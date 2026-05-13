@@ -1995,7 +1995,9 @@ pub fn cascade_with_viewport_typed(
         }
         declarations.insert(*node_id, decls);
     }
-    CascadeOutput { style_map, computed, declarations }
+    // L5 step 4 Phase G: style_map discarded - only computed + declarations exposed.
+    let _ = style_map;
+    CascadeOutput { computed, declarations }
 }
 
 // ─── L5 batch 3 helpers ─────────────────────────────────────────────
