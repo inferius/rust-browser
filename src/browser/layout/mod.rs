@@ -2785,8 +2785,23 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         }
     }
     if let Some(v) = s.get("image-rendering") { bx.image_rendering = ImageRendering::parse(v); }
-    if let Some(v) = s.get("table-layout") { bx.table_layout = TableLayout::parse(v); }
-    if let Some(v) = s.get("border-collapse") { bx.border_collapse = BorderCollapse::parse(v); }
+    // L5 step 4 batch 13: table-layout, border-collapse cross-type inline match.
+    if s.contains_key("table-layout") {
+        if let Some(cs) = cs_opt {
+            use super::computed_style::TableLayout as Tl;
+            bx.table_layout = match cs.table_layout { Tl::Auto => TableLayout::Auto, Tl::Fixed => TableLayout::Fixed };
+        } else {
+            bx.table_layout = TableLayout::parse(s.get("table-layout").unwrap());
+        }
+    }
+    if s.contains_key("border-collapse") {
+        if let Some(cs) = cs_opt {
+            use super::computed_style::BorderCollapse as Bc;
+            bx.border_collapse = match cs.border_collapse { Bc::Separate => BorderCollapse::Separate, Bc::Collapse => BorderCollapse::Collapse };
+        } else {
+            bx.border_collapse = BorderCollapse::parse(s.get("border-collapse").unwrap());
+        }
+    }
     // contain - CSS Containment L3
     if let Some(c) = s.get("contain") {
         let mut bits = 0u8;
