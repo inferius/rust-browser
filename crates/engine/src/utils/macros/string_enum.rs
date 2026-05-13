@@ -2,7 +2,7 @@
 /// Každá varianta MUSÍ mít explicitní stringovou hodnotu (=> "...").
 ///
 /// # Příklad
-/// ```
+/// ```ignore
 /// string_enum! {
 ///     KeywordEnum,
 ///     Break => "break",

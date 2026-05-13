@@ -3,19 +3,23 @@
 // unused_variables zustavaji aktivni - chceme je videt + opravit.
 #![allow(dead_code)]
 
-#[macro_use]
-mod utils;
+// Pub modules - tvori vetsinu povrchu enginu. Shell crate + externi
+// uzivatele sahnou primo skrz tyto moduly. High-level facade pridana
+// v Phase 2 (Engine struct).
 
-mod tokens;
-mod specifications;
-mod ast;
-mod lexer;
-mod parser;
-mod interpreter;
-mod browser;
-mod debug_view;
-mod devtools;
-mod debug_bp;
+#[macro_use]
+pub mod utils;
+
+pub mod tokens;
+pub mod specifications;
+pub mod ast;
+pub mod lexer;
+pub mod parser;
+pub mod interpreter;
+pub mod browser;
+pub mod debug_view;
+pub mod devtools;
+pub mod debug_bp;
 
 use lexer::base::Lexer;
 use parser::Parser;
@@ -94,22 +98,11 @@ fn extract_inline_styles(html: &str) -> Vec<String> {
         .iter().map(|s| s.text_content()).collect()
 }
 
-fn main() {
-    // Spawn worker thread s 256 MB stack pro main work.
-    // Windows main thread default = 1 MB; v debug buildu (no inline) layout/paint
-    // recursion ma velke frames (30+ KB). Linker /STACK flag dava 64 MB ale
-    // dedicated thread je robustnejsi (vetsi rezerva pro winit + interpreter).
-    let handle = std::thread::Builder::new()
-        .name("rwe-main".into())
-        .stack_size(256 * 1024 * 1024)
-        .spawn(real_main)
-        .expect("nelze spawnout main worker thread");
-    let _ = handle.join();
-}
-
-fn real_main() {
-    let args: Vec<String> = std::env::args().collect();
-
+/// CLI dispatcher. Volano z bin/main.rs shim.
+/// V Phase 1 je tohle ekvivalent puvodniho `real_main` z src/main.rs.
+/// Phase 6 (--no-shell default) zredukuje na pure engine demo + presune
+/// shell-zavisle rezimy do shell crate.
+pub fn run_cli(args: Vec<String>) {
     // Safe-mode: --safe-mode flag resetuje profile config (theme/dock/sirku
     // panelu) na default. Pouzite po crash z bad config (napr. dock NaN).
     if args.iter().any(|a| a == "--safe-mode" || a == "-safe-mode") {
@@ -515,7 +508,7 @@ for (let i = 0; i < 5; i++) {
 console.log(sum);
 "#;
 
-    // ── 1. Tokenizace ─────────────────────────────────────────────────────────
+    // 1. Tokenizace
     let lexer = match Lexer::parse_str(source, "<inline>") {
         Ok(l) => l,
         Err(e) => { eprintln!("Chyba lexeru: {e}"); return; }
@@ -525,7 +518,7 @@ console.log(sum);
     Lexer::debug_print_tokens(lexer.tokens.clone());
     println!();
 
-    // ── 2. Parsování ──────────────────────────────────────────────────────────
+    // 2. Parsovani
     let tokens: Vec<_> = lexer.tokens.into_iter()
         .filter(|t| !matches!(t.kind, TokenKind::CommentLine(_) | TokenKind::CommentBlock(_)))
         .collect();
@@ -539,12 +532,12 @@ console.log(sum);
     };
 
     println!("=== AST ===");
-    println!("Program s {} příkazy\n", program.body.len());
+    println!("Program s {} prikazy\n", program.body.len());
 
-    // ── 3. Interpretace ───────────────────────────────────────────────────────
-    println!("=== VÝSTUP ===");
+    // 3. Interpretace
+    println!("=== VYSTUP ===");
     let mut interp = Interpreter::new();
     if let Err(e) = interp.run(&program) {
-        eprintln!("Chyba při běhu: {e}");
+        eprintln!("Chyba pri behu: {e}");
     }
 }

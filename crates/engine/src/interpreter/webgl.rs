@@ -1175,7 +1175,7 @@ pub(crate) fn create_webgl_context(state: Rc<RefCell<WebGLState>>) -> JsValue {
 /// WebGL state objekt - sdileny pres Rc<RefCell<>> mezi metodami.
 /// Phase 1: handle counters + state tracking. Phase 2: shader compile.
 /// Phase 3: real draw call emission.
-pub(crate) struct WebGLState {
+pub struct WebGLState {
     pub next_id: u32,
     /// Shaders: id -> (type, source, compiled_ok)
     pub shaders: std::collections::HashMap<u32, WebGLShader>,
@@ -1219,7 +1219,7 @@ pub(crate) struct WebGLState {
     pub sticky_clear_color: [f32; 4],
 }
 
-pub(crate) struct WebGLShader {
+pub struct WebGLShader {
     pub shader_type: u32,
     pub source: String,
     pub compiled: bool,
@@ -1229,7 +1229,7 @@ pub(crate) struct WebGLShader {
     pub naga_module: Option<naga::Module>,
 }
 
-pub(crate) struct WebGLProgram {
+pub struct WebGLProgram {
     pub vertex_shader: Option<u32>,
     pub fragment_shader: Option<u32>,
     pub linked: bool,
@@ -1255,7 +1255,7 @@ pub(crate) struct WebGLProgram {
 
 /// Layout slot pro 1 uniform v GPU buffer.
 #[derive(Clone, Debug)]
-pub(crate) struct UniformSlot {
+pub struct UniformSlot {
     pub name: String,
     pub offset: u32,
     pub size: u32,
@@ -1264,7 +1264,7 @@ pub(crate) struct UniformSlot {
 
 /// Typ uniformu pro serializaci. Match naga TypeInner.
 #[derive(Clone, Copy, Debug)]
-pub(crate) enum UniformSlotKind {
+pub enum UniformSlotKind {
     Float,        // f32
     Vec2,         // vec2<f32>
     Vec3,         // vec3<f32>
@@ -1410,7 +1410,7 @@ pub(crate) fn extract_resource_bindings(module: &naga::Module) -> (
     (uniform_binding, textures, samplers)
 }
 
-pub(crate) struct WebGLTexture {
+pub struct WebGLTexture {
     pub width: u32,
     pub height: u32,
     pub format: u32,
@@ -1419,7 +1419,7 @@ pub(crate) struct WebGLTexture {
 
 /// Vertex attribute slot - state nastaveny pres vertexAttribPointer/enableVertexAttribArray.
 #[derive(Clone, Debug)]
-pub(crate) struct WebGLAttribSlot {
+pub struct WebGLAttribSlot {
     pub buffer_id: u32,
     pub size: i32,         // 1..4 components
     pub component_type: u32,  // FLOAT/UNSIGNED_BYTE/...
@@ -1431,7 +1431,7 @@ pub(crate) struct WebGLAttribSlot {
 
 /// Uniform value (float/int/matrix variants).
 #[derive(Clone, Debug)]
-pub(crate) enum WebGLUniformValue {
+pub enum WebGLUniformValue {
     Float(Vec<f32>),    // 1f, 2f, 3f, 4f, 1fv, 2fv, 3fv, 4fv
     Int(Vec<i32>),      // 1i, 2i, 3i, 4i, 1iv, ...
     Mat(Vec<f32>),      // matrix2/3/4 fv
@@ -1439,7 +1439,7 @@ pub(crate) enum WebGLUniformValue {
 
 /// Recorded draw command - queue pro renderer (phase 3b real emission).
 #[derive(Clone, Debug)]
-pub(crate) enum WebGLDrawCmd {
+pub enum WebGLDrawCmd {
     ClearColor([f32; 4]),
     Clear(u32),  // mask
     DrawArrays {

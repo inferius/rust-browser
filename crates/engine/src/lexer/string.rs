@@ -5,7 +5,7 @@ use crate::tokens::{EscapeInfo, EscapeKind, Token, TokenKind};
 use crate::utils::utf8_cursor::Utf8Cursor;
 
 #[derive(Debug)]
-pub(crate) struct EscapeResult {
+pub struct EscapeResult {
     pub kind: EscapeKind,
     pub character: char,
     pub raw: String,

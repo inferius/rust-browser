@@ -163,9 +163,9 @@ impl GlyphAtlas {
         };
         // Embedded fallback - guarantees Inter prosli pri kazdem buildu.
         let embedded: &[(&str, &[u8])] = &[
-            ("Inter", include_bytes!("../../../static/fonts/Inter-Regular.ttf")),
-            ("Inter-Bold", include_bytes!("../../../static/fonts/Inter-Bold.ttf")),
-            ("Inter-Italic", include_bytes!("../../../static/fonts/Inter-Italic.ttf")),
+            ("Inter", include_bytes!("../../../../../static/fonts/Inter-Regular.ttf")),
+            ("Inter-Bold", include_bytes!("../../../../../static/fonts/Inter-Bold.ttf")),
+            ("Inter-Italic", include_bytes!("../../../../../static/fonts/Inter-Italic.ttf")),
         ];
         for (family, path) in &[
             ("CamingoMono", "static/fonts/CamingoMono-Light.ttf"),

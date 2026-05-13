@@ -92,7 +92,7 @@ pub fn dt_text_width(text: &str) -> f32 {
             }
         }
         // Embedded fallback - garantovany match s atlas.
-        let bytes: &[u8] = include_bytes!("../../static/fonts/Inter-Regular.ttf");
+        let bytes: &[u8] = include_bytes!("../../../../static/fonts/Inter-Regular.ttf");
         fontdue::Font::from_bytes(bytes.to_vec(), fontdue::FontSettings::default()).ok()
     });
     match f.as_ref() {

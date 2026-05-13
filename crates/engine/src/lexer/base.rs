@@ -10,7 +10,7 @@
 /// - Hashbang (`#!/usr/bin/env node`)
 ///
 /// # Pouziti
-/// ```rust
+/// ```ignore
 /// let result = Lexer::parse_str("let x = 42;", "script.js")?;
 /// for token in &result.tokens {
 ///     println!("{:?}", token.kind);

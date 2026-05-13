@@ -9,7 +9,7 @@
 /// Pro prikazy pouziva rekurzivni sestup (recursive descent).
 ///
 /// # Pouziti
-/// ```rust
+/// ```ignore
 /// let mut parser = Parser::new(tokens);
 /// let program = parser.parse()?;
 /// ```

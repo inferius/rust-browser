@@ -3,45 +3,6 @@
 version = 4
 
 [[package]]
-name = "RustWebEngine"
-version = "0.1.0"
-dependencies = [
- "ahash",
- "arboard",
- "bigdecimal",
- "brotli",
- "bytemuck",
- "cssparser",
- "fancy-regex",
- "fixed_decimal",
- "flate2",
- "fontdue",
- "html5ever",
- "icu",
- "image",
- "markup5ever_rcdom",
- "naga",
- "num-bigint",
- "num-traits",
- "pollster",
- "printpdf",
- "regex",
- "resvg",
- "selectors",
- "serde_json",
- "stacker",
- "tiny-skia",
- "tungstenite",
- "unicode-general-category",
- "unicode-ident",
- "ureq",
- "usvg",
- "wgpu",
- "winit",
- "writeable 0.5.5",
-]
-
-[[package]]
 name = "ab_glyph"
 version = "0.2.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3131,6 +3092,52 @@ dependencies = [
  "unicode-ccc",
  "unicode-properties",
  "unicode-script",
+]
+
+[[package]]
+name = "rwe-engine"
+version = "0.1.0"
+dependencies = [
+ "ahash",
+ "arboard",
+ "bigdecimal",
+ "brotli",
+ "bytemuck",
+ "cssparser",
+ "fancy-regex",
+ "fixed_decimal",
+ "flate2",
+ "fontdue",
+ "html5ever",
+ "icu",
+ "image",
+ "markup5ever_rcdom",
+ "naga",
+ "num-bigint",
+ "num-traits",
+ "pollster",
+ "printpdf",
+ "regex",
+ "resvg",
+ "selectors",
+ "serde_json",
+ "stacker",
+ "tiny-skia",
+ "tungstenite",
+ "unicode-general-category",
+ "unicode-ident",
+ "ureq",
+ "usvg",
+ "wgpu",
+ "winit",
+ "writeable 0.5.5",
+]
+
+[[package]]
+name = "rwe-shell"
+version = "0.1.0"
+dependencies = [
+ "rwe-engine",
 ]
 
 [[package]]

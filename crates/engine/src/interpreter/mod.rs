@@ -6,7 +6,7 @@
 /// Stav programu je udrzovan v retezci `Environment` scopes.
 ///
 /// ## Pipeline
-/// ```
+/// ```text
 /// Zdrojovy text
 ///   -> Lexer (src/lexer/) -> Vec<Token>
 ///   -> Parser (src/parser/) -> Program (AST)
@@ -352,7 +352,7 @@ type Env = Environment;
 /// Vyhledavani promenne jde od nejhlubsiho scope ke globalnimu.
 ///
 /// # Priklad retezce
-/// ```
+/// ```text
 /// global: { console, Math, ... }
 ///   function scope: { x: 5 }
 ///     block scope: { y: 10 }  <- aktualni
@@ -488,7 +488,7 @@ type StmtResult = Result<Option<Signal>, JsError>;
 /// Pro spusteni programu zavolej `Interpreter::new()` a pak `run(&program)`.
 ///
 /// # Priklad
-/// ```rust
+/// ```ignore
 /// let lexer = Lexer::parse_str("return 1 + 2;", "<script>").unwrap();
 /// let tokens = /* filtrovat trivia */;
 /// let program = Parser::new(tokens).parse().unwrap();

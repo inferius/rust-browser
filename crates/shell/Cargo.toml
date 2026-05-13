@@ -1,0 +1,16 @@
+[package]
+name = "rwe-shell"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "rwe_shell"
+path = "src/lib.rs"
+
+[[bin]]
+name = "rwe-shell"
+path = "src/main.rs"
+
+[dependencies]
+# Engine library - core renderer + layout + interpreter.
+rwe-engine = { path = "../engine" }
