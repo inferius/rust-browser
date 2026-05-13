@@ -2486,13 +2486,26 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(v) = s.get("align-content") { bx.align_content = AlignContent::parse(v); }
     if let Some(v) = s.get("align-self") { bx.align_self = AlignSelf::parse(v); }
     if let Some(v) = s.get("justify-self") { bx.justify_self = AlignSelf::parse(v); }
-    if let Some(v) = s.get("flex-grow") { bx.flex_grow = v.trim().parse().unwrap_or(0.0); }
-    if let Some(v) = s.get("flex-shrink") { bx.flex_shrink = v.trim().parse().unwrap_or(1.0); }
+    // L5 step 4 batch 9: flex-grow + flex-shrink z typed f32.
+    if let Some(v) = read_typed_f32(s, cs_opt, "flex-grow", |cs| cs.flex_grow, |raw| raw.trim().parse().unwrap_or(0.0)) {
+        bx.flex_grow = v;
+    }
+    if let Some(v) = read_typed_f32(s, cs_opt, "flex-shrink", |cs| cs.flex_shrink, |raw| raw.trim().parse().unwrap_or(1.0)) {
+        bx.flex_shrink = v;
+    }
     if let Some(v) = s.get("flex-basis") { bx.flex_basis = v.trim().to_string(); }
-    if let Some(v) = s.get("row-gap") { bx.row_gap = parse_length(v); }
-    if let Some(v) = s.get("column-gap") {
-        bx.column_gap = parse_length(v);
-        bx.column_gap_multicol = parse_length(v);
+    // L5 step 4 batch 9: row-gap + column-gap z typed Length.
+    if let Some(v) = read_typed_length(s, cs_opt, "row-gap", |cs| &cs.row_gap) {
+        bx.row_gap = v;
+    }
+    if s.contains_key("column-gap") {
+        let g = if let Some(cs) = cs_opt {
+            cs.column_gap.resolve_or(0.0, 16.0, 16.0, 1024.0, 768.0)
+        } else {
+            parse_length(s.get("column-gap").unwrap())
+        };
+        bx.column_gap = g;
+        bx.column_gap_multicol = g;
     }
     // Multi-column Layout L1: column-count + columns shorthand + column-rule.
     if let Some(v) = s.get("column-count") {
@@ -2644,8 +2657,18 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     };
     if let Some(v) = s.get("counter-reset") { bx.counter_reset = parse_counter(v); }
     if let Some(v) = s.get("counter-increment") { bx.counter_increment = parse_counter(v); }
-    if let Some(v) = s.get("perspective") {
-        if v.trim() != "none" { bx.perspective = Some(parse_length(v)); }
+    // L5 step 4 batch 10: perspective z typed Length.
+    if s.contains_key("perspective") {
+        if let Some(cs) = cs_opt {
+            use super::computed_style::Length as L;
+            match &cs.perspective {
+                L::None | L::Auto => {}
+                other => { bx.perspective = Some(other.resolve_or(0.0, 16.0, 16.0, 1024.0, 768.0)); }
+            }
+        } else {
+            let v = s.get("perspective").unwrap();
+            if v.trim() != "none" { bx.perspective = Some(parse_length(v)); }
+        }
     }
     if let Some(v) = s.get("pointer-events") { bx.pointer_events = PointerEvents::parse(v); }
     // L5 step 4 batch 8: caret-color z typed Color.
@@ -2726,16 +2749,21 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         }
         bx.contain = bits;
     }
-    // aspect-ratio: "16 / 9" / "1.5" / "auto"
-    if let Some(ar) = s.get("aspect-ratio") {
-        let s = ar.trim();
-        if s != "auto" {
-            if let Some((w, h)) = s.split_once('/') {
-                let w: f32 = w.trim().parse().unwrap_or(1.0);
-                let h: f32 = h.trim().parse().unwrap_or(1.0);
-                if h > 0.0 { bx.aspect_ratio = Some(w / h); }
-            } else if let Ok(r) = s.parse::<f32>() {
-                bx.aspect_ratio = Some(r);
+    // aspect-ratio: "16 / 9" / "1.5" / "auto" - L5 step 4 batch 9: cs.aspect_ratio Option<f32>.
+    if s.contains_key("aspect-ratio") {
+        if let Some(cs) = cs_opt {
+            bx.aspect_ratio = cs.aspect_ratio;
+        } else {
+            let ar = s.get("aspect-ratio").unwrap();
+            let t = ar.trim();
+            if t != "auto" {
+                if let Some((w, h)) = t.split_once('/') {
+                    let w: f32 = w.trim().parse().unwrap_or(1.0);
+                    let h: f32 = h.trim().parse().unwrap_or(1.0);
+                    if h > 0.0 { bx.aspect_ratio = Some(w / h); }
+                } else if let Ok(r) = t.parse::<f32>() {
+                    bx.aspect_ratio = Some(r);
+                }
             }
         }
     }
@@ -2838,9 +2866,10 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         };
         bx.italic = italic;
     }
-    // Border radius
-    if let Some(br) = s.get("border-radius") {
-        bx.border_radius = parse_length(br);
+    // Border radius - L5 step 4 batch 10: typed cs.border_top_left_radius (4 corners
+    // CSS shorthand expands na vsechny, layout drzi 1 f32 z top_left jako reprezentant).
+    if let Some(v) = read_typed_length(s, cs_opt, "border-radius", |cs| &cs.border_top_left_radius) {
+        bx.border_radius = v;
     }
     // Explicit width / height z CSS (auto = None, min/max-content = special).
     // min-content: shrink-to-fit odhadem z textu. max-content: max-intrinsic.
