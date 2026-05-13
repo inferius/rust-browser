@@ -2888,9 +2888,19 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(v) = read_typed_length(s, cs_opt, "outline-offset", |cs| &cs.outline_offset) {
         bx.outline_offset = v;
     }
-    if let Some(v) = s.get("anchor-name") { bx.anchor_name = v.trim().to_string(); }
-    if let Some(v) = s.get("position-anchor") { bx.position_anchor = v.trim().to_string(); }
-    if let Some(v) = s.get("inset-area") { bx.inset_area = v.trim().to_string(); }
+    // L5 step 4 Phase E: EXPERIMENTAL CSS Anchor Positioning L1 typed reads.
+    if s.contains_key("anchor-name") {
+        bx.anchor_name = cs_opt.map(|cs| cs.experimental_anchor_name.clone())
+            .unwrap_or_else(|| s.get("anchor-name").unwrap().trim().to_string());
+    }
+    if s.contains_key("position-anchor") {
+        bx.position_anchor = cs_opt.map(|cs| cs.experimental_position_anchor.clone())
+            .unwrap_or_else(|| s.get("position-anchor").unwrap().trim().to_string());
+    }
+    if s.contains_key("inset-area") {
+        bx.inset_area = cs_opt.map(|cs| cs.experimental_inset_area.clone())
+            .unwrap_or_else(|| s.get("inset-area").unwrap().trim().to_string());
+    }
     // L5 step 4 batch 19: orphans + widows z typed u32.
     if s.contains_key("orphans") {
         bx.orphans = if let Some(cs) = cs_opt { cs.orphans as i32 }
