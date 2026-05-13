@@ -2367,8 +2367,18 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
             if t.trim() != "auto" { bx.text_decoration_thickness = parse_length(t); }
         }
     }
-    if let Some(o) = s.get("text-underline-offset") {
-        if o.trim() != "auto" { bx.text_underline_offset = parse_length(o); }
+    // L5 step 4 batch 19: text-underline-offset typed (Length::Auto -> default).
+    if s.contains_key("text-underline-offset") {
+        if let Some(cs) = cs_opt {
+            use super::computed_style::Length as L;
+            match &cs.text_underline_offset {
+                L::Auto | L::None => {}
+                other => { bx.text_underline_offset = other.resolve_or(0.0, 16.0, 16.0, 1024.0, 768.0); }
+            }
+        } else {
+            let o = s.get("text-underline-offset").unwrap();
+            if o.trim() != "auto" { bx.text_underline_offset = parse_length(o); }
+        }
     }
     // L5 step 4 batch 7: text-indent z typed Length.
     if let Some(v) = read_typed_length(s, cs_opt, "text-indent", |cs| &cs.text_indent) {
@@ -2376,14 +2386,31 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     }
     // letter-spacing / word-spacing: parsuje POZDEJI po font-size resolution
     // (em proti font-size). Viz move na konec cascade props loop.
-    if let Some(ws) = s.get("word-spacing") {
-        if ws.trim() != "normal" { bx.word_spacing = parse_length(ws); }
+    // L5 step 4 batch 19: word-spacing + accent-color typed.
+    if s.contains_key("word-spacing") {
+        if let Some(cs) = cs_opt {
+            use super::computed_style::LetterSpacing as Ls;
+            if let Ls::Length(l) = &cs.word_spacing {
+                bx.word_spacing = l.resolve_or(0.0, 16.0, 16.0, 1024.0, 768.0);
+            }
+            // Normal -> nech default
+        } else {
+            let ws = s.get("word-spacing").unwrap();
+            if ws.trim() != "normal" { bx.word_spacing = parse_length(ws); }
+        }
     }
-    // color-scheme
-    // accent-color
-    if let Some(ac) = s.get("accent-color") {
-        if ac.trim() != "auto" {
-            bx.accent_color = parse_color(ac);
+    if s.contains_key("accent-color") {
+        if let Some(cs) = cs_opt {
+            use super::computed_style::AccentColor as Ac;
+            if let Ac::Color(c) = &cs.accent_color {
+                bx.accent_color = Some(c.to_rgba_u8());
+            }
+            // Auto -> nech default
+        } else {
+            let ac = s.get("accent-color").unwrap();
+            if ac.trim() != "auto" {
+                bx.accent_color = parse_color(ac);
+            }
         }
     }
     // border-image: url(...) <slice> / <width> [/ <outset>] <repeat>
@@ -2493,16 +2520,25 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(gaf) = s.get("grid-auto-flow") {
         bx.grid_auto_flow = gaf.trim().to_string();
     }
-    // CSS Shapes L1
-    if let Some(so) = s.get("shape-outside") {
-        let v = so.trim();
-        if v != "none" { bx.shape_outside = Some(v.to_string()); }
+    // CSS Shapes L1 - L5 step 4 batch 19: typed.
+    if s.contains_key("shape-outside") {
+        if let Some(cs) = cs_opt {
+            use super::computed_style::ShapeOutsideVal as So;
+            if let So::Raw(raw) = &cs.shape_outside {
+                bx.shape_outside = Some(raw.clone());
+            }
+        } else {
+            let so = s.get("shape-outside").unwrap();
+            let v = so.trim();
+            if v != "none" { bx.shape_outside = Some(v.to_string()); }
+        }
     }
-    if let Some(sm) = s.get("shape-margin") {
-        bx.shape_margin = parse_length(sm);
+    if let Some(v) = read_typed_length(s, cs_opt, "shape-margin", |cs| &cs.shape_margin) {
+        bx.shape_margin = v;
     }
-    if let Some(sit) = s.get("shape-image-threshold") {
-        bx.shape_image_threshold = sit.trim().parse().unwrap_or(0.0);
+    if s.contains_key("shape-image-threshold") {
+        bx.shape_image_threshold = if let Some(cs) = cs_opt { cs.shape_image_threshold }
+                                    else { s.get("shape-image-threshold").unwrap().trim().parse().unwrap_or(0.0) };
     }
     // CSS Overflow L4
     // SVG markers
@@ -2634,8 +2670,13 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     // CSS Carousels (Scroll Driven Animations + scroll-marker)
     // CSS Filters L2 backdrop-filter raw string (parsovan jinde do filter ops)
     // CSS Containment intrinsic sizes
-    if let Some(v) = s.get("contain-intrinsic-block-size") { bx.contain_intrinsic_block_size = parse_length(v); }
-    if let Some(v) = s.get("contain-intrinsic-inline-size") { bx.contain_intrinsic_inline_size = parse_length(v); }
+    // L5 step 4 batch 19: contain-intrinsic-* typed Length.
+    if let Some(v) = read_typed_length(s, cs_opt, "contain-intrinsic-block-size", |cs| &cs.contain_intrinsic_block_size) {
+        bx.contain_intrinsic_block_size = v;
+    }
+    if let Some(v) = read_typed_length(s, cs_opt, "contain-intrinsic-inline-size", |cs| &cs.contain_intrinsic_inline_size) {
+        bx.contain_intrinsic_inline_size = v;
+    }
     // CSS Anchor L1 / Position L4
     // CSS Display L4 - reading flow / order
     // CSS Compositing L1 - composite-op
@@ -2662,15 +2703,27 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     }
     // scroll-behavior
     // scrollbar-width
-    if let Some(sw) = s.get("scrollbar-width") {
-        bx.scrollbar_width = sw.trim().to_string();
+    // L5 step 4 batch 19: scrollbar-width + scrollbar-color typed.
+    if s.contains_key("scrollbar-width") {
+        bx.scrollbar_width = if let Some(cs) = cs_opt {
+            cs.scrollbar_width.css_string().to_string()
+        } else {
+            s.get("scrollbar-width").unwrap().trim().to_string()
+        };
     }
-    // scrollbar-color: thumb track
-    if let Some(sc) = s.get("scrollbar-color") {
-        let parts: Vec<&str> = sc.split_whitespace().collect();
-        if parts.len() >= 2 {
-            if let (Some(thumb), Some(track)) = (parse_color(parts[0]), parse_color(parts[1])) {
-                bx.scrollbar_color = Some((thumb, track));
+    if s.contains_key("scrollbar-color") {
+        if let Some(cs) = cs_opt {
+            use super::computed_style::ScrollbarColor as Sc;
+            if let Sc::Pair { thumb, track } = &cs.scrollbar_color {
+                bx.scrollbar_color = Some((thumb.to_rgba_u8(), track.to_rgba_u8()));
+            }
+        } else {
+            let sc = s.get("scrollbar-color").unwrap();
+            let parts: Vec<&str> = sc.split_whitespace().collect();
+            if parts.len() >= 2 {
+                if let (Some(thumb), Some(track)) = (parse_color(parts[0]), parse_color(parts[1])) {
+                    bx.scrollbar_color = Some((thumb, track));
+                }
             }
         }
     }
@@ -2706,8 +2759,8 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         let raw = cs_opt.map(|cs| cs.writing_mode.css_string()).unwrap_or_else(|| s.get("writing-mode").unwrap().as_str());
         bx.writing_mode = WritingMode::parse(raw);
     }
-    if let Some(cis) = s.get("contain-intrinsic-size") {
-        bx.contain_intrinsic_size = parse_length(cis);
+    if let Some(v) = read_typed_length(s, cs_opt, "contain-intrinsic-size", |cs| &cs.contain_intrinsic_size) {
+        bx.contain_intrinsic_size = v;
     }
     let parse_counter = |v: &str| -> Vec<(String, i32)> {
         let mut out = Vec::new();
@@ -2799,11 +2852,24 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(v) = s.get("anchor-name") { bx.anchor_name = v.trim().to_string(); }
     if let Some(v) = s.get("position-anchor") { bx.position_anchor = v.trim().to_string(); }
     if let Some(v) = s.get("inset-area") { bx.inset_area = v.trim().to_string(); }
-    if let Some(v) = s.get("orphans") { bx.orphans = v.trim().parse().unwrap_or(2); }
-    if let Some(v) = s.get("widows") { bx.widows = v.trim().parse().unwrap_or(2); }
+    // L5 step 4 batch 19: orphans + widows z typed u32.
+    if s.contains_key("orphans") {
+        bx.orphans = if let Some(cs) = cs_opt { cs.orphans as i32 }
+                     else { s.get("orphans").unwrap().trim().parse().unwrap_or(2) };
+    }
+    if s.contains_key("widows") {
+        bx.widows = if let Some(cs) = cs_opt { cs.widows as i32 }
+                    else { s.get("widows").unwrap().trim().parse().unwrap_or(2) };
+    }
     if let Some(v) = s.get("counter-set") { bx.counter_set = parse_counter(v); }
-    if let Some(v) = s.get("line-height-step") { bx.line_height_step = parse_length(v); }
-    if let Some(v) = s.get("speak") { bx.speak = v.trim().to_string(); }
+    // L5 step 4 batch 19: line-height-step + speak typed.
+    if let Some(v) = read_typed_length(s, cs_opt, "line-height-step", |cs| &cs.line_height_step) {
+        bx.line_height_step = v;
+    }
+    if s.contains_key("speak") {
+        bx.speak = if let Some(cs) = cs_opt { cs.speak.css_string().to_string() }
+                   else { s.get("speak").unwrap().trim().to_string() };
+    }
     // L5 step 4 batch 15: float + clear z typed enums css_string.
     if s.contains_key("float") {
         bx.float_value = if let Some(cs) = cs_opt { cs.float.css_string().to_string() }
@@ -2830,7 +2896,21 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
             bx.object_fit = ObjectFit::parse(s.get("object-fit").unwrap());
         }
     }
-    if let Some(v) = s.get("image-rendering") { bx.image_rendering = ImageRendering::parse(v); }
+    // L5 step 4 batch 19: image-rendering typed cross-type.
+    if s.contains_key("image-rendering") {
+        if let Some(cs) = cs_opt {
+            use super::computed_style::ImageRendering as Ir;
+            bx.image_rendering = match cs.image_rendering {
+                Ir::Auto => ImageRendering::Auto,
+                Ir::Smooth => ImageRendering::Smooth,
+                Ir::HighQuality => ImageRendering::HighQuality,
+                Ir::CrispEdges => ImageRendering::CrispEdges,
+                Ir::Pixelated => ImageRendering::Pixelated,
+            };
+        } else {
+            bx.image_rendering = ImageRendering::parse(s.get("image-rendering").unwrap());
+        }
+    }
     // L5 step 4 batch 13: table-layout, border-collapse cross-type inline match.
     if s.contains_key("table-layout") {
         if let Some(cs) = cs_opt {
@@ -2929,15 +3009,28 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     // letter-spacing PO font-size: em jednotky resolvuje proti font_size
     // aktualniho elementu (CSS spec). parse_length default em=16 by daval
     // 0.15em -> 2.4 misto 0.15 * fs (= 1.68 pri fs=11.2).
-    if let Some(ls) = s.get("letter-spacing") {
-        if ls.trim() != "normal" {
-            let v = ls.trim();
-            if let Some(num) = v.strip_suffix("em") {
-                if let Ok(n) = num.trim().parse::<f32>() {
-                    bx.letter_spacing = n * bx.font_size;
+    // L5 step 4 batch 19: letter-spacing typed (resolve em proti aktualnimu font_size).
+    if s.contains_key("letter-spacing") {
+        if let Some(cs) = cs_opt {
+            use super::computed_style::{LetterSpacing as Ls, Length as L};
+            if let Ls::Length(l) = &cs.letter_spacing {
+                // em proti aktualnimu font_size, ostatni jednotky default ctx.
+                bx.letter_spacing = match l {
+                    L::Em(n) => n * bx.font_size,
+                    other => other.resolve_or(0.0, bx.font_size, 16.0, 1024.0, 768.0),
+                };
+            }
+        } else {
+            let ls = s.get("letter-spacing").unwrap();
+            if ls.trim() != "normal" {
+                let v = ls.trim();
+                if let Some(num) = v.strip_suffix("em") {
+                    if let Ok(n) = num.trim().parse::<f32>() {
+                        bx.letter_spacing = n * bx.font_size;
+                    }
+                } else {
+                    bx.letter_spacing = parse_length(v);
                 }
-            } else {
-                bx.letter_spacing = parse_length(v);
             }
         }
     }
