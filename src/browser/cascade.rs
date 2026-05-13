@@ -1031,6 +1031,15 @@ pub fn cascade_with_viewport_typed(
     let mut declarations: DeclarationsMap = HashMap::new();
     for (node_id, props) in &style_map {
         let mut cs = ComputedStyle::initial();
+        // L5 step 4 Phase G: mark vsechny CSS-deklarovane property names jako
+        // explicitne set. build_box_inner pak cte cs.is_set(prop) misto
+        // s.contains_key(key) - dovoli dropnout style_map dependency v layout.
+        for key in props.keys() {
+            let pid = PropertyId::parse(key);
+            if pid != PropertyId::Unknown {
+                cs.mark_set(pid);
+            }
+        }
         // Stage 3 batch 1: populace color/opacity/visibility/cursor.
         // Pri invalid value -> keep initial (CSS spec discard invalid).
         if let Some(v) = props.get("color") {

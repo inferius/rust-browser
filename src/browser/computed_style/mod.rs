@@ -27,7 +27,7 @@ pub use length::Length;
 pub use property::PropertyId;
 pub use cascade_decl::{CascadeDecl, CascadeOrigin, Specificity};
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Per-element typed computed style. Node ptr (Rc::as_ptr usize) -> resolved
 /// ComputedStyle. L5 stage 2c: definovan, naplnovan v stage 3 dual-write
@@ -405,6 +405,12 @@ pub struct ComputedStyle {
 
     /// EXPERIMENTAL CSS Overflow L4: scroll-marker / scroll-button-controls.
     pub experimental_scroll_marker_group: String,
+
+    /// L5 step 4 Phase G: mnozina PropertyId ktere byly EXPLICITLY nastaveny
+    /// pres CSS deklaraci (cascade). Pouziva se misto `s.contains_key("X")`
+    /// gates - distinguishes "explicitne CSS-set" vs "initial default".
+    /// Vyhoda: dropujeme HashMap<String,String> z build path.
+    pub explicit_set: HashSet<PropertyId>,
 }
 
 impl Default for ComputedStyle {
@@ -642,7 +648,22 @@ impl ComputedStyle {
             experimental_ruby_position: "alternate".into(),
             experimental_ruby_align: "space-around".into(),
             experimental_scroll_marker_group: "none".into(),
+            explicit_set: HashSet::new(),
         }
+    }
+
+    /// L5 step 4 Phase G: kontrola zda byla property explicitne nastavena.
+    /// Nahrazuje `s.contains_key("X")` gate v build_box_inner po drop style_map.
+    #[inline]
+    pub fn is_set(&self, prop: PropertyId) -> bool {
+        self.explicit_set.contains(&prop)
+    }
+
+    /// L5 step 4 Phase G: oznac property jako explicitne nastavenou. Volane
+    /// cascade pri populace typed pole z deklarace.
+    #[inline]
+    pub fn mark_set(&mut self, prop: PropertyId) {
+        self.explicit_set.insert(prop);
     }
 
     /// L5 step 4 Phase D: Devtools adapter. Serializuj typed ComputedStyle do
