@@ -2917,28 +2917,54 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
             }
         }
     }
-    // Position
-    if let Some(pos) = s.get("position") {
-        bx.position = match pos.trim() {
-            "relative" => Position::Relative,
-            "absolute" => Position::Absolute,
-            "fixed"    => Position::Fixed,
-            "sticky"   => Position::Sticky,
-            _ => Position::Static,
+    // Position - L5 step 4 batch 6: typed PositionKind.
+    if s.contains_key("position") {
+        bx.position = if let Some(cs) = cs_opt {
+            use super::computed_style::PositionKind as Pk;
+            match cs.position {
+                Pk::Static => Position::Static,
+                Pk::Relative => Position::Relative,
+                Pk::Absolute => Position::Absolute,
+                Pk::Fixed => Position::Fixed,
+                Pk::Sticky => Position::Sticky,
+            }
+        } else {
+            match s.get("position").unwrap().trim() {
+                "relative" => Position::Relative,
+                "absolute" => Position::Absolute,
+                "fixed"    => Position::Fixed,
+                "sticky"   => Position::Sticky,
+                _ => Position::Static,
+            }
         };
     }
-    // z-index: integer pro stacking order. "auto" / parse fail = None.
-    if let Some(zv) = s.get("z-index") {
-        let zt = zv.trim();
-        if zt != "auto" {
-            if let Ok(n) = zt.parse::<i32>() {
-                bx.z_index = Some(n);
+    // z-index: integer pro stacking order - L5 step 4 batch 6: typed ZIndex.
+    if s.contains_key("z-index") {
+        if let Some(cs) = cs_opt {
+            use super::computed_style::ZIndex as Zi;
+            match cs.z_index {
+                Zi::Auto => {}
+                Zi::Value(n) => { bx.z_index = Some(n); }
+            }
+        } else {
+            let zt = s.get("z-index").unwrap().trim();
+            if zt != "auto" {
+                if let Ok(n) = zt.parse::<i32>() {
+                    bx.z_index = Some(n);
+                }
             }
         }
     }
-    // Top/right/bottom/left offsety. % suffix ulozime do *_pct pro resolve
-    // proti CB pri abs/fixed positioning. Bez tohoto by parse_length vratila
-    // 0 (no parent context) a `top: 50%` by se chovalo jako 0.
+    // Top/right/bottom/left offsety - L5 step 4 batch 6: typed Length.
+    // Length::Percent -> *_pct, ostatni -> px resolve.
+    let typed_offset = |l: &super::computed_style::Length| -> (Option<f32>, Option<f32>) {
+        use super::computed_style::Length as L;
+        match l {
+            L::Auto | L::None => (None, None),
+            L::Percent(p) => (None, Some(*p / 100.0)),
+            other => (Some(other.resolve_or(0.0, 16.0, 16.0, 1024.0, 768.0)), None),
+        }
+    };
     let parse_offset = |v: &str| -> (Option<f32>, Option<f32>) {
         let t = v.trim();
         if t == "auto" || t.is_empty() { return (None, None); }
@@ -2949,26 +2975,20 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         }
         (Some(parse_length(t)), None)
     };
-    if let Some(v) = s.get("top") {
-        let (px, pct) = parse_offset(v);
-        bx.offset_top = px;
-        bx.offset_top_pct = pct;
-    }
-    if let Some(v) = s.get("right") {
-        let (px, pct) = parse_offset(v);
-        bx.offset_right = px;
-        bx.offset_right_pct = pct;
-    }
-    if let Some(v) = s.get("bottom") {
-        let (px, pct) = parse_offset(v);
-        bx.offset_bottom = px;
-        bx.offset_bottom_pct = pct;
-    }
-    if let Some(v) = s.get("left") {
-        let (px, pct) = parse_offset(v);
-        bx.offset_left = px;
-        bx.offset_left_pct = pct;
-    }
+    let read_offset = |key: &str, pick: fn(&ComputedStyle) -> &super::computed_style::Length|
+        -> Option<(Option<f32>, Option<f32>)>
+    {
+        s.get(key)?;
+        Some(if let Some(cs) = cs_opt {
+            typed_offset(pick(cs))
+        } else {
+            parse_offset(s.get(key).unwrap())
+        })
+    };
+    if let Some((px, pct)) = read_offset("top",    |cs| &cs.top)    { bx.offset_top    = px; bx.offset_top_pct    = pct; }
+    if let Some((px, pct)) = read_offset("right",  |cs| &cs.right)  { bx.offset_right  = px; bx.offset_right_pct  = pct; }
+    if let Some((px, pct)) = read_offset("bottom", |cs| &cs.bottom) { bx.offset_bottom = px; bx.offset_bottom_pct = pct; }
+    if let Some((px, pct)) = read_offset("left",   |cs| &cs.left)   { bx.offset_left   = px; bx.offset_left_pct   = pct; }
     // Opacity - L5 step 4 batch 1: typed cs.opacity (pre-parsed + clamped), jinak parse fallback.
     if let Some(o) = read_typed_opacity(s, cs_opt) {
         bx.opacity = o;
