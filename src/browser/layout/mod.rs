@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use super::dom::{Node, NodeKind};
 use super::cascade::StyleMap;
-use super::computed_style::ComputedStyleMap;
+use super::computed_style::{ComputedStyle, ComputedStyleMap};
 
 // L5 step 4 plumbing: thread-local typed cascade output sdileny pres build_box_inner
 // stack. Aktivni jen behem layout_tree_typed* volani. Bez aktivni mapy reads
@@ -32,6 +32,43 @@ pub(crate) fn computed_style_for(node_id: usize)
 #[allow(dead_code)]
 pub(crate) fn active_computed_map() -> Option<Rc<ComputedStyleMap>> {
     ACTIVE_COMPUTED_MAP.with(|cell| cell.borrow().clone())
+}
+
+/// L5 step 4 helper: precti barvu z typed ComputedStyle pokud key v style mape
+/// existuje. Pokud cs_opt = None (= legacy testy bez typed cascade), padne
+/// zpet na parse_color z stringly value.
+///
+/// Gate `s.contains_key(key)` zachovava semantiku legacy `if let Some(v) =
+/// s.get(key)` - properties ktere CSS nedeklaruje (a nejsou inherit-shifted
+/// do style_map) zustanou na bx default, nezapise se initial Color.
+#[inline]
+fn read_typed_color(
+    s: &HashMap<String, String>,
+    cs_opt: Option<&ComputedStyle>,
+    key: &str,
+    pick: impl Fn(&ComputedStyle) -> super::computed_style::Color,
+) -> Option<[u8; 4]> {
+    let raw = s.get(key)?;
+    if let Some(cs) = cs_opt {
+        Some(pick(cs).to_rgba_u8())
+    } else {
+        parse_color(raw)
+    }
+}
+
+/// L5 step 4 helper: precti opacity z typed ComputedStyle pokud key v style mape.
+/// Stejna logika gate jako read_typed_color.
+#[inline]
+fn read_typed_opacity(
+    s: &HashMap<String, String>,
+    cs_opt: Option<&ComputedStyle>,
+) -> Option<f32> {
+    let raw = s.get("opacity")?;
+    if let Some(cs) = cs_opt {
+        Some(cs.opacity)
+    } else {
+        Some(raw.trim().parse::<f32>().unwrap_or(1.0).clamp(0.0, 1.0))
+    }
 }
 
 /// RAII guard - nastavi thread-local na dobu scope, na drop obnovi stary.
@@ -2034,6 +2071,12 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     let styles = super::cascade::get_styles(style_map, node);
     let empty: HashMap<String, String> = HashMap::new();
     let s = styles.unwrap_or(&empty);
+    // L5 step 4: typed ComputedStyle pro tento node, kdyz typed cascade aktivni.
+    // Sites postupne migrovany - bez aktivni typed mapy padaji helpers na
+    // legacy parse path (s.get + parse_color/parse).
+    let _node_id_for_cs = Rc::as_ptr(node) as usize;
+    let cs_for_node: Option<ComputedStyle> = computed_style_for(_node_id_for_cs);
+    let cs_opt: Option<&ComputedStyle> = cs_for_node.as_ref();
 
     // Display
     if let Some(disp) = s.get("display") {
@@ -2635,8 +2678,9 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         bx.transform = parse_transform(tr);
         bx.transforms = parse_transform_chain(tr);
     }
-    if let Some(c) = s.get("color") {
-        bx.text_color = parse_color(c);
+    // L5 step 4 batch 1: text `color` z typed ComputedStyle (fast path), jinak parse fallback.
+    if let Some(rgba) = read_typed_color(s, cs_opt, "color", |cs| cs.color) {
+        bx.text_color = Some(rgba);
     }
 
     // Padding / margin / border-width - prefer expanded shorthand
@@ -2833,9 +2877,9 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         bx.offset_left = px;
         bx.offset_left_pct = pct;
     }
-    // Opacity
-    if let Some(o) = s.get("opacity") {
-        bx.opacity = o.trim().parse::<f32>().unwrap_or(1.0).clamp(0.0, 1.0);
+    // Opacity - L5 step 4 batch 1: typed cs.opacity (pre-parsed + clamped), jinak parse fallback.
+    if let Some(o) = read_typed_opacity(s, cs_opt) {
+        bx.opacity = o;
     }
     // Text-decoration
     if let Some(td) = s.get("text-decoration") {
