@@ -2319,15 +2319,24 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
             if has_strike { bx.text_strikethrough = true; }
         }
     }
-    // text-decoration L4 detail props
-    if let Some(c) = s.get("text-decoration-color") {
-        bx.text_decoration_color = parse_color(c);
+    // text-decoration L4 detail props - L5 step 4 batch 11: typed.
+    if let Some(rgba) = read_typed_color(s, cs_opt, "text-decoration-color", |cs| cs.text_decoration_color) {
+        bx.text_decoration_color = Some(rgba);
     }
     if let Some(st) = s.get("text-decoration-style") {
         bx.text_decoration_style = st.trim().to_string();
     }
-    if let Some(t) = s.get("text-decoration-thickness") {
-        if t.trim() != "auto" { bx.text_decoration_thickness = parse_length(t); }
+    if s.contains_key("text-decoration-thickness") {
+        if let Some(cs) = cs_opt {
+            use super::computed_style::Length as L;
+            match &cs.text_decoration_thickness {
+                L::Auto | L::None => {}
+                other => { bx.text_decoration_thickness = other.resolve_or(0.0, 16.0, 16.0, 1024.0, 768.0); }
+            }
+        } else {
+            let t = s.get("text-decoration-thickness").unwrap();
+            if t.trim() != "auto" { bx.text_decoration_thickness = parse_length(t); }
+        }
     }
     if let Some(o) = s.get("text-underline-offset") {
         if o.trim() != "auto" { bx.text_underline_offset = parse_length(o); }
