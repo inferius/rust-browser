@@ -2332,8 +2332,9 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(o) = s.get("text-underline-offset") {
         if o.trim() != "auto" { bx.text_underline_offset = parse_length(o); }
     }
-    if let Some(ti) = s.get("text-indent") {
-        bx.text_indent = parse_length(ti);
+    // L5 step 4 batch 7: text-indent z typed Length.
+    if let Some(v) = read_typed_length(s, cs_opt, "text-indent", |cs| &cs.text_indent) {
+        bx.text_indent = v;
     }
     // letter-spacing / word-spacing: parsuje POZDEJI po font-size resolution
     // (em proti font-size). Viz move na konec cascade props loop.
@@ -2647,12 +2648,24 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         if v.trim() != "none" { bx.perspective = Some(parse_length(v)); }
     }
     if let Some(v) = s.get("pointer-events") { bx.pointer_events = PointerEvents::parse(v); }
-    if let Some(v) = s.get("caret-color") {
-        if v.trim() != "auto" { bx.caret_color = parse_color(v); }
+    // L5 step 4 batch 8: caret-color z typed Color.
+    if s.contains_key("caret-color") {
+        if let Some(cs) = cs_opt {
+            bx.caret_color = Some(cs.caret_color.to_rgba_u8());
+        } else {
+            let v = s.get("caret-color").unwrap();
+            if v.trim() != "auto" { bx.caret_color = parse_color(v); }
+        }
     }
-    if let Some(v) = s.get("tab-size") {
-        if let Ok(n) = v.trim().parse::<f32>() { bx.tab_size = n; }
-        else { bx.tab_size = parse_length(v); }
+    // L5 step 4 batch 7: tab-size z typed f32.
+    if s.contains_key("tab-size") {
+        if let Some(cs) = cs_opt {
+            bx.tab_size = cs.tab_size;
+        } else {
+            let v = s.get("tab-size").unwrap();
+            if let Ok(n) = v.trim().parse::<f32>() { bx.tab_size = n; }
+            else { bx.tab_size = parse_length(v); }
+        }
     }
     if let Some(v) = s.get("word-break") { bx.word_break = v.trim().to_string(); }
     if let Some(v) = s.get("overflow-wrap").or(s.get("word-wrap")) { bx.overflow_wrap = v.trim().to_string(); }
@@ -2660,12 +2673,27 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(v) = s.get("list-style-image") {
         if v.trim() != "none" { bx.list_style_image = Some(v.trim().to_string()); }
     }
-    if let Some(v) = s.get("outline-width") { bx.outline_width = parse_length(v); }
-    if let Some(v) = s.get("outline-style") { bx.outline_style = v.trim().to_string(); }
-    if let Some(v) = s.get("outline-color") {
-        if v.trim() != "currentColor" { bx.outline_color = parse_color(v); }
+    // L5 step 4 batch 8: outline-width/offset z typed Length, outline-color typed Color.
+    if let Some(v) = read_typed_length(s, cs_opt, "outline-width", |cs| &cs.outline_width) {
+        bx.outline_width = v;
     }
-    if let Some(v) = s.get("outline-offset") { bx.outline_offset = parse_length(v); }
+    if let Some(v) = s.get("outline-style") { bx.outline_style = v.trim().to_string(); }
+    if s.contains_key("outline-color") {
+        // CurrentColor variant skip (resolve proti parent color v cascade by mel naplnit Rgba,
+        // ale puvodni text checkoval string "currentColor" - tady ekvivalent pres CurrentColor variant).
+        if let Some(cs) = cs_opt {
+            use super::computed_style::Color as Cc;
+            if !matches!(cs.outline_color, Cc::CurrentColor) {
+                bx.outline_color = Some(cs.outline_color.to_rgba_u8());
+            }
+        } else {
+            let v = s.get("outline-color").unwrap();
+            if v.trim() != "currentColor" { bx.outline_color = parse_color(v); }
+        }
+    }
+    if let Some(v) = read_typed_length(s, cs_opt, "outline-offset", |cs| &cs.outline_offset) {
+        bx.outline_offset = v;
+    }
     if let Some(v) = s.get("anchor-name") { bx.anchor_name = v.trim().to_string(); }
     if let Some(v) = s.get("position-anchor") { bx.position_anchor = v.trim().to_string(); }
     if let Some(v) = s.get("inset-area") { bx.inset_area = v.trim().to_string(); }
