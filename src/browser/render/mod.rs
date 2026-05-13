@@ -918,6 +918,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         /// realne meni styly.
         cached_cascade_hash: u64,
         cached_style_map: Option<Rc<super::cascade::StyleMap>>,
+        /// L5 step 4 Phase 3: prev frame's ComputedStyleMap pro detect_transitions_typed.
+        prev_computed_map: Option<Rc<super::computed_style::ComputedStyleMap>>,
         /// L5 step 4: typed ComputedStyle cache souvisi se cached_style_map.
         /// Naplnen z cascade_with_viewport_typed; predan do layout_tree_typed
         /// pro typed reads behem build_box_inner. Bez tohohle vstupu reads
@@ -5801,22 +5803,22 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // by stejne nasel zadne diffs.
             // PERF #2: kdyz Rc::ptr_eq(prev, current) = stejna data (cache hit cascade)
             // -> ZERO diffs garantied. Skip O(N) walk.
+            // L5 step 4 Phase 3 Step C: typed detect_transitions + apply_transitions.
             let mut ended_transitions: Vec<(usize, String)> = Vec::new();
             if self.css_uses_transitions {
-                if let Some(prev) = &self.prev_style_map {
-                    let same_map = Rc::ptr_eq(prev, &style_map);
+                if let (Some(prev_cm), Some(cur_cm)) = (self.prev_computed_map.as_ref(), self.cached_computed_map.as_ref()) {
+                    let same_map = Rc::ptr_eq(prev_cm, cur_cm);
                     if !same_map {
                         let active_before = std::mem::take(&mut self.active_transitions);
                         let prev_keys: std::collections::HashSet<(usize, String)> = active_before.iter()
                             .map(|t| (t.node_id, t.property.clone())).collect();
-                        self.active_transitions = cascade::detect_transitions(&**prev, &*style_map, active_before, elapsed);
+                        self.active_transitions = cascade::detect_transitions_typed(prev_cm, cur_cm, active_before, elapsed);
                         let now_keys: std::collections::HashSet<(usize, String)> = self.active_transitions.iter()
                             .map(|t| (t.node_id, t.property.clone())).collect();
                         for k in prev_keys.difference(&now_keys) {
                             ended_transitions.push(k.clone());
                         }
                     } else {
-                        // No cascade change -> drop expired active transitions, keep rest.
                         let active_before = std::mem::take(&mut self.active_transitions);
                         for at in active_before {
                             let total = at.spec.duration_secs + at.spec.delay_secs;
@@ -5827,9 +5829,10 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     }
                 }
             }
-            // Aplikuj transitions jen kdyz nejake aktivni (skip cely walk pri prazdnem).
             if !self.active_transitions.is_empty() {
-                cascade::apply_transitions(Rc::make_mut(&mut style_map), &self.active_transitions, elapsed);
+                if let Some(cm) = self.cached_computed_map.as_mut() {
+                    cascade::apply_transitions_typed(Rc::make_mut(cm), &self.active_transitions, elapsed);
+                }
             }
 
             // Dispatch transitionend events
@@ -5945,8 +5948,13 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             let _t_prev = std::time::Instant::now();
             if self.css_uses_transitions {
                 self.prev_style_map = Some(Rc::clone(&style_map));
+                // L5 step 4 Phase 3: typed prev cmap pro detect_transitions_typed.
+                if let Some(cm) = &self.cached_computed_map {
+                    self.prev_computed_map = Some(Rc::clone(cm));
+                }
             } else {
                 self.prev_style_map = None;
+                self.prev_computed_map = None;
             }
             perf_t("prev_style_map clone (Rc)", _t_prev);
 
@@ -7248,6 +7256,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         cached_stylesheets: None,
         cached_cascade_hash: 0,
         cached_style_map: None,
+        prev_computed_map: None,
         cached_computed_map: None,
         cached_matched_key: None,
         animation_origin: std::time::Instant::now(),

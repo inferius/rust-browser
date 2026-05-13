@@ -3378,6 +3378,36 @@ impl TransitionSpec {
         if duration <= 0.0 { return None; }
         Some(TransitionSpec { property, duration_secs: duration, timing_function: timing, delay_secs: delay })
     }
+
+    /// L5 step 4 Phase 3: typed verze - cte z ComputedStyle.transition_*.
+    pub fn from_cs(cs: &crate::browser::computed_style::ComputedStyle) -> Vec<TransitionSpec> {
+        // Fast bail.
+        if cs.transition_property.is_empty() || cs.transition_property == "none" {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        let p_list: Vec<&str> = cs.transition_property.split(',').map(|s| s.trim()).collect();
+        let dur_list: &[f32] = &cs.transition_duration;
+        let timing_list: &[crate::browser::computed_style::TimingFunction] = &cs.transition_timing_function;
+        let delay_list: &[f32] = &cs.transition_delay;
+        for (i, prop) in p_list.iter().enumerate() {
+            let dur = if dur_list.is_empty() { 0.0 } else { dur_list[i % dur_list.len()] };
+            if dur <= 0.0 { continue; }
+            let timing = if timing_list.is_empty() {
+                "ease".to_string()
+            } else {
+                timing_list[i % timing_list.len()].css_string()
+            };
+            let delay = if delay_list.is_empty() { 0.0 } else { delay_list[i % delay_list.len()] };
+            out.push(TransitionSpec {
+                property: prop.to_string(),
+                duration_secs: dur,
+                timing_function: timing,
+                delay_secs: delay,
+            });
+        }
+        out
+    }
 }
 
 /// Tokenize string respektujici vyvazene zavorky (pro cubic-bezier/steps).
@@ -3582,6 +3612,156 @@ pub fn apply_transitions(
 
         if let Some(styles) = style_map.get_mut(&at.node_id) {
             styles.insert(at.property.clone(), interpolated);
+        }
+    }
+}
+
+/// L5 step 4 Phase 3: getter pro typed cs.X -> CSS string per prop name.
+/// Mirror apply_animated_value_to_cs. Pro transitions detect typed.
+pub fn read_animated_value_from_cs(cs: &crate::browser::computed_style::ComputedStyle, prop: &str) -> Option<String> {
+    use crate::browser::computed_style::{length_css_string, color_css_string};
+    let v = match prop {
+        "opacity" => Some(cs.opacity.to_string()),
+        "color" => Some(color_css_string(cs.color)),
+        "background-color" => Some(color_css_string(cs.background_color)),
+        "border-top-color" => Some(color_css_string(cs.border_top_color)),
+        "border-right-color" => Some(color_css_string(cs.border_right_color)),
+        "border-bottom-color" => Some(color_css_string(cs.border_bottom_color)),
+        "border-left-color" => Some(color_css_string(cs.border_left_color)),
+        "outline-color" => Some(color_css_string(cs.outline_color)),
+        "caret-color" => Some(color_css_string(cs.caret_color)),
+        "text-decoration-color" => Some(color_css_string(cs.text_decoration_color)),
+        "text-emphasis-color" => Some(color_css_string(cs.text_emphasis_color)),
+        "width" => Some(length_css_string(&cs.width)),
+        "height" => Some(length_css_string(&cs.height)),
+        "min-width" => Some(length_css_string(&cs.min_width)),
+        "min-height" => Some(length_css_string(&cs.min_height)),
+        "max-width" => Some(length_css_string(&cs.max_width)),
+        "max-height" => Some(length_css_string(&cs.max_height)),
+        "top" => Some(length_css_string(&cs.top)),
+        "right" => Some(length_css_string(&cs.right)),
+        "bottom" => Some(length_css_string(&cs.bottom)),
+        "left" => Some(length_css_string(&cs.left)),
+        "margin-top" => Some(length_css_string(&cs.margin_top)),
+        "margin-right" => Some(length_css_string(&cs.margin_right)),
+        "margin-bottom" => Some(length_css_string(&cs.margin_bottom)),
+        "margin-left" => Some(length_css_string(&cs.margin_left)),
+        "padding-top" => Some(length_css_string(&cs.padding_top)),
+        "padding-right" => Some(length_css_string(&cs.padding_right)),
+        "padding-bottom" => Some(length_css_string(&cs.padding_bottom)),
+        "padding-left" => Some(length_css_string(&cs.padding_left)),
+        "font-size" => Some(length_css_string(&cs.font_size)),
+        "border-top-width" => Some(length_css_string(&cs.border_top_width)),
+        "border-right-width" => Some(length_css_string(&cs.border_right_width)),
+        "border-bottom-width" => Some(length_css_string(&cs.border_bottom_width)),
+        "border-left-width" => Some(length_css_string(&cs.border_left_width)),
+        "outline-width" => Some(length_css_string(&cs.outline_width)),
+        "outline-offset" => Some(length_css_string(&cs.outline_offset)),
+        "row-gap" => Some(length_css_string(&cs.row_gap)),
+        "column-gap" => Some(length_css_string(&cs.column_gap)),
+        "border-top-left-radius" => Some(length_css_string(&cs.border_top_left_radius)),
+        "border-top-right-radius" => Some(length_css_string(&cs.border_top_right_radius)),
+        "border-bottom-right-radius" => Some(length_css_string(&cs.border_bottom_right_radius)),
+        "border-bottom-left-radius" => Some(length_css_string(&cs.border_bottom_left_radius)),
+        "transform" => Some(cs.transform.clone()),
+        "filter" => Some(cs.filter.clone()),
+        "backdrop-filter" => Some(cs.backdrop_filter.clone()),
+        "clip-path" => Some(cs.clip_path.clone()),
+        "box-shadow" => Some(cs.box_shadow.clone()),
+        "text-shadow" => Some(cs.text_shadow.clone()),
+        "flex-grow" => Some(cs.flex_grow.to_string()),
+        "flex-shrink" => Some(cs.flex_shrink.to_string()),
+        _ => None,
+    };
+    v
+}
+
+/// L5 step 4 Phase 3: typed detect_transitions. Walk prev/cur ComputedStyleMap,
+/// per element + transition spec prop, compare typed values via
+/// read_animated_value_from_cs serialize. ActiveTransition stores Strings.
+pub fn detect_transitions_typed(
+    prev_cmap: &crate::browser::computed_style::ComputedStyleMap,
+    cur_cmap: &crate::browser::computed_style::ComputedStyleMap,
+    active: Vec<ActiveTransition>,
+    elapsed_secs: f32,
+) -> Vec<ActiveTransition> {
+    let mut result: Vec<ActiveTransition> = Vec::new();
+    // Zachovaj aktivni transitions ktere jeste nedohrali.
+    for at in active {
+        let total = at.spec.duration_secs + at.spec.delay_secs;
+        if elapsed_secs - at.start_time < total {
+            result.push(at);
+        }
+    }
+    // Iterate cur_cmap.
+    for (node_id, cur_cs) in cur_cmap {
+        let prev_cs = match prev_cmap.get(node_id) { Some(p) => p, None => continue };
+        // Spec parse z typed cs.transition_property/duration/...
+        let specs = TransitionSpec::from_cs(cur_cs);
+        if specs.is_empty() { continue; }
+        for spec in &specs {
+            let props_to_check: Vec<String> = if spec.property == "all" {
+                // For "all" - jen migrate-cesta props (covered by read_animated_value_from_cs).
+                vec![
+                    "opacity", "color", "background-color",
+                    "width", "height", "min-width", "min-height", "max-width", "max-height",
+                    "top", "right", "bottom", "left",
+                    "margin-top", "margin-right", "margin-bottom", "margin-left",
+                    "padding-top", "padding-right", "padding-bottom", "padding-left",
+                    "font-size", "border-top-width", "border-right-width",
+                    "border-bottom-width", "border-left-width",
+                    "outline-width", "outline-offset", "transform", "filter",
+                ].iter().map(|s| s.to_string()).collect()
+            } else {
+                vec![spec.property.clone()]
+            };
+            for prop in props_to_check {
+                let cur_val = read_animated_value_from_cs(cur_cs, &prop).unwrap_or_default();
+                let prev_val = read_animated_value_from_cs(prev_cs, &prop).unwrap_or_default();
+                if cur_val != prev_val && !prev_val.is_empty() {
+                    if result.iter().any(|t| t.node_id == *node_id && t.property == prop) { continue; }
+                    result.push(ActiveTransition {
+                        node_id: *node_id,
+                        property: prop,
+                        from_value: prev_val,
+                        to_value: cur_val,
+                        spec: spec.clone(),
+                        start_time: elapsed_secs,
+                    });
+                }
+            }
+        }
+    }
+    result
+}
+
+/// L5 step 4 Phase 3: typed apply_transitions. Mutuje ComputedStyleMap typed
+/// pres apply_animated_value_to_cs. Reuse existing setter.
+pub fn apply_transitions_typed(
+    cmap: &mut crate::browser::computed_style::ComputedStyleMap,
+    active: &[ActiveTransition],
+    elapsed_secs: f32,
+) {
+    for at in active {
+        let t = elapsed_secs - at.start_time - at.spec.delay_secs;
+        if t < 0.0 { continue; }
+        let raw_progress = (t / at.spec.duration_secs).clamp(0.0, 1.0);
+        let progress = apply_easing(raw_progress, &at.spec.timing_function);
+        let from = super::layout::parse_length(&at.from_value);
+        let to = super::layout::parse_length(&at.to_value);
+        let interpolated = if from != 0.0 || to != 0.0 {
+            let v = from + (to - from) * progress;
+            let unit = ["px", "em", "rem", "%", "vw", "vh", "deg", "rad"]
+                .iter()
+                .find(|u| at.to_value.ends_with(*u))
+                .copied()
+                .unwrap_or("px");
+            format!("{v}{unit}")
+        } else {
+            if progress < 0.5 { at.from_value.clone() } else { at.to_value.clone() }
+        };
+        if let Some(cs) = cmap.get_mut(&at.node_id) {
+            apply_animated_value_to_cs(cs, &at.property, &interpolated);
         }
     }
 }

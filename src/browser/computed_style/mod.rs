@@ -830,8 +830,8 @@ impl ComputedStyle {
     }
 }
 
-/// Helper: Length -> CSS string pro devtools display.
-fn length_css_string(l: &Length) -> String {
+/// Helper: Length -> CSS string pro devtools display + transitions roundtrip.
+pub fn length_css_string(l: &Length) -> String {
     match l {
         Length::Px(v) => format!("{}px", v),
         Length::Em(v) => format!("{}em", v),
@@ -852,8 +852,8 @@ fn length_css_string(l: &Length) -> String {
     }
 }
 
-/// Helper: Color -> CSS string pro devtools.
-fn color_css_string(c: Color) -> String {
+/// Helper: Color -> CSS string pro devtools + transitions roundtrip.
+pub fn color_css_string(c: Color) -> String {
     let [r, g, b, a] = c.to_rgba_u8();
     if a == 255 {
         format!("rgb({}, {}, {})", r, g, b)
