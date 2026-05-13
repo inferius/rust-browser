@@ -354,9 +354,9 @@ pub struct ComputedStyle {
     /// EXPERIMENTAL CSS Scroll-Driven Animations L1: animation-timeline.
     pub experimental_animation_timeline: String,
 
-    /// EXPERIMENTAL CSS Containment L3: content-visibility.
-    /// auto | hidden | visible - hide off-screen optimization.
-    pub experimental_content_visibility: String,
+    /// CSS Containment L3: content-visibility (partial impl: hidden hides
+    /// element. auto = visible (viewport-relative optimization NOT impl)).
+    pub content_visibility: ContentVisibility,
     /// EXPERIMENTAL CSS Containment L3: container.
     pub experimental_container: String,
     /// EXPERIMENTAL CSS Containment L3: container-type.
@@ -365,8 +365,9 @@ pub struct ComputedStyle {
     /// EXPERIMENTAL CSS Containment L3: container-name.
     pub experimental_container_name: String,
 
-    /// EXPERIMENTAL CSS Text L4: text-wrap. balance | pretty | wrap | nowrap | stable
-    pub experimental_text_wrap: String,
+    /// CSS Text L4: text-wrap (partial impl: nowrap/wrap mapped na white-space).
+    /// balance/pretty/stable advanced line-break NOT implemented = behaves as wrap.
+    pub text_wrap: TextWrap,
     /// EXPERIMENTAL CSS Text L4: text-wrap-style.
     pub experimental_text_wrap_style: String,
     /// EXPERIMENTAL CSS Text L4: text-wrap-mode.
@@ -377,8 +378,8 @@ pub struct ComputedStyle {
     /// EXPERIMENTAL CSS Inline L3: text-box-edge.
     pub experimental_text_box_edge: String,
 
-    /// EXPERIMENTAL CSS Forms L1: field-sizing. fixed | content
-    pub experimental_field_sizing: String,
+    /// CSS Forms L1: field-sizing. content = auto-size to text.
+    pub field_sizing: FieldSizing,
 
     /// EXPERIMENTAL CSS Color L4: print-color-adjust. economy | exact
     pub experimental_print_color_adjust: String,
@@ -630,16 +631,16 @@ impl ComputedStyle {
             experimental_scroll_timeline_name: "none".into(),
             experimental_scroll_timeline_axis: "block".into(),
             experimental_animation_timeline: "auto".into(),
-            experimental_content_visibility: "visible".into(),
+            content_visibility: ContentVisibility::Visible,
             experimental_container: String::new(),
             experimental_container_type: "normal".into(),
             experimental_container_name: String::new(),
-            experimental_text_wrap: "wrap".into(),
+            text_wrap: TextWrap::Wrap,
             experimental_text_wrap_style: "auto".into(),
             experimental_text_wrap_mode: "wrap".into(),
             experimental_text_box_trim: "none".into(),
             experimental_text_box_edge: "leading".into(),
-            experimental_field_sizing: "fixed".into(),
+            field_sizing: FieldSizing::Fixed,
             experimental_print_color_adjust: "economy".into(),
             experimental_forced_color_adjust: "auto".into(),
             experimental_color_scheme: "normal".into(),
@@ -733,11 +734,14 @@ impl ComputedStyle {
         if self.experimental_view_transition_name != "none" {
             out.push(("view-transition-name".into(), self.experimental_view_transition_name.clone()));
         }
-        if self.experimental_content_visibility != "visible" {
-            out.push(("content-visibility".into(), self.experimental_content_visibility.clone()));
+        if !matches!(self.content_visibility, ContentVisibility::Visible) {
+            out.push(("content-visibility".into(), self.content_visibility.css_string().to_string()));
         }
-        if self.experimental_text_wrap != "wrap" {
-            out.push(("text-wrap".into(), self.experimental_text_wrap.clone()));
+        if !matches!(self.text_wrap, TextWrap::Wrap) {
+            out.push(("text-wrap".into(), self.text_wrap.css_string().to_string()));
+        }
+        if !matches!(self.field_sizing, FieldSizing::Fixed) {
+            out.push(("field-sizing".into(), self.field_sizing.css_string().to_string()));
         }
         out.sort_by(|a, b| a.0.cmp(&b.0));
         out
@@ -773,6 +777,96 @@ fn color_css_string(c: Color) -> String {
         format!("rgb({}, {}, {})", r, g, b)
     } else {
         format!("rgba({}, {}, {}, {})", r, g, b, a as f32 / 255.0)
+    }
+}
+
+// ─── L5 step 4 Phase I: nove typed enums pro PARTIAL implementaci experimental specs ───
+
+/// CSS Text L4: `text-wrap`. balance/pretty/stable = advanced line-break
+/// strategy (NOT YET implementovany - chovaji se jako wrap). nowrap/wrap
+/// mapped 1:1 na white-space nowrap/normal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextWrap {
+    Wrap,
+    Nowrap,
+    /// PARTIAL: zatim chovani jako Wrap; advanced balance algo neni implemented.
+    Balance,
+    /// PARTIAL: chovani jako Wrap.
+    Pretty,
+    /// PARTIAL: chovani jako Wrap.
+    Stable,
+}
+
+impl TextWrap {
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "nowrap" => Self::Nowrap,
+            "balance" => Self::Balance,
+            "pretty" => Self::Pretty,
+            "stable" => Self::Stable,
+            _ => Self::Wrap,
+        }
+    }
+    pub fn css_string(self) -> &'static str {
+        match self {
+            Self::Wrap => "wrap",
+            Self::Nowrap => "nowrap",
+            Self::Balance => "balance",
+            Self::Pretty => "pretty",
+            Self::Stable => "stable",
+        }
+    }
+    /// Pro mapping na white-space-style behavior. Nowrap = block break.
+    /// Balance/Pretty/Stable = wrap (advanced not impl).
+    pub fn is_nowrap(self) -> bool { matches!(self, Self::Nowrap) }
+}
+
+/// CSS Containment L3: `content-visibility`. hidden = no render + skip layout.
+/// auto = visible kdyz blizko viewport (NOT implemented; treated as visible).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContentVisibility {
+    Visible,
+    Hidden,
+    /// PARTIAL: chovani jako Visible (viewport-relative optimization not impl).
+    Auto,
+}
+
+impl ContentVisibility {
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "hidden" => Self::Hidden,
+            "auto" => Self::Auto,
+            _ => Self::Visible,
+        }
+    }
+    pub fn css_string(self) -> &'static str {
+        match self {
+            Self::Visible => "visible",
+            Self::Hidden => "hidden",
+            Self::Auto => "auto",
+        }
+    }
+}
+
+/// CSS Forms L1: `field-sizing`. content = auto-size to content. fixed = standard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FieldSizing {
+    Fixed,
+    Content,
+}
+
+impl FieldSizing {
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "content" => Self::Content,
+            _ => Self::Fixed,
+        }
+    }
+    pub fn css_string(self) -> &'static str {
+        match self {
+            Self::Fixed => "fixed",
+            Self::Content => "content",
+        }
     }
 }
 

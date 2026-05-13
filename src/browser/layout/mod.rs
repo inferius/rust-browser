@@ -3436,6 +3436,27 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
             s.get("white-space").unwrap().trim() == "nowrap"
         };
     }
+    // L5 step 4 Phase I: text-wrap nowrap mapped na white_space_nowrap.
+    // balance/pretty/stable nyni chovaji jako wrap (advanced line-break NOT impl).
+    if let Some(cs) = cs_opt {
+        if cs.text_wrap.is_nowrap() {
+            bx.white_space_nowrap = true;
+        }
+    } else if let Some(tw) = s.get("text-wrap") {
+        if tw.trim().eq_ignore_ascii_case("nowrap") {
+            bx.white_space_nowrap = true;
+        }
+    }
+    // L5 step 4 Phase I: content-visibility hidden -> Display::None.
+    if let Some(cs) = cs_opt {
+        if matches!(cs.content_visibility, super::computed_style::ContentVisibility::Hidden) {
+            bx.display = Display::None;
+        }
+    } else if let Some(cv) = s.get("content-visibility") {
+        if cv.trim().eq_ignore_ascii_case("hidden") {
+            bx.display = Display::None;
+        }
+    }
     // Cursor - L5 step 4 batch 15: cs.cursor (Cursor enum) -> css_string.
     if s.contains_key("cursor") {
         bx.cursor = Some(if let Some(cs) = cs_opt {

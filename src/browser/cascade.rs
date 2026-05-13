@@ -1782,16 +1782,22 @@ pub fn cascade_with_viewport_typed(
         if let Some(v) = props.get("scroll-timeline-name") { cs.experimental_scroll_timeline_name = v.clone(); }
         if let Some(v) = props.get("scroll-timeline-axis") { cs.experimental_scroll_timeline_axis = v.clone(); }
         if let Some(v) = props.get("animation-timeline") { cs.experimental_animation_timeline = v.clone(); }
-        if let Some(v) = props.get("content-visibility") { cs.experimental_content_visibility = v.clone(); }
+        if let Some(v) = props.get("content-visibility") {
+            cs.content_visibility = crate::browser::computed_style::ContentVisibility::parse(v);
+        }
         if let Some(v) = props.get("container") { cs.experimental_container = v.clone(); }
         if let Some(v) = props.get("container-type") { cs.experimental_container_type = v.clone(); }
         if let Some(v) = props.get("container-name") { cs.experimental_container_name = v.clone(); }
-        if let Some(v) = props.get("text-wrap") { cs.experimental_text_wrap = v.clone(); }
+        if let Some(v) = props.get("text-wrap") {
+            cs.text_wrap = crate::browser::computed_style::TextWrap::parse(v);
+        }
         if let Some(v) = props.get("text-wrap-style") { cs.experimental_text_wrap_style = v.clone(); }
         if let Some(v) = props.get("text-wrap-mode") { cs.experimental_text_wrap_mode = v.clone(); }
         if let Some(v) = props.get("text-box-trim") { cs.experimental_text_box_trim = v.clone(); }
         if let Some(v) = props.get("text-box-edge") { cs.experimental_text_box_edge = v.clone(); }
-        if let Some(v) = props.get("field-sizing") { cs.experimental_field_sizing = v.clone(); }
+        if let Some(v) = props.get("field-sizing") {
+            cs.field_sizing = crate::browser::computed_style::FieldSizing::parse(v);
+        }
         if let Some(v) = props.get("print-color-adjust") { cs.experimental_print_color_adjust = v.clone(); }
         if let Some(v) = props.get("forced-color-adjust") { cs.experimental_forced_color_adjust = v.clone(); }
         if let Some(v) = props.get("color-scheme") { cs.experimental_color_scheme = v.clone(); }
