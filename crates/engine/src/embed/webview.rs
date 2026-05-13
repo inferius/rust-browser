@@ -260,12 +260,43 @@ impl WebView {
     }
 
     /// Zmena velikosti viewportu. Trigger relayout pri pristim `render()`.
+    /// Pokud Engine ma GPU, realokuje offscreen RT na novou velikost.
     pub fn resize(&mut self, width: u32, height: u32, scale_factor: f32) {
+        let size_changed = (self.viewport_w as u32) != width || (self.viewport_h as u32) != height;
         self.viewport_w = width as f32;
         self.viewport_h = height as f32;
         self.scale_factor = scale_factor;
         self.dirty = true;
-        // Phase 5: realokovat target_texture.
+        if size_changed {
+            self.ensure_target_texture();
+        }
+    }
+
+    /// Realokuje `target_texture` + `target_view` na aktualni viewport.
+    /// Pokud Engine je headless (no GPU), no-op (target_* zustanou None).
+    /// Pouziti: vola se po `resize` + pri prvnim `render` pokud target chybi.
+    pub(crate) fn ensure_target_texture(&mut self) {
+        let device = match self.engine.device.as_ref() {
+            Some(d) => d.clone(),
+            None => return, // headless engine - skip
+        };
+        let w = (self.viewport_w as u32 * self.scale_factor as u32).max(1);
+        let h = (self.viewport_h as u32 * self.scale_factor as u32).max(1);
+        let tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("rwe-webview-offscreen"),
+            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Bgra8UnormSrgb,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+        self.target_texture = Some(tex);
+        self.target_view = Some(view);
     }
 
     /// Zpracuj input event. Vrati `EventResponse` se zmenami pro hostujici
@@ -275,9 +306,61 @@ impl WebView {
     }
 
     /// Renderuj page do offscreen texture. Pokud `dirty == false`, vrati
-    /// posledni view bez prace.
+    /// posledni view bez prace. Pokud Engine je headless, vrati `None`.
+    ///
+    /// Phase 4b stav: alokuje + clear (transparent black). Real paint pipeline
+    /// (cascade -> layout -> display list -> vertex buffer -> draw) prijde v
+    /// Phase 5 - vyzaduje rozdeleni `browser::render::Renderer` na sdilene
+    /// "page paint" + "compositor" vrstvy. Tj. soucasne WebView::render je
+    /// API-functional ale jeste neproduce useful obraz.
     pub fn render(&mut self) -> Option<&wgpu::TextureView> {
-        todo!("Phase 5: paint -> render passes -> target_view")
+        let device = self.engine.device.as_ref()?.clone();
+        let queue = self.engine.queue.as_ref()?.clone();
+
+        if self.target_texture.is_none() {
+            self.ensure_target_texture();
+        }
+        if !self.dirty {
+            return self.target_view.as_ref();
+        }
+
+        let view = self.target_view.as_ref()?;
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("rwe-webview-render"),
+        });
+        {
+            let _rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("rwe-webview-clear"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+        }
+        queue.submit(std::iter::once(encoder.finish()));
+        self.dirty = false;
+        self.target_view.as_ref()
+    }
+
+    /// Aktivni offscreen render target view (vyrobeny v `render`).
+    /// Pouziti: host kompozici - blit tuto texturu do swap chain.
+    pub fn target_view(&self) -> Option<&wgpu::TextureView> {
+        self.target_view.as_ref()
+    }
+
+    /// Aktivni offscreen texture (alternativa k `target_view` pro shell
+    /// kompozici - texture handle umoznuje create_view s vlastnim format).
+    pub fn target_texture(&self) -> Option<&wgpu::Texture> {
+        self.target_texture.as_ref()
     }
 
     /// Velikost dokumentu (content w / h) pro scrollbar sizing v shellu.
@@ -510,5 +593,15 @@ mod tests {
         assert!(!eng.has_gpu());
         assert!(eng.device().is_none());
         assert!(eng.queue().is_none());
+    }
+
+    #[test]
+    fn render_returns_none_on_headless_engine() {
+        // Headless = no GPU - render musi gracefully vratit None misto panik.
+        let mut wv = fresh();
+        wv.load_html("<html><body>x</body></html>", "", None);
+        assert!(wv.render().is_none(), "headless render musi vratit None");
+        assert!(wv.target_view().is_none());
+        assert!(wv.target_texture().is_none());
     }
 }

@@ -1071,9 +1071,18 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         /// sdileny (Interpreter neni Clone bezpecne). Pro Phase 4a je OK 2x
         /// inicializovat scripts - dual run navic je u inline pages levne.
         fn sync_webview_from_app(&mut self) {
-            // Lazy init engine - shared Arc, 1x per App lifetime. Phase 5 ho
-            // dostane od Renderer + skutecne wgpu Device.
-            let engine = std::sync::Arc::new(crate::embed::Engine::new_headless());
+            // Engine s realnymi GPU resources kdyz Renderer ready, jinak headless
+            // (test / pre-resumed). wgpu::Device + Queue jsou v 0.29 internally
+            // Arc'd, ale Engine API kontrakt deklaroval Arc<Device>/Queue pro
+            // explicit shared semantiku - wrap navic minimal cost (extra Arc=8B).
+            let engine = if let Some(r) = &self.renderer {
+                std::sync::Arc::new(crate::embed::Engine::new(
+                    std::sync::Arc::new(r.device.clone()),
+                    std::sync::Arc::new(r.queue.clone()),
+                ))
+            } else {
+                std::sync::Arc::new(crate::embed::Engine::new_headless())
+            };
             // Viewport z Renderer config (po HiDPI scale_factor div).
             let (vw, vh, sf) = if let Some(r) = &self.renderer {
                 (r.config.width.max(1), r.config.height.max(1), r.scale_factor)
