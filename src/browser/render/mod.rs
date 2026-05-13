@@ -546,7 +546,6 @@ fn apply_paint_animations_inner(box_: &mut crate::browser::layout::LayoutBox,
                                  parent_layout_dy: f32) {
     let node_id = box_.node.as_ref().map(|n| Rc::as_ptr(n) as usize).unwrap_or(0);
     let original_width = box_.rect.width;
-    let _ = parent_delta_x; let _ = parent_delta_y; // pouziti via static-shift block nize
     // Baseline rect: pri prvni apply zachyti pozici PRED jakoukoli animaci.
     // Dalsi frames cti baseline misto current rect aby se animace neakumulovala.
     //
@@ -3530,16 +3529,15 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             64.0 + if bm_count > 0 && self.bookmarks_bar_visible { 24.0 } else { 0.0 }
         }
         /// Page commands shift dolu o chrome height (pri shell_mode).
+        /// MUSI handlovat VSECHNY varianty DisplayCommand s y - jinak compose
+        /// pipelines (FilterBegin/TransformBegin/ClippedRect) zustanou v
+        /// puvodni y a renderuji se NAD chrome bar misto pod nim. Pouzivame
+        /// segments::shift_command_y ktery zna vsechny varianty.
         fn shift_page_for_chrome(&self, list: &mut [DisplayCommand]) {
             let dy = self.shell_chrome_h_active();
             if dy < 0.5 { return; }
             for cmd in list.iter_mut() {
-                use DisplayCommand::*;
-                match cmd {
-                    Rect { y, .. } | Text { y, .. } | Border { y, .. }
-                    | Image { y, .. } | Gradient { y, .. } | Shadow { y, .. } => *y += dy,
-                    _ => {}
-                }
+                segments::shift_command_y(cmd, dy);
             }
         }
     }
