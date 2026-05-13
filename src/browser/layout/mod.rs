@@ -2589,7 +2589,12 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
         let raw = cs_opt.map(|cs| cs.align_self.css_string()).unwrap_or_else(|| s.get("align-self").unwrap().as_str());
         bx.align_self = AlignSelf::parse(raw);
     }
-    if let Some(v) = s.get("justify-self") { bx.justify_self = AlignSelf::parse(v); }
+    // L5 step 4 Phase F: justify-self cross-type via cs.justify_self.css_string().
+    if s.contains_key("justify-self") {
+        let raw = cs_opt.map(|cs| cs.justify_self.css_string())
+            .unwrap_or_else(|| s.get("justify-self").unwrap().as_str());
+        bx.justify_self = AlignSelf::parse(raw);
+    }
     // L5 step 4 batch 9: flex-grow + flex-shrink z typed f32.
     if let Some(v) = read_typed_f32(s, cs_opt, "flex-grow", |cs| cs.flex_grow, |raw| raw.trim().parse().unwrap_or(0.0)) {
         bx.flex_grow = v;
@@ -2597,7 +2602,14 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     if let Some(v) = read_typed_f32(s, cs_opt, "flex-shrink", |cs| cs.flex_shrink, |raw| raw.trim().parse().unwrap_or(1.0)) {
         bx.flex_shrink = v;
     }
-    if let Some(v) = s.get("flex-basis") { bx.flex_basis = v.trim().to_string(); }
+    // L5 step 4 Phase F: flex-basis (raw String stored in bx + cs FlexBasis enum).
+    if s.contains_key("flex-basis") {
+        bx.flex_basis = if let Some(cs) = cs_opt {
+            cs.flex_basis.css_string()
+        } else {
+            s.get("flex-basis").unwrap().trim().to_string()
+        };
+    }
     // L5 step 4 batch 9: row-gap + column-gap z typed Length.
     if let Some(v) = read_typed_length(s, cs_opt, "row-gap", |cs| &cs.row_gap) {
         bx.row_gap = v;
@@ -2864,14 +2876,30 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
             s.get("list-style-type").unwrap().trim().to_string()
         };
     }
-    if let Some(v) = s.get("list-style-image") {
-        if v.trim() != "none" { bx.list_style_image = Some(v.trim().to_string()); }
+    // L5 step 4 Phase F: list-style-image typed (cs.list_style_image enum).
+    if s.contains_key("list-style-image") {
+        if let Some(cs) = cs_opt {
+            use super::computed_style::ListStyleImage as Lsi;
+            if let Lsi::Url(url) = &cs.list_style_image {
+                bx.list_style_image = Some(url.clone());
+            }
+        } else {
+            let v = s.get("list-style-image").unwrap();
+            if v.trim() != "none" { bx.list_style_image = Some(v.trim().to_string()); }
+        }
     }
     // L5 step 4 batch 8: outline-width/offset z typed Length, outline-color typed Color.
     if let Some(v) = read_typed_length(s, cs_opt, "outline-width", |cs| &cs.outline_width) {
         bx.outline_width = v;
     }
-    if let Some(v) = s.get("outline-style") { bx.outline_style = v.trim().to_string(); }
+    // L5 step 4 Phase F: outline-style cross-type cs.outline_style (BorderStyle).
+    if s.contains_key("outline-style") {
+        bx.outline_style = if let Some(cs) = cs_opt {
+            cs.outline_style.css_string().to_string()
+        } else {
+            s.get("outline-style").unwrap().trim().to_string()
+        };
+    }
     if s.contains_key("outline-color") {
         // CurrentColor variant skip (resolve proti parent color v cascade by mel naplnit Rgba,
         // ale puvodni text checkoval string "currentColor" - tady ekvivalent pres CurrentColor variant).
@@ -2929,7 +2957,14 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
                          else { s.get("clear").unwrap().trim().to_string() };
     }
     if let Some(v) = s.get("object-position") { bx.object_position = v.trim().to_string(); }
-    if let Some(v) = s.get("justify-items") { bx.justify_items = v.trim().to_string(); }
+    // L5 step 4 Phase F: justify-items typed.
+    if s.contains_key("justify-items") {
+        bx.justify_items = if let Some(cs) = cs_opt {
+            cs.justify_items.css_string().to_string()
+        } else {
+            s.get("justify-items").unwrap().trim().to_string()
+        };
+    }
     // L5 step 4 batch 12: object-fit cross-type via inline match (cs::ObjectFit nema css_string).
     if s.contains_key("object-fit") {
         if let Some(cs) = cs_opt {

@@ -1123,6 +1123,23 @@ impl JustifyItems {
             _ => return None,
         })
     }
+    pub fn css_string(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::Stretch => "stretch",
+            Self::Start => "start",
+            Self::End => "end",
+            Self::Center => "center",
+            Self::FlexStart => "flex-start",
+            Self::FlexEnd => "flex-end",
+            Self::Left => "left",
+            Self::Right => "right",
+            Self::Baseline => "baseline",
+            Self::SelfStart => "self-start",
+            Self::SelfEnd => "self-end",
+            Self::Legacy => "legacy",
+        }
+    }
 }
 
 /// CSS `justify-self` (CSS Box Alignment L3 §6.3).
@@ -1161,6 +1178,23 @@ impl JustifySelf {
             "self-end" => Self::SelfEnd,
             _ => return None,
         })
+    }
+    pub fn css_string(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Normal => "normal",
+            Self::Stretch => "stretch",
+            Self::Start => "start",
+            Self::End => "end",
+            Self::Center => "center",
+            Self::FlexStart => "flex-start",
+            Self::FlexEnd => "flex-end",
+            Self::Left => "left",
+            Self::Right => "right",
+            Self::Baseline => "baseline",
+            Self::SelfStart => "self-start",
+            Self::SelfEnd => "self-end",
+        }
     }
 }
 
@@ -1864,7 +1898,7 @@ impl FlexBasis {
         match self {
             Self::Auto => "auto".into(),
             Self::Content => "content".into(),
-            Self::Length(_) => "<length>".into(),
+            Self::Length(l) => length_css_string(l),
         }
     }
 }
