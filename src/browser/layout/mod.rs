@@ -2722,19 +2722,19 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     }
 
     // Padding / margin / border-width - prefer expanded shorthand
+    // L5 step 4 batch 3+4: padding + margin z typed Length.
     let padding_v = s.get("padding-top").or(s.get("padding"));
     if let Some(p) = padding_v { bx.padding = parse_length(p); }
-    // Asymmetricke padding longhands (musime preferovat pred shorthand `padding`).
-    if let Some(p) = s.get("padding-top")    { bx.padding_top    = Some(parse_length(p)); }
-    if let Some(p) = s.get("padding-right")  { bx.padding_right  = Some(parse_length(p)); }
-    if let Some(p) = s.get("padding-bottom") { bx.padding_bottom = Some(parse_length(p)); }
-    if let Some(p) = s.get("padding-left")   { bx.padding_left   = Some(parse_length(p)); }
+    if let Some(v) = read_typed_length(s, cs_opt, "padding-top",    |cs| &cs.padding_top)    { bx.padding_top    = Some(v); }
+    if let Some(v) = read_typed_length(s, cs_opt, "padding-right",  |cs| &cs.padding_right)  { bx.padding_right  = Some(v); }
+    if let Some(v) = read_typed_length(s, cs_opt, "padding-bottom", |cs| &cs.padding_bottom) { bx.padding_bottom = Some(v); }
+    if let Some(v) = read_typed_length(s, cs_opt, "padding-left",   |cs| &cs.padding_left)   { bx.padding_left   = Some(v); }
     let margin_v = s.get("margin-top").or(s.get("margin"));
     if let Some(m) = margin_v { bx.margin = parse_length(m); }
-    if let Some(m) = s.get("margin-top")    { bx.margin_top    = Some(parse_length(m)); }
-    if let Some(m) = s.get("margin-right")  { bx.margin_right  = Some(parse_length(m)); }
-    if let Some(m) = s.get("margin-bottom") { bx.margin_bottom = Some(parse_length(m)); }
-    if let Some(m) = s.get("margin-left")   { bx.margin_left   = Some(parse_length(m)); }
+    if let Some(v) = read_typed_length(s, cs_opt, "margin-top",    |cs| &cs.margin_top)    { bx.margin_top    = Some(v); }
+    if let Some(v) = read_typed_length(s, cs_opt, "margin-right",  |cs| &cs.margin_right)  { bx.margin_right  = Some(v); }
+    if let Some(v) = read_typed_length(s, cs_opt, "margin-bottom", |cs| &cs.margin_bottom) { bx.margin_bottom = Some(v); }
+    if let Some(v) = read_typed_length(s, cs_opt, "margin-left",   |cs| &cs.margin_left)   { bx.margin_left   = Some(v); }
     if let Some(b) = s.get("border-width") { bx.border_width = parse_length(b); }
     if let Some(bc) = s.get("border-color") { bx.border_color = parse_color(bc); }
     if let Some(bs) = s.get("border-style") { bx.border_style = bs.trim().to_string(); }
