@@ -3145,12 +3145,25 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
             _ => {}
         }
     }
-    if let Some(ox) = s.get("overflow-x") {
-        bx.overflow_x = Overflow::parse(ox);
+    // L5 step 4 batch 14: overflow-x/y cross-type inline match.
+    let cs_overflow_to_layout = |o: super::computed_style::Overflow| -> Overflow {
+        use super::computed_style::Overflow as Co;
+        match o {
+            Co::Visible => Overflow::Visible,
+            Co::Hidden => Overflow::Hidden,
+            Co::Scroll => Overflow::Scroll,
+            Co::Auto => Overflow::Auto,
+            Co::Clip => Overflow::Clip,
+        }
+    };
+    if s.contains_key("overflow-x") {
+        bx.overflow_x = if let Some(cs) = cs_opt { cs_overflow_to_layout(cs.overflow_x) }
+                        else { Overflow::parse(s.get("overflow-x").unwrap()) };
         if bx.overflow_x.hides() { bx.overflow_hidden = true; }
     }
-    if let Some(oy) = s.get("overflow-y") {
-        bx.overflow_y = Overflow::parse(oy);
+    if s.contains_key("overflow-y") {
+        bx.overflow_y = if let Some(cs) = cs_opt { cs_overflow_to_layout(cs.overflow_y) }
+                        else { Overflow::parse(s.get("overflow-y").unwrap()) };
         if bx.overflow_y.hides() { bx.overflow_hidden = true; }
     }
     // White-space
