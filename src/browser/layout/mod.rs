@@ -2817,42 +2817,66 @@ fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::ca
     // Explicit width / height z CSS (auto = None, min/max-content = special).
     // min-content: shrink-to-fit odhadem z textu. max-content: max-intrinsic.
     // fit-content: clamp na dostupnou sirku.
-    if let Some(w) = s.get("width") {
-        let v = w.trim();
-        match v {
-            "auto" => {}
-            "min-content" | "max-content" | "fit-content" => {
-                // Keyword ulozena pro layout_block - odhadneme per content
-                let text_w = bx.text.as_deref().map(|t| measure_text_width(t, bx.font_size)).unwrap_or(0.0);
-                bx.explicit_width = Some(text_w + 2.0 * bx.padding);
-            }
-            // Procenta ukladame jako pomer (0..1) pro pozdejsi resolve proti
-            // parent inner_w v layout pass. parse_length na "100%" vracelo
-            // 16 (default parent_size), coz davalo body height/width = 16
-            // misto plne velikost viewport.
-            _ if v.ends_with('%') => {
-                let pct_str = &v[..v.len() - 1];
-                if let Ok(p) = pct_str.parse::<f32>() {
-                    bx.width_pct = Some(p / 100.0);
+    // L5 step 4 batch 5: width/height typed Length variants.
+    if s.contains_key("width") {
+        if let Some(cs) = cs_opt {
+            use super::computed_style::Length as L;
+            match &cs.width {
+                L::Auto | L::None => {}
+                L::MinContent | L::MaxContent | L::FitContent(_) => {
+                    let text_w = bx.text.as_deref().map(|t| measure_text_width(t, bx.font_size)).unwrap_or(0.0);
+                    bx.explicit_width = Some(text_w + 2.0 * bx.padding);
+                }
+                L::Percent(p) => { bx.width_pct = Some(*p / 100.0); }
+                other => {
+                    let px = other.resolve_or(0.0, 16.0, 16.0, 1024.0, 768.0);
+                    if px > 0.0 { bx.explicit_width = Some(px); }
                 }
             }
-            _ => {
-                let px = parse_length(v);
-                if px > 0.0 { bx.explicit_width = Some(px); }
+        } else {
+            let v = s.get("width").unwrap().trim();
+            match v {
+                "auto" => {}
+                "min-content" | "max-content" | "fit-content" => {
+                    let text_w = bx.text.as_deref().map(|t| measure_text_width(t, bx.font_size)).unwrap_or(0.0);
+                    bx.explicit_width = Some(text_w + 2.0 * bx.padding);
+                }
+                _ if v.ends_with('%') => {
+                    let pct_str = &v[..v.len() - 1];
+                    if let Ok(p) = pct_str.parse::<f32>() {
+                        bx.width_pct = Some(p / 100.0);
+                    }
+                }
+                _ => {
+                    let px = parse_length(v);
+                    if px > 0.0 { bx.explicit_width = Some(px); }
+                }
             }
         }
     }
-    if let Some(h) = s.get("height") {
-        let v = h.trim();
-        if v != "auto" {
-            if v.ends_with('%') {
-                let pct_str = &v[..v.len() - 1];
-                if let Ok(p) = pct_str.parse::<f32>() {
-                    bx.height_pct = Some(p / 100.0);
+    if s.contains_key("height") {
+        if let Some(cs) = cs_opt {
+            use super::computed_style::Length as L;
+            match &cs.height {
+                L::Auto | L::None => {}
+                L::Percent(p) => { bx.height_pct = Some(*p / 100.0); }
+                other => {
+                    let px = other.resolve_or(0.0, 16.0, 16.0, 1024.0, 768.0);
+                    if px > 0.0 { bx.explicit_height = Some(px); }
                 }
-            } else {
-                let px = parse_length(v);
-                if px > 0.0 { bx.explicit_height = Some(px); }
+            }
+        } else {
+            let v = s.get("height").unwrap().trim();
+            if v != "auto" {
+                if v.ends_with('%') {
+                    let pct_str = &v[..v.len() - 1];
+                    if let Ok(p) = pct_str.parse::<f32>() {
+                        bx.height_pct = Some(p / 100.0);
+                    }
+                } else {
+                    let px = parse_length(v);
+                    if px > 0.0 { bx.explicit_height = Some(px); }
+                }
             }
         }
     }
