@@ -1047,6 +1047,49 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         /// Multi-tab manager (shell mode). Active tab drives App.html/css/...
         /// Switch tab = swap active state via tabs.switch_to + reload.
         tabs: tabs::TabManager,
+        /// Embeddable WebView mirror - sdileny page state s shell crate +
+        /// power users. Sync'nuty z App pri reload + scroll/zoom changes.
+        /// Phase 4a = sync (App primary, WebView side-effect populated).
+        /// Phase 5 = WebView authoritative, App reads delegated.
+        pub(super) webview: Option<crate::embed::WebView>,
+    }
+
+    impl App {
+        /// Pristup k embedded WebView (read-only). Vrati None pred prvnim
+        /// loadem (init v `resumed`). Pouziti: shell crate + power users
+        /// chteji DOM/JS state bez sahnuti do interniho App stavu.
+        pub fn webview(&self) -> Option<&crate::embed::WebView> {
+            self.webview.as_ref()
+        }
+
+        /// Synchronizuje mirror WebView z App primary state. Vola se po kazdem
+        /// reload / navigace. Phase 4a sync (App primary, WebView side-effect);
+        /// Phase 5 obrati polarity (WebView primary, App reads).
+        ///
+        /// WebView interpreter je vlastni instance - JS spousteni je idempotentni
+        /// (vola WebView::run_scripts pres load_html), state App.interpreter NE
+        /// sdileny (Interpreter neni Clone bezpecne). Pro Phase 4a je OK 2x
+        /// inicializovat scripts - dual run navic je u inline pages levne.
+        fn sync_webview_from_app(&mut self) {
+            // Lazy init engine - shared Arc, 1x per App lifetime. Phase 5 ho
+            // dostane od Renderer + skutecne wgpu Device.
+            let engine = std::sync::Arc::new(crate::embed::Engine::new_headless());
+            // Viewport z Renderer config (po HiDPI scale_factor div).
+            let (vw, vh, sf) = if let Some(r) = &self.renderer {
+                (r.config.width.max(1), r.config.height.max(1), r.scale_factor)
+            } else {
+                (1280u32, 900u32, 1.0f32)
+            };
+            let mut wv = crate::embed::WebView::new(engine, vw, vh);
+            wv.resize(vw, vh, sf);
+            wv.set_zoom(self.zoom);
+            wv.set_scroll(self.scroll_x, self.scroll_y);
+            wv.set_local_path(self.current_path.clone());
+            // Sync NESPOUSTI scripts - App.interpreter primary uz JS spustil.
+            // Mirror by jinak dvakrat fetchnul / loggoval / DOM mutoval.
+            let _ = wv.load_dom(&self.html, &self.css, self.base_url.clone());
+            self.webview = Some(wv);
+        }
     }
 
     impl ApplicationHandler for App {
@@ -1076,6 +1119,12 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             self.run_inline_scripts(&mut interp);
 
             self.interpreter = Some(interp);
+
+            // Sync mirror WebView (Phase 4a) - sdileny page state pro shell crate
+            // + power users. App.interpreter zustava primary; WebView ma vlastni
+            // (paralelni) instance. Phase 5 zmeni na authoritative WebView.
+            self.sync_webview_from_app();
+
             self.render();
 
             // Auto-open devtools.html po startu
@@ -4119,6 +4168,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             if let Some(w) = &self.window {
                 w.set_title(&format_window_title(&page_title, self.tabs.tabs.len()));
             }
+            // Sync mirror WebView (Phase 4a).
+            self.sync_webview_from_app();
             // Pokud je auto_devtools zaplo, take regen + open po reload.
             if self.auto_devtools {
                 self.regenerate_and_open_devtools();
@@ -7291,6 +7342,9 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             }
             tm
         },
+        // WebView mirror inicializovan v `resumed` (znama viewport size z winit
+        // + chrome offset zname). Pred resumed App nema window -> None.
+        webview: None,
     };
     event_loop.run_app(&mut app).map_err(|e| e.to_string())?;
     Ok(())

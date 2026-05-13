@@ -38,6 +38,10 @@ pub struct WebView {
     /// Sdilene engine resources (GPU device + atlas + font registry).
     pub(crate) engine: Arc<Engine>,
 
+    /// Raw HTML source - preserved pres `load_html` pro re-parse / view-source / save.
+    pub(crate) raw_html: String,
+    /// Raw CSS source (agregat <link>/<style>/<imports>) - preserved pres `load_html`.
+    pub(crate) raw_css: String,
     /// Aktualni DOM po HTML5 parse.
     pub(crate) document: Option<Document>,
     /// Vsechny stylesheets (link rel=stylesheet + inline <style> + UA defaults).
@@ -82,6 +86,8 @@ impl WebView {
     pub fn new(engine: Arc<Engine>, viewport_w: u32, viewport_h: u32) -> Self {
         Self {
             engine,
+            raw_html: String::new(),
+            raw_css: String::new(),
             document: None,
             stylesheets: Vec::new(),
             interpreter: None,
@@ -100,38 +106,12 @@ impl WebView {
         }
     }
 
-    /// Nahraj HTML + CSS string. `base_url` se pouzije pro relative
-    /// `<link rel=stylesheet>` a `<img src=...>` resolve.
+    /// Nahraj HTML + CSS string + spust inline/external `<script>` tagy.
+    /// `base_url` se pouzije pro relative `<link rel=stylesheet>` a
+    /// `<img src=...>` resolve.
     pub fn load_html(&mut self, html: &str, css: &str, base_url: Option<String>) -> NavigationResult {
-        let base = base_url.clone().unwrap_or_else(|| "about:blank".to_string());
-        let doc = crate::browser::html_parser::parse_html(html, &base);
-
-        // Stylesheets - parse CSS string (uz agregovany hostujici aplikaci nebo
-        // load_url helpery). Kazdy WebView drzi 1 logicky stylesheet collection.
-        let stylesheet = crate::browser::css_parser::parse_stylesheet(css);
-        let stylesheet_count = if stylesheet.rules.is_empty() { 0 } else { 1 };
-
-        // Init interpreter + set document.
-        let interp = Interpreter::new();
-        // Document v interpreter needs clone - parse_html znovu pro nezavislou ref
-        // (puvodne kod taky reparseoval pro interp + render).
-        let interp_doc = crate::browser::html_parser::parse_html(html, &base);
-        interp.set_document(interp_doc);
-
-        // Title z parsed dokumentu (po parse_html je vyplnen z <title>).
-        self.title = doc.title.clone();
-
-        // Page state commit.
-        self.document = Some(doc);
-        self.stylesheets = vec![stylesheet];
-        self.base_url = base_url.clone();
-        self.dirty = true;
-
-        // Run <script> inline + external (pres fetch_text_url) - musi byt po
-        // set_document protoze DOM API je dostupne JS only po interp.set_document.
-        self.interpreter = Some(interp);
+        let result = self.load_dom(html, css, base_url);
         self.run_scripts();
-
         // Po JS muze byt title prepsany pres `document.title = ...`. Refresh.
         if let Some(interp) = &self.interpreter {
             let doc_title = interp.document.borrow().title.clone();
@@ -139,6 +119,34 @@ impl WebView {
                 self.title = doc_title;
             }
         }
+        result
+    }
+
+    /// Stejne jako `load_html` ale BEZ behu `<script>` tagu. Pouziti:
+    /// `App::sync_webview_from_app` (Phase 4a) kde App.interpreter je primary
+    /// + uz scripts probehl - mirror WebView ma DOM/stylesheets identicke ale
+    /// JS by se nesmel spustit podruhe (dvojite fetch / console / DOM mutace).
+    pub fn load_dom(&mut self, html: &str, css: &str, base_url: Option<String>) -> NavigationResult {
+        let base = base_url.clone().unwrap_or_else(|| "about:blank".to_string());
+        // Preserve raw sources pred parse - app/devtools/save je mohou potrebovat.
+        self.raw_html = html.to_string();
+        self.raw_css = css.to_string();
+        let doc = crate::browser::html_parser::parse_html(html, &base);
+
+        let stylesheet = crate::browser::css_parser::parse_stylesheet(css);
+        let stylesheet_count = if stylesheet.rules.is_empty() { 0 } else { 1 };
+
+        // Init interpreter + set document. Bez run_scripts (volaci kod o ne stoji).
+        let interp = Interpreter::new();
+        let interp_doc = crate::browser::html_parser::parse_html(html, &base);
+        interp.set_document(interp_doc);
+
+        self.title = doc.title.clone();
+        self.document = Some(doc);
+        self.stylesheets = vec![stylesheet];
+        self.base_url = base_url.clone();
+        self.interpreter = Some(interp);
+        self.dirty = true;
 
         NavigationResult {
             url: base,
@@ -319,6 +327,21 @@ impl WebView {
     /// Base URL (file:// / http(s)://).
     pub fn base_url(&self) -> Option<&str> { self.base_url.as_deref() }
 
+    /// Raw HTML source predany pri poslednim `load_html` (preserve).
+    pub fn html(&self) -> &str { &self.raw_html }
+
+    /// Raw CSS source (aggregat) predany pri poslednim `load_html` (preserve).
+    pub fn css(&self) -> &str { &self.raw_css }
+
+    /// Lokalni filesystem path pokud byla page nactena z file://.
+    pub fn local_path(&self) -> Option<&PathBuf> { self.local_path.as_ref() }
+
+    /// Setter pro local_path - shell / host vyplnuje kdyz vie ze file source
+    /// (load_url s file:// to vyplni automaticky).
+    pub fn set_local_path(&mut self, path: Option<PathBuf>) {
+        self.local_path = path;
+    }
+
     // -- low-level access (devtools, power users, shell crate) ----------
 
     /// Pristup k DOM - pro devtools Elements panel, observers.
@@ -331,6 +354,21 @@ impl WebView {
     /// (devtools console execute, JS injection).
     pub fn interpreter_mut(&mut self) -> Option<&mut Interpreter> {
         self.interpreter.as_mut()
+    }
+
+    /// Vezmi vlastnictvi interpretu z WebView. Po `take_interpreter` je WebView
+    /// bez JS state - dalsi `load_html` ho znovu vytvori. Pouziti: App si bere
+    /// interpreter pres `App::reload_from_html` move (transition phase, neez
+    /// `App.interpreter` zustane primary).
+    pub fn take_interpreter(&mut self) -> Option<Interpreter> {
+        self.interpreter.take()
+    }
+
+    /// Vlozit existujici interpreter (po external mutation jako devtools
+    /// debug step). WebView prevezme ownership.
+    pub fn set_interpreter(&mut self, interp: Interpreter) {
+        self.interpreter = Some(interp);
+        self.dirty = true;
     }
 
     /// CSS stylesheets v poradi cascade priority.
@@ -397,6 +435,30 @@ mod tests {
                     <body><script>document.title = 'Updated';</script></body></html>";
         wv.load_html(html, "", None);
         assert_eq!(wv.title(), "Updated");
+    }
+
+    #[test]
+    fn load_dom_skips_scripts() {
+        let mut wv = fresh();
+        // Stejny HTML jako load_html_runs_inline_script.
+        let html = "<html><body>\
+                    <script>console.log('side-effect MUSI NEbezet');</script>\
+                    </body></html>";
+        wv.load_dom(html, "", None);
+        let interp = wv.interpreter().expect("interpreter present");
+        let logs = interp.console_log.borrow();
+        let found = logs.iter().any(|(_, msg)| msg.contains("side-effect"));
+        assert!(!found, "load_dom musi NEspustit scripts; found in console: {:?}", *logs);
+    }
+
+    #[test]
+    fn load_dom_preserves_raw_html_and_css() {
+        let mut wv = fresh();
+        let html = "<html><body>HI</body></html>";
+        let css = "body { color: red; }";
+        wv.load_dom(html, css, None);
+        assert_eq!(wv.html(), html);
+        assert_eq!(wv.css(), css);
     }
 
     #[test]
