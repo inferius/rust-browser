@@ -31,6 +31,7 @@ pub struct ShellApp {
 
     mouse_x: f32,
     mouse_y: f32,
+    modifiers: winit::keyboard::ModifiersState,
 }
 
 impl ShellApp {
@@ -48,6 +49,7 @@ impl ShellApp {
             webview: None,
             mouse_x: 0.0,
             mouse_y: 0.0,
+            modifiers: winit::keyboard::ModifiersState::empty(),
         }
     }
 
@@ -163,8 +165,29 @@ impl ApplicationHandler for ShellApp {
                     if let Some(w) = &self.window { w.request_redraw(); }
                 }
             }
+            WindowEvent::ModifiersChanged(mods) => {
+                self.modifiers = mods.state();
+            }
             WindowEvent::KeyboardInput { event: key_event, .. } => {
                 use winit::keyboard::{Key, NamedKey};
+                // Ctrl+C: copy text selection do system clipboardu.
+                if matches!(key_event.state, ElementState::Pressed) && self.modifiers.control_key() {
+                    if let Key::Character(s) = &key_event.logical_key {
+                        if s.eq_ignore_ascii_case("c") {
+                            if let Some(wv) = &self.webview {
+                                if let Some(text) = wv.selection_text() {
+                                    if !text.is_empty() {
+                                        if let Ok(mut cb) = arboard::Clipboard::new() {
+                                            let _ = cb.set_text(text);
+                                            println!("[shell] copy: selection -> clipboard");
+                                        }
+                                    }
+                                }
+                            }
+                            return;
+                        }
+                    }
+                }
                 let key_str: String = match &key_event.logical_key {
                     Key::Named(NamedKey::Enter) => "Enter".into(),
                     Key::Named(NamedKey::Escape) => "Escape".into(),

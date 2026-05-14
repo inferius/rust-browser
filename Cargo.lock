@@ -3137,6 +3137,7 @@ dependencies = [
 name = "rwe-shell"
 version = "0.1.0"
 dependencies = [
+ "arboard",
  "rwe-engine",
  "wgpu",
  "winit",

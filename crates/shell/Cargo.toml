@@ -20,3 +20,5 @@ winit = "0.30"
 # wgpu - shell pouziva Renderer pres engine, ale potrebuje wgpu types pri
 # texture/view manipulation.
 wgpu = "29"
+# arboard - system clipboard pro Ctrl+C copy text selection.
+arboard = "3.6"
