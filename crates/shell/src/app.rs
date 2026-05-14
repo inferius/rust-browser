@@ -186,6 +186,38 @@ impl ApplicationHandler for ShellApp {
                             }
                             return;
                         }
+                        if s.eq_ignore_ascii_case("a") {
+                            // Ctrl+A: select all
+                            if let Some(wv) = &mut self.webview {
+                                wv.select_all();
+                                if let Some(w) = &self.window { w.request_redraw(); }
+                            }
+                            return;
+                        }
+                    }
+                }
+                // Scroll keys: PageDown/Up, ArrowUp/Down, Home, End, Space.
+                if matches!(key_event.state, ElementState::Pressed) {
+                    let webview = match &mut self.webview { Some(w) => w, None => return };
+                    let (_vw, vh) = webview.viewport_size();
+                    let (sx, sy) = webview.scroll();
+                    let new_y = match &key_event.logical_key {
+                        Key::Named(NamedKey::PageDown) => Some(sy + vh * 0.9),
+                        Key::Named(NamedKey::PageUp) => Some(sy - vh * 0.9),
+                        Key::Named(NamedKey::ArrowDown) if !self.modifiers.control_key() => Some(sy + 60.0),
+                        Key::Named(NamedKey::ArrowUp) if !self.modifiers.control_key() => Some(sy - 60.0),
+                        Key::Named(NamedKey::Home) => Some(0.0),
+                        Key::Named(NamedKey::End) => Some(1_000_000.0),
+                        Key::Named(NamedKey::Space) if !webview.focused_is_input() => {
+                            let delta = if self.modifiers.shift_key() { -vh * 0.9 } else { vh * 0.9 };
+                            Some(sy + delta)
+                        }
+                        _ => None,
+                    };
+                    if let Some(ny) = new_y {
+                        webview.set_scroll(sx, ny.max(0.0));
+                        if let Some(w) = &self.window { w.request_redraw(); }
+                        return;
                     }
                 }
                 let key_str: String = match &key_event.logical_key {

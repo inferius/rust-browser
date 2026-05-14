@@ -1234,6 +1234,30 @@ impl WebView {
         }
     }
 
+    /// `true` pokud focused element je input nebo textarea (host shell:
+    /// Space scroll skip kdyz user pise do inputu).
+    pub fn focused_is_input(&self) -> bool {
+        self.focused_dom_node()
+            .map(|n| matches!(n.tag_name().as_deref(),
+                Some("input") | Some("textarea")))
+            .unwrap_or(false)
+    }
+
+    /// Select all - anchor (0, 0), current (huge, huge) -> celá stránka.
+    pub fn select_all(&mut self) {
+        let Some(interp) = &self.interpreter else { return };
+        let doc = interp.document.borrow();
+        let max = 1_000_000.0_f32;
+        doc.selection.borrow_mut().page_selection = Some(
+            crate::browser::selection::PageSelection {
+                anchor: (0.0, 0.0),
+                current: (max, max),
+                dragging: false,
+                cached_text: String::new(),
+            });
+        self.dirty = true;
+    }
+
     fn sel_dragging(&self) -> bool {
         self.interpreter.as_ref()
             .map(|i| i.document.borrow().selection.borrow().page_selection
