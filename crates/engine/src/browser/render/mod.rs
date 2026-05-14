@@ -8709,6 +8709,17 @@ impl Renderer {
     pub fn draw_segments_into_view_clipped(&mut self, view: &wgpu::TextureView,
                                         cmds: &[DisplayCommand], start_clear: bool,
                                         scissor: Option<(u32, u32, u32, u32)>) -> bool {
+        // vp uniform: (logical_w, logical_h, zoom, _pad). NDC mapping v
+        // RECT_SHADER pouziva uniform.viewport. Drive write_buffer byl jen
+        // ve `draw_full_frame_cached` - WebView::render_via via tuto fn
+        // potrebuje vlastni uniform sync.
+        let vp = [
+            self.config.width as f32 / (self.zoom * self.scale_factor).max(0.01),
+            self.config.height as f32 / (self.zoom * self.scale_factor).max(0.01),
+            self.zoom,
+            0.0,
+        ];
+        self.queue.write_buffer(&self.uniform_buf, 0, bytemuck::cast_slice(&vp));
         if cmds.is_empty() { return false; }
         let segments: Vec<Seg> = partition_filter_segments(cmds);
         if segments.is_empty() { return false; }

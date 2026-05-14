@@ -52,15 +52,30 @@ impl ShellApp {
     }
 
     fn redraw(&mut self) {
-        let renderer = match &mut self.renderer { Some(r) => r, None => return };
-        let webview = match &mut self.webview { Some(w) => w, None => return };
+        let renderer = match &mut self.renderer { Some(r) => r, None => {
+            eprintln!("[shell redraw] no renderer"); return;
+        }};
+        let webview = match &mut self.webview { Some(w) => w, None => {
+            eprintln!("[shell redraw] no webview"); return;
+        }};
+        let doc_present = webview.document().is_some();
+        let stylesheets = webview.stylesheets().len();
+        let (page_w, page_h) = webview.page_size();
+        let (vw, vh) = webview.viewport_size();
+        let (sx, sy) = webview.scroll();
+        eprintln!("[shell redraw] doc={} sheets={} viewport={}x{} page={}x{} scroll=({},{}) zoom={} sf={}",
+            doc_present, stylesheets, vw, vh, page_w, page_h, sx, sy, webview.zoom(), webview.scale_factor());
         // Renderuj page do offscreen texture.
-        if webview.render_via(renderer).is_none() {
-            return;
+        match webview.render_via(renderer) {
+            Some(_) => eprintln!("[shell redraw] render_via OK"),
+            None => { eprintln!("[shell redraw] render_via=None"); return; }
         }
         // Vezmi target view a kompozituj do swap chain.
         if let Some(view) = webview.target_view() {
-            renderer.present_external_to_swap_chain(view);
+            let ok = renderer.present_external_to_swap_chain(view);
+            eprintln!("[shell redraw] present={}", ok);
+        } else {
+            eprintln!("[shell redraw] no target_view");
         }
     }
 }
@@ -90,6 +105,9 @@ impl ApplicationHandler for ShellApp {
         webview.resize(lw, lh, sf);
         webview.set_local_path(self.local_path.clone());
         let _ = webview.load_html(&self.html, &self.css, self.base_url.clone());
+
+        eprintln!("[shell resumed] surface={}x{} sf={} -> logical={}x{} html_len={} css_len={}",
+            sw, sh, sf, lw, lh, self.html.len(), self.css.len());
 
         self.window = Some(window.clone());
         self.renderer = Some(renderer);

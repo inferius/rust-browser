@@ -427,8 +427,10 @@ impl WebView {
             &layout_root, self.scroll_y, viewport_h);
 
         // 4. Renderer kresli display list do target_view.
-        let _had = renderer.draw_segments_into_view_clipped(
+        let had = renderer.draw_segments_into_view_clipped(
             target_view, &display_list, true, None);
+        eprintln!("[webview render_via] display_list={} had_segments={} layout_root.rect={}x{}",
+            display_list.len(), had, layout_root.rect.width, layout_root.rect.height);
 
         self.dirty = false;
         self.target_view.as_ref()
@@ -477,6 +479,12 @@ impl WebView {
 
     /// Aktualni zoom (1.0 = 100%).
     pub fn zoom(&self) -> f32 { self.zoom }
+
+    /// Aktualni viewport (logical CSS px) sirka.
+    pub fn viewport_size(&self) -> (f32, f32) { (self.viewport_w, self.viewport_h) }
+
+    /// HiDPI scale_factor (1.0 / 1.5 / 2.0 ...).
+    pub fn scale_factor(&self) -> f32 { self.scale_factor }
 
     /// Nastav zoom level. Stejne jako resize trigger relayout.
     pub fn set_zoom(&mut self, zoom: f32) {
