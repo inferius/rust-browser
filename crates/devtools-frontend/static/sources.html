@@ -1,0 +1,71 @@
+<div style="display:flex;height:100%;">
+    <!-- Left: file list -->
+    <div id="file-list" style="width:200px;overflow:auto;border-right:1px solid #3c4043;padding:8px;font-size:11px;">
+        <div style="color:#9aa0a6;margin-bottom:4px;">Files</div>
+        <div id="file-list-items">Loading...</div>
+    </div>
+    <!-- Center: source -->
+    <div id="source-pane" style="flex:1;overflow:auto;padding:8px;">
+        <div class="source-listing" id="source-listing">Vyber file pro zobrazeni.</div>
+    </div>
+    <!-- Right: debugger controls + call stack + scope -->
+    <div id="debugger-pane" style="width:240px;overflow:auto;border-left:1px solid #3c4043;padding:8px;">
+        <div style="margin-bottom:8px;">
+            <button id="btn-resume">Resume</button>
+            <button id="btn-step-over">Step Over</button>
+            <button id="btn-step-into">Step Into</button>
+            <button id="btn-step-out">Step Out</button>
+            <button id="btn-pause">Pause</button>
+        </div>
+        <div style="color:#9aa0a6;margin-bottom:4px;">Call Stack</div>
+        <div id="call-stack" style="font-family:Consolas,monospace;font-size:11px;margin-bottom:8px;">(empty)</div>
+        <div style="color:#9aa0a6;margin-bottom:4px;">Scope</div>
+        <div id="scope" style="font-family:Consolas,monospace;font-size:11px;">(empty)</div>
+    </div>
+</div>
+<script>
+    (function () {
+        const fileList = document.getElementById('file-list-items');
+        const sourceListing = document.getElementById('source-listing');
+        const callStack = document.getElementById('call-stack');
+        const scope = document.getElementById('scope');
+
+        document.getElementById('btn-resume').addEventListener('click', () => window.cdp.send('Debugger.resume'));
+        document.getElementById('btn-step-over').addEventListener('click', () => window.cdp.send('Debugger.stepOver'));
+        document.getElementById('btn-step-into').addEventListener('click', () => window.cdp.send('Debugger.stepInto'));
+        document.getElementById('btn-step-out').addEventListener('click', () => window.cdp.send('Debugger.stepOut'));
+        document.getElementById('btn-pause').addEventListener('click', () => window.cdp.send('Debugger.pause'));
+
+        if (window.cdp) {
+            window.cdp.on('Debugger.paused', evt => {
+                callStack.innerHTML = '';
+                for (const cf of (evt.call_frames || [])) {
+                    const div = document.createElement('div');
+                    div.textContent = cf.function_name + ' @ ' + cf.location.line_number;
+                    callStack.appendChild(div);
+                }
+                scope.innerHTML = '';
+                if (evt.call_frames && evt.call_frames[0] && evt.call_frames[0].scope_chain) {
+                    for (const s of evt.call_frames[0].scope_chain) {
+                        const div = document.createElement('div');
+                        div.textContent = s.type;
+                        scope.appendChild(div);
+                        for (const [k, v] of (s.variables || [])) {
+                            const ln = document.createElement('div');
+                            ln.style.paddingLeft = '12px';
+                            ln.textContent = k + ' = ' + v;
+                            scope.appendChild(ln);
+                        }
+                    }
+                }
+            });
+            window.cdp.on('Debugger.resumed', () => {
+                callStack.textContent = '(running)';
+                scope.textContent = '(running)';
+            });
+        }
+
+        fileList.textContent = '(no sources loaded - placeholder)';
+        sourceListing.textContent = 'Source view zobrazi current script line-by-line s breakpoint gutter.';
+    })();
+</script>

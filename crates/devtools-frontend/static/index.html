@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>DevTools</title>
+    <style id="theme-css"></style>
+    <script id="cdp-js"></script>
+</head>
+<body>
+    <div class="tab-strip" id="tab-strip">
+        <div class="tab active" data-panel="elements">Elements</div>
+        <div class="tab" data-panel="console">Console</div>
+        <div class="tab" data-panel="sources">Sources</div>
+        <div class="tab" data-panel="network">Network</div>
+        <div class="tab" data-panel="performance">Performance</div>
+    </div>
+    <div class="panel-body" id="panel-body">
+        <!-- Aktivni panel se nactne sem (innerHTML swap pri klik na tab). -->
+    </div>
+    <script>
+        // Tab swap - simple in-place innerHTML replacement.
+        // Panel HTML bundled v engine resources (D4 host inject pres
+        // window.__rwe_panel_html__ map nebo include_str! at startup).
+        const tabs = document.querySelectorAll('.tab-strip .tab');
+        const body = document.getElementById('panel-body');
+
+        function activate(name) {
+            for (const t of tabs) {
+                t.classList.toggle('active', t.dataset.panel === name);
+            }
+            const tpl = window.__rwe_panel_html__ && window.__rwe_panel_html__[name];
+            body.innerHTML = tpl || '<div style="padding:16px;color:#888">Panel "' + name + '" not loaded.</div>';
+            // Re-eval inline scripts (innerHTML neexecute).
+            for (const s of body.querySelectorAll('script')) {
+                const ns = document.createElement('script');
+                ns.text = s.textContent;
+                document.body.appendChild(ns).remove();
+            }
+        }
+
+        for (const t of tabs) {
+            t.addEventListener('click', () => activate(t.dataset.panel));
+        }
+
+        // Inicializace - default Elements.
+        if (window.__rwe_panel_html__) activate('elements');
+    </script>
+</body>
+</html>

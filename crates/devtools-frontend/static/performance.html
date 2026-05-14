@@ -1,0 +1,36 @@
+<div style="padding:8px;">
+    <div style="margin-bottom:8px;">
+        <button id="btn-refresh">Refresh metrics</button>
+    </div>
+    <table style="border-collapse:collapse;">
+        <thead>
+            <tr>
+                <th style="text-align:left;padding:4px 8px;border-bottom:1px solid #3c4043;">Metric</th>
+                <th style="text-align:left;padding:4px 8px;border-bottom:1px solid #3c4043;">Value</th>
+            </tr>
+        </thead>
+        <tbody id="metrics-rows"></tbody>
+    </table>
+</div>
+<script>
+    (function () {
+        const rows = document.getElementById('metrics-rows');
+
+        function refresh() {
+            window.cdp.send('Performance.getMetrics').then(result => {
+                rows.innerHTML = '';
+                for (const m of (result.metrics || [])) {
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = '<td style="padding:4px 8px">' + m.name + '</td>' +
+                        '<td style="padding:4px 8px;font-family:Consolas,monospace">' + m.value.toFixed(2) + '</td>';
+                    rows.appendChild(tr);
+                }
+            }).catch(e => {
+                rows.innerHTML = '<tr><td colspan="2" style="color:#f28b82;padding:4px 8px;">Error: ' + e.message + '</td></tr>';
+            });
+        }
+
+        document.getElementById('btn-refresh').addEventListener('click', refresh);
+        if (window.cdp) refresh();
+    })();
+</script>

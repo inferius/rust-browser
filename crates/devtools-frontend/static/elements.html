@@ -1,0 +1,113 @@
+<div style="display:flex;height:100%;">
+    <!-- Left: DOM tree -->
+    <div id="dom-pane" style="flex:1;overflow:auto;border-right:1px solid #3c4043;padding:8px;">
+        <div class="dom-tree" id="dom-tree">Loading DOM...</div>
+    </div>
+    <!-- Right: Styles + Computed -->
+    <div id="styles-pane" style="width:40%;overflow:auto;padding:8px;">
+        <div style="color:#9aa0a6;font-size:11px;margin-bottom:4px;">Styles</div>
+        <div id="styles-list" style="font-family:Consolas,monospace;font-size:11px;">
+            Vyber element pro zobrazeni styles.
+        </div>
+    </div>
+</div>
+<script>
+    (function () {
+        const tree = document.getElementById('dom-tree');
+        const stylesList = document.getElementById('styles-list');
+        let selectedNodeId = null;
+
+        function renderNode(node, depth) {
+            const indent = '  '.repeat(depth);
+            const div = document.createElement('div');
+            div.className = 'node';
+            div.dataset.nodeId = node.node_id;
+            if (node.node_type === 1) {
+                let attrs = '';
+                for (let i = 0; i + 1 < (node.attributes || []).length; i += 2) {
+                    attrs += ' <span class="attr-name">' + node.attributes[i] + '</span>="<span class="attr-value">' + node.attributes[i+1] + '</span>"';
+                }
+                div.innerHTML = indent + '<span class="tag">&lt;' + node.node_name.toLowerCase() + '</span>' + attrs + '<span class="tag">&gt;</span>';
+            } else if (node.node_type === 3) {
+                div.innerHTML = indent + '<span class="text">' + escapeHtml(node.node_value || '') + '</span>';
+            } else if (node.node_type === 9) {
+                div.innerHTML = indent + '<span class="tag">#document</span>';
+            } else {
+                div.innerHTML = indent + '<span class="text">' + node.node_name + '</span>';
+            }
+            div.addEventListener('click', (e) => {
+                e.stopPropagation();
+                selectNode(node.node_id, div);
+            });
+            tree.appendChild(div);
+            for (const c of (node.children || [])) {
+                renderNode(c, depth + 1);
+            }
+            if (node.node_type === 1) {
+                const close = document.createElement('div');
+                close.className = 'node';
+                close.innerHTML = indent + '<span class="tag">&lt;/' + node.node_name.toLowerCase() + '&gt;</span>';
+                tree.appendChild(close);
+            }
+        }
+
+        function selectNode(nodeId, div) {
+            selectedNodeId = nodeId;
+            for (const n of tree.querySelectorAll('.node.selected')) {
+                n.classList.remove('selected');
+            }
+            if (div) div.classList.add('selected');
+            loadStyles(nodeId);
+        }
+
+        function escapeHtml(s) {
+            return s.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+        }
+
+        function loadStyles(nodeId) {
+            stylesList.textContent = 'Loading styles...';
+            window.cdp.send('CSS.getMatchedStylesForNode', { node_id: nodeId })
+                .then(result => {
+                    stylesList.innerHTML = '';
+                    const rules = result.matched_rules || [];
+                    if (rules.length === 0) {
+                        stylesList.textContent = 'No matched rules.';
+                        return;
+                    }
+                    for (const rm of rules) {
+                        const block = document.createElement('div');
+                        block.style.marginBottom = '6px';
+                        const sel = (rm.rule.selector_list || []).join(', ');
+                        block.innerHTML = '<div style="color:#aecbfa">' + escapeHtml(sel) + ' {</div>';
+                        for (const p of (rm.rule.style.properties || [])) {
+                            const line = document.createElement('div');
+                            line.style.paddingLeft = '12px';
+                            line.innerHTML = '<span style="color:#9aa0a6">' + escapeHtml(p.name) + '</span>: ' + escapeHtml(p.value) + ';';
+                            block.appendChild(line);
+                        }
+                        block.innerHTML += '<div>}</div>';
+                        stylesList.appendChild(block);
+                    }
+                })
+                .catch(e => { stylesList.textContent = 'Error: ' + e.message; });
+        }
+
+        // Initial load - get document.
+        if (window.cdp) {
+            window.cdp.send('DOM.getDocument', { depth: -1 })
+                .then(result => {
+                    tree.innerHTML = '';
+                    renderNode(result.root, 0);
+                })
+                .catch(e => { tree.textContent = 'Error: ' + e.message; });
+            window.cdp.on('DOM.documentUpdated', () => {
+                // Reload na page navigation.
+                window.cdp.send('DOM.getDocument', { depth: -1 })
+                    .then(result => {
+                        tree.innerHTML = '';
+                        renderNode(result.root, 0);
+                    });
+            });
+        }
+    })();
+</script>
