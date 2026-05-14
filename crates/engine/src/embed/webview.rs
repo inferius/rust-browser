@@ -258,6 +258,15 @@ impl WebView {
         Some(result)
     }
 
+    /// POST form submit + load response HTML. Pro `<form method=post>`.
+    /// Pri uspechu nahradi current page response HTML + base_url = action URL.
+    pub fn load_url_post(&mut self, url: &str, body: &str) -> Option<NavigationResult> {
+        let html = crate::browser::render::forms::post_form(url, body)?;
+        let css = String::new();
+        let result = self.load_html(&html, &css, Some(url.to_string()));
+        Some(result)
+    }
+
     /// Spusti vsechny inline + external `<script>` tagy z dokumentu pres
     /// aktualni interpreter. Volane interne z `load_html` po set_document.
     pub fn run_scripts(&mut self) {
@@ -562,7 +571,10 @@ impl WebView {
                 if let Some(target) = self.focused_dom_node() {
                     let is_input = matches!(target.tag_name().as_deref(),
                         Some("input") | Some("textarea"));
-                    // Enter na focused input -> form submit (find ancestor form, dispatch submit event).
+                    // Enter na focused input -> form submit: dispatch submit
+                    // event + emit NavigationRequest pres build_form_request.
+                    // preventDefault honoring zustava Phase 99 (interpreter
+                    // event API neexposuje preventDefault hook do hostu).
                     if is_input && key == "Enter" {
                         if let Some(form) = crate::browser::render::forms::find_ancestor_form(&target) {
                             if let Some(interp) = self.interpreter.as_mut() {
@@ -573,6 +585,21 @@ impl WebView {
                                 let event_val = crate::interpreter::JsValue::Object(
                                     std::rc::Rc::new(std::cell::RefCell::new(event)));
                                 let _ = interp.dispatch_event(&form, "submit", event_val);
+                            }
+                            if let Some((url, method, body)) = crate::browser::render::forms::build_form_request(
+                                &form, self.base_url.as_deref())
+                            {
+                                let nav_method = if method == "post" {
+                                    crate::embed::event::NavigationMethod::Post
+                                } else {
+                                    crate::embed::event::NavigationMethod::Get
+                                };
+                                response.navigation = Some(crate::embed::event::NavigationRequest {
+                                    url,
+                                    method: nav_method,
+                                    body: body.map(|b| b.into_bytes()),
+                                    target: crate::embed::event::NavigationTarget::Self_,
+                                });
                             }
                         }
                     }

@@ -306,8 +306,16 @@ impl ApplicationHandler for ShellApp {
                 };
                 let resp = webview.handle_input(event);
                 if let Some(nav) = resp.navigation {
-                    println!("[shell nav] {} ({:?})", nav.url, nav.target);
-                    webview.load_url(&nav.url);
+                    println!("[shell nav] {:?} {} ({:?})", nav.method, nav.url, nav.target);
+                    match nav.method {
+                        rwe_engine::embed::NavigationMethod::Get => { webview.load_url(&nav.url); }
+                        rwe_engine::embed::NavigationMethod::Post => {
+                            let body = nav.body.as_ref()
+                                .and_then(|b| std::str::from_utf8(b).ok())
+                                .unwrap_or_default();
+                            webview.load_url_post(&nav.url, body);
+                        }
+                    }
                 }
                 if resp.dirty {
                     if let Some(w) = &self.window { w.request_redraw(); }
