@@ -3404,11 +3404,15 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 dbg.breakpoints = saved_bp;
                 dbg.skip_once_line = saved_skip;
             }
-            self.interpreter = Some(new_interp);
-            // Znovu spust scripts.
-            let mut tmp = self.interpreter.take().unwrap();
-            self.run_inline_scripts(&mut tmp);
-            self.interpreter = Some(tmp);
+            // Pres webview run_scripts: presunout interp do webview, vola
+            // run_scripts, presunout zpet do App.
+            if let Some(wv) = self.webview.as_mut() {
+                wv.set_interpreter(new_interp);
+                wv.run_scripts();
+                self.interpreter = wv.take_interpreter();
+            } else {
+                self.interpreter = Some(new_interp);
+            }
             self.cached_layout_root = None;
             self.cached_style_map = None;
         }
@@ -3519,127 +3523,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             }
         }
 
-        fn run_inline_scripts(&mut self, interp: &mut crate::interpreter::Interpreter) {
-            use crate::lexer::base::Lexer;
-            use crate::parser::Parser;
-            use crate::tokens::TokenKind;
-
-            let doc_ref = interp.document.clone();
-            let base = self.base_url.clone().unwrap_or_default();
-            // External script src= fetch: default ON. Stranky musi frcet
-            // (real engine = real script load). Opt-out pres env var
-            // RWE_NO_SCRIPTS=1 pro debug bez JS noise.
-            let fetch_external = std::env::var("RWE_NO_SCRIPTS")
-                .map(|v| v != "1" && !v.eq_ignore_ascii_case("true"))
-                .unwrap_or(true);
-            let script_nodes = doc_ref.borrow().root.get_elements_by_tag("script");
-            let mut scripts: Vec<(String, String)> = Vec::with_capacity(script_nodes.len());
-            for (i, s) in script_nodes.iter().enumerate() {
-                if let Some(src_attr) = s.attr("src") {
-                    if !fetch_external { continue; }
-                    let src_attr = src_attr.trim().to_string();
-                    if src_attr.is_empty() { continue; }
-                    let abs_url = if src_attr.starts_with("http://")
-                        || src_attr.starts_with("https://")
-                        || src_attr.starts_with("file://")
-                    {
-                        src_attr.clone()
-                    } else if !base.is_empty() {
-                        super::render::resolve_url(&base, &src_attr)
-                    } else {
-                        src_attr.clone()
-                    };
-                    match super::render::fetch_text_url(&abs_url) {
-                        Some(body) => {
-                            interp.network_log.borrow_mut().push((abs_url.clone(), 200));
-                            scripts.push((abs_url, body));
-                        }
-                        None => {
-                            interp.network_log.borrow_mut().push((abs_url.clone(), 0));
-                            interp.console_log.borrow_mut().push((
-                                "error".into(),
-                                format!("[script fetch failed] {abs_url}"),
-                            ));
-                        }
-                    }
-                } else {
-                    // Inline script - text content uvnitr <script>...</script>.
-                    let url = format!("<inline #{}>", i + 1);
-                    let body = s.text_content();
-                    if !body.trim().is_empty() {
-                        scripts.push((url, body));
-                    }
-                }
-            }
-
-            // Registruj scripts do DevTools sources panel + try fetch source map.
-            use crate::devtools::model::sources::SourceLang;
-            for (url, src) in &scripts {
-                if src.trim().is_empty() { continue; }
-                let id = self.devtools.sources.add_file(url.clone(), src.clone(), SourceLang::JavaScript);
-                let resolve_base = if url.starts_with("http") || url.starts_with("file:") {
-                    url.clone()
-                } else { base.clone() };
-                self.devtools.sources.load_source_map(id, &resolve_base,
-                    |u| super::render::fetch_text_url(u));
-            }
-
-            for (_url, src) in scripts {
-                if src.trim().is_empty() { continue; }
-                match Lexer::parse_str(&src, "<inline>") {
-                    Ok(lex) => {
-                        let tokens: Vec<_> = lex.tokens.into_iter()
-                            .filter(|t| !matches!(t.kind,
-                                TokenKind::Whitespace | TokenKind::Newline
-                                | TokenKind::CommentLine(_) | TokenKind::CommentBlock(_)))
-                            .collect();
-                        let mut parser = Parser::new(tokens);
-                        match parser.parse() {
-                            Ok(prog) => {
-                                if let Err(e) = interp.run(&prog) {
-                                    let msg = format!("[script error] {e}");
-                                    eprintln!("{msg}");
-                                    // Pushni i do devtools console (predtim sel jen na stderr).
-                                    interp.console_log.borrow_mut()
-                                        .push(("error".into(), msg));
-                                }
-                            }
-                            Err(e) => {
-                                // Pridat context kolem error location: extract
-                                // line z `src` + ukaz nearby chars.
-                                let snippet = src.lines().nth(e.line.saturating_sub(1) as usize)
-                                    .map(|l| {
-                                        let col = (e.column as usize).saturating_sub(1);
-                                        let start = col.saturating_sub(30);
-                                        let end = (col + 30).min(l.len());
-                                        let bs = l.get(start..end).unwrap_or("");
-                                        format!(" near: ...{}...", bs)
-                                    })
-                                    .unwrap_or_default();
-                                let msg = format!("[parse error] {e:?}{snippet}");
-                                eprintln!("{msg}");
-                                interp.console_log.borrow_mut()
-                                    .push(("error".into(), msg));
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        let msg = format!("[lex error] {e:?}");
-                        eprintln!("{msg}");
-                        interp.console_log.borrow_mut()
-                            .push(("error".into(), msg));
-                    }
-                }
-            }
-            // Po skriptech: sync document.title -> window title.
-            let new_title = interp.document.borrow().title.clone();
-            if !new_title.is_empty() {
-                self.title = new_title.clone();
-                if let Some(w) = &self.window {
-                    w.set_title(&format_window_title(&new_title, 1));
-                }
-            }
-        }
 
         fn trigger_autocomplete(&mut self) {
             use crate::devtools::model::console::{suggest, AutocompleteState};

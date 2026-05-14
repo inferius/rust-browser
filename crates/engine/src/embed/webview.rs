@@ -172,7 +172,7 @@ impl WebView {
 
     /// Spusti vsechny inline + external `<script>` tagy z dokumentu pres
     /// aktualni interpreter. Volane interne z `load_html` po set_document.
-    fn run_scripts(&mut self) {
+    pub fn run_scripts(&mut self) {
         let interp = match self.interpreter.as_mut() {
             Some(i) => i,
             None => return,
