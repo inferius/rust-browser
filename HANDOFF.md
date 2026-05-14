@@ -2,6 +2,65 @@
 
 Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`, `debug_utils.md`.
 
+## Session N+22: Engine shell strip (chrome bar mimo engine)
+
+**2706 tests pass, 0 warnings.**
+
+Pokracovaní Session N+21. Cilem: engine renderuje JEN naked viewport,
+chrome bar (tabs/addr/find/bookmarks) zmizel z engine.
+
+### Co se smazalo
+
+1. **`lib.rs` shell dispatch** - args "shell" smazany; `browser` + `window`
+   uz jsou aliasy bez `shell_mode` lokalniho flagu; `--no-shell` smazan;
+   `run_window_with_shell` call odstranen
+2. **`browser::render::run_window_with_shell` pub fn** smazana
+3. **App field `shell_mode: bool`** smazany - vsech 25 references
+   `self.shell_mode` -> `false` (dead branches)
+4. **App init**: session restore (multi-tab) odstraneny - single tab
+5. **`shell_chrome.rs` soubor smazan** (242 LOC chrome bar paint)
+6. **Dead chrome paint blok v `App::render`** smazany (363 LOC):
+   paint_shell_chrome_with_groups call, bookmark picker, reading mode
+   badge, status bar URL hover, tab tooltip, F1 shortcuts overlay,
+   zoom indicator, scroll-to-top button
+
+### Co ZUSTALO (Phase 99 cleanup, ne kriticky)
+
+- App fields stale tam (unused dead code):
+  `tabs`, `addr_open`, `addr_input`, `find_open`, `find_query`,
+  `find_match_idx`, `history`, `history_idx`, `bookmarks_bar_visible`,
+  `shell_chrome_h`, `shell_tab_tooltip`, `shell_tab_hover_pending`,
+  `tab_drag_idx`, `tab_drag_x_start`, `bookmark_picker`,
+  `reading_mode_on`, `shortcuts_overlay_open`
+- `tabs.rs` (747 LOC) - zustal jako page state holder (App init pouziva
+  `tabs::Tab::new` pro single-tab page state). Shell-only metody
+  (TabManager::switch_to, drag, ...) dead.
+- Dead event handler bloky pod `if false`/`if self.shell_mode` (=false)
+  vsude pres mod.rs - 9330 LOC stale. ~500 LOC dead.
+
+### Validovany stav
+
+```
+cargo run -p rwe-engine -- browser       # naked viewport (ZADNY chrome bar)
+cargo run -p rwe-engine -- browser src.html
+cargo run -p rwe-shell                   # WebView pipeline naked
+```
+
+Pro plnohodnotny chrome (chrome bar + tabs + addr bar + bookmarks)
+je NUTNE Phase 99 - shell crate dostane chrome paint code. Aktualne
+NIKDE neni chrome dostupny.
+
+### Commits
+
+```
+2ae6e33 chore(shell): vyhodit `legacy` arg delegation
+a1408b7 refactor(engine): smazat shell dispatch z lib.rs + App.shell_mode
+d5fd0d7 refactor(engine): smazat shell_chrome.rs (chrome paint je shell concern)
+174500a refactor(engine): smazat 363 LOC dead chrome paint blok
+```
+
+---
+
 ## Session N+21: Shell-as-crate refactor (Edge/CEF model)
 
 **2706 testy pass, 0 warnings, 7 commitu na branche `inferius-dev/serene-bassi-0a7b83`.**

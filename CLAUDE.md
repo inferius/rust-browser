@@ -187,8 +187,8 @@ cargo run -- dump [src.html] [--selector=.foo]   # Layout/cascade dump
 # Shell bin (Phase 4c+ runtime - vlastni Window + WebView pres embed API)
 cargo run -p rwe-shell                           # WebView render path (no chrome bar)
 cargo run -p rwe-shell -- static/test.html       # spec source HTML
-# Pro plnohodnotny chrome bar pouzij rwe-engine -- browser (chrome zatim
-# zije v engine App, Phase 99 ho presune do shell crate).
+# Chrome bar (tabs/addr/find/bookmarks) NIKDE dostupny od Session N+22 -
+# odrezany z engine, Phase 99 ho doda do shell crate.
 ```
 
 Engine entry point (browser rezim): `embed::Engine::run_standalone` (wrapper okolo `browser::render::run_window_with_options`).
