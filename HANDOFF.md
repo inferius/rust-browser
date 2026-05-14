@@ -41,6 +41,68 @@ Po N+22 step 1+2 inverze:
 
 WebView::load_html runs scripts (real). App.interpreter prevezme ownership.
 
+### WebView full orchestration (Chrome WebContents parity)
+
+User point: features ze App.render JIZ existovaly v engine browser
+moduly (cascade::apply_animations, layout::apply_sticky, render::
+apply_paint_animations, devtools_panel::paint_inspector_overlays, ...).
+Stary WebView::render_via byl minimal first-draft (40 LOC = jen cascade
++ layout + paint + draw). Phase 4d migrace = volat existujici fns ze
+WebView::render_via.
+
+Po N+22 finale WebView::render_via orchestrace zahrnuje:
+
+**Render pipeline:**
+- Cascade s viewport
+- CSS Transitions (detect/apply + transitionend event)
+- @keyframes animations tick (apply_animations + scroll_animations +
+  apply_paint_animations) + animationstart/end/iteration events
+- Layout + sticky positioning
+- Display list cull + scroll shift + scrollbar overlay
+- Canvas2D ops paint (paint_canvas_ops)
+- Atlas warm + text runs extract
+- Draw segments
+- WebGL canvas frame (run_webgl_frame)
+- async_jobs.drain
+- interpreter event queues (drain_websockets / drain_fetches /
+  drain_raf_callbacks)
+
+**Input handling:**
+- MouseMove: hit-test layout -> set_hovered_node (:hover state)
+- MouseDown (Left): hit-test + focus management + JS click event +
+  `<a href>` navigation request emit
+- MouseUp + MouseLeave: hover clear
+- KeyDown: focused element keydown event + Backspace input edit +
+  Enter form submit dispatch
+- KeyUp: keyup event
+- TextInput: append do focused input value attr + input event
+- Scroll: smooth target (lerp v render_via)
+
+**State exposures:**
+- `text_runs()` + `hit_test_text(x, y)` - per-glyph selection foundation
+- `last_layout_root()` - host overlay pass (inspector overlay)
+- `has_active_animations()` - shell continual redraw signal
+
+**Shell crate (ShellApp) ted uses:**
+- MouseInput -> MouseDown/Up + navigation handling
+- KeyboardInput -> KeyDown/Up + Character TextInput
+- MouseWheel -> Scroll
+- CursorMoved -> MouseMove
+- Pri response.navigation: webview.load_url
+- request_redraw loop dokud animations/transitions/smooth_scroll bezi
+
+**Zustal v App.render (devtools-specific):**
+- Inspector overlay paint (App.devtools state - separate render pass
+  nad webview RT)
+- Devtools panel paint (Elements/Console/Network/Sources panely)
+- Devtools resize drag handler
+- debug_runner poll (JS pause/continue)
+- Paused animations frozen snapshot
+
+User rekl: devtools dostane velky rework v dalsi session.
+
+---
+
 ### Phase 99 - polarity invert continuation
 
 Zustava (NEresly N+22):
