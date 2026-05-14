@@ -173,6 +173,80 @@ User rekl: devtools dostane velky rework v dalsi session.
 
 ---
 
+### Polarity invert finale - 6/7 fields hotove
+
+Smazane App fields (6):
+- `title` -> webview.title() delegate
+- `zoom` -> webview.zoom() / set_zoom + cur_zoom capture
+- `scroll_target_x/y` -> webview.scroll_target_x/y + cur_X capture
+- `scroll_x/y` -> webview.scroll_x/y + cur_X capture
+- `html`, `css`, `base_url`, `current_path` -> webview + initial tuple drz pres
+  Option<(String, String, Option<String>, Option<PathBuf>)>, take()'d v
+  App::resumed
+
+Caller sites passuji data PRIMO do `sync_webview(html, css, base, path)`:
+- App::resumed take initial
+- reload_from_html (drag-drop): file:// url + path z drag
+- form submit POST: response html + url
+- navigate_url http: fetched html + css + url
+
+Zbyle App field (1):
+- `interpreter: Option<Interpreter>` - 59 ref, polarity invert vyzaduje
+  **App.render kompletni rewrite** (1266 LOC).
+
+### App.render rewrite plan (dalsi session)
+
+Currently App.render = 1266 LOC inline pipeline:
+- Section A: poll_debug_runner + devtools_wire + console mirror (4416-4767)
+- Section B: cascade + style_map cache (4599-4767)
+- Section C: drain WS/fetch/rAF + async_jobs + anim_apply (4769-4855) - **duplikat webview.render_via**
+- Section D: layout_tree cache (4855-5026) - **duplikat webview**
+- Section E: paint apply_sticky + apply_paint_animations + build_display_list (5026-5076) - **duplikat webview**
+- Section F: post-paint shifts + canvas_ops (5076-5277) - **duplikat webview**
+- Section G: overlays element_highlight + inspector + shell_chrome + fps + devtools_panel (5277-5404) - **APP SPECIFIC**
+- Section H: atlas warm + text_runs + addr_overlay (5404-5588) - **duplikat webview**
+- Section I: gpu draw + present (5588) - **duplikat webview**
+
+**Plan:**
+1. Extract App-specific (G) do `paint_devtools_overlays(&self, cmds, &layout)`.
+2. Delete C-F + H-I (duplikat webview).
+3. New App.render telo:
+   ```
+   self.poll_debug_runner(); self.sync_devtools_state();
+   let renderer = self.renderer.as_mut()?;
+   let webview = self.webview.as_mut()?;
+   webview.set_zoom(self.zoom_local); // sync z App.zoom
+   webview.render_via(renderer); // = sections B-F+H-I
+   // Overlay pass nad webview RT (start_clear=false).
+   let layout = webview.last_layout_root().cloned();
+   if let (Some(l), Some(view)) = (layout, webview.target_view()) {
+       let mut overlay_cmds = Vec::new();
+       self.paint_devtools_overlays(&mut overlay_cmds, &l);
+       renderer.draw_segments_into_view_clipped(view, &overlay_cmds, false, None);
+   }
+   if let Some(view) = webview.target_view() {
+       renderer.present_external_to_swap_chain(view);
+   }
+   ```
+
+Velikost odhad: 4-6 hodin
+- Extract App-specific overlay paint (G) do helper - ~1 h
+- Delete duplicit sections (C-F, H-I) - 30 min
+- New render telo - 1 h
+- Fix devtools state borrow conflicts - 1-2 h
+- Fix tests + regression debug - 1-2 h
+
+Po rewrite:
+- App.render = ~50 LOC
+- App.interpreter polarity invert trivialni (webview.interpreter() helper, NO borrow conflicts mimo overlay pass)
+- App = thin host ~300 LOC total (Window + Renderer + devtools state + helpers)
+- Engine bin = analogiou shell crate s devtools widget
+
+Pripadne pres dalsi krok devtools rework D1-D6 (CDP protocol + frontend
+HTML + 2-WebView shell).
+
+---
+
 ### Polarity invert progress (po user pozadavku dokoncit pred devtools rework)
 
 Smazane App fields (4):
