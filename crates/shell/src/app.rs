@@ -7,7 +7,10 @@
 //! Cilem ten cestu validovat - shell crate je nezavislym hostem enginu.
 //! Phase 5+ pridava chrome paint a multi-tab.
 
+use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use winit::application::ApplicationHandler;
@@ -16,8 +19,33 @@ use winit::event_loop::ActiveEventLoop;
 use winit::window::{Window, WindowId};
 
 use rwe_engine::browser::render::Renderer;
-use rwe_engine::embed::{Engine, InputEvent, KeyModifiers, MouseButton, WebView};
+use rwe_engine::embed::{DevtoolsTarget, Engine, InputEvent, KeyModifiers, MouseButton, WebView};
 use rwe_engine::interpreter::{helpers::native, JsValue};
+use rwe_devtools_proto::DevtoolsRequest;
+
+/// CDP channel - queue messages mezi devtools WebView JS bridge a shell
+/// main loop dispatch. Native `__rwe_cdp_send_native` (v devtools interp)
+/// pushne request do req_queue. Main loop kazdy frame drain req_queue,
+/// dispatch via DevtoolsTarget pres page WebView, push response do
+/// resp_queue (JSON-serialized). Native `__rwe_cdp_poll_events` drains
+/// resp_queue + vraci jako JSON array stringy.
+#[derive(Default, Clone)]
+pub struct CdpChannel {
+    /// Pending requests od devtools UI - drain ve main loop.
+    pub req_queue: Rc<RefCell<VecDeque<DevtoolsRequest>>>,
+    /// Pending responses + events pro devtools UI - drain pres pollEvents.
+    /// Format: kazdy item = JSON string (DevtoolsResponse nebo DevtoolsEvent).
+    pub resp_queue: Rc<RefCell<VecDeque<String>>>,
+}
+
+impl CdpChannel {
+    fn new() -> Self {
+        Self {
+            req_queue: Rc::new(RefCell::new(VecDeque::new())),
+            resp_queue: Rc::new(RefCell::new(VecDeque::new())),
+        }
+    }
+}
 
 pub struct ShellApp {
     html: String,
@@ -36,6 +64,13 @@ pub struct ShellApp {
     /// True kdyz devtools je viditelne. D4a (MVP) = full-screen toggle
     /// (renderuje se bud page, nebo devtools). D4b real split layout TBD.
     devtools_visible: bool,
+    /// DevTools target adapter (D2). Lazy init pri F12 toggle. Drzi events
+    /// buffer + breakpoint counter. Dispatch volame `target.handle_request(
+    /// &mut self.webview, req)` ve main loop.
+    devtools_target: Option<DevtoolsTarget>,
+    /// CDP channel (D6b). Sdileny mezi devtools native fns (send/poll) a
+    /// shell main loop (drain + dispatch). Rc<RefCell<>> queues.
+    cdp_channel: Option<CdpChannel>,
 
     mouse_x: f32,
     mouse_y: f32,
@@ -59,6 +94,8 @@ impl ShellApp {
             webview: None,
             devtools: None,
             devtools_visible: false,
+            devtools_target: None,
+            cdp_channel: None,
             mouse_x: 0.0,
             mouse_y: 0.0,
             modifiers: winit::keyboard::ModifiersState::empty(),
@@ -67,18 +104,16 @@ impl ShellApp {
         }
     }
 
-    /// D6a: Nainstaluje native CDP funkce do interpreter v devtools WebView.
+    /// D6b: Nainstaluje native CDP funkce na devtools interpreter, capturuje
+    /// channel Rc clones do closures.
     ///
-    /// `__rwe_cdp_send_native(json_str)`: prijima JSON-stringified
-    /// DevtoolsRequest, dispatch'ne pres DevtoolsTarget (D6b - aktualne stub).
-    /// Vrati JSON-stringified DevtoolsResponse (nebo "" pokud async).
+    /// `__rwe_cdp_send_native(json_str)`: parse to DevtoolsRequest, push do
+    /// channel.req_queue, vrati "". Response delivered async pres pollEvents.
     ///
-    /// `__rwe_cdp_poll_events()`: vrati JSON array bufferovanych events +
-    /// pending responses. Volana periodicky z cdp.js setInterval.
-    ///
-    /// D6a stub: logy a vraci empty strings. D6b implementuje real wire-up
-    /// pres Rc<RefCell<CdpChannel>> sdileny mezi shell main loop a natives.
-    fn install_cdp_natives(devtools: &mut WebView) {
+    /// `__rwe_cdp_poll_events()`: drain channel.resp_queue, vrati JSON array.
+    /// Format: pole stringu (kazdy DevtoolsResponse nebo DevtoolsEvent jako
+    /// samostatny JSON obj). cdp.js handleResponseJson(s) parse + dispatch.
+    fn install_cdp_natives(devtools: &mut WebView, channel: &CdpChannel) {
         let interp = match devtools.interpreter_mut() {
             Some(i) => i,
             None => {
@@ -86,27 +121,77 @@ impl ShellApp {
                 return;
             }
         };
-        // __rwe_cdp_send_native(json_str) -> response_json_str (or "")
-        let send_fn = native("__rwe_cdp_send_native", |args| {
-            let json = args.first()
-                .map(|v| v.to_string())
-                .unwrap_or_default();
-            println!("[cdp send] {}", json);
-            // D6b: parse to DevtoolsRequest, push to req_queue,
-            // dispatch ve main loop, push response to resp_queue,
-            // poll vrati pozdeji.
-            // D6a: return empty string - cdp.js handleResponseJson handle.
+        // __rwe_cdp_send_native(json_str) -> "" (async dispatch).
+        let req_q = Rc::clone(&channel.req_queue);
+        let send_fn = native("__rwe_cdp_send_native", move |args| {
+            let json = args.first().map(|v| v.to_string()).unwrap_or_default();
+            match serde_json::from_str::<DevtoolsRequest>(&json) {
+                Ok(req) => {
+                    req_q.borrow_mut().push_back(req);
+                }
+                Err(e) => eprintln!("[cdp send] parse err: {} (json: {})", e, json),
+            }
             Ok(JsValue::Str(String::new()))
         });
-        // __rwe_cdp_poll_events() -> JSON array of events + pending responses
-        let poll_fn = native("__rwe_cdp_poll_events", |_args| {
-            // D6b: drain resp_queue + event_queue.
-            // D6a: empty array.
-            Ok(JsValue::Str("[]".into()))
+        // __rwe_cdp_poll_events() -> JSON array of pending response/event strings.
+        let resp_q = Rc::clone(&channel.resp_queue);
+        let poll_fn = native("__rwe_cdp_poll_events", move |_args| {
+            let mut q = resp_q.borrow_mut();
+            if q.is_empty() {
+                return Ok(JsValue::Str("[]".into()));
+            }
+            // Items v queue jsou uz JSON-serialized objekty. Slozit array:
+            // "[<obj>,<obj>,...]"
+            let mut out = String::from("[");
+            let mut first = true;
+            while let Some(item) = q.pop_front() {
+                if !first { out.push(','); }
+                out.push_str(&item);
+                first = false;
+            }
+            out.push(']');
+            Ok(JsValue::Str(out))
         });
         interp.global.borrow_mut().define("__rwe_cdp_send_native", send_fn);
         interp.global.borrow_mut().define("__rwe_cdp_poll_events", poll_fn);
-        println!("[cdp] D6a stub natives installed (send/poll)");
+        println!("[cdp] D6b natives installed (send/poll wired to channel)");
+    }
+
+    /// Drain CDP requests z channelu, dispatch pres devtools_target + page,
+    /// push responses + events do resp_queue jako JSON strings. Volana
+    /// per-frame z redraw.
+    fn pump_cdp(&mut self) {
+        let (target, channel, page) = match (
+            self.devtools_target.as_ref(),
+            self.cdp_channel.as_ref(),
+            self.webview.as_mut(),
+        ) {
+            (Some(t), Some(c), Some(p)) => (t, c, p),
+            _ => return,
+        };
+        // Take pending requests (drain).
+        let pending: Vec<DevtoolsRequest> = {
+            let mut q = channel.req_queue.borrow_mut();
+            q.drain(..).collect()
+        };
+        if pending.is_empty() && target.take_events().is_empty() {
+            // Nothing to do. take_events musi probehnout pres ref - drain z
+            // ABOVE smaze. Redundance: re-check po dispatch nize.
+        }
+        // Dispatch requests sekvencne. Kazda response -> resp_queue JSON.
+        for req in pending {
+            let resp = target.handle_request(page, req);
+            let json = serde_json::to_string(&resp)
+                .unwrap_or_else(|e| format!("{{\"error\":\"serialize: {e}\"}}"));
+            channel.resp_queue.borrow_mut().push_back(json);
+        }
+        // Drain pending events (z target.events) - push do resp_queue.
+        let events = target.take_events();
+        for evt in events {
+            let json = serde_json::to_string(&evt)
+                .unwrap_or_else(|e| format!("{{\"error\":\"serialize: {e}\"}}"));
+            channel.resp_queue.borrow_mut().push_back(json);
+        }
     }
 
     /// Slozi devtools INDEX_HTML s injectnutymi panel HTMLs + theme.css
@@ -200,14 +285,15 @@ impl ShellApp {
             dv.resize(lw, lh, sf);
             let dv_html = Self::build_devtools_html();
             let _ = dv.load_html(&dv_html, "", None);
-            // D6a: install CDP native fns na devtools interpreter PO load_html
-            // (po run_scripts). Pri behu cdp.js definuje window.cdp, ale
-            // window.cdp.send/pollEvents jeste neexistuje protoze cdp.js
-            // resolve nativy az pri callu - takze ted nainstalovane natives
-            // budou viditelne kdyz event handler vola send/pollEvents pozdeji.
-            Self::install_cdp_natives(&mut dv);
+            // D6b: setup channel + target. Native fns install po load_html
+            // (cdp.js definovany pred volanim native). Pumpa probiha v
+            // redraw - drain queue + dispatch pres target + page WebView.
+            let channel = CdpChannel::new();
+            Self::install_cdp_natives(&mut dv, &channel);
             self.devtools = Some(dv);
-            println!("[shell] devtools WebView vytvoreno + INDEX_HTML loaded + CDP natives");
+            self.devtools_target = Some(DevtoolsTarget::new());
+            self.cdp_channel = Some(channel);
+            println!("[shell] devtools WebView vytvoreno + CDP channel armed");
         }
         println!("[shell] devtools visible: {}", self.devtools_visible);
         if let Some(w) = &self.window { w.request_redraw(); }
@@ -234,6 +320,13 @@ impl ShellApp {
     }
 
     fn redraw(&mut self) {
+        // CDP pump pred render - drain pending requests + push responses.
+        // Pri devtools_visible cdp.js setInterval pollEvents loaduje
+        // queue items az do dalsiho native call. Pump per frame zaruci
+        // ze response je dostupna behem same frame jako request.
+        if self.devtools_visible {
+            self.pump_cdp();
+        }
         let renderer = match &mut self.renderer { Some(r) => r, None => return };
         // D4a (MVP): full-screen toggle - pri devtools_visible renderuje se
         // devtools WebView, jinak page WebView. Real split layout = D4b

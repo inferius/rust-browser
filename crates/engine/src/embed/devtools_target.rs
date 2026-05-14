@@ -10,24 +10,27 @@
 //! ```text
 //! +---------------+    DevtoolsRequest   +-----------------+
 //! | DevTools UI   | -------------------> | DevtoolsTarget  |
-//! | (WebView 2)   |                      |  (Rc<RefCell    |
-//! |               | <------------------- |    <WebView>>)  |
+//! | (WebView 2)   |                      |  + &mut WebView |
+//! |               | <------------------- |                 |
 //! +---------------+    DevtoolsResponse  +-----------------+
 //!                      DevtoolsEvent
 //! ```
 //!
-//! ## Aktualni status (D2)
+//! ## API design
 //!
-//! - DevtoolsTarget struct hold Rc<RefCell<WebView>>.
-//! - handle_request dispatcher per-domain.
-//! - DOM.getDocument: serializuje DOM tree.
-//! - CSS.getComputedStyleForNode: stub.
-//! - Runtime.evaluate: stub (potreba interpreter::Interpreter::run wire-up).
-//! - Debugger.setBreakpoint: deleguje na interpreter.debugger.
-//! - Network: read network_log z interpreteru.
-//! - Performance: stub (FPS counter z host App, zde N/A).
+//! DevtoolsTarget drzi jen stav (events buffer + breakpoint counter), ne
+//! WebView referenci. Pri kazdem `handle_request` predame `&mut WebView`
+//! - target dispatchne handler s primym borrow do page state.
 //!
-//! Real wire-up domen probehne ve fazich D2b-D2g po D3+D4 prototype overeni.
+//! Vyhoda: shell ma `webview: Option<WebView>` (ne Rc<RefCell>), dispatch
+//! probiha v main loop, kde uz mame `&mut self.webview`.
+//!
+//! ## Aktualni status (D2 refactored pro D6b)
+//!
+//! - DevtoolsTarget = events buffer + bp_id counter (no webview field).
+//! - handle_request bere `&mut WebView` parametr.
+//! - DOM/Debugger.resume/setBreakpoint real impl. CSS/Runtime/Network/
+//!   Performance stub-level.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -40,35 +43,31 @@ use super::webview::WebView;
 
 /// DevTools target - per-page adapter mezi protocol wire + WebView state.
 ///
-/// Drzi shared reference na WebView (Rc<RefCell<>> pres single-thread).
-/// Frontend (separate WebView pro UI, D4) posila pres `handle_request`
-/// (sync) nebo `handle_request_async` (channel-based, planovana D2b).
+/// Holds: events buffer + breakpoint id counter. WebView se predava
+/// jako `&mut WebView` parametr na kazdy `handle_request`.
 pub struct DevtoolsTarget {
-    webview: Rc<RefCell<WebView>>,
     /// Pending events buffer - flush pres `take_events` z host loop.
     events: RefCell<Vec<DevtoolsEvent>>,
     /// Sekvencni breakpoint ID generator (Debugger.setBreakpoint vrati id).
     next_breakpoint_id: RefCell<u64>,
 }
 
+impl Default for DevtoolsTarget {
+    fn default() -> Self { Self::new() }
+}
+
 impl DevtoolsTarget {
-    /// Vytvori novy target naveseny na given WebView.
-    pub fn new(webview: Rc<RefCell<WebView>>) -> Self {
+    /// Vytvori novy target (stateless mimo events + bp counter).
+    pub fn new() -> Self {
         Self {
-            webview,
             events: RefCell::new(Vec::new()),
             next_breakpoint_id: RefCell::new(1),
         }
     }
 
-    /// Reference na target WebView (read-only pres borrow).
-    pub fn webview(&self) -> Rc<RefCell<WebView>> {
-        Rc::clone(&self.webview)
-    }
-
     /// Dispatch jedne request pres method string. Vrati response s result
     /// nebo error. Neznamy method = `METHOD_NOT_FOUND` (-32601).
-    pub fn handle_request(&self, req: DevtoolsRequest) -> DevtoolsResponse {
+    pub fn handle_request(&self, webview: &mut WebView, req: DevtoolsRequest) -> DevtoolsResponse {
         let method = match Method::from_method_str(&req.method) {
             Some(m) => m,
             None => return Self::error_response(req.id, error_codes::METHOD_NOT_FOUND,
@@ -77,35 +76,35 @@ impl DevtoolsTarget {
 
         match method {
             // DOM domain
-            Method::DomGetDocument => self.handle_dom_get_document(req),
-            Method::DomQuerySelector => self.handle_dom_query_selector(req),
-            Method::DomQuerySelectorAll => self.handle_dom_query_selector_all(req),
-            Method::DomGetAttributes => self.handle_dom_get_attributes(req),
-            Method::DomSetAttributeValue => self.handle_dom_set_attribute_value(req),
-            Method::DomRemoveAttribute => self.handle_dom_remove_attribute(req),
+            Method::DomGetDocument => self.handle_dom_get_document(webview, req),
+            Method::DomQuerySelector => self.handle_dom_query_selector(webview, req),
+            Method::DomQuerySelectorAll => self.handle_dom_query_selector_all(webview, req),
+            Method::DomGetAttributes => self.handle_dom_get_attributes(webview, req),
+            Method::DomSetAttributeValue => self.handle_dom_set_attribute_value(webview, req),
+            Method::DomRemoveAttribute => self.handle_dom_remove_attribute(webview, req),
 
             // CSS domain
-            Method::CssGetMatchedStylesForNode => self.handle_css_get_matched_styles(req),
-            Method::CssGetComputedStyleForNode => self.handle_css_get_computed_style(req),
-            Method::CssSetPropertyText => self.handle_css_set_property_text(req),
+            Method::CssGetMatchedStylesForNode => self.handle_css_get_matched_styles(webview, req),
+            Method::CssGetComputedStyleForNode => self.handle_css_get_computed_style(webview, req),
+            Method::CssSetPropertyText => self.handle_css_set_property_text(webview, req),
 
             // Runtime domain
-            Method::RuntimeEvaluate => self.handle_runtime_evaluate(req),
+            Method::RuntimeEvaluate => self.handle_runtime_evaluate(webview, req),
 
             // Debugger domain
-            Method::DebuggerSetBreakpoint => self.handle_debugger_set_breakpoint(req),
-            Method::DebuggerRemoveBreakpoint => self.handle_debugger_remove_breakpoint(req),
-            Method::DebuggerResume => self.handle_debugger_resume(req),
-            Method::DebuggerStepOver => self.handle_debugger_step_over(req),
-            Method::DebuggerStepInto => self.handle_debugger_step_into(req),
-            Method::DebuggerStepOut => self.handle_debugger_step_out(req),
-            Method::DebuggerPause => self.handle_debugger_pause(req),
+            Method::DebuggerSetBreakpoint => self.handle_debugger_set_breakpoint(webview, req),
+            Method::DebuggerRemoveBreakpoint => self.handle_debugger_remove_breakpoint(webview, req),
+            Method::DebuggerResume => self.handle_debugger_resume(webview, req),
+            Method::DebuggerStepOver => self.handle_debugger_step_over(webview, req),
+            Method::DebuggerStepInto => self.handle_debugger_step_into(webview, req),
+            Method::DebuggerStepOut => self.handle_debugger_step_out(webview, req),
+            Method::DebuggerPause => self.handle_debugger_pause(webview, req),
 
             // Network domain
-            Method::NetworkGetResponseBody => self.handle_network_get_response_body(req),
+            Method::NetworkGetResponseBody => self.handle_network_get_response_body(webview, req),
 
             // Performance domain
-            Method::PerformanceGetMetrics => self.handle_performance_get_metrics(req),
+            Method::PerformanceGetMetrics => self.handle_performance_get_metrics(webview, req),
         }
     }
 
@@ -124,15 +123,14 @@ impl DevtoolsTarget {
     // DOM domain handlers
     // ============================================================
 
-    fn handle_dom_get_document(&self, req: DevtoolsRequest) -> DevtoolsResponse {
+    fn handle_dom_get_document(&self, webview: &WebView, req: DevtoolsRequest) -> DevtoolsResponse {
         use rwe_devtools_proto::dom::{GetDocumentParams, GetDocumentResult};
         let params: GetDocumentParams = match serde_json::from_value(req.params.clone()) {
             Ok(p) => p,
             Err(_) => GetDocumentParams { depth: Some(-1), pierce: Some(false) },
         };
         let depth = params.depth.unwrap_or(-1);
-        let wv = self.webview.borrow();
-        let doc = match wv.document() {
+        let doc = match webview.document() {
             Some(d) => d,
             None => return Self::error_response(req.id, error_codes::INTERNAL_ERROR,
                 "No document loaded".to_string()),
@@ -142,20 +140,19 @@ impl DevtoolsTarget {
         Self::ok_response(req.id, &result)
     }
 
-    fn handle_dom_query_selector(&self, req: DevtoolsRequest) -> DevtoolsResponse {
+    fn handle_dom_query_selector(&self, _webview: &WebView, req: DevtoolsRequest) -> DevtoolsResponse {
         use rwe_devtools_proto::dom::{QuerySelectorParams, QuerySelectorResult};
         let _params: QuerySelectorParams = match serde_json::from_value(req.params.clone()) {
             Ok(p) => p,
             Err(e) => return Self::error_response(req.id, error_codes::INVALID_PARAMS,
                 format!("Invalid params: {e}")),
         };
-        // Stub: real implementace pres selectors::matching engine + walk DOM tree.
-        // Vrati first matching node_id (NodeId = Rc::as_ptr hash).
+        // Stub: real impl pres selectors::matching engine + DOM walk.
         let result = QuerySelectorResult { node_id: None };
         Self::ok_response(req.id, &result)
     }
 
-    fn handle_dom_query_selector_all(&self, req: DevtoolsRequest) -> DevtoolsResponse {
+    fn handle_dom_query_selector_all(&self, _webview: &WebView, req: DevtoolsRequest) -> DevtoolsResponse {
         use rwe_devtools_proto::dom::{QuerySelectorAllParams, QuerySelectorAllResult};
         let _params: QuerySelectorAllParams = match serde_json::from_value(req.params.clone()) {
             Ok(p) => p,
@@ -166,15 +163,14 @@ impl DevtoolsTarget {
         Self::ok_response(req.id, &result)
     }
 
-    fn handle_dom_get_attributes(&self, req: DevtoolsRequest) -> DevtoolsResponse {
+    fn handle_dom_get_attributes(&self, webview: &WebView, req: DevtoolsRequest) -> DevtoolsResponse {
         use rwe_devtools_proto::dom::{GetAttributesParams, GetAttributesResult};
         let params: GetAttributesParams = match serde_json::from_value(req.params.clone()) {
             Ok(p) => p,
             Err(e) => return Self::error_response(req.id, error_codes::INVALID_PARAMS,
                 format!("Invalid params: {e}")),
         };
-        let wv = self.webview.borrow();
-        let doc = match wv.document() {
+        let doc = match webview.document() {
             Some(d) => d,
             None => return Self::error_response(req.id, error_codes::INTERNAL_ERROR,
                 "No document loaded".to_string()),
@@ -194,15 +190,14 @@ impl DevtoolsTarget {
         Self::ok_response(req.id, &result)
     }
 
-    fn handle_dom_set_attribute_value(&self, req: DevtoolsRequest) -> DevtoolsResponse {
+    fn handle_dom_set_attribute_value(&self, webview: &WebView, req: DevtoolsRequest) -> DevtoolsResponse {
         use rwe_devtools_proto::dom::SetAttributeValueParams;
         let params: SetAttributeValueParams = match serde_json::from_value(req.params.clone()) {
             Ok(p) => p,
             Err(e) => return Self::error_response(req.id, error_codes::INVALID_PARAMS,
                 format!("Invalid params: {e}")),
         };
-        let wv = self.webview.borrow();
-        let doc = match wv.document() {
+        let doc = match webview.document() {
             Some(d) => d,
             None => return Self::error_response(req.id, error_codes::INTERNAL_ERROR,
                 "No document loaded".to_string()),
@@ -225,15 +220,14 @@ impl DevtoolsTarget {
         Self::ok_response_raw(req.id, serde_json::json!({}))
     }
 
-    fn handle_dom_remove_attribute(&self, req: DevtoolsRequest) -> DevtoolsResponse {
+    fn handle_dom_remove_attribute(&self, webview: &WebView, req: DevtoolsRequest) -> DevtoolsResponse {
         use rwe_devtools_proto::dom::RemoveAttributeParams;
         let params: RemoveAttributeParams = match serde_json::from_value(req.params.clone()) {
             Ok(p) => p,
             Err(e) => return Self::error_response(req.id, error_codes::INVALID_PARAMS,
                 format!("Invalid params: {e}")),
         };
-        let wv = self.webview.borrow();
-        let doc = match wv.document() {
+        let doc = match webview.document() {
             Some(d) => d,
             None => return Self::error_response(req.id, error_codes::INTERNAL_ERROR,
                 "No document loaded".to_string()),
@@ -251,7 +245,7 @@ impl DevtoolsTarget {
     // CSS domain handlers
     // ============================================================
 
-    fn handle_css_get_matched_styles(&self, req: DevtoolsRequest) -> DevtoolsResponse {
+    fn handle_css_get_matched_styles(&self, _webview: &WebView, req: DevtoolsRequest) -> DevtoolsResponse {
         use rwe_devtools_proto::css::{GetMatchedStylesForNodeParams, GetMatchedStylesForNodeResult};
         let _params: GetMatchedStylesForNodeParams = match serde_json::from_value(req.params.clone()) {
             Ok(p) => p,
@@ -266,28 +260,26 @@ impl DevtoolsTarget {
         Self::ok_response(req.id, &result)
     }
 
-    fn handle_css_get_computed_style(&self, req: DevtoolsRequest) -> DevtoolsResponse {
+    fn handle_css_get_computed_style(&self, _webview: &WebView, req: DevtoolsRequest) -> DevtoolsResponse {
         use rwe_devtools_proto::css::{GetComputedStyleForNodeParams, GetComputedStyleForNodeResult};
         let _params: GetComputedStyleForNodeParams = match serde_json::from_value(req.params.clone()) {
             Ok(p) => p,
             Err(e) => return Self::error_response(req.id, error_codes::INVALID_PARAMS,
                 format!("Invalid params: {e}")),
         };
-        // Stub: real impl projde cascaded ComputedStyle map.
         let result = GetComputedStyleForNodeResult {
             computed_style: Vec::new(),
         };
         Self::ok_response(req.id, &result)
     }
 
-    fn handle_css_set_property_text(&self, req: DevtoolsRequest) -> DevtoolsResponse {
+    fn handle_css_set_property_text(&self, _webview: &WebView, req: DevtoolsRequest) -> DevtoolsResponse {
         use rwe_devtools_proto::css::SetPropertyTextParams;
         let _params: SetPropertyTextParams = match serde_json::from_value(req.params.clone()) {
             Ok(p) => p,
             Err(e) => return Self::error_response(req.id, error_codes::INVALID_PARAMS,
                 format!("Invalid params: {e}")),
         };
-        // Stub: real impl modify inline style attr na node + rerun cascade.
         Self::ok_response_raw(req.id, serde_json::json!({}))
     }
 
@@ -295,17 +287,15 @@ impl DevtoolsTarget {
     // Runtime domain handlers
     // ============================================================
 
-    fn handle_runtime_evaluate(&self, req: DevtoolsRequest) -> DevtoolsResponse {
+    fn handle_runtime_evaluate(&self, _webview: &mut WebView, req: DevtoolsRequest) -> DevtoolsResponse {
         use rwe_devtools_proto::runtime::{EvaluateParams, EvaluateResult, RemoteObject};
         let params: EvaluateParams = match serde_json::from_value(req.params.clone()) {
             Ok(p) => p,
             Err(e) => return Self::error_response(req.id, error_codes::INVALID_PARAMS,
                 format!("Invalid params: {e}")),
         };
-        // Stub: real impl pres Interpreter::run nebo eval_string. Pro D2
-        // potreba interpret expression pres existujici lexer/parser/interpreter.
         let _expr = params.expression;
-        // Pro ted vrati undefined - real wire-up po D3 frontend prototype.
+        // Stub: real impl pres Interpreter::run nebo eval_string.
         let result = EvaluateResult {
             result: RemoteObject {
                 type_: "undefined".to_string(),
@@ -321,15 +311,14 @@ impl DevtoolsTarget {
     // Debugger domain handlers
     // ============================================================
 
-    fn handle_debugger_set_breakpoint(&self, req: DevtoolsRequest) -> DevtoolsResponse {
+    fn handle_debugger_set_breakpoint(&self, webview: &WebView, req: DevtoolsRequest) -> DevtoolsResponse {
         use rwe_devtools_proto::debugger::{Location, SetBreakpointParams, SetBreakpointResult};
         let params: SetBreakpointParams = match serde_json::from_value(req.params.clone()) {
             Ok(p) => p,
             Err(e) => return Self::error_response(req.id, error_codes::INVALID_PARAMS,
                 format!("Invalid params: {e}")),
         };
-        let wv = self.webview.borrow();
-        let interp = match wv.interpreter() {
+        let interp = match webview.interpreter() {
             Some(i) => i,
             None => return Self::error_response(req.id, error_codes::INTERNAL_ERROR,
                 "No interpreter".to_string()),
@@ -352,20 +341,18 @@ impl DevtoolsTarget {
         Self::ok_response(req.id, &result)
     }
 
-    fn handle_debugger_remove_breakpoint(&self, req: DevtoolsRequest) -> DevtoolsResponse {
+    fn handle_debugger_remove_breakpoint(&self, _webview: &WebView, req: DevtoolsRequest) -> DevtoolsResponse {
         use rwe_devtools_proto::debugger::RemoveBreakpointParams;
         let _params: RemoveBreakpointParams = match serde_json::from_value(req.params.clone()) {
             Ok(p) => p,
             Err(e) => return Self::error_response(req.id, error_codes::INVALID_PARAMS,
                 format!("Invalid params: {e}")),
         };
-        // Stub: real impl mapuje breakpoint_id -> line_number, mazaje z interpreter.debugger.
         Self::ok_response_raw(req.id, serde_json::json!({}))
     }
 
-    fn handle_debugger_resume(&self, req: DevtoolsRequest) -> DevtoolsResponse {
-        let wv = self.webview.borrow();
-        if let Some(interp) = wv.interpreter() {
+    fn handle_debugger_resume(&self, webview: &WebView, req: DevtoolsRequest) -> DevtoolsResponse {
+        if let Some(interp) = webview.interpreter() {
             interp.debugger.borrow_mut().resume();
         }
         self.push_event(DevtoolsEvent {
@@ -375,23 +362,19 @@ impl DevtoolsTarget {
         Self::ok_response_raw(req.id, serde_json::json!({}))
     }
 
-    fn handle_debugger_step_over(&self, req: DevtoolsRequest) -> DevtoolsResponse {
-        // Stub: real impl - mark step mode in debugger, resume execution.
+    fn handle_debugger_step_over(&self, _webview: &WebView, req: DevtoolsRequest) -> DevtoolsResponse {
         Self::ok_response_raw(req.id, serde_json::json!({}))
     }
 
-    fn handle_debugger_step_into(&self, req: DevtoolsRequest) -> DevtoolsResponse {
-        // Stub.
+    fn handle_debugger_step_into(&self, _webview: &WebView, req: DevtoolsRequest) -> DevtoolsResponse {
         Self::ok_response_raw(req.id, serde_json::json!({}))
     }
 
-    fn handle_debugger_step_out(&self, req: DevtoolsRequest) -> DevtoolsResponse {
-        // Stub.
+    fn handle_debugger_step_out(&self, _webview: &WebView, req: DevtoolsRequest) -> DevtoolsResponse {
         Self::ok_response_raw(req.id, serde_json::json!({}))
     }
 
-    fn handle_debugger_pause(&self, req: DevtoolsRequest) -> DevtoolsResponse {
-        // Stub: real impl set pause flag - VM blocks na dalsim statementu.
+    fn handle_debugger_pause(&self, _webview: &WebView, req: DevtoolsRequest) -> DevtoolsResponse {
         Self::ok_response_raw(req.id, serde_json::json!({}))
     }
 
@@ -399,15 +382,13 @@ impl DevtoolsTarget {
     // Network domain handlers
     // ============================================================
 
-    fn handle_network_get_response_body(&self, req: DevtoolsRequest) -> DevtoolsResponse {
+    fn handle_network_get_response_body(&self, _webview: &WebView, req: DevtoolsRequest) -> DevtoolsResponse {
         use rwe_devtools_proto::network::{GetResponseBodyParams, GetResponseBodyResult};
         let _params: GetResponseBodyParams = match serde_json::from_value(req.params.clone()) {
             Ok(p) => p,
             Err(e) => return Self::error_response(req.id, error_codes::INVALID_PARAMS,
                 format!("Invalid params: {e}")),
         };
-        // Stub: real impl - cache fetched bodies v interp.network_log nebo separate
-        // ResponseBodyCache, klic = request_id.
         let result = GetResponseBodyResult {
             body: String::new(),
             base64_encoded: false,
@@ -419,10 +400,8 @@ impl DevtoolsTarget {
     // Performance domain handlers
     // ============================================================
 
-    fn handle_performance_get_metrics(&self, req: DevtoolsRequest) -> DevtoolsResponse {
+    fn handle_performance_get_metrics(&self, _webview: &WebView, req: DevtoolsRequest) -> DevtoolsResponse {
         use rwe_devtools_proto::performance::{GetMetricsResult, Metric};
-        // Stub: real impl - frame_times_ms z host App. Zde N/A
-        // (target nezna host App state). D2b pridat trait DevtoolsMetricsSource.
         let result = GetMetricsResult {
             metrics: vec![
                 Metric { name: "Documents".to_string(), value: 1.0 },
@@ -437,19 +416,11 @@ impl DevtoolsTarget {
 
     fn ok_response<T: serde::Serialize>(id: u64, result: &T) -> DevtoolsResponse {
         let value = serde_json::to_value(result).unwrap_or(serde_json::Value::Null);
-        DevtoolsResponse {
-            id,
-            result: Some(value),
-            error: None,
-        }
+        DevtoolsResponse { id, result: Some(value), error: None }
     }
 
     fn ok_response_raw(id: u64, value: serde_json::Value) -> DevtoolsResponse {
-        DevtoolsResponse {
-            id,
-            result: Some(value),
-            error: None,
-        }
+        DevtoolsResponse { id, result: Some(value), error: None }
     }
 
     fn error_response(id: u64, code: i32, message: String) -> DevtoolsResponse {
@@ -547,7 +518,7 @@ mod tests {
     use crate::embed::{Engine, WebView};
     use std::sync::Arc;
 
-    fn make_test_webview() -> Rc<RefCell<WebView>> {
+    fn make_test_webview() -> WebView {
         let engine = Arc::new(Engine::new_headless());
         let mut wv = WebView::new(engine, 800, 600);
         let _ = wv.load_html(
@@ -555,19 +526,19 @@ mod tests {
             "",
             None,
         );
-        Rc::new(RefCell::new(wv))
+        wv
     }
 
     #[test]
     fn unknown_method_returns_error() {
-        let wv = make_test_webview();
-        let target = DevtoolsTarget::new(wv);
+        let mut wv = make_test_webview();
+        let target = DevtoolsTarget::new();
         let req = DevtoolsRequest {
             id: 1,
             method: "Foo.bar".to_string(),
             params: serde_json::json!({}),
         };
-        let resp = target.handle_request(req);
+        let resp = target.handle_request(&mut wv, req);
         assert_eq!(resp.id, 1);
         assert!(resp.result.is_none());
         let err = resp.error.expect("error expected");
@@ -576,59 +547,54 @@ mod tests {
 
     #[test]
     fn dom_get_document_returns_root() {
-        let wv = make_test_webview();
-        let target = DevtoolsTarget::new(wv);
+        let mut wv = make_test_webview();
+        let target = DevtoolsTarget::new();
         let req = DevtoolsRequest {
             id: 5,
             method: "DOM.getDocument".to_string(),
             params: serde_json::json!({ "depth": -1 }),
         };
-        let resp = target.handle_request(req);
+        let resp = target.handle_request(&mut wv, req);
         assert_eq!(resp.id, 5);
         assert!(resp.error.is_none(), "error: {:?}", resp.error);
         let result = resp.result.expect("result expected");
         let root = result.get("root").expect("root field");
-        // Document type = 9.
         assert_eq!(root["node_type"], 9);
-        // Children obsahuji html element.
         assert!(root["children"].is_array());
         assert!(!root["children"].as_array().unwrap().is_empty());
     }
 
     #[test]
     fn debugger_resume_emits_event() {
-        let wv = make_test_webview();
-        let target = DevtoolsTarget::new(wv);
+        let mut wv = make_test_webview();
+        let target = DevtoolsTarget::new();
         let req = DevtoolsRequest {
             id: 7,
             method: "Debugger.resume".to_string(),
             params: serde_json::json!({}),
         };
-        let resp = target.handle_request(req);
+        let resp = target.handle_request(&mut wv, req);
         assert_eq!(resp.id, 7);
         assert!(resp.error.is_none());
         let events = target.take_events();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].method, "Debugger.resumed");
-        // Drugy take_events = empty.
         assert!(target.take_events().is_empty());
     }
 
     #[test]
     fn dom_set_attribute_emits_event() {
-        let wv = make_test_webview();
-        let target = DevtoolsTarget::new(wv);
-        // First get the document to find element node_id.
+        let mut wv = make_test_webview();
+        let target = DevtoolsTarget::new();
         let req = DevtoolsRequest {
             id: 1,
             method: "DOM.getDocument".to_string(),
             params: serde_json::json!({ "depth": -1 }),
         };
-        let resp = target.handle_request(req);
+        let resp = target.handle_request(&mut wv, req);
         let root: rwe_devtools_proto::dom::Node = serde_json::from_value(
             resp.result.unwrap().get("root").unwrap().clone()
         ).unwrap();
-        // Walk to first element (HTML -> BODY -> DIV).
         fn first_elem(n: &rwe_devtools_proto::dom::Node) -> Option<&rwe_devtools_proto::dom::Node> {
             if n.node_name == "DIV" { return Some(n); }
             for c in &n.children {
@@ -647,7 +613,7 @@ mod tests {
                 "value": "bar",
             }),
         };
-        let resp = target.handle_request(req);
+        let resp = target.handle_request(&mut wv, req);
         assert!(resp.error.is_none(), "error: {:?}", resp.error);
         let events = target.take_events();
         assert_eq!(events.len(), 1);
@@ -658,15 +624,14 @@ mod tests {
 
     #[test]
     fn dom_get_attributes_returns_flat_list() {
-        let wv = make_test_webview();
-        let target = DevtoolsTarget::new(wv);
-        // Najdi div node_id.
+        let mut wv = make_test_webview();
+        let target = DevtoolsTarget::new();
         let req = DevtoolsRequest {
             id: 1,
             method: "DOM.getDocument".to_string(),
             params: serde_json::json!({ "depth": -1 }),
         };
-        let resp = target.handle_request(req);
+        let resp = target.handle_request(&mut wv, req);
         let root: rwe_devtools_proto::dom::Node = serde_json::from_value(
             resp.result.unwrap().get("root").unwrap().clone()
         ).unwrap();
@@ -684,11 +649,10 @@ mod tests {
             method: "DOM.getAttributes".to_string(),
             params: serde_json::json!({ "node_id": div.node_id }),
         };
-        let resp = target.handle_request(req);
+        let resp = target.handle_request(&mut wv, req);
         assert!(resp.error.is_none());
         let result = resp.result.unwrap();
         let attrs = result["attributes"].as_array().unwrap();
-        // Hledame id=a + class=x v flat list.
         let mut found_id = false;
         let mut found_class = false;
         let mut i = 0;
@@ -705,28 +669,28 @@ mod tests {
 
     #[test]
     fn dom_node_not_found_error() {
-        let wv = make_test_webview();
-        let target = DevtoolsTarget::new(wv);
+        let mut wv = make_test_webview();
+        let target = DevtoolsTarget::new();
         let req = DevtoolsRequest {
             id: 1,
             method: "DOM.getAttributes".to_string(),
             params: serde_json::json!({ "node_id": 999999u64 }),
         };
-        let resp = target.handle_request(req);
+        let resp = target.handle_request(&mut wv, req);
         assert!(resp.error.is_some());
         assert_eq!(resp.error.unwrap().code, error_codes::NODE_NOT_FOUND);
     }
 
     #[test]
     fn invalid_params_returns_error() {
-        let wv = make_test_webview();
-        let target = DevtoolsTarget::new(wv);
+        let mut wv = make_test_webview();
+        let target = DevtoolsTarget::new();
         let req = DevtoolsRequest {
             id: 1,
             method: "DOM.getAttributes".to_string(),
             params: serde_json::json!({ "wrong_field": 1 }),
         };
-        let resp = target.handle_request(req);
+        let resp = target.handle_request(&mut wv, req);
         assert!(resp.error.is_some());
         assert_eq!(resp.error.unwrap().code, error_codes::INVALID_PARAMS);
     }

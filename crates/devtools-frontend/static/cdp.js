@@ -22,10 +22,11 @@
         return new Promise((resolve, reject) => {
             pendingRequests.set(id, { resolve, reject });
             try {
-                // Native binding (D6) - synchronni call vrati string s JSON
-                // response. Engine-side dispatch pres DevtoolsTarget.
-                const respJson = __rwe_cdp_send_native(JSON.stringify(req));
-                handleResponseJson(respJson);
+                // Native binding (D6b) - async enqueue do channel.req_queue.
+                // Shell main loop drain + dispatch pres DevtoolsTarget,
+                // push response do channel.resp_queue. pollEvents() pak
+                // load responses + dispatchne resolve/reject pres id.
+                __rwe_cdp_send_native(JSON.stringify(req));
             } catch (e) {
                 pendingRequests.delete(id);
                 reject(e);

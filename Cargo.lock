@@ -3153,7 +3153,9 @@ version = "0.1.0"
 dependencies = [
  "arboard",
  "rwe-devtools-frontend",
+ "rwe-devtools-proto",
  "rwe-engine",
+ "serde_json",
  "wgpu",
  "winit",
 ]
