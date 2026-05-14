@@ -839,50 +839,15 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         // kompletni). Initial data drzeny v `initial: Option<InitialData>`
         // do prvniho sync_webview, pak primary v webview.
         initial: Option<(String, String, Option<String>, Option<std::path::PathBuf>)>,
-        /// Cache parsed stylesheets (css string hash -> Vec<Stylesheet>).
-        cached_stylesheets_hash: u64,
+        /// Cache parsed stylesheets (legacy field, jen pro App-side hit-test pres staly path).
         cached_stylesheets: Option<Vec<super::css_parser::Stylesheet>>,
-        /// Reuse display list buffer napric frames (alloc-free).
-        display_list_buffer: Vec<super::paint::DisplayCommand>,
-        /// Dual render Phase 2: per-buffer state hash pro detekci no-change.
         /// Cached layout_root - reuse pri ne-layout-affecting animations.
+        /// TODO: post-N+22 cleanup - smaze + sjednotit pres webview.last_layout_root().
         cached_layout_root: Option<super::layout::LayoutBox>,
-        /// True kdyz animations modify layout-affecting props.
-        animations_affect_layout: bool,
-        /// Zda current CSS pouziva :hover / :focus selektory. Pokud ne, hover
-        /// change neinvaliduje cascade cache.
-        css_uses_hover: bool,
-        css_uses_focus: bool,
         /// CSS pouziva @media/@container queries, takze viewport zmena ovlivni
         /// cascade. Bez teto detekce by se cascade rebuilovala pri kazdem
         /// pixelu resize -> resize lag.
         css_uses_viewport: bool,
-        /// CSS obsahuje "transition" property - pak je potreba prev_style_map
-        /// pro detekci transitions vs current. Bez "transition" v CSS preskakujeme
-        /// drahy clone style_map kazdy frame.
-        css_uses_transitions: bool,
-        /// CSS obsahuje "@keyframes" - pak runtime animations rotation. Bez nich
-        /// preskakujeme apply_animations + clone.
-        css_uses_keyframes: bool,
-        /// Layout obsahuje position: sticky elementy - pak apply_sticky musi mit
-        /// mutable layout_root. Bez sticky preskakujeme clone cached_layout_root.
-        layout_has_sticky: bool,
-        /// Set jmen keyframes ktere ovlivnuji layout-affecting props (width/height/
-        /// margin/padding/...). Cache invalidate jen kdyz aktivni animace ma name
-        /// v tomto set. Drive: jakekoliv layout-prop @keyframes v CSS = perma
-        /// invalidace, i kdyz se nikdy nespusti.
-        layout_affecting_animations: std::collections::HashSet<String>,
-        /// Subset layout_affecting_animations: jmena ktera animuji POUZE
-        /// width/height (zadne jine layout-props). Tyto muzu aplikovat primo
-        /// na rect.width/height (Chrome-style "self-contained layout") kdyz
-        /// element ma overflow:hidden - width change nezpusobi reflow.
-        /// Klic optimalizace pro typewriter (overflow:hidden + anim width).
-        width_height_only_animations: std::collections::HashSet<String>,
-        /// Animace s POUZE left/top/right/bottom props (zadne jine layout aff).
-        /// Pri position != static = self-contained (relative offset = visual,
-        /// absolute/fixed = out-of-flow). Sibling layout neovliveny -> soft path.
-        /// Klic pro slide-anim (left 0->400px na .anim-box position:relative).
-        position_only_animations: std::collections::HashSet<String>,
         /// Ring buffer poslednich N frame timing pro FPS counter overlay.
         /// Default 60 frame window. Render hori v ms, FPS = 1000 / avg.
         frame_times_ms: std::collections::VecDeque<f32>,
@@ -895,9 +860,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         /// realne meni styly.
         cached_cascade_hash: u64,
         cached_style_map: Option<Rc<super::cascade::StyleMap>>,
-        /// Cache pro matched_rules build - (selected_node, cascade_hash).
-        /// Bez zmeny ani jednoho neni potreba pretizet rules walk.
-        cached_matched_key: Option<(Option<usize>, u64)>,
         /// Animations time origin - drahy speed/pause/restart pres devtools panel.
         /// Effective_anim_time = (now - origin) * speed; pri pause snapshot do paused_at.
         animation_origin: std::time::Instant,
@@ -4523,11 +4485,9 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
     // Title nyni drzí webview (App polarity invert step).
     let mut app = App {
         initial: Some((html, css, base_url, current_html_path)),
-        cached_stylesheets_hash: 0,
         cached_stylesheets: None,
         cached_cascade_hash: 0,
         cached_style_map: None,
-        cached_matched_key: None,
         animation_origin: std::time::Instant::now(),
         animation_pause_start: None,
         paused_animation_nodes: std::collections::HashSet::new(),
@@ -4536,18 +4496,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         painted_text_runs: Vec::new(),
         async_jobs: crate::browser::async_jobs::AsyncJobsRegistry::new(),
         cached_pseudo_map: None,
-        display_list_buffer: Vec::with_capacity(2048),
         cached_layout_root: None,
-        animations_affect_layout: false,
-        css_uses_hover: false,
-        css_uses_focus: false,
         css_uses_viewport: false,
-        css_uses_transitions: false,
-        css_uses_keyframes: false,
-        layout_has_sticky: false,
-        layout_affecting_animations: std::collections::HashSet::new(),
-        width_height_only_animations: std::collections::HashSet::new(),
-        position_only_animations: std::collections::HashSet::new(),
         frame_times_ms: std::collections::VecDeque::with_capacity(60),
         // FPS overlay default off - Ctrl+Shift+F toggle. Drive default zapnuty
         // pri PERF_DEBUG=1, ale env var ma byt jen pro logging - overlay je
