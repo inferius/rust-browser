@@ -51,20 +51,7 @@ pub fn resolve_addr_input(input: &str) -> String {
 
 // BookmarkPickerState / BookmarkPickerFocus smazany (Session N+22) - shell concern.
 
-/// Reading mode CSS - injected pri Ctrl+Alt+R toggle. Schova
-/// nav/aside/footer, centrovani main do max 720px, beige bg, vetsi serif.
-const READING_MODE_CSS: &str = r#"
-body { background: #f4ecd8 !important; color: #2a2520 !important; }
-nav, aside, footer, header.global, .sidebar, .ad, .advertisement, .banner, .cookie { display: none !important; }
-main, article, [role=main], .content, .post, .entry { max-width: 720px !important; margin: 0 auto !important; padding: 32px 24px !important; background: #fbf6e9 !important; }
-body * { font-family: Georgia, serif !important; }
-p, li, blockquote { line-height: 1.7 !important; font-size: 18px !important; }
-h1 { font-size: 32px !important; }
-h2 { font-size: 24px !important; }
-h3 { font-size: 20px !important; }
-img, video { max-width: 100% !important; height: auto !important; }
-a { color: #2a4d8f !important; }
-"#;
+// READING_MODE_CSS smazany (Session N+22) - reading mode je shell concern.
 
 // Async worker pro JS exec vyzaduje Interpreter: Send. Aktualne Interpreter ma
 // Rc<RefCell> interne, takze !Send. Wrappers `unsafe impl Send for SendInterp`
@@ -5423,19 +5410,10 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 self.css.hash(&mut h);
                 h.finish()
             };
-            // Reading mode injected CSS pridano k page CSS pokud zaple.
-            let reading_css = if false { READING_MODE_CSS } else { "" };
-            let combined_hash = if false {
-                use std::hash::{Hash, Hasher};
-                let mut h = ahash::AHasher::default();
-                self.css.hash(&mut h);
-                "rmode".hash(&mut h);
-                h.finish()
-            } else { css_hash };
+            // Reading mode CSS smazany (Session N+22) - shell concern.
+            let combined_hash = css_hash;
             if self.cached_stylesheets.is_none() || self.cached_stylesheets_hash != combined_hash {
-                let combined = if false {
-                    format!("{}\n{}", self.css, reading_css)
-                } else { self.css.clone() };
+                let combined = self.css.clone();
                 let parsed = vec![css_parser::parse_stylesheet(&combined)];
                 for sheet in &parsed {
                     r.load_font_faces(&sheet.font_faces, self.base_url.as_deref());
