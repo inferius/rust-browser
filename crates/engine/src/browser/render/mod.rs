@@ -847,15 +847,11 @@ fn collect_subtree_ids(
 /// - `auto_devtools`: pri true vygeneruje devtools.html a otevre v OS default browser
 /// - `base_url`: page URL pro relative resolution (http(s)://... nebo file:///...).
 ///   Pri None se odvodi z `current_html_path`.
-pub fn run_window_with_shell(html: String, css: String, current_html_path: Option<std::path::PathBuf>, auto_devtools: bool, base_url: Option<String>) -> Result<(), String> {
-    run_window_inner(html, css, current_html_path, auto_devtools, base_url, true)
-}
-
 pub fn run_window_with_options(html: String, css: String, current_html_path: Option<std::path::PathBuf>, auto_devtools: bool, base_url: Option<String>) -> Result<(), String> {
-    run_window_inner(html, css, current_html_path, auto_devtools, base_url, false)
+    run_window_inner(html, css, current_html_path, auto_devtools, base_url)
 }
 
-fn run_window_inner(html: String, css: String, current_html_path: Option<std::path::PathBuf>, auto_devtools: bool, base_url: Option<String>, shell_mode: bool) -> Result<(), String> {
+fn run_window_inner(html: String, css: String, current_html_path: Option<std::path::PathBuf>, auto_devtools: bool, base_url: Option<String>) -> Result<(), String> {
     use winit::application::ApplicationHandler;
     use winit::event::{WindowEvent, MouseButton, ElementState};
     use winit::event_loop::ActiveEventLoop;
@@ -1038,10 +1034,9 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         reading_mode_on: bool,
         /// Bookmarks bar visibility (Ctrl+Shift+B toggle). Default true.
         bookmarks_bar_visible: bool,
-        /// Browser shell mode - kdyz true, vykresli se chrome bar (tabs +
-        /// address bar + back/forward) + page area zacne pod chromem.
-        /// Toggle pres CLI flag --shell nebo Ctrl+Shift+B.
-        shell_mode: bool,
+        // shell_mode field smazan (Session N+22). Engine vzdy renderuje naked
+        // viewport; chrome bar zustal v shell crate (Phase 99 - presun chrome
+        // paint do shell::ShellApp).
         /// Chrome bar vyska (tab bar + nav bar).
         shell_chrome_h: f32,
         /// Multi-tab manager (shell mode). Active tab drives App.html/css/...
@@ -1149,7 +1144,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             match event {
                 WindowEvent::CloseRequested => {
                     // Save session pri shell mode quit.
-                    if self.shell_mode {
+                    if false {
                         // Save current tab state pred snapshot.
                         {
                             let cur = self.tabs.active_tab_mut();
@@ -1211,7 +1206,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     self.mouse_y = new_y;
                     // Tab drag reorder.
                     if let Some(drag_idx) = self.tab_drag_idx {
-                        if self.shell_mode {
+                        if false {
                             let viewport_w = self.viewport_w_logical();
                             let n = self.tabs.tabs.len();
                             let tab_w = 200.0_f32.min((viewport_w - 60.0) / (n as f32).max(1.0));
@@ -1383,7 +1378,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     // jiny tab nebo mimo chrome resetuje pending. Pri hover_start
                     // staci > 500ms -> tooltip aktivni.
                     self.shell_tab_tooltip = None;
-                    if self.shell_mode {
+                    if false {
                         let scale_local = self.renderer.as_ref().map(|r| r.scale_factor).unwrap_or(1.0);
                         let mx = (position.x as f32) / (self.zoom * scale_local);
                         let my = (position.y as f32) / (self.zoom * scale_local);
@@ -1462,7 +1457,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     // Klik mimo chrome bar pri otevrenem addr_open = blur
                     // (zavri editor). Klik UVNITR chrome bar prohlasuje
                     // ChromeHit::UrlBar nize a addr_open zustane.
-                    if self.addr_open && self.shell_mode {
+                    if self.addr_open && false {
                         let chrome_h = self.shell_chrome_h_active();
                         let my_screen = self.mouse_y - self.scroll_y;
                         if my_screen >= chrome_h {
@@ -1535,7 +1530,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         }
                     }
                     // Scroll-to-top button hit (pravy dolni roh, jen pri scroll_y > 200).
-                    if self.shell_mode && self.scroll_y > 200.0 {
+                    if false && self.scroll_y > 200.0 {
                         let viewport_w = self.viewport_w_logical();
                         let viewport_h = self.viewport_h_logical();
                         let panel_h = self.panel_h_logical();
@@ -1551,7 +1546,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         }
                     }
                     // Shell chrome hit-test (priorita nad page).
-                    if self.shell_mode {
+                    if false {
                         let viewport_w = self.viewport_w_logical();
                         let mx = self.mouse_x;
                         let my_screen = self.mouse_y - self.scroll_y;
@@ -2314,7 +2309,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 }
                 WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Middle, .. } => {
                     // Middle-click na tab chip = zavrit ten tab.
-                    if self.shell_mode {
+                    if false {
                         let viewport_w = self.viewport_w_logical();
                         let mx = self.mouse_x;
                         let my_screen = self.mouse_y - self.scroll_y;
@@ -2341,7 +2336,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     let viewport_h = self.viewport_h_logical();
                     let panel_h = self.panel_h_logical();
                     // Shell chrome RMB: tab/bookmark context menu.
-                    if self.shell_mode && raw_y < self.shell_chrome_h {
+                    if false && raw_y < self.shell_chrome_h {
                         let viewport_w = self.viewport_w_logical();
                         let mx = self.mouse_x;
                         let hit = hit_chrome(viewport_w, self.shell_chrome_h, &self.tabs, mx, raw_y);
@@ -3218,7 +3213,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                 return;
                             }
                             // Shell tab shortcuts.
-                            if self.shell_mode {
+                            if false {
                                 if (s.as_str() == "T") && self.modifiers.shift_key() {
                                     // Ctrl+Shift+T = restore last closed tab.
                                     {
@@ -3310,7 +3305,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                             }
                         }
                         // Ctrl+Tab = next tab.
-                        if matches!(&key_event.logical_key, Key::Named(NamedKey::Tab)) && self.shell_mode {
+                        if matches!(&key_event.logical_key, Key::Named(NamedKey::Tab)) && false {
                             let target = if self.modifiers.shift_key() {
                                 if self.tabs.active == 0 { self.tabs.tabs.len() - 1 } else { self.tabs.active - 1 }
                             } else {
@@ -3581,7 +3576,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             self.devtools.styles.estimate_total_h()
         }
         fn shell_chrome_h_active(&self) -> f32 {
-            if !self.shell_mode { return 0.0; }
+            if !false { return 0.0; }
             let bm_count = crate::devtools::bookmarks::bookmarks_count();
             // Base: tab strip 28 + nav 36 = 64. Bookmarks bar 24 navic (kdyz visible + nejaky bm).
             64.0 + if bm_count > 0 && self.bookmarks_bar_visible { 24.0 } else { 0.0 }
@@ -6331,7 +6326,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             }
             // Shell mode: shift page commands dolu o chrome_h aby content
             // nezacinal pod chrome bar.
-            if self.shell_mode {
+            if false {
                 let bm_count = crate::devtools::bookmarks::bookmarks_count();
                 let dy = 64.0 + if bm_count > 0 && self.bookmarks_bar_visible { 24.0 } else { 0.0 };
                 for cmd in display_list.iter_mut() {
@@ -6356,7 +6351,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // (overlay_cmds nejsou shifted v glob loop drive). Bez tohoto
             // devtools highlight rect kreslen v layout-coords (y=10) ale paint
             // jiz posunul page (y=74) -> uzivatel vidi highlight jinde.
-            let chrome_dy_for_highlight = if self.shell_mode {
+            let chrome_dy_for_highlight = if false {
                 let bm_count = crate::devtools::bookmarks::bookmarks_count();
                 64.0 + if bm_count > 0 && self.bookmarks_bar_visible { 24.0 } else { 0.0 }
             } else { 0.0 };
@@ -6412,7 +6407,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // (separate render target od page main_rt). Two-way render dela compose
             // teprve na konci: main_rt + shell_rt -> swap chain.
             let shell_split = display_list.len();
-            if self.shell_mode {
+            if false {
                 let win_w_logical = (r.config.width as f32) / (self.zoom * r.scale_factor);
                 let win_h_logical = (r.config.height as f32) / (self.zoom * r.scale_factor);
                 // Zoom indicator pri non-100% (pravy roh status zone).
@@ -6842,7 +6837,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // V shell modu se edit dela primo v chrome URL baru, popup zustava
             // jen pro autocomplete - ale vykresluje se v non-shell modu nebo
             // pri non-empty input.
-            if self.addr_open && !self.shell_mode {
+            if self.addr_open && !false {
                 let vw = (r.config.width as f32) / (self.zoom * r.scale_factor);
                 let bar_w: f32 = (vw - 80.0).min(800.0);
                 let bar_h: f32 = 40.0;
@@ -6995,7 +6990,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // ne od y=0 - jinak by track preplnoval shell. Real Chrome scrollbar
             // je take cely v page area pod chrome.
             let panel_h_logical = if self.devtools.panel_open { self.devtools.panel_h.min(viewport_h_logical * 0.7) } else { 0.0 };
-            let chrome_top = if self.shell_mode {
+            let chrome_top = if false {
                 let bm_count = crate::devtools::bookmarks::bookmarks_count();
                 64.0 + if bm_count > 0 && self.bookmarks_bar_visible { 24.0 } else { 0.0 }
             } else { 0.0 };
@@ -7153,7 +7148,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // Pri WebGL canvas s pending queue, vyuzij webgl-aware draw flow.
             let webgl_states_opt = self.interpreter.as_ref().map(|i| i.webgl_states.clone());
             // Shell chrome top - page render se na nej zarizne scissorem.
-            let chrome_top_logical = if self.shell_mode {
+            let chrome_top_logical = if false {
                 let bm_count = crate::devtools::bookmarks::bookmarks_count();
                 64.0 + if bm_count > 0 && self.bookmarks_bar_visible { 24.0 } else { 0.0 }
             } else { 0.0 };
@@ -7241,25 +7236,9 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
     #[cfg(not(target_os = "windows"))]
     let event_loop = EventLoop::new().map_err(|e| e.to_string())?;
     let initial_url = base_url.clone();
-    // Session restore (shell mode): pri startu nahraje predchozi tabs.
-    let mut initial_tabs: Vec<tabs::Tab> = Vec::new();
-    let mut initial_active: usize = 0;
-    if shell_mode {
-        if let Some(s) = crate::devtools::session::load_session() {
-            for st in &s.tabs {
-                let url = st.url.clone();
-                let mut tab = tabs::Tab::empty();
-                tab.title = st.title.clone();
-                tab.url = url;
-                initial_tabs.push(tab);
-            }
-            initial_active = s.active.min(initial_tabs.len().saturating_sub(1));
-        }
-    }
-    if initial_tabs.is_empty() {
-        initial_tabs.push(tabs::Tab::new(html.clone(), css.clone(), base_url.clone(), current_html_path.clone()));
-    }
-    let initial_tab = initial_tabs[initial_active].clone();
+    // Single-tab: engine bezi naked viewport. Session restore zustal jako
+    // Phase 99 shell crate task.
+    let initial_tab = tabs::Tab::new(html.clone(), css.clone(), base_url.clone(), current_html_path.clone());
     let mut app = App {
         html, css,
         cached_stylesheets_hash: 0,
@@ -7340,17 +7319,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         shortcuts_overlay_open: false,
         reading_mode_on: false,
         bookmarks_bar_visible: true,
-        shell_mode,
-        shell_chrome_h: 64.0,
-        tabs: {
-            let mut tm = tabs::TabManager::new(initial_tab);
-            // Pri session restore pridej dalsi tabs.
-            if shell_mode && initial_tabs.len() > 1 {
-                tm.tabs = initial_tabs;
-                tm.active = initial_active;
-            }
-            tm
-        },
+        shell_chrome_h: 0.0,  // bez chrome bar (Session N+22)
+        tabs: tabs::TabManager::new(initial_tab),
         // WebView mirror inicializovan v `resumed` (znama viewport size z winit
         // + chrome offset zname). Pred resumed App nema window -> None.
         webview: None,
