@@ -118,6 +118,16 @@ pub struct WebView {
     /// TextInput insertne na caret pos + advance. Backspace delete pos-1.
     /// Arrow keys posunou. Render_via emit blinkajici Rect kdy focused input.
     pub(crate) input_caret: std::collections::HashMap<usize, usize>,
+    /// Volitelny overlay painter - hostujici aplikace registruje closure ktera
+    /// po build_display_list emit DODATECNE DisplayCommands (inspector
+    /// highlight, devtools panel, custom badges). Volana s layout_root +
+    /// scroll_y + push prazdneho cmd_buf.
+    #[allow(clippy::type_complexity)]
+    pub(crate) overlay_painter: Option<Box<dyn FnMut(
+        &crate::browser::layout::LayoutBox,
+        f32,
+        &mut Vec<crate::browser::paint::DisplayCommand>,
+    )>>,
     /// Scrollbar drag state - Some(grab_offset_y) pri V thumb drag.
     pub(crate) v_scrollbar_drag: Option<f32>,
     /// Scrollbar drag state - Some(grab_offset_x) pri H thumb drag.
@@ -167,6 +177,7 @@ impl WebView {
             mouse_y: 0.0,
             mouse_down_at: None,
             input_caret: std::collections::HashMap::new(),
+            overlay_painter: None,
             v_scrollbar_drag: None,
             h_scrollbar_drag: None,
             last_layout_root: None,
@@ -1178,6 +1189,13 @@ impl WebView {
             }
         }
 
+        // 3z. Overlay painter callback - hostujici aplikace emit DODATECNE
+        // DisplayCommands (inspector highlight, devtools, ...). Volane PRED
+        // scroll shift -> overlay coords v content-space.
+        if let Some(painter) = self.overlay_painter.as_mut() {
+            painter(&layout_root, self.scroll_y, &mut display_list);
+        }
+
         // 3a. Apply scroll: posun page commands o -scroll_y. Scrollbar
         //     overlay (pridany nize) je viewport-relative -> add PO shift.
         for cmd in display_list.iter_mut() {
@@ -1478,6 +1496,23 @@ impl WebView {
                 reg.page_selection = None;
             }
         }
+    }
+
+    /// Registruj overlay painter - closure ktera emituje DODATECNE
+    /// DisplayCommands po build_display_list (PRED scroll shift). Pouziti:
+    /// inspector overlay paint (devtools highlight), badge overlays,
+    /// custom debugging visualizace.
+    ///
+    /// Closure signature: `FnMut(&LayoutBox, scroll_y, &mut Vec<cmds>)`.
+    pub fn set_overlay_painter(
+        &mut self,
+        painter: Box<dyn FnMut(
+            &crate::browser::layout::LayoutBox,
+            f32,
+            &mut Vec<crate::browser::paint::DisplayCommand>,
+        )>,
+    ) {
+        self.overlay_painter = Some(painter);
     }
 
     /// `true` pokud focused element je input nebo textarea (host shell:
