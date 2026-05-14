@@ -64,6 +64,16 @@ impl ShellApp {
         if let Some(view) = webview.target_view() {
             renderer.present_external_to_swap_chain(view);
         }
+        // Sync window title z page title.
+        if let Some(window) = &self.window {
+            let t = webview.title();
+            if !t.is_empty() {
+                let win_title = format!("{} - RustWebEngine", t);
+                if window.title() != win_title {
+                    window.set_title(&win_title);
+                }
+            }
+        }
         // Pokud stranka ma aktivni animace, request_redraw na pristi frame.
         // Bez tohoto by anim "zamrzla" po prvnim renderu (RedrawRequested je
         // event-driven, ne continual).
