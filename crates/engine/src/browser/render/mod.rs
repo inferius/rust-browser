@@ -1116,25 +1116,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
             match event {
                 WindowEvent::CloseRequested => {
-                    // Save session pri shell mode quit.
-                    if false {
-                        // Save current tab state pred snapshot.
-                        {
-                            let cur = self.tabs.active_tab_mut();
-                            cur.scroll_y = self.scroll_y;
-                            cur.scroll_x = self.scroll_x;
-                            cur.url = self.base_url.clone();
-                        }
-                        let session = crate::devtools::session::Session {
-                            tabs: self.tabs.tabs.iter().map(|t|
-                                crate::devtools::session::SessionTab {
-                                    url: t.url.clone(),
-                                    title: t.title.clone(),
-                                }).collect(),
-                            active: self.tabs.active,
-                        };
-                        crate::devtools::session::save_session(&session);
-                    }
+                    // Session save smazany N+22 (multi-tab shell concern).
                     event_loop.exit();
                 }
                 WindowEvent::Resized(size) => {
@@ -1177,30 +1159,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     }
                     self.mouse_x = new_x;
                     self.mouse_y = new_y;
-                    // Tab drag reorder.
-                    if let Some(drag_idx) = self.tab_drag_idx {
-                        if false {
-                            let viewport_w = self.viewport_w_logical();
-                            let n = self.tabs.tabs.len();
-                            let tab_w = 200.0_f32.min((viewport_w - 60.0) / (n as f32).max(1.0));
-                            let target = ((self.mouse_x - 4.0) / (tab_w + 2.0)).max(0.0) as usize;
-                            let target = target.min(n.saturating_sub(1));
-                            if target != drag_idx {
-                                let tab = self.tabs.tabs.remove(drag_idx);
-                                self.tabs.tabs.insert(target, tab);
-                                if self.tabs.active == drag_idx {
-                                    self.tabs.active = target;
-                                } else if drag_idx < self.tabs.active && target >= self.tabs.active {
-                                    self.tabs.active -= 1;
-                                } else if drag_idx > self.tabs.active && target <= self.tabs.active {
-                                    self.tabs.active += 1;
-                                }
-                                self.tab_drag_idx = Some(target);
-                            }
-                            self.render();
-                            return;
-                        }
-                    }
+                    // Tab drag reorder smazany N+22.
                     // Resize drag: aktualizuj panel size dle dock position.
                     if self.devtools_resizing {
                         use crate::devtools::profile::DockPosition;
@@ -1351,40 +1310,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     // jiny tab nebo mimo chrome resetuje pending. Pri hover_start
                     // staci > 500ms -> tooltip aktivni.
                     self.shell_tab_tooltip = None;
-                    if false {
-                        let scale_local = self.renderer.as_ref().map(|r| r.scale_factor).unwrap_or(1.0);
-                        let mx = (position.x as f32) / (self.zoom * scale_local);
-                        let my = (position.y as f32) / (self.zoom * scale_local);
-                        let mut active_idx: Option<usize> = None;
-                        if my < 0.0_f32 {
-                            let viewport_w = self.viewport_w_logical();
-                            let hit = hit_chrome(viewport_w, 0.0_f32, &self.tabs, mx, my);
-                            if let ChromeHit::TabClick(idx) = hit {
-                                active_idx = Some(idx);
-                            }
-                        }
-                        match (active_idx, self.shell_tab_hover_pending.as_ref()) {
-                            (Some(idx), Some((prev_idx, _, _, _))) if *prev_idx == idx => {
-                                // Stale stejny tab - check elapsed.
-                                let elapsed = self.shell_tab_hover_pending.as_ref()
-                                    .map(|(_, _, _, t)| t.elapsed()).unwrap();
-                                if elapsed >= std::time::Duration::from_millis(500) {
-                                    if let Some(t) = self.tabs.tabs.get(idx) {
-                                        if t.title.chars().count() > 20 {
-                                            self.shell_tab_tooltip = Some((t.title.clone(), mx, my + 16.0));
-                                        }
-                                    }
-                                }
-                            }
-                            (Some(idx), _) => {
-                                // Novy tab - reset hover_start.
-                                self.shell_tab_hover_pending = Some((idx, mx, my, std::time::Instant::now()));
-                            }
-                            (None, _) => {
-                                self.shell_tab_hover_pending = None;
-                            }
-                        }
-                    }
                     if self.page_sel_dragging() {
                         self.page_sel_update_current((self.mouse_x, self.mouse_y));
                         self.render();
@@ -1427,20 +1352,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     }
                 }
                 WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } => {
-                    // Klik mimo chrome bar pri otevrenem addr_open = blur
-                    // (zavri editor). Klik UVNITR chrome bar prohlasuje
-                    // ChromeHit::UrlBar nize a addr_open zustane.
-                    if false && false {
-                        let chrome_h = self.shell_chrome_h_active();
-                        let my_screen = self.mouse_y - self.scroll_y;
-                        if my_screen >= chrome_h {
-            // (invalid bool assignment removed Session N+22)
-                            self.addr_input.clear();
-                            self.render();
-                            // Pokracujeme dal v hit-testu (klik mohl mirit
-                            // do page).
-                        }
-                    }
+                    // Addr bar click handler smazany N+22.
                     // Double-click detection: 400ms okno + < 5px vzdalenost.
                     let now = std::time::Instant::now();
                     let is_double_click = self.last_click_time
@@ -1465,196 +1377,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     let panel_h = self.panel_h_logical();
 
                     // Address bar autocomplete suggestion klik.
-                    if false && !self.addr_input.text.is_empty() {
-                        let viewport_w = self.viewport_w_logical();
-                        let bar_w = (viewport_w - 80.0).min(800.0);
-                        let bar_x = (viewport_w - bar_w) * 0.5;
-                        let bar_y = 8.0_f32;
-                        let bar_h = 40.0_f32;
-                        let popup_y = bar_y + bar_h + 4.0;
-                        let item_h = 28.0_f32;
-                        let mx = self.mouse_x;
-                        let my_screen = self.mouse_y - self.scroll_y;
-                        if mx >= bar_x && mx < bar_x + bar_w && my_screen >= popup_y {
-                            let q = self.addr_input.text.to_lowercase();
-                            let history = crate::devtools::history::load_history();
-                            let bookmarks = crate::devtools::bookmarks::load_bookmarks();
-                            let mut suggest: Vec<String> = Vec::new();
-                            for b in &bookmarks {
-                                if b.url.to_lowercase().contains(&q) || b.title.to_lowercase().contains(&q) {
-                                    suggest.push(b.url.clone());
-                                    if suggest.len() >= 8 { break; }
-                                }
-                            }
-                            for h in history.iter().rev() {
-                                if suggest.len() >= 8 { break; }
-                                if suggest.contains(&h.url) { continue; }
-                                if h.url.to_lowercase().contains(&q) || h.title.to_lowercase().contains(&q) {
-                                    suggest.push(h.url.clone());
-                                }
-                            }
-                            let idx = ((my_screen - popup_y) / item_h) as usize;
-                            if let Some(url) = suggest.get(idx).cloned() {
-            // (invalid bool assignment removed Session N+22)
-                                self.addr_input.clear();
-                                self.navigate_url(&url);
-                                return;
-                            }
-                        }
-                    }
                     // Scroll-to-top button hit (pravy dolni roh, jen pri scroll_y > 200).
-                    if false && self.scroll_y > 200.0 {
-                        let viewport_w = self.viewport_w_logical();
-                        let viewport_h = self.viewport_h_logical();
-                        let panel_h = self.panel_h_logical();
-                        let btn_x = viewport_w - 40.0;
-                        let btn_y = viewport_h - panel_h - 50.0;
-                        let mx = self.mouse_x;
-                        let my_screen = self.mouse_y - self.scroll_y;
-                        if mx >= btn_x && mx < btn_x + 32.0
-                           && my_screen >= btn_y && my_screen < btn_y + 32.0 {
-                            self.scroll_target_y = 0.0;
-                            self.render();
-                            return;
-                        }
-                    }
                     // Shell chrome hit-test (priorita nad page).
-                    if false {
-                        let viewport_w = self.viewport_w_logical();
-                        let mx = self.mouse_x;
-                        let my_screen = self.mouse_y - self.scroll_y;
-                        // Reading mode badge click - toggle.
-                        if false && my_screen < 28.0 {
-                            let bx = viewport_w - 200.0;
-                            if mx >= bx && mx <= bx + 100.0 && my_screen >= 4.0 && my_screen <= 24.0 {
-            // (invalid assignment removed Session N+22)
-                                self.cached_stylesheets = None;
-                                self.cached_style_map = None;
-                                self.cached_pseudo_map = None;
-                                self.cached_layout_root = None;
-                                self.render();
-                                return;
-                            }
-                        }
-                        if my_screen < 0.0_f32 {
-                            let hit = hit_chrome(viewport_w, 0.0_f32, &self.tabs, mx, my_screen);
-                            match hit {
-                                ChromeHit::TabClick(idx) => {
-                                    // Initiate drag tracking + switch.
-                                    self.tab_drag_idx = Some(idx);
-                                    self.tab_drag_x_start = self.mouse_x;
-                                    // Save current tab state pred switch.
-                                    {
-                                        let cur = self.tabs.active_tab_mut();
-                                        cur.scroll_y = self.scroll_y;
-                                        cur.scroll_x = self.scroll_x;
-                                        cur.html = self.html.clone();
-                                        cur.css = self.css.clone();
-                                        cur.url = self.base_url.clone();
-                                    }
-                                    self.switch_tab_with_swap(idx);
-                                    let t = self.tabs.active_tab().clone();
-                                    self.html = t.html;
-                                    self.css = t.css;
-                                    self.base_url = t.url;
-                                    self.cached_layout_root = None;
-                                    self.cached_stylesheets = None;
-                                    self.scroll_y = t.scroll_y;
-                                    self.scroll_x = t.scroll_x;
-                                    self.render();
-                                    return;
-                                }
-                                ChromeHit::TabClose(idx) => {
-                                    self.tabs.close(idx);
-                                    let t = self.tabs.active_tab().clone();
-                                    self.html = t.html;
-                                    self.css = t.css;
-                                    self.base_url = t.url;
-                                    self.cached_layout_root = None;
-                                    self.cached_stylesheets = None;
-                                    self.render();
-                                    return;
-                                }
-                                ChromeHit::NewTab => {
-                                    // Save current tab state pred open.
-                                    {
-                                        let cur = self.tabs.active_tab_mut();
-                                        cur.scroll_y = self.scroll_y;
-                                        cur.scroll_x = self.scroll_x;
-                                        cur.html = self.html.clone();
-                                        cur.css = self.css.clone();
-                                        cur.url = self.base_url.clone();
-                                    }
-                                    self.tabs.open(crate::browser::render::tabs::Tab::empty());
-                                    let t = self.tabs.active_tab().clone();
-                                    self.html = t.html;
-                                    self.css = t.css;
-                                    self.base_url = t.url;
-                                    self.scroll_y = t.scroll_y;
-                                    self.scroll_x = t.scroll_x;
-                                    self.cached_layout_root = None;
-                                    self.cached_stylesheets = None;
-                                    self.render();
-                                    return;
-                                }
-                                ChromeHit::Back => {
-                                    if self.history_idx > 0 {
-                                        self.history_idx -= 1;
-                                        let url = self.history[self.history_idx].clone();
-                                        self.navigate_url_no_history(&url);
-                                    }
-                                    return;
-                                }
-                                ChromeHit::Forward => {
-                                    if self.history_idx + 1 < self.history.len() {
-                                        self.history_idx += 1;
-                                        let url = self.history[self.history_idx].clone();
-                                        self.navigate_url_no_history(&url);
-                                    }
-                                    return;
-                                }
-                                ChromeHit::Reload => {
-                                    if let Some(u) = self.base_url.clone() {
-                                        self.navigate_url_no_history(&u);
-                                    }
-                                    return;
-                                }
-                                ChromeHit::UrlBar => {
-                                    crate::vlog!("[addr] open via UrlBar click");
-            // (invalid bool assignment removed Session N+22)
-                                    self.addr_input = crate::devtools::model::text_buffer::SimpleStringBuffer::with_text_selected(self.base_url.clone().unwrap_or_default());
-                                    self.render();
-                                    return;
-                                }
-                                ChromeHit::BookmarkClick(url) => {
-                                    self.navigate_url(&url);
-                                    return;
-                                }
-                                ChromeHit::DevtoolsToggle => {
-                                    self.devtools.panel_open = !self.devtools.panel_open;
-                                    self.render();
-                                    return;
-                                }
-                                ChromeHit::BookmarkStar => {
-                                    if let Some(url) = self.base_url.clone() {
-                                        let bms = crate::devtools::bookmarks::load_bookmarks();
-                                        if bms.iter().any(|b| b.url == url) {
-                                            crate::devtools::bookmarks::remove_bookmark(&url);
-                                        } else {
-                                            let title = url.split('/').last().unwrap_or(&url).to_string();
-                                            crate::devtools::bookmarks::add_bookmark(&url, &title);
-                                        }
-                                        self.render();
-                                    }
-                                    return;
-                                }
-                                ChromeHit::TabContextMenu(_) | ChromeHit::BookmarkContextMenu(_) => {
-                                    // RMB only - LMB ignoruje.
-                                }
-                                ChromeHit::None => {}
-                            }
-                        }
-                    }
 
                     // Main page scrollbar hit-test (priorita nad page click).
                     // Pozn: scrollbar je shifted by shift_command_x(-scroll_x), takze
@@ -2282,125 +2006,12 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 }
                 WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Middle, .. } => {
                     // Middle-click na tab chip = zavrit ten tab.
-                    if false {
-                        let viewport_w = self.viewport_w_logical();
-                        let mx = self.mouse_x;
-                        let my_screen = self.mouse_y - self.scroll_y;
-                        if my_screen < 0.0_f32 {
-                            let hit = hit_chrome(viewport_w, 0.0_f32, &self.tabs, mx, my_screen);
-                            if let ChromeHit::TabClick(idx) | ChromeHit::TabClose(idx) | ChromeHit::TabContextMenu(idx) = hit {
-                                let pinned = self.tabs.tabs.get(idx).map(|t| t.pinned).unwrap_or(false);
-                                if !pinned {
-                                    self.tabs.close(idx);
-                                    let t = self.tabs.active_tab().clone();
-                                    self.html = t.html;
-                                    self.css = t.css;
-                                    self.base_url = t.url;
-                                    self.cached_layout_root = None;
-                                    self.cached_stylesheets = None;
-                                    self.render();
-                                }
-                            }
-                        }
-                    }
                 }
                 WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Right, .. } => {
                     let raw_y = self.mouse_y - self.scroll_y;
                     let viewport_h = self.viewport_h_logical();
                     let panel_h = self.panel_h_logical();
                     // Shell chrome RMB: tab/bookmark context menu.
-                    if false && raw_y < 0.0_f32 {
-                        let viewport_w = self.viewport_w_logical();
-                        let mx = self.mouse_x;
-                        let hit = hit_chrome(viewport_w, 0.0_f32, &self.tabs, mx, raw_y);
-                        use crate::devtools::context_menu::{ContextMenuState, MenuItem, MenuAction};
-                        match hit {
-                            ChromeHit::TabClick(idx) | ChromeHit::TabClose(idx) | ChromeHit::TabContextMenu(idx) => {
-                                let pinned = self.tabs.tabs.get(idx).map(|t| t.pinned).unwrap_or(false);
-                                let items = vec![
-                                    MenuItem::Action {
-                                        label: if pinned { "Odepnout".to_string() } else { "Pripnout".to_string() },
-                                        action: MenuAction::TabPinToggle(idx),
-                                        enabled: true, shortcut: None,
-                                    },
-                                    MenuItem::Separator,
-                                    MenuItem::Action {
-                                        label: "Zavrit".to_string(),
-                                        action: MenuAction::TabClose(idx),
-                                        enabled: !pinned, shortcut: Some("Ctrl+W".to_string()),
-                                    },
-                                    MenuItem::Action {
-                                        label: "Zavrit ostatni".to_string(),
-                                        action: MenuAction::TabCloseOthers(idx),
-                                        enabled: true, shortcut: None,
-                                    },
-                                    MenuItem::Action {
-                                        label: "Duplikovat".to_string(),
-                                        action: MenuAction::TabDuplicate(idx),
-                                        enabled: true, shortcut: None,
-                                    },
-                                    MenuItem::Separator,
-                                    MenuItem::Action {
-                                        label: "Skupina: Modra".to_string(),
-                                        action: MenuAction::TabSetGroup(idx, Some([69, 161, 255, 255])),
-                                        enabled: true, shortcut: None,
-                                    },
-                                    MenuItem::Action {
-                                        label: "Skupina: Zelena".to_string(),
-                                        action: MenuAction::TabSetGroup(idx, Some([72, 191, 130, 255])),
-                                        enabled: true, shortcut: None,
-                                    },
-                                    MenuItem::Action {
-                                        label: "Skupina: Zluta".to_string(),
-                                        action: MenuAction::TabSetGroup(idx, Some([254, 191, 84, 255])),
-                                        enabled: true, shortcut: None,
-                                    },
-                                    MenuItem::Action {
-                                        label: "Skupina: Cervena".to_string(),
-                                        action: MenuAction::TabSetGroup(idx, Some([235, 87, 87, 255])),
-                                        enabled: true, shortcut: None,
-                                    },
-                                    MenuItem::Action {
-                                        label: "Skupina: Fialova".to_string(),
-                                        action: MenuAction::TabSetGroup(idx, Some([165, 99, 224, 255])),
-                                        enabled: true, shortcut: None,
-                                    },
-                                    MenuItem::Action {
-                                        label: "Skupina: Bez".to_string(),
-                                        action: MenuAction::TabSetGroup(idx, None),
-                                        enabled: true, shortcut: None,
-                                    },
-                                    MenuItem::Separator,
-                                    MenuItem::Action {
-                                        label: "Obnovit".to_string(),
-                                        action: MenuAction::TabReload(idx),
-                                        enabled: true, shortcut: Some("F5".to_string()),
-                                    },
-                                ];
-                                self.devtools.context_menu = Some(ContextMenuState::new(self.mouse_x, raw_y, items));
-                                self.render();
-                                return;
-                            }
-                            ChromeHit::BookmarkClick(url) | ChromeHit::BookmarkContextMenu(url) => {
-                                let items = vec![
-                                    MenuItem::Action {
-                                        label: "Otevrit".to_string(),
-                                        action: MenuAction::BookmarkOpen(url.clone()),
-                                        enabled: true, shortcut: None,
-                                    },
-                                    MenuItem::Action {
-                                        label: "Smazat".to_string(),
-                                        action: MenuAction::BookmarkDelete(url),
-                                        enabled: true, shortcut: None,
-                                    },
-                                ];
-                                self.devtools.context_menu = Some(ContextMenuState::new(self.mouse_x, raw_y, items));
-                                self.render();
-                                return;
-                            }
-                            _ => {}
-                        }
-                    }
                     if self.devtools.panel_open && raw_y >= viewport_h - panel_h {
                         use crate::browser::devtools_panel::{RESIZE_GRIP_H, SEARCH_H};
                         use crate::devtools::context_menu::{ContextMenuState,
@@ -2918,68 +2529,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         }
                     }
                     // Address bar typing.
-                    if false {
-                        use crate::browser::render::text_input::{dispatch_text_key, TextKeyOutcome};
-                        let ctrl = self.modifiers.control_key();
-                        let shift = self.modifiers.shift_key();
-                        let outcome = dispatch_text_key(&mut self.addr_input, &key_event.logical_key, ctrl, shift);
-                        match outcome {
-                            TextKeyOutcome::Submit => {
-                                let url = std::mem::take(&mut self.addr_input.text);
-                                self.addr_input.clear();
-            // (invalid bool assignment removed Session N+22)
-                                if !url.is_empty() {
-                                    let resolved = resolve_addr_input(&url);
-                                    println!("[address] navigate: {} -> {}", url, resolved);
-                                    if resolved.starts_with("http://") || resolved.starts_with("https://")
-                                        || resolved.starts_with("file:///") || resolved.starts_with("about:") {
-                                        self.navigate_url(&resolved);
-                                    } else {
-                                        let p = std::path::PathBuf::from(&resolved);
-                                        self.load_path(&p);
-                                    }
-                                }
-                                self.render();
-                                return;
-                            }
-                            TextKeyOutcome::Cancel => {
-            // (invalid bool assignment removed Session N+22)
-                                self.addr_input.clear();
-                                self.render();
-                                return;
-                            }
-                            TextKeyOutcome::Handled => {
-                                self.render();
-                                return;
-                            }
-                            _ => {}
-                        }
-                    }
                     // Find-on-page typing: pri otevrenem overlay capture chars.
-                    if false {
-                        use crate::browser::render::text_input::{dispatch_text_key, TextKeyOutcome};
-                        let ctrl = self.modifiers.control_key();
-                        let shift = self.modifiers.shift_key();
-                        let outcome = dispatch_text_key(&mut self.find_query, &key_event.logical_key, ctrl, shift);
-                        match outcome {
-                            TextKeyOutcome::Submit => {
-                                let dir = if shift { -1i32 } else { 1 };
-                                self.find_step(dir);
-                                return;
-                            }
-                            TextKeyOutcome::Cancel => {
-            // (invalid bool assignment removed Session N+22)
-                                self.find_query.clear();
-                                self.render();
-                                return;
-                            }
-                            TextKeyOutcome::Handled => {
-                                self.find_apply();
-                                return;
-                            }
-                            _ => {}
-                        }
-                    }
                     // Ctrl+Shift+F = toggle FPS counter overlay.
                     if self.modifiers.control_key() && self.modifiers.shift_key() {
                         if let Key::Character(s) = &key_event.logical_key {
@@ -3123,96 +2673,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                 return;
                             }
                             // Shell tab shortcuts.
-                            if false {
-                                if (s.as_str() == "T") && self.modifiers.shift_key() {
-                                    // Ctrl+Shift+T = restore last closed tab.
-                                    {
-                                        let cur = self.tabs.active_tab_mut();
-                                        cur.scroll_y = self.scroll_y;
-                                        cur.scroll_x = self.scroll_x;
-                                        cur.html = self.html.clone();
-                                        cur.css = self.css.clone();
-                                        cur.url = self.base_url.clone();
-                                    }
-                                    if self.tabs.restore_last_closed() {
-                                        let t = self.tabs.active_tab().clone();
-                                        self.html = t.html;
-                                        self.css = t.css;
-                                        self.base_url = t.url;
-                                        self.scroll_y = t.scroll_y;
-                                        self.scroll_x = t.scroll_x;
-                                        self.cached_layout_root = None;
-                                        self.cached_stylesheets = None;
-                                        // Reload pres URL aby JS state byl fresh.
-                                        if let Some(url) = self.base_url.clone() {
-                                            self.navigate_url_no_history(&url);
-                                        }
-                                        self.render();
-                                    }
-                                    return;
-                                }
-                                if s.as_str() == "t" || s.as_str() == "T" {
-                                    // Ctrl+T = new tab.
-                                    {
-                                        let cur = self.tabs.active_tab_mut();
-                                        cur.scroll_y = self.scroll_y;
-                                        cur.scroll_x = self.scroll_x;
-                                        cur.html = self.html.clone();
-                                        cur.css = self.css.clone();
-                                        cur.url = self.base_url.clone();
-                                    }
-                                    self.tabs.open(crate::browser::render::tabs::Tab::empty());
-                                    let t = self.tabs.active_tab().clone();
-                                    self.html = t.html;
-                                    self.css = t.css;
-                                    self.base_url = t.url;
-                                    self.scroll_y = t.scroll_y;
-                                    self.scroll_x = t.scroll_x;
-                                    self.cached_layout_root = None;
-                                    self.cached_stylesheets = None;
-                                    self.render();
-                                    return;
-                                }
-                                if s.as_str() == "n" || s.as_str() == "N" {
-                                    // Ctrl+N = open new browser window (spawn novy proces).
-                                    let exe = std::env::current_exe().ok();
-                                    if let Some(exe) = exe {
-                                        let _ = std::process::Command::new(exe)
-                                            .arg("browser")
-                                            .spawn();
-                                    }
-                                    return;
-                                }
-                                if s.as_str() == "w" || s.as_str() == "W" {
-                                    // Ctrl+W = close active tab.
-                                    let active = self.tabs.active;
-                                    self.tabs.close(active);
-                                    let t = self.tabs.active_tab().clone();
-                                    self.html = t.html;
-                                    self.css = t.css;
-                                    self.base_url = t.url;
-                                    self.cached_layout_root = None;
-                                    self.cached_stylesheets = None;
-                                    self.render();
-                                    return;
-                                }
-                                // Ctrl+1..9 jump to tab N-1.
-                                if let Ok(n) = s.as_str().parse::<usize>() {
-                                    if n >= 1 && n <= 9 {
-                                        if n - 1 < self.tabs.tabs.len() {
-                                            self.switch_tab_with_swap(n - 1);
-                                            let t = self.tabs.active_tab().clone();
-                                            self.html = t.html;
-                                            self.css = t.css;
-                                            self.base_url = t.url;
-                                            self.cached_layout_root = None;
-                                            self.cached_stylesheets = None;
-                                            self.render();
-                                        }
-                                        return;
-                                    }
-                                }
-                            }
                         }
                         // Ctrl+Tab = next tab.
                         if matches!(&key_event.logical_key, Key::Named(NamedKey::Tab)) && false {
@@ -3381,10 +2841,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // Close prioritou: bookmark picker > shortcuts overlay > color picker > settings >
             // class manager > tab overflow > addr bar > find > selection.
             // bookmark_picker close smazany (Session N+22).
-            if false {
-            // (invalid assignment removed Session N+22)
-                return true;
-            }
             if self.devtools.color_picker.is_some() {
                 self.devtools.color_picker = None;
                 return true;
@@ -3399,16 +2855,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             }
             if self.devtools.tab_overflow_open {
                 self.devtools.tab_overflow_open = false;
-                return true;
-            }
-            if false {
-            // (invalid bool assignment removed Session N+22)
-                self.addr_input.clear();
-                return true;
-            }
-            if false {
-            // (invalid bool assignment removed Session N+22)
-                self.find_query.clear();
                 return true;
             }
             // Last resort: clear page selection.
@@ -6222,18 +5668,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             }
             // Shell mode: shift page commands dolu o chrome_h aby content
             // nezacinal pod chrome bar.
-            if false {
-                let bm_count = crate::devtools::bookmarks::bookmarks_count();
-                let dy = 64.0 + if bm_count > 0 && false { 24.0 } else { 0.0 };
-                for cmd in display_list.iter_mut() {
-                    use DisplayCommand::*;
-                    match cmd {
-                        Rect { y, .. } | Text { y, .. } | Border { y, .. }
-                        | Image { y, .. } | Gradient { y, .. } | Shadow { y, .. } => *y += dy,
-                        _ => {}
-                    }
-                }
-            }
             perf_t("post_paint::shifts", _t_canvas);
             let _t_overlays = std::time::Instant::now();
             // Split point: vsechno za timto bodem se renderuje AZ PO WebGL passu,
@@ -6247,10 +5681,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // (overlay_cmds nejsou shifted v glob loop drive). Bez tohoto
             // devtools highlight rect kreslen v layout-coords (y=10) ale paint
             // jiz posunul page (y=74) -> uzivatel vidi highlight jinde.
-            let chrome_dy_for_highlight = if false {
-                let bm_count = crate::devtools::bookmarks::bookmarks_count();
-                64.0 + if bm_count > 0 && false { 24.0 } else { 0.0 }
-            } else { 0.0 };
+            let chrome_dy_for_highlight = 0.0_f32;
             let chrome_dx_for_highlight = -self.scroll_x;
             crate::browser::devtools_panel::paint_element_highlight_offset(
                 &mut display_list,
@@ -6371,151 +5802,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // V shell modu se edit dela primo v chrome URL baru, popup zustava
             // jen pro autocomplete - ale vykresluje se v non-shell modu nebo
             // pri non-empty input.
-            if false && !false {
-                let vw = (r.config.width as f32) / (self.zoom * r.scale_factor);
-                let bar_w: f32 = (vw - 80.0).min(800.0);
-                let bar_h: f32 = 40.0;
-                let bar_x = (vw - bar_w) * 0.5;
-                let bar_y = 8.0;
-                display_list.push(DisplayCommand::Rect {
-                    x: bar_x, y: bar_y, w: bar_w, h: bar_h,
-                    color: [40, 40, 40, 240], radius: 6.0,
-                });
-                let label = format!("URL: {}", self.addr_input.text);
-                display_list.push(DisplayCommand::Text {
-                    x: bar_x + 12.0, y: bar_y + 10.0,
-                    content: label.clone(), color: [255, 255, 255, 255],
-                    font_size: 14.0, bold: false, font_weight: 400, italic: false,
-                    font_family: "Inter".into(),
-                    strikethrough: false, underline: false,
-                });
-                // Cursor blink ~ 60 frame interval.
-                if (self.devtools.frame_counter / 30) % 2 == 0 {
-                    let label_w = (label.len() as f32) * 7.5;
-                    display_list.push(DisplayCommand::Rect {
-                        x: bar_x + 14.0 + label_w, y: bar_y + 10.0,
-                        w: 2.0, h: 18.0,
-                        color: [255, 255, 255, 255], radius: 0.0,
-                    });
-                }
-                // Autocomplete suggestions z history (max 8 matchu).
-                let q = self.addr_input.text.to_lowercase();
-                if !q.is_empty() {
-                    let history = crate::devtools::history::load_history();
-                    let bookmarks = crate::devtools::bookmarks::load_bookmarks();
-                    let mut suggest: Vec<(String, String, bool)> = Vec::new();
-                    for b in &bookmarks {
-                        if b.url.to_lowercase().contains(&q) || b.title.to_lowercase().contains(&q) {
-                            suggest.push((b.url.clone(), b.title.clone(), true));
-                            if suggest.len() >= 8 { break; }
-                        }
-                    }
-                    for h in history.iter().rev() {
-                        if suggest.len() >= 8 { break; }
-                        if suggest.iter().any(|(u, _, _)| *u == h.url) { continue; }
-                        if h.url.to_lowercase().contains(&q) || h.title.to_lowercase().contains(&q) {
-                            suggest.push((h.url.clone(), h.title.clone(), false));
-                        }
-                    }
-                    if !suggest.is_empty() {
-                        let popup_y = bar_y + bar_h + 4.0;
-                        let item_h = 28.0_f32;
-                        let popup_h = (suggest.len() as f32) * item_h;
-                        display_list.push(DisplayCommand::Rect {
-                            x: bar_x, y: popup_y, w: bar_w, h: popup_h,
-                            color: [40, 40, 40, 240], radius: 6.0,
-                        });
-                        for (i, (url, title, is_bm)) in suggest.iter().enumerate() {
-                            let iy = popup_y + (i as f32) * item_h;
-                            let icon = if *is_bm { "★" } else { "↻" };
-                            display_list.push(DisplayCommand::Text {
-                                x: bar_x + 12.0, y: iy + 6.0, content: icon.to_string(),
-                                color: [191, 191, 201, 255],
-                                font_size: 14.0, bold: false, font_weight: 400, italic: false,
-                                font_family: "Inter".into(),
-                                strikethrough: false, underline: false,
-                            });
-                            display_list.push(DisplayCommand::Text {
-                                x: bar_x + 32.0, y: iy + 4.0, content: title.clone(),
-                                color: [255, 255, 255, 255],
-                                font_size: 13.0, bold: true, font_weight: 700, italic: false,
-                                font_family: "Inter".into(),
-                                strikethrough: false, underline: false,
-                            });
-                            let url_short: String = url.chars().take(80).collect();
-                            display_list.push(DisplayCommand::Text {
-                                x: bar_x + 32.0, y: iy + 16.0, content: url_short,
-                                color: [161, 161, 174, 255],
-                                font_size: 11.0, bold: false, font_weight: 400, italic: false,
-                                font_family: "Inter".into(),
-                                strikethrough: false, underline: false,
-                            });
-                        }
-                    }
-                }
-            }
             // Find on page: highlight matches + overlay s query a counter.
-            if false {
-                let matches = find_matches_in(&layout_root, &self.find_query.text);
-                let cur_idx = self.find_match_idx;
-                for (i, &(my, mx, mw)) in matches.iter().enumerate() {
-                    let color = if i == cur_idx { [255, 165, 0, 180] } else { [255, 235, 100, 130] };
-                    display_list.push(DisplayCommand::Rect {
-                        x: mx - self.scroll_x, y: my - self.scroll_y, w: mw, h: 18.0,
-                        color, radius: 2.0,
-                    });
-                }
-                let vw = (r.config.width as f32) / (self.zoom * r.scale_factor);
-                let bar_w: f32 = 320.0;
-                let bar_h: f32 = 40.0;
-                let bar_x = vw - bar_w - 8.0;
-                let bar_y = 8.0;
-                display_list.push(DisplayCommand::Rect {
-                    x: bar_x, y: bar_y, w: bar_w, h: bar_h,
-                    color: [40, 40, 40, 230], radius: 6.0,
-                });
-                let counter = if matches.is_empty() {
-                    if self.find_query.text.is_empty() { String::from("Find:") } else { String::from("0/0") }
-                } else {
-                    format!("{}/{}", cur_idx + 1, matches.len())
-                };
-                display_list.push(DisplayCommand::Text {
-                    x: bar_x + 12.0, y: bar_y + 10.0,
-                    content: format!("Find: {}", self.find_query.text),
-                    color: [255, 255, 255, 255],
-                    font_size: 14.0, bold: false, font_weight: 400, italic: false,
-                    font_family: "Inter".into(),
-                    strikethrough: false, underline: false,
-                });
-                // Counter vpravo + nav buttons.
-                display_list.push(DisplayCommand::Text {
-                    x: bar_x + bar_w - 100.0, y: bar_y + 10.0,
-                    content: counter.clone(),
-                    color: if matches.is_empty() && !self.find_query.text.is_empty() {
-                        [255, 117, 100, 255]
-                    } else { [191, 191, 201, 255] },
-                    font_size: 12.0, bold: true, font_weight: 700, italic: false,
-                    font_family: "Inter".into(),
-                    strikethrough: false, underline: false,
-                });
-                // Up / Down arrow buttons (Shift+Enter / Enter).
-                display_list.push(DisplayCommand::Text {
-                    x: bar_x + bar_w - 50.0, y: bar_y + 10.0,
-                    content: "↑".to_string(),
-                    color: [191, 191, 201, 255],
-                    font_size: 14.0, bold: false, font_weight: 400, italic: false,
-                    font_family: "Inter".into(),
-                    strikethrough: false, underline: false,
-                });
-                display_list.push(DisplayCommand::Text {
-                    x: bar_x + bar_w - 32.0, y: bar_y + 10.0,
-                    content: "↓".to_string(),
-                    color: [191, 191, 201, 255],
-                    font_size: 14.0, bold: false, font_weight: 400, italic: false,
-                    font_family: "Inter".into(),
-                    strikethrough: false, underline: false,
-                });
-            }
             // (Highlight rect uz vykreslen pres paint_element_highlight nahore.)
 
             // Scrollbar rendering: pri page content overflow Y emituj track + thumb.
@@ -6524,10 +5811,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // ne od y=0 - jinak by track preplnoval shell. Real Chrome scrollbar
             // je take cely v page area pod chrome.
             let panel_h_logical = if self.devtools.panel_open { self.devtools.panel_h.min(viewport_h_logical * 0.7) } else { 0.0 };
-            let chrome_top = if false {
-                let bm_count = crate::devtools::bookmarks::bookmarks_count();
-                64.0 + if bm_count > 0 && false { 24.0 } else { 0.0 }
-            } else { 0.0 };
+            let chrome_top = 0.0_f32;
             let viewport_w = viewport_w_logical;
             let viewport_h = viewport_h_logical - panel_h_logical - chrome_top;
             let total_h = layout_root.rect.height;
@@ -6682,10 +5966,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // Pri WebGL canvas s pending queue, vyuzij webgl-aware draw flow.
             let webgl_states_opt = self.interpreter.as_ref().map(|i| i.webgl_states.clone());
             // Shell chrome top - page render se na nej zarizne scissorem.
-            let chrome_top_logical = if false {
-                let bm_count = crate::devtools::bookmarks::bookmarks_count();
-                64.0 + if bm_count > 0 && false { 24.0 } else { 0.0 }
-            } else { 0.0 };
+            let chrome_top_logical = 0.0_f32;
             let _t_gpu = std::time::Instant::now();
             // Phase 2 dual-render cache (page_skip / shell_skip) disabled -
             // compose alpha-blend bug zpusoboval invisible shell. Phase 1
