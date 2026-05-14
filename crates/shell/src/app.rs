@@ -61,9 +61,14 @@ pub struct ShellApp {
     /// injectnutymi panel HTMLs + theme.css + cdp.js. Komunikace s page
     /// webview pres `window.cdp.send(...)` JS API (D6 nativní binding).
     devtools: Option<WebView>,
-    /// True kdyz devtools je viditelne. D4a (MVP) = full-screen toggle
-    /// (renderuje se bud page, nebo devtools). D4b real split layout TBD.
+    /// True kdyz devtools je viditelne. D4b = horizontal split (page top,
+    /// devtools bottom). Page WebView dostane top `1 - devtools_split_ratio`
+    /// vysky, devtools dostane bottom `devtools_split_ratio`.
     devtools_visible: bool,
+    /// Pomer devtools cast vyrazneho viewport (0.0..1.0). Default 0.4 =
+    /// devtools dostane spodnich 40%, page top 60%. Splitter drag (D4c TBD)
+    /// upravi pres mouse drag.
+    devtools_split_ratio: f32,
     /// DevTools target adapter (D2). Lazy init pri F12 toggle. Drzi events
     /// buffer + breakpoint counter. Dispatch volame `target.handle_request(
     /// &mut self.webview, req)` ve main loop.
@@ -94,6 +99,7 @@ impl ShellApp {
             webview: None,
             devtools: None,
             devtools_visible: false,
+            devtools_split_ratio: 0.4,
             devtools_target: None,
             cdp_channel: None,
             mouse_x: 0.0,
@@ -310,7 +316,6 @@ impl ShellApp {
             // redraw - drain queue + dispatch pres target + page WebView.
             let channel = CdpChannel::new();
             Self::install_cdp_natives(&mut dv, &channel);
-            // Diagnostika - velikost slozenehoho HTML + presence theme/cdp markeru.
             let html_len = Self::build_devtools_html().len();
             let css_len = Self::extract_inline_styles(&Self::build_devtools_html()).len();
             println!("[shell] devtools WebView armed: html={} bytes, inline css={} bytes",
@@ -320,6 +325,8 @@ impl ShellApp {
             self.cdp_channel = Some(channel);
             println!("[shell] devtools CDP channel ready");
         }
+        // Resize obou webview podle aktualniho split state (toggle on/off).
+        self.resize_views();
         println!("[shell] devtools visible: {}", self.devtools_visible);
         if let Some(w) = &self.window { w.request_redraw(); }
     }
@@ -346,32 +353,19 @@ impl ShellApp {
 
     fn redraw(&mut self) {
         // CDP pump pred render - drain pending requests + push responses.
-        // Pri devtools_visible cdp.js setInterval pollEvents loaduje
-        // queue items az do dalsiho native call. Pump per frame zaruci
-        // ze response je dostupna behem same frame jako request.
         if self.devtools_visible {
             self.pump_cdp();
         }
         let renderer = match &mut self.renderer { Some(r) => r, None => return };
-        // D4a (MVP): full-screen toggle - pri devtools_visible renderuje se
-        // devtools WebView, jinak page WebView. Real split layout = D4b
-        // (vyzaduje Renderer::present_two_external_split helper).
-        let active: &mut WebView = if self.devtools_visible {
-            match &mut self.devtools { Some(w) => w, None => return }
-        } else {
-            match &mut self.webview { Some(w) => w, None => return }
-        };
-        // WebView vsechno: cascade -> anim tick -> layout -> sticky ->
-        // paint anim -> paint -> scroll shift -> scrollbar overlay ->
-        // atlas warm -> draw_segments -> RT view.
-        if active.render_via(renderer).is_none() { return; }
-        // Shell jen present: RT view -> swap chain.
-        if let Some(view) = active.target_view() {
-            renderer.present_external_to_swap_chain(view);
-        }
-        let active_anim = active.has_active_animations();
-        // Sync window title z page (ne devtools) title.
+
         if !self.devtools_visible {
+            // Page-only fullscreen.
+            let webview = match &mut self.webview { Some(w) => w, None => return };
+            if webview.render_via(renderer).is_none() { return; }
+            if let Some(view) = webview.target_view() {
+                renderer.present_external_to_swap_chain(view);
+            }
+            let active_anim = webview.has_active_animations();
             if let (Some(window), Some(wv)) = (&self.window, &self.webview) {
                 let t = wv.title();
                 if !t.is_empty() {
@@ -381,10 +375,57 @@ impl ShellApp {
                     }
                 }
             }
+            if active_anim {
+                if let Some(w) = &self.window { w.request_redraw(); }
+            }
+            return;
         }
-        // Continual redraw pri active animations.
-        if active_anim {
+
+        // D4b split layout: page top, devtools bottom. Oba viewporty dostanou
+        // sve vlasne velikosti pres resize call (toggle/Resized handler).
+        // Render kazdy do offscreen RT, pak present_split_external compose.
+        let split = self.devtools_split_ratio.clamp(0.05, 0.95);
+        let page_ratio = 1.0 - split;
+        // `renderer` lokal je &mut z line above. Render kazde do offscreen
+        // RT s field-disjoint borrows do self.webview / self.devtools.
+        let page_anim = self.webview.as_mut()
+            .map(|wv| { let _ = wv.render_via(renderer); wv.has_active_animations() })
+            .unwrap_or(false);
+        let dev_anim = self.devtools.as_mut()
+            .map(|wv| { let _ = wv.render_via(renderer); wv.has_active_animations() })
+            .unwrap_or(false);
+        // Drop &mut renderer, znova borrowuj jako &renderer pro present_split.
+        // Field-disjoint immut refs do webview/devtools/renderer = OK.
+        let _ = renderer;
+        if let (Some(r), Some(page_v), Some(dev_v)) = (
+            self.renderer.as_ref(),
+            self.webview.as_ref().and_then(|w| w.target_view()),
+            self.devtools.as_ref().and_then(|w| w.target_view()),
+        ) {
+            r.present_split_external_to_swap_chain(page_v, dev_v, page_ratio);
+        }
+        if page_anim || dev_anim {
             if let Some(w) = &self.window { w.request_redraw(); }
+        }
+    }
+
+    /// Resize page + devtools webview podle aktualniho devtools_visible
+    /// + devtools_split_ratio. Volat pri F12 toggle + WindowResize.
+    fn resize_views(&mut self) {
+        let r = match &self.renderer { Some(r) => r, None => return };
+        let sf = r.scale_factor_value().max(0.01);
+        let (sw, sh) = r.surface_size();
+        let lw = ((sw as f32 / sf) as u32).max(1);
+        let lh_full = ((sh as f32 / sf) as u32).max(1);
+        if self.devtools_visible {
+            let split = self.devtools_split_ratio.clamp(0.05, 0.95);
+            let dev_h = ((lh_full as f32) * split).round().max(1.0) as u32;
+            let page_h = (lh_full - dev_h).max(1);
+            if let Some(wv) = &mut self.webview { wv.resize(lw, page_h, sf); }
+            if let Some(dv) = &mut self.devtools { dv.resize(lw, dev_h, sf); }
+        } else {
+            if let Some(wv) = &mut self.webview { wv.resize(lw, lh_full, sf); }
+            if let Some(dv) = &mut self.devtools { dv.resize(lw, lh_full, sf); }
         }
     }
 }
@@ -436,25 +477,11 @@ impl ApplicationHandler for ShellApp {
                 if let Some(r) = &mut self.renderer {
                     r.resize_surface(size.width, size.height);
                 }
-                if let Some(r) = &self.renderer {
-                    let sf = r.scale_factor_value().max(0.01);
-                    let (sw, sh) = r.surface_size();
-                    let lw = ((sw as f32 / sf) as u32).max(1);
-                    let lh = ((sh as f32 / sf) as u32).max(1);
-                    if let Some(wv) = &mut self.webview { wv.resize(lw, lh, sf); }
-                    if let Some(dv) = &mut self.devtools { dv.resize(lw, lh, sf); }
-                }
+                self.resize_views();
                 if let Some(w) = &self.window { w.request_redraw(); }
             }
-            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
-                if let Some(r) = &self.renderer {
-                    let (sw, sh) = r.surface_size();
-                    let sf = (scale_factor as f32).max(0.01);
-                    let lw = ((sw as f32 / sf) as u32).max(1);
-                    let lh = ((sh as f32 / sf) as u32).max(1);
-                    if let Some(wv) = &mut self.webview { wv.resize(lw, lh, sf); }
-                    if let Some(dv) = &mut self.devtools { dv.resize(lw, lh, sf); }
-                }
+            WindowEvent::ScaleFactorChanged { .. } => {
+                self.resize_views();
                 if let Some(w) = &self.window { w.request_redraw(); }
             }
             WindowEvent::RedrawRequested => {

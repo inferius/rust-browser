@@ -6234,6 +6234,96 @@ impl Renderer {
         true
     }
 
+    /// Compositni 2 offscreen textures vertical split do swap chain.
+    /// `top_view` se zobrazi v top `split_ratio` cast (0.0..1.0), `bottom_view`
+    /// dole. Bez separatoru / borderu - shell je muze nakreslit pres.
+    /// Pres set_viewport scaling - kazdy fullscreen triangle samples 0..1 ze
+    /// sve src_view, ale fyzicky zabira jen sub-rect swap chain.
+    ///
+    /// Pouziti: D4b devtools split layout (page top 70%, devtools bottom 30%).
+    /// Pokud `split_ratio` <= 0.0 nebo >= 1.0, redukuje na single-view present.
+    pub fn present_split_external_to_swap_chain(
+        &self,
+        top_view: &wgpu::TextureView,
+        bottom_view: &wgpu::TextureView,
+        split_ratio: f32,
+    ) -> bool {
+        if split_ratio <= 0.0 { return self.present_external_to_swap_chain(bottom_view); }
+        if split_ratio >= 1.0 { return self.present_external_to_swap_chain(top_view); }
+
+        let frame = match self.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
+            _ => return false,
+        };
+        let swap_view = frame.texture.create_view(&Default::default());
+
+        let identity: [f32; 20] = [
+            1.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0,
+            0.0, 0.0, 0.0, 1.0,
+            0.0, 0.0, 0.0, 0.0,
+        ];
+        self.queue.write_buffer(&self.compose_uniform_buf, 0, bytemuck::cast_slice(&identity));
+
+        let bg_top = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("present_split_top_bg"),
+            layout: &self.compose_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(top_view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.atlas_smp) },
+                wgpu::BindGroupEntry { binding: 2, resource: self.compose_uniform_buf.as_entire_binding() },
+            ],
+        });
+        let bg_bottom = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("present_split_bottom_bg"),
+            layout: &self.compose_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(bottom_view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.atlas_smp) },
+                wgpu::BindGroupEntry { binding: 2, resource: self.compose_uniform_buf.as_entire_binding() },
+            ],
+        });
+
+        let w = self.config.width as f32;
+        let h = self.config.height as f32;
+        let top_h = (h * split_ratio).max(1.0).floor();
+        let bottom_y = top_h;
+        let bottom_h = (h - top_h).max(1.0);
+
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
+                label: Some("present_split_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    depth_slice: None,
+                    view: &swap_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.1, g: 0.1, b: 0.1, a: 1.0 }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(&self.compose_pipeline);
+            // Top viewport - top_view samples 0..1 zabira top scissor area.
+            pass.set_viewport(0.0, 0.0, w, top_h, 0.0, 1.0);
+            pass.set_bind_group(0, &bg_top, &[]);
+            pass.draw(0..3, 0..1);
+            // Bottom viewport - bottom_view samples 0..1 zabira bottom scissor area.
+            pass.set_viewport(0.0, bottom_y, w, bottom_h, 0.0, 1.0);
+            pass.set_bind_group(0, &bg_bottom, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        self.queue.submit(std::iter::once(encoder.finish()));
+        frame.present();
+        true
+    }
+
     /// Pristup k device Renderer pro hostujici aplikaci (custom rendering,
     /// shader compile, buffer create). Sdileny zaroven s WebView pres Engine.
     pub fn device(&self) -> &wgpu::Device { &self.device }
