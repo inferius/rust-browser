@@ -94,6 +94,9 @@ pub struct WebView {
     /// (App emits inspector overlay nad webview RT pres dalsi draw_segments
     /// pass; shell nepouziva).
     pub(crate) last_layout_root: Option<crate::browser::layout::LayoutBox>,
+    /// Async jobs registry - background work (image lazy load, file IO).
+    /// Drain per render_via vola pending callbacks v main thread.
+    pub(crate) async_jobs: crate::browser::async_jobs::AsyncJobsRegistry,
 }
 
 impl WebView {
@@ -123,6 +126,7 @@ impl WebView {
             prev_style_map: None,
             active_transitions: Vec::new(),
             last_layout_root: None,
+            async_jobs: crate::browser::async_jobs::AsyncJobsRegistry::new(),
         }
     }
 
@@ -438,6 +442,21 @@ impl WebView {
         // RT physical px.
         renderer.zoom = self.zoom;
         renderer.scale_factor = self.scale_factor;
+        // Drain async jobs (image lazy loads, file IO callbacks). Volane PRED
+        // cascade aby novy state byl dostupny v style_map (e.g. image natural
+        // dims po load aktualizuji layout).
+        self.async_jobs.drain();
+
+        // Drain interpreter event queues (WebSocket frames, fetch responses,
+        // requestAnimationFrame callbacks). Vola se kdyz interpreter existuje
+        // (Po polarity invert WebView vlastni interpreter; drive App).
+        if let Some(interp) = self.interpreter.as_mut() {
+            let _ = interp.drain_websockets();
+            interp.drain_fetches();
+            let ts_ms = self.animation_origin.elapsed().as_secs_f64() * 1000.0;
+            let _ = interp.drain_raf_callbacks(ts_ms);
+        }
+
         let target_view = self.target_view.as_ref()?;
         let doc = self.document.as_ref()?;
 
