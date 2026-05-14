@@ -440,7 +440,12 @@ impl WebView {
                         if focusable {
                             crate::browser::cascade::set_focused_node(Some(
                                 std::rc::Rc::as_ptr(target) as usize));
+                        } else {
+                            // Klik na non-focusable -> clear focus (blur).
+                            crate::browser::cascade::set_focused_node(None);
                         }
+                    } else {
+                        crate::browser::cascade::set_focused_node(None);
                     }
                     if let Some(target) = target_node {
                         if let Some(interp) = self.interpreter.as_mut() {
@@ -489,7 +494,14 @@ impl WebView {
             InputEvent::MouseUp { .. } => {
                 // Phase 99: mouseup event + click-vs-drag distinguish.
             }
-            InputEvent::MouseLeave => {}
+            InputEvent::MouseLeave => {
+                // Clear :hover state pri opusteni viewport.
+                if crate::browser::cascade::get_hovered_node().is_some() {
+                    crate::browser::cascade::set_hovered_node(None);
+                    self.dirty = true;
+                    response.dirty = true;
+                }
+            }
             InputEvent::KeyDown { ref key, .. } => {
                 if let Some(target) = self.focused_dom_node() {
                     let is_input = matches!(target.tag_name().as_deref(),
