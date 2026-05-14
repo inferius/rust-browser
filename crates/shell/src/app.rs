@@ -54,12 +54,19 @@ impl ShellApp {
     fn redraw(&mut self) {
         let renderer = match &mut self.renderer { Some(r) => r, None => return };
         let webview = match &mut self.webview { Some(w) => w, None => return };
-        // WebView vsechno: cascade -> layout -> paint -> scroll shift ->
-        // scrollbar overlay -> atlas warm -> draw_segments -> RT view.
+        // WebView vsechno: cascade -> anim tick -> layout -> sticky ->
+        // paint anim -> paint -> scroll shift -> scrollbar overlay ->
+        // atlas warm -> draw_segments -> RT view.
         if webview.render_via(renderer).is_none() { return; }
         // Shell jen present: RT view -> swap chain.
         if let Some(view) = webview.target_view() {
             renderer.present_external_to_swap_chain(view);
+        }
+        // Pokud stranka ma aktivni animace, request_redraw na pristi frame.
+        // Bez tohoto by anim "zamrzla" po prvnim renderu (RedrawRequested je
+        // event-driven, ne continual).
+        if webview.has_active_animations() {
+            if let Some(w) = &self.window { w.request_redraw(); }
         }
     }
 }

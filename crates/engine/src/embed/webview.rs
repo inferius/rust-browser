@@ -574,6 +574,14 @@ impl WebView {
     /// HiDPI scale_factor (1.0 / 1.5 / 2.0 ...).
     pub fn scale_factor(&self) -> f32 { self.scale_factor }
 
+    /// `true` pokud stylesheets obsahuji @keyframes (= moznost aktivni
+    /// animace). Hostujici aplikace pak request_redraw kazdy frame.
+    /// Pro presnejsi detekci by hostujici aplikace mela cekat dokud
+    /// vsechny anim iterations skoncily.
+    pub fn has_active_animations(&self) -> bool {
+        self.stylesheets.iter().any(|s| !s.keyframes.is_empty())
+    }
+
     /// Nastav zoom level. Stejne jako resize trigger relayout.
     pub fn set_zoom(&mut self, zoom: f32) {
         let z = zoom.clamp(0.25, 5.0);
