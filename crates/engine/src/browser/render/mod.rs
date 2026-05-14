@@ -860,11 +860,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         /// panelu zacne drag. Pri pohybu mysi se animation_origin shifte tak
         /// aby progress odpovidal pozici kursoru na track.
         animations_scrubber_drag: bool,
-        /// Per-frame painted TextRun pole - foundation pro per-glyph selection.
-        /// Naplnuje se po build_vertices, pouzivame pro hit-test (mouse -> SelectionPos).
-        /// Aktualne flow-extract zustava authoritative pro copy; postupny prechod
-        /// na per-glyph anchor/focus.
-        painted_text_runs: Vec<crate::browser::textrun::TextRun>,
+        // painted_text_runs field smazany Phase 99: nikdy zapisovan na App vrstve
+        // (webview.painted_text_runs je primary). Delegate getter pres webview.
         /// Async jobs registry - background work (file IO, image lazy load).
         /// Drain per frame; on_complete callbacks beha v main thread (mohou
         /// modifikovat Interpreter pres Rc<RefCell>).
@@ -2817,19 +2814,21 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             }
         }
         /// Hit-test (x, y) na painted_text_runs pro per-glyph selection.
-        /// Vraci SelectionPos nebo None (mimo vsech runs).
+        /// Vraci SelectionPos nebo None (mimo vsech runs). Delegate na webview.
         pub fn hit_test_text_run(&self, x: f32, y: f32) -> Option<crate::browser::textrun::SelectionPos> {
-            crate::browser::textrun::hit_test_runs(&self.painted_text_runs, x, y)
+            self.webview.as_ref().and_then(|w| w.hit_test_text(x, y))
         }
 
         /// Extract text z anchor->focus SelectionPos pro Ctrl+C copy.
-        /// Per-glyph precision (vs flow-based bbox extract).
+        /// Per-glyph precision (vs flow-based bbox extract). Delegate na webview.
         pub fn extract_text_run_selection(&self,
             anchor: crate::browser::textrun::SelectionPos,
             focus: crate::browser::textrun::SelectionPos,
         ) -> String {
             let sel = crate::browser::textrun::TextSelection { anchor, focus };
-            sel.extract_text(&self.painted_text_runs)
+            self.webview.as_ref()
+                .map(|w| sel.extract_text(w.text_runs()))
+                .unwrap_or_default()
         }
 
         fn page_sel_clear(&self) {
@@ -4037,7 +4036,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         paused_animation_nodes: std::collections::HashSet::new(),
         paused_node_styles: std::collections::HashMap::new(),
         animations_scrubber_drag: false,
-        painted_text_runs: Vec::new(),
         async_jobs: crate::browser::async_jobs::AsyncJobsRegistry::new(),
         frame_times_ms: std::collections::VecDeque::with_capacity(60),
         // FPS overlay default off - Ctrl+Shift+F toggle. Drive default zapnuty
