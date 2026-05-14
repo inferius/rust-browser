@@ -968,12 +968,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         /// page reload. Worker thread holds vlastni Interpreter, eval JS s
         /// blocking pause podpora. UI thread polluje events per frame.
         debug_runner: Option<crate::devtools::debug_runner::DebugRunner>,
-        /// Browser zoom factor (1.0 = 100%). Ctrl++/Ctrl+- meni v krocich,
-        /// Ctrl+0 reset. Layout viewport pri zoomu = window/zoom (tj. logical
-        /// dimensions mensi -> reflow). Render uniform vp = window/zoom -> px
-        /// padaji do scaled NDC. Glyf rasterization ale na zoom = blur, ale
-        /// browsersko-funkcni.
-        zoom: f32,
+        // zoom field smazany (polarity invert) - read pres self.zoom() method
+        // delegate webview. Set pres self.set_zoom(z).
         /// Trackovany state Ctrl/Shift/Alt pro zoom shortcut detection.
         modifiers: winit::keyboard::ModifiersState,
         // find_open/find_query/find_match_idx + addr_open/addr_input smazany
@@ -1015,6 +1011,21 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             self.webview.as_ref()
         }
 
+        // -- Polarity invert helpers (App reads webview state) ---------------
+
+        /// Zoom factor pres webview (1.0 = 100%).
+        fn zoom(&self) -> f32 {
+            self.webview.as_ref().map(|w| w.zoom()).unwrap_or(1.0)
+        }
+
+        /// Set zoom pres webview + invalidate App layout cache.
+        fn set_zoom(&mut self, z: f32) {
+            if let Some(w) = self.webview.as_mut() {
+                w.set_zoom(z);
+            }
+            self.cached_layout_root = None;
+        }
+
         /// Synchronizuje mirror WebView z App primary state. Vola se po kazdem
         /// reload / navigace. Phase 4a sync (App primary, WebView side-effect);
         /// Phase 5 obrati polarity (WebView primary, App reads).
@@ -1047,7 +1058,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             };
             let mut wv = crate::embed::WebView::new(engine, vw, vh);
             wv.resize(vw, vh, sf);
-            wv.set_zoom(self.zoom);
+            wv.set_zoom(self.zoom());
             wv.set_scroll(self.scroll_x, self.scroll_y);
             wv.set_local_path(self.current_path.clone());
             // load_html (real) - spousti inline + external <script>s.
@@ -1129,8 +1140,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 WindowEvent::CursorMoved { position, .. } => {
                     // Mouse position je physical px. Logical = physical / (zoom * scale_factor).
                     let scale = self.renderer.as_ref().map(|r| r.scale_factor).unwrap_or(1.0);
-                    let new_x = (position.x as f32) / (self.zoom * scale) + self.scroll_x;
-                    let new_y = (position.y as f32) / (self.zoom * scale) + self.scroll_y;
+                    let new_x = (position.x as f32) / (self.zoom() * scale) + self.scroll_x;
+                    let new_y = (position.y as f32) / (self.zoom() * scale) + self.scroll_y;
                     // Skip update kdyz se pozice nezmenila (deduplicate winit spam).
                     if (new_x - self.mouse_x).abs() < 0.5 && (new_y - self.mouse_y).abs() < 0.5 {
                         return;
@@ -2039,7 +2050,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     let raw_y_logical = self.mouse_y - self.scroll_y;
                     let viewport_w = self.viewport_w_logical();
                     if self.point_in_devtools(self.mouse_x - self.scroll_x, raw_y_logical) {
-                        let scroll_amount_logical = scroll_amount / (self.zoom * self.renderer.as_ref().map(|r| r.scale_factor).unwrap_or(1.0));
+                        let scroll_amount_logical = scroll_amount / (self.zoom() * self.renderer.as_ref().map(|r| r.scale_factor).unwrap_or(1.0));
                         // Globalni scroll routing: vzdy ta cast pod kurzorem.
                         // Pri Elements: 3 zony - tree | styles | side_panel.
                         match self.devtools.tab {
@@ -2090,7 +2101,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     // v logical -> dele zoom. Smooth scroll: meni TARGET, render
                     // tick interpoluje scroll_y -> target.
                     let scale = self.renderer.as_ref().map(|r| r.scale_factor).unwrap_or(1.0);
-                    let logical_scroll = scroll_amount / (self.zoom * scale).max(0.0001);
+                    let logical_scroll = scroll_amount / (self.zoom() * scale).max(0.0001);
                     if self.modifiers.shift_key() {
                         self.scroll_target_x -= logical_scroll;
                         if self.scroll_target_x < 0.0 { self.scroll_target_x = 0.0; }
@@ -2639,23 +2650,23 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         if let Key::Character(s) = &key_event.logical_key {
                             match s.as_str() {
                                 "+" | "=" => {
-                                    self.zoom = (self.zoom * 1.1).min(5.0);
+                                    self.set_zoom((self.zoom() * 1.1).min(5.0));
                                     self.cached_layout_root = None;
                                     self.clamp_scroll_to_layout();
-                                    println!("[zoom] {:.0}%", self.zoom * 100.0);
+                                    println!("[zoom] {:.0}%", self.zoom() * 100.0);
                                     self.render();
                                     return;
                                 }
                                 "-" | "_" => {
-                                    self.zoom = (self.zoom / 1.1).max(0.25);
+                                    self.set_zoom((self.zoom() / 1.1).max(0.25));
                                     self.cached_layout_root = None;
                                     self.clamp_scroll_to_layout();
-                                    println!("[zoom] {:.0}%", self.zoom * 100.0);
+                                    println!("[zoom] {:.0}%", self.zoom() * 100.0);
                                     self.render();
                                     return;
                                 }
                                 "0" => {
-                                    self.zoom = 1.0;
+                                    self.set_zoom(1.0);
                                     self.cached_layout_root = None;
                                     self.clamp_scroll_to_layout();
                                     println!("[zoom] 100%");
@@ -2729,7 +2740,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         }
                         Key::Named(NamedKey::End) => {
                             if let (Some(layout), Some(r)) = (&self.layout_root, &self.renderer) {
-                                let vh = (r.config.height as f32) / (self.zoom * r.scale_factor);
+                                let vh = (r.config.height as f32) / (self.zoom() * r.scale_factor);
                                 self.scroll_target_y = (layout.rect.height - vh).max(0.0);
                                 self.render();
                             }
@@ -2791,10 +2802,10 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             false
         }
         fn viewport_h_logical(&self) -> f32 {
-            self.renderer.as_ref().map(|r| (r.config.height as f32) / (self.zoom * r.scale_factor)).unwrap_or(768.0)
+            self.renderer.as_ref().map(|r| (r.config.height as f32) / (self.zoom() * r.scale_factor)).unwrap_or(768.0)
         }
         fn viewport_w_logical(&self) -> f32 {
-            self.renderer.as_ref().map(|r| (r.config.width as f32) / (self.zoom * r.scale_factor)).unwrap_or(1024.0)
+            self.renderer.as_ref().map(|r| (r.config.width as f32) / (self.zoom() * r.scale_factor)).unwrap_or(1024.0)
         }
         /// Velikost devtools panelu (na perpendicular axis k dock side).
         /// Bottom/Top: vyska. Left/Right: sirka.
@@ -3229,8 +3240,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         /// zmizet -> max_scroll = 0. Stara scroll_y > 0 by ukazovala blank.
         fn clamp_scroll_to_layout(&mut self) {
             if let (Some(layout), Some(r)) = (&self.layout_root, &self.renderer) {
-                let vw = (r.config.width as f32) / (self.zoom * r.scale_factor);
-                let vh = (r.config.height as f32) / (self.zoom * r.scale_factor);
+                let vw = (r.config.width as f32) / (self.zoom() * r.scale_factor);
+                let vh = (r.config.height as f32) / (self.zoom() * r.scale_factor);
                 let max_y = (layout.rect.height - vh).max(0.0);
                 let max_x = (layout.rect.width - vw).max(0.0);
                 if self.scroll_y > max_y { self.scroll_y = max_y; }
@@ -4394,9 +4405,10 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // (page_sel_* metody borrowuji self.interpreter immutably).
             let self_page_sel_anchor = self.page_sel_anchor();
             let self_page_sel_current = self.page_sel_current();
+            let cur_zoom = self.zoom();
             let r = match &mut self.renderer { Some(r) => r, None => return };
             // Push zoom faktor do rendereru pro vp uniform skalovani.
-            r.zoom = self.zoom;
+            r.zoom = cur_zoom;
 
             // Pouzij document z interpreteru (po JS modifikacich)
             let document_root = match &self.interpreter {
@@ -4520,7 +4532,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 let mut h = ahash::AHasher::default();
                 (Rc::as_ptr(&document_root) as usize).hash(&mut h);
                 css_hash.hash(&mut h);
-                ((self.zoom * 1000.0) as i64).hash(&mut h);
+                ((cur_zoom * 1000.0) as i64).hash(&mut h);
                 // Viewport jen pri uses_viewport (resize lag fix). Bez @media/vh
                 // cascade neni viewport-dependent -> cache zustava valid pri resize.
                 if self.css_uses_viewport {
@@ -4538,8 +4550,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             if self.cached_style_map.is_none() || self.cached_cascade_hash != cascade_hash {
                 let _t_cascade = std::time::Instant::now();
                 // Cascade s viewport pro @media + @container queries.
-                let vw_logical = (r.config.width as f32) / (self.zoom * r.scale_factor);
-                let vh_logical = (r.config.height as f32) / (self.zoom * r.scale_factor);
+                let vw_logical = (r.config.width as f32) / (cur_zoom * r.scale_factor);
+                let vh_logical = (r.config.height as f32) / (cur_zoom * r.scale_factor);
                 self.cached_style_map = Some(Rc::new(cascade::cascade_with_viewport(
                     &document_root, stylesheets, vw_logical, vh_logical)));
                 perf_t("cascade::cascade_with_viewport", _t_cascade);
@@ -4874,8 +4886,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // Browser zoom: logical viewport = window / zoom (-> reflow at scaled
             // size). Render shader uniform = same logical dimensions, takze layout
             // px se mapuje na scaled NDC (visualni zoom).
-            let viewport_w = (r.config.width as f32) / (self.zoom * r.scale_factor);
-            let viewport_h = (r.config.height as f32) / (self.zoom * r.scale_factor);
+            let viewport_w = (r.config.width as f32) / (cur_zoom * r.scale_factor);
+            let viewport_h = (r.config.height as f32) / (cur_zoom * r.scale_factor);
             // Layout cache: rebuild jen kdyz CSS/DOM/viewport zmenil nebo
             // animations modifikuji layout-relevant props (width/height/margin/...).
             let cached_some = self.cached_layout_root.is_some();
@@ -5291,7 +5303,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // paint_shell_chrome_with_groups + bookmark picker + reading
             // mode badge + status bar + tab tooltip + shortcuts overlay.
             // Vsechno presunuto do shell::ShellApp v Phase 99.
-            let _ = (r.config.width, r.config.height, self.zoom);
+            let _ = (r.config.width, r.config.height, cur_zoom);
             perf_t("ovl::shell_chrome", _t_chrome);
             let _t_fps_etc = std::time::Instant::now();
 
@@ -5302,7 +5314,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 let fps = if avg_ms > 0.01 { 1000.0 / avg_ms } else { 999.0 };
                 let max_ms = self.frame_times_ms.iter().cloned().fold(0.0_f32, f32::max);
                 let (rect_w, rect_h) = (130.0_f32, 36.0_f32);
-                let win_w_logical = (r.config.width as f32) / (self.zoom * r.scale_factor);
+                let win_w_logical = (r.config.width as f32) / (cur_zoom * r.scale_factor);
                 let chrome_h = 0.0_f32;
                 let fps_x = win_w_logical - rect_w - 8.0;
                 let fps_y = chrome_h + 8.0;
@@ -5334,8 +5346,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             let _t_dt_paint = std::time::Instant::now();
             // In-window DevTools panel - emit pred scrollbar a po main viewport content.
             // viewport_w/h v logical px (display list je v logical, vp uniform / zoom*scale).
-            let viewport_w_logical = (r.config.width as f32) / (self.zoom * r.scale_factor);
-            let viewport_h_logical = (r.config.height as f32) / (self.zoom * r.scale_factor);
+            let viewport_w_logical = (r.config.width as f32) / (cur_zoom * r.scale_factor);
+            let viewport_h_logical = (r.config.height as f32) / (cur_zoom * r.scale_factor);
             self.devtools.tick_frame();
             paint_devtools_panel(
                 &mut display_list,
@@ -5434,7 +5446,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         // pres compose_styled. Bez tohoto weight 500 spadl na
                         // first font Vec (= weight 300 light Ubuntu).
                         let _ = bold;
-                        let phys = (*font_size * self.zoom).round().max(1.0) as u32;
+                        let phys = (*font_size * cur_zoom).round().max(1.0) as u32;
                         // Has color font check (Rc clone uvnitr loopu nepotrebny -
                         // pri color font path projedeme).
                         let color_font: Option<_> = r.color_fonts.get(font_family).cloned();
@@ -5471,8 +5483,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         };
                         r.load_image_as(src, &resolved);
                         // Pri zoomu re-resample image na physical size = w * zoom.
-                        let target_w = (*w * self.zoom).round().max(1.0) as u32;
-                        let target_h = (*h * self.zoom).round().max(1.0) as u32;
+                        let target_w = (*w * cur_zoom).round().max(1.0) as u32;
+                        let target_h = (*h * cur_zoom).round().max(1.0) as u32;
                         r.resample_image_for_size(src, target_w, target_h);
                         // Pri load image dostala se natural dims do cache - pri
                         // 1. layout pass byly unknown -> default 100x100. Po
@@ -5662,7 +5674,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         continue_signal: std::sync::Arc::new((
             std::sync::Mutex::new(false), std::sync::Condvar::new())),
         debug_runner: None,
-        zoom: 1.0,
         modifiers: winit::keyboard::ModifiersState::empty(),
         scroll_target_y: 0.0,
         scroll_target_x: 0.0,
