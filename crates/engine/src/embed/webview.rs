@@ -78,6 +78,15 @@ pub struct WebView {
     /// Dirty flag - `render()` skipne pokud false. Set true pri handle_input
     /// kdyz neco zmenilo viditelne (hover, scroll, JS DOM mutation).
     pub(crate) dirty: bool,
+
+    /// CSS @keyframes animation origin time. Effective_anim_time =
+    /// (now - origin) * speed. Reset pri load_html (kazda stranka fresh
+    /// animation context).
+    pub(crate) animation_origin: std::time::Instant,
+    /// Per-element prev frame styles - foundation pro CSS transitions
+    /// detection (diff before/after, tween mezi old + new value pres
+    /// `transition-duration`).
+    pub(crate) prev_style_map: Option<std::rc::Rc<crate::browser::cascade::StyleMap>>,
 }
 
 impl WebView {
@@ -103,6 +112,8 @@ impl WebView {
             target_texture: None,
             target_view: None,
             dirty: true,
+            animation_origin: std::time::Instant::now(),
+            prev_style_map: None,
         }
     }
 
@@ -147,6 +158,10 @@ impl WebView {
         self.base_url = base_url.clone();
         self.interpreter = Some(interp);
         self.dirty = true;
+        // Animation origin reset - fresh stranka start = anim elapsed 0.
+        self.animation_origin = std::time::Instant::now();
+        // Transitions detect drive z minulych frames -> nova stranka clean state.
+        self.prev_style_map = None;
 
         NavigationResult {
             url: base,
@@ -419,8 +434,18 @@ impl WebView {
             &doc.root, &self.stylesheets, viewport_w, viewport_h);
 
         // 2. Layout - compute boxes.
-        let layout_root = crate::browser::layout::layout_tree(
+        let mut layout_root = crate::browser::layout::layout_tree(
             &doc.root, &style_map, viewport_w, viewport_h);
+
+        // 2b. Sticky positioning post-process - position:sticky elementy
+        // posunuju dle scroll_y aby drzeli na top viewportu uvnitr containeru.
+        crate::browser::layout::apply_sticky(&mut layout_root, self.scroll_y);
+
+        // CSS @keyframes anim tick + transitions vyzaduji 200+ LOC state machine
+        // (animation_origin, active_animations, animation_iterations,
+        // prev_style_map diff). Zustal v App.render zatim - Phase 99 migrace.
+        let _ = &self.animation_origin;
+        let _ = &self.prev_style_map;
 
         // 3. Paint - generate display list (culled na viewport).
         let mut display_list = crate::browser::paint::build_display_list_culled(

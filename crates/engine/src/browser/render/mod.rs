@@ -505,7 +505,7 @@ fn try_decode_svg_into_atlas(bytes: &[u8], cache_key: &str,
     true
 }
 
-pub(crate) fn apply_paint_animations(box_: &mut crate::browser::layout::LayoutBox,
+pub fn apply_paint_animations(box_: &mut crate::browser::layout::LayoutBox,
                            style_map: &crate::browser::cascade::StyleMap) {
     apply_paint_animations_inner(box_, style_map, 0.0, 0.0, 0.0, 0.0, 0.0);
 }
