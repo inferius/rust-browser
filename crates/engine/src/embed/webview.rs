@@ -87,6 +87,9 @@ pub struct WebView {
     /// detection (diff before/after, tween mezi old + new value pres
     /// `transition-duration`).
     pub(crate) prev_style_map: Option<std::rc::Rc<crate::browser::cascade::StyleMap>>,
+    /// CSS transitions aktualne tweenujici. Detect z diff prev vs cur
+    /// style_map + apply per frame dle elapsed time.
+    pub(crate) active_transitions: Vec<crate::browser::cascade::ActiveTransition>,
 }
 
 impl WebView {
@@ -114,6 +117,7 @@ impl WebView {
             dirty: true,
             animation_origin: std::time::Instant::now(),
             prev_style_map: None,
+            active_transitions: Vec::new(),
         }
     }
 
@@ -435,10 +439,41 @@ impl WebView {
         let mut style_map = std::rc::Rc::new(crate::browser::cascade::cascade_with_viewport(
             &doc.root, &self.stylesheets, viewport_w, viewport_h));
 
-        // 1b. CSS @keyframes animation tick - aplikuj current keyframe values
+        let elapsed = self.animation_origin.elapsed().as_secs_f32();
+
+        // 1b. CSS Transitions: detect zmeny vs prev_style_map -> aktivni
+        // transitions. Apply tween na current style_map. PERF: skip kompletne
+        // kdyz CSS neobsahuje "transition" property.
+        let css_uses_transitions = self.stylesheets.iter()
+            .any(|s| s.rules.iter().any(|r| r.declarations.iter()
+                .any(|d| d.property.starts_with("transition"))));
+        if css_uses_transitions {
+            if let Some(prev) = &self.prev_style_map {
+                let same_map = std::rc::Rc::ptr_eq(prev, &style_map);
+                if !same_map {
+                    let active_before = std::mem::take(&mut self.active_transitions);
+                    self.active_transitions = crate::browser::cascade::detect_transitions(
+                        &**prev, &*style_map, active_before, elapsed);
+                } else {
+                    // No cascade change -> drop expired, keep rest.
+                    let active_before = std::mem::take(&mut self.active_transitions);
+                    for at in active_before {
+                        let total = at.spec.duration_secs + at.spec.delay_secs;
+                        if elapsed - at.start_time < total {
+                            self.active_transitions.push(at);
+                        }
+                    }
+                }
+            }
+        }
+        if !self.active_transitions.is_empty() {
+            crate::browser::cascade::apply_transitions(
+                std::rc::Rc::make_mut(&mut style_map), &self.active_transitions, elapsed);
+        }
+
+        // 1c. CSS @keyframes animation tick - aplikuj current keyframe values
         // dle elapsed time. Pri presence @keyframes v CSS, style_map dostane
         // overlay s animated property values (transform, opacity, left, ...).
-        let elapsed = self.animation_origin.elapsed().as_secs_f32();
         let has_keyframes = self.stylesheets.iter().any(|s| !s.keyframes.is_empty());
         if has_keyframes {
             let _animating = crate::browser::cascade::apply_animations(
@@ -450,8 +485,6 @@ impl WebView {
         }
 
         // Sync prev_style_map pro pristi frame transitions detection.
-        // Transitions detect+apply zustavaji v Phase 99 (vyzaduji active_transitions
-        // state machine + event dispatch transitionend).
         self.prev_style_map = Some(style_map.clone());
 
         // 2. Layout - compute boxes (po anim tick aby left/top/width keyframes
@@ -575,11 +608,11 @@ impl WebView {
     pub fn scale_factor(&self) -> f32 { self.scale_factor }
 
     /// `true` pokud stylesheets obsahuji @keyframes (= moznost aktivni
-    /// animace). Hostujici aplikace pak request_redraw kazdy frame.
-    /// Pro presnejsi detekci by hostujici aplikace mela cekat dokud
-    /// vsechny anim iterations skoncily.
+    /// animace) NEBO aktivni CSS transitions. Hostujici aplikace pak
+    /// request_redraw kazdy frame.
     pub fn has_active_animations(&self) -> bool {
         self.stylesheets.iter().any(|s| !s.keyframes.is_empty())
+            || !self.active_transitions.is_empty()
     }
 
     /// Nastav zoom level. Stejne jako resize trigger relayout.
