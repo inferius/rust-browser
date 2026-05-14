@@ -1052,9 +1052,9 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             wv.set_zoom(self.zoom);
             wv.set_scroll(self.scroll_x, self.scroll_y);
             wv.set_local_path(self.current_path.clone());
-            // Sync NESPOUSTI scripts - App.interpreter primary uz JS spustil.
-            // Mirror by jinak dvakrat fetchnul / loggoval / DOM mutoval.
-            let _ = wv.load_dom(&self.html, &self.css, self.base_url.clone());
+            // load_html (real) - spousti inline + external <script>s.
+            // Po loadu volaci kod muze take_interpreter() pro presun do App.
+            let _ = wv.load_html(&self.html, &self.css, self.base_url.clone());
             self.webview = Some(wv);
         }
     }
@@ -1073,24 +1073,14 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             self.window = Some(window.clone());
             self.renderer = Some(Renderer::new(window.clone()));
 
-            // Vytvor interpreter + nacti HTML do jeho document
-            let mut interp = crate::interpreter::Interpreter::new();
-            let url = match &self.current_path {
-                Some(p) => format!("file:///{}", p.display().to_string().replace('\\', "/")),
-                None => "about:blank".to_string(),
-            };
-            let doc = super::html_parser::parse_html(&self.html, &url);
-            interp.set_document(doc);
-
-            // Spust JS uvnitr <script> tagu
-            self.run_inline_scripts(&mut interp);
-
-            self.interpreter = Some(interp);
-
-            // Sync mirror WebView (Phase 4a) - sdileny page state pro shell crate
-            // + power users. App.interpreter zustava primary; WebView ma vlastni
-            // (paralelni) instance. Phase 5 zmeni na authoritative WebView.
+            // Authoritative WebView: vytvori se v sync_webview_from_app + spousti
+            // scripts via webview.load_html. App.interpreter pak vezme ownership
+            // (move) z webview pres take_interpreter. Drive byl App primary +
+            // mirror sync - duplicate JS spousteni odstranen (N+22).
             self.sync_webview_from_app();
+            if let Some(wv) = self.webview.as_mut() {
+                self.interpreter = wv.take_interpreter();
+            }
 
             self.render();
 
@@ -3335,22 +3325,20 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             self.active_animations.clear();
             self.animation_iterations.clear();
             self.active_transitions.clear();
-            // Restart interpreter s novym dokumentem.
-            let url = format!("file:///{}", path.display().to_string().replace('\\', "/"));
-            let doc = super::html_parser::parse_html(&self.html, &url);
-            let mut interp = crate::interpreter::Interpreter::new();
-            interp.set_document(doc);
-            self.run_inline_scripts(&mut interp);
-            self.interpreter = Some(interp);
-            // Title z <title> tagu nebo filename fallback.
+            // Authoritative WebView restart - sync_webview_from_app vytvori
+            // novou instance s real load_html (spousti scripts). Po loadu
+            // take_interpreter -> App.interpreter.
+            self.sync_webview_from_app();
+            if let Some(wv) = self.webview.as_mut() {
+                self.interpreter = wv.take_interpreter();
+            }
             let page_title = crate::embed::loader::extract_title(&self.html)
                 .unwrap_or_else(|| path.file_name()
                     .and_then(|n| n.to_str()).unwrap_or("page").to_string());
+            self.title = page_title.clone();
             if let Some(w) = &self.window {
                 w.set_title(&format_window_title(&page_title, 1));
             }
-            // Sync mirror WebView (Phase 4a).
-            self.sync_webview_from_app();
             // Pokud je auto_devtools zaplo, take regen + open po reload.
             if self.auto_devtools {
                 self.regenerate_and_open_devtools();
