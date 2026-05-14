@@ -90,6 +90,10 @@ pub struct WebView {
     /// CSS transitions aktualne tweenujici. Detect z diff prev vs cur
     /// style_map + apply per frame dle elapsed time.
     pub(crate) active_transitions: Vec<crate::browser::cascade::ActiveTransition>,
+    /// Last layout_root vyrobeny v render_via - getter pro hostujici aplikaci
+    /// (App emits inspector overlay nad webview RT pres dalsi draw_segments
+    /// pass; shell nepouziva).
+    pub(crate) last_layout_root: Option<crate::browser::layout::LayoutBox>,
 }
 
 impl WebView {
@@ -118,7 +122,16 @@ impl WebView {
             animation_origin: std::time::Instant::now(),
             prev_style_map: None,
             active_transitions: Vec::new(),
+            last_layout_root: None,
         }
+    }
+
+    /// Aktualni layout tree z posledniho `render_via`. None pred prvnim render.
+    /// Pouziti: hostujici aplikace emit custom overlay (inspector highlight,
+    /// devtools devtools_panel, ...) pres dalsi `Renderer::draw_segments_into_
+    /// view_clipped` pass nad `target_view()` PRED `present_external_to_swap_chain`.
+    pub fn last_layout_root(&self) -> Option<&crate::browser::layout::LayoutBox> {
+        self.last_layout_root.as_ref()
     }
 
     /// Nahraj HTML + CSS string + spust inline/external `<script>` tagy.
@@ -552,6 +565,9 @@ impl WebView {
         // 5. Renderer kresli display list do target_view.
         let _had = renderer.draw_segments_into_view_clipped(
             target_view, &display_list, true, None);
+
+        // 6. Stash layout_root pro hostujici aplikaci (overlay paint pass).
+        self.last_layout_root = Some(layout_root);
 
         self.dirty = false;
         self.target_view.as_ref()
