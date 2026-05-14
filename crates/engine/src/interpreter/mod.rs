@@ -784,6 +784,46 @@ impl Interpreter {
         }
     }
 
+    /// Zaregistruje callback pro lookup layout boxu node-u.
+    /// Volane z hosta (shell/WebView) po layout passe. JS API jako
+    /// getBoundingClientRect / offsetWidth / offsetHeight / offsetLeft /
+    /// offsetTop / clientWidth / clientHeight / scrollWidth / scrollHeight
+    /// pak vraci skutecne rozmery.
+    ///
+    /// Argument: Box closure (node_ptr) -> Option<(x, y, w, h)> v CSS px.
+    pub fn set_layout_lookup<F>(&mut self, f: F)
+    where
+        F: Fn(*const crate::browser::dom::NodeData) -> Option<(f32, f32, f32, f32)> + 'static,
+    {
+        self.layout_lookup = Some(Rc::new(f));
+    }
+
+    /// Zaregistruje callback pro lookup cascade-resolved CSS computed style.
+    /// Volane z hosta po cascade passe. JS API window.getComputedStyle pak
+    /// vrati realne hodnoty.
+    pub fn set_cascade_lookup<F>(&mut self, f: F)
+    where
+        F: Fn(*const crate::browser::dom::NodeData) -> HashMap<String, String> + 'static,
+    {
+        self.cascade_lookup = Some(Rc::new(f));
+    }
+
+    /// Volane z hosta pri window-level eventu (load, resize, scroll, ...).
+    /// Vsechny zaregistrovane callback-y se zavolaji s event objektem.
+    pub fn dispatch_window_event(&mut self, evt_type: &str, event_obj: JsValue) {
+        let listeners: Vec<JsValue> = self.window_listeners.borrow()
+            .get(evt_type).cloned().unwrap_or_default();
+        for cb in listeners {
+            let _ = self.call_function(cb, vec![event_obj.clone()], None);
+        }
+    }
+
+    /// Helper - vyhleda rect node-u pres layout_lookup.
+    pub(crate) fn lookup_layout_rect(&self, node: &Rc<crate::browser::dom::NodeData>) -> Option<(f32, f32, f32, f32)> {
+        let lookup = self.layout_lookup.as_ref()?;
+        lookup(Rc::as_ptr(node))
+    }
+
     /// Drain requestAnimationFrame callbacks - vsechny pending volat s
     /// timestamp ms (since interpreter start). Volat per frame z renderer.
     pub fn drain_raf_callbacks(&mut self, timestamp_ms: f64) -> Result<(), JsError> {

@@ -1174,6 +1174,35 @@ impl Interpreter {
                             }
                             return Ok(JsValue::Null);
                         }
+                        "getBoundingClientRect" => {
+                            // Lookup layout rect pres host callback; pri absenci vrati 0,0,0,0.
+                            let (x, y, w, h) = self.lookup_layout_rect(&n).unwrap_or((0.0, 0.0, 0.0, 0.0));
+                            let mut rect = JsObject::new();
+                            rect.set("x".into(),      JsValue::Number(x as f64));
+                            rect.set("y".into(),      JsValue::Number(y as f64));
+                            rect.set("width".into(),  JsValue::Number(w as f64));
+                            rect.set("height".into(), JsValue::Number(h as f64));
+                            rect.set("top".into(),    JsValue::Number(y as f64));
+                            rect.set("left".into(),   JsValue::Number(x as f64));
+                            rect.set("right".into(),  JsValue::Number((x + w) as f64));
+                            rect.set("bottom".into(), JsValue::Number((y + h) as f64));
+                            return Ok(JsValue::Object(Rc::new(RefCell::new(rect))));
+                        }
+                        "getClientRects" => {
+                            // Single-rect approximation (spec by mela vratit per-line rects pro inline).
+                            let (x, y, w, h) = self.lookup_layout_rect(&n).unwrap_or((0.0, 0.0, 0.0, 0.0));
+                            let mut rect = JsObject::new();
+                            rect.set("x".into(),      JsValue::Number(x as f64));
+                            rect.set("y".into(),      JsValue::Number(y as f64));
+                            rect.set("width".into(),  JsValue::Number(w as f64));
+                            rect.set("height".into(), JsValue::Number(h as f64));
+                            rect.set("top".into(),    JsValue::Number(y as f64));
+                            rect.set("left".into(),   JsValue::Number(x as f64));
+                            rect.set("right".into(),  JsValue::Number((x + w) as f64));
+                            rect.set("bottom".into(), JsValue::Number((y + h) as f64));
+                            let arr = vec![JsValue::Object(Rc::new(RefCell::new(rect)))];
+                            return Ok(JsValue::Array(Rc::new(RefCell::new(arr))));
+                        }
                         "submit" if n.tag_name().as_deref() == Some("form") => {
                             // Dispatch 'submit' SubmitEvent na form pred actual fetch
                             // Pokud listener zavola preventDefault, fetch neproveden.
@@ -1470,24 +1499,6 @@ impl Interpreter {
                         | "reportValidity" | "stepUp" | "stepDown"
                             if matches!(n.tag_name().as_deref(), Some("input") | Some("textarea") | Some("select")) => {
                             return Ok(JsValue::Bool(true));
-                        }
-                        "getBoundingClientRect" => {
-                            // Vraci object s x/y/width/height/top/left/bottom/right.
-                            let w = n.attr("width").and_then(|w| w.parse::<f64>().ok()).unwrap_or(0.0);
-                            let h = n.attr("height").and_then(|h| h.parse::<f64>().ok()).unwrap_or(0.0);
-                            let r = Rc::new(RefCell::new(JsObject::new()));
-                            {
-                                let mut o = r.borrow_mut();
-                                o.set("x".into(), JsValue::Number(0.0));
-                                o.set("y".into(), JsValue::Number(0.0));
-                                o.set("width".into(), JsValue::Number(w));
-                                o.set("height".into(), JsValue::Number(h));
-                                o.set("top".into(), JsValue::Number(0.0));
-                                o.set("left".into(), JsValue::Number(0.0));
-                                o.set("right".into(), JsValue::Number(w));
-                                o.set("bottom".into(), JsValue::Number(h));
-                            }
-                            return Ok(JsValue::Object(r));
                         }
                         "toggleAttribute" => {
                             let name = arg_vals.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
