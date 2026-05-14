@@ -910,6 +910,30 @@ impl WebView {
                 &layout_root, &canvas_ops, &mut display_list);
         }
 
+        // 3-sel. Text selection highlight - kdy page_selection Some, emit
+        // modry Rect overlays nad selected text runs.
+        if let Some(interp) = self.interpreter.as_ref() {
+            let doc = interp.document.borrow();
+            let reg = doc.selection.borrow();
+            if let Some(ps) = reg.page_selection.as_ref() {
+                let a = ps.anchor;
+                let c = ps.current;
+                let (start, end) = if a.1 < c.1 || (a.1 == c.1 && a.0 <= c.0) {
+                    (a, c)
+                } else { (c, a) };
+                if (end.0 - start.0).abs() > 1.0 || (end.1 - start.1).abs() > 1.0 {
+                    let mut hits: Vec<(f32, f32, f32, f32)> = Vec::new();
+                    collect_text_lines(&layout_root, start.0, start.1, end.0, end.1, &mut hits);
+                    for (hx, hy, hw, hh) in hits {
+                        display_list.push(crate::browser::paint::DisplayCommand::Rect {
+                            x: hx, y: hy, w: hw, h: hh,
+                            color: [80, 150, 255, 120], radius: 0.0,
+                        });
+                    }
+                }
+            }
+        }
+
         // 3a. Apply scroll: posun page commands o -scroll_y. Scrollbar
         //     overlay (pridany nize) je viewport-relative -> add PO shift.
         for cmd in display_list.iter_mut() {
@@ -1227,6 +1251,74 @@ impl WebView {
         let focus = self.hit_test_text(ps.current.0, ps.current.1)?;
         let sel = crate::browser::textrun::TextSelection { anchor, focus };
         Some(sel.extract_text(&self.painted_text_runs))
+    }
+}
+
+/// Walk layout tree + collect highlight rects pro selected text lines.
+/// Flow-based: first/last line maji partial X range, middle full.
+fn collect_text_lines(
+    b: &crate::browser::layout::LayoutBox,
+    sx: f32, sy: f32, ex: f32, ey: f32,
+    out: &mut Vec<(f32, f32, f32, f32)>,
+) {
+    if let Some(text) = &b.text {
+        let bx0 = b.rect.x;
+        let by0 = b.rect.y;
+        let by1 = by0 + b.rect.height;
+        let lh = (b.line_height * b.font_size).max(b.font_size * 1.2);
+        if !(by1 < sy || by0 > ey) {
+            let weight = b.effective_weight();
+            let lines: Vec<&str> = text.split('\n').collect();
+            for (li, line) in lines.iter().enumerate() {
+                let line_y = by0 + (li as f32) * lh;
+                let line_y_end = line_y + lh;
+                if line_y_end < sy || line_y > ey { continue; }
+                let is_first_line = sy >= line_y && sy < line_y_end;
+                let is_last_line = ey >= line_y && ey < line_y_end;
+                let italic = b.italic;
+                let fam = b.font_family.clone();
+                let ls = b.letter_spacing;
+                let line_w = line.chars().map(|ch|
+                    crate::browser::layout::measure_text_width_full(
+                        &ch.to_string(), b.font_size, weight, italic, &fam, ls)).sum::<f32>();
+                let line_start_x = bx0;
+                let (x_lo, x_hi) = if is_first_line && is_last_line {
+                    (sx.min(ex), sx.max(ex))
+                } else if is_first_line {
+                    (sx, line_start_x + line_w)
+                } else if is_last_line {
+                    (line_start_x, ex)
+                } else {
+                    (line_start_x, line_start_x + line_w)
+                };
+                let sel_left = (x_lo - line_start_x).max(0.0);
+                let sel_right = (x_hi - line_start_x).min(line_w);
+                if sel_right <= sel_left + 0.5 { continue; }
+                let mut acc = 0.0_f32;
+                let mut hl_start: Option<f32> = None;
+                let mut hl_end: f32 = line_w;
+                for ch in line.chars() {
+                    let adv = crate::browser::layout::measure_text_width_full(
+                        &ch.to_string(), b.font_size, weight, italic, &fam, ls);
+                    let mid = acc + adv * 0.5;
+                    if hl_start.is_none() && mid >= sel_left {
+                        hl_start = Some(acc);
+                    }
+                    if mid > sel_right {
+                        hl_end = acc;
+                        break;
+                    }
+                    acc += adv;
+                }
+                let hs = hl_start.unwrap_or(0.0);
+                if hl_end > hs + 0.5 {
+                    out.push((line_start_x + hs, line_y, hl_end - hs, lh));
+                }
+            }
+        }
+    }
+    for ch in &b.children {
+        collect_text_lines(ch, sx, sy, ex, ey, out);
     }
 }
 
