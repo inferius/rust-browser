@@ -998,10 +998,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         // paint do shell::ShellApp).
         // shell_chrome_h field smazany (Session N+22) - vzdy 0.0 v engine.
         // Use sites volaji shell_chrome_h_active() ktery vrati 0.0.
-        /// Page title (z <title> tagu nebo `document.title = ...` v JS).
-        /// Drive byl multi-tab pres `tabs.active_tab().title` - po N+22 strip
-        /// single-tab pres App primo.
-        title: String,
+        // title field smazany (Phase 99 polarity invert step) - read pres
+        // self.webview.as_ref().map(|w| w.title()).
         /// Embeddable WebView mirror - sdileny page state s shell crate +
         /// power users. Sync'nuty z App pri reload + scroll/zoom changes.
         /// Phase 4a = sync (App primary, WebView side-effect populated).
@@ -3335,7 +3333,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             let page_title = crate::embed::loader::extract_title(&self.html)
                 .unwrap_or_else(|| path.file_name()
                     .and_then(|n| n.to_str()).unwrap_or("page").to_string());
-            self.title = page_title.clone();
+            // title je primary v webview - sync_webview_from_app + load_html
+            // ho nastavi. App.title field smazany (Phase 99 polarity invert step).
             if let Some(w) = &self.window {
                 w.set_title(&format_window_title(&page_title, 1));
             }
@@ -4163,7 +4162,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             self.navigate_url_no_history(url);
             // Persist v profile history (~/.rwe/profiles/<active>/history.json).
             // Pouzij realny <title> tagu (z aktivniho tab po nav), fallback URL last segment.
-            let title = self.title.clone();
+            let title = self.webview.as_ref().map(|w| w.title().to_string()).unwrap_or_default();
             crate::devtools::history::append_entry(&crate::devtools::history::HistoryEntry {
                 url: url.to_string(),
                 title,
@@ -4218,7 +4217,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 }
                 let page_title = crate::embed::loader::extract_title(&self.html)
                     .unwrap_or_else(|| url.to_string());
-                self.title = page_title.clone();
+                // title je primary v webview - sync_webview_from_app + load_html
+            // ho nastavi. App.title field smazany (Phase 99 polarity invert step).
                 if let Some(w) = &self.window {
                     w.set_title(&format_window_title(&page_title, 1usize));
                 }
@@ -5603,7 +5603,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
     #[cfg(not(target_os = "windows"))]
     let event_loop = EventLoop::new().map_err(|e| e.to_string())?;
     // Title z <title> tagu nebo URL fallback.
-    let initial_title = crate::embed::loader::extract_title(&html).unwrap_or_default();
+    // Title nyni drzí webview (App polarity invert step).
     let mut app = App {
         html, css,
         cached_stylesheets_hash: 0,
@@ -5668,7 +5668,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         scroll_target_x: 0.0,
         page_scrollbar_v_drag: false,
         page_scrollbar_h_drag: false,
-        title: initial_title,
         // WebView mirror inicializovan v `resumed` (znama viewport size z winit
         // + chrome offset zname). Pred resumed App nema window -> None.
         webview: None,
