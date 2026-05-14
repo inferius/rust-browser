@@ -4,7 +4,7 @@
 /// Display list (paint::DisplayCommand) -> vertex data -> GPU.
 
 use super::paint::DisplayCommand;
-use super::devtools_panel::{paint_devtools_panel, devtools_hit_test, pick_node_at_screen_pos};
+use super::devtools_panel::{paint_devtools_panel, devtools_hit_test};
 use super::webgl_helpers::{webgl_compute_stride, webgl_attrib_to_vertex_format, webgl_serialize_uniforms};
 use bytemuck::{Pod, Zeroable};
 use std::rc::Rc;
@@ -67,7 +67,8 @@ pub use url::{fetch_text_url, fetch_image_bytes, resolve_url, cached_fetch_bytes
 // shell_chrome.rs smazany (Session N+22) - chrome paint je shell crate concern.
 
 pub mod forms;
-use forms::{find_ancestor_form, build_form_request, post_form};
+// forms helpers (find_ancestor_form/build_form_request/post_form) momentalne
+// unused na App vrstve - form submit hit-dispatch presunut do WebView pipeline.
 
 
 pub mod segments;
@@ -878,7 +879,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         auto_devtools: bool,
         window: Option<std::sync::Arc<Window>>,
         renderer: Option<Renderer>,
-        layout_root: Option<super::layout::LayoutBox>,
+        // layout_root field smazany Phase 99: nikdy zapisovan (vzdy None od initu);
+        // 11 read sites byly dead branches. Delegate na webview.last_layout_root().
         interpreter: Option<crate::interpreter::Interpreter>,
         mouse_x: f32,
         mouse_y: f32,
@@ -1188,40 +1190,9 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                             }
                         }
                     }
-                    // Main page scrollbar drag.
-                    if self.page_scrollbar_v_drag || self.page_scrollbar_h_drag {
-                        let v_drag = self.page_scrollbar_v_drag;
-                        let h_drag = self.page_scrollbar_h_drag;
-                        let mut new_target_y: Option<f32> = None;
-                        let mut new_target_x: Option<f32> = None;
-                        if let Some(layout) = &self.layout_root {
-                            let viewport_w = self.viewport_w_logical();
-                            let viewport_h = self.viewport_h_logical() - self.panel_h_logical();
-                            if v_drag && layout.rect.height > viewport_h {
-                                let max_scroll = (layout.rect.height - viewport_h).max(1.0);
-                                let thumb_h = (viewport_h * viewport_h / layout.rect.height).max(40.0);
-                                let my_screen = self.mouse_y - self.scroll_y();
-                                let frac = ((my_screen - thumb_h * 0.5) / (viewport_h - thumb_h)).clamp(0.0, 1.0);
-                                new_target_y = Some(frac * max_scroll);
-                            }
-                            if h_drag && layout.rect.width > viewport_w {
-                                let max_scroll = (layout.rect.width - viewport_w).max(1.0);
-                                let thumb_w = (viewport_w * viewport_w / layout.rect.width).max(40.0);
-                                let frac = ((self.mouse_x - thumb_w * 0.5) / (viewport_w - thumb_w)).clamp(0.0, 1.0);
-                                new_target_x = Some(frac * max_scroll);
-                            }
-                        }
-                        if let Some(ty) = new_target_y {
-                            self.set_scroll_target_y(ty);
-                            self.set_scroll_y(ty);
-                        }
-                        if let Some(tx) = new_target_x {
-                            self.set_scroll_target_x(tx);
-                            self.set_scroll_x(tx);
-                        }
-                        self.render();
-                        return;
-                    }
+                    // Main page scrollbar drag - layout_root dead na App vrstve,
+                    // dragging bude per-WebView v dalsi fazi. page_scrollbar_v/h_drag
+                    // flag se uz neda nastavit (hit-test smazany), tak no-op.
                     // Splitter drag: aktualizuj split_x v logical px.
                     if self.devtools.elements.dragging_split {
                         let viewport_w = self.viewport_w_logical();
@@ -1349,42 +1320,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     // Scroll-to-top button hit (pravy dolni roh, jen pri scroll_y > 200).
                     // Shell chrome hit-test (priorita nad page).
 
-                    // Main page scrollbar hit-test (priorita nad page click).
-                    // Pozn: scrollbar je shifted by shift_command_x(-scroll_x), takze
-                    // visible position = bar_x - scroll_x. Mouse_x ma scroll_x baked-in
-                    // (viz CursorMoved), takze srovnani s bar_x funguje primo.
-                    // Layout/scrollbar plati pro page area = viewport bez panelu.
-                    if let Some(layout) = &self.layout_root {
-                        let viewport_h_page = viewport_h - panel_h;
-                        let mx = self.mouse_x;
-                        let my_screen = self.mouse_y - self.scroll_y();
-                        // Vertikalni scrollbar.
-                        if layout.rect.height > viewport_h_page
-                           && mx >= viewport_w - 12.0 && mx < viewport_w
-                           && my_screen >= 0.0 && my_screen < viewport_h_page {
-                            self.page_scrollbar_v_drag = true;
-                            let max_scroll = (layout.rect.height - viewport_h_page).max(1.0);
-                            let thumb_h = (viewport_h_page * viewport_h_page / layout.rect.height).max(40.0);
-                            let frac = ((my_screen - thumb_h * 0.5) / (viewport_h_page - thumb_h)).clamp(0.0, 1.0);
-                            self.set_scroll_target_y(frac * max_scroll);
-                            self.page_sel_clear();
-                            self.render();
-                            return;
-                        }
-                        // Horizontalni scrollbar.
-                        if layout.rect.width > viewport_w
-                           && my_screen >= viewport_h_page - 12.0 && my_screen < viewport_h_page
-                           && mx >= 0.0 && mx < viewport_w {
-                            self.page_scrollbar_h_drag = true;
-                            let max_scroll = (layout.rect.width - viewport_w).max(1.0);
-                            let thumb_w = (viewport_w * viewport_w / layout.rect.width).max(40.0);
-                            let frac = ((mx - thumb_w * 0.5) / (viewport_w - thumb_w)).clamp(0.0, 1.0);
-                            self.set_scroll_target_x(frac * max_scroll);
-                            self.page_sel_clear();
-                            self.render();
-                            return;
-                        }
-                    }
+                    // Main page scrollbar hit-test - layout_root dead na App
+                    // vrstve, scrollbar drag init bude per-WebView v dalsi fazi.
 
                     // Double-click v Elements tab -> zacni editaci attr value / text node.
                     if is_double_click && self.devtools.panel_open && raw_y >= viewport_h - panel_h
@@ -1423,7 +1360,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     // opravy pri Top/Left/Right dock klik v panelu propaguje na page.
                     let in_panel = self.point_in_devtools(self.mouse_x - self.scroll_x(), raw_y);
                     if self.devtools.panel_open && (in_panel || modal_active) {
-                        if let Some(layout) = &self.layout_root {
+                        if let Some(layout) = self.webview.as_ref().and_then(|w| w.last_layout_root()) {
                             let hit = devtools_hit_test(&self.devtools, layout, viewport_w, viewport_h, self.mouse_x, raw_y);
                             use crate::browser::devtools_panel::DevtoolsHit;
                             match hit {
@@ -1939,25 +1876,9 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         self.devtools.focus = crate::devtools::focus::FocusTarget::Page;
                     }
                     // Inspect mode: kliknuti na main viewport vybira node v tree.
+                    // layout_root dead na App vrstve - inspect pick bude per-WebView
+                    // pres webview.last_layout_root().
                     if self.devtools.inspect_mode {
-                        if let Some(layout) = &self.layout_root {
-                            if let Some(node_id) = pick_node_at_screen_pos(layout, self.mouse_x, raw_y, self.scroll_y()) {
-                                self.devtools.elements.selected = Some(node_id);
-                                // Scroll tree pane na vybranou row.
-                                if let Some(idx) = self.devtools.elements.rows.iter()
-                                    .position(|r| r.node_id == node_id) {
-                                    let row_y = idx as f32 * 18.0;
-                                    let body_h = panel_h - 4.0 - 30.0;
-                                    self.devtools.elements.scroll_y = (row_y - body_h * 0.5).max(0.0);
-                                }
-                                // Auto-otevri devtools pokud je zavren.
-                                if !self.devtools.panel_open {
-                                    self.devtools.panel_open = true;
-                                    self.devtools.tab = crate::devtools::Tab::Elements;
-                                }
-                                println!("[inspect] selected node id=0x{:x}", node_id);
-                            }
-                        }
                         self.devtools.inspect_mode = false;
                         self.render();
                         return;
@@ -2503,34 +2424,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     if self.modifiers.control_key() && self.modifiers.shift_key() {
                         if let Key::Character(s) = &key_event.logical_key {
                             if s.as_str() == "d" || s.as_str() == "D" {
-                                if let Some(layout) = &self.layout_root {
-                                    fn dump(b: &super::layout::LayoutBox, depth: usize, out: &mut String) {
-                                        let indent = "  ".repeat(depth);
-                                        let tag = b.tag.as_deref().unwrap_or("?");
-                                        let txt = b.text.as_deref().unwrap_or("");
-                                        let txt_short: String = txt.chars().take(40).collect();
-                                        let class = b.node.as_ref()
-                                            .and_then(|n| n.attr("class"))
-                                            .unwrap_or_default();
-                                        let id = b.node.as_ref()
-                                            .and_then(|n| n.attr("id"))
-                                            .unwrap_or_default();
-                                        out.push_str(&format!(
-                                            "{indent}<{tag} id={:?} class={:?}> rect=({:.0},{:.0} {:.0}x{:.0}) display={:?} ew={:?} eh={:?} mw={} mh={} minh={} fd={:?} ai={:?} jc={:?} text={:?}\n",
-                                            id, class,
-                                            b.rect.x, b.rect.y, b.rect.width, b.rect.height,
-                                            b.display, b.explicit_width, b.explicit_height,
-                                            b.max_width, b.max_height, b.min_height,
-                                            b.flex_direction, b.align_items, b.justify_content,
-                                            txt_short));
-                                        for ch in &b.children { dump(ch, depth + 1, out); }
-                                    }
-                                    let mut out = String::new();
-                                    dump(layout, 0, &mut out);
-                                    let _ = std::fs::write("layout-dump.txt", out);
-                                    eprintln!("[dump] layout-dump.txt zapsano ({} bytes)",
-                                        std::fs::metadata("layout-dump.txt").map(|m| m.len()).unwrap_or(0));
-                                }
+                                // Ctrl+Shift+D layout dump - layout_root dead na App
+                                // vrstve, dump bude per-WebView v dalsi fazi.
                                 return;
                             }
                         }
@@ -2571,13 +2466,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                 return;
                             }
                             if s.as_str() == "a" || s.as_str() == "A" {
-                                // Ctrl+A: select cely document.
-                                if let Some(layout) = &self.layout_root {
-                                    let a = (layout.rect.x, layout.rect.y);
-                                    let c = (layout.rect.x + layout.rect.width, layout.rect.y + layout.rect.height);
-                                    self.page_sel_set_full(a, c);
-                                    self.render();
-                                }
+                                // Ctrl+A: select cely document - layout_root dead
+                                // na App vrstve, full-doc select bude per-WebView.
                                 return;
                             }
                             if s.as_str() == "p" || s.as_str() == "P" {
@@ -2709,11 +2599,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                             self.render();
                         }
                         Key::Named(NamedKey::End) => {
-                            if let (Some(layout), Some(r)) = (&self.layout_root, &self.renderer) {
-                                let vh = (r.config.height as f32) / (self.zoom() * r.scale_factor);
-                                self.set_scroll_target_y((layout.rect.height - vh).max(0.0));
-                                self.render();
-                            }
+                            // End: scroll to bottom - layout_root dead na App vrstve,
+                            // bude per-WebView pres webview.last_layout_root().
                         }
                         Key::Named(NamedKey::Space) => {
                             let dir = if self.modifiers.shift_key() { -1.0 } else { 1.0 };
@@ -2959,78 +2846,10 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             });
         }
 
-        /// Flow-based text extract: anchor->current v reading order, pres
-        /// wrapped lines. First line: chars od start.x; middle lines: full
-        /// line; last line: chars do end.x.
-        fn compute_selection_text(&self, a: (f32, f32), c: (f32, f32)) -> String {
-            let Some(layout) = &self.layout_root else { return String::new() };
-            let (start, end) = if a.1 < c.1 || (a.1 == c.1 && a.0 <= c.0) {
-                (a, c)
-            } else { (c, a) };
-            if (end.0 - start.0).abs() < 1.0 && (end.1 - start.1).abs() < 1.0 { return String::new(); }
-            let mut out = String::new();
-            fn walk(b: &super::layout::LayoutBox, sx: f32, sy: f32, ex: f32, ey: f32, out: &mut String) {
-                if let Some(text) = &b.text {
-                    let bx0 = b.rect.x;
-                    let by0 = b.rect.y;
-                    let by1 = by0 + b.rect.height;
-                    if by1 >= sy && by0 <= ey {
-                        let lh = (b.line_height * b.font_size).max(b.font_size * 1.2);
-                        let weight = b.effective_weight();
-                        let lines: Vec<&str> = text.split('\n').collect();
-                        for (li, line) in lines.iter().enumerate() {
-                            let line_y = by0 + (li as f32) * lh;
-                            let line_y_end = line_y + lh;
-                            if line_y_end < sy || line_y > ey { continue; }
-                            let is_first_line = sy >= line_y && sy < line_y_end;
-                            let is_last_line = ey >= line_y && ey < line_y_end;
-                            let line_start_x = bx0;
-                            let italic = b.italic;
-                            let fam = b.font_family.clone();
-                            let ls = b.letter_spacing;
-                            let line_w: f32 = line.chars().map(|ch|
-                                super::layout::measure_text_width_full(
-                                    &ch.to_string(), b.font_size, weight, italic, &fam, ls)).sum();
-                            let (x_lo, x_hi) = if is_first_line && is_last_line {
-                                (sx.min(ex), sx.max(ex))
-                            } else if is_first_line {
-                                (sx, line_start_x + line_w)
-                            } else if is_last_line {
-                                (line_start_x, ex)
-                            } else {
-                                (line_start_x, line_start_x + line_w)
-                            };
-                            let sel_left = (x_lo - line_start_x).max(0.0);
-                            let sel_right = (x_hi - line_start_x).min(line_w);
-                            if sel_right <= sel_left + 0.5 { continue; }
-                            let mut acc = 0.0f32;
-                            let mut start_byte: Option<usize> = None;
-                            let mut end_byte: usize = line.len();
-                            for (byte_off, ch) in line.char_indices() {
-                                let adv = super::layout::measure_text_width_full(
-                                    &ch.to_string(), b.font_size, weight, italic, &fam, ls);
-                                let mid = acc + adv * 0.5;
-                                if start_byte.is_none() && mid >= sel_left {
-                                    start_byte = Some(byte_off);
-                                }
-                                if mid > sel_right {
-                                    end_byte = byte_off;
-                                    break;
-                                }
-                                acc += adv;
-                            }
-                            let s = start_byte.unwrap_or(0);
-                            if s < end_byte {
-                                out.push_str(&line[s..end_byte]);
-                                out.push(' ');
-                            }
-                        }
-                    }
-                }
-                for ch in &b.children { walk(ch, sx, sy, ex, ey, out); }
-            }
-            walk(layout, start.0, start.1, end.0, end.1, &mut out);
-            out.trim().to_string()
+        /// Flow-based text extract pres LayoutBox tree. layout_root dead na App
+        /// vrstve - selection text extract presunut do WebView pipeline.
+        fn compute_selection_text(&self, _a: (f32, f32), _c: (f32, f32)) -> String {
+            String::new()
         }
         /// Centralni cursor icon dispatch - dle pozice + DOM/devtools state.
         fn compute_cursor_icon(&self, target: Option<&super::layout::LayoutBox>) -> winit::window::CursorIcon {
@@ -3090,15 +2909,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 }
                 return CursorIcon::Default;
             }
-            // 2. Page main scrollbar -> Default.
-            if let Some(layout) = &self.layout_root {
-                let viewport_w = self.viewport_w_logical();
-                let viewport_h = self.viewport_h_logical() - self.panel_h_logical();
-                if layout.rect.height > viewport_h
-                    && self.mouse_x >= viewport_w - 12.0 && self.mouse_x < viewport_w {
-                    return CursorIcon::Default;
-                }
-            }
+            // 2. Page main scrollbar -> Default. layout_root dead na App vrstve;
+            // scrollbar cursor hit-test patri do WebView pipeline.
             // 3. Page element classify pres InteractiveKind.
             if let Some(t) = target {
                 if let Some(node) = &t.node {
@@ -3128,53 +2940,11 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         fn devtools_body_h(&self) -> f32 {
             (self.panel_h_logical() - 4.0 - 30.0).max(0.0)
         }
-        /// Najde vsechny pozice match v display listu textech. Vrati Vec<(y, x, w)>.
         /// Export aktualni stranky do PDF souboru. Walk LayoutBox tree, emituje
-        /// text uzly + bg rects do printpdf documentu. Save do current_path
-        /// directory s .pdf priponou.
-        fn export_pdf(&mut self) {
-            use printpdf::*;
-            let layout = match &self.layout_root { Some(l) => l.clone(), None => return };
-            let page_w_mm = 210.0_f32; // A4 width
-            let _page_h_mm = 297.0_f32;
-            // Layout coords v px -> PDF v mm. Approx 96 DPI = 1 px = 0.264 mm.
-            let px_to_mm = 0.264_f32;
-            let total_h_mm = layout.rect.height * px_to_mm;
-            let (doc, page1, layer1) = PdfDocument::new("Page", Mm(page_w_mm), Mm(total_h_mm.max(297.0)), "Layer 1");
-            let font = match doc.add_builtin_font(BuiltinFont::TimesRoman) {
-                Ok(f) => f,
-                Err(e) => { eprintln!("[pdf] font fail: {e}"); return; }
-            };
-            let layer = doc.get_page(page1).get_layer(layer1);
-            // Walk LayoutBox tree, emituje text uzly s pozici (x, h-y) (PDF y-up).
-            fn walk(b: &super::layout::LayoutBox, layer: &PdfLayerReference, font: &IndirectFontRef, page_h_px: f32, px_to_mm: f32) {
-                if let Some(text) = &b.text {
-                    if !text.trim().is_empty() {
-                        let x_mm = b.rect.x * px_to_mm;
-                        let y_mm = (page_h_px - b.rect.y - b.font_size) * px_to_mm;
-                        let fs = b.font_size * px_to_mm * 2.83; // pt = mm * 2.83
-                        layer.use_text(text, fs, Mm(x_mm), Mm(y_mm), font);
-                    }
-                }
-                for ch in &b.children { walk(ch, layer, font, page_h_px, px_to_mm); }
-            }
-            walk(&layout, &layer, &font, layout.rect.height, px_to_mm);
-            // Save: pri current_path pres .pdf substituce, jinak ~/page.pdf.
-            let out_path = self.current_path().as_ref()
-                .and_then(|p| p.to_str().map(|s| s.replace(".html", ".pdf")))
-                .unwrap_or_else(|| "page.pdf".to_string());
-            match std::fs::File::create(&out_path) {
-                Ok(file) => {
-                    let mut bw = std::io::BufWriter::new(file);
-                    if let Err(e) = doc.save(&mut bw) {
-                        eprintln!("[pdf] save fail: {e}");
-                    } else {
-                        println!("[pdf] saved: {}", out_path);
-                    }
-                }
-                Err(e) => eprintln!("[pdf] open fail {}: {}", out_path, e),
-            }
-        }
+        /// text uzly + bg rects do printpdf documentu. layout_root dead na App
+        /// vrstve - PDF export bude per-WebView pres webview.last_layout_root()
+        /// v dalsi fazi.
+        fn export_pdf(&mut self) {}
         /// Extrahuje text z LayoutBoxu prekryvajicich selection rect, posle do
         /// system clipboard pres arboard. Selection coords v logical px (uz s
         /// scroll_y aplikovany na mouse).
@@ -3207,19 +2977,9 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         }
         /// Po zoom change: clamp scroll_y/scroll_x do max scrollu pro nove
         /// layout dimensions. Pri zoomu out se layout zmensi -> overflow muze
-        /// zmizet -> max_scroll = 0. Stara scroll_y > 0 by ukazovala blank.
-        fn clamp_scroll_to_layout(&mut self) {
-            if let (Some(layout), Some(r)) = (&self.layout_root, &self.renderer) {
-                let vw = (r.config.width as f32) / (self.zoom() * r.scale_factor);
-                let vh = (r.config.height as f32) / (self.zoom() * r.scale_factor);
-                let max_y = (layout.rect.height - vh).max(0.0);
-                let max_x = (layout.rect.width - vw).max(0.0);
-                if self.scroll_y() > max_y { self.set_scroll_y(max_y); }
-                if self.scroll_x() > max_x { self.set_scroll_x(max_x); }
-                if self.scroll_target_y() > max_y { self.set_scroll_target_y(max_y); }
-                if self.scroll_target_x() > max_x { self.set_scroll_target_x(max_x); }
-            }
-        }
+        /// zmizet -> max_scroll = 0. layout_root dead na App vrstve - clamp
+        /// logic se presune do WebView pipeline pres webview.last_layout_root().
+        fn clamp_scroll_to_layout(&mut self) {}
         /// Smooth scroll tick. Lerp scroll_y -> scroll_target_y. Vrati true pokud
         /// stale animuje (volajici by mel request_redraw).
         fn smooth_scroll_tick(&mut self) -> bool {
@@ -3697,13 +3457,9 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         }
                     }
                 }
-                ScrollIntoView { node_id } => {
-                    if let Some(layout) = &self.layout_root {
-                        if let Some(bx) = crate::browser::devtools_panel::find_layout_box(layout, node_id) {
-                            self.set_scroll_target_y(bx.rect.y - 50.0);
-                            if self.scroll_target_y() < 0.0 { self.set_scroll_target_y(0.0); }
-                        }
-                    }
+                ScrollIntoView { node_id: _ } => {
+                    // layout_root dead na App vrstve - scroll-to-node patri
+                    // do WebView pipeline (find_layout_box pres webview).
                 }
                 ExpandAll { node_id } => {
                     let mut to_expand = Vec::new();
@@ -3856,167 +3612,10 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     }
                 }
             }
-            let base_for_form = self.base_url();
-            let layout_root = match &self.layout_root { Some(l) => l, None => return };
-            let interp = match &mut self.interpreter { Some(i) => i, None => return };
-
-            // Hit test - najdi cilovy LayoutBox
-            let target = layout_root.hit_test(x, y);
-            if let Some(target) = target {
-                if let Some(node) = &target.node {
-                    // Centralni klasifikace pres InteractiveKind misto ad-hoc tag matchu.
-                    let tag = node.tag_name();
-                    let kind = crate::browser::interactive::classify(node);
-                    use crate::browser::interactive::InteractiveKind;
-                    let is_focusable = kind.is_focusable() || node.attr("tabindex").is_some();
-                    if is_focusable {
-                        super::cascade::set_focused_node(Some(std::rc::Rc::as_ptr(node) as usize));
-                    } else {
-                        super::cascade::set_focused_node(None);
-                    }
-                    // Form submit: kind=Button + type=submit/button (button default
-                    // = submit). Driv ad-hoc match na tag.
-                    let is_submit_button = matches!(kind, InteractiveKind::Button)
-                        && (tag.as_deref() == Some("button")
-                            || node.attr("type").as_deref().map(|t| t.eq_ignore_ascii_case("submit")).unwrap_or(false));
-                    if is_submit_button {
-                        if let Some(form) = find_ancestor_form(node) {
-                            // Dispatch 'submit' event - browsery to delaji pred navigation.
-                            // Pri preventDefault listener -> skip navigate.
-                            let prevented;
-                            {
-                                let mut event = crate::interpreter::JsObject::new();
-                                event.set("type".into(),
-                                    crate::interpreter::JsValue::Str("submit".into()));
-                                event.set("target".into(),
-                                    crate::interpreter::JsValue::DomNode(std::rc::Rc::clone(&form)));
-                                event.set("currentTarget".into(),
-                                    crate::interpreter::JsValue::DomNode(std::rc::Rc::clone(&form)));
-                                event.set("bubbles".into(), crate::interpreter::JsValue::Bool(true));
-                                event.set("cancelable".into(), crate::interpreter::JsValue::Bool(true));
-                                let prevent_flag = std::rc::Rc::new(std::cell::RefCell::new(false));
-                                let pf = std::rc::Rc::clone(&prevent_flag);
-                                event.set("preventDefault".into(),
-                                    crate::interpreter::helpers::native("preventDefault", move |_| {
-                                        *pf.borrow_mut() = true;
-                                        Ok(crate::interpreter::JsValue::Undefined)
-                                    }));
-                                event.set("stopPropagation".into(),
-                                    crate::interpreter::helpers::native("stopPropagation",
-                                        |_| Ok(crate::interpreter::JsValue::Undefined)));
-                                event.set("defaultPrevented".into(),
-                                    crate::interpreter::JsValue::Bool(false));
-                                let event_val = crate::interpreter::JsValue::Object(
-                                    std::rc::Rc::new(std::cell::RefCell::new(event)));
-                                let _ = interp.dispatch_event(&form, "submit", event_val);
-                                prevented = *prevent_flag.borrow();
-                            }
-                            if prevented {
-                                println!("[form submit] prevented by listener");
-                                return;
-                            }
-                            if let Some((url, method, body)) = build_form_request(&form, base_for_form.as_deref()) {
-                                println!("[form {} submit] {url}", method);
-                                if method == "post" {
-                                    let body_str = body.unwrap_or_default();
-                                    if let Some(html) = post_form(&url, &body_str) {
-                                        // Replace HTML s response - sync_webview vyrobí
-                                        // novy WebView + spousti scripts, App.interpreter
-                                        // move z webview.
-                                        self.set_scroll_y(0.0);
-                                        self.set_scroll_target_y(0.0);
-                                        self.set_scroll_x(0.0);
-                                        self.set_scroll_target_x(0.0);
-                                        self.sync_webview(&html, "", Some(url.clone()), None);
-                                        // Webview drzi interpreter primarne (polarity invert).
-                                        if let Some(w) = &self.window { w.set_title(&format_window_title(&url, 1usize)); }
-                                        self.render();
-                                    }
-                                } else {
-                                    self.navigate_url(&url);
-                                }
-                                return;
-                            }
-                        }
-                    }
-                    // Per-kind dispatch pres InteractiveKind klasifikaci.
-                    match kind {
-                        InteractiveKind::Select => {
-                            let id = std::rc::Rc::as_ptr(node) as usize;
-                            let same = self.open_select.map(|(t, ..)| t == id).unwrap_or(false);
-                            if same {
-                                self.open_select = None;
-                            } else {
-                                self.open_select = Some((id, target.rect.x, target.rect.y, target.rect.width));
-                            }
-                            self.render();
-                            return;
-                        }
-                        InteractiveKind::Link => {
-                            if let Some(href) = node.attr("href") {
-                                if !href.starts_with('#') {
-                                    let url = match base_for_form.as_deref() {
-                                        Some(b) => resolve_url(b, &href),
-                                        None => href.clone(),
-                                    };
-                                    println!("[link] {url}");
-                                    self.navigate_url(&url);
-                                    return;
-                                }
-                            }
-                        }
-                        InteractiveKind::Checkbox | InteractiveKind::Radio => {
-                            // Toggle checked attr.
-                            let was = node.attr("checked").is_some();
-                            if matches!(kind, InteractiveKind::Radio) {
-                                // Radio - uncheck siblings se stejnym name.
-                                let name = node.attr("name").unwrap_or_default();
-                                if let Some(form) = find_ancestor_form(node) {
-                                    fn walk_uncheck(n: &std::rc::Rc<crate::browser::dom::Node>, name: &str) {
-                                        if n.tag_name().as_deref() == Some("input")
-                                            && n.attr("type").as_deref().map(|t| t.eq_ignore_ascii_case("radio")).unwrap_or(false)
-                                            && n.attr("name").as_deref() == Some(name) {
-                                            n.attributes.borrow_mut().remove("checked");
-                                        }
-                                        for c in n.children.borrow().iter() { walk_uncheck(c, name); }
-                                    }
-                                    walk_uncheck(&form, &name);
-                                }
-                            }
-                            if was && !matches!(kind, InteractiveKind::Radio) {
-                                node.attributes.borrow_mut().remove("checked");
-                            } else {
-                                node.attributes.borrow_mut().insert("checked".into(), "checked".into());
-                            }
-                            // render() volat az po fall-through dispatch click listeners
-                            // (interp je borrowed mut, render volat mimo blok).
-                        }
-                        _ => {}
-                    }
-                    // Vyvolej click listeners na node
-                    let ids: Vec<usize> = node.listeners.borrow().get("click")
-                        .cloned().unwrap_or_default();
-                    if ids.is_empty() { return; }
-
-                    let mut event = crate::interpreter::JsObject::new();
-                    event.set("type".into(), crate::interpreter::JsValue::Str("click".into()));
-                    event.set("clientX".into(), crate::interpreter::JsValue::Number(x as f64));
-                    event.set("clientY".into(), crate::interpreter::JsValue::Number(y as f64));
-                    event.set("target".into(), crate::interpreter::JsValue::DomNode(std::rc::Rc::clone(node)));
-                    let event_val = crate::interpreter::JsValue::Object(
-                        std::rc::Rc::new(std::cell::RefCell::new(event))
-                    );
-                    for id in ids {
-                        let cb = interp.event_callbacks.borrow().get(&id).cloned();
-                        if let Some(cb) = cb {
-                            let _ = interp.call_function(cb, vec![event_val.clone()], None);
-                        }
-                    }
-                }
-            } else {
-                // Klik mimo - clear focus.
-                super::cascade::set_focused_node(None);
-            }
+            // layout_root + interpreter dead na App vrstve - hit-test/dispatch
+            // (form submit, link nav, checkbox toggle, click listener fire)
+            // bude per-WebView v dalsi fazi. Zatim handle_click resi jen
+            // open_select popup nahore.
         }
 
         /// Write arbitrary style value (z editing buffer) na selected node inline style.
@@ -4190,12 +3789,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
 
         /// Update :hover na zaklade aktualni mouse position. Vola se z CursorMoved.
         fn update_hover(&mut self) {
-            let layout_root = match &self.layout_root { Some(l) => l, None => return };
-            let target = layout_root.hit_test(self.mouse_x, self.mouse_y);
-            let id = target.and_then(|t| t.node.as_ref().map(|n| std::rc::Rc::as_ptr(n) as usize));
-            super::cascade::set_hovered_node(id);
-            // Status bar URL preview smazany N+22 (shell concern).
-            let _ = target;
+            // Page hover (set_hovered_node) presunut do webview pipeline; App layer
+            // resi jen devtools tooltip swatch/var chip hover.
             // Tooltip update: hover nad swatch -> hex string, var chip -> name.
             self.devtools.tooltip = None;
             if self.devtools.panel_open {
@@ -4266,7 +3861,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 }
             }
             if self.devtools.inspect_mode {
-                self.devtools.elements.hovered = id;
+                // Inspect mode hover ID by se ziskal pres webview hit-test; zatim None.
+                self.devtools.elements.hovered = None;
             } else if tree_hover_id.is_some() {
                 self.devtools.elements.hovered = tree_hover_id;
             } else if self.devtools.elements.hovered.is_some() {
@@ -4274,12 +3870,9 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             }
             // Cursor icon stack - jeden compute_cursor_icon() s prioritou:
             // 1. Devtools panel? -> dle hit_test (search/console = Text, scrollbar/btn = Default/Pointer)
-            // 2. Page form button/link/select -> Pointer
-            // 3. Page input/textarea -> Text
-            // 4. Page text run -> Text
-            // 5. Default
+            // 2-5: Page hit (layout_root dead na App vrstve -> target=None).
             if let Some(window) = &self.window {
-                let icon = self.compute_cursor_icon(target);
+                let icon = self.compute_cursor_icon(None);
                 window.set_cursor(icon);
             }
         }
@@ -4455,7 +4048,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         auto_devtools,
         window: None,
         renderer: None,
-        layout_root: None,
         interpreter: None,
         mouse_x: 0.0,
         mouse_y: 0.0,
