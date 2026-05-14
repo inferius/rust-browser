@@ -940,8 +940,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         interpreter: Option<crate::interpreter::Interpreter>,
         mouse_x: f32,
         mouse_y: f32,
-        scroll_y: f32,
-        scroll_x: f32,
+        // scroll_x/y fields smazany (polarity invert) - read pres
+        // self.scroll_y() method delegate webview.
         start_time: std::time::Instant,
         /// Predchozi cascaded styles - pro detekci transitions.
         prev_style_map: Option<Rc<super::cascade::StyleMap>>,
@@ -1040,6 +1040,19 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             if let Some(w) = self.webview.as_mut() { w.scroll_target_x = x; }
         }
 
+        fn scroll_y(&self) -> f32 {
+            self.webview.as_ref().map(|w| w.scroll_y).unwrap_or(0.0)
+        }
+        fn set_scroll_y(&mut self, y: f32) {
+            if let Some(w) = self.webview.as_mut() { w.scroll_y = y; }
+        }
+        fn scroll_x(&self) -> f32 {
+            self.webview.as_ref().map(|w| w.scroll_x).unwrap_or(0.0)
+        }
+        fn set_scroll_x(&mut self, x: f32) {
+            if let Some(w) = self.webview.as_mut() { w.scroll_x = x; }
+        }
+
         /// Synchronizuje mirror WebView z App primary state. Vola se po kazdem
         /// reload / navigace. Phase 4a sync (App primary, WebView side-effect);
         /// Phase 5 obrati polarity (WebView primary, App reads).
@@ -1073,7 +1086,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             let mut wv = crate::embed::WebView::new(engine, vw, vh);
             wv.resize(vw, vh, sf);
             wv.set_zoom(self.zoom());
-            wv.set_scroll(self.scroll_x, self.scroll_y);
+            wv.set_scroll(self.scroll_x(), self.scroll_y());
             wv.set_local_path(self.current_path.clone());
             // load_html (real) - spousti inline + external <script>s.
             // Po loadu volaci kod muze take_interpreter() pro presun do App.
@@ -1154,8 +1167,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 WindowEvent::CursorMoved { position, .. } => {
                     // Mouse position je physical px. Logical = physical / (zoom * scale_factor).
                     let scale = self.renderer.as_ref().map(|r| r.scale_factor).unwrap_or(1.0);
-                    let new_x = (position.x as f32) / (self.zoom() * scale) + self.scroll_x;
-                    let new_y = (position.y as f32) / (self.zoom() * scale) + self.scroll_y;
+                    let new_x = (position.x as f32) / (self.zoom() * scale) + self.scroll_x();
+                    let new_y = (position.y as f32) / (self.zoom() * scale) + self.scroll_y();
                     // Skip update kdyz se pozice nezmenila (deduplicate winit spam).
                     if (new_x - self.mouse_x).abs() < 0.5 && (new_y - self.mouse_y).abs() < 0.5 {
                         return;
@@ -1168,8 +1181,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         use crate::devtools::profile::DockPosition;
                         let viewport_w = self.viewport_w_logical();
                         let viewport_h = self.viewport_h_logical();
-                        let raw_x = new_x - self.scroll_x;
-                        let raw_y = new_y - self.scroll_y;
+                        let raw_x = new_x - self.scroll_x();
+                        let raw_y = new_y - self.scroll_y();
                         let new_size = match self.devtools.dock_position {
                             DockPosition::Bottom | DockPosition::PopupWindow =>
                                 (viewport_h - raw_y).max(60.0).min(viewport_h * 0.9),
@@ -1190,7 +1203,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         for (zx, zy, zw, zh, action) in bz.iter() {
                             if action == "scrub" {
                                 let local_mx = self.mouse_x;
-                                let local_my = self.mouse_y - self.scroll_y;
+                                let local_my = self.mouse_y - self.scroll_y();
                                 if local_my >= *zy - 10.0 && local_my < zy + zh + 10.0 {
                                     let progress = ((local_mx - zx) / zw).clamp(0.0, 1.0);
                                     drop(bz);
@@ -1232,7 +1245,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                             if v_drag && layout.rect.height > viewport_h {
                                 let max_scroll = (layout.rect.height - viewport_h).max(1.0);
                                 let thumb_h = (viewport_h * viewport_h / layout.rect.height).max(40.0);
-                                let my_screen = self.mouse_y - self.scroll_y;
+                                let my_screen = self.mouse_y - self.scroll_y();
                                 let frac = ((my_screen - thumb_h * 0.5) / (viewport_h - thumb_h)).clamp(0.0, 1.0);
                                 new_target_y = Some(frac * max_scroll);
                             }
@@ -1245,11 +1258,11 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         }
                         if let Some(ty) = new_target_y {
                             self.set_scroll_target_y(ty);
-                            self.scroll_y = ty;
+                            self.set_scroll_y(ty);
                         }
                         if let Some(tx) = new_target_x {
                             self.set_scroll_target_x(tx);
-                            self.scroll_x = tx;
+                            self.set_scroll_x(tx);
                         }
                         self.render();
                         return;
@@ -1258,7 +1271,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     if self.devtools.elements.dragging_split {
                         let viewport_w = self.viewport_w_logical();
                         let max_x = viewport_w - self.devtools.side_panel_w - 200.0;
-                        self.devtools.elements.split_x = (self.mouse_x - self.scroll_x).clamp(200.0, max_x);
+                        self.devtools.elements.split_x = (self.mouse_x - self.scroll_x()).clamp(200.0, max_x);
                         self.render();
                         return;
                     }
@@ -1267,7 +1280,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     if self.devtools.elements.dragging_side_split {
                         use crate::devtools::profile::DockPosition;
                         let viewport_w = self.viewport_w_logical();
-                        let mx_screen = self.mouse_x - self.scroll_x;
+                        let mx_screen = self.mouse_x - self.scroll_x();
                         let (px, _py, pw, _ph) = self.panel_rect_logical();
                         // Pri Bottom/Top: panel_w = viewport_w. Mouse_x v panel_x..panel_x+panel_w.
                         // styles_end = mouse_x_local; side_panel_w = panel_w - mouse_x_local.
@@ -1296,7 +1309,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                             + if self.devtools.elements.search.open { 28.0 } else { 0.0 };
                         let body_h = panel_h - 4.0 - 30.0
                             - if self.devtools.elements.search.open { 28.0 } else { 0.0 };
-                        let raw_y = self.mouse_y - self.scroll_y;
+                        let raw_y = self.mouse_y - self.scroll_y();
                         let frac = ((raw_y - body_y) / body_h).clamp(0.0, 1.0);
                         match target {
                             ScrollTarget::ElementsTree => {
@@ -1372,7 +1385,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     self.page_sel_begin((self.mouse_x, self.mouse_y));
                     // Devtools panel hit-test ma prioritu nad page hit-testem.
                     // mouse_x/y v doc-logical, raw_y v screen-logical. viewport_w/h v logical.
-                    let raw_y = self.mouse_y - self.scroll_y;
+                    let raw_y = self.mouse_y - self.scroll_y();
                     let viewport_w = self.viewport_w_logical();
                     let viewport_h = self.viewport_h_logical();
                     let panel_h = self.panel_h_logical();
@@ -1389,7 +1402,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     if let Some(layout) = &self.layout_root {
                         let viewport_h_page = viewport_h - panel_h;
                         let mx = self.mouse_x;
-                        let my_screen = self.mouse_y - self.scroll_y;
+                        let my_screen = self.mouse_y - self.scroll_y();
                         // Vertikalni scrollbar.
                         if layout.rect.height > viewport_h_page
                            && mx >= viewport_w - 12.0 && mx < viewport_w
@@ -1453,7 +1466,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     // Pouzij point_in_devtools (respektuje dock position) misto
                     // bottom-only check raw_y >= viewport_h - panel_h. Bez teto
                     // opravy pri Top/Left/Right dock klik v panelu propaguje na page.
-                    let in_panel = self.point_in_devtools(self.mouse_x - self.scroll_x, raw_y);
+                    let in_panel = self.point_in_devtools(self.mouse_x - self.scroll_x(), raw_y);
                     if self.devtools.panel_open && (in_panel || modal_active) {
                         if let Some(layout) = &self.layout_root {
                             let hit = devtools_hit_test(&self.devtools, layout, viewport_w, viewport_h, self.mouse_x, raw_y);
@@ -1981,7 +1994,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     // Inspect mode: kliknuti na main viewport vybira node v tree.
                     if self.devtools.inspect_mode {
                         if let Some(layout) = &self.layout_root {
-                            if let Some(node_id) = pick_node_at_screen_pos(layout, self.mouse_x, raw_y, self.scroll_y) {
+                            if let Some(node_id) = pick_node_at_screen_pos(layout, self.mouse_x, raw_y, self.scroll_y()) {
                                 self.devtools.elements.selected = Some(node_id);
                                 // Scroll tree pane na vybranou row.
                                 if let Some(idx) = self.devtools.elements.rows.iter()
@@ -2009,7 +2022,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     // Middle-click na tab chip = zavrit ten tab.
                 }
                 WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Right, .. } => {
-                    let raw_y = self.mouse_y - self.scroll_y;
+                    let raw_y = self.mouse_y - self.scroll_y();
                     let viewport_h = self.viewport_h_logical();
                     let panel_h = self.panel_h_logical();
                     // Shell chrome RMB: tab/bookmark context menu.
@@ -2067,15 +2080,15 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     };
                     // Pri kurzoru nad devtools panelem - scrolluj tree, ne stranku.
                     // mouse_x/y jsou logical (po /(zoom*scale)), srovnani s logical viewport.
-                    let raw_y_logical = self.mouse_y - self.scroll_y;
+                    let raw_y_logical = self.mouse_y - self.scroll_y();
                     let viewport_w = self.viewport_w_logical();
-                    if self.point_in_devtools(self.mouse_x - self.scroll_x, raw_y_logical) {
+                    if self.point_in_devtools(self.mouse_x - self.scroll_x(), raw_y_logical) {
                         let scroll_amount_logical = scroll_amount / (self.zoom() * self.renderer.as_ref().map(|r| r.scale_factor).unwrap_or(1.0));
                         // Globalni scroll routing: vzdy ta cast pod kurzorem.
                         // Pri Elements: 3 zony - tree | styles | side_panel.
                         match self.devtools.tab {
                             crate::devtools::Tab::Elements => {
-                                let mx_local = self.mouse_x - self.scroll_x;
+                                let mx_local = self.mouse_x - self.scroll_x();
                                 let side_panel_w = self.devtools.side_panel_w.clamp(180.0, (viewport_w - 400.0).max(181.0));
                                 let styles_end = viewport_w - side_panel_w;
                                 let default_tree_split = (viewport_w - side_panel_w) * 0.45;
@@ -2136,8 +2149,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     // scroll animation (kdyz scroll_y != scroll_target_y).
                     let has_anim = !self.active_animations.is_empty()
                         || !self.active_transitions.is_empty()
-                        || (self.scroll_y - self.scroll_target_y()).abs() > 0.5
-                        || (self.scroll_x - self.scroll_target_x()).abs() > 0.5;
+                        || (self.scroll_y() - self.scroll_target_y()).abs() > 0.5
+                        || (self.scroll_x() - self.scroll_target_x()).abs() > 0.5;
                     if has_anim {
                         if let Some(w) = &self.window {
                             w.request_redraw();
@@ -3085,8 +3098,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             use winit::window::CursorIcon;
             use crate::devtools::profile::DockPosition;
             // 1. Devtools panel hit?
-            let mx_screen = self.mouse_x - self.scroll_x;
-            let my_screen = self.mouse_y - self.scroll_y;
+            let mx_screen = self.mouse_x - self.scroll_x();
+            let my_screen = self.mouse_y - self.scroll_y();
             // Resize grip cursor (per dock).
             if self.devtools.panel_open {
                 let (px, py, pw, ph) = self.panel_rect_logical();
@@ -3262,8 +3275,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 let vh = (r.config.height as f32) / (self.zoom() * r.scale_factor);
                 let max_y = (layout.rect.height - vh).max(0.0);
                 let max_x = (layout.rect.width - vw).max(0.0);
-                if self.scroll_y > max_y { self.scroll_y = max_y; }
-                if self.scroll_x > max_x { self.scroll_x = max_x; }
+                if self.scroll_y() > max_y { self.set_scroll_y(max_y); }
+                if self.scroll_x() > max_x { self.set_scroll_x(max_x); }
                 if self.scroll_target_y() > max_y { self.set_scroll_target_y(max_y); }
                 if self.scroll_target_x() > max_x { self.set_scroll_target_x(max_x); }
             }
@@ -3271,20 +3284,20 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         /// Smooth scroll tick. Lerp scroll_y -> scroll_target_y. Vrati true pokud
         /// stale animuje (volajici by mel request_redraw).
         fn smooth_scroll_tick(&mut self) -> bool {
-            let dy = self.scroll_target_y() - self.scroll_y;
-            let dx = self.scroll_target_x() - self.scroll_x;
+            let dy = self.scroll_target_y() - self.scroll_y();
+            let dx = self.scroll_target_x() - self.scroll_x();
             let mut animating = false;
             if dy.abs() > 0.5 {
-                self.scroll_y += dy * 0.25;
+                self.set_scroll_y(self.scroll_y() + dy * 0.25);
                 animating = true;
             } else {
-                self.scroll_y = self.scroll_target_y();
+                self.set_scroll_y(self.scroll_target_y());
             }
             if dx.abs() > 0.5 {
-                self.scroll_x += dx * 0.25;
+                self.set_scroll_x(self.scroll_x() + dx * 0.25);
                 animating = true;
             } else {
-                self.scroll_x = self.scroll_target_x();
+                self.set_scroll_x(self.scroll_target_x());
             }
             animating
         }
@@ -3339,9 +3352,9 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             self.html = html;
             self.css = css;
             self.current_path = Some(path.to_path_buf());
-            self.scroll_y = 0.0;
+            self.set_scroll_y(0.0);
             self.set_scroll_target_y(0.0);
-            self.scroll_x = 0.0;
+            self.set_scroll_x(0.0);
             self.set_scroll_target_x(0.0);
             self.start_time = std::time::Instant::now();
             // animation_origin reset - bez tohoto CSS animations elapsed
@@ -3985,9 +3998,9 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                         self.html = html;
                                         self.css = String::new();
                                         self.base_url = Some(url.clone());
-                                        self.scroll_y = 0.0;
+                                        self.set_scroll_y(0.0);
                                         self.set_scroll_target_y(0.0);
-                                        self.scroll_x = 0.0;
+                                        self.set_scroll_x(0.0);
                                         self.set_scroll_target_x(0.0);
                                         self.sync_webview_from_app();
                                         if let Some(wv) = self.webview.as_mut() {
@@ -4230,9 +4243,9 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 self.css = css;
                 self.base_url = Some(url.to_string());
                 self.current_path = None;
-                self.scroll_y = 0.0;
+                self.set_scroll_y(0.0);
             self.set_scroll_target_y(0.0);
-            self.scroll_x = 0.0;
+            self.set_scroll_x(0.0);
             self.set_scroll_target_x(0.0);
                 self.start_time = std::time::Instant::now();
                 self.animation_origin = self.start_time;
@@ -4274,8 +4287,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // Tooltip update: hover nad swatch -> hex string, var chip -> name.
             self.devtools.tooltip = None;
             if self.devtools.panel_open {
-                let mx_screen = self.mouse_x - self.scroll_x;
-                let my_screen = self.mouse_y - self.scroll_y;
+                let mx_screen = self.mouse_x - self.scroll_x();
+                let my_screen = self.mouse_y - self.scroll_y();
                 let zones = self.devtools.styles.swatch_zones.borrow();
                 for (zx, zy, zw, zh, col, _prop) in zones.iter() {
                     if mx_screen >= *zx && mx_screen < zx + zw
@@ -4318,8 +4331,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // Devtools tree hover: mouse v devtools panelu nad Elements tree
             // -> set hovered (Firefox-style page overlay). Mimo tree -> clear.
             // Inspect mode prepise hover na page-side hit-test.
-            let mx_screen = self.mouse_x - self.scroll_x;
-            let my_screen = self.mouse_y - self.scroll_y;
+            let mx_screen = self.mouse_x - self.scroll_x();
+            let my_screen = self.mouse_y - self.scroll_y();
             let in_devtools = self.point_in_devtools(mx_screen, my_screen);
             let mut tree_hover_id: Option<usize> = None;
             if in_devtools && self.devtools.tab == crate::devtools::Tab::Elements {
@@ -4424,6 +4437,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             let self_page_sel_anchor = self.page_sel_anchor();
             let self_page_sel_current = self.page_sel_current();
             let cur_zoom = self.zoom();
+            let cur_scroll_y = self.scroll_y();
+            let cur_scroll_x = self.scroll_x();
             let r = match &mut self.renderer { Some(r) => r, None => return };
             // Push zoom faktor do rendereru pro vp uniform skalovani.
             r.zoom = cur_zoom;
@@ -4825,7 +4840,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     }
                 }
                 let max_scroll = (style_map.len() as f32).max(1.0);
-                let scroll_progress = if max_scroll > 1.0 { self.scroll_y / max_scroll.max(1.0) } else { 0.0 };
+                let scroll_progress = if max_scroll > 1.0 { cur_scroll_y / max_scroll.max(1.0) } else { 0.0 };
                 let _ = cascade::apply_scroll_animations(Rc::make_mut(&mut style_map), stylesheets, scroll_progress);
             }
             perf_t("apply_animations + scroll_anims", _t_anim_apply);
@@ -5033,7 +5048,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 }
                 if self.layout_has_sticky {
                     let _t_sticky = std::time::Instant::now();
-                    layout::apply_sticky(lr_mut, self.scroll_y);
+                    layout::apply_sticky(lr_mut, cur_scroll_y);
                     perf_t("apply_sticky", _t_sticky);
                 }
             }
@@ -5048,7 +5063,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // Reuse buffer pres frames - alloc-free.
             let _t_paint = std::time::Instant::now();
             let mut display_list = std::mem::take(&mut self.display_list_buffer);
-            paint::build_display_list_culled_into(&layout_root, self.scroll_y, viewport_h, &mut display_list);
+            paint::build_display_list_culled_into(&layout_root, cur_scroll_y, viewport_h, &mut display_list);
             perf_t("paint::build_display_list_culled", _t_paint);
             let _t_post_paint = std::time::Instant::now();
             // Selection emit PO layout commands - flow-based row selection.
@@ -5177,7 +5192,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
 
             // Apply scroll: posun vsechny y o -scroll_y
             for cmd in display_list.iter_mut() {
-                shift_command_y(cmd, -self.scroll_y);
+                shift_command_y(cmd, -cur_scroll_y);
             }
 
             // <select> open dropdown overlay - emit popup s options pri open_select.
@@ -5190,7 +5205,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         let mut idx = 0_usize;
                         let popup_x = anchor_x;
                         // Pod selectem.
-                        let popup_y = anchor_y + 24.0 - self.scroll_y;
+                        let popup_y = anchor_y + 24.0 - cur_scroll_y;
                         // Background podklad celeho dropdownu.
                         let options: Vec<std::rc::Rc<crate::browser::dom::Node>> = select_node.children.borrow()
                             .iter().filter(|c| c.tag_name().as_deref() == Some("option")).cloned().collect();
@@ -5214,7 +5229,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                             let opt_y = popup_y + (idx as f32) * opt_h;
                             // Hover detect - mouse_y v range.
                             let hovered = self.mouse_x >= popup_x && self.mouse_x < popup_x + anchor_w
-                                && (self.mouse_y - self.scroll_y) >= opt_y && (self.mouse_y - self.scroll_y) < opt_y + opt_h;
+                                && (self.mouse_y - cur_scroll_y) >= opt_y && (self.mouse_y - cur_scroll_y) < opt_y + opt_h;
                             if hovered {
                                 display_list.push(DisplayCommand::Rect {
                                     x: popup_x, y: opt_y, w: anchor_w, h: opt_h,
@@ -5243,9 +5258,9 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // Aplikuj horizontalni scroll posun na page content (pred overlay split).
             // Overlay (devtools, scrollbars, addr bar, find) jsou screen-fixed a
             // shift se na ne neaplikuje.
-            if self.scroll_x.abs() > 0.001 {
+            if cur_scroll_x.abs() > 0.001 {
                 for cmd in display_list.iter_mut() {
-                    shift_command_x(cmd, -self.scroll_x);
+                    shift_command_x(cmd, -cur_scroll_x);
                 }
             }
             // Shell mode: shift page commands dolu o chrome_h aby content
@@ -5264,12 +5279,12 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // devtools highlight rect kreslen v layout-coords (y=10) ale paint
             // jiz posunul page (y=74) -> uzivatel vidi highlight jinde.
             let chrome_dy_for_highlight = 0.0_f32;
-            let chrome_dx_for_highlight = -self.scroll_x;
+            let chrome_dx_for_highlight = -cur_scroll_x;
             crate::browser::devtools_panel::paint_element_highlight_offset(
                 &mut display_list,
                 &layout_root,
                 &self.devtools,
-                self.scroll_y,
+                cur_scroll_y,
                 chrome_dx_for_highlight,
                 chrome_dy_for_highlight,
             );
@@ -5296,7 +5311,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         // Walk DOM, najdi vsechny matching elementy, vykresli outline.
                         let doc_root = std::rc::Rc::clone(&document_root);
                         paint_match_preview_recursive(
-                            &mut display_list, &doc_root, &sel, &layout_root, self.scroll_y);
+                            &mut display_list, &doc_root, &sel, &layout_root, cur_scroll_y);
                     }
                 }
             }
@@ -5306,7 +5321,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 &mut display_list,
                 &layout_root,
                 &self.devtools,
-                self.scroll_y,
+                cur_scroll_y,
             );
             perf_t("ovl::inspector_overlays", _t_io);
             let _t_chrome = std::time::Instant::now();
@@ -5374,8 +5389,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 self.interpreter.as_ref(),
                 viewport_w_logical,
                 viewport_h_logical,
-                self.mouse_x - self.scroll_x,
-                self.mouse_y - self.scroll_y,
+                self.mouse_x - cur_scroll_x,
+                self.mouse_y - cur_scroll_y,
             );
             perf_t("post_paint::devtools_panel", _t_dt_paint);
             let _t_addr_overlay = std::time::Instant::now();
@@ -5408,7 +5423,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 // Thumb.
                 let thumb_h = (viewport_h * viewport_h / total_h).max(40.0);
                 let max_scroll = (total_h - viewport_h).max(1.0);
-                let thumb_y = chrome_top + (self.scroll_y / max_scroll) * (viewport_h - thumb_h);
+                let thumb_y = chrome_top + (cur_scroll_y / max_scroll) * (viewport_h - thumb_h);
                 display_list.push(DisplayCommand::Rect {
                     x: bar_x + 2.0, y: thumb_y + 2.0,
                     w: bar_w - 4.0, h: thumb_h - 4.0,
@@ -5426,7 +5441,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 });
                 let thumb_w = (viewport_w * viewport_w / total_w).max(40.0);
                 let max_scroll_x = (total_w - viewport_w).max(1.0);
-                let thumb_x = (self.scroll_x / max_scroll_x) * (viewport_w - thumb_w);
+                let thumb_x = (cur_scroll_x / max_scroll_x) * (viewport_w - thumb_w);
                 display_list.push(DisplayCommand::Rect {
                     x: thumb_x + 2.0, y: bar_y + 2.0,
                     w: thumb_w - 4.0, h: bar_h - 4.0,
@@ -5557,9 +5572,9 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             let shell_skip = false;
             if let Some(states_rc) = &webgl_states_opt {
                 let states = states_rc.borrow();
-                r.draw_full_frame_cached(page_cmds, overlay_cmds, shell_cmds, &layout_root, Some(&*states), self.scroll_y, chrome_top_logical, page_skip, shell_skip);
+                r.draw_full_frame_cached(page_cmds, overlay_cmds, shell_cmds, &layout_root, Some(&*states), cur_scroll_y, chrome_top_logical, page_skip, shell_skip);
             } else {
-                r.draw_full_frame_cached(page_cmds, overlay_cmds, shell_cmds, &layout_root, None, self.scroll_y, chrome_top_logical, page_skip, shell_skip);
+                r.draw_full_frame_cached(page_cmds, overlay_cmds, shell_cmds, &layout_root, None, cur_scroll_y, chrome_top_logical, page_skip, shell_skip);
             }
             perf_t("gpu draw + present", _t_gpu);
 
@@ -5615,8 +5630,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // sample misto aktualizace. Stejne pro idle measurement.
             let has_anim = !self.active_animations.is_empty()
                 || !self.active_transitions.is_empty()
-                || (self.scroll_y - self.scroll_target_y()).abs() > 0.5
-                || (self.scroll_x - self.scroll_target_x()).abs() > 0.5;
+                || (cur_scroll_y - self.scroll_target_y()).abs() > 0.5
+                || (cur_scroll_x - self.scroll_target_x()).abs() > 0.5;
             if has_anim || self.show_fps {
                 if let Some(w) = &self.window { w.request_redraw(); }
             }
@@ -5676,8 +5691,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         interpreter: None,
         mouse_x: 0.0,
         mouse_y: 0.0,
-        scroll_y: 0.0,
-        scroll_x: 0.0,
         start_time: std::time::Instant::now(),
         prev_style_map: None,
         active_transitions: Vec::new(),
