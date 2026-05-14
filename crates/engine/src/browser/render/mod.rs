@@ -8706,6 +8706,72 @@ impl Renderer {
     /// Pri start_clear=false neclearuje texturu pri prvni passi (Load namisto
     /// Clear), pouzite pro overlay pass po WebGL.
     /// Pri Some scissor (logical px) clipuje render pass na rect.
+    /// Warm-up glyph atlas + image atlas pre kazdy display command vyzaduje
+    /// glyf/image. Vola se PRED `draw_segments_into_view_clipped`. Atlas
+    /// upload pak ucinkuje vsechny vertices ktere sample texturu.
+    ///
+    /// `base_url` pouzity pro relative image URL resolve.
+    pub fn warm_atlas_for(&mut self, cmds: &[DisplayCommand], base_url: Option<&str>) {
+        for cmd in cmds {
+            match cmd {
+                DisplayCommand::Text { content, font_size, font_family, color, bold, font_weight, italic, .. } => {
+                    let cmd_hash = {
+                        use std::hash::{Hash, Hasher};
+                        let mut h = ahash::AHasher::default();
+                        content.hash(&mut h);
+                        (*font_size as u32).hash(&mut h);
+                        font_family.hash(&mut h);
+                        font_weight.hash(&mut h);
+                        italic.hash(&mut h);
+                        color.hash(&mut h);
+                        h.finish()
+                    };
+                    if self.text_cmd_warmed.contains(&cmd_hash) { continue; }
+                    self.text_cmd_warmed.insert(cmd_hash);
+                    let _ = bold;
+                    let phys = (*font_size * self.zoom).round().max(1.0) as u32;
+                    let color_font: Option<_> = self.color_fonts.get(font_family).cloned();
+                    let color_font_obj: Option<_> = if color_font.is_some() {
+                        self.font_registry.get(font_family).cloned()
+                    } else { None };
+                    for ch in content.chars() {
+                        let mut color_added = false;
+                        if let (Some(colr), Some(font)) = (color_font.as_ref(), color_font_obj.as_ref()) {
+                            let glyph_id = font.lookup_glyph_index(ch);
+                            if glyph_id != 0 && colr.base_to_layers.contains_key(&glyph_id) {
+                                let key = format!("__colr:{}:{}:{}", font_family, ch as u32, *font_size as u32);
+                                if !self.image_atlas.contains(&key) {
+                                    if let Some((w, h, _, _, rgba)) = super::emoji_fonts::rasterize_color_glyph(
+                                        font, glyph_id, *font_size, colr, *color,
+                                    ) {
+                                        self.image_atlas.add(&key, w as u32, h as u32, &rgba);
+                                    }
+                                }
+                                color_added = true;
+                            }
+                        }
+                        if !color_added {
+                            self.atlas.add_styled(font_family, *font_weight, *italic, ch, phys);
+                        }
+                    }
+                }
+                DisplayCommand::Image { src, w, h, .. } => {
+                    let resolved = match base_url {
+                        Some(base) => resolve_url(base, src),
+                        None => src.clone(),
+                    };
+                    self.load_image_as(src, &resolved);
+                    let target_w = (*w * self.zoom).round().max(1.0) as u32;
+                    let target_h = (*h * self.zoom).round().max(1.0) as u32;
+                    self.resample_image_for_size(src, target_w, target_h);
+                }
+                _ => {}
+            }
+        }
+        self.upload_atlas();
+        self.upload_image_atlas();
+    }
+
     pub fn draw_segments_into_view_clipped(&mut self, view: &wgpu::TextureView,
                                         cmds: &[DisplayCommand], start_clear: bool,
                                         scissor: Option<(u32, u32, u32, u32)>) -> bool {

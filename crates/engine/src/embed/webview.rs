@@ -423,10 +423,49 @@ impl WebView {
             &doc.root, &style_map, viewport_w, viewport_h);
 
         // 3. Paint - generate display list (culled na viewport).
-        let display_list = crate::browser::paint::build_display_list_culled(
+        let mut display_list = crate::browser::paint::build_display_list_culled(
             &layout_root, self.scroll_y, viewport_h);
 
-        // 4. Renderer kresli display list do target_view.
+        // 3b. Scrollbar overlay - kdyz content > viewport.
+        let total_h = layout_root.rect.height;
+        if total_h > viewport_h {
+            let bar_w = 12.0_f32;
+            let bar_x = viewport_w - bar_w;
+            display_list.push(crate::browser::paint::DisplayCommand::Rect {
+                x: bar_x, y: 0.0, w: bar_w, h: viewport_h,
+                color: [240, 240, 245, 255], radius: 0.0,
+            });
+            let thumb_h = (viewport_h * viewport_h / total_h).max(40.0);
+            let max_scroll = (total_h - viewport_h).max(1.0);
+            let thumb_y = (self.scroll_y / max_scroll) * (viewport_h - thumb_h);
+            display_list.push(crate::browser::paint::DisplayCommand::Rect {
+                x: bar_x + 2.0, y: thumb_y + 2.0,
+                w: bar_w - 4.0, h: thumb_h - 4.0,
+                color: [160, 160, 170, 255], radius: (bar_w - 4.0) * 0.5,
+            });
+        }
+        let total_w = layout_root.rect.width;
+        if total_w > viewport_w {
+            let bar_h = 12.0_f32;
+            let bar_y = viewport_h - bar_h;
+            display_list.push(crate::browser::paint::DisplayCommand::Rect {
+                x: 0.0, y: bar_y, w: viewport_w, h: bar_h,
+                color: [240, 240, 245, 255], radius: 0.0,
+            });
+            let thumb_w = (viewport_w * viewport_w / total_w).max(40.0);
+            let max_scroll_x = (total_w - viewport_w).max(1.0);
+            let thumb_x = (self.scroll_x / max_scroll_x) * (viewport_w - thumb_w);
+            display_list.push(crate::browser::paint::DisplayCommand::Rect {
+                x: thumb_x + 2.0, y: bar_y + 2.0,
+                w: thumb_w - 4.0, h: bar_h - 4.0,
+                color: [160, 160, 170, 255], radius: (bar_h - 4.0) * 0.5,
+            });
+        }
+
+        // 4. Warm-up glyph atlas + image atlas pred draw.
+        renderer.warm_atlas_for(&display_list, self.base_url.as_deref());
+
+        // 5. Renderer kresli display list do target_view.
         let had = renderer.draw_segments_into_view_clipped(
             target_view, &display_list, true, None);
         eprintln!("[webview render_via] display_list={} had_segments={} layout_root.rect={}x{}",
