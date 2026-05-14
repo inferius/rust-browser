@@ -165,6 +165,14 @@ impl ApplicationHandler for ShellApp {
                     if let Some(w) = &self.window { w.request_redraw(); }
                 }
             }
+            WindowEvent::DroppedFile(path) => {
+                let path_str = path.to_string_lossy().to_string();
+                println!("[shell drop] {path_str}");
+                if let Some(wv) = &mut self.webview {
+                    wv.load_url(&path_str);
+                    if let Some(w) = &self.window { w.request_redraw(); }
+                }
+            }
             WindowEvent::ModifiersChanged(mods) => {
                 self.modifiers = mods.state();
             }
