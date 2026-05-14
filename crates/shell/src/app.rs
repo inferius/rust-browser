@@ -207,9 +207,13 @@ impl ShellApp {
         }
         // Dispatch requests sekvencne. Kazda response -> resp_queue JSON.
         for req in pending {
+            let req_id = req.id;
+            let req_method = req.method.clone();
             let resp = target.handle_request(page, req);
             let json = serde_json::to_string(&resp)
                 .unwrap_or_else(|e| format!("{{\"error\":\"serialize: {e}\"}}"));
+            println!("[cdp dispatch] id={} method={} resp_len={}",
+                req_id, req_method, json.len());
             channel.resp_queue.borrow_mut().push_back(json);
         }
         // Drain pending events (z target.events) - push do resp_queue.
@@ -306,10 +310,15 @@ impl ShellApp {
             // redraw - drain queue + dispatch pres target + page WebView.
             let channel = CdpChannel::new();
             Self::install_cdp_natives(&mut dv, &channel);
+            // Diagnostika - velikost slozenehoho HTML + presence theme/cdp markeru.
+            let html_len = Self::build_devtools_html().len();
+            let css_len = Self::extract_inline_styles(&Self::build_devtools_html()).len();
+            println!("[shell] devtools WebView armed: html={} bytes, inline css={} bytes",
+                html_len, css_len);
             self.devtools = Some(dv);
             self.devtools_target = Some(DevtoolsTarget::new());
             self.cdp_channel = Some(channel);
-            println!("[shell] devtools WebView vytvoreno + CDP channel armed");
+            println!("[shell] devtools CDP channel ready");
         }
         println!("[shell] devtools visible: {}", self.devtools_visible);
         if let Some(w) = &self.window { w.request_redraw(); }
