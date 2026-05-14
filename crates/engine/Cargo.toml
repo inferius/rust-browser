@@ -55,6 +55,8 @@ tungstenite = { version = "0.29", default-features = false, features = ["handsha
 # Test-only - JSON parser pro web layout fixtures (Chrome export -> Rust compare).
 # Naive parser ne na 60kb+ JSON -> serde stack-safe iterativni parse.
 serde_json = "1"
+# Serde derive pro devtools target adapter (Serialize trait bounds).
+serde = { version = "1", features = ["derive"] }
 fontdue = "0.9"  # font rasterizer pro glyph atlas
 # taffy odstraneno - vlastni layout_engine v src/browser/layout_engine/
 # (inspirovano taffy MIT licence; mame plnou kontrolu nad layoutem)
@@ -77,3 +79,7 @@ brotli = { version = "8.0", default-features = false, features = ["std"] }
 # AHash - fast non-cryptographic hasher pro hot paths (cascade hash, layout
 # subtree hash, atlas lookup keys). Pure Rust, SipHash13 nahrazeny ~10x rychleji.
 ahash = { version = "0.8", default-features = false, features = ["std"] }
+# DevTools protokol crate - DevtoolsRequest/Response/Event typy + Method enum.
+# Pres `embed::devtools_target` adapter mapuje method strings na WebView API
+# (DOM/CSS/Runtime/Debugger/Network/Performance domains).
+rwe-devtools-proto = { path = "../devtools-proto" }

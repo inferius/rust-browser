@@ -3095,6 +3095,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "rwe-devtools-frontend"
+version = "0.1.0"
+
+[[package]]
 name = "rwe-devtools-proto"
 version = "0.1.0"
 dependencies = [
@@ -3127,7 +3131,9 @@ dependencies = [
  "printpdf",
  "regex",
  "resvg",
+ "rwe-devtools-proto",
  "selectors",
+ "serde",
  "serde_json",
  "stacker",
  "tiny-skia",

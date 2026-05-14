@@ -33,11 +33,13 @@
 //! Phase 3+: postupne migrace stavu z `App` do `WebView`. Phase 5 sloti shell
 //! kompositor a engine prejde na offscreen RT only.
 
+pub mod devtools_target;
 pub mod engine;
 pub mod event;
 pub mod loader;
 pub mod webview;
 
+pub use devtools_target::DevtoolsTarget;
 pub use engine::{Engine, EngineSettings};
 pub use event::{
     CursorIcon, EventResponse, InputEvent, KeyModifiers, MouseButton, NavigationMethod,
