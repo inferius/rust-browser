@@ -90,6 +90,12 @@ pub struct WebView {
     /// CSS transitions aktualne tweenujici. Detect z diff prev vs cur
     /// style_map + apply per frame dle elapsed time.
     pub(crate) active_transitions: Vec<crate::browser::cascade::ActiveTransition>,
+    /// Aktivni @keyframes anim - (node_id, anim_name). Diff per frame ->
+    /// animationstart / animationend events.
+    pub(crate) active_animations: std::collections::HashSet<(usize, String)>,
+    /// Iteration counter per (node_id, anim_name) - animationiteration event
+    /// pri inkrementu.
+    pub(crate) animation_iterations: std::collections::HashMap<(usize, String), i32>,
     /// Last layout_root vyrobeny v render_via - getter pro hostujici aplikaci
     /// (App emits inspector overlay nad webview RT pres dalsi draw_segments
     /// pass; shell nepouziva).
@@ -125,6 +131,8 @@ impl WebView {
             animation_origin: std::time::Instant::now(),
             prev_style_map: None,
             active_transitions: Vec::new(),
+            active_animations: std::collections::HashSet::new(),
+            animation_iterations: std::collections::HashMap::new(),
             last_layout_root: None,
             async_jobs: crate::browser::async_jobs::AsyncJobsRegistry::new(),
         }
@@ -181,8 +189,11 @@ impl WebView {
         self.dirty = true;
         // Animation origin reset - fresh stranka start = anim elapsed 0.
         self.animation_origin = std::time::Instant::now();
-        // Transitions detect drive z minulych frames -> nova stranka clean state.
+        // Transitions / animations state cleanup pri nove strance.
         self.prev_style_map = None;
+        self.active_transitions.clear();
+        self.active_animations.clear();
+        self.animation_iterations.clear();
 
         NavigationResult {
             url: base,
@@ -479,13 +490,21 @@ impl WebView {
         let css_uses_transitions = self.stylesheets.iter()
             .any(|s| s.rules.iter().any(|r| r.declarations.iter()
                 .any(|d| d.property.starts_with("transition"))));
+        let mut ended_transitions: Vec<(usize, String)> = Vec::new();
         if css_uses_transitions {
             if let Some(prev) = &self.prev_style_map {
                 let same_map = std::rc::Rc::ptr_eq(prev, &style_map);
                 if !same_map {
                     let active_before = std::mem::take(&mut self.active_transitions);
+                    let prev_keys: std::collections::HashSet<(usize, String)> = active_before.iter()
+                        .map(|t| (t.node_id, t.property.clone())).collect();
                     self.active_transitions = crate::browser::cascade::detect_transitions(
                         &**prev, &*style_map, active_before, elapsed);
+                    let now_keys: std::collections::HashSet<(usize, String)> = self.active_transitions.iter()
+                        .map(|t| (t.node_id, t.property.clone())).collect();
+                    for k in prev_keys.difference(&now_keys) {
+                        ended_transitions.push(k.clone());
+                    }
                 } else {
                     // No cascade change -> drop expired, keep rest.
                     let active_before = std::mem::take(&mut self.active_transitions);
@@ -514,6 +533,76 @@ impl WebView {
             let scroll_progress = if max_scroll > 1.0 { self.scroll_y / max_scroll.max(1.0) } else { 0.0 };
             let _ = crate::browser::cascade::apply_scroll_animations(
                 std::rc::Rc::make_mut(&mut style_map), &self.stylesheets, scroll_progress);
+        }
+
+        // 1d. Animation event detection (start / end / iteration). Vyzaduje
+        // walk vsech elementu se spec, porovna s active_animations + iter
+        // counter.
+        let mut current_anims: std::collections::HashSet<(usize, String)> = std::collections::HashSet::new();
+        let mut iter_events: Vec<(usize, String, i32)> = Vec::new();
+        if has_keyframes {
+            for (node_id, styles) in &*style_map {
+                if let Some(spec) = crate::browser::cascade::AnimationSpec::from_styles(styles) {
+                    let t = elapsed - spec.delay_secs;
+                    if t >= 0.0 && (spec.iteration_count.is_infinite() || t / spec.duration_secs < spec.iteration_count) {
+                        let key = (*node_id, spec.name.clone());
+                        current_anims.insert(key.clone());
+                        let cur_iter = (t / spec.duration_secs).floor() as i32;
+                        let prev_iter = self.animation_iterations.get(&key).copied().unwrap_or(-1);
+                        if cur_iter > prev_iter && cur_iter > 0 {
+                            iter_events.push((*node_id, spec.name.clone(), cur_iter));
+                        }
+                        self.animation_iterations.insert(key, cur_iter);
+                    }
+                }
+            }
+        }
+        let started: Vec<(usize, String)> = current_anims.difference(&self.active_animations).cloned().collect();
+        let ended_anims: Vec<(usize, String)> = self.active_animations.difference(&current_anims).cloned().collect();
+        self.active_animations = current_anims;
+
+        // 1e. Dispatch transition / animation events do JS interpretu.
+        if let Some(interp) = self.interpreter.as_mut() {
+            use std::rc::Rc;
+            let doc_root = Rc::clone(&interp.document.borrow().root);
+            // transitionend
+            for (node_id, prop) in &ended_transitions {
+                if let Some(target) = crate::browser::render::find_node_by_ptr(&doc_root, *node_id) {
+                    let mut event = crate::interpreter::JsObject::new();
+                    event.set("type".into(), crate::interpreter::JsValue::Str("transitionend".into()));
+                    event.set("propertyName".into(), crate::interpreter::JsValue::Str(prop.clone()));
+                    event.set("target".into(), crate::interpreter::JsValue::DomNode(Rc::clone(&target)));
+                    let event_val = crate::interpreter::JsValue::Object(
+                        Rc::new(std::cell::RefCell::new(event)));
+                    let _ = interp.dispatch_event(&target, "transitionend", event_val);
+                }
+            }
+            // animationstart / animationend
+            for (event_type, list) in [("animationstart", &started), ("animationend", &ended_anims)] {
+                for (node_id, name) in list {
+                    if let Some(target) = crate::browser::render::find_node_by_ptr(&doc_root, *node_id) {
+                        let mut event = crate::interpreter::JsObject::new();
+                        event.set("type".into(), crate::interpreter::JsValue::Str(event_type.into()));
+                        event.set("animationName".into(), crate::interpreter::JsValue::Str(name.clone()));
+                        event.set("target".into(), crate::interpreter::JsValue::DomNode(Rc::clone(&target)));
+                        let event_val = crate::interpreter::JsValue::Object(
+                            Rc::new(std::cell::RefCell::new(event)));
+                        let _ = interp.dispatch_event(&target, event_type, event_val);
+                    }
+                }
+            }
+            // animationiteration
+            for (node_id, name, _iter) in &iter_events {
+                if let Some(target) = crate::browser::render::find_node_by_ptr(&doc_root, *node_id) {
+                    let mut event = crate::interpreter::JsObject::new();
+                    event.set("type".into(), crate::interpreter::JsValue::Str("animationiteration".into()));
+                    event.set("animationName".into(), crate::interpreter::JsValue::Str(name.clone()));
+                    event.set("target".into(), crate::interpreter::JsValue::DomNode(Rc::clone(&target)));
+                    let event_val = crate::interpreter::JsValue::Object(
+                        Rc::new(std::cell::RefCell::new(event)));
+                    let _ = interp.dispatch_event(&target, "animationiteration", event_val);
+                }
+            }
         }
 
         // Sync prev_style_map pro pristi frame transitions detection.

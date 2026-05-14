@@ -787,7 +787,7 @@ fn paint_match_preview_recursive(
     }
 }
 
-fn find_node_by_ptr(root: &Rc<crate::browser::dom::NodeData>, ptr: usize) -> Option<Rc<crate::browser::dom::NodeData>> {
+pub fn find_node_by_ptr(root: &Rc<crate::browser::dom::NodeData>, ptr: usize) -> Option<Rc<crate::browser::dom::NodeData>> {
     if Rc::as_ptr(root) as usize == ptr {
         return Some(Rc::clone(root));
     }
