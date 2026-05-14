@@ -877,7 +877,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         renderer: Option<Renderer>,
         // layout_root field smazany Phase 99: nikdy zapisovan (vzdy None od initu);
         // 11 read sites byly dead branches. Delegate na webview.last_layout_root().
-        interpreter: Option<crate::interpreter::Interpreter>,
+        // interpreter field smazany Phase 99: nikdy zapisovan po polarity invert
+        // (webview.interpreter je primary). 38 read sites migrace na self.interp().
         mouse_x: f32,
         mouse_y: f32,
         // scroll_x/y fields smazany (polarity invert) - read pres
@@ -1402,7 +1403,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                     } else {
                                         self.devtools.elements.collapsed.insert(node_id);
                                     }
-                                    if let Some(interp) = &self.interpreter {
+                                    if let Some(interp) = self.interp() {
                                         let root = std::rc::Rc::clone(&interp.document.borrow().root);
                                         crate::browser::devtools_panel::rebuild_tree(&mut self.devtools, &root);
                                     }
@@ -1486,7 +1487,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                     }
                                 }
                                 DevtoolsHit::DebuggerContinue => {
-                                    if let Some(interp) = &self.interpreter {
+                                    if let Some(interp) = self.interp() {
                                         interp.debugger.borrow_mut().resume();
                                     }
                                     self.devtools.sources.debugger_paused = false;
@@ -1494,21 +1495,21 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                     self.rerun_paused_scripts();
                                 }
                                 DevtoolsHit::DebuggerStepOver => {
-                                    if let Some(interp) = &self.interpreter {
+                                    if let Some(interp) = self.interp() {
                                         interp.debugger.borrow_mut().start_step(crate::interpreter::StepKind::Over);
                                     }
                                     self.devtools.sources.debugger_paused = false;
                                     self.devtools.sources.current_pause_location = None;
                                 }
                                 DevtoolsHit::DebuggerStepInto => {
-                                    if let Some(interp) = &self.interpreter {
+                                    if let Some(interp) = self.interp() {
                                         interp.debugger.borrow_mut().start_step(crate::interpreter::StepKind::Into);
                                     }
                                     self.devtools.sources.debugger_paused = false;
                                     self.devtools.sources.current_pause_location = None;
                                 }
                                 DevtoolsHit::DebuggerStepOut => {
-                                    if let Some(interp) = &self.interpreter {
+                                    if let Some(interp) = self.interp() {
                                         interp.debugger.borrow_mut().start_step(crate::interpreter::StepKind::Out);
                                     }
                                     self.devtools.sources.debugger_paused = false;
@@ -1662,7 +1663,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                     // Read current inline value z node attr "style".
                                     let val = self.devtools.elements.selected
                                         .and_then(|sel| {
-                                            self.interpreter.as_ref().and_then(|i| {
+                                            self.interp().and_then(|i| {
                                                 let root = std::rc::Rc::clone(&i.document.borrow().root);
                                                 find_node_by_ptr(&root, sel)
                                             })
@@ -1786,7 +1787,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                 DevtoolsHit::AddNewRule => {
                                     // Pridej prazdny inline style attribut na selected node + open editor.
                                     if let Some(sel_id) = self.devtools.elements.selected {
-                                        if let Some(interp) = &self.interpreter {
+                                        if let Some(interp) = self.interp() {
                                             let doc_root = std::rc::Rc::clone(&interp.document.borrow().root);
                                             if let Some(node) = find_node_by_ptr(&doc_root, sel_id) {
                                                 let mut attrs = node.attributes.borrow_mut();
@@ -1807,7 +1808,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                 }
                                 DevtoolsHit::ClassManagerToggleClass(cls) => {
                                     if let Some(sel_id) = self.devtools.elements.selected {
-                                        if let Some(interp) = &self.interpreter {
+                                        if let Some(interp) = self.interp() {
                                             let doc_root = std::rc::Rc::clone(&interp.document.borrow().root);
                                             if let Some(node) = find_node_by_ptr(&doc_root, sel_id) {
                                                 let cur = node.attributes.borrow().get("class").cloned().unwrap_or_default();
@@ -2297,7 +2298,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                         text: cmd.clone(),
                                     });
                                     let sel_id = self.devtools.elements.selected;
-                                    if let Some(interp) = &mut self.interpreter {
+                                    if let Some(interp) = self.interp_mut() {
                                         let result = console_eval_via_vm(&cmd, interp, sel_id);
                                         match result {
                                             Ok(v) => self.devtools.console.push_log(LogEntry {
@@ -2363,7 +2364,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                 && !self.devtools.focus.is_text_input()
                                 && !self.modifiers.control_key()
                             {
-                                let (node_opt, doc_rc) = self.interpreter.as_ref().map(|interp| {
+                                let (node_opt, doc_rc) = self.interp().map(|interp| {
                                     let doc_root = std::rc::Rc::clone(&interp.document.borrow().root);
                                     let n = find_node_by_ptr(&doc_root, fid);
                                     (n, std::rc::Rc::clone(&interp.document))
@@ -2529,7 +2530,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         Key::Named(NamedKey::F12) => {
                             self.devtools.panel_open = !self.devtools.panel_open;
                             if self.devtools.panel_open {
-                                if let Some(interp) = &self.interpreter {
+                                if let Some(interp) = self.interp() {
                                     let root = std::rc::Rc::clone(&interp.document.borrow().root);
                                     crate::browser::devtools_panel::rebuild_tree(&mut self.devtools, &root);
                                 }
@@ -2752,24 +2753,33 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
     }
 
     impl App {
-        // ─── Page selection accessors (Document.selection.page_selection) ───
+        /// Webview interpreter delegate - po polarity invert je interpreter
+        /// primary v WebView, ne App. App.interpreter field smazany Phase 99.
+        fn interp(&self) -> Option<&crate::interpreter::Interpreter> {
+            self.webview.as_ref().and_then(|w| w.interpreter())
+        }
+        fn interp_mut(&mut self) -> Option<&mut crate::interpreter::Interpreter> {
+            self.webview.as_mut().and_then(|w| w.interpreter_mut())
+        }
+
+        // Page selection accessors (Document.selection.page_selection)
         // App.selection_* fields zruseny - registry je primary state.
 
         fn page_sel_anchor(&self) -> Option<(f32, f32)> {
-            self.interpreter.as_ref()
+            self.interp()
                 .and_then(|i| i.document.borrow().selection.borrow().page_selection.as_ref().map(|p| p.anchor))
         }
         fn page_sel_current(&self) -> Option<(f32, f32)> {
-            self.interpreter.as_ref()
+            self.interp()
                 .and_then(|i| i.document.borrow().selection.borrow().page_selection.as_ref().map(|p| p.current))
         }
         fn page_sel_dragging(&self) -> bool {
-            self.interpreter.as_ref()
+            self.interp()
                 .map(|i| i.document.borrow().selection.borrow().page_selection.as_ref().map(|p| p.dragging).unwrap_or(false))
                 .unwrap_or(false)
         }
         fn page_sel_begin(&self, anchor: (f32, f32)) {
-            let Some(interp) = &self.interpreter else { return };
+            let Some(interp) = self.interp() else { return };
             let doc = interp.document.borrow();
             doc.selection.borrow_mut().page_selection = Some(crate::browser::selection::PageSelection {
                 anchor,
@@ -2781,7 +2791,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         fn page_sel_update_current(&self, current: (f32, f32)) {
             let Some(anchor) = self.page_sel_anchor() else { return };
             let cached = self.compute_selection_text(anchor, current);
-            let Some(interp) = &self.interpreter else { return };
+            let Some(interp) = self.interp() else { return };
             let doc = interp.document.borrow();
             let mut reg = doc.selection.borrow_mut();
             if let Some(ps) = reg.page_selection.as_mut() {
@@ -2790,7 +2800,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             }
         }
         fn page_sel_end_drag(&self) {
-            let Some(interp) = &self.interpreter else { return };
+            let Some(interp) = self.interp() else { return };
             let doc = interp.document.borrow();
             let mut reg = doc.selection.borrow_mut();
             if let Some(ps) = reg.page_selection.as_mut() {
@@ -2819,13 +2829,13 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         }
 
         fn page_sel_clear(&self) {
-            let Some(interp) = &self.interpreter else { return };
+            let Some(interp) = self.interp() else { return };
             let doc = interp.document.borrow();
             doc.selection.borrow_mut().page_selection = None;
         }
         fn page_sel_set_full(&self, anchor: (f32, f32), current: (f32, f32)) {
             let cached = self.compute_selection_text(anchor, current);
-            let Some(interp) = &self.interpreter else { return };
+            let Some(interp) = self.interp() else { return };
             let doc = interp.document.borrow();
             doc.selection.borrow_mut().page_selection = Some(crate::browser::selection::PageSelection {
                 anchor, current, dragging: false, cached_text: cached,
@@ -3061,7 +3071,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
 
         /// Regen devtools.html + otevri ho v default OS browseru.
         fn regenerate_and_open_devtools(&self) {
-            let interp = match &self.interpreter { Some(i) => i, None => return };
+            let Some(interp) = self.interp() else { return };
             let stylesheets = vec![super::css_parser::parse_stylesheet(self.css())];
             let console_log = interp.console_log.borrow().clone();
             let network_log = interp.network_log.borrow().clone();
@@ -3089,7 +3099,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         /// na predchozi pause line, takze script se pri stejnem BP nezacykli a
         /// pokracuje az do dalsiho hitu nebo konce.
         fn rerun_paused_scripts(&mut self) {
-            if self.interpreter.is_none() { return }
+            if self.interp().is_none() { return }
             // Vytvor novy Interpreter (cisty state) ALE zkopiruj breakpoints +
             // skip_once_line z aktualniho debuggeru aby pause logic fungovala
             // dale. DOM je v interpreter.document - zachova v novem.
@@ -3098,7 +3108,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             let saved_console;
             let saved_doc;
             {
-                let interp = self.interpreter.as_ref().unwrap();
+                let interp = self.interp().unwrap();
                 let dbg = interp.debugger.borrow();
                 saved_bp = dbg.breakpoints.clone();
                 saved_skip = dbg.skip_once_line;
@@ -3123,9 +3133,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             if let Some(wv) = self.webview.as_mut() {
                 wv.set_interpreter(new_interp);
                 wv.run_scripts();
-            } else {
-                self.interpreter = Some(new_interp);
             }
+            // (App.interpreter fallback smazany Phase 99 - webview vzdy Some po resumed.)
         }
 
         /// Notify worker thread pres Condvar - po klik Continue/Step.
@@ -3239,13 +3248,13 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             use crate::devtools::model::console::{suggest, AutocompleteState};
             let text = self.devtools.console.input.text.clone();
             let cursor = self.devtools.console.input.cursor;
-            let globals: Vec<String> = if let Some(interp) = &self.interpreter {
+            let globals: Vec<String> = if let Some(interp) = self.interp() {
                 interp.global.borrow().names()
             } else { Vec::new() };
             // Reflective property resolver: base ident -> own props z JsObject.
             // Hleda v env: kdyz base je top-level var, a hodnota je Object,
             // vrat keys. Jinak prazdny - fallback na hardcoded baseline.
-            let interp_ref = self.interpreter.as_ref();
+            let interp_ref = self.interp();
             let resolve = |base: &str| -> Vec<String> {
                 let Some(interp) = interp_ref else { return Vec::new() };
                 let val = interp.global.borrow().get(base);
@@ -3278,7 +3287,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         }
 
         fn start_edit_attribute_value(&mut self, node_id: usize, attr: String) {
-            let Some(interp) = &self.interpreter else { return };
+            let Some(interp) = self.interp() else { return };
             let root = std::rc::Rc::clone(&interp.document.borrow().root);
             let Some(node) = crate::devtools::model::elements::find_node_by_id(&root, node_id) else { return };
             let original = node.attributes.borrow().iter()
@@ -3297,7 +3306,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         }
 
         fn start_edit_text_node(&mut self, node_id: usize) {
-            let Some(interp) = &self.interpreter else { return };
+            let Some(interp) = self.interp() else { return };
             let root = std::rc::Rc::clone(&interp.document.borrow().root);
             let Some(node) = crate::devtools::model::elements::find_node_by_id(&root, node_id) else { return };
             let original = if let crate::browser::dom::NodeKind::Text(t) = &node.kind {
@@ -3334,7 +3343,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             use crate::devtools::EditTarget;
             let Some(edit) = self.devtools.elements.edit.take() else { return };
             let new_value = edit.buffer.text;
-            let Some(interp) = &mut self.interpreter else { return };
+            let Some(interp) = self.interp_mut() else { return };
             let root = std::rc::Rc::clone(&interp.document.borrow().root);
             match edit.target {
                 EditTarget::AttributeValue { node_id, attr } => {
@@ -3428,7 +3437,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     self.devtools.focus = crate::devtools::focus::FocusTarget::DevToolsConsole;
                 }
                 CopySelector { node_id } | CopyXPath { node_id } | CopyOuterHtml { node_id } | CopyInnerHtml { node_id } => {
-                    if let Some(interp) = &self.interpreter {
+                    if let Some(interp) = self.interp() {
                         let root = std::rc::Rc::clone(&interp.document.borrow().root);
                         if let Some(node) = crate::devtools::model::elements::find_node_by_id(&root, node_id) {
                             let txt = node.tag_name().unwrap_or_default();
@@ -3448,7 +3457,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     for id in to_expand {
                         self.devtools.elements.collapsed.remove(&id);
                     }
-                    if let Some(interp) = &self.interpreter {
+                    if let Some(interp) = self.interp() {
                         let root = std::rc::Rc::clone(&interp.document.borrow().root);
                         crate::browser::devtools_panel::rebuild_tree(&mut self.devtools, &root);
                     }
@@ -3459,14 +3468,14 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     for id in to_collapse {
                         self.devtools.elements.collapsed.insert(id);
                     }
-                    if let Some(interp) = &self.interpreter {
+                    if let Some(interp) = self.interp() {
                         let root = std::rc::Rc::clone(&interp.document.borrow().root);
                         crate::browser::devtools_panel::rebuild_tree(&mut self.devtools, &root);
                     }
                 }
                 ClearConsole => {
                     self.devtools.console.log.clear();
-                    if let Some(interp) = &self.interpreter {
+                    if let Some(interp) = self.interp() {
                         interp.console_log.borrow_mut().clear();
                     }
                 }
@@ -3493,7 +3502,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         if let Ok(mut cb) = arboard::Clipboard::new() {
                             let _ = cb.set_text(e.url.clone());
                         }
-                    } else if let Some(interp) = &self.interpreter {
+                    } else if let Some(interp) = self.interp() {
                         let logs = interp.network_log.borrow();
                         if let Some((url, _)) = logs.get(idx) {
                             if let Ok(mut cb) = arboard::Clipboard::new() {
@@ -3504,7 +3513,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 }
                 CopyAsCurl { idx } => {
                     let url = self.devtools.network.entries.get(idx).map(|e| e.url.clone())
-                        .or_else(|| self.interpreter.as_ref()
+                        .or_else(|| self.interp()
                             .and_then(|i| i.network_log.borrow().get(idx).map(|(u, _)| u.clone())));
                     if let Some(u) = url {
                         let curl = format!("curl '{}' -A 'RustWebEngine/0.1'", u);
@@ -3530,7 +3539,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             self.devtools.elements.search.matches.clear();
             self.devtools.elements.search.current = 0;
             if q.trim().is_empty() { return; }
-            if let Some(interp) = &self.interpreter {
+            if let Some(interp) = self.interp() {
                 let root = std::rc::Rc::clone(&interp.document.borrow().root);
                 let hits = crate::devtools::search::search(&root, &q, mode);
                 self.devtools.elements.search.matches = hits;
@@ -3542,7 +3551,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             if let Some(node_id) = s.matches.get(s.current) {
                 self.devtools.elements.selected = Some(*node_id);
                 // Expand vsechny ancestors aby radek byl viditelny.
-                if let Some(interp) = &self.interpreter {
+                if let Some(interp) = self.interp() {
                     let root = std::rc::Rc::clone(&interp.document.borrow().root);
                     if let Some(node) = crate::devtools::model::elements::find_node_by_id(&root, *node_id) {
                         let mut p = node.parent.borrow().upgrade();
@@ -3563,7 +3572,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 let popup_x = anchor_x;
                 let popup_y = anchor_y + 24.0; // y v page-space (bez -scroll); klik je page-space.
                 let opt_h = 24.0_f32;
-                if let Some(interp) = &self.interpreter {
+                if let Some(interp) = self.interp() {
                     let doc_root = std::rc::Rc::clone(&interp.document.borrow().root);
                     if let Some(select_node) = find_node_by_ptr(&doc_root, select_id) {
                         let options: Vec<std::rc::Rc<crate::browser::dom::Node>> = select_node.children.borrow()
@@ -3643,7 +3652,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
 
         fn write_back_style_edit(&mut self, prop: &str, value: &str) {
             let Some(node_id) = self.devtools.elements.selected else { return };
-            if let Some(interp) = &self.interpreter {
+            if let Some(interp) = self.interp() {
                 let doc_root = std::rc::Rc::clone(&interp.document.borrow().root);
                 if let Some(node) = find_node_by_ptr(&doc_root, node_id) {
                     let mut attrs = node.attributes.borrow_mut();
@@ -3669,7 +3678,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             let Some(cp) = self.devtools.color_picker.clone() else { return };
             let Some((node_id, prop)) = cp.target else { return };
             let hex = format!("#{:02x}{:02x}{:02x}", cp.rgba[0], cp.rgba[1], cp.rgba[2]);
-            if let Some(interp) = &self.interpreter {
+            if let Some(interp) = self.interp() {
                 let doc_root = std::rc::Rc::clone(&interp.document.borrow().root);
                 if let Some(node) = find_node_by_ptr(&doc_root, node_id) {
                     let mut attrs = node.attributes.borrow_mut();
@@ -4022,7 +4031,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         auto_devtools,
         window: None,
         renderer: None,
-        interpreter: None,
         mouse_x: 0.0,
         mouse_y: 0.0,
         devtools: crate::devtools::DevToolsState::default(),
