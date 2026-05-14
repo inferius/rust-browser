@@ -41,6 +41,76 @@ Po N+22 step 1+2 inverze:
 
 WebView::load_html runs scripts (real). App.interpreter prevezme ownership.
 
+### Shell crate plnohodnotny browser host (N+22 finale)
+
+Po vsech orchestrace + input dispatch + shell wire features:
+
+**Shell features hotove:**
+
+Rendering pres webview.render_via:
+- Full cascade + transitions + @keyframes animations + paint anim
+- Layout + sticky positioning + paint
+- Display list cull + scroll shift + scrollbar overlay
+- Canvas2D + WebGL canvas frame
+- Atlas warm + text runs extract
+- async_jobs + interpreter event queues drain
+- Selection highlight paint (modry overlay)
+- Caret blink pro focused input
+- `<select>` popup overlay
+
+Input pres webview.handle_input:
+- Mouse: down/up/move/leave/wheel
+- Click-vs-drag distinguish (5px threshold)
+- :hover state + focus / blur
+- mousedown / mouseup / click event dispatch do JS
+- `<a href>` -> NavigationRequest
+- Text selection drag (anchor/current/extract)
+- Scrollbar thumb drag (V + H)
+- Keyboard: keydown/keyup do focused element
+- TextInput: insert na caret pos + advance
+- Backspace / Delete / Arrow / Home / End: caret + value edit
+- Enter on input: form submit event + NavigationRequest
+- Cursor icon (Pointer pri <a>/<button>, Text pri input/text node)
+
+Shell-side handlers:
+- WindowEvent::Resized -> webview.resize
+- WindowEvent::CursorMoved -> MouseMove + cursor apply
+- WindowEvent::MouseInput -> MouseDown/Up
+- WindowEvent::MouseWheel -> Scroll (Ctrl+Wheel = zoom)
+- WindowEvent::KeyboardInput -> KeyDown/Up + TextInput
+- WindowEvent::DroppedFile -> webview.load_url
+- WindowEvent::ModifiersChanged -> track Ctrl/Shift/Alt
+- WindowEvent::RedrawRequested -> render + present + window.set_title
+
+Shell-side keyboard shortcuts:
+- **Ctrl+C** -> clipboard copy selection (arboard)
+- **Ctrl+A** -> select all
+- **Ctrl+Plus/=/Minus/0** -> zoom +/- /reset
+- **Ctrl+R / F5** -> reload current page
+- **Alt+Left / Alt+Right** -> history back/forward
+- **PageDown/Up / Arrows / Home/End / Space** -> page scroll
+- **Esc** -> clear selection
+- **Ctrl+Wheel** -> zoom
+
+Navigation:
+- response.navigation Get -> webview.load_url + history push
+- response.navigation Post -> webview.load_url_post (build_form_request + ureq POST)
+- History stack pres back/forward + reload
+
+Continual redraw kdy webview.has_active_animations() (@keyframes /
+transitions / smooth scroll / caret blink) - shell request_redraw loop.
+
+Co stale chybi (Phase 99 cleanup):
+- Inspector overlay paint (App side, last_layout_root accessor ready)
+- Devtools panel UI (user planuje rework do separate WebView app)
+- App polarity invert (App.html/css/scroll/base_url duplicate s webview)
+- preventDefault honoring v event dispatch
+- Multi-tab v shell (Vec<WebView> + tab strip)
+- Text selection rect pres painted_text_runs (currently flow-based)
+- Devtools debug_runner JS pause/continue UI
+
+---
+
 ### WebView full orchestration (Chrome WebContents parity)
 
 User point: features ze App.render JIZ existovaly v engine browser
