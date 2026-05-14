@@ -96,6 +96,9 @@ pub struct WebView {
     /// Iteration counter per (node_id, anim_name) - animationiteration event
     /// pri inkrementu.
     pub(crate) animation_iterations: std::collections::HashMap<(usize, String), i32>,
+    /// Painted text runs - per-glyph cumulative advances. Foundation pro
+    /// per-glyph text selection (hit-test mouse pos -> SelectionPos).
+    pub(crate) painted_text_runs: Vec<crate::browser::textrun::TextRun>,
     /// Last layout_root vyrobeny v render_via - getter pro hostujici aplikaci
     /// (App emits inspector overlay nad webview RT pres dalsi draw_segments
     /// pass; shell nepouziva).
@@ -133,9 +136,21 @@ impl WebView {
             active_transitions: Vec::new(),
             active_animations: std::collections::HashSet::new(),
             animation_iterations: std::collections::HashMap::new(),
+            painted_text_runs: Vec::new(),
             last_layout_root: None,
             async_jobs: crate::browser::async_jobs::AsyncJobsRegistry::new(),
         }
+    }
+
+    /// Painted text runs z posledniho `render_via` (per-glyph cumulative
+    /// advances). Foundation pro text selection hit-test.
+    pub fn text_runs(&self) -> &[crate::browser::textrun::TextRun] {
+        &self.painted_text_runs
+    }
+
+    /// Hit-test (x, y) na painted_text_runs - vrati SelectionPos pres mouse.
+    pub fn hit_test_text(&self, x: f32, y: f32) -> Option<crate::browser::textrun::SelectionPos> {
+        crate::browser::textrun::hit_test_runs(&self.painted_text_runs, x, y)
     }
 
     /// Aktualni layout tree z posledniho `render_via`. None pred prvnim render.
@@ -676,6 +691,12 @@ impl WebView {
 
         // 4. Warm-up glyph atlas + image atlas pred draw.
         renderer.warm_atlas_for(&display_list, self.base_url.as_deref());
+
+        // 4b. Extract text runs (per-glyph cumulative advances) - foundation
+        // pro per-glyph hit-test selection. Walks display_list TEXT cmds +
+        // measure pres atlas. Page cmds only (overlay text neselectable).
+        self.painted_text_runs = crate::browser::render::extract_text_runs(
+            &display_list, renderer.atlas(), renderer.zoom);
 
         // 5. Renderer kresli display list do target_view.
         let _had = renderer.draw_segments_into_view_clipped(

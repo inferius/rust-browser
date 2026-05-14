@@ -202,7 +202,7 @@ fn build_lcd_pipeline(
 
 /// Extract TextRun info z DisplayCommand::Text pro per-glyph selection.
 /// Spocita cumulative_advances pres atlas glyph widths.
-fn extract_text_runs(
+pub fn extract_text_runs(
     commands: &[DisplayCommand],
     atlas: &GlyphAtlas,
     zoom: f32,
@@ -7991,6 +7991,9 @@ impl Renderer {
     pub fn resize_surface(&mut self, w: u32, h: u32) {
         self.resize(w.max(1), h.max(1));
     }
+
+    /// Pristup ke glyph atlas (cumulative advances pro per-glyph selection).
+    pub fn atlas(&self) -> &GlyphAtlas { &self.atlas }
 
     fn compose_offscreen(&self, view: &wgpu::TextureView, x: f32, y: f32, w: f32, h: f32, color_matrix: &[f32; 20], first: bool) {
         // Upload color matrix do uniform: 5x vec4 (rgba per row + offset)

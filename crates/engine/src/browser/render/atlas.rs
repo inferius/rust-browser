@@ -59,7 +59,7 @@ pub(super) struct GlyphInfo {
     pub(super) lcd: bool,
 }
 
-pub(super) struct GlyphAtlas {
+pub struct GlyphAtlas {
     /// Default font (fallback pri family lookup miss)
     pub(super) font: fontdue::Font,
     /// Default bold variant (Segoe UI Bold etc.). Pouzity pri bx.bold=true
