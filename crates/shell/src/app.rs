@@ -194,6 +194,22 @@ impl ApplicationHandler for ShellApp {
                             }
                             return;
                         }
+                        // Ctrl+= / Ctrl++ / Ctrl+- / Ctrl+0 zoom controls.
+                        if matches!(s.as_str(), "+" | "=" | "-" | "_" | "0") {
+                            if let Some(wv) = &mut self.webview {
+                                let z = wv.zoom();
+                                let new_zoom = match s.as_str() {
+                                    "+" | "=" => (z * 1.1).min(5.0),
+                                    "-" | "_" => (z / 1.1).max(0.25),
+                                    "0" => 1.0,
+                                    _ => z,
+                                };
+                                wv.set_zoom(new_zoom);
+                                println!("[shell zoom] {:.0}%", new_zoom * 100.0);
+                                if let Some(w) = &self.window { w.request_redraw(); }
+                            }
+                            return;
+                        }
                     }
                 }
                 // Scroll keys: PageDown/Up, ArrowUp/Down, Home, End, Space.
