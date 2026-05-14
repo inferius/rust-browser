@@ -1076,11 +1076,17 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         /// (vola WebView::run_scripts pres load_html), state App.interpreter NE
         /// sdileny (Interpreter neni Clone bezpecne). Pro Phase 4a je OK 2x
         /// inicializovat scripts - dual run navic je u inline pages levne.
-        fn sync_webview_from_app(&mut self) {
-            // Engine s realnymi GPU resources kdyz Renderer ready, jinak headless
-            // (test / pre-resumed). wgpu::Device + Queue jsou v 0.29 internally
-            // Arc'd, ale Engine API kontrakt deklaroval Arc<Device>/Queue pro
-            // explicit shared semantiku - wrap navic minimal cost (extra Arc=8B).
+        /// Build novy WebView s realnymi GPU resources (kdyz Renderer ready)
+        /// + load HTML/CSS s zachovanim zoom/scroll z pripadne predchazejci
+        /// instance. Volane pri kazdem reload (initial load, drag-drop file,
+        /// form POST response, navigate_url).
+        fn sync_webview(
+            &mut self,
+            html: &str,
+            css: &str,
+            base_url: Option<String>,
+            path: Option<std::path::PathBuf>,
+        ) {
             let engine = if let Some(r) = &self.renderer {
                 std::sync::Arc::new(crate::embed::Engine::new(
                     std::sync::Arc::new(r.device.clone()),
@@ -1089,7 +1095,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             } else {
                 std::sync::Arc::new(crate::embed::Engine::new_headless())
             };
-            // Viewport: WebView prijima LOGICAL CSS px (physical / scale_factor).
             let (vw, vh, sf) = if let Some(r) = &self.renderer {
                 let sf = r.scale_factor.max(0.01);
                 let lw = ((r.config.width as f32 / sf) as u32).max(1);
@@ -1104,10 +1109,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             wv.resize(vw, vh, sf);
             wv.set_zoom(prev_zoom);
             wv.set_scroll(prev_scroll.0, prev_scroll.1);
-            wv.set_local_path(self.current_path());
-            // load_html (real) - spousti inline + external <script>s.
-            // Po loadu volaci kod muze take_interpreter() pro presun do App.
-            let _ = wv.load_html(self.html(), self.css(), self.base_url());
+            wv.set_local_path(path);
+            let _ = wv.load_html(html, css, base_url);
             self.webview = Some(wv);
         }
     }
@@ -1126,11 +1129,14 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             self.window = Some(window.clone());
             self.renderer = Some(Renderer::new(window.clone()));
 
-            // Authoritative WebView: vytvori se v sync_webview_from_app + spousti
-            // scripts via webview.load_html. App.interpreter pak vezme ownership
-            // (move) z webview pres take_interpreter. Drive byl App primary +
-            // mirror sync - duplicate JS spousteni odstranen (N+22).
-            self.sync_webview_from_app();
+            // Authoritative WebView: vytvori se v sync_webview + spousti scripts
+            // via webview.load_html. App.interpreter pak vezme ownership pres
+            // take_interpreter.
+            let init_html = self.html.clone();
+            let init_css = self.css.clone();
+            let init_base = self.base_url.clone();
+            let init_path = self.current_path.clone();
+            self.sync_webview(&init_html, &init_css, init_base, init_path);
             if let Some(wv) = self.webview.as_mut() {
                 self.interpreter = wv.take_interpreter();
             }
@@ -3382,10 +3388,14 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             self.active_animations.clear();
             self.animation_iterations.clear();
             self.active_transitions.clear();
-            // Authoritative WebView restart - sync_webview_from_app vytvori
-            // novou instance s real load_html (spousti scripts). Po loadu
-            // take_interpreter -> App.interpreter.
-            self.sync_webview_from_app();
+            // Authoritative WebView restart pres sync_webview - novy webview s
+            // real load_html (spousti scripts). Po loadu take_interpreter ->
+            // App.interpreter.
+            let new_html = self.html.clone();
+            let new_css = self.css.clone();
+            let new_base = self.base_url.clone();
+            let new_path = self.current_path.clone();
+            self.sync_webview(&new_html, &new_css, new_base, new_path);
             if let Some(wv) = self.webview.as_mut() {
                 self.interpreter = wv.take_interpreter();
             }
@@ -4013,14 +4023,14 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                         // Replace HTML s response - sync_webview vyrobí
                                         // novy WebView + spousti scripts, App.interpreter
                                         // move z webview.
-                                        self.html = html;
+                                        self.html = html.clone();
                                         self.css = String::new();
                                         self.base_url = Some(url.clone());
                                         self.set_scroll_y(0.0);
                                         self.set_scroll_target_y(0.0);
                                         self.set_scroll_x(0.0);
                                         self.set_scroll_target_x(0.0);
-                                        self.sync_webview_from_app();
+                                        self.sync_webview(&html, "", Some(url.clone()), None);
                                         if let Some(wv) = self.webview.as_mut() {
                                             self.interpreter = wv.take_interpreter();
                                         }
@@ -4257,21 +4267,21 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 for style in document.root.get_elements_by_tag("style") {
                     css.push('\n'); css.push_str(&style.text_content());
                 }
-                self.html = html;
-                self.css = css;
+                self.html = html.clone();
+                self.css = css.clone();
                 self.base_url = Some(url.to_string());
                 self.current_path = None;
                 self.set_scroll_y(0.0);
-            self.set_scroll_target_y(0.0);
-            self.set_scroll_x(0.0);
-            self.set_scroll_target_x(0.0);
+                self.set_scroll_target_y(0.0);
+                self.set_scroll_x(0.0);
+                self.set_scroll_target_x(0.0);
                 self.start_time = std::time::Instant::now();
                 self.animation_origin = self.start_time;
                 self.prev_style_map = None;
                 self.active_animations.clear();
                 self.animation_iterations.clear();
                 self.active_transitions.clear();
-                self.sync_webview_from_app();
+                self.sync_webview(&html, &css, Some(url.to_string()), None);
                 if let Some(wv) = self.webview.as_mut() {
                     self.interpreter = wv.take_interpreter();
                 }
