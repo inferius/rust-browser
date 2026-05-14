@@ -66,9 +66,12 @@ pub struct ShellApp {
     /// vysky, devtools dostane bottom `devtools_split_ratio`.
     devtools_visible: bool,
     /// Pomer devtools cast vyrazneho viewport (0.0..1.0). Default 0.4 =
-    /// devtools dostane spodnich 40%, page top 60%. Splitter drag (D4c TBD)
-    /// upravi pres mouse drag.
+    /// devtools dostane spodnich 40%, page top 60%. Splitter drag (D4d)
+    /// upravi pres mouse drag na hranici.
     devtools_split_ratio: f32,
+    /// True kdyz user drze LMB na splitter line a tahne. Pri MouseMove se
+    /// split_ratio updatuje + oba webview resizuji.
+    splitter_drag: bool,
     /// DevTools target adapter (D2). Lazy init pri F12 toggle. Drzi events
     /// buffer + breakpoint counter. Dispatch volame `target.handle_request(
     /// &mut self.webview, req)` ve main loop.
@@ -100,6 +103,7 @@ impl ShellApp {
             devtools: None,
             devtools_visible: false,
             devtools_split_ratio: 0.4,
+            splitter_drag: false,
             devtools_target: None,
             cdp_channel: None,
             mouse_x: 0.0,
@@ -263,6 +267,14 @@ impl ShellApp {
             out = out.replace(&open_hidden, &filled_hidden);
         }
         out
+    }
+
+    /// True kdyz mouse_y je v zone +- 4px okolo split line. Aktivni hover
+    /// zone pro splitter drag.
+    fn point_on_splitter(&self, y: f32) -> bool {
+        if !self.devtools_visible { return false; }
+        let split_y = self.devtools_y_offset();
+        (y - split_y).abs() < 4.0
     }
 
     /// True kdyz devtools je viditelne A mouse_y je v devtools area (bottom).
@@ -534,6 +546,26 @@ impl ApplicationHandler for ShellApp {
                 let scale = self.renderer.as_ref().map(|r| r.scale_factor_value()).unwrap_or(1.0);
                 self.mouse_x = position.x as f32 / scale;
                 self.mouse_y = position.y as f32 / scale;
+                // D4d: pri active splitter drag updatuj split_ratio.
+                if self.splitter_drag {
+                    let r = match &self.renderer { Some(r) => r, None => return };
+                    let sf = r.scale_factor_value().max(0.01);
+                    let (_sw, sh) = r.surface_size();
+                    let lh_full = (sh as f32 / sf).max(1.0);
+                    // mouse_y = split_y line, devtools start at this y, devtools_h = lh_full - mouse_y
+                    let new_ratio = ((lh_full - self.mouse_y) / lh_full).clamp(0.05, 0.95);
+                    self.devtools_split_ratio = new_ratio;
+                    self.resize_views();
+                    if let Some(w) = &self.window { w.request_redraw(); }
+                    return;
+                }
+                // D4d: hover splitter -> NS resize cursor.
+                if self.point_on_splitter(self.mouse_y) {
+                    if let Some(window) = &self.window {
+                        window.set_cursor(winit::window::CursorIcon::NsResize);
+                    }
+                    return;
+                }
                 let event = InputEvent::MouseMove {
                     x: self.mouse_x,
                     y: self.mouse_y,
@@ -765,6 +797,20 @@ impl ApplicationHandler for ShellApp {
                     WinitMouseButton::Forward => MouseButton::Other(4),
                     WinitMouseButton::Other(b) => MouseButton::Other(b),
                 };
+                // D4d: LMB Down/Up na splitter zacne / ukonci drag.
+                if matches!(btn, MouseButton::Left) {
+                    match state {
+                        ElementState::Pressed if self.point_on_splitter(self.mouse_y) => {
+                            self.splitter_drag = true;
+                            return;
+                        }
+                        ElementState::Released if self.splitter_drag => {
+                            self.splitter_drag = false;
+                            return;
+                        }
+                        _ => {}
+                    }
+                }
                 let event = match state {
                     ElementState::Pressed => InputEvent::MouseDown {
                         x: self.mouse_x, y: self.mouse_y, button: btn,
