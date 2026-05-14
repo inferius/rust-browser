@@ -234,6 +234,10 @@ impl ApplicationHandler for ShellApp {
                     },
                 };
                 let resp = webview.handle_input(event);
+                if let Some(nav) = resp.navigation {
+                    println!("[shell nav] {} ({:?})", nav.url, nav.target);
+                    webview.load_url(&nav.url);
+                }
                 if resp.dirty {
                     if let Some(w) = &self.window { w.request_redraw(); }
                 }

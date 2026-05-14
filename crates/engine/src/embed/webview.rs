@@ -429,18 +429,47 @@ impl WebView {
                                 std::rc::Rc::as_ptr(target) as usize));
                         }
                     }
-                    if let (Some(target), Some(interp)) = (target_node, self.interpreter.as_mut()) {
-                        let mut event = crate::interpreter::JsObject::new();
-                        event.set("type".into(), crate::interpreter::JsValue::Str("click".into()));
-                        event.set("clientX".into(), crate::interpreter::JsValue::Number(x as f64));
-                        event.set("clientY".into(), crate::interpreter::JsValue::Number(y as f64));
-                        event.set("target".into(), crate::interpreter::JsValue::DomNode(
-                            std::rc::Rc::clone(&target)));
-                        let event_val = crate::interpreter::JsValue::Object(
-                            std::rc::Rc::new(std::cell::RefCell::new(event)));
-                        let _ = interp.dispatch_event(&target, "click", event_val);
-                        response.dirty = true;
-                        self.dirty = true;
+                    if let Some(target) = target_node {
+                        if let Some(interp) = self.interpreter.as_mut() {
+                            let mut event = crate::interpreter::JsObject::new();
+                            event.set("type".into(), crate::interpreter::JsValue::Str("click".into()));
+                            event.set("clientX".into(), crate::interpreter::JsValue::Number(x as f64));
+                            event.set("clientY".into(), crate::interpreter::JsValue::Number(y as f64));
+                            event.set("target".into(), crate::interpreter::JsValue::DomNode(
+                                std::rc::Rc::clone(&target)));
+                            let event_val = crate::interpreter::JsValue::Object(
+                                std::rc::Rc::new(std::cell::RefCell::new(event)));
+                            let _ = interp.dispatch_event(&target, "click", event_val);
+                            response.dirty = true;
+                            self.dirty = true;
+                        }
+                        // <a href> -> emit NavigationRequest (host vola load_url).
+                        // Walk ancestors aby zachytil klik na <span> v <a>.
+                        let mut cur = Some(target.clone());
+                        while let Some(n) = cur {
+                            if n.tag_name().as_deref() == Some("a") {
+                                if let Some(href) = n.attr("href") {
+                                    if !href.is_empty() && !href.starts_with('#') {
+                                        let resolved = if let Some(base) = &self.base_url {
+                                            crate::browser::render::resolve_url(base, &href)
+                                        } else { href.clone() };
+                                        let target_kind = match n.attr("target").as_deref() {
+                                            Some("_blank") => crate::embed::event::NavigationTarget::NewTab,
+                                            Some(t) if !t.is_empty() => crate::embed::event::NavigationTarget::Named(t.to_string()),
+                                            _ => crate::embed::event::NavigationTarget::Self_,
+                                        };
+                                        response.navigation = Some(crate::embed::event::NavigationRequest {
+                                            url: resolved,
+                                            method: crate::embed::event::NavigationMethod::Get,
+                                            body: None,
+                                            target: target_kind,
+                                        });
+                                    }
+                                }
+                                break;
+                            }
+                            cur = n.parent.borrow().upgrade();
+                        }
                     }
                 }
             }
