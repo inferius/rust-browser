@@ -416,12 +416,16 @@ impl WebView {
                     let prev = crate::browser::cascade::get_hovered_node();
                     if prev != hovered_id {
                         crate::browser::cascade::set_hovered_node(hovered_id);
-                        // Hover change -> cascade rebuild (kdyz CSS pouziva
-                        // :hover) -> dirty + redraw.
                         self.dirty = true;
                         response.dirty = true;
                     }
                     if self.open_select.is_some() {
+                        self.dirty = true;
+                        response.dirty = true;
+                    }
+                    // Update text selection drag.
+                    if self.sel_dragging() {
+                        self.sel_update(content_x, content_y);
                         self.dirty = true;
                         response.dirty = true;
                     }
@@ -465,6 +469,8 @@ impl WebView {
                     if let Some(target) = target_node {
                         self.mouse_down_at = Some((x, y, target));
                     }
+                    // Begin text selection drag (content coords).
+                    self.sel_begin(content_x, content_y);
                     response.dirty = true;
                     self.dirty = true;
                 }
@@ -473,6 +479,8 @@ impl WebView {
                 if matches!(button, crate::embed::MouseButton::Left) {
                     let content_x = x + self.scroll_x;
                     let content_y = y + self.scroll_y;
+                    // End selection drag (collapse pri <3px movement).
+                    self.sel_end();
                     let up_target = self.last_layout_root.as_ref()
                         .and_then(|root| root.hit_test(content_x, content_y))
                         .and_then(|bx| bx.node.clone());
@@ -1163,6 +1171,62 @@ impl WebView {
         let interp = self.interpreter.as_ref()?;
         let doc_root = std::rc::Rc::clone(&interp.document.borrow().root);
         crate::browser::render::find_node_by_ptr(&doc_root, id)
+    }
+
+    // -- Page selection (text drag) ---------------------------------------
+
+    /// Zacni text selection drag pri MouseDown.
+    fn sel_begin(&self, content_x: f32, content_y: f32) {
+        let Some(interp) = &self.interpreter else { return };
+        let doc = interp.document.borrow();
+        doc.selection.borrow_mut().page_selection = Some(
+            crate::browser::selection::PageSelection {
+                anchor: (content_x, content_y),
+                current: (content_x, content_y),
+                dragging: true,
+                cached_text: String::new(),
+            });
+    }
+
+    fn sel_update(&self, content_x: f32, content_y: f32) {
+        let Some(interp) = &self.interpreter else { return };
+        let doc = interp.document.borrow();
+        let mut reg = doc.selection.borrow_mut();
+        if let Some(ps) = reg.page_selection.as_mut() {
+            ps.current = (content_x, content_y);
+        }
+    }
+
+    fn sel_end(&self) {
+        let Some(interp) = &self.interpreter else { return };
+        let doc = interp.document.borrow();
+        let mut reg = doc.selection.borrow_mut();
+        if let Some(ps) = reg.page_selection.as_mut() {
+            ps.dragging = false;
+            if (ps.anchor.0 - ps.current.0).abs() < 3.0
+                && (ps.anchor.1 - ps.current.1).abs() < 3.0 {
+                reg.page_selection = None;
+            }
+        }
+    }
+
+    fn sel_dragging(&self) -> bool {
+        self.interpreter.as_ref()
+            .map(|i| i.document.borrow().selection.borrow().page_selection
+                .as_ref().map(|p| p.dragging).unwrap_or(false))
+            .unwrap_or(false)
+    }
+
+    /// Extract selected text (anchor->current rect range pres painted_text_runs).
+    pub fn selection_text(&self) -> Option<String> {
+        let interp = self.interpreter.as_ref()?;
+        let doc = interp.document.borrow();
+        let reg = doc.selection.borrow();
+        let ps = reg.page_selection.as_ref()?;
+        let anchor = self.hit_test_text(ps.anchor.0, ps.anchor.1)?;
+        let focus = self.hit_test_text(ps.current.0, ps.current.1)?;
+        let sel = crate::browser::textrun::TextSelection { anchor, focus };
+        Some(sel.extract_text(&self.painted_text_runs))
     }
 }
 
