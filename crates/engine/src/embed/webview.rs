@@ -614,42 +614,49 @@ impl WebView {
                         let dist = ((dx - x).powi(2) + (dy - y).powi(2)).sqrt();
                         let same_target = std::rc::Rc::ptr_eq(&down_target, &up);
                         if dist < 5.0 && same_target {
-                            if let Some(interp) = self.interpreter.as_mut() {
+                            let event_obj_rc = std::rc::Rc::new(std::cell::RefCell::new({
                                 let mut event = crate::interpreter::JsObject::new();
                                 event.set("type".into(), crate::interpreter::JsValue::Str("click".into()));
                                 event.set("clientX".into(), crate::interpreter::JsValue::Number(x as f64));
                                 event.set("clientY".into(), crate::interpreter::JsValue::Number(y as f64));
                                 event.set("target".into(), crate::interpreter::JsValue::DomNode(
                                     std::rc::Rc::clone(&up)));
+                                event
+                            }));
+                            if let Some(interp) = self.interpreter.as_mut() {
                                 let event_val = crate::interpreter::JsValue::Object(
-                                    std::rc::Rc::new(std::cell::RefCell::new(event)));
+                                    std::rc::Rc::clone(&event_obj_rc));
                                 let _ = interp.dispatch_event(&up, "click", event_val);
                             }
-                            // <a href> navigation emit pri click (ne pri drag).
-                            let mut cur = Some(up.clone());
-                            while let Some(n) = cur {
-                                if n.tag_name().as_deref() == Some("a") {
-                                    if let Some(href) = n.attr("href") {
-                                        if !href.is_empty() && !href.starts_with('#') {
-                                            let resolved = if let Some(base) = &self.base_url {
-                                                crate::browser::render::resolve_url(base, &href)
-                                            } else { href.clone() };
-                                            let target_kind = match n.attr("target").as_deref() {
-                                                Some("_blank") => crate::embed::event::NavigationTarget::NewTab,
-                                                Some(t) if !t.is_empty() => crate::embed::event::NavigationTarget::Named(t.to_string()),
-                                                _ => crate::embed::event::NavigationTarget::Self_,
-                                            };
-                                            response.navigation = Some(crate::embed::event::NavigationRequest {
-                                                url: resolved,
-                                                method: crate::embed::event::NavigationMethod::Get,
-                                                body: None,
-                                                target: target_kind,
-                                            });
+                            let prevented = matches!(event_obj_rc.borrow().get("defaultPrevented"),
+                                crate::interpreter::JsValue::Bool(true));
+                            // <a href> navigation emit pri click + ne preventDefault.
+                            if !prevented {
+                                let mut cur = Some(up.clone());
+                                while let Some(n) = cur {
+                                    if n.tag_name().as_deref() == Some("a") {
+                                        if let Some(href) = n.attr("href") {
+                                            if !href.is_empty() && !href.starts_with('#') {
+                                                let resolved = if let Some(base) = &self.base_url {
+                                                    crate::browser::render::resolve_url(base, &href)
+                                                } else { href.clone() };
+                                                let target_kind = match n.attr("target").as_deref() {
+                                                    Some("_blank") => crate::embed::event::NavigationTarget::NewTab,
+                                                    Some(t) if !t.is_empty() => crate::embed::event::NavigationTarget::Named(t.to_string()),
+                                                    _ => crate::embed::event::NavigationTarget::Self_,
+                                                };
+                                                response.navigation = Some(crate::embed::event::NavigationRequest {
+                                                    url: resolved,
+                                                    method: crate::embed::event::NavigationMethod::Get,
+                                                    body: None,
+                                                    target: target_kind,
+                                                });
+                                            }
                                         }
+                                        break;
                                     }
-                                    break;
+                                    cur = n.parent.borrow().upgrade();
                                 }
-                                cur = n.parent.borrow().upgrade();
                             }
                         }
                     }
@@ -670,34 +677,40 @@ impl WebView {
                     let is_input = matches!(target.tag_name().as_deref(),
                         Some("input") | Some("textarea"));
                     // Enter na focused input -> form submit: dispatch submit
-                    // event + emit NavigationRequest pres build_form_request.
-                    // preventDefault honoring zustava Phase 99 (interpreter
-                    // event API neexposuje preventDefault hook do hostu).
+                    // event + check defaultPrevented + emit NavigationRequest.
                     if is_input && key == "Enter" {
                         if let Some(form) = crate::browser::render::forms::find_ancestor_form(&target) {
-                            if let Some(interp) = self.interpreter.as_mut() {
+                            let event_obj_rc = std::rc::Rc::new(std::cell::RefCell::new({
                                 let mut event = crate::interpreter::JsObject::new();
                                 event.set("type".into(), crate::interpreter::JsValue::Str("submit".into()));
                                 event.set("target".into(), crate::interpreter::JsValue::DomNode(
                                     std::rc::Rc::clone(&form)));
+                                event
+                            }));
+                            if let Some(interp) = self.interpreter.as_mut() {
                                 let event_val = crate::interpreter::JsValue::Object(
-                                    std::rc::Rc::new(std::cell::RefCell::new(event)));
+                                    std::rc::Rc::clone(&event_obj_rc));
                                 let _ = interp.dispatch_event(&form, "submit", event_val);
                             }
-                            if let Some((url, method, body)) = crate::browser::render::forms::build_form_request(
-                                &form, self.base_url.as_deref())
-                            {
-                                let nav_method = if method == "post" {
-                                    crate::embed::event::NavigationMethod::Post
-                                } else {
-                                    crate::embed::event::NavigationMethod::Get
-                                };
-                                response.navigation = Some(crate::embed::event::NavigationRequest {
-                                    url,
-                                    method: nav_method,
-                                    body: body.map(|b| b.into_bytes()),
-                                    target: crate::embed::event::NavigationTarget::Self_,
-                                });
+                            // Check defaultPrevented po dispatchu.
+                            let prevented = matches!(event_obj_rc.borrow().get("defaultPrevented"),
+                                crate::interpreter::JsValue::Bool(true));
+                            if !prevented {
+                                if let Some((url, method, body)) = crate::browser::render::forms::build_form_request(
+                                    &form, self.base_url.as_deref())
+                                {
+                                    let nav_method = if method == "post" {
+                                        crate::embed::event::NavigationMethod::Post
+                                    } else {
+                                        crate::embed::event::NavigationMethod::Get
+                                    };
+                                    response.navigation = Some(crate::embed::event::NavigationRequest {
+                                        url,
+                                        method: nav_method,
+                                        body: body.map(|b| b.into_bytes()),
+                                        target: crate::embed::event::NavigationTarget::Self_,
+                                    });
+                                }
                             }
                         }
                     }
