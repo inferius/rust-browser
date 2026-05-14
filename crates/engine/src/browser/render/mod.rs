@@ -1132,9 +1132,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
 
             // Authoritative WebView: vytvori se v sync_webview + spousti scripts.
             self.sync_webview(&init_html, &init_css, init_base, init_path);
-            if let Some(wv) = self.webview.as_mut() {
-                self.interpreter = wv.take_interpreter();
-            }
+            // Webview drzi interpreter primarne (polarity invert).
 
             self.render();
 
@@ -3382,9 +3380,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // App.interpreter.
             let url = format!("file:///{}", path.display().to_string().replace('\\', "/"));
             self.sync_webview(&html, &css, Some(url), Some(path.to_path_buf()));
-            if let Some(wv) = self.webview.as_mut() {
-                self.interpreter = wv.take_interpreter();
-            }
+            // Webview drzi interpreter primarne (polarity invert).
             let page_title = crate::embed::loader::extract_title(self.html())
                 .unwrap_or_else(|| path.file_name()
                     .and_then(|n| n.to_str()).unwrap_or("page").to_string());
@@ -3459,11 +3455,10 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 dbg.skip_once_line = saved_skip;
             }
             // Pres webview run_scripts: presunout interp do webview, vola
-            // run_scripts, presunout zpet do App.
+            // Webview drzi interpreter primarne (polarity invert).
             if let Some(wv) = self.webview.as_mut() {
                 wv.set_interpreter(new_interp);
                 wv.run_scripts();
-                self.interpreter = wv.take_interpreter();
             } else {
                 self.interpreter = Some(new_interp);
             }
@@ -4014,9 +4009,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                         self.set_scroll_x(0.0);
                                         self.set_scroll_target_x(0.0);
                                         self.sync_webview(&html, "", Some(url.clone()), None);
-                                        if let Some(wv) = self.webview.as_mut() {
-                                            self.interpreter = wv.take_interpreter();
-                                        }
+                                        // Webview drzi interpreter primarne (polarity invert).
                                         if let Some(w) = &self.window { w.set_title(&format_window_title(&url, 1usize)); }
                                         self.render();
                                     }
@@ -4261,9 +4254,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 self.animation_iterations.clear();
                 self.active_transitions.clear();
                 self.sync_webview(&html, &css, Some(url.to_string()), None);
-                if let Some(wv) = self.webview.as_mut() {
-                    self.interpreter = wv.take_interpreter();
-                }
+                // Webview drzi interpreter primarne (polarity invert).
                 let page_title = crate::embed::loader::extract_title(self.html())
                     .unwrap_or_else(|| url.to_string());
                 // title je primary v webview - sync_webview_from_app + load_html
