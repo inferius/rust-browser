@@ -426,6 +426,13 @@ impl WebView {
         let mut display_list = crate::browser::paint::build_display_list_culled(
             &layout_root, self.scroll_y, viewport_h);
 
+        // 3a. Apply scroll: posun page commands o -scroll_y. Scrollbar
+        //     overlay (pridany nize) je viewport-relative -> add PO shift.
+        for cmd in display_list.iter_mut() {
+            crate::browser::render::segments::shift_command_y(cmd, -self.scroll_y);
+            crate::browser::render::segments::shift_command_x(cmd, -self.scroll_x);
+        }
+
         // 3b. Scrollbar overlay - kdyz content > viewport.
         let total_h = layout_root.rect.height;
         if total_h > viewport_h {
@@ -466,10 +473,8 @@ impl WebView {
         renderer.warm_atlas_for(&display_list, self.base_url.as_deref());
 
         // 5. Renderer kresli display list do target_view.
-        let had = renderer.draw_segments_into_view_clipped(
+        let _had = renderer.draw_segments_into_view_clipped(
             target_view, &display_list, true, None);
-        eprintln!("[webview render_via] display_list={} had_segments={} layout_root.rect={}x{}",
-            display_list.len(), had, layout_root.rect.width, layout_root.rect.height);
 
         self.dirty = false;
         self.target_view.as_ref()

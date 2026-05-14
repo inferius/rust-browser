@@ -161,7 +161,7 @@ pub fn partition_filter_segments(cmds: &[DisplayCommand]) -> Vec<Seg<'_>> {
 }
 
 /// Posune Y souradnice display command (pro scroll).
-pub(super) fn shift_command_y(cmd: &mut DisplayCommand, dy: f32) {
+pub fn shift_command_y(cmd: &mut DisplayCommand, dy: f32) {
     match cmd {
         DisplayCommand::Rect { y, .. }
         | DisplayCommand::Border { y, .. }
@@ -184,7 +184,7 @@ pub(super) fn shift_command_y(cmd: &mut DisplayCommand, dy: f32) {
     }
 }
 
-pub(super) fn shift_command_x(cmd: &mut DisplayCommand, dx: f32) {
+pub fn shift_command_x(cmd: &mut DisplayCommand, dx: f32) {
     match cmd {
         DisplayCommand::Rect { x, .. }
         | DisplayCommand::Border { x, .. }

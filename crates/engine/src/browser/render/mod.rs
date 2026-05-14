@@ -70,7 +70,7 @@ mod forms;
 use forms::{find_ancestor_form, build_form_request, post_form};
 
 
-mod segments;
+pub mod segments;
 pub use segments::{Seg, partition_filter_segments};
 use segments::{shift_command_y, shift_command_x};
 
