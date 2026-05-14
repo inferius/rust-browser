@@ -155,6 +155,19 @@ impl ApplicationHandler for ShellApp {
                     MouseScrollDelta::PixelDelta(p) => (-(p.x as f32), -(p.y as f32)),
                 };
                 let webview = match &mut self.webview { Some(w) => w, None => return };
+                // Ctrl+Wheel = zoom in/out (common browser pattern).
+                if self.modifiers.control_key() {
+                    let z = webview.zoom();
+                    let new_zoom = if dy < 0.0 {
+                        (z * 1.1).min(5.0)
+                    } else {
+                        (z / 1.1).max(0.25)
+                    };
+                    webview.set_zoom(new_zoom);
+                    println!("[shell zoom] {:.0}%", new_zoom * 100.0);
+                    if let Some(w) = &self.window { w.request_redraw(); }
+                    return;
+                }
                 let response = webview.handle_input(InputEvent::Scroll {
                     dx, dy,
                     x: self.mouse_x,
