@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/engine", "crates/shell"]
+members = ["crates/engine", "crates/shell", "crates/devtools-proto"]
 # Default = engine bin. `cargo run` z workspace root = puvodni CLI dispatcher
 # (JS demo / debug / devtools / browser / dump). Shell bin pres `cargo run -p rwe-shell`.
 default-members = ["crates/engine"]

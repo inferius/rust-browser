@@ -3095,6 +3095,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "rwe-devtools-proto"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "rwe-engine"
 version = "0.1.0"
 dependencies = [
