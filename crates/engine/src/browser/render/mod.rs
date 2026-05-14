@@ -885,12 +885,9 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         // self.scroll_y() method delegate webview.
         // start_time + prev_style_map fields smazany Phase 99: nikdy ctene
         // (jen self-write). start_time slouzil jako source pro animation_origin.
-        /// Track running animations per (node_id, anim_name) - pro dispatch animationstart/end
-        active_animations: std::collections::HashSet<(usize, String)>,
-        /// Iteration counter per animation pro animationiteration event.
-        animation_iterations: std::collections::HashMap<(usize, String), i32>,
-        /// Aktivni CSS transitions.
-        active_transitions: Vec<super::cascade::ActiveTransition>,
+        // active_animations/animation_iterations/active_transitions fields smazany
+        // Phase 99: vsechny jen clear()/is_empty() (vzdy prazdne). Animace
+        // tracking je per-WebView (webview.cascade).
         /// DevTools state (theme, tab, panel_h, panel_open, elements, console, network,
         /// sources, performance, focus, context_menu, inspect_mode, frame_counter).
         devtools: crate::devtools::DevToolsState,
@@ -1636,8 +1633,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                             self.devtools.animations_speed = new_speed;
                                         }
                                         "restart" => {
-                                            self.active_animations.clear();
-                                            self.animation_iterations.clear();
                                             self.animation_origin = Instant::now();
                                             if self.devtools.animations_paused {
                                                 self.animation_pause_start = Some(Instant::now());
@@ -2009,11 +2004,10 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 }
                 WindowEvent::RedrawRequested => {
                     self.render();
-                    // Continual redraw pri aktivnich animacich/transition NEBO smooth
-                    // scroll animation (kdyz scroll_y != scroll_target_y).
-                    let has_anim = !self.active_animations.is_empty()
-                        || !self.active_transitions.is_empty()
-                        || (self.scroll_y() - self.scroll_target_y()).abs() > 0.5
+                    // Continual redraw pri smooth scroll animation. CSS animacie/
+                    // transition tracking je per-WebView (webview.cascade); App
+                    // active_animations/transitions fields dead.
+                    let has_anim = (self.scroll_y() - self.scroll_target_y()).abs() > 0.5
                         || (self.scroll_x() - self.scroll_target_x()).abs() > 0.5;
                     if has_anim {
                         if let Some(w) = &self.window {
@@ -3051,9 +3045,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             self.set_scroll_x(0.0);
             self.set_scroll_target_x(0.0);
             self.animation_origin = std::time::Instant::now();
-            self.active_animations.clear();
-            self.animation_iterations.clear();
-            self.active_transitions.clear();
             // Authoritative WebView restart pres sync_webview - novy webview s
             // real load_html (spousti scripts). Po loadu take_interpreter ->
             // App.interpreter.
@@ -3757,9 +3748,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 self.set_scroll_x(0.0);
                 self.set_scroll_target_x(0.0);
                 self.animation_origin = std::time::Instant::now();
-                self.active_animations.clear();
-                self.animation_iterations.clear();
-                self.active_transitions.clear();
                 self.sync_webview(&html, &css, Some(url.to_string()), None);
                 // Webview drzi interpreter primarne (polarity invert).
                 let page_title = crate::embed::loader::extract_title(self.html())
@@ -4044,9 +4032,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         interpreter: None,
         mouse_x: 0.0,
         mouse_y: 0.0,
-        active_transitions: Vec::new(),
-        active_animations: std::collections::HashSet::new(),
-        animation_iterations: std::collections::HashMap::new(),
         devtools: crate::devtools::DevToolsState::default(),
         devtools_resizing: false,
         last_click_time: None,
