@@ -839,27 +839,11 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         // kompletni). Initial data drzeny v `initial: Option<InitialData>`
         // do prvniho sync_webview, pak primary v webview.
         initial: Option<(String, String, Option<String>, Option<std::path::PathBuf>)>,
-        /// Cache parsed stylesheets (legacy field, jen pro App-side hit-test pres staly path).
-        cached_stylesheets: Option<Vec<super::css_parser::Stylesheet>>,
-        /// Cached layout_root - reuse pri ne-layout-affecting animations.
-        /// TODO: post-N+22 cleanup - smaze + sjednotit pres webview.last_layout_root().
-        cached_layout_root: Option<super::layout::LayoutBox>,
-        /// CSS pouziva @media/@container queries, takze viewport zmena ovlivni
-        /// cascade. Bez teto detekce by se cascade rebuilovala pri kazdem
-        /// pixelu resize -> resize lag.
-        css_uses_viewport: bool,
         /// Ring buffer poslednich N frame timing pro FPS counter overlay.
         /// Default 60 frame window. Render hori v ms, FPS = 1000 / avg.
         frame_times_ms: std::collections::VecDeque<f32>,
         /// Show FPS counter overlay (Ctrl+Shift+F nebo always-on dev mode).
         show_fps: bool,
-        /// Cache cascade output (DOM root ptr hash -> StyleMap).
-        /// Rc<StyleMap> aby per-frame Rc::clone byl cheap (jen pointer + atomic
-        /// counter). Drive HashMap clone = ~1 ms na 5000 nodu kazdy frame.
-        /// Mutace via Rc::make_mut (clones if shared) - jen kdyz animations
-        /// realne meni styly.
-        cached_cascade_hash: u64,
-        cached_style_map: Option<Rc<super::cascade::StyleMap>>,
         /// Animations time origin - drahy speed/pause/restart pres devtools panel.
         /// Effective_anim_time = (now - origin) * speed; pri pause snapshot do paused_at.
         animation_origin: std::time::Instant,
@@ -885,7 +869,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         /// modifikovat Interpreter pres Rc<RefCell>).
         async_jobs: crate::browser::async_jobs::AsyncJobsRegistry,
         // bookmark_picker field smazany (Session N+22) - shell concern.
-        cached_pseudo_map: Option<super::cascade::PseudoStyleMap>,
         // current_path + base_url smazany (polarity invert) - drzeny v webview.
         // history / history_idx fields smazany N+22 - back/forward shell concern.
         // (profile history persist v ~/.rwe stale aktualizuje pres navigate_url).
@@ -982,7 +965,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             if let Some(w) = self.webview.as_mut() {
                 w.set_zoom(z);
             }
-            self.cached_layout_root = None;
         }
 
         /// Smooth scroll target Y (webview-vlastnen po polarity invert).
@@ -1122,9 +1104,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     // Bez @media/vh layout je viewport-independent (content size
                     // urcen z elements, ne window) -> kesovany layout zustava
                     // valid pri resize, render jen prepocita scrollbars + shifts.
-                    if self.css_uses_viewport {
-                        self.cached_layout_root = None;
-                    }
                     // PERF: nevolame self.render() inline - winit posila pri
                     // startu vicero Resized eventu (initial + DPI + final).
                     // request_redraw() je coalescovany -> jeden RedrawRequested
@@ -1687,13 +1666,10 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                                     self.paused_node_styles.remove(&sel);
                                                 } else {
                                                     self.paused_animation_nodes.insert(sel);
-                                                    // Snapshot current style_map[sel] z minuleho framu
-                                                    // (cached). Bude reused jako frozen.
-                                                    if let Some(sm) = &self.cached_style_map {
-                                                        if let Some(style) = sm.get(&sel) {
-                                                            self.paused_node_styles.insert(sel, style.clone());
-                                                        }
-                                                    }
+                                                    // TODO(N+22 cleanup): per-element pause snapshot
+                                                    // potrebuje pristup k webview cascade.style_map.
+                                                    // Aktualne stale TODO - paused_node_styles zustane
+                                                    // prazdny pro tento element.
                                                 }
                                                 self.devtools.animations_paused =
                                                     !self.paused_animation_nodes.is_empty();
@@ -1881,7 +1857,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                     } else {
                                         self.devtools.force_active = false;
                                     }
-                                    self.cached_layout_root = None;
                                 }
                                 DevtoolsHit::ClassManagerToggle => {
                                     self.devtools.class_manager_open = !self.devtools.class_manager_open;
@@ -1903,8 +1878,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                                     attrs.insert("style".to_string(), appended);
                                                 }
                                                 drop(attrs);
-                                                self.cached_layout_root = None;
-                                                self.cached_cascade_hash = 0;
                                                 println!("[devtools] add rule - inline style updated");
                                             }
                                         }
@@ -1924,8 +1897,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                                 }
                                                 let new_val = classes.join(" ");
                                                 node.attributes.borrow_mut().insert("class".to_string(), new_val.clone());
-                                                self.cached_layout_root = None;
-                                                self.cached_cascade_hash = 0;
                                                 // Changes log entry.
                                                 self.devtools.changes.push(crate::devtools::ChangeEntry {
                                                     timestamp_ts: crate::devtools::history::now_ts(),
@@ -2507,7 +2478,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                         }
                                         drop(buf); // Drop -> commit_back value attr.
                                         if consumed {
-                                            self.cached_layout_root = None;
                                             self.render();
                                             return;
                                         }
@@ -2641,10 +2611,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                             // Ctrl+Alt+R = toggle reading mode (zen view).
                             if (s.as_str() == "r" || s.as_str() == "R") && self.modifiers.alt_key() {
             // (invalid assignment removed Session N+22)
-                                self.cached_stylesheets = None;
-                                self.cached_style_map = None;
-                                self.cached_pseudo_map = None;
-                                self.cached_layout_root = None;
                                 self.render();
                                 return;
                             }
@@ -2658,7 +2624,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                             match s.as_str() {
                                 "+" | "=" => {
                                     self.set_zoom((self.zoom() * 1.1).min(5.0));
-                                    self.cached_layout_root = None;
                                     self.clamp_scroll_to_layout();
                                     println!("[zoom] {:.0}%", self.zoom() * 100.0);
                                     self.render();
@@ -2666,7 +2631,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                 }
                                 "-" | "_" => {
                                     self.set_zoom((self.zoom() / 1.1).max(0.25));
-                                    self.cached_layout_root = None;
                                     self.clamp_scroll_to_layout();
                                     println!("[zoom] {:.0}%", self.zoom() * 100.0);
                                     self.render();
@@ -2674,7 +2638,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                 }
                                 "0" => {
                                     self.set_zoom(1.0);
-                                    self.cached_layout_root = None;
                                     self.clamp_scroll_to_layout();
                                     println!("[zoom] 100%");
                                     self.render();
@@ -3422,8 +3385,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             } else {
                 self.interpreter = Some(new_interp);
             }
-            self.cached_layout_root = None;
-            self.cached_style_map = None;
         }
 
         /// Notify worker thread pres Condvar - po klik Continue/Step.
@@ -3694,8 +3655,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 }
             }
             // Invalidate caches - cascade + layout musi rebuilt.
-            self.cached_style_map = None;
-            self.cached_layout_root = None;
             crate::browser::devtools_panel::rebuild_tree(&mut self.devtools, &root);
             self.devtools.focus = crate::devtools::focus::FocusTarget::Page;
         }
@@ -4029,7 +3988,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                             } else {
                                 node.attributes.borrow_mut().insert("checked".into(), "checked".into());
                             }
-                            self.cached_layout_root = None;
                             // render() volat az po fall-through dispatch click listeners
                             // (interp je borrowed mut, render volat mimo blok).
                         }
@@ -4114,8 +4072,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     let old_value = cur_style.clone();
                     attrs.insert("style".to_string(), new_style.clone());
                     drop(attrs);
-                    self.cached_layout_root = None;
-                    self.cached_cascade_hash = 0;
                     self.devtools.changes.push(crate::devtools::ChangeEntry {
                         timestamp_ts: crate::devtools::history::now_ts(),
                         kind: crate::devtools::ChangeKind::StyleEdit,
@@ -4143,8 +4099,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     let old_value = cur_style.clone();
                     attrs.insert("style".to_string(), new_style.clone());
                     drop(attrs);
-                    self.cached_layout_root = None;
-                    self.cached_cascade_hash = 0;
                     // Changes log.
                     self.devtools.changes.push(crate::devtools::ChangeEntry {
                         timestamp_ts: crate::devtools::history::now_ts(),
@@ -4485,9 +4439,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
     // Title nyni drzí webview (App polarity invert step).
     let mut app = App {
         initial: Some((html, css, base_url, current_html_path)),
-        cached_stylesheets: None,
-        cached_cascade_hash: 0,
-        cached_style_map: None,
         animation_origin: std::time::Instant::now(),
         animation_pause_start: None,
         paused_animation_nodes: std::collections::HashSet::new(),
@@ -4495,9 +4446,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         animations_scrubber_drag: false,
         painted_text_runs: Vec::new(),
         async_jobs: crate::browser::async_jobs::AsyncJobsRegistry::new(),
-        cached_pseudo_map: None,
-        cached_layout_root: None,
-        css_uses_viewport: false,
         frame_times_ms: std::collections::VecDeque::with_capacity(60),
         // FPS overlay default off - Ctrl+Shift+F toggle. Drive default zapnuty
         // pri PERF_DEBUG=1, ale env var ma byt jen pro logging - overlay je
