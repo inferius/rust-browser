@@ -32,6 +32,8 @@ pub struct ShellApp {
     mouse_x: f32,
     mouse_y: f32,
     modifiers: winit::keyboard::ModifiersState,
+    history: Vec<String>,
+    history_idx: usize,
 }
 
 impl ShellApp {
@@ -50,6 +52,28 @@ impl ShellApp {
             mouse_x: 0.0,
             mouse_y: 0.0,
             modifiers: winit::keyboard::ModifiersState::empty(),
+            history: Vec::new(),
+            history_idx: 0,
+        }
+    }
+
+    fn nav_back(&mut self) {
+        if self.history_idx == 0 { return; }
+        self.history_idx -= 1;
+        let url = self.history[self.history_idx].clone();
+        if let Some(wv) = &mut self.webview {
+            wv.load_url(&url);
+            if let Some(w) = &self.window { w.request_redraw(); }
+        }
+    }
+
+    fn nav_forward(&mut self) {
+        if self.history_idx + 1 >= self.history.len() { return; }
+        self.history_idx += 1;
+        let url = self.history[self.history_idx].clone();
+        if let Some(wv) = &mut self.webview {
+            wv.load_url(&url);
+            if let Some(w) = &self.window { w.request_redraw(); }
         }
     }
 
@@ -108,6 +132,11 @@ impl ApplicationHandler for ShellApp {
         webview.resize(lw, lh, sf);
         webview.set_local_path(self.local_path.clone());
         let _ = webview.load_html(&self.html, &self.css, self.base_url.clone());
+        // History init s initial URL (pro Alt+Left/Right back/forward).
+        if let Some(url) = &self.base_url {
+            self.history.push(url.clone());
+            self.history_idx = 0;
+        }
 
         self.window = Some(window.clone());
         self.renderer = Some(renderer);
@@ -249,6 +278,14 @@ impl ApplicationHandler for ShellApp {
                             return;
                         }
                         // Ctrl+= / Ctrl++ / Ctrl+- / Ctrl+0 zoom controls.
+                        if s.eq_ignore_ascii_case("r") {
+                            // Ctrl+R: reload current page.
+                            if let (Some(wv), Some(last)) = (&mut self.webview, self.history.get(self.history_idx).cloned()) {
+                                wv.load_url(&last);
+                                if let Some(w) = &self.window { w.request_redraw(); }
+                            }
+                            return;
+                        }
                         if matches!(s.as_str(), "+" | "=" | "-" | "_" | "0") {
                             if let Some(wv) = &mut self.webview {
                                 let z = wv.zoom();
@@ -264,6 +301,23 @@ impl ApplicationHandler for ShellApp {
                             }
                             return;
                         }
+                    }
+                }
+                // Alt+Left/Right -> history back/forward. F5 -> reload.
+                if matches!(key_event.state, ElementState::Pressed) {
+                    if self.modifiers.alt_key() {
+                        match &key_event.logical_key {
+                            Key::Named(NamedKey::ArrowLeft) => { self.nav_back(); return; }
+                            Key::Named(NamedKey::ArrowRight) => { self.nav_forward(); return; }
+                            _ => {}
+                        }
+                    }
+                    if matches!(&key_event.logical_key, Key::Named(NamedKey::F5)) {
+                        if let (Some(wv), Some(last)) = (&mut self.webview, self.history.get(self.history_idx).cloned()) {
+                            wv.load_url(&last);
+                            if let Some(w) = &self.window { w.request_redraw(); }
+                        }
+                        return;
                     }
                 }
                 // Scroll keys: PageDown/Up, ArrowUp/Down, Home, End, Space.
@@ -362,12 +416,20 @@ impl ApplicationHandler for ShellApp {
                 if let Some(nav) = resp.navigation {
                     println!("[shell nav] {:?} {} ({:?})", nav.method, nav.url, nav.target);
                     match nav.method {
-                        rwe_engine::embed::NavigationMethod::Get => { webview.load_url(&nav.url); }
+                        rwe_engine::embed::NavigationMethod::Get => {
+                            // History push pro back/forward.
+                            self.history.truncate(self.history_idx + 1);
+                            self.history.push(nav.url.clone());
+                            self.history_idx = self.history.len() - 1;
+                            if let Some(wv) = &mut self.webview { wv.load_url(&nav.url); }
+                        }
                         rwe_engine::embed::NavigationMethod::Post => {
                             let body = nav.body.as_ref()
                                 .and_then(|b| std::str::from_utf8(b).ok())
                                 .unwrap_or_default();
-                            webview.load_url_post(&nav.url, body);
+                            if let Some(wv) = &mut self.webview {
+                                wv.load_url_post(&nav.url, body);
+                            }
                         }
                     }
                 }
