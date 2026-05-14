@@ -104,6 +104,13 @@ pub struct WebView {
     /// Painted text runs - per-glyph cumulative advances. Foundation pro
     /// per-glyph text selection (hit-test mouse pos -> SelectionPos).
     pub(crate) painted_text_runs: Vec<crate::browser::textrun::TextRun>,
+    /// Open <select> dropdown - Some((node_id, anchor_x, anchor_y, anchor_w))
+    /// emit popup z option children pres render_via.
+    pub(crate) open_select: Option<(usize, f32, f32, f32)>,
+    /// Mouse position v CSS px (logical, viewport-relative). Updateuje
+    /// `handle_input MouseMove`. Pouzity pro select option hover detect.
+    pub(crate) mouse_x: f32,
+    pub(crate) mouse_y: f32,
     /// Last layout_root vyrobeny v render_via - getter pro hostujici aplikaci
     /// (App emits inspector overlay nad webview RT pres dalsi draw_segments
     /// pass; shell nepouziva).
@@ -144,6 +151,9 @@ impl WebView {
             active_animations: std::collections::HashSet::new(),
             animation_iterations: std::collections::HashMap::new(),
             painted_text_runs: Vec::new(),
+            open_select: None,
+            mouse_x: 0.0,
+            mouse_y: 0.0,
             last_layout_root: None,
             async_jobs: crate::browser::async_jobs::AsyncJobsRegistry::new(),
         }
@@ -388,9 +398,17 @@ impl WebView {
                 self.dirty = true;
                 response.dirty = true;
             }
-            InputEvent::MouseMove { x: _, y: _, .. } => {
-                // Phase 99: hit-test layout tree + :hover state machine.
-                // Pro ted no-op (dirty zustane).
+            InputEvent::MouseMove { x, y, .. } => {
+                if (self.mouse_x - x).abs() > 0.5 || (self.mouse_y - y).abs() > 0.5 {
+                    self.mouse_x = x;
+                    self.mouse_y = y;
+                    // Pri otevrene select dropdown hover state mit redraw.
+                    if self.open_select.is_some() {
+                        self.dirty = true;
+                        response.dirty = true;
+                    }
+                }
+                // Phase 99: hit-test layout tree + :hover state machine + redraw.
             }
             InputEvent::MouseDown { .. } | InputEvent::MouseUp { .. } => {
                 // Phase 99: hit-test + dispatch click events do JS listeneru.
@@ -670,6 +688,58 @@ impl WebView {
         for cmd in display_list.iter_mut() {
             crate::browser::render::segments::shift_command_y(cmd, -self.scroll_y);
             crate::browser::render::segments::shift_command_x(cmd, -self.scroll_x);
+        }
+
+        // 3a2. <select> open dropdown overlay - viewport-relative emit.
+        if let Some((select_id, anchor_x, anchor_y, anchor_w)) = self.open_select {
+            if let Some(interp) = self.interpreter.as_ref() {
+                let doc_root = std::rc::Rc::clone(&interp.document.borrow().root);
+                if let Some(select_node) = crate::browser::render::find_node_by_ptr(&doc_root, select_id) {
+                    let opt_h = 24.0_f32;
+                    let pad_l = 8.0_f32;
+                    let popup_x = anchor_x;
+                    let popup_y = anchor_y + 24.0 - self.scroll_y;
+                    let options: Vec<std::rc::Rc<crate::browser::dom::Node>> = select_node.children.borrow()
+                        .iter().filter(|c| c.tag_name().as_deref() == Some("option")).cloned().collect();
+                    let popup_h = opt_h * options.len() as f32;
+                    if popup_h > 0.0 {
+                        display_list.push(crate::browser::paint::DisplayCommand::Shadow {
+                            x: popup_x, y: popup_y, w: anchor_w, h: popup_h,
+                            offset_x: 0.0, offset_y: 2.0, blur: 8.0, spread: 0.0,
+                            color: [0, 0, 0, 80], radius: 4.0, inset: false,
+                        });
+                        display_list.push(crate::browser::paint::DisplayCommand::Rect {
+                            x: popup_x, y: popup_y, w: anchor_w, h: popup_h,
+                            color: [255, 255, 255, 255], radius: 4.0,
+                        });
+                        display_list.push(crate::browser::paint::DisplayCommand::Border {
+                            x: popup_x, y: popup_y, w: anchor_w, h: popup_h,
+                            width: 1.0, color: [200, 200, 210, 255],
+                        });
+                    }
+                    for (idx, opt) in options.iter().enumerate() {
+                        let opt_y = popup_y + (idx as f32) * opt_h;
+                        let hovered = self.mouse_x >= popup_x && self.mouse_x < popup_x + anchor_w
+                            && self.mouse_y >= opt_y && self.mouse_y < opt_y + opt_h;
+                        if hovered {
+                            display_list.push(crate::browser::paint::DisplayCommand::Rect {
+                                x: popup_x, y: opt_y, w: anchor_w, h: opt_h,
+                                color: [230, 240, 255, 255], radius: 0.0,
+                            });
+                        }
+                        let txt = opt.text_content().trim().to_string();
+                        display_list.push(crate::browser::paint::DisplayCommand::Text {
+                            x: popup_x + pad_l, y: opt_y + 6.0,
+                            content: txt,
+                            color: [40, 40, 50, 255],
+                            font_size: 14.0, bold: false, font_weight: 400,
+                            italic: false,
+                            font_family: String::new(),
+                            strikethrough: false, underline: false,
+                        });
+                    }
+                }
+            }
         }
 
         // 3b. Scrollbar overlay - kdyz content > viewport.
