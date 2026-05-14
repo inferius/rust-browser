@@ -11,12 +11,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use winit::application::ApplicationHandler;
-use winit::event::{MouseScrollDelta, WindowEvent};
+use winit::event::{ElementState, MouseButton as WinitMouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
 use winit::window::{Window, WindowId};
 
 use rwe_engine::browser::render::Renderer;
-use rwe_engine::embed::{Engine, InputEvent, KeyModifiers, WebView};
+use rwe_engine::embed::{Engine, InputEvent, KeyModifiers, MouseButton, WebView};
 
 pub struct ShellApp {
     html: String,
@@ -163,8 +163,33 @@ impl ApplicationHandler for ShellApp {
                     if let Some(w) = &self.window { w.request_redraw(); }
                 }
             }
+            WindowEvent::MouseInput { state, button, .. } => {
+                let btn = match button {
+                    WinitMouseButton::Left => MouseButton::Left,
+                    WinitMouseButton::Right => MouseButton::Right,
+                    WinitMouseButton::Middle => MouseButton::Middle,
+                    WinitMouseButton::Back => MouseButton::Other(3),
+                    WinitMouseButton::Forward => MouseButton::Other(4),
+                    WinitMouseButton::Other(b) => MouseButton::Other(b),
+                };
+                let webview = match &mut self.webview { Some(w) => w, None => return };
+                let event = match state {
+                    ElementState::Pressed => InputEvent::MouseDown {
+                        x: self.mouse_x, y: self.mouse_y, button: btn,
+                        modifiers: KeyModifiers::default(),
+                    },
+                    ElementState::Released => InputEvent::MouseUp {
+                        x: self.mouse_x, y: self.mouse_y, button: btn,
+                        modifiers: KeyModifiers::default(),
+                    },
+                };
+                let resp = webview.handle_input(event);
+                if resp.dirty {
+                    if let Some(w) = &self.window { w.request_redraw(); }
+                }
+            }
             _ => {
-                // Click/key dispatch do JS = Phase 99 (hit-test + addEventListener).
+                // Key dispatch do JS = Phase 99 (focused element + keydown event).
             }
         }
     }

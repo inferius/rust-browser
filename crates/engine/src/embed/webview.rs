@@ -410,8 +410,32 @@ impl WebView {
                 }
                 // Phase 99: hit-test layout tree + :hover state machine + redraw.
             }
-            InputEvent::MouseDown { .. } | InputEvent::MouseUp { .. } => {
-                // Phase 99: hit-test + dispatch click events do JS listeneru.
+            InputEvent::MouseDown { x, y, button, .. } => {
+                if matches!(button, crate::embed::MouseButton::Left) {
+                    // Hit-test layout_root (last frame's tree) pres content coords
+                    // (mouse + scroll). Dispatch "click" event do JS listeneru.
+                    let content_x = x + self.scroll_x;
+                    let content_y = y + self.scroll_y;
+                    let target_node = self.last_layout_root.as_ref()
+                        .and_then(|root| root.hit_test(content_x, content_y))
+                        .and_then(|bx| bx.node.clone());
+                    if let (Some(target), Some(interp)) = (target_node, self.interpreter.as_mut()) {
+                        let mut event = crate::interpreter::JsObject::new();
+                        event.set("type".into(), crate::interpreter::JsValue::Str("click".into()));
+                        event.set("clientX".into(), crate::interpreter::JsValue::Number(x as f64));
+                        event.set("clientY".into(), crate::interpreter::JsValue::Number(y as f64));
+                        event.set("target".into(), crate::interpreter::JsValue::DomNode(
+                            std::rc::Rc::clone(&target)));
+                        let event_val = crate::interpreter::JsValue::Object(
+                            std::rc::Rc::new(std::cell::RefCell::new(event)));
+                        let _ = interp.dispatch_event(&target, "click", event_val);
+                        response.dirty = true;
+                        self.dirty = true;
+                    }
+                }
+            }
+            InputEvent::MouseUp { .. } => {
+                // Phase 99: mouseup event + click-vs-drag distinguish.
             }
             InputEvent::MouseLeave => {}
             InputEvent::KeyDown { .. } | InputEvent::KeyUp { .. } | InputEvent::TextInput { .. } => {
