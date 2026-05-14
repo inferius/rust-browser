@@ -40,6 +40,18 @@ pub fn run_window(
     base_url: Option<String>,
     local_path: Option<PathBuf>,
 ) -> Result<(), String> {
+    // Shell bin spousti UI v dedikovanem worker threadu (256 MB stack
+    // pro hluboky JS interp recursion). winit 0.30 strict main-thread
+    // check - pres `any_thread(true)` opt-out na Windows.
+    #[cfg(target_os = "windows")]
+    let event_loop = {
+        use winit::platform::windows::EventLoopBuilderExtWindows;
+        winit::event_loop::EventLoop::builder()
+            .with_any_thread(true)
+            .build()
+            .map_err(|e| format!("event_loop: {e}"))?
+    };
+    #[cfg(not(target_os = "windows"))]
     let event_loop = winit::event_loop::EventLoop::new()
         .map_err(|e| format!("event_loop: {e}"))?;
     let mut app = app::ShellApp::new(html, css, base_url, local_path);
