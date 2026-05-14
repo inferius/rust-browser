@@ -66,7 +66,7 @@ pub use url::{fetch_text_url, fetch_image_bytes, resolve_url, cached_fetch_bytes
 
 // shell_chrome.rs smazany (Session N+22) - chrome paint je shell crate concern.
 
-mod forms;
+pub mod forms;
 use forms::{find_ancestor_form, build_form_request, post_form};
 
 

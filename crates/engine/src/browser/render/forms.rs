@@ -5,7 +5,7 @@ use std::rc::Rc;
 use super::resolve_url;
 
 /// Najde nejblizsi <form> ancestor.
-pub(super) fn find_ancestor_form(node: &Rc<Node>) -> Option<Rc<Node>> {
+pub fn find_ancestor_form(node: &Rc<Node>) -> Option<Rc<Node>> {
     let mut current = Some(std::rc::Rc::clone(node));
     while let Some(n) = current {
         if n.tag_name().as_deref() == Some("form") { return Some(n); }
@@ -17,7 +17,7 @@ pub(super) fn find_ancestor_form(node: &Rc<Node>) -> Option<Rc<Node>> {
 /// Vrati (resolved_url, method, querystring_or_body).
 /// Pri GET: body=None, params kombinovany do URL ?k=v&k=v.
 /// Pri POST: vrati url cely + body separately. Caller posli pres ureq POST.
-pub(super) fn build_form_request(form: &Rc<Node>, base_url: Option<&str>) -> Option<(String, String, Option<String>)> {
+pub fn build_form_request(form: &Rc<Node>, base_url: Option<&str>) -> Option<(String, String, Option<String>)> {
     let action = form.attr("action").unwrap_or_default();
     let method = form.attr("method").unwrap_or_default().to_lowercase();
     let method = if method.is_empty() { "get".to_string() } else { method };
@@ -85,7 +85,7 @@ pub(super) fn build_form_request(form: &Rc<Node>, base_url: Option<&str>) -> Opt
 }
 
 /// POST request s url-encoded form body. Vrati response HTML.
-pub(super) fn post_form(url: &str, body: &str) -> Option<String> {
+pub fn post_form(url: &str, body: &str) -> Option<String> {
     if !url.starts_with("http://") && !url.starts_with("https://") {
         eprintln!("[form POST] non-http URL: {url}");
         return None;

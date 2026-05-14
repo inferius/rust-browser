@@ -452,6 +452,20 @@ impl WebView {
                 if let Some(target) = self.focused_dom_node() {
                     let is_input = matches!(target.tag_name().as_deref(),
                         Some("input") | Some("textarea"));
+                    // Enter na focused input -> form submit (find ancestor form, dispatch submit event).
+                    if is_input && key == "Enter" {
+                        if let Some(form) = crate::browser::render::forms::find_ancestor_form(&target) {
+                            if let Some(interp) = self.interpreter.as_mut() {
+                                let mut event = crate::interpreter::JsObject::new();
+                                event.set("type".into(), crate::interpreter::JsValue::Str("submit".into()));
+                                event.set("target".into(), crate::interpreter::JsValue::DomNode(
+                                    std::rc::Rc::clone(&form)));
+                                let event_val = crate::interpreter::JsValue::Object(
+                                    std::rc::Rc::new(std::cell::RefCell::new(event)));
+                                let _ = interp.dispatch_event(&form, "submit", event_val);
+                            }
+                        }
+                    }
                     // Backspace na focused input - smaze posledni grapheme + emit "input" event.
                     if is_input && key == "Backspace" {
                         let cur = target.attr("value").unwrap_or_default();
