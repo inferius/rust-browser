@@ -104,6 +104,33 @@ impl ShellApp {
         }
     }
 
+    /// Extrahuje vsechny inline `<style>...</style>` bloky z HTML stringu
+    /// + spoji do jednoho CSS textu. Naive regex-free parser: hleda
+    /// <style otevreny + </style> closing, vse mezi tim concatenate.
+    fn extract_inline_styles(html: &str) -> String {
+        let lc = html.to_ascii_lowercase();
+        let mut out = String::new();
+        let mut cursor = 0;
+        while cursor < lc.len() {
+            let open = match lc[cursor..].find("<style") {
+                Some(p) => cursor + p,
+                None => break,
+            };
+            let after_tag = match lc[open..].find('>') {
+                Some(p) => open + p + 1,
+                None => break,
+            };
+            let close = match lc[after_tag..].find("</style>") {
+                Some(p) => after_tag + p,
+                None => break,
+            };
+            out.push_str(&html[after_tag..close]);
+            out.push('\n');
+            cursor = close + "</style>".len();
+        }
+        out
+    }
+
     /// D6b: Nainstaluje native CDP funkce na devtools interpreter, capturuje
     /// channel Rc clones do closures.
     ///
@@ -284,7 +311,11 @@ impl ShellApp {
             let mut dv = WebView::new(engine, lw, lh);
             dv.resize(lw, lh, sf);
             let dv_html = Self::build_devtools_html();
-            let _ = dv.load_html(&dv_html, "", None);
+            // load_html bere html + css separate. Inline <style> tagy v <head>
+            // by se ignorovaly (loader::extract_inline_styles bezi jen pres
+            // load_url cestu). Extract rucne a predat jako css parametr.
+            let inline_css = Self::extract_inline_styles(&dv_html);
+            let _ = dv.load_html(&dv_html, &inline_css, None);
             // D6b: setup channel + target. Native fns install po load_html
             // (cdp.js definovany pred volanim native). Pumpa probiha v
             // redraw - drain queue + dispatch pres target + page WebView.
