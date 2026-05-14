@@ -341,14 +341,14 @@ fn element_remove_self() {
 
 #[test]
 fn element_get_bounding_client_rect() {
+    // Bez layout_lookup vraci 0,0,0,0 (default).
+    // Real test s mock layout_lookup je v dom_tier1_tests.
     let v = run(r#"
         const c = document.createElement("canvas");
-        c.setAttribute("width", "300");
-        c.setAttribute("height", "150");
         const r = c.getBoundingClientRect();
-        return r.width + ":" + r.height + ":" + r.bottom;
+        return r.x + ":" + r.y + ":" + r.width + ":" + r.height;
     "#);
-    assert_eq!(as_str(v), "300:150:150");
+    assert_eq!(as_str(v), "0:0:0:0");
 }
 
 #[test]

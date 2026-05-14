@@ -318,6 +318,102 @@ impl Interpreter {
                             return self.iterator_helper_method(JsValue::Object(obj_rc2), &key, arg_vals);
                         }
                     }
+                    // ─── window metody s pristupem k interpretu ────────────
+                    if matches!(obj_rc2.borrow().props.get("__window__"), Some(JsValue::Bool(true))) {
+                        match key.as_str() {
+                            "getComputedStyle" => {
+                                let arg_vals = self.eval_args(args, env)?;
+                                let target = arg_vals.into_iter().next().unwrap_or(JsValue::Null);
+                                let node = match target {
+                                    JsValue::DomNode(n) => n,
+                                    _ => return Ok(JsValue::Null),
+                                };
+                                // Lookup cascade map; pri absenci fallback - parse inline style attribute.
+                                let map: HashMap<String, String> = if let Some(lookup) = self.cascade_lookup.as_ref() {
+                                    lookup(Rc::as_ptr(&node))
+                                } else {
+                                    let mut m = HashMap::new();
+                                    if let Some(style_str) = node.attr("style") {
+                                        for pair in style_str.split(';') {
+                                            if let Some(idx) = pair.find(':') {
+                                                let prop = pair[..idx].trim().to_string();
+                                                let val = pair[idx+1..].trim().to_string();
+                                                if !prop.is_empty() { m.insert(prop, val); }
+                                            }
+                                        }
+                                    }
+                                    m
+                                };
+                                let result_rc = Rc::new(RefCell::new(JsObject::new()));
+                                // Pre-naplnit kebab + camelCase keys.
+                                for (k, v) in &map {
+                                    result_rc.borrow_mut().set(k.clone(), JsValue::Str(v.clone()));
+                                    let camel = super::dom_props::kebab_to_camel(k);
+                                    if &camel != k {
+                                        result_rc.borrow_mut().set(camel, JsValue::Str(v.clone()));
+                                    }
+                                }
+                                // getPropertyValue(name) - vraci hodnotu pro kebab key.
+                                let map_clone = Rc::new(map);
+                                {
+                                    let m = Rc::clone(&map_clone);
+                                    result_rc.borrow_mut().set("getPropertyValue".into(),
+                                        native("computedStyle.getPropertyValue", move |args| {
+                                            let prop = args.into_iter().next()
+                                                .map(|v| v.to_string()).unwrap_or_default();
+                                            Ok(JsValue::Str(m.get(&prop).cloned().unwrap_or_default()))
+                                        }));
+                                }
+                                return Ok(JsValue::Object(result_rc));
+                            }
+                            "matchMedia" => {
+                                let arg_vals = self.eval_args(args, env)?;
+                                let query = arg_vals.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+                                let mut mm = JsObject::new();
+                                mm.set("media".into(), JsValue::Str(query));
+                                mm.set("matches".into(), JsValue::Bool(false));
+                                mm.set("addEventListener".into(), native("mm.addEventListener", |_| Ok(JsValue::Undefined)));
+                                mm.set("removeEventListener".into(), native("mm.removeEventListener", |_| Ok(JsValue::Undefined)));
+                                mm.set("addListener".into(), native("mm.addListener", |_| Ok(JsValue::Undefined)));
+                                mm.set("removeListener".into(), native("mm.removeListener", |_| Ok(JsValue::Undefined)));
+                                return Ok(JsValue::Object(Rc::new(RefCell::new(mm))));
+                            }
+                            "addEventListener" => {
+                                let arg_vals = self.eval_args(args, env)?;
+                                let mut it = arg_vals.into_iter();
+                                let evt = it.next().map(|v| v.to_string()).unwrap_or_default();
+                                let cb = it.next().unwrap_or(JsValue::Undefined);
+                                if !matches!(cb, JsValue::Undefined | JsValue::Null) {
+                                    self.window_listeners.borrow_mut()
+                                        .entry(evt).or_default().push(cb);
+                                }
+                                return Ok(JsValue::Undefined);
+                            }
+                            "removeEventListener" => {
+                                let arg_vals = self.eval_args(args, env)?;
+                                let mut it = arg_vals.into_iter();
+                                let evt = it.next().map(|v| v.to_string()).unwrap_or_default();
+                                let _cb = it.next().unwrap_or(JsValue::Undefined);
+                                // Zjednodusene - clear cely seznam pro tento event type.
+                                // Real impl by porovnavala identity callback-u.
+                                self.window_listeners.borrow_mut().remove(&evt);
+                                return Ok(JsValue::Undefined);
+                            }
+                            "dispatchEvent" => {
+                                let arg_vals = self.eval_args(args, env)?;
+                                let event = arg_vals.into_iter().next().unwrap_or(JsValue::Undefined);
+                                let evt_type = if let JsValue::Object(o) = &event {
+                                    match o.borrow().get("type") {
+                                        JsValue::Str(s) => s,
+                                        _ => String::new(),
+                                    }
+                                } else { String::new() };
+                                self.dispatch_window_event(&evt_type, event);
+                                return Ok(JsValue::Bool(true));
+                            }
+                            _ => {}
+                        }
+                    }
                     // ─── document metody s pristupem k interpretu ──────────
                     if matches!(obj_rc2.borrow().props.get("__document__"), Some(JsValue::Bool(true))) {
                         if key == "createElement" {
