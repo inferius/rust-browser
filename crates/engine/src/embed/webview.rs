@@ -111,6 +111,9 @@ pub struct WebView {
     /// `handle_input MouseMove`. Pouzity pro select option hover detect.
     pub(crate) mouse_x: f32,
     pub(crate) mouse_y: f32,
+    /// Mouse down position - pro click-vs-drag distinguish pri MouseUp.
+    /// Some pri MouseDown, None po MouseUp dispatch.
+    pub(crate) mouse_down_at: Option<(f32, f32, std::rc::Rc<crate::browser::dom::Node>)>,
     /// Last layout_root vyrobeny v render_via - getter pro hostujici aplikaci
     /// (App emits inspector overlay nad webview RT pres dalsi draw_segments
     /// pass; shell nepouziva).
@@ -154,6 +157,7 @@ impl WebView {
             open_select: None,
             mouse_x: 0.0,
             mouse_y: 0.0,
+            mouse_down_at: None,
             last_layout_root: None,
             async_jobs: crate::browser::async_jobs::AsyncJobsRegistry::new(),
         }
@@ -425,15 +429,15 @@ impl WebView {
             }
             InputEvent::MouseDown { x, y, button, .. } => {
                 if matches!(button, crate::embed::MouseButton::Left) {
-                    // Hit-test layout_root (last frame's tree) pres content coords
-                    // (mouse + scroll). Dispatch "click" event do JS listeneru.
+                    // Hit-test layout_root pres content coords. Store target +
+                    // pos pro MouseUp click-vs-drag distinguish.
                     let content_x = x + self.scroll_x;
                     let content_y = y + self.scroll_y;
                     let target_node = self.last_layout_root.as_ref()
                         .and_then(|root| root.hit_test(content_x, content_y))
                         .and_then(|bx| bx.node.clone());
+                    // Focus / blur.
                     if let Some(target) = target_node.as_ref() {
-                        // Focus: <input>/<textarea>/<button>/<a> = focusable.
                         let focusable = matches!(target.tag_name().as_deref(),
                             Some("input") | Some("textarea") | Some("button")
                             | Some("a") | Some("select"));
@@ -441,58 +445,97 @@ impl WebView {
                             crate::browser::cascade::set_focused_node(Some(
                                 std::rc::Rc::as_ptr(target) as usize));
                         } else {
-                            // Klik na non-focusable -> clear focus (blur).
                             crate::browser::cascade::set_focused_node(None);
                         }
                     } else {
                         crate::browser::cascade::set_focused_node(None);
                     }
-                    if let Some(target) = target_node {
-                        if let Some(interp) = self.interpreter.as_mut() {
-                            let mut event = crate::interpreter::JsObject::new();
-                            event.set("type".into(), crate::interpreter::JsValue::Str("click".into()));
-                            event.set("clientX".into(), crate::interpreter::JsValue::Number(x as f64));
-                            event.set("clientY".into(), crate::interpreter::JsValue::Number(y as f64));
-                            event.set("target".into(), crate::interpreter::JsValue::DomNode(
-                                std::rc::Rc::clone(&target)));
-                            let event_val = crate::interpreter::JsValue::Object(
-                                std::rc::Rc::new(std::cell::RefCell::new(event)));
-                            let _ = interp.dispatch_event(&target, "click", event_val);
-                            response.dirty = true;
-                            self.dirty = true;
-                        }
-                        // <a href> -> emit NavigationRequest (host vola load_url).
-                        // Walk ancestors aby zachytil klik na <span> v <a>.
-                        let mut cur = Some(target.clone());
-                        while let Some(n) = cur {
-                            if n.tag_name().as_deref() == Some("a") {
-                                if let Some(href) = n.attr("href") {
-                                    if !href.is_empty() && !href.starts_with('#') {
-                                        let resolved = if let Some(base) = &self.base_url {
-                                            crate::browser::render::resolve_url(base, &href)
-                                        } else { href.clone() };
-                                        let target_kind = match n.attr("target").as_deref() {
-                                            Some("_blank") => crate::embed::event::NavigationTarget::NewTab,
-                                            Some(t) if !t.is_empty() => crate::embed::event::NavigationTarget::Named(t.to_string()),
-                                            _ => crate::embed::event::NavigationTarget::Self_,
-                                        };
-                                        response.navigation = Some(crate::embed::event::NavigationRequest {
-                                            url: resolved,
-                                            method: crate::embed::event::NavigationMethod::Get,
-                                            body: None,
-                                            target: target_kind,
-                                        });
-                                    }
-                                }
-                                break;
-                            }
-                            cur = n.parent.borrow().upgrade();
-                        }
+                    // mousedown event dispatch.
+                    if let (Some(target), Some(interp)) = (target_node.clone(), self.interpreter.as_mut()) {
+                        let mut event = crate::interpreter::JsObject::new();
+                        event.set("type".into(), crate::interpreter::JsValue::Str("mousedown".into()));
+                        event.set("clientX".into(), crate::interpreter::JsValue::Number(x as f64));
+                        event.set("clientY".into(), crate::interpreter::JsValue::Number(y as f64));
+                        event.set("target".into(), crate::interpreter::JsValue::DomNode(
+                            std::rc::Rc::clone(&target)));
+                        let event_val = crate::interpreter::JsValue::Object(
+                            std::rc::Rc::new(std::cell::RefCell::new(event)));
+                        let _ = interp.dispatch_event(&target, "mousedown", event_val);
                     }
+                    if let Some(target) = target_node {
+                        self.mouse_down_at = Some((x, y, target));
+                    }
+                    response.dirty = true;
+                    self.dirty = true;
                 }
             }
-            InputEvent::MouseUp { .. } => {
-                // Phase 99: mouseup event + click-vs-drag distinguish.
+            InputEvent::MouseUp { x, y, button, .. } => {
+                if matches!(button, crate::embed::MouseButton::Left) {
+                    let content_x = x + self.scroll_x;
+                    let content_y = y + self.scroll_y;
+                    let up_target = self.last_layout_root.as_ref()
+                        .and_then(|root| root.hit_test(content_x, content_y))
+                        .and_then(|bx| bx.node.clone());
+                    // mouseup event dispatch.
+                    if let (Some(target), Some(interp)) = (up_target.as_ref(), self.interpreter.as_mut()) {
+                        let mut event = crate::interpreter::JsObject::new();
+                        event.set("type".into(), crate::interpreter::JsValue::Str("mouseup".into()));
+                        event.set("clientX".into(), crate::interpreter::JsValue::Number(x as f64));
+                        event.set("clientY".into(), crate::interpreter::JsValue::Number(y as f64));
+                        event.set("target".into(), crate::interpreter::JsValue::DomNode(
+                            std::rc::Rc::clone(target)));
+                        let event_val = crate::interpreter::JsValue::Object(
+                            std::rc::Rc::new(std::cell::RefCell::new(event)));
+                        let _ = interp.dispatch_event(target, "mouseup", event_val);
+                    }
+                    // Click event: same target + distance < 5 px (jinak drag).
+                    let down = std::mem::take(&mut self.mouse_down_at);
+                    if let (Some((dx, dy, down_target)), Some(up)) = (down, up_target) {
+                        let dist = ((dx - x).powi(2) + (dy - y).powi(2)).sqrt();
+                        let same_target = std::rc::Rc::ptr_eq(&down_target, &up);
+                        if dist < 5.0 && same_target {
+                            if let Some(interp) = self.interpreter.as_mut() {
+                                let mut event = crate::interpreter::JsObject::new();
+                                event.set("type".into(), crate::interpreter::JsValue::Str("click".into()));
+                                event.set("clientX".into(), crate::interpreter::JsValue::Number(x as f64));
+                                event.set("clientY".into(), crate::interpreter::JsValue::Number(y as f64));
+                                event.set("target".into(), crate::interpreter::JsValue::DomNode(
+                                    std::rc::Rc::clone(&up)));
+                                let event_val = crate::interpreter::JsValue::Object(
+                                    std::rc::Rc::new(std::cell::RefCell::new(event)));
+                                let _ = interp.dispatch_event(&up, "click", event_val);
+                            }
+                            // <a href> navigation emit pri click (ne pri drag).
+                            let mut cur = Some(up.clone());
+                            while let Some(n) = cur {
+                                if n.tag_name().as_deref() == Some("a") {
+                                    if let Some(href) = n.attr("href") {
+                                        if !href.is_empty() && !href.starts_with('#') {
+                                            let resolved = if let Some(base) = &self.base_url {
+                                                crate::browser::render::resolve_url(base, &href)
+                                            } else { href.clone() };
+                                            let target_kind = match n.attr("target").as_deref() {
+                                                Some("_blank") => crate::embed::event::NavigationTarget::NewTab,
+                                                Some(t) if !t.is_empty() => crate::embed::event::NavigationTarget::Named(t.to_string()),
+                                                _ => crate::embed::event::NavigationTarget::Self_,
+                                            };
+                                            response.navigation = Some(crate::embed::event::NavigationRequest {
+                                                url: resolved,
+                                                method: crate::embed::event::NavigationMethod::Get,
+                                                body: None,
+                                                target: target_kind,
+                                            });
+                                        }
+                                    }
+                                    break;
+                                }
+                                cur = n.parent.borrow().upgrade();
+                            }
+                        }
+                    }
+                    response.dirty = true;
+                    self.dirty = true;
+                }
             }
             InputEvent::MouseLeave => {
                 // Clear :hover state pri opusteni viewport.
