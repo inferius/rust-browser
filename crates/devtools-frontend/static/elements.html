@@ -81,7 +81,7 @@
                         block.innerHTML = '<div style="color:#aecbfa">' + escapeHtml(sel) + ' {</div>';
                         for (const p of (rm.rule.style.properties || [])) {
                             const line = document.createElement('div');
-                            line.style.paddingLeft = '12px';
+                            line.setAttribute('style', 'padding-left:12px');
                             line.innerHTML = '<span style="color:#9aa0a6">' + escapeHtml(p.name) + '</span>: ' + escapeHtml(p.value) + ';';
                             block.appendChild(line);
                         }

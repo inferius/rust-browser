@@ -25,6 +25,10 @@
          (innerHTML pri build_devtools_html). Tab click jen flippe display
          mezi panel divs - zadny innerHTML swap, zadne re-eval scripts. -->
     <script>
+        // Tab swap pres setAttribute (ne element.style.X = ...). Nas interpreter
+        // vraci .style fresh object kazde volani - direct prop set nepersist.
+        // Pres setAttribute('style', 'display:none') modify underlying attr ->
+        // cascade pickne pri pristim layoutu.
         (function () {
             var panels = ['elements','console','sources','network','performance'];
             for (var i = 0; i < panels.length; i++) {
@@ -35,10 +39,12 @@
                         for (var j = 0; j < panels.length; j++) {
                             var p = document.getElementById('panel-' + panels[j]);
                             var t = document.getElementById('tab-' + panels[j]);
-                            if (p) p.style.display = (panels[j] === name) ? '' : 'none';
+                            if (p) {
+                                if (panels[j] === name) p.setAttribute('style', '');
+                                else p.setAttribute('style', 'display:none');
+                            }
                             if (t) {
-                                if (panels[j] === name) t.className = 'tab active';
-                                else t.className = 'tab';
+                                t.setAttribute('class', panels[j] === name ? 'tab active' : 'tab');
                             }
                         }
                     });
