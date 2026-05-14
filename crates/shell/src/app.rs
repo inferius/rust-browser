@@ -265,12 +265,35 @@ impl ShellApp {
         out
     }
 
-    /// Pristup k aktivnimu WebView (devtools pokud visible, jinak page).
-    /// Input events route do nej pres handle_input. Closure forma kvuli
-    /// split borrow checker (self.window access po dispatch_input).
+    /// True kdyz devtools je viditelne A mouse_y je v devtools area (bottom).
+    /// Pri devtools_visible=false vraci false vzdy (page-only).
+    fn point_in_devtools(&self, y: f32) -> bool {
+        if !self.devtools_visible { return false; }
+        let r = match &self.renderer { Some(r) => r, None => return false };
+        let sf = r.scale_factor_value().max(0.01);
+        let (_sw, sh) = r.surface_size();
+        let lh_full = (sh as f32 / sf).max(1.0);
+        let split = self.devtools_split_ratio.clamp(0.05, 0.95);
+        let page_h = lh_full * (1.0 - split);
+        y >= page_h
+    }
+
+    /// Y offset pro mouse_y do devtools WebView local coords (subtract page_h).
+    fn devtools_y_offset(&self) -> f32 {
+        let r = match &self.renderer { Some(r) => r, None => return 0.0 };
+        let sf = r.scale_factor_value().max(0.01);
+        let (_sw, sh) = r.surface_size();
+        let lh_full = (sh as f32 / sf).max(1.0);
+        let split = self.devtools_split_ratio.clamp(0.05, 0.95);
+        lh_full * (1.0 - split)
+    }
+
+    /// Pristup k aktivnimu WebView (D4c: dle mouse_y position pokud
+    /// devtools_visible, jinak page). Pro keyboard fallback je devtools
+    /// kdyz visible (mouse-area-independent decision).
     fn with_active_mut<R, F>(&mut self, f: F) -> Option<R>
     where F: FnOnce(&mut WebView) -> R {
-        if self.devtools_visible {
+        if self.point_in_devtools(self.mouse_y) {
             self.devtools.as_mut().map(f)
         } else {
             self.webview.as_mut().map(f)
@@ -279,16 +302,36 @@ impl ShellApp {
 
     fn with_active<R, F>(&self, f: F) -> Option<R>
     where F: FnOnce(&WebView) -> R {
-        if self.devtools_visible {
+        if self.point_in_devtools(self.mouse_y) {
             self.devtools.as_ref().map(f)
         } else {
             self.webview.as_ref().map(f)
         }
     }
 
-    /// Konvenience: dispatch InputEvent na aktivni WebView, vrati response.
+    /// Konvenience: dispatch InputEvent na aktivni WebView dle y position.
+    /// Mouse events maji x/y - dle y rozhoduje. Pred dispatch event upravi
+    /// y na local-to-pane (subtract page_h pokud devtools).
     fn dispatch_input(&mut self, event: InputEvent) -> rwe_engine::embed::EventResponse {
-        self.with_active_mut(|wv| wv.handle_input(event)).unwrap_or_default()
+        let in_dev = self.point_in_devtools(self.mouse_y);
+        let y_off = if in_dev { self.devtools_y_offset() } else { 0.0 };
+        // Adjust y koord v event aby webview videl coordy ve sve local space.
+        let adjusted = match event {
+            InputEvent::MouseMove { x, y, modifiers } =>
+                InputEvent::MouseMove { x, y: y - y_off, modifiers },
+            InputEvent::MouseDown { x, y, button, modifiers } =>
+                InputEvent::MouseDown { x, y: y - y_off, button, modifiers },
+            InputEvent::MouseUp { x, y, button, modifiers } =>
+                InputEvent::MouseUp { x, y: y - y_off, button, modifiers },
+            InputEvent::Scroll { dx, dy, x, y, modifiers } =>
+                InputEvent::Scroll { dx, dy, x, y: y - y_off, modifiers },
+            other => other,
+        };
+        if in_dev {
+            self.devtools.as_mut().map(|wv| wv.handle_input(adjusted)).unwrap_or_default()
+        } else {
+            self.webview.as_mut().map(|wv| wv.handle_input(adjusted)).unwrap_or_default()
+        }
     }
 
     /// F12 toggle: pri prvnim volani vytvori devtools WebView + load
