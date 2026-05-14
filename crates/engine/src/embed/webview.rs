@@ -419,6 +419,16 @@ impl WebView {
                     let target_node = self.last_layout_root.as_ref()
                         .and_then(|root| root.hit_test(content_x, content_y))
                         .and_then(|bx| bx.node.clone());
+                    if let Some(target) = target_node.as_ref() {
+                        // Focus: <input>/<textarea>/<button>/<a> = focusable.
+                        let focusable = matches!(target.tag_name().as_deref(),
+                            Some("input") | Some("textarea") | Some("button")
+                            | Some("a") | Some("select"));
+                        if focusable {
+                            crate::browser::cascade::set_focused_node(Some(
+                                std::rc::Rc::as_ptr(target) as usize));
+                        }
+                    }
                     if let (Some(target), Some(interp)) = (target_node, self.interpreter.as_mut()) {
                         let mut event = crate::interpreter::JsObject::new();
                         event.set("type".into(), crate::interpreter::JsValue::Str("click".into()));
@@ -438,8 +448,59 @@ impl WebView {
                 // Phase 99: mouseup event + click-vs-drag distinguish.
             }
             InputEvent::MouseLeave => {}
-            InputEvent::KeyDown { .. } | InputEvent::KeyUp { .. } | InputEvent::TextInput { .. } => {
-                // Phase 99: keyboard event dispatch + focused element input.
+            InputEvent::KeyDown { ref key, .. } => {
+                if let Some(target) = self.focused_dom_node() {
+                    if let Some(interp) = self.interpreter.as_mut() {
+                        let mut event = crate::interpreter::JsObject::new();
+                        event.set("type".into(), crate::interpreter::JsValue::Str("keydown".into()));
+                        event.set("key".into(), crate::interpreter::JsValue::Str(key.clone()));
+                        event.set("target".into(), crate::interpreter::JsValue::DomNode(
+                            std::rc::Rc::clone(&target)));
+                        let event_val = crate::interpreter::JsValue::Object(
+                            std::rc::Rc::new(std::cell::RefCell::new(event)));
+                        let _ = interp.dispatch_event(&target, "keydown", event_val);
+                        response.dirty = true;
+                        self.dirty = true;
+                    }
+                }
+            }
+            InputEvent::KeyUp { ref key, .. } => {
+                if let Some(target) = self.focused_dom_node() {
+                    if let Some(interp) = self.interpreter.as_mut() {
+                        let mut event = crate::interpreter::JsObject::new();
+                        event.set("type".into(), crate::interpreter::JsValue::Str("keyup".into()));
+                        event.set("key".into(), crate::interpreter::JsValue::Str(key.clone()));
+                        event.set("target".into(), crate::interpreter::JsValue::DomNode(
+                            std::rc::Rc::clone(&target)));
+                        let event_val = crate::interpreter::JsValue::Object(
+                            std::rc::Rc::new(std::cell::RefCell::new(event)));
+                        let _ = interp.dispatch_event(&target, "keyup", event_val);
+                    }
+                }
+            }
+            InputEvent::TextInput { ref text } => {
+                // Pri focused <input>/<textarea> append text do value attr +
+                // dispatch "input" event.
+                if let Some(target) = self.focused_dom_node() {
+                    let is_input = matches!(target.tag_name().as_deref(),
+                        Some("input") | Some("textarea"));
+                    if is_input {
+                        let cur = target.attr("value").unwrap_or_default();
+                        let new_value = format!("{cur}{text}");
+                        target.set_attr("value", &new_value);
+                        if let Some(interp) = self.interpreter.as_mut() {
+                            let mut event = crate::interpreter::JsObject::new();
+                            event.set("type".into(), crate::interpreter::JsValue::Str("input".into()));
+                            event.set("target".into(), crate::interpreter::JsValue::DomNode(
+                                std::rc::Rc::clone(&target)));
+                            let event_val = crate::interpreter::JsValue::Object(
+                                std::rc::Rc::new(std::cell::RefCell::new(event)));
+                            let _ = interp.dispatch_event(&target, "input", event_val);
+                        }
+                        response.dirty = true;
+                        self.dirty = true;
+                    }
+                }
             }
             InputEvent::FocusChanged { .. } => {}
             InputEvent::Resize { width, height, scale_factor } => {
@@ -960,6 +1021,15 @@ impl WebView {
 
     /// Engine reference (pro custom rendering hostujici aplikace).
     pub fn engine(&self) -> &Arc<Engine> { &self.engine }
+
+    /// Aktualne focused DOM node (z cascade thread_local) - pro keyboard
+    /// event dispatch. Some pri focused <input>/<textarea>/<a>/<button>.
+    fn focused_dom_node(&self) -> Option<std::rc::Rc<crate::browser::dom::Node>> {
+        let id = crate::browser::cascade::get_focused_node()?;
+        let interp = self.interpreter.as_ref()?;
+        let doc_root = std::rc::Rc::clone(&interp.document.borrow().root);
+        crate::browser::render::find_node_by_ptr(&doc_root, id)
+    }
 }
 
 #[cfg(test)]

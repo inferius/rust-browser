@@ -163,6 +163,56 @@ impl ApplicationHandler for ShellApp {
                     if let Some(w) = &self.window { w.request_redraw(); }
                 }
             }
+            WindowEvent::KeyboardInput { event: key_event, .. } => {
+                use winit::keyboard::{Key, NamedKey};
+                let key_str: String = match &key_event.logical_key {
+                    Key::Named(NamedKey::Enter) => "Enter".into(),
+                    Key::Named(NamedKey::Escape) => "Escape".into(),
+                    Key::Named(NamedKey::Backspace) => "Backspace".into(),
+                    Key::Named(NamedKey::Tab) => "Tab".into(),
+                    Key::Named(NamedKey::ArrowLeft) => "ArrowLeft".into(),
+                    Key::Named(NamedKey::ArrowRight) => "ArrowRight".into(),
+                    Key::Named(NamedKey::ArrowUp) => "ArrowUp".into(),
+                    Key::Named(NamedKey::ArrowDown) => "ArrowDown".into(),
+                    Key::Named(NamedKey::Space) => " ".into(),
+                    Key::Character(s) => s.to_string(),
+                    _ => return,
+                };
+                let webview = match &mut self.webview { Some(w) => w, None => return };
+                let event = if matches!(key_event.state, ElementState::Pressed) {
+                    let resp = webview.handle_input(InputEvent::KeyDown {
+                        key: key_str.clone(),
+                        modifiers: KeyModifiers::default(),
+                    });
+                    if resp.dirty {
+                        if let Some(w) = &self.window { w.request_redraw(); }
+                    }
+                    // Character keys taky emit TextInput.
+                    if let Key::Character(s) = &key_event.logical_key {
+                        let resp = webview.handle_input(InputEvent::TextInput {
+                            text: s.to_string(),
+                        });
+                        if resp.dirty {
+                            if let Some(w) = &self.window { w.request_redraw(); }
+                        }
+                    }
+                    InputEvent::KeyDown { key: key_str, modifiers: KeyModifiers::default() }
+                } else {
+                    InputEvent::KeyUp { key: key_str, modifiers: KeyModifiers::default() }
+                };
+                let _ = event; // dispatched outside if pressed
+                if matches!(key_event.state, ElementState::Released) {
+                    let key_str_release = match &key_event.logical_key {
+                        Key::Character(s) => s.to_string(),
+                        Key::Named(NamedKey::Enter) => "Enter".into(),
+                        _ => return,
+                    };
+                    webview.handle_input(InputEvent::KeyUp {
+                        key: key_str_release,
+                        modifiers: KeyModifiers::default(),
+                    });
+                }
+            }
             WindowEvent::MouseInput { state, button, .. } => {
                 let btn = match button {
                     WinitMouseButton::Left => MouseButton::Left,
