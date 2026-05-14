@@ -49,16 +49,7 @@ pub fn resolve_addr_input(input: &str) -> String {
     format!("https://duckduckgo.com/?q={}", q)
 }
 
-#[derive(Debug, Clone)]
-pub struct BookmarkPickerState {
-    pub url: String,
-    pub title_buffer: String,
-    pub folder_buffer: String,
-    pub focus: BookmarkPickerFocus,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum BookmarkPickerFocus { Title, Folder }
+// BookmarkPickerState / BookmarkPickerFocus smazany (Session N+22) - shell concern.
 
 /// Reading mode CSS - injected pri Ctrl+Alt+R toggle. Schova
 /// nav/aside/footer, centrovani main do max 720px, beige bg, vetsi serif.
@@ -943,8 +934,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         /// Drain per frame; on_complete callbacks beha v main thread (mohou
         /// modifikovat Interpreter pres Rc<RefCell>).
         async_jobs: crate::browser::async_jobs::AsyncJobsRegistry,
-        /// Bookmark picker (Ctrl+D popup): edit title + folder.
-        bookmark_picker: Option<BookmarkPickerState>,
+        // bookmark_picker field smazany (Session N+22) - shell concern.
         cached_pseudo_map: Option<super::cascade::PseudoStyleMap>,
         /// Cesta k aktualne nactenemu HTML souboru (pro reload + relativni paths).
         current_path: Option<std::path::PathBuf>,
@@ -1000,12 +990,11 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         zoom: f32,
         /// Trackovany state Ctrl/Shift/Alt pro zoom shortcut detection.
         modifiers: winit::keyboard::ModifiersState,
-        /// Find-on-page (Ctrl+F): otevreny overlay + query + matches.
-        find_open: bool,
+        // find_open/find_query/find_match_idx + addr_open/addr_input smazany
+        // (Session N+22) - shell concerns. Find bar + addr bar v Phase 99
+        // patri do shell crate.
         find_query: crate::devtools::model::text_buffer::SimpleStringBuffer,
         find_match_idx: usize,
-        /// Address bar (Ctrl+L): toggleable input overlay. Enter navigate.
-        addr_open: bool,
         addr_input: crate::devtools::model::text_buffer::SimpleStringBuffer,
         /// Smooth scroll target. Render tick interpoluje scroll_y -> target.
         scroll_target_y: f32,
@@ -1026,18 +1015,13 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         /// Hover state pro tab tooltip - (tab_idx, x, y, hover_start).
         /// Tooltip se zobrazi az kdyz hover trva > 500ms na stejnem tabu.
         shell_tab_hover_pending: Option<(usize, f32, f32, std::time::Instant)>,
-        /// F1 toggle: keyboard shortcuts cheat sheet overlay.
-        shortcuts_overlay_open: bool,
-        /// Reading mode (Ctrl+Alt+R): inject zen-style CSS - hide nav/sidebar/footer,
-        /// center main, beige bg, vetsi serif text.
-        reading_mode_on: bool,
-        /// Bookmarks bar visibility (Ctrl+Shift+B toggle). Default true.
-        bookmarks_bar_visible: bool,
+        // shortcuts_overlay_open / reading_mode_on / bookmarks_bar_visible
+        // fields smazany (Session N+22) - shell concerns mimo engine.
         // shell_mode field smazan (Session N+22). Engine vzdy renderuje naked
         // viewport; chrome bar zustal v shell crate (Phase 99 - presun chrome
         // paint do shell::ShellApp).
-        /// Chrome bar vyska (tab bar + nav bar).
-        shell_chrome_h: f32,
+        // shell_chrome_h field smazany (Session N+22) - vzdy 0.0 v engine.
+        // Use sites volaji shell_chrome_h_active() ktery vrati 0.0.
         /// Multi-tab manager (shell mode). Active tab drives App.html/css/...
         /// Switch tab = swap active state via tabs.switch_to + reload.
         tabs: tabs::TabManager,
@@ -1382,9 +1366,9 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         let mx = (position.x as f32) / (self.zoom * scale_local);
                         let my = (position.y as f32) / (self.zoom * scale_local);
                         let mut active_idx: Option<usize> = None;
-                        if my < self.shell_chrome_h {
+                        if my < 0.0_f32 {
                             let viewport_w = self.viewport_w_logical();
-                            let hit = hit_chrome(viewport_w, self.shell_chrome_h, &self.tabs, mx, my);
+                            let hit = hit_chrome(viewport_w, 0.0_f32, &self.tabs, mx, my);
                             if let ChromeHit::TabClick(idx) = hit {
                                 active_idx = Some(idx);
                             }
@@ -1456,11 +1440,11 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     // Klik mimo chrome bar pri otevrenem addr_open = blur
                     // (zavri editor). Klik UVNITR chrome bar prohlasuje
                     // ChromeHit::UrlBar nize a addr_open zustane.
-                    if self.addr_open && false {
+                    if false && false {
                         let chrome_h = self.shell_chrome_h_active();
                         let my_screen = self.mouse_y - self.scroll_y;
                         if my_screen >= chrome_h {
-                            self.addr_open = false;
+            // (invalid bool assignment removed Session N+22)
                             self.addr_input.clear();
                             self.render();
                             // Pokracujeme dal v hit-testu (klik mohl mirit
@@ -1491,7 +1475,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     let panel_h = self.panel_h_logical();
 
                     // Address bar autocomplete suggestion klik.
-                    if self.addr_open && !self.addr_input.text.is_empty() {
+                    if false && !self.addr_input.text.is_empty() {
                         let viewport_w = self.viewport_w_logical();
                         let bar_w = (viewport_w - 80.0).min(800.0);
                         let bar_x = (viewport_w - bar_w) * 0.5;
@@ -1521,7 +1505,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                             }
                             let idx = ((my_screen - popup_y) / item_h) as usize;
                             if let Some(url) = suggest.get(idx).cloned() {
-                                self.addr_open = false;
+            // (invalid bool assignment removed Session N+22)
                                 self.addr_input.clear();
                                 self.navigate_url(&url);
                                 return;
@@ -1550,10 +1534,10 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         let mx = self.mouse_x;
                         let my_screen = self.mouse_y - self.scroll_y;
                         // Reading mode badge click - toggle.
-                        if self.reading_mode_on && my_screen < 28.0 {
+                        if false && my_screen < 28.0 {
                             let bx = viewport_w - 200.0;
                             if mx >= bx && mx <= bx + 100.0 && my_screen >= 4.0 && my_screen <= 24.0 {
-                                self.reading_mode_on = false;
+            // (invalid assignment removed Session N+22)
                                 self.cached_stylesheets = None;
                                 self.cached_style_map = None;
                                 self.cached_pseudo_map = None;
@@ -1562,8 +1546,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                 return;
                             }
                         }
-                        if my_screen < self.shell_chrome_h {
-                            let hit = hit_chrome(viewport_w, self.shell_chrome_h, &self.tabs, mx, my_screen);
+                        if my_screen < 0.0_f32 {
+                            let hit = hit_chrome(viewport_w, 0.0_f32, &self.tabs, mx, my_screen);
                             match hit {
                                 ChromeHit::TabClick(idx) => {
                                     // Initiate drag tracking + switch.
@@ -1647,7 +1631,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                 }
                                 ChromeHit::UrlBar => {
                                     crate::vlog!("[addr] open via UrlBar click");
-                                    self.addr_open = true;
+            // (invalid bool assignment removed Session N+22)
                                     self.addr_input = crate::devtools::model::text_buffer::SimpleStringBuffer::with_text_selected(self.base_url.clone().unwrap_or_default());
                                     self.render();
                                     return;
@@ -2312,8 +2296,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         let viewport_w = self.viewport_w_logical();
                         let mx = self.mouse_x;
                         let my_screen = self.mouse_y - self.scroll_y;
-                        if my_screen < self.shell_chrome_h {
-                            let hit = hit_chrome(viewport_w, self.shell_chrome_h, &self.tabs, mx, my_screen);
+                        if my_screen < 0.0_f32 {
+                            let hit = hit_chrome(viewport_w, 0.0_f32, &self.tabs, mx, my_screen);
                             if let ChromeHit::TabClick(idx) | ChromeHit::TabClose(idx) | ChromeHit::TabContextMenu(idx) = hit {
                                 let pinned = self.tabs.tabs.get(idx).map(|t| t.pinned).unwrap_or(false);
                                 if !pinned {
@@ -2335,10 +2319,10 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     let viewport_h = self.viewport_h_logical();
                     let panel_h = self.panel_h_logical();
                     // Shell chrome RMB: tab/bookmark context menu.
-                    if false && raw_y < self.shell_chrome_h {
+                    if false && raw_y < 0.0_f32 {
                         let viewport_w = self.viewport_w_logical();
                         let mx = self.mouse_x;
-                        let hit = hit_chrome(viewport_w, self.shell_chrome_h, &self.tabs, mx, raw_y);
+                        let hit = hit_chrome(viewport_w, 0.0_f32, &self.tabs, mx, raw_y);
                         use crate::devtools::context_menu::{ContextMenuState, MenuItem, MenuAction};
                         match hit {
                             ChromeHit::TabClick(idx) | ChromeHit::TabClose(idx) | ChromeHit::TabContextMenu(idx) => {
@@ -2585,56 +2569,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                             self.render();
                             return;
                         }
-                    }
-                    // Bookmark picker keyboard - typovani title/folder, Tab swap focus.
-                    if self.bookmark_picker.is_some() {
-                        match &key_event.logical_key {
-                            Key::Named(NamedKey::Backspace) => {
-                                if let Some(p) = self.bookmark_picker.as_mut() {
-                                    match p.focus {
-                                        BookmarkPickerFocus::Title => { p.title_buffer.pop(); }
-                                        BookmarkPickerFocus::Folder => { p.folder_buffer.pop(); }
-                                    }
-                                }
-                            }
-                            Key::Named(NamedKey::Tab) => {
-                                if let Some(p) = self.bookmark_picker.as_mut() {
-                                    p.focus = match p.focus {
-                                        BookmarkPickerFocus::Title => BookmarkPickerFocus::Folder,
-                                        BookmarkPickerFocus::Folder => BookmarkPickerFocus::Title,
-                                    };
-                                }
-                            }
-                            Key::Named(NamedKey::Enter) => {
-                                if let Some(p) = self.bookmark_picker.take() {
-                                    crate::devtools::bookmarks::add_bookmark_in(
-                                        &p.url, &p.title_buffer, &p.folder_buffer);
-                                    println!("[bookmark] added {} to folder {:?}", p.url, p.folder_buffer);
-                                }
-                            }
-                            Key::Named(NamedKey::Escape) => {
-                                self.bookmark_picker = None;
-                            }
-                            Key::Named(NamedKey::Space) => {
-                                if let Some(p) = self.bookmark_picker.as_mut() {
-                                    match p.focus {
-                                        BookmarkPickerFocus::Title => p.title_buffer.push(' '),
-                                        BookmarkPickerFocus::Folder => p.folder_buffer.push(' '),
-                                    }
-                                }
-                            }
-                            Key::Character(s) => {
-                                if let Some(p) = self.bookmark_picker.as_mut() {
-                                    match p.focus {
-                                        BookmarkPickerFocus::Title => p.title_buffer.push_str(s),
-                                        BookmarkPickerFocus::Folder => p.folder_buffer.push_str(s),
-                                    }
-                                }
-                            }
-                            _ => {}
-                        }
-                        self.render();
-                        return;
                     }
                     // Editing inline (klik value v prvek{}) - typovani.
                     if self.devtools.styles.editing_inline.is_some() {
@@ -2960,7 +2894,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     {
                         let focused_id = super::cascade::get_focused_node();
                         if let Some(fid) = focused_id {
-                            if !self.find_open && !self.addr_open
+                            if !false && !false
                                 && !self.devtools.focus.is_text_input()
                                 && !self.modifiers.control_key()
                             {
@@ -2994,7 +2928,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         }
                     }
                     // Address bar typing.
-                    if self.addr_open {
+                    if false {
                         use crate::browser::render::text_input::{dispatch_text_key, TextKeyOutcome};
                         let ctrl = self.modifiers.control_key();
                         let shift = self.modifiers.shift_key();
@@ -3003,7 +2937,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                             TextKeyOutcome::Submit => {
                                 let url = std::mem::take(&mut self.addr_input.text);
                                 self.addr_input.clear();
-                                self.addr_open = false;
+            // (invalid bool assignment removed Session N+22)
                                 if !url.is_empty() {
                                     let resolved = resolve_addr_input(&url);
                                     println!("[address] navigate: {} -> {}", url, resolved);
@@ -3019,7 +2953,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                 return;
                             }
                             TextKeyOutcome::Cancel => {
-                                self.addr_open = false;
+            // (invalid bool assignment removed Session N+22)
                                 self.addr_input.clear();
                                 self.render();
                                 return;
@@ -3032,7 +2966,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         }
                     }
                     // Find-on-page typing: pri otevrenem overlay capture chars.
-                    if self.find_open {
+                    if false {
                         use crate::browser::render::text_input::{dispatch_text_key, TextKeyOutcome};
                         let ctrl = self.modifiers.control_key();
                         let shift = self.modifiers.shift_key();
@@ -3044,7 +2978,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                 return;
                             }
                             TextKeyOutcome::Cancel => {
-                                self.find_open = false;
+            // (invalid bool assignment removed Session N+22)
                                 self.find_query.clear();
                                 self.render();
                                 return;
@@ -3128,7 +3062,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                     self.devtools.elements.search.open = true;
                                     self.devtools.focus = crate::devtools::focus::FocusTarget::DevToolsElementsSearch;
                                 } else {
-                                    self.find_open = true;
+            // (invalid bool assignment removed Session N+22)
                                 }
                                 self.render();
                                 return;
@@ -3156,25 +3090,12 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                             if s.as_str() == "l" || s.as_str() == "L" {
                                 // Ctrl+L: toggle address bar.
                                 crate::vlog!("[addr] open via Ctrl+L");
-                                self.addr_open = true;
+            // (invalid bool assignment removed Session N+22)
                                 self.addr_input = crate::devtools::model::text_buffer::SimpleStringBuffer::with_text_selected(self.base_url.clone().unwrap_or_default());
                                 self.render();
                                 return;
                             }
-                            if s.as_str() == "d" || s.as_str() == "D" {
-                                // Ctrl+D: open bookmark picker popup s folder selection.
-                                if let Some(url) = self.base_url.clone() {
-                                    let title = self.tabs.active_tab().title.clone();
-                                    self.bookmark_picker = Some(BookmarkPickerState {
-                                        url,
-                                        title_buffer: title,
-                                        folder_buffer: String::new(),
-                                        focus: BookmarkPickerFocus::Title,
-                                    });
-                                    self.render();
-                                }
-                                return;
-                            }
+                            // Ctrl+D (bookmark picker) smazany Session N+22.
                             if s.as_str() == "h" || s.as_str() == "H" {
                                 // Ctrl+H: open history page.
                                 self.navigate_url("about:history");
@@ -3192,7 +3113,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                             }
                             if s.as_str() == "B" && self.modifiers.shift_key() {
                                 // Ctrl+Shift+B: toggle bookmarks bar visibility.
-                                self.bookmarks_bar_visible = !self.bookmarks_bar_visible;
+            // (invalid assignment removed Session N+22)
                                 self.render();
                                 return;
                             }
@@ -3203,7 +3124,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                             }
                             // Ctrl+Alt+R = toggle reading mode (zen view).
                             if (s.as_str() == "r" || s.as_str() == "R") && self.modifiers.alt_key() {
-                                self.reading_mode_on = !self.reading_mode_on;
+            // (invalid assignment removed Session N+22)
                                 self.cached_stylesheets = None;
                                 self.cached_style_map = None;
                                 self.cached_pseudo_map = None;
@@ -3355,7 +3276,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     }
                     match key_event.logical_key {
                         Key::Named(NamedKey::F1) => {
-                            self.shortcuts_overlay_open = !self.shortcuts_overlay_open;
+            // (invalid assignment removed Session N+22)
                             if let Some(w) = &self.window { w.request_redraw(); }
                         }
                         Key::Named(NamedKey::F12) => {
@@ -3469,12 +3390,9 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         fn handle_escape_close_popups(&mut self) -> bool {
             // Close prioritou: bookmark picker > shortcuts overlay > color picker > settings >
             // class manager > tab overflow > addr bar > find > selection.
-            if self.bookmark_picker.is_some() {
-                self.bookmark_picker = None;
-                return true;
-            }
-            if self.shortcuts_overlay_open {
-                self.shortcuts_overlay_open = false;
+            // bookmark_picker close smazany (Session N+22).
+            if false {
+            // (invalid assignment removed Session N+22)
                 return true;
             }
             if self.devtools.color_picker.is_some() {
@@ -3493,13 +3411,13 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 self.devtools.tab_overflow_open = false;
                 return true;
             }
-            if self.addr_open {
-                self.addr_open = false;
+            if false {
+            // (invalid bool assignment removed Session N+22)
                 self.addr_input.clear();
                 return true;
             }
-            if self.find_open {
-                self.find_open = false;
+            if false {
+            // (invalid bool assignment removed Session N+22)
                 self.find_query.clear();
                 return true;
             }
@@ -3575,10 +3493,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             self.devtools.styles.estimate_total_h()
         }
         fn shell_chrome_h_active(&self) -> f32 {
-            if !false { return 0.0; }
-            let bm_count = crate::devtools::bookmarks::bookmarks_count();
-            // Base: tab strip 28 + nav 36 = 64. Bookmarks bar 24 navic (kdyz visible + nejaky bm).
-            64.0 + if bm_count > 0 && self.bookmarks_bar_visible { 24.0 } else { 0.0 }
+            // Engine renderuje naked viewport - bez chrome bar (Session N+22).
+            0.0
         }
         /// Page commands shift dolu o chrome height (pri shell_mode).
         /// MUSI handlovat VSECHNY varianty DisplayCommand s y - jinak compose
@@ -5508,8 +5424,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 h.finish()
             };
             // Reading mode injected CSS pridano k page CSS pokud zaple.
-            let reading_css = if self.reading_mode_on { READING_MODE_CSS } else { "" };
-            let combined_hash = if self.reading_mode_on {
+            let reading_css = if false { READING_MODE_CSS } else { "" };
+            let combined_hash = if false {
                 use std::hash::{Hash, Hasher};
                 let mut h = ahash::AHasher::default();
                 self.css.hash(&mut h);
@@ -5517,7 +5433,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 h.finish()
             } else { css_hash };
             if self.cached_stylesheets.is_none() || self.cached_stylesheets_hash != combined_hash {
-                let combined = if self.reading_mode_on {
+                let combined = if false {
                     format!("{}\n{}", self.css, reading_css)
                 } else { self.css.clone() };
                 let parsed = vec![css_parser::parse_stylesheet(&combined)];
@@ -6327,7 +6243,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // nezacinal pod chrome bar.
             if false {
                 let bm_count = crate::devtools::bookmarks::bookmarks_count();
-                let dy = 64.0 + if bm_count > 0 && self.bookmarks_bar_visible { 24.0 } else { 0.0 };
+                let dy = 64.0 + if bm_count > 0 && false { 24.0 } else { 0.0 };
                 for cmd in display_list.iter_mut() {
                     use DisplayCommand::*;
                     match cmd {
@@ -6352,7 +6268,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // jiz posunul page (y=74) -> uzivatel vidi highlight jinde.
             let chrome_dy_for_highlight = if false {
                 let bm_count = crate::devtools::bookmarks::bookmarks_count();
-                64.0 + if bm_count > 0 && self.bookmarks_bar_visible { 24.0 } else { 0.0 }
+                64.0 + if bm_count > 0 && false { 24.0 } else { 0.0 }
             } else { 0.0 };
             let chrome_dx_for_highlight = -self.scroll_x;
             crate::browser::devtools_panel::paint_element_highlight_offset(
@@ -6423,7 +6339,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 let max_ms = self.frame_times_ms.iter().cloned().fold(0.0_f32, f32::max);
                 let (rect_w, rect_h) = (130.0_f32, 36.0_f32);
                 let win_w_logical = (r.config.width as f32) / (self.zoom * r.scale_factor);
-                let chrome_h = self.shell_chrome_h;
+                let chrome_h = 0.0_f32;
                 let fps_x = win_w_logical - rect_w - 8.0;
                 let fps_y = chrome_h + 8.0;
                 let color = if fps >= 50.0 { [80, 220, 120, 255] }
@@ -6474,7 +6390,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // V shell modu se edit dela primo v chrome URL baru, popup zustava
             // jen pro autocomplete - ale vykresluje se v non-shell modu nebo
             // pri non-empty input.
-            if self.addr_open && !false {
+            if false && !false {
                 let vw = (r.config.width as f32) / (self.zoom * r.scale_factor);
                 let bar_w: f32 = (vw - 80.0).min(800.0);
                 let bar_h: f32 = 40.0;
@@ -6558,7 +6474,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 }
             }
             // Find on page: highlight matches + overlay s query a counter.
-            if self.find_open {
+            if false {
                 let matches = find_matches_in(&layout_root, &self.find_query.text);
                 let cur_idx = self.find_match_idx;
                 for (i, &(my, mx, mw)) in matches.iter().enumerate() {
@@ -6629,7 +6545,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             let panel_h_logical = if self.devtools.panel_open { self.devtools.panel_h.min(viewport_h_logical * 0.7) } else { 0.0 };
             let chrome_top = if false {
                 let bm_count = crate::devtools::bookmarks::bookmarks_count();
-                64.0 + if bm_count > 0 && self.bookmarks_bar_visible { 24.0 } else { 0.0 }
+                64.0 + if bm_count > 0 && false { 24.0 } else { 0.0 }
             } else { 0.0 };
             let viewport_w = viewport_w_logical;
             let viewport_h = viewport_h_logical - panel_h_logical - chrome_top;
@@ -6787,7 +6703,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // Shell chrome top - page render se na nej zarizne scissorem.
             let chrome_top_logical = if false {
                 let bm_count = crate::devtools::bookmarks::bookmarks_count();
-                64.0 + if bm_count > 0 && self.bookmarks_bar_visible { 24.0 } else { 0.0 }
+                64.0 + if bm_count > 0 && false { 24.0 } else { 0.0 }
             } else { 0.0 };
             let _t_gpu = std::time::Instant::now();
             // Phase 2 dual-render cache (page_skip / shell_skip) disabled -
@@ -6890,7 +6806,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         animations_scrubber_drag: false,
         painted_text_runs: Vec::new(),
         async_jobs: crate::browser::async_jobs::AsyncJobsRegistry::new(),
-        bookmark_picker: None,
         cached_pseudo_map: None,
         display_list_buffer: Vec::with_capacity(2048),
         cached_layout_root: None,
@@ -6939,10 +6854,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         debug_runner: None,
         zoom: 1.0,
         modifiers: winit::keyboard::ModifiersState::empty(),
-        find_open: false,
         find_query: crate::devtools::model::text_buffer::SimpleStringBuffer::new(),
         find_match_idx: 0,
-        addr_open: false,
         addr_input: crate::devtools::model::text_buffer::SimpleStringBuffer::new(),
         scroll_target_y: 0.0,
         scroll_target_x: 0.0,
@@ -6953,10 +6866,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         status_hover_url: None,
         shell_tab_tooltip: None,
         shell_tab_hover_pending: None,
-        shortcuts_overlay_open: false,
-        reading_mode_on: false,
-        bookmarks_bar_visible: true,
-        shell_chrome_h: 0.0,  // bez chrome bar (Session N+22)
         tabs: tabs::TabManager::new(initial_tab),
         // WebView mirror inicializovan v `resumed` (znama viewport size z winit
         // + chrome offset zname). Pred resumed App nema window -> None.
