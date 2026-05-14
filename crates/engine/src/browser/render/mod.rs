@@ -883,9 +883,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         mouse_y: f32,
         // scroll_x/y fields smazany (polarity invert) - read pres
         // self.scroll_y() method delegate webview.
-        start_time: std::time::Instant,
-        /// Predchozi cascaded styles - pro detekci transitions.
-        prev_style_map: Option<Rc<super::cascade::StyleMap>>,
+        // start_time + prev_style_map fields smazany Phase 99: nikdy ctene
+        // (jen self-write). start_time slouzil jako source pro animation_origin.
         /// Track running animations per (node_id, anim_name) - pro dispatch animationstart/end
         active_animations: std::collections::HashSet<(usize, String)>,
         /// Iteration counter per animation pro animationiteration event.
@@ -3051,9 +3050,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             self.set_scroll_target_y(0.0);
             self.set_scroll_x(0.0);
             self.set_scroll_target_x(0.0);
-            self.start_time = std::time::Instant::now();
-            self.animation_origin = self.start_time;
-            self.prev_style_map = None;
+            self.animation_origin = std::time::Instant::now();
             self.active_animations.clear();
             self.animation_iterations.clear();
             self.active_transitions.clear();
@@ -3759,9 +3756,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 self.set_scroll_target_y(0.0);
                 self.set_scroll_x(0.0);
                 self.set_scroll_target_x(0.0);
-                self.start_time = std::time::Instant::now();
-                self.animation_origin = self.start_time;
-                self.prev_style_map = None;
+                self.animation_origin = std::time::Instant::now();
                 self.active_animations.clear();
                 self.animation_iterations.clear();
                 self.active_transitions.clear();
@@ -4049,8 +4044,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         interpreter: None,
         mouse_x: 0.0,
         mouse_y: 0.0,
-        start_time: std::time::Instant::now(),
-        prev_style_map: None,
         active_transitions: Vec::new(),
         active_animations: std::collections::HashSet::new(),
         animation_iterations: std::collections::HashMap::new(),
