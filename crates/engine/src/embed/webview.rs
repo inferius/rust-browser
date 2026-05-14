@@ -443,6 +443,26 @@ impl WebView {
                         self.dirty = true;
                         response.dirty = true;
                     }
+                    // Cursor icon dle hovered tag.
+                    let hovered_tag = self.last_layout_root.as_ref()
+                        .and_then(|root| root.hit_test(content_x, content_y))
+                        .and_then(|bx| bx.node.as_ref().map(|n| n.tag_name()))
+                        .flatten();
+                    response.cursor = Some(match hovered_tag.as_deref() {
+                        Some("a") | Some("button") => crate::embed::CursorIcon::Pointer,
+                        Some("input") | Some("textarea") => crate::embed::CursorIcon::Text,
+                        _ => {
+                            // Pres text node -> taky text cursor.
+                            let over_text = self.last_layout_root.as_ref()
+                                .and_then(|root| root.hit_test(content_x, content_y))
+                                .map(|bx| bx.text.is_some()).unwrap_or(false);
+                            if over_text {
+                                crate::embed::CursorIcon::Text
+                            } else {
+                                crate::embed::CursorIcon::Default
+                            }
+                        }
+                    });
                 }
             }
             InputEvent::MouseDown { x, y, button, .. } => {

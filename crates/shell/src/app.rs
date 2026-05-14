@@ -142,11 +142,34 @@ impl ApplicationHandler for ShellApp {
                 self.mouse_x = position.x as f32 / scale;
                 self.mouse_y = position.y as f32 / scale;
                 if let Some(wv) = &mut self.webview {
-                    let _ = wv.handle_input(InputEvent::MouseMove {
+                    let resp = wv.handle_input(InputEvent::MouseMove {
                         x: self.mouse_x,
                         y: self.mouse_y,
                         modifiers: KeyModifiers::default(),
                     });
+                    if let (Some(cursor), Some(window)) = (resp.cursor, &self.window) {
+                        use rwe_engine::embed::CursorIcon as IC;
+                        let winit_cursor = match cursor {
+                            IC::Pointer => winit::window::CursorIcon::Pointer,
+                            IC::Text => winit::window::CursorIcon::Text,
+                            IC::Wait => winit::window::CursorIcon::Wait,
+                            IC::Help => winit::window::CursorIcon::Help,
+                            IC::Crosshair => winit::window::CursorIcon::Crosshair,
+                            IC::Move => winit::window::CursorIcon::Move,
+                            IC::NotAllowed => winit::window::CursorIcon::NotAllowed,
+                            IC::Grab => winit::window::CursorIcon::Grab,
+                            IC::Grabbing => winit::window::CursorIcon::Grabbing,
+                            IC::ResizeEw => winit::window::CursorIcon::EwResize,
+                            IC::ResizeNs => winit::window::CursorIcon::NsResize,
+                            IC::ResizeNesw => winit::window::CursorIcon::NeswResize,
+                            IC::ResizeNwse => winit::window::CursorIcon::NwseResize,
+                            IC::Default => winit::window::CursorIcon::Default,
+                        };
+                        window.set_cursor(winit_cursor);
+                    }
+                    if resp.dirty {
+                        if let Some(w) = &self.window { w.request_redraw(); }
+                    }
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
