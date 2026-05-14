@@ -118,6 +118,10 @@ pub struct WebView {
     /// TextInput insertne na caret pos + advance. Backspace delete pos-1.
     /// Arrow keys posunou. Render_via emit blinkajici Rect kdy focused input.
     pub(crate) input_caret: std::collections::HashMap<usize, usize>,
+    /// Scrollbar drag state - Some(grab_offset_y) pri V thumb drag.
+    pub(crate) v_scrollbar_drag: Option<f32>,
+    /// Scrollbar drag state - Some(grab_offset_x) pri H thumb drag.
+    pub(crate) h_scrollbar_drag: Option<f32>,
     /// Last layout_root vyrobeny v render_via - getter pro hostujici aplikaci
     /// (App emits inspector overlay nad webview RT pres dalsi draw_segments
     /// pass; shell nepouziva).
@@ -163,6 +167,8 @@ impl WebView {
             mouse_y: 0.0,
             mouse_down_at: None,
             input_caret: std::collections::HashMap::new(),
+            v_scrollbar_drag: None,
+            h_scrollbar_drag: None,
             last_layout_root: None,
             async_jobs: crate::browser::async_jobs::AsyncJobsRegistry::new(),
         }
@@ -420,6 +426,40 @@ impl WebView {
                 if (self.mouse_x - x).abs() > 0.5 || (self.mouse_y - y).abs() > 0.5 {
                     self.mouse_x = x;
                     self.mouse_y = y;
+                    // Scrollbar thumb drag - update scroll position pres
+                    // mouse pos vs thumb grab offset.
+                    let viewport_w = self.viewport_w / self.zoom.max(0.01);
+                    let viewport_h = self.viewport_h / self.zoom.max(0.01);
+                    if let (Some(grab_y), Some(layout)) = (self.v_scrollbar_drag, &self.last_layout_root) {
+                        let total_h = layout.rect.height;
+                        if total_h > viewport_h {
+                            let thumb_h = (viewport_h * viewport_h / total_h).max(40.0);
+                            let track_h = viewport_h - thumb_h;
+                            let new_thumb_y = (y - grab_y).max(0.0).min(track_h);
+                            let max_scroll = total_h - viewport_h;
+                            let new_scroll = (new_thumb_y / track_h) * max_scroll;
+                            self.scroll_y = new_scroll;
+                            self.scroll_target_y = new_scroll;
+                            self.dirty = true;
+                            response.dirty = true;
+                            return response;
+                        }
+                    }
+                    if let (Some(grab_x), Some(layout)) = (self.h_scrollbar_drag, &self.last_layout_root) {
+                        let total_w = layout.rect.width;
+                        if total_w > viewport_w {
+                            let thumb_w = (viewport_w * viewport_w / total_w).max(40.0);
+                            let track_w = viewport_w - thumb_w;
+                            let new_thumb_x = (x - grab_x).max(0.0).min(track_w);
+                            let max_scroll_x = total_w - viewport_w;
+                            let new_scroll = (new_thumb_x / track_w) * max_scroll_x;
+                            self.scroll_x = new_scroll;
+                            self.scroll_target_x = new_scroll;
+                            self.dirty = true;
+                            response.dirty = true;
+                            return response;
+                        }
+                    }
                     // Hit-test layout_root pres content coords -> :hover state.
                     let content_x = x + self.scroll_x;
                     let content_y = y + self.scroll_y;
@@ -467,6 +507,37 @@ impl WebView {
             }
             InputEvent::MouseDown { x, y, button, .. } => {
                 if matches!(button, crate::embed::MouseButton::Left) {
+                    // Scrollbar thumb hit-test PRED page hit-test.
+                    let viewport_w = self.viewport_w / self.zoom.max(0.01);
+                    let viewport_h = self.viewport_h / self.zoom.max(0.01);
+                    if let Some(layout) = &self.last_layout_root {
+                        let total_h = layout.rect.height;
+                        let total_w = layout.rect.width;
+                        // Vertical thumb hit.
+                        if total_h > viewport_h && x >= viewport_w - 12.0 && x < viewport_w {
+                            let thumb_h = (viewport_h * viewport_h / total_h).max(40.0);
+                            let max_scroll = (total_h - viewport_h).max(1.0);
+                            let thumb_y = (self.scroll_y / max_scroll) * (viewport_h - thumb_h);
+                            if y >= thumb_y && y < thumb_y + thumb_h {
+                                self.v_scrollbar_drag = Some(y - thumb_y);
+                                response.dirty = true;
+                                self.dirty = true;
+                                return response;
+                            }
+                        }
+                        // Horizontal thumb hit.
+                        if total_w > viewport_w && y >= viewport_h - 12.0 && y < viewport_h {
+                            let thumb_w = (viewport_w * viewport_w / total_w).max(40.0);
+                            let max_scroll_x = (total_w - viewport_w).max(1.0);
+                            let thumb_x = (self.scroll_x / max_scroll_x) * (viewport_w - thumb_w);
+                            if x >= thumb_x && x < thumb_x + thumb_w {
+                                self.h_scrollbar_drag = Some(x - thumb_x);
+                                response.dirty = true;
+                                self.dirty = true;
+                                return response;
+                            }
+                        }
+                    }
                     // Hit-test layout_root pres content coords. Store target +
                     // pos pro MouseUp click-vs-drag distinguish.
                     let content_x = x + self.scroll_x;
@@ -511,6 +582,13 @@ impl WebView {
             }
             InputEvent::MouseUp { x, y, button, .. } => {
                 if matches!(button, crate::embed::MouseButton::Left) {
+                    // End scrollbar drag.
+                    if self.v_scrollbar_drag.is_some() || self.h_scrollbar_drag.is_some() {
+                        self.v_scrollbar_drag = None;
+                        self.h_scrollbar_drag = None;
+                        response.dirty = true;
+                        return response;
+                    }
                     let content_x = x + self.scroll_x;
                     let content_y = y + self.scroll_y;
                     // End selection drag (collapse pri <3px movement).
