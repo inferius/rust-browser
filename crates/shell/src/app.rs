@@ -319,6 +319,14 @@ impl ApplicationHandler for ShellApp {
                         }
                         return;
                     }
+                    // Esc: clear selection (jen pokud ne v focused input).
+                    if matches!(&key_event.logical_key, Key::Named(NamedKey::Escape)) {
+                        if let Some(wv) = &mut self.webview {
+                            wv.clear_selection();
+                            if let Some(w) = &self.window { w.request_redraw(); }
+                        }
+                        return;
+                    }
                 }
                 // Scroll keys: PageDown/Up, ArrowUp/Down, Home, End, Space.
                 if matches!(key_event.state, ElementState::Pressed) {

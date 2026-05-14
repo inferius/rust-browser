@@ -1398,6 +1398,16 @@ impl WebView {
             .unwrap_or(false)
     }
 
+    /// Clear text selection (Esc).
+    pub fn clear_selection(&mut self) {
+        let Some(interp) = &self.interpreter else { return };
+        let doc = interp.document.borrow();
+        if doc.selection.borrow().page_selection.is_some() {
+            doc.selection.borrow_mut().page_selection = None;
+            self.dirty = true;
+        }
+    }
+
     /// Select all - anchor (0, 0), current (huge, huge) -> celá stránka.
     pub fn select_all(&mut self) {
         let Some(interp) = &self.interpreter else { return };
