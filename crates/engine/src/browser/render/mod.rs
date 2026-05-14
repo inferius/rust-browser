@@ -86,8 +86,20 @@ a { color: #2a4d8f !important; }
 mod url;
 pub use url::{fetch_text_url, fetch_image_bytes, resolve_url, cached_fetch_bytes};
 
-mod shell_chrome;
-use shell_chrome::paint_shell_chrome_with_groups;
+// shell_chrome.rs smazany (Session N+22) - chrome paint je shell crate concern.
+// Stub fn aby zustaly dead `if false { paint_shell_chrome_with_groups(...) }` bloky
+// compilable. Smaze se v dalsim commit kdyz zlikvidujem dead bloky.
+#[allow(clippy::too_many_arguments)]
+fn paint_shell_chrome_with_groups(
+    _dl: &mut Vec<super::paint::DisplayCommand>,
+    _w: f32, _h: f32, _url: &str,
+    _titles: Option<&[String]>, _active: usize,
+    _favicons: Option<&[Option<String>]>,
+    _pins: Option<&[bool]>, _loadings: Option<&[bool]>,
+    _t: f32, _groups: Option<&[Option<[u8; 4]>]>,
+) {
+    // No-op stub. Real impl Phase 99 v shell crate.
+}
 
 mod forms;
 use forms::{find_ancestor_form, build_form_request, post_form};
@@ -6407,6 +6419,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // (separate render target od page main_rt). Two-way render dela compose
             // teprve na konci: main_rt + shell_rt -> swap chain.
             let shell_split = display_list.len();
+            // Chrome paint smazany (Session N+22) - move do shell crate (Phase 99).
             if false {
                 let win_w_logical = (r.config.width as f32) / (self.zoom * r.scale_factor);
                 let win_h_logical = (r.config.height as f32) / (self.zoom * r.scale_factor);
