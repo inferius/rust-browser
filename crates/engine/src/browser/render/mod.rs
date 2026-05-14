@@ -1048,9 +1048,12 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             } else {
                 std::sync::Arc::new(crate::embed::Engine::new_headless())
             };
-            // Viewport z Renderer config (po HiDPI scale_factor div).
+            // Viewport: WebView prijima LOGICAL CSS px (physical / scale_factor).
             let (vw, vh, sf) = if let Some(r) = &self.renderer {
-                (r.config.width.max(1), r.config.height.max(1), r.scale_factor)
+                let sf = r.scale_factor.max(0.01);
+                let lw = ((r.config.width as f32 / sf) as u32).max(1);
+                let lh = ((r.config.height as f32 / sf) as u32).max(1);
+                (lw, lh, sf)
             } else {
                 (1280u32, 900u32, 1.0f32)
             };
@@ -6882,11 +6885,11 @@ pub struct Renderer {
     /// Browser zoom factor. Vertex px coordinates jsou v logickem px (viewport
     /// width / zoom). Uniform vp je nastaven na (config.w / zoom, config.h /
     /// zoom) tak aby NDC mapping render-koval zoom*logical px na physical px.
-    zoom: f32,
+    pub zoom: f32,
     /// HiDPI scale_factor z winit. config.width je v physical px = logical *
     /// scale_factor. CSS coords jsou logical -> NDC mapping musi pouzit logical
     /// vp = config.width / scale_factor.
-    scale_factor: f32,
+    pub scale_factor: f32,
     pipeline: wgpu::RenderPipeline,
     /// Optional LCD pipeline pro real subpixel text - vyzaduje DUAL_SOURCE_BLENDING.
     /// None pri unsupported HW (fallback grayscale v hlavnim shaderu mode 9).

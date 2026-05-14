@@ -83,8 +83,11 @@ impl ApplicationHandler for ShellApp {
         let engine = Arc::new(Engine::new(device, queue));
 
         let (sw, sh) = renderer.surface_size();
-        let mut webview = WebView::new(engine.clone(), sw, sh);
-        webview.resize(sw, sh, renderer.scale_factor_value());
+        let sf = renderer.scale_factor_value().max(0.01);
+        let lw = ((sw as f32 / sf) as u32).max(1);
+        let lh = ((sh as f32 / sf) as u32).max(1);
+        let mut webview = WebView::new(engine.clone(), lw, lh);
+        webview.resize(lw, lh, sf);
         webview.set_local_path(self.local_path.clone());
         let _ = webview.load_html(&self.html, &self.css, self.base_url.clone());
 
@@ -105,15 +108,21 @@ impl ApplicationHandler for ShellApp {
                     r.resize_surface(size.width, size.height);
                 }
                 if let (Some(r), Some(wv)) = (&self.renderer, &mut self.webview) {
+                    let sf = r.scale_factor_value().max(0.01);
                     let (sw, sh) = r.surface_size();
-                    wv.resize(sw, sh, r.scale_factor_value());
+                    let lw = ((sw as f32 / sf) as u32).max(1);
+                    let lh = ((sh as f32 / sf) as u32).max(1);
+                    wv.resize(lw, lh, sf);
                 }
                 if let Some(w) = &self.window { w.request_redraw(); }
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 if let (Some(r), Some(wv)) = (&self.renderer, &mut self.webview) {
                     let (sw, sh) = r.surface_size();
-                    wv.resize(sw, sh, scale_factor as f32);
+                    let sf = (scale_factor as f32).max(0.01);
+                    let lw = ((sw as f32 / sf) as u32).max(1);
+                    let lh = ((sh as f32 / sf) as u32).max(1);
+                    wv.resize(lw, lh, sf);
                 }
                 if let Some(w) = &self.window { w.request_redraw(); }
             }

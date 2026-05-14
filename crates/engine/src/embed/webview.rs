@@ -280,8 +280,11 @@ impl WebView {
             Some(d) => d.clone(),
             None => return, // headless engine - skip
         };
-        let w = (self.viewport_w as u32 * self.scale_factor as u32).max(1);
-        let h = (self.viewport_h as u32 * self.scale_factor as u32).max(1);
+        // viewport_w/h jsou ulozeny jako LOGICAL CSS px. RT velikost MUSI
+        // byt v PHYSICAL px (= logical * scale_factor) aby match renderer
+        // surface config (NDC mapping pouziva renderer.config.width physical).
+        let w = ((self.viewport_w * self.scale_factor) as u32).max(1);
+        let h = ((self.viewport_h * self.scale_factor) as u32).max(1);
         let tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("rwe-webview-offscreen"),
             size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
@@ -398,9 +401,16 @@ impl WebView {
         if self.target_texture.is_none() {
             self.ensure_target_texture();
         }
+        // Renderer sdili pipeline + uniforms s WebView - sync browser zoom +
+        // HiDPI scale_factor pred paint pass. NDC mapping pak shoduje s
+        // RT physical px.
+        renderer.zoom = self.zoom;
+        renderer.scale_factor = self.scale_factor;
         let target_view = self.target_view.as_ref()?;
         let doc = self.document.as_ref()?;
 
+        // Layout viewport = logical CSS px / browser zoom. viewport_w/h jsou
+        // uz LOGICAL (host predava surface_size / scale_factor).
         let viewport_w = self.viewport_w / self.zoom.max(0.01);
         let viewport_h = self.viewport_h / self.zoom.max(0.01);
 
