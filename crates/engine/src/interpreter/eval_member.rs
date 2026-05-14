@@ -564,9 +564,11 @@ impl Interpreter {
                     "dataset" => {
                         return Ok(dom_props::create_dataset(&n));
                     }
-                    // style - CSSStyleDeclaration object
+                    // style - CSSStyleDeclaration object (cached, persistuje pri setteru)
                     "style" => {
-                        return Ok(dom_props::create_style_object(Rc::clone(&n)));
+                        return Ok(dom_props::get_or_create_style_object(
+                            &self.style_cache, Rc::clone(&n),
+                        ));
                     }
                     // HTMLFormElement properties
                     "action" if n.tag_name().as_deref() == Some("form") => {

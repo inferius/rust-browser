@@ -606,6 +606,26 @@ impl Interpreter {
                         }
                         // Frozen objekt: zmeny se tisnich ignoruji (soulad s JS non-strict)
                         if o.borrow().frozen { return Ok(()); }
+                        // Style object proxy: pokud ma `__style_node__` (internal Rc<Node>),
+                        // sync prop do node.set_attr("style", ...).
+                        // Skip metody (setProperty etc.) a internal `__...__` props.
+                        if !key.starts_with("__")
+                            && !matches!(key.as_str(),
+                                "setProperty" | "getPropertyValue" | "removeProperty" | "cssText")
+                        {
+                            let style_node = o.borrow().props.get("__style_node__").cloned();
+                            if let Some(JsValue::DomNode(n)) = style_node {
+                                let value_str = val.to_string();
+                                super::dom_props::update_style_attr(&n, &key, &value_str);
+                            }
+                        }
+                        // cssText specialni - prepise cely style
+                        if key == "cssText" {
+                            let style_node = o.borrow().props.get("__style_node__").cloned();
+                            if let Some(JsValue::DomNode(n)) = style_node {
+                                n.set_attr("style", &val.to_string());
+                            }
+                        }
                         o.borrow_mut().props.insert(key, val);
                         Ok(())
                     }

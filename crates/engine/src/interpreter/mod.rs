@@ -28,7 +28,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::str::FromStr;
 use crate::ast::*;
 use bigdecimal::BigDecimal;
@@ -619,6 +619,19 @@ pub struct Interpreter {
     pub shared_debugger: Option<SharedDebugger>,
     /// Continue signal pri pause v worker thread.
     pub continue_signal: Option<ContinueSignal>,
+    /// Cache style objektu per DOM node (klic = Rc::as_ptr(node) as usize).
+    /// Weak ref aby se uvolnili po posledni reference z JS. Pri setteru
+    /// (eval_expr.rs assign_to) se z `__style_node__` propu vyzvedne Rc<Node>
+    /// a sync zpet do attr "style".
+    pub style_cache: Rc<RefCell<HashMap<usize, Weak<RefCell<JsObject>>>>>,
+    /// Lookup callback z hosta - element rect (offsetLeft/Top/Width/Height,
+    /// getBoundingClientRect). Vraci (x, y, w, h) v CSS px. None = no layout.
+    pub layout_lookup: Option<Rc<dyn Fn(*const crate::browser::dom::NodeData) -> Option<(f32, f32, f32, f32)>>>,
+    /// Lookup callback z hosta - cascade computed style pro getComputedStyle.
+    /// Vraci HashMap<property, value>. None = vrat prazdne.
+    pub cascade_lookup: Option<Rc<dyn Fn(*const crate::browser::dom::NodeData) -> HashMap<String, String>>>,
+    /// window.addEventListener registry: event type -> Vec<callback>.
+    pub window_listeners: Rc<RefCell<HashMap<String, Vec<JsValue>>>>,
 }
 
 /// Sdileny debugger state pres Arc<Mutex>. UI thread cte/zapisuje set
@@ -764,6 +777,10 @@ impl Interpreter {
             pending_xhr_callbacks,
             raf_callbacks,
             next_raf_id,
+            style_cache: Rc::new(RefCell::new(HashMap::new())),
+            layout_lookup: None,
+            cascade_lookup: None,
+            window_listeners: Rc::new(RefCell::new(HashMap::new())),
         }
     }
 

@@ -1,10 +1,168 @@
 //! DOM element property objects: style, classList, dataset.
 //! Extrahovano z mod.rs (Iter 267 refactor).
 
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::cell::RefCell;
+use std::collections::HashMap;
 use super::{JsValue, JsObject};
 use super::helpers::native;
+
+/// Vrati style objekt s persistentnim ulozenim - cache pres Weak v interp.
+/// Pri opakovanem volani vrati stejnou Rc instanci, takze setter v JS:
+///   el.style.display = 'none'
+/// updatne primo props v cached objektu. Pri setteru (eval_expr.rs assign_to)
+/// se navic syncuje zpet do n.set_attr("style", ...) protoze objekt ma
+/// internal prop "__style_node__" = JsValue::DomNode.
+pub(crate) fn get_or_create_style_object(
+    cache: &Rc<RefCell<HashMap<usize, Weak<RefCell<JsObject>>>>>,
+    node: Rc<crate::browser::dom::NodeData>,
+) -> JsValue {
+    let key = Rc::as_ptr(&node) as usize;
+    // Try lookup
+    if let Some(weak) = cache.borrow().get(&key) {
+        if let Some(strong) = weak.upgrade() {
+            // Refresh from attribute (mohlo byt zmeneno z DOM strany - setAttribute)
+            refresh_style_from_attr(&strong, &node);
+            return JsValue::Object(strong);
+        }
+    }
+    // Create new + insert
+    let obj_rc = build_style_object(Rc::clone(&node));
+    cache.borrow_mut().insert(key, Rc::downgrade(&obj_rc));
+    // Cleanup stale entries (Weak::strong_count==0) - lazy GC
+    cache.borrow_mut().retain(|_, w| w.strong_count() > 0);
+    JsValue::Object(obj_rc)
+}
+
+/// Pomocna - refresh CSS props z atributu (kdyz dilo DOM strany).
+fn refresh_style_from_attr(obj: &Rc<RefCell<JsObject>>, node: &Rc<crate::browser::dom::NodeData>) {
+    let style_str = node.attr("style").unwrap_or_default();
+    // Smaz vsechny CSS props (krome internich __key__ a metod)
+    let mut o = obj.borrow_mut();
+    let to_remove: Vec<String> = o.props.keys()
+        .filter(|k| !k.starts_with("__") && !matches!(k.as_str(),
+            "setProperty" | "getPropertyValue" | "removeProperty" | "cssText"))
+        .cloned().collect();
+    for k in to_remove { o.props.remove(&k); }
+    drop(o);
+    // Re-naplnit
+    for pair in style_str.split(';') {
+        if let Some(idx) = pair.find(':') {
+            let prop = pair[..idx].trim().to_string();
+            let val = pair[idx+1..].trim().to_string();
+            if !prop.is_empty() {
+                let camel = kebab_to_camel(&prop);
+                obj.borrow_mut().set(camel, JsValue::Str(val.clone()));
+                obj.borrow_mut().set(prop, JsValue::Str(val));
+            }
+        }
+    }
+    // Update cssText
+    obj.borrow_mut().set("cssText".into(), JsValue::Str(style_str));
+}
+
+fn build_style_object(node: Rc<crate::browser::dom::NodeData>) -> Rc<RefCell<JsObject>> {
+    let obj_rc = Rc::new(RefCell::new(JsObject::new()));
+    // Internal: drzime Rc na node pro setter sync (eval_expr.rs)
+    obj_rc.borrow_mut().set("__style_node__".into(), JsValue::DomNode(Rc::clone(&node)));
+    // Pre-naplnit z atributu
+    refresh_style_from_attr(&obj_rc, &node);
+    // setProperty(name, value)
+    {
+        let n = Rc::clone(&node);
+        let o_weak = Rc::downgrade(&obj_rc);
+        obj_rc.borrow_mut().set("setProperty".into(), native("style.setProperty", move |args| {
+            let mut it = args.into_iter();
+            let prop = it.next().map(|v| v.to_string()).unwrap_or_default();
+            let val  = it.next().map(|v| v.to_string()).unwrap_or_default();
+            update_style_attr(&n, &prop, &val);
+            if let Some(o) = o_weak.upgrade() { refresh_style_from_attr(&o, &n); }
+            Ok(JsValue::Undefined)
+        }));
+    }
+    // getPropertyValue(name)
+    {
+        let n = Rc::clone(&node);
+        obj_rc.borrow_mut().set("getPropertyValue".into(), native("style.getPropertyValue", move |args| {
+            let prop = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+            let style = n.attr("style").unwrap_or_default();
+            for pair in style.split(';') {
+                if let Some(idx) = pair.find(':') {
+                    let p = pair[..idx].trim();
+                    if p == prop {
+                        return Ok(JsValue::Str(pair[idx+1..].trim().to_string()));
+                    }
+                }
+            }
+            Ok(JsValue::Str(String::new()))
+        }));
+    }
+    // removeProperty(name)
+    {
+        let n = Rc::clone(&node);
+        let o_weak = Rc::downgrade(&obj_rc);
+        obj_rc.borrow_mut().set("removeProperty".into(), native("style.removeProperty", move |args| {
+            let prop = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+            let style = n.attr("style").unwrap_or_default();
+            let mut removed = String::new();
+            let new_pairs: Vec<String> = style.split(';').filter_map(|pair| {
+                if let Some(idx) = pair.find(':') {
+                    let p = pair[..idx].trim();
+                    if p == prop {
+                        removed = pair[idx+1..].trim().to_string();
+                        return None;
+                    }
+                    if !p.is_empty() { return Some(pair.trim().to_string()); }
+                }
+                None
+            }).collect();
+            n.set_attr("style", &new_pairs.join("; "));
+            if let Some(o) = o_weak.upgrade() { refresh_style_from_attr(&o, &n); }
+            Ok(JsValue::Str(removed))
+        }));
+    }
+    obj_rc
+}
+
+/// Update nebo pridat prop do node "style" atributu (kebab nebo camel - oba
+/// se pak smapuji pri reparse). Volame z setteru `el.style.display = ...`.
+pub(crate) fn update_style_attr(node: &Rc<crate::browser::dom::NodeData>, prop: &str, val: &str) {
+    // Convert camelCase -> kebab-case pri pridani do attr
+    let kebab = camel_to_kebab(prop);
+    let style = node.attr("style").unwrap_or_default();
+    let mut found = false;
+    let mut new_pairs: Vec<String> = Vec::new();
+    for pair in style.split(';') {
+        if let Some(idx) = pair.find(':') {
+            let p = pair[..idx].trim();
+            if p == kebab {
+                if !val.is_empty() {
+                    new_pairs.push(format!("{kebab}: {val}"));
+                }
+                found = true;
+            } else if !p.is_empty() {
+                new_pairs.push(pair.trim().to_string());
+            }
+        }
+    }
+    if !found && !val.is_empty() {
+        new_pairs.push(format!("{kebab}: {val}"));
+    }
+    node.set_attr("style", &new_pairs.join("; "));
+}
+
+pub(crate) fn camel_to_kebab(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 4);
+    for c in s.chars() {
+        if c.is_ascii_uppercase() {
+            out.push('-');
+            out.push(c.to_ascii_lowercase());
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
 
 
 /// CSSStyleDeclaration object pro element.style.
