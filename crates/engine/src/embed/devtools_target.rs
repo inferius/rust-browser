@@ -140,26 +140,66 @@ impl DevtoolsTarget {
         Self::ok_response(req.id, &result)
     }
 
-    fn handle_dom_query_selector(&self, _webview: &WebView, req: DevtoolsRequest) -> DevtoolsResponse {
+    fn handle_dom_query_selector(&self, webview: &WebView, req: DevtoolsRequest) -> DevtoolsResponse {
         use rwe_devtools_proto::dom::{QuerySelectorParams, QuerySelectorResult};
-        let _params: QuerySelectorParams = match serde_json::from_value(req.params.clone()) {
+        let params: QuerySelectorParams = match serde_json::from_value(req.params.clone()) {
             Ok(p) => p,
             Err(e) => return Self::error_response(req.id, error_codes::INVALID_PARAMS,
                 format!("Invalid params: {e}")),
         };
-        // Stub: real impl pres selectors::matching engine + DOM walk.
-        let result = QuerySelectorResult { node_id: None };
+        let doc = match webview.document() {
+            Some(d) => d,
+            None => return Self::error_response(req.id, error_codes::INTERNAL_ERROR,
+                "No document loaded".to_string()),
+        };
+        let root = match find_node_by_id(&doc.root, params.node_id) {
+            Some(n) => n,
+            None => return Self::error_response(req.id, error_codes::NODE_NOT_FOUND,
+                format!("Node {} not found", params.node_id)),
+        };
+        let selectors = crate::browser::css_parser::parse_selectors(&params.selector);
+        let mut found: Option<u64> = None;
+        walk_dfs(&root, &mut |node| {
+            if found.is_some() { return; }
+            for sel in &selectors {
+                if crate::browser::cascade::matches_selector(node, sel) {
+                    found = Some(node_id_from_ptr(node));
+                    return;
+                }
+            }
+        });
+        let result = QuerySelectorResult { node_id: found };
         Self::ok_response(req.id, &result)
     }
 
-    fn handle_dom_query_selector_all(&self, _webview: &WebView, req: DevtoolsRequest) -> DevtoolsResponse {
+    fn handle_dom_query_selector_all(&self, webview: &WebView, req: DevtoolsRequest) -> DevtoolsResponse {
         use rwe_devtools_proto::dom::{QuerySelectorAllParams, QuerySelectorAllResult};
-        let _params: QuerySelectorAllParams = match serde_json::from_value(req.params.clone()) {
+        let params: QuerySelectorAllParams = match serde_json::from_value(req.params.clone()) {
             Ok(p) => p,
             Err(e) => return Self::error_response(req.id, error_codes::INVALID_PARAMS,
                 format!("Invalid params: {e}")),
         };
-        let result = QuerySelectorAllResult { node_ids: Vec::new() };
+        let doc = match webview.document() {
+            Some(d) => d,
+            None => return Self::error_response(req.id, error_codes::INTERNAL_ERROR,
+                "No document loaded".to_string()),
+        };
+        let root = match find_node_by_id(&doc.root, params.node_id) {
+            Some(n) => n,
+            None => return Self::error_response(req.id, error_codes::NODE_NOT_FOUND,
+                format!("Node {} not found", params.node_id)),
+        };
+        let selectors = crate::browser::css_parser::parse_selectors(&params.selector);
+        let mut ids: Vec<u64> = Vec::new();
+        walk_dfs(&root, &mut |node| {
+            for sel in &selectors {
+                if crate::browser::cascade::matches_selector(node, sel) {
+                    ids.push(node_id_from_ptr(node));
+                    return;
+                }
+            }
+        });
+        let result = QuerySelectorAllResult { node_ids: ids };
         Self::ok_response(req.id, &result)
     }
 
@@ -245,17 +285,77 @@ impl DevtoolsTarget {
     // CSS domain handlers
     // ============================================================
 
-    fn handle_css_get_matched_styles(&self, _webview: &WebView, req: DevtoolsRequest) -> DevtoolsResponse {
-        use rwe_devtools_proto::css::{GetMatchedStylesForNodeParams, GetMatchedStylesForNodeResult};
-        let _params: GetMatchedStylesForNodeParams = match serde_json::from_value(req.params.clone()) {
+    fn handle_css_get_matched_styles(&self, webview: &WebView, req: DevtoolsRequest) -> DevtoolsResponse {
+        use rwe_devtools_proto::css::{
+            CSSProperty, CSSRule, CSSStyle, GetMatchedStylesForNodeParams,
+            GetMatchedStylesForNodeResult, RuleMatch,
+        };
+        let params: GetMatchedStylesForNodeParams = match serde_json::from_value(req.params.clone()) {
             Ok(p) => p,
             Err(e) => return Self::error_response(req.id, error_codes::INVALID_PARAMS,
                 format!("Invalid params: {e}")),
         };
-        // Stub: real impl projde stylesheets + cascade::match_selector pro daly node.
+        let doc = match webview.document() {
+            Some(d) => d,
+            None => return Self::error_response(req.id, error_codes::INTERNAL_ERROR,
+                "No document loaded".to_string()),
+        };
+        let node = match find_node_by_id(&doc.root, params.node_id) {
+            Some(n) => n,
+            None => return Self::error_response(req.id, error_codes::NODE_NOT_FOUND,
+                format!("Node {} not found", params.node_id)),
+        };
+
+        // Inline style atribut -> CSSStyle.
+        let inline_style = node.attr("style").and_then(|s| {
+            if s.is_empty() { return None; }
+            let mut props = Vec::new();
+            for pair in s.split(';') {
+                if let Some(idx) = pair.find(':') {
+                    let name = pair[..idx].trim().to_string();
+                    let value = pair[idx+1..].trim().trim_end_matches("!important").trim().to_string();
+                    let important = pair[idx+1..].contains("!important");
+                    if !name.is_empty() {
+                        props.push(CSSProperty { name, value, important, disabled: false });
+                    }
+                }
+            }
+            if props.is_empty() { None } else { Some(CSSStyle { properties: props }) }
+        });
+
+        // Walk stylesheets + match selectors proti tomuto node.
+        let mut matched_rules: Vec<RuleMatch> = Vec::new();
+        for sheet in webview.stylesheets() {
+            for rule in &sheet.rules {
+                let mut matching_indices: Vec<u32> = Vec::new();
+                let mut selectors_str: Vec<String> = Vec::with_capacity(rule.selectors.len());
+                for (i, sel) in rule.selectors.iter().enumerate() {
+                    selectors_str.push(format_selector(sel));
+                    if crate::browser::cascade::matches_selector(&node, sel) {
+                        matching_indices.push(i as u32);
+                    }
+                }
+                if matching_indices.is_empty() { continue; }
+                let props: Vec<CSSProperty> = rule.declarations.iter().map(|d| CSSProperty {
+                    name: d.property.clone(),
+                    value: d.value.clone(),
+                    important: d.important,
+                    disabled: false,
+                }).collect();
+                matched_rules.push(RuleMatch {
+                    rule: CSSRule {
+                        selector_list: selectors_str,
+                        style: CSSStyle { properties: props },
+                        origin: Some("regular".to_string()),
+                    },
+                    matching_selectors: matching_indices,
+                });
+            }
+        }
+
         let result = GetMatchedStylesForNodeResult {
-            inline_style: None,
-            matched_rules: Vec::new(),
+            inline_style,
+            matched_rules,
         };
         Self::ok_response(req.id, &result)
     }
@@ -492,6 +592,36 @@ fn node_id_from_ptr(node: &Rc<crate::browser::dom::Node>) -> u64 {
     Rc::as_ptr(node) as usize as u64
 }
 
+/// Selector -> string (cosmetic - vrati to v CDP rule.selector_list).
+/// Naive format: join SimpleSelectors s descendant " ".
+fn format_selector(sel: &crate::browser::css_parser::Selector) -> String {
+    sel.parts.iter().map(|s| {
+        let mut out = String::new();
+        if let Some(t) = &s.tag { out.push_str(t); }
+        if let Some(id) = &s.id { out.push('#'); out.push_str(id); }
+        for c in &s.classes { out.push('.'); out.push_str(c); }
+        for pc in &s.pseudo_classes { out.push(':'); out.push_str(pc); }
+        if let Some(pe) = &s.pseudo_element { out.push_str("::"); out.push_str(pe); }
+        if out.is_empty() { out.push('*'); }
+        out
+    }).collect::<Vec<_>>().join(" ")
+}
+
+/// DFS walk subtree + apply visitor pres kazdy element node.
+/// Visitor mutate moze hold state nebo early-exit (check `found`).
+fn walk_dfs<F: FnMut(&Rc<crate::browser::dom::Node>)>(
+    root: &Rc<crate::browser::dom::Node>,
+    visitor: &mut F,
+) {
+    use crate::browser::dom::NodeKind;
+    if matches!(root.kind, NodeKind::Element(_)) {
+        visitor(root);
+    }
+    for child in root.children.borrow().iter() {
+        walk_dfs(child, visitor);
+    }
+}
+
 /// Najde node v tree dle node_id (pointer hash). Walk DFS, prvni match.
 fn find_node_by_id(
     root: &Rc<crate::browser::dom::Node>,
@@ -679,6 +809,87 @@ mod tests {
         let resp = target.handle_request(&mut wv, req);
         assert!(resp.error.is_some());
         assert_eq!(resp.error.unwrap().code, error_codes::NODE_NOT_FOUND);
+    }
+
+    #[test]
+    fn dom_query_selector_returns_match() {
+        let engine = Arc::new(Engine::new_headless());
+        let mut wv = WebView::new(engine, 800, 600);
+        let _ = wv.load_html(
+            "<html><body><div id='a'></div><p class='x'></p><p class='x'></p></body></html>",
+            "", None);
+        let target = DevtoolsTarget::new();
+        // First get document for root node_id.
+        let resp = target.handle_request(&mut wv, DevtoolsRequest {
+            id: 1, method: "DOM.getDocument".into(),
+            params: serde_json::json!({ "depth": -1 }),
+        });
+        let root_id = resp.result.unwrap()["root"]["node_id"].as_u64().unwrap();
+
+        // querySelector finds first .x.
+        let resp = target.handle_request(&mut wv, DevtoolsRequest {
+            id: 2, method: "DOM.querySelector".into(),
+            params: serde_json::json!({ "node_id": root_id, "selector": ".x" }),
+        });
+        assert!(resp.error.is_none(), "qs error: {:?}", resp.error);
+        let node_id = resp.result.unwrap()["node_id"].as_u64();
+        assert!(node_id.is_some(), "querySelector should match first .x");
+
+        // querySelectorAll vraci 2 matches.
+        let resp = target.handle_request(&mut wv, DevtoolsRequest {
+            id: 3, method: "DOM.querySelectorAll".into(),
+            params: serde_json::json!({ "node_id": root_id, "selector": ".x" }),
+        });
+        assert!(resp.error.is_none());
+        let ids = resp.result.unwrap()["node_ids"].as_array().unwrap().len();
+        assert_eq!(ids, 2, "querySelectorAll should return 2");
+    }
+
+    #[test]
+    fn css_get_matched_styles_real_walk() {
+        let engine = Arc::new(Engine::new_headless());
+        let mut wv = WebView::new(engine, 800, 600);
+        let _ = wv.load_html(
+            "<html><body><div class='box' style='padding: 5px'></div></body></html>",
+            ".box { color: red; background: blue; }", None);
+        let target = DevtoolsTarget::new();
+        // Find div node_id.
+        let resp = target.handle_request(&mut wv, DevtoolsRequest {
+            id: 1, method: "DOM.getDocument".into(),
+            params: serde_json::json!({ "depth": -1 }),
+        });
+        let root: rwe_devtools_proto::dom::Node = serde_json::from_value(
+            resp.result.unwrap()["root"].clone()
+        ).unwrap();
+        fn find_div(n: &rwe_devtools_proto::dom::Node) -> Option<&rwe_devtools_proto::dom::Node> {
+            if n.node_name == "DIV" { return Some(n); }
+            for c in &n.children { if let Some(f) = find_div(c) { return Some(f); } }
+            None
+        }
+        let div = find_div(&root).expect("DIV");
+
+        let resp = target.handle_request(&mut wv, DevtoolsRequest {
+            id: 2, method: "CSS.getMatchedStylesForNode".into(),
+            params: serde_json::json!({ "node_id": div.node_id }),
+        });
+        assert!(resp.error.is_none(), "css err: {:?}", resp.error);
+        let result = resp.result.unwrap();
+
+        // Inline style (padding: 5px).
+        let inline = result.get("inline_style").expect("inline_style key");
+        assert!(!inline.is_null(), "inline_style should be set (padding)");
+        let inline_props = inline["properties"].as_array().unwrap();
+        assert!(inline_props.iter().any(|p| p["name"] == "padding"),
+            "inline must have padding");
+
+        // Matched rules - .box { color, background }.
+        let rules = result["matched_rules"].as_array().unwrap();
+        assert!(!rules.is_empty(), "matched_rules should not be empty");
+        let first_rule = &rules[0];
+        let props = first_rule["rule"]["style"]["properties"].as_array().unwrap();
+        let prop_names: Vec<&str> = props.iter().map(|p| p["name"].as_str().unwrap()).collect();
+        assert!(prop_names.contains(&"color"), "expected color in matched rule");
+        assert!(prop_names.contains(&"background"), "expected background in matched rule");
     }
 
     #[test]
