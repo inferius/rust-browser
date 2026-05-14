@@ -845,20 +845,11 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         frame_times_ms: std::collections::VecDeque<f32>,
         /// Show FPS counter overlay (Ctrl+Shift+F nebo always-on dev mode).
         show_fps: bool,
-        /// Animations time origin - drahy speed/pause/restart pres devtools panel.
-        /// Effective_anim_time = (now - origin) * speed; pri pause snapshot do paused_at.
-        animation_origin: std::time::Instant,
-        animation_pause_start: Option<std::time::Instant>,
-        /// Per-element pause - selected nodes maji animace zamrzly v presne
-        /// fazi pri toggle. Pause v Animations panelu (s vybranym elementem)
-        /// snapshot animated style v ten moment + restore kazdy frame.
-        paused_animation_nodes: std::collections::HashSet<usize>,
-        // paused_node_styles field smazany Phase 99: nikdy zapisovan
-        // (TODO: per-element pause snapshot vyzaduje webview cascade.style_map).
-        /// Drag timeline scrubber state - pri MouseDown na track v Animations
-        /// panelu zacne drag. Pri pohybu mysi se animation_origin shifte tak
-        /// aby progress odpovidal pozici kursoru na track.
-        animations_scrubber_drag: bool,
+        // animation_origin / animation_pause_start / paused_animation_nodes /
+        // animations_scrubber_drag / paused_node_styles fields vsechny smazany
+        // Phase 99: effective animace cas drzi webview.animation_origin. App-side
+        // copies byly izolovane (menia jen sami sebe, ne render). Devtools
+        // animations panel scrubber/pause/speed/restart bude per-WebView v dalsi fazi.
         // painted_text_runs field smazany Phase 99: nikdy zapisovan na App vrstve
         // (webview.painted_text_runs je primary). Delegate getter pres webview.
         /// Async jobs registry - background work (file IO, image lazy load).
@@ -1147,41 +1138,9 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         self.render();
                         return;
                     }
-                    // Animations scrubber drag - update progress podle mouse_x.
-                    if self.animations_scrubber_drag {
-                        let bz = self.devtools.styles.animations_btn_zones.borrow();
-                        for (zx, zy, zw, zh, action) in bz.iter() {
-                            if action == "scrub" {
-                                let local_mx = self.mouse_x;
-                                let local_my = self.mouse_y - self.scroll_y();
-                                if local_my >= *zy - 10.0 && local_my < zy + zh + 10.0 {
-                                    let progress = ((local_mx - zx) / zw).clamp(0.0, 1.0);
-                                    drop(bz);
-                                    use std::time::{Instant, Duration};
-                                    let dur = self.devtools.styles.computed.iter()
-                                        .find(|(k, _)| k == "animation-duration")
-                                        .and_then(|(_, v)| {
-                                            let s = v.trim();
-                                            if let Some(n) = s.strip_suffix("ms") {
-                                                n.parse::<f32>().ok().map(|x| x / 1000.0)
-                                            } else if let Some(n) = s.strip_suffix('s') {
-                                                n.parse::<f32>().ok()
-                                            } else { s.parse::<f32>().ok() }
-                                        }).unwrap_or(1.0).max(0.1);
-                                    let target_t = progress * dur;
-                                    let speed = self.devtools.animations_speed.max(0.01);
-                                    let now = Instant::now();
-                                    self.animation_origin = now - Duration::from_secs_f32((target_t / speed).max(0.0));
-                                    if self.devtools.animations_paused {
-                                        self.animation_pause_start = Some(now);
-                                    }
-                                    self.render();
-                                    return;
-                                }
-                                break;
-                            }
-                        }
-                    }
+                    // Animations scrubber drag handler smazany Phase 99: efektivni
+                    // animation_origin je na webview.animation_origin (App-side dead).
+                    // Scrubber rework potrebuje webview.set_animation_origin API.
                     // Main page scrollbar drag - layout_root dead na App vrstve,
                     // dragging bude per-WebView v dalsi fazi. page_scrollbar_v/h_drag
                     // flag se uz neda nastavit (hit-test smazany), tak no-op.
@@ -1275,9 +1234,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         self.page_scrollbar_h_drag = false;
                         self.render();
                     }
-                    if self.animations_scrubber_drag {
-                        self.animations_scrubber_drag = false;
-                    }
+                    // animations_scrubber_drag dead-flag smazany Phase 99.
                     if self.page_sel_dragging() {
                         self.page_sel_end_drag();
                         self.render();
@@ -1558,84 +1515,17 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                 DevtoolsHit::SidePanelOverflowToggle => {
                                     self.devtools.side_panel_overflow_open = !self.devtools.side_panel_overflow_open;
                                 }
-                                DevtoolsHit::AnimationsScrub(progress) => {
-                                    use std::time::{Instant, Duration};
-                                    // Scrub: shift animation_origin tak aby effective elapsed
-                                    // odpovida progress * duration. Pri pri drag/click on track.
-                                    self.animations_scrubber_drag = true;
-                                    let dur = self.devtools.styles.computed.iter()
-                                        .find(|(k, _)| k == "animation-duration")
-                                        .map(|(_, v)| {
-                                            let s = v.trim();
-                                            if let Some(n) = s.strip_suffix("ms") {
-                                                n.parse::<f32>().ok().map(|x| x / 1000.0)
-                                            } else if let Some(n) = s.strip_suffix('s') {
-                                                n.parse::<f32>().ok()
-                                            } else { s.parse::<f32>().ok() }
-                                        }).flatten().unwrap_or(1.0).max(0.1);
-                                    let target_t = progress * dur;
-                                    let speed = self.devtools.animations_speed.max(0.01);
-                                    let now = Instant::now();
-                                    self.animation_origin = now - Duration::from_secs_f32((target_t / speed).max(0.0));
-                                    if self.devtools.animations_paused {
-                                        self.animation_pause_start = Some(now);
-                                    }
+                                DevtoolsHit::AnimationsScrub(_progress) => {
+                                    // animation_origin/animation_pause_start dead na App vrstve.
+                                    // Effective animace cas zije ve webview.animation_origin.
+                                    // Scrubber rework vyzaduje webview.set_animation_origin API.
                                 }
                                 DevtoolsHit::AnimationsAction(action) => {
-                                    use std::time::{Instant, Duration};
-                                    match action.as_str() {
-                                        "pause" => {
-                                            // Per-element pause kdyz je vybrany element. Snapshot
-                                            // CURRENT (po anim) styl pri toggle - drzeni presne fazi.
-                                            if let Some(sel) = self.devtools.elements.selected {
-                                                if self.paused_animation_nodes.contains(&sel) {
-                                                    self.paused_animation_nodes.remove(&sel);
-                                                } else {
-                                                    self.paused_animation_nodes.insert(sel);
-                                                    // TODO: per-element pause snapshot vyzaduje pristup
-                                                    // k webview cascade.style_map. Zatim paused_animation_nodes
-                                                    // jen toggle flag, snapshot se neuklada.
-                                                }
-                                                self.devtools.animations_paused =
-                                                    !self.paused_animation_nodes.is_empty();
-                                            } else if !self.devtools.animations_paused {
-                                                self.animation_pause_start = Some(Instant::now());
-                                                self.devtools.animations_paused = true;
-                                            } else {
-                                                if let Some(ps) = self.animation_pause_start.take() {
-                                                    let pause_dur = ps.elapsed();
-                                                    self.animation_origin += pause_dur;
-                                                }
-                                                self.devtools.animations_paused = false;
-                                            }
-                                        }
-                                        "speed" => {
-                                            // Cycle 0.25 / 0.5 / 1 / 2 / 4. Snapshot effective_t,
-                                            // pak shift origin tak aby novy speed pokracoval z teze hodnoty.
-                                            let speeds = [0.25, 0.5, 1.0, 2.0, 4.0];
-                                            let cur = self.devtools.animations_speed;
-                                            let idx = speeds.iter().position(|s| (s - cur).abs() < 0.01).unwrap_or(2);
-                                            let new_speed = speeds[(idx + 1) % speeds.len()];
-                                            let now = Instant::now();
-                                            let raw_now = if self.devtools.animations_paused {
-                                                self.animation_pause_start.unwrap_or(now)
-                                            } else { now };
-                                            let cur_t = raw_now.duration_since(self.animation_origin)
-                                                .as_secs_f32() * cur;
-                                            // new_origin: raw_now - cur_t/new_speed.
-                                            self.animation_origin = raw_now
-                                                - Duration::from_secs_f32((cur_t / new_speed).max(0.0));
-                                            self.devtools.animations_speed = new_speed;
-                                        }
-                                        "restart" => {
-                                            self.animation_origin = Instant::now();
-                                            if self.devtools.animations_paused {
-                                                self.animation_pause_start = Some(Instant::now());
-                                            } else {
-                                                self.animation_pause_start = None;
-                                            }
-                                        }
-                                        _ => {}
+                                    // pause/speed/restart handler smazany Phase 99 - vsechny
+                                    // operace patri webview.animation_origin (App-side dead).
+                                    // devtools.animations_paused flag zustal toggle-only:
+                                    if action == "pause" {
+                                        self.devtools.animations_paused = !self.devtools.animations_paused;
                                     }
                                 }
                                 DevtoolsHit::ColorPickerHexFocus => {
@@ -3048,7 +2938,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             self.set_scroll_target_y(0.0);
             self.set_scroll_x(0.0);
             self.set_scroll_target_x(0.0);
-            self.animation_origin = std::time::Instant::now();
             // Authoritative WebView restart pres sync_webview - novy webview s
             // real load_html (spousti scripts). Po loadu take_interpreter ->
             // App.interpreter.
@@ -3750,7 +3639,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 self.set_scroll_target_y(0.0);
                 self.set_scroll_x(0.0);
                 self.set_scroll_target_x(0.0);
-                self.animation_origin = std::time::Instant::now();
                 self.sync_webview(&html, &css, Some(url.to_string()), None);
                 // Webview drzi interpreter primarne (polarity invert).
                 let page_title = crate::embed::loader::extract_title(self.html())
@@ -4017,10 +3905,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
     // Title nyni drzí webview (App polarity invert step).
     let mut app = App {
         initial: Some((html, css, base_url, current_html_path)),
-        animation_origin: std::time::Instant::now(),
-        animation_pause_start: None,
-        paused_animation_nodes: std::collections::HashSet::new(),
-        animations_scrubber_drag: false,
         async_jobs: crate::browser::async_jobs::AsyncJobsRegistry::new(),
         frame_times_ms: std::collections::VecDeque::with_capacity(60),
         // FPS overlay default off - Ctrl+Shift+F toggle. Drive default zapnuty
