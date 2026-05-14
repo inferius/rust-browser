@@ -17,6 +17,7 @@ use winit::window::{Window, WindowId};
 
 use rwe_engine::browser::render::Renderer;
 use rwe_engine::embed::{Engine, InputEvent, KeyModifiers, MouseButton, WebView};
+use rwe_engine::interpreter::{helpers::native, JsValue};
 
 pub struct ShellApp {
     html: String,
@@ -64,6 +65,48 @@ impl ShellApp {
             history: Vec::new(),
             history_idx: 0,
         }
+    }
+
+    /// D6a: Nainstaluje native CDP funkce do interpreter v devtools WebView.
+    ///
+    /// `__rwe_cdp_send_native(json_str)`: prijima JSON-stringified
+    /// DevtoolsRequest, dispatch'ne pres DevtoolsTarget (D6b - aktualne stub).
+    /// Vrati JSON-stringified DevtoolsResponse (nebo "" pokud async).
+    ///
+    /// `__rwe_cdp_poll_events()`: vrati JSON array bufferovanych events +
+    /// pending responses. Volana periodicky z cdp.js setInterval.
+    ///
+    /// D6a stub: logy a vraci empty strings. D6b implementuje real wire-up
+    /// pres Rc<RefCell<CdpChannel>> sdileny mezi shell main loop a natives.
+    fn install_cdp_natives(devtools: &mut WebView) {
+        let interp = match devtools.interpreter_mut() {
+            Some(i) => i,
+            None => {
+                eprintln!("[cdp] devtools interpreter chybi, natives neinstaluju");
+                return;
+            }
+        };
+        // __rwe_cdp_send_native(json_str) -> response_json_str (or "")
+        let send_fn = native("__rwe_cdp_send_native", |args| {
+            let json = args.first()
+                .map(|v| v.to_string())
+                .unwrap_or_default();
+            println!("[cdp send] {}", json);
+            // D6b: parse to DevtoolsRequest, push to req_queue,
+            // dispatch ve main loop, push response to resp_queue,
+            // poll vrati pozdeji.
+            // D6a: return empty string - cdp.js handleResponseJson handle.
+            Ok(JsValue::Str(String::new()))
+        });
+        // __rwe_cdp_poll_events() -> JSON array of events + pending responses
+        let poll_fn = native("__rwe_cdp_poll_events", |_args| {
+            // D6b: drain resp_queue + event_queue.
+            // D6a: empty array.
+            Ok(JsValue::Str("[]".into()))
+        });
+        interp.global.borrow_mut().define("__rwe_cdp_send_native", send_fn);
+        interp.global.borrow_mut().define("__rwe_cdp_poll_events", poll_fn);
+        println!("[cdp] D6a stub natives installed (send/poll)");
     }
 
     /// Slozi devtools INDEX_HTML s injectnutymi panel HTMLs + theme.css
@@ -157,8 +200,14 @@ impl ShellApp {
             dv.resize(lw, lh, sf);
             let dv_html = Self::build_devtools_html();
             let _ = dv.load_html(&dv_html, "", None);
+            // D6a: install CDP native fns na devtools interpreter PO load_html
+            // (po run_scripts). Pri behu cdp.js definuje window.cdp, ale
+            // window.cdp.send/pollEvents jeste neexistuje protoze cdp.js
+            // resolve nativy az pri callu - takze ted nainstalovane natives
+            // budou viditelne kdyz event handler vola send/pollEvents pozdeji.
+            Self::install_cdp_natives(&mut dv);
             self.devtools = Some(dv);
-            println!("[shell] devtools WebView vytvoreno + INDEX_HTML loaded");
+            println!("[shell] devtools WebView vytvoreno + INDEX_HTML loaded + CDP natives");
         }
         println!("[shell] devtools visible: {}", self.devtools_visible);
         if let Some(w) = &self.window { w.request_redraw(); }
