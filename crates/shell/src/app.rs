@@ -28,6 +28,13 @@ pub struct ShellApp {
     renderer: Option<Renderer>,
     engine: Option<Arc<Engine>>,
     webview: Option<WebView>,
+    /// DevTools WebView (D4). Some pri F12 toggle on - load INDEX_HTML s
+    /// injectnutymi panel HTMLs + theme.css + cdp.js. Komunikace s page
+    /// webview pres `window.cdp.send(...)` JS API (D6 nativní binding).
+    devtools: Option<WebView>,
+    /// True kdyz devtools je viditelne. D4a (MVP) = full-screen toggle
+    /// (renderuje se bud page, nebo devtools). D4b real split layout TBD.
+    devtools_visible: bool,
 
     mouse_x: f32,
     mouse_y: f32,
@@ -49,12 +56,112 @@ impl ShellApp {
             renderer: None,
             engine: None,
             webview: None,
+            devtools: None,
+            devtools_visible: false,
             mouse_x: 0.0,
             mouse_y: 0.0,
             modifiers: winit::keyboard::ModifiersState::empty(),
             history: Vec::new(),
             history_idx: 0,
         }
+    }
+
+    /// Slozi devtools INDEX_HTML s injectnutymi panel HTMLs + theme.css
+    /// + cdp.js. Vlozi do <head> jako `<script id="theme-css">` + cdp.js
+    /// + `window.__rwe_panel_html__ = { elements: ..., console: ... }`.
+    fn build_devtools_html() -> String {
+        use rwe_devtools_frontend::*;
+        // JSON-escape kazdy panel HTML pro bezpecne vlozeni do JS string.
+        fn js_escape(s: &str) -> String {
+            let mut out = String::with_capacity(s.len() + 16);
+            out.push('"');
+            for ch in s.chars() {
+                match ch {
+                    '\\' => out.push_str("\\\\"),
+                    '"' => out.push_str("\\\""),
+                    '\n' => out.push_str("\\n"),
+                    '\r' => out.push_str("\\r"),
+                    '\t' => out.push_str("\\t"),
+                    '<' => out.push_str("\\u003c"), // </script breaker
+                    c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+                    c => out.push(c),
+                }
+            }
+            out.push('"');
+            out
+        }
+        // INDEX_HTML obsahuje:
+        //   <style id="theme-css"></style>
+        //   <script id="cdp-js"></script>
+        // Nahradime tyto prazdne elementy obsahem.
+        let with_theme = INDEX_HTML.replace(
+            "<style id=\"theme-css\"></style>",
+            &format!("<style id=\"theme-css\">{}</style>", THEME_CSS),
+        );
+        let panel_map = format!(
+            "<script>window.__rwe_panel_html__ = {{\
+                elements: {}, console: {}, sources: {}, network: {}, performance: {} }};\
+            </script>",
+            js_escape(ELEMENTS_HTML),
+            js_escape(CONSOLE_HTML),
+            js_escape(SOURCES_HTML),
+            js_escape(NETWORK_HTML),
+            js_escape(PERFORMANCE_HTML),
+        );
+        let with_cdp = with_theme.replace(
+            "<script id=\"cdp-js\"></script>",
+            &format!("{}<script id=\"cdp-js\">{}</script>", panel_map, CDP_JS),
+        );
+        with_cdp
+    }
+
+    /// Pristup k aktivnimu WebView (devtools pokud visible, jinak page).
+    /// Input events route do nej pres handle_input. Closure forma kvuli
+    /// split borrow checker (self.window access po dispatch_input).
+    fn with_active_mut<R, F>(&mut self, f: F) -> Option<R>
+    where F: FnOnce(&mut WebView) -> R {
+        if self.devtools_visible {
+            self.devtools.as_mut().map(f)
+        } else {
+            self.webview.as_mut().map(f)
+        }
+    }
+
+    fn with_active<R, F>(&self, f: F) -> Option<R>
+    where F: FnOnce(&WebView) -> R {
+        if self.devtools_visible {
+            self.devtools.as_ref().map(f)
+        } else {
+            self.webview.as_ref().map(f)
+        }
+    }
+
+    /// Konvenience: dispatch InputEvent na aktivni WebView, vrati response.
+    fn dispatch_input(&mut self, event: InputEvent) -> rwe_engine::embed::EventResponse {
+        self.with_active_mut(|wv| wv.handle_input(event)).unwrap_or_default()
+    }
+
+    /// F12 toggle: pri prvnim volani vytvori devtools WebView + load
+    /// build_devtools_html(). Pri kazdem dalsim flippe visibility flag.
+    fn toggle_devtools(&mut self) {
+        let was_visible = self.devtools_visible;
+        self.devtools_visible = !was_visible;
+        if self.devtools_visible && self.devtools.is_none() {
+            let engine = match &self.engine { Some(e) => e.clone(), None => return };
+            let renderer = match &self.renderer { Some(r) => r, None => return };
+            let (sw, sh) = renderer.surface_size();
+            let sf = renderer.scale_factor_value().max(0.01);
+            let lw = ((sw as f32 / sf) as u32).max(1);
+            let lh = ((sh as f32 / sf) as u32).max(1);
+            let mut dv = WebView::new(engine, lw, lh);
+            dv.resize(lw, lh, sf);
+            let dv_html = Self::build_devtools_html();
+            let _ = dv.load_html(&dv_html, "", None);
+            self.devtools = Some(dv);
+            println!("[shell] devtools WebView vytvoreno + INDEX_HTML loaded");
+        }
+        println!("[shell] devtools visible: {}", self.devtools_visible);
+        if let Some(w) = &self.window { w.request_redraw(); }
     }
 
     fn nav_back(&mut self) {
@@ -79,29 +186,37 @@ impl ShellApp {
 
     fn redraw(&mut self) {
         let renderer = match &mut self.renderer { Some(r) => r, None => return };
-        let webview = match &mut self.webview { Some(w) => w, None => return };
+        // D4a (MVP): full-screen toggle - pri devtools_visible renderuje se
+        // devtools WebView, jinak page WebView. Real split layout = D4b
+        // (vyzaduje Renderer::present_two_external_split helper).
+        let active: &mut WebView = if self.devtools_visible {
+            match &mut self.devtools { Some(w) => w, None => return }
+        } else {
+            match &mut self.webview { Some(w) => w, None => return }
+        };
         // WebView vsechno: cascade -> anim tick -> layout -> sticky ->
         // paint anim -> paint -> scroll shift -> scrollbar overlay ->
         // atlas warm -> draw_segments -> RT view.
-        if webview.render_via(renderer).is_none() { return; }
+        if active.render_via(renderer).is_none() { return; }
         // Shell jen present: RT view -> swap chain.
-        if let Some(view) = webview.target_view() {
+        if let Some(view) = active.target_view() {
             renderer.present_external_to_swap_chain(view);
         }
-        // Sync window title z page title.
-        if let Some(window) = &self.window {
-            let t = webview.title();
-            if !t.is_empty() {
-                let win_title = format!("{} - RustWebEngine", t);
-                if window.title() != win_title {
-                    window.set_title(&win_title);
+        let active_anim = active.has_active_animations();
+        // Sync window title z page (ne devtools) title.
+        if !self.devtools_visible {
+            if let (Some(window), Some(wv)) = (&self.window, &self.webview) {
+                let t = wv.title();
+                if !t.is_empty() {
+                    let win_title = format!("{} - RustWebEngine", t);
+                    if window.title() != win_title {
+                        window.set_title(&win_title);
+                    }
                 }
             }
         }
-        // Pokud stranka ma aktivni animace, request_redraw na pristi frame.
-        // Bez tohoto by anim "zamrzla" po prvnim renderu (RedrawRequested je
-        // event-driven, ne continual).
-        if webview.has_active_animations() {
+        // Continual redraw pri active animations.
+        if active_anim {
             if let Some(w) = &self.window { w.request_redraw(); }
         }
     }
@@ -154,22 +269,24 @@ impl ApplicationHandler for ShellApp {
                 if let Some(r) = &mut self.renderer {
                     r.resize_surface(size.width, size.height);
                 }
-                if let (Some(r), Some(wv)) = (&self.renderer, &mut self.webview) {
+                if let Some(r) = &self.renderer {
                     let sf = r.scale_factor_value().max(0.01);
                     let (sw, sh) = r.surface_size();
                     let lw = ((sw as f32 / sf) as u32).max(1);
                     let lh = ((sh as f32 / sf) as u32).max(1);
-                    wv.resize(lw, lh, sf);
+                    if let Some(wv) = &mut self.webview { wv.resize(lw, lh, sf); }
+                    if let Some(dv) = &mut self.devtools { dv.resize(lw, lh, sf); }
                 }
                 if let Some(w) = &self.window { w.request_redraw(); }
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
-                if let (Some(r), Some(wv)) = (&self.renderer, &mut self.webview) {
+                if let Some(r) = &self.renderer {
                     let (sw, sh) = r.surface_size();
                     let sf = (scale_factor as f32).max(0.01);
                     let lw = ((sw as f32 / sf) as u32).max(1);
                     let lh = ((sh as f32 / sf) as u32).max(1);
-                    wv.resize(lw, lh, sf);
+                    if let Some(wv) = &mut self.webview { wv.resize(lw, lh, sf); }
+                    if let Some(dv) = &mut self.devtools { dv.resize(lw, lh, sf); }
                 }
                 if let Some(w) = &self.window { w.request_redraw(); }
             }
@@ -180,35 +297,34 @@ impl ApplicationHandler for ShellApp {
                 let scale = self.renderer.as_ref().map(|r| r.scale_factor_value()).unwrap_or(1.0);
                 self.mouse_x = position.x as f32 / scale;
                 self.mouse_y = position.y as f32 / scale;
-                if let Some(wv) = &mut self.webview {
-                    let resp = wv.handle_input(InputEvent::MouseMove {
-                        x: self.mouse_x,
-                        y: self.mouse_y,
-                        modifiers: KeyModifiers::default(),
-                    });
-                    if let (Some(cursor), Some(window)) = (resp.cursor, &self.window) {
-                        use rwe_engine::embed::CursorIcon as IC;
-                        let winit_cursor = match cursor {
-                            IC::Pointer => winit::window::CursorIcon::Pointer,
-                            IC::Text => winit::window::CursorIcon::Text,
-                            IC::Wait => winit::window::CursorIcon::Wait,
-                            IC::Help => winit::window::CursorIcon::Help,
-                            IC::Crosshair => winit::window::CursorIcon::Crosshair,
-                            IC::Move => winit::window::CursorIcon::Move,
-                            IC::NotAllowed => winit::window::CursorIcon::NotAllowed,
-                            IC::Grab => winit::window::CursorIcon::Grab,
-                            IC::Grabbing => winit::window::CursorIcon::Grabbing,
-                            IC::ResizeEw => winit::window::CursorIcon::EwResize,
-                            IC::ResizeNs => winit::window::CursorIcon::NsResize,
-                            IC::ResizeNesw => winit::window::CursorIcon::NeswResize,
-                            IC::ResizeNwse => winit::window::CursorIcon::NwseResize,
-                            IC::Default => winit::window::CursorIcon::Default,
-                        };
-                        window.set_cursor(winit_cursor);
-                    }
-                    if resp.dirty {
-                        if let Some(w) = &self.window { w.request_redraw(); }
-                    }
+                let event = InputEvent::MouseMove {
+                    x: self.mouse_x,
+                    y: self.mouse_y,
+                    modifiers: KeyModifiers::default(),
+                };
+                let resp = self.dispatch_input(event);
+                if let (Some(cursor), Some(window)) = (resp.cursor, &self.window) {
+                    use rwe_engine::embed::CursorIcon as IC;
+                    let winit_cursor = match cursor {
+                        IC::Pointer => winit::window::CursorIcon::Pointer,
+                        IC::Text => winit::window::CursorIcon::Text,
+                        IC::Wait => winit::window::CursorIcon::Wait,
+                        IC::Help => winit::window::CursorIcon::Help,
+                        IC::Crosshair => winit::window::CursorIcon::Crosshair,
+                        IC::Move => winit::window::CursorIcon::Move,
+                        IC::NotAllowed => winit::window::CursorIcon::NotAllowed,
+                        IC::Grab => winit::window::CursorIcon::Grab,
+                        IC::Grabbing => winit::window::CursorIcon::Grabbing,
+                        IC::ResizeEw => winit::window::CursorIcon::EwResize,
+                        IC::ResizeNs => winit::window::CursorIcon::NsResize,
+                        IC::ResizeNesw => winit::window::CursorIcon::NeswResize,
+                        IC::ResizeNwse => winit::window::CursorIcon::NwseResize,
+                        IC::Default => winit::window::CursorIcon::Default,
+                    };
+                    window.set_cursor(winit_cursor);
+                }
+                if resp.dirty {
+                    if let Some(w) = &self.window { w.request_redraw(); }
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
@@ -216,27 +332,28 @@ impl ApplicationHandler for ShellApp {
                     MouseScrollDelta::LineDelta(x, y) => (x * -60.0, y * -60.0),
                     MouseScrollDelta::PixelDelta(p) => (-(p.x as f32), -(p.y as f32)),
                 };
-                let webview = match &mut self.webview { Some(w) => w, None => return };
                 // Ctrl+Wheel = zoom in/out (common browser pattern).
                 if self.modifiers.control_key() {
-                    let z = webview.zoom();
-                    let new_zoom = if dy < 0.0 {
-                        (z * 1.1).min(5.0)
-                    } else {
-                        (z / 1.1).max(0.25)
-                    };
-                    webview.set_zoom(new_zoom);
-                    println!("[shell zoom] {:.0}%", new_zoom * 100.0);
-                    if let Some(w) = &self.window { w.request_redraw(); }
+                    let new_zoom = self.with_active_mut(|wv| {
+                        let z = wv.zoom();
+                        let nz = if dy < 0.0 { (z * 1.1).min(5.0) } else { (z / 1.1).max(0.25) };
+                        wv.set_zoom(nz);
+                        nz
+                    });
+                    if let Some(nz) = new_zoom {
+                        println!("[shell zoom] {:.0}%", nz * 100.0);
+                        if let Some(w) = &self.window { w.request_redraw(); }
+                    }
                     return;
                 }
-                let response = webview.handle_input(InputEvent::Scroll {
+                let event = InputEvent::Scroll {
                     dx, dy,
                     x: self.mouse_x,
                     y: self.mouse_y,
                     modifiers: KeyModifiers::default(),
-                });
-                if response.dirty {
+                };
+                let resp = self.dispatch_input(event);
+                if resp.dirty {
                     if let Some(w) = &self.window { w.request_redraw(); }
                 }
             }
@@ -257,29 +374,24 @@ impl ApplicationHandler for ShellApp {
                 if matches!(key_event.state, ElementState::Pressed) && self.modifiers.control_key() {
                     if let Key::Character(s) = &key_event.logical_key {
                         if s.eq_ignore_ascii_case("c") {
-                            if let Some(wv) = &self.webview {
-                                if let Some(text) = wv.selection_text() {
-                                    if !text.is_empty() {
-                                        if let Ok(mut cb) = arboard::Clipboard::new() {
-                                            let _ = cb.set_text(text);
-                                            println!("[shell] copy: selection -> clipboard");
-                                        }
+                            if let Some(text) = self.with_active(|wv| wv.selection_text()).flatten() {
+                                if !text.is_empty() {
+                                    if let Ok(mut cb) = arboard::Clipboard::new() {
+                                        let _ = cb.set_text(text);
+                                        println!("[shell] copy: selection -> clipboard");
                                     }
                                 }
                             }
                             return;
                         }
                         if s.eq_ignore_ascii_case("a") {
-                            // Ctrl+A: select all
-                            if let Some(wv) = &mut self.webview {
-                                wv.select_all();
-                                if let Some(w) = &self.window { w.request_redraw(); }
-                            }
+                            // Ctrl+A: select all v aktivnim WebView.
+                            self.with_active_mut(|wv| wv.select_all());
+                            if let Some(w) = &self.window { w.request_redraw(); }
                             return;
                         }
-                        // Ctrl+= / Ctrl++ / Ctrl+- / Ctrl+0 zoom controls.
                         if s.eq_ignore_ascii_case("r") {
-                            // Ctrl+R: reload current page.
+                            // Ctrl+R: reload PAGE (devtools ignore).
                             if let (Some(wv), Some(last)) = (&mut self.webview, self.history.get(self.history_idx).cloned()) {
                                 wv.load_url(&last);
                                 if let Some(w) = &self.window { w.request_redraw(); }
@@ -287,16 +399,19 @@ impl ApplicationHandler for ShellApp {
                             return;
                         }
                         if matches!(s.as_str(), "+" | "=" | "-" | "_" | "0") {
-                            if let Some(wv) = &mut self.webview {
+                            let new_zoom = self.with_active_mut(|wv| {
                                 let z = wv.zoom();
-                                let new_zoom = match s.as_str() {
+                                let nz = match s.as_str() {
                                     "+" | "=" => (z * 1.1).min(5.0),
                                     "-" | "_" => (z / 1.1).max(0.25),
                                     "0" => 1.0,
                                     _ => z,
                                 };
-                                wv.set_zoom(new_zoom);
-                                println!("[shell zoom] {:.0}%", new_zoom * 100.0);
+                                wv.set_zoom(nz);
+                                nz
+                            });
+                            if let Some(nz) = new_zoom {
+                                println!("[shell zoom] {:.0}%", nz * 100.0);
                                 if let Some(w) = &self.window { w.request_redraw(); }
                             }
                             return;
@@ -319,35 +434,45 @@ impl ApplicationHandler for ShellApp {
                         }
                         return;
                     }
-                    // Esc: clear selection (jen pokud ne v focused input).
+                    // F12: toggle DevTools (D4a full-screen swap; D4b split TBD).
+                    if matches!(&key_event.logical_key, Key::Named(NamedKey::F12)) {
+                        self.toggle_devtools();
+                        return;
+                    }
+                    // Esc: clear selection v aktivnim WebView.
                     if matches!(&key_event.logical_key, Key::Named(NamedKey::Escape)) {
-                        if let Some(wv) = &mut self.webview {
-                            wv.clear_selection();
-                            if let Some(w) = &self.window { w.request_redraw(); }
-                        }
+                        self.with_active_mut(|wv| wv.clear_selection());
+                        if let Some(w) = &self.window { w.request_redraw(); }
                         return;
                     }
                 }
                 // Scroll keys: PageDown/Up, ArrowUp/Down, Home, End, Space.
                 if matches!(key_event.state, ElementState::Pressed) {
-                    let webview = match &mut self.webview { Some(w) => w, None => return };
-                    let (_vw, vh) = webview.viewport_size();
-                    let (sx, sy) = webview.scroll();
-                    let new_y = match &key_event.logical_key {
-                        Key::Named(NamedKey::PageDown) => Some(sy + vh * 0.9),
-                        Key::Named(NamedKey::PageUp) => Some(sy - vh * 0.9),
-                        Key::Named(NamedKey::ArrowDown) if !self.modifiers.control_key() => Some(sy + 60.0),
-                        Key::Named(NamedKey::ArrowUp) if !self.modifiers.control_key() => Some(sy - 60.0),
-                        Key::Named(NamedKey::Home) => Some(0.0),
-                        Key::Named(NamedKey::End) => Some(1_000_000.0),
-                        Key::Named(NamedKey::Space) if !webview.focused_is_input() => {
-                            let delta = if self.modifiers.shift_key() { -vh * 0.9 } else { vh * 0.9 };
-                            Some(sy + delta)
-                        }
-                        _ => None,
-                    };
-                    if let Some(ny) = new_y {
-                        webview.set_scroll(sx, ny.max(0.0));
+                    let shift = self.modifiers.shift_key();
+                    let ctrl = self.modifiers.control_key();
+                    let key_logical = key_event.logical_key.clone();
+                    let new_y = self.with_active_mut(|webview| {
+                        let (_vw, vh) = webview.viewport_size();
+                        let (sx, sy) = webview.scroll();
+                        let ny = match &key_logical {
+                            Key::Named(NamedKey::PageDown) => Some(sy + vh * 0.9),
+                            Key::Named(NamedKey::PageUp) => Some(sy - vh * 0.9),
+                            Key::Named(NamedKey::ArrowDown) if !ctrl => Some(sy + 60.0),
+                            Key::Named(NamedKey::ArrowUp) if !ctrl => Some(sy - 60.0),
+                            Key::Named(NamedKey::Home) => Some(0.0),
+                            Key::Named(NamedKey::End) => Some(1_000_000.0),
+                            Key::Named(NamedKey::Space) if !webview.focused_is_input() => {
+                                let delta = if shift { -vh * 0.9 } else { vh * 0.9 };
+                                Some(sy + delta)
+                            }
+                            _ => None,
+                        };
+                        if let Some(y) = ny {
+                            webview.set_scroll(sx, y.max(0.0));
+                            true
+                        } else { false }
+                    }).unwrap_or(false);
+                    if new_y {
                         if let Some(w) = &self.window { w.request_redraw(); }
                         return;
                     }
@@ -365,9 +490,8 @@ impl ApplicationHandler for ShellApp {
                     Key::Character(s) => s.to_string(),
                     _ => return,
                 };
-                let webview = match &mut self.webview { Some(w) => w, None => return };
-                let event = if matches!(key_event.state, ElementState::Pressed) {
-                    let resp = webview.handle_input(InputEvent::KeyDown {
+                if matches!(key_event.state, ElementState::Pressed) {
+                    let resp = self.dispatch_input(InputEvent::KeyDown {
                         key: key_str.clone(),
                         modifiers: KeyModifiers::default(),
                     });
@@ -376,25 +500,20 @@ impl ApplicationHandler for ShellApp {
                     }
                     // Character keys taky emit TextInput.
                     if let Key::Character(s) = &key_event.logical_key {
-                        let resp = webview.handle_input(InputEvent::TextInput {
+                        let resp = self.dispatch_input(InputEvent::TextInput {
                             text: s.to_string(),
                         });
                         if resp.dirty {
                             if let Some(w) = &self.window { w.request_redraw(); }
                         }
                     }
-                    InputEvent::KeyDown { key: key_str, modifiers: KeyModifiers::default() }
                 } else {
-                    InputEvent::KeyUp { key: key_str, modifiers: KeyModifiers::default() }
-                };
-                let _ = event; // dispatched outside if pressed
-                if matches!(key_event.state, ElementState::Released) {
                     let key_str_release = match &key_event.logical_key {
                         Key::Character(s) => s.to_string(),
                         Key::Named(NamedKey::Enter) => "Enter".into(),
                         _ => return,
                     };
-                    webview.handle_input(InputEvent::KeyUp {
+                    self.dispatch_input(InputEvent::KeyUp {
                         key: key_str_release,
                         modifiers: KeyModifiers::default(),
                     });
@@ -409,7 +528,6 @@ impl ApplicationHandler for ShellApp {
                     WinitMouseButton::Forward => MouseButton::Other(4),
                     WinitMouseButton::Other(b) => MouseButton::Other(b),
                 };
-                let webview = match &mut self.webview { Some(w) => w, None => return };
                 let event = match state {
                     ElementState::Pressed => InputEvent::MouseDown {
                         x: self.mouse_x, y: self.mouse_y, button: btn,
@@ -420,8 +538,9 @@ impl ApplicationHandler for ShellApp {
                         modifiers: KeyModifiers::default(),
                     },
                 };
-                let resp = webview.handle_input(event);
-                if let Some(nav) = resp.navigation {
+                let resp = self.dispatch_input(event);
+                // Navigation requests jen z page (devtools click NEnavigates main page).
+                if !self.devtools_visible && let Some(nav) = resp.navigation {
                     println!("[shell nav] {:?} {} ({:?})", nav.method, nav.url, nav.target);
                     match nav.method {
                         rwe_engine::embed::NavigationMethod::Get => {

@@ -22,3 +22,6 @@ winit = "0.30"
 wgpu = "29"
 # arboard - system clipboard pro Ctrl+C copy text selection.
 arboard = "3.6"
+# DevTools frontend bundled HTML/CSS/JS resources (D3). Shell injectne
+# INDEX + panel HTMLs do devtools WebView pri F12 toggle.
+rwe-devtools-frontend = { path = "../devtools-frontend" }

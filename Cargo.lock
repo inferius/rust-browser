@@ -3152,6 +3152,7 @@ name = "rwe-shell"
 version = "0.1.0"
 dependencies = [
  "arboard",
+ "rwe-devtools-frontend",
  "rwe-engine",
  "wgpu",
  "winit",
