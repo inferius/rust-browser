@@ -1053,6 +1053,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             if let Some(w) = self.webview.as_mut() { w.scroll_x = x; }
         }
 
+
         /// Synchronizuje mirror WebView z App primary state. Vola se po kazdem
         /// reload / navigace. Phase 4a sync (App primary, WebView side-effect);
         /// Phase 5 obrati polarity (WebView primary, App reads).
@@ -1083,10 +1084,12 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             } else {
                 (1280u32, 900u32, 1.0f32)
             };
+            let prev_zoom = self.zoom();
+            let prev_scroll = (self.scroll_x(), self.scroll_y());
             let mut wv = crate::embed::WebView::new(engine, vw, vh);
             wv.resize(vw, vh, sf);
-            wv.set_zoom(self.zoom());
-            wv.set_scroll(self.scroll_x(), self.scroll_y());
+            wv.set_zoom(prev_zoom);
+            wv.set_scroll(prev_scroll.0, prev_scroll.1);
             wv.set_local_path(self.current_path.clone());
             // load_html (real) - spousti inline + external <script>s.
             // Po loadu volaci kod muze take_interpreter() pro presun do App.

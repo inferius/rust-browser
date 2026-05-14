@@ -173,6 +173,41 @@ User rekl: devtools dostane velky rework v dalsi session.
 
 ---
 
+### Polarity invert progress (po user pozadavku dokoncit pred devtools rework)
+
+Smazane App fields (4):
+- `App.title: String` -> `self.webview.as_ref().map(|w| w.title())`
+- `App.zoom: f32` -> `self.zoom()` method + `self.set_zoom(z)`
+- `App.scroll_target_x/y: f32` -> getters/setters
+- `App.scroll_x/y: f32` -> getters/setters + `cur_scroll_y/x` capture
+  na startu App.render (borrow conflict pres mut renderer borrow scope)
+
+Zbyle App fields (Phase 99):
+- `App.html: String`, `App.css: String` - primary v App, mirror v webview.raw_html/css.
+  Smaze vyzaduje sync_webview_from_app refactor (take html/css args ze
+  caller misto self.* fields).
+- `App.base_url: Option<String>`, `App.current_path: Option<PathBuf>` -
+  stejny problem: initial values z run_window args potreba pri prvnim
+  sync. Drzene jako App fields aby sync mohla pouzit.
+- `App.interpreter: Option<Interpreter>` - velky (59 ref). Po polarity
+  invert webview.interpreter primary; App vola pres
+  `self.webview.as_mut().and_then(|w| w.interpreter_mut())`. Borrow
+  checker problemy pri scope kde webview + interpreter mut current.
+
+Polarity invert dotaz: realne kompletne smaze vsechny App fields
+vyzaduje App.render kompletni rewrite na shell-like pattern:
+```
+self.sync_webview_from_app(html, css, base_url, path);
+let view = self.webview.as_mut().unwrap().render_via(renderer);
+renderer.present_external_to_swap_chain(view);
+```
++ devtools overlay pass pres `webview.last_layout_root()`.
+
+To by smazlo 1260 LOC App.render. Phase 99 priority po devtools rework
+(spise pred - clean App nez novy devtools).
+
+---
+
 ### Phase 99 - polarity invert continuation
 
 Zustava (NEresly N+22):
