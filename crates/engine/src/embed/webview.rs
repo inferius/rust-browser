@@ -429,11 +429,33 @@ impl WebView {
         let viewport_w = self.viewport_w / self.zoom.max(0.01);
         let viewport_h = self.viewport_h / self.zoom.max(0.01);
 
-        // 1. Cascade - resolve CSS styles per element.
-        let style_map = crate::browser::cascade::cascade_with_viewport(
-            &doc.root, &self.stylesheets, viewport_w, viewport_h);
+        // 1. Cascade - resolve CSS styles per element. Wrap v Rc aby
+        // apply_animations / apply_transitions mohly Rc::make_mut mutate
+        // (pri animaci tick anim values overlay puvodne resolved styles).
+        let mut style_map = std::rc::Rc::new(crate::browser::cascade::cascade_with_viewport(
+            &doc.root, &self.stylesheets, viewport_w, viewport_h));
 
-        // 2. Layout - compute boxes.
+        // 1b. CSS @keyframes animation tick - aplikuj current keyframe values
+        // dle elapsed time. Pri presence @keyframes v CSS, style_map dostane
+        // overlay s animated property values (transform, opacity, left, ...).
+        let elapsed = self.animation_origin.elapsed().as_secs_f32();
+        let has_keyframes = self.stylesheets.iter().any(|s| !s.keyframes.is_empty());
+        if has_keyframes {
+            let _animating = crate::browser::cascade::apply_animations(
+                std::rc::Rc::make_mut(&mut style_map), &self.stylesheets, elapsed);
+            let max_scroll = (style_map.len() as f32).max(1.0);
+            let scroll_progress = if max_scroll > 1.0 { self.scroll_y / max_scroll.max(1.0) } else { 0.0 };
+            let _ = crate::browser::cascade::apply_scroll_animations(
+                std::rc::Rc::make_mut(&mut style_map), &self.stylesheets, scroll_progress);
+        }
+
+        // Sync prev_style_map pro pristi frame transitions detection.
+        // Transitions detect+apply zustavaji v Phase 99 (vyzaduji active_transitions
+        // state machine + event dispatch transitionend).
+        self.prev_style_map = Some(style_map.clone());
+
+        // 2. Layout - compute boxes (po anim tick aby left/top/width keyframes
+        // ovlivnili layout pozice).
         let mut layout_root = crate::browser::layout::layout_tree(
             &doc.root, &style_map, viewport_w, viewport_h);
 
@@ -441,11 +463,8 @@ impl WebView {
         // posunuju dle scroll_y aby drzeli na top viewportu uvnitr containeru.
         crate::browser::layout::apply_sticky(&mut layout_root, self.scroll_y);
 
-        // CSS @keyframes anim tick + transitions vyzaduji 200+ LOC state machine
-        // (animation_origin, active_animations, animation_iterations,
-        // prev_style_map diff). Zustal v App.render zatim - Phase 99 migrace.
-        let _ = &self.animation_origin;
-        let _ = &self.prev_style_map;
+        // 2c. Paint-side animations apply (transform overlay, opacity tween).
+        crate::browser::render::apply_paint_animations(&mut layout_root, &style_map);
 
         // 3. Paint - generate display list (culled na viewport).
         let mut display_list = crate::browser::paint::build_display_list_culled(
