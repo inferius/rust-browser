@@ -624,6 +624,13 @@ impl WebView {
         let mut display_list = crate::browser::paint::build_display_list_culled(
             &layout_root, self.scroll_y, viewport_h);
 
+        // 3-canvas. Canvas2D ops -> DisplayCommands (po body paint).
+        if let Some(interp) = self.interpreter.as_ref() {
+            let canvas_ops = interp.canvas_ops.borrow();
+            crate::browser::render::canvas_paint::paint_canvas_ops(
+                &layout_root, &canvas_ops, &mut display_list);
+        }
+
         // 3a. Apply scroll: posun page commands o -scroll_y. Scrollbar
         //     overlay (pridany nize) je viewport-relative -> add PO shift.
         for cmd in display_list.iter_mut() {
@@ -673,6 +680,17 @@ impl WebView {
         // 5. Renderer kresli display list do target_view.
         let _had = renderer.draw_segments_into_view_clipped(
             target_view, &display_list, true, None);
+
+        // 5b. WebGL canvas frame - per <canvas> s WebGL state encode wgpu
+        // draw passes do per-canvas RT + compose do target_view. NO-OP pri
+        // zadnem WebGL canvasu na strance.
+        if let Some(interp) = self.interpreter.as_ref() {
+            let webgl_states = interp.webgl_states.clone();
+            let states = webgl_states.borrow();
+            if !states.is_empty() {
+                let _ = renderer.run_webgl_frame(&layout_root, target_view, &*states, self.scroll_y);
+            }
+        }
 
         // 6. Stash layout_root pro hostujici aplikaci (overlay paint pass).
         self.last_layout_root = Some(layout_root);

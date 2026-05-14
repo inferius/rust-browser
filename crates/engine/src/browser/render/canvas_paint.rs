@@ -4,7 +4,7 @@ use crate::browser::layout::LayoutBox;
 use crate::browser::paint::{CanvasOp, DisplayCommand};
 
 /// Emituje DisplayCommands pro canvas tag z canvas_ops storage.
-pub(super) fn paint_canvas_ops(
+pub fn paint_canvas_ops(
     bx: &LayoutBox,
     ops_storage: &std::collections::HashMap<usize, Vec<CanvasOp>>,
     cmds: &mut Vec<DisplayCommand>,

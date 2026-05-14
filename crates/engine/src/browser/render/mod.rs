@@ -92,7 +92,7 @@ use primitives::{push_rect, push_rect_rounded, push_rect_uv, push_skewed_quad,
     push_multi_stop_radial_gradient, push_multi_stop_conic_gradient,
     push_shadow, push_inset_shadow, normalize_color};
 
-mod canvas_paint;
+pub mod canvas_paint;
 use canvas_paint::paint_canvas_ops;
 
 mod webgl_paint;
