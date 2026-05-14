@@ -1053,6 +1053,20 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             if let Some(w) = self.webview.as_mut() { w.scroll_x = x; }
         }
 
+        /// Raw HTML source delegate webview (polarity invert).
+        fn html(&self) -> &str {
+            self.webview.as_ref().map(|w| w.html()).unwrap_or("")
+        }
+        fn css(&self) -> &str {
+            self.webview.as_ref().map(|w| w.css()).unwrap_or("")
+        }
+        fn base_url(&self) -> Option<String> {
+            self.webview.as_ref().and_then(|w| w.base_url().map(|s| s.to_string()))
+        }
+        fn current_path(&self) -> Option<std::path::PathBuf> {
+            self.webview.as_ref().and_then(|w| w.local_path().cloned())
+        }
+
 
         /// Synchronizuje mirror WebView z App primary state. Vola se po kazdem
         /// reload / navigace. Phase 4a sync (App primary, WebView side-effect);
@@ -1090,10 +1104,10 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             wv.resize(vw, vh, sf);
             wv.set_zoom(prev_zoom);
             wv.set_scroll(prev_scroll.0, prev_scroll.1);
-            wv.set_local_path(self.current_path.clone());
+            wv.set_local_path(self.current_path());
             // load_html (real) - spousti inline + external <script>s.
             // Po loadu volaci kod muze take_interpreter() pro presun do App.
-            let _ = wv.load_html(&self.html, &self.css, self.base_url.clone());
+            let _ = wv.load_html(self.html(), self.css(), self.base_url());
             self.webview = Some(wv);
         }
     }
@@ -2741,11 +2755,11 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                             self.regenerate_and_open_devtools();
                         }
                         Key::Named(NamedKey::F5) => {
-                            if let Some(p) = self.current_path.clone() {
+                            if let Some(p) = self.current_path() {
                                 println!("[F5 reload] {}", p.display());
                                 self.load_path(&p);
                                 self.render();
-                            } else if let Some(url) = self.base_url.clone() {
+                            } else if let Some(url) = self.base_url() {
                                 println!("[F5 reload] {url}");
                                 self.navigate_url_no_history(&url);
                             }
@@ -3224,7 +3238,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             }
             walk(&layout, &layer, &font, layout.rect.height, px_to_mm);
             // Save: pri current_path pres .pdf substituce, jinak ~/page.pdf.
-            let out_path = self.current_path.as_ref()
+            let out_path = self.current_path().as_ref()
                 .and_then(|p| p.to_str().map(|s| s.replace(".html", ".pdf")))
                 .unwrap_or_else(|| "page.pdf".to_string());
             match std::fs::File::create(&out_path) {
@@ -3375,7 +3389,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             if let Some(wv) = self.webview.as_mut() {
                 self.interpreter = wv.take_interpreter();
             }
-            let page_title = crate::embed::loader::extract_title(&self.html)
+            let page_title = crate::embed::loader::extract_title(self.html())
                 .unwrap_or_else(|| path.file_name()
                     .and_then(|n| n.to_str()).unwrap_or("page").to_string());
             // title je primary v webview - sync_webview_from_app + load_html
@@ -3392,7 +3406,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         /// Regen devtools.html + otevri ho v default OS browseru.
         fn regenerate_and_open_devtools(&self) {
             let interp = match &self.interpreter { Some(i) => i, None => return };
-            let stylesheets = vec![super::css_parser::parse_stylesheet(&self.css)];
+            let stylesheets = vec![super::css_parser::parse_stylesheet(self.css())];
             let console_log = interp.console_log.borrow().clone();
             let network_log = interp.network_log.borrow().clone();
             // Borrow document, vygeneruj HTML, drop borrow.
@@ -3480,8 +3494,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         /// cached layout dokud worker neposla Done event.
         fn activate_debug_mode(&mut self) {
             if self.debug_runner.is_some() { return; }
-            let html = self.html.clone();
-            let base_url = self.base_url.clone().unwrap_or_default();
+            let html = self.html().to_string();
+            let base_url = self.base_url().unwrap_or_default();
             let bp_lines: Vec<u32> = self.devtools.sources.breakpoints.iter()
                 .map(|b| b.line).collect();
             let runner = crate::devtools::debug_runner::DebugRunner::spawn(
@@ -3932,6 +3946,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     }
                 }
             }
+            let base_for_form = self.base_url();
             let layout_root = match &self.layout_root { Some(l) => l, None => return };
             let interp = match &mut self.interpreter { Some(i) => i, None => return };
 
@@ -3990,7 +4005,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                 println!("[form submit] prevented by listener");
                                 return;
                             }
-                            if let Some((url, method, body)) = build_form_request(&form, self.base_url.as_deref()) {
+                            if let Some((url, method, body)) = build_form_request(&form, base_for_form.as_deref()) {
                                 println!("[form {} submit] {url}", method);
                                 if method == "post" {
                                     let body_str = body.unwrap_or_default();
@@ -4113,7 +4128,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 .map(|h| std::path::PathBuf::from(h).join("Downloads"));
             let Some(dir) = dl_dir else { return };
             let _ = std::fs::create_dir_all(&dir);
-            let url = self.base_url.clone().unwrap_or_else(|| "page".to_string());
+            let url = self.base_url().unwrap_or_else(|| "page".to_string());
             // Filename z URL last segment + timestamp pro unique.
             let base = url.split('/').last().unwrap_or("page");
             let safe: String = base.chars()
@@ -4128,7 +4143,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 format!("{}_{}.html", safe, ts)
             };
             let path = dir.join(&fname);
-            if let Err(e) = std::fs::write(&path, &self.html) {
+            if let Err(e) = std::fs::write(&path, self.html()) {
                 eprintln!("[save] {}: {}", path.display(), e);
                 return;
             }
@@ -4260,7 +4275,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 if let Some(wv) = self.webview.as_mut() {
                     self.interpreter = wv.take_interpreter();
                 }
-                let page_title = crate::embed::loader::extract_title(&self.html)
+                let page_title = crate::embed::loader::extract_title(self.html())
                     .unwrap_or_else(|| url.to_string());
                 // title je primary v webview - sync_webview_from_app + load_html
             // ho nastavi. App.title field smazany (Phase 99 polarity invert step).
@@ -4442,6 +4457,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             let cur_zoom = self.zoom();
             let cur_scroll_y = self.scroll_y();
             let cur_scroll_x = self.scroll_x();
+            let cur_css = self.css().to_string();
+            let cur_base_url = self.base_url();
             let r = match &mut self.renderer { Some(r) => r, None => return };
             // Push zoom faktor do rendereru pro vp uniform skalovani.
             r.zoom = cur_zoom;
@@ -4456,16 +4473,16 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             let css_hash = {
                 use std::hash::{Hash, Hasher};
                 let mut h = ahash::AHasher::default();
-                self.css.hash(&mut h);
+                cur_css.hash(&mut h);
                 h.finish()
             };
             // Reading mode CSS smazany (Session N+22) - shell concern.
             let combined_hash = css_hash;
             if self.cached_stylesheets.is_none() || self.cached_stylesheets_hash != combined_hash {
-                let combined = self.css.clone();
+                let combined = cur_css.to_string();
                 let parsed = vec![css_parser::parse_stylesheet(&combined)];
                 for sheet in &parsed {
-                    r.load_font_faces(&sheet.font_faces, self.base_url.as_deref());
+                    r.load_font_faces(&sheet.font_faces, cur_base_url.clone().as_deref().map(|s| s.to_string()).as_deref());
                 }
                 // Detect if any keyframes animate layout-affecting properties.
                 // EXACT match - drive starts_with("border") matchovalo "border-color"
@@ -4542,20 +4559,20 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 // Detekuj zda CSS obsahuje :hover/:focus selektory. Pokud ne,
                 // hover/focus state nema vliv na cascade -> skip re-cascade pri
                 // hover change.
-                self.css_uses_hover = self.css.contains(":hover");
-                self.css_uses_focus = self.css.contains(":focus");
-                self.css_uses_transitions = self.css.contains("transition");
-                self.css_uses_keyframes = self.css.contains("@keyframes")
-                    || self.css.contains("animation:")
-                    || self.css.contains("animation-name");
+                self.css_uses_hover = cur_css.contains(":hover");
+                self.css_uses_focus = cur_css.contains(":focus");
+                self.css_uses_transitions = cur_css.contains("transition");
+                self.css_uses_keyframes = cur_css.contains("@keyframes")
+                    || cur_css.contains("animation:")
+                    || cur_css.contains("animation-name");
                 // Detect viewport-dependent queries: @media, @container, vw/vh units.
-                self.css_uses_viewport = self.css.contains("@media")
-                    || self.css.contains("@container")
-                    || self.css.contains("vw") || self.css.contains("vh")
-                    || self.css.contains("vmin") || self.css.contains("vmax")
-                    || self.css.contains("dvh") || self.css.contains("dvw")
-                    || self.css.contains("svw") || self.css.contains("svh")
-                    || self.css.contains("lvw") || self.css.contains("lvh");
+                self.css_uses_viewport = cur_css.contains("@media")
+                    || cur_css.contains("@container")
+                    || cur_css.contains("vw") || cur_css.contains("vh")
+                    || cur_css.contains("vmin") || cur_css.contains("vmax")
+                    || cur_css.contains("dvh") || cur_css.contains("dvw")
+                    || cur_css.contains("svw") || cur_css.contains("svh")
+                    || cur_css.contains("lvw") || cur_css.contains("lvh");
                 self.cached_stylesheets = Some(parsed);
                 self.cached_stylesheets_hash = combined_hash;
                 self.cached_style_map = None;
