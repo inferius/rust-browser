@@ -837,8 +837,10 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
     use winit::keyboard::{Key, NamedKey};
 
     struct App {
-        html: String,
-        css: String,
+        // html/css/base_url/current_path fields smazany (polarity invert
+        // kompletni). Initial data drzeny v `initial: Option<InitialData>`
+        // do prvniho sync_webview, pak primary v webview.
+        initial: Option<(String, String, Option<String>, Option<std::path::PathBuf>)>,
         /// Cache parsed stylesheets (css string hash -> Vec<Stylesheet>).
         cached_stylesheets_hash: u64,
         cached_stylesheets: Option<Vec<super::css_parser::Stylesheet>>,
@@ -924,10 +926,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         async_jobs: crate::browser::async_jobs::AsyncJobsRegistry,
         // bookmark_picker field smazany (Session N+22) - shell concern.
         cached_pseudo_map: Option<super::cascade::PseudoStyleMap>,
-        /// Cesta k aktualne nactenemu HTML souboru (pro reload + relativni paths).
-        current_path: Option<std::path::PathBuf>,
-        /// Page URL (http(s)://... nebo file:///...) pro relative URL resolution.
-        base_url: Option<String>,
+        // current_path + base_url smazany (polarity invert) - drzeny v webview.
         // history / history_idx fields smazany N+22 - back/forward shell concern.
         // (profile history persist v ~/.rwe stale aktualizuje pres navigate_url).
         /// Otevreny <select> dropdown - hodnota = (node ptr, anchor x/y/w).
@@ -1117,7 +1116,9 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
 
     impl ApplicationHandler for App {
         fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-            let title = match &self.current_path {
+            let (init_html, init_css, init_base, init_path) = self.initial.take()
+                .unwrap_or_default();
+            let title = match &init_path {
                 Some(p) => format!("Rust Web Engine - {}", p.display()),
                 None => "Rust Web Engine".to_string(),
             };
@@ -1129,13 +1130,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             self.window = Some(window.clone());
             self.renderer = Some(Renderer::new(window.clone()));
 
-            // Authoritative WebView: vytvori se v sync_webview + spousti scripts
-            // via webview.load_html. App.interpreter pak vezme ownership pres
-            // take_interpreter.
-            let init_html = self.html.clone();
-            let init_css = self.css.clone();
-            let init_base = self.base_url.clone();
-            let init_path = self.current_path.clone();
+            // Authoritative WebView: vytvori se v sync_webview + spousti scripts.
             self.sync_webview(&init_html, &init_css, init_base, init_path);
             if let Some(wv) = self.webview.as_mut() {
                 self.interpreter = wv.take_interpreter();
@@ -3372,17 +3367,11 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     }
                 }
             }
-            self.html = html;
-            self.css = css;
-            self.current_path = Some(path.to_path_buf());
             self.set_scroll_y(0.0);
             self.set_scroll_target_y(0.0);
             self.set_scroll_x(0.0);
             self.set_scroll_target_x(0.0);
             self.start_time = std::time::Instant::now();
-            // animation_origin reset - bez tohoto CSS animations elapsed
-            // pri prvni snimek nove stranky != 0 (zachoval z predchoziho
-            // browse sessions). Slide-anim startovala uprostred iteration.
             self.animation_origin = self.start_time;
             self.prev_style_map = None;
             self.active_animations.clear();
@@ -3391,11 +3380,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             // Authoritative WebView restart pres sync_webview - novy webview s
             // real load_html (spousti scripts). Po loadu take_interpreter ->
             // App.interpreter.
-            let new_html = self.html.clone();
-            let new_css = self.css.clone();
-            let new_base = self.base_url.clone();
-            let new_path = self.current_path.clone();
-            self.sync_webview(&new_html, &new_css, new_base, new_path);
+            let url = format!("file:///{}", path.display().to_string().replace('\\', "/"));
+            self.sync_webview(&html, &css, Some(url), Some(path.to_path_buf()));
             if let Some(wv) = self.webview.as_mut() {
                 self.interpreter = wv.take_interpreter();
             }
@@ -4023,9 +4009,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                         // Replace HTML s response - sync_webview vyrobí
                                         // novy WebView + spousti scripts, App.interpreter
                                         // move z webview.
-                                        self.html = html.clone();
-                                        self.css = String::new();
-                                        self.base_url = Some(url.clone());
                                         self.set_scroll_y(0.0);
                                         self.set_scroll_target_y(0.0);
                                         self.set_scroll_x(0.0);
@@ -4060,7 +4043,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         InteractiveKind::Link => {
                             if let Some(href) = node.attr("href") {
                                 if !href.starts_with('#') {
-                                    let url = match &self.base_url {
+                                    let url = match base_for_form.as_deref() {
                                         Some(b) => resolve_url(b, &href),
                                         None => href.clone(),
                                     };
@@ -4267,10 +4250,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 for style in document.root.get_elements_by_tag("style") {
                     css.push('\n'); css.push_str(&style.text_content());
                 }
-                self.html = html.clone();
-                self.css = css.clone();
-                self.base_url = Some(url.to_string());
-                self.current_path = None;
                 self.set_scroll_y(0.0);
                 self.set_scroll_target_y(0.0);
                 self.set_scroll_x(0.0);
@@ -5540,7 +5519,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     }
                     DisplayCommand::Image { src, w, h, .. } => {
                         // Resolve relative URL proti base_url (pri http(s) nebo file:// page).
-                        let resolved = match &self.base_url {
+                        let resolved = match cur_base_url.as_deref() {
                             Some(base) => resolve_url(base, src),
                             None => src.clone(),
                         };
@@ -5680,7 +5659,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
     // Title z <title> tagu nebo URL fallback.
     // Title nyni drzí webview (App polarity invert step).
     let mut app = App {
-        html, css,
+        initial: Some((html, css, base_url, current_html_path)),
         cached_stylesheets_hash: 0,
         cached_stylesheets: None,
         cached_cascade_hash: 0,
@@ -5711,8 +5690,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         // pri PERF_DEBUG=1, ale env var ma byt jen pro logging - overlay je
         // separate UI feature.
         show_fps: false,
-        current_path: current_html_path,
-        base_url,
         open_select: None,
         auto_devtools,
         window: None,
