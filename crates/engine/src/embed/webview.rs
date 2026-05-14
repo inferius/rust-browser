@@ -402,13 +402,26 @@ impl WebView {
                 if (self.mouse_x - x).abs() > 0.5 || (self.mouse_y - y).abs() > 0.5 {
                     self.mouse_x = x;
                     self.mouse_y = y;
-                    // Pri otevrene select dropdown hover state mit redraw.
+                    // Hit-test layout_root pres content coords -> :hover state.
+                    let content_x = x + self.scroll_x;
+                    let content_y = y + self.scroll_y;
+                    let hovered_id = self.last_layout_root.as_ref()
+                        .and_then(|root| root.hit_test(content_x, content_y))
+                        .and_then(|bx| bx.node.as_ref().map(|n|
+                            std::rc::Rc::as_ptr(n) as usize));
+                    let prev = crate::browser::cascade::get_hovered_node();
+                    if prev != hovered_id {
+                        crate::browser::cascade::set_hovered_node(hovered_id);
+                        // Hover change -> cascade rebuild (kdyz CSS pouziva
+                        // :hover) -> dirty + redraw.
+                        self.dirty = true;
+                        response.dirty = true;
+                    }
                     if self.open_select.is_some() {
                         self.dirty = true;
                         response.dirty = true;
                     }
                 }
-                // Phase 99: hit-test layout tree + :hover state machine + redraw.
             }
             InputEvent::MouseDown { x, y, button, .. } => {
                 if matches!(button, crate::embed::MouseButton::Left) {
