@@ -221,53 +221,38 @@ impl ShellApp {
         }
     }
 
-    /// Slozi devtools INDEX_HTML s injectnutymi panel HTMLs + theme.css
-    /// + cdp.js. Vlozi do <head> jako `<script id="theme-css">` + cdp.js
-    /// + `window.__rwe_panel_html__ = { elements: ..., console: ... }`.
+    /// Slozi devtools HTML: INDEX_HTML s nahrazenymi placeholdery na
+    /// theme.css + cdp.js + per-panel HTML injectnuty primo do <div id="panel-*">.
+    /// Tab swap pres display style (ne innerHTML swap) - vsechny panely
+    /// v DOM od zacatku, event listeners aktivni.
     fn build_devtools_html() -> String {
         use rwe_devtools_frontend::*;
-        // JSON-escape kazdy panel HTML pro bezpecne vlozeni do JS string.
-        fn js_escape(s: &str) -> String {
-            let mut out = String::with_capacity(s.len() + 16);
-            out.push('"');
-            for ch in s.chars() {
-                match ch {
-                    '\\' => out.push_str("\\\\"),
-                    '"' => out.push_str("\\\""),
-                    '\n' => out.push_str("\\n"),
-                    '\r' => out.push_str("\\r"),
-                    '\t' => out.push_str("\\t"),
-                    '<' => out.push_str("\\u003c"), // </script breaker
-                    c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
-                    c => out.push(c),
-                }
-            }
-            out.push('"');
-            out
-        }
-        // INDEX_HTML obsahuje:
-        //   <style id="theme-css"></style>
-        //   <script id="cdp-js"></script>
-        // Nahradime tyto prazdne elementy obsahem.
-        let with_theme = INDEX_HTML.replace(
+        let mut out = INDEX_HTML.to_string();
+        out = out.replace(
             "<style id=\"theme-css\"></style>",
             &format!("<style id=\"theme-css\">{}</style>", THEME_CSS),
         );
-        let panel_map = format!(
-            "<script>window.__rwe_panel_html__ = {{\
-                elements: {}, console: {}, sources: {}, network: {}, performance: {} }};\
-            </script>",
-            js_escape(ELEMENTS_HTML),
-            js_escape(CONSOLE_HTML),
-            js_escape(SOURCES_HTML),
-            js_escape(NETWORK_HTML),
-            js_escape(PERFORMANCE_HTML),
-        );
-        let with_cdp = with_theme.replace(
+        out = out.replace(
             "<script id=\"cdp-js\"></script>",
-            &format!("{}<script id=\"cdp-js\">{}</script>", panel_map, CDP_JS),
+            &format!("<script id=\"cdp-js\">{}</script>", CDP_JS),
         );
-        with_cdp
+        // Inject kazdy panel HTML do prislusneho <div id="panel-X"></div>.
+        // Naivni String::replace - matchne prvni vyskyt (jednou per panel).
+        for (id, body) in [
+            ("panel-elements", ELEMENTS_HTML),
+            ("panel-console", CONSOLE_HTML),
+            ("panel-sources", SOURCES_HTML),
+            ("panel-network", NETWORK_HTML),
+            ("panel-performance", PERFORMANCE_HTML),
+        ] {
+            let open = format!("<div id=\"{}\" class=\"panel\"></div>", id);
+            let open_hidden = format!("<div id=\"{}\" class=\"panel\" style=\"display:none\"></div>", id);
+            let filled = format!("<div id=\"{}\" class=\"panel\">{}</div>", id, body);
+            let filled_hidden = format!("<div id=\"{}\" class=\"panel\" style=\"display:none\">{}</div>", id, body);
+            out = out.replace(&open, &filled);
+            out = out.replace(&open_hidden, &filled_hidden);
+        }
+        out
     }
 
     /// Pristup k aktivnimu WebView (devtools pokud visible, jinak page).
