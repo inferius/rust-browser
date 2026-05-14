@@ -57,7 +57,44 @@ NIKDE neni chrome dostupny.
 a1408b7 refactor(engine): smazat shell dispatch z lib.rs + App.shell_mode
 d5fd0d7 refactor(engine): smazat shell_chrome.rs (chrome paint je shell concern)
 174500a refactor(engine): smazat 363 LOC dead chrome paint blok
+73d8a94 refactor(engine): smazat 7 shell-only App fields
+de245ad refactor(engine): smazat READING_MODE_CSS + reading_css cache shtub
 ```
+
+### Phase 99 cleanup TODO (na ostraneni TabManager + zbylych shell concerns)
+
+App.tabs field (TabManager) + tabs.rs (747 LOC) zustavaji. Multi-tab
+keyboard shortcuts a chrome event handlers jsou v dead `if false` blocich
+ALE pole stale alokovany kvuli ref sites uvnitr tehto bloku. Strip
+vyzaduje:
+
+1. Pridat App.current_tab: tabs::Tab field, init z initial_tab.
+2. Pridat App::active_tab(&self) -> &Tab, active_tab_mut(&mut self) -> &mut Tab.
+3. **JEDNOTLIVE** smazat vsech ~20 `if false { ... shell ... }` bloku v
+   render/mod.rs (CharacterReceived handlers, mouse handlers, MenuAction
+   match arms, hit_chrome calls). KAZDY block ma rozdilnou hloubku +
+   nested match - automatic regex strip rozbije strukturu (zkouseno v
+   N+22 - vlastni session strip neuspesny, revertovany).
+4. Smazat App.tabs: TabManager field. Smazat init line.
+5. Replace `self.tabs.active_tab()` / `_mut()` -> `self.active_tab()`
+   / `_mut()` (POUZE po brackety strip jinak chyby misalign).
+6. Smaze MenuAction::Tab*(idx) match arms.
+7. Smaze hit_chrome fn + tabs.rs.
+8. Engine.embed::loader pridat `extract_title` re-export z tabs.rs
+   (pouzity i pro embed loadu). about: pages fns presunout do shell.
+
+Dalsi shell-only fields ktere se po tomto kroku da smazat (po dead block
+strip):
+- `addr_input` (SimpleStringBuffer), `find_query`, `find_match_idx`
+- `history`, `history_idx`
+- `shell_tab_tooltip`, `shell_tab_hover_pending`
+- `tab_drag_idx`, `tab_drag_x_start`
+- `status_hover_url`
+- `tabs::TabManager` + `tabs::Tab` (po current_tab refactor)
+
+Strip neuspesny v N+22 protoze: PowerShell regex replace `self.tabs.X`
+-> komentar rozbil multi-line `match` arm / `if let Some(t) = ...` 
+struktury. Iterativni manual delete kazdeho dead bloku je nutny.
 
 ---
 
