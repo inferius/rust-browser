@@ -114,6 +114,10 @@ pub struct WebView {
     /// Mouse down position - pro click-vs-drag distinguish pri MouseUp.
     /// Some pri MouseDown, None po MouseUp dispatch.
     pub(crate) mouse_down_at: Option<(f32, f32, std::rc::Rc<crate::browser::dom::Node>)>,
+    /// Caret position per <input>/<textarea> node_id (char index 0..value.len()).
+    /// TextInput insertne na caret pos + advance. Backspace delete pos-1.
+    /// Arrow keys posunou. Render_via emit blinkajici Rect kdy focused input.
+    pub(crate) input_caret: std::collections::HashMap<usize, usize>,
     /// Last layout_root vyrobeny v render_via - getter pro hostujici aplikaci
     /// (App emits inspector overlay nad webview RT pres dalsi draw_segments
     /// pass; shell nepouziva).
@@ -158,6 +162,7 @@ impl WebView {
             mouse_x: 0.0,
             mouse_y: 0.0,
             mouse_down_at: None,
+            input_caret: std::collections::HashMap::new(),
             last_layout_root: None,
             async_jobs: crate::browser::async_jobs::AsyncJobsRegistry::new(),
         }
@@ -571,14 +576,52 @@ impl WebView {
                             }
                         }
                     }
-                    // Backspace na focused input - smaze posledni grapheme + emit "input" event.
-                    if is_input && key == "Backspace" {
+                    if is_input {
+                        let nid = std::rc::Rc::as_ptr(&target) as usize;
                         let cur = target.attr("value").unwrap_or_default();
-                        let mut chars: Vec<char> = cur.chars().collect();
-                        if !chars.is_empty() {
-                            chars.pop();
-                            let new_value: String = chars.into_iter().collect();
+                        let chars: Vec<char> = cur.chars().collect();
+                        let mut caret = *self.input_caret.get(&nid).unwrap_or(&chars.len());
+                        caret = caret.min(chars.len());
+                        let mut mutated = false;
+                        let mut new_chars = chars.clone();
+                        match key.as_str() {
+                            "Backspace" if caret > 0 => {
+                                new_chars.remove(caret - 1);
+                                caret -= 1;
+                                mutated = true;
+                            }
+                            "Delete" if caret < new_chars.len() => {
+                                new_chars.remove(caret);
+                                mutated = true;
+                            }
+                            "ArrowLeft" => {
+                                caret = caret.saturating_sub(1);
+                                self.input_caret.insert(nid, caret);
+                                response.dirty = true;
+                                self.dirty = true;
+                            }
+                            "ArrowRight" => {
+                                caret = (caret + 1).min(new_chars.len());
+                                self.input_caret.insert(nid, caret);
+                                response.dirty = true;
+                                self.dirty = true;
+                            }
+                            "Home" => {
+                                self.input_caret.insert(nid, 0);
+                                response.dirty = true;
+                                self.dirty = true;
+                            }
+                            "End" => {
+                                self.input_caret.insert(nid, new_chars.len());
+                                response.dirty = true;
+                                self.dirty = true;
+                            }
+                            _ => {}
+                        }
+                        if mutated {
+                            let new_value: String = new_chars.into_iter().collect();
                             target.set_attr("value", &new_value);
+                            self.input_caret.insert(nid, caret);
                             if let Some(interp) = self.interpreter.as_mut() {
                                 let mut event = crate::interpreter::JsObject::new();
                                 event.set("type".into(), crate::interpreter::JsValue::Str("input".into()));
@@ -621,15 +664,29 @@ impl WebView {
                 }
             }
             InputEvent::TextInput { ref text } => {
-                // Pri focused <input>/<textarea> append text do value attr +
-                // dispatch "input" event.
+                // Pri focused <input>/<textarea> insert text na caret pos +
+                // dispatch "input" event. Caret advance o N graphemes.
                 if let Some(target) = self.focused_dom_node() {
                     let is_input = matches!(target.tag_name().as_deref(),
                         Some("input") | Some("textarea"));
                     if is_input {
+                        // Skip control chars (Enter/Tab handled v KeyDown).
+                        let printable: String = text.chars()
+                            .filter(|c| !c.is_control()).collect();
+                        if printable.is_empty() { return response; }
+                        let nid = std::rc::Rc::as_ptr(&target) as usize;
                         let cur = target.attr("value").unwrap_or_default();
-                        let new_value = format!("{cur}{text}");
+                        let mut chars: Vec<char> = cur.chars().collect();
+                        let caret = (*self.input_caret.get(&nid).unwrap_or(&chars.len()))
+                            .min(chars.len());
+                        let ins_chars: Vec<char> = printable.chars().collect();
+                        let ins_n = ins_chars.len();
+                        for (i, ch) in ins_chars.into_iter().enumerate() {
+                            chars.insert(caret + i, ch);
+                        }
+                        let new_value: String = chars.into_iter().collect();
                         target.set_attr("value", &new_value);
+                        self.input_caret.insert(nid, caret + ins_n);
                         if let Some(interp) = self.interpreter.as_mut() {
                             let mut event = crate::interpreter::JsObject::new();
                             event.set("type".into(), crate::interpreter::JsValue::Str("input".into()));
@@ -910,6 +967,55 @@ impl WebView {
                 &layout_root, &canvas_ops, &mut display_list);
         }
 
+        // 3-caret. Blinking caret na focused <input>/<textarea>.
+        if let Some(focused) = self.focused_dom_node() {
+            let is_input = matches!(focused.tag_name().as_deref(),
+                Some("input") | Some("textarea"));
+            if is_input {
+                let nid = std::rc::Rc::as_ptr(&focused) as usize;
+                let value = focused.attr("value").unwrap_or_default();
+                let chars: Vec<char> = value.chars().collect();
+                let caret = (*self.input_caret.get(&nid).unwrap_or(&chars.len()))
+                    .min(chars.len());
+                // Find LayoutBox pre this node (walk layout_root).
+                fn find_box<'a>(b: &'a crate::browser::layout::LayoutBox, target_id: usize)
+                    -> Option<&'a crate::browser::layout::LayoutBox> {
+                    if let Some(n) = &b.node {
+                        if std::rc::Rc::as_ptr(n) as usize == target_id {
+                            return Some(b);
+                        }
+                    }
+                    for ch in &b.children {
+                        if let Some(f) = find_box(ch, target_id) { return Some(f); }
+                    }
+                    None
+                }
+                if let Some(input_box) = find_box(&layout_root, nid) {
+                    let weight = input_box.effective_weight();
+                    let prefix: String = chars[..caret].iter().collect();
+                    let prefix_w = crate::browser::layout::measure_text_width_full(
+                        &prefix, input_box.font_size, weight, input_box.italic,
+                        &input_box.font_family, input_box.letter_spacing);
+                    // Pad left ~6px (CSS input default), caret y od inner top.
+                    let pad_l = 6.0_f32;
+                    let pad_t = 4.0_f32;
+                    let caret_x = input_box.rect.x + pad_l + prefix_w;
+                    let caret_y = input_box.rect.y + pad_t;
+                    let caret_h = input_box.font_size * 1.2;
+                    // Blink 1 Hz: even seconds visible, odd off.
+                    let elapsed = self.animation_origin.elapsed().as_secs_f32();
+                    let blink_on = (elapsed * 2.0) as i32 % 2 == 0;
+                    if blink_on {
+                        display_list.push(crate::browser::paint::DisplayCommand::Rect {
+                            x: caret_x, y: caret_y,
+                            w: 1.5, h: caret_h,
+                            color: [40, 40, 50, 255], radius: 0.0,
+                        });
+                    }
+                }
+            }
+        }
+
         // 3-sel. Text selection highlight - kdy page_selection Some, emit
         // modry Rect overlays nad selected text runs.
         if let Some(interp) = self.interpreter.as_ref() {
@@ -1114,13 +1220,15 @@ impl WebView {
     pub fn scale_factor(&self) -> f32 { self.scale_factor }
 
     /// `true` pokud stylesheets obsahuji @keyframes / aktivni CSS transitions
-    /// / smooth scroll still tweening. Hostujici aplikace pak request_redraw
-    /// kazdy frame dokud nestihnem ustaleni.
+    /// / smooth scroll still tweening / focused input (caret blink).
+    /// Hostujici aplikace pak request_redraw kazdy frame dokud nestihnem
+    /// ustaleni.
     pub fn has_active_animations(&self) -> bool {
         self.stylesheets.iter().any(|s| !s.keyframes.is_empty())
             || !self.active_transitions.is_empty()
             || (self.scroll_target_y - self.scroll_y).abs() > 0.5
             || (self.scroll_target_x - self.scroll_x).abs() > 0.5
+            || self.focused_is_input()
     }
 
     /// Nastav zoom level. Stejne jako resize trigger relayout.
