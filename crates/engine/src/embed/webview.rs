@@ -450,6 +450,29 @@ impl WebView {
             InputEvent::MouseLeave => {}
             InputEvent::KeyDown { ref key, .. } => {
                 if let Some(target) = self.focused_dom_node() {
+                    let is_input = matches!(target.tag_name().as_deref(),
+                        Some("input") | Some("textarea"));
+                    // Backspace na focused input - smaze posledni grapheme + emit "input" event.
+                    if is_input && key == "Backspace" {
+                        let cur = target.attr("value").unwrap_or_default();
+                        let mut chars: Vec<char> = cur.chars().collect();
+                        if !chars.is_empty() {
+                            chars.pop();
+                            let new_value: String = chars.into_iter().collect();
+                            target.set_attr("value", &new_value);
+                            if let Some(interp) = self.interpreter.as_mut() {
+                                let mut event = crate::interpreter::JsObject::new();
+                                event.set("type".into(), crate::interpreter::JsValue::Str("input".into()));
+                                event.set("target".into(), crate::interpreter::JsValue::DomNode(
+                                    std::rc::Rc::clone(&target)));
+                                let event_val = crate::interpreter::JsValue::Object(
+                                    std::rc::Rc::new(std::cell::RefCell::new(event)));
+                                let _ = interp.dispatch_event(&target, "input", event_val);
+                            }
+                            response.dirty = true;
+                            self.dirty = true;
+                        }
+                    }
                     if let Some(interp) = self.interpreter.as_mut() {
                         let mut event = crate::interpreter::JsObject::new();
                         event.set("type".into(), crate::interpreter::JsValue::Str("keydown".into()));
