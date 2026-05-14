@@ -4068,19 +4068,20 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                 if method == "post" {
                                     let body_str = body.unwrap_or_default();
                                     if let Some(html) = post_form(&url, &body_str) {
-                                        // Replace HTML s response.
+                                        // Replace HTML s response - sync_webview vyrobí
+                                        // novy WebView + spousti scripts, App.interpreter
+                                        // move z webview.
                                         self.html = html;
                                         self.css = String::new();
                                         self.base_url = Some(url.clone());
                                         self.scroll_y = 0.0;
-            self.scroll_target_y = 0.0;
-            self.scroll_x = 0.0;
-            self.scroll_target_x = 0.0;
-                                        let mut interp = crate::interpreter::Interpreter::new();
-                                        let doc = super::html_parser::parse_html(&self.html, &url);
-                                        interp.set_document(doc);
-                                        self.run_inline_scripts(&mut interp);
-                                        self.interpreter = Some(interp);
+                                        self.scroll_target_y = 0.0;
+                                        self.scroll_x = 0.0;
+                                        self.scroll_target_x = 0.0;
+                                        self.sync_webview_from_app();
+                                        if let Some(wv) = self.webview.as_mut() {
+                                            self.interpreter = wv.take_interpreter();
+                                        }
                                         if let Some(w) = &self.window { w.set_title(&format_window_title(&url, 1usize)); }
                                         self.render();
                                     }
@@ -4328,11 +4329,10 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 self.active_animations.clear();
                 self.animation_iterations.clear();
                 self.active_transitions.clear();
-                let mut interp = crate::interpreter::Interpreter::new();
-                let doc = super::html_parser::parse_html(&self.html, url);
-                interp.set_document(doc);
-                self.run_inline_scripts(&mut interp);
-                self.interpreter = Some(interp);
+                self.sync_webview_from_app();
+                if let Some(wv) = self.webview.as_mut() {
+                    self.interpreter = wv.take_interpreter();
+                }
                 let page_title = crate::embed::loader::extract_title(&self.html)
                     .unwrap_or_else(|| url.to_string());
                 self.title = page_title.clone();
