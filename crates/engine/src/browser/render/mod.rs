@@ -853,9 +853,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         /// fazi pri toggle. Pause v Animations panelu (s vybranym elementem)
         /// snapshot animated style v ten moment + restore kazdy frame.
         paused_animation_nodes: std::collections::HashSet<usize>,
-        /// Per-node frozen style snapshot - pri pause toggle uchova soucasny
-        /// (animated) styl, kazdy frame se aplikuje misto fresh anim tick.
-        paused_node_styles: std::collections::HashMap<usize, std::collections::HashMap<String, String>>,
+        // paused_node_styles field smazany Phase 99: nikdy zapisovan
+        // (TODO: per-element pause snapshot vyzaduje webview cascade.style_map).
         /// Drag timeline scrubber state - pri MouseDown na track v Animations
         /// panelu zacne drag. Pri pohybu mysi se animation_origin shifte tak
         /// aby progress odpovidal pozici kursoru na track.
@@ -1175,7 +1174,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                     if self.devtools.animations_paused {
                                         self.animation_pause_start = Some(now);
                                     }
-                                    self.paused_node_styles.clear();
                                     self.render();
                                     return;
                                 }
@@ -1581,8 +1579,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                     if self.devtools.animations_paused {
                                         self.animation_pause_start = Some(now);
                                     }
-                                    // Pri scrub clear paused snapshots (force re-snapshot na novou fazi).
-                                    self.paused_node_styles.clear();
                                 }
                                 DevtoolsHit::AnimationsAction(action) => {
                                     use std::time::{Instant, Duration};
@@ -1593,13 +1589,11 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                             if let Some(sel) = self.devtools.elements.selected {
                                                 if self.paused_animation_nodes.contains(&sel) {
                                                     self.paused_animation_nodes.remove(&sel);
-                                                    self.paused_node_styles.remove(&sel);
                                                 } else {
                                                     self.paused_animation_nodes.insert(sel);
-                                                    // TODO(N+22 cleanup): per-element pause snapshot
-                                                    // potrebuje pristup k webview cascade.style_map.
-                                                    // Aktualne stale TODO - paused_node_styles zustane
-                                                    // prazdny pro tento element.
+                                                    // TODO: per-element pause snapshot vyzaduje pristup
+                                                    // k webview cascade.style_map. Zatim paused_animation_nodes
+                                                    // jen toggle flag, snapshot se neuklada.
                                                 }
                                                 self.devtools.animations_paused =
                                                     !self.paused_animation_nodes.is_empty();
@@ -4017,7 +4011,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         animation_origin: std::time::Instant::now(),
         animation_pause_start: None,
         paused_animation_nodes: std::collections::HashSet::new(),
-        paused_node_styles: std::collections::HashMap::new(),
         animations_scrubber_drag: false,
         async_jobs: crate::browser::async_jobs::AsyncJobsRegistry::new(),
         frame_times_ms: std::collections::VecDeque::with_capacity(60),
