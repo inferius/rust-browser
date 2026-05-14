@@ -4379,7 +4379,150 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             }
         }
 
+        /// Novy thin render path - webview je primary, App emit overlays + present.
+        /// Default cesta od polarity invert kompletni. Legacy 1266-LOC App.render
+        /// fallback pres `RWE_RENDER_LEGACY=1` env var.
+        fn render_via_webview(&mut self) {
+            self.poll_debug_runner();
+            self.sync_devtools_from_interp();
+            let _ = self.smooth_scroll_tick();
+            // Sync zoom from App-side state (Ctrl+= adjusts) do webview.
+            let cur_zoom_val = self.zoom();
+            if let Some(wv) = self.webview.as_mut() {
+                wv.set_zoom(cur_zoom_val);
+            }
+            // Render page do offscreen RT.
+            let renderer = match &mut self.renderer { Some(r) => r, None => return };
+            let webview = match &mut self.webview { Some(w) => w, None => return };
+            if webview.render_via(renderer).is_none() { return; }
+            // Overlay pass - paint devtools panel + inspector overlay + FPS nad
+            // webview RT (start_clear=false ABS extra draw NEsmaz page).
+            let layout_clone = webview.last_layout_root().cloned();
+            let target_view_present = webview.target_view().is_some();
+            if let (Some(layout), true) = (layout_clone, target_view_present) {
+                let mut overlay_cmds = Vec::new();
+                let (vw, vh) = webview.viewport_size();
+                let mouse_pos = (self.mouse_x, self.mouse_y);
+                let cur_scroll_y = self.scroll_y();
+                let cur_scroll_x = self.scroll_x();
+                // Inspector overlays + element highlight.
+                let chrome_dx = -cur_scroll_x;
+                crate::browser::devtools_panel::paint_element_highlight_offset(
+                    &mut overlay_cmds, &layout, &self.devtools,
+                    cur_scroll_y, chrome_dx, 0.0);
+                crate::browser::devtools_panel::paint_inspector_overlays(
+                    &mut overlay_cmds, &layout, &self.devtools, cur_scroll_y);
+                // Devtools panel UI paint.
+                self.devtools.tick_frame();
+                let interp_ref_opt = self.webview.as_ref().and_then(|w| w.interpreter());
+                paint_devtools_panel(
+                    &mut overlay_cmds, &layout, &self.devtools, interp_ref_opt,
+                    vw, vh, mouse_pos.0 - cur_scroll_x, mouse_pos.1 - cur_scroll_y);
+                // FPS counter.
+                if self.show_fps && !self.frame_times_ms.is_empty() {
+                    let avg_ms = self.frame_times_ms.iter().sum::<f32>() / self.frame_times_ms.len() as f32;
+                    let fps = if avg_ms > 0.01 { 1000.0 / avg_ms } else { 999.0 };
+                    let max_ms = self.frame_times_ms.iter().cloned().fold(0.0_f32, f32::max);
+                    let (rect_w, rect_h) = (130.0_f32, 36.0_f32);
+                    let fps_x = vw - rect_w - 8.0;
+                    let fps_y = 8.0;
+                    let color = if fps >= 50.0 { [80, 220, 120, 255] }
+                        else if fps >= 30.0 { [240, 200, 80, 255] }
+                        else { [240, 80, 80, 255] };
+                    overlay_cmds.push(DisplayCommand::Rect {
+                        x: fps_x, y: fps_y, w: rect_w, h: rect_h,
+                        color: [20, 20, 26, 220], radius: 4.0,
+                    });
+                    overlay_cmds.push(DisplayCommand::Text {
+                        x: fps_x + 8.0, y: fps_y + 4.0,
+                        content: format!("{:.0} FPS  {:.1}ms", fps, avg_ms),
+                        color, font_size: 12.0, bold: true, font_weight: 700,
+                        italic: false, font_family: "CamingoMono".into(),
+                        strikethrough: false, underline: false,
+                    });
+                    overlay_cmds.push(DisplayCommand::Text {
+                        x: fps_x + 8.0, y: fps_y + 20.0,
+                        content: format!("max {:.1}ms", max_ms),
+                        color: [180, 180, 190, 200],
+                        font_size: 10.0, bold: false, font_weight: 400, italic: false,
+                        font_family: "CamingoMono".into(),
+                        strikethrough: false, underline: false,
+                    });
+                }
+                // Warm atlas pro overlay cmds + draw.
+                let webview = self.webview.as_mut().unwrap();
+                let renderer = self.renderer.as_mut().unwrap();
+                renderer.warm_atlas_for(&overlay_cmds, webview.base_url());
+                if let Some(view) = webview.target_view() {
+                    let _ = renderer.draw_segments_into_view_clipped(
+                        view, &overlay_cmds, false, None);
+                }
+            }
+            // Present do swap chain.
+            let webview = self.webview.as_ref().unwrap();
+            let renderer = self.renderer.as_ref().unwrap();
+            if let Some(view) = webview.target_view() {
+                renderer.present_external_to_swap_chain(view);
+            }
+        }
+
+        /// Sync devtools state z interpretu (console/network log mirroring).
+        fn sync_devtools_from_interp(&mut self) {
+            // Sync interpreter breakpoints from devtools state.
+            let bp_lines: std::collections::HashSet<u32> = self.devtools.sources.breakpoints.iter()
+                .map(|b| b.line).collect();
+            let paused_info: Option<(u32, Vec<(String, String)>)>;
+            if let Some(interp) = self.webview.as_ref().and_then(|w| w.interpreter()) {
+                let mut dbg = interp.debugger.borrow_mut();
+                if dbg.breakpoints != bp_lines {
+                    dbg.breakpoints = bp_lines;
+                }
+                paused_info = dbg.paused_at.map(|l| (l, dbg.locals.clone()));
+            } else {
+                paused_info = None;
+            }
+            if let Some((line, locals)) = paused_info {
+                if let Some(file_id) = self.devtools.sources.selected_id {
+                    self.devtools.sources.current_pause_location = Some((file_id, line));
+                    self.devtools.sources.debugger_paused = true;
+                    self.devtools.sources.locals = locals;
+                }
+            } else {
+                self.devtools.sources.debugger_paused = false;
+                self.devtools.sources.locals.clear();
+            }
+            // Mirror console_log do DevToolsState.
+            let new_logs: Vec<(String, String)>;
+            if let Some(interp) = self.webview.as_ref().and_then(|w| w.interpreter()) {
+                let logs = interp.console_log.borrow();
+                let already = self.devtools.console.log.len();
+                new_logs = if logs.len() > already {
+                    logs.iter().skip(already).cloned().collect()
+                } else { Vec::new() };
+            } else {
+                new_logs = Vec::new();
+            }
+            if !new_logs.is_empty() {
+                use crate::devtools::model::console::{LogEntry, LogLevel};
+                for (level, msg) in new_logs {
+                    let lvl = match level.as_str() {
+                        "error" => LogLevel::Error,
+                        "warn" => LogLevel::Warn,
+                        _ => LogLevel::Info,
+                    };
+                    self.devtools.console.log.push(LogEntry { level: lvl, text: msg });
+                }
+                self.devtools.console.stick_to_bottom = true;
+            }
+        }
+
         fn render(&mut self) {
+            // Default = novy thin path pres webview. Legacy fallback pres
+            // RWE_RENDER_LEGACY=1 env var.
+            if std::env::var("RWE_RENDER_LEGACY").is_err() {
+                self.render_via_webview();
+                return;
+            }
             use super::{css_parser, cascade, layout, paint};
             let frame_start = std::time::Instant::now();
             let _perf_debug = std::env::var("PERF_DEBUG").is_ok();
