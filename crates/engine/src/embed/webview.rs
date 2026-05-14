@@ -68,6 +68,11 @@ pub struct WebView {
     pub(crate) scroll_y: f32,
     /// Horizontalni scroll v CSS px.
     pub(crate) scroll_x: f32,
+    /// Smooth scroll target Y - render_via lerp scroll_y -> scroll_target_y
+    /// 25 %% per frame pro plynulou animaci wheel scroll.
+    pub(crate) scroll_target_y: f32,
+    /// Smooth scroll target X.
+    pub(crate) scroll_target_x: f32,
 
     /// Offscreen render target texture - vytvori se v `new` (Phase 5).
     /// Phase 2 placeholder `None`.
@@ -128,6 +133,8 @@ impl WebView {
             zoom: 1.0,
             scroll_y: 0.0,
             scroll_x: 0.0,
+            scroll_target_y: 0.0,
+            scroll_target_x: 0.0,
             target_texture: None,
             target_view: None,
             dirty: true,
@@ -374,11 +381,12 @@ impl WebView {
         let mut response = EventResponse::default();
         match event {
             InputEvent::Scroll { dx, dy, .. } => {
-                let (x, y) = self.scroll();
-                let new_x = (x + dx).max(0.0);
-                let new_y = (y + dy).max(0.0);
-                self.set_scroll(new_x, new_y);
-                response.dirty = self.dirty;
+                // Wheel adjusts smooth scroll target. render_via lerp aktivni
+                // scroll_y -> scroll_target_y 25 %% per frame.
+                self.scroll_target_x = (self.scroll_target_x + dx).max(0.0);
+                self.scroll_target_y = (self.scroll_target_y + dy).max(0.0);
+                self.dirty = true;
+                response.dirty = true;
             }
             InputEvent::MouseMove { x: _, y: _, .. } => {
                 // Phase 99: hit-test layout tree + :hover state machine.
@@ -468,6 +476,17 @@ impl WebView {
         // RT physical px.
         renderer.zoom = self.zoom;
         renderer.scale_factor = self.scale_factor;
+        // Smooth scroll tick: lerp scroll_y -> scroll_target_y 25 %% per frame.
+        // Snap pri delta < 0.5 px aby render_via prestane request_redraw pri
+        // ustaleni.
+        let lerp = 0.25_f32;
+        let dy = self.scroll_target_y - self.scroll_y;
+        if dy.abs() > 0.5 { self.scroll_y += dy * lerp; }
+        else if dy.abs() > 0.0 { self.scroll_y = self.scroll_target_y; }
+        let dx = self.scroll_target_x - self.scroll_x;
+        if dx.abs() > 0.5 { self.scroll_x += dx * lerp; }
+        else if dx.abs() > 0.0 { self.scroll_x = self.scroll_target_x; }
+
         // Drain async jobs (image lazy loads, file IO callbacks). Volane PRED
         // cascade aby novy state byl dostupny v style_map (e.g. image natural
         // dims po load aktualizuji layout).
@@ -749,11 +768,14 @@ impl WebView {
         (content_w, content_h)
     }
 
-    /// Nastav scroll position.
+    /// Nastav scroll position (instant - smooth target taky aktualizovan
+    /// aby nasledne wheel scroll nezacal z stale hodnoty).
     pub fn set_scroll(&mut self, x: f32, y: f32) {
         if (self.scroll_x - x).abs() > 0.5 || (self.scroll_y - y).abs() > 0.5 {
             self.scroll_x = x;
             self.scroll_y = y;
+            self.scroll_target_x = x;
+            self.scroll_target_y = y;
             self.dirty = true;
         }
     }
@@ -770,12 +792,14 @@ impl WebView {
     /// HiDPI scale_factor (1.0 / 1.5 / 2.0 ...).
     pub fn scale_factor(&self) -> f32 { self.scale_factor }
 
-    /// `true` pokud stylesheets obsahuji @keyframes (= moznost aktivni
-    /// animace) NEBO aktivni CSS transitions. Hostujici aplikace pak
-    /// request_redraw kazdy frame.
+    /// `true` pokud stylesheets obsahuji @keyframes / aktivni CSS transitions
+    /// / smooth scroll still tweening. Hostujici aplikace pak request_redraw
+    /// kazdy frame dokud nestihnem ustaleni.
     pub fn has_active_animations(&self) -> bool {
         self.stylesheets.iter().any(|s| !s.keyframes.is_empty())
             || !self.active_transitions.is_empty()
+            || (self.scroll_target_y - self.scroll_y).abs() > 0.5
+            || (self.scroll_target_x - self.scroll_x).abs() > 0.5
     }
 
     /// Nastav zoom level. Stejne jako resize trigger relayout.
@@ -980,7 +1004,7 @@ mod tests {
     }
 
     #[test]
-    fn handle_input_scroll_updates_position() {
+    fn handle_input_scroll_updates_target() {
         let mut wv = fresh();
         wv.dirty = false;
         let resp = wv.handle_input(InputEvent::Scroll {
@@ -988,18 +1012,20 @@ mod tests {
             modifiers: KeyModifiers::default(),
         });
         assert!(resp.dirty, "scroll musi dirty webview");
-        assert_eq!(wv.scroll(), (0.0, 50.0));
+        // Smooth scroll: target je novy, actual scroll lerp pri render_via.
+        assert_eq!(wv.scroll_target_y, 50.0);
+        assert_eq!(wv.scroll(), (0.0, 0.0));
     }
 
     #[test]
     fn handle_input_scroll_clamps_negative() {
         let mut wv = fresh();
-        // Pri scroll na negativni hodnotu clampujem na 0.
         wv.handle_input(InputEvent::Scroll {
             dx: -100.0, dy: -100.0, x: 0.0, y: 0.0,
             modifiers: KeyModifiers::default(),
         });
-        assert_eq!(wv.scroll(), (0.0, 0.0));
+        assert_eq!(wv.scroll_target_x, 0.0);
+        assert_eq!(wv.scroll_target_y, 0.0);
     }
 
     #[test]
