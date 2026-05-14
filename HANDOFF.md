@@ -2,7 +2,69 @@
 
 Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`, `debug_utils.md`.
 
-## Session N+22: Engine shell strip (chrome bar mimo engine)
+## Session N+22: Engine shell strip + WebView polarity invert (step 1)
+
+Pokracovani N+21 (workspace + embed API) - kompletni shell concerns
+strip z engine + zacatek WebView authoritative polarity.
+
+### Dosazeny stav
+
+- shell_chrome.rs file (-242 LOC) + dead chrome paint blok v App::render (-363 LOC)
+- 16 dead `if false { ... }` bloku (-720 LOC)
+- TabManager + tabs.rs file (-747 LOC, 9 unit testy)
+- 10 shell-only App fields (shell_chrome_h, addr_open, find_open, addr_input,
+  find_query, find_match_idx, history, history_idx, bookmarks_bar_visible,
+  bookmark_picker, reading_mode_on, shortcuts_overlay_open, tab_drag_*,
+  shell_tab_*, status_hover_url)
+- ChromeHit enum + hit_chrome fn
+- READING_MODE_CSS const + ChromeBookmarkPickerState
+- Multi-tab MenuAction::Tab*(idx) match arms (TabClose/CloseOthers/Duplicate/
+  SetGroup/PinToggle/Reload)
+- navigate_about fn -> no-op (about: pages = shell)
+- find_apply / find_step / find_scroll_to_current / find_collect_matches /
+  find_matches_in fns
+- run_inline_scripts fn (App, duplicate s WebView::run_scripts)
+
+**Net: render/mod.rs 9700 -> 8231 LOC (-1469). Plus -747 tabs.rs +
+-242 shell_chrome.rs = ~-2400 LOC engine shrink (~25%).**
+
+### WebView authoritative polarity (zacatek)
+
+Drive App.html/css/interpreter byly PRIMARY, WebView mirror sync'nuty.
+Po N+22 step 1+2 inverze:
+
+- App::resumed: vola sync_webview_from_app, pak interpreter = webview.take_interpreter()
+- reload_from_html (drag-drop): stejne
+- form submit POST: stejne
+- navigate_url http: stejne
+- rerun_paused_scripts (debug resume): pres webview.run_scripts + take
+
+WebView::load_html runs scripts (real). App.interpreter prevezme ownership.
+
+### Phase 99 - polarity invert continuation
+
+Zustava (NEresly N+22):
+- App.html / css / base_url / current_path fields - duplicit s
+  webview.html() / css() / base_url() / local_path(). Smazat App fields,
+  refs nahradit pres helpers/getters.
+- App.scroll_x / scroll_y / zoom fields - duplicit s webview.scroll()/zoom().
+- App.layout_root cache - pojme presunout do webview internal cache.
+- App.interpreter field - posledni primary. Smazat, pres webview.interpreter()
+  / _mut() helpers. Risk: borrow checker (App mutace + webview borrow conflict).
+
+Po polarity invert komplete: App degeneruje na "engine demo host wrapper"
+(Window + Renderer + devtools panel + animations cache + JS debugger UI).
+Mozno spojit s shell::ShellApp do unified host pattern.
+
+### Pomocne metricy
+
+Tests: 2697 pass (drive 2706 -9 ze smazanych tabs.rs internal testy).
+Build: 0 warnings.
+shell render: text + scrollbar + scroll OK.
+
+---
+
+## Session N+22 ORIGINAL: Engine shell strip (chrome bar mimo engine)
 
 **2706 tests pass, 0 warnings.**
 
