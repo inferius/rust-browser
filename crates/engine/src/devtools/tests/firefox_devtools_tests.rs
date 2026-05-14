@@ -224,13 +224,7 @@ fn hsv_to_rgb_black() {
     assert_eq!(hsv_to_rgb(0.0, 0.0, 0.0), [0, 0, 0, 255]);
 }
 
-#[test]
-fn tab_manager_close_does_not_remove_last() {
-    use crate::browser::render::tabs::TabManager;
-    let mut m = TabManager::default();
-    m.close(0);
-    assert_eq!(m.tabs.len(), 1);
-}
+// tab_manager_close_does_not_remove_last test smazany N+22 (multi-tab je shell concern).
 
 #[test]
 fn change_kind_variants() {

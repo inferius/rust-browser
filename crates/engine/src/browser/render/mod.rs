@@ -97,7 +97,8 @@ use canvas_paint::paint_canvas_ops;
 
 mod webgl_paint;
 mod text_input;
-pub mod tabs;
+// tabs.rs smazany N+22 (TabManager + Tab + about: pages = shell concerns).
+// extract_title presunut do `embed::loader::extract_title`.
 #[allow(unused_imports)] // pub use - test exposure
 pub use webgl_paint::paint_webgl_canvases;
 
@@ -927,10 +928,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         current_path: Option<std::path::PathBuf>,
         /// Page URL (http(s)://... nebo file:///...) pro relative URL resolution.
         base_url: Option<String>,
-        /// Browser history: stack URLs + aktualni index.
-        /// Push pri navigate. Alt+Left = back (idx-=1), Alt+Right = forward (idx+=1).
-        history: Vec<String>,
-        history_idx: usize,
+        // history / history_idx fields smazany N+22 - back/forward shell concern.
+        // (profile history persist v ~/.rwe stale aktualizuje pres navigate_url).
         /// Otevreny <select> dropdown - hodnota = (node ptr, anchor x/y/w).
         open_select: Option<(usize, f32, f32, f32)>,
         /// Po startu otevri devtools.html v default browseru.
@@ -980,9 +979,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         // find_open/find_query/find_match_idx + addr_open/addr_input smazany
         // (Session N+22) - shell concerns. Find bar + addr bar v Phase 99
         // patri do shell crate.
-        find_query: crate::devtools::model::text_buffer::SimpleStringBuffer,
-        find_match_idx: usize,
-        addr_input: crate::devtools::model::text_buffer::SimpleStringBuffer,
+        // find_query / find_match_idx / addr_input fields smazany N+22 - shell concerns.
         /// Smooth scroll target. Render tick interpoluje scroll_y -> target.
         scroll_target_y: f32,
         scroll_target_x: f32,
@@ -992,16 +989,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         /// Main page scrollbar drag - true pri LMB hold na vertical/horizontal thumb.
         page_scrollbar_v_drag: bool,
         page_scrollbar_h_drag: bool,
-        /// Tab drag reorder state - Some(idx) pri probihajici drag.
-        tab_drag_idx: Option<usize>,
-        tab_drag_x_start: f32,
-        /// Status bar hover URL preview (Some = link hover, None = hidden).
-        status_hover_url: Option<String>,
-        /// Tooltip nad shell tab chip (full title) - (text, x, y screen logical).
-        shell_tab_tooltip: Option<(String, f32, f32)>,
-        /// Hover state pro tab tooltip - (tab_idx, x, y, hover_start).
-        /// Tooltip se zobrazi az kdyz hover trva > 500ms na stejnem tabu.
-        shell_tab_hover_pending: Option<(usize, f32, f32, std::time::Instant)>,
+        // tab_drag_idx, tab_drag_x_start, status_hover_url, shell_tab_tooltip,
+        // shell_tab_hover_pending smazany N+22 - shell concerns.
         // shortcuts_overlay_open / reading_mode_on / bookmarks_bar_visible
         // fields smazany (Session N+22) - shell concerns mimo engine.
         // shell_mode field smazan (Session N+22). Engine vzdy renderuje naked
@@ -1009,9 +998,10 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         // paint do shell::ShellApp).
         // shell_chrome_h field smazany (Session N+22) - vzdy 0.0 v engine.
         // Use sites volaji shell_chrome_h_active() ktery vrati 0.0.
-        /// Multi-tab manager (shell mode). Active tab drives App.html/css/...
-        /// Switch tab = swap active state via tabs.switch_to + reload.
-        tabs: tabs::TabManager,
+        /// Page title (z <title> tagu nebo `document.title = ...` v JS).
+        /// Drive byl multi-tab pres `tabs.active_tab().title` - po N+22 strip
+        /// single-tab pres App primo.
+        title: String,
         /// Embeddable WebView mirror - sdileny page state s shell crate +
         /// power users. Sync'nuty z App pri reload + scroll/zoom changes.
         /// Phase 4a = sync (App primary, WebView side-effect populated).
@@ -1306,10 +1296,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         return;
                     }
                     self.update_hover();
-                    // Shell tab tooltip - 500ms delay pred zobrazenim. Hover na
-                    // jiny tab nebo mimo chrome resetuje pending. Pri hover_start
-                    // staci > 500ms -> tooltip aktivni.
-                    self.shell_tab_tooltip = None;
                     if self.page_sel_dragging() {
                         self.page_sel_update_current((self.mouse_x, self.mouse_y));
                         self.render();
@@ -1341,10 +1327,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     }
                     if self.animations_scrubber_drag {
                         self.animations_scrubber_drag = false;
-                    }
-                    if self.tab_drag_idx.is_some() {
-                        self.tab_drag_idx = None;
-                        self.render();
                     }
                     if self.page_sel_dragging() {
                         self.page_sel_end_drag();
@@ -2627,20 +2609,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                 self.export_pdf();
                                 return;
                             }
-                            if s.as_str() == "l" || s.as_str() == "L" {
-                                // Ctrl+L: toggle address bar.
-                                crate::vlog!("[addr] open via Ctrl+L");
-            // (invalid bool assignment removed Session N+22)
-                                self.addr_input = crate::devtools::model::text_buffer::SimpleStringBuffer::with_text_selected(self.base_url.clone().unwrap_or_default());
-                                self.render();
-                                return;
-                            }
-                            // Ctrl+D (bookmark picker) smazany Session N+22.
-                            if s.as_str() == "h" || s.as_str() == "H" {
-                                // Ctrl+H: open history page.
-                                self.navigate_url("about:history");
-                                return;
-                            }
+                            // Ctrl+L (addr bar), Ctrl+D (bookmarks), Ctrl+H (history)
+                            // smazany N+22 - shell concerns.
                             if s.as_str() == "j" || s.as_str() == "J" {
                                 // Ctrl+J: open downloads page.
                                 self.navigate_url("about:downloads");
@@ -2674,23 +2644,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                             }
                             // Shell tab shortcuts.
                         }
-                        // Ctrl+Tab = next tab.
-                        if matches!(&key_event.logical_key, Key::Named(NamedKey::Tab)) && false {
-                            let target = if self.modifiers.shift_key() {
-                                if self.tabs.active == 0 { self.tabs.tabs.len() - 1 } else { self.tabs.active - 1 }
-                            } else {
-                                (self.tabs.active + 1) % self.tabs.tabs.len()
-                            };
-                            self.switch_tab_with_swap(target);
-                            let t = self.tabs.active_tab().clone();
-                            self.html = t.html;
-                            self.css = t.css;
-                            self.base_url = t.url;
-                            self.cached_layout_root = None;
-                            self.cached_stylesheets = None;
-                            self.render();
-                            return;
-                        }
+                        // Ctrl+Tab = next tab smazany N+22 (shell concern).
                     }
                     // Ctrl+= / Ctrl++ / Ctrl+- / Ctrl+0 = zoom controls.
                     if self.modifiers.control_key() {
@@ -2763,23 +2717,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                 self.navigate_url_no_history(&url);
                             }
                         }
-                        Key::Named(NamedKey::ArrowLeft) => {
-                            // Alt+Left back. Bez modifier check zatim - winit ma KeyEvent.modifiers.
-                            if self.history_idx > 0 {
-                                self.history_idx -= 1;
-                                let url = self.history[self.history_idx].clone();
-                                println!("[history back] {url}");
-                                self.navigate_url_no_history(&url);
-                            }
-                        }
-                        Key::Named(NamedKey::ArrowRight) => {
-                            if self.history_idx + 1 < self.history.len() {
-                                self.history_idx += 1;
-                                let url = self.history[self.history_idx].clone();
-                                println!("[history forward] {url}");
-                                self.navigate_url_no_history(&url);
-                            }
-                        }
+                        // Alt+Left/Right history back/forward smazany N+22 - shell concern.
                         // Vertikalni scroll keys: PageDown/Up = +/- viewport_h,
                         // ArrowDown/Up = +/- 60 px (line height steps), Space =
                         // PageDown, Shift+Space = PageUp, Home = top, End = bottom.
@@ -2944,76 +2882,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 segments::shift_command_y(cmd, dy);
             }
         }
-    }
-
-    /// Chrome bar hit zones.
-    pub enum ChromeHit {
-        TabClick(usize),
-        TabClose(usize),
-        TabContextMenu(usize),
-        NewTab,
-        Back,
-        Forward,
-        Reload,
-        UrlBar,
-        DevtoolsToggle,
-        BookmarkStar,
-        BookmarkClick(String),
-        BookmarkContextMenu(String),
-        None,
-    }
-
-    pub fn hit_chrome(win_w: f32, chrome_h: f32, tabs: &tabs::TabManager,
-                      mouse_x: f32, mouse_y: f32) -> ChromeHit {
-        if mouse_y < 0.0 || mouse_y >= chrome_h { return ChromeHit::None; }
-        let tab_h = 28.0;
-        let nav_h = chrome_h - tab_h;
-        if mouse_y < tab_h {
-            // Tab strip.
-            let tab_w = 200.0_f32.min(win_w / (tabs.tabs.len().max(1) as f32 + 0.5));
-            let mut tx = 4.0;
-            for (i, _) in tabs.tabs.iter().enumerate() {
-                if mouse_x >= tx && mouse_x < tx + tab_w {
-                    // Close X v pravej casti chipu.
-                    if mouse_x >= tx + tab_w - 22.0 {
-                        return ChromeHit::TabClose(i);
-                    }
-                    return ChromeHit::TabClick(i);
-                }
-                tx += tab_w + 2.0;
-            }
-            // + new tab.
-            if mouse_x >= tx && mouse_x < tx + 22.0 {
-                return ChromeHit::NewTab;
-            }
-            return ChromeHit::None;
-        }
-        // Nav bar.
-        let ny = tab_h;
-        if mouse_y >= ny && mouse_y < ny + nav_h {
-            if mouse_x >= 8.0 && mouse_x < 28.0 { return ChromeHit::Back; }
-            if mouse_x >= 28.0 && mouse_x < 48.0 { return ChromeHit::Forward; }
-            if mouse_x >= 48.0 && mouse_x < 68.0 { return ChromeHit::Reload; }
-            if mouse_x >= win_w - 36.0 && mouse_x < win_w - 8.0 { return ChromeHit::DevtoolsToggle; }
-            if mouse_x >= win_w - 76.0 && mouse_x < win_w - 56.0 { return ChromeHit::BookmarkStar; }
-            if mouse_x >= 78.0 && mouse_x < win_w - 80.0 { return ChromeHit::UrlBar; }
-        }
-        // Bookmarks bar (24px pod nav bar).
-        let bm_y = chrome_h - 24.0;
-        if mouse_y >= bm_y && mouse_y < bm_y + 24.0 {
-            let bms = crate::devtools::bookmarks::load_bookmarks();
-            let mut bx = 8.0;
-            for bm in bms.iter().take(15) {
-                let title_trunc: String = bm.title.chars().take(18).collect();
-                let bw = (title_trunc.len() as f32) * 7.0 + 16.0;
-                if bx + bw > win_w - 8.0 { break; }
-                if mouse_x >= bx && mouse_x < bx + bw {
-                    return ChromeHit::BookmarkClick(bm.url.clone());
-                }
-                bx += bw + 4.0;
-            }
-        }
-        ChromeHit::None
     }
 
     /// Paint chrome bar (tabs + nav) - free fn aby slo volat behem renderer borrow.
@@ -3292,31 +3160,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             (self.panel_h_logical() - 4.0 - 30.0).max(0.0)
         }
         /// Najde vsechny pozice match v display listu textech. Vrati Vec<(y, x, w)>.
-        fn find_collect_matches(&self) -> Vec<(f32, f32, f32)> {
-            match &self.layout_root {
-                Some(l) => find_matches_in(l, &self.find_query.text),
-                None => Vec::new(),
-            }
-        }
-        fn find_apply(&mut self) {
-            let matches = self.find_collect_matches();
-            if matches.is_empty() {
-                self.find_match_idx = 0;
-            } else if self.find_match_idx >= matches.len() {
-                self.find_match_idx = 0;
-            }
-            self.find_scroll_to_current();
-            self.render();
-        }
-        fn find_step(&mut self, dir: i32) {
-            let matches = self.find_collect_matches();
-            if matches.is_empty() { return; }
-            let n = matches.len() as i32;
-            let cur = self.find_match_idx as i32;
-            self.find_match_idx = ((cur + dir).rem_euclid(n)) as usize;
-            self.find_scroll_to_current();
-            self.render();
-        }
         /// Export aktualni stranky do PDF souboru. Walk LayoutBox tree, emituje
         /// text uzly + bg rects do printpdf documentu. Save do current_path
         /// directory s .pdf priponou.
@@ -3385,14 +3228,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     }
                 }
                 Err(e) => eprintln!("[clipboard] open fail: {e}"),
-            }
-        }
-        fn find_scroll_to_current(&mut self) {
-            let matches = self.find_collect_matches();
-            if let Some(&(my, _, _)) = matches.get(self.find_match_idx) {
-                let vh = self.viewport_h_logical();
-                self.scroll_target_y = (my - vh * 0.3).max(0.0);
-                self.clamp_scroll_to_layout();
             }
         }
         fn scroll_by_y(&mut self, dy: f32) {
@@ -3507,21 +3342,12 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             interp.set_document(doc);
             self.run_inline_scripts(&mut interp);
             self.interpreter = Some(interp);
-            // Sync title -> active tab + window title.
-            let page_title = crate::browser::render::tabs::extract_title(&self.html)
+            // Title z <title> tagu nebo filename fallback.
+            let page_title = crate::embed::loader::extract_title(&self.html)
                 .unwrap_or_else(|| path.file_name()
                     .and_then(|n| n.to_str()).unwrap_or("page").to_string());
-            {
-                let cur = self.tabs.active_tab_mut();
-                cur.html = self.html.clone();
-                cur.css = self.css.clone();
-                cur.path = Some(path.to_path_buf());
-                cur.url = Some(url.clone());
-                cur.title = page_title.clone();
-                cur.loading = false;
-            }
             if let Some(w) = &self.window {
-                w.set_title(&format_window_title(&page_title, self.tabs.tabs.len()));
+                w.set_title(&format_window_title(&page_title, 1));
             }
             // Sync mirror WebView (Phase 4a).
             self.sync_webview_from_app();
@@ -3817,12 +3643,12 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     }
                 }
             }
-            // Po skriptech: sync document.title (mohlo jit zmenit zevnitr JS) -> active tab + window.
+            // Po skriptech: sync document.title -> window title.
             let new_title = interp.document.borrow().title.clone();
             if !new_title.is_empty() {
-                self.tabs.active_tab_mut().title = new_title.clone();
+                self.title = new_title.clone();
                 if let Some(w) = &self.window {
-                    w.set_title(&format_window_title(&new_title, self.tabs.tabs.len()));
+                    w.set_title(&format_window_title(&new_title, 1));
                 }
             }
         }
@@ -4002,56 +3828,10 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         fn dispatch_menu_action(&mut self, action: crate::devtools::context_menu::MenuAction) {
             use crate::devtools::context_menu::MenuAction::*;
             match action {
-                TabClose(idx) => {
-                    self.tabs.close(idx);
-                    let t = self.tabs.active_tab().clone();
-                    self.html = t.html;
-                    self.css = t.css;
-                    self.base_url = t.url;
-                    self.cached_layout_root = None;
-                    self.cached_stylesheets = None;
-                }
-                TabCloseOthers(idx) => {
-                    let keep = self.tabs.tabs[idx].clone();
-                    self.tabs.tabs.clear();
-                    self.tabs.tabs.push(keep);
-                    self.tabs.active = 0;
-                    let t = self.tabs.active_tab().clone();
-                    self.html = t.html;
-                    self.css = t.css;
-                    self.base_url = t.url;
-                    self.cached_layout_root = None;
-                    self.cached_stylesheets = None;
-                }
-                TabDuplicate(idx) => {
-                    let dup = self.tabs.tabs[idx].clone();
-                    self.tabs.open(dup);
-                }
-                TabSetGroup(idx, color) => {
-                    if let Some(t) = self.tabs.tabs.get_mut(idx) {
-                        t.group_color = color;
-                    }
-                }
-                TabPinToggle(idx) => {
-                    if let Some(t) = self.tabs.tabs.get_mut(idx) {
-                        t.pinned = !t.pinned;
-                    }
-                    // Sort: pinned first.
-                    self.tabs.tabs.sort_by(|a, b| b.pinned.cmp(&a.pinned));
-                    if let Some(active_url) = self.base_url.clone() {
-                        if let Some(new_pos) = self.tabs.tabs.iter().position(|t| t.url.as_ref() == Some(&active_url)) {
-                            self.tabs.active = new_pos;
-                        }
-                    }
-                }
-                TabReload(idx) => {
-                    if let Some(url) = self.tabs.tabs[idx].url.clone() {
-                        let active_was = self.tabs.active;
-                        self.switch_tab_with_swap(idx);
-                        self.navigate_url_no_history(&url);
-                        self.switch_tab_with_swap(active_was);
-                    }
-                }
+                // TabClose / TabCloseOthers / TabDuplicate / TabSetGroup /
+                // TabPinToggle / TabReload smazany N+22 - multi-tab je shell concern.
+                TabClose(_) | TabCloseOthers(_) | TabDuplicate(_)
+                | TabSetGroup(..) | TabPinToggle(_) | TabReload(_) => {}
                 BookmarkOpen(url) => {
                     self.navigate_url(&url);
                 }
@@ -4313,7 +4093,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                         interp.set_document(doc);
                                         self.run_inline_scripts(&mut interp);
                                         self.interpreter = Some(interp);
-                                        if let Some(w) = &self.window { w.set_title(&format_window_title(&url, self.tabs.tabs.len())); }
+                                        if let Some(w) = &self.window { w.set_title(&format_window_title(&url, 1usize)); }
                                         self.render();
                                     }
                                 } else {
@@ -4407,28 +4187,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         /// Write arbitrary style value (z editing buffer) na selected node inline style.
         /// Swap interpreter mezi App.interpreter a target_tab.stored_interpreter.
         /// Stash aktualni interp do soucasneho aktivniho tabu pred prepnutim.
-        /// Cilove tab dostane App.interpreter (presune se z stored_interpreter).
-        /// Pri prvni navsteve target_tab neni stored_interp -> App.interpreter
-        /// = None, nasledne navigate_url ho vytvori.
-        fn switch_tab_with_swap(&mut self, target_idx: usize) {
-            if target_idx >= self.tabs.tabs.len() { return; }
-            if target_idx == self.tabs.active { return; }
-            let prev = self.tabs.active;
-            // Stash current interp do prev tabu (pokud existuje).
-            if let Some(interp) = self.interpreter.take() {
-                self.tabs.stash_interpreter(prev, Box::new(interp));
-            }
-            self.tabs.switch_to(target_idx);
-            // Take target's stored interp (pokud existuje).
-            if let Some(boxed) = self.tabs.take_target_interpreter(target_idx) {
-                self.interpreter = Some(*boxed);
-            }
-            // Cache invalidace - nove DOM/document.
-            self.cached_layout_root = None;
-            self.cached_style_map = None;
-            self.cached_pseudo_map = None;
-            self.cached_matched_key = None;
-        }
+        /// switch_tab_with_swap smazany N+22 - single-tab, no-op.
+        fn switch_tab_with_swap(&mut self, _target_idx: usize) {}
 
         /// Ctrl+S = save current page HTML do $HOME/Downloads + zaznam do downloads tracker.
         fn save_page_to_downloads(&mut self) {
@@ -4521,77 +4281,17 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             }
         }
 
-        fn navigate_about(&mut self, url: &str) -> bool {
-            // Internal pages: about:newtab, about:config.
-            match url {
-                "about:newtab" => {
-                    let (html, css) = crate::browser::render::tabs::render_about_newtab();
-                    self.html = html;
-                    self.css = css;
-                    self.base_url = Some("about:newtab".to_string());
-                    self.cached_layout_root = None;
-                    self.cached_stylesheets = None;
-                    true
-                }
-                "about:config" => {
-                    let (html, css) = crate::browser::render::tabs::render_about_config();
-                    self.html = html;
-                    self.css = css;
-                    self.base_url = Some("about:config".to_string());
-                    self.cached_layout_root = None;
-                    self.cached_stylesheets = None;
-                    true
-                }
-                "about:history" => {
-                    let (html, css) = crate::browser::render::tabs::render_about_history();
-                    self.html = html;
-                    self.css = css;
-                    self.base_url = Some("about:history".to_string());
-                    self.cached_layout_root = None;
-                    self.cached_stylesheets = None;
-                    true
-                }
-                "about:bookmarks" => {
-                    let (html, css) = crate::browser::render::tabs::render_about_bookmarks();
-                    self.html = html;
-                    self.css = css;
-                    self.base_url = Some("about:bookmarks".to_string());
-                    self.cached_layout_root = None;
-                    self.cached_stylesheets = None;
-                    true
-                }
-                "about:about" => {
-                    let (html, css) = crate::browser::render::tabs::render_about_about();
-                    self.html = html;
-                    self.css = css;
-                    self.base_url = Some("about:about".to_string());
-                    self.cached_layout_root = None;
-                    self.cached_stylesheets = None;
-                    true
-                }
-                "about:downloads" => {
-                    let (html, css) = crate::browser::render::tabs::render_about_downloads();
-                    self.html = html;
-                    self.css = css;
-                    self.base_url = Some("about:downloads".to_string());
-                    self.cached_layout_root = None;
-                    self.cached_stylesheets = None;
-                    true
-                }
-                _ => false,
-            }
-        }
+        /// navigate_about smazany N+22 - about: pages (newtab, config, history,
+        /// bookmarks, about, downloads) jsou shell concern.
+        fn navigate_about(&mut self, _url: &str) -> bool { false }
 
-        /// Navigate s history push (smaze forward history pri navigaci).
+        /// Navigate (history persist v ~/.rwe profile, in-memory back/forward
+        /// stack smazany N+22 - shell concern).
         fn navigate_url(&mut self, url: &str) {
-            // Truncate forward history.
-            self.history.truncate(self.history_idx + 1);
-            self.history.push(url.to_string());
-            self.history_idx = self.history.len() - 1;
             self.navigate_url_no_history(url);
             // Persist v profile history (~/.rwe/profiles/<active>/history.json).
             // Pouzij realny <title> tagu (z aktivniho tab po nav), fallback URL last segment.
-            let title = self.tabs.active_tab().title.clone();
+            let title = self.title.clone();
             crate::devtools::history::append_entry(&crate::devtools::history::HistoryEntry {
                 url: url.to_string(),
                 title,
@@ -4601,12 +4301,9 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
 
         /// Navigate bez modifikace history (back/forward use this).
         fn navigate_url_no_history(&mut self, url: &str) {
-            // Loading flag: zobrazi spinner v tab chip behem fetch.
-            self.tabs.active_tab_mut().loading = true;
             // about: URL handled internally.
             if url.starts_with("about:") {
                 if self.navigate_about(url) {
-                    self.tabs.active_tab_mut().loading = false;
                     self.render();
                     return;
                 }
@@ -4648,18 +4345,11 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 interp.set_document(doc);
                 self.run_inline_scripts(&mut interp);
                 self.interpreter = Some(interp);
-                let page_title = crate::browser::render::tabs::extract_title(&self.html)
+                let page_title = crate::embed::loader::extract_title(&self.html)
                     .unwrap_or_else(|| url.to_string());
-                {
-                    let cur = self.tabs.active_tab_mut();
-                    cur.html = self.html.clone();
-                    cur.css = self.css.clone();
-                    cur.url = Some(url.to_string());
-                    cur.title = page_title.clone();
-                    cur.loading = false;
-                }
+                self.title = page_title.clone();
                 if let Some(w) = &self.window {
-                    w.set_title(&format_window_title(&page_title, self.tabs.tabs.len()));
+                    w.set_title(&format_window_title(&page_title, 1usize));
                 }
                 self.render();
             } else if let Some(rest) = url.strip_prefix("file:///") {
@@ -4679,17 +4369,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             let target = layout_root.hit_test(self.mouse_x, self.mouse_y);
             let id = target.and_then(|t| t.node.as_ref().map(|n| std::rc::Rc::as_ptr(n) as usize));
             super::cascade::set_hovered_node(id);
-            // Status bar URL preview pri hover na link.
-            self.status_hover_url = None;
-            if let Some(t) = target {
-                if let Some(node) = &t.node {
-                    if node.tag_name().as_deref() == Some("a") {
-                        if let Some(href) = node.attr("href") {
-                            self.status_hover_url = Some(href);
-                        }
-                    }
-                }
-            }
+            // Status bar URL preview smazany N+22 (shell concern).
+            let _ = target;
             // Tooltip update: hover nad swatch -> hex string, var chip -> name.
             self.devtools.tooltip = None;
             if self.devtools.panel_open {
@@ -6050,10 +5731,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
     };
     #[cfg(not(target_os = "windows"))]
     let event_loop = EventLoop::new().map_err(|e| e.to_string())?;
-    let initial_url = base_url.clone();
-    // Single-tab: engine bezi naked viewport. Session restore zustal jako
-    // Phase 99 shell crate task.
-    let initial_tab = tabs::Tab::new(html.clone(), css.clone(), base_url.clone(), current_html_path.clone());
+    // Title z <title> tagu nebo URL fallback.
+    let initial_title = crate::embed::loader::extract_title(&html).unwrap_or_default();
     let mut app = App {
         html, css,
         cached_stylesheets_hash: 0,
@@ -6088,8 +5767,6 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         show_fps: false,
         current_path: current_html_path,
         base_url,
-        history: initial_url.into_iter().collect(),
-        history_idx: 0,
         open_select: None,
         auto_devtools,
         window: None,
@@ -6116,19 +5793,11 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         debug_runner: None,
         zoom: 1.0,
         modifiers: winit::keyboard::ModifiersState::empty(),
-        find_query: crate::devtools::model::text_buffer::SimpleStringBuffer::new(),
-        find_match_idx: 0,
-        addr_input: crate::devtools::model::text_buffer::SimpleStringBuffer::new(),
         scroll_target_y: 0.0,
         scroll_target_x: 0.0,
         page_scrollbar_v_drag: false,
         page_scrollbar_h_drag: false,
-        tab_drag_idx: None,
-        tab_drag_x_start: 0.0,
-        status_hover_url: None,
-        shell_tab_tooltip: None,
-        shell_tab_hover_pending: None,
-        tabs: tabs::TabManager::new(initial_tab),
+        title: initial_title,
         // WebView mirror inicializovan v `resumed` (znama viewport size z winit
         // + chrome offset zname). Pred resumed App nema window -> None.
         webview: None,

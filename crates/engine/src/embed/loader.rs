@@ -68,6 +68,17 @@ pub fn extract_stylesheet_hrefs(html: &str) -> Vec<String> {
     out
 }
 
+/// Extrahuj `<title>...</title>` z HTML (case-insensitive, prvni vyskyt).
+/// None pokud chybi nebo je prazdny.
+pub fn extract_title(html: &str) -> Option<String> {
+    let lower = html.to_lowercase();
+    let start = lower.find("<title")?;
+    let tag_end = lower[start..].find('>').map(|e| start + e + 1)?;
+    let close = lower[tag_end..].find("</title>").map(|e| tag_end + e)?;
+    let raw = html[tag_end..close].trim();
+    if raw.is_empty() { None } else { Some(raw.to_string()) }
+}
+
 /// Vsechny inline `<style> ... </style>` blocky.
 pub fn extract_inline_styles(html: &str) -> Vec<String> {
     let document = browser::html_parser::parse_html(html, "about:blank");
