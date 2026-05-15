@@ -406,13 +406,52 @@ impl DevtoolsTarget {
         Self::ok_response(req.id, &result)
     }
 
-    fn handle_css_set_property_text(&self, _webview: &WebView, req: DevtoolsRequest) -> DevtoolsResponse {
+    fn handle_css_set_property_text(&self, webview: &WebView, req: DevtoolsRequest) -> DevtoolsResponse {
         use rwe_devtools_proto::css::SetPropertyTextParams;
-        let _params: SetPropertyTextParams = match serde_json::from_value(req.params.clone()) {
+        let params: SetPropertyTextParams = match serde_json::from_value(req.params.clone()) {
             Ok(p) => p,
             Err(e) => return Self::error_response(req.id, error_codes::INVALID_PARAMS,
                 format!("Invalid params: {e}")),
         };
+        let doc = match webview.document() {
+            Some(d) => d,
+            None => return Self::error_response(req.id, error_codes::INTERNAL_ERROR,
+                "No document loaded".to_string()),
+        };
+        let node = match find_node_by_id(&doc.root, params.node_id) {
+            Some(n) => n,
+            None => return Self::error_response(req.id, error_codes::NODE_NOT_FOUND,
+                format!("Node {} not found", params.node_id)),
+        };
+        // Modify inline style attribute - replace nebo pridat property.
+        let cur_style = node.attr("style").unwrap_or_default();
+        let mut found = false;
+        let mut new_pairs: Vec<String> = Vec::new();
+        for pair in cur_style.split(';') {
+            if let Some(idx) = pair.find(':') {
+                let p = pair[..idx].trim();
+                if p == params.property {
+                    new_pairs.push(format!("{}: {}", params.property, params.value));
+                    found = true;
+                } else if !p.is_empty() {
+                    new_pairs.push(pair.trim().to_string());
+                }
+            }
+        }
+        if !found {
+            new_pairs.push(format!("{}: {}", params.property, params.value));
+        }
+        let new_style = new_pairs.join("; ");
+        node.set_attr("style", &new_style);
+        // Broadcast event - frontend updatne UI.
+        self.push_event(DevtoolsEvent {
+            method: "DOM.attributeModified".to_string(),
+            params: serde_json::json!({
+                "nodeId": params.node_id,
+                "name": "style",
+                "value": new_style,
+            }),
+        });
         Self::ok_response_raw(req.id, serde_json::json!({}))
     }
 
