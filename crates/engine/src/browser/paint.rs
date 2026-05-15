@@ -1553,19 +1553,26 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
         // text pres measure_text_width (Times Regular metrics) misaligned vs
         // render Ubuntu Bold (sirsi glyfy) -> centering offset spatne.
         let text_w = super::layout::measure_text_width_full(text, bx.font_size, bx.effective_weight(), bx.italic, &bx.font_family, bx.letter_spacing);
-        let inner_w = bx.rect.width - 2.0 * bx.padding;
+        // Asymmetric padding: padding-left wins pro text x-pozici, padding-top
+        // pro text y-pozici. Pri "padding: 2px 8px" potrebujeme 8 horizontalni
+        // a 2 vertikalni.
+        let pad_l = bx.padding_left.unwrap_or(bx.padding);
+        let pad_r = bx.padding_right.unwrap_or(bx.padding);
+        let pad_t = bx.padding_top.unwrap_or(bx.padding);
+        let pad_b = bx.padding_bottom.unwrap_or(bx.padding);
+        // inner_w pres asymmetric padding (drive 2 * bx.padding shorthand chyba
+        // pri asymmetric -> text-align center off).
+        let inner_w = bx.rect.width - pad_l - pad_r;
         let align_offset = match bx.text_align {
             TextAlign::Left | TextAlign::Justify => 0.0,
             TextAlign::Center => ((inner_w - text_w) * 0.5).max(0.0),
             TextAlign::Right  => (inner_w - text_w).max(0.0),
         };
-        // Asymmetric padding: padding-left wins pro text x-pozici, padding-top
-        // pro text y-pozici. Pri "padding: 2px 8px" potrebujeme 8 horizontalni
-        // a 2 vertikalni.
-        let pad_l = bx.padding_left.unwrap_or(bx.padding);
-        let pad_t = bx.padding_top.unwrap_or(bx.padding);
-        let pad_b = bx.padding_bottom.unwrap_or(bx.padding);
-        let text_x = bx.rect.x + pad_l + align_offset;
+        let border = bx.border_width.max(0.0);
+        // text_x = vnejsi rect + border + padding_left (CSS box-model).
+        // Bez border posunu by text byl ulozeny na border edge = posunuty
+        // o border_width doleva od skutecne content area.
+        let text_x = bx.rect.x + border + pad_l + align_offset;
         // Vertical centering: CSS line-box leading split. Pri natural
         // line_height ~= 1.2 * font_size (default leading 0.2*font_size)
         // glyph je natural top - render pen_y/bearing_y resi baseline.
@@ -1586,7 +1593,7 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
         //   v_offset = -shift = (inner_h - 0.9*fs)/2 - 0.3*fs = (inner_h - 1.5*fs)/2
         // BEZ clampu na 0 - pri inner_h < 1.5*fs negative shift posune text
         // do pad_t area (badge/highlight maly inner = mensi clam). Akceptace.
-        let inner_h = bx.rect.height - pad_t - pad_b;
+        let inner_h = bx.rect.height - pad_t - pad_b - 2.0 * border;
         // Vertical centering: jen kdyz inner_h substantialne > advance_h (=
         // box vyssi nez line, tj. button/badge/td s extra space). Pri
         // single-line text v normalnim flow (rect.height ≈ advance_h) nebo
@@ -1600,7 +1607,7 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
         } else {
             0.0
         };
-        let text_y = bx.rect.y + pad_t + v_offset;
+        let text_y = bx.rect.y + border + pad_t + v_offset;
         let text_color = with_alpha(bx.text_color.unwrap_or([0, 0, 0, 255]));
         // Text shadow - emit pred main text aby byl v pozadi
         if let Some((ox, oy, _blur, color)) = bx.text_shadow {
