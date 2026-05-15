@@ -3971,6 +3971,12 @@ pub struct Renderer {
     /// scale_factor. CSS coords jsou logical -> NDC mapping musi pouzit logical
     /// vp = config.width / scale_factor.
     pub scale_factor: f32,
+    /// Override target size (physical px) pro `vp` uniform pri render_via.
+    /// None = pouzit config.width/height (default - present do swap chain).
+    /// Some((w, h)) = render do RT s touto velikosti (WebView offscreen RT).
+    /// Bez override by NDC pocital pres full surface, ale RT je smaller,
+    /// vede ke kompresi obsahu.
+    pub target_size: Option<(u32, u32)>,
     pipeline: wgpu::RenderPipeline,
     /// Optional LCD pipeline pro real subpixel text - vyzaduje DUAL_SOURCE_BLENDING.
     /// None pri unsupported HW (fallback grayscale v hlavnim shaderu mode 9).
@@ -4535,6 +4541,7 @@ impl Renderer {
         Renderer {
             surface, device, queue, config, zoom: 1.0,
             scale_factor: scale_factor as f32,
+            target_size: None,
             pipeline, lcd_pipeline, uniform_buf,
             atlas_tex, atlas_view, atlas_smp, bind_group_layout, bind_group, atlas,
             image_atlas, image_tex, image_view,
@@ -5670,7 +5677,8 @@ impl Renderer {
         // Browser zoom: vp uniform = logical dims (window/zoom). Vertex px coords
         // jsou v logical px (layout running at logical viewport). NDC mapping
         // px/vp pak skaluje obsah o zoom faktor pri compose do framebufferu.
-        let vp = [self.config.width as f32 / (self.zoom * self.scale_factor), self.config.height as f32 / (self.zoom * self.scale_factor), self.zoom, 0.0];
+        let (vp_w, vp_h) = self.vp_dims();
+        let vp = [vp_w, vp_h, self.zoom, 0.0];
         self.queue.write_buffer(&self.uniform_buf, 0, bytemuck::cast_slice(&vp));
 
         // Acquire frame
@@ -5860,12 +5868,8 @@ impl Renderer {
         // RECT_SHADER pouziva uniform.viewport. Drive write_buffer byl jen
         // ve `draw_full_frame_cached` - WebView::render_via via tuto fn
         // potrebuje vlastni uniform sync.
-        let vp = [
-            self.config.width as f32 / (self.zoom * self.scale_factor).max(0.01),
-            self.config.height as f32 / (self.zoom * self.scale_factor).max(0.01),
-            self.zoom,
-            0.0,
-        ];
+        let (vp_w, vp_h) = self.vp_dims();
+        let vp = [vp_w, vp_h, self.zoom, 0.0];
         self.queue.write_buffer(&self.uniform_buf, 0, bytemuck::cast_slice(&vp));
         if cmds.is_empty() { return false; }
         let segments: Vec<Seg> = partition_filter_segments(cmds);
@@ -5982,7 +5986,8 @@ impl Renderer {
         // Browser zoom: vp uniform = logical dims (window/zoom). Vertex px coords
         // jsou v logical px (layout running at logical viewport). NDC mapping
         // px/vp pak skaluje obsah o zoom faktor pri compose do framebufferu.
-        let vp = [self.config.width as f32 / (self.zoom * self.scale_factor), self.config.height as f32 / (self.zoom * self.scale_factor), self.zoom, 0.0];
+        let (vp_w, vp_h) = self.vp_dims();
+        let vp = [vp_w, vp_h, self.zoom, 0.0];
         self.queue.write_buffer(&self.uniform_buf, 0, bytemuck::cast_slice(&vp));
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
@@ -6232,6 +6237,14 @@ impl Renderer {
         self.queue.submit(std::iter::once(encoder.finish()));
         frame.present();
         true
+    }
+
+    /// Logical viewport dimensions pro vp uniform. Pri WebView render_via
+    /// override pres target_size (RT velikost). Default = full surface.
+    fn vp_dims(&self) -> (f32, f32) {
+        let (w, h) = self.target_size.unwrap_or((self.config.width, self.config.height));
+        let scale = (self.zoom * self.scale_factor).max(0.01);
+        (w as f32 / scale, h as f32 / scale)
     }
 
     /// Compositni 2 offscreen textures vertical split do swap chain.
@@ -6487,7 +6500,8 @@ impl Renderer {
         // Browser zoom: vp uniform = logical dims (window/zoom). Vertex px coords
         // jsou v logical px (layout running at logical viewport). NDC mapping
         // px/vp pak skaluje obsah o zoom faktor pri compose do framebufferu.
-        let vp = [self.config.width as f32 / (self.zoom * self.scale_factor), self.config.height as f32 / (self.zoom * self.scale_factor), self.zoom, 0.0];
+        let (vp_w, vp_h) = self.vp_dims();
+        let vp = [vp_w, vp_h, self.zoom, 0.0];
         self.queue.write_buffer(&self.uniform_buf, 0, bytemuck::cast_slice(&vp));
 
         let frame = match self.surface.get_current_texture() {

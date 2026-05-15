@@ -989,6 +989,12 @@ impl WebView {
         // RT physical px.
         renderer.zoom = self.zoom;
         renderer.scale_factor = self.scale_factor;
+        // Override renderer target_size pres RT velikost (physical px).
+        // Bez tohoto by NDC mapping pouzival full surface, vede k svisle
+        // kompresi obsahu pri devtools split (RT je mensi nez surface).
+        let rt_w = (self.viewport_w * self.scale_factor) as u32;
+        let rt_h = (self.viewport_h * self.scale_factor) as u32;
+        renderer.target_size = Some((rt_w, rt_h));
         // Sync scroll_pos od interpreteru (JS window.scrollTo zapsal). Pri
         // zmene apply do self.scroll_x/y + scroll_target. Po render zpetne
         // sync scroll_pos = current scroll.
@@ -1412,6 +1418,10 @@ impl WebView {
             }
         }
         self.last_layout_root = Some(layout_root);
+
+        // Reset renderer target_size override - shell present_split + jine
+        // pas v swap chain pouziva config size.
+        renderer.target_size = None;
 
         self.dirty = false;
         self.target_view.as_ref()
