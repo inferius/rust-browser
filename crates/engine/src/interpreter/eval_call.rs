@@ -1481,9 +1481,59 @@ impl Interpreter {
                             let ctx = canvas::create_canvas_2d_context(canvas_ptr, Rc::clone(&self.canvas_ops));
                             return Ok(ctx);
                         }
-                        "scrollIntoView" | "scroll" | "scrollBy" | "scrollTo"
-                            => {
-                            // No-op
+                        "scrollIntoView" => {
+                            // Element.scrollIntoView(opt) - posune scroll position
+                            // tak, aby el byl viditelny. Spec defaults: block="start",
+                            // inline="nearest". Pri opt=false (deprecated bool API)
+                            // ekvivalent block="start". Pri opt=true / objekt:
+                            // block="start"|"center"|"end"|"nearest", inline same.
+                            // Bez layout_lookup -> no-op (rect = (0,0,0,0) by skocil
+                            // na 0 ktere jiz je).
+                            let opt = arg_vals.into_iter().next().unwrap_or(JsValue::Undefined);
+                            // block default "start" pro bool/Undefined
+                            let (block, _inline) = match &opt {
+                                JsValue::Object(o) => {
+                                    let b = o.borrow();
+                                    let bl = match b.get("block") {
+                                        JsValue::Str(s) => s,
+                                        _ => "start".to_string(),
+                                    };
+                                    let il = match b.get("inline") {
+                                        JsValue::Str(s) => s,
+                                        _ => "nearest".to_string(),
+                                    };
+                                    (bl, il)
+                                }
+                                _ => ("start".to_string(), "nearest".to_string()),
+                            };
+                            if let Some((x, y, _w, h)) = self.lookup_layout_rect(&n) {
+                                // Pred volanim scrollIntoView je element na pozici
+                                // (x, y) v page-coordinates. scrollIntoView meni
+                                // scroll tak, aby el.top byl na viewport.top (block=start),
+                                // viewport.center (center) nebo viewport.bottom (end).
+                                // Bez viewport_height dostupneho v interp pouzijeme
+                                // jednoduchou heuristiku: target_scroll_y = el.y pro
+                                // "start". Pro "center" / "end" by chtelo viewport;
+                                // necheme over-engineer, vratime "start" pro nearest
+                                // a end taky.
+                                let target_y = match block.as_str() {
+                                    "end" => (y + h - 600.0).max(0.0), // assume vh ~600
+                                    "center" => (y + h * 0.5 - 300.0).max(0.0),
+                                    _ => y.max(0.0),
+                                };
+                                let mut sp = self.scroll_pos.borrow_mut();
+                                sp.0 = x.max(0.0);
+                                sp.1 = target_y;
+                            }
+                            return Ok(JsValue::Undefined);
+                        }
+                        "scroll" | "scrollBy" | "scrollTo" => {
+                            // Element-level scroll - meni element-internal scroll
+                            // pozici. Bez per-element scroll state v interpreteru
+                            // necheme over-engineer, no-op je akceptovatelny
+                            // (real browsers se na overflow scrollable elementech
+                            // implementuje pres prislusne attr). Test scope cili
+                            // jen window-level scroll.
                             return Ok(JsValue::Undefined);
                         }
                         // ─── Element extras ─────────────────────────────────
@@ -1975,17 +2025,54 @@ impl Interpreter {
                             return Ok(JsValue::Undefined);
                         }
                         "focus" => {
+                            // Pokud uz byl tento node focused, nedispatchovat.
+                            let already_focused = match self.focused_element.borrow().as_ref() {
+                                Some(f) => Rc::ptr_eq(f, &n),
+                                None => false,
+                            };
+                            if already_focused {
+                                return Ok(JsValue::Undefined);
+                            }
+                            // Pokud byl jiny element focused, dispatch blur na nej.
+                            let prev = self.focused_element.borrow().clone();
+                            if let Some(prev_n) = prev {
+                                let mut blur_evt = JsObject::new();
+                                blur_evt.set("type".into(), JsValue::Str("blur".into()));
+                                blur_evt.set("bubbles".into(), JsValue::Bool(false));
+                                blur_evt.set("cancelable".into(), JsValue::Bool(false));
+                                let _ = self.dispatch_event(
+                                    &prev_n, "blur",
+                                    JsValue::Object(Rc::new(RefCell::new(blur_evt))),
+                                );
+                            }
                             *self.focused_element.borrow_mut() = Some(Rc::clone(&n));
+                            // Dispatch focus event.
+                            let mut focus_evt = JsObject::new();
+                            focus_evt.set("type".into(), JsValue::Str("focus".into()));
+                            focus_evt.set("bubbles".into(), JsValue::Bool(false));
+                            focus_evt.set("cancelable".into(), JsValue::Bool(false));
+                            let _ = self.dispatch_event(
+                                &n, "focus",
+                                JsValue::Object(Rc::new(RefCell::new(focus_evt))),
+                            );
                             return Ok(JsValue::Undefined);
                         }
                         "blur" => {
-                            // Pokud byl prave focused tento node, clear.
+                            // Pokud byl prave focused tento node, clear + dispatch blur.
                             let was_focused = match self.focused_element.borrow().as_ref() {
                                 Some(f) => Rc::ptr_eq(f, &n),
                                 None => false,
                             };
                             if was_focused {
                                 *self.focused_element.borrow_mut() = None;
+                                let mut blur_evt = JsObject::new();
+                                blur_evt.set("type".into(), JsValue::Str("blur".into()));
+                                blur_evt.set("bubbles".into(), JsValue::Bool(false));
+                                blur_evt.set("cancelable".into(), JsValue::Bool(false));
+                                let _ = self.dispatch_event(
+                                    &n, "blur",
+                                    JsValue::Object(Rc::new(RefCell::new(blur_evt))),
+                                );
                             }
                             return Ok(JsValue::Undefined);
                         }

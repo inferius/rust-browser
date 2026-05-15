@@ -45,6 +45,7 @@ pub fn setup_builtins(
     pending_xhr_callbacks: &Rc<RefCell<Vec<(JsValue, JsValue)>>>,
     raf_callbacks: &Rc<RefCell<Vec<(u32, JsValue)>>>,
     next_raf_id: &Rc<RefCell<u32>>,
+    scroll_pos: &Rc<RefCell<(f32, f32)>>,
 ) {
     let mut e = env.borrow_mut();
 
@@ -1597,6 +1598,90 @@ pub fn setup_builtins(
     window.set("innerWidth".into(),  JsValue::Number(1024.0));
     window.set("innerHeight".into(), JsValue::Number(768.0));
     window.set("devicePixelRatio".into(), JsValue::Number(1.0));
+    // window.scrollTo / scrollBy / pageXOffset / pageYOffset / scrollX / scrollY.
+    // scroll_pos drzen sdileny pres Rc<RefCell<(x,y)>> - host (WebView) ho
+    // potom muze cist v render_via a aplikovat na fyzicky scroll. Pred prvni
+    // render Sync je hodnota (0, 0). pageXOffset/pageYOffset musi delat dynamic
+    // lookup pres getter, ale tady postavime jako native callable wrapper:
+    // alias scrollX/scrollY = pageXOffset/pageYOffset.
+    {
+        let sp = Rc::clone(scroll_pos);
+        window.set("scrollTo".into(), native("scrollTo", move |args| {
+            // scrollTo(x, y) ALEBO scrollTo({left, top, behavior}).
+            let mut it = args.into_iter();
+            let first = it.next().unwrap_or(JsValue::Undefined);
+            let (nx, ny) = match &first {
+                JsValue::Object(o) => {
+                    let b = o.borrow();
+                    let l = b.get("left").to_number();
+                    let t = b.get("top").to_number();
+                    (l as f32, t as f32)
+                }
+                _ => {
+                    let x = first.to_number() as f32;
+                    let y = it.next().map(|v| v.to_number() as f32).unwrap_or(0.0);
+                    (x, y)
+                }
+            };
+            *sp.borrow_mut() = (nx.max(0.0), ny.max(0.0));
+            Ok(JsValue::Undefined)
+        }));
+    }
+    {
+        let sp = Rc::clone(scroll_pos);
+        window.set("scrollBy".into(), native("scrollBy", move |args| {
+            let mut it = args.into_iter();
+            let first = it.next().unwrap_or(JsValue::Undefined);
+            let (dx, dy) = match &first {
+                JsValue::Object(o) => {
+                    let b = o.borrow();
+                    let l = b.get("left").to_number();
+                    let t = b.get("top").to_number();
+                    (l as f32, t as f32)
+                }
+                _ => {
+                    let x = first.to_number() as f32;
+                    let y = it.next().map(|v| v.to_number() as f32).unwrap_or(0.0);
+                    (x, y)
+                }
+            };
+            let mut cur = sp.borrow_mut();
+            cur.0 = (cur.0 + dx).max(0.0);
+            cur.1 = (cur.1 + dy).max(0.0);
+            Ok(JsValue::Undefined)
+        }));
+    }
+    // window.scroll alias na scrollTo (spec).
+    {
+        let sp = Rc::clone(scroll_pos);
+        window.set("scroll".into(), native("scroll", move |args| {
+            let mut it = args.into_iter();
+            let first = it.next().unwrap_or(JsValue::Undefined);
+            let (nx, ny) = match &first {
+                JsValue::Object(o) => {
+                    let b = o.borrow();
+                    let l = b.get("left").to_number();
+                    let t = b.get("top").to_number();
+                    (l as f32, t as f32)
+                }
+                _ => {
+                    let x = first.to_number() as f32;
+                    let y = it.next().map(|v| v.to_number() as f32).unwrap_or(0.0);
+                    (x, y)
+                }
+            };
+            *sp.borrow_mut() = (nx.max(0.0), ny.max(0.0));
+            Ok(JsValue::Undefined)
+        }));
+    }
+    // pageXOffset/pageYOffset/scrollX/scrollY - 4 aliasy pro stejnou hodnotu.
+    // Realne dynamic getter - pres `__window__` sentinel v eval_member.rs.
+    // Tady jen seedneme defaultni 0.0. Skutecna hodnota cte interpreter
+    // ze scroll_pos v eval_member.
+    window.set("pageXOffset".into(), JsValue::Number(0.0));
+    window.set("pageYOffset".into(), JsValue::Number(0.0));
+    window.set("scrollX".into(), JsValue::Number(0.0));
+    window.set("scrollY".into(), JsValue::Number(0.0));
     let window_rc = Rc::new(RefCell::new(window));
     let window_val = JsValue::Object(Rc::clone(&window_rc));
     e.define("window", window_val.clone());

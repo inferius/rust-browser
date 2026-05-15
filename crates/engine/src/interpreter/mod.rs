@@ -635,6 +635,11 @@ pub struct Interpreter {
     /// Aktualne fokusovany element (document.activeElement). Pri focus() -> Some,
     /// pri blur() -> None (a getter pak vraci document.body).
     pub focused_element: Rc<RefCell<Option<Rc<crate::browser::dom::Node>>>>,
+    /// Scroll position pres `Rc<RefCell<(x, y)>>`. Host (WebView/shell) drzi
+    /// stejny Rc a synchronizuje sve `scroll_x/scroll_y` z teto hodnoty po kazde
+    /// JS dispatch. Default (0, 0). Pristup pres `window.pageXOffset/pageYOffset`,
+    /// `window.scrollX/scrollY` a `document.documentElement.scrollTop`.
+    pub scroll_pos: Rc<RefCell<(f32, f32)>>,
 }
 
 /// Sdileny debugger state pres Arc<Mutex>. UI thread cte/zapisuje set
@@ -746,12 +751,13 @@ impl Interpreter {
         let raf_callbacks: Rc<RefCell<Vec<(u32, JsValue)>>> =
             Rc::new(RefCell::new(Vec::new()));
         let next_raf_id: Rc<RefCell<u32>> = Rc::new(RefCell::new(1));
+        let scroll_pos: Rc<RefCell<(f32, f32)>> = Rc::new(RefCell::new((0.0, 0.0)));
         setup_builtins(
             &global, &task_queue, &next_timer_id, &workers, &next_worker_id,
             &document, &console_log, &network_log, &custom_elements,
             &mutation_observers, &websockets, &next_ws_id,
             &pending_fetches, &pending_xhr_callbacks,
-            &raf_callbacks, &next_raf_id,
+            &raf_callbacks, &next_raf_id, &scroll_pos,
         );
         Interpreter {
             global, yield_buffer: None, task_queue, next_timer_id,
@@ -785,6 +791,7 @@ impl Interpreter {
             cascade_lookup: None,
             window_listeners: Rc::new(RefCell::new(HashMap::new())),
             focused_element: Rc::new(RefCell::new(None)),
+            scroll_pos,
         }
     }
 

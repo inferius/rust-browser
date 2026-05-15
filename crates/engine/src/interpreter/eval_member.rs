@@ -48,6 +48,22 @@ impl Interpreter {
             }
         }
 
+        // window.pageXOffset/pageYOffset/scrollX/scrollY - dynamic getter
+        // ze scroll_pos. JS pristup `window.pageYOffset` musi vratit aktualni
+        // scroll_y (mozna upravenou v predchozim scrollTo / scrollBy v ramci
+        // jednoho skriptu). Static field v window objektu by drzel jen seed
+        // hodnotu z time-of-construction.
+        if matches!(key.as_str(), "pageXOffset" | "scrollX" | "pageYOffset" | "scrollY") {
+            if let JsValue::Object(ref o) = obj {
+                if matches!(o.borrow().props.get("__window__"), Some(JsValue::Bool(true))) {
+                    let (sx, sy) = *self.scroll_pos.borrow();
+                    return Ok(JsValue::Number(
+                        if matches!(key.as_str(), "pageXOffset" | "scrollX") { sx as f64 } else { sy as f64 }
+                    ));
+                }
+            }
+        }
+
         // Getter podpora: kdyz objekt ma `__get_key__` vlastnost (funkci), zavolej ji
         if let JsValue::Object(ref o) = obj {
             let getter_key = format!("__get_{key}__");
