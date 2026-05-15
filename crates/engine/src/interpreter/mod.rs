@@ -632,6 +632,9 @@ pub struct Interpreter {
     pub cascade_lookup: Option<Rc<dyn Fn(*const crate::browser::dom::NodeData) -> HashMap<String, String>>>,
     /// window.addEventListener registry: event type -> Vec<callback>.
     pub window_listeners: Rc<RefCell<HashMap<String, Vec<JsValue>>>>,
+    /// Aktualne fokusovany element (document.activeElement). Pri focus() -> Some,
+    /// pri blur() -> None (a getter pak vraci document.body).
+    pub focused_element: Rc<RefCell<Option<Rc<crate::browser::dom::Node>>>>,
 }
 
 /// Sdileny debugger state pres Arc<Mutex>. UI thread cte/zapisuje set
@@ -781,6 +784,7 @@ impl Interpreter {
             layout_lookup: None,
             cascade_lookup: None,
             window_listeners: Rc::new(RefCell::new(HashMap::new())),
+            focused_element: Rc::new(RefCell::new(None)),
         }
     }
 

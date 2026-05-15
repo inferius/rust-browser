@@ -31,6 +31,23 @@ impl Interpreter {
             }
         }
 
+        // Specialni handling pro document.activeElement - vyzaduje pristup k
+        // self.focused_element ktery se v native fn closurach nedostal.
+        if key == "activeElement" {
+            if let JsValue::Object(ref o) = obj {
+                if matches!(o.borrow().props.get("__is_document__"), Some(JsValue::Bool(true))) {
+                    if let Some(n) = self.focused_element.borrow().clone() {
+                        return Ok(JsValue::DomNode(n));
+                    }
+                    // Default fallback - document.body
+                    if let Some(body) = self.document.borrow().body() {
+                        return Ok(JsValue::DomNode(body));
+                    }
+                    return Ok(JsValue::Null);
+                }
+            }
+        }
+
         // Getter podpora: kdyz objekt ma `__get_key__` vlastnost (funkci), zavolej ji
         if let JsValue::Object(ref o) = obj {
             let getter_key = format!("__get_{key}__");

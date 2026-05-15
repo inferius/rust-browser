@@ -1963,7 +1963,21 @@ impl Interpreter {
                             }
                             return Ok(JsValue::Undefined);
                         }
-                        "focus" | "blur" => return Ok(JsValue::Undefined),
+                        "focus" => {
+                            *self.focused_element.borrow_mut() = Some(Rc::clone(&n));
+                            return Ok(JsValue::Undefined);
+                        }
+                        "blur" => {
+                            // Pokud byl prave focused tento node, clear.
+                            let was_focused = match self.focused_element.borrow().as_ref() {
+                                Some(f) => Rc::ptr_eq(f, &n),
+                                None => false,
+                            };
+                            if was_focused {
+                                *self.focused_element.borrow_mut() = None;
+                            }
+                            return Ok(JsValue::Undefined);
+                        }
                         _ => {}
                     }
                     let _ = NodeData::new_text("");  // suppress unused-import warning

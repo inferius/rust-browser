@@ -1510,6 +1510,12 @@ pub fn setup_builtins(
     }
     doc_obj.set("readyState".into(), JsValue::Str("complete".into()));
 
+    // document.activeElement - intercept v eval_member.rs (potrebuje pristup
+    // k Interpreter.focused_element). Sentinel: oznacime document objekt
+    // flagem __is_document__ aby eval_member pred bezne hledanim klice
+    // mohl dispatchnout na focused_element.
+    doc_obj.set("__is_document__".into(), JsValue::Bool(true));
+
     e.define("document", JsValue::Object(Rc::new(RefCell::new(doc_obj))));
 
     // Element/Node konstruktory (pro instanceof kontroly)
