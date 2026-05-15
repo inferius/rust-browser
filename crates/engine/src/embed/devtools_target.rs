@@ -429,7 +429,16 @@ impl DevtoolsTarget {
         };
         let env = Rc::clone(&interp.global);
         let mut last_val = crate::interpreter::JsValue::Undefined;
+        // Parser obali kazdy stmt do WithLine { line, inner } pro debugger
+        // source map. Unwrap pres helper aby nas match na Stmt::Expr fungoval.
+        fn unwrap_with_line(s: &crate::ast::Stmt) -> &crate::ast::Stmt {
+            match s {
+                crate::ast::Stmt::WithLine { inner, .. } => unwrap_with_line(inner),
+                other => other,
+            }
+        }
         for stmt in &program.body {
+            let stmt = unwrap_with_line(stmt);
             if let crate::ast::Stmt::Expr(e) = stmt {
                 match interp.eval(e, &env) {
                     Ok(v) => last_val = v,
@@ -869,6 +878,53 @@ mod tests {
         }
         assert!(found_id, "id attribute missing");
         assert!(found_class, "class attribute missing");
+    }
+
+    #[test]
+    fn runtime_evaluate_arithmetic() {
+        let engine = Arc::new(Engine::new_headless());
+        let mut wv = WebView::new(engine, 800, 600);
+        let _ = wv.load_html("<html></html>", "", None);
+        let target = DevtoolsTarget::new();
+        let resp = target.handle_request(&mut wv, DevtoolsRequest {
+            id: 1, method: "Runtime.evaluate".into(),
+            params: serde_json::json!({ "expression": "2 + 3 * 4" }),
+        });
+        assert!(resp.error.is_none(), "eval err: {:?}", resp.error);
+        let result = resp.result.unwrap();
+        let val = &result["result"]["value"];
+        assert_eq!(val.as_f64(), Some(14.0), "expected 14, got {:?}", val);
+    }
+
+    #[test]
+    fn runtime_evaluate_string_concat() {
+        let engine = Arc::new(Engine::new_headless());
+        let mut wv = WebView::new(engine, 800, 600);
+        let _ = wv.load_html("<html></html>", "", None);
+        let target = DevtoolsTarget::new();
+        let resp = target.handle_request(&mut wv, DevtoolsRequest {
+            id: 1, method: "Runtime.evaluate".into(),
+            params: serde_json::json!({ "expression": "'foo' + 'bar'" }),
+        });
+        assert!(resp.error.is_none());
+        let result = resp.result.unwrap();
+        assert_eq!(result["result"]["type"], "string");
+        assert_eq!(result["result"]["value"], "foobar");
+    }
+
+    #[test]
+    fn runtime_evaluate_syntax_error() {
+        let engine = Arc::new(Engine::new_headless());
+        let mut wv = WebView::new(engine, 800, 600);
+        let _ = wv.load_html("<html></html>", "", None);
+        let target = DevtoolsTarget::new();
+        let resp = target.handle_request(&mut wv, DevtoolsRequest {
+            id: 1, method: "Runtime.evaluate".into(),
+            params: serde_json::json!({ "expression": "(((" }),
+        });
+        assert!(resp.error.is_none());
+        let result = resp.result.unwrap();
+        assert!(!result["exception_details"].is_null(), "expected exception_details");
     }
 
     #[test]
