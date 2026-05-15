@@ -644,6 +644,10 @@ pub struct Interpreter {
     /// `attachShadow` create entry, `el.shadowRoot` getter lookup.
     /// Closed mode = lookup return Null (ale samotny objekt drzi mode="closed").
     pub shadow_roots: Rc<RefCell<HashMap<usize, Rc<RefCell<JsObject>>>>>,
+    /// Stylesheets lookup callback z hosta. Vraci Vec<sheet>; kazdy sheet je
+    /// Vec<(selector_text, Vec<(property, value)>)>. None / empty = zadne styly.
+    /// document.styleSheets pak vrati StyleSheetList z teto sructure.
+    pub stylesheets_lookup: Option<Rc<dyn Fn() -> Vec<Vec<(String, Vec<(String, String)>)>>>>,
 }
 
 /// Sdileny debugger state pres Arc<Mutex>. UI thread cte/zapisuje set
@@ -797,7 +801,17 @@ impl Interpreter {
             focused_element: Rc::new(RefCell::new(None)),
             scroll_pos,
             shadow_roots: Rc::new(RefCell::new(HashMap::new())),
+            stylesheets_lookup: None,
         }
+    }
+
+    /// Zaregistruje callback pro lookup stylesheets z hosta.
+    /// Vraci Vec<sheet>; kazdy sheet je Vec<(selector, Vec<(property, value)>)>.
+    pub fn set_stylesheets_lookup<F>(&mut self, f: F)
+    where
+        F: Fn() -> Vec<Vec<(String, Vec<(String, String)>)>> + 'static,
+    {
+        self.stylesheets_lookup = Some(Rc::new(f));
     }
 
     /// Zaregistruje callback pro lookup layout boxu node-u.

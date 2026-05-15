@@ -147,6 +147,12 @@ pub struct WebView {
     pub(crate) cascade_props: std::rc::Rc<std::cell::RefCell<
         std::collections::HashMap<usize, std::collections::HashMap<String, String>>
     >>,
+    /// Stylesheets ve formatu pro document.styleSheets JS API.
+    /// Vec<sheet>, kazdy sheet Vec<(selector_text, Vec<(prop, val)>)>.
+    /// Rebuild po kazdem load_html z self.stylesheets.
+    pub(crate) stylesheets_data: std::rc::Rc<std::cell::RefCell<
+        Vec<Vec<(String, Vec<(String, String)>)>>
+    >>,
     /// Async jobs registry - background work (image lazy load, file IO).
     /// Drain per render_via vola pending callbacks v main thread.
     pub(crate) async_jobs: crate::browser::async_jobs::AsyncJobsRegistry,
@@ -194,6 +200,7 @@ impl WebView {
             last_layout_root: None,
             layout_rects: std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new())),
             cascade_props: std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new())),
+            stylesheets_data: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
             async_jobs: crate::browser::async_jobs::AsyncJobsRegistry::new(),
         }
     }
@@ -268,6 +275,27 @@ impl WebView {
         interp.set_cascade_lookup(move |ptr| {
             cascade_clone.borrow().get(&(ptr as usize)).cloned().unwrap_or_default()
         });
+        let sheets_clone = std::rc::Rc::clone(&self.stylesheets_data);
+        interp.set_stylesheets_lookup(move || {
+            sheets_clone.borrow().clone()
+        });
+
+        // Pre-build stylesheets_data ze stylesheet pro document.styleSheets API.
+        let mut sheet_data: Vec<(String, Vec<(String, String)>)> = Vec::new();
+        for rule in &stylesheet.rules {
+            let selector_text = rule.selectors.iter()
+                .map(|s| s.parts.iter().map(|p| format!("{p:?}")).collect::<Vec<_>>().join(" "))
+                .collect::<Vec<_>>().join(", ");
+            let decls = rule.declarations.iter()
+                .map(|d| (d.property.clone(), d.value.clone()))
+                .collect();
+            sheet_data.push((selector_text, decls));
+        }
+        *self.stylesheets_data.borrow_mut() = if sheet_data.is_empty() {
+            Vec::new()
+        } else {
+            vec![sheet_data]
+        };
 
         self.title = doc.title.clone();
         self.document = Some(doc);

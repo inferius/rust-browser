@@ -48,6 +48,16 @@ impl Interpreter {
             }
         }
 
+        // document.styleSheets - dynamicky StyleSheetList z webview lookup.
+        // Pri kazdem volani buildne fresh list (host moze pridavat sheety).
+        if key == "styleSheets" {
+            if let JsValue::Object(ref o) = obj {
+                if matches!(o.borrow().props.get("__is_document__"), Some(JsValue::Bool(true))) {
+                    return Ok(build_stylesheet_list(self));
+                }
+            }
+        }
+
         // window.pageXOffset/pageYOffset/scrollX/scrollY - dynamic getter
         // ze scroll_pos. JS pristup `window.pageYOffset` musi vratit aktualni
         // scroll_y (mozna upravenou v predchozim scrollTo / scrollBy v ramci
@@ -761,4 +771,105 @@ impl Interpreter {
             _ => Ok(JsValue::Undefined),
         }
     }
+}
+
+/// Buildne `StyleSheetList` z aktualniho host stylesheets lookupu.
+/// Vraci JsValue::Object - array-like s length, item(i), index access [0],
+/// kazda polozka CSSStyleSheet { cssRules, insertRule, deleteRule }.
+fn build_stylesheet_list(interp: &Interpreter) -> JsValue {
+    let sheets_data: Vec<Vec<(String, Vec<(String, String)>)>> =
+        if let Some(lookup) = interp.stylesheets_lookup.as_ref() {
+            lookup()
+        } else { Vec::new() };
+
+    let list = Rc::new(RefCell::new(JsObject::new()));
+    list.borrow_mut().set("__stylesheet_list__".into(), JsValue::Bool(true));
+    list.borrow_mut().set("length".into(), JsValue::Number(sheets_data.len() as f64));
+
+    let mut sheet_objs: Vec<JsValue> = Vec::new();
+    for (sheet_idx, rules) in sheets_data.iter().enumerate() {
+        let sheet = Rc::new(RefCell::new(JsObject::new()));
+        sheet.borrow_mut().set("__cssstylesheet__".into(), JsValue::Bool(true));
+        sheet.borrow_mut().set("href".into(), JsValue::Null);
+        sheet.borrow_mut().set("type".into(), JsValue::Str("text/css".into()));
+        sheet.borrow_mut().set("disabled".into(), JsValue::Bool(false));
+        sheet.borrow_mut().set("title".into(), JsValue::Null);
+        sheet.borrow_mut().set("ownerNode".into(), JsValue::Null);
+        sheet.borrow_mut().set("parentStyleSheet".into(), JsValue::Null);
+
+        // cssRules - CSSRuleList array-like
+        let css_rules = Rc::new(RefCell::new(JsObject::new()));
+        css_rules.borrow_mut().set("__css_rule_list__".into(), JsValue::Bool(true));
+        css_rules.borrow_mut().set("length".into(), JsValue::Number(rules.len() as f64));
+
+        let mut rule_arr: Vec<JsValue> = Vec::new();
+        for (rule_idx, (selector, decls)) in rules.iter().enumerate() {
+            let rule = Rc::new(RefCell::new(JsObject::new()));
+            rule.borrow_mut().set("__css_rule__".into(), JsValue::Bool(true));
+            rule.borrow_mut().set("type".into(), JsValue::Number(1.0)); // CSSRule.STYLE_RULE
+            rule.borrow_mut().set("selectorText".into(), JsValue::Str(selector.clone()));
+            // cssText - rebuild selector { decls }
+            let decls_str: String = decls.iter()
+                .map(|(p, v)| format!("{p}: {v};"))
+                .collect::<Vec<_>>().join(" ");
+            rule.borrow_mut().set("cssText".into(),
+                JsValue::Str(format!("{selector} {{ {decls_str} }}")));
+
+            // style - CSSStyleDeclaration-like (pasivni; bez DOM sync).
+            let style = Rc::new(RefCell::new(JsObject::new()));
+            for (p, v) in decls {
+                let camel = super::dom_props::kebab_to_camel(p);
+                style.borrow_mut().set(camel, JsValue::Str(v.clone()));
+                style.borrow_mut().set(p.clone(), JsValue::Str(v.clone()));
+            }
+            style.borrow_mut().set("cssText".into(), JsValue::Str(decls_str));
+            style.borrow_mut().set("length".into(), JsValue::Number(decls.len() as f64));
+            rule.borrow_mut().set("style".into(), JsValue::Object(style));
+
+            // Indexed access na CSSRule pro cssRules[i]
+            css_rules.borrow_mut().set(rule_idx.to_string(),
+                JsValue::Object(Rc::clone(&rule)));
+            rule_arr.push(JsValue::Object(rule));
+        }
+        // item(i)
+        let rule_arr_rc = Rc::new(rule_arr);
+        let rs = Rc::clone(&rule_arr_rc);
+        css_rules.borrow_mut().set("item".into(), native("cssRules.item", move |args| {
+            let idx = args.into_iter().next().map(|v| v.to_number() as usize).unwrap_or(0);
+            Ok(rs.get(idx).cloned().unwrap_or(JsValue::Null))
+        }));
+        sheet.borrow_mut().set("cssRules".into(), JsValue::Object(Rc::clone(&css_rules)));
+        sheet.borrow_mut().set("rules".into(), JsValue::Object(css_rules));
+
+        // insertRule(rule_text, idx) - stub, vraci idx (no mutation persist).
+        sheet.borrow_mut().set("insertRule".into(),
+            native("CSSStyleSheet.insertRule", |args| {
+                let idx = args.into_iter().nth(1)
+                    .map(|v| v.to_number()).unwrap_or(0.0);
+                Ok(JsValue::Number(idx))
+            }));
+        // deleteRule(idx) - stub, undefined return.
+        sheet.borrow_mut().set("deleteRule".into(),
+            native("CSSStyleSheet.deleteRule", |_| Ok(JsValue::Undefined)));
+        // replace(text) / replaceSync(text) - Constructable StyleSheets stubs.
+        sheet.borrow_mut().set("replace".into(),
+            native("CSSStyleSheet.replace", |_| {
+                Ok(super::helpers::make_settled_promise("fulfilled", JsValue::Undefined))
+            }));
+        sheet.borrow_mut().set("replaceSync".into(),
+            native("CSSStyleSheet.replaceSync", |_| Ok(JsValue::Undefined)));
+
+        let sheet_val = JsValue::Object(sheet);
+        // indexed access [0], [1], ...
+        list.borrow_mut().set(sheet_idx.to_string(), sheet_val.clone());
+        sheet_objs.push(sheet_val);
+    }
+    // item(i)
+    let sheet_objs_rc = Rc::new(sheet_objs);
+    let so = Rc::clone(&sheet_objs_rc);
+    list.borrow_mut().set("item".into(), native("styleSheets.item", move |args| {
+        let idx = args.into_iter().next().map(|v| v.to_number() as usize).unwrap_or(0);
+        Ok(so.get(idx).cloned().unwrap_or(JsValue::Null))
+    }));
+    JsValue::Object(list)
 }

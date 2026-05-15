@@ -141,6 +141,107 @@ fn document_styleSheets_length_zero_default() {
     assert_eq!(as_num(v), 0.0);
 }
 
+#[test]
+fn document_styleSheets_with_lookup_returns_sheets() {
+    // Simulujeme host wire-up: 1 sheet, 2 rules.
+    use crate::interpreter::Interpreter;
+    use crate::lexer::base::Lexer;
+    use crate::parser::Parser;
+    use crate::tokens::TokenKind;
+    let src = r#"
+        const ss = document.styleSheets;
+        return ss.length + "|" + ss[0].cssRules.length + "|" + ss[0].cssRules[0].selectorText;
+    "#;
+    let lexer = Lexer::parse_str(src, "<test>").unwrap();
+    let tokens: Vec<_> = lexer.tokens.into_iter()
+        .filter(|t| !matches!(t.kind,
+            TokenKind::Whitespace | TokenKind::Newline
+            | TokenKind::CommentLine(_) | TokenKind::CommentBlock(_)))
+        .collect();
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse().unwrap();
+    let mut interp = Interpreter::new();
+    interp.set_stylesheets_lookup(|| {
+        vec![
+            vec![
+                (".foo".to_string(), vec![
+                    ("color".to_string(), "red".to_string()),
+                ]),
+                ("#bar".to_string(), vec![
+                    ("font-size".to_string(), "14px".to_string()),
+                ]),
+            ],
+        ]
+    });
+    let v = interp.run(&program).unwrap();
+    assert_eq!(as_str(v), "1|2|.foo");
+}
+
+#[test]
+fn cssstylesheet_insertRule_returns_idx() {
+    let v = run(r#"
+        const sheet = document.styleSheets;
+        if (sheet.length === 0) return -1;
+        return sheet[0].insertRule(".a{}", 0);
+    "#);
+    // Bez host lookup je length 0 -> -1.
+    assert_eq!(as_num(v), -1.0);
+}
+
+#[test]
+fn cssstylesheet_methods_exist_with_lookup() {
+    use crate::interpreter::Interpreter;
+    use crate::lexer::base::Lexer;
+    use crate::parser::Parser;
+    use crate::tokens::TokenKind;
+    let src = r#"
+        const sheet = document.styleSheets[0];
+        return typeof sheet.insertRule + "|" + typeof sheet.deleteRule + "|" + typeof sheet.replace;
+    "#;
+    let lexer = Lexer::parse_str(src, "<test>").unwrap();
+    let tokens: Vec<_> = lexer.tokens.into_iter()
+        .filter(|t| !matches!(t.kind,
+            TokenKind::Whitespace | TokenKind::Newline
+            | TokenKind::CommentLine(_) | TokenKind::CommentBlock(_)))
+        .collect();
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse().unwrap();
+    let mut interp = Interpreter::new();
+    interp.set_stylesheets_lookup(|| {
+        vec![vec![(".a".to_string(), vec![])]]
+    });
+    let v = interp.run(&program).unwrap();
+    assert_eq!(as_str(v), "function|function|function");
+}
+
+#[test]
+fn cssstylesheet_cssRules_indexed_access() {
+    use crate::interpreter::Interpreter;
+    use crate::lexer::base::Lexer;
+    use crate::parser::Parser;
+    use crate::tokens::TokenKind;
+    let src = r#"
+        const rules = document.styleSheets[0].cssRules;
+        return rules.item(0).selectorText;
+    "#;
+    let lexer = Lexer::parse_str(src, "<test>").unwrap();
+    let tokens: Vec<_> = lexer.tokens.into_iter()
+        .filter(|t| !matches!(t.kind,
+            TokenKind::Whitespace | TokenKind::Newline
+            | TokenKind::CommentLine(_) | TokenKind::CommentBlock(_)))
+        .collect();
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse().unwrap();
+    let mut interp = Interpreter::new();
+    interp.set_stylesheets_lookup(|| {
+        vec![vec![("body".to_string(), vec![
+            ("margin".to_string(), "0".to_string()),
+        ])]]
+    });
+    let v = interp.run(&program).unwrap();
+    assert_eq!(as_str(v), "body");
+}
+
 // --- Item 4: Selection API -----------------------------------------------
 
 #[test]
