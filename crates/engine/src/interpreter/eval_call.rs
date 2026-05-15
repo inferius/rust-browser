@@ -1206,7 +1206,13 @@ impl Interpreter {
                         }
                         "removeAttribute" => {
                             let name = arg_vals.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+                            let old_val = n.attr(&name).unwrap_or_default();
+                            let had = n.has_attr(&name);
                             n.remove_attr(&name);
+                            if had {
+                                self.dispatch_mutation(&n, "attributes",
+                                    Some(name), Some(old_val));
+                            }
                             return Ok(JsValue::Undefined);
                         }
                         "hasAttribute" => {
@@ -1362,30 +1368,12 @@ impl Interpreter {
                         "getBoundingClientRect" => {
                             // Lookup layout rect pres host callback; pri absenci vrati 0,0,0,0.
                             let (x, y, w, h) = self.lookup_layout_rect(&n).unwrap_or((0.0, 0.0, 0.0, 0.0));
-                            let mut rect = JsObject::new();
-                            rect.set("x".into(),      JsValue::Number(x as f64));
-                            rect.set("y".into(),      JsValue::Number(y as f64));
-                            rect.set("width".into(),  JsValue::Number(w as f64));
-                            rect.set("height".into(), JsValue::Number(h as f64));
-                            rect.set("top".into(),    JsValue::Number(y as f64));
-                            rect.set("left".into(),   JsValue::Number(x as f64));
-                            rect.set("right".into(),  JsValue::Number((x + w) as f64));
-                            rect.set("bottom".into(), JsValue::Number((y + h) as f64));
-                            return Ok(JsValue::Object(Rc::new(RefCell::new(rect))));
+                            return Ok(make_dom_rect(x, y, w, h));
                         }
                         "getClientRects" => {
                             // Single-rect approximation (spec by mela vratit per-line rects pro inline).
                             let (x, y, w, h) = self.lookup_layout_rect(&n).unwrap_or((0.0, 0.0, 0.0, 0.0));
-                            let mut rect = JsObject::new();
-                            rect.set("x".into(),      JsValue::Number(x as f64));
-                            rect.set("y".into(),      JsValue::Number(y as f64));
-                            rect.set("width".into(),  JsValue::Number(w as f64));
-                            rect.set("height".into(), JsValue::Number(h as f64));
-                            rect.set("top".into(),    JsValue::Number(y as f64));
-                            rect.set("left".into(),   JsValue::Number(x as f64));
-                            rect.set("right".into(),  JsValue::Number((x + w) as f64));
-                            rect.set("bottom".into(), JsValue::Number((y + h) as f64));
-                            let arr = vec![JsValue::Object(Rc::new(RefCell::new(rect)))];
+                            let arr = vec![make_dom_rect(x, y, w, h)];
                             return Ok(JsValue::Array(Rc::new(RefCell::new(arr))));
                         }
                         "submit" if n.tag_name().as_deref() == Some("form") => {
@@ -2129,7 +2117,8 @@ impl Interpreter {
                             return Ok(JsValue::Bool(matches!(arg_vals.first(), Some(JsValue::Array(_)))));
                         }
                         ("Array", "from") => {
-                            let result = match arg_vals.into_iter().next().unwrap_or(JsValue::Undefined) {
+                            let src = arg_vals.into_iter().next().unwrap_or(JsValue::Undefined);
+                            let result = match &src {
                                 JsValue::Array(a) => JsValue::Array(Rc::new(RefCell::new(a.borrow().clone()))),
                                 JsValue::Str(s) => JsValue::Array(Rc::new(RefCell::new(
                                     s.chars().map(|c| JsValue::Str(c.to_string())).collect()
@@ -2140,6 +2129,43 @@ impl Interpreter {
                                         .map(|(k, v)| JsValue::Array(Rc::new(RefCell::new(vec![k.clone(), v.clone()]))))
                                         .collect();
                                     JsValue::Array(Rc::new(RefCell::new(entries)))
+                                }
+                                JsValue::Object(o) => {
+                                    // Iterable protocol: object s "Symbol.iterator" fn -> volat ji,
+                                    // pak iterator.next() loop dokud done.
+                                    let iter_fn = o.borrow().props.get("Symbol.iterator").cloned();
+                                    if let Some(f) = iter_fn {
+                                        let iter = self.call_function(f, vec![], Some(src.clone()))?;
+                                        let mut collected: Vec<JsValue> = Vec::new();
+                                        if let JsValue::Object(iter_obj) = &iter {
+                                            let next_fn = iter_obj.borrow().props.get("next").cloned();
+                                            if let Some(nf) = next_fn {
+                                                loop {
+                                                    let step = self.call_function(
+                                                        nf.clone(), vec![], Some(iter.clone()))?;
+                                                    if let JsValue::Object(so) = &step {
+                                                        let done = matches!(so.borrow().get("done"),
+                                                            JsValue::Bool(true));
+                                                        if done { break; }
+                                                        let value = so.borrow().get("value");
+                                                        collected.push(value);
+                                                    } else { break; }
+                                                }
+                                            }
+                                        }
+                                        JsValue::Array(Rc::new(RefCell::new(collected)))
+                                    } else {
+                                        // Array-like: length + indexed. Spec: Array.from({length:3}) -> [undef]*3
+                                        let len = match o.borrow().get("length") {
+                                            JsValue::Number(n) => n as usize,
+                                            _ => 0,
+                                        };
+                                        let mut collected: Vec<JsValue> = Vec::with_capacity(len);
+                                        for i in 0..len {
+                                            collected.push(o.borrow().get(&i.to_string()));
+                                        }
+                                        JsValue::Array(Rc::new(RefCell::new(collected)))
+                                    }
                                 }
                                 _ => JsValue::Array(Rc::new(RefCell::new(vec![]))),
                             };

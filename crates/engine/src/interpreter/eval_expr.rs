@@ -606,6 +606,19 @@ impl Interpreter {
                         }
                         // Frozen objekt: zmeny se tisnich ignoruji (soulad s JS non-strict)
                         if o.borrow().frozen { return Ok(()); }
+                        // DOMTokenList.value setter - prepise cely class attr
+                        // (per spec). Drzeny pres __token_list_node__ Rc<Node>.
+                        if key == "value"
+                            && matches!(o.borrow().props.get("__dom_token_list__"),
+                                Some(JsValue::Bool(true)))
+                        {
+                            let node_val = o.borrow().props.get("__token_list_node__").cloned();
+                            if let Some(JsValue::DomNode(n)) = node_val {
+                                n.set_attr("class", &val.to_string());
+                                o.borrow_mut().props.insert("value".into(), val);
+                                return Ok(());
+                            }
+                        }
                         // Style object proxy: pokud ma `__style_node__` (internal Rc<Node>),
                         // sync prop do node.set_attr("style", ...).
                         // Skip metody (setProperty etc.) a internal `__...__` props.

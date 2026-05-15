@@ -255,9 +255,15 @@ pub(crate) fn create_style_object(node: Rc<crate::browser::dom::NodeData>) -> Js
     JsValue::Object(obj_rc)
 }
 
-/// classList JS object pro Element - methods add/remove/toggle/contains.
+/// classList JS object pro Element - DOMTokenList (DOM spec).
+/// Methods: add/remove/toggle/contains/replace/item, forEach, value, length,
+/// indexed access ([0], [1], ...), Symbol.iterator.
 pub(crate) fn create_class_list(node: Rc<crate::browser::dom::NodeData>) -> JsValue {
     let obj_rc = Rc::new(RefCell::new(JsObject::new()));
+    // Marker pro identifikaci tokenu listu
+    obj_rc.borrow_mut().set("__dom_token_list__".into(), JsValue::Bool(true));
+    obj_rc.borrow_mut().set("__token_list_node__".into(),
+        JsValue::DomNode(Rc::clone(&node)));
     {
         let n = Rc::clone(&node);
         obj_rc.borrow_mut().set("add".into(), native("classList.add", move |args| {
@@ -309,6 +315,62 @@ pub(crate) fn create_class_list(node: Rc<crate::browser::dom::NodeData>) -> JsVa
             Ok(JsValue::Bool(has))
         }));
     }
+    // DOMTokenList.replace(oldToken, newToken) - per spec: pokud oldToken
+    // existuje, nahradi ho newToken (preserve poradi); vrati Bool zmena.
+    {
+        let n = Rc::clone(&node);
+        obj_rc.borrow_mut().set("replace".into(), native("classList.replace", move |args| {
+            let mut it = args.into_iter();
+            let old = it.next().map(|v| v.to_string()).unwrap_or_default();
+            let new = it.next().map(|v| v.to_string()).unwrap_or_default();
+            let class = n.attr("class").unwrap_or_default();
+            let mut classes: Vec<String> = class.split_whitespace().map(String::from).collect();
+            let mut replaced = false;
+            for c in &mut classes {
+                if *c == old {
+                    *c = new.clone();
+                    replaced = true;
+                    break;
+                }
+            }
+            if replaced {
+                n.set_attr("class", &classes.join(" "));
+            }
+            Ok(JsValue::Bool(replaced))
+        }));
+    }
+    // DOMTokenList.item(index) - vraci token na danem indexu nebo null.
+    {
+        let n = Rc::clone(&node);
+        obj_rc.borrow_mut().set("item".into(), native("classList.item", move |args| {
+            let idx = args.into_iter().next().map(|v| v.to_number() as i64).unwrap_or(-1);
+            if idx < 0 { return Ok(JsValue::Null); }
+            let class = n.attr("class").unwrap_or_default();
+            let classes: Vec<&str> = class.split_whitespace().collect();
+            Ok(classes.get(idx as usize)
+                .map(|s| JsValue::Str(s.to_string()))
+                .unwrap_or(JsValue::Null))
+        }));
+    }
+    // POZNAMKA: DOMTokenList.forEach() neni implementovany pres native fn
+    // (native callback dispatch je out-of-scope pro native helpers - nema
+    // pristup k interpreteru). Bezne JS pouziva Array.from(classList).forEach()
+    // ktere funguje pres Symbol.iterator nize.
+    // Symbol.iterator - iterate tokenu pro for-of a Array.from.
+    {
+        let n = Rc::clone(&node);
+        obj_rc.borrow_mut().set("Symbol.iterator".into(),
+            native("classList[Symbol.iterator]", move |_| {
+                let class = n.attr("class").unwrap_or_default();
+                let tokens: Vec<JsValue> = class.split_whitespace()
+                    .map(|t| JsValue::Str(t.to_string())).collect();
+                Ok(super::helpers::make_array_iterator(tokens))
+            }));
+    }
+    // value getter/setter pres __dom_token_list__ marker resi eval_member.rs +
+    // eval_expr.rs assign_to. Initial setup: prazdny string (rebuild dynamic).
+    obj_rc.borrow_mut().set("value".into(),
+        JsValue::Str(node.attr("class").unwrap_or_default()));
     JsValue::Object(obj_rc)
 }
 

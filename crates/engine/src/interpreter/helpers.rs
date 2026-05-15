@@ -49,6 +49,42 @@ pub fn native(name: &str, f: impl Fn(Vec<JsValue>) -> Result<JsValue, String> + 
     JsValue::Function(JsFunc::Native(name.to_string(), Rc::new(f)))
 }
 
+// ─── DOMRect factory ─────────────────────────────────────────────────────
+
+/// Postavi JS object odpovidajici DOMRect / DOMRectReadOnly (per Geometry L1
+/// spec): x, y, width, height, top, right, bottom, left, toJSON().
+/// toJSON() vraci {x, y, width, height, top, right, bottom, left} jako plain
+/// object - umoznuje JSON.stringify(rect) emit useful payload.
+pub fn make_dom_rect(x: f32, y: f32, w: f32, h: f32) -> JsValue {
+    let mut rect = JsObject::new();
+    rect.set("x".into(),      JsValue::Number(x as f64));
+    rect.set("y".into(),      JsValue::Number(y as f64));
+    rect.set("width".into(),  JsValue::Number(w as f64));
+    rect.set("height".into(), JsValue::Number(h as f64));
+    rect.set("top".into(),    JsValue::Number(y as f64));
+    rect.set("left".into(),   JsValue::Number(x as f64));
+    rect.set("right".into(),  JsValue::Number((x + w) as f64));
+    rect.set("bottom".into(), JsValue::Number((y + h) as f64));
+    // toJSON - DOMRectReadOnly per spec: vracit plain object s vsemi 8 fieldy.
+    let xf = x as f64;
+    let yf = y as f64;
+    let wf = w as f64;
+    let hf = h as f64;
+    rect.set("toJSON".into(), native("DOMRect.toJSON", move |_| {
+        let mut j = JsObject::new();
+        j.set("x".into(),      JsValue::Number(xf));
+        j.set("y".into(),      JsValue::Number(yf));
+        j.set("width".into(),  JsValue::Number(wf));
+        j.set("height".into(), JsValue::Number(hf));
+        j.set("top".into(),    JsValue::Number(yf));
+        j.set("left".into(),   JsValue::Number(xf));
+        j.set("right".into(),  JsValue::Number(xf + wf));
+        j.set("bottom".into(), JsValue::Number(yf + hf));
+        Ok(JsValue::Object(Rc::new(RefCell::new(j))))
+    }));
+    JsValue::Object(Rc::new(RefCell::new(rect)))
+}
+
 // ─── Iterator factory ────────────────────────────────────────────────────
 
 /// Vytvori iterator objekt (s `next()` a `Symbol.iterator`) z pole hodnot.

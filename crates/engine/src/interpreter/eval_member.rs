@@ -64,6 +64,34 @@ impl Interpreter {
             }
         }
 
+        // DOMTokenList: length, value (getter), indexed pristup [0], [1], ...
+        // Identifikace pres __dom_token_list__ marker + __token_list_node__
+        // drzi Rc<NodeData>. Token zdroj = node.attr("class").
+        if let JsValue::Object(ref o) = obj {
+            let is_tokenlist = matches!(o.borrow().props.get("__dom_token_list__"),
+                Some(JsValue::Bool(true)));
+            if is_tokenlist {
+                let node_val = o.borrow().props.get("__token_list_node__").cloned()
+                    .unwrap_or(JsValue::Undefined);
+                if let JsValue::DomNode(n) = node_val {
+                    let class = n.attr("class").unwrap_or_default();
+                    let tokens: Vec<&str> = class.split_whitespace().collect();
+                    match key.as_str() {
+                        "length" => return Ok(JsValue::Number(tokens.len() as f64)),
+                        "value" => return Ok(JsValue::Str(class)),
+                        _ => {
+                            // Indexed pristup - cislicne klice.
+                            if let Ok(idx) = key.parse::<usize>() {
+                                return Ok(tokens.get(idx)
+                                    .map(|s| JsValue::Str(s.to_string()))
+                                    .unwrap_or(JsValue::Undefined));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Getter podpora: kdyz objekt ma `__get_key__` vlastnost (funkci), zavolej ji
         if let JsValue::Object(ref o) = obj {
             let getter_key = format!("__get_{key}__");
