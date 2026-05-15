@@ -56,35 +56,13 @@ html, body {
 }
 
 /* Page area (mock) */
-.page-area {
-    height: 50%;
-    background: #fff;
-    color: #333;
-    padding: 16px;
-    font-size: 14px;
-    overflow: auto;
-    border-bottom: 1px solid var(--border-strong);
-}
-.page-area h1 { margin: 0 0 8px; }
-.page-area p { margin: 4px 0; color: #555; }
-.page-area button { margin: 4px; padding: 6px 12px; }
-
-/* DevTools container */
+/* DevTools container - bezi v dedikovanem WebView, fill 100% */
 .devtools {
-    height: 50%;
+    height: 100%;
     display: flex;
     flex-direction: column;
     background: var(--bg-base);
 }
-
-/* Resize grip nad devtools */
-.resize-grip {
-    height: 4px;
-    background: var(--bg-elev2);
-    cursor: ns-resize;
-    flex-shrink: 0;
-}
-.resize-grip:hover { background: var(--accent); }
 
 /* Top tab strip */
 .tab-strip {
@@ -1334,17 +1312,9 @@ html, body {
 </head>
 <body>
 
-<!-- Page area -->
-<div class="page-area">
-    <h1>Mock Page</h1>
-    <p>Toto je stranka. DevTools mockup pres Firefox-like 3-column splittable layout.</p>
-    <button>Tlacitko</button>
-    <div id="counter">Counter: 42</div>
-</div>
-
 <!-- DevTools -->
-<div class="devtools">
-    <div class="resize-grip"></div>
+<div class="devtools" style="height:100%;">
+    <!-- resize-grip + page-area smazany (frontend bezi v dedikovanem WebView) -->
     <div class="tab-strip">
         <div class="left">
             <div class="tab active" data-panel="inspector"><i data-lucide="layout-panel-left" class="icon"></i><span data-i18n="tab.inspector">Pruzkumnik</span></div>
@@ -2206,29 +2176,7 @@ function setupVSplitter(splitter, leftSel, rightSel) {
 setupVSplitter(document.getElementById('splitter-styles'), '.dom-pane', '.styles-pane');
 setupVSplitter(document.getElementById('splitter-layout'), '.styles-pane', '.layout-pane');
 
-// Vertical resize devtools
-const grip = document.querySelector('.resize-grip');
-const devtools = document.querySelector('.devtools');
-const pageArea = document.querySelector('.page-area');
-let vdrag = false;
-let startY = 0;
-let startDevH = 0;
-grip.addEventListener('mousedown', e => {
-    vdrag = true;
-    startY = e.clientY;
-    startDevH = devtools.getBoundingClientRect().height;
-    e.preventDefault();
-});
-document.addEventListener('mousemove', e => {
-    if (!vdrag) return;
-    const delta = e.clientY - startY;
-    const totalH = window.innerHeight;
-    const newDev = Math.max(100, Math.min(totalH - 100, startDevH - delta));
-    const pct = (newDev / totalH) * 100;
-    devtools.style.height = pct + '%';
-    pageArea.style.height = (100 - pct) + '%';
-});
-document.addEventListener('mouseup', () => { vdrag = false; });
+// Vertical resize devtools - drop (shell ovlada vsku panelu pres splitter).
 </script>
 
 <!-- Lucide icons CDN (offline-safe: gracefully degrades if unreachable) -->
@@ -2637,10 +2585,15 @@ applyI18n(currentLang);
     });
 
     // ---------- DOM live updates ----------
+    // Debounce - pri velkem DOMu s castymi mutacemi by sync re-render zabil FPS.
+    // 500ms debounce = poslední event za okno -> jedno provedeni.
+    let _domUpdateTimer = null;
     window.cdp.on('DOM.documentUpdated', () => {
-        // Frontend reload DOM tree.
-        renderDomTree();
-        // Reset other panels on navigation (sources will repopulate via scriptParsed).
+        if (_domUpdateTimer) clearTimeout(_domUpdateTimer);
+        _domUpdateTimer = setTimeout(() => {
+            _domUpdateTimer = null;
+            renderDomTree();
+        }, 500);
     });
 
     function escapeHtml(s) {

@@ -258,6 +258,10 @@ pub struct ShellApp {
     /// Last seen page.dom_version() - pri zmene emit DOM.documentUpdated
     /// (frontend pak znovu vyzve DOM.getDocument).
     cdp_last_dom_version: u64,
+    /// Posledni emit DOM.documentUpdated cas (Instant.elapsed seconds). Pouziva
+    /// se pro throttle - pri velkem DOMu s castymi mutacemi (animations,
+    /// timers) by sync rerender frontend zabilo FPS. Min 0.5s mezi emity.
+    cdp_last_dom_emit: std::time::Instant,
 
     mouse_x: f32,
     mouse_y: f32,
@@ -300,6 +304,7 @@ impl ShellApp {
             cdp_sources_cache: Vec::new(),
             cdp_next_script_id: 1,
             cdp_last_dom_version: 0,
+            cdp_last_dom_emit: std::time::Instant::now(),
             mouse_x: 0.0,
             mouse_y: 0.0,
             modifiers: winit::keyboard::ModifiersState::empty(),
@@ -500,15 +505,22 @@ impl ShellApp {
             self.cdp_last_dom_version = page.dom_version();
         }
         // DOM mutation detekce - pri rozdilu emit DOM.documentUpdated.
+        // Throttle 500ms - pri velkem DOMu s castymi mutacemi (animations,
+        // setInterval timers) by sync rerender zaplavil frontend a srazil FPS.
         let cur_dom = page.dom_version();
         if cur_dom != self.cdp_last_dom_version {
-            let evt = rwe_devtools_proto::DevtoolsEvent {
-                method: "DOM.documentUpdated".to_string(),
-                params: serde_json::json!({}),
-            };
-            channel.resp_queue.borrow_mut().push_back(
-                serde_json::to_string(&evt).unwrap_or_default());
-            self.cdp_last_dom_version = cur_dom;
+            if self.cdp_last_dom_emit.elapsed().as_millis() >= 500 {
+                let evt = rwe_devtools_proto::DevtoolsEvent {
+                    method: "DOM.documentUpdated".to_string(),
+                    params: serde_json::json!({}),
+                };
+                channel.resp_queue.borrow_mut().push_back(
+                    serde_json::to_string(&evt).unwrap_or_default());
+                self.cdp_last_dom_version = cur_dom;
+                self.cdp_last_dom_emit = std::time::Instant::now();
+            }
+            // Pokud throttle aktivni, last_dom_version se neaktualizuje -
+            // zajistime ze priste emit projde (zachova dirty flag).
         }
         // Diff page network_log od last index -> emit Network events.
         // Format network_log entry: (url, status). Status 0 = pending.
