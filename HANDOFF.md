@@ -1920,3 +1920,86 @@ Render frame:
 - **Commit message:** strucny, popis "co + proc". Cesky.
 - **Pri nejistote zeptat se** drive nez psat kod.
 - **NIKDY nedelat fake fixes** ("done" bez verifikace) - radeji zeptat user.
+
+---
+
+## Session N+23: DevTools rework + DOM API Tier 1+2
+
+### Devtools Edge/CEF model (D1-D6)
+
+**D1 - Protocol crate** (`crates/devtools-proto/`, 8 testy)
+- DevtoolsRequest / DevtoolsResponse / DevtoolsEvent / DevtoolsError typy
+- Per-domain modules: dom / css / runtime / debugger / network / performance
+- Method enum + error_codes
+
+**D2 - Target adapter** (`crates/engine/src/embed/devtools_target.rs`, 12 testy)
+- DevtoolsTarget: events buffer + breakpoint counter (stateless mimo to)
+- `handle_request(&mut WebView, req) -> DevtoolsResponse` - per-domain dispatch
+- DOM.getDocument/getAttributes/setAttributeValue/removeAttribute real
+- DOM.querySelector/All real (cascade::matches_selector + DFS walk)
+- CSS.getMatchedStyles real (walk stylesheets + match per node + serialize properties)
+- Runtime.evaluate real (lexer + parser + interp.eval pres Stmt::Expr top-level)
+- Debugger.setBreakpoint/resume real
+
+**D3 - DevTools frontend** (`crates/devtools-frontend/`, 3 testy)
+- Static HTML/CSS/JS resources jako &'static str pres include_str!
+- INDEX_HTML (tab strip) + 5 panel HTMLs (Elements/Console/Sources/Network/Performance)
+- THEME_CSS (dark Chrome-style) + CDP_JS (window.cdp.send/on/off + pollEvents)
+- Panely v DOM od zacatku jako siblings, tab swap pres display style (setAttribute)
+
+**D4 - Shell 2-WebView host** (shell/src/app.rs)
+- D4a: F12 toggle, ShellApp.devtools: Option<WebView>, lazy init
+- D4b: real split layout - present_split_external_to_swap_chain
+  (top_view + bottom_view + ratio, viewport-based dual draw)
+- D4c: input routing po y koord, point_in_devtools + devtools_y_offset
+- D4d: splitter drag (point_on_splitter + drag MouseMove updatuje split_ratio)
+
+**D5 - Inspector overlay** (shell + devtools-frontend)
+- Ctrl+Shift+C toggle inspect_mode
+- CursorMoved pick_node_at(layout_root, x, y) -> Option<usize ptr>
+- overlay_painter callback paint 4 modre rect outline + polo-pruhledne pozadi
+- LMB Press v inspect emit DOM.inspectNodeRequested CDP event + auto-open devtools
+- elements.html listener selectne node v tree + scrollIntoView
+
+**D6 - JS binding** (`__rwe_cdp_send_native` + `__rwe_cdp_poll_events`)
+- D6a stub: native fns log + return ""
+- D6b real: CdpChannel { req_queue, resp_queue } Rc<RefCell<VecDeque>>
+- pump_cdp() v shell redraw - drain req_queue, dispatch via target,
+  push response/events do resp_queue jako JSON
+- cdp.js refactor: send() vrati pending Promise, response delivered pres pollEvents
+
+### DOM API Tier 1 (8/8 hotove)
+
+Vse v `crates/engine/src/interpreter/` + tests v `dom_tier1_tests.rs` (34 testu):
+
+1. **element.style cached + setter persistence** - `Interpreter.style_cache:
+   HashMap<usize, Weak<JsObject>>` per node, Object setter sync do node.style attr
+2. **getBoundingClientRect** + getClientRects pres `Interpreter.layout_lookup:
+   Option<Rc<dyn Fn(*const Node) -> Option<(f32,f32,f32,f32)>>>`
+3. **window.getComputedStyle** pres `cascade_lookup` callback (HashMap props)
+4. **offsetWidth/Height/Left/Top + clientW/H + scrollW/H** pres layout_lookup
+5. **element.matches(selector) + closest(selector)** pres parse_selectors + cascade
+6. **element.contains(other)** DFS subtree walk
+7. **Event/CustomEvent/MouseEvent/KeyboardEvent constructors** v builtins
+8. **window.addEventListener** real + `Interpreter::dispatch_window_event`
+
+### Wire-up shell (webview.rs)
+
+- `layout_rects: Rc<RefCell<HashMap<usize, (f32,f32,f32,f32)>>>` - node ptr -> rect
+- `cascade_props: Rc<RefCell<HashMap<usize, HashMap<String, String>>>>` - node ptr -> styles
+- Po render_via populate ze layout_root + style_map.
+- Pri load_dom register interp.set_layout_lookup + set_cascade_lookup s Rc clones.
+- Pri load_html dispatch DOMContentLoaded + load events.
+- Pri resize() / set_scroll() dispatch resize / scroll events.
+
+### DOM API Tier 2 (in progress - agent)
+
+Polozky: insertBefore, replaceChild, insertAdjacentHTML/Element, cloneNode,
+removeEventListener real, document.activeElement, createDocumentFragment.
+
+NodeKind::DocumentFragment variant pridan - match arms ve 4 souborech.
+
+### Test counts (po N+23)
+
+- 2743+ engine, 8 devtools-proto, 3 devtools-frontend = 2754+ testu
+- 0 warnings, cargo build/test --workspace cisty
