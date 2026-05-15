@@ -1252,6 +1252,42 @@ impl Interpreter {
                             }
                             return Ok(child);
                         }
+                        "replaceChild" => {
+                            // parent.replaceChild(newChild, oldChild) - nahradi oldChild za newChild.
+                            // Vraci oldChild (DOM spec).
+                            let mut it = arg_vals.into_iter();
+                            let new_child = it.next().unwrap_or(JsValue::Undefined);
+                            let old_child = it.next().unwrap_or(JsValue::Undefined);
+                            if let (JsValue::DomNode(nc), JsValue::DomNode(oc)) = (&new_child, &old_child) {
+                                // Lifecycle: disconnectedCallback pro old
+                                let old_ptr = Rc::as_ptr(oc) as usize;
+                                let old_inst = self.custom_element_instances.borrow().get(&old_ptr).cloned();
+                                if let Some(inst) = old_inst {
+                                    let cb = if let JsValue::Object(o) = &inst {
+                                        o.borrow().props.get("disconnectedCallback").cloned()
+                                    } else { None };
+                                    if let Some(f) = cb {
+                                        let _ = self.call_function(f, vec![], Some(inst));
+                                    }
+                                }
+                                let returned = n.replace_child(Rc::clone(nc), Rc::clone(oc));
+                                self.dispatch_mutation_childlist(&n,
+                                    vec![Rc::clone(nc)], vec![Rc::clone(oc)]);
+                                // Lifecycle: connectedCallback pro new
+                                let new_ptr = Rc::as_ptr(nc) as usize;
+                                let new_inst = self.custom_element_instances.borrow().get(&new_ptr).cloned();
+                                if let Some(inst) = new_inst {
+                                    let cb = if let JsValue::Object(o) = &inst {
+                                        o.borrow().props.get("connectedCallback").cloned()
+                                    } else { None };
+                                    if let Some(f) = cb {
+                                        let _ = self.call_function(f, vec![], Some(inst));
+                                    }
+                                }
+                                return Ok(JsValue::DomNode(returned));
+                            }
+                            return Ok(old_child);
+                        }
                         "insertBefore" => {
                             // parent.insertBefore(newNode, refNode) - vlozi newNode pred refNode.
                             // Pokud refNode is null -> append na konec.
