@@ -180,6 +180,10 @@ pub struct WebView {
     /// Each entry = (url, body, language_marker: "js" | "css" | "html").
     /// Vyplneny v `run_scripts` + `load_dom`. Drainuje host pres `take_collected_sources`.
     pub(crate) collected_sources: Vec<(String, String, &'static str)>,
+    /// Last seen interp.dom_version() pri render_via. Diff -> dirty=true
+    /// (JS DOM mutation pres setAttribute/appendChild/innerHTML potrebuje
+    /// repaint i bez explicitniho input event).
+    pub(crate) last_render_dom_version: u64,
 }
 
 impl WebView {
@@ -231,6 +235,7 @@ impl WebView {
             async_jobs: crate::browser::async_jobs::AsyncJobsRegistry::new(),
             nav_id: 0,
             collected_sources: Vec::new(),
+            last_render_dom_version: 0,
         }
     }
 
@@ -1127,6 +1132,15 @@ impl WebView {
         if self.target_texture.is_none() {
             self.ensure_target_texture();
         }
+        // JS DOM mutation pres interp.bump_dom_version() (setAttribute,
+        // appendChild, innerHTML, ...) - diff vs sledovany snapshot -> dirty.
+        if let Some(interp) = &self.interpreter {
+            let cur = interp.dom_version();
+            if cur != self.last_render_dom_version {
+                self.dirty = true;
+                self.last_render_dom_version = cur;
+            }
+        }
         // PERF: dirty skip - pokud nic se nezmenilo, vrat cached target_view
         // bez full cascade/layout/paint pipeline. Bez tohoto by render_via
         // bezel kazdy redraw frame i pro idle WebView (chrome bar, devtools
@@ -1135,7 +1149,7 @@ impl WebView {
         //
         // Co ovlivnuje dirty:
         // - Input events (scroll, click, key) set dirty=true v handle_input
-        // - JS DOM mutation pres bump_dom_version (sledovat) - viz dale
+        // - JS DOM mutation pres dom_version diff (vyse)
         // - load_html / set_zoom / resize
         //
         // Animations + smooth scroll + focused input -> NEN0 dirty, ale potreba
