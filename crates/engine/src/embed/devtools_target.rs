@@ -50,6 +50,10 @@ pub struct DevtoolsTarget {
     events: RefCell<Vec<DevtoolsEvent>>,
     /// Sekvencni breakpoint ID generator (Debugger.setBreakpoint vrati id).
     next_breakpoint_id: RefCell<u64>,
+    /// Mapping breakpoint ID (string "bp-N") -> line_number. Pouziti
+    /// pri Debugger.removeBreakpoint - dle id najdi line + mazat z
+    /// interp.debugger.breakpoints.
+    breakpoint_lines: RefCell<std::collections::HashMap<String, u32>>,
 }
 
 impl Default for DevtoolsTarget {
@@ -62,6 +66,7 @@ impl DevtoolsTarget {
         Self {
             events: RefCell::new(Vec::new()),
             next_breakpoint_id: RefCell::new(1),
+            breakpoint_lines: RefCell::new(std::collections::HashMap::new()),
         }
     }
 
@@ -512,8 +517,11 @@ impl DevtoolsTarget {
             *n += 1;
             id
         };
+        let bp_id_str = format!("bp-{id}");
+        // Ulozim bp_id -> line mapping pro pozdejsi removeBreakpoint.
+        self.breakpoint_lines.borrow_mut().insert(bp_id_str.clone(), params.line_number);
         let result = SetBreakpointResult {
-            breakpoint_id: format!("bp-{id}"),
+            breakpoint_id: bp_id_str,
             actual_location: Location {
                 script_id: params.script_id,
                 line_number: params.line_number,
@@ -523,13 +531,18 @@ impl DevtoolsTarget {
         Self::ok_response(req.id, &result)
     }
 
-    fn handle_debugger_remove_breakpoint(&self, _webview: &WebView, req: DevtoolsRequest) -> DevtoolsResponse {
+    fn handle_debugger_remove_breakpoint(&self, webview: &WebView, req: DevtoolsRequest) -> DevtoolsResponse {
         use rwe_devtools_proto::debugger::RemoveBreakpointParams;
-        let _params: RemoveBreakpointParams = match serde_json::from_value(req.params.clone()) {
+        let params: RemoveBreakpointParams = match serde_json::from_value(req.params.clone()) {
             Ok(p) => p,
             Err(e) => return Self::error_response(req.id, error_codes::INVALID_PARAMS,
                 format!("Invalid params: {e}")),
         };
+        // Najdi line podle bp_id + mazat z interp.debugger.breakpoints.
+        let line = self.breakpoint_lines.borrow_mut().remove(&params.breakpoint_id);
+        if let (Some(line), Some(interp)) = (line, webview.interpreter()) {
+            interp.debugger.borrow_mut().breakpoints.remove(&line);
+        }
         Self::ok_response_raw(req.id, serde_json::json!({}))
     }
 
