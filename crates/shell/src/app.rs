@@ -124,6 +124,11 @@ pub struct ShellApp {
     addr_open: bool,
     /// Aktualni text v address bar (pred Enter submit).
     addr_input: String,
+    /// Find on page otevreny (Ctrl+F). Capture klavesnice -> find_query.
+    /// Enter najde next match, Esc close.
+    find_open: bool,
+    /// Find query string.
+    find_query: String,
     /// DevTools target adapter (D2). Lazy init pri F12 toggle. Drzi events
     /// buffer + breakpoint counter. Dispatch volame `target.handle_request(
     /// &mut self.webview, req)` ve main loop.
@@ -160,6 +165,8 @@ impl ShellApp {
             inspect_target: Rc::new(RefCell::new(None)),
             addr_open: false,
             addr_input: String::new(),
+            find_open: false,
+            find_query: String::new(),
             devtools_target: None,
             cdp_channel: None,
             mouse_x: 0.0,
@@ -765,6 +772,33 @@ impl ApplicationHandler for ShellApp {
             }
             WindowEvent::KeyboardInput { event: key_event, .. } => {
                 use winit::keyboard::{Key, NamedKey};
+                // Find on page capture.
+                if self.find_open && matches!(key_event.state, ElementState::Pressed) {
+                    match &key_event.logical_key {
+                        Key::Named(NamedKey::Escape) => {
+                            self.find_open = false;
+                            self.find_query.clear();
+                            println!("[shell find] cancel");
+                            return;
+                        }
+                        Key::Named(NamedKey::Enter) => {
+                            println!("[shell find] search '{}' (TBD highlight matches)", self.find_query);
+                            // Real impl: find text v webview.text_runs + highlight + scroll to first.
+                            return;
+                        }
+                        Key::Named(NamedKey::Backspace) => {
+                            self.find_query.pop();
+                            println!("[shell find] {}", self.find_query);
+                            return;
+                        }
+                        Key::Character(s) => {
+                            self.find_query.push_str(s);
+                            println!("[shell find] {}", self.find_query);
+                            return;
+                        }
+                        _ => return,
+                    }
+                }
                 // Address bar capture - pri addr_open intercepta vsechny keys.
                 if self.addr_open && matches!(key_event.state, ElementState::Pressed) {
                     match &key_event.logical_key {
@@ -857,6 +891,19 @@ impl ApplicationHandler for ShellApp {
                             } else {
                                 self.addr_input.clear();
                                 println!("[shell addr] closed");
+                            }
+                            return;
+                        }
+                        if s.eq_ignore_ascii_case("f") {
+                            // Ctrl+F: toggle find on page. Vstup pres stdout
+                            // (visual overlay TBD). User tipuje query.
+                            self.find_open = !self.find_open;
+                            if self.find_open {
+                                self.find_query.clear();
+                                println!("[shell find] open. Tipuj query + Enter / Esc.");
+                            } else {
+                                self.find_query.clear();
+                                println!("[shell find] closed");
                             }
                             return;
                         }
