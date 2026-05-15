@@ -696,7 +696,6 @@ html, body {{ margin: 0; padding: 0; height: 100%; background: #202124; color: #
             InputEvent::KeyDown { .. } | InputEvent::KeyUp { .. }
             | InputEvent::TextInput { .. });
         if is_keyboard {
-            // Find which WebView ma focused input.
             let chrome_focused = self.chrome.as_ref()
                 .map(|wv| wv.has_focused_input()).unwrap_or(false);
             let page_focused = self.webview.as_ref()
@@ -715,7 +714,6 @@ html, body {{ margin: 0; padding: 0; height: 100%; background: #202124; color: #
                 return self.webview.as_mut()
                     .map(|wv| wv.handle_input(event)).unwrap_or_default();
             }
-            // Bez focused inputu route dle mouse zone (default page scroll keys).
         }
         let in_chrome = self.point_in_chrome(self.mouse_y);
         let in_dev = !in_chrome && self.point_in_devtools(self.mouse_y);
@@ -1388,11 +1386,16 @@ impl ApplicationHandler for ShellApp {
                     if resp.dirty {
                         if let Some(w) = &self.window { w.request_redraw(); }
                     }
-                    // Character keys taky emit TextInput.
-                    if let Key::Character(s) = &key_event.logical_key {
-                        let resp = self.dispatch_input(InputEvent::TextInput {
-                            text: s.to_string(),
-                        });
+                    // Char keys + Space taky emit TextInput. Bez Space NamedKey
+                    // by mezernik se nikdy nevlozil do input pole (Space je
+                    // Key::Named, ne Character).
+                    let text_to_insert: Option<String> = match &key_event.logical_key {
+                        Key::Character(s) => Some(s.to_string()),
+                        Key::Named(NamedKey::Space) => Some(" ".into()),
+                        _ => None,
+                    };
+                    if let Some(t) = text_to_insert {
+                        let resp = self.dispatch_input(InputEvent::TextInput { text: t });
                         if resp.dirty {
                             if let Some(w) = &self.window { w.request_redraw(); }
                         }

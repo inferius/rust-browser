@@ -594,6 +594,17 @@ impl WebView {
                         self.dirty = true;
                         response.dirty = true;
                     }
+                    // Editor drag selection - pri mouse hold po MouseDown na
+                    // input/textarea: update caret + extend selection anchor.
+                    if let Some((_dx, _dy, down_node)) = self.mouse_down_at.clone() {
+                        let is_input = matches!(down_node.tag_name().as_deref(),
+                            Some("input") | Some("textarea"));
+                        if is_input {
+                            self.editor_hit_test_input(&down_node, x, true);
+                            self.dirty = true;
+                            response.dirty = true;
+                        }
+                    }
                     // Cursor icon dle hovered tag.
                     let hovered_tag = self.last_layout_root.as_ref()
                         .and_then(|root| root.hit_test(content_x, content_y))
@@ -945,9 +956,6 @@ impl WebView {
                 }
             }
             InputEvent::TextInput { ref text } => {
-                // Pri focused <input>/<textarea> insert do EditorState. Pri
-                // selection nahradi range. Sync zpet node.attr("value") +
-                // legacy input_caret (char idx) pro back-compat.
                 if let Some(target) = self.focused_dom_node() {
                     let is_input = matches!(target.tag_name().as_deref(),
                         Some("input") | Some("textarea"));
