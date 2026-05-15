@@ -593,6 +593,9 @@ pub struct Interpreter {
     pub webgl_states: Rc<RefCell<std::collections::HashMap<usize, Rc<RefCell<WebGLState>>>>>,
     /// Network log capture: (url, status).
     pub network_log: Rc<RefCell<Vec<(String, u16)>>>,
+    /// Response body cache: url -> body. Drain_fetches ukladá pri Ok outcome.
+    /// Pouziti: CDP Network.getResponseBody pres request_id == url klic.
+    pub response_bodies: Rc<RefCell<HashMap<String, String>>>,
     /// CustomElements registry: tag-name -> constructor JsValue.
     pub custom_elements: Rc<RefCell<HashMap<String, JsValue>>>,
     /// CustomElements instances: DomNode ptr -> JS instance JsValue.
@@ -748,6 +751,7 @@ impl Interpreter {
         ));
         let console_log: Rc<RefCell<Vec<(String, String)>>> = Rc::new(RefCell::new(Vec::new()));
         let network_log: Rc<RefCell<Vec<(String, u16)>>> = Rc::new(RefCell::new(Vec::new()));
+        let response_bodies: Rc<RefCell<HashMap<String, String>>> = Rc::new(RefCell::new(HashMap::new()));
         let custom_elements: Rc<RefCell<HashMap<String, JsValue>>> =
             Rc::new(RefCell::new(HashMap::new()));
         let mutation_observers: Rc<RefCell<Vec<(usize, JsValue, JsValue, bool)>>> =
@@ -780,6 +784,7 @@ impl Interpreter {
             next_callback_id: Rc::new(RefCell::new(1)),
             console_log,
             network_log,
+            response_bodies,
             canvas_ops: Rc::new(RefCell::new(std::collections::HashMap::new())),
             webgl_states: Rc::new(RefCell::new(std::collections::HashMap::new())),
             custom_elements,
@@ -903,6 +908,9 @@ impl Interpreter {
                     let mut p = task.promise_obj.borrow_mut();
                     match outcome {
                         Ok((status, status_text, body, headers)) => {
+                            // Cache body pres URL klic - CDP Network.getResponseBody
+                            // lookup pres request_id = url.
+                            self.response_bodies.borrow_mut().insert(task.url.clone(), body.clone());
                             let mut response = JsObject::new();
                             response.set("__response__".into(), JsValue::Bool(true));
                             response.set("__body__".into(), JsValue::Str(body));

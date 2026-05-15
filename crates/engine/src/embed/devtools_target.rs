@@ -616,15 +616,19 @@ impl DevtoolsTarget {
     // Network domain handlers
     // ============================================================
 
-    fn handle_network_get_response_body(&self, _webview: &WebView, req: DevtoolsRequest) -> DevtoolsResponse {
+    fn handle_network_get_response_body(&self, webview: &WebView, req: DevtoolsRequest) -> DevtoolsResponse {
         use rwe_devtools_proto::network::{GetResponseBodyParams, GetResponseBodyResult};
-        let _params: GetResponseBodyParams = match serde_json::from_value(req.params.clone()) {
+        let params: GetResponseBodyParams = match serde_json::from_value(req.params.clone()) {
             Ok(p) => p,
             Err(e) => return Self::error_response(req.id, error_codes::INVALID_PARAMS,
                 format!("Invalid params: {e}")),
         };
+        // V nas modelu request_id = URL (drain_fetches cachuje pres URL klic).
+        let body = webview.interpreter()
+            .and_then(|i| i.response_bodies.borrow().get(&params.request_id).cloned())
+            .unwrap_or_default();
         let result = GetResponseBodyResult {
-            body: String::new(),
+            body,
             base64_encoded: false,
         };
         Self::ok_response(req.id, &result)
