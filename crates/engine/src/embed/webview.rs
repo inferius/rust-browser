@@ -723,11 +723,21 @@ impl WebView {
                             std::rc::Rc::new(std::cell::RefCell::new(event)));
                         let _ = interp.dispatch_event(&target, "mousedown", event_val);
                     }
+                    // Begin text selection drag jen pri klik MIMO input/
+                    // textarea. V inputu EditorState.selection_anchor handle
+                    // selection self - bez tohoto by 2 paralelni selection
+                    // states konfliktovali (Backspace clears EditorState, ale
+                    // page_selection visible nad new insert).
+                    let click_on_input = target_node.as_ref()
+                        .map(|n| matches!(n.tag_name().as_deref(),
+                            Some("input") | Some("textarea")))
+                        .unwrap_or(false);
                     if let Some(target) = target_node {
                         self.mouse_down_at = Some((x, y, target));
                     }
-                    // Begin text selection drag (content coords).
-                    self.sel_begin(content_x, content_y);
+                    if !click_on_input {
+                        self.sel_begin(content_x, content_y);
+                    }
                     response.dirty = true;
                     self.dirty = true;
                 }
