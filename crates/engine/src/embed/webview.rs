@@ -961,6 +961,19 @@ impl WebView {
         // RT physical px.
         renderer.zoom = self.zoom;
         renderer.scale_factor = self.scale_factor;
+        // Sync scroll_pos od interpreteru (JS window.scrollTo zapsal). Pri
+        // zmene apply do self.scroll_x/y + scroll_target. Po render zpetne
+        // sync scroll_pos = current scroll.
+        if let Some(interp) = self.interpreter.as_ref() {
+            let (jx, jy) = *interp.scroll_pos.borrow();
+            if (jx - self.scroll_x).abs() > 0.5 || (jy - self.scroll_y).abs() > 0.5 {
+                self.scroll_x = jx;
+                self.scroll_y = jy;
+                self.scroll_target_x = jx;
+                self.scroll_target_y = jy;
+                self.dirty = true;
+            }
+        }
         // Smooth scroll tick: lerp scroll_y -> scroll_target_y 25 %% per frame.
         // Snap pri delta < 0.5 px aby render_via prestane request_redraw pri
         // ustaleni.
@@ -971,6 +984,12 @@ impl WebView {
         let dx = self.scroll_target_x - self.scroll_x;
         if dx.abs() > 0.5 { self.scroll_x += dx * lerp; }
         else if dx.abs() > 0.0 { self.scroll_x = self.scroll_target_x; }
+        // Sync interp.scroll_pos do current scroll (pri wheel/scrollbar drag
+        // animovany scroll, JS read pres pageXOffset/scrollX dostane realnou
+        // hodnotu, ne jen JS-set hodnotu).
+        if let Some(interp) = self.interpreter.as_ref() {
+            *interp.scroll_pos.borrow_mut() = (self.scroll_x, self.scroll_y);
+        }
 
         // Drain async jobs (image lazy loads, file IO callbacks). Volane PRED
         // cascade aby novy state byl dostupny v style_map (e.g. image natural
@@ -1408,6 +1427,10 @@ impl WebView {
             self.scroll_target_x = x;
             self.scroll_target_y = y;
             self.dirty = true;
+            // Sync interp.scroll_pos pro JS window.pageXOffset/scrollX reads.
+            if let Some(interp) = self.interpreter.as_ref() {
+                *interp.scroll_pos.borrow_mut() = (x, y);
+            }
             // Dispatch window 'scroll' event do JS.
             if let Some(interp) = self.interpreter.as_mut() {
                 interp.dispatch_window_event("scroll", crate::interpreter::JsValue::Undefined);
