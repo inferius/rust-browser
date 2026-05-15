@@ -112,6 +112,11 @@ pub struct ShellApp {
     renderer: Option<Renderer>,
     engine: Option<Arc<Engine>>,
     webview: Option<WebView>,
+    /// Chrome bar WebView (back/fwd/reload + URL input). Visible vzdy nad
+    /// page. Fixed height = chrome_h logical px.
+    chrome: Option<WebView>,
+    /// Chrome bar vyska (logical px).
+    chrome_h: f32,
     /// DevTools WebView (D4). Some pri F12 toggle on - load INDEX_HTML s
     /// injectnutymi panel HTMLs + theme.css + cdp.js. Komunikace s page
     /// webview pres `window.cdp.send(...)` JS API (D6 nativní binding).
@@ -178,6 +183,8 @@ impl ShellApp {
             renderer: None,
             engine: None,
             webview: None,
+            chrome: None,
+            chrome_h: 36.0,
             devtools: None,
             devtools_visible: false,
             devtools_split_ratio: 0.4,
@@ -395,6 +402,45 @@ impl ShellApp {
             }
             self.cdp_console_log_idx = console_log.len();
         }
+    }
+
+    /// Chrome bar HTML - back/fwd/reload buttons + URL input. Bez native
+    /// bindings (MVP) - vizualni only. Click handlery emit pres
+    /// __shell_*__ globalni fns (instaluji se po load_html).
+    fn build_chrome_html(initial_url: &str) -> String {
+        format!(r#"<!DOCTYPE html>
+<html><head><style>
+* {{ box-sizing: border-box; }}
+html, body {{ margin: 0; padding: 0; height: 100%; background: #202124; color: #e8eaed;
+  font-family: 'Segoe UI', sans-serif; font-size: 12px; overflow: hidden; }}
+.bar {{ display: flex; align-items: center; height: 100%; padding: 4px 8px; gap: 6px; }}
+.btn {{ background: #3c4043; color: #fff; border: 1px solid #5f6368; padding: 4px 10px;
+  border-radius: 4px; cursor: pointer; min-width: 26px; text-align: center; }}
+.btn:hover {{ background: #5f6368; }}
+.addr {{ flex: 1; background: #292a2d; color: #e8eaed; border: 1px solid #3c4043;
+  border-radius: 14px; padding: 5px 14px; outline: none; }}
+.addr:focus {{ border-color: #8ab4f8; }}
+</style></head><body>
+<div class="bar">
+  <button class="btn" id="back">&lt;</button>
+  <button class="btn" id="fwd">&gt;</button>
+  <button class="btn" id="reload">R</button>
+  <input class="addr" id="addr" value="{}" type="text" />
+  <button class="btn" id="devtools">F12</button>
+</div>
+<script>
+  function on(id, ev, fn) {{ var e = document.getElementById(id); if (e) e.addEventListener(ev, fn); }}
+  on('back', 'click', function() {{ if (window.__shell_back__) __shell_back__(); }});
+  on('fwd', 'click', function() {{ if (window.__shell_fwd__) __shell_fwd__(); }});
+  on('reload', 'click', function() {{ if (window.__shell_reload__) __shell_reload__(); }});
+  on('devtools', 'click', function() {{ if (window.__shell_toggle_devtools__) __shell_toggle_devtools__(); }});
+  on('addr', 'keydown', function(e) {{
+    if (e.key === 'Enter' && window.__shell_navigate__) {{
+      __shell_navigate__(document.getElementById('addr').value);
+    }}
+  }});
+</script></body></html>
+"#, initial_url)
     }
 
     /// Slozi devtools HTML: INDEX_HTML s nahrazenymi placeholdery na
@@ -639,53 +685,64 @@ impl ShellApp {
         }
         let renderer = match &mut self.renderer { Some(r) => r, None => return };
 
-        if !self.devtools_visible {
-            // Page-only fullscreen.
-            let webview = match &mut self.webview { Some(w) => w, None => return };
-            if webview.render_via(renderer).is_none() { return; }
-            if let Some(view) = webview.target_view() {
-                renderer.present_external_to_swap_chain(view);
-            }
-            let active_anim = webview.has_active_animations();
-            if let (Some(window), Some(wv)) = (&self.window, &self.webview) {
-                let t = wv.title();
-                if !t.is_empty() {
-                    let win_title = format!("{} - RustWebEngine", t);
-                    if window.title() != win_title {
-                        window.set_title(&win_title);
-                    }
-                }
-            }
-            if active_anim {
-                if let Some(w) = &self.window { w.request_redraw(); }
-            }
-            return;
-        }
-
-        // D4b split layout: page top, devtools bottom. Oba viewporty dostanou
-        // sve vlasne velikosti pres resize call (toggle/Resized handler).
-        // Render kazdy do offscreen RT, pak present_split_external compose.
-        let split = self.devtools_split_ratio.clamp(0.05, 0.95);
-        let page_ratio = 1.0 - split;
-        // `renderer` lokal je &mut z line above. Render kazde do offscreen
-        // RT s field-disjoint borrows do self.webview / self.devtools.
+        // Render vsech 3 WebViews do jejich offscreen RT (field-disjoint mut).
+        let chrome_anim = self.chrome.as_mut()
+            .map(|wv| { let _ = wv.render_via(renderer); wv.has_active_animations() })
+            .unwrap_or(false);
         let page_anim = self.webview.as_mut()
             .map(|wv| { let _ = wv.render_via(renderer); wv.has_active_animations() })
             .unwrap_or(false);
-        let dev_anim = self.devtools.as_mut()
-            .map(|wv| { let _ = wv.render_via(renderer); wv.has_active_animations() })
-            .unwrap_or(false);
-        // Drop &mut renderer, znova borrowuj jako &renderer pro present_split.
-        // Field-disjoint immut refs do webview/devtools/renderer = OK.
+        let dev_anim = if self.devtools_visible {
+            self.devtools.as_mut()
+                .map(|wv| { let _ = wv.render_via(renderer); wv.has_active_animations() })
+                .unwrap_or(false)
+        } else { false };
         let _ = renderer;
-        if let (Some(r), Some(page_v), Some(dev_v)) = (
-            self.renderer.as_ref(),
-            self.webview.as_ref().and_then(|w| w.target_view()),
-            self.devtools.as_ref().and_then(|w| w.target_view()),
-        ) {
-            r.present_split_external_to_swap_chain(page_v, dev_v, page_ratio);
+
+        // Present layered: chrome top (fixed h), page middle, devtools bottom.
+        let sf = self.renderer.as_ref().map(|r| r.scale_factor_value()).unwrap_or(1.0);
+        let chrome_h_px = (self.chrome_h * sf) as u32;
+        let dev_visible = self.devtools_visible;
+        let r = match self.renderer.as_ref() { Some(r) => r, None => return };
+        let chrome_v = self.chrome.as_ref().and_then(|w| w.target_view());
+        let page_v = self.webview.as_ref().and_then(|w| w.target_view());
+        let dev_v = self.devtools.as_ref().and_then(|w| w.target_view());
+
+        // Build layers vec - chrome + page + maybe devtools.
+        // Last layer dostane zbytek vysky (presents helper).
+        match (chrome_v, page_v, dev_v) {
+            (Some(c), Some(p), Some(d)) if dev_visible => {
+                let surface_h = r.surface_size().1;
+                let split = self.devtools_split_ratio.clamp(0.05, 0.95);
+                let content_h = surface_h.saturating_sub(chrome_h_px);
+                let dev_h_px = ((content_h as f32) * split) as u32;
+                let page_h_px = content_h.saturating_sub(dev_h_px);
+                r.present_layered_external_to_swap_chain(&[
+                    (c, chrome_h_px), (p, page_h_px), (d, dev_h_px),
+                ]);
+            }
+            (Some(c), Some(p), _) => {
+                r.present_layered_external_to_swap_chain(&[
+                    (c, chrome_h_px), (p, 0),  // page bere zbytek
+                ]);
+            }
+            (None, Some(p), _) => {
+                r.present_external_to_swap_chain(p);
+            }
+            _ => return,
         }
-        if page_anim || dev_anim {
+
+        // Window title sync.
+        if let (Some(window), Some(wv)) = (&self.window, &self.webview) {
+            let t = wv.title();
+            if !t.is_empty() {
+                let win_title = format!("{} - RustWebEngine", t);
+                if window.title() != win_title {
+                    window.set_title(&win_title);
+                }
+            }
+        }
+        if chrome_anim || page_anim || dev_anim {
             if let Some(w) = &self.window { w.request_redraw(); }
         }
     }
@@ -698,15 +755,19 @@ impl ShellApp {
         let (sw, sh) = r.surface_size();
         let lw = ((sw as f32 / sf) as u32).max(1);
         let lh_full = ((sh as f32 / sf) as u32).max(1);
+        // Chrome bar fixni vyska nahore. Page + devtools sdili zbytek.
+        let chrome_h = (self.chrome_h as u32).min(lh_full.saturating_sub(1));
+        if let Some(c) = &mut self.chrome { c.resize(lw, chrome_h.max(1), sf); }
+        let content_h = lh_full.saturating_sub(chrome_h).max(1);
         if self.devtools_visible {
             let split = self.devtools_split_ratio.clamp(0.05, 0.95);
-            let dev_h = ((lh_full as f32) * split).round().max(1.0) as u32;
-            let page_h = (lh_full - dev_h).max(1);
+            let dev_h = ((content_h as f32) * split).round().max(1.0) as u32;
+            let page_h = content_h.saturating_sub(dev_h).max(1);
             if let Some(wv) = &mut self.webview { wv.resize(lw, page_h, sf); }
             if let Some(dv) = &mut self.devtools { dv.resize(lw, dev_h, sf); }
         } else {
-            if let Some(wv) = &mut self.webview { wv.resize(lw, lh_full, sf); }
-            if let Some(dv) = &mut self.devtools { dv.resize(lw, lh_full, sf); }
+            if let Some(wv) = &mut self.webview { wv.resize(lw, content_h, sf); }
+            if let Some(dv) = &mut self.devtools { dv.resize(lw, content_h, sf); }
         }
     }
 }
@@ -742,12 +803,24 @@ impl ApplicationHandler for ShellApp {
             self.history_idx = 0;
         }
 
+        // Chrome bar WebView - back/fwd/reload + URL input. Fixed top.
+        let chrome_h_px = (self.chrome_h * sf) as u32;
+        let mut chrome = WebView::new(engine.clone(), lw, chrome_h_px.max(1));
+        chrome.resize(lw, chrome_h_px.max(1), sf);
+        let initial_url = self.base_url.clone().unwrap_or_else(|| "about:blank".to_string());
+        let chrome_html = Self::build_chrome_html(&initial_url);
+        let chrome_css = Self::extract_inline_styles(&chrome_html);
+        let _ = chrome.load_html(&chrome_html, &chrome_css, None);
+
         self.window = Some(window.clone());
         self.renderer = Some(renderer);
         self.engine = Some(engine);
         self.webview = Some(webview);
+        self.chrome = Some(chrome);
+        // Resize_views aplikuje chrome_h slot - page dostane lh - chrome_h.
+        self.resize_views();
 
-        println!("[shell] vlastni okno + WebView render path (no chrome v Phase 4c)");
+        println!("[shell] vlastni okno + WebView + chrome bar");
         window.request_redraw();
     }
 

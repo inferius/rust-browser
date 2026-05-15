@@ -6252,6 +6252,88 @@ impl Renderer {
         self.target_size.unwrap_or((self.config.width, self.config.height))
     }
 
+    /// Compositni N offscreen textures vertical-stacked do swap chain.
+    /// Kazdy layer = (view, height_physical_px). Posledni layer dostane
+    /// zbytek vysky (clip pri overflow).
+    ///
+    /// Pouziti: shell chrome top + page middle + devtools bottom.
+    pub fn present_layered_external_to_swap_chain(
+        &self,
+        layers: &[(&wgpu::TextureView, u32)],
+    ) -> bool {
+        if layers.is_empty() { return false; }
+        let frame = match self.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
+            _ => return false,
+        };
+        let swap_view = frame.texture.create_view(&Default::default());
+
+        let identity: [f32; 20] = [
+            1.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0,
+            0.0, 0.0, 0.0, 1.0,
+            0.0, 0.0, 0.0, 0.0,
+        ];
+        self.queue.write_buffer(&self.compose_uniform_buf, 0, bytemuck::cast_slice(&identity));
+
+        let w_total = self.config.width as f32;
+        let h_total = self.config.height as f32;
+
+        // Build bind groups + viewport positions.
+        let mut bind_groups: Vec<wgpu::BindGroup> = Vec::with_capacity(layers.len());
+        let mut viewports: Vec<(f32, f32, f32, f32)> = Vec::with_capacity(layers.len());
+        let mut y_cursor = 0.0_f32;
+        for (i, (view, h_px)) in layers.iter().enumerate() {
+            let h = if i == layers.len() - 1 {
+                (h_total - y_cursor).max(1.0)
+            } else {
+                (*h_px as f32).min(h_total - y_cursor).max(1.0)
+            };
+            let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("present_layered_bg"),
+                layout: &self.compose_bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(view) },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.atlas_smp) },
+                    wgpu::BindGroupEntry { binding: 2, resource: self.compose_uniform_buf.as_entire_binding() },
+                ],
+            });
+            bind_groups.push(bg);
+            viewports.push((0.0, y_cursor, w_total, h));
+            y_cursor += h;
+        }
+
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
+                label: Some("present_layered_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    depth_slice: None,
+                    view: &swap_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.1, g: 0.1, b: 0.1, a: 1.0 }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(&self.compose_pipeline);
+            for (i, (vx, vy, vw, vh)) in viewports.iter().enumerate() {
+                pass.set_viewport(*vx, *vy, *vw, *vh, 0.0, 1.0);
+                pass.set_bind_group(0, &bind_groups[i], &[]);
+                pass.draw(0..3, 0..1);
+            }
+        }
+        self.queue.submit(std::iter::once(encoder.finish()));
+        frame.present();
+        true
+    }
+
     /// Compositni 2 offscreen textures vertical split do swap chain.
     /// `top_view` se zobrazi v top `split_ratio` cast (0.0..1.0), `bottom_view`
     /// dole. Bez separatoru / borderu - shell je muze nakreslit pres.
