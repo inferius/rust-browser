@@ -234,13 +234,14 @@ impl Interpreter {
                         return Ok(JsValue::Str(n.attr("value").unwrap_or_default()));
                     }
                     "shadowRoot" => {
-                        // Bez attachShadow vraci null. Po attachShadow ulozeno v atributu.
-                        if n.has_attr("data-shadow-root") {
-                            // Vraci empty shadow root prepointer (state se nedrzi mezi calls)
-                            let sr = Rc::new(RefCell::new(JsObject::new()));
-                            sr.borrow_mut().set("__shadow_root__".into(), JsValue::Bool(true));
-                            sr.borrow_mut().set("mode".into(), JsValue::Str("open".into()));
-                            sr.borrow_mut().set("host".into(), JsValue::DomNode(Rc::clone(&n)));
+                        // Bez attachShadow vraci null. Po attachShadow lookup
+                        // v interpreter.shadow_roots; mode="closed" hide z JS.
+                        let host_ptr = Rc::as_ptr(&n) as usize;
+                        if let Some(sr) = self.shadow_roots.borrow().get(&host_ptr).cloned() {
+                            let mode = sr.borrow().get("mode").to_string();
+                            if mode == "closed" {
+                                return Ok(JsValue::Null);
+                            }
                             return Ok(JsValue::Object(sr));
                         }
                         return Ok(JsValue::Null);

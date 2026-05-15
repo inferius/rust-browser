@@ -558,6 +558,97 @@ impl Interpreter {
                             _ => {}
                         }
                     }
+                    // ─── ShadowRoot - delegate na underlying DOM fragment ──
+                    if matches!(obj_rc2.borrow().props.get("__shadow_root__"), Some(JsValue::Bool(true))) {
+                        let arg_vals = self.eval_args(args, env)?;
+                        // Underlying DOM node (DocumentFragment) drzi children + listeners.
+                        let dom_node = match obj_rc2.borrow().props.get("__dom__").cloned() {
+                            Some(JsValue::DomNode(d)) => d,
+                            _ => return Ok(JsValue::Undefined),
+                        };
+                        match key.as_str() {
+                            "appendChild" => {
+                                let child = arg_vals.into_iter().next().unwrap_or(JsValue::Undefined);
+                                if let JsValue::DomNode(c) = &child {
+                                    if matches!(c.kind, crate::browser::dom::NodeKind::DocumentFragment) {
+                                        // Fragment: spec rika presunout deti.
+                                        let frag_children: Vec<_> = c.children.borrow().clone();
+                                        c.children.borrow_mut().clear();
+                                        for ch in &frag_children {
+                                            dom_node.append_child(Rc::clone(ch));
+                                        }
+                                    } else {
+                                        dom_node.append_child(Rc::clone(c));
+                                    }
+                                }
+                                return Ok(child);
+                            }
+                            "removeChild" => {
+                                let child = arg_vals.into_iter().next().unwrap_or(JsValue::Undefined);
+                                if let JsValue::DomNode(c) = &child {
+                                    dom_node.children.borrow_mut().retain(|x| !Rc::ptr_eq(x, c));
+                                }
+                                return Ok(child);
+                            }
+                            "querySelector" => {
+                                let sel = arg_vals.into_iter().next()
+                                    .map(|v| v.to_string()).unwrap_or_default();
+                                let result = if let Some(id) = sel.strip_prefix('#') {
+                                    dom_node.get_element_by_id(id)
+                                } else if let Some(cls) = sel.strip_prefix('.') {
+                                    dom_node.get_elements_by_class(cls).into_iter().next()
+                                } else {
+                                    dom_node.get_elements_by_tag(&sel).into_iter().next()
+                                };
+                                return Ok(match result {
+                                    Some(node) => JsValue::DomNode(node),
+                                    None       => JsValue::Null,
+                                });
+                            }
+                            "querySelectorAll" => {
+                                let sel = arg_vals.into_iter().next()
+                                    .map(|v| v.to_string()).unwrap_or_default();
+                                let nodes: Vec<_> = if let Some(id) = sel.strip_prefix('#') {
+                                    dom_node.get_element_by_id(id).into_iter().collect()
+                                } else if let Some(cls) = sel.strip_prefix('.') {
+                                    dom_node.get_elements_by_class(cls)
+                                } else {
+                                    dom_node.get_elements_by_tag(&sel)
+                                };
+                                let arr: Vec<JsValue> = nodes.into_iter()
+                                    .map(JsValue::DomNode).collect();
+                                return Ok(JsValue::Array(Rc::new(RefCell::new(arr))));
+                            }
+                            "getElementById" => {
+                                let id = arg_vals.into_iter().next()
+                                    .map(|v| v.to_string()).unwrap_or_default();
+                                return Ok(match dom_node.get_element_by_id(&id) {
+                                    Some(node) => JsValue::DomNode(node),
+                                    None       => JsValue::Null,
+                                });
+                            }
+                            "addEventListener" | "removeEventListener" => {
+                                // ShadowRoot je EventTarget - stub jako window obecny target.
+                                return Ok(JsValue::Undefined);
+                            }
+                            "contains" => {
+                                let target = arg_vals.into_iter().next().unwrap_or(JsValue::Undefined);
+                                let found = if let JsValue::DomNode(t) = &target {
+                                    fn walk(node: &Rc<crate::browser::dom::NodeData>,
+                                            target: &Rc<crate::browser::dom::NodeData>) -> bool {
+                                        if Rc::ptr_eq(node, target) { return true; }
+                                        for ch in node.children.borrow().iter() {
+                                            if walk(ch, target) { return true; }
+                                        }
+                                        false
+                                    }
+                                    walk(&dom_node, t)
+                                } else { false };
+                                return Ok(JsValue::Bool(found));
+                            }
+                            _ => {}
+                        }
+                    }
                     // ─── Response (fetch) - text/json/ok/headers.get ──────
                     if matches!(obj_rc2.borrow().props.get("__response__"), Some(JsValue::Bool(true))) {
                         let body = match obj_rc2.borrow().props.get("__body__").cloned() {
@@ -1608,28 +1699,26 @@ impl Interpreter {
                         "attachShadow" => {
                             let init = arg_vals.into_iter().next().unwrap_or(JsValue::Undefined);
                             let mode = if let JsValue::Object(o) = &init {
-                                o.borrow().get("mode").to_string()
+                                let m = o.borrow().get("mode").to_string();
+                                if m.is_empty() { "open".into() } else { m }
                             } else { "open".into() };
-                            // Shadow root - separe DOM strom (zatim plain JsObject simulace)
+                            let host_ptr = Rc::as_ptr(&n) as usize;
+                            // Pokud uz attach proveden, throw (DOM spec NotSupportedError).
+                            if self.shadow_roots.borrow().contains_key(&host_ptr) {
+                                return Err(JsError::Runtime(
+                                    "Element already attached a ShadowRoot".into()));
+                            }
+                            // Shadow root - DocumentFragment-like DOM node + JS facade.
+                            let shadow_dom = crate::browser::dom::NodeData::new_document_fragment();
                             let shadow = Rc::new(RefCell::new(JsObject::new()));
                             shadow.borrow_mut().set("__shadow_root__".into(), JsValue::Bool(true));
                             shadow.borrow_mut().set("mode".into(), JsValue::Str(mode));
                             shadow.borrow_mut().set("host".into(), JsValue::DomNode(Rc::clone(&n)));
-                            shadow.borrow_mut().set("childNodes".into(),
-                                JsValue::Array(Rc::new(RefCell::new(Vec::new()))));
-                            shadow.borrow_mut().set("innerHTML".into(), JsValue::Str(String::new()));
-                            shadow.borrow_mut().set("appendChild".into(),
-                                native("appendChild", |args| Ok(args.into_iter().next().unwrap_or(JsValue::Undefined))));
-                            shadow.borrow_mut().set("querySelector".into(),
-                                native("querySelector", |_| Ok(JsValue::Null)));
-                            shadow.borrow_mut().set("querySelectorAll".into(),
-                                native("querySelectorAll", |_| Ok(JsValue::Array(Rc::new(RefCell::new(Vec::new()))))));
-                            shadow.borrow_mut().set("getElementById".into(),
-                                native("getElementById", |_| Ok(JsValue::Null)));
+                            shadow.borrow_mut().set("__dom__".into(), JsValue::DomNode(Rc::clone(&shadow_dom)));
                             shadow.borrow_mut().set("adoptedStyleSheets".into(),
                                 JsValue::Array(Rc::new(RefCell::new(Vec::new()))));
-                            // Ulozit shadow root ID na node atribut
-                            n.set_attr("data-shadow-root", "true");
+                            // Registry pro shadowRoot getter.
+                            self.shadow_roots.borrow_mut().insert(host_ptr, Rc::clone(&shadow));
                             return Ok(JsValue::Object(shadow));
                         }
                         // ─── Web Animations API: Element.animate(keyframes, options) ──

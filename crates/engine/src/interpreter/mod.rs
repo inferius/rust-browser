@@ -640,6 +640,10 @@ pub struct Interpreter {
     /// JS dispatch. Default (0, 0). Pristup pres `window.pageXOffset/pageYOffset`,
     /// `window.scrollX/scrollY` a `document.documentElement.scrollTop`.
     pub scroll_pos: Rc<RefCell<(f32, f32)>>,
+    /// Shadow DOM registry: host node ptr (Rc::as_ptr as usize) -> ShadowRoot obj.
+    /// `attachShadow` create entry, `el.shadowRoot` getter lookup.
+    /// Closed mode = lookup return Null (ale samotny objekt drzi mode="closed").
+    pub shadow_roots: Rc<RefCell<HashMap<usize, Rc<RefCell<JsObject>>>>>,
 }
 
 /// Sdileny debugger state pres Arc<Mutex>. UI thread cte/zapisuje set
@@ -792,6 +796,7 @@ impl Interpreter {
             window_listeners: Rc::new(RefCell::new(HashMap::new())),
             focused_element: Rc::new(RefCell::new(None)),
             scroll_pos,
+            shadow_roots: Rc::new(RefCell::new(HashMap::new())),
         }
     }
 

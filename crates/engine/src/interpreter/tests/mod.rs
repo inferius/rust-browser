@@ -50,3 +50,4 @@ mod dom_tier1_tests;
 mod dom_tier2_tests;
 mod dom_tier3_tests;
 mod dom_tier4_tests;
+mod dom_tier5_tests;

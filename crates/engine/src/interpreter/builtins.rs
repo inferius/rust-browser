@@ -1422,7 +1422,26 @@ pub fn setup_builtins(
             native("fonts.check", |_| Ok(JsValue::Bool(true))));
         fonts.borrow_mut().set("load".into(),
             native("fonts.load", |_| Ok(make_settled_promise("fulfilled", JsValue::Array(Rc::new(RefCell::new(Vec::new())))))));
+        fonts.borrow_mut().set("forEach".into(),
+            native("fonts.forEach", |_| Ok(JsValue::Undefined)));
+        // event listeners pro loading/loadingdone/loadingerror
+        fonts.borrow_mut().set("addEventListener".into(),
+            native("fonts.addEventListener", |_| Ok(JsValue::Undefined)));
+        fonts.borrow_mut().set("removeEventListener".into(),
+            native("fonts.removeEventListener", |_| Ok(JsValue::Undefined)));
         doc_obj.set("fonts".into(), JsValue::Object(fonts));
+    }
+
+    // document.styleSheets - StyleSheetList (array-like).
+    // Real source via host bridge (webview); minimal stub returns empty list
+    // s length=0, item(i)=null, [Symbol.iterator]=empty.
+    {
+        let sheets = Rc::new(RefCell::new(JsObject::new()));
+        sheets.borrow_mut().set("length".into(), JsValue::Number(0.0));
+        sheets.borrow_mut().set("__stylesheet_list__".into(), JsValue::Bool(true));
+        sheets.borrow_mut().set("item".into(),
+            native("styleSheets.item", |_| Ok(JsValue::Null)));
+        doc_obj.set("styleSheets".into(), JsValue::Object(sheets));
     }
 
     // document.querySelector - basic #id, .class, tag
@@ -1474,6 +1493,17 @@ pub fn setup_builtins(
     {
         let doc = Rc::clone(document);
         doc_obj.set("__get_documentElement__".into(), native("document.documentElement", move |_| {
+            Ok(match doc.borrow().html_element() {
+                Some(n) => JsValue::DomNode(n),
+                None    => JsValue::Null,
+            })
+        }));
+    }
+    // document.scrollingElement - quirks mode HTML element. Vraci stejny
+    // jako documentElement (modern standard mode).
+    {
+        let doc = Rc::clone(document);
+        doc_obj.set("__get_scrollingElement__".into(), native("document.scrollingElement", move |_| {
             Ok(match doc.borrow().html_element() {
                 Some(n) => JsValue::DomNode(n),
                 None    => JsValue::Null,
@@ -5053,7 +5083,8 @@ pub fn setup_builtins(
         JsValue::Object(obj)
     }
 
-    // window.getSelection() - mirror document.getSelection (cte registry).
+    // window.getSelection() + document.getSelection().
+    // Pridame i na window object samotny aby `window.getSelection()` fungovalo.
     {
         let sel = make_selection();
         if let JsValue::Object(obj) = &sel {
@@ -5066,7 +5097,11 @@ pub fn setup_builtins(
                     .unwrap_or_default()))
             }));
         }
+        let sel2 = sel.clone();
         e.define("getSelection", native("getSelection", move |_| Ok(sel.clone())));
+        // Pridame na window object pro `window.getSelection()` (mirror).
+        window_rc.borrow_mut().set("getSelection".into(),
+            native("window.getSelection", move |_| Ok(sel2.clone())));
     }
     e.define("Range", native("Range", |_| Ok(make_range())));
 
