@@ -117,7 +117,15 @@ pub struct WebView {
     /// Caret position per <input>/<textarea> node_id (char index 0..value.len()).
     /// TextInput insertne na caret pos + advance. Backspace delete pos-1.
     /// Arrow keys posunou. Render_via emit blinkajici Rect kdy focused input.
+    ///
+    /// LEGACY: postupne migruje do `editors` (Phase 3 z Session N+22b). Po
+    /// uplne migraci selecta + contenteditable smazat.
     pub(crate) input_caret: std::collections::HashMap<usize, usize>,
+    /// Unified editor state per <input>/<textarea>/contenteditable node_id.
+    /// Drzi text + caret_byte + selection_anchor. WebView synchronizuje
+    /// `value` attr <-> EditorState.text pri TextInput/KeyDown.
+    /// Hit-test pres editor::shape_text vola hit_test_input -> set caret.
+    pub(crate) editors: std::collections::HashMap<usize, crate::browser::editor::EditorState>,
     /// Volitelny overlay painter - hostujici aplikace registruje closure ktera
     /// po build_display_list emit DODATECNE DisplayCommands (inspector
     /// highlight, devtools panel, custom badges). Volana s layout_root +
@@ -198,6 +206,7 @@ impl WebView {
             mouse_y: 0.0,
             mouse_down_at: None,
             input_caret: std::collections::HashMap::new(),
+            editors: std::collections::HashMap::new(),
             overlay_painter: None,
             last_synced_scroll_pos: (0.0, 0.0),
             v_scrollbar_drag: None,
@@ -668,6 +677,19 @@ impl WebView {
                         }
                     } else {
                         crate::browser::cascade::set_focused_node(None);
+                    }
+                    // Editor hit-test pri klik na <input>/<textarea>: posun
+                    // caret na glyph pod kurzorem. Bez tohoto by Click vzdy
+                    // skociol jen na end (input_caret defaults).
+                    // TODO: shift-click extend selection - aktualne nemame
+                    // modifier z InputEvent::MouseDown propagated dolu.
+                    if let Some(target) = target_node.as_ref() {
+                        let is_input = matches!(target.tag_name().as_deref(),
+                            Some("input") | Some("textarea"));
+                        if is_input {
+                            let target_clone = std::rc::Rc::clone(target);
+                            self.editor_hit_test_input(&target_clone, x, false);
+                        }
                     }
                     // mousedown event dispatch.
                     if let (Some(target), Some(interp)) = (target_node.clone(), self.interpreter.as_mut()) {
@@ -1644,6 +1666,70 @@ impl WebView {
         crate::browser::render::find_node_by_ptr(&doc_root, id)
     }
 
+    // -- Input editor state -----------------------------------------------
+
+    /// Get-or-init `EditorState` pro <input>/<textarea> node. Synchronizuje
+    /// text pres `value` attr (pri externi mutation z JS).
+    pub(crate) fn editor_for_node(&mut self, node: &std::rc::Rc<crate::browser::dom::Node>)
+        -> &mut crate::browser::editor::EditorState
+    {
+        let nid = std::rc::Rc::as_ptr(node) as usize;
+        let cur_value = node.attr("value").unwrap_or_default();
+        let entry = self.editors.entry(nid).or_insert_with(|| {
+            crate::browser::editor::EditorState::new(&cur_value)
+        });
+        // Pri JS mutation `el.value = "x"` text divergne - resync.
+        if entry.text != cur_value {
+            entry.set_text(&cur_value);
+        }
+        entry
+    }
+
+    /// Hit-test x koord (clientX viewport-relative) na <input>/<textarea>
+    /// glyph -> nastav caret. Sync `input_caret` (char-index legacy) z
+    /// `editors[nid].caret` (byte). Volane z MouseDown po focusable detekci.
+    pub(crate) fn editor_hit_test_input(
+        &mut self,
+        node: &std::rc::Rc<crate::browser::dom::Node>,
+        client_x: f32,
+        extend: bool,
+    ) {
+        let nid = std::rc::Rc::as_ptr(node) as usize;
+        // Najdi layout box pre node (potrebujem font_size, family, padding).
+        let Some(layout_root) = self.last_layout_root.as_ref() else { return };
+        fn find_box<'a>(b: &'a crate::browser::layout::LayoutBox, target_id: usize)
+            -> Option<&'a crate::browser::layout::LayoutBox> {
+            if let Some(n) = &b.node {
+                if std::rc::Rc::as_ptr(n) as usize == target_id { return Some(b); }
+            }
+            for ch in &b.children {
+                if let Some(f) = find_box(ch, target_id) { return Some(f); }
+            }
+            None
+        }
+        let Some(input_box) = find_box(layout_root, nid) else { return };
+        let weight = input_box.effective_weight();
+        let italic = input_box.italic;
+        let fam = input_box.font_family.clone();
+        let fs = input_box.font_size;
+        let ls = input_box.letter_spacing;
+        let pad_l = input_box.padding_left.unwrap_or(input_box.padding);
+        let border = input_box.border_width.max(0.0);
+        // text_origin_x v content-space (= rect.x). client_x je viewport
+        // koord -> prevod na content pres scroll_x.
+        let content_x = client_x + self.scroll_x;
+        let text_origin_x = input_box.rect.x + border + pad_l;
+        // Shape pres value (= editor.text after sync).
+        let ed = self.editor_for_node(node);
+        let (_runs, shaped) = crate::browser::editor::shape_text(
+            &ed.text, fs, weight, italic, &fam, ls);
+        let local_x = content_x - text_origin_x;
+        ed.hit_test(&shaped, local_x, extend);
+        // Sync legacy input_caret (char index).
+        let char_idx = ed.caret_char_index();
+        self.input_caret.insert(nid, char_idx);
+    }
+
     // -- Page selection (text drag) ---------------------------------------
 
     /// Zacni text selection drag pri MouseDown.
@@ -2019,5 +2105,59 @@ mod tests {
         assert!(wv.render().is_none(), "headless render musi vratit None");
         assert!(wv.target_view().is_none());
         assert!(wv.target_texture().is_none());
+    }
+
+    #[test]
+    fn editor_for_node_inits_from_value_attr() {
+        // editor_for_node musi vratit EditorState s text = value attr.
+        // Bez render volani (headless) musim si rucne vytvorit node.
+        let mut wv = fresh();
+        wv.load_html("<html><body><input value=\"hello\" /></body></html>", "", None);
+        let doc = wv.document().expect("doc");
+        let root = std::rc::Rc::clone(&doc.root);
+        // Najdi <input> node v DOM tree.
+        fn find_input(n: &std::rc::Rc<crate::browser::dom::Node>)
+            -> Option<std::rc::Rc<crate::browser::dom::Node>>
+        {
+            if n.tag_name().as_deref() == Some("input") {
+                return Some(std::rc::Rc::clone(n));
+            }
+            for ch in n.children.borrow().iter() {
+                if let Some(r) = find_input(ch) { return Some(r); }
+            }
+            None
+        }
+        let input = find_input(&root).expect("<input> v DOM");
+        let ed = wv.editor_for_node(&input);
+        assert_eq!(ed.text, "hello");
+        assert_eq!(ed.caret, 5);
+    }
+
+    #[test]
+    fn editor_for_node_resyncs_on_value_change() {
+        let mut wv = fresh();
+        wv.load_html("<html><body><input value=\"abc\" /></body></html>", "", None);
+        let doc = wv.document().expect("doc");
+        let root = std::rc::Rc::clone(&doc.root);
+        fn find_input(n: &std::rc::Rc<crate::browser::dom::Node>)
+            -> Option<std::rc::Rc<crate::browser::dom::Node>>
+        {
+            if n.tag_name().as_deref() == Some("input") {
+                return Some(std::rc::Rc::clone(n));
+            }
+            for ch in n.children.borrow().iter() {
+                if let Some(r) = find_input(ch) { return Some(r); }
+            }
+            None
+        }
+        let input = find_input(&root).expect("<input> v DOM");
+        {
+            let ed = wv.editor_for_node(&input);
+            assert_eq!(ed.text, "abc");
+        }
+        // External JS-like mutation `el.value = "xyz"`.
+        input.set_attr("value", "xyz");
+        let ed = wv.editor_for_node(&input);
+        assert_eq!(ed.text, "xyz", "editor musi resync s value attr");
     }
 }
