@@ -1,35 +1,44 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="cs">
 <head>
 <meta charset="UTF-8">
-<title>RWE DevTools Mockup</title>
+<title>RWE DevTools - Firefox-like mockup</title>
 <style>
+/* Firefox dark theme palette */
 :root {
-    --bg: #202124;
-    --bg-elev1: #292a2d;
-    --bg-elev2: #35363a;
-    --bg-hover: #3c4043;
-    --bg-active: #44464a;
-    --border: #3c4043;
-    --border-strong: #5f6368;
-    --fg: #e8eaed;
-    --fg-dim: #9aa0a6;
-    --fg-muted: #80868b;
-    --accent: #8ab4f8;
-    --accent-bg: rgba(138, 180, 248, 0.15);
-    --error: #f28b82;
-    --warn: #fdd663;
-    --ok: #81c995;
-    --syntax-tag: #5db0d7;
-    --syntax-attr-name: #9aceeb;
-    --syntax-attr-value: #f29766;
-    --syntax-string: #f29766;
-    --syntax-keyword: #c58af9;
-    --syntax-number: #f28b82;
-    --syntax-comment: #80868b;
-    --selection: #3a5371;
-    --gutter-bg: #28292c;
-    --bp-active: #4285f4;
+    --bg-base: #0c0c0d;
+    --bg-surface: #18191a;
+    --bg-elev1: #1c1d20;
+    --bg-elev2: #232427;
+    --bg-elev3: #2a2b2e;
+    --bg-hover: #313337;
+    --bg-active: #38393d;
+    --border: #2a2b2e;
+    --border-strong: #3a3d40;
+    --fg: #d4d4d8;
+    --fg-dim: #a0a0a4;
+    --fg-muted: #737378;
+    --accent: #0a84ff;
+    --accent-hover: #0060df;
+    --accent-bg: rgba(10, 132, 255, 0.15);
+    --link: #4caedb;
+    --error: #ff6b6b;
+    --warn: #f5b942;
+    --ok: #5bc56a;
+    --syntax-tag: #75bfff;
+    --syntax-attr-name: #a3d2ff;
+    --syntax-attr-value: #ff7de9;
+    --syntax-string: #ff7de9;
+    --syntax-keyword: #b98eff;
+    --syntax-number: #ff6b6b;
+    --syntax-comment: #737378;
+    --syntax-prop: #75bfff;
+    --syntax-val: #f5b942;
+    --selection: #0a84ff66;
+    --gutter-bg: #15161a;
+    --bp-active: #0a84ff;
+    --tab-active-bg: #1c1d20;
+    --tab-active-border: #0a84ff;
 }
 
 * { box-sizing: border-box; }
@@ -38,9 +47,9 @@ html, body {
     margin: 0;
     padding: 0;
     height: 100%;
-    background: var(--bg);
+    background: var(--bg-base);
     color: var(--fg);
-    font-family: 'Segoe UI', 'SF Pro Text', Roboto, system-ui, sans-serif;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, system-ui, sans-serif;
     font-size: 12px;
     overflow: hidden;
     user-select: none;
@@ -48,7 +57,7 @@ html, body {
 
 /* Page area (mock) */
 .page-area {
-    height: 60%;
+    height: 50%;
     background: #fff;
     color: #333;
     padding: 16px;
@@ -62,61 +71,83 @@ html, body {
 
 /* DevTools container */
 .devtools {
-    height: 40%;
+    height: 50%;
     display: flex;
     flex-direction: column;
-    background: var(--bg);
+    background: var(--bg-base);
 }
 
 /* Resize grip nad devtools */
 .resize-grip {
     height: 4px;
-    background: var(--border);
+    background: var(--bg-elev2);
     cursor: ns-resize;
     flex-shrink: 0;
 }
 .resize-grip:hover { background: var(--accent); }
 
-/* Tab strip */
+/* Top tab strip */
 .tab-strip {
     display: flex;
     align-items: stretch;
-    height: 30px;
-    background: var(--bg);
+    height: 28px;
+    background: var(--bg-base);
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
 }
-.tab-strip .left { display: flex; }
-.tab-strip .right { display: flex; margin-left: auto; align-items: center; gap: 4px; padding-right: 8px; }
+.tab-strip .left { display: flex; overflow: hidden; }
+.tab-strip .right {
+    display: flex;
+    margin-left: auto;
+    align-items: center;
+    gap: 2px;
+    padding: 0 6px;
+}
 .tab {
-    padding: 0 14px;
+    padding: 0 12px;
     height: 100%;
     display: flex;
     align-items: center;
+    gap: 6px;
     cursor: pointer;
     color: var(--fg-dim);
     font-size: 12px;
-    border-bottom: 2px solid transparent;
+    border-right: 1px solid var(--border);
     position: relative;
+    white-space: nowrap;
 }
 .tab:hover { background: var(--bg-elev1); color: var(--fg); }
 .tab.active {
     color: var(--fg);
-    border-bottom-color: var(--accent);
-    background: var(--bg-elev1);
+    background: var(--tab-active-bg);
+}
+.tab.active::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: var(--tab-active-border);
 }
 .tab-icon {
-    width: 18px;
-    height: 18px;
-    background: var(--fg-dim);
-    border-radius: 4px;
-    margin-right: 4px;
-    opacity: 0.6;
+    width: 14px;
+    height: 14px;
+    background: currentColor;
+    opacity: 0.5;
+    mask-repeat: no-repeat;
+    mask-position: center;
+    mask-size: contain;
+    -webkit-mask-repeat: no-repeat;
+    -webkit-mask-position: center;
+    -webkit-mask-size: contain;
+    flex-shrink: 0;
 }
+.tab.active .tab-icon { opacity: 0.9; }
 .toolbar-btn {
     width: 24px;
     height: 24px;
-    border-radius: 4px;
+    border-radius: 3px;
     border: none;
     background: transparent;
     color: var(--fg-dim);
@@ -124,17 +155,15 @@ html, body {
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 14px;
+    font-size: 13px;
+    padding: 0;
 }
 .toolbar-btn:hover { background: var(--bg-hover); color: var(--fg); }
 .toolbar-btn.active { background: var(--accent-bg); color: var(--accent); }
 .close-btn { font-size: 16px; }
 
 /* Panel body */
-.panel-body {
-    flex: 1;
-    overflow: hidden;
-}
+.panel-body { flex: 1; overflow: hidden; }
 .panel {
     height: 100%;
     width: 100%;
@@ -142,160 +171,420 @@ html, body {
 }
 .panel.active { display: flex; }
 
-/* ============================================
-   ELEMENTS PANEL
-   ============================================ */
-.elements {
-    flex-direction: row;
-}
-.elements-tree-pane {
-    flex: 1;
-    overflow: auto;
-    padding: 6px 4px;
-    background: var(--bg);
-    border-right: 1px solid var(--border);
-    min-width: 200px;
-}
-.elements-side-pane {
-    width: 40%;
-    min-width: 280px;
-    display: flex;
-    flex-direction: column;
-    background: var(--bg);
-}
-.side-tabs {
-    display: flex;
-    border-bottom: 1px solid var(--border);
-    height: 28px;
+/* Vertical splitter */
+.vsplitter {
+    width: 1px;
+    background: var(--border);
+    cursor: ew-resize;
     flex-shrink: 0;
+    position: relative;
 }
-.side-tab {
-    padding: 0 10px;
+.vsplitter::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -3px;
+    width: 7px;
+    height: 100%;
+}
+.vsplitter:hover { background: var(--accent); }
+
+/* ============================================
+   INSPECTOR (Pruzkumnik) - DOM + Styles + Layout
+   ============================================ */
+.inspector {
+    flex-direction: column;
+}
+.inspector-toolbar {
     display: flex;
     align-items: center;
-    cursor: pointer;
-    color: var(--fg-dim);
-    font-size: 11px;
-    border-bottom: 2px solid transparent;
+    height: 26px;
+    border-bottom: 1px solid var(--border);
+    padding: 0 4px;
+    gap: 2px;
+    flex-shrink: 0;
 }
-.side-tab.active { color: var(--fg); border-bottom-color: var(--accent); }
-.side-tab:hover:not(.active) { background: var(--bg-elev1); color: var(--fg); }
-.side-body { flex: 1; overflow: auto; padding: 8px; }
+.inspector-body {
+    flex: 1;
+    display: flex;
+    overflow: hidden;
+}
 
-/* DOM tree */
+/* Left: DOM tree */
+.dom-pane {
+    flex: 1;
+    overflow: auto;
+    padding: 4px 4px 4px 0;
+    min-width: 180px;
+    background: var(--bg-base);
+}
+.dom-search-bar {
+    display: flex;
+    align-items: center;
+    padding: 4px 6px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-elev1);
+    gap: 4px;
+}
+.dom-search-input {
+    flex: 1;
+    background: var(--bg-elev2);
+    border: 1px solid var(--border-strong);
+    color: var(--fg);
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 11px;
+    outline: none;
+    height: 22px;
+}
+.dom-search-input:focus { border-color: var(--accent); }
+
 .dom-tree {
     font-family: 'Consolas', 'SF Mono', monospace;
     font-size: 11px;
     line-height: 18px;
     user-select: text;
+    padding: 4px 0;
 }
 .dom-node {
-    padding: 0 4px;
+    padding: 0 6px;
     cursor: pointer;
     white-space: pre;
-    border-radius: 2px;
 }
 .dom-node:hover { background: var(--bg-elev1); }
-.dom-node.selected { background: var(--selection); color: var(--fg); }
+.dom-node.selected { background: var(--accent); color: #fff; }
+.dom-node.selected .tok-tag,
+.dom-node.selected .tok-attr-name,
+.dom-node.selected .tok-attr-value,
+.dom-node.selected .tok-text { color: #fff; }
 .dom-node .toggle {
     display: inline-block;
     width: 12px;
     text-align: center;
     color: var(--fg-muted);
     cursor: pointer;
+    font-size: 9px;
 }
 .tok-tag { color: var(--syntax-tag); }
 .tok-attr-name { color: var(--syntax-attr-name); }
 .tok-attr-value { color: var(--syntax-attr-value); }
 .tok-text { color: var(--fg); }
 .tok-comment { color: var(--syntax-comment); font-style: italic; }
+.event-badge {
+    background: var(--warn);
+    color: var(--bg-base);
+    font-size: 9px;
+    padding: 0 4px;
+    border-radius: 6px;
+    margin-left: 4px;
+}
 
-/* Styles pane */
-.styles-section { margin-bottom: 14px; }
-.styles-section-header {
-    font-size: 11px;
-    color: var(--fg-dim);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    padding: 4px 0;
-    border-bottom: 1px solid var(--border);
-    margin-bottom: 4px;
+/* Middle: Styles panel */
+.styles-pane {
+    width: 340px;
+    min-width: 240px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-surface);
+    flex-shrink: 0;
+}
+.styles-header {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    height: 26px;
+    border-bottom: 1px solid var(--border);
+    padding: 0 6px;
+    gap: 4px;
+    background: var(--bg-elev1);
 }
+.styles-filter {
+    flex: 1;
+    background: var(--bg-elev2);
+    border: 1px solid var(--border-strong);
+    color: var(--fg);
+    padding: 2px 8px 2px 22px;
+    border-radius: 3px;
+    font-size: 11px;
+    outline: none;
+    height: 20px;
+    background-image: linear-gradient(transparent, transparent);
+}
+.styles-filter:focus { border-color: var(--accent); }
+.styles-pseudo-toggle {
+    color: var(--fg-dim);
+    padding: 2px 6px;
+    font-size: 10px;
+    cursor: pointer;
+    border: 1px solid var(--border-strong);
+    border-radius: 3px;
+    background: var(--bg-elev2);
+}
+.styles-pseudo-toggle.active { color: var(--accent); border-color: var(--accent); }
+
+.styles-body {
+    flex: 1;
+    overflow: auto;
+    padding: 4px 0;
+}
+.styles-section { padding: 4px 0; }
 .style-rule {
     font-family: 'Consolas', monospace;
     font-size: 11px;
     line-height: 16px;
-    margin-bottom: 8px;
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--bg-elev1);
 }
+.style-rule:hover { background: var(--bg-elev1); }
 .style-rule .selector { color: var(--syntax-tag); }
-.style-rule .source { color: var(--fg-muted); font-size: 10px; float: right; }
-.style-rule .decl { padding-left: 16px; }
-.style-rule .decl .prop { color: var(--syntax-attr-name); }
-.style-rule .decl .val { color: var(--syntax-attr-value); }
+.style-rule .source {
+    color: var(--link);
+    font-size: 10px;
+    float: right;
+    cursor: pointer;
+    text-decoration: underline dotted;
+}
+.style-rule .source:hover { color: #fff; }
+.style-rule .decl {
+    padding-left: 16px;
+    display: flex;
+    align-items: center;
+}
 .style-rule .decl .check {
     display: inline-block;
-    width: 12px;
+    width: 14px;
     color: var(--fg-muted);
     cursor: pointer;
+    flex-shrink: 0;
 }
-.style-rule .decl.disabled { opacity: 0.4; text-decoration: line-through; }
+.style-rule .decl input[type=checkbox] {
+    margin: 0 4px 0 0;
+    appearance: none;
+    width: 11px;
+    height: 11px;
+    border: 1px solid var(--border-strong);
+    background: var(--bg-elev2);
+    border-radius: 2px;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+.style-rule .decl input[type=checkbox]:checked {
+    background: var(--accent);
+    border-color: var(--accent);
+}
+.style-rule .decl input[type=checkbox]:checked::after {
+    content: '✓';
+    color: #fff;
+    font-size: 9px;
+    display: block;
+    text-align: center;
+    line-height: 9px;
+}
+.style-rule .decl .prop { color: var(--syntax-prop); }
+.style-rule .decl .val { color: var(--syntax-val); }
+.style-rule .decl.disabled .prop,
+.style-rule .decl.disabled .val { text-decoration: line-through; opacity: 0.5; }
 .style-add {
     color: var(--fg-muted);
     font-style: italic;
-    padding: 2px 16px;
+    padding: 2px 24px;
     cursor: pointer;
+    font-size: 11px;
 }
 .style-add:hover { color: var(--fg); background: var(--bg-elev1); }
+.style-rule-bracket { color: var(--fg-dim); }
+.media-line {
+    padding: 4px 8px;
+    font-family: 'Consolas', monospace;
+    font-size: 10px;
+    color: var(--fg-dim);
+    border-bottom: 1px solid var(--bg-elev1);
+    background: var(--bg-elev1);
+}
+.layer-line {
+    padding: 4px 8px;
+    font-family: 'Consolas', monospace;
+    font-size: 10px;
+    color: var(--syntax-keyword);
+    background: var(--bg-elev1);
+    border-bottom: 1px solid var(--bg-elev1);
+}
+
+/* Right: Layout/Computed/Changes... tabs */
+.layout-pane {
+    width: 320px;
+    min-width: 200px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-surface);
+    flex-shrink: 0;
+    border-left: 1px solid var(--border);
+}
+.layout-pane.collapsed {
+    width: 28px;
+    min-width: 28px;
+}
+.layout-tabs {
+    display: flex;
+    height: 26px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-base);
+    overflow: hidden;
+    flex-shrink: 0;
+}
+.layout-pane.collapsed .layout-tabs-inner { display: none; }
+.layout-tabs-inner {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+}
+.layout-tab {
+    padding: 0 10px;
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+    color: var(--fg-dim);
+    font-size: 11px;
+    border-right: 1px solid var(--border);
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+.layout-tab.active {
+    color: var(--fg);
+    background: var(--bg-surface);
+    position: relative;
+}
+.layout-tab.active::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: var(--tab-active-border);
+}
+.layout-tab:hover:not(.active) { background: var(--bg-elev1); color: var(--fg); }
+.layout-overflow-btn {
+    width: 24px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    color: var(--fg-dim);
+    border-left: 1px solid var(--border);
+    font-size: 10px;
+}
+.layout-overflow-btn:hover { background: var(--bg-hover); color: var(--fg); }
+.layout-collapse-btn {
+    width: 24px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    color: var(--fg-dim);
+    border-left: 1px solid var(--border);
+    background: var(--bg-base);
+    font-size: 12px;
+}
+.layout-collapse-btn:hover { background: var(--bg-hover); color: var(--fg); }
+.layout-body {
+    flex: 1;
+    overflow: auto;
+    padding: 8px 12px;
+}
+.layout-pane.collapsed .layout-body { display: none; }
+
+.layout-section {
+    margin-bottom: 16px;
+}
+.layout-section-header {
+    color: var(--fg);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 4px 0;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+}
+.layout-section-header::before {
+    content: '▾';
+    margin-right: 4px;
+    font-size: 9px;
+    color: var(--fg-dim);
+}
+.layout-section.collapsed .layout-section-header::before { content: '▸'; }
+.layout-section.collapsed .layout-section-body { display: none; }
+.layout-empty {
+    color: var(--fg-muted);
+    font-style: italic;
+    font-size: 11px;
+    padding: 4px 0;
+}
 
 /* Box model */
 .box-model {
-    padding: 16px;
+    padding: 8px;
     display: flex;
     justify-content: center;
 }
 .bm-layer {
     border: 1px dashed var(--fg-muted);
-    padding: 16px;
+    padding: 18px 24px;
     text-align: center;
     font-family: 'Consolas', monospace;
     font-size: 10px;
     color: var(--fg-dim);
     position: relative;
-    background: rgba(255, 255, 200, 0.04);
 }
 .bm-layer .label {
     position: absolute;
     top: -8px;
-    left: 4px;
-    background: var(--bg);
+    left: 6px;
+    background: var(--bg-surface);
     padding: 0 4px;
     color: var(--fg-muted);
-    font-size: 10px;
+    font-size: 9px;
+    text-transform: uppercase;
 }
-.bm-margin { background: rgba(255, 165, 0, 0.1); }
-.bm-border { background: rgba(255, 220, 0, 0.1); }
-.bm-padding { background: rgba(130, 180, 130, 0.1); }
-.bm-content {
-    padding: 8px 32px;
-    background: rgba(110, 180, 240, 0.15);
-    color: var(--accent);
-    border: 1px solid var(--border-strong);
-}
-
-/* Computed styles */
-.computed-filter {
-    width: 100%;
-    background: var(--bg-elev1);
-    border: 1px solid var(--border);
-    padding: 4px 8px;
+.bm-layer .edge {
+    position: absolute;
     color: var(--fg);
     font-size: 11px;
-    border-radius: 4px;
+    font-family: 'Consolas', monospace;
+}
+.bm-layer .edge.top    { top: 2px; left: 50%; transform: translateX(-50%); }
+.bm-layer .edge.bottom { bottom: 2px; left: 50%; transform: translateX(-50%); }
+.bm-layer .edge.left   { top: 50%; left: 4px; transform: translateY(-50%); }
+.bm-layer .edge.right  { top: 50%; right: 4px; transform: translateY(-50%); }
+.bm-margin { background: rgba(255, 165, 0, 0.12); }
+.bm-border { background: rgba(255, 220, 0, 0.15); }
+.bm-padding { background: rgba(130, 200, 130, 0.15); }
+.bm-content {
+    padding: 10px 28px;
+    background: rgba(110, 180, 240, 0.18);
+    color: var(--syntax-tag);
+    border: none;
+    font-weight: bold;
+}
+
+/* Computed */
+.computed-filter {
+    width: 100%;
+    background: var(--bg-elev2);
+    border: 1px solid var(--border-strong);
+    padding: 3px 8px;
+    color: var(--fg);
+    font-size: 11px;
+    border-radius: 3px;
     margin-bottom: 6px;
     outline: none;
+    height: 22px;
 }
 .computed-filter:focus { border-color: var(--accent); }
 .computed-list {
@@ -308,9 +597,16 @@ html, body {
     padding: 1px 0;
 }
 .computed-prop:hover { background: var(--bg-elev1); }
+.computed-prop .toggle-src {
+    display: inline-block;
+    width: 12px;
+    color: var(--fg-muted);
+    cursor: pointer;
+    font-size: 9px;
+}
 .computed-prop .name {
     width: 50%;
-    color: var(--syntax-attr-name);
+    color: var(--syntax-prop);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -323,19 +619,118 @@ html, body {
     white-space: nowrap;
 }
 
-/* Event listeners */
-.evt-listener {
+/* Changes */
+.changes-list {
     font-family: 'Consolas', monospace;
     font-size: 11px;
+}
+.change-rule {
+    margin-bottom: 8px;
+    padding: 4px;
+    background: var(--bg-elev1);
+    border-radius: 3px;
+}
+.change-rule .sel { color: var(--syntax-tag); }
+.change-decl.added { color: var(--ok); }
+.change-decl.added::before { content: '+ '; }
+.change-decl.removed { color: var(--error); }
+.change-decl.removed::before { content: '- '; }
+.copy-btn {
+    float: right;
+    padding: 2px 8px;
+    background: var(--bg-elev2);
+    border: 1px solid var(--border-strong);
+    color: var(--fg-dim);
+    cursor: pointer;
+    border-radius: 3px;
+    font-size: 10px;
+}
+.copy-btn:hover { background: var(--bg-hover); color: var(--fg); }
+
+/* Compatibility */
+.compat-prop {
+    padding: 4px 6px;
+    border-bottom: 1px solid var(--bg-elev1);
+    font-family: 'Consolas', monospace;
+    font-size: 11px;
+}
+.compat-prop .name { color: var(--syntax-prop); }
+.compat-prop .browsers {
+    margin-top: 2px;
+    font-size: 10px;
+}
+.compat-browser {
+    display: inline-block;
+    padding: 1px 6px;
+    margin-right: 4px;
+    border-radius: 3px;
+    background: var(--bg-elev2);
+    color: var(--fg-dim);
+}
+.compat-browser.supported { color: var(--ok); border: 1px solid var(--ok); }
+.compat-browser.unsupported { color: var(--error); border: 1px solid var(--error); }
+.compat-browser.partial { color: var(--warn); border: 1px solid var(--warn); }
+
+/* Fonts */
+.font-card {
+    padding: 8px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    margin-bottom: 8px;
+    background: var(--bg-elev1);
+}
+.font-card .preview {
+    font-size: 24px;
+    color: var(--fg);
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 6px;
+}
+.font-card .family { font-size: 12px; color: var(--accent); font-weight: 500; }
+.font-card .meta { font-size: 10px; color: var(--fg-muted); margin-top: 4px; }
+
+/* Animations */
+.anim-timeline {
+    margin-bottom: 12px;
+}
+.anim-row {
+    display: flex;
+    align-items: center;
+    height: 22px;
+    margin-bottom: 4px;
+    background: var(--bg-elev1);
+    border-radius: 3px;
+    overflow: hidden;
+}
+.anim-row .anim-name {
+    width: 90px;
+    padding: 0 8px;
+    font-size: 11px;
+    color: var(--syntax-prop);
+    border-right: 1px solid var(--border);
+    flex-shrink: 0;
+}
+.anim-row .anim-bar {
+    flex: 1;
+    height: 100%;
+    position: relative;
+}
+.anim-bar-fill {
+    position: absolute;
+    height: 100%;
+    background: linear-gradient(to right, var(--accent), var(--syntax-keyword));
+    border-radius: 0 3px 3px 0;
+}
+.anim-controls {
+    display: flex;
+    gap: 4px;
     padding: 4px 0;
     border-bottom: 1px solid var(--border);
+    margin-bottom: 8px;
 }
-.evt-listener .type { color: var(--accent); font-weight: bold; }
-.evt-listener .handler { color: var(--fg-dim); }
-.evt-listener .meta { font-size: 10px; color: var(--fg-muted); }
 
 /* ============================================
-   CONSOLE PANEL
+   CONSOLE
    ============================================ */
 .console {
     flex-direction: column;
@@ -343,43 +738,48 @@ html, body {
 .console-toolbar {
     display: flex;
     align-items: center;
-    gap: 6px;
-    padding: 4px 8px;
+    gap: 4px;
+    padding: 4px 6px;
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
     height: 28px;
+    background: var(--bg-elev1);
 }
 .console-filter-input {
     flex: 1;
-    background: var(--bg-elev1);
-    border: 1px solid var(--border);
+    background: var(--bg-elev2);
+    border: 1px solid var(--border-strong);
     color: var(--fg);
-    padding: 3px 8px;
-    border-radius: 4px;
+    padding: 2px 8px;
+    border-radius: 3px;
     font-size: 11px;
     outline: none;
+    max-width: 240px;
+    height: 20px;
 }
 .console-filter-input:focus { border-color: var(--accent); }
 .level-toggle {
-    padding: 2px 8px;
-    border-radius: 10px;
-    border: 1px solid var(--border);
-    background: var(--bg-elev1);
+    padding: 2px 10px;
+    border-radius: 3px;
+    border: 1px solid var(--border-strong);
+    background: var(--bg-elev2);
     color: var(--fg-dim);
     cursor: pointer;
     font-size: 10px;
+    height: 22px;
 }
+.level-toggle:hover { background: var(--bg-hover); color: var(--fg); }
 .level-toggle.active { background: var(--accent-bg); color: var(--accent); border-color: var(--accent); }
 .console-log {
     flex: 1;
     overflow-y: auto;
     font-family: 'Consolas', monospace;
     font-size: 11px;
-    padding: 4px 0;
+    padding: 0;
 }
 .log-entry {
     padding: 4px 12px 4px 32px;
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid var(--bg-elev1);
     position: relative;
     line-height: 1.5;
     word-wrap: break-word;
@@ -388,41 +788,45 @@ html, body {
     position: absolute;
     left: 10px;
     top: 5px;
-    font-weight: bold;
     width: 14px;
     height: 14px;
     text-align: center;
     border-radius: 50%;
     font-size: 10px;
     line-height: 14px;
+    font-weight: bold;
 }
 .log-entry.log::before { content: ''; }
-.log-entry.info::before { content: 'i'; background: var(--accent); color: var(--bg); }
-.log-entry.warn::before { content: '!'; background: var(--warn); color: var(--bg); }
-.log-entry.error::before { content: '×'; background: var(--error); color: var(--bg); }
-.log-entry.warn { background: rgba(253, 214, 99, 0.08); }
-.log-entry.error { background: rgba(242, 139, 130, 0.08); color: var(--error); }
+.log-entry.info::before { content: 'i'; background: var(--accent); color: #fff; }
+.log-entry.warn::before { content: '!'; background: var(--warn); color: var(--bg-base); }
+.log-entry.error::before { content: '×'; background: var(--error); color: #fff; }
+.log-entry.warn { background: rgba(245, 185, 66, 0.06); }
+.log-entry.error { background: rgba(255, 107, 107, 0.08); color: var(--error); }
 .log-source {
     float: right;
-    color: var(--fg-muted);
+    color: var(--link);
     font-size: 10px;
+    cursor: pointer;
+    text-decoration: underline dotted;
 }
+.log-source:hover { color: #fff; }
 .log-input {
     padding: 4px 12px 4px 32px;
     background: var(--bg-elev1);
     border-bottom: 1px solid var(--border);
     position: relative;
+    color: var(--fg);
 }
 .log-input::before {
-    content: '>';
+    content: '»';
     position: absolute;
     left: 12px;
     top: 5px;
     color: var(--accent);
     font-weight: bold;
 }
-.log-result { color: var(--fg-dim); }
-.log-result::before { content: '< '; color: var(--ok); font-weight: bold; }
+.log-result { color: var(--fg); }
+.log-result::before { content: '« '; color: var(--ok); font-weight: bold; }
 .console-prompt {
     display: flex;
     align-items: center;
@@ -430,9 +834,10 @@ html, body {
     border-top: 1px solid var(--border);
     flex-shrink: 0;
     background: var(--bg-elev1);
+    height: 28px;
 }
 .console-prompt::before {
-    content: '>';
+    content: '»';
     color: var(--accent);
     margin-right: 8px;
     font-family: 'Consolas', monospace;
@@ -448,9 +853,8 @@ html, body {
     outline: none;
 }
 
-/* Object expansion */
 .obj-tree { display: inline-block; }
-.obj-toggle { cursor: pointer; color: var(--fg-muted); width: 12px; display: inline-block; }
+.obj-toggle { cursor: pointer; color: var(--fg-muted); width: 12px; display: inline-block; font-size: 9px; }
 .obj-children { margin-left: 16px; }
 .obj-key { color: var(--syntax-attr-name); }
 .obj-string { color: var(--syntax-string); }
@@ -458,9 +862,9 @@ html, body {
 .obj-keyword { color: var(--syntax-keyword); }
 
 /* ============================================
-   SOURCES PANEL
+   DEBUGGER (Sources)
    ============================================ */
-.sources {
+.debugger {
     flex-direction: row;
 }
 .sources-tree {
@@ -468,6 +872,7 @@ html, body {
     overflow: auto;
     border-right: 1px solid var(--border);
     flex-shrink: 0;
+    background: var(--bg-surface);
 }
 .file-section {
     padding: 4px 0;
@@ -492,24 +897,26 @@ html, body {
     text-overflow: ellipsis;
 }
 .file-item:hover { background: var(--bg-elev1); }
-.file-item.active { background: var(--selection); }
+.file-item.active { background: var(--accent); color: #fff; }
 .file-item .badge {
     float: right;
     background: var(--accent);
-    color: var(--bg);
+    color: #fff;
     font-size: 9px;
     padding: 0 4px;
     border-radius: 6px;
 }
+.file-item.active .badge { background: #fff; color: var(--accent); }
 .sources-main {
     flex: 1;
     display: flex;
     flex-direction: column;
+    min-width: 200px;
 }
 .sources-tabs {
     display: flex;
     height: 24px;
-    background: var(--bg-elev1);
+    background: var(--bg-base);
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
 }
@@ -523,13 +930,22 @@ html, body {
     font-size: 11px;
     gap: 4px;
 }
-.source-tab.active { background: var(--bg); color: var(--fg); }
+.source-tab.active { background: var(--bg-surface); color: var(--fg); position: relative; }
+.source-tab.active::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: var(--tab-active-border);
+}
 .source-tab .x { margin-left: 6px; color: var(--fg-muted); }
 .source-tab .x:hover { color: var(--error); }
 .source-editor {
     flex: 1;
     overflow: auto;
-    background: var(--bg);
+    background: var(--bg-surface);
     font-family: 'Consolas', monospace;
     font-size: 12px;
     line-height: 18px;
@@ -540,10 +956,8 @@ html, body {
 }
 .source-line:hover { background: var(--bg-elev1); }
 .source-line.has-bp .gutter { background: var(--bp-active); color: #fff; }
-.source-line.paused {
-    background: rgba(253, 214, 99, 0.15);
-}
-.source-line.paused .gutter { background: var(--warn); color: var(--bg); }
+.source-line.paused { background: rgba(245, 185, 66, 0.15); }
+.source-line.paused .gutter { background: var(--warn); color: var(--bg-base); }
 .gutter {
     width: 50px;
     text-align: right;
@@ -555,12 +969,7 @@ html, body {
     cursor: pointer;
     flex-shrink: 0;
 }
-.code-line {
-    flex: 1;
-    padding-left: 8px;
-    white-space: pre;
-    user-select: text;
-}
+.code-line { flex: 1; padding-left: 8px; white-space: pre; user-select: text; }
 .kw { color: var(--syntax-keyword); }
 .str { color: var(--syntax-string); }
 .num { color: var(--syntax-number); }
@@ -568,10 +977,11 @@ html, body {
 .fn { color: var(--syntax-tag); }
 
 .sources-right {
-    width: 280px;
+    width: 260px;
     border-left: 1px solid var(--border);
     overflow: auto;
     flex-shrink: 0;
+    background: var(--bg-surface);
 }
 .debug-section { border-bottom: 1px solid var(--border); }
 .debug-section-header {
@@ -584,6 +994,14 @@ html, body {
     align-items: center;
     justify-content: space-between;
 }
+.debug-section-header::before {
+    content: '▾';
+    color: var(--fg-dim);
+    margin-right: 4px;
+    font-size: 9px;
+}
+.debug-section.collapsed .debug-section-header::before { content: '▸'; }
+.debug-section.collapsed .debug-body { display: none; }
 .debug-section-header .count { color: var(--fg-muted); }
 .debug-body { padding: 4px 8px; font-family: 'Consolas', monospace; font-size: 11px; }
 .scope-row { padding: 2px 0; }
@@ -591,7 +1009,7 @@ html, body {
 .scope-row .val { color: var(--fg); }
 .stack-frame { padding: 3px 8px; cursor: pointer; font-size: 11px; }
 .stack-frame:hover { background: var(--bg-elev1); }
-.stack-frame.active { background: var(--selection); }
+.stack-frame.active { background: var(--accent-bg); border-left: 2px solid var(--accent); }
 .stack-frame .fn { color: var(--accent); }
 .stack-frame .loc { color: var(--fg-muted); font-size: 10px; }
 .bp-row {
@@ -605,18 +1023,15 @@ html, body {
 .bp-row .loc { color: var(--fg-dim); }
 .debug-toolbar {
     display: flex;
-    gap: 4px;
-    padding: 6px 8px;
+    gap: 2px;
+    padding: 4px 8px;
     border-bottom: 1px solid var(--border);
     background: var(--bg-elev1);
 }
-.debug-toolbar .toolbar-btn {
-    width: 28px;
-    height: 24px;
-}
+.debug-toolbar .toolbar-btn { width: 26px; height: 22px; }
 
 /* ============================================
-   NETWORK PANEL
+   NETWORK (Sit)
    ============================================ */
 .network {
     flex-direction: column;
@@ -624,20 +1039,18 @@ html, body {
 .network-toolbar {
     display: flex;
     align-items: center;
-    gap: 6px;
-    padding: 4px 8px;
+    gap: 4px;
+    padding: 4px 6px;
     border-bottom: 1px solid var(--border);
     height: 28px;
+    background: var(--bg-elev1);
 }
 .network-main {
     flex: 1;
     display: flex;
     overflow: hidden;
 }
-.network-table-container {
-    flex: 1;
-    overflow: auto;
-}
+.network-table-container { flex: 1; overflow: auto; }
 .network-table {
     width: 100%;
     border-collapse: collapse;
@@ -650,7 +1063,7 @@ html, body {
     background: var(--bg-elev1);
     color: var(--fg-dim);
     border-bottom: 1px solid var(--border);
-    font-weight: normal;
+    font-weight: 500;
     position: sticky;
     top: 0;
     z-index: 1;
@@ -665,89 +1078,115 @@ html, body {
     cursor: pointer;
 }
 .network-table tr:hover td { background: var(--bg-elev1); }
-.network-table tr.selected td { background: var(--selection); }
+.network-table tr.selected td { background: var(--accent); color: #fff; }
+.network-table tr.selected td span { color: #fff !important; }
 .status-2xx { color: var(--ok); }
 .status-3xx { color: var(--warn); }
 .status-4xx, .status-5xx { color: var(--error); }
 .waterfall-cell {
     position: relative;
-    background: linear-gradient(to right,
-        transparent 0%, transparent 20%,
-        var(--accent) 20%, var(--accent) 45%,
-        transparent 45%);
     min-width: 200px;
+}
+.waterfall-bar {
+    height: 12px;
+    background: var(--accent);
+    border-radius: 2px;
+    margin-top: 2px;
 }
 .network-side {
     width: 380px;
     border-left: 1px solid var(--border);
     display: flex;
     flex-direction: column;
+    flex-shrink: 0;
+    background: var(--bg-surface);
 }
 .net-side-tabs {
     display: flex;
     border-bottom: 1px solid var(--border);
     height: 24px;
     flex-shrink: 0;
+    background: var(--bg-base);
+}
+.net-side-tab {
+    padding: 0 10px;
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+    color: var(--fg-dim);
+    font-size: 11px;
+}
+.net-side-tab.active { color: var(--fg); background: var(--bg-surface); position: relative; }
+.net-side-tab.active::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: var(--tab-active-border);
 }
 .net-side-body { flex: 1; overflow: auto; padding: 8px 12px; }
 .net-section { margin-bottom: 12px; }
 .net-section-header {
     font-size: 11px;
-    color: var(--fg-dim);
+    color: var(--fg);
     text-transform: uppercase;
     padding: 4px 0;
     border-bottom: 1px solid var(--border);
     margin-bottom: 4px;
+    font-weight: 500;
 }
 .net-kv {
     font-family: 'Consolas', monospace;
     font-size: 11px;
-    line-height: 16px;
+    line-height: 18px;
 }
-.net-kv .k { color: var(--syntax-attr-name); }
+.net-kv .k { color: var(--syntax-prop); }
 .net-kv .v { color: var(--fg); }
 
 /* ============================================
-   PERFORMANCE PANEL
+   PERFORMANCE (Vykon)
    ============================================ */
-.performance {
-    flex-direction: column;
-}
+.performance { flex-direction: column; }
 .perf-toolbar {
-    padding: 6px 8px;
+    padding: 4px 8px;
     border-bottom: 1px solid var(--border);
     display: flex;
-    gap: 8px;
+    gap: 4px;
     align-items: center;
+    height: 28px;
+    background: var(--bg-elev1);
 }
 .perf-body { flex: 1; overflow: auto; padding: 8px; }
 .metric-card {
     display: inline-block;
     background: var(--bg-elev1);
     border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 10px 16px;
+    border-radius: 4px;
+    padding: 8px 14px;
     margin: 4px;
-    min-width: 140px;
+    min-width: 130px;
 }
-.metric-card .label { color: var(--fg-dim); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
-.metric-card .value { font-size: 20px; color: var(--fg); font-weight: 500; padding-top: 2px; }
+.metric-card .label { color: var(--fg-dim); font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
+.metric-card .value { font-size: 22px; color: var(--fg); font-weight: 500; padding-top: 2px; }
 .metric-card .unit { color: var(--fg-muted); font-size: 11px; padding-left: 4px; }
 .chart-placeholder {
     height: 200px;
     background: var(--bg-elev1);
-    border-radius: 6px;
-    margin: 12px 4px;
+    border-radius: 4px;
+    margin: 8px 4px;
     display: flex;
     align-items: end;
-    padding: 12px;
+    padding: 8px;
     gap: 2px;
+    border: 1px solid var(--border);
 }
 .chart-bar {
     flex: 1;
     background: var(--accent);
     border-radius: 2px 2px 0 0;
-    opacity: 0.8;
+    opacity: 0.85;
 }
 .flame-row {
     display: flex;
@@ -757,7 +1196,7 @@ html, body {
 .flame-cell {
     padding: 2px 8px;
     background: var(--accent);
-    color: var(--bg);
+    color: #fff;
     font-size: 10px;
     font-family: 'Consolas', monospace;
     border-radius: 2px;
@@ -765,23 +1204,22 @@ html, body {
     white-space: nowrap;
     text-overflow: ellipsis;
 }
-.flame-cell.scripting { background: #fbbc04; }
-.flame-cell.rendering { background: #34a853; }
-.flame-cell.painting { background: #ea4335; }
-.flame-cell.system { background: var(--fg-muted); }
+.flame-cell.scripting { background: var(--warn); color: var(--bg-base); }
+.flame-cell.rendering { background: var(--ok); color: #fff; }
+.flame-cell.painting { background: var(--error); color: #fff; }
+.flame-cell.system { background: var(--fg-muted); color: var(--bg-base); }
 
 /* ============================================
-   APPLICATION PANEL
+   APPLICATION (Uloziste)
    ============================================ */
-.application {
-    flex-direction: row;
-}
+.application { flex-direction: row; }
 .app-tree {
     width: 220px;
     border-right: 1px solid var(--border);
     overflow: auto;
     flex-shrink: 0;
     padding: 4px 0;
+    background: var(--bg-surface);
 }
 .app-tree .section { padding: 4px 0; }
 .app-tree .section-header {
@@ -798,24 +1236,32 @@ html, body {
     display: flex;
     align-items: center;
     gap: 4px;
+    color: var(--fg);
 }
 .app-item:hover { background: var(--bg-elev1); }
-.app-item.active { background: var(--selection); }
+.app-item.active { background: var(--accent); color: #fff; }
 .app-item .icon {
-    width: 14px;
-    height: 14px;
-    background: var(--fg-dim);
-    border-radius: 2px;
-    opacity: 0.6;
+    width: 12px;
+    height: 12px;
+    background: currentColor;
+    opacity: 0.5;
     flex-shrink: 0;
 }
 .app-body { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
 .app-data-toolbar {
     display: flex;
-    gap: 6px;
-    padding: 6px 8px;
+    gap: 4px;
+    padding: 4px 8px;
     border-bottom: 1px solid var(--border);
     align-items: center;
+    height: 28px;
+    background: var(--bg-elev1);
+}
+.app-data-toolbar .origin {
+    color: var(--fg-dim);
+    font-size: 11px;
+    font-family: 'Consolas', monospace;
+    margin-right: 8px;
 }
 .app-table-container { flex: 1; overflow: auto; }
 .app-table {
@@ -830,7 +1276,7 @@ html, body {
     background: var(--bg-elev1);
     color: var(--fg-dim);
     border-bottom: 1px solid var(--border);
-    font-weight: normal;
+    font-weight: 500;
     position: sticky;
     top: 0;
 }
@@ -843,176 +1289,336 @@ html, body {
 }
 .app-table tr:hover td { background: var(--bg-elev1); }
 
-/* Scrollbar styling */
+/* Scrollbar */
 ::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-track { background: var(--bg); }
-::-webkit-scrollbar-thumb { background: var(--bg-elev2); border-radius: 4px; }
+::-webkit-scrollbar-track { background: var(--bg-base); }
+::-webkit-scrollbar-thumb { background: var(--bg-elev3); border-radius: 4px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
 
 </style>
 </head>
 <body>
 
-<!-- ===========================================================
-     PAGE AREA (mockup pro context - jak by vypadala stranka)
-     =========================================================== -->
+<!-- Page area -->
 <div class="page-area">
     <h1>Mock Page</h1>
-    <p>Toto je stranka. DevTools mockup zobrazuje vsechny panely + sub-views.</p>
-    <button>Click me</button>
+    <p>Toto je stranka. DevTools mockup pres Firefox-like 3-column splittable layout.</p>
+    <button>Tlacitko</button>
     <div id="counter">Counter: 42</div>
 </div>
 
-<!-- ===========================================================
-     DEVTOOLS PANEL
-     =========================================================== -->
+<!-- DevTools -->
 <div class="devtools">
     <div class="resize-grip"></div>
     <div class="tab-strip">
         <div class="left">
-            <div class="tab active" data-panel="elements"><span class="tab-icon"></span>Elements</div>
-            <div class="tab" data-panel="console"><span class="tab-icon"></span>Console</div>
-            <div class="tab" data-panel="sources"><span class="tab-icon"></span>Sources</div>
-            <div class="tab" data-panel="network"><span class="tab-icon"></span>Network</div>
-            <div class="tab" data-panel="performance"><span class="tab-icon"></span>Performance</div>
-            <div class="tab" data-panel="application"><span class="tab-icon"></span>Application</div>
+            <div class="tab active" data-panel="inspector">▣ Pruzkumnik</div>
+            <div class="tab" data-panel="console">▢ Konzole</div>
+            <div class="tab" data-panel="debugger">▶ Debugger</div>
+            <div class="tab" data-panel="network">↑ Sit</div>
+            <div class="tab" data-panel="style-editor">≡ Editor stylu</div>
+            <div class="tab" data-panel="performance">⌃ Vykon</div>
+            <div class="tab" data-panel="memory">⊟ Pamet</div>
+            <div class="tab" data-panel="application">⛁ Uloziste</div>
+            <div class="tab" data-panel="accessibility">⌖ Pristupnost</div>
+            <div class="tab" data-panel="app-info">⊡ Aplikace</div>
         </div>
         <div class="right">
-            <button class="toolbar-btn" title="Inspect (Ctrl+Shift+C)">⊕</button>
-            <button class="toolbar-btn" title="Device toolbar">▢</button>
-            <button class="toolbar-btn" title="Settings">⚙</button>
-            <button class="toolbar-btn close-btn" title="Close">×</button>
+            <button class="toolbar-btn" title="Responzivni navrh">⊟</button>
+            <button class="toolbar-btn" title="Nastaveni">⚙</button>
+            <button class="toolbar-btn" title="Vice">⋯</button>
+            <button class="toolbar-btn close-btn" title="Zavrit">×</button>
         </div>
     </div>
 
     <div class="panel-body">
 
-        <!-- ELEMENTS -->
-        <div class="panel elements active">
-            <div class="elements-tree-pane">
-                <div class="dom-tree">
-                    <div class="dom-node"><span class="toggle">▼</span><span class="tok-tag">&lt;!DOCTYPE html&gt;</span></div>
-                    <div class="dom-node"><span class="toggle">▼</span><span class="tok-tag">&lt;html</span> <span class="tok-attr-name">lang</span>=<span class="tok-attr-value">"en"</span><span class="tok-tag">&gt;</span></div>
-                    <div class="dom-node" style="padding-left: 16px"><span class="toggle">▼</span><span class="tok-tag">&lt;head&gt;</span></div>
-                    <div class="dom-node" style="padding-left: 32px"><span class="toggle">·</span><span class="tok-tag">&lt;meta</span> <span class="tok-attr-name">charset</span>=<span class="tok-attr-value">"UTF-8"</span><span class="tok-tag">&gt;</span></div>
-                    <div class="dom-node" style="padding-left: 32px"><span class="toggle">▼</span><span class="tok-tag">&lt;title&gt;</span></div>
-                    <div class="dom-node" style="padding-left: 48px"><span class="tok-text">Mock Page</span></div>
-                    <div class="dom-node" style="padding-left: 32px"><span class="tok-tag">&lt;/title&gt;</span></div>
-                    <div class="dom-node" style="padding-left: 32px"><span class="toggle">▶</span><span class="tok-tag">&lt;style&gt;</span> <span class="tok-comment">...</span> <span class="tok-tag">&lt;/style&gt;</span></div>
-                    <div class="dom-node" style="padding-left: 16px"><span class="tok-tag">&lt;/head&gt;</span></div>
-                    <div class="dom-node" style="padding-left: 16px"><span class="toggle">▼</span><span class="tok-tag">&lt;body&gt;</span></div>
-                    <div class="dom-node" style="padding-left: 32px"><span class="toggle">▼</span><span class="tok-tag">&lt;div</span> <span class="tok-attr-name">class</span>=<span class="tok-attr-value">"page-area"</span><span class="tok-tag">&gt;</span></div>
-                    <div class="dom-node selected" style="padding-left: 48px"><span class="toggle">▼</span><span class="tok-tag">&lt;h1&gt;</span><span class="tok-text">Mock Page</span><span class="tok-tag">&lt;/h1&gt;</span></div>
-                    <div class="dom-node" style="padding-left: 48px"><span class="toggle">▼</span><span class="tok-tag">&lt;p&gt;</span><span class="tok-text">Toto je stranka...</span><span class="tok-tag">&lt;/p&gt;</span></div>
-                    <div class="dom-node" style="padding-left: 48px"><span class="toggle">·</span><span class="tok-tag">&lt;button&gt;</span><span class="tok-text">Click me</span><span class="tok-tag">&lt;/button&gt;</span></div>
-                    <div class="dom-node" style="padding-left: 48px"><span class="toggle">▼</span><span class="tok-tag">&lt;div</span> <span class="tok-attr-name">id</span>=<span class="tok-attr-value">"counter"</span><span class="tok-tag">&gt;</span><span class="tok-text">Counter: 42</span><span class="tok-tag">&lt;/div&gt;</span></div>
-                    <div class="dom-node" style="padding-left: 32px"><span class="tok-tag">&lt;/div&gt;</span></div>
-                    <div class="dom-node" style="padding-left: 32px"><span class="toggle">▶</span><span class="tok-tag">&lt;div</span> <span class="tok-attr-name">class</span>=<span class="tok-attr-value">"devtools"</span><span class="tok-tag">&gt;</span></div>
-                    <div class="dom-node" style="padding-left: 16px"><span class="tok-tag">&lt;/body&gt;</span></div>
-                    <div class="dom-node"><span class="tok-tag">&lt;/html&gt;</span></div>
-                </div>
+        <!-- INSPECTOR (Pruzkumnik) -->
+        <div class="panel inspector active">
+            <div class="inspector-toolbar">
+                <button class="toolbar-btn" title="Inspect (Ctrl+Shift+C)">⊕</button>
+                <button class="toolbar-btn" title="Vybrat barvu">🎨</button>
+                <input class="dom-search-input" placeholder="Hledat HTML">
+                <span style="flex:1"></span>
+                <button class="toolbar-btn" title="Pridat node">+</button>
+                <button class="toolbar-btn" title="Vice">⋮</button>
             </div>
-            <div class="elements-side-pane">
-                <div class="side-tabs">
-                    <div class="side-tab active" data-side="styles">Styles</div>
-                    <div class="side-tab" data-side="computed">Computed</div>
-                    <div class="side-tab" data-side="boxmodel">Box</div>
-                    <div class="side-tab" data-side="events">Events</div>
-                    <div class="side-tab" data-side="breakpoints">DOM BP</div>
-                </div>
-                <div class="side-body" data-side-body="styles">
-                    <div class="styles-section">
-                        <div class="styles-section-header">
-                            element.style { }
-                            <span class="toolbar-btn" title="Add rule">+</span>
-                        </div>
-                        <div class="style-rule">
-                            <div class="style-add">+ Click to add property</div>
-                        </div>
-                    </div>
-                    <div class="styles-section">
-                        <div class="styles-section-header">Matched CSS Rules</div>
-                        <div class="style-rule">
-                            <span class="selector">h1</span> <span class="source">style:64</span>
-                            <div>{</div>
-                            <div class="decl"><span class="check">✓</span><span class="prop">margin</span>: <span class="val">0 0 8px</span>;</div>
-                            <div>}</div>
-                        </div>
-                        <div class="style-rule">
-                            <span class="selector">.page-area h1</span> <span class="source">user agent</span>
-                            <div>{</div>
-                            <div class="decl"><span class="check">✓</span><span class="prop">font-size</span>: <span class="val">2em</span>;</div>
-                            <div class="decl"><span class="check">✓</span><span class="prop">font-weight</span>: <span class="val">bold</span>;</div>
-                            <div class="decl disabled"><span class="check">✗</span><span class="prop">color</span>: <span class="val">red</span>;</div>
-                            <div>}</div>
-                        </div>
-                    </div>
-                    <div class="styles-section">
-                        <div class="styles-section-header">Inherited from body</div>
-                        <div class="style-rule">
-                            <span class="selector">body</span> <span class="source">style:38</span>
-                            <div>{</div>
-                            <div class="decl"><span class="check">✓</span><span class="prop">font-family</span>: <span class="val">'Segoe UI', sans-serif</span>;</div>
-                            <div>}</div>
-                        </div>
+            <div class="inspector-body">
+                <!-- LEFT: DOM tree -->
+                <div class="dom-pane">
+                    <div class="dom-tree">
+                        <div class="dom-node"><span class="toggle">▼</span><span class="tok-tag">&lt;!DOCTYPE html&gt;</span></div>
+                        <div class="dom-node"><span class="toggle">▼</span><span class="tok-tag">&lt;html</span> <span class="tok-attr-name">lang</span>=<span class="tok-attr-value">"cs"</span><span class="tok-tag">&gt;</span></div>
+                        <div class="dom-node" style="padding-left: 22px"><span class="toggle">▶</span><span class="tok-tag">&lt;head&gt;</span></div>
+                        <div class="dom-node" style="padding-left: 22px"><span class="toggle">▼</span><span class="tok-tag">&lt;body&gt;</span></div>
+                        <div class="dom-node" style="padding-left: 38px"><span class="toggle">▼</span><span class="tok-tag">&lt;div</span> <span class="tok-attr-name">class</span>=<span class="tok-attr-value">"page-area"</span><span class="tok-tag">&gt;</span></div>
+                        <div class="dom-node selected" style="padding-left: 54px"><span class="toggle">▼</span><span class="tok-tag">&lt;h1&gt;</span><span class="tok-text">Mock Page</span><span class="tok-tag">&lt;/h1&gt;</span></div>
+                        <div class="dom-node" style="padding-left: 54px"><span class="toggle">▼</span><span class="tok-tag">&lt;p&gt;</span><span class="tok-text">Toto je stranka...</span><span class="tok-tag">&lt;/p&gt;</span></div>
+                        <div class="dom-node" style="padding-left: 54px"><span class="toggle">·</span><span class="tok-tag">&lt;button&gt;</span><span class="tok-text">Tlacitko</span><span class="tok-tag">&lt;/button&gt;</span><span class="event-badge">event</span></div>
+                        <div class="dom-node" style="padding-left: 54px"><span class="toggle">▼</span><span class="tok-tag">&lt;div</span> <span class="tok-attr-name">id</span>=<span class="tok-attr-value">"counter"</span><span class="tok-tag">&gt;</span><span class="tok-text">Counter: 42</span><span class="tok-tag">&lt;/div&gt;</span></div>
+                        <div class="dom-node" style="padding-left: 38px"><span class="tok-tag">&lt;/div&gt;</span></div>
+                        <div class="dom-node" style="padding-left: 38px"><span class="toggle">▶</span><span class="tok-tag">&lt;div</span> <span class="tok-attr-name">class</span>=<span class="tok-attr-value">"devtools"</span><span class="tok-tag">&gt;</span></div>
+                        <div class="dom-node" style="padding-left: 22px"><span class="tok-tag">&lt;/body&gt;</span></div>
+                        <div class="dom-node"><span class="tok-tag">&lt;/html&gt;</span></div>
                     </div>
                 </div>
-                <div class="side-body" data-side-body="computed" style="display:none">
-                    <input class="computed-filter" placeholder="Filter">
-                    <div class="computed-list">
-                        <div class="computed-prop"><span class="name">color</span><span class="val">rgb(51, 51, 51)</span></div>
-                        <div class="computed-prop"><span class="name">display</span><span class="val">block</span></div>
-                        <div class="computed-prop"><span class="name">font-family</span><span class="val">'Segoe UI', sans-serif</span></div>
-                        <div class="computed-prop"><span class="name">font-size</span><span class="val">32px</span></div>
-                        <div class="computed-prop"><span class="name">font-weight</span><span class="val">700</span></div>
-                        <div class="computed-prop"><span class="name">height</span><span class="val">36px</span></div>
-                        <div class="computed-prop"><span class="name">line-height</span><span class="val">38.4px</span></div>
-                        <div class="computed-prop"><span class="name">margin-bottom</span><span class="val">8px</span></div>
-                        <div class="computed-prop"><span class="name">margin-top</span><span class="val">0px</span></div>
-                        <div class="computed-prop"><span class="name">padding</span><span class="val">0px</span></div>
-                        <div class="computed-prop"><span class="name">width</span><span class="val">1264px</span></div>
+
+                <!-- SPLITTER -->
+                <div class="vsplitter" id="splitter-styles"></div>
+
+                <!-- MIDDLE: Styles -->
+                <div class="styles-pane">
+                    <div class="styles-header">
+                        <input class="styles-filter" placeholder="Filtrovat styly">
+                        <span class="styles-pseudo-toggle" title="Pseudo-classes">:hov</span>
+                        <span class="styles-pseudo-toggle" title="Class list">.cls</span>
+                        <button class="toolbar-btn" title="Pridat pravidlo">+</button>
+                        <button class="toolbar-btn" title="Light theme">☼</button>
+                        <button class="toolbar-btn" title="Print preview">⎙</button>
+                    </div>
+                    <div class="styles-body">
+                        <div class="styles-section">
+                            <div class="style-rule">
+                                <span class="selector">element <span class="style-rule-bracket">{</span></span>
+                                <div class="style-add">+ Klikni pro pridani vlastnosti</div>
+                                <span class="style-rule-bracket">}</span>
+                            </div>
+                        </div>
+                        <div class="style-rule">
+                            <span class="selector">h1</span> <span class="style-rule-bracket">{</span>
+                            <span class="source">page.html:64</span>
+                            <div class="decl"><input type="checkbox" checked><span class="prop">margin</span>: <span class="val">0 0 8px</span>;</div>
+                            <div class="style-add">+</div>
+                            <span class="style-rule-bracket">}</span>
+                        </div>
+                        <div class="style-rule">
+                            <span class="selector">.page-area h1</span> <span class="style-rule-bracket">{</span>
+                            <span class="source">user agent</span>
+                            <div class="decl"><input type="checkbox" checked><span class="prop">font-size</span>: <span class="val">2em</span>;</div>
+                            <div class="decl"><input type="checkbox" checked><span class="prop">font-weight</span>: <span class="val">bold</span>;</div>
+                            <div class="decl disabled"><input type="checkbox"><span class="prop">color</span>: <span class="val">red</span>;</div>
+                            <span class="style-rule-bracket">}</span>
+                        </div>
+                        <div class="media-line">@media (max-width: 768px) {</div>
+                        <div class="style-rule">
+                            <span class="selector">h1</span> <span class="style-rule-bracket">{</span>
+                            <span class="source">page.html:128</span>
+                            <div class="decl"><input type="checkbox" checked><span class="prop">font-size</span>: <span class="val">24px</span>;</div>
+                            <span class="style-rule-bracket">}</span>
+                        </div>
+                        <div class="media-line">}</div>
+                        <div style="padding: 8px; color: var(--fg-dim); font-size: 11px; border-bottom: 1px solid var(--border);">
+                            Zdedeno z body
+                        </div>
+                        <div class="style-rule">
+                            <span class="selector">body</span> <span class="style-rule-bracket">{</span>
+                            <span class="source">page.html:38</span>
+                            <div class="decl"><input type="checkbox" checked><span class="prop">font-family</span>: <span class="val">-apple-system, BlinkMacSystemFont, "Segoe UI"</span>;</div>
+                            <div class="decl"><input type="checkbox" checked><span class="prop">font-size</span>: <span class="val">14px</span>;</div>
+                            <div class="decl"><input type="checkbox" checked><span class="prop">color</span>: <span class="val">rgb(51, 51, 51)</span>;</div>
+                            <span class="style-rule-bracket">}</span>
+                        </div>
                     </div>
                 </div>
-                <div class="side-body" data-side-body="boxmodel" style="display:none">
-                    <div class="box-model">
-                        <div class="bm-layer bm-margin">
-                            <span class="label">margin</span>
-                            0 — 0 — 8 — 0
-                            <div class="bm-layer bm-border">
-                                <span class="label">border</span>
-                                0 — 0 — 0 — 0
-                                <div class="bm-layer bm-padding">
-                                    <span class="label">padding</span>
-                                    0 — 0 — 0 — 0
-                                    <div class="bm-content">1264 × 36</div>
+
+                <!-- SPLITTER -->
+                <div class="vsplitter" id="splitter-layout"></div>
+
+                <!-- RIGHT: Layout/Computed/Changes/Compat/Fonts/Animations -->
+                <div class="layout-pane" id="layout-pane">
+                    <div class="layout-tabs">
+                        <div class="layout-tabs-inner" id="layout-tabs-inner">
+                            <div class="layout-tab active" data-side="layout">Rozlozeni</div>
+                            <div class="layout-tab" data-side="computed">Vypocitano</div>
+                            <div class="layout-tab" data-side="changes">Zmeny</div>
+                            <div class="layout-tab" data-side="compat">Kompatibilita</div>
+                            <div class="layout-tab" data-side="fonts">Pismo</div>
+                            <div class="layout-tab" data-side="animations">Animace</div>
+                        </div>
+                        <div class="layout-overflow-btn" title="Vice zalozek">▾</div>
+                        <div class="layout-collapse-btn" id="layout-collapse" title="Skryt/rozthranout">»</div>
+                    </div>
+
+                    <!-- LAYOUT -->
+                    <div class="layout-body" data-side-body="layout">
+                        <div class="layout-section">
+                            <div class="layout-section-header">Flexbox</div>
+                            <div class="layout-section-body">
+                                <div class="layout-empty">Pro pokracovani vyberte polozku Flex kontejneru.</div>
+                            </div>
+                        </div>
+                        <div class="layout-section">
+                            <div class="layout-section-header">Grid</div>
+                            <div class="layout-section-body">
+                                <div class="layout-empty">Na teto strance se CSS Grid nepouziva.</div>
+                            </div>
+                        </div>
+                        <div class="layout-section">
+                            <div class="layout-section-header">Model boxu</div>
+                            <div class="layout-section-body">
+                                <div class="box-model">
+                                    <div class="bm-layer bm-margin">
+                                        <span class="label">margin</span>
+                                        <span class="edge top">0</span>
+                                        <span class="edge right">0</span>
+                                        <span class="edge bottom">8</span>
+                                        <span class="edge left">0</span>
+                                        <div class="bm-layer bm-border">
+                                            <span class="label">border</span>
+                                            <span class="edge top">0</span>
+                                            <span class="edge right">0</span>
+                                            <span class="edge bottom">0</span>
+                                            <span class="edge left">0</span>
+                                            <div class="bm-layer bm-padding">
+                                                <span class="label">padding</span>
+                                                <span class="edge top">0</span>
+                                                <span class="edge right">0</span>
+                                                <span class="edge bottom">0</span>
+                                                <span class="edge left">0</span>
+                                                <div class="bm-content">1264 × 36</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div style="text-align: center; color: var(--fg-muted); font-size: 10px; padding-top: 4px;">
+                                    static
+                                </div>
+                            </div>
+                        </div>
+                        <div class="layout-section">
+                            <div class="layout-section-header">Vlastnosti box modelu</div>
+                            <div class="layout-section-body">
+                                <div class="computed-list">
+                                    <div class="computed-prop"><span class="name">box-sizing</span><span class="val">content-box</span></div>
+                                    <div class="computed-prop"><span class="name">display</span><span class="val">block</span></div>
+                                    <div class="computed-prop"><span class="name">float</span><span class="val">none</span></div>
+                                    <div class="computed-prop"><span class="name">line-height</span><span class="val">21px</span></div>
+                                    <div class="computed-prop"><span class="name">position</span><span class="val">static</span></div>
+                                    <div class="computed-prop"><span class="name">z-index</span><span class="val">auto</span></div>
                                 </div>
                             </div>
                         </div>
                     </div>
-                </div>
-                <div class="side-body" data-side-body="events" style="display:none">
-                    <div class="evt-listener">
-                        <div><span class="type">click</span></div>
-                        <div class="handler">function() { ... }</div>
-                        <div class="meta">handler @ inline:142 • bubble • passive</div>
+
+                    <!-- COMPUTED -->
+                    <div class="layout-body" data-side-body="computed" style="display:none">
+                        <input class="computed-filter" placeholder="Filtrovat vlastnosti">
+                        <label style="display:flex; align-items:center; gap:4px; color:var(--fg-dim); font-size:11px; padding: 4px 0;">
+                            <input type="checkbox" checked> Zobrazit prohlizecove styly
+                        </label>
+                        <div class="computed-list">
+                            <div class="computed-prop"><span class="toggle-src">▶</span><span class="name">color</span><span class="val">rgb(51, 51, 51)</span></div>
+                            <div class="computed-prop"><span class="toggle-src">▶</span><span class="name">display</span><span class="val">block</span></div>
+                            <div class="computed-prop"><span class="toggle-src">▶</span><span class="name">font-family</span><span class="val">'Segoe UI', sans-serif</span></div>
+                            <div class="computed-prop"><span class="toggle-src">▶</span><span class="name">font-size</span><span class="val">32px</span></div>
+                            <div class="computed-prop"><span class="toggle-src">▶</span><span class="name">font-weight</span><span class="val">700</span></div>
+                            <div class="computed-prop"><span class="toggle-src">▶</span><span class="name">height</span><span class="val">36px</span></div>
+                            <div class="computed-prop"><span class="toggle-src">▶</span><span class="name">line-height</span><span class="val">38.4px</span></div>
+                            <div class="computed-prop"><span class="toggle-src">▶</span><span class="name">margin-bottom</span><span class="val">8px</span></div>
+                            <div class="computed-prop"><span class="toggle-src">▶</span><span class="name">margin-top</span><span class="val">0px</span></div>
+                            <div class="computed-prop"><span class="toggle-src">▶</span><span class="name">padding</span><span class="val">0px</span></div>
+                            <div class="computed-prop"><span class="toggle-src">▶</span><span class="name">width</span><span class="val">1264px</span></div>
+                        </div>
                     </div>
-                    <div class="evt-listener">
-                        <div><span class="type">mouseenter</span></div>
-                        <div class="handler">handleHover</div>
-                        <div class="meta">script.js:89 • bubble</div>
+
+                    <!-- CHANGES -->
+                    <div class="layout-body" data-side-body="changes" style="display:none">
+                        <button class="copy-btn">Kopirovat vse</button>
+                        <div style="clear: both"></div>
+                        <div class="changes-list">
+                            <div class="change-rule">
+                                <span class="sel">h1</span> {
+                                <div class="change-decl added">color: blue;</div>
+                                <div class="change-decl removed">color: red;</div>
+                                }
+                            </div>
+                            <div class="change-rule">
+                                <span class="sel">button</span> {
+                                <div class="change-decl added">padding: 8px 16px;</div>
+                                }
+                            </div>
+                        </div>
                     </div>
-                </div>
-                <div class="side-body" data-side-body="breakpoints" style="display:none">
-                    <div style="color:var(--fg-dim); padding:8px 0; font-size:11px;">DOM Breakpoints</div>
-                    <div class="bp-row">
-                        <input type="checkbox" checked>
-                        <span>subtree modified</span>
-                        <span class="loc">div#counter</span>
+
+                    <!-- COMPAT -->
+                    <div class="layout-body" data-side-body="compat" style="display:none">
+                        <div style="color: var(--fg-dim); font-size: 11px; padding-bottom: 8px;">
+                            Vlastnosti nekompatibilni s aspon jednim prohlizecem:
+                        </div>
+                        <div class="compat-prop">
+                            <span class="name">backdrop-filter</span>
+                            <div class="browsers">
+                                <span class="compat-browser supported">Chrome 76+</span>
+                                <span class="compat-browser supported">Firefox 103+</span>
+                                <span class="compat-browser partial">Safari 9+ (-webkit-)</span>
+                            </div>
+                        </div>
+                        <div class="compat-prop">
+                            <span class="name">aspect-ratio</span>
+                            <div class="browsers">
+                                <span class="compat-browser supported">Chrome 88+</span>
+                                <span class="compat-browser supported">Firefox 89+</span>
+                                <span class="compat-browser supported">Safari 15+</span>
+                            </div>
+                        </div>
+                        <div class="compat-prop">
+                            <span class="name">@scope</span>
+                            <div class="browsers">
+                                <span class="compat-browser supported">Chrome 118+</span>
+                                <span class="compat-browser unsupported">Firefox: NE</span>
+                                <span class="compat-browser supported">Safari 17.4+</span>
+                            </div>
+                        </div>
                     </div>
-                    <div class="bp-row">
-                        <input type="checkbox">
-                        <span>attribute modified</span>
-                        <span class="loc">button</span>
+
+                    <!-- FONTS -->
+                    <div class="layout-body" data-side-body="fonts" style="display:none">
+                        <div style="color: var(--fg-dim); font-size: 11px; padding-bottom: 8px;">
+                            Pisma pouzita pro tento element:
+                        </div>
+                        <div class="font-card">
+                            <div class="preview">Abeceda 0123</div>
+                            <div class="family">Segoe UI</div>
+                            <div class="meta">System • 700 weight • normal style • Latin subset</div>
+                        </div>
+                        <div class="font-card">
+                            <div class="preview" style="font-family: 'Consolas', monospace;">code{font}123</div>
+                            <div class="family">Consolas</div>
+                            <div class="meta">System • 400 weight • normal style</div>
+                        </div>
+                    </div>
+
+                    <!-- ANIMATIONS -->
+                    <div class="layout-body" data-side-body="animations" style="display:none">
+                        <div class="anim-controls">
+                            <button class="toolbar-btn" title="Pause/play">▶</button>
+                            <button class="toolbar-btn" title="Restart">⟲</button>
+                            <select style="background: var(--bg-elev2); color: var(--fg); border: 1px solid var(--border-strong); padding: 2px; font-size: 11px;">
+                                <option>100%</option>
+                                <option>50%</option>
+                                <option>25%</option>
+                                <option>10%</option>
+                            </select>
+                        </div>
+                        <div class="anim-timeline">
+                            <div class="anim-row">
+                                <div class="anim-name">slide-in</div>
+                                <div class="anim-bar"><div class="anim-bar-fill" style="left: 0%; width: 40%;"></div></div>
+                            </div>
+                            <div class="anim-row">
+                                <div class="anim-name">fade</div>
+                                <div class="anim-bar"><div class="anim-bar-fill" style="left: 20%; width: 50%;"></div></div>
+                            </div>
+                            <div class="anim-row">
+                                <div class="anim-name">pulse</div>
+                                <div class="anim-bar"><div class="anim-bar-fill" style="left: 30%; width: 70%; background: linear-gradient(to right, var(--warn), var(--error));"></div></div>
+                            </div>
+                        </div>
+                        <div style="font-size: 11px; color: var(--fg-dim);">
+                            <div><strong style="color: var(--fg)">slide-in</strong> · 600ms ease-out · infinite</div>
+                            <div><strong style="color: var(--fg)">fade</strong> · 1200ms linear · 2 iterations</div>
+                            <div><strong style="color: var(--fg)">pulse</strong> · 800ms ease-in-out · forwards</div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -1021,52 +1627,43 @@ html, body {
         <!-- CONSOLE -->
         <div class="panel console">
             <div class="console-toolbar">
-                <button class="toolbar-btn" title="Clear">⌫</button>
-                <input class="console-filter-input" placeholder="Filter">
-                <button class="level-toggle active">All</button>
-                <button class="level-toggle">Errors</button>
-                <button class="level-toggle">Warnings</button>
+                <button class="toolbar-btn" title="Vymazat">⌫</button>
+                <input class="console-filter-input" placeholder="Filtrovat zaznamy">
+                <button class="level-toggle active">Vsechny</button>
+                <button class="level-toggle">Chyby</button>
+                <button class="level-toggle">Upozorneni</button>
                 <button class="level-toggle">Info</button>
+                <button class="level-toggle">Debug</button>
+                <span style="flex:1"></span>
+                <button class="toolbar-btn" title="Nastaveni">⚙</button>
             </div>
             <div class="console-log">
                 <div class="log-entry log">
-                    Page loaded successfully <span class="log-source">page.html:1</span>
+                    Stranka uspesne nactena <span class="log-source">page.html:1</span>
                 </div>
                 <div class="log-entry info">
                     User clicked button <span class="log-source">script.js:42</span>
                 </div>
-                <div class="log-input">
-                    document.querySelector('h1')
-                </div>
+                <div class="log-input">document.querySelector('h1')</div>
                 <div class="log-entry log log-result">
                     <span class="obj-toggle">▶</span>&lt;h1&gt;Mock Page&lt;/h1&gt;
                 </div>
                 <div class="log-entry warn">
                     Deprecation warning: <code>document.cookie</code> sync access <span class="log-source">page.html:33</span>
                 </div>
-                <div class="log-input">
-                    counter + 1
-                </div>
+                <div class="log-input">counter + 1</div>
                 <div class="log-entry log log-result">
                     <span class="obj-number">43</span>
                 </div>
                 <div class="log-entry error">
                     Uncaught TypeError: undefined is not a function
-                    <div style="padding-left: 14px; color: var(--fg-muted); font-size: 10px;">
+                    <div style="padding-left: 14px; color: var(--fg-muted); font-size: 10px; margin-top: 2px;">
                         at script.js:88<br>
                         at HTMLButtonElement.onclick (page.html:24)
                     </div>
                     <span class="log-source">script.js:88</span>
                 </div>
-                <div class="log-input">
-                    [1, 2, 3].map(x => x * 2)
-                </div>
-                <div class="log-entry log log-result">
-                    <span class="obj-toggle">▶</span><span>Array(3)</span> <span class="obj-keyword">[2, 4, 6]</span>
-                </div>
-                <div class="log-input">
-                    JSON.parse('{"a": 1, "b": [true, null]}')
-                </div>
+                <div class="log-input">JSON.parse('{"a": 1, "b": [true, null]}')</div>
                 <div class="log-entry log log-result">
                     <div><span class="obj-toggle">▼</span><span class="obj-keyword">Object</span> {</div>
                     <div class="obj-children">
@@ -1077,29 +1674,28 @@ html, body {
                 </div>
             </div>
             <div class="console-prompt">
-                <input placeholder="Enter JavaScript expression...">
+                <input placeholder="Zadejte JS vyraz...">
             </div>
         </div>
 
-        <!-- SOURCES -->
-        <div class="panel sources">
+        <!-- DEBUGGER -->
+        <div class="panel debugger">
             <div class="sources-tree">
                 <div class="file-section">
-                    <div class="file-section-header">▼ Page (3)</div>
+                    <div class="file-section-header">▾ Stranka (3)</div>
                     <div class="file-item">index.html<span class="badge">1</span></div>
                     <div class="file-item active">script.js</div>
                     <div class="file-item">styles.css</div>
                 </div>
                 <div class="file-section">
-                    <div class="file-section-header">▶ Workers (1)</div>
+                    <div class="file-section-header">▸ Pracovni vlakna (1)</div>
                 </div>
                 <div class="file-section">
-                    <div class="file-section-header">▶ External (5)</div>
+                    <div class="file-section-header">▸ Externi (5)</div>
                 </div>
                 <div class="file-section">
-                    <div class="file-section-header">▼ Snippets</div>
+                    <div class="file-section-header">▾ Sniptety</div>
                     <div class="file-item">helper.js</div>
-                    <div class="file-item">debug-utils.js</div>
                 </div>
             </div>
             <div class="sources-main">
@@ -1118,20 +1714,18 @@ html, body {
                     <div class="source-line"><div class="gutter">8</div><div class="code-line">  counter.textContent = <span class="str">'Counter: '</span> + count;</div></div>
                     <div class="source-line"><div class="gutter">9</div><div class="code-line">  console.log(<span class="str">'New count:'</span>, count);</div></div>
                     <div class="source-line"><div class="gutter">10</div><div class="code-line">}</div></div>
-                    <div class="source-line"><div class="gutter">11</div><div class="code-line"></div></div>
-                    <div class="source-line"><div class="gutter">12</div><div class="code-line">document.querySelector(<span class="str">'button'</span>).addEventListener(<span class="str">'click'</span>, increment);</div></div>
                 </div>
             </div>
             <div class="sources-right">
                 <div class="debug-toolbar">
-                    <button class="toolbar-btn" title="Resume (F8)">▶</button>
-                    <button class="toolbar-btn" title="Step over (F10)">⇣</button>
-                    <button class="toolbar-btn" title="Step into (F11)">↳</button>
-                    <button class="toolbar-btn" title="Step out (Shift+F11)">↲</button>
-                    <button class="toolbar-btn" title="Deactivate breakpoints">⏸</button>
+                    <button class="toolbar-btn" title="Pokracovat (F8)">▶</button>
+                    <button class="toolbar-btn" title="Krok pres (F10)">⇣</button>
+                    <button class="toolbar-btn" title="Krok do (F11)">↳</button>
+                    <button class="toolbar-btn" title="Krok ven (Shift+F11)">↲</button>
+                    <button class="toolbar-btn" title="Deaktivovat breakpoints">⏸</button>
                 </div>
                 <div class="debug-section">
-                    <div class="debug-section-header">Call Stack<span class="count">(2)</span></div>
+                    <div class="debug-section-header">Zasobnik volani <span class="count">(2)</span></div>
                     <div class="debug-body">
                         <div class="stack-frame active">
                             <div class="fn">increment</div>
@@ -1144,28 +1738,22 @@ html, body {
                     </div>
                 </div>
                 <div class="debug-section">
-                    <div class="debug-section-header">Scope</div>
+                    <div class="debug-section-header">Rozsah</div>
                     <div class="debug-body">
-                        <div class="scope-row"><span class="name">Local</span></div>
+                        <div class="scope-row"><span class="name">Lokalni</span></div>
                         <div class="scope-row" style="padding-left: 12px"><span class="name">count</span>: <span class="val">42</span></div>
                         <div class="scope-row" style="padding-left: 12px"><span class="name">counter</span>: <span class="val">&lt;div#counter&gt;</span></div>
-                        <div class="scope-row"><span class="name">Global</span></div>
+                        <div class="scope-row"><span class="name">Globalni</span></div>
                         <div class="scope-row" style="padding-left: 12px"><span class="name">window</span>: <span class="val">Window</span></div>
                     </div>
                 </div>
                 <div class="debug-section">
-                    <div class="debug-section-header">Breakpoints<span class="count">(2)</span></div>
-                    <div class="bp-row">
-                        <input type="checkbox" checked>
-                        <span class="loc">script.js:6</span>
-                    </div>
-                    <div class="bp-row">
-                        <input type="checkbox" checked>
-                        <span class="loc">style.css:42</span>
-                    </div>
+                    <div class="debug-section-header">Breakpointy <span class="count">(2)</span></div>
+                    <div class="bp-row"><input type="checkbox" checked><span class="loc">script.js:6</span></div>
+                    <div class="bp-row"><input type="checkbox" checked><span class="loc">script.js:12</span></div>
                 </div>
                 <div class="debug-section">
-                    <div class="debug-section-header">Watch<span class="count">(1)</span></div>
+                    <div class="debug-section-header">Vyrazy ke sledovani <span class="count">(1)</span></div>
                     <div class="debug-body">
                         <div class="scope-row"><span class="name">count + 1</span>: <span class="val">43</span></div>
                     </div>
@@ -1173,30 +1761,32 @@ html, body {
             </div>
         </div>
 
-        <!-- NETWORK -->
+        <!-- NETWORK (Sit) -->
         <div class="panel network">
             <div class="network-toolbar">
-                <button class="toolbar-btn" title="Record (red)">●</button>
-                <button class="toolbar-btn" title="Clear">⌫</button>
-                <input class="console-filter-input" placeholder="Filter URL, status, method..." style="flex:1; max-width: 280px;">
-                <button class="level-toggle active">All</button>
-                <button class="level-toggle">XHR</button>
-                <button class="level-toggle">JS</button>
+                <button class="toolbar-btn" title="Zaznamenavat">●</button>
+                <button class="toolbar-btn" title="Vymazat">⌫</button>
+                <input class="console-filter-input" placeholder="Filtrovat URL, status, metodu...">
+                <button class="level-toggle active">Vsechny</button>
+                <button class="level-toggle">HTML</button>
                 <button class="level-toggle">CSS</button>
-                <button class="level-toggle">Img</button>
+                <button class="level-toggle">JS</button>
+                <button class="level-toggle">XHR</button>
+                <button class="level-toggle">Obr.</button>
+                <button class="level-toggle">Pisma</button>
             </div>
             <div class="network-main">
                 <div class="network-table-container">
                     <table class="network-table">
                         <thead>
                             <tr>
-                                <th style="width: 30%">Name</th>
+                                <th style="width: 28%">Soubor</th>
                                 <th style="width: 60px">Status</th>
-                                <th style="width: 60px">Method</th>
-                                <th style="width: 80px">Type</th>
-                                <th style="width: 70px">Size</th>
-                                <th style="width: 70px">Time</th>
-                                <th>Waterfall</th>
+                                <th style="width: 60px">Metoda</th>
+                                <th style="width: 80px">Typ</th>
+                                <th style="width: 70px">Velikost</th>
+                                <th style="width: 60px">Cas</th>
+                                <th>Casova osa</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -1204,37 +1794,37 @@ html, body {
                                 <td>index.html</td>
                                 <td class="status-2xx">200</td>
                                 <td>GET</td>
-                                <td>Document</td>
+                                <td>Dokument</td>
                                 <td>4.2 KB</td>
                                 <td>120ms</td>
-                                <td class="waterfall-cell"></td>
+                                <td class="waterfall-cell"><div class="waterfall-bar" style="width: 20%;"></div></td>
                             </tr>
                             <tr>
                                 <td>style.css</td>
                                 <td class="status-2xx">200</td>
                                 <td>GET</td>
-                                <td>Stylesheet</td>
+                                <td>CSS</td>
                                 <td>2.1 KB</td>
                                 <td>45ms</td>
-                                <td class="waterfall-cell" style="background: linear-gradient(to right, transparent 0%, transparent 12%, var(--ok) 12%, var(--ok) 25%, transparent 25%)"></td>
+                                <td class="waterfall-cell"><div class="waterfall-bar" style="margin-left: 15%; width: 8%; background: var(--ok);"></div></td>
                             </tr>
                             <tr>
                                 <td>script.js</td>
                                 <td class="status-2xx">200</td>
                                 <td>GET</td>
-                                <td>Script</td>
+                                <td>JS</td>
                                 <td>8.5 KB</td>
                                 <td>87ms</td>
-                                <td class="waterfall-cell" style="background: linear-gradient(to right, transparent 0%, transparent 13%, var(--accent) 13%, var(--accent) 35%, transparent 35%)"></td>
+                                <td class="waterfall-cell"><div class="waterfall-bar" style="margin-left: 18%; width: 14%;"></div></td>
                             </tr>
                             <tr>
                                 <td>logo.png</td>
                                 <td class="status-2xx">200</td>
                                 <td>GET</td>
-                                <td>Image</td>
+                                <td>Obrazek</td>
                                 <td>32 KB</td>
                                 <td>220ms</td>
-                                <td class="waterfall-cell" style="background: linear-gradient(to right, transparent 0%, transparent 25%, #c58af9 25%, #c58af9 75%, transparent 75%)"></td>
+                                <td class="waterfall-cell"><div class="waterfall-bar" style="margin-left: 30%; width: 36%; background: var(--syntax-keyword);"></div></td>
                             </tr>
                             <tr>
                                 <td>api/users</td>
@@ -1243,16 +1833,16 @@ html, body {
                                 <td>XHR</td>
                                 <td>12 KB</td>
                                 <td>540ms</td>
-                                <td class="waterfall-cell" style="background: linear-gradient(to right, transparent 0%, transparent 35%, var(--accent) 35%, var(--accent) 95%, transparent 95%)"></td>
+                                <td class="waterfall-cell"><div class="waterfall-bar" style="margin-left: 40%; width: 55%;"></div></td>
                             </tr>
                             <tr>
                                 <td>analytics.js</td>
                                 <td class="status-4xx">404</td>
                                 <td>GET</td>
-                                <td>Script</td>
+                                <td>JS</td>
                                 <td>0 B</td>
                                 <td>34ms</td>
-                                <td class="waterfall-cell" style="background: linear-gradient(to right, transparent 0%, transparent 32%, var(--error) 32%, var(--error) 38%, transparent 38%)"></td>
+                                <td class="waterfall-cell"><div class="waterfall-bar" style="margin-left: 36%; width: 6%; background: var(--error);"></div></td>
                             </tr>
                             <tr>
                                 <td>data.json</td>
@@ -1261,41 +1851,40 @@ html, body {
                                 <td>Fetch</td>
                                 <td>0 B</td>
                                 <td>12ms</td>
-                                <td class="waterfall-cell" style="background: linear-gradient(to right, transparent 0%, transparent 50%, var(--warn) 50%, var(--warn) 52%, transparent 52%)"></td>
+                                <td class="waterfall-cell"><div class="waterfall-bar" style="margin-left: 55%; width: 2%; background: var(--warn);"></div></td>
                             </tr>
                         </tbody>
                     </table>
                 </div>
                 <div class="network-side">
                     <div class="net-side-tabs">
-                        <div class="side-tab active">Headers</div>
-                        <div class="side-tab">Preview</div>
-                        <div class="side-tab">Response</div>
-                        <div class="side-tab">Timing</div>
-                        <div class="side-tab">Cookies</div>
+                        <div class="net-side-tab active">Hlavicky</div>
+                        <div class="net-side-tab">Cookies</div>
+                        <div class="net-side-tab">Pozadavek</div>
+                        <div class="net-side-tab">Odpoved</div>
+                        <div class="net-side-tab">Casovani</div>
                     </div>
                     <div class="net-side-body">
                         <div class="net-section">
-                            <div class="net-section-header">General</div>
+                            <div class="net-section-header">Obecne</div>
                             <div class="net-kv">
-                                <div><span class="k">Request URL</span>: <span class="v">https://example.com/index.html</span></div>
-                                <div><span class="k">Request Method</span>: <span class="v">GET</span></div>
-                                <div><span class="k">Status Code</span>: <span class="v status-2xx">200 OK</span></div>
-                                <div><span class="k">Remote Address</span>: <span class="v">93.184.216.34:443</span></div>
+                                <div><span class="k">URL</span>: <span class="v">https://example.com/index.html</span></div>
+                                <div><span class="k">Metoda</span>: <span class="v">GET</span></div>
+                                <div><span class="k">Stav</span>: <span class="v status-2xx">200 OK</span></div>
+                                <div><span class="k">Vzdalena adresa</span>: <span class="v">93.184.216.34:443</span></div>
                             </div>
                         </div>
                         <div class="net-section">
-                            <div class="net-section-header">Response Headers</div>
+                            <div class="net-section-header">Hlavicky odpovedi</div>
                             <div class="net-kv">
                                 <div><span class="k">content-type</span>: <span class="v">text/html; charset=UTF-8</span></div>
                                 <div><span class="k">content-length</span>: <span class="v">4231</span></div>
                                 <div><span class="k">cache-control</span>: <span class="v">max-age=3600</span></div>
                                 <div><span class="k">server</span>: <span class="v">nginx/1.21.6</span></div>
-                                <div><span class="k">date</span>: <span class="v">Mon, 15 May 2026 09:23:14 GMT</span></div>
                             </div>
                         </div>
                         <div class="net-section">
-                            <div class="net-section-header">Request Headers</div>
+                            <div class="net-section-header">Hlavicky pozadavku</div>
                             <div class="net-kv">
                                 <div><span class="k">accept</span>: <span class="v">text/html,*/*</span></div>
                                 <div><span class="k">user-agent</span>: <span class="v">RustWebEngine/0.1</span></div>
@@ -1307,26 +1896,32 @@ html, body {
             </div>
         </div>
 
+        <!-- Style Editor (placeholder) -->
+        <div class="panel" style="flex-direction: column; padding: 20px; color: var(--fg-dim);">
+            <h3 style="color: var(--fg); margin-top: 0;">Editor stylu</h3>
+            <p>Vsechny stylesheets v sloupcich + monospace editor s syntax highlight, save button.</p>
+        </div>
+
         <!-- PERFORMANCE -->
         <div class="panel performance">
             <div class="perf-toolbar">
-                <button class="toolbar-btn" title="Record">●</button>
-                <button class="toolbar-btn" title="Reload + record">↻</button>
-                <button class="toolbar-btn" title="Clear">⌫</button>
-                <span style="color: var(--fg-dim); margin-left: 8px;">2.42s capture</span>
+                <button class="toolbar-btn" title="Zaznamenat">●</button>
+                <button class="toolbar-btn" title="Reload + zaznamenat">↻</button>
+                <button class="toolbar-btn" title="Vymazat">⌫</button>
+                <span style="color: var(--fg-dim); margin-left: 8px;">2.42s zaznam</span>
             </div>
             <div class="perf-body">
-                <h3 style="margin: 4px; font-size: 13px; color: var(--fg-dim);">Metrics</h3>
+                <h3 style="margin: 4px; font-size: 12px; color: var(--fg-dim); text-transform: uppercase;">Metriky</h3>
                 <div class="metric-card">
-                    <div class="label">Documents</div>
+                    <div class="label">Dokumenty</div>
                     <div class="value">1</div>
                 </div>
                 <div class="metric-card">
-                    <div class="label">DOM Nodes</div>
+                    <div class="label">DOM Uzly</div>
                     <div class="value">328</div>
                 </div>
                 <div class="metric-card">
-                    <div class="label">Layout Objects</div>
+                    <div class="label">Layout</div>
                     <div class="value">214</div>
                 </div>
                 <div class="metric-card">
@@ -1334,15 +1929,14 @@ html, body {
                     <div class="value">42</div>
                 </div>
                 <div class="metric-card">
-                    <div class="label">JS Heap Used</div>
+                    <div class="label">JS Heap</div>
                     <div class="value">12<span class="unit">MB</span></div>
                 </div>
                 <div class="metric-card">
                     <div class="label">FPS</div>
                     <div class="value">58<span class="unit">fps</span></div>
                 </div>
-
-                <h3 style="margin: 16px 4px 4px; font-size: 13px; color: var(--fg-dim);">Frame timing</h3>
+                <h3 style="margin: 16px 4px 4px; font-size: 12px; color: var(--fg-dim); text-transform: uppercase;">Casovani snimku</h3>
                 <div class="chart-placeholder">
                     <div class="chart-bar" style="height: 30%"></div>
                     <div class="chart-bar" style="height: 45%"></div>
@@ -1360,8 +1954,7 @@ html, body {
                     <div class="chart-bar" style="height: 35%"></div>
                     <div class="chart-bar" style="height: 50%"></div>
                 </div>
-
-                <h3 style="margin: 16px 4px 4px; font-size: 13px; color: var(--fg-dim);">Call stack (flame)</h3>
+                <h3 style="margin: 16px 4px 4px; font-size: 12px; color: var(--fg-dim); text-transform: uppercase;">Plamen volani</h3>
                 <div style="padding: 8px;">
                     <div class="flame-row">
                         <div class="flame-cell" style="width: 100%;">page load (2412ms)</div>
@@ -1385,77 +1978,69 @@ html, body {
             </div>
         </div>
 
-        <!-- APPLICATION -->
+        <!-- Memory (placeholder) -->
+        <div class="panel" style="flex-direction: column; padding: 20px; color: var(--fg-dim);">
+            <h3 style="color: var(--fg); margin-top: 0;">Pamet</h3>
+            <p>Heap snapshot, allocation timeline, retained size, dominator tree.</p>
+        </div>
+
+        <!-- APPLICATION (Uloziste) -->
         <div class="panel application">
             <div class="app-tree">
                 <div class="section">
-                    <div class="section-header">Storage</div>
-                    <div class="app-item"><span class="icon"></span>Local Storage</div>
-                    <div class="app-item active"><span class="icon"></span>Session Storage</div>
+                    <div class="section-header">Uloziste</div>
+                    <div class="app-item"><span class="icon"></span>Mistni uloziste</div>
+                    <div class="app-item active"><span class="icon"></span>Uloziste relace</div>
                     <div class="app-item"><span class="icon"></span>IndexedDB</div>
-                    <div class="app-item"><span class="icon"></span>Web SQL</div>
                     <div class="app-item"><span class="icon"></span>Cookies</div>
                 </div>
                 <div class="section">
                     <div class="section-header">Cache</div>
                     <div class="app-item"><span class="icon"></span>Cache Storage</div>
-                    <div class="app-item"><span class="icon"></span>Application Cache</div>
                 </div>
                 <div class="section">
-                    <div class="section-header">Background</div>
+                    <div class="section-header">Pozadi</div>
                     <div class="app-item"><span class="icon"></span>Service Workers</div>
                     <div class="app-item"><span class="icon"></span>Manifest</div>
                 </div>
                 <div class="section">
-                    <div class="section-header">Frames</div>
-                    <div class="app-item"><span class="icon"></span>top (1 origin)</div>
+                    <div class="section-header">Ramy</div>
+                    <div class="app-item"><span class="icon"></span>top (1 puvod)</div>
                 </div>
             </div>
             <div class="app-body">
                 <div class="app-data-toolbar">
-                    <span style="color: var(--fg-dim); font-size: 11px;">https://example.com</span>
-                    <button class="toolbar-btn" title="Refresh">↻</button>
-                    <button class="toolbar-btn" title="Clear all">⌫</button>
-                    <button class="toolbar-btn" title="Add">+</button>
-                    <input class="console-filter-input" placeholder="Filter" style="flex:1; max-width: 200px;">
+                    <span class="origin">https://example.com</span>
+                    <button class="toolbar-btn" title="Obnovit">↻</button>
+                    <button class="toolbar-btn" title="Smazat vse">⌫</button>
+                    <button class="toolbar-btn" title="Pridat">+</button>
+                    <input class="console-filter-input" placeholder="Filtrovat" style="max-width: 200px;">
                 </div>
                 <div class="app-table-container">
                     <table class="app-table">
                         <thead>
-                            <tr>
-                                <th style="width: 30%">Key</th>
-                                <th>Value</th>
-                            </tr>
+                            <tr><th style="width: 30%">Klic</th><th>Hodnota</th></tr>
                         </thead>
                         <tbody>
-                            <tr>
-                                <td>user_token</td>
-                                <td>eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...</td>
-                            </tr>
-                            <tr>
-                                <td>preferences</td>
-                                <td>{"theme":"dark","lang":"cs","notifications":true}</td>
-                            </tr>
-                            <tr>
-                                <td>last_visit</td>
-                                <td>2026-05-15T08:32:11Z</td>
-                            </tr>
-                            <tr>
-                                <td>cart_count</td>
-                                <td>3</td>
-                            </tr>
-                            <tr>
-                                <td>session_id</td>
-                                <td>sess_a8b3c9d2e1f4g5h6</td>
-                            </tr>
-                            <tr>
-                                <td>feature_flags</td>
-                                <td>["new-checkout","social-login","beta-ui"]</td>
-                            </tr>
+                            <tr><td>user_token</td><td>eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...</td></tr>
+                            <tr><td>preferences</td><td>{"theme":"dark","lang":"cs"}</td></tr>
+                            <tr><td>last_visit</td><td>2026-05-15T08:32:11Z</td></tr>
+                            <tr><td>cart_count</td><td>3</td></tr>
+                            <tr><td>session_id</td><td>sess_a8b3c9d2e1f4g5h6</td></tr>
                         </tbody>
                     </table>
                 </div>
             </div>
+        </div>
+
+        <!-- Placeholders pro ostatni -->
+        <div class="panel" style="flex-direction: column; padding: 20px; color: var(--fg-dim);">
+            <h3 style="color: var(--fg); margin-top: 0;">Pristupnost</h3>
+            <p>Accessibility tree, role + name + aria attrs visualization, contrast checker.</p>
+        </div>
+        <div class="panel" style="flex-direction: column; padding: 20px; color: var(--fg-dim);">
+            <h3 style="color: var(--fg); margin-top: 0;">Aplikace</h3>
+            <p>Manifest, service workers, push notifications, web app metadata.</p>
         </div>
 
     </div>
@@ -1463,28 +2048,51 @@ html, body {
 
 <script>
 // Tab switching
-document.querySelectorAll('.tab-strip .tab').forEach(tab => {
+const tabs = document.querySelectorAll('.tab-strip .tab');
+const panels = document.querySelectorAll('.panel');
+tabs.forEach((tab, idx) => {
     tab.addEventListener('click', () => {
-        const target = tab.dataset.panel;
-        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        tabs.forEach(t => t.classList.remove('active'));
         tab.classList.add('active');
-        document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
-        document.querySelector('.panel.' + target).classList.add('active');
+        panels.forEach(p => p.classList.remove('active'));
+        const targetClass = tab.dataset.panel;
+        const target = document.querySelector('.panel.' + targetClass) || panels[idx];
+        if (target) target.classList.add('active');
     });
 });
 
-// Side tabs (Elements panel)
-document.querySelectorAll('.side-tab').forEach(t => {
+// Layout pane side tabs
+document.querySelectorAll('.layout-tab').forEach(t => {
     t.addEventListener('click', () => {
         const target = t.dataset.side;
-        if (!target) return;
-        const parent = t.closest('.elements-side-pane');
+        const parent = t.closest('.layout-pane');
         if (!parent) return;
-        parent.querySelectorAll('.side-tab').forEach(x => x.classList.remove('active'));
+        parent.querySelectorAll('.layout-tab').forEach(x => x.classList.remove('active'));
         t.classList.add('active');
-        parent.querySelectorAll('.side-body').forEach(b => {
+        parent.querySelectorAll('.layout-body').forEach(b => {
             b.style.display = b.dataset.sideBody === target ? '' : 'none';
         });
+    });
+});
+
+// Layout collapse toggle
+const layoutPane = document.getElementById('layout-pane');
+const collapseBtn = document.getElementById('layout-collapse');
+collapseBtn.addEventListener('click', () => {
+    layoutPane.classList.toggle('collapsed');
+    collapseBtn.textContent = layoutPane.classList.contains('collapsed') ? '«' : '»';
+});
+
+// Layout sections collapse
+document.querySelectorAll('.layout-section-header').forEach(h => {
+    h.addEventListener('click', () => {
+        h.parentElement.classList.toggle('collapsed');
+    });
+});
+// Debug sections collapse
+document.querySelectorAll('.debug-section-header').forEach(h => {
+    h.addEventListener('click', () => {
+        h.parentElement.classList.toggle('collapsed');
     });
 });
 
@@ -1514,21 +2122,63 @@ document.querySelectorAll('.app-item').forEach(i => {
     });
 });
 
-// Resize grip (basic)
+// Vertical splitters (resize horizontal)
+function setupVSplitter(splitter, leftSel, rightSel) {
+    const left = document.querySelector(leftSel);
+    const right = document.querySelector(rightSel);
+    let dragging = false;
+    let startX = 0;
+    let startLeftW = 0;
+    let startRightW = 0;
+    splitter.style.cursor = 'ew-resize';
+    splitter.addEventListener('mousedown', e => {
+        dragging = true;
+        startX = e.clientX;
+        startLeftW = left.getBoundingClientRect().width;
+        startRightW = right.getBoundingClientRect().width;
+        document.body.style.cursor = 'ew-resize';
+        e.preventDefault();
+    });
+    document.addEventListener('mousemove', e => {
+        if (!dragging) return;
+        const delta = e.clientX - startX;
+        const newLeft = Math.max(120, startLeftW + delta);
+        const newRight = Math.max(120, startRightW - delta);
+        if (left.classList.contains('dom-pane')) {
+            // dom-pane is flex:1, ne fixed width. Pri drag spis setni styles-pane width.
+        } else {
+            left.style.width = newLeft + 'px';
+        }
+        if (right.classList.contains('layout-pane') && right.classList.contains('collapsed')) {
+            // skip resize collapsed
+        } else {
+            right.style.width = newRight + 'px';
+            right.style.flexShrink = '0';
+        }
+    });
+    document.addEventListener('mouseup', () => {
+        dragging = false;
+        document.body.style.cursor = '';
+    });
+}
+setupVSplitter(document.getElementById('splitter-styles'), '.dom-pane', '.styles-pane');
+setupVSplitter(document.getElementById('splitter-layout'), '.styles-pane', '.layout-pane');
+
+// Vertical resize devtools
 const grip = document.querySelector('.resize-grip');
 const devtools = document.querySelector('.devtools');
 const pageArea = document.querySelector('.page-area');
-let dragging = false;
+let vdrag = false;
 let startY = 0;
 let startDevH = 0;
 grip.addEventListener('mousedown', e => {
-    dragging = true;
+    vdrag = true;
     startY = e.clientY;
     startDevH = devtools.getBoundingClientRect().height;
     e.preventDefault();
 });
 document.addEventListener('mousemove', e => {
-    if (!dragging) return;
+    if (!vdrag) return;
     const delta = e.clientY - startY;
     const totalH = window.innerHeight;
     const newDev = Math.max(100, Math.min(totalH - 100, startDevH - delta));
@@ -1536,7 +2186,7 @@ document.addEventListener('mousemove', e => {
     devtools.style.height = pct + '%';
     pageArea.style.height = (100 - pct) + '%';
 });
-document.addEventListener('mouseup', () => { dragging = false; });
+document.addEventListener('mouseup', () => { vdrag = false; });
 </script>
 
 </body>
