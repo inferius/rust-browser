@@ -1127,6 +1127,27 @@ impl WebView {
         if self.target_texture.is_none() {
             self.ensure_target_texture();
         }
+        // PERF: dirty skip - pokud nic se nezmenilo, vrat cached target_view
+        // bez full cascade/layout/paint pipeline. Bez tohoto by render_via
+        // bezel kazdy redraw frame i pro idle WebView (chrome bar, devtools
+        // panel beztoho). Pri 3 WebView setup = 3x cascade/layout/paint per
+        // frame = 1 FPS na velkych strankach.
+        //
+        // Co ovlivnuje dirty:
+        // - Input events (scroll, click, key) set dirty=true v handle_input
+        // - JS DOM mutation pres bump_dom_version (sledovat) - viz dale
+        // - load_html / set_zoom / resize
+        //
+        // Animations + smooth scroll + focused input -> NEN0 dirty, ale potreba
+        // tick. Check zvlastne aktivni animace nez full skip.
+        let needs_tick = !self.active_animations.is_empty()
+            || !self.active_transitions.is_empty()
+            || (self.scroll_target_y - self.scroll_y).abs() > 0.5
+            || (self.scroll_target_x - self.scroll_x).abs() > 0.5
+            || self.focused_is_input();
+        if !self.dirty && !needs_tick {
+            return self.target_view.as_ref();
+        }
         // Renderer sdili pipeline + uniforms s WebView - sync browser zoom +
         // HiDPI scale_factor pred paint pass. NDC mapping pak shoduje s
         // RT physical px.
@@ -1669,7 +1690,13 @@ impl WebView {
     /// Hostujici aplikace pak request_redraw kazdy frame dokud nestihnem
     /// ustaleni.
     pub fn has_active_animations(&self) -> bool {
-        self.stylesheets.iter().any(|s| !s.keyframes.is_empty())
+        // PERF FIX: drive bylo `stylesheets.any(|s| !s.keyframes.is_empty())`
+        // ktere bylo TRUE i pokud stranka jen DEFINUJE @keyframes (bez pouziti
+        // pres `animation:` property). To zapinalo nekonecny request_redraw
+        // smycku v shellu (3 WebView render kazdy frame) = 1 FPS pri 3WV setup.
+        // Now: cti `active_animations` - skutecne hrajici (set v render_via po
+        // detekci animation: prop na elementech).
+        !self.active_animations.is_empty()
             || !self.active_transitions.is_empty()
             || (self.scroll_target_y - self.scroll_y).abs() > 0.5
             || (self.scroll_target_x - self.scroll_x).abs() > 0.5
