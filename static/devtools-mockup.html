@@ -1295,6 +1295,41 @@ html, body {
 ::-webkit-scrollbar-thumb { background: var(--bg-elev3); border-radius: 4px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
 
+/* Lucide icon sizing */
+.icon, i[data-lucide] {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    vertical-align: middle;
+    flex-shrink: 0;
+}
+.icon svg, i[data-lucide] svg, svg.lucide {
+    width: 14px;
+    height: 14px;
+    stroke-width: 1.75;
+    stroke: currentColor;
+    fill: none;
+}
+.tab .icon { margin-right: 4px; }
+.toolbar-btn .icon { width: 14px; height: 14px; }
+.toggle.icon, .obj-toggle.icon { width: 12px; height: 12px; }
+.toggle.icon svg, .obj-toggle.icon svg { width: 12px; height: 12px; }
+.lang-switch {
+    background: transparent;
+    color: var(--fg-dim);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    font-size: 11px;
+    padding: 2px 8px;
+    cursor: pointer;
+    margin-right: 4px;
+    font-weight: 600;
+}
+.lang-switch:hover { background: var(--bg-hover); color: var(--fg); }
+.lang-switch.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
 </style>
 </head>
 <body>
@@ -1312,22 +1347,24 @@ html, body {
     <div class="resize-grip"></div>
     <div class="tab-strip">
         <div class="left">
-            <div class="tab active" data-panel="inspector">▣ Pruzkumnik</div>
-            <div class="tab" data-panel="console">▢ Konzole</div>
-            <div class="tab" data-panel="debugger">▶ Debugger</div>
-            <div class="tab" data-panel="network">↑ Sit</div>
-            <div class="tab" data-panel="style-editor">≡ Editor stylu</div>
-            <div class="tab" data-panel="performance">⌃ Vykon</div>
-            <div class="tab" data-panel="memory">⊟ Pamet</div>
-            <div class="tab" data-panel="application">⛁ Uloziste</div>
-            <div class="tab" data-panel="accessibility">⌖ Pristupnost</div>
-            <div class="tab" data-panel="app-info">⊡ Aplikace</div>
+            <div class="tab active" data-panel="inspector"><i data-lucide="layout-panel-left" class="icon"></i><span data-i18n="tab.inspector">Pruzkumnik</span></div>
+            <div class="tab" data-panel="console"><i data-lucide="terminal" class="icon"></i><span data-i18n="tab.console">Konzole</span></div>
+            <div class="tab" data-panel="debugger"><i data-lucide="bug" class="icon"></i><span data-i18n="tab.debugger">Debugger</span></div>
+            <div class="tab" data-panel="network"><i data-lucide="globe" class="icon"></i><span data-i18n="tab.network">Sit</span></div>
+            <div class="tab" data-panel="style-editor"><i data-lucide="paintbrush" class="icon"></i><span data-i18n="tab.styleEditor">Editor stylu</span></div>
+            <div class="tab" data-panel="performance"><i data-lucide="gauge" class="icon"></i><span data-i18n="tab.performance">Vykon</span></div>
+            <div class="tab" data-panel="memory"><i data-lucide="hard-drive" class="icon"></i><span data-i18n="tab.memory">Pamet</span></div>
+            <div class="tab" data-panel="application"><i data-lucide="database" class="icon"></i><span data-i18n="tab.application">Uloziste</span></div>
+            <div class="tab" data-panel="accessibility"><i data-lucide="accessibility" class="icon"></i><span data-i18n="tab.accessibility">Pristupnost</span></div>
+            <div class="tab" data-panel="app-info"><i data-lucide="info" class="icon"></i><span data-i18n="tab.appInfo">Aplikace</span></div>
         </div>
         <div class="right">
-            <button class="toolbar-btn" title="Responzivni navrh">⊟</button>
-            <button class="toolbar-btn" title="Nastaveni">⚙</button>
-            <button class="toolbar-btn" title="Vice">⋯</button>
-            <button class="toolbar-btn close-btn" title="Zavrit">×</button>
+            <button class="lang-switch active" data-lang="cs">CS</button>
+            <button class="lang-switch" data-lang="en">EN</button>
+            <button class="toolbar-btn" data-i18n-title="btn.responsive" title="Responzivni navrh"><i data-lucide="smartphone" class="icon"></i></button>
+            <button class="toolbar-btn" data-i18n-title="btn.settings" title="Nastaveni"><i data-lucide="settings" class="icon"></i></button>
+            <button class="toolbar-btn" data-i18n-title="btn.more" title="Vice"><i data-lucide="more-horizontal" class="icon"></i></button>
+            <button class="toolbar-btn close-btn" data-i18n-title="btn.close" title="Zavrit"><i data-lucide="x" class="icon"></i></button>
         </div>
     </div>
 
@@ -1336,28 +1373,28 @@ html, body {
         <!-- INSPECTOR (Pruzkumnik) -->
         <div class="panel inspector active">
             <div class="inspector-toolbar">
-                <button class="toolbar-btn" title="Inspect (Ctrl+Shift+C)">⊕</button>
-                <button class="toolbar-btn" title="Vybrat barvu">🎨</button>
-                <input class="dom-search-input" placeholder="Hledat HTML">
+                <button class="toolbar-btn" data-i18n-title="btn.inspect" title="Inspect (Ctrl+Shift+C)"><i data-lucide="mouse-pointer-square-dashed" class="icon"></i></button>
+                <button class="toolbar-btn" data-i18n-title="btn.pickColor" title="Vybrat barvu"><i data-lucide="pipette" class="icon"></i></button>
+                <input class="dom-search-input" data-i18n-placeholder="ph.searchHtml" placeholder="Hledat HTML">
                 <span style="flex:1"></span>
-                <button class="toolbar-btn" title="Pridat node">+</button>
-                <button class="toolbar-btn" title="Vice">⋮</button>
+                <button class="toolbar-btn" data-i18n-title="btn.addNode" title="Pridat node"><i data-lucide="plus" class="icon"></i></button>
+                <button class="toolbar-btn" data-i18n-title="btn.more" title="Vice"><i data-lucide="more-vertical" class="icon"></i></button>
             </div>
             <div class="inspector-body">
                 <!-- LEFT: DOM tree -->
                 <div class="dom-pane">
                     <div class="dom-tree">
-                        <div class="dom-node"><span class="toggle">▼</span><span class="tok-tag">&lt;!DOCTYPE html&gt;</span></div>
-                        <div class="dom-node"><span class="toggle">▼</span><span class="tok-tag">&lt;html</span> <span class="tok-attr-name">lang</span>=<span class="tok-attr-value">"cs"</span><span class="tok-tag">&gt;</span></div>
-                        <div class="dom-node" style="padding-left: 22px"><span class="toggle">▶</span><span class="tok-tag">&lt;head&gt;</span></div>
-                        <div class="dom-node" style="padding-left: 22px"><span class="toggle">▼</span><span class="tok-tag">&lt;body&gt;</span></div>
-                        <div class="dom-node" style="padding-left: 38px"><span class="toggle">▼</span><span class="tok-tag">&lt;div</span> <span class="tok-attr-name">class</span>=<span class="tok-attr-value">"page-area"</span><span class="tok-tag">&gt;</span></div>
-                        <div class="dom-node selected" style="padding-left: 54px"><span class="toggle">▼</span><span class="tok-tag">&lt;h1&gt;</span><span class="tok-text">Mock Page</span><span class="tok-tag">&lt;/h1&gt;</span></div>
-                        <div class="dom-node" style="padding-left: 54px"><span class="toggle">▼</span><span class="tok-tag">&lt;p&gt;</span><span class="tok-text">Toto je stranka...</span><span class="tok-tag">&lt;/p&gt;</span></div>
-                        <div class="dom-node" style="padding-left: 54px"><span class="toggle">·</span><span class="tok-tag">&lt;button&gt;</span><span class="tok-text">Tlacitko</span><span class="tok-tag">&lt;/button&gt;</span><span class="event-badge">event</span></div>
-                        <div class="dom-node" style="padding-left: 54px"><span class="toggle">▼</span><span class="tok-tag">&lt;div</span> <span class="tok-attr-name">id</span>=<span class="tok-attr-value">"counter"</span><span class="tok-tag">&gt;</span><span class="tok-text">Counter: 42</span><span class="tok-tag">&lt;/div&gt;</span></div>
+                        <div class="dom-node"><span class="toggle icon"><i data-lucide="chevron-down"></i></span><span class="tok-tag">&lt;!DOCTYPE html&gt;</span></div>
+                        <div class="dom-node"><span class="toggle icon"><i data-lucide="chevron-down"></i></span><span class="tok-tag">&lt;html</span> <span class="tok-attr-name">lang</span>=<span class="tok-attr-value">"cs"</span><span class="tok-tag">&gt;</span></div>
+                        <div class="dom-node" style="padding-left: 22px"><span class="toggle icon"><i data-lucide="chevron-right"></i></span><span class="tok-tag">&lt;head&gt;</span></div>
+                        <div class="dom-node" style="padding-left: 22px"><span class="toggle icon"><i data-lucide="chevron-down"></i></span><span class="tok-tag">&lt;body&gt;</span></div>
+                        <div class="dom-node" style="padding-left: 38px"><span class="toggle icon"><i data-lucide="chevron-down"></i></span><span class="tok-tag">&lt;div</span> <span class="tok-attr-name">class</span>=<span class="tok-attr-value">"page-area"</span><span class="tok-tag">&gt;</span></div>
+                        <div class="dom-node selected" style="padding-left: 54px"><span class="toggle icon"><i data-lucide="chevron-down"></i></span><span class="tok-tag">&lt;h1&gt;</span><span class="tok-text">Mock Page</span><span class="tok-tag">&lt;/h1&gt;</span></div>
+                        <div class="dom-node" style="padding-left: 54px"><span class="toggle icon"><i data-lucide="chevron-down"></i></span><span class="tok-tag">&lt;p&gt;</span><span class="tok-text">Toto je stranka...</span><span class="tok-tag">&lt;/p&gt;</span></div>
+                        <div class="dom-node" style="padding-left: 54px"><span class="toggle icon"><i data-lucide="dot"></i></span><span class="tok-tag">&lt;button&gt;</span><span class="tok-text">Tlacitko</span><span class="tok-tag">&lt;/button&gt;</span><span class="event-badge">event</span></div>
+                        <div class="dom-node" style="padding-left: 54px"><span class="toggle icon"><i data-lucide="chevron-down"></i></span><span class="tok-tag">&lt;div</span> <span class="tok-attr-name">id</span>=<span class="tok-attr-value">"counter"</span><span class="tok-tag">&gt;</span><span class="tok-text">Counter: 42</span><span class="tok-tag">&lt;/div&gt;</span></div>
                         <div class="dom-node" style="padding-left: 38px"><span class="tok-tag">&lt;/div&gt;</span></div>
-                        <div class="dom-node" style="padding-left: 38px"><span class="toggle">▶</span><span class="tok-tag">&lt;div</span> <span class="tok-attr-name">class</span>=<span class="tok-attr-value">"devtools"</span><span class="tok-tag">&gt;</span></div>
+                        <div class="dom-node" style="padding-left: 38px"><span class="toggle icon"><i data-lucide="chevron-right"></i></span><span class="tok-tag">&lt;div</span> <span class="tok-attr-name">class</span>=<span class="tok-attr-value">"devtools"</span><span class="tok-tag">&gt;</span></div>
                         <div class="dom-node" style="padding-left: 22px"><span class="tok-tag">&lt;/body&gt;</span></div>
                         <div class="dom-node"><span class="tok-tag">&lt;/html&gt;</span></div>
                     </div>
@@ -1369,12 +1406,12 @@ html, body {
                 <!-- MIDDLE: Styles -->
                 <div class="styles-pane">
                     <div class="styles-header">
-                        <input class="styles-filter" placeholder="Filtrovat styly">
-                        <span class="styles-pseudo-toggle" title="Pseudo-classes">:hov</span>
-                        <span class="styles-pseudo-toggle" title="Class list">.cls</span>
-                        <button class="toolbar-btn" title="Pridat pravidlo">+</button>
-                        <button class="toolbar-btn" title="Light theme">☼</button>
-                        <button class="toolbar-btn" title="Print preview">⎙</button>
+                        <input class="styles-filter" data-i18n-placeholder="ph.filterStyles" placeholder="Filtrovat styly">
+                        <span class="styles-pseudo-toggle" data-i18n-title="btn.pseudoClasses" title="Pseudo-classes">:hov</span>
+                        <span class="styles-pseudo-toggle" data-i18n-title="btn.classList" title="Class list">.cls</span>
+                        <button class="toolbar-btn" data-i18n-title="btn.addRule" title="Pridat pravidlo"><i data-lucide="plus" class="icon"></i></button>
+                        <button class="toolbar-btn" data-i18n-title="btn.lightTheme" title="Light theme"><i data-lucide="sun" class="icon"></i></button>
+                        <button class="toolbar-btn" data-i18n-title="btn.printPreview" title="Print preview"><i data-lucide="printer" class="icon"></i></button>
                     </div>
                     <div class="styles-body">
                         <div class="styles-section">
@@ -1428,15 +1465,15 @@ html, body {
                 <div class="layout-pane" id="layout-pane">
                     <div class="layout-tabs">
                         <div class="layout-tabs-inner" id="layout-tabs-inner">
-                            <div class="layout-tab active" data-side="layout">Rozlozeni</div>
-                            <div class="layout-tab" data-side="computed">Vypocitano</div>
-                            <div class="layout-tab" data-side="changes">Zmeny</div>
-                            <div class="layout-tab" data-side="compat">Kompatibilita</div>
-                            <div class="layout-tab" data-side="fonts">Pismo</div>
-                            <div class="layout-tab" data-side="animations">Animace</div>
+                            <div class="layout-tab active" data-side="layout" data-i18n="side.layout">Rozlozeni</div>
+                            <div class="layout-tab" data-side="computed" data-i18n="side.computed">Vypocitano</div>
+                            <div class="layout-tab" data-side="changes" data-i18n="side.changes">Zmeny</div>
+                            <div class="layout-tab" data-side="compat" data-i18n="side.compat">Kompatibilita</div>
+                            <div class="layout-tab" data-side="fonts" data-i18n="side.fonts">Pismo</div>
+                            <div class="layout-tab" data-side="animations" data-i18n="side.animations">Animace</div>
                         </div>
-                        <div class="layout-overflow-btn" title="Vice zalozek">▾</div>
-                        <div class="layout-collapse-btn" id="layout-collapse" title="Skryt/rozthranout">»</div>
+                        <div class="layout-overflow-btn" data-i18n-title="btn.moreTabs" title="Vice zalozek"><i data-lucide="chevron-down" class="icon"></i></div>
+                        <div class="layout-collapse-btn" id="layout-collapse" data-i18n-title="btn.collapse" title="Skryt/rozthranout"><i data-lucide="chevrons-right" class="icon"></i></div>
                     </div>
 
                     <!-- LAYOUT -->
@@ -1507,17 +1544,17 @@ html, body {
                             <input type="checkbox" checked> Zobrazit prohlizecove styly
                         </label>
                         <div class="computed-list">
-                            <div class="computed-prop"><span class="toggle-src">▶</span><span class="name">color</span><span class="val">rgb(51, 51, 51)</span></div>
-                            <div class="computed-prop"><span class="toggle-src">▶</span><span class="name">display</span><span class="val">block</span></div>
-                            <div class="computed-prop"><span class="toggle-src">▶</span><span class="name">font-family</span><span class="val">'Segoe UI', sans-serif</span></div>
-                            <div class="computed-prop"><span class="toggle-src">▶</span><span class="name">font-size</span><span class="val">32px</span></div>
-                            <div class="computed-prop"><span class="toggle-src">▶</span><span class="name">font-weight</span><span class="val">700</span></div>
-                            <div class="computed-prop"><span class="toggle-src">▶</span><span class="name">height</span><span class="val">36px</span></div>
-                            <div class="computed-prop"><span class="toggle-src">▶</span><span class="name">line-height</span><span class="val">38.4px</span></div>
-                            <div class="computed-prop"><span class="toggle-src">▶</span><span class="name">margin-bottom</span><span class="val">8px</span></div>
-                            <div class="computed-prop"><span class="toggle-src">▶</span><span class="name">margin-top</span><span class="val">0px</span></div>
-                            <div class="computed-prop"><span class="toggle-src">▶</span><span class="name">padding</span><span class="val">0px</span></div>
-                            <div class="computed-prop"><span class="toggle-src">▶</span><span class="name">width</span><span class="val">1264px</span></div>
+                            <div class="computed-prop"><span class="toggle-src icon"><i data-lucide="chevron-right"></i></span><span class="name">color</span><span class="val">rgb(51, 51, 51)</span></div>
+                            <div class="computed-prop"><span class="toggle-src icon"><i data-lucide="chevron-right"></i></span><span class="name">display</span><span class="val">block</span></div>
+                            <div class="computed-prop"><span class="toggle-src icon"><i data-lucide="chevron-right"></i></span><span class="name">font-family</span><span class="val">'Segoe UI', sans-serif</span></div>
+                            <div class="computed-prop"><span class="toggle-src icon"><i data-lucide="chevron-right"></i></span><span class="name">font-size</span><span class="val">32px</span></div>
+                            <div class="computed-prop"><span class="toggle-src icon"><i data-lucide="chevron-right"></i></span><span class="name">font-weight</span><span class="val">700</span></div>
+                            <div class="computed-prop"><span class="toggle-src icon"><i data-lucide="chevron-right"></i></span><span class="name">height</span><span class="val">36px</span></div>
+                            <div class="computed-prop"><span class="toggle-src icon"><i data-lucide="chevron-right"></i></span><span class="name">line-height</span><span class="val">38.4px</span></div>
+                            <div class="computed-prop"><span class="toggle-src icon"><i data-lucide="chevron-right"></i></span><span class="name">margin-bottom</span><span class="val">8px</span></div>
+                            <div class="computed-prop"><span class="toggle-src icon"><i data-lucide="chevron-right"></i></span><span class="name">margin-top</span><span class="val">0px</span></div>
+                            <div class="computed-prop"><span class="toggle-src icon"><i data-lucide="chevron-right"></i></span><span class="name">padding</span><span class="val">0px</span></div>
+                            <div class="computed-prop"><span class="toggle-src icon"><i data-lucide="chevron-right"></i></span><span class="name">width</span><span class="val">1264px</span></div>
                         </div>
                     </div>
 
@@ -1591,8 +1628,8 @@ html, body {
                     <!-- ANIMATIONS -->
                     <div class="layout-body" data-side-body="animations" style="display:none">
                         <div class="anim-controls">
-                            <button class="toolbar-btn" title="Pause/play">▶</button>
-                            <button class="toolbar-btn" title="Restart">⟲</button>
+                            <button class="toolbar-btn" data-i18n-title="btn.playPause" title="Pause/play"><i data-lucide="play" class="icon"></i></button>
+                            <button class="toolbar-btn" data-i18n-title="btn.restart" title="Restart"><i data-lucide="rotate-ccw" class="icon"></i></button>
                             <select style="background: var(--bg-elev2); color: var(--fg); border: 1px solid var(--border-strong); padding: 2px; font-size: 11px;">
                                 <option>100%</option>
                                 <option>50%</option>
@@ -1627,15 +1664,15 @@ html, body {
         <!-- CONSOLE -->
         <div class="panel console">
             <div class="console-toolbar">
-                <button class="toolbar-btn" title="Vymazat">⌫</button>
-                <input class="console-filter-input" placeholder="Filtrovat zaznamy">
-                <button class="level-toggle active">Vsechny</button>
-                <button class="level-toggle">Chyby</button>
-                <button class="level-toggle">Upozorneni</button>
-                <button class="level-toggle">Info</button>
-                <button class="level-toggle">Debug</button>
+                <button class="toolbar-btn" data-i18n-title="btn.clear" title="Vymazat"><i data-lucide="trash-2" class="icon"></i></button>
+                <input class="console-filter-input" data-i18n-placeholder="ph.filterLogs" placeholder="Filtrovat zaznamy">
+                <button class="level-toggle active" data-i18n="level.all">Vsechny</button>
+                <button class="level-toggle" data-i18n="level.errors">Chyby</button>
+                <button class="level-toggle" data-i18n="level.warnings">Upozorneni</button>
+                <button class="level-toggle" data-i18n="level.info">Info</button>
+                <button class="level-toggle" data-i18n="level.debug">Debug</button>
                 <span style="flex:1"></span>
-                <button class="toolbar-btn" title="Nastaveni">⚙</button>
+                <button class="toolbar-btn" data-i18n-title="btn.settings" title="Nastaveni"><i data-lucide="settings" class="icon"></i></button>
             </div>
             <div class="console-log">
                 <div class="log-entry log">
@@ -1646,7 +1683,7 @@ html, body {
                 </div>
                 <div class="log-input">document.querySelector('h1')</div>
                 <div class="log-entry log log-result">
-                    <span class="obj-toggle">▶</span>&lt;h1&gt;Mock Page&lt;/h1&gt;
+                    <span class="obj-toggle icon"><i data-lucide="chevron-right"></i></span>&lt;h1&gt;Mock Page&lt;/h1&gt;
                 </div>
                 <div class="log-entry warn">
                     Deprecation warning: <code>document.cookie</code> sync access <span class="log-source">page.html:33</span>
@@ -1665,10 +1702,10 @@ html, body {
                 </div>
                 <div class="log-input">JSON.parse('{"a": 1, "b": [true, null]}')</div>
                 <div class="log-entry log log-result">
-                    <div><span class="obj-toggle">▼</span><span class="obj-keyword">Object</span> {</div>
+                    <div><span class="obj-toggle icon"><i data-lucide="chevron-down"></i></span><span class="obj-keyword">Object</span> {</div>
                     <div class="obj-children">
                         <div><span class="obj-key">a</span>: <span class="obj-number">1</span></div>
-                        <div><span class="obj-key">b</span>: <span class="obj-toggle">▶</span><span class="obj-keyword">Array(2)</span></div>
+                        <div><span class="obj-key">b</span>: <span class="obj-toggle icon"><i data-lucide="chevron-right"></i></span><span class="obj-keyword">Array(2)</span></div>
                     </div>
                     <div>}</div>
                 </div>
@@ -1682,26 +1719,26 @@ html, body {
         <div class="panel debugger">
             <div class="sources-tree">
                 <div class="file-section">
-                    <div class="file-section-header">▾ Stranka (3)</div>
+                    <div class="file-section-header"><i data-lucide="chevron-down" class="icon"></i> <span data-i18n="dbg.page">Stranka</span> (3)</div>
                     <div class="file-item">index.html<span class="badge">1</span></div>
                     <div class="file-item active">script.js</div>
                     <div class="file-item">styles.css</div>
                 </div>
                 <div class="file-section">
-                    <div class="file-section-header">▸ Pracovni vlakna (1)</div>
+                    <div class="file-section-header"><i data-lucide="chevron-right" class="icon"></i> <span data-i18n="dbg.workers">Pracovni vlakna</span> (1)</div>
                 </div>
                 <div class="file-section">
-                    <div class="file-section-header">▸ Externi (5)</div>
+                    <div class="file-section-header"><i data-lucide="chevron-right" class="icon"></i> <span data-i18n="dbg.external">Externi</span> (5)</div>
                 </div>
                 <div class="file-section">
-                    <div class="file-section-header">▾ Sniptety</div>
+                    <div class="file-section-header"><i data-lucide="chevron-down" class="icon"></i> <span data-i18n="dbg.snippets">Sniptety</span></div>
                     <div class="file-item">helper.js</div>
                 </div>
             </div>
             <div class="sources-main">
                 <div class="sources-tabs">
-                    <div class="source-tab active">script.js<span class="x">×</span></div>
-                    <div class="source-tab">index.html<span class="x">×</span></div>
+                    <div class="source-tab active">script.js<span class="x"><i data-lucide="x" class="icon"></i></span></div>
+                    <div class="source-tab">index.html<span class="x"><i data-lucide="x" class="icon"></i></span></div>
                 </div>
                 <div class="source-editor">
                     <div class="source-line"><div class="gutter">1</div><div class="code-line"><span class="cmt">// Click handler s vypocet counter</span></div></div>
@@ -1718,11 +1755,11 @@ html, body {
             </div>
             <div class="sources-right">
                 <div class="debug-toolbar">
-                    <button class="toolbar-btn" title="Pokracovat (F8)">▶</button>
-                    <button class="toolbar-btn" title="Krok pres (F10)">⇣</button>
-                    <button class="toolbar-btn" title="Krok do (F11)">↳</button>
-                    <button class="toolbar-btn" title="Krok ven (Shift+F11)">↲</button>
-                    <button class="toolbar-btn" title="Deaktivovat breakpoints">⏸</button>
+                    <button class="toolbar-btn" data-i18n-title="btn.resume" title="Pokracovat (F8)"><i data-lucide="play" class="icon"></i></button>
+                    <button class="toolbar-btn" data-i18n-title="btn.stepOver" title="Krok pres (F10)"><i data-lucide="corner-down-right" class="icon"></i></button>
+                    <button class="toolbar-btn" data-i18n-title="btn.stepInto" title="Krok do (F11)"><i data-lucide="arrow-down-to-line" class="icon"></i></button>
+                    <button class="toolbar-btn" data-i18n-title="btn.stepOut" title="Krok ven (Shift+F11)"><i data-lucide="arrow-up-from-line" class="icon"></i></button>
+                    <button class="toolbar-btn" data-i18n-title="btn.deactivateBp" title="Deaktivovat breakpoints"><i data-lucide="circle-slash" class="icon"></i></button>
                 </div>
                 <div class="debug-section">
                     <div class="debug-section-header">Zasobnik volani <span class="count">(2)</span></div>
@@ -1764,16 +1801,16 @@ html, body {
         <!-- NETWORK (Sit) -->
         <div class="panel network">
             <div class="network-toolbar">
-                <button class="toolbar-btn" title="Zaznamenavat">●</button>
-                <button class="toolbar-btn" title="Vymazat">⌫</button>
-                <input class="console-filter-input" placeholder="Filtrovat URL, status, metodu...">
-                <button class="level-toggle active">Vsechny</button>
+                <button class="toolbar-btn" data-i18n-title="btn.record" title="Zaznamenavat"><i data-lucide="circle" class="icon"></i></button>
+                <button class="toolbar-btn" data-i18n-title="btn.clear" title="Vymazat"><i data-lucide="trash-2" class="icon"></i></button>
+                <input class="console-filter-input" data-i18n-placeholder="ph.filterUrl" placeholder="Filtrovat URL, status, metodu...">
+                <button class="level-toggle active" data-i18n="level.all">Vsechny</button>
                 <button class="level-toggle">HTML</button>
                 <button class="level-toggle">CSS</button>
                 <button class="level-toggle">JS</button>
                 <button class="level-toggle">XHR</button>
-                <button class="level-toggle">Obr.</button>
-                <button class="level-toggle">Pisma</button>
+                <button class="level-toggle" data-i18n="net.images">Obr.</button>
+                <button class="level-toggle" data-i18n="net.fonts">Pisma</button>
             </div>
             <div class="network-main">
                 <div class="network-table-container">
@@ -1905,10 +1942,10 @@ html, body {
         <!-- PERFORMANCE -->
         <div class="panel performance">
             <div class="perf-toolbar">
-                <button class="toolbar-btn" title="Zaznamenat">●</button>
-                <button class="toolbar-btn" title="Reload + zaznamenat">↻</button>
-                <button class="toolbar-btn" title="Vymazat">⌫</button>
-                <span style="color: var(--fg-dim); margin-left: 8px;">2.42s zaznam</span>
+                <button class="toolbar-btn" data-i18n-title="btn.record" title="Zaznamenat"><i data-lucide="circle" class="icon"></i></button>
+                <button class="toolbar-btn" data-i18n-title="btn.reloadRecord" title="Reload + zaznamenat"><i data-lucide="rotate-cw" class="icon"></i></button>
+                <button class="toolbar-btn" data-i18n-title="btn.clear" title="Vymazat"><i data-lucide="trash-2" class="icon"></i></button>
+                <span style="color: var(--fg-dim); margin-left: 8px;" data-i18n="perf.recordLen">2.42s zaznam</span>
             </div>
             <div class="perf-body">
                 <h3 style="margin: 4px; font-size: 12px; color: var(--fg-dim); text-transform: uppercase;">Metriky</h3>
@@ -2011,10 +2048,10 @@ html, body {
             <div class="app-body">
                 <div class="app-data-toolbar">
                     <span class="origin">https://example.com</span>
-                    <button class="toolbar-btn" title="Obnovit">↻</button>
-                    <button class="toolbar-btn" title="Smazat vse">⌫</button>
-                    <button class="toolbar-btn" title="Pridat">+</button>
-                    <input class="console-filter-input" placeholder="Filtrovat" style="max-width: 200px;">
+                    <button class="toolbar-btn" data-i18n-title="btn.refresh" title="Obnovit"><i data-lucide="rotate-cw" class="icon"></i></button>
+                    <button class="toolbar-btn" data-i18n-title="btn.clearAll" title="Smazat vse"><i data-lucide="trash-2" class="icon"></i></button>
+                    <button class="toolbar-btn" data-i18n-title="btn.add" title="Pridat"><i data-lucide="plus" class="icon"></i></button>
+                    <input class="console-filter-input" data-i18n-placeholder="ph.filter" placeholder="Filtrovat" style="max-width: 200px;">
                 </div>
                 <div class="app-table-container">
                     <table class="app-table">
@@ -2080,7 +2117,9 @@ const layoutPane = document.getElementById('layout-pane');
 const collapseBtn = document.getElementById('layout-collapse');
 collapseBtn.addEventListener('click', () => {
     layoutPane.classList.toggle('collapsed');
-    collapseBtn.textContent = layoutPane.classList.contains('collapsed') ? '«' : '»';
+    const collapsed = layoutPane.classList.contains('collapsed');
+    collapseBtn.innerHTML = '<i data-lucide="' + (collapsed ? 'chevrons-left' : 'chevrons-right') + '" class="icon"></i>';
+    if (window.lucide) lucide.createIcons({ nameAttr: 'data-lucide', icons: window.lucide.icons });
 });
 
 // Layout sections collapse
@@ -2187,6 +2226,188 @@ document.addEventListener('mousemove', e => {
     pageArea.style.height = (100 - pct) + '%';
 });
 document.addEventListener('mouseup', () => { vdrag = false; });
+</script>
+
+<!-- Lucide icons CDN (offline-safe: gracefully degrades if unreachable) -->
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+
+<!-- i18n dictionary + applier -->
+<script>
+const I18N = {
+    cs: {
+        // Top tabs
+        'tab.inspector':      'Pruzkumnik',
+        'tab.console':        'Konzole',
+        'tab.debugger':       'Debugger',
+        'tab.network':        'Sit',
+        'tab.styleEditor':    'Editor stylu',
+        'tab.performance':    'Vykon',
+        'tab.memory':         'Pamet',
+        'tab.application':    'Uloziste',
+        'tab.accessibility':  'Pristupnost',
+        'tab.appInfo':        'Aplikace',
+        // Side tabs (right pane)
+        'side.layout':        'Rozlozeni',
+        'side.computed':      'Vypocitano',
+        'side.changes':       'Zmeny',
+        'side.compat':        'Kompatibilita',
+        'side.fonts':         'Pismo',
+        'side.animations':    'Animace',
+        // Buttons
+        'btn.responsive':     'Responzivni navrh',
+        'btn.settings':       'Nastaveni',
+        'btn.more':           'Vice',
+        'btn.close':          'Zavrit',
+        'btn.inspect':        'Inspect (Ctrl+Shift+C)',
+        'btn.pickColor':      'Vybrat barvu',
+        'btn.addNode':        'Pridat node',
+        'btn.addRule':        'Pridat pravidlo',
+        'btn.lightTheme':     'Svetly motiv',
+        'btn.printPreview':   'Nahled tisku',
+        'btn.pseudoClasses':  'Pseudo-classes',
+        'btn.classList':      'Seznam trid',
+        'btn.moreTabs':       'Vice zalozek',
+        'btn.collapse':       'Skryt/rozthranout panel',
+        'btn.playPause':      'Pozastavit / spustit',
+        'btn.restart':        'Restartovat',
+        'btn.clear':          'Vymazat',
+        'btn.record':         'Zaznamenavat',
+        'btn.reloadRecord':   'Nacist znovu + zaznamenat',
+        'btn.refresh':        'Obnovit',
+        'btn.clearAll':       'Smazat vse',
+        'btn.add':            'Pridat',
+        'btn.resume':         'Pokracovat (F8)',
+        'btn.stepOver':       'Krok pres (F10)',
+        'btn.stepInto':       'Krok do (F11)',
+        'btn.stepOut':        'Krok ven (Shift+F11)',
+        'btn.deactivateBp':   'Deaktivovat breakpointy',
+        // Placeholders
+        'ph.searchHtml':      'Hledat HTML',
+        'ph.filterStyles':    'Filtrovat styly',
+        'ph.filterLogs':      'Filtrovat zaznamy',
+        'ph.filterUrl':       'Filtrovat URL, status, metodu...',
+        'ph.filter':          'Filtrovat',
+        // Log levels
+        'level.all':          'Vsechny',
+        'level.errors':       'Chyby',
+        'level.warnings':     'Upozorneni',
+        'level.info':         'Info',
+        'level.debug':        'Debug',
+        // Network resource types
+        'net.images':         'Obr.',
+        'net.fonts':          'Pisma',
+        // Debugger tree
+        'dbg.page':           'Stranka',
+        'dbg.workers':        'Pracovni vlakna',
+        'dbg.external':       'Externi',
+        'dbg.snippets':       'Sniptety',
+        // Performance
+        'perf.recordLen':     '2.42s zaznam',
+    },
+    en: {
+        'tab.inspector':      'Inspector',
+        'tab.console':        'Console',
+        'tab.debugger':       'Debugger',
+        'tab.network':        'Network',
+        'tab.styleEditor':    'Style Editor',
+        'tab.performance':    'Performance',
+        'tab.memory':         'Memory',
+        'tab.application':    'Storage',
+        'tab.accessibility':  'Accessibility',
+        'tab.appInfo':        'Application',
+        'side.layout':        'Layout',
+        'side.computed':      'Computed',
+        'side.changes':       'Changes',
+        'side.compat':        'Compatibility',
+        'side.fonts':         'Fonts',
+        'side.animations':    'Animations',
+        'btn.responsive':     'Responsive design',
+        'btn.settings':       'Settings',
+        'btn.more':           'More',
+        'btn.close':          'Close',
+        'btn.inspect':        'Inspect (Ctrl+Shift+C)',
+        'btn.pickColor':      'Pick color',
+        'btn.addNode':        'Add node',
+        'btn.addRule':        'Add rule',
+        'btn.lightTheme':     'Light theme',
+        'btn.printPreview':   'Print preview',
+        'btn.pseudoClasses':  'Pseudo-classes',
+        'btn.classList':      'Class list',
+        'btn.moreTabs':       'More tabs',
+        'btn.collapse':       'Collapse/expand panel',
+        'btn.playPause':      'Pause / play',
+        'btn.restart':        'Restart',
+        'btn.clear':          'Clear',
+        'btn.record':         'Record',
+        'btn.reloadRecord':   'Reload + record',
+        'btn.refresh':        'Refresh',
+        'btn.clearAll':       'Clear all',
+        'btn.add':            'Add',
+        'btn.resume':         'Resume (F8)',
+        'btn.stepOver':       'Step over (F10)',
+        'btn.stepInto':       'Step into (F11)',
+        'btn.stepOut':        'Step out (Shift+F11)',
+        'btn.deactivateBp':   'Deactivate breakpoints',
+        'ph.searchHtml':      'Search HTML',
+        'ph.filterStyles':    'Filter styles',
+        'ph.filterLogs':      'Filter output',
+        'ph.filterUrl':       'Filter URL, status, method...',
+        'ph.filter':          'Filter',
+        'level.all':          'All',
+        'level.errors':       'Errors',
+        'level.warnings':     'Warnings',
+        'level.info':         'Info',
+        'level.debug':        'Debug',
+        'net.images':         'Img',
+        'net.fonts':          'Fonts',
+        'dbg.page':           'Page',
+        'dbg.workers':        'Workers',
+        'dbg.external':       'External',
+        'dbg.snippets':       'Snippets',
+        'perf.recordLen':     '2.42s recording',
+    },
+};
+
+let currentLang = 'cs';
+
+function applyI18n(lang) {
+    const dict = I18N[lang] || I18N.cs;
+    document.querySelectorAll('[data-i18n]').forEach(el => {
+        const key = el.dataset.i18n;
+        if (dict[key] !== undefined) el.textContent = dict[key];
+    });
+    document.querySelectorAll('[data-i18n-title]').forEach(el => {
+        const key = el.dataset.i18nTitle;
+        if (dict[key] !== undefined) el.title = dict[key];
+    });
+    document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+        const key = el.dataset.i18nPlaceholder;
+        if (dict[key] !== undefined) el.placeholder = dict[key];
+    });
+    document.documentElement.lang = lang;
+    currentLang = lang;
+}
+
+document.querySelectorAll('.lang-switch').forEach(btn => {
+    btn.addEventListener('click', () => {
+        document.querySelectorAll('.lang-switch').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        applyI18n(btn.dataset.lang);
+    });
+});
+
+// Init: render Lucide icons + apply default lang
+function initIcons() {
+    if (window.lucide && typeof lucide.createIcons === 'function') {
+        try { lucide.createIcons(); } catch (e) { console.warn('Lucide init failed:', e); }
+    }
+}
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initIcons);
+} else {
+    initIcons();
+}
+applyI18n(currentLang);
 </script>
 
 </body>
