@@ -1771,6 +1771,50 @@ impl Interpreter {
                             }
                             return Ok(JsValue::Undefined);
                         }
+                        "insertAdjacentElement" => {
+                            // el.insertAdjacentElement(position, element)
+                            // position: beforebegin / afterbegin / beforeend / afterend
+                            let mut it = arg_vals.into_iter();
+                            let position = it.next().map(|v| v.to_string()).unwrap_or_default();
+                            let target = it.next().unwrap_or(JsValue::Undefined);
+                            let target_rc = match &target {
+                                JsValue::DomNode(t) => Rc::clone(t),
+                                _ => return Ok(JsValue::Null),
+                            };
+                            // Odpoj target z aktualniho parenta
+                            if let Some(p) = target_rc.parent.borrow().upgrade() {
+                                p.children.borrow_mut().retain(|c| !Rc::ptr_eq(c, &target_rc));
+                            }
+                            match position.as_str() {
+                                "beforebegin" => {
+                                    if let Some(p) = n.parent.borrow().upgrade() {
+                                        *target_rc.parent.borrow_mut() = Rc::downgrade(&p);
+                                        let mut c = p.children.borrow_mut();
+                                        if let Some(i) = c.iter().position(|x| Rc::ptr_eq(x, &n)) {
+                                            c.insert(i, Rc::clone(&target_rc));
+                                        }
+                                    }
+                                }
+                                "afterbegin" => {
+                                    *target_rc.parent.borrow_mut() = Rc::downgrade(&n);
+                                    n.children.borrow_mut().insert(0, Rc::clone(&target_rc));
+                                }
+                                "beforeend" => {
+                                    n.append_child(Rc::clone(&target_rc));
+                                }
+                                "afterend" => {
+                                    if let Some(p) = n.parent.borrow().upgrade() {
+                                        *target_rc.parent.borrow_mut() = Rc::downgrade(&p);
+                                        let mut c = p.children.borrow_mut();
+                                        if let Some(i) = c.iter().position(|x| Rc::ptr_eq(x, &n)) {
+                                            c.insert(i + 1, Rc::clone(&target_rc));
+                                        }
+                                    }
+                                }
+                                _ => return Ok(JsValue::Null),
+                            }
+                            return Ok(JsValue::DomNode(target_rc));
+                        }
                         "insertAdjacentHTML" => {
                             let mut it = arg_vals.into_iter();
                             let position = it.next().map(|v| v.to_string()).unwrap_or_default();
