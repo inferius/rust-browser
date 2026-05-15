@@ -1076,7 +1076,11 @@ impl ApplicationHandler for ShellApp {
                             _ => None,
                         };
                         if let Some(y) = ny {
-                            webview.set_scroll(sx, y.max(0.0));
+                            // Clamp na [0, max] kde max = layout_h - viewport_h.
+                            let max_y = webview.last_layout_root()
+                                .map(|l| (l.rect.height - vh).max(0.0))
+                                .unwrap_or(f32::INFINITY);
+                            webview.set_scroll(sx, y.clamp(0.0, max_y));
                             true
                         } else { false }
                     }).unwrap_or(false);

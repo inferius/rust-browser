@@ -489,9 +489,19 @@ impl WebView {
         match event {
             InputEvent::Scroll { dx, dy, .. } => {
                 // Wheel adjusts smooth scroll target. render_via lerp aktivni
-                // scroll_y -> scroll_target_y 25 %% per frame.
-                self.scroll_target_x = (self.scroll_target_x + dx).max(0.0);
-                self.scroll_target_y = (self.scroll_target_y + dy).max(0.0);
+                // scroll_y -> scroll_target_y 25 %% per frame. Clamp na
+                // [0, max] kde max = layout_h - viewport_h (z last render).
+                let viewport_h = self.viewport_h / self.zoom.max(0.01);
+                let viewport_w = self.viewport_w / self.zoom.max(0.01);
+                let (max_y, max_x) = match &self.last_layout_root {
+                    Some(l) => (
+                        (l.rect.height - viewport_h).max(0.0),
+                        (l.rect.width - viewport_w).max(0.0),
+                    ),
+                    None => (f32::INFINITY, f32::INFINITY),
+                };
+                self.scroll_target_x = (self.scroll_target_x + dx).clamp(0.0, max_x);
+                self.scroll_target_y = (self.scroll_target_y + dy).clamp(0.0, max_y);
                 self.dirty = true;
                 response.dirty = true;
             }
