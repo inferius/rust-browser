@@ -1684,18 +1684,16 @@ impl Interpreter {
                             }
                         }
                         "cloneNode" => {
-                            // Clone node deep (zjednodusene pres serialize -> parse fragment)
-                            let html = serialize::serialize_outer_html(&n);
-                            let frag = crate::browser::html_parser::parse_html_fragment(&html);
-                            let frag_children: Vec<_> = frag.children.borrow().clone();
-                            // Najdi prvni element child
-                            for ch in &frag_children {
-                                let body_children: Vec<_> = ch.children.borrow().clone();
-                                if let Some(b) = body_children.into_iter().next() {
-                                    return Ok(JsValue::DomNode(b));
-                                }
-                            }
-                            return Ok(JsValue::DomNode(Rc::clone(&n)));
+                            // cloneNode(deep) - real recursive clone (DOM spec).
+                            // Deep=true: subtree, deep=false: jen self + attrs.
+                            // Listenery se neclonuji (spec).
+                            let deep = match arg_vals.into_iter().next() {
+                                Some(JsValue::Bool(b)) => b,
+                                Some(JsValue::Undefined) | None => false,
+                                Some(v) => v.is_truthy(),
+                            };
+                            let cloned = n.clone_node(deep);
+                            return Ok(JsValue::DomNode(cloned));
                         }
                         "contains" => {
                             let other = arg_vals.into_iter().next().unwrap_or(JsValue::Null);
