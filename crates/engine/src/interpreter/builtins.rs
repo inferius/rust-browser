@@ -3518,9 +3518,23 @@ pub fn setup_builtins(
     }));
 
     // ─── Cookie Store API ─────────────────────────────────────────────────
+    // Persist do ~/.rust-web-engine/cookies.json pres load/save_storage_to_disk.
+    // Format: tab-separated rows "name\tvalue" - same jako localStorage.
     {
         let cs = Rc::new(RefCell::new(JsObject::new()));
         let cookies: Rc<RefCell<HashMap<String, String>>> = Rc::new(RefCell::new(HashMap::new()));
+        // Initial load z disku.
+        for (k, v) in super::helpers::load_storage_from_disk("cookies") {
+            cookies.borrow_mut().insert(k, v);
+        }
+        let save_cookies = {
+            let c = Rc::clone(&cookies);
+            move || {
+                let entries: Vec<(String, String)> = c.borrow().iter()
+                    .map(|(k, v)| (k.clone(), v.clone())).collect();
+                let _ = super::helpers::save_storage_to_disk("cookies", &entries);
+            }
+        };
         let c1 = Rc::clone(&cookies);
         cs.borrow_mut().set("get".into(), native("cookieStore.get", move |args| {
             let name = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
@@ -3537,6 +3551,7 @@ pub fn setup_builtins(
             Ok(make_settled_promise("fulfilled", result))
         }));
         let c2 = Rc::clone(&cookies);
+        let save2 = save_cookies.clone();
         cs.borrow_mut().set("set".into(), native("cookieStore.set", move |args| {
             let mut it = args.into_iter();
             let first = it.next().unwrap_or(JsValue::Undefined);
@@ -3549,12 +3564,15 @@ pub fn setup_builtins(
                 (n, v)
             };
             c2.borrow_mut().insert(name, value);
+            save2();
             Ok(make_settled_promise("fulfilled", JsValue::Undefined))
         }));
         let c3 = Rc::clone(&cookies);
+        let save3 = save_cookies.clone();
         cs.borrow_mut().set("delete".into(), native("cookieStore.delete", move |args| {
             let name = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
             c3.borrow_mut().remove(&name);
+            save3();
             Ok(make_settled_promise("fulfilled", JsValue::Undefined))
         }));
         let c4 = Rc::clone(&cookies);
