@@ -184,6 +184,12 @@ pub struct WebView {
     /// (JS DOM mutation pres setAttribute/appendChild/innerHTML potrebuje
     /// repaint i bez explicitniho input event).
     pub(crate) last_render_dom_version: u64,
+    /// Cascade cache: hash key (dom_version, hovered_id, focused_id, viewport)
+    /// -> resolved StyleMap. Pri shode reuse Rc clone. Bez cache by hover
+    /// pohyb mysi vyvolal cascade walk celeho DOMu kazdy frame (2400 LOC HTML
+    /// + 28 :hover selectoru = 100% CPU pri pohybu).
+    pub(crate) cascade_cache_key: Option<u64>,
+    pub(crate) cascade_cache_value: Option<std::rc::Rc<crate::browser::cascade::StyleMap>>,
 }
 
 impl WebView {
@@ -236,6 +242,8 @@ impl WebView {
             nav_id: 0,
             collected_sources: Vec::new(),
             last_render_dom_version: 0,
+            cascade_cache_key: None,
+            cascade_cache_value: None,
         }
     }
 
@@ -1234,11 +1242,38 @@ impl WebView {
         let viewport_w = self.viewport_w / self.zoom.max(0.01);
         let viewport_h = self.viewport_h / self.zoom.max(0.01);
 
-        // 1. Cascade - resolve CSS styles per element. Wrap v Rc aby
-        // apply_animations / apply_transitions mohly Rc::make_mut mutate
-        // (pri animaci tick anim values overlay puvodne resolved styles).
-        let mut style_map = std::rc::Rc::new(crate::browser::cascade::cascade_with_viewport(
-            &doc.root, &self.stylesheets, viewport_w, viewport_h));
+        // 1. Cascade - resolve CSS styles per element. Cache pres hash klic
+        // (dom_version, hovered_node, focused_node, viewport, stylesheets_len).
+        // Pri pohybu mysi bez zmeny hovered_node = reuse cached map = O(1)
+        // misto O(N*M) walk.
+        let cache_key = {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            // dom_version
+            self.interpreter.as_ref().map(|i| i.dom_version()).unwrap_or(0).hash(&mut hasher);
+            // hovered / focused thread_local state (mozna mezi WebView sdileno)
+            crate::browser::cascade::get_hovered_node().unwrap_or(0).hash(&mut hasher);
+            self.focused_node_local.unwrap_or(0).hash(&mut hasher);
+            // viewport rounded
+            (viewport_w as u32).hash(&mut hasher);
+            (viewport_h as u32).hash(&mut hasher);
+            // stylesheets - cheap identity (len + first rule count)
+            self.stylesheets.len().hash(&mut hasher);
+            for s in &self.stylesheets {
+                s.rules.len().hash(&mut hasher);
+            }
+            hasher.finish()
+        };
+        let mut style_map = if Some(cache_key) == self.cascade_cache_key {
+            // Cache hit - reuse Rc clone.
+            self.cascade_cache_value.as_ref().unwrap().clone()
+        } else {
+            let m = std::rc::Rc::new(crate::browser::cascade::cascade_with_viewport(
+                &doc.root, &self.stylesheets, viewport_w, viewport_h));
+            self.cascade_cache_key = Some(cache_key);
+            self.cascade_cache_value = Some(m.clone());
+            m
+        };
 
         let elapsed = self.animation_origin.elapsed().as_secs_f32();
 
