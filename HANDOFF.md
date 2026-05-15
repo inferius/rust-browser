@@ -2061,8 +2061,40 @@ WebView render_via dela:
 - Address bar Ctrl+L (stdout-only feedback)
 - Find on page Ctrl+F (stdout-only, highlight TBD)
 
-### Test counts (po N+23, all tiers done)
+### Test counts (po N+23, Tier 1-4 done)
 
 - 2804 engine, 8 devtools-proto, 3 devtools-frontend = 2815 testu
 - 0 warnings, cargo build/test --workspace cisty
 - 30+ commitov v session
+
+### DOM API Tier 5 (8/8 hotove, 29 testu)
+
+CSSOM + Shadow DOM + Selection/Range + scrollingElement.
+
+- **Shadow DOM real** - attachShadow vraci ShadowRoot s DocumentFragment-based
+  underlying DOM. Shadow_roots registry na Interpreter (host_ptr -> SR obj).
+  ShadowRoot dispatch: appendChild/removeChild/querySelector/querySelectorAll/
+  getElementById/contains real. Closed mode hide z host.shadowRoot. Double-
+  attach throws NotSupportedError per spec.
+- **document.scrollingElement** -> html_element (standard mode).
+- **document.styleSheets real** s host wire-up:
+  - Interpreter.stylesheets_lookup callback (Vec<sheet> kde sheet = Vec<rule>).
+  - WebView.stylesheets_data Rc<RefCell> bridge - po load_html rebuild ze
+    self.stylesheets do flat format.
+  - StyleSheetList: length, item(i), indexed [0].
+  - CSSStyleSheet: cssRules (CSSRuleList s length + item + indexed),
+    insertRule/deleteRule stubs (vrati idx/undefined), replace/replaceSync
+    Promise stubs (Constructable Stylesheets), href, disabled, type.
+  - CSSRule: type=1 (STYLE_RULE), selectorText, cssText, style.
+- **Selection API + Range API** existoval, pridan jen window.getSelection()
+  mirror document.getSelection.
+- **CSSStyleDeclaration full** - pridan length getter (__get_length__) +
+  item(i) (vraci nazev i-te property). cssText getter/setter uz existoval.
+- **document.fonts** - pridan forEach + addEventListener/removeEventListener
+  stubs. status='loaded', size=0, ready=Promise.resolve, check, load OK.
+
+### Test counts (po N+24, all 5 tiers done)
+
+- 2833 engine, 8 devtools-proto, 3 devtools-frontend = 2844 testu
+- 0 warnings, cargo build/test --workspace cisty
+- 3 commit DOM Tier 5 (shadow + style + styleSheets)
