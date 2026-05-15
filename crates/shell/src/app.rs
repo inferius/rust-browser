@@ -816,12 +816,18 @@ html, body {{ margin: 0; padding: 0; height: 100%; background: #202124; color: #
             // by se ignorovaly (loader::extract_inline_styles bezi jen pres
             // load_url cestu). Extract rucne a predat jako css parametr.
             let inline_css = Self::extract_inline_styles(&dv_html);
-            let _ = dv.load_html(&dv_html, &inline_css, None);
-            // D6b: setup channel + target. Native fns install po load_html
-            // (cdp.js definovany pred volanim native). Pumpa probiha v
-            // redraw - drain queue + dispatch pres target + page WebView.
+            // BUG fix: install CDP natives MUSI byt PRED run_scripts.
+            // Drive byl cely `load_html` (=load_dom + run_scripts) volan, pak
+            // install. Inicialni scripty (cdp.js setInterval + elements.html
+            // `cdp.send DOM.getDocument`) bezely PRED native binding install ->
+            // throw "__rwe_cdp_send_native not defined" -> tree "Error: ..."
+            // misto DOM tree.
+            // Reseni: load_dom (parse + interpreter init, no scripts), pak
+            // install natives, pak run_scripts (scripty maji bindings).
+            let _ = dv.load_dom(&dv_html, &inline_css, None);
             let channel = CdpChannel::new();
             Self::install_cdp_natives(&mut dv, &channel);
+            dv.run_scripts();
             let html_len = Self::build_devtools_html().len();
             let css_len = Self::extract_inline_styles(&Self::build_devtools_html()).len();
             println!("[shell] devtools WebView armed: html={} bytes, inline css={} bytes",
