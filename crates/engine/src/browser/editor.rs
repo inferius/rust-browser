@@ -452,6 +452,45 @@ mod tests {
     }
 
     #[test]
+    fn editor_hit_test_then_caret_char_index() {
+        // Simulace MouseDown na vnitrek inputu "hello": klik priblizne na
+        // pozici 'l' (3. char) -> caret musi byt na 2 nebo 3 dle snap.
+        let mut ed = EditorState::new("hello");
+        let (_, shaped) = shape_text(&ed.text, 16.0, 400, false, "", 0.0);
+        // X = stred 3. glyfu ('l' index 2).
+        let target_x = (shaped.cumulative[2] + shaped.cumulative[3]) * 0.5 - 0.5;
+        ed.hit_test(&shaped, target_x, false);
+        // Char index pred 3. glyf = 2.
+        assert_eq!(ed.caret_char_index(), 2);
+        // Byte = 2 (ASCII).
+        assert_eq!(ed.caret, 2);
+    }
+
+    #[test]
+    fn editor_set_text_clamps_caret() {
+        let mut ed = EditorState::new("hello world");
+        ed.caret = 11;
+        ed.set_text("hi");
+        assert_eq!(ed.text, "hi");
+        assert_eq!(ed.caret, 2, "caret musi clamp na novy text.len()");
+    }
+
+    #[test]
+    fn editor_extend_selection_anchors() {
+        // Move s extend=true po caret advancuje - selection_anchor zustava
+        // na initial position.
+        let mut ed = EditorState::new("hello");
+        ed.caret = 1;
+        ed.move_right(false, true); // extend=true
+        assert_eq!(ed.caret, 2);
+        assert_eq!(ed.selection_anchor, Some(1));
+        ed.move_right(false, true);
+        assert_eq!(ed.caret, 3);
+        assert_eq!(ed.selection_anchor, Some(1), "anchor musi zustat");
+        assert_eq!(ed.selection_range(), Some((1, 3)));
+    }
+
+    #[test]
     fn editor_byte_char_roundtrip() {
         let txt = "aá本";
         // 'a' = 1B, 'á' = 2B, '本' = 3B. Total = 6B, 3 chars.
