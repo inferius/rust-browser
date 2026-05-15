@@ -25,6 +25,71 @@ use rwe_devtools_proto::DevtoolsRequest;
 
 /// Guess resource_type pro Network.requestWillBeSent event z URL extension.
 /// Real impl by mela header Content-Type, ale aktualne network_log nema.
+/// ConsoleArg (Phase A3 strukturovany format) -> CDP RemoteObject JSON.
+/// Format CDP Runtime.RemoteObject:
+///   { type, subtype?, value?, description?, preview? }
+/// Mapping per ConsoleArgKind. Pro Object/Array/Map/Set vlozi `preview`
+/// s prvni-uroven children jako properties array.
+fn console_arg_to_cdp_remote_object(arg: &rwe_engine::interpreter::console_args::ConsoleArg) -> serde_json::Value {
+    use rwe_engine::interpreter::console_args::ConsoleArgKind as K;
+    let (cdp_type, cdp_subtype): (&str, Option<&str>) = match arg.kind {
+        K::String                 => ("string", None),
+        K::Number                 => ("number", None),
+        K::Bool                   => ("boolean", None),
+        K::Undefined              => ("undefined", None),
+        K::Null                   => ("object", Some("null")),
+        K::BigInt                 => ("bigint", None),
+        K::Function               => ("function", None),
+        K::Object                 => ("object", None),
+        K::Array                  => ("object", Some("array")),
+        K::Error                  => ("object", Some("error")),
+        K::Date                   => ("object", Some("date")),
+        K::RegExp                 => ("object", Some("regexp")),
+        K::Dom                    => ("object", Some("node")),
+        K::Map                    => ("object", Some("map")),
+        K::Set                    => ("object", Some("set")),
+        K::Promise                => ("object", Some("promise")),
+    };
+    let mut obj = serde_json::Map::new();
+    obj.insert("type".into(), serde_json::Value::String(cdp_type.into()));
+    if let Some(sub) = cdp_subtype {
+        obj.insert("subtype".into(), serde_json::Value::String(sub.into()));
+    }
+    obj.insert("description".into(), serde_json::Value::String(arg.repr.clone()));
+    // Pro String/Number/Bool inline value (frontend rendering bez expand).
+    match arg.kind {
+        K::String => { obj.insert("value".into(), serde_json::Value::String(arg.repr.clone())); }
+        K::Number => {
+            if let Ok(n) = arg.repr.parse::<f64>() {
+                if let Some(v) = serde_json::Number::from_f64(n) {
+                    obj.insert("value".into(), serde_json::Value::Number(v));
+                }
+            }
+        }
+        K::Bool => {
+            obj.insert("value".into(), serde_json::Value::Bool(arg.repr == "true"));
+        }
+        _ => {}
+    }
+    // Preview s children pro Object/Array/Map/Set.
+    if !arg.children.is_empty() {
+        let props: Vec<serde_json::Value> = arg.children.iter().map(|(k, v)| {
+            serde_json::json!({
+                "name": k,
+                "type": "string",
+                "value": v,
+            })
+        }).collect();
+        obj.insert("preview".into(), serde_json::json!({
+            "type": cdp_type,
+            "description": arg.repr,
+            "overflow": arg.children.len() >= 16,
+            "properties": props,
+        }));
+    }
+    serde_json::Value::Object(obj)
+}
+
 fn guess_resource_type(url: &str) -> &'static str {
     let lc = url.to_ascii_lowercase();
     if lc.ends_with(".js") || lc.ends_with(".mjs") { "Script" }
@@ -181,6 +246,18 @@ pub struct ShellApp {
     /// Posledni viditelny idx v page.interpreter().console_log. Pump_cdp
     /// detekuje nove entries a emit Runtime.consoleAPICalled events.
     cdp_console_log_idx: usize,
+    /// Last seen page.nav_id - pri zmene drain collected_sources do
+    /// cdp_sources_cache + emit Debugger.scriptParsed events.
+    cdp_last_nav_id: u64,
+    /// Cache sebranych source files - klic = scriptId (sekvencni string).
+    /// Format: (scriptId, url, body, lang_marker). Pouziva
+    /// Debugger.getScriptSource handler pro retrieve body.
+    cdp_sources_cache: Vec<(String, String, String, String)>,
+    /// Sekvencni script ID generator.
+    cdp_next_script_id: u64,
+    /// Last seen page.dom_version() - pri zmene emit DOM.documentUpdated
+    /// (frontend pak znovu vyzve DOM.getDocument).
+    cdp_last_dom_version: u64,
 
     mouse_x: f32,
     mouse_y: f32,
@@ -219,6 +296,10 @@ impl ShellApp {
             cdp_channel: None,
             cdp_network_log_idx: 0,
             cdp_console_log_idx: 0,
+            cdp_last_nav_id: 0,
+            cdp_sources_cache: Vec::new(),
+            cdp_next_script_id: 1,
+            cdp_last_dom_version: 0,
             mouse_x: 0.0,
             mouse_y: 0.0,
             modifiers: winit::keyboard::ModifiersState::empty(),
@@ -332,7 +413,32 @@ impl ShellApp {
         for req in pending {
             let req_id = req.id;
             let req_method = req.method.clone();
-            let resp = target.handle_request(page, req);
+            // Shell-side intercept: Debugger.getScriptSource - sources nejsou
+            // v WebView, drzi je shell.cdp_sources_cache.
+            let resp = if req.method == "Debugger.getScriptSource" {
+                let script_id = req.params.get("script_id")
+                    .and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let body = self.cdp_sources_cache.iter()
+                    .find(|(id, _, _, _)| *id == script_id)
+                    .map(|(_, _, body, _)| body.clone());
+                match body {
+                    Some(b) => rwe_devtools_proto::DevtoolsResponse {
+                        id: req.id,
+                        result: Some(serde_json::json!({ "script_source": b })),
+                        error: None,
+                    },
+                    None => rwe_devtools_proto::DevtoolsResponse {
+                        id: req.id,
+                        result: None,
+                        error: Some(rwe_devtools_proto::DevtoolsError {
+                            code: rwe_devtools_proto::error_codes::NODE_NOT_FOUND,
+                            message: format!("Script {script_id} not found"),
+                        }),
+                    },
+                }
+            } else {
+                target.handle_request(page, req)
+            };
             let json = serde_json::to_string(&resp)
                 .unwrap_or_else(|e| format!("{{\"error\":\"serialize: {e}\"}}"));
             println!("[cdp dispatch] id={} method={} resp_len={}",
@@ -345,6 +451,64 @@ impl ShellApp {
             let json = serde_json::to_string(&evt)
                 .unwrap_or_else(|e| format!("{{\"error\":\"serialize: {e}\"}}"));
             channel.resp_queue.borrow_mut().push_back(json);
+        }
+        // Nav detekce - pri zmene page.nav_id() drain collected_sources +
+        // emit Debugger.scriptParsed + DOM.documentUpdated.
+        let cur_nav = page.nav_id();
+        if cur_nav != self.cdp_last_nav_id {
+            let sources = page.take_collected_sources();
+            // Clear sources cache pri nove stranky.
+            self.cdp_sources_cache.clear();
+            for (url, body, lang) in sources {
+                if lang != "js" { continue; } // CDP scriptParsed je jen pro JS
+                let script_id = self.cdp_next_script_id.to_string();
+                self.cdp_next_script_id += 1;
+                let line_count = body.lines().count() as u32;
+                let end_col = body.lines().last().map(|l| l.len() as u32).unwrap_or(0);
+                let evt = rwe_devtools_proto::DevtoolsEvent {
+                    method: "Debugger.scriptParsed".to_string(),
+                    params: serde_json::json!({
+                        "scriptId": script_id,
+                        "url": url,
+                        "startLine": 0,
+                        "startColumn": 0,
+                        "endLine": line_count.saturating_sub(1),
+                        "endColumn": end_col,
+                        "executionContextId": 1,
+                        "hash": "",
+                        "isLiveEdit": false,
+                        "sourceMapURL": "",
+                        "hasSourceURL": false,
+                        "isModule": false,
+                        "length": body.len(),
+                    }),
+                };
+                let json = serde_json::to_string(&evt).unwrap_or_default();
+                channel.resp_queue.borrow_mut().push_back(json);
+                self.cdp_sources_cache.push((script_id, url.clone(), body, lang.to_string()));
+            }
+            // DOM.documentUpdated - frontend reload tree.
+            let dom_evt = rwe_devtools_proto::DevtoolsEvent {
+                method: "DOM.documentUpdated".to_string(),
+                params: serde_json::json!({}),
+            };
+            channel.resp_queue.borrow_mut().push_back(
+                serde_json::to_string(&dom_evt).unwrap_or_default());
+            self.cdp_last_nav_id = cur_nav;
+            // Sync dom_version - po nav je dom_version > 0, frontend uz
+            // dostal documentUpdated event vyse, neopakovat.
+            self.cdp_last_dom_version = page.dom_version();
+        }
+        // DOM mutation detekce - pri rozdilu emit DOM.documentUpdated.
+        let cur_dom = page.dom_version();
+        if cur_dom != self.cdp_last_dom_version {
+            let evt = rwe_devtools_proto::DevtoolsEvent {
+                method: "DOM.documentUpdated".to_string(),
+                params: serde_json::json!({}),
+            };
+            channel.resp_queue.borrow_mut().push_back(
+                serde_json::to_string(&evt).unwrap_or_default());
+            self.cdp_last_dom_version = cur_dom;
         }
         // Diff page network_log od last index -> emit Network events.
         // Format network_log entry: (url, status). Status 0 = pending.
@@ -407,13 +571,27 @@ impl ShellApp {
                 }
             }
             self.cdp_network_log_idx = net_log.len();
-            // Diff console_log -> emit Runtime.consoleAPICalled events.
-            for (level, msg) in console_log.iter().skip(self.cdp_console_log_idx) {
+            // Diff console_log + console_log_args -> emit Runtime.consoleAPICalled events.
+            // Paralelne s console_log_args (i-ty entry = i-ty zaznam) pro typove
+            // preview. Bez args fallback na plain string (legacy / worker entries).
+            let log_args = interp.console_log_args.borrow();
+            for (i, (level, msg)) in console_log.iter().enumerate().skip(self.cdp_console_log_idx) {
+                let args_json: serde_json::Value = if let Some(structured) = log_args.get(i) {
+                    if structured.is_empty() {
+                        serde_json::json!([{ "type": "string", "value": msg, "description": msg }])
+                    } else {
+                        let arr: Vec<serde_json::Value> = structured.iter()
+                            .map(console_arg_to_cdp_remote_object).collect();
+                        serde_json::Value::Array(arr)
+                    }
+                } else {
+                    serde_json::json!([{ "type": "string", "value": msg, "description": msg }])
+                };
                 let evt = rwe_devtools_proto::DevtoolsEvent {
                     method: "Runtime.consoleAPICalled".to_string(),
                     params: serde_json::json!({
                         "type": level,
-                        "args": [{ "type": "string", "value": msg, "description": msg }],
+                        "args": args_json,
                         "timestamp": now_ts,
                     }),
                 };

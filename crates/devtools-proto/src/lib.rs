@@ -347,6 +347,19 @@ pub mod debugger {
     /// Debugger.pause - manual pause na nasledujici statement.
     /// Method string: "Debugger.pause"
 
+    /// Debugger.getScriptSource - vrat source code daneho scriptId.
+    /// Method string: "Debugger.getScriptSource"
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct GetScriptSourceParams {
+        pub script_id: String,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct GetScriptSourceResult {
+        pub script_source: String,
+    }
+
+
     /// Event: Debugger.paused - VM hit breakpoint nebo pause.
     /// Method string: "Debugger.paused"
     #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -489,6 +502,7 @@ pub enum Method {
     DebuggerStepInto,
     DebuggerStepOut,
     DebuggerPause,
+    DebuggerGetScriptSource,
     NetworkGetResponseBody,
     PerformanceGetMetrics,
 }
@@ -513,6 +527,7 @@ impl Method {
             Method::DebuggerStepInto => "Debugger.stepInto",
             Method::DebuggerStepOut => "Debugger.stepOut",
             Method::DebuggerPause => "Debugger.pause",
+            Method::DebuggerGetScriptSource => "Debugger.getScriptSource",
             Method::NetworkGetResponseBody => "Network.getResponseBody",
             Method::PerformanceGetMetrics => "Performance.getMetrics",
         }
@@ -537,6 +552,7 @@ impl Method {
             "Debugger.stepInto" => Method::DebuggerStepInto,
             "Debugger.stepOut" => Method::DebuggerStepOut,
             "Debugger.pause" => Method::DebuggerPause,
+            "Debugger.getScriptSource" => Method::DebuggerGetScriptSource,
             "Network.getResponseBody" => Method::NetworkGetResponseBody,
             "Performance.getMetrics" => Method::PerformanceGetMetrics,
             _ => return None,

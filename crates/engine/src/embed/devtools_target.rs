@@ -104,6 +104,9 @@ impl DevtoolsTarget {
             Method::DebuggerStepInto => self.handle_debugger_step_into(webview, req),
             Method::DebuggerStepOut => self.handle_debugger_step_out(webview, req),
             Method::DebuggerPause => self.handle_debugger_pause(webview, req),
+            Method::DebuggerGetScriptSource => Self::error_response(req.id,
+                error_codes::METHOD_NOT_FOUND,
+                "Debugger.getScriptSource must be handled by shell (sources cache)".into()),
 
             // Network domain
             Method::NetworkGetResponseBody => self.handle_network_get_response_body(webview, req),
