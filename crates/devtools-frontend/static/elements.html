@@ -108,6 +108,21 @@
                         renderNode(result.root, 0);
                     });
             });
+            // D5: Shell emit DOM.inspectNodeRequested kdyz user klikne v
+            // inspect mode na page. Najdeme node v tree + selectneme.
+            window.cdp.on('DOM.inspectNodeRequested', evt => {
+                var targetId = evt.nodeId;
+                var divs = tree.querySelectorAll('.node');
+                for (var i = 0; i < divs.length; i++) {
+                    var d = divs[i];
+                    if (d.dataset && d.dataset.nodeId == targetId) {
+                        selectNode(targetId, d);
+                        d.scrollIntoView();
+                        return;
+                    }
+                }
+                console.log('[inspect] node not found in tree:', targetId);
+            });
         }
     })();
 </script>
