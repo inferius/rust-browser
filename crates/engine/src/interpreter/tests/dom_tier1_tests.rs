@@ -175,6 +175,64 @@ fn computed_style_with_cascade_lookup() {
     assert_eq!(as_str(v), "rgb(0, 0, 0)|rgb(255, 255, 255)");
 }
 
+// ─── Item 4: offset/client/scroll dimensions ─────────────────────────────
+
+#[test]
+fn offset_dimensions_default_zero() {
+    let v = run(r#"
+        const el = document.createElement("div");
+        return el.offsetWidth + ":" + el.offsetHeight + ":" + el.offsetLeft + ":" + el.offsetTop;
+    "#);
+    assert_eq!(as_str(v), "0:0:0:0");
+}
+
+#[test]
+fn offset_dimensions_with_layout() {
+    use crate::interpreter::Interpreter;
+    use crate::lexer::base::Lexer;
+    use crate::parser::Parser;
+    use crate::tokens::TokenKind;
+
+    let src = r#"
+        const el = document.createElement("div");
+        return el.offsetWidth + ":" + el.offsetHeight + ":" + el.offsetLeft + ":" + el.offsetTop;
+    "#;
+    let lexer = Lexer::parse_str(src, "<test>").unwrap();
+    let tokens: Vec<_> = lexer.tokens.into_iter()
+        .filter(|t| !matches!(t.kind,
+            TokenKind::Whitespace | TokenKind::Newline
+            | TokenKind::CommentLine(_) | TokenKind::CommentBlock(_)))
+        .collect();
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse().unwrap();
+    let mut interp = Interpreter::new();
+    interp.set_layout_lookup(|_| Some((5.0, 8.0, 200.0, 100.0)));
+    let v = interp.run(&program).unwrap();
+    assert_eq!(as_str(v), "200:100:5:8");
+}
+
+#[test]
+fn client_scroll_dimensions() {
+    let v = run(r#"
+        const el = document.createElement("div");
+        return el.clientWidth + ":" + el.clientHeight + ":"
+             + el.scrollWidth + ":" + el.scrollHeight + ":"
+             + el.clientLeft + ":" + el.scrollTop;
+    "#);
+    assert_eq!(as_str(v), "0:0:0:0:0:0");
+}
+
+#[test]
+fn offset_parent_returns_parent_node() {
+    let v = run(r#"
+        const parent = document.createElement("div");
+        const child = document.createElement("span");
+        parent.appendChild(child);
+        return child.offsetParent === parent;
+    "#);
+    assert_eq!(as_bool(v), true);
+}
+
 #[test]
 fn match_media_returns_object() {
     let v = run(r#"

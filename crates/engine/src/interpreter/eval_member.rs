@@ -308,18 +308,8 @@ impl Interpreter {
                         let h = n.attr("height").and_then(|h| h.parse::<f64>().ok()).unwrap_or(0.0);
                         return Ok(JsValue::Number(h));
                     }
-                    // Element bounding rect (zjednoduseny)
-                    "offsetWidth" | "clientWidth" | "scrollWidth" => {
-                        let w = n.attr("width").and_then(|w| w.parse::<f64>().ok()).unwrap_or(0.0);
-                        return Ok(JsValue::Number(w));
-                    }
-                    "offsetHeight" | "clientHeight" | "scrollHeight" => {
-                        let h = n.attr("height").and_then(|h| h.parse::<f64>().ok()).unwrap_or(0.0);
-                        return Ok(JsValue::Number(h));
-                    }
-                    "offsetLeft" | "offsetTop" | "scrollLeft" | "scrollTop" => {
-                        return Ok(JsValue::Number(0.0));
-                    }
+                    // Stare stuby pro offset/client/scroll - nahrazeny nizez s
+                    // layout_lookup-aware impl (Tier 1 Item 4).
                     // Hidden / contentEditable / draggable
                     "hidden" => {
                         return Ok(JsValue::Bool(n.has_attr("hidden")));
@@ -568,6 +558,59 @@ impl Interpreter {
                     "style" => {
                         return Ok(dom_props::get_or_create_style_object(
                             &self.style_cache, Rc::clone(&n),
+                        ));
+                    }
+                    // offsetWidth/Height/Left/Top - rect z layout_lookup (rounded).
+                    // Pro zacatek offset == client == rect (bez nezavisleho rozliseni border).
+                    "offsetWidth" => {
+                        let (_, _, w, _) = self.lookup_layout_rect(&n).unwrap_or((0.0, 0.0, 0.0, 0.0));
+                        return Ok(JsValue::Number(w.round() as f64));
+                    }
+                    "offsetHeight" => {
+                        let (_, _, _, h) = self.lookup_layout_rect(&n).unwrap_or((0.0, 0.0, 0.0, 0.0));
+                        return Ok(JsValue::Number(h.round() as f64));
+                    }
+                    "offsetLeft" => {
+                        let (x, _, _, _) = self.lookup_layout_rect(&n).unwrap_or((0.0, 0.0, 0.0, 0.0));
+                        return Ok(JsValue::Number(x.round() as f64));
+                    }
+                    "offsetTop" => {
+                        let (_, y, _, _) = self.lookup_layout_rect(&n).unwrap_or((0.0, 0.0, 0.0, 0.0));
+                        return Ok(JsValue::Number(y.round() as f64));
+                    }
+                    "offsetParent" => {
+                        // Zjednodusene: parent v DOM tree.
+                        return Ok(match n.parent.borrow().upgrade() {
+                            Some(p) => JsValue::DomNode(p),
+                            None    => JsValue::Null,
+                        });
+                    }
+                    // clientWidth/Height - content + padding (bez border). Zatim == rect.
+                    "clientWidth" => {
+                        let (_, _, w, _) = self.lookup_layout_rect(&n).unwrap_or((0.0, 0.0, 0.0, 0.0));
+                        return Ok(JsValue::Number(w.round() as f64));
+                    }
+                    "clientHeight" => {
+                        let (_, _, _, h) = self.lookup_layout_rect(&n).unwrap_or((0.0, 0.0, 0.0, 0.0));
+                        return Ok(JsValue::Number(h.round() as f64));
+                    }
+                    "clientLeft" | "clientTop" => {
+                        // Border width (zatim 0).
+                        return Ok(JsValue::Number(0.0));
+                    }
+                    // scrollWidth/Height - content size, scrollTop/Left - scroll position.
+                    "scrollWidth" => {
+                        let (_, _, w, _) = self.lookup_layout_rect(&n).unwrap_or((0.0, 0.0, 0.0, 0.0));
+                        return Ok(JsValue::Number(w.round() as f64));
+                    }
+                    "scrollHeight" => {
+                        let (_, _, _, h) = self.lookup_layout_rect(&n).unwrap_or((0.0, 0.0, 0.0, 0.0));
+                        return Ok(JsValue::Number(h.round() as f64));
+                    }
+                    "scrollTop" | "scrollLeft" => {
+                        // Aktualne ulozeno jako attribute (default 0).
+                        return Ok(JsValue::Number(
+                            n.attr(key).and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0)
                         ));
                     }
                     // HTMLFormElement properties
