@@ -413,6 +413,10 @@ impl WebView {
         self.dirty = true;
         if size_changed {
             self.ensure_target_texture();
+            // Dispatch window 'resize' event do JS po skutecne zmene size.
+            if let Some(interp) = self.interpreter.as_mut() {
+                interp.dispatch_window_event("resize", crate::interpreter::JsValue::Undefined);
+            }
         }
     }
 
@@ -1404,6 +1408,10 @@ impl WebView {
             self.scroll_target_x = x;
             self.scroll_target_y = y;
             self.dirty = true;
+            // Dispatch window 'scroll' event do JS.
+            if let Some(interp) = self.interpreter.as_mut() {
+                interp.dispatch_window_event("scroll", crate::interpreter::JsValue::Undefined);
+            }
         }
     }
 
