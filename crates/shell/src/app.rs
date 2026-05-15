@@ -1265,12 +1265,16 @@ impl ApplicationHandler for ShellApp {
                     }
                     return;
                 }
-                // Throttle mouse_move dispatch na 60fps cap. Bez tohoto kazdy
-                // pixel pohybu mysi vyvolal hit_test + cascade walk + paint
-                // (devtools-frontend ma 28x :hover -> kazda zmena hover dirty).
-                // OS dodava CursorMoved freq ~1000Hz - bez throttle 100% CPU.
+                // Throttle mouse_move dispatch. 16ms = 60fps cap pro release,
+                // 33ms = 30fps cap pro debug (cascade je 5-10x pomalejsi bez
+                // optimalizaci). OS dodava CursorMoved ~1000Hz - bez throttle
+                // 100% CPU pri pohybu nad devtools-frontend (28x :hover).
+                #[cfg(debug_assertions)]
+                let throttle_ms = 33u128;
+                #[cfg(not(debug_assertions))]
+                let throttle_ms = 16u128;
                 let now = std::time::Instant::now();
-                if now.duration_since(self.last_mouse_move).as_millis() < 16 {
+                if now.duration_since(self.last_mouse_move).as_millis() < throttle_ms {
                     return;
                 }
                 self.last_mouse_move = now;

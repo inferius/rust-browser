@@ -190,6 +190,10 @@ pub struct WebView {
     /// + 28 :hover selectoru = 100% CPU pri pohybu).
     pub(crate) cascade_cache_key: Option<u64>,
     pub(crate) cascade_cache_value: Option<std::rc::Rc<crate::browser::cascade::StyleMap>>,
+    /// Hit-test cache pri mouse_move - klic = (x rounded 2px grid, y rounded,
+    /// dom_version) -> Option<hovered_id>. Pri stejnem klici reuse posledni
+    /// hovered (bez tree walk). Mouse pohyb pres 1px = stejna mrizka.
+    pub(crate) hit_test_cache: Option<((i32, i32, u64), Option<usize>)>,
 }
 
 impl WebView {
@@ -244,6 +248,7 @@ impl WebView {
             last_render_dom_version: 0,
             cascade_cache_key: None,
             cascade_cache_value: None,
+            hit_test_cache: None,
         }
     }
 
@@ -638,12 +643,23 @@ impl WebView {
                         }
                     }
                     // Hit-test layout_root pres content coords -> :hover state.
+                    // Cache: pri stejne 2px-mrizce a dom_version reuse posledni
+                    // hovered_id (bez tree walk).
                     let content_x = x + self.scroll_x;
                     let content_y = y + self.scroll_y;
-                    let hovered_id = self.last_layout_root.as_ref()
-                        .and_then(|root| root.hit_test(content_x, content_y))
-                        .and_then(|bx| bx.node.as_ref().map(|n|
-                            std::rc::Rc::as_ptr(n) as usize));
+                    let dom_v = self.interpreter.as_ref().map(|i| i.dom_version()).unwrap_or(0);
+                    let hit_key = ((content_x / 2.0) as i32, (content_y / 2.0) as i32, dom_v);
+                    let hovered_id = match &self.hit_test_cache {
+                        Some((k, v)) if *k == hit_key => *v,
+                        _ => {
+                            let h = self.last_layout_root.as_ref()
+                                .and_then(|root| root.hit_test(content_x, content_y))
+                                .and_then(|bx| bx.node.as_ref().map(|n|
+                                    std::rc::Rc::as_ptr(n) as usize));
+                            self.hit_test_cache = Some((hit_key, h));
+                            h
+                        }
+                    };
                     let prev = crate::browser::cascade::get_hovered_node();
                     if prev != hovered_id {
                         crate::browser::cascade::set_hovered_node(hovered_id);
