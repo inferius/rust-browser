@@ -424,6 +424,44 @@ impl ShellApp {
         }
     }
 
+    /// Sync chrome address input dle history[idx] (po nav back/fwd/reload/load).
+    fn sync_chrome_url(&mut self) {
+        let cur = self.history.get(self.history_idx).cloned();
+        if let Some(url) = cur {
+            self.update_chrome_url(&url);
+        }
+    }
+
+    /// Updatuje address input v chrome bar na novou URL. Volane po nav
+    /// (back/forward/reload/navigate). Najde #addr element v chrome DOM
+    /// + nastavi value attr + force redraw.
+    fn update_chrome_url(&mut self, url: &str) {
+        let chrome = match self.chrome.as_mut() { Some(c) => c, None => return };
+        let interp = match chrome.interpreter() { Some(i) => i, None => return };
+        let doc = interp.document.borrow();
+        let root = std::rc::Rc::clone(&doc.root);
+        drop(doc);
+        // Najdi #addr element pres DFS.
+        fn find_by_id(
+            node: &std::rc::Rc<rwe_engine::browser::dom::Node>,
+            id: &str,
+        ) -> Option<std::rc::Rc<rwe_engine::browser::dom::Node>> {
+            if let Some(attr_val) = node.attributes.borrow().get("id") {
+                if attr_val == id { return Some(std::rc::Rc::clone(node)); }
+            }
+            for c in node.children.borrow().iter() {
+                if let Some(f) = find_by_id(c, id) { return Some(f); }
+            }
+            None
+        }
+        if let Some(addr) = find_by_id(&root, "addr") {
+            addr.attributes.borrow_mut().insert("value".to_string(), url.to_string());
+        }
+        // Force dirty pro pristi render.
+        chrome.resize(chrome.viewport_size().0 as u32, chrome.viewport_size().1 as u32,
+            chrome.scale_factor());
+    }
+
     /// Install __shell_*__ native fns na chrome interpreter. Kazda push
     /// ShellCommand do chrome_cmds queue. Shell main loop drain + execute.
     fn install_chrome_natives(chrome: &mut WebView, cmds: &ShellCmdQueue) {
@@ -490,16 +528,17 @@ impl ShellApp {
                 }
                 ShellCommand::ToggleDevtools => self.toggle_devtools(),
                 ShellCommand::Navigate(url) => {
-                    if let Some(wv) = &mut self.webview {
-                        if wv.load_url(&url).is_some() {
-                            self.history.truncate(self.history_idx + 1);
-                            self.history.push(url);
-                            self.history_idx = self.history.len() - 1;
-                        }
+                    let loaded = self.webview.as_mut()
+                        .map(|wv| wv.load_url(&url).is_some()).unwrap_or(false);
+                    if loaded {
+                        self.history.truncate(self.history_idx + 1);
+                        self.history.push(url);
+                        self.history_idx = self.history.len() - 1;
                     }
                 }
             }
         }
+        self.sync_chrome_url();
         if let Some(w) = &self.window { w.request_redraw(); }
     }
 
@@ -513,11 +552,13 @@ impl ShellApp {
 html, body {{ margin: 0; padding: 0; height: 100%; background: #202124; color: #e8eaed;
   font-family: 'Segoe UI', sans-serif; font-size: 12px; overflow: hidden; }}
 .bar {{ display: flex; align-items: center; height: 100%; padding: 4px 8px; gap: 6px; }}
-.btn {{ background: #3c4043; color: #fff; border: 1px solid #5f6368; padding: 4px 10px;
-  border-radius: 4px; cursor: pointer; min-width: 26px; text-align: center; }}
+.btn {{ background: #3c4043; color: #fff; border: 1px solid #5f6368; padding: 2px 8px;
+  border-radius: 4px; cursor: pointer; min-width: 24px; height: 22px; line-height: 18px;
+  text-align: center; font-size: 12px; }}
 .btn:hover {{ background: #5f6368; }}
 .addr {{ flex: 1; background: #292a2d; color: #e8eaed; border: 1px solid #3c4043;
-  border-radius: 14px; padding: 5px 14px; outline: none; }}
+  border-radius: 11px; padding: 2px 12px; outline: none; height: 22px; line-height: 18px;
+  font-size: 12px; }}
 .addr:focus {{ border-color: #8ab4f8; }}
 </style></head><body>
 <div class="bar">
@@ -776,8 +817,9 @@ html, body {{ margin: 0; padding: 0; height: 100%; background: #202124; color: #
         let url = self.history[self.history_idx].clone();
         if let Some(wv) = &mut self.webview {
             wv.load_url(&url);
-            if let Some(w) = &self.window { w.request_redraw(); }
         }
+        self.sync_chrome_url();
+        if let Some(w) = &self.window { w.request_redraw(); }
     }
 
     fn nav_forward(&mut self) {
@@ -786,8 +828,9 @@ html, body {{ margin: 0; padding: 0; height: 100%; background: #202124; color: #
         let url = self.history[self.history_idx].clone();
         if let Some(wv) = &mut self.webview {
             wv.load_url(&url);
-            if let Some(w) = &self.window { w.request_redraw(); }
         }
+        self.sync_chrome_url();
+        if let Some(w) = &self.window { w.request_redraw(); }
     }
 
     fn redraw(&mut self) {
@@ -911,11 +954,6 @@ impl ApplicationHandler for ShellApp {
         webview.resize(lw, lh, sf);
         webview.set_local_path(self.local_path.clone());
         let _ = webview.load_html(&self.html, &self.css, self.base_url.clone());
-        // History init s initial URL (pro Alt+Left/Right back/forward).
-        if let Some(url) = &self.base_url {
-            self.history.push(url.clone());
-            self.history_idx = 0;
-        }
 
         // Chrome bar WebView - back/fwd/reload + URL input. Fixed top.
         let chrome_h_px = (self.chrome_h * sf) as u32;
@@ -928,6 +966,15 @@ impl ApplicationHandler for ShellApp {
         // Install native shell command bindings (back/fwd/reload/navigate).
         Self::install_chrome_natives(&mut chrome, &self.chrome_cmds);
 
+        // History init s initial URL - pri startu pres CLI arg.
+        if self.history.is_empty() {
+            let init_url = self.base_url.clone()
+                .or_else(|| self.local_path.as_ref().map(|p| p.to_string_lossy().to_string()))
+                .unwrap_or_else(|| "about:blank".to_string());
+            self.history.push(init_url);
+            self.history_idx = 0;
+        }
+
         self.window = Some(window.clone());
         self.renderer = Some(renderer);
         self.engine = Some(engine);
@@ -935,6 +982,8 @@ impl ApplicationHandler for ShellApp {
         self.chrome = Some(chrome);
         // Resize_views aplikuje chrome_h slot - page dostane lh - chrome_h.
         self.resize_views();
+        // Initial chrome URL sync z history.
+        self.sync_chrome_url();
 
         println!("[shell] vlastni okno + WebView + chrome bar");
         window.request_redraw();
