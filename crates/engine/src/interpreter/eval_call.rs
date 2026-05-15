@@ -1252,6 +1252,47 @@ impl Interpreter {
                             }
                             return Ok(child);
                         }
+                        "insertBefore" => {
+                            // parent.insertBefore(newNode, refNode) - vlozi newNode pred refNode.
+                            // Pokud refNode is null -> append na konec.
+                            // Pri DocumentFragment newNode vlozi vsechny jeho deti misto fragmentu.
+                            let mut it = arg_vals.into_iter();
+                            let new_child = it.next().unwrap_or(JsValue::Undefined);
+                            let ref_child = it.next().unwrap_or(JsValue::Null);
+                            let ref_rc = match &ref_child {
+                                JsValue::DomNode(r) => Some(Rc::clone(r)),
+                                _ => None,
+                            };
+                            match &new_child {
+                                JsValue::DomNode(c) => {
+                                    // Pokud je to DocumentFragment node, predej jeho deti
+                                    if matches!(c.kind, crate::browser::dom::NodeKind::DocumentFragment) {
+                                        let frag_children: Vec<_> = c.children.borrow().clone();
+                                        c.children.borrow_mut().clear();
+                                        for ch in &frag_children {
+                                            n.insert_before(Rc::clone(ch), ref_rc.as_ref());
+                                        }
+                                        self.dispatch_mutation_childlist(&n, frag_children, Vec::new());
+                                        return Ok(new_child);
+                                    }
+                                    let inserted = n.insert_before(Rc::clone(c), ref_rc.as_ref());
+                                    self.dispatch_mutation_childlist(&n, vec![Rc::clone(&inserted)], Vec::new());
+                                    // Lifecycle: connectedCallback
+                                    let child_ptr = Rc::as_ptr(&inserted) as usize;
+                                    let instance = self.custom_element_instances.borrow().get(&child_ptr).cloned();
+                                    if let Some(inst) = instance {
+                                        let cb = if let JsValue::Object(o) = &inst {
+                                            o.borrow().props.get("connectedCallback").cloned()
+                                        } else { None };
+                                        if let Some(f) = cb {
+                                            let _ = self.call_function(f, vec![], Some(inst));
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                            return Ok(new_child);
+                        }
                         "matches" => {
                             let sel = arg_vals.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
                             let parsed = crate::browser::css_parser::parse_selectors(&sel);

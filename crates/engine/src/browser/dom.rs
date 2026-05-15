@@ -24,6 +24,9 @@ pub enum NodeKind {
     Cdata(String),
     /// DOCTYPE deklarace
     DocType(String),
+    /// DocumentFragment - lightweight container, pri appendChild se jeho
+    /// deti presunou do parenta (DOM spec).
+    DocumentFragment,
 }
 
 /// DOM uzel.
@@ -96,6 +99,16 @@ impl NodeData {
         })
     }
 
+    pub fn new_document_fragment() -> Rc<Self> {
+        Rc::new(NodeData {
+            kind: NodeKind::DocumentFragment,
+            attributes: RefCell::new(HashMap::new()),
+            parent: RefCell::new(Weak::new()),
+            children: RefCell::new(Vec::new()),
+            listeners: RefCell::new(HashMap::new()),
+        })
+    }
+
     pub fn new_comment(content: &str) -> Rc<Self> {
         Rc::new(NodeData {
             kind: NodeKind::Comment(content.to_string()),
@@ -110,6 +123,68 @@ impl NodeData {
     pub fn append_child(self: &Rc<Self>, child: Rc<Node>) {
         *child.parent.borrow_mut() = Rc::downgrade(self);
         self.children.borrow_mut().push(child);
+    }
+
+    /// Vlozi `new_child` pred `ref_child`. Pokud `ref_child` is None, append.
+    /// Vraci `new_child` (DOM spec - vraci inserted node).
+    pub fn insert_before(self: &Rc<Self>, new_child: Rc<Node>, ref_child: Option<&Rc<Node>>) -> Rc<Node> {
+        // Nejprve odpoj new_child z puvodniho parenta, pokud existuje.
+        if let Some(old_parent) = new_child.parent.borrow().upgrade() {
+            old_parent.children.borrow_mut().retain(|c| !Rc::ptr_eq(c, &new_child));
+        }
+        *new_child.parent.borrow_mut() = Rc::downgrade(self);
+        let mut children = self.children.borrow_mut();
+        match ref_child {
+            Some(r) => {
+                if let Some(idx) = children.iter().position(|c| Rc::ptr_eq(c, r)) {
+                    children.insert(idx, Rc::clone(&new_child));
+                } else {
+                    // ref_child neni v children - DOM spec by mel throw, my appendneme.
+                    children.push(Rc::clone(&new_child));
+                }
+            }
+            None => {
+                children.push(Rc::clone(&new_child));
+            }
+        }
+        new_child
+    }
+
+    /// Nahradi `old_child` za `new_child` v children. Vraci `old_child`.
+    pub fn replace_child(self: &Rc<Self>, new_child: Rc<Node>, old_child: Rc<Node>) -> Rc<Node> {
+        // Odpoj new_child z puvodniho parenta.
+        if let Some(old_parent) = new_child.parent.borrow().upgrade() {
+            old_parent.children.borrow_mut().retain(|c| !Rc::ptr_eq(c, &new_child));
+        }
+        *new_child.parent.borrow_mut() = Rc::downgrade(self);
+        let mut children = self.children.borrow_mut();
+        if let Some(idx) = children.iter().position(|c| Rc::ptr_eq(c, &old_child)) {
+            children[idx] = new_child;
+            // Disconnect old_child parent.
+            *old_child.parent.borrow_mut() = Weak::new();
+        }
+        old_child
+    }
+
+    /// Deep clone: rekurzivne naklonuje kind + attrs + vsechny deti.
+    /// Pri `deep=false` klonuje jen self (bez deti).
+    /// Pozn.: listeners se NEklonuji (DOM spec - cloneNode nekopiruje listenery).
+    pub fn clone_node(self: &Rc<Self>, deep: bool) -> Rc<Self> {
+        let attrs_clone = self.attributes.borrow().clone();
+        let new_node = Rc::new(NodeData {
+            kind: self.kind.clone(),
+            attributes: RefCell::new(attrs_clone),
+            parent: RefCell::new(Weak::new()),
+            children: RefCell::new(Vec::new()),
+            listeners: RefCell::new(HashMap::new()),
+        });
+        if deep {
+            for ch in self.children.borrow().iter() {
+                let child_clone = ch.clone_node(true);
+                new_node.append_child(child_clone);
+            }
+        }
+        new_node
     }
 
     /// Vrati tag (lowercase) pokud je element.

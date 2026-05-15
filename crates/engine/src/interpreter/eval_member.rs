@@ -136,12 +136,13 @@ impl Interpreter {
                     }
                     "nodeType" => {
                         let nt = match &n.kind {
-                            NodeKind::Element { .. } => 1.0,
-                            NodeKind::Text(_)        => 3.0,
-                            NodeKind::Comment(_)     => 8.0,
-                            NodeKind::Document       => 9.0,
-                            NodeKind::DocType(_)     => 10.0,
-                            NodeKind::Cdata(_)       => 4.0,
+                            NodeKind::Element { .. }     => 1.0,
+                            NodeKind::Text(_)            => 3.0,
+                            NodeKind::Comment(_)         => 8.0,
+                            NodeKind::Document           => 9.0,
+                            NodeKind::DocType(_)         => 10.0,
+                            NodeKind::Cdata(_)           => 4.0,
+                            NodeKind::DocumentFragment   => 11.0,
                         };
                         return Ok(JsValue::Number(nt));
                     }

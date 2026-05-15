@@ -93,6 +93,12 @@ fn render_dom_tree(node: &Rc<Node>, depth: usize) -> String {
         NodeKind::Cdata(c) => {
             out.push_str(&format!("<div class=\"dom-cdata\">{}</div>", html_escape(c)));
         }
+        NodeKind::DocumentFragment => {
+            // DocumentFragment - render jen jeho deti, sam je transparentni.
+            for ch in node.children.borrow().iter() {
+                out.push_str(&render_dom_tree(ch, depth));
+            }
+        }
     }
     out
 }

@@ -47,3 +47,4 @@ mod bytecode_bench;
 mod cache_api_tests;
 mod indexeddb_tests;
 mod dom_tier1_tests;
+mod dom_tier2_tests;

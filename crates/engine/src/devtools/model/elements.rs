@@ -159,6 +159,12 @@ fn walk(
                 kind: RowKind::Cdata(c.clone()),
             });
         }
+        NodeKind::DocumentFragment => {
+            // DocumentFragment je transparentni - nezobrazujeme self, jen deti.
+            for ch in node.children.borrow().iter() {
+                walk(ch, depth, collapsed, out);
+            }
+        }
     }
 }
 
