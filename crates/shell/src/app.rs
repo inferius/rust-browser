@@ -325,6 +325,20 @@ impl ShellApp {
         if let Some(interp) = interp {
             let net_log = interp.network_log.borrow();
             let console_log = interp.console_log.borrow();
+            // Detekce page reload - len(network/console) zmensila se vs
+            // last idx => page byla rebuild. Emit DOM.documentUpdated +
+            // reset indexy.
+            if self.cdp_network_log_idx > net_log.len()
+                || self.cdp_console_log_idx > console_log.len() {
+                self.cdp_network_log_idx = 0;
+                self.cdp_console_log_idx = 0;
+                let evt = rwe_devtools_proto::DevtoolsEvent {
+                    method: "DOM.documentUpdated".to_string(),
+                    params: serde_json::json!({}),
+                };
+                let json = serde_json::to_string(&evt).unwrap_or_default();
+                channel.resp_queue.borrow_mut().push_back(json);
+            }
             let now_ts = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs_f64()).unwrap_or(0.0);
