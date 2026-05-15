@@ -121,6 +121,35 @@ fn build_style_object(node: Rc<crate::browser::dom::NodeData>) -> Rc<RefCell<JsO
             Ok(JsValue::Str(removed))
         }));
     }
+    // item(i) - vraci nazev i-te property (CSS L2 spec).
+    {
+        let n = Rc::clone(&node);
+        obj_rc.borrow_mut().set("item".into(),
+            native("style.item", move |args| {
+                let idx = args.into_iter().next()
+                    .map(|v| v.to_number() as usize).unwrap_or(0);
+                let style = n.attr("style").unwrap_or_default();
+                let props: Vec<String> = style.split(';')
+                    .filter_map(|p| {
+                        if let Some(c) = p.find(':') {
+                            let name = p[..c].trim();
+                            if !name.is_empty() { Some(name.to_string()) } else { None }
+                        } else { None }
+                    }).collect();
+                Ok(JsValue::Str(props.get(idx).cloned().unwrap_or_default()))
+            }));
+    }
+    // length getter - pres __get_length__.
+    {
+        let n = Rc::clone(&node);
+        obj_rc.borrow_mut().set("__get_length__".into(),
+            native("style.length getter", move |_| {
+                let style = n.attr("style").unwrap_or_default();
+                let cnt = style.split(';').filter(|p| p.contains(':')
+                    && !p.split(':').next().unwrap_or("").trim().is_empty()).count();
+                Ok(JsValue::Number(cnt as f64))
+            }));
+    }
     obj_rc
 }
 
@@ -164,96 +193,6 @@ pub(crate) fn camel_to_kebab(s: &str) -> String {
     out
 }
 
-
-/// CSSStyleDeclaration object pro element.style.
-/// Nese referenci na node + parsuje "style" attribute pro getter / setter.
-pub(crate) fn create_style_object(node: Rc<crate::browser::dom::NodeData>) -> JsValue {
-    let obj_rc = Rc::new(RefCell::new(JsObject::new()));
-    // Pre-naplnim z aktualniho style attributu - kebab-case keys + camelCase
-    if let Some(style_str) = node.attr("style") {
-        for pair in style_str.split(';') {
-            if let Some(idx) = pair.find(':') {
-                let prop = pair[..idx].trim().to_string();
-                let val = pair[idx+1..].trim().to_string();
-                if !prop.is_empty() {
-                    let camel = kebab_to_camel(&prop);
-                    obj_rc.borrow_mut().set(camel, JsValue::Str(val.clone()));
-                    obj_rc.borrow_mut().set(prop, JsValue::Str(val));
-                }
-            }
-        }
-    }
-    // setProperty(name, value)
-    {
-        let n = Rc::clone(&node);
-        obj_rc.borrow_mut().set("setProperty".into(), native("style.setProperty", move |args| {
-            let mut it = args.into_iter();
-            let prop = it.next().map(|v| v.to_string()).unwrap_or_default();
-            let val  = it.next().map(|v| v.to_string()).unwrap_or_default();
-            let mut style = n.attr("style").unwrap_or_default();
-            // Replace nebo pridat
-            let mut found = false;
-            let mut new_pairs: Vec<String> = Vec::new();
-            for pair in style.split(';') {
-                if let Some(idx) = pair.find(':') {
-                    let p = pair[..idx].trim();
-                    if p == prop {
-                        new_pairs.push(format!("{prop}: {val}"));
-                        found = true;
-                    } else if !p.is_empty() {
-                        new_pairs.push(pair.trim().to_string());
-                    }
-                }
-            }
-            if !found {
-                new_pairs.push(format!("{prop}: {val}"));
-            }
-            style = new_pairs.join("; ");
-            n.set_attr("style", &style);
-            Ok(JsValue::Undefined)
-        }));
-    }
-    // getPropertyValue(name)
-    {
-        let n = Rc::clone(&node);
-        obj_rc.borrow_mut().set("getPropertyValue".into(), native("style.getPropertyValue", move |args| {
-            let prop = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
-            let style = n.attr("style").unwrap_or_default();
-            for pair in style.split(';') {
-                if let Some(idx) = pair.find(':') {
-                    let p = pair[..idx].trim();
-                    if p == prop {
-                        return Ok(JsValue::Str(pair[idx+1..].trim().to_string()));
-                    }
-                }
-            }
-            Ok(JsValue::Str(String::new()))
-        }));
-    }
-    // removeProperty(name)
-    {
-        let n = Rc::clone(&node);
-        obj_rc.borrow_mut().set("removeProperty".into(), native("style.removeProperty", move |args| {
-            let prop = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
-            let style = n.attr("style").unwrap_or_default();
-            let mut removed = String::new();
-            let new_pairs: Vec<String> = style.split(';').filter_map(|pair| {
-                if let Some(idx) = pair.find(':') {
-                    let p = pair[..idx].trim();
-                    if p == prop {
-                        removed = pair[idx+1..].trim().to_string();
-                        return None;
-                    }
-                    if !p.is_empty() { return Some(pair.trim().to_string()); }
-                }
-                None
-            }).collect();
-            n.set_attr("style", &new_pairs.join("; "));
-            Ok(JsValue::Str(removed))
-        }));
-    }
-    JsValue::Object(obj_rc)
-}
 
 /// classList JS object pro Element - DOMTokenList (DOM spec).
 /// Methods: add/remove/toggle/contains/replace/item, forEach, value, length,

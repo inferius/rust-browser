@@ -223,6 +223,37 @@ fn style_kebab_property_access() {
     assert_eq!(as_str(v), "blue");
 }
 
+#[test]
+fn style_length_reflects_props() {
+    let v = run(r#"
+        const el = document.createElement("div");
+        el.style.color = "red";
+        el.style.fontSize = "12px";
+        return el.style.length;
+    "#);
+    assert_eq!(as_num(v), 2.0);
+}
+
+#[test]
+fn style_item_returns_property_name() {
+    let v = run(r#"
+        const el = document.createElement("div");
+        el.style.color = "red";
+        return el.style.item(0);
+    "#);
+    assert_eq!(as_str(v), "color");
+}
+
+#[test]
+fn style_cssText_setter() {
+    let v = run(r#"
+        const el = document.createElement("div");
+        el.style.cssText = "color: red; font-size: 14px";
+        return el.style.color;
+    "#);
+    assert_eq!(as_str(v), "red");
+}
+
 // --- Item 7: document.fonts FontFaceSet ----------------------------------
 
 #[test]
