@@ -2098,3 +2098,11 @@ CSSOM + Shadow DOM + Selection/Range + scrollingElement.
 - 2833 engine, 8 devtools-proto, 3 devtools-frontend = 2844 testu
 - 0 warnings, cargo build/test --workspace cisty
 - 3 commit DOM Tier 5 (shadow + style + styleSheets)
+
+### Network.getResponseBody body cache (N+24 final)
+
+- Interpreter.response_bodies: Rc<RefCell<HashMap<String, String>>> field.
+- drain_fetches po Ok outcome insertujeme body clone s URL klicem.
+- CDP Network.getResponseBody lookup pres webview.interpreter().response_bodies
+  klic = request_id (v nas modelu == URL).
+- XHR body cache TBD.
