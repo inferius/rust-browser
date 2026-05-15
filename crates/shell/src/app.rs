@@ -1300,35 +1300,40 @@ impl ApplicationHandler for ShellApp {
                     }
                 }
                 // Scroll keys: PageDown/Up, ArrowUp/Down, Home, End, Space.
+                // Pri focused input -> skip scroll handler, klave projdou
+                // do dispatch_input -> webview text insert/move handlery.
                 if matches!(key_event.state, ElementState::Pressed) {
                     let shift = self.modifiers.shift_key();
                     let ctrl = self.modifiers.control_key();
                     let key_logical = key_event.logical_key.clone();
-                    let new_y = self.with_active_mut(|webview| {
-                        let (_vw, vh) = webview.viewport_size();
-                        let (sx, sy) = webview.scroll();
-                        let ny = match &key_logical {
-                            Key::Named(NamedKey::PageDown) => Some(sy + vh * 0.9),
-                            Key::Named(NamedKey::PageUp) => Some(sy - vh * 0.9),
-                            Key::Named(NamedKey::ArrowDown) if !ctrl => Some(sy + 60.0),
-                            Key::Named(NamedKey::ArrowUp) if !ctrl => Some(sy - 60.0),
-                            Key::Named(NamedKey::Home) => Some(0.0),
-                            Key::Named(NamedKey::End) => Some(1_000_000.0),
-                            Key::Named(NamedKey::Space) if !webview.focused_is_input() => {
-                                let delta = if shift { -vh * 0.9 } else { vh * 0.9 };
-                                Some(sy + delta)
-                            }
-                            _ => None,
-                        };
-                        if let Some(y) = ny {
-                            // Clamp na [0, max] kde max = layout_h - viewport_h.
-                            let max_y = webview.last_layout_root()
-                                .map(|l| (l.rect.height - vh).max(0.0))
-                                .unwrap_or(f32::INFINITY);
-                            webview.set_scroll(sx, y.clamp(0.0, max_y));
-                            true
-                        } else { false }
-                    }).unwrap_or(false);
+                    let focused_input = self.with_active(|wv| wv.focused_is_input()).unwrap_or(false);
+                    let new_y = if focused_input { false } else {
+                        self.with_active_mut(|webview| {
+                            let (_vw, vh) = webview.viewport_size();
+                            let (sx, sy) = webview.scroll();
+                            let ny = match &key_logical {
+                                Key::Named(NamedKey::PageDown) => Some(sy + vh * 0.9),
+                                Key::Named(NamedKey::PageUp) => Some(sy - vh * 0.9),
+                                Key::Named(NamedKey::ArrowDown) if !ctrl => Some(sy + 60.0),
+                                Key::Named(NamedKey::ArrowUp) if !ctrl => Some(sy - 60.0),
+                                Key::Named(NamedKey::Home) => Some(0.0),
+                                Key::Named(NamedKey::End) => Some(1_000_000.0),
+                                Key::Named(NamedKey::Space) => {
+                                    let delta = if shift { -vh * 0.9 } else { vh * 0.9 };
+                                    Some(sy + delta)
+                                }
+                                _ => None,
+                            };
+                            if let Some(y) = ny {
+                                // Clamp na [0, max] kde max = layout_h - viewport_h.
+                                let max_y = webview.last_layout_root()
+                                    .map(|l| (l.rect.height - vh).max(0.0))
+                                    .unwrap_or(f32::INFINITY);
+                                webview.set_scroll(sx, y.clamp(0.0, max_y));
+                                true
+                            } else { false }
+                        }).unwrap_or(false)
+                    };
                     if new_y {
                         if let Some(w) = &self.window { w.request_redraw(); }
                         return;

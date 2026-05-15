@@ -849,57 +849,59 @@ impl WebView {
                     if is_input {
                         let nid = std::rc::Rc::as_ptr(&target) as usize;
                         let cur = target.attr("value").unwrap_or_default();
-                        let chars: Vec<char> = cur.chars().collect();
-                        let mut caret = *self.input_caret.get(&nid).unwrap_or(&chars.len());
-                        caret = caret.min(chars.len());
+                        // Ensure EditorState exists + synced s aktualnim value.
+                        let entry = self.editors.entry(nid).or_insert_with(||
+                            crate::browser::editor::EditorState::new(&cur));
+                        if entry.text != cur { entry.set_text(&cur); }
                         let mut mutated = false;
-                        let mut new_chars = chars.clone();
+                        let mut moved = false;
                         match key.as_str() {
-                            "Backspace" if caret > 0 => {
-                                new_chars.remove(caret - 1);
-                                caret -= 1;
+                            "Backspace" => {
+                                entry.delete_backward();
                                 mutated = true;
                             }
-                            "Delete" if caret < new_chars.len() => {
-                                new_chars.remove(caret);
+                            "Delete" => {
+                                entry.delete_forward();
                                 mutated = true;
                             }
                             "ArrowLeft" => {
-                                caret = caret.saturating_sub(1);
-                                self.input_caret.insert(nid, caret);
-                                response.dirty = true;
-                                self.dirty = true;
+                                entry.move_left(false, false);
+                                moved = true;
                             }
                             "ArrowRight" => {
-                                caret = (caret + 1).min(new_chars.len());
-                                self.input_caret.insert(nid, caret);
-                                response.dirty = true;
-                                self.dirty = true;
+                                entry.move_right(false, false);
+                                moved = true;
                             }
                             "Home" => {
-                                self.input_caret.insert(nid, 0);
-                                response.dirty = true;
-                                self.dirty = true;
+                                entry.move_home(false);
+                                moved = true;
                             }
                             "End" => {
-                                self.input_caret.insert(nid, new_chars.len());
-                                response.dirty = true;
-                                self.dirty = true;
+                                entry.move_end(false);
+                                moved = true;
                             }
                             _ => {}
                         }
-                        if mutated {
-                            let new_value: String = new_chars.into_iter().collect();
-                            target.set_attr("value", &new_value);
-                            self.input_caret.insert(nid, caret);
-                            if let Some(interp) = self.interpreter.as_mut() {
-                                let mut event = crate::interpreter::JsObject::new();
-                                event.set("type".into(), crate::interpreter::JsValue::Str("input".into()));
-                                event.set("target".into(), crate::interpreter::JsValue::DomNode(
-                                    std::rc::Rc::clone(&target)));
-                                let event_val = crate::interpreter::JsValue::Object(
-                                    std::rc::Rc::new(std::cell::RefCell::new(event)));
-                                let _ = interp.dispatch_event(&target, "input", event_val);
+                        if mutated || moved {
+                            let new_value = entry.text.clone();
+                            let new_caret_byte = entry.caret;
+                            if mutated {
+                                target.set_attr("value", &new_value);
+                            }
+                            // Sync legacy char-idx caret pro back-compat caret blink.
+                            let char_idx = crate::browser::editor::byte_to_char_offset(
+                                &new_value, new_caret_byte);
+                            self.input_caret.insert(nid, char_idx);
+                            if mutated {
+                                if let Some(interp) = self.interpreter.as_mut() {
+                                    let mut event = crate::interpreter::JsObject::new();
+                                    event.set("type".into(), crate::interpreter::JsValue::Str("input".into()));
+                                    event.set("target".into(), crate::interpreter::JsValue::DomNode(
+                                        std::rc::Rc::clone(&target)));
+                                    let event_val = crate::interpreter::JsValue::Object(
+                                        std::rc::Rc::new(std::cell::RefCell::new(event)));
+                                    let _ = interp.dispatch_event(&target, "input", event_val);
+                                }
                             }
                             response.dirty = true;
                             self.dirty = true;
@@ -934,8 +936,9 @@ impl WebView {
                 }
             }
             InputEvent::TextInput { ref text } => {
-                // Pri focused <input>/<textarea> insert text na caret pos +
-                // dispatch "input" event. Caret advance o N graphemes.
+                // Pri focused <input>/<textarea> insert do EditorState. Pri
+                // selection nahradi range. Sync zpet node.attr("value") +
+                // legacy input_caret (char idx) pro back-compat.
                 if let Some(target) = self.focused_dom_node() {
                     let is_input = matches!(target.tag_name().as_deref(),
                         Some("input") | Some("textarea"));
@@ -946,17 +949,18 @@ impl WebView {
                         if printable.is_empty() { return response; }
                         let nid = std::rc::Rc::as_ptr(&target) as usize;
                         let cur = target.attr("value").unwrap_or_default();
-                        let mut chars: Vec<char> = cur.chars().collect();
-                        let caret = (*self.input_caret.get(&nid).unwrap_or(&chars.len()))
-                            .min(chars.len());
-                        let ins_chars: Vec<char> = printable.chars().collect();
-                        let ins_n = ins_chars.len();
-                        for (i, ch) in ins_chars.into_iter().enumerate() {
-                            chars.insert(caret + i, ch);
-                        }
-                        let new_value: String = chars.into_iter().collect();
+                        // Ensure EditorState exists + synced s attr value.
+                        let entry = self.editors.entry(nid).or_insert_with(||
+                            crate::browser::editor::EditorState::new(&cur));
+                        if entry.text != cur { entry.set_text(&cur); }
+                        entry.insert(&printable);
+                        let new_value = entry.text.clone();
+                        let new_caret_byte = entry.caret;
                         target.set_attr("value", &new_value);
-                        self.input_caret.insert(nid, caret + ins_n);
+                        // Sync legacy char-index input_caret (pouzity caret blink).
+                        let char_idx = crate::browser::editor::byte_to_char_offset(
+                            &new_value, new_caret_byte);
+                        self.input_caret.insert(nid, char_idx);
                         if let Some(interp) = self.interpreter.as_mut() {
                             let mut event = crate::interpreter::JsObject::new();
                             event.set("type".into(), crate::interpreter::JsValue::Str("input".into()));
