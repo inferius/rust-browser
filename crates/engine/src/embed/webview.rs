@@ -230,6 +230,11 @@ impl WebView {
                 self.title = doc_title;
             }
         }
+        // Dispatch DOMContentLoaded + load events.
+        if let Some(interp) = self.interpreter.as_mut() {
+            interp.dispatch_window_event("DOMContentLoaded", crate::interpreter::JsValue::Undefined);
+            interp.dispatch_window_event("load", crate::interpreter::JsValue::Undefined);
+        }
         result
     }
 
