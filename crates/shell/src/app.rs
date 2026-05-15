@@ -78,6 +78,21 @@ fn find_layout_rect(
     None
 }
 
+/// Shell commands z chrome bar JS bridge. Chrome WebView volat
+/// `__shell_navigate__(url)` etc. -> push do command queue. Shell main
+/// loop drain + execute (load_url, nav_back, ...).
+#[derive(Debug, Clone)]
+pub enum ShellCommand {
+    Back,
+    Forward,
+    Reload,
+    ToggleDevtools,
+    Navigate(String),
+}
+
+/// Sdilena command queue mezi chrome native fns a shell main loop.
+pub type ShellCmdQueue = Rc<RefCell<VecDeque<ShellCommand>>>;
+
 /// CDP channel - queue messages mezi devtools WebView JS bridge a shell
 /// main loop dispatch. Native `__rwe_cdp_send_native` (v devtools interp)
 /// pushne request do req_queue. Main loop kazdy frame drain req_queue,
@@ -117,6 +132,10 @@ pub struct ShellApp {
     chrome: Option<WebView>,
     /// Chrome bar vyska (logical px).
     chrome_h: f32,
+    /// Command queue z chrome bar (back/fwd/reload/navigate). Native fns
+    /// instalovane na chrome interpreter push pri user click. Shell main
+    /// loop drain pred kazdym render.
+    chrome_cmds: ShellCmdQueue,
     /// DevTools WebView (D4). Some pri F12 toggle on - load INDEX_HTML s
     /// injectnutymi panel HTMLs + theme.css + cdp.js. Komunikace s page
     /// webview pres `window.cdp.send(...)` JS API (D6 nativní binding).
@@ -185,6 +204,7 @@ impl ShellApp {
             webview: None,
             chrome: None,
             chrome_h: 36.0,
+            chrome_cmds: Rc::new(RefCell::new(VecDeque::new())),
             devtools: None,
             devtools_visible: false,
             devtools_split_ratio: 0.4,
@@ -404,6 +424,85 @@ impl ShellApp {
         }
     }
 
+    /// Install __shell_*__ native fns na chrome interpreter. Kazda push
+    /// ShellCommand do chrome_cmds queue. Shell main loop drain + execute.
+    fn install_chrome_natives(chrome: &mut WebView, cmds: &ShellCmdQueue) {
+        let interp = match chrome.interpreter_mut() {
+            Some(i) => i,
+            None => return,
+        };
+        // __shell_back__()
+        let q = Rc::clone(cmds);
+        interp.global.borrow_mut().define("__shell_back__",
+            native("__shell_back__", move |_| {
+                q.borrow_mut().push_back(ShellCommand::Back);
+                Ok(JsValue::Undefined)
+            }));
+        // __shell_fwd__()
+        let q = Rc::clone(cmds);
+        interp.global.borrow_mut().define("__shell_fwd__",
+            native("__shell_fwd__", move |_| {
+                q.borrow_mut().push_back(ShellCommand::Forward);
+                Ok(JsValue::Undefined)
+            }));
+        // __shell_reload__()
+        let q = Rc::clone(cmds);
+        interp.global.borrow_mut().define("__shell_reload__",
+            native("__shell_reload__", move |_| {
+                q.borrow_mut().push_back(ShellCommand::Reload);
+                Ok(JsValue::Undefined)
+            }));
+        // __shell_toggle_devtools__()
+        let q = Rc::clone(cmds);
+        interp.global.borrow_mut().define("__shell_toggle_devtools__",
+            native("__shell_toggle_devtools__", move |_| {
+                q.borrow_mut().push_back(ShellCommand::ToggleDevtools);
+                Ok(JsValue::Undefined)
+            }));
+        // __shell_navigate__(url)
+        let q = Rc::clone(cmds);
+        interp.global.borrow_mut().define("__shell_navigate__",
+            native("__shell_navigate__", move |args| {
+                let url = args.first().map(|v| v.to_string()).unwrap_or_default();
+                if !url.is_empty() {
+                    q.borrow_mut().push_back(ShellCommand::Navigate(url));
+                }
+                Ok(JsValue::Undefined)
+            }));
+        println!("[shell chrome] natives installed (back/fwd/reload/devtools/navigate)");
+    }
+
+    /// Drain command queue + execute. Po kazde akci request_redraw.
+    fn drain_chrome_cmds(&mut self) {
+        let cmds: Vec<ShellCommand> = self.chrome_cmds.borrow_mut().drain(..).collect();
+        if cmds.is_empty() { return; }
+        for cmd in cmds {
+            match cmd {
+                ShellCommand::Back => self.nav_back(),
+                ShellCommand::Forward => self.nav_forward(),
+                ShellCommand::Reload => {
+                    if let (Some(wv), Some(last)) = (
+                        &mut self.webview,
+                        self.history.get(self.history_idx).cloned()
+                    ) {
+                        wv.load_url(&last);
+                    }
+                }
+                ShellCommand::ToggleDevtools => self.toggle_devtools(),
+                ShellCommand::Navigate(url) => {
+                    if let Some(wv) = &mut self.webview {
+                        if wv.load_url(&url).is_some() {
+                            self.history.truncate(self.history_idx + 1);
+                            self.history.push(url);
+                            self.history_idx = self.history.len() - 1;
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(w) = &self.window { w.request_redraw(); }
+    }
+
     /// Chrome bar HTML - back/fwd/reload buttons + URL input. Bez native
     /// bindings (MVP) - vizualni only. Click handlery emit pres
     /// __shell_*__ globalni fns (instaluji se po load_html).
@@ -492,35 +591,42 @@ html, body {{ margin: 0; padding: 0; height: 100%; background: #202124; color: #
         true
     }
 
+    /// True kdyz mouse_y je v chrome bar area (top, fixed h).
+    fn point_in_chrome(&self, y: f32) -> bool {
+        y < self.chrome_h
+    }
+
     /// True kdyz devtools je viditelne A mouse_y je v devtools area (bottom).
-    /// Pri devtools_visible=false vraci false vzdy (page-only).
     fn point_in_devtools(&self, y: f32) -> bool {
         if !self.devtools_visible { return false; }
         let r = match &self.renderer { Some(r) => r, None => return false };
         let sf = r.scale_factor_value().max(0.01);
         let (_sw, sh) = r.surface_size();
         let lh_full = (sh as f32 / sf).max(1.0);
+        let content_h = (lh_full - self.chrome_h).max(1.0);
         let split = self.devtools_split_ratio.clamp(0.05, 0.95);
-        let page_h = lh_full * (1.0 - split);
-        y >= page_h
+        let dev_start = self.chrome_h + content_h * (1.0 - split);
+        y >= dev_start
     }
 
-    /// Y offset pro mouse_y do devtools WebView local coords (subtract page_h).
+    /// Y offset pro mouse_y do devtools WebView local coords.
     fn devtools_y_offset(&self) -> f32 {
         let r = match &self.renderer { Some(r) => r, None => return 0.0 };
         let sf = r.scale_factor_value().max(0.01);
         let (_sw, sh) = r.surface_size();
         let lh_full = (sh as f32 / sf).max(1.0);
+        let content_h = (lh_full - self.chrome_h).max(1.0);
         let split = self.devtools_split_ratio.clamp(0.05, 0.95);
-        lh_full * (1.0 - split)
+        self.chrome_h + content_h * (1.0 - split)
     }
 
-    /// Pristup k aktivnimu WebView (D4c: dle mouse_y position pokud
-    /// devtools_visible, jinak page). Pro keyboard fallback je devtools
-    /// kdyz visible (mouse-area-independent decision).
+    /// Pristup k aktivnimu WebView (D4c: dle mouse_y position - chrome top,
+    /// devtools bottom, jinak page).
     fn with_active_mut<R, F>(&mut self, f: F) -> Option<R>
     where F: FnOnce(&mut WebView) -> R {
-        if self.point_in_devtools(self.mouse_y) {
+        if self.point_in_chrome(self.mouse_y) {
+            self.chrome.as_mut().map(f)
+        } else if self.point_in_devtools(self.mouse_y) {
             self.devtools.as_mut().map(f)
         } else {
             self.webview.as_mut().map(f)
@@ -529,7 +635,9 @@ html, body {{ margin: 0; padding: 0; height: 100%; background: #202124; color: #
 
     fn with_active<R, F>(&self, f: F) -> Option<R>
     where F: FnOnce(&WebView) -> R {
-        if self.point_in_devtools(self.mouse_y) {
+        if self.point_in_chrome(self.mouse_y) {
+            self.chrome.as_ref().map(f)
+        } else if self.point_in_devtools(self.mouse_y) {
             self.devtools.as_ref().map(f)
         } else {
             self.webview.as_ref().map(f)
@@ -538,11 +646,13 @@ html, body {{ margin: 0; padding: 0; height: 100%; background: #202124; color: #
 
     /// Konvenience: dispatch InputEvent na aktivni WebView dle y position.
     /// Mouse events maji x/y - dle y rozhoduje. Pred dispatch event upravi
-    /// y na local-to-pane (subtract page_h pokud devtools).
+    /// y na local-to-pane.
     fn dispatch_input(&mut self, event: InputEvent) -> rwe_engine::embed::EventResponse {
-        let in_dev = self.point_in_devtools(self.mouse_y);
-        let y_off = if in_dev { self.devtools_y_offset() } else { 0.0 };
-        // Adjust y koord v event aby webview videl coordy ve sve local space.
+        let in_chrome = self.point_in_chrome(self.mouse_y);
+        let in_dev = !in_chrome && self.point_in_devtools(self.mouse_y);
+        let y_off = if in_chrome { 0.0 }
+                    else if in_dev { self.devtools_y_offset() }
+                    else { self.chrome_h };  // page area starts at chrome_h
         let adjusted = match event {
             InputEvent::MouseMove { x, y, modifiers } =>
                 InputEvent::MouseMove { x, y: y - y_off, modifiers },
@@ -554,7 +664,9 @@ html, body {{ margin: 0; padding: 0; height: 100%; background: #202124; color: #
                 InputEvent::Scroll { dx, dy, x, y: y - y_off, modifiers },
             other => other,
         };
-        if in_dev {
+        if in_chrome {
+            self.chrome.as_mut().map(|wv| wv.handle_input(adjusted)).unwrap_or_default()
+        } else if in_dev {
             self.devtools.as_mut().map(|wv| wv.handle_input(adjusted)).unwrap_or_default()
         } else {
             self.webview.as_mut().map(|wv| wv.handle_input(adjusted)).unwrap_or_default()
@@ -679,6 +791,8 @@ html, body {{ margin: 0; padding: 0; height: 100%; background: #202124; color: #
     }
 
     fn redraw(&mut self) {
+        // Drain chrome bar command queue (back/fwd/navigate/reload).
+        self.drain_chrome_cmds();
         // CDP pump pred render - drain pending requests + push responses.
         if self.devtools_visible {
             self.pump_cdp();
@@ -811,6 +925,8 @@ impl ApplicationHandler for ShellApp {
         let chrome_html = Self::build_chrome_html(&initial_url);
         let chrome_css = Self::extract_inline_styles(&chrome_html);
         let _ = chrome.load_html(&chrome_html, &chrome_css, None);
+        // Install native shell command bindings (back/fwd/reload/navigate).
+        Self::install_chrome_natives(&mut chrome, &self.chrome_cmds);
 
         self.window = Some(window.clone());
         self.renderer = Some(renderer);
