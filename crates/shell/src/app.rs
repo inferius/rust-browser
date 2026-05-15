@@ -262,6 +262,13 @@ pub struct ShellApp {
     /// se pro throttle - pri velkem DOMu s castymi mutacemi (animations,
     /// timers) by sync rerender frontend zabilo FPS. Min 0.5s mezi emity.
     cdp_last_dom_emit: std::time::Instant,
+    /// Posledni mouse_move dispatch cas - throttle na 60fps cap. Bez tohoto
+    /// pri pohybu mysi nad devtools (28x :hover v CSS) by mass cascade walks
+    /// vytizely CPU 100%.
+    last_mouse_move: std::time::Instant,
+    /// Posledni redraw cas - FPS counter (EMA 30 frames).
+    frame_times_ms: std::collections::VecDeque<f32>,
+    last_frame_time: std::time::Instant,
 
     mouse_x: f32,
     mouse_y: f32,
@@ -305,6 +312,9 @@ impl ShellApp {
             cdp_next_script_id: 1,
             cdp_last_dom_version: 0,
             cdp_last_dom_emit: std::time::Instant::now(),
+            last_mouse_move: std::time::Instant::now(),
+            frame_times_ms: std::collections::VecDeque::with_capacity(30),
+            last_frame_time: std::time::Instant::now(),
             mouse_x: 0.0,
             mouse_y: 0.0,
             modifiers: winit::keyboard::ModifiersState::empty(),
@@ -1036,6 +1046,13 @@ html, body {{ margin: 0; padding: 0; height: 100%; background: #202124; color: #
     }
 
     fn redraw(&mut self) {
+        // FPS counter - measure frame time + EMA (30 frame ring).
+        let now = std::time::Instant::now();
+        let dt = now.duration_since(self.last_frame_time).as_secs_f32() * 1000.0;
+        self.last_frame_time = now;
+        if self.frame_times_ms.len() >= 30 { self.frame_times_ms.pop_front(); }
+        self.frame_times_ms.push_back(dt);
+
         // Drain chrome bar command queue (back/fwd/navigate/reload).
         self.drain_chrome_cmds();
         // CDP pump pred render - drain pending requests + push responses.
@@ -1091,14 +1108,17 @@ html, body {{ margin: 0; padding: 0; height: 100%; background: #202124; color: #
             _ => return,
         }
 
-        // Window title sync.
+        // Window title sync + FPS counter.
         if let (Some(window), Some(wv)) = (&self.window, &self.webview) {
             let t = wv.title();
-            if !t.is_empty() {
-                let win_title = format!("{} - RustWebEngine", t);
-                if window.title() != win_title {
-                    window.set_title(&win_title);
-                }
+            let avg_ms = if self.frame_times_ms.is_empty() { 0.0 }
+                else { self.frame_times_ms.iter().sum::<f32>() / self.frame_times_ms.len() as f32 };
+            let fps = if avg_ms > 0.01 { 1000.0 / avg_ms } else { 999.0 };
+            let title_base = if t.is_empty() { "RustWebEngine".to_string() }
+                else { format!("{} - RustWebEngine", t) };
+            let win_title = format!("[{:.0} FPS {:.1}ms] {}", fps, avg_ms, title_base);
+            if window.title() != win_title {
+                window.set_title(&win_title);
             }
         }
         if chrome_anim || page_anim || dev_anim {
@@ -1245,6 +1265,15 @@ impl ApplicationHandler for ShellApp {
                     }
                     return;
                 }
+                // Throttle mouse_move dispatch na 60fps cap. Bez tohoto kazdy
+                // pixel pohybu mysi vyvolal hit_test + cascade walk + paint
+                // (devtools-frontend ma 28x :hover -> kazda zmena hover dirty).
+                // OS dodava CursorMoved freq ~1000Hz - bez throttle 100% CPU.
+                let now = std::time::Instant::now();
+                if now.duration_since(self.last_mouse_move).as_millis() < 16 {
+                    return;
+                }
+                self.last_mouse_move = now;
                 let event = InputEvent::MouseMove {
                     x: self.mouse_x,
                     y: self.mouse_y,
