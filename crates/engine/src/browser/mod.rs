@@ -26,6 +26,7 @@ pub mod dom_input_buffer;
 pub mod interactive;
 pub mod selection;
 pub mod textrun;
+pub mod editor;
 pub mod async_jobs;
 
 /// Vraci true pokud je v env nastaveno RWE_VERBOSE (libovolna hodnota).

@@ -4122,6 +4122,46 @@ pub fn measure_text_width_weight(text: &str, font_size: f32, weight: u32, italic
 /// kazdeho char vc. trailing (Chrome chovani). Volajte z paint/layout pres
 /// box.letter_spacing.
 pub fn measure_text_width_full(text: &str, font_size: f32, weight: u32, italic: bool, family: &str, letter_spacing: f32) -> f32 {
+    shape_text_advances(text, font_size, weight, italic, family, letter_spacing).total_width
+}
+
+/// Vysledek shape_text_advances - per-char advance + total width.
+/// Single source of truth pro caret/selection geometry.
+///
+/// `advances[i]` = advance pro i-ty char (vc. letter_spacing).
+/// `cumulative[i]` = X od zacatku po i-ty char (cumulative[0] = 0,
+///                   cumulative[advances.len()] = total_width).
+#[derive(Debug, Clone)]
+pub struct ShapedText {
+    pub advances: Vec<f32>,
+    pub cumulative: Vec<f32>,
+    pub total_width: f32,
+}
+
+impl ShapedText {
+    /// Hit-test X (relative k text origin) -> char index [0..n_chars].
+    /// Snap pres mid-glyph: x < mid -> char i, jinak char i+1.
+    pub fn char_at_x(&self, x: f32) -> usize {
+        let n = self.advances.len();
+        if n == 0 || x <= 0.0 { return 0; }
+        for i in 0..n {
+            let mid = (self.cumulative[i] + self.cumulative[i + 1]) * 0.5;
+            if x < mid { return i; }
+        }
+        n
+    }
+
+    /// X position (relative) pro char index. char_idx > n -> total_width.
+    pub fn x_at_char(&self, char_idx: usize) -> f32 {
+        self.cumulative.get(char_idx).copied().unwrap_or(self.total_width)
+    }
+}
+
+/// Shape text -> per-char advance + cumulative pole. Pouziva STEJNY font
+/// resolve + advance lookup jako measure_text_width_full (= layout canonical).
+/// Single source of truth pro caret/selection - bez tohoto kazdy callsite
+/// pocital total sum samostatne s ruznym roundingem.
+pub fn shape_text_advances(text: &str, font_size: f32, weight: u32, italic: bool, family: &str, letter_spacing: f32) -> ShapedText {
     let bold = weight >= 600;
     use std::sync::OnceLock;
     static FONT: OnceLock<Option<fontdue::Font>> = OnceLock::new();
@@ -4232,6 +4272,10 @@ pub fn measure_text_width_full(text: &str, font_size: f32, weight: u32, italic: 
                 font_bold_opt.as_ref(),
                 mono_opt.as_ref(),
             ];
+            let n_chars = text.chars().count();
+            let mut advances: Vec<f32> = Vec::with_capacity(n_chars);
+            let mut cumulative: Vec<f32> = Vec::with_capacity(n_chars + 1);
+            cumulative.push(0.0);
             let mut total = 0.0_f32;
             for ch in text.chars() {
                 let key = (font_ptr, ch, fs_bits);
@@ -4258,13 +4302,25 @@ pub fn measure_text_width_full(text: &str, font_size: f32, weight: u32, italic: 
                     ADVANCE_CACHE.with(|c| c.borrow_mut().insert(key, v));
                     v
                 };
-                total += aw + letter_spacing;
+                let step = aw + letter_spacing;
+                advances.push(step);
+                total += step;
+                cumulative.push(total);
             }
-            total
+            ShapedText { advances, cumulative, total_width: total }
         }
         None => {
-            let avg_char_w = font_size * 0.55;
-            text.chars().count() as f32 * (avg_char_w + letter_spacing)
+            let avg_char_w = font_size * 0.55 + letter_spacing;
+            let n_chars = text.chars().count();
+            let advances = vec![avg_char_w; n_chars];
+            let mut cumulative: Vec<f32> = Vec::with_capacity(n_chars + 1);
+            cumulative.push(0.0);
+            let mut total = 0.0_f32;
+            for a in &advances {
+                total += *a;
+                cumulative.push(total);
+            }
+            ShapedText { advances, cumulative, total_width: total }
         }
     }
 }
