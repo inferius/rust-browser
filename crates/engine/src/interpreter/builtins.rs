@@ -36,6 +36,7 @@ pub fn setup_builtins(
     next_worker_id: &Rc<RefCell<u32>>,
     document: &Rc<RefCell<crate::browser::dom::Document>>,
     console_log: &Rc<RefCell<Vec<(String, String)>>>,
+    console_log_args: &Rc<RefCell<Vec<Vec<super::console_args::ConsoleArg>>>>,
     network_log: &Rc<RefCell<Vec<(String, u16)>>>,
     custom_elements_registry: &Rc<RefCell<HashMap<String, super::JsValue>>>,
     mutation_observers: &Rc<RefCell<Vec<(usize, super::JsValue, super::JsValue, bool)>>>,
@@ -50,49 +51,65 @@ pub fn setup_builtins(
     let mut e = env.borrow_mut();
 
     // console - vsechny varianty captureju do console_log Rc<RefCell<Vec>>
+    // + paralelne strukturovane args do console_log_args pro DevTools typove-aware render.
     let mut console = JsObject::new();
     {
         let log = Rc::clone(console_log);
+        let log_args = Rc::clone(console_log_args);
         console.set("log".into(), native("log", move |args| {
             let msg = args.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" ");
             println!("{msg}");
+            let structured: Vec<_> = args.iter().map(super::console_args::ConsoleArg::from_jsvalue).collect();
             log.borrow_mut().push(("log".into(), msg));
+            log_args.borrow_mut().push(structured);
             Ok(JsValue::Undefined)
         }));
     }
     {
         let log = Rc::clone(console_log);
+        let log_args = Rc::clone(console_log_args);
         console.set("error".into(), native("error", move |args| {
             let msg = args.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" ");
             eprintln!("[error] {msg}");
+            let structured: Vec<_> = args.iter().map(super::console_args::ConsoleArg::from_jsvalue).collect();
             log.borrow_mut().push(("error".into(), msg));
+            log_args.borrow_mut().push(structured);
             Ok(JsValue::Undefined)
         }));
     }
     {
         let log = Rc::clone(console_log);
+        let log_args = Rc::clone(console_log_args);
         console.set("warn".into(), native("warn", move |args| {
             let msg = args.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" ");
             eprintln!("[warn] {msg}");
+            let structured: Vec<_> = args.iter().map(super::console_args::ConsoleArg::from_jsvalue).collect();
             log.borrow_mut().push(("warn".into(), msg));
+            log_args.borrow_mut().push(structured);
             Ok(JsValue::Undefined)
         }));
     }
     {
         let log = Rc::clone(console_log);
+        let log_args = Rc::clone(console_log_args);
         console.set("info".into(), native("info", move |args| {
             let msg = args.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" ");
             println!("[info] {msg}");
+            let structured: Vec<_> = args.iter().map(super::console_args::ConsoleArg::from_jsvalue).collect();
             log.borrow_mut().push(("info".into(), msg));
+            log_args.borrow_mut().push(structured);
             Ok(JsValue::Undefined)
         }));
     }
     {
         let log = Rc::clone(console_log);
+        let log_args = Rc::clone(console_log_args);
         console.set("debug".into(), native("debug", move |args| {
             let msg = args.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" ");
             println!("[debug] {msg}");
+            let structured: Vec<_> = args.iter().map(super::console_args::ConsoleArg::from_jsvalue).collect();
             log.borrow_mut().push(("debug".into(), msg));
+            log_args.borrow_mut().push(structured);
             Ok(JsValue::Undefined)
         }));
     }

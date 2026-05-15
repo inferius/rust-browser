@@ -172,6 +172,14 @@ pub struct WebView {
     /// Async jobs registry - background work (image lazy load, file IO).
     /// Drain per render_via vola pending callbacks v main thread.
     pub(crate) async_jobs: crate::browser::async_jobs::AsyncJobsRegistry,
+    /// Navigation counter. Inkrementuje pri kazdem `load_html` startu.
+    /// DevTools host porovnava proti svemu `last_nav_id`; pri zmene drainne
+    /// `collected_sources` do Sources panelu + clearne predchozi console/network.
+    pub(crate) nav_id: u64,
+    /// Buffer scriptu/stylu sebranych behem load_html / run_scripts.
+    /// Each entry = (url, body, language_marker: "js" | "css" | "html").
+    /// Vyplneny v `run_scripts` + `load_dom`. Drainuje host pres `take_collected_sources`.
+    pub(crate) collected_sources: Vec<(String, String, &'static str)>,
 }
 
 impl WebView {
@@ -221,6 +229,8 @@ impl WebView {
             cascade_props: std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new())),
             stylesheets_data: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
             async_jobs: crate::browser::async_jobs::AsyncJobsRegistry::new(),
+            nav_id: 0,
+            collected_sources: Vec::new(),
         }
     }
 
@@ -261,7 +271,32 @@ impl WebView {
             interp.dispatch_window_event("DOMContentLoaded", crate::interpreter::JsValue::Undefined);
             interp.dispatch_window_event("load", crate::interpreter::JsValue::Undefined);
         }
+        // Race fix: force bump dom_version po load+scripts aby DevTools host
+        // pri pristim redraw zaregistroval novy DOM (bez nutnosti klik uvnitr).
+        if let Some(interp) = &self.interpreter {
+            interp.bump_dom_version();
+        }
         result
+    }
+
+    /// DOM mutation counter z interpreteru. DevTools host porovnava proti
+    /// vlastnimu snapshotu a pri zmene rebuilds Elements tree. Vraci 0
+    /// pokud interpreter neexistuje (no document loaded).
+    pub fn dom_version(&self) -> u64 {
+        self.interpreter.as_ref().map(|i| i.dom_version()).unwrap_or(0)
+    }
+
+    /// Navigation counter. Inkrementuje pri kazdem `load_html` startu.
+    /// DevTools host porovnava proti svemu `last_nav_id` snapshotu.
+    pub fn nav_id(&self) -> u64 {
+        self.nav_id
+    }
+
+    /// Drainne nasbirane HTML/CSS/JS sources do (url, body, lang_marker) Vec.
+    /// Volat po detekci nav_id zmeny - DevTools registruje do Sources panelu.
+    /// `lang_marker`: "html" | "css" | "js".
+    pub fn take_collected_sources(&mut self) -> Vec<(String, String, &'static str)> {
+        std::mem::take(&mut self.collected_sources)
     }
 
     /// Stejne jako `load_html` ale BEZ behu `<script>` tagu. Pouziti:
@@ -273,6 +308,15 @@ impl WebView {
         // Preserve raw sources pred parse - app/devtools/save je mohou potrebovat.
         self.raw_html = html.to_string();
         self.raw_css = css.to_string();
+        // Inkrementuj nav counter + reset sources buffer. DevTools host
+        // pri pristim drain registruje fresh sady scriptu pro novou stranku.
+        self.nav_id = self.nav_id.wrapping_add(1);
+        self.collected_sources.clear();
+        // Pre-collect HTML + CSS jako Sources entries.
+        self.collected_sources.push((base.clone(), html.to_string(), "html"));
+        if !css.trim().is_empty() {
+            self.collected_sources.push((format!("{}#inline-styles", base), css.to_string(), "css"));
+        }
         let doc = crate::browser::html_parser::parse_html(html, &base);
 
         let stylesheet = crate::browser::css_parser::parse_stylesheet(css);
@@ -373,55 +417,64 @@ impl WebView {
     /// Spusti vsechny inline + external `<script>` tagy z dokumentu pres
     /// aktualni interpreter. Volane interne z `load_html` po set_document.
     pub fn run_scripts(&mut self) {
-        let interp = match self.interpreter.as_mut() {
-            Some(i) => i,
-            None => return,
-        };
-        let doc_ref = interp.document.clone();
+        if self.interpreter.is_none() { return; }
         let base = self.base_url.clone().unwrap_or_default();
         let fetch_external = std::env::var("RWE_NO_SCRIPTS")
             .map(|v| v != "1" && !v.eq_ignore_ascii_case("true"))
             .unwrap_or(true);
 
-        let script_nodes = doc_ref.borrow().root.get_elements_by_tag("script");
-        let mut scripts: Vec<(String, String)> = Vec::with_capacity(script_nodes.len());
-        for (i, s) in script_nodes.iter().enumerate() {
-            if let Some(src_attr) = s.attr("src") {
-                if !fetch_external { continue; }
-                let src_attr = src_attr.trim().to_string();
-                if src_attr.is_empty() { continue; }
-                let abs_url = if src_attr.starts_with("http://")
-                    || src_attr.starts_with("https://")
-                    || src_attr.starts_with("file://")
-                {
-                    src_attr.clone()
-                } else if !base.is_empty() {
-                    crate::browser::render::resolve_url(&base, &src_attr)
+        // Phase 1: collect scripts (fetch external) - krátký interp borrow.
+        let mut scripts: Vec<(String, String)> = Vec::new();
+        {
+            let interp = self.interpreter.as_mut().unwrap();
+            let doc_ref = interp.document.clone();
+            let script_nodes = doc_ref.borrow().root.get_elements_by_tag("script");
+            scripts.reserve(script_nodes.len());
+            for (i, s) in script_nodes.iter().enumerate() {
+                if let Some(src_attr) = s.attr("src") {
+                    if !fetch_external { continue; }
+                    let src_attr = src_attr.trim().to_string();
+                    if src_attr.is_empty() { continue; }
+                    let abs_url = if src_attr.starts_with("http://")
+                        || src_attr.starts_with("https://")
+                        || src_attr.starts_with("file://")
+                    {
+                        src_attr.clone()
+                    } else if !base.is_empty() {
+                        crate::browser::render::resolve_url(&base, &src_attr)
+                    } else {
+                        src_attr.clone()
+                    };
+                    match crate::browser::render::fetch_text_url(&abs_url) {
+                        Some(body) => {
+                            interp.network_log.borrow_mut().push((abs_url.clone(), 200));
+                            scripts.push((abs_url, body));
+                        }
+                        None => {
+                            interp.network_log.borrow_mut().push((abs_url.clone(), 0));
+                            interp.console_log.borrow_mut().push((
+                                "error".into(),
+                                format!("[script fetch failed] {abs_url}"),
+                            ));
+                        }
+                    }
                 } else {
-                    src_attr.clone()
-                };
-                match crate::browser::render::fetch_text_url(&abs_url) {
-                    Some(body) => {
-                        interp.network_log.borrow_mut().push((abs_url.clone(), 200));
-                        scripts.push((abs_url, body));
+                    let url = format!("<inline #{}>", i + 1);
+                    let body = s.text_content();
+                    if !body.trim().is_empty() {
+                        scripts.push((url, body));
                     }
-                    None => {
-                        interp.network_log.borrow_mut().push((abs_url.clone(), 0));
-                        interp.console_log.borrow_mut().push((
-                            "error".into(),
-                            format!("[script fetch failed] {abs_url}"),
-                        ));
-                    }
-                }
-            } else {
-                let url = format!("<inline #{}>", i + 1);
-                let body = s.text_content();
-                if !body.trim().is_empty() {
-                    scripts.push((url, body));
                 }
             }
         }
 
+        // Phase 2: append do collected_sources (mut self).
+        for (url, body) in &scripts {
+            self.collected_sources.push((url.clone(), body.clone(), "js"));
+        }
+
+        // Phase 3: actual eval - znovu interp borrow.
+        let interp = self.interpreter.as_mut().unwrap();
         for (_url, src) in scripts {
             if src.trim().is_empty() { continue; }
             match Lexer::parse_str(&src, "<inline>") {

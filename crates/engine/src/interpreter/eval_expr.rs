@@ -513,17 +513,20 @@ impl Interpreter {
                         match key.as_str() {
                             "textContent" | "innerText" => {
                                 n.set_text_content(&val.to_string());
+                                self.bump_dom_version();
                                 return Ok(());
                             }
                             "value" => {
                                 // Form inputs - ulozit jako attribute "value"
                                 n.set_attr("value", &val.to_string());
+                                self.bump_dom_version();
                                 return Ok(());
                             }
                             "checked" => {
                                 let s = if val.is_truthy() { "checked" } else { "" };
                                 if s.is_empty() { n.remove_attr("checked"); }
                                 else { n.set_attr("checked", "checked"); }
+                                self.bump_dom_version();
                                 return Ok(());
                             }
                             "innerHTML" => {
@@ -538,14 +541,17 @@ impl Interpreter {
                                         n.append_child(Rc::clone(&grandch));
                                     }
                                 }
+                                self.bump_dom_version();
                                 return Ok(());
                             }
                             "id" => {
                                 n.set_attr("id", &val.to_string());
+                                self.bump_dom_version();
                                 return Ok(());
                             }
                             "className" => {
                                 n.set_attr("class", &val.to_string());
+                                self.bump_dom_version();
                                 return Ok(());
                             }
                             _ => {

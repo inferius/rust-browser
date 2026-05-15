@@ -1757,10 +1757,20 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         self.devtools.focus = crate::devtools::focus::FocusTarget::Page;
                     }
                     // Inspect mode: kliknuti na main viewport vybira node v tree.
-                    // layout_root dead na App vrstve - inspect pick bude per-WebView
-                    // pres webview.last_layout_root().
+                    // Pick pres webview.last_layout_root() - prevedeni screen px na
+                    // page-local px (minus scroll_y).
                     if self.devtools.inspect_mode {
+                        let pick = self.webview.as_ref()
+                            .and_then(|w| w.last_layout_root())
+                            .and_then(|lay| {
+                                let scroll_y = self.scroll_y();
+                                crate::browser::devtools_panel::pick_node_at_screen_pos(
+                                    lay, self.mouse_x, self.mouse_y, scroll_y)
+                            });
                         self.devtools.inspect_mode = false;
+                        if let Some(node_id) = pick {
+                            self.select_and_reveal_node(node_id);
+                        }
                         self.render();
                         return;
                     }
@@ -2191,18 +2201,24 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                                     self.devtools.console.push_log(LogEntry {
                                         level: LogLevel::InputEcho,
                                         text: cmd.clone(),
+                                        args: Vec::new(),
                                     });
                                     let sel_id = self.devtools.elements.selected;
                                     if let Some(interp) = self.interp_mut() {
                                         let result = console_eval_via_vm(&cmd, interp, sel_id);
                                         match result {
-                                            Ok(v) => self.devtools.console.push_log(LogEntry {
-                                                level: LogLevel::Result,
-                                                text: v.pretty_print(),
-                                            }),
+                                            Ok(v) => {
+                                                let arg = crate::interpreter::console_args::ConsoleArg::from_jsvalue(&v);
+                                                self.devtools.console.push_log(LogEntry {
+                                                    level: LogLevel::Result,
+                                                    text: v.pretty_print(),
+                                                    args: vec![arg],
+                                                });
+                                            }
                                             Err(e) => self.devtools.console.push_log(LogEntry {
                                                 level: LogLevel::Error,
                                                 text: e,
+                                                args: Vec::new(),
                                             }),
                                         }
                                     }
@@ -3059,6 +3075,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             self.devtools.console.push_log(crate::devtools::model::console::LogEntry {
                 level: crate::devtools::model::console::LogLevel::Info,
                 text: "[debug-mode] Worker thread spustil eval JS - real freeze pause aktivni".into(),
+                args: Vec::new(),
             });
             self.debug_runner = Some(runner);
         }
@@ -3071,6 +3088,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 self.devtools.console.push_log(crate::devtools::model::console::LogEntry {
                     level: crate::devtools::model::console::LogLevel::Info,
                     text: "[debug-mode] Worker thread skoncil".into(),
+                    args: Vec::new(),
                 });
             }
         }
@@ -3090,7 +3108,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                             "warn" => LogLevel::Warn,
                             _ => LogLevel::Info,
                         };
-                        self.devtools.console.push_log(LogEntry { level: lvl, text: msg });
+                        self.devtools.console.push_log(LogEntry { level: lvl, text: msg, args: Vec::new() });
                     }
                     WorkerEvent::Network { url, status } => {
                         use crate::devtools::model::network::{NetworkEntry, NetworkResourceType};
@@ -3119,6 +3137,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         self.devtools.console.push_log(LogEntry {
                             level: LogLevel::Info,
                             text: "[debug-mode] Script done".into(),
+                            args: Vec::new(),
                         });
                         self.devtools.sources.debugger_paused = false;
                         self.devtools.sources.current_pause_location = None;
@@ -3127,6 +3146,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         self.devtools.console.push_log(LogEntry {
                             level: LogLevel::Error,
                             text: format!("[debug-mode] Error: {}", e),
+                            args: Vec::new(),
                         });
                     }
                 }
@@ -3442,22 +3462,34 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
 
         fn jump_to_search_match(&mut self) {
             let s = &self.devtools.elements.search;
-            if let Some(node_id) = s.matches.get(s.current) {
-                self.devtools.elements.selected = Some(*node_id);
-                // Expand vsechny ancestors aby radek byl viditelny.
-                if let Some(interp) = self.interp() {
-                    let root = std::rc::Rc::clone(&interp.document.borrow().root);
-                    if let Some(node) = crate::devtools::model::elements::find_node_by_id(&root, *node_id) {
-                        let mut p = node.parent.borrow().upgrade();
-                        while let Some(par) = p {
-                            let pid = std::rc::Rc::as_ptr(&par) as usize;
-                            self.devtools.elements.collapsed.remove(&pid);
-                            p = par.parent.borrow().upgrade();
-                        }
-                    }
-                    crate::browser::devtools_panel::rebuild_tree(&mut self.devtools, &root);
-                }
+            if let Some(node_id) = s.matches.get(s.current).copied() {
+                self.select_and_reveal_node(node_id);
             }
+        }
+
+        /// Select node v Elements tree + uncollapse cely parent chain aby radek
+        /// byl viditelny + rebuild rows. Pouziva search jump, page-side inspect
+        /// click, externi inspect API (CDP $0).
+        fn select_and_reveal_node(&mut self, node_id: usize) {
+            self.devtools.elements.selected = Some(node_id);
+            if let Some(interp) = self.interp() {
+                let root = std::rc::Rc::clone(&interp.document.borrow().root);
+                if let Some(node) = crate::devtools::model::elements::find_node_by_id(&root, node_id) {
+                    let mut p = node.parent.borrow().upgrade();
+                    while let Some(par) = p {
+                        let pid = std::rc::Rc::as_ptr(&par) as usize;
+                        self.devtools.elements.collapsed.remove(&pid);
+                        p = par.parent.borrow().upgrade();
+                    }
+                }
+                crate::browser::devtools_panel::rebuild_tree(&mut self.devtools, &root);
+            }
+            // Auto-otevri devtools panel pokud zavren.
+            if !self.devtools.panel_open {
+                self.devtools.panel_open = true;
+            }
+            // Switch na Elements tab.
+            self.devtools.tab = crate::devtools::Tab::Elements;
         }
 
         fn handle_click(&mut self, x: f32, y: f32) {
@@ -3790,6 +3822,45 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     &mut overlay_cmds, &layout, &self.devtools, cur_scroll_y);
                 // Devtools panel UI paint.
                 self.devtools.tick_frame();
+                // Navigation detection - pri zmene nav_id drain sources + reset stav.
+                if let Some(wv) = self.webview.as_mut() {
+                    let cur_nav = wv.nav_id();
+                    if cur_nav != self.devtools.last_nav_id {
+                        let sources = wv.take_collected_sources();
+                        // Reset Sources files - fresh sada per navigaci.
+                        self.devtools.sources.files.clear();
+                        self.devtools.sources.selected_id = None;
+                        for (url, body, lang_marker) in sources {
+                            use crate::devtools::model::sources::SourceLang;
+                            let lang = match lang_marker {
+                                "js"   => SourceLang::JavaScript,
+                                "css"  => SourceLang::Css,
+                                "html" => SourceLang::Html,
+                                _      => SourceLang::Other,
+                            };
+                            self.devtools.sources.add_file(url, body, lang);
+                        }
+                        // Auto-select prvni JS file pokud nejaky existuje.
+                        if let Some(first_js) = self.devtools.sources.files.iter()
+                            .find(|f| f.language == crate::devtools::model::sources::SourceLang::JavaScript)
+                        {
+                            self.devtools.sources.selected_id = Some(first_js.id);
+                        }
+                        self.devtools.last_nav_id = cur_nav;
+                    }
+                }
+                // Live DOM mutation detection - pokud webview DOM se zmenil
+                // (appendChild/setAttribute/innerHTML z JS), rebuild Elements tree.
+                if let Some(wv) = self.webview.as_ref() {
+                    let cur_version = wv.dom_version();
+                    if cur_version != self.devtools.last_dom_version {
+                        if let Some(doc) = wv.document() {
+                            let root = std::rc::Rc::clone(&doc.root);
+                            crate::browser::devtools_panel::rebuild_tree(&mut self.devtools, &root);
+                        }
+                        self.devtools.last_dom_version = cur_version;
+                    }
+                }
                 let interp_ref_opt = self.webview.as_ref().and_then(|w| w.interpreter());
                 paint_devtools_panel(
                     &mut overlay_cmds, &layout, &self.devtools, interp_ref_opt,
@@ -3867,26 +3938,34 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 self.devtools.sources.debugger_paused = false;
                 self.devtools.sources.locals.clear();
             }
-            // Mirror console_log do DevToolsState.
+            // Mirror console_log + console_log_args do DevToolsState.
+            // Paruje i-ty entry s i-tymi args (parallel arrays z interpreter).
             let new_logs: Vec<(String, String)>;
+            let new_args: Vec<Vec<crate::interpreter::console_args::ConsoleArg>>;
             if let Some(interp) = self.webview.as_ref().and_then(|w| w.interpreter()) {
                 let logs = interp.console_log.borrow();
+                let args = interp.console_log_args.borrow();
                 let already = self.devtools.console.log.len();
                 new_logs = if logs.len() > already {
                     logs.iter().skip(already).cloned().collect()
                 } else { Vec::new() };
+                new_args = if args.len() > already {
+                    args.iter().skip(already).cloned().collect()
+                } else { Vec::new() };
             } else {
                 new_logs = Vec::new();
+                new_args = Vec::new();
             }
             if !new_logs.is_empty() {
                 use crate::devtools::model::console::{LogEntry, LogLevel};
-                for (level, msg) in new_logs {
+                for (i, (level, msg)) in new_logs.into_iter().enumerate() {
                     let lvl = match level.as_str() {
                         "error" => LogLevel::Error,
                         "warn" => LogLevel::Warn,
                         _ => LogLevel::Info,
                     };
-                    self.devtools.console.log.push(LogEntry { level: lvl, text: msg });
+                    let entry_args = new_args.get(i).cloned().unwrap_or_default();
+                    self.devtools.console.log.push(LogEntry { level: lvl, text: msg, args: entry_args });
                 }
                 self.devtools.console.stick_to_bottom = true;
             }

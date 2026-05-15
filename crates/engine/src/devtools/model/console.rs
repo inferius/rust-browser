@@ -15,6 +15,11 @@ pub enum LogLevel {
 pub struct LogEntry {
     pub level: LogLevel,
     pub text: String,
+    /// Strukturovane args z console.log/error/.. - kazdy arg s typovou info
+    /// (kind + repr + children pro Object/Array). Pri drainu z interpreteru
+    /// (`Interpreter.console_log_args`) se prevede na DevTools-friendly format.
+    /// Empty vec = legacy plain-text entry (worker mode, system zprava, ...).
+    pub args: Vec<crate::interpreter::console_args::ConsoleArg>,
 }
 
 /// Input pole s cursor pos + selection + historie.

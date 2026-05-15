@@ -42,6 +42,7 @@ use num_traits::Pow;
 // ─── Submoduly ────────────────────────────────────────────────────────────────
 
 pub mod helpers;
+pub mod console_args;
 mod builtins;
 mod builtins_helpers;
 mod string_methods;
@@ -587,6 +588,11 @@ pub struct Interpreter {
     pub next_callback_id: Rc<RefCell<usize>>,
     /// Console log capture pro DevTools: (level, message).
     pub console_log: Rc<RefCell<Vec<(String, String)>>>,
+    /// Strukturovany capture per-call. Paralelni s `console_log` - i-ty entry
+    /// patri k i-temu zaznamu v console_log. DevTools cte z teto reprezentace
+    /// pro typove-aware rendering (Object preview, Array(n) inline expand,
+    /// color per kind). Drain pri kazdem render frame.
+    pub console_log_args: Rc<RefCell<Vec<Vec<console_args::ConsoleArg>>>>,
     /// Canvas 2D operations: canvas DOM node ptr -> ops sequence.
     pub canvas_ops: Rc<RefCell<std::collections::HashMap<usize, Vec<crate::browser::paint::CanvasOp>>>>,
     /// WebGL contexty per canvas DOM node ptr -> sdileny WebGLState.
@@ -651,6 +657,11 @@ pub struct Interpreter {
     /// Vec<(selector_text, Vec<(property, value)>)>. None / empty = zadne styly.
     /// document.styleSheets pak vrati StyleSheetList z teto sructure.
     pub stylesheets_lookup: Option<Rc<dyn Fn() -> Vec<Vec<(String, Vec<(String, String)>)>>>>,
+    /// DOM mutation counter - inkrementuje pri appendChild/removeChild/insertBefore/
+    /// replaceChild/setAttribute/textContent. DevTools host porovnava proti
+    /// vlastnimu last_dom_version; pri diff rebuilds Elements tree.
+    /// Rc<Cell> - sdileny clone do native closures + native eval_call.
+    pub dom_version: Rc<std::cell::Cell<u64>>,
 }
 
 /// Sdileny debugger state pres Arc<Mutex>. UI thread cte/zapisuje set
@@ -750,6 +761,7 @@ impl Interpreter {
             crate::browser::dom::Document::new("about:blank".to_string())
         ));
         let console_log: Rc<RefCell<Vec<(String, String)>>> = Rc::new(RefCell::new(Vec::new()));
+        let console_log_args: Rc<RefCell<Vec<Vec<console_args::ConsoleArg>>>> = Rc::new(RefCell::new(Vec::new()));
         let network_log: Rc<RefCell<Vec<(String, u16)>>> = Rc::new(RefCell::new(Vec::new()));
         let response_bodies: Rc<RefCell<HashMap<String, String>>> = Rc::new(RefCell::new(HashMap::new()));
         let custom_elements: Rc<RefCell<HashMap<String, JsValue>>> =
@@ -766,7 +778,7 @@ impl Interpreter {
         let scroll_pos: Rc<RefCell<(f32, f32)>> = Rc::new(RefCell::new((0.0, 0.0)));
         setup_builtins(
             &global, &task_queue, &next_timer_id, &workers, &next_worker_id,
-            &document, &console_log, &network_log, &custom_elements,
+            &document, &console_log, &console_log_args, &network_log, &custom_elements,
             &mutation_observers, &websockets, &next_ws_id,
             &pending_fetches, &pending_xhr_callbacks,
             &raf_callbacks, &next_raf_id, &scroll_pos,
@@ -783,6 +795,7 @@ impl Interpreter {
             event_callbacks: Rc::new(RefCell::new(HashMap::new())),
             next_callback_id: Rc::new(RefCell::new(1)),
             console_log,
+            console_log_args,
             network_log,
             response_bodies,
             canvas_ops: Rc::new(RefCell::new(std::collections::HashMap::new())),
@@ -807,7 +820,24 @@ impl Interpreter {
             scroll_pos,
             shadow_roots: Rc::new(RefCell::new(HashMap::new())),
             stylesheets_lookup: None,
+            dom_version: Rc::new(std::cell::Cell::new(0)),
         }
+    }
+
+    /// Bump DOM mutation counter. Vola se v native impl eval_call.rs
+    /// po DOM mutacich (appendChild/removeChild/insertBefore/replaceChild/
+    /// setAttribute/innerHTML/textContent). DevTools v render frame ji
+    /// cte pres `dom_version()` a pri zmene rebuilds Elements tree.
+    #[inline]
+    pub fn bump_dom_version(&self) {
+        self.dom_version.set(self.dom_version.get().wrapping_add(1));
+    }
+
+    /// Aktualni DOM mutation counter. DevTools host porovnava proti
+    /// vlastnimu last_dom_version snapshotu.
+    #[inline]
+    pub fn dom_version(&self) -> u64 {
+        self.dom_version.get()
     }
 
     /// Zaregistruje callback pro lookup stylesheets z hosta.
@@ -1000,6 +1030,9 @@ impl Interpreter {
         added: Vec<Rc<crate::browser::dom::NodeData>>,
         removed: Vec<Rc<crate::browser::dom::NodeData>>,
     ) {
+        // Bump DOM mutation counter - DevTools host pak vidi zmenu a rebuilds
+        // Elements tree. Bump i kdyz nejsou observery, kvuli devtools sync.
+        self.bump_dom_version();
         let target_ptr = Rc::as_ptr(target) as usize;
         let observers: Vec<(JsValue, JsValue)> = self.mutation_observers.borrow().iter()
             .filter(|(obs_ptr, _, _, subtree)| {
@@ -1061,6 +1094,8 @@ impl Interpreter {
         attribute_name: Option<String>,
         old_value: Option<String>,
     ) {
+        // Bump DOM mutation counter - viz dispatch_mutation_full.
+        self.bump_dom_version();
         let target_ptr = Rc::as_ptr(target) as usize;
         // Najit observers co matchuji target nebo (pri subtree) ancestor target.
         let observers: Vec<(JsValue, JsValue)> = self.mutation_observers.borrow().iter()

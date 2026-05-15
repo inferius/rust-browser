@@ -126,6 +126,15 @@ pub struct DevToolsState {
     pub tooltip: Option<TooltipState>,
     /// Changes log - tracking inline CSS edits pres devtools.
     pub changes: Vec<ChangeEntry>,
+    /// Last seen DOM mutation counter. Inicialne 0; pri kazdem redraw frame
+    /// se porovnava s `webview.dom_version()`. Pri zmene -> rebuild_tree
+    /// + update teto hodnoty. Detekuje live DOM mutations z JS bez nutnosti
+    /// klikat v devtools tree.
+    pub last_dom_version: u64,
+    /// Last seen WebView navigation counter. Inicialne 0; pri zmene drainne
+    /// `take_collected_sources()` do `sources.files` + reset console/network.
+    /// Mismatch detekuje first load i in-place navigation.
+    pub last_nav_id: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -363,6 +372,8 @@ impl Default for DevToolsState {
             var_highlight: None,
             tooltip: None,
             changes: Vec::new(),
+            last_dom_version: 0,
+            last_nav_id: 0,
         }
     }
 }
