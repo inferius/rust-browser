@@ -685,10 +685,38 @@ html, body {{ margin: 0; padding: 0; height: 100%; background: #202124; color: #
         }
     }
 
-    /// Konvenience: dispatch InputEvent na aktivni WebView dle y position.
-    /// Mouse events maji x/y - dle y rozhoduje. Pred dispatch event upravi
-    /// y na local-to-pane.
+    /// Konvenience: dispatch InputEvent na spravny WebView.
+    /// - Mouse events (Move/Down/Up/Scroll): dle y position (chrome/page/dev).
+    /// - Keyboard events (KeyDown/KeyUp/TextInput): dle WebView s focused
+    ///   input/textarea. Bez tohoto by mouse drift posunul keyboard dispatch
+    ///   na nesedici pane.
     fn dispatch_input(&mut self, event: InputEvent) -> rwe_engine::embed::EventResponse {
+        // Keyboard events: route do focused pane.
+        let is_keyboard = matches!(event,
+            InputEvent::KeyDown { .. } | InputEvent::KeyUp { .. }
+            | InputEvent::TextInput { .. });
+        if is_keyboard {
+            // Find which WebView ma focused input.
+            let chrome_focused = self.chrome.as_ref()
+                .map(|wv| wv.has_focused_input()).unwrap_or(false);
+            let page_focused = self.webview.as_ref()
+                .map(|wv| wv.has_focused_input()).unwrap_or(false);
+            let dev_focused = self.devtools.as_ref()
+                .map(|wv| wv.has_focused_input()).unwrap_or(false);
+            if chrome_focused {
+                return self.chrome.as_mut()
+                    .map(|wv| wv.handle_input(event)).unwrap_or_default();
+            }
+            if dev_focused {
+                return self.devtools.as_mut()
+                    .map(|wv| wv.handle_input(event)).unwrap_or_default();
+            }
+            if page_focused {
+                return self.webview.as_mut()
+                    .map(|wv| wv.handle_input(event)).unwrap_or_default();
+            }
+            // Bez focused inputu route dle mouse zone (default page scroll keys).
+        }
         let in_chrome = self.point_in_chrome(self.mouse_y);
         let in_dev = !in_chrome && self.point_in_devtools(self.mouse_y);
         let y_off = if in_chrome { 0.0 }

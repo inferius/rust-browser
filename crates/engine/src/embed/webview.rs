@@ -140,6 +140,10 @@ pub struct WebView {
     /// detekce ze JS scrollTo modify -> apply. Bez toho by stale-zero
     /// interp.scroll_pos prepisoval scroll_y po host-side drag.
     pub(crate) last_synced_scroll_pos: (f32, f32),
+    /// Per-WebView focused DOM node id (Rc::as_ptr). Replaces global
+    /// cascade::FOCUSED_NODE thread_local - to slo sdileny pres vsechny
+    /// WebViews (chrome/page/devtools) co vedlo k mismatch.
+    pub(crate) focused_node_local: Option<usize>,
     /// Scrollbar drag state - Some(grab_offset_y) pri V thumb drag.
     pub(crate) v_scrollbar_drag: Option<f32>,
     /// Scrollbar drag state - Some(grab_offset_x) pri H thumb drag.
@@ -209,6 +213,7 @@ impl WebView {
             editors: std::collections::HashMap::new(),
             overlay_painter: None,
             last_synced_scroll_pos: (0.0, 0.0),
+            focused_node_local: None,
             v_scrollbar_drag: None,
             h_scrollbar_drag: None,
             last_layout_root: None,
@@ -664,18 +669,22 @@ impl WebView {
                     let target_node = self.last_layout_root.as_ref()
                         .and_then(|root| root.hit_test(content_x, content_y))
                         .and_then(|bx| bx.node.clone());
-                    // Focus / blur.
+                    // Focus / blur - per-WebView focused state.
                     if let Some(target) = target_node.as_ref() {
                         let focusable = matches!(target.tag_name().as_deref(),
                             Some("input") | Some("textarea") | Some("button")
                             | Some("a") | Some("select"));
-                        if focusable {
-                            crate::browser::cascade::set_focused_node(Some(
-                                std::rc::Rc::as_ptr(target) as usize));
-                        } else {
-                            crate::browser::cascade::set_focused_node(None);
-                        }
+                        let new_id = if focusable {
+                            Some(std::rc::Rc::as_ptr(target) as usize)
+                        } else { None };
+                        self.focused_node_local = new_id;
+                        // Cascade global = mirror per-WebView pro :focus styling
+                        // (cascade.rs PSEUDO :focus check). Single thread,
+                        // posledni MouseDown wins. Multi-WebView problem: posledni
+                        // klik prepise styling pro vsechny - akceptace pri F12.
+                        crate::browser::cascade::set_focused_node(new_id);
                     } else {
+                        self.focused_node_local = None;
                         crate::browser::cascade::set_focused_node(None);
                     }
                     // Editor hit-test pri klik na <input>/<textarea>: posun
@@ -1661,13 +1670,19 @@ impl WebView {
     /// Engine reference (pro custom rendering hostujici aplikace).
     pub fn engine(&self) -> &Arc<Engine> { &self.engine }
 
-    /// Aktualne focused DOM node (z cascade thread_local) - pro keyboard
-    /// event dispatch. Some pri focused <input>/<textarea>/<a>/<button>.
+    /// Aktualne focused DOM node (per-WebView focused_node_local).
     fn focused_dom_node(&self) -> Option<std::rc::Rc<crate::browser::dom::Node>> {
-        let id = crate::browser::cascade::get_focused_node()?;
+        let id = self.focused_node_local?;
         let interp = self.interpreter.as_ref()?;
         let doc_root = std::rc::Rc::clone(&interp.document.borrow().root);
         crate::browser::render::find_node_by_ptr(&doc_root, id)
+    }
+
+    /// True kdyz tento WebView ma focused input/textarea (per-WebView).
+    pub fn has_focused_input(&self) -> bool {
+        self.focused_dom_node().map(|n|
+            matches!(n.tag_name().as_deref(), Some("input") | Some("textarea"))
+        ).unwrap_or(false)
     }
 
     // -- Input editor state -----------------------------------------------
