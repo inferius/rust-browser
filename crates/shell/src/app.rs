@@ -431,12 +431,19 @@ impl ShellApp {
         out
     }
 
-    /// True kdyz mouse_y je v zone +- 4px okolo split line. Aktivni hover
-    /// zone pro splitter drag.
-    fn point_on_splitter(&self, y: f32) -> bool {
+    /// True kdyz mouse_y je v zone +- 3px okolo split line A x neni v page
+    /// scrollbar zone (pravy edge 12px). Bez x check by splitter chytil
+    /// klik na bottom scrollbar tracku.
+    fn point_on_splitter(&self, x: f32, y: f32) -> bool {
         if !self.devtools_visible { return false; }
         let split_y = self.devtools_y_offset();
-        (y - split_y).abs() < 4.0
+        if (y - split_y).abs() >= 3.0 { return false; }
+        // Page scrollbar zone (x > page.viewport_w - 12) priority.
+        if let Some(wv) = &self.webview {
+            let (vw, _) = wv.viewport_size();
+            if x >= vw - 12.0 { return false; }
+        }
+        true
     }
 
     /// True kdyz devtools je viditelne A mouse_y je v devtools area (bottom).
@@ -792,7 +799,7 @@ impl ApplicationHandler for ShellApp {
                     return;
                 }
                 // D4d: hover splitter -> NS resize cursor.
-                if self.point_on_splitter(self.mouse_y) {
+                if self.point_on_splitter(self.mouse_x, self.mouse_y) {
                     if let Some(window) = &self.window {
                         window.set_cursor(winit::window::CursorIcon::NsResize);
                     }
@@ -1143,7 +1150,7 @@ impl ApplicationHandler for ShellApp {
                 // D4d: LMB Down/Up na splitter zacne / ukonci drag.
                 if matches!(btn, MouseButton::Left) {
                     match state {
-                        ElementState::Pressed if self.point_on_splitter(self.mouse_y) => {
+                        ElementState::Pressed if self.point_on_splitter(self.mouse_x, self.mouse_y) => {
                             self.splitter_drag = true;
                             return;
                         }
