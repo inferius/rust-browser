@@ -167,6 +167,31 @@ impl GlyphAtlas {
             ("Inter-Bold", include_bytes!("../../../../../static/fonts/Inter-Bold.ttf")),
             ("Inter-Italic", include_bytes!("../../../../../static/fonts/Inter-Italic.ttf")),
         ];
+        // Registrace system fonts s family aliases. Bez tohoto atlas font_for
+        // pri "Segoe UI" / "Arial" / "sans-serif" / "Courier" spadne na Times
+        // (self.font). shape_text vs atlas: SHAPE pouziva sans_opt (Segoe UI),
+        // atlas fallback na Times -> glyph metrics neshoduje -> render overlap.
+        // Pres explicit register kazdou family name + variant atlas resolve
+        // same font jako shape_text_advances.
+        let system_aliases: &[(&str, &str)] = &[
+            // Sans-serif system family aliases - all point na Segoe UI on Win.
+            ("Segoe UI", "C:\\Windows\\Fonts\\segoeui.ttf"),
+            ("Arial", "C:\\Windows\\Fonts\\arial.ttf"),
+            ("sans-serif", "C:\\Windows\\Fonts\\segoeui.ttf"),
+            ("Verdana", "C:\\Windows\\Fonts\\verdana.ttf"),
+            // Monospace.
+            ("Courier New", "C:\\Windows\\Fonts\\cour.ttf"),
+            ("Consolas", "C:\\Windows\\Fonts\\consola.ttf"),
+            ("monospace", "C:\\Windows\\Fonts\\cour.ttf"),
+        ];
+        for (family, path) in system_aliases {
+            if let Ok(data) = std::fs::read(path) {
+                if let Ok(f) = fontdue::Font::from_bytes(data, fontdue::FontSettings::default()) {
+                    extra_fonts.entry(family.to_string()).or_insert_with(Vec::new).push(f.clone());
+                    crate::browser::layout::register_measure_font(family, f);
+                }
+            }
+        }
         for (family, path) in &[
             ("CamingoMono", "static/fonts/CamingoMono-Light.ttf"),
             ("CamingoMono-Bold", "static/fonts/CamingoMono-Bold.ttf"),
