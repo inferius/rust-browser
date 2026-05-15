@@ -360,15 +360,43 @@ impl DevtoolsTarget {
         Self::ok_response(req.id, &result)
     }
 
-    fn handle_css_get_computed_style(&self, _webview: &WebView, req: DevtoolsRequest) -> DevtoolsResponse {
-        use rwe_devtools_proto::css::{GetComputedStyleForNodeParams, GetComputedStyleForNodeResult};
-        let _params: GetComputedStyleForNodeParams = match serde_json::from_value(req.params.clone()) {
+    fn handle_css_get_computed_style(&self, webview: &WebView, req: DevtoolsRequest) -> DevtoolsResponse {
+        use rwe_devtools_proto::css::{CSSProperty, GetComputedStyleForNodeParams, GetComputedStyleForNodeResult};
+        let params: GetComputedStyleForNodeParams = match serde_json::from_value(req.params.clone()) {
             Ok(p) => p,
             Err(e) => return Self::error_response(req.id, error_codes::INVALID_PARAMS,
                 format!("Invalid params: {e}")),
         };
+        let doc = match webview.document() {
+            Some(d) => d,
+            None => return Self::error_response(req.id, error_codes::INTERNAL_ERROR,
+                "No document loaded".to_string()),
+        };
+        let node = match find_node_by_id(&doc.root, params.node_id) {
+            Some(n) => n,
+            None => return Self::error_response(req.id, error_codes::NODE_NOT_FOUND,
+                format!("Node {} not found", params.node_id)),
+        };
+        // Lookup computed style pres webview cascade_props (sdilene s
+        // interpreter v load_dom). Po render_via populate. Pri ne-loaded
+        // cascade vraci prazdne.
+        let ptr = Rc::as_ptr(&node) as usize;
+        let props_map = webview.cascade_props.borrow();
+        let style_map = props_map.get(&ptr);
+        let mut computed: Vec<CSSProperty> = Vec::new();
+        if let Some(map) = style_map {
+            for (k, v) in map.iter() {
+                computed.push(CSSProperty {
+                    name: k.clone(),
+                    value: v.clone(),
+                    important: false,
+                    disabled: false,
+                });
+            }
+        }
+        computed.sort_by(|a, b| a.name.cmp(&b.name));
         let result = GetComputedStyleForNodeResult {
-            computed_style: Vec::new(),
+            computed_style: computed,
         };
         Self::ok_response(req.id, &result)
     }
