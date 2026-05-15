@@ -119,6 +119,11 @@ pub struct ShellApp {
     /// D5: Sdilene state s page WebView overlay_painter closure. Pri inspect
     /// hover update node_id, closure cte + emit highlight rect.
     inspect_target: std::rc::Rc<std::cell::RefCell<Option<usize>>>,
+    /// Address bar otevreny (Ctrl+L). Pri zapnuti capture klavesnice
+    /// (znaky -> addr_input), Enter -> load_url. Esc -> close bez navigace.
+    addr_open: bool,
+    /// Aktualni text v address bar (pred Enter submit).
+    addr_input: String,
     /// DevTools target adapter (D2). Lazy init pri F12 toggle. Drzi events
     /// buffer + breakpoint counter. Dispatch volame `target.handle_request(
     /// &mut self.webview, req)` ve main loop.
@@ -153,6 +158,8 @@ impl ShellApp {
             splitter_drag: false,
             inspect_mode: false,
             inspect_target: Rc::new(RefCell::new(None)),
+            addr_open: false,
+            addr_input: String::new(),
             devtools_target: None,
             cdp_channel: None,
             mouse_x: 0.0,
@@ -758,6 +765,47 @@ impl ApplicationHandler for ShellApp {
             }
             WindowEvent::KeyboardInput { event: key_event, .. } => {
                 use winit::keyboard::{Key, NamedKey};
+                // Address bar capture - pri addr_open intercepta vsechny keys.
+                if self.addr_open && matches!(key_event.state, ElementState::Pressed) {
+                    match &key_event.logical_key {
+                        Key::Named(NamedKey::Escape) => {
+                            self.addr_open = false;
+                            self.addr_input.clear();
+                            println!("[shell addr] cancel");
+                            return;
+                        }
+                        Key::Named(NamedKey::Enter) => {
+                            let url = self.addr_input.trim().to_string();
+                            self.addr_open = false;
+                            self.addr_input.clear();
+                            if !url.is_empty() {
+                                println!("[shell addr] navigate: {}", url);
+                                if let Some(wv) = &mut self.webview {
+                                    if wv.load_url(&url).is_some() {
+                                        self.history.truncate(self.history_idx + 1);
+                                        self.history.push(url);
+                                        self.history_idx = self.history.len() - 1;
+                                        if let Some(w) = &self.window { w.request_redraw(); }
+                                    } else {
+                                        eprintln!("[shell addr] load failed");
+                                    }
+                                }
+                            }
+                            return;
+                        }
+                        Key::Named(NamedKey::Backspace) => {
+                            self.addr_input.pop();
+                            println!("[shell addr] {}", self.addr_input);
+                            return;
+                        }
+                        Key::Character(s) => {
+                            self.addr_input.push_str(s);
+                            println!("[shell addr] {}", self.addr_input);
+                            return;
+                        }
+                        _ => return,
+                    }
+                }
                 // D5: Ctrl+Shift+C toggle inspect mode.
                 if matches!(key_event.state, ElementState::Pressed)
                     && self.modifiers.control_key() && self.modifiers.shift_key() {
@@ -793,6 +841,22 @@ impl ApplicationHandler for ShellApp {
                             if let (Some(wv), Some(last)) = (&mut self.webview, self.history.get(self.history_idx).cloned()) {
                                 wv.load_url(&last);
                                 if let Some(w) = &self.window { w.request_redraw(); }
+                            }
+                            return;
+                        }
+                        if s.eq_ignore_ascii_case("l") {
+                            // Ctrl+L: toggle address bar. Vstup pres stdout
+                            // (visual overlay = Phase 99). User tipuje, Enter
+                            // load_url, Esc close.
+                            self.addr_open = !self.addr_open;
+                            if self.addr_open {
+                                self.addr_input = self.history.get(self.history_idx)
+                                    .cloned().unwrap_or_default();
+                                println!("[shell addr] open. Tipuj URL + Enter / Esc.");
+                                println!("[shell addr] current: {}", self.addr_input);
+                            } else {
+                                self.addr_input.clear();
+                                println!("[shell addr] closed");
                             }
                             return;
                         }
