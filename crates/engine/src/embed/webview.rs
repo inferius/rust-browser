@@ -194,6 +194,11 @@ pub struct WebView {
     /// dom_version) -> Option<hovered_id>. Pri stejnem klici reuse posledni
     /// hovered (bez tree walk). Mouse pohyb pres 1px = stejna mrizka.
     pub(crate) hit_test_cache: Option<((i32, i32, u64), Option<usize>)>,
+    /// Per-WebView hovered DOM node. Drive bylo jen thread_local v
+    /// cascade::HOVERED_NODE (sdileny pres WV) - pohyb mysi v jedne WV
+    /// invalidoval cascade cache vsech ostatnich. Per-WV stav fixuje.
+    /// Pred cascade_with_viewport call se thread_local set z tohoto fieldu.
+    pub(crate) hovered_node_local: Option<usize>,
 }
 
 impl WebView {
@@ -249,6 +254,7 @@ impl WebView {
             cascade_cache_key: None,
             cascade_cache_value: None,
             hit_test_cache: None,
+            hovered_node_local: None,
         }
     }
 
@@ -660,9 +666,10 @@ impl WebView {
                             h
                         }
                     };
-                    let prev = crate::browser::cascade::get_hovered_node();
-                    if prev != hovered_id {
-                        crate::browser::cascade::set_hovered_node(hovered_id);
+                    // Per-WebView hovered. Bez per-WV stav by mouse_move v
+                    // jine WV invalidoval cascade cache teto WV (thread_local).
+                    if self.hovered_node_local != hovered_id {
+                        self.hovered_node_local = hovered_id;
                         self.dirty = true;
                         response.dirty = true;
                     }
@@ -910,7 +917,8 @@ impl WebView {
             }
             InputEvent::MouseLeave => {
                 // Clear :hover state pri opusteni viewport.
-                if crate::browser::cascade::get_hovered_node().is_some() {
+                if self.hovered_node_local.is_some() {
+                    self.hovered_node_local = None;
                     crate::browser::cascade::set_hovered_node(None);
                     self.dirty = true;
                     response.dirty = true;
@@ -1262,13 +1270,19 @@ impl WebView {
         // (dom_version, hovered_node, focused_node, viewport, stylesheets_len).
         // Pri pohybu mysi bez zmeny hovered_node = reuse cached map = O(1)
         // misto O(N*M) walk.
+        // Pred cascade set thread_local na per-WV hover stav (selectory ctou
+        // pres set_hovered_node API). Po render_via NEN0 reset - dalsi WV
+        // cascade nastavi pred svym walk.
+        crate::browser::cascade::set_hovered_node(self.hovered_node_local);
+
         let cache_key = {
             use std::hash::{Hash, Hasher};
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
             // dom_version
             self.interpreter.as_ref().map(|i| i.dom_version()).unwrap_or(0).hash(&mut hasher);
-            // hovered / focused thread_local state (mozna mezi WebView sdileno)
-            crate::browser::cascade::get_hovered_node().unwrap_or(0).hash(&mut hasher);
+            // Per-WV hovered/focused. Bez per-WV by jine WV mouse_move
+            // invalidoval cache i kdyz tahle WV nezmenila hover.
+            self.hovered_node_local.unwrap_or(0).hash(&mut hasher);
             self.focused_node_local.unwrap_or(0).hash(&mut hasher);
             // viewport rounded
             (viewport_w as u32).hash(&mut hasher);

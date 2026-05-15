@@ -269,6 +269,10 @@ pub struct ShellApp {
     /// Posledni redraw cas - FPS counter (EMA 30 frames).
     frame_times_ms: std::collections::VecDeque<f32>,
     last_frame_time: std::time::Instant,
+    /// Per-WebView posledni render_via doba (ms) - diagnostika v title bar.
+    last_chrome_ms: f32,
+    last_page_ms: f32,
+    last_dev_ms: f32,
 
     mouse_x: f32,
     mouse_y: f32,
@@ -315,6 +319,9 @@ impl ShellApp {
             last_mouse_move: std::time::Instant::now(),
             frame_times_ms: std::collections::VecDeque::with_capacity(30),
             last_frame_time: std::time::Instant::now(),
+            last_chrome_ms: 0.0,
+            last_page_ms: 0.0,
+            last_dev_ms: 0.0,
             mouse_x: 0.0,
             mouse_y: 0.0,
             modifiers: winit::keyboard::ModifiersState::empty(),
@@ -1062,17 +1069,25 @@ html, body {{ margin: 0; padding: 0; height: 100%; background: #202124; color: #
         let renderer = match &mut self.renderer { Some(r) => r, None => return };
 
         // Render vsech 3 WebViews do jejich offscreen RT (field-disjoint mut).
+        // Per-WV timing pro diagnostiku - ulozime do struct fields.
+        let t0 = std::time::Instant::now();
         let chrome_anim = self.chrome.as_mut()
             .map(|wv| { let _ = wv.render_via(renderer); wv.has_active_animations() })
             .unwrap_or(false);
+        let t1 = std::time::Instant::now();
         let page_anim = self.webview.as_mut()
             .map(|wv| { let _ = wv.render_via(renderer); wv.has_active_animations() })
             .unwrap_or(false);
+        let t2 = std::time::Instant::now();
         let dev_anim = if self.devtools_visible {
             self.devtools.as_mut()
                 .map(|wv| { let _ = wv.render_via(renderer); wv.has_active_animations() })
                 .unwrap_or(false)
         } else { false };
+        let t3 = std::time::Instant::now();
+        self.last_chrome_ms = t1.duration_since(t0).as_secs_f32() * 1000.0;
+        self.last_page_ms = t2.duration_since(t1).as_secs_f32() * 1000.0;
+        self.last_dev_ms = t3.duration_since(t2).as_secs_f32() * 1000.0;
         let _ = renderer;
 
         // Present layered: chrome top (fixed h), page middle, devtools bottom.
@@ -1116,7 +1131,9 @@ html, body {{ margin: 0; padding: 0; height: 100%; background: #202124; color: #
             let fps = if avg_ms > 0.01 { 1000.0 / avg_ms } else { 999.0 };
             let title_base = if t.is_empty() { "RustWebEngine".to_string() }
                 else { format!("{} - RustWebEngine", t) };
-            let win_title = format!("[{:.0} FPS {:.1}ms] {}", fps, avg_ms, title_base);
+            let win_title = format!("[{:.0} FPS {:.1}ms | C:{:.1} P:{:.1} D:{:.1}] {}",
+                fps, avg_ms, self.last_chrome_ms, self.last_page_ms, self.last_dev_ms,
+                title_base);
             if window.title() != win_title {
                 window.set_title(&win_title);
             }

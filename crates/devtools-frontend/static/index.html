@@ -1354,19 +1354,9 @@ html, body {
                 <!-- LEFT: DOM tree -->
                 <div class="dom-pane">
                     <div class="dom-tree">
-                        <div class="dom-node"><span class="toggle icon"><i data-lucide="chevron-down"></i></span><span class="tok-tag">&lt;!DOCTYPE html&gt;</span></div>
-                        <div class="dom-node"><span class="toggle icon"><i data-lucide="chevron-down"></i></span><span class="tok-tag">&lt;html</span> <span class="tok-attr-name">lang</span>=<span class="tok-attr-value">"cs"</span><span class="tok-tag">&gt;</span></div>
-                        <div class="dom-node" style="padding-left: 22px"><span class="toggle icon"><i data-lucide="chevron-right"></i></span><span class="tok-tag">&lt;head&gt;</span></div>
-                        <div class="dom-node" style="padding-left: 22px"><span class="toggle icon"><i data-lucide="chevron-down"></i></span><span class="tok-tag">&lt;body&gt;</span></div>
-                        <div class="dom-node" style="padding-left: 38px"><span class="toggle icon"><i data-lucide="chevron-down"></i></span><span class="tok-tag">&lt;div</span> <span class="tok-attr-name">class</span>=<span class="tok-attr-value">"page-area"</span><span class="tok-tag">&gt;</span></div>
-                        <div class="dom-node selected" style="padding-left: 54px"><span class="toggle icon"><i data-lucide="chevron-down"></i></span><span class="tok-tag">&lt;h1&gt;</span><span class="tok-text">Mock Page</span><span class="tok-tag">&lt;/h1&gt;</span></div>
-                        <div class="dom-node" style="padding-left: 54px"><span class="toggle icon"><i data-lucide="chevron-down"></i></span><span class="tok-tag">&lt;p&gt;</span><span class="tok-text">Toto je stranka...</span><span class="tok-tag">&lt;/p&gt;</span></div>
-                        <div class="dom-node" style="padding-left: 54px"><span class="toggle icon"><i data-lucide="dot"></i></span><span class="tok-tag">&lt;button&gt;</span><span class="tok-text">Tlacitko</span><span class="tok-tag">&lt;/button&gt;</span><span class="event-badge">event</span></div>
-                        <div class="dom-node" style="padding-left: 54px"><span class="toggle icon"><i data-lucide="chevron-down"></i></span><span class="tok-tag">&lt;div</span> <span class="tok-attr-name">id</span>=<span class="tok-attr-value">"counter"</span><span class="tok-tag">&gt;</span><span class="tok-text">Counter: 42</span><span class="tok-tag">&lt;/div&gt;</span></div>
-                        <div class="dom-node" style="padding-left: 38px"><span class="tok-tag">&lt;/div&gt;</span></div>
-                        <div class="dom-node" style="padding-left: 38px"><span class="toggle icon"><i data-lucide="chevron-right"></i></span><span class="tok-tag">&lt;div</span> <span class="tok-attr-name">class</span>=<span class="tok-attr-value">"devtools"</span><span class="tok-tag">&gt;</span></div>
-                        <div class="dom-node" style="padding-left: 22px"><span class="tok-tag">&lt;/body&gt;</span></div>
-                        <div class="dom-node"><span class="tok-tag">&lt;/html&gt;</span></div>
+                        <!-- Static placeholder - JS CDP wireup naplni real DOM
+                             pres window.cdp.send('DOM.getDocument'). Zustava
+                             prazdny pokud CDP neni dostupny (standalone mockup). -->
                     </div>
                 </div>
 
@@ -1384,46 +1374,10 @@ html, body {
                         <button class="toolbar-btn" data-i18n-title="btn.printPreview" title="Print preview"><i data-lucide="printer" class="icon"></i></button>
                     </div>
                     <div class="styles-body">
-                        <div class="styles-section">
-                            <div class="style-rule">
-                                <span class="selector">element <span class="style-rule-bracket">{</span></span>
-                                <div class="style-add">+ Klikni pro pridani vlastnosti</div>
-                                <span class="style-rule-bracket">}</span>
-                            </div>
-                        </div>
-                        <div class="style-rule">
-                            <span class="selector">h1</span> <span class="style-rule-bracket">{</span>
-                            <span class="source">page.html:64</span>
-                            <div class="decl"><input type="checkbox" checked><span class="prop">margin</span>: <span class="val">0 0 8px</span>;</div>
-                            <div class="style-add">+</div>
-                            <span class="style-rule-bracket">}</span>
-                        </div>
-                        <div class="style-rule">
-                            <span class="selector">.page-area h1</span> <span class="style-rule-bracket">{</span>
-                            <span class="source">user agent</span>
-                            <div class="decl"><input type="checkbox" checked><span class="prop">font-size</span>: <span class="val">2em</span>;</div>
-                            <div class="decl"><input type="checkbox" checked><span class="prop">font-weight</span>: <span class="val">bold</span>;</div>
-                            <div class="decl disabled"><input type="checkbox"><span class="prop">color</span>: <span class="val">red</span>;</div>
-                            <span class="style-rule-bracket">}</span>
-                        </div>
-                        <div class="media-line">@media (max-width: 768px) {</div>
-                        <div class="style-rule">
-                            <span class="selector">h1</span> <span class="style-rule-bracket">{</span>
-                            <span class="source">page.html:128</span>
-                            <div class="decl"><input type="checkbox" checked><span class="prop">font-size</span>: <span class="val">24px</span>;</div>
-                            <span class="style-rule-bracket">}</span>
-                        </div>
-                        <div class="media-line">}</div>
-                        <div style="padding: 8px; color: var(--fg-dim); font-size: 11px; border-bottom: 1px solid var(--border);">
-                            Zdedeno z body
-                        </div>
-                        <div class="style-rule">
-                            <span class="selector">body</span> <span class="style-rule-bracket">{</span>
-                            <span class="source">page.html:38</span>
-                            <div class="decl"><input type="checkbox" checked><span class="prop">font-family</span>: <span class="val">-apple-system, BlinkMacSystemFont, "Segoe UI"</span>;</div>
-                            <div class="decl"><input type="checkbox" checked><span class="prop">font-size</span>: <span class="val">14px</span>;</div>
-                            <div class="decl"><input type="checkbox" checked><span class="prop">color</span>: <span class="val">rgb(51, 51, 51)</span>;</div>
-                            <span class="style-rule-bracket">}</span>
+                        <!-- JS CDP wireup naplni real styles pres
+                             CSS.getMatchedStylesForNode po click na DOM node. -->
+                        <div style="padding: 8px; color: var(--fg-dim); font-size: 11px;">
+                            Vyber element pro zobrazeni styles.
                         </div>
                     </div>
                 </div>
