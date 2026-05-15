@@ -596,29 +596,42 @@ impl WebView {
                     if let Some(layout) = &self.last_layout_root {
                         let total_h = layout.rect.height;
                         let total_w = layout.rect.width;
-                        // Vertical thumb hit.
+                        // Vertical scrollbar - thumb drag nebo track jump.
                         if total_h > viewport_h && x >= viewport_w - 12.0 && x < viewport_w {
                             let thumb_h = (viewport_h * viewport_h / total_h).max(40.0);
                             let max_scroll = (total_h - viewport_h).max(1.0);
                             let thumb_y = (self.scroll_y / max_scroll) * (viewport_h - thumb_h);
                             if y >= thumb_y && y < thumb_y + thumb_h {
+                                // Klik na thumb -> drag (instantni, bez smooth).
                                 self.v_scrollbar_drag = Some(y - thumb_y);
-                                response.dirty = true;
-                                self.dirty = true;
-                                return response;
+                            } else {
+                                // Klik na track mimo thumb -> page jump.
+                                // y nad thumb = scroll up viewport_h, pod = down.
+                                let delta = if y < thumb_y { -viewport_h } else { viewport_h };
+                                let new_scroll = (self.scroll_y + delta).clamp(0.0, max_scroll);
+                                self.scroll_y = new_scroll;
+                                self.scroll_target_y = new_scroll;
                             }
+                            response.dirty = true;
+                            self.dirty = true;
+                            return response;
                         }
-                        // Horizontal thumb hit.
+                        // Horizontal scrollbar - thumb drag nebo track jump.
                         if total_w > viewport_w && y >= viewport_h - 12.0 && y < viewport_h {
                             let thumb_w = (viewport_w * viewport_w / total_w).max(40.0);
                             let max_scroll_x = (total_w - viewport_w).max(1.0);
                             let thumb_x = (self.scroll_x / max_scroll_x) * (viewport_w - thumb_w);
                             if x >= thumb_x && x < thumb_x + thumb_w {
                                 self.h_scrollbar_drag = Some(x - thumb_x);
-                                response.dirty = true;
-                                self.dirty = true;
-                                return response;
+                            } else {
+                                let delta = if x < thumb_x { -viewport_w } else { viewport_w };
+                                let new_scroll = (self.scroll_x + delta).clamp(0.0, max_scroll_x);
+                                self.scroll_x = new_scroll;
+                                self.scroll_target_x = new_scroll;
                             }
+                            response.dirty = true;
+                            self.dirty = true;
+                            return response;
                         }
                     }
                     // Hit-test layout_root pres content coords. Store target +
