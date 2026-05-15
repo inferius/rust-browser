@@ -223,9 +223,49 @@ impl JsValue {
             (JsValue::BigNumber(a), JsValue::BigNumber(b)) => *a == *b,
             (JsValue::BigInt(a),    JsValue::BigInt(b))    => *a == *b,
             (JsValue::DomNode(a),   JsValue::DomNode(b))   => Rc::ptr_eq(a, b),
+            (JsValue::Function(a), JsValue::Function(b))   => js_func_identity_eq(a, b),
             _ => false,
         }
     }
+
+    /// Identity equality pro callback funkce - pouziva removeEventListener
+    /// k najiti registrace. Pro User fn porovnava env Rc ptr + jmeno + arity.
+    /// Pro Native fn pres Rc::ptr_eq na NativeFn closure.
+    pub(crate) fn function_identity_eq(&self, other: &JsValue) -> bool {
+        match (self, other) {
+            (JsValue::Function(a), JsValue::Function(b)) => js_func_identity_eq(a, b),
+            _ => self.strict_eq(other),
+        }
+    }
+}
+
+/// Porovnani JsFunc pres identitu (pro removeEventListener).
+/// Funkce ulozena v promenne `h` je pri kazdem evaluation Identifier(h)
+/// clonova z env-binding -> ruzne Rust instance, ale stejne env Rc ptr,
+/// stejne jmeno, stejna arita. Same vola dvakrat -> identicke.
+fn js_func_identity_eq(a: &super::JsFunc, b: &super::JsFunc) -> bool {
+    use super::JsFunc::*;
+    match (a, b) {
+        (User { name: n1, params: p1, env: e1, .. },
+         User { name: n2, params: p2, env: e2, .. }) => {
+            n1 == n2 && p1.len() == p2.len() && Rc::ptr_eq(e1, e2)
+        }
+        (Async { name: n1, params: p1, env: e1, .. },
+         Async { name: n2, params: p2, env: e2, .. }) => {
+            n1 == n2 && p1.len() == p2.len() && Rc::ptr_eq(e1, e2)
+        }
+        (Generator { name: n1, params: p1, env: e1, .. },
+         Generator { name: n2, params: p2, env: e2, .. }) => {
+            n1 == n2 && p1.len() == p2.len() && Rc::ptr_eq(e1, e2)
+        }
+        (Native(_, f1), Native(_, f2)) => Rc::ptr_eq(f1, f2),
+        (Bound { func: f1, .. }, Bound { func: f2, .. }) => f1.function_identity_eq(f2),
+        _ => false,
+    }
+}
+
+impl JsValue {
+    // Placeholder pro fix - prazdny impl block, hlavni telo nahore.
 
     /// Vrati JsValue jako BigDecimal (pro BigNumber operace).
     pub fn to_bigdecimal(&self) -> Option<BigDecimal> {

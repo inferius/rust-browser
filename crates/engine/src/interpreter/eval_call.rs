@@ -393,10 +393,11 @@ impl Interpreter {
                                 let arg_vals = self.eval_args(args, env)?;
                                 let mut it = arg_vals.into_iter();
                                 let evt = it.next().map(|v| v.to_string()).unwrap_or_default();
-                                let _cb = it.next().unwrap_or(JsValue::Undefined);
-                                // Zjednodusene - clear cely seznam pro tento event type.
-                                // Real impl by porovnavala identity callback-u.
-                                self.window_listeners.borrow_mut().remove(&evt);
+                                let cb = it.next().unwrap_or(JsValue::Undefined);
+                                let mut listeners = self.window_listeners.borrow_mut();
+                                if let Some(vec) = listeners.get_mut(&evt) {
+                                    vec.retain(|c| !c.function_identity_eq(&cb));
+                                }
                                 return Ok(JsValue::Undefined);
                             }
                             "dispatchEvent" => {
@@ -1900,7 +1901,32 @@ impl Interpreter {
                             return Ok(JsValue::Undefined);
                         }
                         "removeEventListener" => {
-                            // Bez ID nelze najit konkretni callback - zatim no-op
+                            // el.removeEventListener(type, callback) - najdi registrovany ID
+                            // podle function_identity_eq a smaz z listeners + event_callbacks.
+                            let mut it = arg_vals.into_iter();
+                            let event_type = it.next().map(|v| v.to_string()).unwrap_or_default();
+                            let callback = it.next().unwrap_or(JsValue::Undefined);
+                            let ids: Vec<usize> = n.listeners.borrow().get(&event_type)
+                                .cloned().unwrap_or_default();
+                            let mut to_remove: Vec<usize> = Vec::new();
+                            for id in &ids {
+                                let cb = self.event_callbacks.borrow().get(id).cloned();
+                                if let Some(cb) = cb {
+                                    if cb.function_identity_eq(&callback) {
+                                        to_remove.push(*id);
+                                    }
+                                }
+                            }
+                            if !to_remove.is_empty() {
+                                let mut lst = n.listeners.borrow_mut();
+                                if let Some(vec) = lst.get_mut(&event_type) {
+                                    vec.retain(|id| !to_remove.contains(id));
+                                }
+                                let mut cbs = self.event_callbacks.borrow_mut();
+                                for id in &to_remove {
+                                    cbs.remove(id);
+                                }
+                            }
                             return Ok(JsValue::Undefined);
                         }
                         "dispatchEvent" => {
