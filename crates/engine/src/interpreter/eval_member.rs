@@ -146,9 +146,16 @@ impl Interpreter {
                 use crate::browser::dom::NodeKind;
                 match key {
                     "tagName" | "nodeName" => {
-                        return Ok(match n.tag_name() {
-                            Some(t) => JsValue::Str(t.to_uppercase()),
-                            None    => JsValue::Str(String::new()),
+                        return Ok(match &n.kind {
+                            NodeKind::Element(t) => JsValue::Str(t.to_uppercase()),
+                            NodeKind::Text(_) if key == "nodeName" => JsValue::Str("#text".into()),
+                            NodeKind::Comment(_) if key == "nodeName" => JsValue::Str("#comment".into()),
+                            NodeKind::Document if key == "nodeName" => JsValue::Str("#document".into()),
+                            NodeKind::DocumentFragment if key == "nodeName" =>
+                                JsValue::Str("#document-fragment".into()),
+                            NodeKind::Cdata(_) if key == "nodeName" => JsValue::Str("#cdata-section".into()),
+                            NodeKind::DocType(s) if key == "nodeName" => JsValue::Str(s.clone()),
+                            _ => JsValue::Str(String::new()),
                         });
                     }
                     "nodeType" => {

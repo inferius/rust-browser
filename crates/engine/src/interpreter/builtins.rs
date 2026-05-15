@@ -1306,11 +1306,11 @@ pub fn setup_builtins(
         doc_obj.set("getSelection".into(), native("document.getSelection", move |_| Ok(sel.clone())));
     }
 
-    // document.createDocumentFragment()
+    // document.createDocumentFragment() - real DocumentFragment node.
+    // Pri appendChild(frag) na parent se jeho deti presunou do parenta.
     doc_obj.set("createDocumentFragment".into(), native("document.createDocumentFragment", |_| {
         use crate::browser::dom::NodeData;
-        let node = NodeData::new_element("fragment", std::collections::HashMap::new());
-        Ok(JsValue::DomNode(node))
+        Ok(JsValue::DomNode(NodeData::new_document_fragment()))
     }));
 
     // document.getElementById(id) - real walk skrz DOM tree

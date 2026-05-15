@@ -1216,6 +1216,17 @@ impl Interpreter {
                         "appendChild" => {
                             let child = arg_vals.into_iter().next().unwrap_or(JsValue::Undefined);
                             if let JsValue::DomNode(c) = &child {
+                                // DocumentFragment: spec rika presunout vsechny deti
+                                // fragmentu do parenta a vyprazdnit fragment.
+                                if matches!(c.kind, crate::browser::dom::NodeKind::DocumentFragment) {
+                                    let frag_children: Vec<_> = c.children.borrow().clone();
+                                    c.children.borrow_mut().clear();
+                                    for ch in &frag_children {
+                                        n.append_child(Rc::clone(ch));
+                                    }
+                                    self.dispatch_mutation_childlist(&n, frag_children, Vec::new());
+                                    return Ok(child);
+                                }
                                 n.append_child(Rc::clone(c));
                                 // MutationObserver dispatch on parent s addedNodes.
                                 self.dispatch_mutation_childlist(&n, vec![Rc::clone(c)], Vec::new());
