@@ -136,6 +136,17 @@ pub struct WebView {
     /// (App emits inspector overlay nad webview RT pres dalsi draw_segments
     /// pass; shell nepouziva).
     pub(crate) last_layout_root: Option<crate::browser::layout::LayoutBox>,
+    /// Layout rects per node ptr (klic = Rc::as_ptr as usize). Vytvoreny
+    /// po kazdem render_via z layout_root. Sdileny do interpreter
+    /// layout_lookup callback - JS getBoundingClientRect / offsetXY read.
+    pub(crate) layout_rects: std::rc::Rc<std::cell::RefCell<
+        std::collections::HashMap<usize, (f32, f32, f32, f32)>
+    >>,
+    /// Cascade props per node ptr. Vytvoreny po cascade pass. Sdileny do
+    /// interpreter cascade_lookup callback - JS getComputedStyle read.
+    pub(crate) cascade_props: std::rc::Rc<std::cell::RefCell<
+        std::collections::HashMap<usize, std::collections::HashMap<String, String>>
+    >>,
     /// Async jobs registry - background work (image lazy load, file IO).
     /// Drain per render_via vola pending callbacks v main thread.
     pub(crate) async_jobs: crate::browser::async_jobs::AsyncJobsRegistry,
@@ -181,6 +192,8 @@ impl WebView {
             v_scrollbar_drag: None,
             h_scrollbar_drag: None,
             last_layout_root: None,
+            layout_rects: std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new())),
+            cascade_props: std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new())),
             async_jobs: crate::browser::async_jobs::AsyncJobsRegistry::new(),
         }
     }
@@ -235,9 +248,21 @@ impl WebView {
         let stylesheet_count = if stylesheet.rules.is_empty() { 0 } else { 1 };
 
         // Init interpreter + set document. Bez run_scripts (volaci kod o ne stoji).
-        let interp = Interpreter::new();
+        let mut interp = Interpreter::new();
         let interp_doc = crate::browser::html_parser::parse_html(html, &base);
         interp.set_document(interp_doc);
+
+        // Wire-up lookups - layout_rects + cascade_props sdilene s host.
+        // Po kazdem render_via webview rebuilds tyto mapy, interpreter
+        // closures je read pres Rc<RefCell> clone.
+        let rects_clone = std::rc::Rc::clone(&self.layout_rects);
+        interp.set_layout_lookup(move |ptr| {
+            rects_clone.borrow().get(&(ptr as usize)).copied()
+        });
+        let cascade_clone = std::rc::Rc::clone(&self.cascade_props);
+        interp.set_cascade_lookup(move |ptr| {
+            cascade_clone.borrow().get(&(ptr as usize)).cloned().unwrap_or_default()
+        });
 
         self.title = doc.title.clone();
         self.document = Some(doc);
@@ -1316,6 +1341,20 @@ impl WebView {
         }
 
         // 6. Stash layout_root pro hostujici aplikaci (overlay paint pass).
+        // Populate layout_rects (node ptr -> rect) + cascade_props sdilene
+        // s interpreter lookups (getBoundingClientRect / getComputedStyle).
+        {
+            let mut rects = self.layout_rects.borrow_mut();
+            rects.clear();
+            populate_layout_rects(&layout_root, self.scroll_x, self.scroll_y, &mut rects);
+        }
+        {
+            let mut props = self.cascade_props.borrow_mut();
+            props.clear();
+            for (ptr, style) in style_map.iter() {
+                props.insert(*ptr, style.clone());
+            }
+        }
         self.last_layout_root = Some(layout_root);
 
         self.dirty = false;
@@ -1571,6 +1610,27 @@ impl WebView {
 
 /// Walk layout tree + collect highlight rects pro selected text lines.
 /// Flow-based: first/last line maji partial X range, middle full.
+/// Walk LayoutBox tree + populate layout_rects mapu (node_ptr -> rect).
+/// Pouziti: JS getBoundingClientRect / offsetWidth pres interp.layout_lookup.
+/// Pri scroll_x/y odecte (rect je document-space, JS API ocekava viewport-space).
+fn populate_layout_rects(
+    b: &crate::browser::layout::LayoutBox,
+    scroll_x: f32,
+    scroll_y: f32,
+    out: &mut std::collections::HashMap<usize, (f32, f32, f32, f32)>,
+) {
+    if let Some(node) = &b.node {
+        let ptr = std::rc::Rc::as_ptr(node) as usize;
+        // Viewport-space rect: subtract scroll offsets.
+        let x = b.rect.x - scroll_x;
+        let y = b.rect.y - scroll_y;
+        out.insert(ptr, (x, y, b.rect.width, b.rect.height));
+    }
+    for child in &b.children {
+        populate_layout_rects(child, scroll_x, scroll_y, out);
+    }
+}
+
 fn collect_text_lines(
     b: &crate::browser::layout::LayoutBox,
     sx: f32, sy: f32, ex: f32, ey: f32,
