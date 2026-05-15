@@ -10,204 +10,110 @@ Working v worktree `J:\Claude\Worktrees\RustWebEngine\serene-bassi-0a7b83` (bran
 
 **Prectit pred startem:**
 1. `CLAUDE.md` (root) - projekt instrukce
-2. `HANDOFF.md` - Session N+22 detail status (Edge/CEF shell-as-crate refactor + WebView orchestration + polarity invert)
+2. `HANDOFF.md` - Session N+22 + N+23 detail status
 3. `git log --oneline -50` - posledních ~50 commitu
 
-## Co je hotove (N+22 session, ~60 commitu)
+## Co je hotove (N+23 session, ~35+ commitu, 2844 testu)
 
 ### Architektura
-- Cargo workspace `crates/engine` + `crates/shell`
-- Edge/CEF model: shell crate = nezavisly host. Engine = embeddable WebView
-- `crates/engine/src/embed/` - Engine + WebView + InputEvent/EventResponse + loader
+- Cargo workspace: `crates/engine` + `crates/shell` + `crates/devtools-proto` + `crates/devtools-frontend`
+- Edge/CEF model: shell = nezavisly host, engine = embeddable WebView
+- `crates/engine/src/embed/` - Engine + WebView + InputEvent/EventResponse + DevtoolsTarget + loader
 
-### WebView feature parity s Chrome WebContents
-- Cascade + CSS transitions (detect+apply+transitionend) + @keyframes anim tick (start/end/iter events)
-- Layout + sticky positioning + paint anim
-- Display list cull + scroll shift + scrollbar overlay
-- Canvas2D + WebGL canvas frame
-- Atlas warm + text runs extract + selection paint
-- Caret blink pro focused input
-- `<select>` popup overlay
-- async_jobs drain + interpreter event queues (WS/fetch/rAF)
-- overlay_painter callback hook
+### DevTools rework (D1-D6 + D4b/c/d + D5)
+- **D1** Protocol crate `crates/devtools-proto/` - DevtoolsRequest/Response/Event + Method enum (8 tests)
+- **D2** Target adapter `embed/devtools_target.rs` - per-domain dispatcher, &mut WebView per call (12 tests)
+- **D3** Frontend crate `crates/devtools-frontend/` - INDEX_HTML + 5 panels + theme.css + cdp.js (3 tests)
+- **D4a** F12 toggle - lazy devtools WebView create + INDEX HTML inject + CDP channel arm
+- **D4b** Real split layout - present_split_external_to_swap_chain (page top 60%, devtools bottom 40%)
+- **D4c** Input routing po y koord - mouse hit-test dle pane + y offset adjust pres dispatch_input
+- **D4d** Splitter drag - Ns resize cursor + drag MouseMove updatuje split_ratio
+- **D5** Inspector overlay - Ctrl+Shift+C + pick_node_at + overlay_painter outline + click emit DOM.inspectNodeRequested + elements.html listener
+- **D6a/b** CDP channel - CdpChannel { req_queue, resp_queue } Rc<RefCell<VecDeque>> + native fns + pump_cdp per redraw
 
-### WebView input dispatch
-- Mouse: down/up/move/leave/wheel + click-vs-drag (5px threshold)
-- mousedown/mouseup/click event dispatch do JS
-- `<a href>` -> NavigationRequest
-- Keys: keydown/keyup do focused element
-- TextInput: caret-based insert + Backspace + Delete + Arrow + Home/End
-- Enter on input -> form submit event + NavigationRequest (preventDefault honored)
-- :hover state update + MouseLeave clear
-- focus management + blur na non-focusable
-- Scroll: smooth target (lerp v render_via)
-- Scrollbar thumb drag (V + H)
-- Text selection drag (anchor/current/extract pres painted_text_runs)
-- Cursor icon (Pointer/Text/Default)
-- Select all + clear selection (Esc)
+### CDP target handlers (real, no stubs)
+- DOM: getDocument / querySelector / querySelectorAll / getAttributes / setAttributeValue / removeAttribute
+- CSS: getMatchedStyles / getComputedStyle / setPropertyText
+- Runtime: evaluate (lexer + parser + interp.eval pres Stmt::Expr, unwrap WithLine)
+- Debugger: setBreakpoint / removeBreakpoint / resume + 4 step stubs
+- Network: getResponseBody stub (body cache TBD)
+- Performance: getMetrics real (Documents/Nodes/LayoutObjects/JSEventListeners)
 
-### Shell crate (full browser host)
-- Vlastni Window/Surface/Renderer/Engine
-- All winit events wired: Resized/CursorMoved/MouseInput/MouseWheel/KeyboardInput/DroppedFile/ModifiersChanged
-- Keyboard shortcuts: Ctrl+C/A/+/=/-/0/R/Wheel/L, Alt+Left/Right, F5, Esc, PageUp/Down, Arrows, Home/End, Space
-- Clipboard copy (arboard)
-- Navigation pres response.navigation (Get -> load_url, Post -> load_url_post)
-- History stack + back/forward + reload
-- Drag-drop file load
-- Window title sync z webview.title()
-- Continual redraw pri active animations/transitions/smooth scroll/caret blink
+### DOM API Tier 1-5 (32 polozek, 95+ tests)
 
-### Engine cleanup
-- ~3000 LOC smazany: shell_chrome.rs (242), 16 dead `if false` bloku (720), TabManager + tabs.rs (747), App fields shell-only (10 polozek), READING_MODE_CSS, ChromeHit/hit_chrome, 1266 LOC App.render rewrite s thin pres webview
+**Tier 1**: element.style cached+persistence, getBoundingClientRect, getComputedStyle, offset/client/scroll dims, matches/closest/contains, Event constructors, window.addEventListener
 
-### Polarity invert (7/7 effective)
-- App.title/zoom/scroll_target_x/y/scroll_x/y/html/css/base_url/current_path - vsechno smazane, delegate webview pres helpers
-- App.interpreter zustal field pro legacy compat ALE novy path uses webview.interpreter()
-- `sync_webview(html, css, base, path)` brát args (no self.* cache)
-- App::resumed pres `initial: Option<(String, String, Option<String>, Option<PathBuf>)>` take()'d
-- Reload sites passuji data primo
+**Tier 2**: insertBefore + DocumentFragment, replaceChild, insertAdjacentElement, cloneNode, removeEventListener real (function identity), document.activeElement, createDocumentFragment
 
-### App.render dual-mode
-- **Default**: `App::render_via_webview()` thin path (~150 LOC):
-  1. poll_debug_runner + sync_devtools_from_interp
-  2. smooth_scroll_tick
-  3. webview.set_zoom + render_via (vse rendering)
-  4. Overlay pass nad webview RT (start_clear=false):
-     - paint_element_highlight_offset
-     - paint_inspector_overlays
-     - paint_devtools_panel
-     - FPS counter
-  5. present_external_to_swap_chain
-- **Legacy fallback**: `RWE_RENDER_LEGACY=1` env var -> original 1266 LOC inline App.render pipeline (debugging regression compare)
+**Tier 3**: scrollIntoView, window.scrollTo/By/scrollX/Y + pageXOffset/Yoffset, focus/blur real s dispatch
 
-## Co dale (priority order)
+**Tier 4**: DOMRect.toJSON, DOMTokenList full (length/item/replace/value/iterator), Array.from(iterable), MutationObserver real
 
-### Krok 1: Validate render_via_webview parity s legacy
+**Tier 5**: document.styleSheets + CSSStyleSheet API, attachShadow + ShadowRoot real, scrollingElement, CSSStyleDeclaration full (cssText/length/item), document.fonts.forEach, window.getSelection stub
 
-Spustit:
-```
-cargo run -- browser static/test.html
-```
-Default cesta = render_via_webview. Overit vizualne:
-- Page renderuje normalne (text, kolize, anim, transitions)
-- Devtools F12 panel otevre (Elements/Console/Network)
-- Inspector overlay funguje (Ctrl+Shift+C inspect mode -> click element -> modry box)
-- Scrollbar drag funguje
-- FPS counter (Ctrl+Shift+F)
-- Devtools Sources breakpoints / pause
+### Wire-up (interpreter <-> webview)
+- `webview.layout_rects: Rc<RefCell<HashMap<usize, (x,y,w,h)>>>` - populated po render_via
+- `webview.cascade_props: Rc<RefCell<HashMap<usize, HashMap<String, String>>>>` - populated z style_map
+- `webview.stylesheets_data` - flat format pro CSSOM
+- `interp.scroll_pos: Rc<RefCell<(f32, f32)>>` - bidirectional sync s webview.scroll_x/y
+- `interp.layout_lookup` + `cascade_lookup` + `stylesheets_lookup` callbacks
 
-Compare s legacy:
-```
-$env:RWE_RENDER_LEGACY="1"; cargo run -- browser static/test.html
-```
+### Window events dispatch
+- load + DOMContentLoaded pri load_html po run_scripts
+- resize pri webview.resize (skutecne size change)
+- scroll pri set_scroll
 
-Pokud parity OK -> krok 2. Pokud regression -> debug + fix.
+### Shell features (full browser host)
+- F12 toggle DevTools + split layout + splitter drag
+- Ctrl+Shift+C inspector mode
+- Ctrl+L address bar (stdout feedback)
+- Ctrl+F find on page (stdout feedback)
+- Alt+Left/Right back/forward + F5/Ctrl+R reload
+- Ctrl+C/A/+/-/0/Wheel zoom + clipboard + select all
+- PageUp/Down/Arrow/Home/End/Space scroll keys
+- Esc clear selection
 
-### Krok 2: Smaze legacy App.render telo
+## Aktualne TBD
 
-V `crates/engine/src/browser/render/mod.rs` linka ~4382 zacatek `fn render(&mut self) {`. Dual-mode pres env var check:
-```rust
-fn render(&mut self) {
-    if std::env::var("RWE_RENDER_LEGACY").is_err() {
-        self.render_via_webview();
-        return;
-    }
-    use super::{...}; // legacy continues
-    ...
-}
-```
+### Tier 6+ (advanced - optional)
+- **Network.getResponseBody body cache** - vyzaduje fetch native refactor v builtins.rs (add response_bodies HashMap Rc sdileny pres setup_builtins)
+- **Debugger.step{Over,Into,Out,Pause}** - vyzaduje pause infrastructure refactor (per-statement check v exec_stmt). Aktualne resume + breakpoint flag jen.
+- **Visual overlay address bar + find** - render UI Pred page area (top 32px bar). Shell paint overlay nad webview RT pred present.
+- **Find highlight matches** - walk webview.text_runs find substring + paint yellow rects pres overlay_painter.
 
-Smaze cely legacy telo + env var check. Final:
-```rust
-fn render(&mut self) {
-    self.render_via_webview();
-}
-```
-
-Po smaze App.render legacy = velke smaze App fields ktere uses jen legacy:
-- `cached_stylesheets`, `cached_stylesheets_hash`
-- `cached_style_map`, `cached_cascade_hash`
-- `cached_pseudo_map`, `cached_matched_key`
-- `cached_layout_root`, `layout_root`
-- `animation_origin`, `animation_pause_start`, `start_time`
-- `paused_animation_nodes`, `paused_node_styles`
-- `animations_scrubber_drag`
-- `prev_style_map`, `active_animations`, `active_transitions`, `animation_iterations`
-- `painted_text_runs`
-- `display_list_buffer`
-- `animations_affect_layout`, `css_uses_*` flags
-- `layout_affecting_animations`, `width_height_only_animations`, `position_only_animations`
-- `interpreter` (now redundant, webview primary)
-- `html, css, base_url, current_path` partial smaze - drz `initial` tuple v App::resumed
-
-Risk: hodne App-side state co webview duplikuje. Po smaze App = thin host ~300 LOC.
-
-### Krok 3: Devtools rework D1-D6
-
-Po App.render legacy smaze + App fields cleanup, App = ~300 LOC. Zacit devtools rework dle Chrome model:
-
-**D1: Protocol crate** (`crates/devtools-proto/`)
-- DevtoolsRequest enum: DOM/CSS/Runtime/Debugger/Network/Console/Performance domains
-- DevtoolsEvent enum (broadcast)
-- serde JSON serialization
-- mpsc channel transport
-
-**D2: Target adapter** (`crates/engine/src/embed/devtools_target.rs`)
-- `DevtoolsTarget` struct holds Arc<RefCell<WebView>>
-- handle_request per-domain dispatch:
-  - DOM.getDocument -> walk webview.document
-  - CSS.getMatchedStylesForNode -> webview.stylesheets cascade lookup
-  - Runtime.evaluate -> webview.interpreter.run
-  - Debugger.setBreakpoint -> webview.interpreter.debugger
-  - Network -> webview.interpreter.network_log
-  - Console -> webview.interpreter.console_log
-
-**D3: Devtools front-end** (`crates/devtools-frontend/`)
-- HTML/CSS/JS pages: index.html (tab strip) + elements.html + console.html + sources.html + network.html + performance.html
-- JS pouziva `window.cdp.send(method, params).then(...)` API
-- Render DOM pres recursive divs (treeview)
-
-**D4: Shell 2-WebView host**
-- ShellApp drzi `page: WebView`, `devtools: Option<WebView>`
-- F12 toggle creates devtools WebView + load devtools-frontend index.html
-- Window split: top 70% page, bottom 30% devtools (resizable)
-- Devtools WebView's interpreter ma JS binding `window.cdp.send(method, params)` -> DevtoolsTarget
-
-**D5: Inspector overlay**
-- Page WebView overlay_painter callback emit blue highlight box pres devtools state
-- F12 inspect mode: page click -> emit Inspect event -> devtools WebView elements panel updatuje
-
-**D6: JS bindings**
-- `interpreter::Interpreter::register_global_fn` + Rust closure handler pro `window.cdp.send`
+### Tier 7+ (longer-term)
+- **WebSocket cross-page** + ServiceWorker
+- **IntersectionObserver real** (per-frame intersection check)
+- **ResizeObserver real**
+- **History API** real (pushState/replaceState/popstate event)
+- **Storage events** (cross-tab broadcast)
+- **WebGL2 + WebGPU JS API**
 
 ## CLI cheat sheet
 
 ```powershell
-# Engine bin (default = naked viewport + webview render_via_webview)
+# Engine bin (CLI rezimy)
 cargo run                          # JS demo
 cargo run -- browser src.html      # browser thin path
-$env:RWE_RENDER_LEGACY="1"; cargo run -- browser   # legacy fallback (debug)
 cargo run -- debug src.js out.html # debug viewer
 cargo run -- dump src.html         # layout dump
 
-# Shell bin (full browser host)
-cargo run -p rwe-shell             # WebView pipeline (no chrome bar)
+# Shell bin (plnohodnotny browser host)
+cargo run -p rwe-shell             # WebView pipeline
 cargo run -p rwe-shell -- static/test.html
 
 # Build / test
 cargo build --workspace            # 0 warnings
-cargo test --workspace             # 2697 pass
+cargo test --workspace             # 2844 testu pass
 ```
 
-## Stats
+## Konvence
 
-- render/mod.rs: 9700 -> ~7800 LOC
-- shell_chrome.rs: -242 LOC
-- tabs.rs: -747 LOC
-- Celkem engine shrink: ~-3000 LOC
-- WebView grow: ~+1500 LOC (full Chrome WebContents parita)
-- Shell crate: ~450 LOC (winit App + handlers)
-- 2697 testy pass
+- **Cesky** v komunikaci + komentarich. Diakritika OK.
+- **ASCII** v kodu (-> ne ->, em-dash ne -).
+- **CAVEMAN mode**: terse czech v komunikaci, kod normalne.
+- **Po kazde feature**: build + test + commit. Commit msg kratky cesky.
+- **Pri nejistote zeptat se** drive nez psat kod.
 
 ## Branch + commits
 
@@ -215,18 +121,17 @@ cargo test --workspace             # 2697 pass
 git log --oneline -10
 ```
 
-Aktualne: `10588e3 refactor(engine): smaze take_interpreter calls`
+Aktualne (top of branch): `518c47a docs(HANDOFF): DOM API Tier 5 completion`
 Branch: `inferius-dev/serene-bassi-0a7b83`
 
 ---
 
 ## Tvuj task ted
 
-1. **Validate render_via_webview parity** (rucni test `cargo run -- browser`). Pokud regression - identifikuj co chybi v render_via_webview vs legacy + doplnit.
-2. Pokud OK -> **smaze legacy App.render** (~1100 LOC) + env var check.
-3. **Smaze unused App fields** ze duplikuji webview.
-4. Po App = ~300 LOC -> zacit **devtools rework D1** (protocol crate skeleton).
+User chce dale rozsirovat. Doporuceno postupne:
+1. **Network.getResponseBody body cache** (1-2h) - fetch refactor
+2. **Visual overlay address bar** (2-3h) - render UI nad webview
+3. **Find highlight matches** (1-2h) - text_runs walk
+4. **Debugger.step* infrastructure** (4-6h) - per-statement pause
 
-User chce postupne work + commit per krok + test pass kazdym.
-
-Konvence projektu: cesky komentar, ASCII only v kodu, caveman mode v komunikaci, kazdou nejistotu zeptat pred psanim kodu.
+User chce **postupne work + commit per krok + test pass kazdym**. Caveman cesky.
