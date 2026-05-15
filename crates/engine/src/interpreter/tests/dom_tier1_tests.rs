@@ -384,6 +384,57 @@ fn match_media_returns_object() {
     assert_eq!(as_str(v), "(max-width: 600px)");
 }
 
+// ─── Item 8: window.addEventListener dispatch ────────────────────────────
+
+#[test]
+fn window_add_event_listener_registers_callback() {
+    let v = run(r#"
+        let fired = [];
+        window.addEventListener('myevt', (e) => { fired.push(e.type); });
+        window.dispatchEvent(new Event('myevt'));
+        return fired.length + ":" + fired[0];
+    "#);
+    assert_eq!(as_str(v), "1:myevt");
+}
+
+#[test]
+fn window_dispatch_window_event_from_host() {
+    // Host volaa Interpreter::dispatch_window_event - simulace load eventu.
+    use crate::interpreter::Interpreter;
+    use crate::lexer::base::Lexer;
+    use crate::parser::Parser;
+    use crate::tokens::TokenKind;
+
+    let src = r#"
+        globalThis.__fired = [];
+        window.addEventListener('load', () => { globalThis.__fired.push('load'); });
+    "#;
+    let lexer = Lexer::parse_str(src, "<test>").unwrap();
+    let tokens: Vec<_> = lexer.tokens.into_iter()
+        .filter(|t| !matches!(t.kind,
+            TokenKind::Whitespace | TokenKind::Newline
+            | TokenKind::CommentLine(_) | TokenKind::CommentBlock(_)))
+        .collect();
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse().unwrap();
+    let mut interp = Interpreter::new();
+    interp.run(&program).unwrap();
+    // Host volaa dispatch
+    interp.dispatch_window_event("load", JsValue::Undefined);
+    // Overit ze __fired ma "load" pres druhy interp.run
+    let check_src = r#"return globalThis.__fired.length + ":" + globalThis.__fired[0];"#;
+    let lexer2 = Lexer::parse_str(check_src, "<test>").unwrap();
+    let tokens2: Vec<_> = lexer2.tokens.into_iter()
+        .filter(|t| !matches!(t.kind,
+            TokenKind::Whitespace | TokenKind::Newline
+            | TokenKind::CommentLine(_) | TokenKind::CommentBlock(_)))
+        .collect();
+    let mut parser2 = Parser::new(tokens2);
+    let prog2 = parser2.parse().unwrap();
+    let result = interp.run(&prog2).unwrap();
+    assert_eq!(as_str(result), "1:load");
+}
+
 #[test]
 fn get_client_rects_returns_array() {
     let v = run(r#"

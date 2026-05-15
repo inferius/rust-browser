@@ -387,21 +387,66 @@ impl DevtoolsTarget {
     // Runtime domain handlers
     // ============================================================
 
-    fn handle_runtime_evaluate(&self, _webview: &mut WebView, req: DevtoolsRequest) -> DevtoolsResponse {
-        use rwe_devtools_proto::runtime::{EvaluateParams, EvaluateResult, RemoteObject};
+    fn handle_runtime_evaluate(&self, webview: &mut WebView, req: DevtoolsRequest) -> DevtoolsResponse {
+        use rwe_devtools_proto::runtime::{EvaluateParams, EvaluateResult, ExceptionDetails, RemoteObject};
         let params: EvaluateParams = match serde_json::from_value(req.params.clone()) {
             Ok(p) => p,
             Err(e) => return Self::error_response(req.id, error_codes::INVALID_PARAMS,
                 format!("Invalid params: {e}")),
         };
-        let _expr = params.expression;
-        // Stub: real impl pres Interpreter::run nebo eval_string.
+        let expr_src = params.expression;
+        let interp = match webview.interpreter_mut() {
+            Some(i) => i,
+            None => return Self::error_response(req.id, error_codes::INTERNAL_ERROR,
+                "No interpreter".to_string()),
+        };
+        let lexer = match crate::lexer::base::Lexer::parse_str(&expr_src, "<devtools-eval>") {
+            Ok(l) => l,
+            Err(e) => return Self::ok_response(req.id, &EvaluateResult {
+                result: RemoteObject { type_: "object".into(), value: None,
+                    description: Some(format!("SyntaxError: {e}")) },
+                exception_details: Some(ExceptionDetails {
+                    text: format!("SyntaxError: {e}"),
+                    line_number: None, column_number: None, stack_trace: None,
+                }),
+            }),
+        };
+        let tokens: Vec<_> = lexer.tokens.iter().filter(|t| !matches!(t.kind,
+            crate::tokens::TokenKind::Whitespace | crate::tokens::TokenKind::Newline
+            | crate::tokens::TokenKind::CommentLine(_) | crate::tokens::TokenKind::CommentBlock(_)
+        )).cloned().collect();
+        let mut parser = crate::parser::Parser::new(tokens);
+        let program = match parser.parse() {
+            Ok(p) => p,
+            Err(e) => return Self::ok_response(req.id, &EvaluateResult {
+                result: RemoteObject { type_: "object".into(), value: None,
+                    description: Some(format!("ParseError: {:?}", e)) },
+                exception_details: Some(ExceptionDetails {
+                    text: format!("ParseError: {:?}", e),
+                    line_number: None, column_number: None, stack_trace: None,
+                }),
+            }),
+        };
+        let env = Rc::clone(&interp.global);
+        let mut last_val = crate::interpreter::JsValue::Undefined;
+        for stmt in &program.body {
+            if let crate::ast::Stmt::Expr(e) = stmt {
+                match interp.eval(e, &env) {
+                    Ok(v) => last_val = v,
+                    Err(err) => return Self::ok_response(req.id, &EvaluateResult {
+                        result: RemoteObject { type_: "object".into(), value: None,
+                            description: Some(format!("RuntimeError: {:?}", err)) },
+                        exception_details: Some(ExceptionDetails {
+                            text: format!("RuntimeError: {:?}", err),
+                            line_number: None, column_number: None, stack_trace: None,
+                        }),
+                    }),
+                }
+            }
+        }
+        let (type_, value, description) = js_value_to_remote(&last_val);
         let result = EvaluateResult {
-            result: RemoteObject {
-                type_: "undefined".to_string(),
-                value: None,
-                description: Some("undefined".to_string()),
-            },
+            result: RemoteObject { type_, value, description: Some(description) },
             exception_details: None,
         };
         Self::ok_response(req.id, &result)
@@ -619,6 +664,35 @@ fn walk_dfs<F: FnMut(&Rc<crate::browser::dom::Node>)>(
     }
     for child in root.children.borrow().iter() {
         walk_dfs(child, visitor);
+    }
+}
+
+/// JsValue -> (type, value, description) pro CDP Runtime.evaluate RemoteObject.
+fn js_value_to_remote(val: &crate::interpreter::JsValue) -> (String, Option<serde_json::Value>, String) {
+    use crate::interpreter::JsValue;
+    match val {
+        JsValue::Undefined => ("undefined".into(), None, "undefined".into()),
+        JsValue::Null => ("object".into(), Some(serde_json::Value::Null), "null".into()),
+        JsValue::Bool(b) => ("boolean".into(), Some(serde_json::Value::Bool(*b)), b.to_string()),
+        JsValue::Number(n) => {
+            let v = serde_json::Number::from_f64(*n)
+                .map(serde_json::Value::Number).unwrap_or(serde_json::Value::Null);
+            ("number".into(), Some(v), n.to_string())
+        }
+        JsValue::Str(s) => ("string".into(),
+            Some(serde_json::Value::String(s.clone())), s.clone()),
+        JsValue::BigInt(b) => ("bigint".into(), None, format!("{}n", b)),
+        JsValue::Function(_) => ("function".into(), None, "[Function]".into()),
+        JsValue::Object(_) => ("object".into(), None, "[Object]".into()),
+        JsValue::Array(a) => ("object".into(), None, format!("Array({})", a.borrow().len())),
+        JsValue::DomNode(n) => {
+            let desc = match &n.kind {
+                crate::browser::dom::NodeKind::Element(tag) => format!("<{}>", tag),
+                _ => format!("[{:?}]", n.kind),
+            };
+            ("object".into(), None, desc)
+        }
+        _ => ("object".into(), None, format!("{:?}", val)),
     }
 }
 
