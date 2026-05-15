@@ -23,6 +23,21 @@ use rwe_engine::embed::{DevtoolsTarget, Engine, InputEvent, KeyModifiers, MouseB
 use rwe_engine::interpreter::{helpers::native, JsValue};
 use rwe_devtools_proto::DevtoolsRequest;
 
+/// Guess resource_type pro Network.requestWillBeSent event z URL extension.
+/// Real impl by mela header Content-Type, ale aktualne network_log nema.
+fn guess_resource_type(url: &str) -> &'static str {
+    let lc = url.to_ascii_lowercase();
+    if lc.ends_with(".js") || lc.ends_with(".mjs") { "Script" }
+    else if lc.ends_with(".css") { "Stylesheet" }
+    else if lc.ends_with(".png") || lc.ends_with(".jpg") || lc.ends_with(".jpeg")
+         || lc.ends_with(".gif") || lc.ends_with(".webp") || lc.ends_with(".svg") { "Image" }
+    else if lc.ends_with(".woff") || lc.ends_with(".woff2") || lc.ends_with(".ttf")
+         || lc.ends_with(".otf") { "Font" }
+    else if lc.ends_with(".html") || lc.ends_with(".htm") { "Document" }
+    else if lc.ends_with(".json") { "XHR" }
+    else { "Other" }
+}
+
 /// Find smallest LayoutBox containing (x, y). DFS prefer descendant
 /// (deepest node ktery obsahuje point). Used pres inspect_mode hover
 /// hit-test.
@@ -136,6 +151,12 @@ pub struct ShellApp {
     /// CDP channel (D6b). Sdileny mezi devtools native fns (send/poll) a
     /// shell main loop (drain + dispatch). Rc<RefCell<>> queues.
     cdp_channel: Option<CdpChannel>,
+    /// Posledni viditelny idx v page.interpreter().network_log. Pump_cdp
+    /// detekuje nove entries a emit Network.* events.
+    cdp_network_log_idx: usize,
+    /// Posledni viditelny idx v page.interpreter().console_log. Pump_cdp
+    /// detekuje nove entries a emit Runtime.consoleAPICalled events.
+    cdp_console_log_idx: usize,
 
     mouse_x: f32,
     mouse_y: f32,
@@ -169,6 +190,8 @@ impl ShellApp {
             find_query: String::new(),
             devtools_target: None,
             cdp_channel: None,
+            cdp_network_log_idx: 0,
+            cdp_console_log_idx: 0,
             mouse_x: 0.0,
             mouse_y: 0.0,
             modifiers: winit::keyboard::ModifiersState::empty(),
@@ -295,6 +318,68 @@ impl ShellApp {
             let json = serde_json::to_string(&evt)
                 .unwrap_or_else(|e| format!("{{\"error\":\"serialize: {e}\"}}"));
             channel.resp_queue.borrow_mut().push_back(json);
+        }
+        // Diff page network_log od last index -> emit Network events.
+        // Format network_log entry: (url, status). Status 0 = pending.
+        let interp = page.interpreter();
+        if let Some(interp) = interp {
+            let net_log = interp.network_log.borrow();
+            let console_log = interp.console_log.borrow();
+            let now_ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs_f64()).unwrap_or(0.0);
+            for entry in net_log.iter().skip(self.cdp_network_log_idx) {
+                let (url, status) = entry;
+                let req_id = url.clone();
+                let resource_type = guess_resource_type(url);
+                let req_evt = rwe_devtools_proto::DevtoolsEvent {
+                    method: "Network.requestWillBeSent".to_string(),
+                    params: serde_json::json!({
+                        "request_id": req_id,
+                        "url": url,
+                        "method": "GET",
+                        "timestamp": now_ts,
+                        "resource_type": resource_type,
+                    }),
+                };
+                let resp_evt = rwe_devtools_proto::DevtoolsEvent {
+                    method: "Network.responseReceived".to_string(),
+                    params: serde_json::json!({
+                        "request_id": req_id,
+                        "status": *status as u32,
+                        "status_text": if *status >= 200 && *status < 300 { "OK" } else { "" },
+                        "mime_type": "text/plain",
+                        "timestamp": now_ts,
+                    }),
+                };
+                let fin_evt = rwe_devtools_proto::DevtoolsEvent {
+                    method: "Network.loadingFinished".to_string(),
+                    params: serde_json::json!({
+                        "request_id": req_id,
+                        "encoded_data_length": 0u64,
+                        "timestamp": now_ts,
+                    }),
+                };
+                for e in [req_evt, resp_evt, fin_evt] {
+                    let json = serde_json::to_string(&e).unwrap_or_default();
+                    channel.resp_queue.borrow_mut().push_back(json);
+                }
+            }
+            self.cdp_network_log_idx = net_log.len();
+            // Diff console_log -> emit Runtime.consoleAPICalled events.
+            for (level, msg) in console_log.iter().skip(self.cdp_console_log_idx) {
+                let evt = rwe_devtools_proto::DevtoolsEvent {
+                    method: "Runtime.consoleAPICalled".to_string(),
+                    params: serde_json::json!({
+                        "type": level,
+                        "args": [{ "type": "string", "value": msg, "description": msg }],
+                        "timestamp": now_ts,
+                    }),
+                };
+                let json = serde_json::to_string(&evt).unwrap_or_default();
+                channel.resp_queue.borrow_mut().push_back(json);
+            }
+            self.cdp_console_log_idx = console_log.len();
         }
     }
 
