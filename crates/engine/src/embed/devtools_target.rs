@@ -608,6 +608,7 @@ fn serialize_node(
         NodeKind::Comment(text) => (8, "#comment".to_string(), Some(text.clone())),
         NodeKind::Cdata(text) => (4, "#cdata-section".to_string(), Some(text.clone())),
         NodeKind::DocType(text) => (10, text.clone(), None),
+        NodeKind::DocumentFragment => (11, "#document-fragment".to_string(), None),
     };
 
     let attrs = node.attributes.borrow();

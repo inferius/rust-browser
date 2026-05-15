@@ -23,6 +23,46 @@ use rwe_engine::embed::{DevtoolsTarget, Engine, InputEvent, KeyModifiers, MouseB
 use rwe_engine::interpreter::{helpers::native, JsValue};
 use rwe_devtools_proto::DevtoolsRequest;
 
+/// Find smallest LayoutBox containing (x, y). DFS prefer descendant
+/// (deepest node ktery obsahuje point). Used pres inspect_mode hover
+/// hit-test.
+fn pick_node_at(
+    root: &rwe_engine::browser::layout::LayoutBox,
+    x: f32, y: f32,
+) -> Option<usize> {
+    // Hit-test self?
+    let r = &root.rect;
+    let in_self = x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height;
+    if !in_self { return None; }
+    // Try children first - prefer deepest.
+    for child in &root.children {
+        if let Some(p) = pick_node_at(child, x, y) {
+            return Some(p);
+        }
+    }
+    // Otherwise return self (if node exists).
+    root.node.as_ref().map(|n| std::rc::Rc::as_ptr(n) as usize)
+}
+
+/// Find LayoutBox rect dle node ptr. Walk DFS, return rect (x,y,w,h)
+/// nebo None pokud node neexistuje v layout tree.
+fn find_layout_rect(
+    root: &rwe_engine::browser::layout::LayoutBox,
+    target_ptr: usize,
+) -> Option<(f32, f32, f32, f32)> {
+    if let Some(n) = &root.node {
+        if std::rc::Rc::as_ptr(n) as usize == target_ptr {
+            return Some((root.rect.x, root.rect.y, root.rect.width, root.rect.height));
+        }
+    }
+    for child in &root.children {
+        if let Some(r) = find_layout_rect(child, target_ptr) {
+            return Some(r);
+        }
+    }
+    None
+}
+
 /// CDP channel - queue messages mezi devtools WebView JS bridge a shell
 /// main loop dispatch. Native `__rwe_cdp_send_native` (v devtools interp)
 /// pushne request do req_queue. Main loop kazdy frame drain req_queue,
@@ -72,6 +112,13 @@ pub struct ShellApp {
     /// True kdyz user drze LMB na splitter line a tahne. Pri MouseMove se
     /// split_ratio updatuje + oba webview resizuji.
     splitter_drag: bool,
+    /// D5: Inspector mode toggle pres Ctrl+Shift+C. Pri active hover na
+    /// page emit blue overlay nad hovered element, click vyzve devtools
+    /// elements panel select (DOM.inspectNodeRequested CDP event).
+    inspect_mode: bool,
+    /// D5: Sdilene state s page WebView overlay_painter closure. Pri inspect
+    /// hover update node_id, closure cte + emit highlight rect.
+    inspect_target: std::rc::Rc<std::cell::RefCell<Option<usize>>>,
     /// DevTools target adapter (D2). Lazy init pri F12 toggle. Drzi events
     /// buffer + breakpoint counter. Dispatch volame `target.handle_request(
     /// &mut self.webview, req)` ve main loop.
@@ -104,6 +151,8 @@ impl ShellApp {
             devtools_visible: false,
             devtools_split_ratio: 0.4,
             splitter_drag: false,
+            inspect_mode: false,
+            inspect_target: Rc::new(RefCell::new(None)),
             devtools_target: None,
             cdp_channel: None,
             mouse_x: 0.0,
@@ -346,6 +395,63 @@ impl ShellApp {
         }
     }
 
+    /// D5: Toggle inspector mode (Ctrl+Shift+C). Pri zapnuti se pri kazdem
+    /// CursorMoved nad page hit-testuje DOM, set inspect_target. Overlay
+    /// painter na page WebView (registered pri prvnim toggle) paint modry
+    /// rect okolo hovered element. Klik v inspect mode -> emit CDP event.
+    fn toggle_inspect_mode(&mut self) {
+        let was = self.inspect_mode;
+        self.inspect_mode = !was;
+        if self.inspect_mode {
+            // Install overlay_painter na page WebView. Closure cte sdilene
+            // inspect_target Rc + emit modry rect okolo node z layout_root.
+            if let Some(wv) = &mut self.webview {
+                let target = Rc::clone(&self.inspect_target);
+                let painter: Box<dyn FnMut(
+                    &rwe_engine::browser::layout::LayoutBox,
+                    f32,
+                    &mut Vec<rwe_engine::browser::paint::DisplayCommand>,
+                )> = Box::new(move |layout_root, _scroll_y, cmds| {
+                    let target_id = *target.borrow();
+                    let Some(target_ptr) = target_id else { return };
+                    if let Some(rect) = find_layout_rect(layout_root, target_ptr) {
+                        // Outline: 4 tenke rects okolo bounds.
+                        let (x, y, w, h) = rect;
+                        let border = 2.0;
+                        let color = [80, 180, 240, 255]; // Modra
+                        use rwe_engine::browser::paint::DisplayCommand;
+                        // Top
+                        cmds.push(DisplayCommand::Rect { x, y, w, h: border, color, radius: 0.0 });
+                        // Bottom
+                        cmds.push(DisplayCommand::Rect { x, y: y + h - border, w, h: border, color, radius: 0.0 });
+                        // Left
+                        cmds.push(DisplayCommand::Rect { x, y, w: border, h, color, radius: 0.0 });
+                        // Right
+                        cmds.push(DisplayCommand::Rect { x: x + w - border, y, w: border, h, color, radius: 0.0 });
+                        // Polo-pruhledne pozadi.
+                        cmds.push(DisplayCommand::Rect {
+                            x: x + border, y: y + border,
+                            w: (w - 2.0 * border).max(0.0),
+                            h: (h - 2.0 * border).max(0.0),
+                            color: [80, 180, 240, 50],
+                            radius: 0.0,
+                        });
+                    }
+                });
+                wv.set_overlay_painter(painter);
+            }
+            println!("[shell] inspect mode ON (Ctrl+Shift+C toggle)");
+        } else {
+            // Clear target + remove overlay painter (set None pres dummy).
+            *self.inspect_target.borrow_mut() = None;
+            if let Some(wv) = &mut self.webview {
+                wv.set_overlay_painter(Box::new(|_, _, _| {}));
+            }
+            println!("[shell] inspect mode OFF");
+        }
+        if let Some(w) = &self.window { w.request_redraw(); }
+    }
+
     /// F12 toggle: pri prvnim volani vytvori devtools WebView + load
     /// build_devtools_html(). Pri kazdem dalsim flippe visibility flag.
     fn toggle_devtools(&mut self) {
@@ -546,6 +652,19 @@ impl ApplicationHandler for ShellApp {
                 let scale = self.renderer.as_ref().map(|r| r.scale_factor_value()).unwrap_or(1.0);
                 self.mouse_x = position.x as f32 / scale;
                 self.mouse_y = position.y as f32 / scale;
+                // D5: pri inspect_mode + mouse v page area, hit-test layout
+                // a updatuj inspect_target. Overlay painter prekresli.
+                if self.inspect_mode && !self.point_in_devtools(self.mouse_y) {
+                    let target = self.webview.as_ref()
+                        .and_then(|w| w.last_layout_root())
+                        .and_then(|root| pick_node_at(root, self.mouse_x, self.mouse_y));
+                    let prev = *self.inspect_target.borrow();
+                    if target != prev {
+                        *self.inspect_target.borrow_mut() = target;
+                        if let Some(w) = &self.window { w.request_redraw(); }
+                    }
+                    return;
+                }
                 // D4d: pri active splitter drag updatuj split_ratio.
                 if self.splitter_drag {
                     let r = match &self.renderer { Some(r) => r, None => return };
@@ -639,6 +758,16 @@ impl ApplicationHandler for ShellApp {
             }
             WindowEvent::KeyboardInput { event: key_event, .. } => {
                 use winit::keyboard::{Key, NamedKey};
+                // D5: Ctrl+Shift+C toggle inspect mode.
+                if matches!(key_event.state, ElementState::Pressed)
+                    && self.modifiers.control_key() && self.modifiers.shift_key() {
+                    if let Key::Character(s) = &key_event.logical_key {
+                        if s.eq_ignore_ascii_case("c") {
+                            self.toggle_inspect_mode();
+                            return;
+                        }
+                    }
+                }
                 // Ctrl+C: copy text selection do system clipboardu.
                 if matches!(key_event.state, ElementState::Pressed) && self.modifiers.control_key() {
                     if let Key::Character(s) = &key_event.logical_key {
@@ -810,6 +939,31 @@ impl ApplicationHandler for ShellApp {
                         }
                         _ => {}
                     }
+                }
+                // D5: LMB Press v inspect_mode + page area -> emit CDP event
+                // DOM.inspectNodeRequested (frontend elements panel selectne).
+                if matches!(btn, MouseButton::Left)
+                    && matches!(state, ElementState::Pressed)
+                    && self.inspect_mode
+                    && !self.point_in_devtools(self.mouse_y) {
+                    let node_ptr = *self.inspect_target.borrow();
+                    if let (Some(ptr), Some(channel)) = (node_ptr, self.cdp_channel.as_ref()) {
+                        let evt = rwe_devtools_proto::DevtoolsEvent {
+                            method: "DOM.inspectNodeRequested".to_string(),
+                            params: serde_json::json!({ "nodeId": ptr as u64 }),
+                        };
+                        let json = serde_json::to_string(&evt).unwrap_or_default();
+                        channel.resp_queue.borrow_mut().push_back(json);
+                        println!("[shell inspect] click -> emit DOM.inspectNodeRequested nodeId={}", ptr);
+                    }
+                    // Toggle off + auto-open devtools pokud zavren.
+                    self.inspect_mode = false;
+                    *self.inspect_target.borrow_mut() = None;
+                    if !self.devtools_visible {
+                        self.toggle_devtools();
+                    }
+                    if let Some(w) = &self.window { w.request_redraw(); }
+                    return;
                 }
                 let event = match state {
                     ElementState::Pressed => InputEvent::MouseDown {
