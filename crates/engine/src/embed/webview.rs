@@ -128,6 +128,10 @@ pub struct WebView {
         f32,
         &mut Vec<crate::browser::paint::DisplayCommand>,
     )>>,
+    /// Last synced scroll_pos (po sync z interpreteru). Diff vs interp =
+    /// detekce ze JS scrollTo modify -> apply. Bez toho by stale-zero
+    /// interp.scroll_pos prepisoval scroll_y po host-side drag.
+    pub(crate) last_synced_scroll_pos: (f32, f32),
     /// Scrollbar drag state - Some(grab_offset_y) pri V thumb drag.
     pub(crate) v_scrollbar_drag: Option<f32>,
     /// Scrollbar drag state - Some(grab_offset_x) pri H thumb drag.
@@ -195,6 +199,7 @@ impl WebView {
             mouse_down_at: None,
             input_caret: std::collections::HashMap::new(),
             overlay_painter: None,
+            last_synced_scroll_pos: (0.0, 0.0),
             v_scrollbar_drag: None,
             h_scrollbar_drag: None,
             last_layout_root: None,
@@ -1018,12 +1023,18 @@ impl WebView {
         let rt_w = (self.viewport_w * self.scale_factor) as u32;
         let rt_h = (self.viewport_h * self.scale_factor) as u32;
         renderer.target_size = Some((rt_w, rt_h));
-        // Sync scroll_pos od interpreteru (JS window.scrollTo zapsal). Pri
-        // zmene apply do self.scroll_x/y + scroll_target. Po render zpetne
-        // sync scroll_pos = current scroll.
+        // Sync scroll_pos od interpreteru. Bidirectional: JS scrollTo
+        // zapise -> apply do scroll_x/y. Pri rozdilu kde scroll_x/y noveji
+        // (host-side scrollbar drag/wheel) -> NE prepise z interp (stary).
+        // Pravidlo: pokud interp.scroll_pos != scroll_x/y, posledni zmena
+        // wins. Detekce: my drzime last_synced_scroll_pos, JS update detekt
+        // pres (interp != last_synced) -> apply; nase update vyhrava jinak.
         if let Some(interp) = self.interpreter.as_ref() {
             let (jx, jy) = *interp.scroll_pos.borrow();
-            if (jx - self.scroll_x).abs() > 0.5 || (jy - self.scroll_y).abs() > 0.5 {
+            let (lx, ly) = self.last_synced_scroll_pos;
+            // Detekt: JS modifikoval interp.scroll_pos (diff vs last sync).
+            let js_modified = (jx - lx).abs() > 0.5 || (jy - ly).abs() > 0.5;
+            if js_modified {
                 self.scroll_x = jx;
                 self.scroll_y = jy;
                 self.scroll_target_x = jx;
@@ -1043,9 +1054,11 @@ impl WebView {
         else if dx.abs() > 0.0 { self.scroll_x = self.scroll_target_x; }
         // Sync interp.scroll_pos do current scroll (pri wheel/scrollbar drag
         // animovany scroll, JS read pres pageXOffset/scrollX dostane realnou
-        // hodnotu, ne jen JS-set hodnotu).
+        // hodnotu, ne jen JS-set hodnotu). Take updatuj last_synced_scroll_pos
+        // - diff detection v dalsim frame ne triggerne false JS modified.
         if let Some(interp) = self.interpreter.as_ref() {
             *interp.scroll_pos.borrow_mut() = (self.scroll_x, self.scroll_y);
+            self.last_synced_scroll_pos = (self.scroll_x, self.scroll_y);
         }
 
         // Drain async jobs (image lazy loads, file IO callbacks). Volane PRED
@@ -1491,6 +1504,7 @@ impl WebView {
             // Sync interp.scroll_pos pro JS window.pageXOffset/scrollX reads.
             if let Some(interp) = self.interpreter.as_ref() {
                 *interp.scroll_pos.borrow_mut() = (x, y);
+                self.last_synced_scroll_pos = (x, y);
             }
             // Dispatch window 'scroll' event do JS.
             if let Some(interp) = self.interpreter.as_mut() {
