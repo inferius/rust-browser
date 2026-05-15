@@ -233,6 +233,91 @@ fn offset_parent_returns_parent_node() {
     assert_eq!(as_bool(v), true);
 }
 
+// ─── Items 5+6: matches / closest / contains (verify existing impl) ──────
+
+#[test]
+fn matches_class_selector() {
+    let v = run(r#"
+        const el = document.createElement("div");
+        el.setAttribute("class", "card big");
+        return el.matches(".card") + ":" + el.matches(".other");
+    "#);
+    assert_eq!(as_str(v), "true:false");
+}
+
+#[test]
+fn matches_compound_selector() {
+    let v = run(r#"
+        const el = document.createElement("input");
+        el.setAttribute("type", "text");
+        el.setAttribute("class", "field");
+        return el.matches("input.field");
+    "#);
+    assert_eq!(as_bool(v), true);
+}
+
+#[test]
+fn closest_finds_ancestor() {
+    let v = run(r#"
+        const parent = document.createElement("div");
+        parent.setAttribute("class", "container");
+        const child = document.createElement("p");
+        parent.appendChild(child);
+        const found = child.closest(".container");
+        return found === parent;
+    "#);
+    assert_eq!(as_bool(v), true);
+}
+
+#[test]
+fn closest_returns_null_if_not_found() {
+    let v = run(r#"
+        const el = document.createElement("div");
+        return el.closest(".nope");
+    "#);
+    assert!(matches!(v, JsValue::Null));
+}
+
+#[test]
+fn closest_matches_self() {
+    let v = run(r#"
+        const el = document.createElement("div");
+        el.setAttribute("class", "x");
+        return el.closest(".x") === el;
+    "#);
+    assert_eq!(as_bool(v), true);
+}
+
+#[test]
+fn contains_returns_true_for_descendant() {
+    let v = run(r#"
+        const parent = document.createElement("div");
+        const child = document.createElement("span");
+        parent.appendChild(child);
+        return parent.contains(child);
+    "#);
+    assert_eq!(as_bool(v), true);
+}
+
+#[test]
+fn contains_returns_true_for_self() {
+    let v = run(r#"
+        const el = document.createElement("div");
+        return el.contains(el);
+    "#);
+    assert_eq!(as_bool(v), true);
+}
+
+#[test]
+fn contains_returns_false_for_sibling() {
+    let v = run(r#"
+        const a = document.createElement("div");
+        const b = document.createElement("div");
+        return a.contains(b);
+    "#);
+    assert_eq!(as_bool(v), false);
+}
+
 #[test]
 fn match_media_returns_object() {
     let v = run(r#"
