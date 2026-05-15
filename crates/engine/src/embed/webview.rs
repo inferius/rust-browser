@@ -265,8 +265,17 @@ impl WebView {
         let stylesheet_count = if stylesheet.rules.is_empty() { 0 } else { 1 };
 
         // Init interpreter + set document. Bez run_scripts (volaci kod o ne stoji).
+        // SDILENY root Rc<Node> mezi self.document a interp.document - bez
+        // sdileni mela hit_test pres self.document.root jiny ptr nez JS lookup
+        // pres interp.document.root (focused_node nikdy nesedi).
         let mut interp = Interpreter::new();
-        let interp_doc = crate::browser::html_parser::parse_html(html, &base);
+        let interp_doc = crate::browser::dom::Document {
+            root: std::rc::Rc::clone(&doc.root),
+            url: doc.url.clone(),
+            title: doc.title.clone(),
+            selection: std::cell::RefCell::new(
+                crate::browser::selection::SelectionRegistry::new()),
+        };
         interp.set_document(interp_doc);
 
         // Wire-up lookups - layout_rects + cascade_props sdilene s host.

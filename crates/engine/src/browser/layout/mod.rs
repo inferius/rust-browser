@@ -439,10 +439,33 @@ fn apply_tag_html_attrs(bx: &mut LayoutBox, node: &Rc<Node>) {
         }
         bx.text = selected_text.or(first_text);
     }
-    // <textarea>: multi-line input. Default 200x50.
+    // <input type="text|email|...">: vykresli value attr jako text content.
+    // Password type maskuje *. Bez value paint zustane bg/border + placeholder.
+    if bx.tag.as_deref() == Some("input") {
+        let typ = node.attr("type").unwrap_or_else(|| "text".to_string()).to_lowercase();
+        if matches!(typ.as_str(),
+            "text" | "email" | "password" | "url" | "tel" | "search" | "number" | "") {
+            if let Some(val) = node.attr("value") {
+                if !val.is_empty() {
+                    let display = if typ == "password" {
+                        "\u{2022}".repeat(val.chars().count())
+                    } else { val };
+                    bx.text = Some(display);
+                }
+            }
+        }
+    }
+    // <textarea>: multi-line input. Default 200x50. Value/text content
+    // analogicky.
     if bx.tag.as_deref() == Some("textarea") {
         if bx.rect.width == 0.0 { bx.rect.width = 200.0; }
         if bx.rect.height == 0.0 { bx.rect.height = 60.0; }
+        if let Some(val) = node.attr("value") {
+            if !val.is_empty() { bx.text = Some(val); }
+        } else {
+            let inner = node.text_content();
+            if !inner.is_empty() { bx.text = Some(inner); }
+        }
     }
     // <progress>: progress bar.
     if bx.tag.as_deref() == Some("progress") {
