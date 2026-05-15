@@ -318,6 +318,63 @@ fn contains_returns_false_for_sibling() {
     assert_eq!(as_bool(v), false);
 }
 
+// ─── Item 7: Event / CustomEvent / MouseEvent / KeyboardEvent constructors ─
+
+#[test]
+fn new_event_basic() {
+    let v = run(r#"
+        const e = new Event('click');
+        return e.type + ":" + e.bubbles + ":" + e.cancelable + ":" + e.defaultPrevented;
+    "#);
+    assert_eq!(as_str(v), "click:false:false:false");
+}
+
+#[test]
+fn new_event_with_init() {
+    let v = run(r#"
+        const e = new Event('focus', { bubbles: true, cancelable: true });
+        return e.bubbles + ":" + e.cancelable;
+    "#);
+    assert_eq!(as_str(v), "true:true");
+}
+
+#[test]
+fn event_prevent_default() {
+    let v = run(r#"
+        const e = new Event('click');
+        e.preventDefault();
+        return e.defaultPrevented;
+    "#);
+    assert_eq!(as_bool(v), true);
+}
+
+#[test]
+fn custom_event_with_detail() {
+    let v = run(r#"
+        const e = new CustomEvent('myevt', { detail: { foo: 42 } });
+        return e.type + ":" + e.detail.foo;
+    "#);
+    assert_eq!(as_str(v), "myevt:42");
+}
+
+#[test]
+fn mouse_event_with_coords() {
+    let v = run(r#"
+        const e = new MouseEvent('click', { clientX: 10, clientY: 20, button: 0 });
+        return e.type + ":" + e.clientX + ":" + e.clientY + ":" + e.button;
+    "#);
+    assert_eq!(as_str(v), "click:10:20:0");
+}
+
+#[test]
+fn keyboard_event_with_key() {
+    let v = run(r#"
+        const e = new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', shiftKey: true });
+        return e.type + ":" + e.key + ":" + e.code + ":" + e.shiftKey;
+    "#);
+    assert_eq!(as_str(v), "keydown:Enter:Enter:true");
+}
+
 #[test]
 fn match_media_returns_object() {
     let v = run(r#"
