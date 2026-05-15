@@ -582,11 +582,30 @@ impl DevtoolsTarget {
     // Performance domain handlers
     // ============================================================
 
-    fn handle_performance_get_metrics(&self, _webview: &WebView, req: DevtoolsRequest) -> DevtoolsResponse {
+    fn handle_performance_get_metrics(&self, webview: &WebView, req: DevtoolsRequest) -> DevtoolsResponse {
         use rwe_devtools_proto::performance::{GetMetricsResult, Metric};
+        // Documents = vzdy 1 (one webview = one document). Nodes = count
+        // DOM nodes pres walk. LayoutObjects = layout_rects size (po render).
+        // JSEventListeners = sum window_listeners + DOM node.listeners.
+        let mut nodes_count: u32 = 0;
+        if let Some(doc) = webview.document() {
+            count_nodes(&doc.root, &mut nodes_count);
+        }
+        let layout_objects = webview.layout_rects.borrow().len() as u32;
+        let mut event_listeners: u32 = 0;
+        if let Some(interp) = webview.interpreter() {
+            event_listeners += interp.window_listeners.borrow().values()
+                .map(|v| v.len()).sum::<usize>() as u32;
+            if let Some(doc) = webview.document() {
+                count_dom_listeners(&doc.root, &mut event_listeners);
+            }
+        }
         let result = GetMetricsResult {
             metrics: vec![
                 Metric { name: "Documents".to_string(), value: 1.0 },
+                Metric { name: "Nodes".to_string(), value: nodes_count as f64 },
+                Metric { name: "LayoutObjects".to_string(), value: layout_objects as f64 },
+                Metric { name: "JSEventListeners".to_string(), value: event_listeners as f64 },
             ],
         };
         Self::ok_response(req.id, &result)
@@ -692,6 +711,22 @@ fn format_selector(sel: &crate::browser::css_parser::Selector) -> String {
 
 /// DFS walk subtree + apply visitor pres kazdy element node.
 /// Visitor mutate moze hold state nebo early-exit (check `found`).
+/// Recurzivne pocita celkovy pocet DOM nodes pres tree.
+fn count_nodes(node: &Rc<crate::browser::dom::Node>, count: &mut u32) {
+    *count += 1;
+    for child in node.children.borrow().iter() {
+        count_nodes(child, count);
+    }
+}
+
+/// Recurzivne pocita event listenery na DOM node tree.
+fn count_dom_listeners(node: &Rc<crate::browser::dom::Node>, count: &mut u32) {
+    *count += node.listeners.borrow().values().map(|v| v.len()).sum::<usize>() as u32;
+    for child in node.children.borrow().iter() {
+        count_dom_listeners(child, count);
+    }
+}
+
 fn walk_dfs<F: FnMut(&Rc<crate::browser::dom::Node>)>(
     root: &Rc<crate::browser::dom::Node>,
     visitor: &mut F,
