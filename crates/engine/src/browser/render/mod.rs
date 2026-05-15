@@ -6049,8 +6049,7 @@ impl Renderer {
             });
             if let Some((sx, sy, sw, sh)) = scissor {
                 // wgpu vyzaduje scissor uvnitr framebuffer dimenze.
-                let fb_w = self.config.width;
-                let fb_h = self.config.height;
+                let (fb_w, fb_h) = self.fb_dims();
                 let cx = sx.min(fb_w);
                 let cy = sy.min(fb_h);
                 let cw = sw.min(fb_w.saturating_sub(cx));
@@ -6247,6 +6246,12 @@ impl Renderer {
         (w as f32 / scale, h as f32 / scale)
     }
 
+    /// Framebuffer dimensions pro scissor/viewport clamping (physical px).
+    /// target_size.unwrap_or(config) - pri WebView RT pouzij RT velikost.
+    fn fb_dims(&self) -> (u32, u32) {
+        self.target_size.unwrap_or((self.config.width, self.config.height))
+    }
+
     /// Compositni 2 offscreen textures vertical split do swap chain.
     /// `top_view` se zobrazi v top `split_ratio` cast (0.0..1.0), `bottom_view`
     /// dole. Bez separatoru / borderu - shell je muze nakreslit pres.
@@ -6385,12 +6390,13 @@ impl Renderer {
         } else {
             wgpu::LoadOp::Load
         };
-        // Scissor: clamp do swap chain rozmeru, integer pixely.
-        // x/y/w/h jsou layout (logical) px - prevedeme na physical pres
-        // zoom * scale_factor (HiDPI).
+        // Scissor: clamp do framebuffer rozmeru (RT pri WebView, jinak
+        // swap chain), integer pixely. x/y/w/h jsou layout (logical) px -
+        // prevedeme na physical pres zoom * scale_factor (HiDPI).
         let z = (self.zoom * self.scale_factor).max(0.0001);
-        let vw = self.config.width as i32;
-        let vh = self.config.height as i32;
+        let (fb_w, fb_h) = self.fb_dims();
+        let vw = fb_w as i32;
+        let vh = fb_h as i32;
         let sx = (x * z).max(0.0) as i32;
         let sy = (y * z).max(0.0) as i32;
         let sw = ((x + w) * z).min(vw as f32) as i32 - sx;
