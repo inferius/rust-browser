@@ -1277,20 +1277,40 @@ impl WebView {
                     let prefix_w = crate::browser::layout::measure_text_width_full(
                         &prefix, input_box.font_size, weight, input_box.italic,
                         &input_box.font_family, input_box.letter_spacing);
-                    // Pad left ~6px (CSS input default), caret y od inner top.
-                    let pad_l = 6.0_f32;
-                    let pad_t = 4.0_f32;
-                    let caret_x = input_box.rect.x + pad_l + prefix_w;
-                    let caret_y = input_box.rect.y + pad_t;
+                    // Pad z node-specific - musi shodovat s paint.rs text_x.
+                    // Pad_l asymmetric pripady (padding_left wins).
+                    let pad_l = input_box.padding_left.unwrap_or(input_box.padding);
+                    let pad_t = input_box.padding_top.unwrap_or(input_box.padding);
+                    let pad_b = input_box.padding_bottom.unwrap_or(input_box.padding);
+                    let border = input_box.border_width.max(0.0);
+                    // Inner h pro vertical centering (CSS technique stejna jako
+                    // paint.rs vertical center pres v_offset = (inner_h - 1.5*fs)/2).
+                    let inner_h = input_box.rect.height - pad_t - pad_b - 2.0 * border;
+                    let v_offset = ((inner_h - 1.5 * input_box.font_size) * 0.5).max(0.0);
+                    let caret_x = input_box.rect.x + border + pad_l + prefix_w;
+                    let caret_y = input_box.rect.y + border + pad_t + v_offset;
                     let caret_h = input_box.font_size * 1.2;
                     // Blink 1 Hz: even seconds visible, odd off.
                     let elapsed = self.animation_origin.elapsed().as_secs_f32();
                     let blink_on = (elapsed * 2.0) as i32 % 2 == 0;
                     if blink_on {
+                        // Caret barva: kontrastni proti bg (default tmavy text
+                        // na svetlem bg = cerny caret; light text na tmavem = bily).
+                        // Heuristika dle text_color luma.
+                        let text_color = input_box.text_color.unwrap_or([20, 20, 20, 255]);
+                        let luma = 0.299 * text_color[0] as f32
+                                 + 0.587 * text_color[1] as f32
+                                 + 0.114 * text_color[2] as f32;
+                        // Pokud text je svetly (luma > 128), caret bily; jinak cerny.
+                        let caret_color = if luma > 128.0 {
+                            [220, 220, 230, 255]
+                        } else {
+                            [20, 20, 30, 255]
+                        };
                         display_list.push(crate::browser::paint::DisplayCommand::Rect {
                             x: caret_x, y: caret_y,
                             w: 1.5, h: caret_h,
-                            color: [40, 40, 50, 255], radius: 0.0,
+                            color: caret_color, radius: 0.0,
                         });
                     }
                 }
@@ -1757,7 +1777,12 @@ fn collect_text_lines(
     out: &mut Vec<(f32, f32, f32, f32)>,
 ) {
     if let Some(text) = &b.text {
-        let bx0 = b.rect.x;
+        // line_start_x musi pouzit pad_l + border (stejny jako paint.rs
+        // text_x = bx.rect.x + pad_l + align_offset). Bez tohoto byla
+        // selection posunuta vlevo o pad_l - oznacovala mimo viditelny text.
+        let pad_l = b.padding_left.unwrap_or(b.padding);
+        let border = b.border_width.max(0.0);
+        let bx0 = b.rect.x + border + pad_l;
         let by0 = b.rect.y;
         let by1 = by0 + b.rect.height;
         let lh = (b.line_height * b.font_size).max(b.font_size * 1.2);
@@ -1773,9 +1798,11 @@ fn collect_text_lines(
                 let italic = b.italic;
                 let fam = b.font_family.clone();
                 let ls = b.letter_spacing;
-                let line_w = line.chars().map(|ch|
-                    crate::browser::layout::measure_text_width_full(
-                        &ch.to_string(), b.font_size, weight, italic, &fam, ls)).sum::<f32>();
+                // Mereni: full string najednou (ne char-by-char + sum) - aby
+                // sirka shodovala s render pen_x advance (per-char measure
+                // muze rounding differ od bulk pri letter-spacing 0).
+                let line_w = crate::browser::layout::measure_text_width_full(
+                    line, b.font_size, weight, italic, &fam, ls);
                 let line_start_x = bx0;
                 let (x_lo, x_hi) = if is_first_line && is_last_line {
                     (sx.min(ex), sx.max(ex))
