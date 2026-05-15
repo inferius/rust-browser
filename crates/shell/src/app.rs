@@ -761,37 +761,17 @@ html, body {{ margin: 0; padding: 0; height: 100%; background: #202124; color: #
 "#, initial_url)
     }
 
-    /// Slozi devtools HTML: INDEX_HTML s nahrazenymi placeholdery na
-    /// theme.css + cdp.js + per-panel HTML injectnuty primo do <div id="panel-*">.
-    /// Tab swap pres display style (ne innerHTML swap) - vsechny panely
-    /// v DOM od zacatku, event listeners aktivni.
+    /// Slozi devtools HTML: INDEX_HTML (single-file Firefox-like Theme + i18n +
+    /// Lucide ikony + Firefox 3-col Inspector) s injectnutym CDP JS clientem.
+    /// Per-panel HTML injection (predchozi pattern) drop - novy index.html
+    /// drzi vsechny panely v jedne strance.
     fn build_devtools_html() -> String {
         use rwe_devtools_frontend::*;
         let mut out = INDEX_HTML.to_string();
         out = out.replace(
-            "<style id=\"theme-css\"></style>",
-            &format!("<style id=\"theme-css\">{}</style>", THEME_CSS),
-        );
-        out = out.replace(
             "<script id=\"cdp-js\"></script>",
             &format!("<script id=\"cdp-js\">{}</script>", CDP_JS),
         );
-        // Inject kazdy panel HTML do prislusneho <div id="panel-X"></div>.
-        // Naivni String::replace - matchne prvni vyskyt (jednou per panel).
-        for (id, body) in [
-            ("panel-elements", ELEMENTS_HTML),
-            ("panel-console", CONSOLE_HTML),
-            ("panel-sources", SOURCES_HTML),
-            ("panel-network", NETWORK_HTML),
-            ("panel-performance", PERFORMANCE_HTML),
-        ] {
-            let open = format!("<div id=\"{}\" class=\"panel\"></div>", id);
-            let open_hidden = format!("<div id=\"{}\" class=\"panel\" style=\"display:none\"></div>", id);
-            let filled = format!("<div id=\"{}\" class=\"panel\">{}</div>", id, body);
-            let filled_hidden = format!("<div id=\"{}\" class=\"panel\" style=\"display:none\">{}</div>", id, body);
-            out = out.replace(&open, &filled);
-            out = out.replace(&open_hidden, &filled_hidden);
-        }
         out
     }
 
