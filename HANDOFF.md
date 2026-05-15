@@ -1992,14 +1992,42 @@ Vse v `crates/engine/src/interpreter/` + tests v `dom_tier1_tests.rs` (34 testu)
 - Pri load_html dispatch DOMContentLoaded + load events.
 - Pri resize() / set_scroll() dispatch resize / scroll events.
 
-### DOM API Tier 2 (in progress - agent)
+### DOM API Tier 2 (8/8 hotove, 21 testu)
 
-Polozky: insertBefore, replaceChild, insertAdjacentHTML/Element, cloneNode,
-removeEventListener real, document.activeElement, createDocumentFragment.
+- **insertBefore(newNode, refNode)** + DocumentFragment NodeKind variant
+- **replaceChild(newNode, oldNode)** real
+- **insertAdjacentElement(pos, el)** - beforebegin/afterbegin/beforeend/afterend
+- **cloneNode(deep)** real recursive (kopiruje kind+attrs, listenery ne per spec)
+- **removeEventListener real** s function identity (helper function_identity_eq
+  v js_value_impl: User/Async/Generator pres (name, params.len(), Rc::ptr_eq(env)),
+  Native pres Rc::ptr_eq)
+- **document.activeElement** - Interpreter.focused_element: Rc<RefCell<Option<Rc<Node>>>>,
+  focus() set, blur() clear (jen pri ptr_eq match), default fallback document.body
+- **createDocumentFragment** real - new NodeKind::DocumentFragment, appendChild
+  fragment-move semantics (presune children + clear fragment)
+- **NodeKind::DocumentFragment** match arms doplneny ve 5 souborech (eval_member,
+  debug_view/devtools, devtools/model/elements, embed/devtools_target, dom)
 
-NodeKind::DocumentFragment variant pridan - match arms ve 4 souborech.
+### Shell features (additional)
+
+- D5 inspector overlay (Ctrl+Shift+C + hit-test + overlay_painter paint outline
+  + click emit DOM.inspectNodeRequested + elements.html listener selectne node)
+- Address bar Ctrl+L (stdout-only feedback, visual overlay TBD)
+- D4d splitter drag (NS resize cursor + drag updatuje split_ratio)
+
+### CDP target handlers (real, no stubs)
+
+- DOM: getDocument / querySelector / querySelectorAll / getAttributes /
+  setAttributeValue / removeAttribute
+- CSS: getMatchedStyles / getComputedStyle / setPropertyText
+- Runtime: evaluate (lexer + parser + interp.eval pres Stmt::Expr,
+  unwrap WithLine)
+- Debugger: setBreakpoint / removeBreakpoint / resume + 4 step stubs
+- Network: getResponseBody stub (body cache TBD - vyzaduje fetch refactor)
+- Performance: getMetrics real (Documents/Nodes/LayoutObjects/JSEventListeners)
 
 ### Test counts (po N+23)
 
-- 2743+ engine, 8 devtools-proto, 3 devtools-frontend = 2754+ testu
+- 2764 engine, 8 devtools-proto, 3 devtools-frontend = 2775 testu
 - 0 warnings, cargo build/test --workspace cisty
+- 25+ commitov v session
