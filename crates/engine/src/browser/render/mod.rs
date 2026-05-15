@@ -288,60 +288,65 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: 
                 let colr_prefix: String = if has_color_fonts {
                     format!("__colr:{}:", font_family)
                 } else { String::new() };
-                for ch in content.chars() {
-                    if ch == '\n' {
+                // GLOBAL FIX: render glyph X positions z shape_text (single
+                // source of truth s caret + selection). Bez tohoto atlas
+                // advance + measure mohli rounding-differ -> caret mismatch.
+                // Per-line shape - split obsahu na lines, kazda jako vlastni
+                // shape (newline reset pen_x = start_x).
+                let lines: Vec<&str> = content.split('\n').collect();
+                for (line_idx, line) in lines.iter().enumerate() {
+                    if line_idx > 0 {
                         pen_y += line_advance;
-                        pen_x = start_x;
-                        continue;
                     }
-                    if has_color_fonts {
-                        // Compose final key via push (alloc, ale jen pri color font hit).
-                        let mut colr_key = colr_prefix.clone();
-                        colr_key.push_str(&(ch as u32).to_string());
-                        colr_key.push(':');
-                        colr_key.push_str(&(*font_size as u32).to_string());
-                        if let Some(info) = image_atlas.get(&colr_key) {
-                            let gx = pen_x.round();
-                            let gy = (pen_y - info.height).round();
-                            push_image(&mut verts, gx, gy, info.width, info.height, info.uv0, info.uv1, 0.0);
-                            pen_x += info.width;
-                            continue;
-                        }
-                    }
-                    if let Some(g) = atlas.get_hashed(family_hash, ch, physical_size) {
-                        // Glyf metrics v physical -> dele inv_z na logical.
-                        let g_w = g.width * inv_z;
-                        let g_h = g.height * inv_z;
-                        let g_bx = g.bearing_x * inv_z;
-                        let g_by = g.bearing_y * inv_z;
-                        let g_adv = g.advance * inv_z;
-                        let gx_raw = pen_x + g_bx;
-                        let gy_raw = pen_y - g_by;
-                        // Round na logical-px hranici (pri zoom=1 = integer phys);
-                        // pri zoomu > 1 je krok jemnejsi (1/zoom logical px = 1 phys).
-                        let gx = (gx_raw * z).round() * inv_z;
-                        let gy = (gy_raw * z).round() * inv_z;
-                        // Mode 9 = LCD subpixel text (3-tap shader sample), 1 = grayscale.
-                        let text_mode = if g.lcd { 9.0 } else { 1.0 };
-                        if italic_skew != 0.0 {
-                            let skew = g_h * italic_skew;
-                            push_skewed_quad(&mut verts, gx, gy, g_w, g_h, skew, c, g.uv0, g.uv1);
-                        } else {
-                            push_rect_uv(&mut verts, gx, gy, g_w, g_h, c, g.uv0, g.uv1, text_mode);
-                        }
-                        if bold_offset > 0.0 {
-                            let bo = bold_offset * inv_z;
-                            if italic_skew != 0.0 {
-                                let skew = g_h * italic_skew;
-                                push_skewed_quad(&mut verts, gx + bo, gy, g_w, g_h, skew, c, g.uv0, g.uv1);
-                            } else {
-                                push_rect_uv(&mut verts, gx + bo, gy, g_w, g_h, c, g.uv0, g.uv1, text_mode);
+                    // pen_x reset implicit pri g_x_logical = start_x + run.x.
+                    // Shape current line - x positions a advances per char.
+                    let line_runs = super::editor::shape_text(
+                        line, *font_size, *font_weight, *italic, font_family, 0.0
+                    ).0;
+                    for (ch_idx, ch) in line.chars().enumerate() {
+                        let g_x_logical = start_x + line_runs.get(ch_idx).map(|r| r.x).unwrap_or(0.0);
+                        if has_color_fonts {
+                            let mut colr_key = colr_prefix.clone();
+                            colr_key.push_str(&(ch as u32).to_string());
+                            colr_key.push(':');
+                            colr_key.push_str(&(*font_size as u32).to_string());
+                            if let Some(info) = image_atlas.get(&colr_key) {
+                                let gx = g_x_logical.round();
+                                let gy = (pen_y - info.height).round();
+                                push_image(&mut verts, gx, gy, info.width, info.height, info.uv0, info.uv1, 0.0);
+                                continue;
                             }
                         }
-                        pen_x += g_adv + bold_offset * inv_z;
-                    } else {
-                        pen_x += font_size * 0.5;
+                        if let Some(g) = atlas.get_hashed(family_hash, ch, physical_size) {
+                            // Glyf bbox v physical -> dele inv_z na logical.
+                            let g_w = g.width * inv_z;
+                            let g_h = g.height * inv_z;
+                            let g_bx = g.bearing_x * inv_z;
+                            let g_by = g.bearing_y * inv_z;
+                            let gx_raw = g_x_logical + g_bx;
+                            let gy_raw = pen_y - g_by;
+                            let gx = (gx_raw * z).round() * inv_z;
+                            let gy = (gy_raw * z).round() * inv_z;
+                            let text_mode = if g.lcd { 9.0 } else { 1.0 };
+                            if italic_skew != 0.0 {
+                                let skew = g_h * italic_skew;
+                                push_skewed_quad(&mut verts, gx, gy, g_w, g_h, skew, c, g.uv0, g.uv1);
+                            } else {
+                                push_rect_uv(&mut verts, gx, gy, g_w, g_h, c, g.uv0, g.uv1, text_mode);
+                            }
+                            if bold_offset > 0.0 {
+                                let bo = bold_offset * inv_z;
+                                if italic_skew != 0.0 {
+                                    let skew = g_h * italic_skew;
+                                    push_skewed_quad(&mut verts, gx + bo, gy, g_w, g_h, skew, c, g.uv0, g.uv1);
+                                } else {
+                                    push_rect_uv(&mut verts, gx + bo, gy, g_w, g_h, c, g.uv0, g.uv1, text_mode);
+                                }
+                            }
+                        }
                     }
+                    // Po line update pen_x na konec line pres shape total.
+                    pen_x = start_x + line_runs.iter().map(|r| r.advance).sum::<f32>();
                 }
                 // Strikethrough line cca v 50% font size od top.
                 let text_w = pen_x - start_x;
