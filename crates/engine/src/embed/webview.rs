@@ -1273,10 +1273,14 @@ impl WebView {
                 }
                 if let Some(input_box) = find_box(&layout_root, nid) {
                     let weight = input_box.effective_weight();
-                    let prefix: String = chars[..caret].iter().collect();
-                    let prefix_w = crate::browser::layout::measure_text_width_full(
-                        &prefix, input_box.font_size, weight, input_box.italic,
+                    // Single source of truth: shape_text vraci stejne advance
+                    // jako measure_text_width_full (= layout canonical).
+                    // x_at_char pres ShapedText cumulative pole - bez separateho
+                    // prefix sum (drive prefix_w mereny zvlast, mohl rounding-differ).
+                    let (_runs, shaped) = crate::browser::editor::shape_text(
+                        &value, input_box.font_size, weight, input_box.italic,
                         &input_box.font_family, input_box.letter_spacing);
+                    let prefix_w = shaped.x_at_char(caret);
                     // Pad z node-specific - musi shodovat s paint.rs text_x.
                     // Pad_l asymmetric pripady (padding_left wins).
                     let pad_l = input_box.padding_left.unwrap_or(input_box.padding);
@@ -1798,11 +1802,13 @@ fn collect_text_lines(
                 let italic = b.italic;
                 let fam = b.font_family.clone();
                 let ls = b.letter_spacing;
-                // Mereni: full string najednou (ne char-by-char + sum) - aby
-                // sirka shodovala s render pen_x advance (per-char measure
-                // muze rounding differ od bulk pri letter-spacing 0).
-                let line_w = crate::browser::layout::measure_text_width_full(
+                // Single source of truth: shape_text vraci per-char advance
+                // shodne s caret + paint mereni. Drive 2 separate calls
+                // (line_w bulk + ch-by-ch acc) co mohly differ pri letter
+                // spacing 0 ale s fallback fonts.
+                let (_runs, shaped) = crate::browser::editor::shape_text(
                     line, b.font_size, weight, italic, &fam, ls);
+                let line_w = shaped.total_width;
                 let line_start_x = bx0;
                 let (x_lo, x_hi) = if is_first_line && is_last_line {
                     (sx.min(ex), sx.max(ex))
@@ -1816,25 +1822,14 @@ fn collect_text_lines(
                 let sel_left = (x_lo - line_start_x).max(0.0);
                 let sel_right = (x_hi - line_start_x).min(line_w);
                 if sel_right <= sel_left + 0.5 { continue; }
-                let mut acc = 0.0_f32;
-                let mut hl_start: Option<f32> = None;
-                let mut hl_end: f32 = line_w;
-                for ch in line.chars() {
-                    let adv = crate::browser::layout::measure_text_width_full(
-                        &ch.to_string(), b.font_size, weight, italic, &fam, ls);
-                    let mid = acc + adv * 0.5;
-                    if hl_start.is_none() && mid >= sel_left {
-                        hl_start = Some(acc);
-                    }
-                    if mid > sel_right {
-                        hl_end = acc;
-                        break;
-                    }
-                    acc += adv;
-                }
-                let hs = hl_start.unwrap_or(0.0);
-                if hl_end > hs + 0.5 {
-                    out.push((line_start_x + hs, line_y, hl_end - hs, lh));
+                // Hit-test pres ShapedText: najdi char index pro sel_left
+                // (start) a sel_right (end). x_at_char vrati edge X (cumulative).
+                let start_char = shaped.char_at_x(sel_left);
+                let end_char = shaped.char_at_x(sel_right);
+                let hs = shaped.x_at_char(start_char);
+                let he = shaped.x_at_char(end_char);
+                if he > hs + 0.5 {
+                    out.push((line_start_x + hs, line_y, he - hs, lh));
                 }
             }
         }
