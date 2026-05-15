@@ -2026,8 +2026,43 @@ Vse v `crates/engine/src/interpreter/` + tests v `dom_tier1_tests.rs` (34 testu)
 - Network: getResponseBody stub (body cache TBD - vyzaduje fetch refactor)
 - Performance: getMetrics real (Documents/Nodes/LayoutObjects/JSEventListeners)
 
-### Test counts (po N+23)
+### DOM API Tier 3 (3/3 hotove, 14 testu)
 
-- 2764 engine, 8 devtools-proto, 3 devtools-frontend = 2775 testu
+- **element.scrollIntoView(opts)** - pres layout_lookup posune scroll_pos.
+  Default block=start, support center/end (heuristika 600/300 vh).
+- **window.scrollTo/scrollBy/scroll + pageXOffset/pageYOffset/scrollX/scrollY** -
+  scroll_pos Rc<RefCell<(f32,f32)>> field na Interpreter. JS modify pres
+  scrollTo(x, y) nebo scrollTo({left, top}). Getter dynamic v eval_member.
+- **element.focus()/blur() real** - dispatch focus/blur events pres
+  dispatch_event. focus() pri prepnuti dispatchne blur na predchozim.
+
+### DOM API Tier 4 (5/5 hotove, 26 testu)
+
+- **DOMRect + toJSON()** - centralni helper make_dom_rect(x,y,w,h).
+  Pouziva getBoundingClientRect + getClientRects.
+- **DOMTokenList full** (classList): length, item(i), [0]/[1]/... indexed,
+  replace(old,new), value getter/setter, Symbol.iterator (for-of + Array.from).
+- **Array.from** rozsiren o Object iterable protocol + Array-like fallback.
+- **MutationObserver** real dispatch z removeAttribute + setAttribute hooks.
+- **IntersectionObserver/ResizeObserver** stub-level (API funguje, callback
+  nikdy nefired - render-time check vyzaduje per-frame work).
+
+### Wire-up scroll_pos (bidirectional sync)
+
+WebView render_via dela:
+1. Pre tick: check interp.scroll_pos. Pri zmene (JS scrollTo) apply do
+   self.scroll_x/y + scroll_target.
+2. Po smooth scroll tick: sync interp.scroll_pos = (scroll_x, scroll_y).
+   JS pageXOffset/scrollX cte aktualni hodnotu.
+3. set_scroll() take sync interp.scroll_pos.
+
+### Shell features dokoncene
+
+- Address bar Ctrl+L (stdout-only feedback)
+- Find on page Ctrl+F (stdout-only, highlight TBD)
+
+### Test counts (po N+23, all tiers done)
+
+- 2804 engine, 8 devtools-proto, 3 devtools-frontend = 2815 testu
 - 0 warnings, cargo build/test --workspace cisty
-- 25+ commitov v session
+- 30+ commitov v session
