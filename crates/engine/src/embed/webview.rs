@@ -210,6 +210,26 @@ pub struct WebView {
     /// jen - color/background change neinvaliduje. Pri shode reuse
     /// last_layout_root + skip layout_tree call (363ms drop na <1ms v debug).
     pub(crate) layout_cache_key: Option<(u64, u32, u32, i32)>,
+    /// Per-layer texture cache (L2 compositor). Klic = layer_id (root box
+    /// node_ptr). Hodnota = (texture, view, width_px, height_px, last_paint_fp).
+    /// Pri layer texture cache hit: paint do existing texture skip (last_paint_fp
+    /// matches) -> compositor pass jen sample. Pri size change: realloc texture.
+    /// Pri layer remove (rebuild layer_tree): GC unreferenced entries.
+    pub(crate) layer_textures: std::collections::HashMap<usize, LayerTextureSlot>,
+    /// Posledni LayerTree z extract_layer_tree. Hostujici code muze sample.
+    /// Diagnostika + invalidation tracking.
+    pub(crate) last_layer_tree: Option<crate::browser::compositor::LayerNode>,
+}
+
+/// Per-layer texture slot v WebView cache. L2 compositor foundation.
+pub struct LayerTextureSlot {
+    pub texture: wgpu::Texture,
+    pub view: wgpu::TextureView,
+    pub width: u32,
+    pub height: u32,
+    /// Fingerprint posledniho paintu - hash style + layout boxu v teto layer.
+    /// Pri shode skip paint, reuse texture. 0 = nikdy nepaintnuto.
+    pub last_paint_fp: u64,
 }
 
 impl WebView {
@@ -271,7 +291,18 @@ impl WebView {
             prof_paint_ms: 0.0,
             prof_gpu_ms: 0.0,
             layout_cache_key: None,
+            layer_textures: std::collections::HashMap::new(),
+            last_layer_tree: None,
         }
+    }
+
+    /// Diagnostika: pocet aktivnich layers v posledni render. L1 compositor
+    /// foundation - vystavena hodnota umoznuje shell title bar zobrazit
+    /// "L:N" pocet layers per WebView.
+    pub fn layer_count(&self) -> usize {
+        self.last_layer_tree.as_ref()
+            .map(crate::browser::compositor::count_layers)
+            .unwrap_or(0)
     }
 
     /// Posledni render_via per-phase timing (ms): (cascade, layout, paint, gpu).
@@ -1484,6 +1515,13 @@ impl WebView {
 
         // 2c. Paint-side animations apply (transform overlay, opacity tween).
         crate::browser::render::apply_paint_animations(&mut layout_root, &style_map);
+
+        // 2d. L1 compositor: extract LayerTree z layout. Zatim jen diagnostika
+        // (layer_count v shell title bar). L2-L5 v dalsich commitech pridaji:
+        // per-layer texture cache, compositor pass, composite-only anim, dirty
+        // rect tracking.
+        self.last_layer_tree = Some(
+            crate::browser::compositor::extract_layer_tree(&layout_root));
 
         let prof_t2 = std::time::Instant::now();
         self.prof_layout_ms = prof_t2.duration_since(prof_t1).as_secs_f32() * 1000.0;

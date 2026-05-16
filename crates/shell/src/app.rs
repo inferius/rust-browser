@@ -1135,9 +1135,13 @@ html, body {{ margin: 0; padding: 0; height: 100%; background: #202124; color: #
             let (dc, dl, dp, dg) = self.devtools.as_ref()
                 .map(|w| w.render_phase_times())
                 .unwrap_or((0.0, 0.0, 0.0, 0.0));
+            // L1 compositor diagnostika: pocet layer v posledni WV render.
+            let layer_p = self.webview.as_ref().map(|w| w.layer_count()).unwrap_or(0);
+            let layer_d = self.devtools.as_ref().map(|w| w.layer_count()).unwrap_or(0);
             let win_title = format!(
-                "[{:.0} FPS {:.1}ms | C:{:.1} P:{:.1} D:{:.1} (cas:{:.1} lay:{:.1} pnt:{:.1} gpu:{:.1})] {}",
-                fps, avg_ms, self.last_chrome_ms, self.last_page_ms, self.last_dev_ms,
+                "[{:.0} FPS {:.1}ms | C:{:.1} P:{:.1}/L{} D:{:.1}/L{} (cas:{:.1} lay:{:.1} pnt:{:.1} gpu:{:.1})] {}",
+                fps, avg_ms, self.last_chrome_ms, self.last_page_ms, layer_p,
+                self.last_dev_ms, layer_d,
                 dc, dl, dp, dg, title_base);
             if window.title() != win_title {
                 window.set_title(&win_title);

@@ -35,6 +35,11 @@ use super::layout::{LayoutBox, Position};
 /// Layer = offscreen "vrstva" content. Maps na CSS Stacking Context.
 #[derive(Debug, Clone)]
 pub struct LayerNode {
+    /// Stable ID pres frames - root box node ptr (Rc::as_ptr usize). 0 pro
+    /// root layer (no associated node). Pouziti: HashMap klic pro texture
+    /// cache (host alokuje wgpu::Texture per layer_id, pri zmene size
+    /// realokuje, jinak reuse mezi frames).
+    pub id: usize,
     /// LayoutBox ktery layer "owns" (root teto vrstvy).
     pub root_rect: super::layout::Rect,
     /// Z-index pro sort order (None = auto = treat jako 0).
@@ -73,7 +78,10 @@ pub enum LayerReason {
 /// Build LayerTree z layout_root. Walk LayoutBox tree, identify layer
 /// boundaries pres CSS Stacking Context kriteria.
 pub fn extract_layer_tree(layout_root: &LayoutBox) -> LayerNode {
+    let root_id = layout_root.node.as_ref()
+        .map(|n| std::rc::Rc::as_ptr(n) as usize).unwrap_or(0);
     let mut root = LayerNode {
+        id: root_id,
         root_rect: layout_root.rect,
         z_index: None,
         opacity: 1.0,
@@ -141,7 +149,10 @@ fn walk_box(b: &LayoutBox, current: &mut LayerNode) {
     // Jinak pokracuje v current layer.
     for child in &b.children {
         if is_layer_boundary(child) {
+            let layer_id = child.node.as_ref()
+                .map(|n| std::rc::Rc::as_ptr(n) as usize).unwrap_or(0);
             let mut sub = LayerNode {
+                id: layer_id,
                 root_rect: child.rect,
                 z_index: child.z_index,
                 opacity: child.opacity,
