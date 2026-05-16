@@ -16,6 +16,7 @@ pub mod computed_style;
 pub mod layout;
 pub mod layout_engine;
 pub mod paint;
+pub mod compositor;
 pub mod render;
 pub mod devtools_panel;
 pub mod woff;
