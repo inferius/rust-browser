@@ -219,6 +219,11 @@ pub struct WebView {
     /// Posledni LayerTree z extract_layer_tree. Hostujici code muze sample.
     /// Diagnostika + invalidation tracking.
     pub(crate) last_layer_tree: Option<crate::browser::compositor::LayerNode>,
+    /// Paint cache: hash style_map full content. Pri shode (cascade vraci
+    /// novy Rc ale identicky content - hover bez :hover effect) skip paint
+    /// + gpu submit, reuse cached target_view. Klicova win pres hover bez
+    /// vizualni odezvy = 0ms frame.
+    pub(crate) last_paint_fingerprint: Option<u64>,
 }
 
 /// Per-layer texture slot v WebView cache. L2 compositor foundation.
@@ -293,6 +298,7 @@ impl WebView {
             layout_cache_key: None,
             layer_textures: std::collections::HashMap::new(),
             last_layer_tree: None,
+            last_paint_fingerprint: None,
         }
     }
 
@@ -1486,6 +1492,26 @@ impl WebView {
         self.prev_style_map = Some(style_map.clone());
         let prof_t1 = std::time::Instant::now();
         self.prof_cascade_ms = prof_t1.duration_since(prof_t0).as_secs_f32() * 1000.0;
+
+        // Paint cache: pokud kompletni style_map content match predchozi
+        // frame (mouse hover bez visible CSS effect = novy Rc ale same content)
+        // -> SKIP layout+paint+gpu, reuse target_view. Vykresleny obsah uz
+        // existuje v target_texture, nic se nezmenilo.
+        // Skip jen pokud scroll a active anim taky nezmenily.
+        let paint_fp = crate::browser::cascade::paint_fingerprint(&style_map);
+        if Some(paint_fp) == self.last_paint_fingerprint
+            && !needs_tick
+            && self.target_view.is_some()
+        {
+            // Cache hit - vse identicke, reuse predchozi frame.
+            self.prof_layout_ms = 0.0;
+            self.prof_paint_ms = 0.0;
+            self.prof_gpu_ms = 0.0;
+            renderer.target_size = None;
+            self.dirty = false;
+            return self.target_view.as_ref();
+        }
+        self.last_paint_fingerprint = Some(paint_fp);
 
         // 2. Layout cache - content-based klic. Hash pres LAYOUT_RELEVANT_PROPS
         // ne cely style_map. Hover zmena typicky meni color/background - layout

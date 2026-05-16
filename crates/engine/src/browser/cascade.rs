@@ -385,6 +385,30 @@ pub fn layout_fingerprint(style_map: &StyleMap) -> u64 {
     hasher.finish()
 }
 
+/// Hash CELEHO style_map (vsechny props - layout + paint). Pri shode mezi
+/// frames znamena vykresleny obsah identicky -> skip paint walk + gpu submit,
+/// reuse cached target_view.
+///
+/// Pouziti: mouse hover bez :hover CSS effect produkuje novy Rc<StyleMap>
+/// (cascade vyrabi novy alloc) ale content identicky. Bez paint cache by
+/// pres novy Rc = paint+gpu run zbytecne.
+pub fn paint_fingerprint(style_map: &StyleMap) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut entries: Vec<(&usize, &HashMap<String, String>)> = style_map.iter().collect();
+    entries.sort_by_key(|(k, _)| **k);
+    for (node_ptr, props) in entries {
+        node_ptr.hash(&mut hasher);
+        let mut props_sorted: Vec<(&String, &String)> = props.iter().collect();
+        props_sorted.sort_by(|a, b| a.0.cmp(b.0));
+        for (p, v) in props_sorted {
+            p.hash(&mut hasher);
+            v.hash(&mut hasher);
+        }
+    }
+    hasher.finish()
+}
+
 /// Mapa: (node_id, pseudo-element-name) -> computed styles.
 /// Napr. ((0xabcd, "before"), {"content": "\"->\"", "color": "red"})
 pub type PseudoStyleMap = HashMap<(usize, String), HashMap<String, String>>;
