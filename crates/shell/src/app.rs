@@ -1131,9 +1131,14 @@ html, body {{ margin: 0; padding: 0; height: 100%; background: #202124; color: #
             let fps = if avg_ms > 0.01 { 1000.0 / avg_ms } else { 999.0 };
             let title_base = if t.is_empty() { "RustWebEngine".to_string() }
                 else { format!("{} - RustWebEngine", t) };
-            let win_title = format!("[{:.0} FPS {:.1}ms | C:{:.1} P:{:.1} D:{:.1}] {}",
+            // Per-phase timing devtools WV - kde je drahy: cascade/layout/paint/gpu?
+            let (dc, dl, dp, dg) = self.devtools.as_ref()
+                .map(|w| w.render_phase_times())
+                .unwrap_or((0.0, 0.0, 0.0, 0.0));
+            let win_title = format!(
+                "[{:.0} FPS {:.1}ms | C:{:.1} P:{:.1} D:{:.1} (cas:{:.1} lay:{:.1} pnt:{:.1} gpu:{:.1})] {}",
                 fps, avg_ms, self.last_chrome_ms, self.last_page_ms, self.last_dev_ms,
-                title_base);
+                dc, dl, dp, dg, title_base);
             if window.title() != win_title {
                 window.set_title(&win_title);
             }

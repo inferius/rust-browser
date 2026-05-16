@@ -199,6 +199,12 @@ pub struct WebView {
     /// invalidoval cascade cache vsech ostatnich. Per-WV stav fixuje.
     /// Pred cascade_with_viewport call se thread_local set z tohoto fieldu.
     pub(crate) hovered_node_local: Option<usize>,
+    /// Profilovaci timery posledniho render_via (ms). Sledovat ktera faze
+    /// je drahy. Public read pro host (shell title bar).
+    pub(crate) prof_cascade_ms: f32,
+    pub(crate) prof_layout_ms: f32,
+    pub(crate) prof_paint_ms: f32,
+    pub(crate) prof_gpu_ms: f32,
 }
 
 impl WebView {
@@ -255,7 +261,17 @@ impl WebView {
             cascade_cache_value: None,
             hit_test_cache: None,
             hovered_node_local: None,
+            prof_cascade_ms: 0.0,
+            prof_layout_ms: 0.0,
+            prof_paint_ms: 0.0,
+            prof_gpu_ms: 0.0,
         }
+    }
+
+    /// Posledni render_via per-phase timing (ms): (cascade, layout, paint, gpu).
+    /// Pro diagnostiku - shell title bar nebo overlay.
+    pub fn render_phase_times(&self) -> (f32, f32, f32, f32) {
+        (self.prof_cascade_ms, self.prof_layout_ms, self.prof_paint_ms, self.prof_gpu_ms)
     }
 
     /// Painted text runs z posledniho `render_via` (per-glyph cumulative
@@ -1275,6 +1291,7 @@ impl WebView {
         // cascade nastavi pred svym walk.
         crate::browser::cascade::set_hovered_node(self.hovered_node_local);
 
+        let prof_t0 = std::time::Instant::now();
         let cache_key = {
             use std::hash::{Hash, Hasher};
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -1430,6 +1447,8 @@ impl WebView {
 
         // Sync prev_style_map pro pristi frame transitions detection.
         self.prev_style_map = Some(style_map.clone());
+        let prof_t1 = std::time::Instant::now();
+        self.prof_cascade_ms = prof_t1.duration_since(prof_t0).as_secs_f32() * 1000.0;
 
         // 2. Layout - compute boxes (po anim tick aby left/top/width keyframes
         // ovlivnili layout pozice).
@@ -1442,6 +1461,9 @@ impl WebView {
 
         // 2c. Paint-side animations apply (transform overlay, opacity tween).
         crate::browser::render::apply_paint_animations(&mut layout_root, &style_map);
+
+        let prof_t2 = std::time::Instant::now();
+        self.prof_layout_ms = prof_t2.duration_since(prof_t1).as_secs_f32() * 1000.0;
 
         // 3. Paint - generate display list (culled na viewport).
         let mut display_list = crate::browser::paint::build_display_list_culled(
@@ -1662,6 +1684,9 @@ impl WebView {
         self.painted_text_runs = crate::browser::render::extract_text_runs(
             &display_list, renderer.atlas(), renderer.zoom);
 
+        let prof_t3 = std::time::Instant::now();
+        self.prof_paint_ms = prof_t3.duration_since(prof_t2).as_secs_f32() * 1000.0;
+
         // 5. Renderer kresli display list do target_view.
         let _had = renderer.draw_segments_into_view_clipped(
             target_view, &display_list, true, None);
@@ -1697,6 +1722,9 @@ impl WebView {
         // Reset renderer target_size override - shell present_split + jine
         // pas v swap chain pouziva config size.
         renderer.target_size = None;
+
+        let prof_t4 = std::time::Instant::now();
+        self.prof_gpu_ms = prof_t4.duration_since(prof_t3).as_secs_f32() * 1000.0;
 
         self.dirty = false;
         self.target_view.as_ref()
