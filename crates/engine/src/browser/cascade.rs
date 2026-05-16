@@ -344,6 +344,47 @@ fn logical_shorthand_pair(prop: &str) -> Option<(&'static str, &'static str)> {
 /// Mapa: pointer na Node -> computed styles.
 pub type StyleMap = HashMap<usize, HashMap<String, String>>;
 
+/// Layout-relevant CSS properties - jen tyhle ovlivnuji LayoutBox tree.
+/// Vsechno ostatni (color, background, opacity, transform, ...) je paint-only.
+/// Pri stejnem hashi pres layout props muze WebView reuse cached layout_root.
+pub const LAYOUT_RELEVANT_PROPS: &[&str] = &[
+    "display", "position", "float", "clear", "overflow", "overflow-x", "overflow-y",
+    "box-sizing", "white-space", "word-break", "word-wrap", "writing-mode",
+    "width", "min-width", "max-width", "height", "min-height", "max-height",
+    "margin", "margin-top", "margin-right", "margin-bottom", "margin-left",
+    "padding", "padding-top", "padding-right", "padding-bottom", "padding-left",
+    "border-width", "border-top-width", "border-right-width", "border-bottom-width", "border-left-width",
+    "border-style", "border-top-style", "border-right-style", "border-bottom-style", "border-left-style",
+    "top", "right", "bottom", "left", "z-index",
+    "flex", "flex-direction", "flex-wrap", "flex-flow", "flex-grow", "flex-shrink", "flex-basis",
+    "justify-content", "align-items", "align-self", "align-content", "gap", "row-gap", "column-gap",
+    "grid", "grid-template-columns", "grid-template-rows", "grid-template-areas",
+    "grid-column", "grid-row", "grid-area", "grid-auto-columns", "grid-auto-rows", "grid-auto-flow",
+    "font-size", "font-family", "font-weight", "font-style", "line-height",
+    "text-align", "text-indent", "letter-spacing", "word-spacing", "vertical-align",
+];
+
+/// Hash celeho style_map pres LAYOUT_RELEVANT_PROPS jen. Pri stejnem hashi
+/// po cascade rebuild znamena ze layout je identicky -> reuse cached layout_root.
+/// Mouse hover zmena typicky meni jen `color`/`background-color` -> hash stable.
+pub fn layout_fingerprint(style_map: &StyleMap) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    // Sort entries by node ptr (HashMap iteration order = nedeterministicky).
+    let mut entries: Vec<(&usize, &HashMap<String, String>)> = style_map.iter().collect();
+    entries.sort_by_key(|(k, _)| **k);
+    for (node_ptr, props) in entries {
+        node_ptr.hash(&mut hasher);
+        for prop_name in LAYOUT_RELEVANT_PROPS {
+            if let Some(v) = props.get(*prop_name) {
+                prop_name.hash(&mut hasher);
+                v.hash(&mut hasher);
+            }
+        }
+    }
+    hasher.finish()
+}
+
 /// Mapa: (node_id, pseudo-element-name) -> computed styles.
 /// Napr. ((0xabcd, "before"), {"content": "\"->\"", "color": "red"})
 pub type PseudoStyleMap = HashMap<(usize, String), HashMap<String, String>>;

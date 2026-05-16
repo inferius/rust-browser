@@ -205,10 +205,11 @@ pub struct WebView {
     pub(crate) prof_layout_ms: f32,
     pub(crate) prof_paint_ms: f32,
     pub(crate) prof_gpu_ms: f32,
-    /// Layout cache klic = (style_map Rc::as_ptr, viewport_w u32, viewport_h
-    /// u32, scroll_y rounded - pro sticky). Pri shode reuse last_layout_root
-    /// + skip layout_tree call (363ms drop na <1ms v debug).
-    pub(crate) layout_cache_key: Option<(usize, u32, u32, i32)>,
+    /// Layout cache klic = (layout_fingerprint hash, viewport_w u32, viewport_h
+    /// u32, scroll_y rounded - pro sticky). Fingerprint pres LAYOUT_RELEVANT_PROPS
+    /// jen - color/background change neinvaliduje. Pri shode reuse
+    /// last_layout_root + skip layout_tree call (363ms drop na <1ms v debug).
+    pub(crate) layout_cache_key: Option<(u64, u32, u32, i32)>,
 }
 
 impl WebView {
@@ -1455,13 +1456,13 @@ impl WebView {
         let prof_t1 = std::time::Instant::now();
         self.prof_cascade_ms = prof_t1.duration_since(prof_t0).as_secs_f32() * 1000.0;
 
-        // 2. Layout cache - pres style_map Rc identitu + viewport + scroll
-        // (pro sticky). Pri shode reuse last_layout_root clone misto
-        // taffy + inline layout walk (363ms v debug).
-        // Cascade cache hit => stejny Rc<StyleMap> = stejny ptr. Bez cascade
-        // change layout je nevylacelny.
+        // 2. Layout cache - content-based klic. Hash pres LAYOUT_RELEVANT_PROPS
+        // ne cely style_map. Hover zmena typicky meni color/background - layout
+        // hash zustava stable -> reuse cached layout_root. Skip layout_tree
+        // call (363ms drop na <1ms v debug).
+        let layout_fp = crate::browser::cascade::layout_fingerprint(&style_map);
         let layout_key = (
-            std::rc::Rc::as_ptr(&style_map) as usize,
+            layout_fp,
             (viewport_w as u32),
             (viewport_h as u32),
             self.scroll_y as i32,
