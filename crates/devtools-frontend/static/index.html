@@ -1461,126 +1461,14 @@ html, body {
                         </div>
                     </div>
 
-                    <!-- COMPUTED -->
-                    <div class="layout-body" data-side-body="computed" style="display:none">
-                        <input class="computed-filter" placeholder="Filtrovat vlastnosti">
-                        <label style="display:flex; align-items:center; gap:4px; color:var(--fg-dim); font-size:11px; padding: 4px 0;">
-                            <input type="checkbox" checked> Zobrazit prohlizecove styly
-                        </label>
-                        <div class="computed-list">
-                            <div class="computed-prop"><span class="toggle-src icon"><i data-lucide="chevron-right"></i></span><span class="name">color</span><span class="val">rgb(51, 51, 51)</span></div>
-                            <div class="computed-prop"><span class="toggle-src icon"><i data-lucide="chevron-right"></i></span><span class="name">display</span><span class="val">block</span></div>
-                            <div class="computed-prop"><span class="toggle-src icon"><i data-lucide="chevron-right"></i></span><span class="name">font-family</span><span class="val">'Segoe UI', sans-serif</span></div>
-                            <div class="computed-prop"><span class="toggle-src icon"><i data-lucide="chevron-right"></i></span><span class="name">font-size</span><span class="val">32px</span></div>
-                            <div class="computed-prop"><span class="toggle-src icon"><i data-lucide="chevron-right"></i></span><span class="name">font-weight</span><span class="val">700</span></div>
-                            <div class="computed-prop"><span class="toggle-src icon"><i data-lucide="chevron-right"></i></span><span class="name">height</span><span class="val">36px</span></div>
-                            <div class="computed-prop"><span class="toggle-src icon"><i data-lucide="chevron-right"></i></span><span class="name">line-height</span><span class="val">38.4px</span></div>
-                            <div class="computed-prop"><span class="toggle-src icon"><i data-lucide="chevron-right"></i></span><span class="name">margin-bottom</span><span class="val">8px</span></div>
-                            <div class="computed-prop"><span class="toggle-src icon"><i data-lucide="chevron-right"></i></span><span class="name">margin-top</span><span class="val">0px</span></div>
-                            <div class="computed-prop"><span class="toggle-src icon"><i data-lucide="chevron-right"></i></span><span class="name">padding</span><span class="val">0px</span></div>
-                            <div class="computed-prop"><span class="toggle-src icon"><i data-lucide="chevron-right"></i></span><span class="name">width</span><span class="val">1264px</span></div>
-                        </div>
-                    </div>
-
-                    <!-- CHANGES -->
-                    <div class="layout-body" data-side-body="changes" style="display:none">
-                        <button class="copy-btn">Kopirovat vse</button>
-                        <div style="clear: both"></div>
-                        <div class="changes-list">
-                            <div class="change-rule">
-                                <span class="sel">h1</span> {
-                                <div class="change-decl added">color: blue;</div>
-                                <div class="change-decl removed">color: red;</div>
-                                }
-                            </div>
-                            <div class="change-rule">
-                                <span class="sel">button</span> {
-                                <div class="change-decl added">padding: 8px 16px;</div>
-                                }
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- COMPAT -->
-                    <div class="layout-body" data-side-body="compat" style="display:none">
-                        <div style="color: var(--fg-dim); font-size: 11px; padding-bottom: 8px;">
-                            Vlastnosti nekompatibilni s aspon jednim prohlizecem:
-                        </div>
-                        <div class="compat-prop">
-                            <span class="name">backdrop-filter</span>
-                            <div class="browsers">
-                                <span class="compat-browser supported">Chrome 76+</span>
-                                <span class="compat-browser supported">Firefox 103+</span>
-                                <span class="compat-browser partial">Safari 9+ (-webkit-)</span>
-                            </div>
-                        </div>
-                        <div class="compat-prop">
-                            <span class="name">aspect-ratio</span>
-                            <div class="browsers">
-                                <span class="compat-browser supported">Chrome 88+</span>
-                                <span class="compat-browser supported">Firefox 89+</span>
-                                <span class="compat-browser supported">Safari 15+</span>
-                            </div>
-                        </div>
-                        <div class="compat-prop">
-                            <span class="name">@scope</span>
-                            <div class="browsers">
-                                <span class="compat-browser supported">Chrome 118+</span>
-                                <span class="compat-browser unsupported">Firefox: NE</span>
-                                <span class="compat-browser supported">Safari 17.4+</span>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- FONTS -->
-                    <div class="layout-body" data-side-body="fonts" style="display:none">
-                        <div style="color: var(--fg-dim); font-size: 11px; padding-bottom: 8px;">
-                            Pisma pouzita pro tento element:
-                        </div>
-                        <div class="font-card">
-                            <div class="preview">Abeceda 0123</div>
-                            <div class="family">Segoe UI</div>
-                            <div class="meta">System • 700 weight • normal style • Latin subset</div>
-                        </div>
-                        <div class="font-card">
-                            <div class="preview" style="font-family: 'Consolas', monospace;">code{font}123</div>
-                            <div class="family">Consolas</div>
-                            <div class="meta">System • 400 weight • normal style</div>
-                        </div>
-                    </div>
-
-                    <!-- ANIMATIONS -->
-                    <div class="layout-body" data-side-body="animations" style="display:none">
-                        <div class="anim-controls">
-                            <button class="toolbar-btn" data-i18n-title="btn.playPause" title="Pause/play"><i data-lucide="play" class="icon"></i></button>
-                            <button class="toolbar-btn" data-i18n-title="btn.restart" title="Restart"><i data-lucide="rotate-ccw" class="icon"></i></button>
-                            <select style="background: var(--bg-elev2); color: var(--fg); border: 1px solid var(--border-strong); padding: 2px; font-size: 11px;">
-                                <option>100%</option>
-                                <option>50%</option>
-                                <option>25%</option>
-                                <option>10%</option>
-                            </select>
-                        </div>
-                        <div class="anim-timeline">
-                            <div class="anim-row">
-                                <div class="anim-name">slide-in</div>
-                                <div class="anim-bar"><div class="anim-bar-fill" style="left: 0%; width: 40%;"></div></div>
-                            </div>
-                            <div class="anim-row">
-                                <div class="anim-name">fade</div>
-                                <div class="anim-bar"><div class="anim-bar-fill" style="left: 20%; width: 50%;"></div></div>
-                            </div>
-                            <div class="anim-row">
-                                <div class="anim-name">pulse</div>
-                                <div class="anim-bar"><div class="anim-bar-fill" style="left: 30%; width: 70%; background: linear-gradient(to right, var(--warn), var(--error));"></div></div>
-                            </div>
-                        </div>
-                        <div style="font-size: 11px; color: var(--fg-dim);">
-                            <div><strong style="color: var(--fg)">slide-in</strong> · 600ms ease-out · infinite</div>
-                            <div><strong style="color: var(--fg)">fade</strong> · 1200ms linear · 2 iterations</div>
-                            <div><strong style="color: var(--fg)">pulse</strong> · 800ms ease-in-out · forwards</div>
-                        </div>
-                    </div>
+                    <!-- COMPUTED / CHANGES / COMPAT / FONTS / ANIMATIONS -
+                         empty containers, JS naplni real data per panel.
+                         Mock obsah vyhozen (perf - 320+ divs cascade walk). -->
+                    <div class="layout-body" data-side-body="computed" style="display:none"></div>
+                    <div class="layout-body" data-side-body="changes" style="display:none"></div>
+                    <div class="layout-body" data-side-body="compat" style="display:none"></div>
+                    <div class="layout-body" data-side-body="fonts" style="display:none"></div>
+                    <div class="layout-body" data-side-body="animations" style="display:none"></div>
                 </div>
             </div>
         </div>
@@ -1599,40 +1487,7 @@ html, body {
                 <button class="toolbar-btn" data-i18n-title="btn.settings" title="Nastaveni"><i data-lucide="settings" class="icon"></i></button>
             </div>
             <div class="console-log">
-                <div class="log-entry log">
-                    Stranka uspesne nactena <span class="log-source">page.html:1</span>
-                </div>
-                <div class="log-entry info">
-                    User clicked button <span class="log-source">script.js:42</span>
-                </div>
-                <div class="log-input">document.querySelector('h1')</div>
-                <div class="log-entry log log-result">
-                    <span class="obj-toggle icon"><i data-lucide="chevron-right"></i></span>&lt;h1&gt;Mock Page&lt;/h1&gt;
-                </div>
-                <div class="log-entry warn">
-                    Deprecation warning: <code>document.cookie</code> sync access <span class="log-source">page.html:33</span>
-                </div>
-                <div class="log-input">counter + 1</div>
-                <div class="log-entry log log-result">
-                    <span class="obj-number">43</span>
-                </div>
-                <div class="log-entry error">
-                    Uncaught TypeError: undefined is not a function
-                    <div style="padding-left: 14px; color: var(--fg-muted); font-size: 10px; margin-top: 2px;">
-                        at script.js:88<br>
-                        at HTMLButtonElement.onclick (page.html:24)
-                    </div>
-                    <span class="log-source">script.js:88</span>
-                </div>
-                <div class="log-input">JSON.parse('{"a": 1, "b": [true, null]}')</div>
-                <div class="log-entry log log-result">
-                    <div><span class="obj-toggle icon"><i data-lucide="chevron-down"></i></span><span class="obj-keyword">Object</span> {</div>
-                    <div class="obj-children">
-                        <div><span class="obj-key">a</span>: <span class="obj-number">1</span></div>
-                        <div><span class="obj-key">b</span>: <span class="obj-toggle icon"><i data-lucide="chevron-right"></i></span><span class="obj-keyword">Array(2)</span></div>
-                    </div>
-                    <div>}</div>
-                </div>
+                <!-- JS CDP wireup populate ze Runtime.consoleAPICalled events. -->
             </div>
             <div class="console-prompt">
                 <input placeholder="Zadejte JS vyraz...">
@@ -1643,80 +1498,15 @@ html, body {
         <div class="panel debugger">
             <div class="sources-tree">
                 <div class="file-section">
-                    <div class="file-section-header"><i data-lucide="chevron-down" class="icon"></i> <span data-i18n="dbg.page">Stranka</span> (3)</div>
-                    <div class="file-item">index.html<span class="badge">1</span></div>
-                    <div class="file-item active">script.js</div>
-                    <div class="file-item">styles.css</div>
-                </div>
-                <div class="file-section">
-                    <div class="file-section-header"><i data-lucide="chevron-right" class="icon"></i> <span data-i18n="dbg.workers">Pracovni vlakna</span> (1)</div>
-                </div>
-                <div class="file-section">
-                    <div class="file-section-header"><i data-lucide="chevron-right" class="icon"></i> <span data-i18n="dbg.external">Externi</span> (5)</div>
-                </div>
-                <div class="file-section">
-                    <div class="file-section-header"><i data-lucide="chevron-down" class="icon"></i> <span data-i18n="dbg.snippets">Sniptety</span></div>
-                    <div class="file-item">helper.js</div>
+                    <div class="file-section-header"><i data-lucide="chevron-down" class="icon"></i> <span data-i18n="dbg.page">Stranka</span></div>
+                    <!-- JS CDP wireup populate ze Debugger.scriptParsed events. -->
                 </div>
             </div>
             <div class="sources-main">
-                <div class="sources-tabs">
-                    <div class="source-tab active">script.js<span class="x"><i data-lucide="x" class="icon"></i></span></div>
-                    <div class="source-tab">index.html<span class="x"><i data-lucide="x" class="icon"></i></span></div>
-                </div>
+                <div class="sources-tabs"></div>
                 <div class="source-editor">
-                    <div class="source-line"><div class="gutter">1</div><div class="code-line"><span class="cmt">// Click handler s vypocet counter</span></div></div>
-                    <div class="source-line"><div class="gutter">2</div><div class="code-line"></div></div>
-                    <div class="source-line"><div class="gutter">3</div><div class="code-line"><span class="kw">const</span> counter = document.getElementById(<span class="str">'counter'</span>);</div></div>
-                    <div class="source-line"><div class="gutter">4</div><div class="code-line"><span class="kw">let</span> count = <span class="num">42</span>;</div></div>
-                    <div class="source-line"><div class="gutter">5</div><div class="code-line"></div></div>
-                    <div class="source-line has-bp"><div class="gutter">6</div><div class="code-line"><span class="kw">function</span> <span class="fn">increment</span>() {</div></div>
-                    <div class="source-line paused"><div class="gutter">7</div><div class="code-line">  count++;</div></div>
-                    <div class="source-line"><div class="gutter">8</div><div class="code-line">  counter.textContent = <span class="str">'Counter: '</span> + count;</div></div>
-                    <div class="source-line"><div class="gutter">9</div><div class="code-line">  console.log(<span class="str">'New count:'</span>, count);</div></div>
-                    <div class="source-line"><div class="gutter">10</div><div class="code-line">}</div></div>
-                </div>
-            </div>
-            <div class="sources-right">
-                <div class="debug-toolbar">
-                    <button class="toolbar-btn" data-i18n-title="btn.resume" title="Pokracovat (F8)"><i data-lucide="play" class="icon"></i></button>
-                    <button class="toolbar-btn" data-i18n-title="btn.stepOver" title="Krok pres (F10)"><i data-lucide="corner-down-right" class="icon"></i></button>
-                    <button class="toolbar-btn" data-i18n-title="btn.stepInto" title="Krok do (F11)"><i data-lucide="arrow-down-to-line" class="icon"></i></button>
-                    <button class="toolbar-btn" data-i18n-title="btn.stepOut" title="Krok ven (Shift+F11)"><i data-lucide="arrow-up-from-line" class="icon"></i></button>
-                    <button class="toolbar-btn" data-i18n-title="btn.deactivateBp" title="Deaktivovat breakpoints"><i data-lucide="circle-slash" class="icon"></i></button>
-                </div>
-                <div class="debug-section">
-                    <div class="debug-section-header">Zasobnik volani <span class="count">(2)</span></div>
-                    <div class="debug-body">
-                        <div class="stack-frame active">
-                            <div class="fn">increment</div>
-                            <div class="loc">script.js:7</div>
-                        </div>
-                        <div class="stack-frame">
-                            <div class="fn">HTMLButtonElement.onclick</div>
-                            <div class="loc">script.js:12</div>
-                        </div>
-                    </div>
-                </div>
-                <div class="debug-section">
-                    <div class="debug-section-header">Rozsah</div>
-                    <div class="debug-body">
-                        <div class="scope-row"><span class="name">Lokalni</span></div>
-                        <div class="scope-row" style="padding-left: 12px"><span class="name">count</span>: <span class="val">42</span></div>
-                        <div class="scope-row" style="padding-left: 12px"><span class="name">counter</span>: <span class="val">&lt;div#counter&gt;</span></div>
-                        <div class="scope-row"><span class="name">Globalni</span></div>
-                        <div class="scope-row" style="padding-left: 12px"><span class="name">window</span>: <span class="val">Window</span></div>
-                    </div>
-                </div>
-                <div class="debug-section">
-                    <div class="debug-section-header">Breakpointy <span class="count">(2)</span></div>
-                    <div class="bp-row"><input type="checkbox" checked><span class="loc">script.js:6</span></div>
-                    <div class="bp-row"><input type="checkbox" checked><span class="loc">script.js:12</span></div>
-                </div>
-                <div class="debug-section">
-                    <div class="debug-section-header">Vyrazy ke sledovani <span class="count">(1)</span></div>
-                    <div class="debug-body">
-                        <div class="scope-row"><span class="name">count + 1</span>: <span class="val">43</span></div>
+                    <div style="padding: 12px; color: var(--fg-dim); font-size: 11px;">
+                        Vyber soubor pro zobrazeni zdrojoveho kodu.
                     </div>
                 </div>
             </div>
@@ -1751,108 +1541,9 @@ html, body {
                             </tr>
                         </thead>
                         <tbody>
-                            <tr class="selected">
-                                <td>index.html</td>
-                                <td class="status-2xx">200</td>
-                                <td>GET</td>
-                                <td>Dokument</td>
-                                <td>4.2 KB</td>
-                                <td>120ms</td>
-                                <td class="waterfall-cell"><div class="waterfall-bar" style="width: 20%;"></div></td>
-                            </tr>
-                            <tr>
-                                <td>style.css</td>
-                                <td class="status-2xx">200</td>
-                                <td>GET</td>
-                                <td>CSS</td>
-                                <td>2.1 KB</td>
-                                <td>45ms</td>
-                                <td class="waterfall-cell"><div class="waterfall-bar" style="margin-left: 15%; width: 8%; background: var(--ok);"></div></td>
-                            </tr>
-                            <tr>
-                                <td>script.js</td>
-                                <td class="status-2xx">200</td>
-                                <td>GET</td>
-                                <td>JS</td>
-                                <td>8.5 KB</td>
-                                <td>87ms</td>
-                                <td class="waterfall-cell"><div class="waterfall-bar" style="margin-left: 18%; width: 14%;"></div></td>
-                            </tr>
-                            <tr>
-                                <td>logo.png</td>
-                                <td class="status-2xx">200</td>
-                                <td>GET</td>
-                                <td>Obrazek</td>
-                                <td>32 KB</td>
-                                <td>220ms</td>
-                                <td class="waterfall-cell"><div class="waterfall-bar" style="margin-left: 30%; width: 36%; background: var(--syntax-keyword);"></div></td>
-                            </tr>
-                            <tr>
-                                <td>api/users</td>
-                                <td class="status-2xx">200</td>
-                                <td>GET</td>
-                                <td>XHR</td>
-                                <td>12 KB</td>
-                                <td>540ms</td>
-                                <td class="waterfall-cell"><div class="waterfall-bar" style="margin-left: 40%; width: 55%;"></div></td>
-                            </tr>
-                            <tr>
-                                <td>analytics.js</td>
-                                <td class="status-4xx">404</td>
-                                <td>GET</td>
-                                <td>JS</td>
-                                <td>0 B</td>
-                                <td>34ms</td>
-                                <td class="waterfall-cell"><div class="waterfall-bar" style="margin-left: 36%; width: 6%; background: var(--error);"></div></td>
-                            </tr>
-                            <tr>
-                                <td>data.json</td>
-                                <td class="status-3xx">304</td>
-                                <td>GET</td>
-                                <td>Fetch</td>
-                                <td>0 B</td>
-                                <td>12ms</td>
-                                <td class="waterfall-cell"><div class="waterfall-bar" style="margin-left: 55%; width: 2%; background: var(--warn);"></div></td>
-                            </tr>
+                            <!-- JS CDP wireup populate ze Network.* events. -->
                         </tbody>
                     </table>
-                </div>
-                <div class="network-side">
-                    <div class="net-side-tabs">
-                        <div class="net-side-tab active">Hlavicky</div>
-                        <div class="net-side-tab">Cookies</div>
-                        <div class="net-side-tab">Pozadavek</div>
-                        <div class="net-side-tab">Odpoved</div>
-                        <div class="net-side-tab">Casovani</div>
-                    </div>
-                    <div class="net-side-body">
-                        <div class="net-section">
-                            <div class="net-section-header">Obecne</div>
-                            <div class="net-kv">
-                                <div><span class="k">URL</span>: <span class="v">https://example.com/index.html</span></div>
-                                <div><span class="k">Metoda</span>: <span class="v">GET</span></div>
-                                <div><span class="k">Stav</span>: <span class="v status-2xx">200 OK</span></div>
-                                <div><span class="k">Vzdalena adresa</span>: <span class="v">93.184.216.34:443</span></div>
-                            </div>
-                        </div>
-                        <div class="net-section">
-                            <div class="net-section-header">Hlavicky odpovedi</div>
-                            <div class="net-kv">
-                                <div><span class="k">content-type</span>: <span class="v">text/html; charset=UTF-8</span></div>
-                                <div><span class="k">content-length</span>: <span class="v">4231</span></div>
-                                <div><span class="k">cache-control</span>: <span class="v">max-age=3600</span></div>
-                                <div><span class="k">server</span>: <span class="v">nginx/1.21.6</span></div>
-                            </div>
-                        </div>
-                        <div class="net-section">
-                            <div class="net-section-header">Hlavicky pozadavku</div>
-                            <div class="net-kv">
-                                <div><span class="k">accept</span>: <span class="v">text/html,*/*</span></div>
-                                <div><span class="k">user-agent</span>: <span class="v">RustWebEngine/0.1</span></div>
-                                <div><span class="k">accept-language</span>: <span class="v">cs,en;q=0.9</span></div>
-                            </div>
-                        </div>
-                    </div>
                 </div>
             </div>
         </div>
@@ -1865,77 +1556,9 @@ html, body {
 
         <!-- PERFORMANCE -->
         <div class="panel performance">
-            <div class="perf-toolbar">
-                <button class="toolbar-btn" data-i18n-title="btn.record" title="Zaznamenat"><i data-lucide="circle" class="icon"></i></button>
-                <button class="toolbar-btn" data-i18n-title="btn.reloadRecord" title="Reload + zaznamenat"><i data-lucide="rotate-cw" class="icon"></i></button>
-                <button class="toolbar-btn" data-i18n-title="btn.clear" title="Vymazat"><i data-lucide="trash-2" class="icon"></i></button>
-                <span style="color: var(--fg-dim); margin-left: 8px;" data-i18n="perf.recordLen">2.42s zaznam</span>
-            </div>
-            <div class="perf-body">
-                <h3 style="margin: 4px; font-size: 12px; color: var(--fg-dim); text-transform: uppercase;">Metriky</h3>
-                <div class="metric-card">
-                    <div class="label">Dokumenty</div>
-                    <div class="value">1</div>
-                </div>
-                <div class="metric-card">
-                    <div class="label">DOM Uzly</div>
-                    <div class="value">328</div>
-                </div>
-                <div class="metric-card">
-                    <div class="label">Layout</div>
-                    <div class="value">214</div>
-                </div>
-                <div class="metric-card">
-                    <div class="label">JS Listeners</div>
-                    <div class="value">42</div>
-                </div>
-                <div class="metric-card">
-                    <div class="label">JS Heap</div>
-                    <div class="value">12<span class="unit">MB</span></div>
-                </div>
-                <div class="metric-card">
-                    <div class="label">FPS</div>
-                    <div class="value">58<span class="unit">fps</span></div>
-                </div>
-                <h3 style="margin: 16px 4px 4px; font-size: 12px; color: var(--fg-dim); text-transform: uppercase;">Casovani snimku</h3>
-                <div class="chart-placeholder">
-                    <div class="chart-bar" style="height: 30%"></div>
-                    <div class="chart-bar" style="height: 45%"></div>
-                    <div class="chart-bar" style="height: 60%"></div>
-                    <div class="chart-bar" style="height: 35%"></div>
-                    <div class="chart-bar" style="height: 50%"></div>
-                    <div class="chart-bar" style="height: 95%; background: var(--warn)"></div>
-                    <div class="chart-bar" style="height: 40%"></div>
-                    <div class="chart-bar" style="height: 55%"></div>
-                    <div class="chart-bar" style="height: 70%"></div>
-                    <div class="chart-bar" style="height: 100%; background: var(--error)"></div>
-                    <div class="chart-bar" style="height: 45%"></div>
-                    <div class="chart-bar" style="height: 50%"></div>
-                    <div class="chart-bar" style="height: 60%"></div>
-                    <div class="chart-bar" style="height: 35%"></div>
-                    <div class="chart-bar" style="height: 50%"></div>
-                </div>
-                <h3 style="margin: 16px 4px 4px; font-size: 12px; color: var(--fg-dim); text-transform: uppercase;">Plamen volani</h3>
-                <div style="padding: 8px;">
-                    <div class="flame-row">
-                        <div class="flame-cell" style="width: 100%;">page load (2412ms)</div>
-                    </div>
-                    <div class="flame-row">
-                        <div class="flame-cell rendering" style="width: 20%;">parse HTML</div>
-                        <div class="flame-cell scripting" style="width: 35%;">script.js execute</div>
-                        <div class="flame-cell rendering" style="width: 25%;">layout + paint</div>
-                        <div class="flame-cell system" style="width: 20%;">idle</div>
-                    </div>
-                    <div class="flame-row">
-                        <div class="flame-cell rendering" style="width: 20%;">tokenize</div>
-                        <div class="flame-cell scripting" style="width: 18%;">parse</div>
-                        <div class="flame-cell scripting" style="width: 17%;">execute</div>
-                        <div class="flame-cell rendering" style="width: 10%;">cascade</div>
-                        <div class="flame-cell rendering" style="width: 15%;">layout</div>
-                        <div class="flame-cell painting" style="width: 8%;">paint</div>
-                        <div class="flame-cell system" style="width: 12%;">idle</div>
-                    </div>
-                </div>
+            <div style="padding: 20px; color: var(--fg-dim);">
+                <h3 style="color: var(--fg); margin-top: 0;">Vykon</h3>
+                <p>Performance.getMetrics + recording, frames timeline, flame graph.</p>
             </div>
         </div>
 
@@ -1950,23 +1573,6 @@ html, body {
             <div class="app-tree">
                 <div class="section">
                     <div class="section-header">Uloziste</div>
-                    <div class="app-item"><span class="icon"></span>Mistni uloziste</div>
-                    <div class="app-item active"><span class="icon"></span>Uloziste relace</div>
-                    <div class="app-item"><span class="icon"></span>IndexedDB</div>
-                    <div class="app-item"><span class="icon"></span>Cookies</div>
-                </div>
-                <div class="section">
-                    <div class="section-header">Cache</div>
-                    <div class="app-item"><span class="icon"></span>Cache Storage</div>
-                </div>
-                <div class="section">
-                    <div class="section-header">Pozadi</div>
-                    <div class="app-item"><span class="icon"></span>Service Workers</div>
-                    <div class="app-item"><span class="icon"></span>Manifest</div>
-                </div>
-                <div class="section">
-                    <div class="section-header">Ramy</div>
-                    <div class="app-item"><span class="icon"></span>top (1 puvod)</div>
                 </div>
             </div>
             <div class="app-body">
@@ -1983,11 +1589,7 @@ html, body {
                             <tr><th style="width: 30%">Klic</th><th>Hodnota</th></tr>
                         </thead>
                         <tbody>
-                            <tr><td>user_token</td><td>eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...</td></tr>
-                            <tr><td>preferences</td><td>{"theme":"dark","lang":"cs"}</td></tr>
-                            <tr><td>last_visit</td><td>2026-05-15T08:32:11Z</td></tr>
-                            <tr><td>cart_count</td><td>3</td></tr>
-                            <tr><td>session_id</td><td>sess_a8b3c9d2e1f4g5h6</td></tr>
+                            <!-- TODO: JS CDP wireup populate (Storage.* domain). -->
                         </tbody>
                     </table>
                 </div>
