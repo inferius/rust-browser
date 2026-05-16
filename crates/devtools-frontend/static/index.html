@@ -1830,10 +1830,12 @@ applyI18n(currentLang);
      =========================================================== -->
 <script>
 (function() {
+    console.log('[devtools wireup] start. window.cdp = ' + (typeof window.cdp));
     if (!window.cdp) {
         console.warn('[devtools] window.cdp not available - frontend bezi standalone (mockup mode)');
         return;
     }
+    console.log('[devtools wireup] cdp.send = ' + (typeof window.cdp.send));
 
     // ---------- INSPECTOR: DOM tree z DOM.getDocument ----------
     function renderDomTree() {
@@ -2067,7 +2069,9 @@ applyI18n(currentLang);
     }
 
     // Initial load.
+    console.log('[devtools wireup] calling renderDomTree()');
     renderDomTree();
+    console.log('[devtools wireup] init complete');
 })();
 </script>
 
