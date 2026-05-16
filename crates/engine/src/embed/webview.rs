@@ -205,6 +205,10 @@ pub struct WebView {
     pub(crate) prof_layout_ms: f32,
     pub(crate) prof_paint_ms: f32,
     pub(crate) prof_gpu_ms: f32,
+    /// Layout cache klic = (style_map Rc::as_ptr, viewport_w u32, viewport_h
+    /// u32, scroll_y rounded - pro sticky). Pri shode reuse last_layout_root
+    /// + skip layout_tree call (363ms drop na <1ms v debug).
+    pub(crate) layout_cache_key: Option<(usize, u32, u32, i32)>,
 }
 
 impl WebView {
@@ -265,6 +269,7 @@ impl WebView {
             prof_layout_ms: 0.0,
             prof_paint_ms: 0.0,
             prof_gpu_ms: 0.0,
+            layout_cache_key: None,
         }
     }
 
@@ -1450,10 +1455,27 @@ impl WebView {
         let prof_t1 = std::time::Instant::now();
         self.prof_cascade_ms = prof_t1.duration_since(prof_t0).as_secs_f32() * 1000.0;
 
-        // 2. Layout - compute boxes (po anim tick aby left/top/width keyframes
-        // ovlivnili layout pozice).
-        let mut layout_root = crate::browser::layout::layout_tree(
-            &doc.root, &style_map, viewport_w, viewport_h);
+        // 2. Layout cache - pres style_map Rc identitu + viewport + scroll
+        // (pro sticky). Pri shode reuse last_layout_root clone misto
+        // taffy + inline layout walk (363ms v debug).
+        // Cascade cache hit => stejny Rc<StyleMap> = stejny ptr. Bez cascade
+        // change layout je nevylacelny.
+        let layout_key = (
+            std::rc::Rc::as_ptr(&style_map) as usize,
+            (viewport_w as u32),
+            (viewport_h as u32),
+            self.scroll_y as i32,
+        );
+        let mut layout_root = if Some(layout_key) == self.layout_cache_key
+            && self.last_layout_root.is_some()
+        {
+            // Cache hit - reuse clone z predchoziho framu.
+            self.last_layout_root.as_ref().unwrap().clone()
+        } else {
+            self.layout_cache_key = Some(layout_key);
+            crate::browser::layout::layout_tree(
+                &doc.root, &style_map, viewport_w, viewport_h)
+        };
 
         // 2b. Sticky positioning post-process - position:sticky elementy
         // posunuju dle scroll_y aby drzeli na top viewportu uvnitr containeru.
