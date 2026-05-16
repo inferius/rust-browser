@@ -1613,126 +1613,31 @@ html, body {
 <script id="cdp-js"></script>
 
 <script>
-// Tab switching
-const tabs = document.querySelectorAll('.tab-strip .tab');
-const panels = document.querySelectorAll('.panel');
-tabs.forEach((tab, idx) => {
-    tab.addEventListener('click', () => {
-        tabs.forEach(t => t.classList.remove('active'));
-        tab.classList.add('active');
-        panels.forEach(p => p.classList.remove('active'));
-        const targetClass = tab.dataset.panel;
-        const target = document.querySelector('.panel.' + targetClass) || panels[idx];
-        if (target) target.classList.add('active');
-    });
-});
-
-// Layout pane side tabs
-document.querySelectorAll('.layout-tab').forEach(t => {
-    t.addEventListener('click', () => {
-        const target = t.dataset.side;
-        const parent = t.closest('.layout-pane');
-        if (!parent) return;
-        parent.querySelectorAll('.layout-tab').forEach(x => x.classList.remove('active'));
-        t.classList.add('active');
-        parent.querySelectorAll('.layout-body').forEach(b => {
-            b.style.display = b.dataset.sideBody === target ? '' : 'none';
-        });
-    });
-});
-
-// Layout collapse toggle
-const layoutPane = document.getElementById('layout-pane');
-const collapseBtn = document.getElementById('layout-collapse');
-collapseBtn.addEventListener('click', () => {
-    layoutPane.classList.toggle('collapsed');
-    const collapsed = layoutPane.classList.contains('collapsed');
-    collapseBtn.innerHTML = '<i data-lucide="' + (collapsed ? 'chevrons-left' : 'chevrons-right') + '" class="icon"></i>';
-    if (window.lucide) lucide.createIcons({ nameAttr: 'data-lucide', icons: window.lucide.icons });
-});
-
-// Layout sections collapse
-document.querySelectorAll('.layout-section-header').forEach(h => {
-    h.addEventListener('click', () => {
-        h.parentElement.classList.toggle('collapsed');
-    });
-});
-// Debug sections collapse
-document.querySelectorAll('.debug-section-header').forEach(h => {
-    h.addEventListener('click', () => {
-        h.parentElement.classList.toggle('collapsed');
-    });
-});
-
-// DOM node selection
-document.querySelectorAll('.dom-node').forEach(n => {
-    n.addEventListener('click', e => {
-        e.stopPropagation();
-        document.querySelectorAll('.dom-node').forEach(x => x.classList.remove('selected'));
-        n.classList.add('selected');
-    });
-});
-
-// Level toggles
-document.querySelectorAll('.level-toggle').forEach(t => {
-    t.addEventListener('click', () => {
-        const parent = t.parentElement;
-        parent.querySelectorAll('.level-toggle').forEach(x => x.classList.remove('active'));
-        t.classList.add('active');
-    });
-});
-
-// App tree items
-document.querySelectorAll('.app-item').forEach(i => {
-    i.addEventListener('click', () => {
-        document.querySelectorAll('.app-item').forEach(x => x.classList.remove('active'));
-        i.classList.add('active');
-    });
-});
-
-// Vertical splitters (resize horizontal)
-function setupVSplitter(splitter, leftSel, rightSel) {
-    const left = document.querySelector(leftSel);
-    const right = document.querySelector(rightSel);
-    let dragging = false;
-    let startX = 0;
-    let startLeftW = 0;
-    let startRightW = 0;
-    splitter.style.cursor = 'ew-resize';
-    splitter.addEventListener('mousedown', e => {
-        dragging = true;
-        startX = e.clientX;
-        startLeftW = left.getBoundingClientRect().width;
-        startRightW = right.getBoundingClientRect().width;
-        document.body.style.cursor = 'ew-resize';
-        e.preventDefault();
-    });
-    document.addEventListener('mousemove', e => {
-        if (!dragging) return;
-        const delta = e.clientX - startX;
-        const newLeft = Math.max(120, startLeftW + delta);
-        const newRight = Math.max(120, startRightW - delta);
-        if (left.classList.contains('dom-pane')) {
-            // dom-pane is flex:1, ne fixed width. Pri drag spis setni styles-pane width.
-        } else {
-            left.style.width = newLeft + 'px';
-        }
-        if (right.classList.contains('layout-pane') && right.classList.contains('collapsed')) {
-            // skip resize collapsed
-        } else {
-            right.style.width = newRight + 'px';
-            right.style.flexShrink = '0';
-        }
-    });
-    document.addEventListener('mouseup', () => {
-        dragging = false;
-        document.body.style.cursor = '';
-    });
+// Tab switching - minimal viable. Splitter / collapse / sections / app-tree
+// vyhozeno kvuli "RuntimeError: undefined neni funkce" v jednom z volani.
+// CDP wireup je primary - tab swap stacik.
+try {
+    var tabs = document.querySelectorAll('.tab-strip .tab');
+    var panels = document.querySelectorAll('.panel');
+    for (var i = 0; i < tabs.length; i++) {
+        (function(tab, idx) {
+            tab.addEventListener('click', function() {
+                for (var j = 0; j < tabs.length; j++) {
+                    tabs[j].classList.remove('active');
+                }
+                tab.classList.add('active');
+                for (var k = 0; k < panels.length; k++) {
+                    panels[k].classList.remove('active');
+                }
+                var targetClass = tab.dataset.panel;
+                var target = document.querySelector('.panel.' + targetClass) || panels[idx];
+                if (target) target.classList.add('active');
+            });
+        })(tabs[i], i);
+    }
+} catch (e) {
+    console.error('Tab swap init failed: ' + (e && e.message ? e.message : e));
 }
-setupVSplitter(document.getElementById('splitter-styles'), '.dom-pane', '.styles-pane');
-setupVSplitter(document.getElementById('splitter-layout'), '.styles-pane', '.layout-pane');
-
-// Vertical resize devtools - drop (shell ovlada vsku panelu pres splitter).
 </script>
 
 <!-- Lucide CDN - DROPPED. Fetch fails v shell devtools WV bez network setup
