@@ -558,8 +558,13 @@ impl WebView {
 
         // Phase 3: actual eval - znovu interp borrow.
         let interp = self.interpreter.as_mut().unwrap();
-        for (_url, src) in scripts {
+        for (url, src) in scripts {
             if src.trim().is_empty() { continue; }
+            // Debug: log script header pred eval (DIAG bug: parser/script error
+            // bez kontextu = nevime ktery script chyboval).
+            let preview = src.lines().next().unwrap_or("").chars().take(80).collect::<String>();
+            eprintln!("[run_script] url={} ({} bytes) line1: {}",
+                url, src.len(), preview);
             match Lexer::parse_str(&src, "<inline>") {
                 Ok(lex) => {
                     let tokens: Vec<_> = lex.tokens.into_iter()

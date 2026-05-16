@@ -1735,8 +1735,10 @@ setupVSplitter(document.getElementById('splitter-layout'), '.styles-pane', '.lay
 // Vertical resize devtools - drop (shell ovlada vsku panelu pres splitter).
 </script>
 
-<!-- Lucide icons CDN (offline-safe: gracefully degrades if unreachable) -->
-<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+<!-- Lucide CDN - DROPPED. Fetch fails v shell devtools WV bez network setup
+     a minifikovany single-line UMD je nas JS parser nezpracuje. Ikony zatim
+     nahrazeny ASCII unicode chars (chevron-down=v, chevron-right=>). -->
+<!-- <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script> -->
 
 <!-- i18n dictionary + applier -->
 <script>
