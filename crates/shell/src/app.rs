@@ -380,6 +380,7 @@ impl ShellApp {
             let json = args.first().map(|v| v.to_string()).unwrap_or_default();
             match serde_json::from_str::<DevtoolsRequest>(&json) {
                 Ok(req) => {
+                    eprintln!("[cdp send] id={} method={}", req.id, req.method);
                     req_q.borrow_mut().push_back(req);
                 }
                 Err(e) => eprintln!("[cdp send] parse err: {} (json: {})", e, json),
@@ -393,6 +394,7 @@ impl ShellApp {
             if q.is_empty() {
                 return Ok(JsValue::Str("[]".into()));
             }
+            eprintln!("[cdp poll] drain {} items", q.len());
             // Items v queue jsou uz JSON-serialized objekty. Slozit array:
             // "[<obj>,<obj>,...]"
             let mut out = String::from("[");
