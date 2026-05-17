@@ -1841,12 +1841,19 @@ fn layout_dispatch(bx: &mut LayoutBox) {
 }
 
 thread_local! {
-    // (block_calls, block_us, flex_calls, flex_us, grid_calls, grid_us)
+    // (block_calls, block_self_us, flex_calls, flex_self_us, grid_calls, grid_self_us)
+    // SELF-time = exclusive vuci rekurzi (odecet children dispatch time).
     static DISPATCH_STATS: std::cell::Cell<(u32, u128, u32, u128, u32, u128)>
         = const { std::cell::Cell::new((0, 0, 0, 0, 0, 0)) };
+    // Total children dispatch time akumulator pri kazde fn call. Stack-based:
+    // pred children loop = save = 0. Pri kazde recursion = pridat (child_total).
+    // Self_time = (total - children_total_v_teto_call).
+    static DISPATCH_CHILDREN_US: std::cell::Cell<u128>
+        = const { std::cell::Cell::new(0) };
 }
 pub fn reset_dispatch_stats() {
     DISPATCH_STATS.with(|c| c.set((0, 0, 0, 0, 0, 0)));
+    DISPATCH_CHILDREN_US.with(|c| c.set(0));
 }
 pub fn take_dispatch_stats() -> (u32, u128, u32, u128, u32, u128) {
     DISPATCH_STATS.with(|c| { let v = c.get(); c.set((0, 0, 0, 0, 0, 0)); v })
@@ -1856,31 +1863,38 @@ fn layout_dispatch_inner(bx: &mut LayoutBox) {
     // Auto-grow stack (deep DOM nesting -> deep flex/grid/block recursion).
     stacker::maybe_grow(32 * 1024, 8 * 1024 * 1024, || {
         let t0 = std::time::Instant::now();
+        let parent_children_us = DISPATCH_CHILDREN_US.with(|c| c.get());
+        // Mark "before call" - children_us = parent_count snapshot
+        DISPATCH_CHILDREN_US.with(|c| c.set(parent_children_us));
+        let snap_before = parent_children_us;
+
         match bx.display {
-            Display::Flex => {
-                layout_flex(bx);
-                let us = t0.elapsed().as_micros();
-                DISPATCH_STATS.with(|c| {
-                    let (bc, bu, fc, fu, gc, gu) = c.get();
-                    c.set((bc, bu, fc + 1, fu + us, gc, gu));
-                });
-            }
-            Display::Grid => {
-                super::layout_engine::grid::layout_grid(bx);
-                let us = t0.elapsed().as_micros();
-                DISPATCH_STATS.with(|c| {
-                    let (bc, bu, fc, fu, gc, gu) = c.get();
-                    c.set((bc, bu, fc, fu, gc + 1, gu + us));
-                });
-            }
-            _ => {
-                layout_block(bx);
-                let us = t0.elapsed().as_micros();
-                DISPATCH_STATS.with(|c| {
-                    let (bc, bu, fc, fu, gc, gu) = c.get();
-                    c.set((bc + 1, bu + us, fc, fu, gc, gu));
-                });
-            }
+            Display::Flex => layout_flex(bx),
+            Display::Grid => super::layout_engine::grid::layout_grid(bx),
+            _ => layout_block(bx),
+        }
+
+        let total_us = t0.elapsed().as_micros();
+        let after = DISPATCH_CHILDREN_US.with(|c| c.get());
+        // Children spent (after - snap_before). Self_time = total - children.
+        let children_us = after.saturating_sub(snap_before);
+        let self_us = total_us.saturating_sub(children_us);
+        // Pridat moji total k parent's children counter.
+        DISPATCH_CHILDREN_US.with(|c| c.set(after + total_us));
+
+        match bx.display {
+            Display::Flex => DISPATCH_STATS.with(|c| {
+                let (bc, bu, fc, fu, gc, gu) = c.get();
+                c.set((bc, bu, fc + 1, fu + self_us, gc, gu));
+            }),
+            Display::Grid => DISPATCH_STATS.with(|c| {
+                let (bc, bu, fc, fu, gc, gu) = c.get();
+                c.set((bc, bu, fc, fu, gc + 1, gu + self_us));
+            }),
+            _ => DISPATCH_STATS.with(|c| {
+                let (bc, bu, fc, fu, gc, gu) = c.get();
+                c.set((bc + 1, bu + self_us, fc, fu, gc, gu));
+            }),
         }
     });
 }
