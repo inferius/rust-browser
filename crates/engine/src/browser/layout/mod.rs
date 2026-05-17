@@ -1932,6 +1932,9 @@ fn reset_subtree_rect(bx: &mut LayoutBox) {
 }
 
 thread_local! {
+    // (call_count, total_cumulative_us) - cumul ZAHRNUJE recurse (each level
+    // sees subtree time). Pro avg per real-node = total / count je orientacni
+    // ale dvojity-counted. Lepsi je sirsi self-time tracking - TODO.
     static BUILD_BOX_STATS: std::cell::Cell<(u32, u128)> = const { std::cell::Cell::new((0, 0)) };
 }
 
