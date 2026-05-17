@@ -629,6 +629,14 @@ impl WebView {
         self.dirty = true;
         if size_changed {
             self.ensure_target_texture();
+            // BUG fix: realokace target_texture znamena ze stara texture s obsahem
+            // je dropped + new EMPTY texture alokovana. Vsechny paint/layout caches
+            // referenci ZASTARALY content -> seda plocha pri reuse.
+            // Invalidate paint cache aby pristim render full pipeline naplnil
+            // novou texturu.
+            self.last_paint_fingerprint = None;
+            self.layout_cache_key = None;
+            self.cascade_cache_key = None;
             // Dispatch window 'resize' event do JS po skutecne zmene size.
             if let Some(interp) = self.interpreter.as_mut() {
                 interp.dispatch_window_event("resize", crate::interpreter::JsValue::Undefined);
