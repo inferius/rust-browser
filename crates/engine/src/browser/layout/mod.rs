@@ -1931,7 +1931,34 @@ fn reset_subtree_rect(bx: &mut LayoutBox) {
     }
 }
 
+thread_local! {
+    static BUILD_BOX_STATS: std::cell::Cell<(u32, u128)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+pub fn reset_build_box_stats() {
+    BUILD_BOX_STATS.with(|c| c.set((0, 0)));
+}
+
+pub fn take_build_box_stats() -> (u32, u128) {
+    BUILD_BOX_STATS.with(|c| {
+        let v = c.get();
+        c.set((0, 0));
+        v
+    })
+}
+
 fn build_box_inner(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::cascade::PseudoStyleMap, counters: &mut HashMap<String, i32>) -> LayoutBox {
+    let t0 = std::time::Instant::now();
+    let r = build_box_inner_impl(node, style_map, pseudo_map, counters);
+    let elapsed_us = t0.elapsed().as_micros();
+    BUILD_BOX_STATS.with(|c| {
+        let (count, total) = c.get();
+        c.set((count + 1, total + elapsed_us));
+    });
+    r
+}
+
+fn build_box_inner_impl(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &super::cascade::PseudoStyleMap, counters: &mut HashMap<String, i32>) -> LayoutBox {
     // Debug breakpoint hook: BP_TAG/BP_ID/BP_CLASS env vars + IDE breakpoint na
     // `breakpoint_build` v src/debug_bp.rs.
     if crate::debug_bp::bp_enabled() {

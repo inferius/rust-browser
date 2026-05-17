@@ -1479,15 +1479,29 @@ impl Interpreter {
     pub fn drain_timers(&mut self) -> Result<(), JsError> {
         // Fast path - prazdne queue, zadny borrow needed.
         if self.task_queue.borrow().is_empty() { return Ok(()); }
+        let initial = self.task_queue.borrow().len();
+        let drain_start = std::time::Instant::now();
+        let mut count = 0;
         loop {
             let next = { self.task_queue.borrow().first().cloned() };
             match next {
                 None => break,
                 Some((_, cb, args)) => {
                     self.task_queue.borrow_mut().remove(0);
+                    let t0 = std::time::Instant::now();
                     self.call_function(cb, args, None)?;
+                    let elapsed = t0.elapsed().as_secs_f32() * 1000.0;
+                    count += 1;
+                    if elapsed > 50.0 {
+                        eprintln!("[DRAIN_TIMERS] cb#{} took {:.0}ms", count, elapsed);
+                    }
                 }
             }
+        }
+        let total_elapsed = drain_start.elapsed().as_secs_f32() * 1000.0;
+        if total_elapsed > 10.0 || initial > 1 {
+            eprintln!("[DRAIN_TIMERS] initial={} fired={} total={:.0}ms",
+                initial, count, total_elapsed);
         }
         Ok(())
     }
@@ -1510,8 +1524,17 @@ impl Interpreter {
             }
             due
         };
+        if !due.is_empty() {
+            eprintln!("[DRAIN_INTERVALS] {} intervals due (queue size {})",
+                due.len(), self.interval_queue.borrow().len());
+        }
         for (_idx, cb, args) in due {
+            let t0 = std::time::Instant::now();
             self.call_function(cb, args, None)?;
+            let elapsed = t0.elapsed().as_secs_f32() * 1000.0;
+            if elapsed > 10.0 {
+                eprintln!("[DRAIN_INTERVALS] cb took {:.0}ms", elapsed);
+            }
         }
         Ok(())
     }

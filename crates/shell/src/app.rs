@@ -432,6 +432,12 @@ impl ShellApp {
             let mut q = channel.req_queue.borrow_mut();
             q.drain(..).collect()
         };
+        // Diag: pri ne-prazdne req nebo resp queue, log per-pump status.
+        let resp_len = channel.resp_queue.borrow().len();
+        if !pending.is_empty() || resp_len > 0 {
+            eprintln!("[PUMP frame#{}] req_drain={} resp_queue_len={}",
+                self.frame_counter, pending.len(), resp_len);
+        }
         if pending.is_empty() && target.take_events().is_empty() {
             // Nothing to do. take_events musi probehnout pres ref - drain z
             // ABOVE smaze. Redundance: re-check po dispatch nize.

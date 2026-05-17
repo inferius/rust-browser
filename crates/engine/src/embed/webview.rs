@@ -1635,14 +1635,17 @@ impl WebView {
             // ze NEpomohl (lay 14s -> 15s). Subtree hash compute + cache
             // collect overhead spotrebovaval vic nez usetril. Pojdme zpet
             // a najit jiny culprit.
+            crate::browser::layout::reset_build_box_stats();
             let t = std::time::Instant::now();
             let r = crate::browser::layout::layout_tree(
                 &doc.root, &style_map, viewport_w, viewport_h);
             let elapsed = t.elapsed().as_secs_f32() * 1000.0;
             if elapsed > 100.0 {
                 let node_count = count_nodes(&doc.root);
-                eprintln!("[LAYOUT SLOW] {:.0}ms ({} nodes = {:.1}ms/node)",
-                    elapsed, node_count, elapsed / (node_count.max(1) as f32));
+                let (bb_count, bb_total_us) = crate::browser::layout::take_build_box_stats();
+                eprintln!("[LAYOUT SLOW] total:{:.0}ms ({} nodes = {:.1}ms/node) | build_box: {} calls, {:.1}ms cumulative",
+                    elapsed, node_count, elapsed / (node_count.max(1) as f32),
+                    bb_count, bb_total_us as f32 / 1000.0);
             }
             r
         };
