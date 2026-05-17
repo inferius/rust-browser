@@ -311,6 +311,16 @@ impl WebView {
             .unwrap_or(0)
     }
 
+    /// True pokud WV ma aktivni setInterval (cdp.js poll, anim loops).
+    /// Shell::redraw pak schedule next redraw - bez tohoto idle WV by
+    /// pollEvents nikdy nepokracoval (host stop request_redraw po prvnim
+    /// dirty=false render).
+    pub fn has_pending_intervals(&self) -> bool {
+        self.interpreter.as_ref()
+            .map(|i| !i.interval_queue.borrow().is_empty())
+            .unwrap_or(false)
+    }
+
     /// Posledni render_via per-phase timing (ms): (cascade, layout, paint, gpu).
     /// Pro diagnostiku - shell title bar nebo overlay.
     pub fn render_phase_times(&self) -> (f32, f32, f32, f32) {
@@ -1228,6 +1238,13 @@ impl WebView {
         if self.target_texture.is_none() {
             self.ensure_target_texture();
         }
+        // Drain periodicke setInterval callbacks PRED dirty skip - jinak pri
+        // idle frame interval bez efektu (cdp.js setInterval(pollEvents,250)
+        // potrebuje run i kdyz DOM unchanged). Callback mozna modify DOM ->
+        // dirty bump pres bump_dom_version -> dalsi check.
+        if let Some(interp) = self.interpreter.as_mut() {
+            let _ = interp.drain_intervals();
+        }
         // JS DOM mutation pres interp.bump_dom_version() (setAttribute,
         // appendChild, innerHTML, ...) - diff vs sledovany snapshot -> dirty.
         if let Some(interp) = &self.interpreter {
@@ -1318,6 +1335,9 @@ impl WebView {
         if let Some(interp) = self.interpreter.as_mut() {
             let _ = interp.drain_websockets();
             interp.drain_fetches();
+            // Periodicke setInterval callbacks (cdp.js setInterval pollEvents
+            // 250ms, anim frame loops, ...) - musi pumpovat per render frame.
+            let _ = interp.drain_intervals();
             let ts_ms = self.animation_origin.elapsed().as_secs_f64() * 1000.0;
             let _ = interp.drain_raf_callbacks(ts_ms);
         }

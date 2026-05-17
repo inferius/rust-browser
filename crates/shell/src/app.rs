@@ -1149,7 +1149,13 @@ html, body {{ margin: 0; padding: 0; height: 100%; background: #202124; color: #
                 window.set_title(&win_title);
             }
         }
-        if chrome_anim || page_anim || dev_anim {
+        // Trigger redraw pri active anim NEBO pending setInterval (CDP poll).
+        // Bez interval trigger by devtools po prvni dirty=false render zustal
+        // bez pollEvents -> CDP responses neviditelne -> DOM tree neviditelny.
+        let any_intervals = self.chrome.as_ref().map(|w| w.has_pending_intervals()).unwrap_or(false)
+            || self.webview.as_ref().map(|w| w.has_pending_intervals()).unwrap_or(false)
+            || self.devtools.as_ref().map(|w| w.has_pending_intervals()).unwrap_or(false);
+        if chrome_anim || page_anim || dev_anim || any_intervals {
             if let Some(w) = &self.window { w.request_redraw(); }
         }
     }

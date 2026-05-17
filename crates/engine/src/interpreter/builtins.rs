@@ -31,6 +31,7 @@ use super::builtins_helpers::{run_worker_thread, make_message_port, build_search
 pub fn setup_builtins(
     env: &Rc<RefCell<Environment>>,
     task_queue: &Rc<RefCell<Vec<(u32, JsValue, Vec<JsValue>)>>>,
+    interval_queue: &Rc<RefCell<Vec<super::IntervalEntry>>>,
     next_timer_id: &Rc<RefCell<u32>>,
     workers: &Rc<RefCell<HashMap<u32, super::WorkerState>>>,
     next_worker_id: &Rc<RefCell<u32>>,
@@ -2145,12 +2146,16 @@ pub fn setup_builtins(
         }));
     }
     {
-        let tq = Rc::clone(task_queue);
+        // setInterval - PERIODIC. Drzi se v interval_queue do clearInterval.
+        // Pre fixu (2026-05-17): pushovalo do task_queue jako setTimeout =
+        // bezelo 1x misto periodic. cdp.js setInterval(pollEvents, 250)
+        // pollnul jen jednou. DevTools nikdy nedostalo CDP responses.
+        let iq = Rc::clone(interval_queue);
         let id_ctr = Rc::clone(next_timer_id);
         e.define("setInterval", native("setInterval", move |a| {
             let mut iter = a.into_iter();
-            let cb   = iter.next().unwrap_or(JsValue::Undefined);
-            let _interval = iter.next();
+            let cb = iter.next().unwrap_or(JsValue::Undefined);
+            let interval_ms = iter.next().map(|v| v.to_number() as u64).unwrap_or(0);
             let args: Vec<JsValue> = iter.collect();
             let id = {
                 let mut ctr = id_ctr.borrow_mut();
@@ -2158,15 +2163,18 @@ pub fn setup_builtins(
                 *ctr += 1;
                 id
             };
-            tq.borrow_mut().push((id, cb, args));
+            iq.borrow_mut().push(super::IntervalEntry {
+                id, cb, args, interval_ms,
+                last_call: std::time::Instant::now(),
+            });
             Ok(JsValue::Number(id as f64))
         }));
     }
     {
-        let tq = Rc::clone(task_queue);
+        let iq = Rc::clone(interval_queue);
         e.define("clearInterval", native("clearInterval", move |a| {
             let id = a.into_iter().next().map(|v| v.to_number() as u32).unwrap_or(0);
-            tq.borrow_mut().retain(|(tid, _, _)| *tid != id);
+            iq.borrow_mut().retain(|e| e.id != id);
             Ok(JsValue::Undefined)
         }));
     }

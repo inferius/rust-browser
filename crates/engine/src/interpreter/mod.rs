@@ -551,9 +551,14 @@ pub struct Interpreter {
     /// Generator mode: Some = shromazduji yield hodnoty misto preruseni
     /// None = normalni rezim
     yield_buffer: Option<Vec<JsValue>>,
-    /// Fronta timeru pro setTimeout/setInterval (id, callback, args)
+    /// Fronta one-shot timeru pro setTimeout (id, callback, args).
+    /// drain_timers vola + REMOVE - kazdy task bezi 1x.
     task_queue: Rc<RefCell<Vec<(u32, JsValue, Vec<JsValue>)>>>,
-    /// Pocitadlo ID pro setTimeout/setInterval
+    /// Periodic intervaly pro setInterval. Drzi se do clearInterval volani.
+    /// drain_intervals vola cb pri uplynuti interval_ms od last_call, NEremove.
+    /// Format: (id, callback, args, interval_ms, last_call_instant).
+    pub(crate) interval_queue: Rc<RefCell<Vec<IntervalEntry>>>,
+    /// Pocitadlo ID pro setTimeout/setInterval (sdilene namespace).
     next_timer_id: Rc<RefCell<u32>>,
     /// Cache nactenych modulu: cesta -> namespace objekt s exporty
     /// Sdileny pres Rc, aby ho videly cizi/dynamicky importy.
@@ -671,6 +676,19 @@ pub type SharedDebugger = std::sync::Arc<std::sync::Mutex<DebuggerState>>;
 /// Continue signal pres Condvar - worker wait pri pause, UI notify pri klik.
 pub type ContinueSignal = std::sync::Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>;
 
+/// Periodic interval - drzi se v Interpreter.interval_queue do clearInterval.
+/// drain_intervals testuje uplynuti `interval_ms` od `last_call`. Pri >=
+/// vola `cb(args)` + updateuje `last_call`. NIKDY ne-remove sam (jen
+/// clearInterval).
+#[derive(Clone)]
+pub struct IntervalEntry {
+    pub id: u32,
+    pub cb: JsValue,
+    pub args: Vec<JsValue>,
+    pub interval_ms: u64,
+    pub last_call: std::time::Instant,
+}
+
 /// Debugger state - sdileny mezi Interpreter a UI (Renderer/devtools_panel).
 #[derive(Debug, Default)]
 pub struct DebuggerState {
@@ -750,6 +768,8 @@ impl Interpreter {
         let global = Environment::new_global();
         let task_queue: Rc<RefCell<Vec<(u32, JsValue, Vec<JsValue>)>>> =
             Rc::new(RefCell::new(Vec::new()));
+        let interval_queue: Rc<RefCell<Vec<IntervalEntry>>> =
+            Rc::new(RefCell::new(Vec::new()));
         let next_timer_id: Rc<RefCell<u32>> = Rc::new(RefCell::new(1));
         let workers: Rc<RefCell<HashMap<u32, WorkerState>>> =
             Rc::new(RefCell::new(HashMap::new()));
@@ -777,14 +797,14 @@ impl Interpreter {
         let next_raf_id: Rc<RefCell<u32>> = Rc::new(RefCell::new(1));
         let scroll_pos: Rc<RefCell<(f32, f32)>> = Rc::new(RefCell::new((0.0, 0.0)));
         setup_builtins(
-            &global, &task_queue, &next_timer_id, &workers, &next_worker_id,
+            &global, &task_queue, &interval_queue, &next_timer_id, &workers, &next_worker_id,
             &document, &console_log, &console_log_args, &network_log, &custom_elements,
             &mutation_observers, &websockets, &next_ws_id,
             &pending_fetches, &pending_xhr_callbacks,
             &raf_callbacks, &next_raf_id, &scroll_pos,
         );
         Interpreter {
-            global, yield_buffer: None, task_queue, next_timer_id,
+            global, yield_buffer: None, task_queue, interval_queue, next_timer_id,
             module_cache:    Rc::new(RefCell::new(HashMap::new())),
             virtual_modules: Rc::new(RefCell::new(HashMap::new())),
             current_exports: None,
@@ -1423,6 +1443,8 @@ impl Interpreter {
         };
         // Drain timer queue - spust vsechny setTimeout callbacky
         self.drain_timers()?;
+        // Drain periodicke setInterval callbacks (dle uplynuti interval_ms).
+        self.drain_intervals()?;
         // Drain XHR onload/onreadystatechange callbacky.
         self.drain_xhr_callbacks()?;
         // Worker + websocket sync: 50ms sleep dava worker threadum cas dorucit
@@ -1455,6 +1477,30 @@ impl Interpreter {
                     self.call_function(cb, args, None)?;
                 }
             }
+        }
+        Ok(())
+    }
+
+    /// Drain periodicke setInterval callbacks. Pro kazdy entry kdy uplynulo
+    /// >= interval_ms od last_call: zavolej cb + update last_call. Entry
+    /// nikdy NEremove (jen clearInterval).
+    /// Volat per frame z host (WebView::render_via, run loop).
+    pub fn drain_intervals(&mut self) -> Result<(), JsError> {
+        if self.interval_queue.borrow().is_empty() { return Ok(()); }
+        let now = std::time::Instant::now();
+        let due: Vec<(usize, JsValue, Vec<JsValue>)> = {
+            let mut q = self.interval_queue.borrow_mut();
+            let mut due = Vec::new();
+            for (idx, entry) in q.iter_mut().enumerate() {
+                if now.duration_since(entry.last_call).as_millis() as u64 >= entry.interval_ms {
+                    due.push((idx, entry.cb.clone(), entry.args.clone()));
+                    entry.last_call = now;
+                }
+            }
+            due
+        };
+        for (_idx, cb, args) in due {
+            self.call_function(cb, args, None)?;
         }
         Ok(())
     }
