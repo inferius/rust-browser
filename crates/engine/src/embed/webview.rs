@@ -1301,12 +1301,23 @@ impl WebView {
         if self.target_texture.is_none() {
             self.ensure_target_texture();
         }
-        // Drain periodicke setInterval callbacks PRED dirty skip - jinak pri
-        // idle frame interval bez efektu (cdp.js setInterval(pollEvents,250)
+        // Drain periodicke setInterval + task_queue PRED dirty skip - jinak
+        // pri idle frame interval bez efektu (cdp.js setInterval(pollEvents,250)
         // potrebuje run i kdyz DOM unchanged). Callback mozna modify DOM ->
         // dirty bump pres bump_dom_version -> dalsi check.
+        //
+        // BUG fix 2026-05-17: drain_timers byl AZ ZA dirty skip. Resolve native
+        // fn push then cb do task_queue ale dirty skip vyskocil pred drain_timers
+        // = 105+ frames cekani na mouse hover ktery dirty=true zpusobil. Mezi
+        // SEND a then() = 27s.
         if let Some(interp) = self.interpreter.as_mut() {
             let _ = interp.drain_intervals();
+            let _ = interp.drain_timers();
+            // Plus drain fetches + raf + xhr po setup pred render skip.
+            interp.drain_fetches();
+            let _ = interp.drain_websockets();
+            let ts_ms = self.animation_origin.elapsed().as_secs_f64() * 1000.0;
+            let _ = interp.drain_raf_callbacks(ts_ms);
         }
         // JS DOM mutation pres interp.bump_dom_version() (setAttribute,
         // appendChild, innerHTML, ...) - diff vs sledovany snapshot -> dirty.
@@ -1401,20 +1412,7 @@ impl WebView {
         // Drain interpreter event queues (WebSocket frames, fetch responses,
         // requestAnimationFrame callbacks). Vola se kdyz interpreter existuje
         // (Po polarity invert WebView vlastni interpreter; drive App).
-        if let Some(interp) = self.interpreter.as_mut() {
-            let _ = interp.drain_websockets();
-            interp.drain_fetches();
-            // Periodicke setInterval callbacks (cdp.js setInterval pollEvents
-            // 250ms, anim frame loops, ...) - musi pumpovat per render frame.
-            let _ = interp.drain_intervals();
-            // Drain microtask / setTimeout queue - Promise.resolve schedule
-            // then callbacks pres task_queue. Bez drain Promise.then() chain
-            // never volan. Klicovy bug DOM tree neviditelny - resolve volan
-            // ale callback nikdy.
-            let _ = interp.drain_timers();
-            let ts_ms = self.animation_origin.elapsed().as_secs_f64() * 1000.0;
-            let _ = interp.drain_raf_callbacks(ts_ms);
-        }
+        // (Drains uz probehly nad dirty skip - vyhozeno duplicitni.)
 
         // target_view borrow odlozen do paint pass (pred L2 allocator
         // potrebujeme mut borrow self pres ensure_layer_texture).
