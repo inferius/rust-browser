@@ -1452,6 +1452,14 @@ pub fn layout_tree_with_pseudo_cached(
             breakdown.push_str(&format!(" {}:{:.0}ms", label, ms));
         }
         eprintln!("[LAYOUT BREAKDOWN total:{:.0}ms]{}", total_ms, breakdown);
+        let (bc, bu, fc, fu, gc, gu) = take_dispatch_stats();
+        eprintln!("[LAYOUT DISPATCH STATS] block:{}calls/{:.0}ms flex:{}calls/{:.0}ms grid:{}calls/{:.0}ms",
+            bc, bu as f32 / 1000.0,
+            fc, fu as f32 / 1000.0,
+            gc, gu as f32 / 1000.0);
+    } else {
+        // Reset stats (auto_log path nebo fast path).
+        let _ = take_dispatch_stats();
     }
     layout_root
 }
@@ -1832,13 +1840,47 @@ fn layout_dispatch(bx: &mut LayoutBox) {
     bx.display = saved;
 }
 
+thread_local! {
+    // (block_calls, block_us, flex_calls, flex_us, grid_calls, grid_us)
+    static DISPATCH_STATS: std::cell::Cell<(u32, u128, u32, u128, u32, u128)>
+        = const { std::cell::Cell::new((0, 0, 0, 0, 0, 0)) };
+}
+pub fn reset_dispatch_stats() {
+    DISPATCH_STATS.with(|c| c.set((0, 0, 0, 0, 0, 0)));
+}
+pub fn take_dispatch_stats() -> (u32, u128, u32, u128, u32, u128) {
+    DISPATCH_STATS.with(|c| { let v = c.get(); c.set((0, 0, 0, 0, 0, 0)); v })
+}
+
 fn layout_dispatch_inner(bx: &mut LayoutBox) {
     // Auto-grow stack (deep DOM nesting -> deep flex/grid/block recursion).
     stacker::maybe_grow(32 * 1024, 8 * 1024 * 1024, || {
+        let t0 = std::time::Instant::now();
         match bx.display {
-            Display::Flex => layout_flex(bx),
-            Display::Grid => super::layout_engine::grid::layout_grid(bx),
-            _ => layout_block(bx),
+            Display::Flex => {
+                layout_flex(bx);
+                let us = t0.elapsed().as_micros();
+                DISPATCH_STATS.with(|c| {
+                    let (bc, bu, fc, fu, gc, gu) = c.get();
+                    c.set((bc, bu, fc + 1, fu + us, gc, gu));
+                });
+            }
+            Display::Grid => {
+                super::layout_engine::grid::layout_grid(bx);
+                let us = t0.elapsed().as_micros();
+                DISPATCH_STATS.with(|c| {
+                    let (bc, bu, fc, fu, gc, gu) = c.get();
+                    c.set((bc, bu, fc, fu, gc + 1, gu + us));
+                });
+            }
+            _ => {
+                layout_block(bx);
+                let us = t0.elapsed().as_micros();
+                DISPATCH_STATS.with(|c| {
+                    let (bc, bu, fc, fu, gc, gu) = c.get();
+                    c.set((bc + 1, bu + us, fc, fu, gc, gu));
+                });
+            }
         }
     });
 }
