@@ -1868,9 +1868,10 @@ applyI18n(currentLang);
             domTree.textContent = ''; // clear, no innerHTML parse
             var t4 = nowMs();
             console.log('[PROF] clear domTree: ' + (t4-t3) + 'ms');
+            __renderNodeCount = 0;
             renderNode(result.root, domTree, 0);
             var t5 = nowMs();
-            console.log('[PROF] renderNode recursion (' + totalNodes + ' nodes): ' + (t5-t4) + 'ms');
+            console.log('[PROF] renderNode TOTAL: ' + (t5-t4) + 'ms, nodes_emitted=' + __renderNodeCount);
             console.log('[PROF] TOTAL renderDomTree: ' + (t5-t0) + 'ms');
         }).catch(function(e) {
             console.log('[renderDomTree] CDP error: ' + (e && e.message ? e.message : e));
@@ -1887,7 +1888,14 @@ applyI18n(currentLang);
         return s;
     }
 
+    var __renderNodeCount = 0;
+    var __renderNodeT0 = 0;
     function renderNode(node, container, depth) {
+        if (__renderNodeCount === 0) __renderNodeT0 = Date.now();
+        __renderNodeCount++;
+        if (__renderNodeCount % 500 === 0) {
+            console.log('[renderNode] N=' + __renderNodeCount + ' elapsed=' + (Date.now() - __renderNodeT0) + 'ms');
+        }
         const div = document.createElement('div');
         div.className = 'dom-node';
         div.style.paddingLeft = (6 + depth * 16) + 'px';

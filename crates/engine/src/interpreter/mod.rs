@@ -1053,6 +1053,12 @@ impl Interpreter {
         // Bump DOM mutation counter - DevTools host pak vidi zmenu a rebuilds
         // Elements tree. Bump i kdyz nejsou observery, kvuli devtools sync.
         self.bump_dom_version();
+        // Diag: cumulative mutation count per Interpreter instance.
+        let v = self.dom_version.get();
+        if v % 1000 == 0 && v > 0 {
+            eprintln!("[DOM MUT] {} mutations cumulative (target {} type={})", v,
+                target.tag_name_ref().unwrap_or("?"), record_type);
+        }
         let target_ptr = Rc::as_ptr(target) as usize;
         let observers: Vec<(JsValue, JsValue)> = self.mutation_observers.borrow().iter()
             .filter(|(obs_ptr, _, _, subtree)| {

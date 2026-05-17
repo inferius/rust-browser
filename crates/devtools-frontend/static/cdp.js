@@ -96,11 +96,14 @@
     // - item.id numeric -> resolve/reject pres pendingRequests
     function pollEvents() {
         try {
+            var pt0 = Date.now();
             const eventsJson = __rwe_cdp_poll_events();
+            var pt1 = Date.now();
             if (!eventsJson || eventsJson === '[]') return;
-            console.log('[pollEvents] raw json (first 200): ' + eventsJson.substring(0, 200));
+            console.log('[pollEvents] poll_native:' + (pt1-pt0) + 'ms json_size=' + eventsJson.length);
             const items = JSON.parse(eventsJson);
-            console.log('[pollEvents] parsed ' + items.length + ' items');
+            var pt2 = Date.now();
+            console.log('[pollEvents] JSON.parse:' + (pt2-pt1) + 'ms items=' + items.length);
             for (var i = 0; i < items.length; i++) {
                 const item = items[i];
                 console.log('[pollEvents] item ' + i + ': method=' + item.method + ' id=' + item.id + ' typeof_id=' + (typeof item.id));
