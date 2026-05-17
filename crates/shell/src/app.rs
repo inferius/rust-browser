@@ -273,6 +273,8 @@ pub struct ShellApp {
     last_chrome_ms: f32,
     last_page_ms: f32,
     last_dev_ms: f32,
+    /// Frame counter pro debug log per-frame.
+    frame_counter: u64,
 
     mouse_x: f32,
     mouse_y: f32,
@@ -322,6 +324,7 @@ impl ShellApp {
             last_chrome_ms: 0.0,
             last_page_ms: 0.0,
             last_dev_ms: 0.0,
+            frame_counter: 0,
             mouse_x: 0.0,
             mouse_y: 0.0,
             modifiers: winit::keyboard::ModifiersState::empty(),
@@ -380,10 +383,10 @@ impl ShellApp {
             let json = args.first().map(|v| v.to_string()).unwrap_or_default();
             match serde_json::from_str::<DevtoolsRequest>(&json) {
                 Ok(req) => {
-                    eprintln!("[cdp send] id={} method={}", req.id, req.method);
+                    eprintln!("[CDP SEND] id={} method={} (queued)", req.id, req.method);
                     req_q.borrow_mut().push_back(req);
                 }
-                Err(e) => eprintln!("[cdp send] parse err: {} (json: {})", e, json),
+                Err(e) => eprintln!("[CDP SEND] parse err: {} (json: {})", e, json),
             }
             Ok(JsValue::Str(String::new()))
         });
@@ -394,7 +397,7 @@ impl ShellApp {
             if q.is_empty() {
                 return Ok(JsValue::Str("[]".into()));
             }
-            eprintln!("[cdp poll] drain {} items", q.len());
+            eprintln!("[CDP POLL] drain {} items (queued in resp_queue)", q.len());
             // Items v queue jsou uz JSON-serialized objekty. Slozit array:
             // "[<obj>,<obj>,...]"
             let mut out = String::from("[");
@@ -437,6 +440,7 @@ impl ShellApp {
         for req in pending {
             let req_id = req.id;
             let req_method = req.method.clone();
+            let t_dispatch_start = std::time::Instant::now();
             // Shell-side intercept: Debugger.getScriptSource - sources nejsou
             // v WebView, drzi je shell.cdp_sources_cache.
             let resp = if req.method == "Debugger.getScriptSource" {
@@ -463,10 +467,14 @@ impl ShellApp {
             } else {
                 target.handle_request(page, req)
             };
+            let t_handle_done = std::time::Instant::now();
             let json = serde_json::to_string(&resp)
                 .unwrap_or_else(|e| format!("{{\"error\":\"serialize: {e}\"}}"));
-            println!("[cdp dispatch] id={} method={} resp_len={}",
-                req_id, req_method, json.len());
+            let t_serialize_done = std::time::Instant::now();
+            let handle_ms = t_handle_done.duration_since(t_dispatch_start).as_secs_f32() * 1000.0;
+            let serialize_ms = t_serialize_done.duration_since(t_handle_done).as_secs_f32() * 1000.0;
+            eprintln!("[CDP DISPATCH] id={} method={} handle:{:.1}ms serialize:{:.1}ms resp_len={}",
+                req_id, req_method, handle_ms, serialize_ms, json.len());
             channel.resp_queue.borrow_mut().push_back(json);
         }
         // Drain pending events (z target.events) - push do resp_queue.
@@ -1063,12 +1071,19 @@ html, body {{ margin: 0; padding: 0; height: 100%; background: #202124; color: #
         if self.frame_times_ms.len() >= 30 { self.frame_times_ms.pop_front(); }
         self.frame_times_ms.push_back(dt);
 
+        // STRUCT LOG: per-frame breakdown kdyz frame trva > 50ms (slow frame).
+        let t_frame_start = now;
+        let frame_idx = self.frame_counter;
+        self.frame_counter = self.frame_counter.wrapping_add(1);
+
         // Drain chrome bar command queue (back/fwd/navigate/reload).
         self.drain_chrome_cmds();
+        let t_chrome_drain = std::time::Instant::now();
         // CDP pump pred render - drain pending requests + push responses.
         if self.devtools_visible {
             self.pump_cdp();
         }
+        let t_pump_cdp = std::time::Instant::now();
         let renderer = match &mut self.renderer { Some(r) => r, None => return };
 
         // Render vsech 3 WebViews do jejich offscreen RT (field-disjoint mut).
@@ -1151,13 +1166,28 @@ html, body {{ margin: 0; padding: 0; height: 100%; background: #202124; color: #
             }
         }
         // Trigger redraw pri active anim NEBO pending setInterval (CDP poll).
-        // Bez interval trigger by devtools po prvni dirty=false render zustal
-        // bez pollEvents -> CDP responses neviditelne -> DOM tree neviditelny.
         let any_intervals = self.chrome.as_ref().map(|w| w.has_pending_intervals()).unwrap_or(false)
             || self.webview.as_ref().map(|w| w.has_pending_intervals()).unwrap_or(false)
             || self.devtools.as_ref().map(|w| w.has_pending_intervals()).unwrap_or(false);
         if chrome_anim || page_anim || dev_anim || any_intervals {
             if let Some(w) = &self.window { w.request_redraw(); }
+        }
+
+        // STRUCT LOG: slow frame trace (>50ms). Vsechny stage cas.
+        let t_end = std::time::Instant::now();
+        let total_ms = t_end.duration_since(t_frame_start).as_secs_f32() * 1000.0;
+        if total_ms > 50.0 {
+            let chrome_drain_ms = t_chrome_drain.duration_since(t_frame_start).as_secs_f32() * 1000.0;
+            let pump_ms = t_pump_cdp.duration_since(t_chrome_drain).as_secs_f32() * 1000.0;
+            eprintln!("[FRAME #{} SLOW {:.0}ms] chrome_drain:{:.1} pump_cdp:{:.1} chrome_render:{:.1} page_render:{:.1} dev_render:{:.1} dev_phases(cas/lay/pnt/gpu):{:.1}/{:.1}/{:.1}/{:.1}",
+                frame_idx, total_ms,
+                chrome_drain_ms, pump_ms,
+                self.last_chrome_ms, self.last_page_ms, self.last_dev_ms,
+                self.devtools.as_ref().map(|w| w.render_phase_times().0).unwrap_or(0.0),
+                self.devtools.as_ref().map(|w| w.render_phase_times().1).unwrap_or(0.0),
+                self.devtools.as_ref().map(|w| w.render_phase_times().2).unwrap_or(0.0),
+                self.devtools.as_ref().map(|w| w.render_phase_times().3).unwrap_or(0.0),
+            );
         }
     }
 
