@@ -1038,7 +1038,23 @@ impl Interpreter {
                                             Ok(JsValue::Object(Rc::clone(&obj_rc2)))
                                         }
                                     }
-                                    _ => Ok(JsValue::Object(Rc::clone(&obj_rc2))),
+                                    _ => {
+                                        // PENDING: ulozit (on_fulfilled, on_rejected, child)
+                                        // do __pending_callbacks__. Resolve/reject native
+                                        // pak drain + schedule pres task_queue.
+                                        // BUG fix 2026-05-17: drive nase then() pending
+                                        // zahodil callback -> Promise nikdy nedosla then().
+                                        let pending = {
+                                            let o = obj_rc2.borrow();
+                                            o.props.get("__pending_callbacks__").cloned()
+                                        };
+                                        if let Some(JsValue::Array(arr)) = pending {
+                                            let triple = vec![on_fulfilled, on_rejected, JsValue::Undefined];
+                                            arr.borrow_mut().push(JsValue::Array(
+                                                Rc::new(RefCell::new(triple))));
+                                        }
+                                        Ok(JsValue::Object(Rc::clone(&obj_rc2)))
+                                    }
                                 };
                             }
                             "catch" => {

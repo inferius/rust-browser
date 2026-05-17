@@ -239,28 +239,85 @@ impl Interpreter {
         let mut obj = JsObject::new();
         obj.set("__promise_state__".into(), JsValue::Str("pending".into()));
         obj.set("__promise_value__".into(), JsValue::Undefined);
+        // Pending callbacks: array s entries [(on_fulfilled, on_rejected, child_promise), ...]
+        // Pri then() pending: push entry. Pri resolve/reject: drain + call.
+        obj.set("__pending_callbacks__".into(),
+            JsValue::Array(Rc::new(RefCell::new(Vec::new()))));
         let obj_rc = Rc::new(RefCell::new(obj));
 
         let executor = args.into_iter().next().unwrap_or(JsValue::Undefined);
         if matches!(executor, JsValue::Function(_)) {
             // Vytvor resolve/reject closures ktere zachyti Rc<RefCell<JsObject>>
+            // Resolve/reject mutuje state + value + DRAIN pending callbacks.
+            // (Pending callbacks scheduling = task_queue push, real call az
+            // event loop. Pro nasi sync interpreter scheduling = call inline.)
             let obj_rc_r = Rc::clone(&obj_rc);
+            let tq = Rc::clone(&self.task_queue);
+            let id_ctr = Rc::clone(&self.next_timer_id);
             let resolve = native("resolve", move |a| {
                 let val = a.into_iter().next().unwrap_or(JsValue::Undefined);
-                let mut o = obj_rc_r.borrow_mut();
-                if matches!(o.props.get("__promise_state__"), Some(JsValue::Str(s)) if s == "pending") {
+                let pending = {
+                    let mut o = obj_rc_r.borrow_mut();
+                    if !matches!(o.props.get("__promise_state__"), Some(JsValue::Str(s)) if s == "pending") {
+                        return Ok(JsValue::Undefined);
+                    }
                     o.set("__promise_state__".into(), JsValue::Str("fulfilled".into()));
-                    o.set("__promise_value__".into(), val);
+                    o.set("__promise_value__".into(), val.clone());
+                    match o.props.get("__pending_callbacks__").cloned() {
+                        Some(JsValue::Array(arr)) => arr,
+                        _ => Rc::new(RefCell::new(Vec::new())),
+                    }
+                };
+                // Drain pending callbacks: kazdy [on_fulfilled, _, _] schedule
+                // pres task_queue (microtask emulation - bezi pres drain_timers).
+                let cbs: Vec<JsValue> = pending.borrow().clone();
+                for entry in cbs {
+                    if let JsValue::Array(a3) = entry {
+                        let triple = a3.borrow().clone();
+                        if let Some(on_f) = triple.first().cloned() {
+                            if matches!(on_f, JsValue::Function(_)) {
+                                let id = {
+                                    let mut ctr = id_ctr.borrow_mut();
+                                    let id = *ctr; *ctr += 1; id
+                                };
+                                tq.borrow_mut().push((id, on_f, vec![val.clone()]));
+                            }
+                        }
+                    }
                 }
                 Ok(JsValue::Undefined)
             });
             let obj_rc_j = Rc::clone(&obj_rc);
+            let tq2 = Rc::clone(&self.task_queue);
+            let id_ctr2 = Rc::clone(&self.next_timer_id);
             let reject = native("reject", move |a| {
                 let val = a.into_iter().next().unwrap_or(JsValue::Undefined);
-                let mut o = obj_rc_j.borrow_mut();
-                if matches!(o.props.get("__promise_state__"), Some(JsValue::Str(s)) if s == "pending") {
+                let pending = {
+                    let mut o = obj_rc_j.borrow_mut();
+                    if !matches!(o.props.get("__promise_state__"), Some(JsValue::Str(s)) if s == "pending") {
+                        return Ok(JsValue::Undefined);
+                    }
                     o.set("__promise_state__".into(), JsValue::Str("rejected".into()));
-                    o.set("__promise_value__".into(), val);
+                    o.set("__promise_value__".into(), val.clone());
+                    match o.props.get("__pending_callbacks__").cloned() {
+                        Some(JsValue::Array(arr)) => arr,
+                        _ => Rc::new(RefCell::new(Vec::new())),
+                    }
+                };
+                let cbs: Vec<JsValue> = pending.borrow().clone();
+                for entry in cbs {
+                    if let JsValue::Array(a3) = entry {
+                        let triple = a3.borrow().clone();
+                        if let Some(on_r) = triple.get(1).cloned() {
+                            if matches!(on_r, JsValue::Function(_)) {
+                                let id = {
+                                    let mut ctr = id_ctr2.borrow_mut();
+                                    let id = *ctr; *ctr += 1; id
+                                };
+                                tq2.borrow_mut().push((id, on_r, vec![val.clone()]));
+                            }
+                        }
+                    }
                 }
                 Ok(JsValue::Undefined)
             });
