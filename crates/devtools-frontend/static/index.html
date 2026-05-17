@@ -1838,28 +1838,42 @@ applyI18n(currentLang);
     console.log('[devtools wireup] cdp.send = ' + (typeof window.cdp.send));
 
     // ---------- INSPECTOR: DOM tree z DOM.getDocument ----------
+    // Perf timing: zachyt kde 14s zere (CDP roundtrip / renderNode recursion / paint).
+    function nowMs() {
+        try { return Date.now(); } catch (e) { return 0; }
+    }
+    function countNodes(n) {
+        var c = 1;
+        var kids = n.children || [];
+        for (var i = 0; i < kids.length; i++) c += countNodes(kids[i]);
+        return c;
+    }
     function renderDomTree() {
-        console.log('[renderDomTree] entry');
-        var domTree = document.querySelector('.inspector-body .dom-tree');
-        console.log('[renderDomTree] inspector-body .dom-tree = ' + (domTree ? 'found' : 'null'));
-        if (!domTree) {
-            // Fallback: zkus jen `.dom-tree`.
-            domTree = document.querySelector('.dom-tree');
-            console.log('[renderDomTree] .dom-tree = ' + (domTree ? 'found' : 'null'));
-        }
+        var t0 = nowMs();
+        var domTree = document.querySelector('.dom-tree');
         if (!domTree) {
             console.warn('[renderDomTree] dom-tree element neexistuje');
             return;
         }
-        domTree.innerHTML = '<div style="padding:8px;color:#737378">Loading DOM...</div>';
-        console.log('[renderDomTree] calling cdp.send');
+        var t1 = nowMs();
+        console.log('[PROF] querySelector: ' + (t1-t0) + 'ms');
+        console.log('[PROF] cdp.send DOM.getDocument...');
         window.cdp.send('DOM.getDocument', { depth: -1 }).then(function(result) {
-            console.log('[renderDomTree] CDP response received');
-            domTree.innerHTML = '';
+            var t2 = nowMs();
+            console.log('[PROF] CDP roundtrip (send -> response): ' + (t2-t1) + 'ms');
+            var totalNodes = countNodes(result.root);
+            console.log('[PROF] DOM nodes to render: ' + totalNodes);
+            var t3 = nowMs();
+            console.log('[PROF] countNodes walk: ' + (t3-t2) + 'ms');
+            domTree.textContent = ''; // clear, no innerHTML parse
+            var t4 = nowMs();
+            console.log('[PROF] clear domTree: ' + (t4-t3) + 'ms');
             renderNode(result.root, domTree, 0);
+            var t5 = nowMs();
+            console.log('[PROF] renderNode recursion (' + totalNodes + ' nodes): ' + (t5-t4) + 'ms');
+            console.log('[PROF] TOTAL renderDomTree: ' + (t5-t0) + 'ms');
         }).catch(function(e) {
             console.log('[renderDomTree] CDP error: ' + (e && e.message ? e.message : e));
-            domTree.innerHTML = '<div style="padding:8px;color:#ff6b6b">Error: ' + (e && e.message ? e.message : e) + '</div>';
         });
     }
 
