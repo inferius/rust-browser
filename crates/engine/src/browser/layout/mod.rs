@@ -4227,7 +4227,27 @@ pub fn measure_text_width_weight(text: &str, font_size: f32, weight: u32, italic
 /// kazdeho char vc. trailing (Chrome chovani). Volajte z paint/layout pres
 /// box.letter_spacing.
 pub fn measure_text_width_full(text: &str, font_size: f32, weight: u32, italic: bool, family: &str, letter_spacing: f32) -> f32 {
-    shape_text_advances(text, font_size, weight, italic, family, letter_spacing).total_width
+    // Cache pres (text, font_size, weight, italic, family, letter_spacing).
+    // Mass calls v inline flush vyhledava na stejny text+font opakovane.
+    // Layout 12.7s v debug = mass shape_text_advances calls iterujici chars.
+    // Cache hit = O(1) HashMap lookup misto iterace pres chars + advance.
+    use std::cell::RefCell;
+    thread_local! {
+        static MEASURE_CACHE: RefCell<std::collections::HashMap<(String, u32, u32, bool, String, u32), f32, ahash::RandomState>>
+            = RefCell::new(std::collections::HashMap::with_hasher(ahash::RandomState::new()));
+    }
+    let key = (text.to_string(), font_size.to_bits(), weight, italic, family.to_string(), letter_spacing.to_bits());
+    if let Some(v) = MEASURE_CACHE.with(|c| c.borrow().get(&key).copied()) {
+        return v;
+    }
+    let v = shape_text_advances(text, font_size, weight, italic, family, letter_spacing).total_width;
+    MEASURE_CACHE.with(|c| {
+        let mut m = c.borrow_mut();
+        // Limit size aby cache nerostla nekonecne (huge unique texts).
+        if m.len() >= 10000 { m.clear(); }
+        m.insert(key, v);
+    });
+    v
 }
 
 /// Vysledek shape_text_advances - per-char advance + total width.
