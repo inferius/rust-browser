@@ -226,6 +226,15 @@ pub struct WebView {
     pub(crate) last_paint_fingerprint: Option<u64>,
 }
 
+/// Pomocnik pro debug log node count v layout slow path.
+fn count_nodes(node: &std::rc::Rc<crate::browser::dom::NodeData>) -> usize {
+    let mut c = 1;
+    for child in node.children.borrow().iter() {
+        c += count_nodes(child);
+    }
+    c
+}
+
 /// Per-layer texture slot v WebView cache. L2 compositor foundation.
 pub struct LayerTextureSlot {
     pub texture: wgpu::Texture,
@@ -1622,16 +1631,20 @@ impl WebView {
             self.last_layout_root.as_ref().unwrap().clone()
         } else {
             self.layout_cache_key = Some(layout_key);
-            // Pri cache miss pouzij prev_root subtree caching - rebuild
-            // jen subtrees jejichz fingerprint se zmenil. Bez tohoto pri
-            // DOM mutace (devtools renderDomTree appendChild N times)
-            // = full layout walk pres celou tree O(N) per element CSS
-            // parsing = 14+ sekund v debug pri ~300 elementu.
-            let empty_pseudo = crate::browser::cascade::PseudoStyleMap::new();
-            crate::browser::layout::layout_tree_with_pseudo_cached(
-                &doc.root, &style_map, &empty_pseudo,
-                viewport_w, viewport_h,
-                self.last_layout_root.as_ref())
+            // Rollback layout_tree_with_pseudo_cached - testovani ukazalo
+            // ze NEpomohl (lay 14s -> 15s). Subtree hash compute + cache
+            // collect overhead spotrebovaval vic nez usetril. Pojdme zpet
+            // a najit jiny culprit.
+            let t = std::time::Instant::now();
+            let r = crate::browser::layout::layout_tree(
+                &doc.root, &style_map, viewport_w, viewport_h);
+            let elapsed = t.elapsed().as_secs_f32() * 1000.0;
+            if elapsed > 100.0 {
+                let node_count = count_nodes(&doc.root);
+                eprintln!("[LAYOUT SLOW] {:.0}ms ({} nodes = {:.1}ms/node)",
+                    elapsed, node_count, elapsed / (node_count.max(1) as f32));
+            }
+            r
         };
 
         // 2b. Sticky positioning post-process - position:sticky elementy
