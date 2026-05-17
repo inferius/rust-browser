@@ -199,6 +199,11 @@ pub struct WebView {
     /// invalidoval cascade cache vsech ostatnich. Per-WV stav fixuje.
     /// Pred cascade_with_viewport call se thread_local set z tohoto fieldu.
     pub(crate) hovered_node_local: Option<usize>,
+    /// P2 hover invalidation set - per node_ptr ktery je ovlivnen :hover rule.
+    /// Pri mouse_move check zda prev/new hovered v setu. Pokud NEN0 -
+    /// skip dirty=true -> cascade cache hit -> 0 work.
+    /// Rebuild po load_html (CSS muze prinest nove :hover).
+    pub(crate) hover_affected_set: std::collections::HashSet<usize>,
     /// Profilovaci timery posledniho render_via (ms). Sledovat ktera faze
     /// je drahy. Public read pro host (shell title bar).
     pub(crate) prof_cascade_ms: f32,
@@ -300,6 +305,7 @@ impl WebView {
             cascade_cache_value: None,
             hit_test_cache: None,
             hovered_node_local: None,
+            hover_affected_set: std::collections::HashSet::new(),
             prof_cascade_ms: 0.0,
             prof_layout_ms: 0.0,
             prof_paint_ms: 0.0,
@@ -472,8 +478,16 @@ impl WebView {
         };
 
         self.title = doc.title.clone();
+        let doc_root_clone = std::rc::Rc::clone(&doc.root);
         self.document = Some(doc);
         self.stylesheets = vec![stylesheet];
+        // P2 hover invalidation set - build pres new stylesheets + DOM.
+        // Pri mouse_move host kontroluje zda hovered v set. Pokud NE - skip
+        // dirty -> cascade reuse cache. Pres mass :hover v devtools-frontend
+        // (24x) mass hover events ne-affected nodes = no cascade walks.
+        self.hover_affected_set = crate::browser::cascade::collect_hover_affected_set(
+            &doc_root_clone, &self.stylesheets);
+        eprintln!("[HOVER SET] {} affected nodes", self.hover_affected_set.len());
         self.base_url = base_url.clone();
         self.interpreter = Some(interp);
         self.dirty = true;
@@ -813,10 +827,24 @@ impl WebView {
                     };
                     // Per-WebView hovered. Bez per-WV stav by mouse_move v
                     // jine WV invalidoval cascade cache teto WV (thread_local).
+                    // P2 fix: dirty=true JEN POKUD prev nebo new hovered ma
+                    // :hover effect (v hover_affected_set). Bez tohoto mass
+                    // mouse_move pres devtools-frontend (5857 nodes) =
+                    // mass cascade walks (60ms/walk) i kdyz hover effect je
+                    // jen na nekolik elementu.
                     if self.hovered_node_local != hovered_id {
+                        let prev_id = self.hovered_node_local;
                         self.hovered_node_local = hovered_id;
-                        self.dirty = true;
-                        response.dirty = true;
+                        let prev_affected = prev_id
+                            .map(|p| self.hover_affected_set.contains(&p))
+                            .unwrap_or(false);
+                        let new_affected = hovered_id
+                            .map(|n| self.hover_affected_set.contains(&n))
+                            .unwrap_or(false);
+                        if prev_affected || new_affected {
+                            self.dirty = true;
+                            response.dirty = true;
+                        }
                     }
                     if self.open_select.is_some() {
                         self.dirty = true;

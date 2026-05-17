@@ -344,6 +344,70 @@ fn logical_shorthand_pair(prop: &str) -> Option<(&'static str, &'static str)> {
 /// Mapa: pointer na Node -> computed styles.
 pub type StyleMap = HashMap<usize, HashMap<String, String>>;
 
+/// Hover invalidation set - per element node_ptr ktery je ovlivnen aspon
+/// jednim `:hover` selectorem (pri :hover state by zmenil style).
+/// Pri mouse_move zmena hovered, host kontroluje zda prev/new hovered v setu.
+/// Pokud NEN0 - skipne dirty=true -> cascade cache hit -> 0 work.
+///
+/// Buduje pres walk DOM + per node test "matches selektor BEZ :hover pseudo".
+/// Pokud match -> :hover state nad timto nodem by aplikoval styl -> add to set.
+pub fn collect_hover_affected_set(
+    root: &Rc<Node>,
+    stylesheets: &[super::css_parser::Stylesheet],
+) -> std::collections::HashSet<usize> {
+    let mut affected: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    // Sber vsech selektoru s :hover pseudo class v rightmost simple part.
+    // (Descendant cases `.parent:hover .child` rovnez ovlivnuje child - to
+    // by pri prvni iter mohlo unikat. Pro now matchnem JEN selektory s
+    // :hover na rightmost = own pseudo.)
+    let mut hover_sels: Vec<&super::css_parser::Selector> = Vec::new();
+    for sheet in stylesheets {
+        for rule in &sheet.rules {
+            for sel in &rule.selectors {
+                if let Some(last) = sel.parts.last() {
+                    if last.pseudo_classes.iter().any(|p| p == "hover") {
+                        hover_sels.push(sel);
+                    }
+                }
+            }
+        }
+        for mq in &sheet.media_queries {
+            for rule in &mq.rules {
+                for sel in &rule.selectors {
+                    if let Some(last) = sel.parts.last() {
+                        if last.pseudo_classes.iter().any(|p| p == "hover") {
+                            hover_sels.push(sel);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if hover_sels.is_empty() {
+        return affected;
+    }
+    // Walk DOM, per node test matchovani.
+    root.walk(&mut |node| {
+        if !matches!(node.kind, NodeKind::Element { .. }) { return; }
+        for sel in &hover_sels {
+            // matches_selector contains :hover handling - aktualne pri
+            // ne-set HOVERED_NODE :hover pseudoclass fails. Pojdme set
+            // dummy hover na own node pres temp closure - hack pres
+            // thread_local switch.
+            // SIMPLE: predtim docasne set HOVERED_NODE na own node ptr.
+            let prev_hover = get_hovered_node();
+            set_hovered_node(Some(Rc::as_ptr(node) as usize));
+            let m = matches_selector(node, sel);
+            set_hovered_node(prev_hover);
+            if m {
+                affected.insert(Rc::as_ptr(node) as usize);
+                break;
+            }
+        }
+    });
+    affected
+}
+
 /// Test zda stylesheet pouziva `:hover` pseudo-class. Pouziti: pri zadnem
 /// `:hover` rule v stylesheetech mouse_move nemeni style_map -> cascade
 /// cache klic nezahrnuje hovered_node -> skipne invalidaci.
