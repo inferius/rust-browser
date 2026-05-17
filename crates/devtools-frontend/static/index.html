@@ -1839,14 +1839,27 @@ applyI18n(currentLang);
 
     // ---------- INSPECTOR: DOM tree z DOM.getDocument ----------
     function renderDomTree() {
-        const domTree = document.querySelector('.inspector-body .dom-tree');
-        if (!domTree) return;
+        console.log('[renderDomTree] entry');
+        var domTree = document.querySelector('.inspector-body .dom-tree');
+        console.log('[renderDomTree] inspector-body .dom-tree = ' + (domTree ? 'found' : 'null'));
+        if (!domTree) {
+            // Fallback: zkus jen `.dom-tree`.
+            domTree = document.querySelector('.dom-tree');
+            console.log('[renderDomTree] .dom-tree = ' + (domTree ? 'found' : 'null'));
+        }
+        if (!domTree) {
+            console.warn('[renderDomTree] dom-tree element neexistuje');
+            return;
+        }
         domTree.innerHTML = '<div style="padding:8px;color:#737378">Loading DOM...</div>';
-        window.cdp.send('DOM.getDocument', { depth: -1 }).then(result => {
+        console.log('[renderDomTree] calling cdp.send');
+        window.cdp.send('DOM.getDocument', { depth: -1 }).then(function(result) {
+            console.log('[renderDomTree] CDP response received');
             domTree.innerHTML = '';
             renderNode(result.root, domTree, 0);
-        }).catch(e => {
-            domTree.innerHTML = '<div style="padding:8px;color:#ff6b6b">Error: ' + e.message + '</div>';
+        }).catch(function(e) {
+            console.log('[renderDomTree] CDP error: ' + (e && e.message ? e.message : e));
+            domTree.innerHTML = '<div style="padding:8px;color:#ff6b6b">Error: ' + (e && e.message ? e.message : e) + '</div>';
         });
     }
 
