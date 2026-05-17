@@ -189,6 +189,24 @@ pub fn count_content_boxes(root: &LayerNode) -> usize {
     count
 }
 
+/// Walk LayerTree + collect vsechny layer ids do HashSet. Pouziti:
+/// WebView::gc_layer_textures - drop entries pres set membership check.
+pub fn collect_layer_ids(root: &LayerNode, out: &mut std::collections::HashSet<usize>) {
+    out.insert(root.id);
+    for child in &root.children {
+        collect_layer_ids(child, out);
+    }
+}
+
+/// Walk LayerTree + flat list (root + all descendants). Pouziti pri render:
+/// process kazdou layer separately.
+pub fn flatten_layers<'a>(root: &'a LayerNode, out: &mut Vec<&'a LayerNode>) {
+    out.push(root);
+    for child in &root.children {
+        flatten_layers(child, out);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

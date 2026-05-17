@@ -657,6 +657,60 @@ impl WebView {
         self.target_view = Some(view);
     }
 
+    /// L2 compositor: alokuj/reuse offscreen Texture pro danou layer.
+    /// Klic = layer.id (root box node_ptr). Pri shode size reuse, jinak realloc.
+    /// Velikost v PHYSICAL px (= logical * scale_factor).
+    /// Vraci Option<()> = None pokud engine headless. Texture + view ulozeny
+    /// v self.layer_textures pres klic.
+    pub(crate) fn ensure_layer_texture(
+        &mut self,
+        layer_id: usize,
+        logical_w: f32,
+        logical_h: f32,
+    ) -> Option<()> {
+        let device = self.engine.device.as_ref()?.clone();
+        let phys_w = ((logical_w * self.scale_factor) as u32).max(1);
+        let phys_h = ((logical_h * self.scale_factor) as u32).max(1);
+
+        // Reuse pri shode size.
+        if let Some(slot) = self.layer_textures.get(&layer_id) {
+            if slot.width == phys_w && slot.height == phys_h {
+                return Some(());
+            }
+        }
+
+        // Alloc nova (replace pripadnou starou).
+        let tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("rwe-layer-offscreen"),
+            size: wgpu::Extent3d { width: phys_w, height: phys_h, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Bgra8UnormSrgb,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+        self.layer_textures.insert(layer_id, LayerTextureSlot {
+            texture: tex,
+            view,
+            width: phys_w,
+            height: phys_h,
+            last_paint_fp: 0,
+        });
+        Some(())
+    }
+
+    /// Garbage collect layer_textures - drop entries jejichz layer_id neni v
+    /// current_layers set. Volat po extract_layer_tree v render_via.
+    /// Bez GC: layer_textures roste pri DOM mutaci (smazane elementy ale
+    /// jejich texture cache zustava).
+    pub(crate) fn gc_layer_textures(&mut self, alive_layer_ids: &std::collections::HashSet<usize>) {
+        self.layer_textures.retain(|k, _| alive_layer_ids.contains(k));
+    }
+
     /// Zpracuj input event. Vrati `EventResponse` se zmenami pro hostujici
     /// aplikaci (dirty flag, cursor change, navigation request, ...).
     ///
@@ -1348,7 +1402,8 @@ impl WebView {
             let _ = interp.drain_raf_callbacks(ts_ms);
         }
 
-        let target_view = self.target_view.as_ref()?;
+        // target_view borrow odlozen do paint pass (pred L2 allocator
+        // potrebujeme mut borrow self pres ensure_layer_texture).
         let doc = self.document.as_ref()?;
 
         // Layout viewport = logical CSS px / browser zoom. viewport_w/h jsou
@@ -1573,12 +1628,24 @@ impl WebView {
         // 2c. Paint-side animations apply (transform overlay, opacity tween).
         crate::browser::render::apply_paint_animations(&mut layout_root, &style_map);
 
-        // 2d. L1 compositor: extract LayerTree z layout. Zatim jen diagnostika
-        // (layer_count v shell title bar). L2-L5 v dalsich commitech pridaji:
-        // per-layer texture cache, compositor pass, composite-only anim, dirty
-        // rect tracking.
-        self.last_layer_tree = Some(
-            crate::browser::compositor::extract_layer_tree(&layout_root));
+        // 2d. L1+L2 compositor: extract LayerTree z layout.
+        // L2: per-layer offscreen texture allocator. Pro kazdou layer alokuj
+        // wgpu::Texture velikosti layer.root_rect (logical). Reuse pri size
+        // match mezi frames. GC unreferenced layers.
+        let layer_tree = crate::browser::compositor::extract_layer_tree(&layout_root);
+        {
+            let mut alive = std::collections::HashSet::new();
+            crate::browser::compositor::collect_layer_ids(&layer_tree, &mut alive);
+            self.gc_layer_textures(&alive);
+            let mut flat: Vec<&crate::browser::compositor::LayerNode> = Vec::new();
+            crate::browser::compositor::flatten_layers(&layer_tree, &mut flat);
+            for layer in flat {
+                let lw = layer.root_rect.width.max(1.0);
+                let lh = layer.root_rect.height.max(1.0);
+                let _ = self.ensure_layer_texture(layer.id, lw, lh);
+            }
+        }
+        self.last_layer_tree = Some(layer_tree);
 
         let prof_t2 = std::time::Instant::now();
         self.prof_layout_ms = prof_t2.duration_since(prof_t1).as_secs_f32() * 1000.0;
@@ -1806,6 +1873,7 @@ impl WebView {
         self.prof_paint_ms = prof_t3.duration_since(prof_t2).as_secs_f32() * 1000.0;
 
         // 5. Renderer kresli display list do target_view.
+        let target_view = self.target_view.as_ref()?;
         let _had = renderer.draw_segments_into_view_clipped(
             target_view, &display_list, true, None);
 
