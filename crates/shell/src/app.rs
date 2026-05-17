@@ -432,9 +432,10 @@ impl ShellApp {
             let mut q = channel.req_queue.borrow_mut();
             q.drain(..).collect()
         };
-        // Diag: pri ne-prazdne req nebo resp queue, log per-pump status.
-        let resp_len = channel.resp_queue.borrow().len();
-        if !pending.is_empty() || resp_len > 0 {
+        // Diag: log jen kdyz req se draina (pump_cdp dispatch). Skipni
+        // resp_queue idle wait state (spam during setInterval poll wait).
+        if !pending.is_empty() {
+            let resp_len = channel.resp_queue.borrow().len();
             eprintln!("[PUMP frame#{}] req_drain={} resp_queue_len={}",
                 self.frame_counter, pending.len(), resp_len);
         }
