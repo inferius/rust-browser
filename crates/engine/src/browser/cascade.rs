@@ -344,6 +344,33 @@ fn logical_shorthand_pair(prop: &str) -> Option<(&'static str, &'static str)> {
 /// Mapa: pointer na Node -> computed styles.
 pub type StyleMap = HashMap<usize, HashMap<String, String>>;
 
+/// Test zda stylesheet pouziva `:hover` pseudo-class. Pouziti: pri zadnem
+/// `:hover` rule v stylesheetech mouse_move nemeni style_map -> cascade
+/// cache klic nezahrnuje hovered_node -> skipne invalidaci.
+pub fn stylesheet_uses_pseudo(sheet: &super::css_parser::Stylesheet, pseudo: &str) -> bool {
+    for rule in &sheet.rules {
+        for sel in &rule.selectors {
+            for part in &sel.parts {
+                if part.pseudo_classes.iter().any(|p| p == pseudo) {
+                    return true;
+                }
+            }
+        }
+    }
+    for mq in &sheet.media_queries {
+        for rule in &mq.rules {
+            for sel in &rule.selectors {
+                for part in &sel.parts {
+                    if part.pseudo_classes.iter().any(|p| p == pseudo) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Layout-relevant CSS properties - jen tyhle ovlivnuji LayoutBox tree.
 /// Vsechno ostatni (color, background, opacity, transform, ...) je paint-only.
 /// Pri stejnem hashi pres layout props muze WebView reuse cached layout_root.

@@ -1441,15 +1441,27 @@ impl WebView {
         crate::browser::cascade::set_hovered_node(self.hovered_node_local);
 
         let prof_t0 = std::time::Instant::now();
+        // PERF: ovlivnuje stylesheet :hover/:focus? Pokud ne, hover/focus
+        // zmena nemeni style_map -> cache klic NEzahrnuje. Drasticky redukuje
+        // cascade walks pri hover na pages bez :hover effects.
+        let uses_hover = self.stylesheets.iter()
+            .any(|s| crate::browser::cascade::stylesheet_uses_pseudo(s, "hover"));
+        let uses_focus = self.stylesheets.iter()
+            .any(|s| crate::browser::cascade::stylesheet_uses_pseudo(s, "focus"));
         let cache_key = {
             use std::hash::{Hash, Hasher};
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
             // dom_version
             self.interpreter.as_ref().map(|i| i.dom_version()).unwrap_or(0).hash(&mut hasher);
             // Per-WV hovered/focused. Bez per-WV by jine WV mouse_move
-            // invalidoval cache i kdyz tahle WV nezmenila hover.
-            self.hovered_node_local.unwrap_or(0).hash(&mut hasher);
-            self.focused_node_local.unwrap_or(0).hash(&mut hasher);
+            // invalidoval cache i kdyz tahla WV nezmenila hover.
+            // Conditional: jen pokud stylesheet pouziva :hover/:focus.
+            if uses_hover {
+                self.hovered_node_local.unwrap_or(0).hash(&mut hasher);
+            }
+            if uses_focus {
+                self.focused_node_local.unwrap_or(0).hash(&mut hasher);
+            }
             // viewport rounded
             (viewport_w as u32).hash(&mut hasher);
             (viewport_h as u32).hash(&mut hasher);
