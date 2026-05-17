@@ -1273,6 +1273,12 @@ impl WebView {
             || (self.scroll_target_x - self.scroll_x).abs() > 0.5
             || self.focused_is_input();
         if !self.dirty && !needs_tick {
+            // Reset profilers - jinak title bar drzi historickou hodnotu z
+            // prvni render (uvadi v omyl user diagnostiku).
+            self.prof_cascade_ms = 0.0;
+            self.prof_layout_ms = 0.0;
+            self.prof_paint_ms = 0.0;
+            self.prof_gpu_ms = 0.0;
             return self.target_view.as_ref();
         }
         // Renderer sdili pipeline + uniforms s WebView - sync browser zoom +

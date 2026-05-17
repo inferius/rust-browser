@@ -82,16 +82,44 @@
         if (i >= 0) list.splice(i, 1);
     }
 
-    // Periodic event poll - native binding (D6) push'uje events do
+    // Periodic event poll - native binding (D6) push'uje events I RESPONSES do
     // queue, JS volat `__rwe_cdp_poll_events()` -> JSON array.
+    //
+    // BUG fix (2026-05-17): drive volalo `dispatchEvent(e)` pro vsechny items.
+    // Ale items obsahuji jak `DevtoolsResponse {id, result}` tak
+    // `DevtoolsEvent {method, params}`. dispatchEvent funguje jen pro events.
+    // Responses na cdp.send Promise nikdy nedosly resolve -> DOM tree
+    // "Loading DOM..." zustal forever, .then() callback nezavolavan.
+    //
+    // Fix: rozlisit per item (stejna logika jako handleResponseJson):
+    // - item.method -> dispatchEvent
+    // - item.id numeric -> resolve/reject pres pendingRequests
     function pollEvents() {
         try {
             const eventsJson = __rwe_cdp_poll_events();
-            if (!eventsJson) return;
-            const events = JSON.parse(eventsJson);
-            for (const e of events) dispatchEvent(e);
+            if (!eventsJson || eventsJson === '[]') return;
+            const items = JSON.parse(eventsJson);
+            for (const item of items) {
+                if (item.method) {
+                    // Event broadcast (no id).
+                    dispatchEvent(item);
+                } else if (typeof item.id === 'number') {
+                    // Response na request - resolve/reject Promise.
+                    const p = pendingRequests.get(item.id);
+                    if (p) {
+                        pendingRequests.delete(item.id);
+                        if (item.error) {
+                            const err = new Error(item.error.message);
+                            err.code = item.error.code;
+                            p.reject(err);
+                        } else {
+                            p.resolve(item.result || {});
+                        }
+                    }
+                }
+            }
         } catch (e) {
-            // Native binding chybi (pre-D6) - skip.
+            console.error('CDP poll error: ' + (e && e.message ? e.message : e));
         }
     }
 
