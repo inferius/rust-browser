@@ -1622,8 +1622,16 @@ impl WebView {
             self.last_layout_root.as_ref().unwrap().clone()
         } else {
             self.layout_cache_key = Some(layout_key);
-            crate::browser::layout::layout_tree(
-                &doc.root, &style_map, viewport_w, viewport_h)
+            // Pri cache miss pouzij prev_root subtree caching - rebuild
+            // jen subtrees jejichz fingerprint se zmenil. Bez tohoto pri
+            // DOM mutace (devtools renderDomTree appendChild N times)
+            // = full layout walk pres celou tree O(N) per element CSS
+            // parsing = 14+ sekund v debug pri ~300 elementu.
+            let empty_pseudo = crate::browser::cascade::PseudoStyleMap::new();
+            crate::browser::layout::layout_tree_with_pseudo_cached(
+                &doc.root, &style_map, &empty_pseudo,
+                viewport_w, viewport_h,
+                self.last_layout_root.as_ref())
         };
 
         // 2b. Sticky positioning post-process - position:sticky elementy
