@@ -1372,12 +1372,21 @@ pub fn layout_tree_with_pseudo_cached(
     // frames mute pres apply_animations, takze cached hashes z prev frame
     // jsou stale). Within-frame still helps deduplikovat recursive volani.
     clear_subtree_hash_cache();
-    let perf = std::env::var("PERF_DEBUG").is_ok();
+    // PERF_DEBUG env var nebo auto-log stages pri SLOW (>1000ms total).
+    // Pri SLOW log s budgetem: collect_prev / build_box / layout_dispatch /
+    // collect_anchors / apply_anchor / table_border. Vidi se kde 15s zere.
+    let auto_log = std::env::var("PERF_DEBUG").is_ok();
+    let stages_ref: std::rc::Rc<std::cell::RefCell<Vec<(String, f64)>>> = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let stages_clone = std::rc::Rc::clone(&stages_ref);
+    let perf = auto_log;
     let perf_t = |label: &str, t: std::time::Instant| {
-        if std::env::var("PERF_DEBUG").is_ok() {
-            eprintln!("  [layout_tree::{}] {:.2} ms", label, t.elapsed().as_secs_f64() * 1000.0);
+        let ms = t.elapsed().as_secs_f64() * 1000.0;
+        stages_clone.borrow_mut().push((label.to_string(), ms));
+        if auto_log {
+            eprintln!("  [layout_tree::{}] {:.2} ms", label, ms);
         }
     };
+    let outer_t = std::time::Instant::now();
     // Build prev_node_map (node_ptr -> LayoutBox subtree) z prev_root.
     let _t = std::time::Instant::now();
     let mut prev_map: HashMap<usize, LayoutBox> = HashMap::new();
@@ -1434,6 +1443,16 @@ pub fn layout_tree_with_pseudo_cached(
     let _t = std::time::Instant::now();
     apply_table_border_collapse(&mut layout_root, false);
     perf_t("apply_table_border_collapse", _t);
+    let total_ms = outer_t.elapsed().as_secs_f64() * 1000.0;
+    if !auto_log && total_ms > 1000.0 {
+        // SLOW auto-log breakdown - kde 15s zere.
+        let stages = stages_ref.borrow();
+        let mut breakdown = String::new();
+        for (label, ms) in stages.iter() {
+            breakdown.push_str(&format!(" {}:{:.0}ms", label, ms));
+        }
+        eprintln!("[LAYOUT BREAKDOWN total:{:.0}ms]{}", total_ms, breakdown);
+    }
     layout_root
 }
 
