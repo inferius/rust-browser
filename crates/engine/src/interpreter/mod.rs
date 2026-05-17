@@ -1465,7 +1465,12 @@ impl Interpreter {
     }
 
     /// Spusti vsechny cekajici timer callbacky.
-    fn drain_timers(&mut self) -> Result<(), JsError> {
+    /// Public pro host (WebView::render_via) - bez pravidelneho drain
+    /// nikdo nezavolat callbacky pushnut do task_queue mimo `run()`.
+    /// Typicky: Promise.resolve native fn schedule cb pres task_queue,
+    /// pollEvents drain pres interval_queue volat resolve, ale dokud
+    /// drain_timers nepokracuje nikdo callback nezavola.
+    pub fn drain_timers(&mut self) -> Result<(), JsError> {
         // Fast path - prazdne queue, zadny borrow needed.
         if self.task_queue.borrow().is_empty() { return Ok(()); }
         loop {

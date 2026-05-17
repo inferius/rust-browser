@@ -1398,6 +1398,11 @@ impl WebView {
             // Periodicke setInterval callbacks (cdp.js setInterval pollEvents
             // 250ms, anim frame loops, ...) - musi pumpovat per render frame.
             let _ = interp.drain_intervals();
+            // Drain microtask / setTimeout queue - Promise.resolve schedule
+            // then callbacks pres task_queue. Bez drain Promise.then() chain
+            // never volan. Klicovy bug DOM tree neviditelny - resolve volan
+            // ale callback nikdy.
+            let _ = interp.drain_timers();
             let ts_ms = self.animation_origin.elapsed().as_secs_f64() * 1000.0;
             let _ = interp.drain_raf_callbacks(ts_ms);
         }
