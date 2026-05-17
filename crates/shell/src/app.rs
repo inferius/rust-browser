@@ -992,6 +992,7 @@ html, body {{ margin: 0; padding: 0; height: 100%; background: #202124; color: #
         let was_visible = self.devtools_visible;
         self.devtools_visible = !was_visible;
         if self.devtools_visible && self.devtools.is_none() {
+            let t_start = std::time::Instant::now();
             let engine = match &self.engine { Some(e) => e.clone(), None => return };
             let renderer = match &self.renderer { Some(r) => r, None => return };
             let (sw, sh) = renderer.surface_size();
@@ -1000,31 +1001,31 @@ html, body {{ margin: 0; padding: 0; height: 100%; background: #202124; color: #
             let lh = ((sh as f32 / sf) as u32).max(1);
             let mut dv = WebView::new(engine, lw, lh);
             dv.resize(lw, lh, sf);
+            let t_alloc = std::time::Instant::now();
             let dv_html = Self::build_devtools_html();
-            // load_html bere html + css separate. Inline <style> tagy v <head>
-            // by se ignorovaly (loader::extract_inline_styles bezi jen pres
-            // load_url cestu). Extract rucne a predat jako css parametr.
             let inline_css = Self::extract_inline_styles(&dv_html);
-            // BUG fix: install CDP natives MUSI byt PRED run_scripts.
-            // Drive byl cely `load_html` (=load_dom + run_scripts) volan, pak
-            // install. Inicialni scripty (cdp.js setInterval + elements.html
-            // `cdp.send DOM.getDocument`) bezely PRED native binding install ->
-            // throw "__rwe_cdp_send_native not defined" -> tree "Error: ..."
-            // misto DOM tree.
-            // Reseni: load_dom (parse + interpreter init, no scripts), pak
-            // install natives, pak run_scripts (scripty maji bindings).
+            let t_html = std::time::Instant::now();
             let _ = dv.load_dom(&dv_html, &inline_css, None);
+            let t_load_dom = std::time::Instant::now();
             let channel = CdpChannel::new();
             Self::install_cdp_natives(&mut dv, &channel);
+            let t_natives = std::time::Instant::now();
             dv.run_scripts();
-            let html_len = Self::build_devtools_html().len();
-            let css_len = Self::extract_inline_styles(&Self::build_devtools_html()).len();
-            println!("[shell] devtools WebView armed: html={} bytes, inline css={} bytes",
+            let t_scripts = std::time::Instant::now();
+            let html_len = dv_html.len();
+            let css_len = inline_css.len();
+            eprintln!("[PROF F12] alloc:{:.0}ms html_build:{:.0}ms load_dom:{:.0}ms natives:{:.0}ms scripts:{:.0}ms (html={} css={})",
+                t_alloc.duration_since(t_start).as_secs_f32() * 1000.0,
+                t_html.duration_since(t_alloc).as_secs_f32() * 1000.0,
+                t_load_dom.duration_since(t_html).as_secs_f32() * 1000.0,
+                t_natives.duration_since(t_load_dom).as_secs_f32() * 1000.0,
+                t_scripts.duration_since(t_natives).as_secs_f32() * 1000.0,
                 html_len, css_len);
             self.devtools = Some(dv);
             self.devtools_target = Some(DevtoolsTarget::new());
             self.cdp_channel = Some(channel);
-            println!("[shell] devtools CDP channel ready");
+            eprintln!("[PROF F12] TOTAL toggle_devtools:{:.0}ms",
+                t_scripts.duration_since(t_start).as_secs_f32() * 1000.0);
         }
         // Resize obou webview podle aktualniho split state (toggle on/off).
         self.resize_views();
