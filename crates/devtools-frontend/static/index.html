@@ -1863,51 +1863,58 @@ applyI18n(currentLang);
         });
     }
 
+    // Helper: createElement + textContent. Drive renderNode pouzival innerHTML
+    // per node = parse_html_fragment (html5ever) v interpreteru pres ~200x.
+    // 12s freeze pri 200 nodes v debug. createElement+textContent ne-parsuje.
+    function mkSpan(cls, text) {
+        const s = document.createElement('span');
+        s.className = cls;
+        s.textContent = text;
+        return s;
+    }
+
     function renderNode(node, container, depth) {
         const div = document.createElement('div');
         div.className = 'dom-node';
         div.style.paddingLeft = (6 + depth * 16) + 'px';
         div.dataset.nodeId = node.node_id;
         if (node.node_type === 1) { // Element
-            let attrs = '';
+            const hasChildren = (node.children || []).length > 0;
+            div.appendChild(mkSpan('toggle', hasChildren ? 'v ' : '. '));
+            div.appendChild(mkSpan('tok-tag', '<' + node.node_name.toLowerCase()));
             const a = node.attributes || [];
             for (let i = 0; i + 1 < a.length; i += 2) {
-                attrs += ' <span class="tok-attr-name">' + escapeHtml(a[i]) +
-                         '</span>=<span class="tok-attr-value">"' + escapeHtml(a[i+1]) + '"</span>';
+                div.appendChild(document.createTextNode(' '));
+                div.appendChild(mkSpan('tok-attr-name', a[i]));
+                div.appendChild(document.createTextNode('='));
+                div.appendChild(mkSpan('tok-attr-value', '"' + a[i+1] + '"'));
             }
-            const hasChildren = (node.children || []).length > 0;
-            const toggleIcon = hasChildren
-                ? '<span class="toggle">v</span>'
-                : '<span class="toggle">.</span>';
-            div.innerHTML = toggleIcon +
-                '<span class="tok-tag">&lt;' + escapeHtml(node.node_name.toLowerCase()) + '</span>' +
-                attrs +
-                '<span class="tok-tag">&gt;</span>';
+            div.appendChild(mkSpan('tok-tag', '>'));
         } else if (node.node_type === 3) { // Text
-            div.innerHTML = '<span class="tok-text">' + escapeHtml(node.node_value || '') + '</span>';
+            div.appendChild(mkSpan('tok-text', node.node_value || ''));
         } else if (node.node_type === 9) { // Document
-            div.innerHTML = '<span class="tok-tag">#document</span>';
+            div.appendChild(mkSpan('tok-tag', '#document'));
         } else if (node.node_type === 10) { // DocType
-            div.innerHTML = '<span class="tok-tag">&lt;!DOCTYPE ' + escapeHtml(node.node_name) + '&gt;</span>';
+            div.appendChild(mkSpan('tok-tag', '<!DOCTYPE ' + node.node_name + '>'));
         } else {
-            div.innerHTML = '<span class="tok-text">' + escapeHtml(node.node_name) + '</span>';
+            div.appendChild(mkSpan('tok-text', node.node_name));
         }
-        div.addEventListener('click', e => {
+        div.addEventListener('click', function(e) {
             e.stopPropagation();
-            document.querySelectorAll('.dom-node.selected').forEach(n => n.classList.remove('selected'));
+            var sels = document.querySelectorAll('.dom-node.selected');
+            for (var i = 0; i < sels.length; i++) sels[i].classList.remove('selected');
             div.classList.add('selected');
             loadStylesForNode(node.node_id);
         });
         container.appendChild(div);
-        for (const child of (node.children || [])) {
-            renderNode(child, container, depth + 1);
+        for (var ci = 0; ci < (node.children || []).length; ci++) {
+            renderNode(node.children[ci], container, depth + 1);
         }
         if (node.node_type === 1 && (node.children || []).length > 0) {
             const close = document.createElement('div');
             close.className = 'dom-node';
             close.style.paddingLeft = (6 + depth * 16) + 'px';
-            close.innerHTML = '<span class="tok-tag">&lt;/' +
-                escapeHtml(node.node_name.toLowerCase()) + '&gt;</span>';
+            close.appendChild(mkSpan('tok-tag', '</' + node.node_name.toLowerCase() + '>'));
             container.appendChild(close);
         }
     }
