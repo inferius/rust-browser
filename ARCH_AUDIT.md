@@ -264,3 +264,55 @@ Pri novem bugu:
 2. Kde je v arch
 3. Existuje uz reseni v jine vrstve? (cache, helper, ...)
 4. Pokud cista oprava = fix. Pokud nova ficha = audit. Pokud arch problem = plan.
+
+---
+
+## Progress log
+
+### 2026-05-17 Session
+
+**Hotov:**
+- ARCH_AUDIT.md (tento doc)
+- Step 1a: setInterval periodic fix (cdp.js setInterval bezel 1x misto periodic)
+- Step 1b: cdp.js pollEvents handle responses (drive dispatchEvent jen pro events,
+  responses ignorovany)
+- L1: layer detection foundation
+- L2 step 1: per-layer wgpu::Texture allocator + GC
+
+**Zbyva (priority order):**
+
+#### L2 step 2 - display list with parallel node_ids
+- `paint::build_display_list_with_ids(root) -> (cmds, ids)`
+- Per cmd paralelne ulozit `Option<usize>` node_ptr v Vec
+- Pro nestrukturovany cmd (gradient, shadow background) - Option::None
+
+#### L2 step 3 - render per layer do texture
+- Pres LayerNode.content_box_ids filter commands
+- Per layer wgpu draw_segments do jeji texture
+- Bind groups: atlas + uniform per layer (transform matrix)
+
+#### L3 - compositor pass shader
+- Novy WGSL shader: vertex quad + texture sample + transform/opacity uniform
+- Per layer emit quad s uniform setem
+- Compose do parent target_view (target_texture)
+
+#### L4 - composite-only animations
+- Detect `animation: transform | opacity` (compatible)
+- Animation tick: update jen uniform v compositor pass
+- SKIP cascade/layout/paint pro anim layer
+
+#### L5 - dirty rect tracking
+- WV.dirty_regions: Vec<Rect>
+- Mouse event push rect prev+new
+- wgpu scissor v render pass = union(dirty_regions)
+- Preserve rest target_texture (no clear)
+
+### Realny target
+
+Po L1-L5 reform:
+- 0 cascade/layout/paint pri composite-only anim (transform/opacity)
+- ~0.5ms paint per affected layer pri hover (dirty rect)
+- Compositor pass <1ms (GPU work s par textures)
+- Idle = 0ms (no redraw)
+
+Cilove 120 FPS na stranke s par anim + interactive page.
