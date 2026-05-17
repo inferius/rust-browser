@@ -310,9 +310,17 @@ impl DevtoolsTarget {
         };
         let node = match find_node_by_id(&doc.root, params.node_id) {
             Some(n) => n,
-            None => return Self::error_response(req.id, error_codes::NODE_NOT_FOUND,
-                format!("Node {} not found", params.node_id)),
+            None => {
+                eprintln!("[CSS.getMatchedStyles] node_id {} NOT FOUND v page DOM",
+                    params.node_id);
+                return Self::error_response(req.id, error_codes::NODE_NOT_FOUND,
+                    format!("Node {} not found", params.node_id));
+            }
         };
+        eprintln!("[CSS.getMatchedStyles] node_id {} FOUND tag={} stylesheets={}",
+            params.node_id,
+            node.tag_name_ref().unwrap_or("?"),
+            webview.stylesheets().len());
 
         // Inline style atribut -> CSSStyle.
         let inline_style = node.attr("style").and_then(|s| {
@@ -365,6 +373,9 @@ impl DevtoolsTarget {
             inline_style,
             matched_rules,
         };
+        eprintln!("[CSS.getMatchedStyles] inline_style={} matched_rules={}",
+            result.inline_style.is_some(),
+            result.matched_rules.len());
         Self::ok_response(req.id, &result)
     }
 
