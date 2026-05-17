@@ -2081,10 +2081,11 @@ applyI18n(currentLang);
         }[c]));
     }
 
-    // Initial load.
-    console.log('[devtools wireup] calling renderDomTree()');
-    renderDomTree();
-    console.log('[devtools wireup] init complete');
+    // Initial load - REMOVED. Shell pump_cdp pri F12 emit DOM.documentUpdated
+    // (nav detect) coz triggene renderDomTree pres debounced handler.
+    // Drive: 2 round-trips DOM.getDocument (initial + event) = duplicate
+    // mass DOM mutace v devtools WV = perf hit 1-2 FPS po dobu naplneni.
+    console.log('[devtools wireup] init complete (waiting for DOM.documentUpdated event)');
 })();
 </script>
 
