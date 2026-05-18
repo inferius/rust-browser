@@ -628,7 +628,7 @@ impl Interpreter {
                     }
                     // classList - vraci JsObject s methods (add/remove/toggle/contains)
                     "classList" => {
-                        return Ok(dom_props::create_class_list(Rc::clone(&n)));
+                        return Ok(dom_props::create_class_list(Rc::clone(&n), Rc::clone(&self.dom_version)));
                     }
                     // dataset - vraci JsObject se vsemi data-* atributy
                     "dataset" => {

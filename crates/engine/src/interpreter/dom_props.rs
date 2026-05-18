@@ -197,40 +197,62 @@ pub(crate) fn camel_to_kebab(s: &str) -> String {
 /// classList JS object pro Element - DOMTokenList (DOM spec).
 /// Methods: add/remove/toggle/contains/replace/item, forEach, value, length,
 /// indexed access ([0], [1], ...), Symbol.iterator.
-pub(crate) fn create_class_list(node: Rc<crate::browser::dom::NodeData>) -> JsValue {
+///
+/// dom_version Rc shared with Interpreter - mutations bump counter aby cascade
+/// cache invalidate. Bez tohoto classList.add nezpusobil re-render (style_map
+/// caché vrátí stale entry pro .selected/.active class swaps).
+pub(crate) fn create_class_list(
+    node: Rc<crate::browser::dom::NodeData>,
+    dom_version: Rc<std::cell::Cell<u64>>,
+) -> JsValue {
     let obj_rc = Rc::new(RefCell::new(JsObject::new()));
     // Marker pro identifikaci tokenu listu
     obj_rc.borrow_mut().set("__dom_token_list__".into(), JsValue::Bool(true));
     obj_rc.borrow_mut().set("__token_list_node__".into(),
         JsValue::DomNode(Rc::clone(&node)));
+    let bump = move |dv: &Rc<std::cell::Cell<u64>>| dv.set(dv.get().wrapping_add(1));
     {
         let n = Rc::clone(&node);
+        let dv = Rc::clone(&dom_version);
+        let bump = bump.clone();
         obj_rc.borrow_mut().set("add".into(), native("classList.add", move |args| {
             let class = n.attr("class").unwrap_or_default();
             let mut classes: Vec<String> = class.split_whitespace().map(String::from).collect();
+            let mut changed = false;
             for arg in args {
                 let name = arg.to_string();
-                if !classes.contains(&name) { classes.push(name); }
+                if !classes.contains(&name) { classes.push(name); changed = true; }
             }
-            n.set_attr("class", &classes.join(" "));
+            if changed {
+                n.set_attr("class", &classes.join(" "));
+                bump(&dv);
+            }
             Ok(JsValue::Undefined)
         }));
     }
     {
         let n = Rc::clone(&node);
+        let dv = Rc::clone(&dom_version);
+        let bump = bump.clone();
         obj_rc.borrow_mut().set("remove".into(), native("classList.remove", move |args| {
             let class = n.attr("class").unwrap_or_default();
             let mut classes: Vec<String> = class.split_whitespace().map(String::from).collect();
+            let pre_len = classes.len();
             for arg in args {
                 let name = arg.to_string();
                 classes.retain(|c| c != &name);
             }
-            n.set_attr("class", &classes.join(" "));
+            if classes.len() != pre_len {
+                n.set_attr("class", &classes.join(" "));
+                bump(&dv);
+            }
             Ok(JsValue::Undefined)
         }));
     }
     {
         let n = Rc::clone(&node);
+        let dv = Rc::clone(&dom_version);
+        let bump = bump.clone();
         obj_rc.borrow_mut().set("toggle".into(), native("classList.toggle", move |args| {
             let name = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
             let class = n.attr("class").unwrap_or_default();
@@ -242,6 +264,7 @@ pub(crate) fn create_class_list(node: Rc<crate::browser::dom::NodeData>) -> JsVa
                 classes.push(name);
             }
             n.set_attr("class", &classes.join(" "));
+            bump(&dv);
             Ok(JsValue::Bool(!has))
         }));
     }
