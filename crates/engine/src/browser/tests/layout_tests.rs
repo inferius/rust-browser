@@ -2132,12 +2132,12 @@ fn transition_detect_change_creates_active() {
     let mut prev_styles: HashMap<String, String> = HashMap::new();
     prev_styles.insert("color".into(), "red".into());
     prev_styles.insert("transition".into(), "color 200ms".into());
-    prev.insert(42, prev_styles);
+    prev.insert(42, std::rc::Rc::new(prev_styles));
 
     let mut cur_styles: HashMap<String, String> = HashMap::new();
     cur_styles.insert("color".into(), "blue".into());
     cur_styles.insert("transition".into(), "color 200ms".into());
-    cur.insert(42, cur_styles);
+    cur.insert(42, std::rc::Rc::new(cur_styles));
 
     let active = cascade::detect_transitions(&prev, &cur, vec![], 1.0);
     assert_eq!(active.len(), 1);
@@ -2154,7 +2154,7 @@ fn transition_apply_interpolates_numeric() {
     let mut style_map: cascade::StyleMap = HashMap::new();
     let mut styles: HashMap<String, String> = HashMap::new();
     styles.insert("opacity".into(), "1".into());
-    style_map.insert(99, styles);
+    style_map.insert(99, std::rc::Rc::new(styles));
 
     let active = vec![ActiveTransition {
         node_id: 99,

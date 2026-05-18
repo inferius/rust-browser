@@ -14,10 +14,28 @@ use super::css_parser::{Stylesheet, Selector, SimpleSelector, Combinator, Rule, 
 /// Pri stable DOM + stylesheets, vsech ~3434 nodes hit cache = walk 41ms -> <2ms.
 /// Pri hover zmene jednu node klic + lookup miss + recompute (1 entry / 12us).
 /// Invalidate triggery: stylesheet change (clear all), DOM mutate (clear all).
-type MatchedKey = (usize, u8, u8, u64);
+// Cache klice obsahuji (host_id, dom_version) - host_id rozlisuje multi-WV
+// (sdileny thread_local cache), dom_version auto-invaliduje stale entries pri
+// DOM mutaci (mrtve node_ptr by jinak matchnul recyklovany alokat).
+type MatchedKey = (u64, u64, usize, u8, u8, u64);  // host_id, dom_ver, node_ptr, hover, focus, sheets_sig
 type MatchedVal = Rc<Vec<((u32, u32, u32, usize), Declaration)>>;
+type WalkOutputKey = (u64, u64, usize, u8, u8, u64, u64);  // host_id, dom_ver, node_ptr, hover, focus, sheets_sig, inline_hash
+type WalkOutputVal = Rc<HashMap<String, String>>;
 thread_local! {
     static MATCHED_DECLS_CACHE: RefCell<HashMap<MatchedKey, MatchedVal>> = RefCell::new(HashMap::new());
+    static WALK_OUTPUT_CACHE: RefCell<HashMap<WalkOutputKey, WalkOutputVal>> = RefCell::new(HashMap::new());
+    /// Per-cascade-call context, set pred volanim cascade_with_viewport.
+    /// Webview nastavi (host_id, dom_version) tak aby cache klice rozlisily WVs.
+    pub static CASCADE_CTX: std::cell::Cell<(u64, u64)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+/// Set per-WV context pred cascade_with_viewport. `host_id` = stable per-WV ID
+/// (Rc::as_ptr(self.document.root)), `dom_version` = JS interp counter.
+pub fn set_cascade_ctx(host_id: u64, dom_version: u64) {
+    CASCADE_CTX.with(|c| c.set((host_id, dom_version)));
+}
+fn get_cascade_ctx() -> (u64, u64) {
+    CASCADE_CTX.with(|c| c.get())
 }
 
 /// Reset cache - vola se pri load_html (stylesheets se meni) + pri DOM mutaci
@@ -25,6 +43,30 @@ thread_local! {
 /// entries pres &Stylesheet refs co uz neexistuji.
 pub fn clear_matched_decls_cache() {
     MATCHED_DECLS_CACHE.with(|c| c.borrow_mut().clear());
+    PROPAGATED_ENTRY_CACHE.with(|c| c.borrow_mut().clear());
+    WALK_OUTPUT_CACHE.with(|c| c.borrow_mut().clear());
+}
+
+/// Per-element after-propagate style_map entry cache. Klic: (node_ptr,
+/// parent_subset_hash, own_pre_prop_signature). Pri stable inputs HIT = skip
+/// merge of inherited props (30 hashmap ops per node = ~10us saved).
+/// Pres 3434 nodes celkove 30+ms saved per frame pri stable styles.
+// Klic = (Rc::as_ptr(walk_output), parent_subset_hash). Pres walk_output Rc identity
+// (preserved walk cache HIT) je pointer stable cross cascade = O(1) lookup bez hashe stylu.
+// Value = (post-prop Rc<HashMap>, Rc<Vec<inherit_subset>>) - oboji zero-clone reuse.
+type PropEntryKey = (u64, u64, usize, u64);  // host_id, dom_ver, walk_rc_ptr, parent_subset_hash
+type PropEntryVal = (Rc<HashMap<String, String>>, Rc<Vec<(String, String)>>);
+thread_local! {
+    static PROPAGATED_ENTRY_CACHE: RefCell<HashMap<PropEntryKey, PropEntryVal>> = RefCell::new(HashMap::new());
+    static PROP_CACHE_HITS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    static PROP_CACHE_MISSES: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+pub fn prop_cache_stats() -> (u32, u32) {
+    (PROP_CACHE_HITS.with(|c| c.get()), PROP_CACHE_MISSES.with(|c| c.get()))
+}
+pub fn prop_cache_stats_reset() {
+    PROP_CACHE_HITS.with(|c| c.set(0));
+    PROP_CACHE_MISSES.with(|c| c.set(0));
 }
 
 /// Stylesheets signature - cheap hash pres metadata (cnt rules + selectors).
@@ -408,7 +450,10 @@ fn logical_shorthand_pair(prop: &str) -> Option<(&'static str, &'static str)> {
 }
 
 /// Mapa: pointer na Node -> computed styles.
-pub type StyleMap = HashMap<usize, HashMap<String, String>>;
+/// Per-element computed styles. Value je Rc<HashMap> aby clone byl cheap (ref count++)
+/// a propagated entry cache mohla sdilet immutable entries pres viceha cascades.
+/// Mut access pres Rc::make_mut (copy-on-write).
+pub type StyleMap = HashMap<usize, Rc<HashMap<String, String>>>;
 
 /// Hover invalidation set - per element node_ptr ktery je ovlivnen aspon
 /// jednim `:hover` selectorem (pri :hover state by zmenil style).
@@ -528,7 +573,7 @@ pub fn layout_fingerprint(style_map: &StyleMap) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     // Sort entries by node ptr (HashMap iteration order = nedeterministicky).
-    let mut entries: Vec<(&usize, &HashMap<String, String>)> = style_map.iter().collect();
+    let mut entries: Vec<(&usize, &Rc<HashMap<String, String>>)> = style_map.iter().collect();
     entries.sort_by_key(|(k, _)| **k);
     for (node_ptr, props) in entries {
         node_ptr.hash(&mut hasher);
@@ -552,7 +597,7 @@ pub fn layout_fingerprint(style_map: &StyleMap) -> u64 {
 pub fn paint_fingerprint(style_map: &StyleMap) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    let mut entries: Vec<(&usize, &HashMap<String, String>)> = style_map.iter().collect();
+    let mut entries: Vec<(&usize, &Rc<HashMap<String, String>>)> = style_map.iter().collect();
     entries.sort_by_key(|(k, _)| **k);
     for (node_ptr, props) in entries {
         node_ptr.hash(&mut hasher);
@@ -2159,7 +2204,8 @@ pub fn cascade_with_container_sizes(
                     for rule in &cq.rules {
                         for sel in &rule.selectors {
                             if matches_selector(node, sel) {
-                                let entry = style_map.entry(node_id(node)).or_default();
+                                let entry_rc = style_map.entry(node_id(node)).or_insert_with(|| Rc::new(HashMap::new()));
+                                let entry = Rc::make_mut(entry_rc);
                                 let mut variables: HashMap<String, String> = HashMap::new();
                                 for d in &rule.declarations {
                                     if d.property.starts_with("--") {
@@ -2194,7 +2240,8 @@ pub fn cascade_starting_style(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> St
             for rule in &sheet.starting_style_rules {
                 for sel in &rule.selectors {
                     if matches_selector(node, sel) {
-                        let entry = style_map.entry(node_id(node)).or_default();
+                        let entry_rc = style_map.entry(node_id(node)).or_insert_with(|| Rc::new(HashMap::new()));
+                        let entry = Rc::make_mut(entry_rc);
                         for d in &rule.declarations {
                             let resolved = resolve_value(&d.value, &variables);
                             let resolved = resolve_attr_in_value(&resolved, node);
@@ -2392,6 +2439,7 @@ pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
     let prof_t_walk = std::time::Instant::now();
     // Sheets signature pre cache klic.
     let sheets_sig = compute_sheets_signature(stylesheets);
+    let (host_id, dom_ver) = get_cascade_ctx();
     // Per-walk counters - akumulujeme lokalne pak flushne na end.
     let mut p_nodes: u32 = 0;
     let mut p_might_calls: u64 = 0;
@@ -2425,7 +2473,22 @@ pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
         let node_ptr = Rc::as_ptr(node) as usize;
         let hover_bit: u8 = if get_hovered_node() == Some(node_ptr) { 1 } else { 0 };
         let focus_bit: u8 = if get_focused_node() == Some(node_ptr) { 1 } else { 0 };
-        let cache_key: MatchedKey = (node_ptr, hover_bit, focus_bit, sheets_sig);
+        let cache_key: MatchedKey = (host_id, dom_ver, node_ptr, hover_bit, focus_bit, sheets_sig);
+
+        // Walk-output cache HIT: skip cely build (inline parse + apply decls + insert).
+        // Klic = MatchedKey + inline_attr_hash. Stable hover/focus/sheets/inline -> Rc clone.
+        let inline_hash = if let Some(s) = node.attr("style") {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            s.hash(&mut h);
+            h.finish()
+        } else { 0 };
+        let walk_key: WalkOutputKey = (host_id, dom_ver, node_ptr, hover_bit, focus_bit, sheets_sig, inline_hash);
+        if let Some(cached_walk) = WALK_OUTPUT_CACHE.with(|c| c.borrow().get(&walk_key).cloned()) {
+            // Re-use immutable post-walk Rc<HashMap>. Identity stable -> propagate cache hits.
+            style_map.insert(node_id(node), cached_walk);
+            return;
+        }
 
         let cached = MATCHED_DECLS_CACHE.with(|c| c.borrow().get(&cache_key).cloned());
         let matched_owned: Rc<Vec<((u32, u32, u32, usize), Declaration)>> = if let Some(v) = cached {
@@ -2589,15 +2652,41 @@ pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
             }
         }
 
-        style_map.insert(node_id(node), styles);
+        // UA tag defaults pro h1-h6 + strong/b - inline tady aby walk-cache Rc
+        // byl post-UA stable identity (jinak make_mut po walk mutuje a rozbi Rc).
+        let (ua_fs, ua_bold): (Option<&str>, bool) = match node_tag {
+            "h1" => (Some("2em"), true),
+            "h2" => (Some("1.5em"), true),
+            "h3" => (Some("1.17em"), true),
+            "h4" => (Some("1em"), true),
+            "h5" => (Some("0.83em"), true),
+            "h6" => (Some("0.67em"), true),
+            "strong" | "b" => (None, true),
+            _ => (None, false),
+        };
+        if let Some(v) = ua_fs {
+            styles.entry("font-size".into()).or_insert_with(|| v.to_string());
+        }
+        if ua_bold {
+            styles.entry("font-weight".into()).or_insert_with(|| "bold".to_string());
+        }
+
+        let styles_rc = Rc::new(styles);
+        // Walk-output cache store: pres stejny key bude HIT.
+        WALK_OUTPUT_CACHE.with(|c| {
+            let mut cache = c.borrow_mut();
+            if cache.len() >= 16384 { cache.clear(); }
+            cache.insert(walk_key, Rc::clone(&styles_rc));
+        });
+        style_map.insert(node_id(node), styles_rc);
     });
     let walk_ms = prof_t_walk.elapsed().as_secs_f32() * 1000.0;
 
     let prof_t_ua = std::time::Instant::now();
-    // UA tag defaults pro h1-h6 font-size + font-weight - musi byt v cascade
-    // entry PRED propagate_inherited, jinak parent font-size inherit overrida
-    // tag default (h2 v `body { font-size: 13px }` dostane 13 misto UA 24).
-    apply_ua_tag_defaults(root, &mut style_map);
+    // UA tag defaults inlined uvnitr walk loop (musi byt v walk-cache Rc entry
+    // aby cascade-to-cascade Rc identity zustal stable pro propagate cache).
+    // Old apply_ua_tag_defaults disabled - nedotykat se style_map post-walk.
+    let _ = &apply_ua_tag_defaults;  // suppress dead_code warning
     let ua_ms = prof_t_ua.elapsed().as_secs_f32() * 1000.0;
 
     let prof_t_prop = std::time::Instant::now();
@@ -2639,7 +2728,8 @@ fn apply_ua_tag_defaults(node: &Rc<Node>, style_map: &mut StyleMap) {
             _ => (None, false),
         };
         if fs.is_some() || bold {
-            let entry = style_map.entry(node_id(node)).or_default();
+            let entry_rc = style_map.entry(node_id(node)).or_insert_with(|| Rc::new(HashMap::new()));
+            let entry = Rc::make_mut(entry_rc);
             if let Some(v) = fs {
                 entry.entry("font-size".into()).or_insert_with(|| v.to_string());
             }
@@ -2663,6 +2753,7 @@ fn apply_ua_tag_defaults(node: &Rc<Node>, style_map: &mut StyleMap) {
 /// Iterativni DFS (ne recurze) protoze BC neumozni recurzi pres &mut style_map
 /// a immutable parent slice soucasne. Stack drzi (node, Rc<inherited_subset>).
 fn propagate_inherited(root: &Rc<Node>, style_map: &mut StyleMap) {
+    let (host_id, dom_ver) = get_cascade_ctx();
     // Inherited CSS props per CSS spec. `font-size`, `font-weight`, `font-stretch`
     // jsou inherited (NE jen aproximace pres UA tag defaults v build_box). Bez
     // toho `body { font-size: 13px }` se NEPROPAGOVAL do deti - cascade vracela
@@ -2678,49 +2769,81 @@ fn propagate_inherited(root: &Rc<Node>, style_map: &mut StyleMap) {
     ];
     type Subset = Rc<Vec<(String, String)>>;
     let empty: Subset = Rc::new(Vec::new());
-    let mut stack: Vec<(Rc<Node>, Subset)> = Vec::with_capacity(64);
-    stack.push((root.clone(), empty.clone()));
-    while let Some((node, parent_subset)) = stack.pop() {
+    let mut stack: Vec<(Rc<Node>, Subset, u64)> = Vec::with_capacity(64);
+    stack.push((root.clone(), empty.clone(), 0));
+    while let Some((node, parent_subset, parent_subset_hash)) = stack.pop() {
         let is_el = matches!(node.kind, NodeKind::Element { .. });
-        // 1. Merge parent inherited do vlastni entry (jen pokud element + parent ma data).
-        if is_el && !parent_subset.is_empty() {
-            let id = node_id(&node);
-            let entry = style_map.entry(id).or_default();
-            for (k, v) in parent_subset.iter() {
-                if !entry.contains_key(k) {
-                    entry.insert(k.clone(), v.clone());
+        let node_ptr = Rc::as_ptr(&node) as usize;
+        // Walk-output Rc identity je klic - stable cross cascade pres WALK_OUTPUT_CACHE.
+        let walk_rc_ptr = if is_el {
+            style_map.get(&node_ptr).map(|rc| Rc::as_ptr(rc) as usize).unwrap_or(0)
+        } else { 0 };
+        let cache_key: PropEntryKey = (host_id, dom_ver, walk_rc_ptr, parent_subset_hash);
+        let cached = if is_el && walk_rc_ptr != 0 {
+            PROPAGATED_ENTRY_CACHE.with(|c| c.borrow().get(&cache_key).cloned())
+        } else { None };
+
+        // Build own_subset z hashmap stable poradi (sorted var keys).
+        let build_own_subset = |m: &HashMap<String, String>| -> Vec<(String, String)> {
+            let mut v = Vec::with_capacity(INHERITED.len() + 4);
+            for &prop in INHERITED {
+                if let Some(val) = m.get(prop) {
+                    v.push((prop.to_string(), val.clone()));
                 }
             }
-        }
-        // 2. Build inherited subset pro descent. Pri element: build z final
-        // entry (po inheritance). Pri non-element: share parent's subset.
-        let own_subset: Subset = if is_el {
-            let id = node_id(&node);
-            if let Some(m) = style_map.get(&id) {
-                let mut v = Vec::with_capacity(INHERITED.len() + 4);
-                for &prop in INHERITED {
-                    if let Some(val) = m.get(prop) {
-                        v.push((prop.to_string(), val.clone()));
-                    }
-                }
-                // CSS variables (--foo) inherit per CSS Variables spec.
-                for (k, val) in m.iter() {
-                    if k.starts_with("--") {
-                        v.push((k.clone(), val.clone()));
-                    }
-                }
-                Rc::new(v)
+            let mut vars: Vec<(&String, &String)> = m.iter()
+                .filter(|(k, _)| k.starts_with("--"))
+                .collect();
+            vars.sort_by_key(|(k, _)| k.as_str());
+            for (k, val) in vars {
+                v.push((k.clone(), val.clone()));
+            }
+            v
+        };
+        let (own_subset, own_subset_hash): (Subset, u64) = if is_el {
+            if let Some((post_prop_rc, subset_rc)) = cached {
+                PROP_CACHE_HITS.with(|c| c.set(c.get() + 1));
+                // HIT zero-clone: jen Rc::clone do style_map + return cached subset Rc.
+                // Hash pro descent = Rc::as_ptr (jednoznacne identifikuje shared subset).
+                let subset_ptr = Rc::as_ptr(&subset_rc) as usize as u64;
+                style_map.insert(node_ptr, post_prop_rc);
+                (subset_rc, subset_ptr)
             } else {
-                Rc::clone(&parent_subset)
+                PROP_CACHE_MISSES.with(|c| c.set(c.get() + 1));
+                if !parent_subset.is_empty() {
+                    let entry_rc = style_map.entry(node_ptr).or_insert_with(|| Rc::new(HashMap::new()));
+                    let entry = Rc::make_mut(entry_rc);
+                    for (k, v) in parent_subset.iter() {
+                        if !entry.contains_key(k) {
+                            entry.insert(k.clone(), v.clone());
+                        }
+                    }
+                }
+                let v = if let Some(m) = style_map.get(&node_ptr) {
+                    build_own_subset(m)
+                } else { Vec::new() };
+                let v_rc = Rc::new(v);
+                let v_ptr = Rc::as_ptr(&v_rc) as usize as u64;
+                if let Some(final_entry) = style_map.get(&node_ptr) {
+                    PROPAGATED_ENTRY_CACHE.with(|c| {
+                        let mut cache = c.borrow_mut();
+                        if cache.len() >= 16384 { cache.clear(); }
+                        cache.insert(cache_key, (final_entry.clone(), Rc::clone(&v_rc)));
+                    });
+                }
+                (v_rc, v_ptr)
             }
         } else {
-            Rc::clone(&parent_subset)
+            // Non-element: pass-through parent subset + hash beze zmen.
+            // Pouzit ZMENENY parent_subset_hash, NE Rc::as_ptr(&parent_subset) -
+            // root's empty Rc je fresh per call -> jinak chain break v 1. urovni.
+            (Rc::clone(&parent_subset), parent_subset_hash)
         };
         // 3. Push children s shared Rc (cheap clone, ref count++).
         // Reverse pro stable preorder DFS (pop bere posledni = prvni child).
         let children = node.children.borrow();
         for ch in children.iter().rev() {
-            stack.push((ch.clone(), Rc::clone(&own_subset)));
+            stack.push((ch.clone(), Rc::clone(&own_subset), own_subset_hash));
         }
     }
 }
@@ -3318,7 +3441,7 @@ fn nth_child_matches(node: &Rc<Node>, a: i32, b: i32, of_type: bool, last: bool,
 
 /// Vrati computed styles pro dany uzel (z StyleMap).
 pub fn get_styles<'a>(map: &'a StyleMap, node: &Rc<Node>) -> Option<&'a HashMap<String, String>> {
-    map.get(&node_id(node))
+    map.get(&node_id(node)).map(|rc| rc.as_ref())
 }
 
 /// Parsovany shorthand `animation` property.
@@ -3697,8 +3820,8 @@ pub fn apply_transitions(
             if progress < 0.5 { at.from_value.clone() } else { at.to_value.clone() }
         };
 
-        if let Some(styles) = style_map.get_mut(&at.node_id) {
-            styles.insert(at.property.clone(), interpolated);
+        if let Some(styles_rc) = style_map.get_mut(&at.node_id) {
+            Rc::make_mut(styles_rc).insert(at.property.clone(), interpolated);
         }
     }
 }
@@ -3712,11 +3835,11 @@ pub fn apply_scroll_animations(
 ) -> bool {
     use super::layout::interpolate_keyframes;
     let mut any_active = false;
-    for styles in style_map.values_mut() {
+    for styles_rc in style_map.values_mut() {
         // Detect animation-timeline pres styles
-        let timeline = styles.get("animation-timeline").cloned().unwrap_or_default();
+        let timeline = styles_rc.get("animation-timeline").cloned().unwrap_or_default();
         if !timeline.starts_with("scroll(") && timeline != "scroll" { continue; }
-        let spec = match AnimationSpec::from_styles(styles) {
+        let spec = match AnimationSpec::from_styles(styles_rc.as_ref()) {
             Some(s) => s, None => continue,
         };
         let frames = stylesheets.iter()
@@ -3725,6 +3848,7 @@ pub fn apply_scroll_animations(
         let frames = match frames { Some(k) => &k.frames, None => continue };
         let progress = scroll_progress.clamp(0.0, 1.0);
         let interp_vals = interpolate_keyframes(frames, progress);
+        let styles = Rc::make_mut(styles_rc);
         for (k, v) in interp_vals { styles.insert(k, v); }
         any_active = true;
     }
@@ -3746,8 +3870,8 @@ pub fn apply_animations(
     use super::layout::interpolate_keyframes;
     let mut any_active = false;
 
-    for styles in style_map.values_mut() {
-        let spec = match AnimationSpec::from_styles(styles) {
+    for styles_rc in style_map.values_mut() {
+        let spec = match AnimationSpec::from_styles(styles_rc.as_ref()) {
             Some(s) => s, None => continue,
         };
 
@@ -3769,6 +3893,7 @@ pub fn apply_animations(
                     _ => 0.0,
                 };
                 let interp_vals = interpolate_keyframes(frames, initial);
+                let styles = Rc::make_mut(styles_rc);
                 for (k, v) in interp_vals { styles.insert(k, v); }
                 any_active = true;
             }
@@ -3779,6 +3904,7 @@ pub fn apply_animations(
         if spec.play_state == "paused" {
             // Pouzij prvni snimek
             let interp_vals = interpolate_keyframes(frames, 0.0);
+            let styles = Rc::make_mut(styles_rc);
             for (k, v) in interp_vals { styles.insert(k, v); }
             continue;
         }
@@ -3797,6 +3923,7 @@ pub fn apply_animations(
                     _ => 1.0,
                 };
                 let interp_vals = interpolate_keyframes(frames, final_progress);
+                let styles = Rc::make_mut(styles_rc);
                 for (k, v) in interp_vals { styles.insert(k, v); }
             }
             continue;
@@ -3819,6 +3946,7 @@ pub fn apply_animations(
         let progress = apply_easing(local, &spec.timing_function);
 
         let interp_vals = interpolate_keyframes(frames, progress);
+        let styles = Rc::make_mut(styles_rc);
         for (k, v) in interp_vals { styles.insert(k, v); }
         any_active = true;
     }

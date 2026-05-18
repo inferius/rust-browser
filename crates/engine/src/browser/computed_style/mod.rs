@@ -44,8 +44,8 @@ pub type DeclarationsMap = std::collections::HashMap<usize, Vec<CascadeDecl>>;
 #[derive(Debug, Default)]
 pub struct CascadeOutput {
     /// Legacy stringly mapping. Layout/paint/animations zatim cti odsud.
-    /// Po stage 4 dropnout.
-    pub style_map: HashMap<usize, HashMap<String, String>>,
+    /// Po stage 4 dropnout. Value Rc<HashMap> pro cheap clone (cascade cache).
+    pub style_map: HashMap<usize, std::rc::Rc<HashMap<String, String>>>,
     /// Typed computed styles. Po stage 3 plnit; po stage 4 main API.
     pub computed: ComputedStyleMap,
     /// All declarations vc. invalid. Pro devtools (stage 5).

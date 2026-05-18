@@ -463,7 +463,7 @@ impl WebView {
         let cascade_clone = std::rc::Rc::clone(&self.cascade_props);
         interp.set_cascade_lookup(move |ptr| {
             cascade_clone.borrow().as_ref()
-                .and_then(|m| m.get(&(ptr as usize)).cloned())
+                .and_then(|m| m.get(&(ptr as usize)).map(|rc| rc.as_ref().clone()))
                 .unwrap_or_default()
         });
         let sheets_clone = std::rc::Rc::clone(&self.stylesheets_data);
@@ -492,9 +492,10 @@ impl WebView {
         let doc_root_clone = std::rc::Rc::clone(&doc.root);
         self.document = Some(doc);
         self.stylesheets = vec![stylesheet];
-        // Per-element matched_decls cache invalidate - stylesheets se zmenily
-        // (signature klic mozna stejny pres heuristic hash; explicit clear je
-        // bezpecny + stale entries pres mrtve node_ptr drop).
+        // Stylesheets uplne nove pres load_html - drop cache (per-WV keys obsahuji
+        // host_id, ale stary host_id zustal v thread_local pres jine WV - bezpecne
+        // clearovat protoze nova pagina = nove node_ptrs).
+        // POZOR: clear smaze i entries jinych WV ale ty se rebuilduji rychle (cold start).
         crate::browser::cascade::clear_matched_decls_cache();
         // P2 hover invalidation set - build pres new stylesheets + DOM.
         // Pri mouse_move host kontroluje zda hovered v set. Pokud NE - skip
@@ -1491,7 +1492,9 @@ impl WebView {
         // (mrtve element + recyklacky addr) - cache musime drop.
         let cur_dom_ver = self.interpreter.as_ref().map(|i| i.dom_version()).unwrap_or(0);
         if cur_dom_ver != self.last_matched_cache_dom_ver {
-            crate::browser::cascade::clear_matched_decls_cache();
+            // DISABLED pres multi-WV thread_local konflikt - kazda WV by
+            // zhozila sdilenou cache jine WV. TODO: per-WV cache fields.
+            // crate::browser::cascade::clear_matched_decls_cache();
             self.last_matched_cache_dom_ver = cur_dom_ver;
         }
         // PERF: ovlivnuje stylesheet :hover/:focus? Pokud ne, hover/focus
@@ -1530,6 +1533,12 @@ impl WebView {
             // Cache hit - reuse Rc clone.
             self.cascade_cache_value.as_ref().unwrap().clone()
         } else {
+            // Per-WV cache izolace: host_id = root ptr, dom_ver = JS counter.
+            // Pres host_id se WV-A entries nesmichaji s WV-B; pres dom_ver
+            // stale entries po DOM mutaci auto-invalidne (key miss).
+            let host_id = std::rc::Rc::as_ptr(&doc.root) as usize as u64;
+            let dom_ver = self.interpreter.as_ref().map(|i| i.dom_version()).unwrap_or(0);
+            crate::browser::cascade::set_cascade_ctx(host_id, dom_ver);
             let m = std::rc::Rc::new(crate::browser::cascade::cascade_with_viewport(
                 &doc.root, &self.stylesheets, viewport_w, viewport_h));
             self.cascade_cache_key = Some(cache_key);
