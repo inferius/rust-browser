@@ -36,6 +36,16 @@ pub struct GlyphRun {
 /// Per-char x je `cumulative[i]`, advance je `advances[i]`. Vraci pole o
 /// delce `text.chars().count()` (kazdy znak = 1 GlyphRun, bez ligature merge
 /// - layout pouziva fontdue advance per codepoint).
+// Shape cache - thread_local. shape_text je volan per Text cmd v build_vertices
+// (~200 cmds per frame), drive uncached = 30-50ms total. Klic = (hash text +
+// font params). Pri stable hover frames same Text cmds = HIT.
+type ShapeKey = u64;
+type ShapeVal = std::rc::Rc<(Vec<GlyphRun>, ShapedText)>;
+thread_local! {
+    static SHAPE_CACHE: std::cell::RefCell<std::collections::HashMap<ShapeKey, ShapeVal>>
+        = std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
 pub fn shape_text(
     text: &str,
     font_size: f32,
@@ -44,18 +54,34 @@ pub fn shape_text(
     family: &str,
     letter_spacing: f32,
 ) -> (Vec<GlyphRun>, ShapedText) {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut h);
+    font_size.to_bits().hash(&mut h);
+    weight.hash(&mut h);
+    italic.hash(&mut h);
+    family.hash(&mut h);
+    letter_spacing.to_bits().hash(&mut h);
+    let key = h.finish();
+    let cached = SHAPE_CACHE.with(|c| c.borrow().get(&key).cloned());
+    if let Some(rc) = cached {
+        return ((*rc).0.clone(), (*rc).1.clone());
+    }
     let shaped = shape_text_advances(text, font_size, weight, italic, family, letter_spacing);
     let mut runs: Vec<GlyphRun> = Vec::with_capacity(shaped.advances.len());
-    for (i, (ch_idx, ch)) in text.char_indices().zip(text.chars()).enumerate() {
-        // ch_idx je (byte_offset, char) z char_indices, ale zip s chars by
-        // dal redundantni - opravim na char_indices:
-        let _ = ch;
+    for (i, ch_idx) in text.char_indices().enumerate() {
         let byte_offset = ch_idx.0;
         let ch = ch_idx.1;
         let x = *shaped.cumulative.get(i).unwrap_or(&0.0);
         let advance = *shaped.advances.get(i).unwrap_or(&0.0);
         runs.push(GlyphRun { ch, byte_offset, x, advance });
     }
+    let result = std::rc::Rc::new((runs.clone(), shaped.clone()));
+    SHAPE_CACHE.with(|c| {
+        let mut cache = c.borrow_mut();
+        if cache.len() >= 8192 { cache.clear(); }
+        cache.insert(key, result);
+    });
     (runs, shaped)
 }
 
