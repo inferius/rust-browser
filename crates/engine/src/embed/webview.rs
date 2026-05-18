@@ -191,6 +191,12 @@ pub struct WebView {
     /// + 28 :hover selectoru = 100% CPU pri pohybu).
     pub(crate) cascade_cache_key: Option<u64>,
     pub(crate) cascade_cache_value: Option<std::rc::Rc<crate::browser::cascade::StyleMap>>,
+    /// Cache layout_fingerprint per StyleMap Rc identity. Klic = Rc::as_ptr(style_map).
+    /// Pri cascade-level HIT je style_map SAME Rc -> layout_fp identical = reuse.
+    /// Sni hash compute z 8-10ms na O(1) lookup.
+    pub(crate) layout_fp_cache: Option<(usize, u64)>,
+    /// Cache paint_fingerprint per StyleMap Rc identity - stejne jako layout_fp.
+    pub(crate) paint_fp_cache: Option<(usize, u64)>,
     /// Hit-test cache pri mouse_move - klic = (x rounded 2px grid, y rounded,
     /// dom_version) -> Option<hovered_id>. Pri stejnem klici reuse posledni
     /// hovered (bez tree walk). Mouse pohyb pres 1px = stejna mrizka.
@@ -310,6 +316,8 @@ impl WebView {
             last_render_dom_version: 0,
             cascade_cache_key: None,
             cascade_cache_value: None,
+            layout_fp_cache: None,
+            paint_fp_cache: None,
             hit_test_cache: None,
             hovered_node_local: None,
             hover_affected_set: std::collections::HashSet::new(),
@@ -1690,7 +1698,19 @@ impl WebView {
         // -> SKIP layout+paint+gpu, reuse target_view. Vykresleny obsah uz
         // existuje v target_texture, nic se nezmenilo.
         // Skip jen pokud scroll a active anim taky nezmenily.
-        let paint_fp = crate::browser::cascade::paint_fingerprint(&style_map);
+        // paint_fp cache - Rc identity klic (same trick jako layout_fp).
+        let style_map_ptr_for_pfp = std::rc::Rc::as_ptr(&style_map) as usize;
+        let paint_fp = if let Some((cached_ptr, cached_fp)) = self.paint_fp_cache {
+            if cached_ptr == style_map_ptr_for_pfp { cached_fp } else {
+                let fp = crate::browser::cascade::paint_fingerprint(&style_map);
+                self.paint_fp_cache = Some((style_map_ptr_for_pfp, fp));
+                fp
+            }
+        } else {
+            let fp = crate::browser::cascade::paint_fingerprint(&style_map);
+            self.paint_fp_cache = Some((style_map_ptr_for_pfp, fp));
+            fp
+        };
         if Some(paint_fp) == self.last_paint_fingerprint
             && !needs_tick
             && self.target_view.is_some()
@@ -1709,7 +1729,19 @@ impl WebView {
         // ne cely style_map. Hover zmena typicky meni color/background - layout
         // hash zustava stable -> reuse cached layout_root. Skip layout_tree
         // call (363ms drop na <1ms v debug).
-        let layout_fp = crate::browser::cascade::layout_fingerprint(&style_map);
+        // layout_fp cache - Rc identity klic.
+        let style_map_ptr = std::rc::Rc::as_ptr(&style_map) as usize;
+        let layout_fp = if let Some((cached_ptr, cached_fp)) = self.layout_fp_cache {
+            if cached_ptr == style_map_ptr { cached_fp } else {
+                let fp = crate::browser::cascade::layout_fingerprint(&style_map);
+                self.layout_fp_cache = Some((style_map_ptr, fp));
+                fp
+            }
+        } else {
+            let fp = crate::browser::cascade::layout_fingerprint(&style_map);
+            self.layout_fp_cache = Some((style_map_ptr, fp));
+            fp
+        };
         // PERF: scroll_y NEN0 v key - smooth scroll inertia by jinak invalidoval
         // cache kazdy frame (lerp 25% per step = scroll_y meni kazdy pixel).
         // Layout je viewport+style closure, scroll je paint-time offset.

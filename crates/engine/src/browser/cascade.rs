@@ -566,25 +566,51 @@ pub const LAYOUT_RELEVANT_PROPS: &[&str] = &[
     "text-align", "text-indent", "letter-spacing", "word-spacing", "vertical-align",
 ];
 
-/// Hash celeho style_map pres LAYOUT_RELEVANT_PROPS jen. Pri stejnem hashi
-/// po cascade rebuild znamena ze layout je identicky -> reuse cached layout_root.
-/// Mouse hover zmena typicky meni jen `color`/`background-color` -> hash stable.
+// Hash celeho style_map pres LAYOUT_RELEVANT_PROPS jen. Pri stejnem hashi
+// po cascade rebuild znamena ze layout je identicky -> reuse cached layout_root.
+// Mouse hover zmena typicky meni jen `color`/`background-color` -> hash stable.
+// Per-node layout-relevant sub-hash cache. Klic = Rc::as_ptr(inner StyleMap value).
+// Hodnota = hash(node_ptr + LAYOUT_RELEVANT_PROPS values). Pri stable inner Rc HIT.
+thread_local! {
+    static LAYOUT_NODE_HASH_CACHE: std::cell::RefCell<HashMap<usize, u64>>
+        = std::cell::RefCell::new(HashMap::new());
+    static PAINT_NODE_HASH_CACHE: std::cell::RefCell<HashMap<usize, u64>>
+        = std::cell::RefCell::new(HashMap::new());
+}
+
 pub fn layout_fingerprint(style_map: &StyleMap) -> u64 {
     use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    // Sort entries by node ptr (HashMap iteration order = nedeterministicky).
-    let mut entries: Vec<(&usize, &Rc<HashMap<String, String>>)> = style_map.iter().collect();
-    entries.sort_by_key(|(k, _)| **k);
-    for (node_ptr, props) in entries {
-        node_ptr.hash(&mut hasher);
-        for prop_name in LAYOUT_RELEVANT_PROPS {
-            if let Some(v) = props.get(*prop_name) {
-                prop_name.hash(&mut hasher);
-                v.hash(&mut hasher);
-            }
+    // XOR akumulator pres per-node sub-hashes. Kazda sub-hash je deterministicky
+    // hash(node_ptr + sorted layout-relevant props). Pres XOR je commutative -
+    // order-independent + bez sort outer entries.
+    // Per-node sub-hash cached na Rc::as_ptr(inner). Pri walk_cache HIT je inner
+    // Rc stable -> sub-hash cache HIT -> skip prop iteration.
+    let mut total: u64 = 0;
+    LAYOUT_NODE_HASH_CACHE.with(|cache_cell| {
+        let mut cache = cache_cell.borrow_mut();
+        // LRU-style cap.
+        if cache.len() >= 32768 { cache.clear(); }
+        for (node_ptr, props) in style_map.iter() {
+            let rc_ptr = Rc::as_ptr(props) as usize;
+            let sub = if let Some(&h) = cache.get(&rc_ptr) {
+                h
+            } else {
+                let mut hh = std::collections::hash_map::DefaultHasher::new();
+                node_ptr.hash(&mut hh);
+                for prop_name in LAYOUT_RELEVANT_PROPS {
+                    if let Some(v) = props.get(*prop_name) {
+                        prop_name.hash(&mut hh);
+                        v.hash(&mut hh);
+                    }
+                }
+                let h = hh.finish();
+                cache.insert(rc_ptr, h);
+                h
+            };
+            total ^= sub;
         }
-    }
-    hasher.finish()
+    });
+    total
 }
 
 /// Hash CELEHO style_map (vsechny props - layout + paint). Pri shode mezi
@@ -596,19 +622,29 @@ pub fn layout_fingerprint(style_map: &StyleMap) -> u64 {
 /// pres novy Rc = paint+gpu run zbytecne.
 pub fn paint_fingerprint(style_map: &StyleMap) -> u64 {
     use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    let mut entries: Vec<(&usize, &Rc<HashMap<String, String>>)> = style_map.iter().collect();
-    entries.sort_by_key(|(k, _)| **k);
-    for (node_ptr, props) in entries {
-        node_ptr.hash(&mut hasher);
-        let mut props_sorted: Vec<(&String, &String)> = props.iter().collect();
-        props_sorted.sort_by(|a, b| a.0.cmp(b.0));
-        for (p, v) in props_sorted {
-            p.hash(&mut hasher);
-            v.hash(&mut hasher);
+    // Same trick jako layout_fingerprint - XOR per-node sub-hashes pres Rc ptr cache.
+    // Paint fingerprint cte cely content (vsechny props vyznamne pro paint), tudiz
+    // sub-hash kombinuje node_ptr + rc_ptr (Rc identity = full content identity).
+    let mut total: u64 = 0;
+    PAINT_NODE_HASH_CACHE.with(|cache_cell| {
+        let mut cache = cache_cell.borrow_mut();
+        if cache.len() >= 32768 { cache.clear(); }
+        for (node_ptr, props) in style_map.iter() {
+            let rc_ptr = Rc::as_ptr(props) as usize;
+            let sub = if let Some(&h) = cache.get(&rc_ptr) {
+                h
+            } else {
+                let mut hh = std::collections::hash_map::DefaultHasher::new();
+                node_ptr.hash(&mut hh);
+                rc_ptr.hash(&mut hh);
+                let h = hh.finish();
+                cache.insert(rc_ptr, h);
+                h
+            };
+            total ^= sub;
         }
-    }
-    hasher.finish()
+    });
+    total
 }
 
 /// Mapa: (node_id, pseudo-element-name) -> computed styles.
