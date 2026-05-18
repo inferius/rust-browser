@@ -399,16 +399,17 @@ impl DevtoolsTarget {
         // cascade vraci prazdne.
         let ptr = Rc::as_ptr(&node) as usize;
         let props_map = webview.cascade_props.borrow();
-        let style_map = props_map.get(&ptr);
         let mut computed: Vec<CSSProperty> = Vec::new();
-        if let Some(map) = style_map {
-            for (k, v) in map.iter() {
-                computed.push(CSSProperty {
-                    name: k.clone(),
-                    value: v.clone(),
-                    important: false,
-                    disabled: false,
-                });
+        if let Some(map) = props_map.as_ref() {
+            if let Some(node_styles) = map.get(&ptr) {
+                for (k, v) in node_styles.iter() {
+                    computed.push(CSSProperty {
+                        name: k.clone(),
+                        value: v.clone(),
+                        important: false,
+                        disabled: false,
+                    });
+                }
             }
         }
         computed.sort_by(|a, b| a.name.cmp(&b.name));

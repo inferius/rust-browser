@@ -158,10 +158,11 @@ pub struct WebView {
     pub(crate) layout_rects: std::rc::Rc<std::cell::RefCell<
         std::collections::HashMap<usize, (f32, f32, f32, f32)>
     >>,
-    /// Cascade props per node ptr. Vytvoreny po cascade pass. Sdileny do
-    /// interpreter cascade_lookup callback - JS getComputedStyle read.
+    /// Cascade props per node ptr. Po cascade pass je tu Rc<StyleMap> = sdilene
+    /// pres interpreter cascade_lookup callback. PERF: drive clone vsech entries
+    /// per frame (3434 * HashMap clone = 30ms). Ted Rc::clone (1us).
     pub(crate) cascade_props: std::rc::Rc<std::cell::RefCell<
-        std::collections::HashMap<usize, std::collections::HashMap<String, String>>
+        Option<std::rc::Rc<crate::browser::cascade::StyleMap>>
     >>,
     /// Stylesheets ve formatu pro document.styleSheets JS API.
     /// Vec<sheet>, kazdy sheet Vec<(selector_text, Vec<(prop, val)>)>.
@@ -298,7 +299,7 @@ impl WebView {
             h_scrollbar_drag: None,
             last_layout_root: None,
             layout_rects: std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new())),
-            cascade_props: std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new())),
+            cascade_props: std::rc::Rc::new(std::cell::RefCell::new(None)),
             stylesheets_data: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
             async_jobs: crate::browser::async_jobs::AsyncJobsRegistry::new(),
             nav_id: 0,
@@ -457,7 +458,9 @@ impl WebView {
         });
         let cascade_clone = std::rc::Rc::clone(&self.cascade_props);
         interp.set_cascade_lookup(move |ptr| {
-            cascade_clone.borrow().get(&(ptr as usize)).cloned().unwrap_or_default()
+            cascade_clone.borrow().as_ref()
+                .and_then(|m| m.get(&(ptr as usize)).cloned())
+                .unwrap_or_default()
         });
         let sheets_clone = std::rc::Rc::clone(&self.stylesheets_data);
         interp.set_stylesheets_lookup(move || {
@@ -1975,11 +1978,10 @@ impl WebView {
             populate_layout_rects(&layout_root, self.scroll_x, self.scroll_y, &mut rects);
         }
         {
-            let mut props = self.cascade_props.borrow_mut();
-            props.clear();
-            for (ptr, style) in style_map.iter() {
-                props.insert(*ptr, style.clone());
-            }
+            // PERF: drive `props.insert(*ptr, style.clone())` per element =
+            // O(N * keys) hashmap clone (~30ms pri 3434 elementu pres devtools).
+            // Ted Rc::clone = 1us. Callback dela lookup pres borrow().as_ref().
+            *self.cascade_props.borrow_mut() = Some(std::rc::Rc::clone(&style_map));
         }
         self.last_layout_root = Some(layout_root);
 

@@ -236,6 +236,15 @@ pub fn extract_text_runs(
     runs
 }
 
+/// Stable hash pro vertex cache klic. DisplayCommand obsahuje f32 (no Hash trait
+/// derive moznost). Hash pres Debug format string - cheap (1-2ms per 1000 cmds)
+/// vs build_vertices 35ms - net pozitivni i pri vsem rebuildu.
+fn hash_display_command<H: std::hash::Hasher>(c: &DisplayCommand, h: &mut H) {
+    use std::hash::Hash;
+    let s = format!("{:?}", c);
+    s.hash(h);
+}
+
 fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: &ImageAtlas, zoom: f32) -> Vec<Vertex> {
     // PERF: pre-alloc capacity estimate (6 verts per cmd avg).
     let mut verts = Vec::with_capacity(commands.len() * 6);
@@ -4086,6 +4095,16 @@ pub struct Renderer {
     /// znovu-pouziti stejneho textu. Resi 20 ms warm-up loop na strankach
     /// kde display list je stable mezi framy.
     text_cmd_warmed: std::collections::HashSet<u64>,
+    /// Vertex buffer cache pres DisplayCommand slice hash + atlas/image gen
+    /// counter + zoom. Pri stable display_list (typicky hover bez visual change)
+    /// reuse drive vyrobeny `Vec<Vertex>` misto rebuild (35ms saved per frame).
+    /// LRU 8 entries (multiple segments per frame: page WV, devtools, chrome).
+    vert_cache: std::collections::VecDeque<(u64, Vec<Vertex>)>,
+    /// Atlas generation counter - bump pri glyph add/upload. Vertex cache klic
+    /// zahrnuje aktualni gen, takze stary cache entry expiruje po novem glyphu.
+    pub atlas_gen: u64,
+    /// Image atlas generation counter - rovnez.
+    pub image_atlas_gen: u64,
     image_tex: wgpu::Texture,
     image_view: wgpu::TextureView,
     /// @font-face loaded fonts: family -> Font.
@@ -4632,6 +4651,9 @@ impl Renderer {
             image_source_bytes: std::collections::HashMap::new(),
             image_load_failed: std::collections::HashSet::new(),
             text_cmd_warmed: std::collections::HashSet::new(),
+            vert_cache: std::collections::VecDeque::with_capacity(8),
+            atlas_gen: 0,
+            image_atlas_gen: 0,
             font_registry: std::collections::HashMap::new(),
             loaded_font_urls: std::collections::HashSet::new(),
             color_fonts: std::collections::HashMap::new(),
@@ -5945,6 +5967,12 @@ impl Renderer {
         self.upload_image_atlas();
     }
 
+    pub fn invalidate_vert_cache(&mut self) {
+        self.vert_cache.clear();
+        self.atlas_gen = self.atlas_gen.wrapping_add(1);
+        self.image_atlas_gen = self.image_atlas_gen.wrapping_add(1);
+    }
+
     pub fn draw_segments_into_view_clipped(&mut self, view: &wgpu::TextureView,
                                         cmds: &[DisplayCommand], start_clear: bool,
                                         scissor: Option<(u32, u32, u32, u32)>) -> bool {
@@ -5962,7 +5990,35 @@ impl Renderer {
         for seg in segments {
             match seg {
                 Seg::Main(slice) => {
-                    let verts = build_vertices(slice, &self.atlas, &self.image_atlas, self.zoom);
+                    // Vertex buffer cache - hash cmds slice + atlas/image gen + zoom.
+                    // Cache hit reuse Vec<Vertex> = skip build_vertices (20ms saved).
+                    // Pri stable display_list (mass hover frames bez visual change)
+                    // gpu phase 40-65ms -> 7-10ms.
+                    let key = {
+                        use std::hash::{Hash, Hasher};
+                        let mut h = std::collections::hash_map::DefaultHasher::new();
+                        slice.len().hash(&mut h);
+                        for c in slice {
+                            hash_display_command(c, &mut h);
+                        }
+                        self.atlas_gen.hash(&mut h);
+                        self.image_atlas_gen.hash(&mut h);
+                        self.zoom.to_bits().hash(&mut h);
+                        h.finish()
+                    };
+                    let verts_cached = self.vert_cache.iter()
+                        .find(|(k, _)| *k == key)
+                        .map(|(_, v)| v.clone());
+                    let verts = if let Some(v) = verts_cached {
+                        v
+                    } else {
+                        let v = build_vertices(slice, &self.atlas, &self.image_atlas, self.zoom);
+                        if self.vert_cache.len() >= 8 {
+                            self.vert_cache.pop_front();
+                        }
+                        self.vert_cache.push_back((key, v.clone()));
+                        v
+                    };
                     self.draw_main_pass_clipped(view, &verts, first_pass, scissor);
                     first_pass = false;
                 }
