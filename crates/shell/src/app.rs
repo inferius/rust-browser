@@ -1019,6 +1019,15 @@ html, body {{ margin: 0; padding: 0; height: 100%; background: #202124; color: #
     fn toggle_devtools(&mut self) {
         let was_visible = self.devtools_visible;
         self.devtools_visible = !was_visible;
+        if !self.devtools_visible {
+            // Hide -> DROP devtools WebView. JS interp, DOM, caches, timers,
+            // animations - vse odpoji. Pri dalsim toggle se rebuilduje cold.
+            // Bez tohoto stale tickly intervals + thread_local caches accumulated
+            // entries -> page perf degradace po close.
+            self.devtools = None;
+            self.devtools_target = None;
+            self.cdp_channel = None;
+        }
         if self.devtools_visible && self.devtools.is_none() {
             let t_start = std::time::Instant::now();
             let engine = match &self.engine { Some(e) => e.clone(), None => return };
