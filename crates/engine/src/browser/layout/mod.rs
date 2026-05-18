@@ -1547,6 +1547,14 @@ thread_local! {
     /// Key format: "<family>" / "<family>__bold__" / "<family>__italic__" / "<family>__bi__".
     pub(crate) static MEASURE_FONTS: std::cell::RefCell<HashMap<String, fontdue::Font>>
         = std::cell::RefCell::new(HashMap::new());
+    /// Generation counter - bumps pri register_measure_font. Shape cache pres
+    /// editor::shape_text musi tuto hodnotu zahrnout v klici, jinak post-@font-face
+    /// load vraci stale advances (pred system fallback fontu).
+    pub(crate) static MEASURE_FONTS_GEN: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+pub fn measure_fonts_gen() -> u64 {
+    MEASURE_FONTS_GEN.with(|c| c.get())
 }
 
 /// Renderer pri @font-face load registruje font pro measure. Pri parsing
@@ -1556,6 +1564,7 @@ pub fn register_measure_font(key: &str, font: fontdue::Font) {
     MEASURE_FONTS.with(|m| {
         m.borrow_mut().insert(key.to_string(), font);
     });
+    MEASURE_FONTS_GEN.with(|c| c.set(c.get() + 1));
 }
 
 /// Lookup pro measure_text_width_full. Vraci cloned font (fontdue::Font je
