@@ -291,6 +291,7 @@ pub struct ShellApp {
     autotest_f12_done: bool,
     /// Hover ticker (per-frame increment, modulo na unique X positions).
     autotest_hover_tick: u32,
+    #[allow(dead_code)]
     autotest_click_done: bool,
 }
 
@@ -1119,32 +1120,6 @@ html, body {{ margin: 0; padding: 0; height: 100%; background: #202124; color: #
                 modifiers: rwe_engine::embed::KeyModifiers::default(),
             };
             let _ = self.dispatch_input(evt);
-            if let Some(w) = &self.window { w.request_redraw(); }
-        }
-        // CLICK test pri t=2000ms - klik na druhy tab "Konzole".
-        // Devtools y_start = chrome_h + content_h*(1-split). Tab strip 32px.
-        if std::env::var("RWE_AUTOTEST_CLICK").is_ok() && self.autotest_f12_done
-            && !self.autotest_click_done
-            && elapsed.as_millis() >= 2000
-        {
-            self.autotest_click_done = true;
-            let dev_y_start = self.devtools_y_offset();
-            let (cx, cy) = (180.0_f32, dev_y_start + 12.0);
-            eprintln!("[AUTOTEST CLICK] tab Konzole at ({},{}) (dev_y_start={})", cx, cy, dev_y_start);
-            self.mouse_x = cx;
-            self.mouse_y = cy;
-            let down = rwe_engine::embed::InputEvent::MouseDown {
-                x: cx, y: cy,
-                button: rwe_engine::embed::MouseButton::Left,
-                modifiers: rwe_engine::embed::KeyModifiers::default(),
-            };
-            let _ = self.dispatch_input(down);
-            let up = rwe_engine::embed::InputEvent::MouseUp {
-                x: cx, y: cy,
-                button: rwe_engine::embed::MouseButton::Left,
-                modifiers: rwe_engine::embed::KeyModifiers::default(),
-            };
-            let _ = self.dispatch_input(up);
             if let Some(w) = &self.window { w.request_redraw(); }
         }
     }
