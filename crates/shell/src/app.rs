@@ -281,6 +281,16 @@ pub struct ShellApp {
     modifiers: winit::keyboard::ModifiersState,
     history: Vec<String>,
     history_idx: usize,
+    /// AUTOTEST exit deadline (RWE_AUTOTEST env). None = manual run.
+    autotest_deadline: Option<std::time::Instant>,
+    /// AUTOTEST start time pro relativni stagery.
+    autotest_start: std::time::Instant,
+    autotest_f12: bool,
+    autotest_hover: bool,
+    /// Pres flag - autotest F12 uz proveden.
+    autotest_f12_done: bool,
+    /// Hover ticker (per-frame increment, modulo na unique X positions).
+    autotest_hover_tick: u32,
 }
 
 impl ShellApp {
@@ -330,6 +340,12 @@ impl ShellApp {
             modifiers: winit::keyboard::ModifiersState::empty(),
             history: Vec::new(),
             history_idx: 0,
+            autotest_deadline: None,
+            autotest_start: std::time::Instant::now(),
+            autotest_f12: false,
+            autotest_hover: false,
+            autotest_f12_done: false,
+            autotest_hover_tick: 0,
         }
     }
 
@@ -1065,6 +1081,37 @@ html, body {{ margin: 0; padding: 0; height: 100%; background: #202124; color: #
         if let Some(w) = &self.window { w.request_redraw(); }
     }
 
+    /// Self-driven test scenario. Pri RWE_AUTOTEST_F12=1 po 500ms toggle devtools.
+    /// Pri RWE_AUTOTEST_HOVER=1 emit mouse_move pres devtools area per frame.
+    /// Bez user GUI interakce, captured stderr/stdout pres `cargo run 2>&1 | tee`.
+    fn autotest_tick(&mut self) {
+        if self.autotest_deadline.is_none() { return; }
+        let elapsed = self.autotest_start.elapsed();
+        // F12 toggle po 500ms.
+        if self.autotest_f12 && !self.autotest_f12_done && elapsed.as_millis() >= 500 {
+            eprintln!("[AUTOTEST] toggle devtools (t={}ms)", elapsed.as_millis());
+            self.toggle_devtools();
+            self.autotest_f12_done = true;
+            if let Some(w) = &self.window { w.request_redraw(); }
+            return;
+        }
+        // Hover ticks po 1500ms - emit mouse_move pres devtools area.
+        if self.autotest_hover && self.autotest_f12_done && elapsed.as_millis() >= 1500 {
+            self.autotest_hover_tick = self.autotest_hover_tick.wrapping_add(1);
+            // Pohyb cyklicky pres x=100..600 y=500..700 (devtools area).
+            let tx = 100.0 + (self.autotest_hover_tick % 50) as f32 * 10.0;
+            let ty = 500.0 + ((self.autotest_hover_tick / 50) % 20) as f32 * 10.0;
+            self.mouse_x = tx;
+            self.mouse_y = ty;
+            let evt = rwe_engine::embed::InputEvent::MouseMove {
+                x: tx, y: ty,
+                modifiers: rwe_engine::embed::KeyModifiers::default(),
+            };
+            let _ = self.dispatch_input(evt);
+            if let Some(w) = &self.window { w.request_redraw(); }
+        }
+    }
+
     fn redraw(&mut self) {
         // FPS counter - measure frame time + EMA (30 frame ring).
         let now = std::time::Instant::now();
@@ -1276,6 +1323,25 @@ impl ApplicationHandler for ShellApp {
 
         println!("[shell] vlastni okno + WebView + chrome bar");
         window.request_redraw();
+
+        // AUTOTEST hook - po N sekundach proc exit + log ticker pro:
+        // RWE_AUTOTEST=N        - exit po N s
+        // RWE_AUTOTEST_F12=1    - po 500ms toggle devtools (pres script tick)
+        // RWE_AUTOTEST_HOVER=1  - po 1500ms emit mouse hovers nad devtools
+        // Hover akce pres script_tick - bypass ApplicationHandler thread safety
+        // (single-thread event loop polluje misto cross-thread synthesis).
+        if let Ok(v) = std::env::var("RWE_AUTOTEST") {
+            let secs: u64 = v.parse().unwrap_or(8);
+            self.autotest_deadline = Some(std::time::Instant::now()
+                + std::time::Duration::from_secs(secs));
+            self.autotest_f12 = std::env::var("RWE_AUTOTEST_F12").is_ok();
+            self.autotest_hover = std::env::var("RWE_AUTOTEST_HOVER").is_ok();
+            self.autotest_start = std::time::Instant::now();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(secs));
+                std::process::exit(0);
+            });
+        }
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
@@ -1293,6 +1359,7 @@ impl ApplicationHandler for ShellApp {
                 if let Some(w) = &self.window { w.request_redraw(); }
             }
             WindowEvent::RedrawRequested => {
+                self.autotest_tick();
                 self.redraw();
             }
             WindowEvent::CursorMoved { position, .. } => {
