@@ -338,6 +338,65 @@ pub fn emit_main_scrollbar_overlay(
             color: thumb_col, radius: (bar_h - 4.0) * 0.5,
         });
     }
+    // Inner scrollbar overlay - kazdy nested element s overflow:auto/scroll +
+    // content > rect. Devtools panels (.dom-tree, .styles-body, .computed-list)
+    // pouzivaji nested overflow - bez tohoto se content cut off bez visual hint
+    // ze je scrollovatelne.
+    emit_inner_scrollbars(layout_root, display_list, track_col, thumb_col, scroll_x, scroll_y);
+}
+
+fn emit_inner_scrollbars(
+    bx: &LayoutBox,
+    display_list: &mut Vec<DisplayCommand>,
+    track_col: [u8; 4],
+    thumb_col: [u8; 4],
+    scroll_x: f32, scroll_y: f32,
+) {
+    let _ = scroll_x;
+    let _ = scroll_y;
+    use crate::browser::layout::Overflow;
+    let needs_y = matches!(bx.overflow_y, Overflow::Auto | Overflow::Scroll)
+        && bx.inner_content_h > bx.rect.height + 0.5;
+    let needs_x = matches!(bx.overflow_x, Overflow::Auto | Overflow::Scroll)
+        && bx.inner_content_w > bx.rect.width + 0.5;
+    if needs_y {
+        let bar_w = bx.scrollbar_size.max(8.0).min(14.0);
+        let bar_x = bx.rect.x + bx.rect.width - bar_w;
+        let bar_y = bx.rect.y;
+        let bar_h = bx.rect.height;
+        display_list.push(DisplayCommand::Rect {
+            x: bar_x, y: bar_y, w: bar_w, h: bar_h,
+            color: track_col, radius: 0.0,
+        });
+        let thumb_h = (bar_h * bar_h / bx.inner_content_h).max(30.0);
+        // No scroll tracking per-element - inner scroll = 0 (top of content).
+        // TODO Phase X: per-element scroll state.
+        let thumb_y = bar_y;
+        display_list.push(DisplayCommand::Rect {
+            x: bar_x + 2.0, y: thumb_y + 2.0,
+            w: bar_w - 4.0, h: (thumb_h - 4.0).max(8.0),
+            color: thumb_col, radius: (bar_w - 4.0) * 0.5,
+        });
+    }
+    if needs_x {
+        let bar_h = bx.scrollbar_size.max(8.0).min(14.0);
+        let bar_x = bx.rect.x;
+        let bar_y = bx.rect.y + bx.rect.height - bar_h;
+        let bar_w = bx.rect.width - if needs_y { 12.0 } else { 0.0 };
+        display_list.push(DisplayCommand::Rect {
+            x: bar_x, y: bar_y, w: bar_w, h: bar_h,
+            color: track_col, radius: 0.0,
+        });
+        let thumb_w = (bar_w * bar_w / bx.inner_content_w).max(30.0);
+        display_list.push(DisplayCommand::Rect {
+            x: bar_x + 2.0, y: bar_y + 2.0,
+            w: (thumb_w - 4.0).max(8.0), h: bar_h - 4.0,
+            color: thumb_col, radius: (bar_h - 4.0) * 0.5,
+        });
+    }
+    for ch in &bx.children {
+        emit_inner_scrollbars(ch, display_list, track_col, thumb_col, scroll_x, scroll_y);
+    }
 }
 
 // Thread-local viewport pro paint culling. Pred build_display_list_culled
