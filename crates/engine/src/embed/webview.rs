@@ -216,6 +216,9 @@ pub struct WebView {
     /// jen - color/background change neinvaliduje. Pri shode reuse
     /// last_layout_root + skip layout_tree call (363ms drop na <1ms v debug).
     pub(crate) layout_cache_key: Option<(u64, u32, u32)>,
+    /// Per-element matched_decls cache invalidation tracker. Pres dom_version
+    /// change clear cache (node_ptrs mohou byt mrtvych po DOM mutaci).
+    pub(crate) last_matched_cache_dom_ver: u64,
     /// Pocet emitnutych LAYOUT OVERFLOW logu - rate-limit ze spamu pri opakovanych
     /// layout cache miss. Reset pri load_html.
     pub(crate) layout_overflow_log_count: u32,
@@ -315,6 +318,7 @@ impl WebView {
             prof_paint_ms: 0.0,
             prof_gpu_ms: 0.0,
             layout_cache_key: None,
+            last_matched_cache_dom_ver: 0,
             layout_overflow_log_count: 0,
             layer_textures: std::collections::HashMap::new(),
             last_layer_tree: None,
@@ -488,6 +492,10 @@ impl WebView {
         let doc_root_clone = std::rc::Rc::clone(&doc.root);
         self.document = Some(doc);
         self.stylesheets = vec![stylesheet];
+        // Per-element matched_decls cache invalidate - stylesheets se zmenily
+        // (signature klic mozna stejny pres heuristic hash; explicit clear je
+        // bezpecny + stale entries pres mrtve node_ptr drop).
+        crate::browser::cascade::clear_matched_decls_cache();
         // P2 hover invalidation set - build pres new stylesheets + DOM.
         // Pri mouse_move host kontroluje zda hovered v set. Pokud NE - skip
         // dirty -> cascade reuse cache. Pres mass :hover v devtools-frontend
@@ -1478,6 +1486,14 @@ impl WebView {
         crate::browser::cascade::set_hovered_node(self.hovered_node_local);
 
         let prof_t0 = std::time::Instant::now();
+        // Per-element matched_decls cache invalidate pres dom mutate.
+        // Pri DOM mutaci (interp.bump_dom_version), node_ptr mohou byt invalid
+        // (mrtve element + recyklacky addr) - cache musime drop.
+        let cur_dom_ver = self.interpreter.as_ref().map(|i| i.dom_version()).unwrap_or(0);
+        if cur_dom_ver != self.last_matched_cache_dom_ver {
+            crate::browser::cascade::clear_matched_decls_cache();
+            self.last_matched_cache_dom_ver = cur_dom_ver;
+        }
         // PERF: ovlivnuje stylesheet :hover/:focus? Pokud ne, hover/focus
         // zmena nemeni style_map -> cache klic NEzahrnuje. Drasticky redukuje
         // cascade walks pri hover na pages bez :hover effects.

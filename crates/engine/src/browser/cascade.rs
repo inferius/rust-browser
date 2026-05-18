@@ -5,8 +5,47 @@
 
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::cell::RefCell;
 use super::dom::{Node, NodeKind};
-use super::css_parser::{Stylesheet, Selector, SimpleSelector, Combinator, Rule, specificity};
+use super::css_parser::{Stylesheet, Selector, SimpleSelector, Combinator, Rule, Declaration, specificity};
+
+/// Per-element matched_decls cache. Klic: (node_ptr, hover_bit, focus_bit,
+/// sheets_signature). Hodnota: Rc<Vec<((prio, sheet_prio, spec, order), Declaration)>>.
+/// Pri stable DOM + stylesheets, vsech ~3434 nodes hit cache = walk 41ms -> <2ms.
+/// Pri hover zmene jednu node klic + lookup miss + recompute (1 entry / 12us).
+/// Invalidate triggery: stylesheet change (clear all), DOM mutate (clear all).
+type MatchedKey = (usize, u8, u8, u64);
+type MatchedVal = Rc<Vec<((u32, u32, u32, usize), Declaration)>>;
+thread_local! {
+    static MATCHED_DECLS_CACHE: RefCell<HashMap<MatchedKey, MatchedVal>> = RefCell::new(HashMap::new());
+}
+
+/// Reset cache - vola se pri load_html (stylesheets se meni) + pri DOM mutaci
+/// (node_ptrs mohou invalidne). Bez explicitni invalidace cache hold stale
+/// entries pres &Stylesheet refs co uz neexistuji.
+pub fn clear_matched_decls_cache() {
+    MATCHED_DECLS_CACHE.with(|c| c.borrow_mut().clear());
+}
+
+/// Stylesheets signature - cheap hash pres metadata (cnt rules + selectors).
+/// Pres stable signature cache hit. Pri stylesheet content change (parse novy
+/// CSS), signature musi zmenit -> stary entries unused -> evicted pres size cap.
+fn compute_sheets_signature(stylesheets: &[Stylesheet]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    stylesheets.len().hash(&mut h);
+    for s in stylesheets {
+        s.rules.len().hash(&mut h);
+        s.layered_rules.len().hash(&mut h);
+        s.scopes.len().hash(&mut h);
+        // First 3 rules selector cnts pres rychlou heuristiku.
+        for r in s.rules.iter().take(3) {
+            r.selectors.len().hash(&mut h);
+            r.declarations.len().hash(&mut h);
+        }
+    }
+    h.finish()
+}
 use super::computed_style::{
     AlignContent as CsAlignContent, AlignItems as CsAlignItems,
     AlignSelf as CsAlignSelf, BorderStyle as CsBorderStyle,
@@ -2351,19 +2390,19 @@ pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
     }
     CASCADE_PROF.with(|c| c.borrow_mut().keys_prep_ms = prof_t_keys.elapsed().as_secs_f32() * 1000.0);
     let prof_t_walk = std::time::Instant::now();
+    // Sheets signature pre cache klic.
+    let sheets_sig = compute_sheets_signature(stylesheets);
     // Per-walk counters - akumulujeme lokalne pak flushne na end.
     let mut p_nodes: u32 = 0;
     let mut p_might_calls: u64 = 0;
     let mut p_might_pass: u64 = 0;
     let mut p_match_hits: u64 = 0;
     let mut p_decls_applied: u64 = 0;
+    let mut p_cache_hits: u32 = 0;
     // Prochazime DOM, pro kazdy element zkontrolujeme vsechny rules
     root.walk(&mut |node| {
         if !matches!(node.kind, NodeKind::Element { .. }) { return; }
         p_nodes += 1;
-
-        let mut matched_decls: Vec<((u32, u32, u32, usize), &super::css_parser::Declaration)> = Vec::new();
-        let mut order = 0;
 
         // PERF: precompute node identity ONCE per node. tag_name_ref vraci &str
         // (drive `.tag_name()` clone'oval String per call).
@@ -2380,6 +2419,22 @@ pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
             crate::debug_bp::breakpoint_cascade();
         }
 
+        // Per-element matched_decls cache lookup. Klic = (node_ptr, hover_bit,
+        // focus_bit, sheets_signature). Pres stable DOM + style + non-hover-state
+        // change vsech ~3434 nodes hit cache = skip walk loop = 0us per node.
+        let node_ptr = Rc::as_ptr(node) as usize;
+        let hover_bit: u8 = if get_hovered_node() == Some(node_ptr) { 1 } else { 0 };
+        let focus_bit: u8 = if get_focused_node() == Some(node_ptr) { 1 } else { 0 };
+        let cache_key: MatchedKey = (node_ptr, hover_bit, focus_bit, sheets_sig);
+
+        let cached = MATCHED_DECLS_CACHE.with(|c| c.borrow().get(&cache_key).cloned());
+        let matched_owned: Rc<Vec<((u32, u32, u32, usize), Declaration)>> = if let Some(v) = cached {
+            p_cache_hits += 1;
+            v
+        } else {
+        // Cache MISS - compute matched_decls pres tento node.
+        let mut matched_decls: Vec<((u32, u32, u32, usize), Declaration)> = Vec::new();
+        let mut order = 0;
         for (sheet_idx, sheet) in stylesheets.iter().enumerate() {
             // Layered rules nejprve (nizsi prio) - per CSS Cascade Layers L5.
             let mut layered_rule_idx = 0usize;
@@ -2409,7 +2464,7 @@ pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
                                     spec.0 * 1000 + spec.1 + spec.2,
                                     order,
                                 );
-                                matched_decls.push(((key.0, key.1, key.2, key.3), decl));
+                                matched_decls.push(((key.0, key.1, key.2, key.3), decl.clone()));
                                 order += 1;
                                 p_decls_applied += 1;
                             }
@@ -2439,7 +2494,7 @@ pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
                                 spec.0 * 1000 + spec.1 + spec.2,
                                 order,
                             );
-                            matched_decls.push(((key.0, key.1, key.2, key.3), decl));
+                            matched_decls.push(((key.0, key.1, key.2, key.3), decl.clone()));
                             order += 1;
                             p_decls_applied += 1;
                         }
@@ -2472,7 +2527,7 @@ pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
                                     spec.0 * 1000 + spec.1 + spec.2 + 1,
                                     order,
                                 );
-                                matched_decls.push(((key.0, key.1, key.2, key.3), decl));
+                                matched_decls.push(((key.0, key.1, key.2, key.3), decl.clone()));
                                 order += 1;
                                 p_decls_applied += 1;
                             }
@@ -2482,19 +2537,30 @@ pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
             }
         }
 
-        // Sort podle (important, id_count, class+type, order) - vyssi kombinace vyhrava
-        matched_decls.sort_by(|a, b| a.0.cmp(&b.0));
+        // Store do cache.
+        let rc = Rc::new(matched_decls);
+        MATCHED_DECLS_CACHE.with(|c| {
+            let mut cache = c.borrow_mut();
+            // LRU-style cap: pres 16k entries clear all (full restart).
+            if cache.len() >= 16384 {
+                cache.clear();
+            }
+            cache.insert(cache_key, Rc::clone(&rc));
+        });
+        rc
+        };  // konec if/else cache miss/hit
+
+        // Sort podle (important, id_count, class+type, order) - vyssi kombinace vyhrava.
+        // matched_owned je Rc<Vec> - need owned indices Vec pro sort (preserve Rc immutable).
+        let mut indices: Vec<usize> = (0..matched_owned.len()).collect();
+        indices.sort_by(|&a, &b| matched_owned[a].0.cmp(&matched_owned[b].0));
 
         let mut styles = HashMap::new();
-        for (_, decl) in matched_decls {
+        for &idx in &indices {
+            let decl = &matched_owned[idx].1;
             let resolved = resolve_value_with_funcs(&decl.value, &variables, &functions);
             let resolved = resolve_attr_in_value(&resolved, node);
             // CSS-wide keywords: inherit / initial / unset / revert / revert-layer.
-            // `inherit` = remove + propagate_inherited dosadi parent (pro inherited
-            // props). `initial` / `unset` / `revert` ucinne reset na default.
-            // Bez handling `inherit` zustal jako literal string v mapa ->
-            // bx.font_family = "inherit" -> lookup atlas "inherit" -> None ->
-            // system default font, ne real parent.
             let kw = resolved.trim();
             if matches!(kw, "inherit" | "unset" | "initial" | "revert" | "revert-layer") {
                 styles.remove(&decl.property);
