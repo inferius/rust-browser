@@ -214,7 +214,10 @@ pub struct WebView {
     /// u32, scroll_y rounded - pro sticky). Fingerprint pres LAYOUT_RELEVANT_PROPS
     /// jen - color/background change neinvaliduje. Pri shode reuse
     /// last_layout_root + skip layout_tree call (363ms drop na <1ms v debug).
-    pub(crate) layout_cache_key: Option<(u64, u32, u32, i32)>,
+    pub(crate) layout_cache_key: Option<(u64, u32, u32)>,
+    /// Pocet emitnutych LAYOUT OVERFLOW logu - rate-limit ze spamu pri opakovanych
+    /// layout cache miss. Reset pri load_html.
+    pub(crate) layout_overflow_log_count: u32,
     /// Per-layer texture cache (L2 compositor). Klic = layer_id (root box
     /// node_ptr). Hodnota = (texture, view, width_px, height_px, last_paint_fp).
     /// Pri layer texture cache hit: paint do existing texture skip (last_paint_fp
@@ -311,6 +314,7 @@ impl WebView {
             prof_paint_ms: 0.0,
             prof_gpu_ms: 0.0,
             layout_cache_key: None,
+            layout_overflow_log_count: 0,
             layer_textures: std::collections::HashMap::new(),
             last_layer_tree: None,
             last_paint_fingerprint: None,
@@ -488,6 +492,8 @@ impl WebView {
         self.hover_affected_set = crate::browser::cascade::collect_hover_affected_set(
             &doc_root_clone, &self.stylesheets);
         eprintln!("[HOVER SET] {} affected nodes", self.hover_affected_set.len());
+        // Reset overflow log counter pro novou stranku (max 3 logy per page).
+        self.layout_overflow_log_count = 0;
         self.base_url = base_url.clone();
         self.interpreter = Some(interp);
         self.dirty = true;
@@ -1500,7 +1506,8 @@ impl WebView {
             }
             hasher.finish()
         };
-        let mut style_map = if Some(cache_key) == self.cascade_cache_key {
+        let cascade_was_miss = Some(cache_key) != self.cascade_cache_key;
+        let mut style_map = if !cascade_was_miss {
             // Cache hit - reuse Rc clone.
             self.cascade_cache_value.as_ref().unwrap().clone()
         } else {
@@ -1508,6 +1515,17 @@ impl WebView {
                 &doc.root, &self.stylesheets, viewport_w, viewport_h));
             self.cascade_cache_key = Some(cache_key);
             self.cascade_cache_value = Some(m.clone());
+            // PROFILE: log breakdown pokud cascade > 10ms.
+            let prof = crate::browser::cascade::cascade_prof_snapshot();
+            let total = prof.viewport_prep_ms + prof.keys_prep_ms + prof.walk_ms
+                      + prof.ua_defaults_ms + prof.propagate_ms;
+            if total > 10.0 {
+                eprintln!("[CASCADE PROF] total={:.1}ms vp={:.1} keys={:.1} walk={:.1} ua={:.1} prop={:.1} | nodes={} might_calls={} might_pass={} hits={} decls={}",
+                    total, prof.viewport_prep_ms, prof.keys_prep_ms, prof.walk_ms,
+                    prof.ua_defaults_ms, prof.propagate_ms,
+                    prof.nodes, prof.might_match_calls, prof.might_match_pass,
+                    prof.matches_selector_hits, prof.decls_applied);
+            }
             m
         };
 
@@ -1664,11 +1682,14 @@ impl WebView {
         // hash zustava stable -> reuse cached layout_root. Skip layout_tree
         // call (363ms drop na <1ms v debug).
         let layout_fp = crate::browser::cascade::layout_fingerprint(&style_map);
+        // PERF: scroll_y NEN0 v key - smooth scroll inertia by jinak invalidoval
+        // cache kazdy frame (lerp 25% per step = scroll_y meni kazdy pixel).
+        // Layout je viewport+style closure, scroll je paint-time offset.
+        // Sticky positions zachycuje apply_sticky() pres mutaci cached root.
         let layout_key = (
             layout_fp,
             (viewport_w as u32),
             (viewport_h as u32),
-            self.scroll_y as i32,
         );
         let mut layout_root = if Some(layout_key) == self.layout_cache_key
             && self.last_layout_root.is_some()
@@ -1692,6 +1713,16 @@ impl WebView {
                 eprintln!("[LAYOUT SLOW] total:{:.0}ms ({} nodes = {:.1}ms/node) | build_box: {} calls, {:.1}ms cumulative",
                     elapsed, node_count, elapsed / (node_count.max(1) as f32),
                     bb_count, bb_total_us as f32 / 1000.0);
+            }
+            // DIAG: pokud root pretahuje viewport, layout vyleti -> hledame
+            // flex bug nebo overflow nedodrzeni. Rate-limit (max 3 logy).
+            if (r.rect.width > viewport_w * 1.05 || r.rect.height > viewport_h * 5.0)
+                && self.layout_overflow_log_count < 3 {
+                eprintln!("[LAYOUT OVERFLOW #{}] root w={:.0}/h={:.0} vs viewport w={:.0}/h={:.0} | body overflow_x={:?} overflow_y={:?}",
+                    self.layout_overflow_log_count + 1,
+                    r.rect.width, r.rect.height, viewport_w, viewport_h,
+                    r.overflow_x, r.overflow_y);
+                self.layout_overflow_log_count += 1;
             }
             r
         };
@@ -1900,40 +1931,12 @@ impl WebView {
         }
 
         // 3b. Scrollbar overlay - kdyz content > viewport.
-        let total_h = layout_root.rect.height;
-        if total_h > viewport_h {
-            let bar_w = 12.0_f32;
-            let bar_x = viewport_w - bar_w;
-            display_list.push(crate::browser::paint::DisplayCommand::Rect {
-                x: bar_x, y: 0.0, w: bar_w, h: viewport_h,
-                color: [240, 240, 245, 255], radius: 0.0,
-            });
-            let thumb_h = (viewport_h * viewport_h / total_h).max(40.0);
-            let max_scroll = (total_h - viewport_h).max(1.0);
-            let thumb_y = (self.scroll_y / max_scroll) * (viewport_h - thumb_h);
-            display_list.push(crate::browser::paint::DisplayCommand::Rect {
-                x: bar_x + 2.0, y: thumb_y + 2.0,
-                w: bar_w - 4.0, h: thumb_h - 4.0,
-                color: [160, 160, 170, 255], radius: (bar_w - 4.0) * 0.5,
-            });
-        }
-        let total_w = layout_root.rect.width;
-        if total_w > viewport_w {
-            let bar_h = 12.0_f32;
-            let bar_y = viewport_h - bar_h;
-            display_list.push(crate::browser::paint::DisplayCommand::Rect {
-                x: 0.0, y: bar_y, w: viewport_w, h: bar_h,
-                color: [240, 240, 245, 255], radius: 0.0,
-            });
-            let thumb_w = (viewport_w * viewport_w / total_w).max(40.0);
-            let max_scroll_x = (total_w - viewport_w).max(1.0);
-            let thumb_x = (self.scroll_x / max_scroll_x) * (viewport_w - thumb_w);
-            display_list.push(crate::browser::paint::DisplayCommand::Rect {
-                x: thumb_x + 2.0, y: bar_y + 2.0,
-                w: thumb_w - 4.0, h: bar_h - 4.0,
-                color: [160, 160, 170, 255], radius: (bar_h - 4.0) * 0.5,
-            });
-        }
+        // PERF: emit AT END display_list aby byl nad page contents.
+        crate::browser::paint::emit_main_scrollbar_overlay(
+            &layout_root, &mut display_list,
+            viewport_w, viewport_h,
+            self.scroll_x, self.scroll_y,
+        );
 
         // 4. Warm-up glyph atlas + image atlas pred draw.
         renderer.warm_atlas_for(&display_list, self.base_url.as_deref());

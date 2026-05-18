@@ -1081,6 +1081,13 @@ pub struct LayoutBox {
     pub overflow_y: Overflow,
     /// scrollbar-width numericky (px).
     pub scrollbar_size: f32,
+    /// Inner content extent - max child bottom edge relative to own rect.y
+    /// po dokoncenem layout vsech deti. Pouzito pres paint pro inner scrollbar
+    /// overlay kdyz `overflow_y.scrollable() && inner_content_h > rect.height`.
+    /// 0.0 = ne-vypocteno / leaf box.
+    pub inner_content_h: f32,
+    /// Inner content extent horizontal - max child right edge relative to rect.x.
+    pub inner_content_w: f32,
     /// White-space: nowrap zachazi text jako jeden radek
     pub white_space_nowrap: bool,
     /// Cursor (jen string - real impl pres OS cursor)
@@ -1184,6 +1191,8 @@ impl LayoutBox {
             overflow_x: Overflow::Visible,
             overflow_y: Overflow::Visible,
             scrollbar_size: 0.0,
+            inner_content_h: 0.0,
+            inner_content_w: 0.0,
             white_space_nowrap: false,
             cursor: None,
             bg_gradient: None,
@@ -3707,6 +3716,18 @@ pub fn layout_block(bx: &mut LayoutBox) {
     let block_pad_t = bx.padding_top.unwrap_or(bx.padding);
     let block_pad_b = bx.padding_bottom.unwrap_or(bx.padding);
     let bound = content_h + block_pad_t + block_pad_b + 2.0 * bx.border_width;
+
+    // Inner content extent - track po children layout. Pouzite pres paint
+    // pro inner scrollbar overlay pri overflow_y.scrollable() && content_h > inner_h.
+    // content_h = cursor_y - inner_y (max bottom edge in-flow children + paddings).
+    // Pridava block_pad_b aby scrollable area pokryla padding-bottom prelom.
+    bx.inner_content_h = content_h + block_pad_b;
+    let mut max_right = 0.0_f32;
+    for ch in &bx.children {
+        let r = ch.rect.x + ch.rect.width - bx.rect.x;
+        if r > max_right { max_right = r; }
+    }
+    bx.inner_content_w = max_right;
     // Bound > 0 + bez explicit_height + bez taffy_mode preset + ma node (skip
     // umely layout_root): override misto grow-only. Bez tohoto by stale h (z
     // pre-pass kdy parent mel mensi width) prevazila spravne novy bound.

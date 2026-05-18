@@ -1381,6 +1381,15 @@ pub fn setup_builtins(
     }));
 
     // document.exitFullscreen / document.fullscreenElement / hasFocus / hidden
+    // EventTarget methods - noop stubs pro document (real impl pres window event queue
+    // mimo scope). Bez nich any document.addEventListener('click', ...) wireup hodi
+    // "undefined neni funkce" pri load -> cely script blok zhavi try/catch.
+    doc_obj.set("addEventListener".into(),
+        native("document.addEventListener", |_| Ok(JsValue::Undefined)));
+    doc_obj.set("removeEventListener".into(),
+        native("document.removeEventListener", |_| Ok(JsValue::Undefined)));
+    doc_obj.set("dispatchEvent".into(),
+        native("document.dispatchEvent", |_| Ok(JsValue::Bool(true))));
     doc_obj.set("exitFullscreen".into(), native("exitFullscreen", |_| {
         Ok(make_settled_promise("fulfilled", JsValue::Undefined))
     }));

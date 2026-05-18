@@ -366,6 +366,10 @@ pub struct Environment {
     vars: HashMap<String, JsValue>,
     /// Rodicovsky scope (None pouze pro globalni scope)
     parent: Option<Rc<RefCell<Environment>>>,
+    /// Function-boundary marker. `var` declarations hoist se do
+    /// nejblizsiho env s `is_function_scope=true`. Block-level envs (for/if)
+    /// false; function call_env true; global env true.
+    pub is_function_scope: bool,
 }
 
 impl Environment {
@@ -381,12 +385,35 @@ impl Environment {
 
     /// Vytvori novy globalni scope (bez rodice).
     pub fn new_global() -> Rc<RefCell<Self>> {
-        Rc::new(RefCell::new(Environment { vars: HashMap::new(), parent: None }))
+        Rc::new(RefCell::new(Environment { vars: HashMap::new(), parent: None, is_function_scope: true }))
     }
 
     /// Vytvori novy child scope (blok, funkce, ...).
+    /// Default block-scope (is_function_scope=false). Vola se z exec_stmt
+    /// pro {} bloky, for/if/while. Pro function calls pouzij `new_function_child`.
     pub fn new_child(parent: &Rc<RefCell<Environment>>) -> Rc<RefCell<Self>> {
-        Rc::new(RefCell::new(Environment { vars: HashMap::new(), parent: Some(Rc::clone(parent)) }))
+        Rc::new(RefCell::new(Environment { vars: HashMap::new(), parent: Some(Rc::clone(parent)), is_function_scope: false }))
+    }
+
+    /// Vytvori novy function-call scope. `var` declarations hoist se sem
+    /// (ne pres globalni env, jako tomu bylo drive - to byl bug).
+    pub fn new_function_child(parent: &Rc<RefCell<Environment>>) -> Rc<RefCell<Self>> {
+        Rc::new(RefCell::new(Environment { vars: HashMap::new(), parent: Some(Rc::clone(parent)), is_function_scope: true }))
+    }
+
+    /// Walk pres parent chain najit nejblizsi function-scope env. Pouziva se
+    /// pri `var` declaraci - hoist do enclosing function (nebo global pro
+    /// top-level script).
+    pub fn nearest_function_scope(env: &Rc<RefCell<Self>>) -> Rc<RefCell<Self>> {
+        let mut cur = Rc::clone(env);
+        loop {
+            if cur.borrow().is_function_scope { return cur; }
+            let next = cur.borrow().parent.clone();
+            match next {
+                Some(p) => cur = p,
+                None => return cur,
+            }
+        }
     }
 
     /// Deklaruje novou promennou v tomto scopu (let/const/var).
@@ -1524,15 +1551,11 @@ impl Interpreter {
             }
             due
         };
-        if !due.is_empty() {
-            eprintln!("[DRAIN_INTERVALS] {} intervals due (queue size {})",
-                due.len(), self.interval_queue.borrow().len());
-        }
         for (_idx, cb, args) in due {
             let t0 = std::time::Instant::now();
             self.call_function(cb, args, None)?;
             let elapsed = t0.elapsed().as_secs_f32() * 1000.0;
-            if elapsed > 10.0 {
+            if elapsed > 50.0 {
                 eprintln!("[DRAIN_INTERVALS] cb took {:.0}ms", elapsed);
             }
         }

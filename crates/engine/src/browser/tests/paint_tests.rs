@@ -1581,3 +1581,47 @@ fn rot_box_in_flex_row_keeps_80x60() {
         assert!((h - 60.0).abs() < 1.0, "h={} != 60", h);
     }
 }
+
+#[test]
+fn main_scrollbar_emits_when_layout_overflows_viewport() {
+    // Build a layout that exceeds viewport, then run emit_main_scrollbar_overlay
+    // directly to verify it pushes Rect commands for track + thumb.
+    let html = r#"<html><body><div class="tall"></div></body></html>"#;
+    let css = r#"body { margin: 0; background: #fff; }
+                 .tall { height: 3000px; background: red; }"#;
+    let doc = parse_html(html, "");
+    let css_sheet = parse_stylesheet(css);
+    let map = cascade::cascade(&doc.root, &[css_sheet]);
+    let layout_root = layout::layout_tree(&doc.root, &map, 800.0, 600.0);
+    assert!(layout_root.rect.height > 600.0, "layout height {} should overflow viewport 600",
+        layout_root.rect.height);
+    // Build display list culled + scrollbar overlay.
+    let mut cmds = paint::build_display_list_culled(&layout_root, 0.0, 600.0);
+    let pre_len = cmds.len();
+    paint::emit_main_scrollbar_overlay(&layout_root, &mut cmds, 800.0, 600.0, 0.0, 0.0);
+    let post_len = cmds.len();
+    // Scrollbar emits 2 Rects (track + thumb) when only vertical overflow.
+    assert_eq!(post_len - pre_len, 2,
+        "expected 2 scrollbar Rects, got {} ({} -> {})", post_len - pre_len, pre_len, post_len);
+    // Verify rightmost x position = viewport_w - bar_w.
+    let track = &cmds[pre_len];
+    if let DisplayCommand::Rect { x, w, .. } = track {
+        assert!((*x + *w - 800.0).abs() < 1.0, "track right edge {} != viewport_w 800", *x + *w);
+    } else {
+        panic!("expected Rect for scrollbar track, got {:?}", track);
+    }
+}
+
+#[test]
+fn main_scrollbar_no_emit_when_content_fits_viewport() {
+    let html = r#"<html><body><div></div></body></html>"#;
+    let css = r#"div { width: 100px; height: 100px; background: red; }"#;
+    let doc = parse_html(html, "");
+    let css_sheet = parse_stylesheet(css);
+    let map = cascade::cascade(&doc.root, &[css_sheet]);
+    let layout_root = layout::layout_tree(&doc.root, &map, 800.0, 600.0);
+    let mut cmds = paint::build_display_list_culled(&layout_root, 0.0, 600.0);
+    let pre_len = cmds.len();
+    paint::emit_main_scrollbar_overlay(&layout_root, &mut cmds, 800.0, 600.0, 0.0, 0.0);
+    assert_eq!(cmds.len(), pre_len, "no scrollbar should emit when content fits");
+}

@@ -110,9 +110,10 @@ impl Interpreter {
             Stmt::Var { kind, decls } => {
                 for d in decls {
                     let val = match &d.init { Some(e) => self.eval(e, env)?, None => JsValue::Undefined };
-                    // var = function-scoped (global), let/const = block-scoped
+                    // var = function-scoped (hoist do nejblizsi function env, NE globalni!),
+                    // let/const = block-scoped.
                     let target_env = if *kind == VarKind::Var {
-                        Rc::clone(&self.global)
+                        Environment::nearest_function_scope(env)
                     } else {
                         Rc::clone(env)
                     };

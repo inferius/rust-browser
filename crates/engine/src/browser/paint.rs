@@ -282,6 +282,64 @@ pub fn build_display_list(root: &LayoutBox) -> Vec<DisplayCommand> {
     commands
 }
 
+/// Emit main viewport scrollbar overlay. Vola se po build_display_list pri
+/// host (WebView) - drive bylo inline v render_via, ted public/testable.
+/// Vykresli vertikalni a horizontalni scrollbar Rect pres viewport okraje
+/// pokud layout content presahuje viewport. Barvy auto-pick dle body bg
+/// (svetla/tmava schema).
+pub fn emit_main_scrollbar_overlay(
+    layout_root: &LayoutBox,
+    display_list: &mut Vec<DisplayCommand>,
+    viewport_w: f32, viewport_h: f32,
+    scroll_x: f32, scroll_y: f32,
+) {
+    // Body bg detect pro track/thumb barvy.
+    let body_bg_dark = layout_root.children.first().and_then(|html_box| {
+        html_box.children.iter().find(|c| c.tag.as_deref() == Some("body"))
+    }).and_then(|body| body.bg_color)
+        .map(|c| (c[0] as u32 + c[1] as u32 + c[2] as u32) < 384)
+        .unwrap_or(false);
+    let (track_col, thumb_col) = if body_bg_dark {
+        ([55, 55, 65, 220], [140, 140, 150, 255])
+    } else {
+        ([210, 210, 215, 220], [120, 120, 130, 255])
+    };
+    let total_h = layout_root.rect.height;
+    if total_h > viewport_h {
+        let bar_w = 12.0_f32;
+        let bar_x = viewport_w - bar_w;
+        display_list.push(DisplayCommand::Rect {
+            x: bar_x, y: 0.0, w: bar_w, h: viewport_h,
+            color: track_col, radius: 0.0,
+        });
+        let thumb_h = (viewport_h * viewport_h / total_h).max(40.0);
+        let max_scroll = (total_h - viewport_h).max(1.0);
+        let thumb_y = (scroll_y / max_scroll) * (viewport_h - thumb_h);
+        display_list.push(DisplayCommand::Rect {
+            x: bar_x + 2.0, y: thumb_y + 2.0,
+            w: bar_w - 4.0, h: thumb_h - 4.0,
+            color: thumb_col, radius: (bar_w - 4.0) * 0.5,
+        });
+    }
+    let total_w = layout_root.rect.width;
+    if total_w > viewport_w {
+        let bar_h = 12.0_f32;
+        let bar_y = viewport_h - bar_h;
+        display_list.push(DisplayCommand::Rect {
+            x: 0.0, y: bar_y, w: viewport_w, h: bar_h,
+            color: track_col, radius: 0.0,
+        });
+        let thumb_w = (viewport_w * viewport_w / total_w).max(40.0);
+        let max_scroll_x = (total_w - viewport_w).max(1.0);
+        let thumb_x = (scroll_x / max_scroll_x) * (viewport_w - thumb_w);
+        display_list.push(DisplayCommand::Rect {
+            x: thumb_x + 2.0, y: bar_y + 2.0,
+            w: thumb_w - 4.0, h: bar_h - 4.0,
+            color: thumb_col, radius: (bar_h - 4.0) * 0.5,
+        });
+    }
+}
+
 // Thread-local viewport pro paint culling. Pred build_display_list_culled
 // se nastavi, paint_box pak preskoci elementy mimo.
 thread_local! {
@@ -1831,6 +1889,50 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
                 color, radius: 0.0,
             });
         }
+    }
+
+    // Inner scrollbar overlay - pro elementy s overflow_y/x: auto/scroll
+    // kdyz inner content presahuje rect bounds. Stage 1: pouze visual indicator
+    // (no scroll position tracking). Track + thumb rect pres self bounds.
+    // Real interaktivni scroll dela WV (Stage 2 TODO).
+    if bx.overflow_y.scrollable() && bx.inner_content_h > bx.rect.height + 1.0
+        && bx.rect.width > 12.0 && bx.rect.height > 30.0 {
+        let bar_w = 10.0_f32;
+        let bar_x = bx.rect.x + bx.rect.width - bar_w;
+        let bar_y = bx.rect.y;
+        let bar_h = bx.rect.height;
+        // Track pozadi (semi-transparent)
+        cmds.push(DisplayCommand::Rect {
+            x: bar_x, y: bar_y, w: bar_w, h: bar_h,
+            color: [60, 60, 70, 100], radius: 0.0,
+        });
+        // Thumb - proporcionalni k content_h
+        let ratio = bx.rect.height / bx.inner_content_h;
+        let thumb_h = (bar_h * ratio).max(20.0).min(bar_h);
+        // Stage 1: thumb position 0 (no scroll yet). Stage 2 vlozi scroll_y / max * (bar_h - thumb_h)
+        cmds.push(DisplayCommand::Rect {
+            x: bar_x + 1.0, y: bar_y + 1.0,
+            w: bar_w - 2.0, h: thumb_h - 2.0,
+            color: [140, 140, 150, 220], radius: (bar_w - 2.0) * 0.5,
+        });
+    }
+    if bx.overflow_x.scrollable() && bx.inner_content_w > bx.rect.width + 1.0
+        && bx.rect.height > 12.0 && bx.rect.width > 30.0 {
+        let bar_h = 10.0_f32;
+        let bar_x = bx.rect.x;
+        let bar_y = bx.rect.y + bx.rect.height - bar_h;
+        let bar_w = bx.rect.width;
+        cmds.push(DisplayCommand::Rect {
+            x: bar_x, y: bar_y, w: bar_w, h: bar_h,
+            color: [60, 60, 70, 100], radius: 0.0,
+        });
+        let ratio = bx.rect.width / bx.inner_content_w;
+        let thumb_w = (bar_w * ratio).max(20.0).min(bar_w);
+        cmds.push(DisplayCommand::Rect {
+            x: bar_x + 1.0, y: bar_y + 1.0,
+            w: thumb_w - 2.0, h: bar_h - 2.0,
+            color: [140, 140, 150, 220], radius: (bar_h - 2.0) * 0.5,
+        });
     }
 
     // mask-image end marker

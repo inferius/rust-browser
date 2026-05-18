@@ -21,6 +21,11 @@
     --accent: #0a84ff;
     --accent-hover: #0060df;
     --accent-bg: rgba(10, 132, 255, 0.15);
+    /* Selection bg pres DOM tree / network tabulky / breadcrumb active -
+       mensi zariva (mensi vyrazna) modra. Light theme ekvivalent v alternate
+       block (TODO). */
+    --select-bg: #204e8a;
+    --select-fg: #ffffff;
     --link: #4caedb;
     --error: #ff6b6b;
     --warn: #f5b942;
@@ -39,6 +44,18 @@
     --bp-active: #0a84ff;
     --tab-active-bg: #1c1d20;
     --tab-active-border: #0a84ff;
+}
+
+/* Light theme override - prefers-color-scheme + body.theme-light fallback. */
+@media (prefers-color-scheme: light) {
+    :root:not(.theme-dark) {
+        --select-bg: #cce4ff;
+        --select-fg: #1d1d1f;
+    }
+}
+:root.theme-light {
+    --select-bg: #cce4ff;
+    --select-fg: #1d1d1f;
 }
 
 * { box-sizing: border-box; }
@@ -191,12 +208,19 @@ html, body {
 
 /* Left: DOM tree */
 .dom-pane {
-    flex: 1;
+    /* flex: 1 1 0 + min-width: 0 = CSS hack pro flex item s overflow:auto.
+       Bez min-width: 0 flex defaults na content min-width, child content
+       (white-space: pre dom-node) pretahne sirky a vytlaci sibling panels
+       (styles+layout) mimo viewport. */
+    flex: 1 1 0;
+    min-width: 0;
     overflow: auto;
     padding: 4px 4px 4px 0;
-    min-width: 180px;
     background: var(--bg-base);
+    display: flex;
+    flex-direction: column;
 }
+.dom-tree { min-width: 0; overflow: auto; }
 .dom-search-bar {
     display: flex;
     align-items: center;
@@ -231,11 +255,11 @@ html, body {
     white-space: pre;
 }
 .dom-node:hover { background: var(--bg-elev1); }
-.dom-node.selected { background: var(--accent); color: #fff; }
+.dom-node.selected { background: var(--select-bg); color: var(--select-fg); }
 .dom-node.selected .tok-tag,
 .dom-node.selected .tok-attr-name,
 .dom-node.selected .tok-attr-value,
-.dom-node.selected .tok-text { color: #fff; }
+.dom-node.selected .tok-text { color: var(--select-fg); }
 .dom-node .toggle {
     display: inline-block;
     width: 12px;
@@ -362,7 +386,567 @@ html, body {
 .style-rule .decl .prop { color: var(--syntax-prop); }
 .style-rule .decl .val { color: var(--syntax-val); }
 .style-rule .decl.disabled .prop,
-.style-rule .decl.disabled .val { text-decoration: line-through; opacity: 0.5; }
+.style-rule .decl.disabled .val { text-decoration: line-through; opacity: 0.5; color: var(--fg-dim); }
+.style-rule .rule-header,
+.style-rule .rule-footer { color: var(--fg); }
+.style-rule .rule-origin {
+    color: var(--fg-dim);
+    font-size: 10px;
+    font-style: italic;
+    margin-left: 8px;
+}
+.dom-node.search-match { background: rgba(10, 132, 255, 0.18); }
+
+/* ============================================
+   SDILENE STYLY - sub-tabs / toolbar / kv-table.
+   Pouzity v Sit detail panelu, Editor stylu toolbar,
+   Memory toolbar, Accessibility, Aplikace, atd.
+   ============================================ */
+.subtabs {
+    display: flex;
+    align-items: center;
+    height: 28px;
+    border-bottom: 1px solid var(--border);
+    padding: 0 8px;
+    gap: 4px;
+    background: var(--bg-elev1);
+    flex-shrink: 0;
+}
+.subtab-btn {
+    background: transparent;
+    border: none;
+    color: var(--fg-dim);
+    padding: 4px 10px;
+    cursor: pointer;
+    font-size: 11px;
+    border-radius: 3px;
+    height: 22px;
+    line-height: 14px;
+}
+.subtab-btn:hover { background: var(--bg-elev2); color: var(--fg); }
+.subtab-btn.active {
+    color: var(--fg);
+    background: var(--bg-elev2);
+    box-shadow: inset 0 -2px 0 var(--accent);
+}
+.panel-toolbar {
+    display: flex;
+    align-items: center;
+    height: 28px;
+    border-bottom: 1px solid var(--border);
+    padding: 0 8px;
+    gap: 8px;
+    flex-shrink: 0;
+}
+.kv-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11px;
+    font-family: 'Consolas', monospace;
+}
+.kv-table td {
+    padding: 3px 8px;
+    vertical-align: top;
+    border-bottom: 1px solid var(--bg-elev1);
+}
+.kv-table td:first-child {
+    color: var(--fg-dim);
+    white-space: nowrap;
+    width: 1%;
+}
+.kv-table td:last-child {
+    color: var(--fg);
+    word-break: break-all;
+}
+.net-side-content h4 {
+    color: var(--fg);
+    margin: 12px 0 6px 0;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 4px;
+}
+.net-side-content h4:first-child { margin-top: 0; }
+.net-side-content pre {
+    background: var(--bg-elev1);
+    padding: 8px;
+    border-radius: 4px;
+    overflow: auto;
+    font-size: 11px;
+    line-height: 14px;
+    color: var(--fg);
+    border: 1px solid var(--border);
+    margin: 0;
+}
+
+/* Univerzalni layout helpery + form controls sdilene mezi panely. */
+.flex-col { flex-direction: column; }
+.row-split { flex: 1; display: flex; overflow: hidden; min-height: 0; }
+.row-split > * { overflow: auto; }
+.panel-body-pad { flex: 1; overflow: auto; padding: 12px; color: var(--fg); font-size: 11px; }
+.panel-body-pad h3 { margin: 0 0 12px 0; font-size: 13px; color: var(--fg); }
+.panel-body-pad h4 {
+    margin: 16px 0 6px 0;
+    font-size: 11px;
+    color: var(--fg);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 4px;
+}
+.panel-body-pad h4:first-child { margin-top: 0; }
+.muted { color: var(--fg-dim); font-size: 11px; line-height: 1.5; }
+.ctl-select, .ctl-input {
+    background: var(--bg-elev1);
+    color: var(--fg);
+    border: 1px solid var(--border-strong);
+    padding: 2px 6px;
+    height: 22px;
+    font-size: 11px;
+    border-radius: 3px;
+    outline: none;
+}
+.ctl-input { padding: 2px 8px; min-width: 160px; }
+.ctl-input:focus, .ctl-select:focus { border-color: var(--accent); }
+.side-list {
+    width: 220px;
+    border-right: 1px solid var(--border);
+    padding: 4px 0;
+    background: var(--bg-surface);
+}
+.code-pane {
+    flex: 1;
+    padding: 8px;
+    font-family: 'Consolas', monospace;
+    font-size: 11px;
+    line-height: 16px;
+    color: var(--fg);
+    background: var(--bg-base);
+}
+.code-pane pre { margin: 0; white-space: pre; }
+.data-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11px;
+    margin-top: 8px;
+}
+.data-table th, .data-table td {
+    text-align: left;
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--bg-elev1);
+}
+.data-table thead th {
+    background: var(--bg-elev1);
+    color: var(--fg);
+    font-weight: 600;
+    text-transform: uppercase;
+    font-size: 10px;
+    letter-spacing: 0.5px;
+}
+.data-table tbody tr:hover { background: var(--bg-elev1); }
+.info-box {
+    padding: 8px 12px;
+    background: var(--bg-elev1);
+    border-radius: 4px;
+    margin-bottom: 12px;
+    color: var(--fg);
+    font-size: 11px;
+}
+.a11y-tree {
+    width: 50%;
+    padding: 12px;
+    font-family: 'Consolas', monospace;
+    font-size: 11px;
+    color: var(--fg);
+}
+.a11y-tree h4 {
+    font-family: 'Segoe UI', sans-serif;
+    margin: 0 0 8px 0;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--fg-dim);
+}
+.a11y-node {
+    padding: 2px 4px;
+    border-radius: 2px;
+    cursor: pointer;
+}
+.a11y-node:hover { background: var(--bg-elev1); }
+.a11y-detail {
+    flex: 1;
+    padding: 12px;
+    color: var(--fg);
+    font-size: 11px;
+}
+.a11y-detail h4 {
+    margin: 0 0 6px 0;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--fg-dim);
+}
+.a11y-detail h4:not(:first-child) { margin-top: 16px; }
+.a11y-check { padding: 2px 0; font-size: 11px; }
+.a11y-check.ok { color: #16a34a; }
+.a11y-check.warn { color: #f59e0b; }
+.a11y-check.err { color: var(--error); }
+
+/* Network table selected row + waterfall thumb pozadi vyzdurazneni. */
+.network-table tbody tr.selected { background: var(--accent); color: #fff; }
+.network-table tbody tr.selected td { color: #fff; }
+.network-table tbody tr { cursor: pointer; }
+
+/* Inspector toolbar: divider + active button. */
+.toolbar-divider {
+    width: 1px;
+    height: 16px;
+    background: var(--border);
+    margin: 0 4px;
+}
+.toolbar-btn.active {
+    background: var(--accent);
+    color: #fff;
+}
+.toolbar-btn.active svg path,
+.toolbar-btn.active svg circle { stroke: #fff; fill: #fff; }
+
+/* DOM tree chevron toggle - SVG icon. */
+.dom-node .toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 12px;
+    height: 14px;
+    color: var(--fg-muted);
+    cursor: pointer;
+    flex-shrink: 0;
+    vertical-align: middle;
+    margin-right: 2px;
+    border-radius: 2px;
+}
+.dom-node .toggle:hover {
+    background: var(--bg-elev2);
+    color: var(--fg);
+}
+.dom-node .toggle.no-children {
+    cursor: default;
+    visibility: hidden;
+}
+.dom-node .collapsed-summary {
+    color: var(--fg-dim);
+    background: var(--bg-elev2);
+    padding: 0 8px;
+    margin: 0 4px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    line-height: 14px;
+    display: inline-block;
+    vertical-align: middle;
+    cursor: pointer;
+    transition: background 0.1s;
+}
+.dom-node .collapsed-summary:hover {
+    background: var(--accent);
+    color: #fff;
+}
+
+/* Badges flex/grid/scroll u DOM tree node - inspirace Chrome/FF devtools.
+   Klikatelne, hover = overlay. */
+.dom-node .badge {
+    display: inline-block;
+    padding: 0 6px;
+    margin-left: 6px;
+    font-size: 10px;
+    font-weight: 600;
+    border-radius: 8px;
+    line-height: 14px;
+    cursor: pointer;
+    vertical-align: middle;
+    border: 1px solid currentColor;
+    text-transform: lowercase;
+    letter-spacing: 0.5px;
+}
+.dom-node .badge.flex { color: #f59e0b; background: rgba(245, 158, 11, 0.12); }
+.dom-node .badge.flex:hover { background: rgba(245, 158, 11, 0.35); }
+.dom-node .badge.flex.active { background: #f59e0b; color: #1a1a1a; }
+.dom-node .badge.grid { color: #a78bfa; background: rgba(167, 139, 250, 0.12); }
+.dom-node .badge.grid:hover { background: rgba(167, 139, 250, 0.35); }
+.dom-node .badge.grid.active { background: #a78bfa; color: #1a1a1a; }
+.dom-node .badge.scroll { color: #4ade80; background: rgba(74, 222, 128, 0.12); }
+.dom-node .badge.scroll:hover { background: rgba(74, 222, 128, 0.35); }
+
+/* Inherit group header v styles panelu - "Podedeno z <html>" oddelovac. */
+.inherit-group-header {
+    padding: 6px 10px;
+    background: var(--bg-elev1);
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    color: var(--fg-dim);
+    font-size: 11px;
+    font-style: italic;
+    margin-top: 8px;
+}
+.inherit-group-header:first-child { margin-top: 0; }
+
+/* "Zobrazit X nepouzivanych" button v :root vars. */
+.show-unused-btn {
+    display: inline-block;
+    margin: 4px 0 4px 16px;
+    padding: 4px 10px;
+    background: var(--bg-elev1);
+    border: 1px solid var(--border-strong);
+    color: var(--fg);
+    font-size: 11px;
+    cursor: pointer;
+    border-radius: 3px;
+}
+.show-unused-btn:hover { background: var(--bg-elev2); }
+
+/* FF-style gray "unused" rule - rules ktere nemaj ucinek (override). */
+.style-rule.unused-rule .prop,
+.style-rule.unused-rule .val {
+    color: var(--fg-muted);
+    text-decoration: line-through;
+    text-decoration-color: var(--fg-muted);
+    opacity: 0.65;
+}
+
+/* Layout overflow popup menu (subtabs > N). */
+.layout-overflow-menu .ctx-item {
+    padding: 6px 12px;
+    cursor: pointer;
+    color: var(--fg);
+}
+.layout-overflow-menu .ctx-item:hover {
+    background: var(--accent);
+    color: #fff;
+}
+
+/* Styles-pane v merged mode (presunuta do layout-pane jako tab). */
+.styles-pane.merged-tab {
+    width: auto !important;
+    min-width: 0 !important;
+    flex: 1 1 auto !important;
+    border-left: 0;
+    border-right: 0;
+}
+
+/* Computed panel - FF-style tree. */
+.computed-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-elev1);
+    flex-shrink: 0;
+}
+.computed-toolbar .ctl-input { flex: 1; min-width: 0; }
+.computed-ua-toggle {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    color: var(--fg);
+    cursor: pointer;
+    white-space: nowrap;
+}
+.computed-list {
+    flex: 1;
+    overflow: auto;
+    font-family: 'Consolas', monospace;
+    font-size: 11px;
+    line-height: 16px;
+}
+.computed-prop {
+    padding: 3px 8px;
+    color: var(--fg);
+    border-bottom: 1px solid var(--bg-elev1);
+    line-height: 18px;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+}
+.computed-prop > .computed-main {
+    display: block;
+    word-break: break-word;
+    width: 100%;
+}
+.computed-prop > .computed-sources {
+    display: none;
+    margin-top: 4px;
+    margin-left: 22px;
+    width: auto;
+    align-self: stretch;
+}
+.computed-prop.expanded > .computed-sources { display: block; }
+.computed-prop .toggle {
+    display: inline-flex;
+    width: 14px;
+    height: 14px;
+    align-items: center;
+    justify-content: center;
+    color: var(--fg);
+    cursor: pointer;
+    border-radius: 2px;
+    margin-right: 4px;
+    vertical-align: middle;
+}
+.computed-prop .toggle:hover { background: var(--bg-elev2); }
+.computed-prop .toggle.no-children { visibility: hidden; }
+.computed-prop .prop-name {
+    color: var(--syntax-prop);
+    cursor: pointer;
+}
+.computed-prop .prop-colon {
+    color: var(--fg-muted);
+    margin: 0 4px 0 0;
+}
+.computed-prop .prop-value {
+    color: var(--syntax-val);
+    word-break: break-word;
+}
+.computed-prop .swatch {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border: 1px solid var(--border-strong);
+    border-radius: 2px;
+    margin-right: 4px;
+    vertical-align: middle;
+}
+.computed-sources {
+    display: none;
+    padding: 4px 6px 6px 24px;
+    margin-top: 2px;
+    background: var(--bg-base);
+    border-left: 2px solid var(--accent);
+    font-size: 10px;
+}
+.computed-prop.expanded .computed-sources { display: block; }
+.computed-source-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--fg-dim);
+    padding: 2px 0;
+}
+.computed-source-row .src-info {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.computed-source-row .selector { color: var(--syntax-tag); }
+.computed-source-row .arrow {
+    color: var(--fg-muted);
+    margin: 0 4px;
+}
+.computed-source-row .src-value { color: var(--syntax-val); }
+.computed-source-row .source-link {
+    color: var(--link);
+    cursor: pointer;
+    text-decoration: underline dotted;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+.computed-source-row .source-link:hover { color: var(--accent); }
+
+/* Box model FF-style barvy. margin=zluta/olive, border=fialova,
+   padding=teal/petrol, content=modra. Polopruhledne aby vrstvy svitily skrz. */
+.bm-margin { background: rgba(245, 192, 45, 0.22); border: 1px dashed rgba(245, 192, 45, 0.7); }
+.bm-border { background: rgba(196, 142, 233, 0.22); border: 1px dashed rgba(196, 142, 233, 0.7); }
+.bm-padding { background: rgba(99, 180, 198, 0.22); border: 1px dashed rgba(99, 180, 198, 0.7); }
+.bm-content { background: rgba(110, 142, 199, 0.4); border: 1px dashed rgba(110, 142, 199, 0.8); }
+.bm-layer { position: relative; padding: 18px; }
+.bm-layer .label {
+    position: absolute;
+    top: 1px;
+    left: 4px;
+    font-size: 9px;
+    color: var(--fg);
+    text-transform: lowercase;
+    font-weight: 600;
+}
+.bm-layer .edge {
+    position: absolute;
+    font-size: 10px;
+    color: var(--fg);
+    background: var(--bg-elev2);
+    padding: 0 4px;
+    border-radius: 2px;
+}
+.bm-layer .edge.top { top: -8px; left: 50%; transform: translateX(-50%); }
+.bm-layer .edge.bottom { bottom: -8px; left: 50%; transform: translateX(-50%); }
+.bm-layer .edge.left { left: -10px; top: 50%; transform: translateY(-50%); }
+.bm-layer .edge.right { right: -10px; top: 50%; transform: translateY(-50%); }
+.bm-content { text-align: center; min-width: 60px; padding: 10px 12px; color: var(--fg); }
+.dom-tree:focus { outline: none; }
+.dom-tree:focus-within { box-shadow: inset 2px 0 0 var(--accent); }
+
+/* DOM pane: tree v hornim, breadcrumbs v patce. */
+.dom-pane { display: flex; flex-direction: column; }
+.dom-breadcrumbs {
+    flex-shrink: 0;
+    border-top: 1px solid var(--border);
+    background: var(--bg-elev1);
+    padding: 4px 6px;
+    font-size: 10px;
+    font-family: 'Consolas', monospace;
+    line-height: 16px;
+    color: var(--fg-dim);
+    overflow-x: auto;
+    overflow-y: hidden;
+    white-space: nowrap;
+    min-height: 24px;
+    max-height: 60px;
+}
+.dom-crumb {
+    display: inline-block;
+    padding: 1px 6px;
+    margin: 1px 0;
+    border-radius: 2px;
+    cursor: pointer;
+    color: var(--syntax-tag);
+}
+.dom-crumb:hover { background: var(--bg-elev2); color: var(--fg); }
+.dom-crumb.active { background: var(--accent); color: #fff; }
+.dom-crumb-sep {
+    display: inline-block;
+    padding: 0 2px;
+    color: var(--fg-muted);
+}
+.dom-node .inline-close {
+    /* zarovnani na otviraci radek pres opening tag spans. */
+}
+
+/* Context menu - klasicky popup. */
+.ctx-menu {
+    position: fixed;
+    background: var(--bg-elev2);
+    border: 1px solid var(--border-strong);
+    border-radius: 4px;
+    padding: 4px 0;
+    min-width: 200px;
+    z-index: 10000;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+    font-size: 11px;
+    color: var(--fg);
+}
+.ctx-item {
+    padding: 5px 14px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.ctx-item:hover { background: var(--accent); color: #fff; }
+.ctx-sep {
+    height: 1px;
+    background: var(--border);
+    margin: 4px 0;
+}
 .style-add {
     color: var(--fg-muted);
     font-style: italic;
@@ -1344,21 +1928,34 @@ html, body {
         <!-- INSPECTOR (Pruzkumnik) -->
         <div class="panel inspector active">
             <div class="inspector-toolbar">
-                <button class="toolbar-btn" data-i18n-title="btn.inspect" title="Inspect (Ctrl+Shift+C)"><i data-lucide="mouse-pointer-square-dashed" class="icon"></i></button>
-                <button class="toolbar-btn" data-i18n-title="btn.pickColor" title="Vybrat barvu"><i data-lucide="pipette" class="icon"></i></button>
-                <input class="dom-search-input" data-i18n-placeholder="ph.searchHtml" placeholder="Hledat HTML">
+                <button class="toolbar-btn" id="btn-inspect" title="Vybrat prvek na strance (Ctrl+Shift+C)">
+                    <svg width="14" height="14" viewBox="0 0 16 16"><path d="M2 2 L2 9 L5 6 L7 11 L9 10 L7 5 L11 5 Z" stroke="currentColor" stroke-width="1.3" fill="none" stroke-linejoin="round"/></svg>
+                </button>
+                <button class="toolbar-btn" id="btn-pick-color" title="Vybrat barvu">
+                    <svg width="14" height="14" viewBox="0 0 16 16"><path d="M9 2 L13 6 L8 11 L4 11 L4 7 Z M2 14 L4 11 M9 2 L11 4" stroke="currentColor" stroke-width="1.3" fill="none" stroke-linejoin="round"/></svg>
+                </button>
+                <span class="toolbar-divider"></span>
+                <button class="toolbar-btn" id="btn-expand-all" title="Rozbalit vse">
+                    <svg width="14" height="14" viewBox="0 0 16 16"><path d="M4 6 L8 10 L12 6 M4 12 L12 12" stroke="currentColor" stroke-width="1.3" fill="none" stroke-linecap="round"/></svg>
+                </button>
+                <button class="toolbar-btn" id="btn-collapse-all" title="Sbalit vse">
+                    <svg width="14" height="14" viewBox="0 0 16 16"><path d="M4 10 L8 6 L12 10 M4 12 L12 12" stroke="currentColor" stroke-width="1.3" fill="none" stroke-linecap="round"/></svg>
+                </button>
+                <input class="dom-search-input" data-i18n-placeholder="ph.searchHtml" placeholder="Hledat HTML / CSS / XPath">
                 <span style="flex:1"></span>
-                <button class="toolbar-btn" data-i18n-title="btn.addNode" title="Pridat node"><i data-lucide="plus" class="icon"></i></button>
-                <button class="toolbar-btn" data-i18n-title="btn.more" title="Vice"><i data-lucide="more-vertical" class="icon"></i></button>
+                <button class="toolbar-btn" title="Pridat node"><svg width="14" height="14" viewBox="0 0 16 16"><path d="M8 3 L8 13 M3 8 L13 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
+                <button class="toolbar-btn" title="Vice"><svg width="14" height="14" viewBox="0 0 16 16"><circle cx="8" cy="3" r="1.2" fill="currentColor"/><circle cx="8" cy="8" r="1.2" fill="currentColor"/><circle cx="8" cy="13" r="1.2" fill="currentColor"/></svg></button>
             </div>
             <div class="inspector-body">
                 <!-- LEFT: DOM tree -->
                 <div class="dom-pane">
-                    <div class="dom-tree">
+                    <div class="dom-tree" tabindex="0">
                         <!-- Static placeholder - JS CDP wireup naplni real DOM
                              pres window.cdp.send('DOM.getDocument'). Zustava
                              prazdny pokud CDP neni dostupny (standalone mockup). -->
                     </div>
+                    <!-- Breadcrumbs - cesta od root k selected node. -->
+                    <div class="dom-breadcrumbs"></div>
                 </div>
 
                 <!-- SPLITTER -->
@@ -1368,11 +1965,13 @@ html, body {
                 <div class="styles-pane">
                     <div class="styles-header">
                         <input class="styles-filter" data-i18n-placeholder="ph.filterStyles" placeholder="Filtrovat styly">
-                        <span class="styles-pseudo-toggle" data-i18n-title="btn.pseudoClasses" title="Pseudo-classes">:hov</span>
-                        <span class="styles-pseudo-toggle" data-i18n-title="btn.classList" title="Class list">.cls</span>
-                        <button class="toolbar-btn" data-i18n-title="btn.addRule" title="Pridat pravidlo"><i data-lucide="plus" class="icon"></i></button>
-                        <button class="toolbar-btn" data-i18n-title="btn.lightTheme" title="Light theme"><i data-lucide="sun" class="icon"></i></button>
-                        <button class="toolbar-btn" data-i18n-title="btn.printPreview" title="Print preview"><i data-lucide="printer" class="icon"></i></button>
+                        <span class="styles-pseudo-toggle" title="Pseudo-classes">:hov</span>
+                        <span class="styles-pseudo-toggle" title="Class list">.cls</span>
+                        <button class="toolbar-btn" title="Pridat pravidlo"><svg width="14" height="14" viewBox="0 0 16 16"><path d="M8 3 L8 13 M3 8 L13 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
+                        <button class="toolbar-btn" title="Svetly motiv"><svg width="14" height="14" viewBox="0 0 16 16"><circle cx="8" cy="8" r="3" stroke="currentColor" stroke-width="1.3" fill="none"/><path d="M8 1 L8 3 M8 13 L8 15 M1 8 L3 8 M13 8 L15 8 M3 3 L4 4 M12 12 L13 13 M3 13 L4 12 M12 4 L13 3" stroke="currentColor" stroke-width="1.3"/></svg></button>
+                        <button class="toolbar-btn" id="btn-move-styles" title="Presunout pravidla mezi zalozky vpravo">
+                            <svg width="14" height="14" viewBox="0 0 16 16"><path d="M3 8 L13 8 M9 4 L13 8 L9 12" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        </button>
                     </div>
                     <div class="styles-body">
                         <!-- JS CDP wireup naplni real styles pres
@@ -1465,7 +2064,18 @@ html, body {
                     <!-- COMPUTED / CHANGES / COMPAT / FONTS / ANIMATIONS -
                          empty containers, JS naplni real data per panel.
                          Mock obsah vyhozen (perf - 320+ divs cascade walk). -->
-                    <div class="layout-body" data-side-body="computed" style="display:none"></div>
+                    <div class="layout-body" data-side-body="computed" style="display:none; flex-direction: column;">
+                        <div class="computed-toolbar">
+                            <input class="ctl-input computed-filter" placeholder="Filtr stylu">
+                            <label class="computed-ua-toggle">
+                                <input type="checkbox" id="computed-ua-checkbox">
+                                <span>Styly prohlizece</span>
+                            </label>
+                        </div>
+                        <div class="computed-list">
+                            <div style="padding: 16px; color: var(--fg-dim); font-size: 11px;">Vyber prvek pro zobrazeni vypocitanych stylu.</div>
+                        </div>
+                    </div>
                     <div class="layout-body" data-side-body="changes" style="display:none"></div>
                     <div class="layout-body" data-side-body="compat" style="display:none"></div>
                     <div class="layout-body" data-side-body="fonts" style="display:none"></div>
@@ -1527,8 +2137,8 @@ html, body {
                 <button class="level-toggle" data-i18n="net.images">Obr.</button>
                 <button class="level-toggle" data-i18n="net.fonts">Pisma</button>
             </div>
-            <div class="network-main">
-                <div class="network-table-container">
+            <div class="network-main" style="display: flex; overflow: hidden; flex: 1;">
+                <div class="network-table-container" style="flex: 1; overflow: auto; min-width: 0;">
                     <table class="network-table">
                         <thead>
                             <tr>
@@ -1546,13 +2156,21 @@ html, body {
                         </tbody>
                     </table>
                 </div>
+                <!-- Right side panel - details vybraneho pozadavku. Hidden default. -->
+                <div class="net-side-panel" style="width: 400px; border-left: 1px solid var(--border); display: none; flex-direction: column; background: var(--bg-surface);">
+                    <div class="subtabs">
+                        <button class="subtab-btn active net-side-tab" data-net-tab="headers">Hlavicky</button>
+                        <button class="subtab-btn net-side-tab" data-net-tab="preview">Nahled</button>
+                        <button class="subtab-btn net-side-tab" data-net-tab="response">Odpoved</button>
+                        <button class="subtab-btn net-side-tab" data-net-tab="timing">Casovani</button>
+                        <span style="flex:1"></span>
+                        <button class="subtab-btn net-side-close" title="Zavrit">X</button>
+                    </div>
+                    <div class="net-side-body" style="flex: 1; overflow: auto; padding: 12px; color: var(--fg); font-size: 11px;">
+                        <div class="net-side-content"></div>
+                    </div>
+                </div>
             </div>
-        </div>
-
-        <!-- Style Editor (placeholder) -->
-        <div class="panel" style="flex-direction: column; padding: 20px; color: var(--fg-dim);">
-            <h3 style="color: var(--fg); margin-top: 0;">Editor stylu</h3>
-            <p>Vsechny stylesheets v sloupcich + monospace editor s syntax highlight, save button.</p>
         </div>
 
         <!-- PERFORMANCE -->
@@ -1597,14 +2215,125 @@ html, body {
             </div>
         </div>
 
-        <!-- Placeholders pro ostatni -->
-        <div class="panel" style="flex-direction: column; padding: 20px; color: var(--fg-dim);">
-            <h3 style="color: var(--fg); margin-top: 0;">Pristupnost</h3>
-            <p>Accessibility tree, role + name + aria attrs visualization, contrast checker.</p>
+        <!-- Style Editor panel -->
+        <div class="panel style-editor flex-col">
+            <div class="panel-toolbar">
+                <select class="ctl-select">
+                    <option>test.css</option>
+                    <option>inline (style)</option>
+                </select>
+                <button class="toolbar-btn">Nove pravidlo</button>
+                <button class="toolbar-btn">Importovat</button>
+                <span style="flex:1"></span>
+                <input class="ctl-input" placeholder="Hledat v CSS">
+            </div>
+            <div class="row-split">
+                <div class="side-list">
+                    <div class="file-item active">test.css</div>
+                    <div class="file-item">styles/theme.css</div>
+                    <div class="file-item">styles/print.css</div>
+                </div>
+                <div class="code-pane">
+<pre>body {
+  background: #f5f5f7;
+  color: #1d1d1f;
+  font-size: 16px;
+}
+
+.card {
+  background: #ffffff;
+  border: 1px solid #d2d2d7;
+  padding: 16px;
+  margin: 12px 0;
+}
+
+.btn {
+  background: #0a84ff;
+  color: #ffffff;
+  padding: 8px 16px;
+}</pre>
+                </div>
+            </div>
         </div>
-        <div class="panel" style="flex-direction: column; padding: 20px; color: var(--fg-dim);">
-            <h3 style="color: var(--fg); margin-top: 0;">Aplikace</h3>
-            <p>Manifest, service workers, push notifications, web app metadata.</p>
+
+        <!-- Memory panel -->
+        <div class="panel memory flex-col">
+            <div class="panel-toolbar">
+                <select class="ctl-select">
+                    <option>Heap snapshot</option>
+                    <option>Allocation timeline</option>
+                    <option>Allocation sampling</option>
+                </select>
+                <button class="toolbar-btn">Spustit</button>
+                <button class="toolbar-btn">Smazat</button>
+            </div>
+            <div class="panel-body-pad">
+                <div class="info-box"><strong>Heap velikost:</strong> 12.4 MB / 256 MB</div>
+                <table class="data-table">
+                    <thead>
+                        <tr><th>Konstruktor</th><th>Pocet</th><th>Velikost</th><th>% z heap</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td>Object</td><td>12 432</td><td>1.2 MB</td><td>9.7%</td></tr>
+                        <tr><td>Array</td><td>5 218</td><td>820 kB</td><td>6.6%</td></tr>
+                        <tr><td>String</td><td>34 102</td><td>2.4 MB</td><td>19.3%</td></tr>
+                        <tr><td>HTMLElement</td><td>765</td><td>456 kB</td><td>3.7%</td></tr>
+                        <tr><td>Function</td><td>1 234</td><td>180 kB</td><td>1.5%</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Accessibility panel -->
+        <div class="panel accessibility flex-col">
+            <div class="row-split">
+                <div class="a11y-tree">
+                    <h4>Strom pristupnosti</h4>
+                    <div class="a11y-node">WebArea "Mock Test Stranka"</div>
+                    <div class="a11y-node" style="padding-left: 16px;">banner</div>
+                    <div class="a11y-node" style="padding-left: 32px;">heading "Rust Web Engine" level=1</div>
+                    <div class="a11y-node" style="padding-left: 32px;">paragraph</div>
+                    <div class="a11y-node" style="padding-left: 16px;">main</div>
+                    <div class="a11y-node" style="padding-left: 32px;">heading "1. Typografie" level=2</div>
+                    <div class="a11y-node" style="padding-left: 32px;">button "Odeslat"</div>
+                    <div class="a11y-node" style="padding-left: 32px;">textbox "Honza"</div>
+                </div>
+                <div class="a11y-detail">
+                    <h4>Vlastnosti vybraneho uzlu</h4>
+                    <table class="kv-table">
+                        <tr><td>Role</td><td>heading</td></tr>
+                        <tr><td>Name</td><td>"Rust Web Engine"</td></tr>
+                        <tr><td>Level</td><td>1</td></tr>
+                        <tr><td>Focusable</td><td>false</td></tr>
+                        <tr><td>Contrast ratio</td><td>21:1 (AAA)</td></tr>
+                    </table>
+                    <h4>Kontrola problemu</h4>
+                    <div class="a11y-check ok">+ Vsechny obrazky maji alt atribut</div>
+                    <div class="a11y-check ok">+ Heading struktura konzistentni</div>
+                    <div class="a11y-check warn">! Form input bez aria-label</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- App info panel -->
+        <div class="panel app-info flex-col">
+            <div class="panel-body-pad">
+                <h3>Aplikace</h3>
+                <table class="kv-table" style="max-width: 600px;">
+                    <tr><td>Nazev</td><td>RustWebEngine</td></tr>
+                    <tr><td>Verze enginu</td><td>0.1.0 (dev)</td></tr>
+                    <tr><td>User agent</td><td>RustWebEngine/0.1 (Windows NT 10.0; rv:0.1)</td></tr>
+                    <tr><td>Manifest</td><td>(nezadan)</td></tr>
+                    <tr><td>Service worker</td><td>(none)</td></tr>
+                    <tr><td>Notifications</td><td>default</td></tr>
+                    <tr><td>Push subscribed</td><td>false</td></tr>
+                </table>
+                <h4>O enginu</h4>
+                <p class="muted">
+                    Rust web engine - vlastni JS interpret, HTML/CSS parser, wgpu GPU rendering.
+                    Inspirovano Servo (html5ever, selectors, cssparser). Detaily v DOKUMENTACE.md.
+                </p>
+            </div>
         </div>
 
     </div>
@@ -1638,6 +2367,619 @@ try {
     }
 } catch (e) {
     console.error('Tab swap init failed: ' + (e && e.message ? e.message : e));
+}
+
+// Vertical splitter drag - menit sirku panelu pri drag.
+// splitter-styles: mezi dom-pane (flex:1) a styles-pane (width)
+//                  -> drag meni styles-pane width (rozsiruje vlevo dom-pane, vpravo styles+layout).
+// splitter-layout: mezi styles-pane a layout-pane
+//                  -> drag meni layout-pane width.
+try {
+    function installSplitter(splitterEl, paneEl, side) {
+        // side: 'left' = pane je vlevo od splitter (sirka rste s mousex), 'right' = vpravo (sirka klesa s mousex).
+        if (!splitterEl || !paneEl) return;
+        splitterEl.addEventListener('mousedown', function(e) {
+            e.preventDefault();
+            var startX = e.clientX;
+            var startW = paneEl.getBoundingClientRect().width;
+            document.body.style.cursor = 'ew-resize';
+            document.body.style.userSelect = 'none';
+            function onMove(ev) {
+                var dx = ev.clientX - startX;
+                var newW = side === 'left' ? startW + dx : startW - dx;
+                newW = Math.max(120, Math.min(800, newW));
+                paneEl.style.width = newW + 'px';
+                paneEl.style.flexBasis = newW + 'px';
+            }
+            function onUp() {
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup', onUp);
+                document.body.style.cursor = '';
+                document.body.style.userSelect = '';
+            }
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+        });
+    }
+    var splitterStyles = document.getElementById('splitter-styles');
+    var splitterLayout = document.getElementById('splitter-layout');
+    var stylesPane = document.querySelector('.styles-pane');
+    var layoutPane = document.querySelector('.layout-pane');
+    // splitter-styles drag meni styles-pane (vpravo od splitter) - dx pozitivni = mensi styles.
+    installSplitter(splitterStyles, stylesPane, 'right');
+    // splitter-layout drag meni layout-pane (vpravo od splitter) - dx pozitivni = mensi layout.
+    installSplitter(splitterLayout, layoutPane, 'right');
+} catch (e) {
+    console.error('Splitter init failed: ' + (e && e.message ? e.message : e));
+}
+
+// DOM tree toggle - chevron click expand/collapse children.
+// Cely subtree pres paddingLeft hierarchy (flat DOM, depth ulozen v paddingLeft).
+function nodeDepth(el) {
+    var pad = parseInt(el.style.paddingLeft, 10) || 0;
+    return Math.max(0, (pad - 6) / 16);
+}
+function setNodeCollapsed(node, collapsed) {
+    if (!node || !node.classList.contains('dom-node')) return;
+    // Pokud node nema toggle (single-line), kolaps nedava smysl.
+    var toggleEl = node.querySelector('.toggle');
+    if (!toggleEl || toggleEl.classList.contains('no-children')) return;
+    node.classList.toggle('collapsed', collapsed);
+    toggleEl.innerHTML = collapsed ? chevronRight() : chevronDown();
+    // Zobrazit/skryt summary "..." + inline close uvnitr opening tag radky.
+    var summary = node.querySelector('.collapsed-summary');
+    var inlineClose = node.querySelector('.inline-close');
+    if (summary) summary.style.display = collapsed ? '' : 'none';
+    if (inlineClose) inlineClose.style.display = collapsed ? '' : 'none';
+    // Hide/show vsechny dite (depth > myDepth). Closing-line patri k OPENING
+    // ale ma stejny depth - hledame zvlast pres data-closing-for atribut.
+    var myDepth = nodeDepth(node);
+    var sib = node.nextElementSibling;
+    while (sib && sib.classList && sib.classList.contains('dom-node')) {
+        var sibDepth = nodeDepth(sib);
+        if (sibDepth <= myDepth) break;
+        if (collapsed) {
+            sib.style.display = 'none';
+        } else {
+            // Show pokud zadny meziparent na ceste neni collapsed.
+            var hiddenByAncestor = false;
+            var cursor = sib.previousElementSibling;
+            var cursorDepth = sibDepth;
+            while (cursor && cursor !== node) {
+                if (cursor.classList && cursor.classList.contains('dom-node')) {
+                    var cd = nodeDepth(cursor);
+                    if (cd < cursorDepth) {
+                        cursorDepth = cd;
+                        if (cursor.classList.contains('collapsed')) {
+                            hiddenByAncestor = true;
+                            break;
+                        }
+                    }
+                }
+                cursor = cursor.previousElementSibling;
+            }
+            sib.style.display = hiddenByAncestor ? 'none' : '';
+        }
+        sib = sib.nextElementSibling;
+    }
+    // Closing-line samostatny lookup pres data-closing-for=node.id.
+    var nodeId = node.dataset.nodeId;
+    if (nodeId !== undefined && nodeId !== '') {
+        // Escape pres CSS attribute selektor - quoted value bezpecne.
+        var closings = document.querySelectorAll('.dom-tree .dom-node.closing-line');
+        for (var ci = 0; ci < closings.length; ci++) {
+            if (closings[ci].dataset.closingFor == nodeId) {
+                closings[ci].style.display = collapsed ? 'none' : '';
+                break;
+            }
+        }
+    }
+}
+function chevronDown() { return '<svg width="10" height="10" viewBox="0 0 12 12"><path d="M2 4 L6 8 L10 4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>'; }
+function chevronRight() { return '<svg width="10" height="10" viewBox="0 0 12 12"><path d="M4 2 L8 6 L4 10" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>'; }
+try {
+    document.addEventListener('click', function(e) {
+        // closest('.toggle') zachyti i pripad ze klik landed na inner SVG path.
+        var toggle = e.target && e.target.closest && e.target.closest('.toggle');
+        if (!toggle) return;
+        var node = toggle.parentElement;
+        if (!node || !node.classList.contains('dom-node')) return;
+        e.stopPropagation();
+        setNodeCollapsed(node, !node.classList.contains('collapsed'));
+    });
+} catch (e) {
+    console.error('Toggle init failed: ' + (e && e.message ? e.message : e));
+}
+
+// Po renderDomTree default collapse vse pod depth 1 (jen html + body level visible).
+// MutationObserver triggers po DOM tree replacement.
+function collapseToDepth(maxVisibleDepth) {
+    var rows = document.querySelectorAll('.dom-tree .dom-node');
+    rows.forEach(function(row) {
+        var d = nodeDepth(row);
+        if (d >= maxVisibleDepth && row.querySelector('.toggle')) {
+            setNodeCollapsed(row, true);
+        }
+    });
+}
+function expandAllDomTree() {
+    document.querySelectorAll('.dom-tree .dom-node.collapsed').forEach(function(row) {
+        setNodeCollapsed(row, false);
+    });
+}
+function collapseAllDomTree() {
+    document.querySelectorAll('.dom-tree .dom-node').forEach(function(row) {
+        if (row.querySelector('.toggle')) setNodeCollapsed(row, true);
+    });
+}
+// Expose pro DOM render po-hook + context menu.
+window.__rweDomTree = {
+    collapseToDepth: collapseToDepth,
+    expandAll: expandAllDomTree,
+    collapseAll: collapseAllDomTree,
+    setCollapsed: setNodeCollapsed,
+};
+
+// Toolbar buttons wire-up.
+var btnExpandAll = document.getElementById('btn-expand-all');
+if (btnExpandAll) btnExpandAll.addEventListener('click', expandAllDomTree);
+var btnCollapseAll = document.getElementById('btn-collapse-all');
+if (btnCollapseAll) btnCollapseAll.addEventListener('click', collapseAllDomTree);
+
+// Inspect button - toggle inspect mode. Pri CDP backend posila Overlay.setInspectMode
+// + listenuje DOM.inspectNodeRequested event. Standalone mockup: jen vizualne toggle.
+var inspectActive = false;
+var btnInspect = document.getElementById('btn-inspect');
+if (btnInspect) {
+    btnInspect.addEventListener('click', function() {
+        inspectActive = !inspectActive;
+        btnInspect.classList.toggle('active', inspectActive);
+        if (window.cdp && window.cdp.send) {
+            window.cdp.send('Overlay.setInspectMode', {
+                mode: inspectActive ? 'searchForNode' : 'none',
+                highlightConfig: { showInfo: true, showRulers: false },
+            }).catch(function() {});
+        }
+    });
+    // Listen na DOM.inspectNodeRequested - backend dispatch po user klik na page.
+    if (window.cdp && window.cdp.on) {
+        window.cdp.on('DOM.inspectNodeRequested', function(p) {
+            inspectActive = false;
+            btnInspect.classList.remove('active');
+            // Find row pres dataset.nodeId + select + expand ancestors + scroll.
+            var row = document.querySelector('.dom-tree .dom-node[data-node-id="' + p.backend_node_id + '"]');
+            if (row) {
+                // Expand all ancestors (paddingLeft < my -> previous collapsed parent).
+                var myDepth = nodeDepth(row);
+                var prev = row.previousElementSibling;
+                var cd = myDepth;
+                while (prev && cd > 0) {
+                    if (prev.classList && prev.classList.contains('dom-node')) {
+                        var pd = nodeDepth(prev);
+                        if (pd < cd) {
+                            cd = pd;
+                            if (prev.classList.contains('collapsed')) setNodeCollapsed(prev, false);
+                        }
+                    }
+                    prev = prev.previousElementSibling;
+                }
+                document.querySelectorAll('.dom-node.selected').forEach(function(x) { x.classList.remove('selected'); });
+                row.classList.add('selected');
+                if (row.scrollIntoView) row.scrollIntoView({ block: 'center' });
+                loadStylesForNode(p.backend_node_id);
+            }
+        });
+    }
+}
+
+// Context menu na dom-node - right click pres dom-tree.
+var ctxMenu = null;
+function closeCtxMenu() {
+    if (ctxMenu) { ctxMenu.remove(); ctxMenu = null; }
+}
+document.addEventListener('contextmenu', function(e) {
+    var node = e.target.closest && e.target.closest('.dom-node');
+    if (!node) return;
+    e.preventDefault();
+    closeCtxMenu();
+    var nodeId = node.dataset.nodeId || (node.dataset.closingFor || null);
+    ctxMenu = document.createElement('div');
+    ctxMenu.className = 'ctx-menu';
+    ctxMenu.style.left = e.clientX + 'px';
+    ctxMenu.style.top = e.clientY + 'px';
+    var items = [
+        { label: 'Pridat atribut', action: function() {} },
+        { label: 'Upravit jako HTML', action: function() {} },
+        { sep: true },
+        { label: 'Rozbalit rekurzivne', action: function() {
+            // Expand subtree pod kliknu nodem.
+            var myDepth = nodeDepth(node);
+            var sib = node.nextElementSibling;
+            while (sib && sib.classList && sib.classList.contains('dom-node')) {
+                if (nodeDepth(sib) <= myDepth) break;
+                if (sib.classList.contains('collapsed')) setNodeCollapsed(sib, false);
+                sib = sib.nextElementSibling;
+            }
+            if (node.classList.contains('collapsed')) setNodeCollapsed(node, false);
+        }},
+        { label: 'Sbalit deti', action: function() {
+            var myDepth = nodeDepth(node);
+            var sib = node.nextElementSibling;
+            while (sib && sib.classList && sib.classList.contains('dom-node')) {
+                if (nodeDepth(sib) <= myDepth) break;
+                if (sib.querySelector('.toggle') && !sib.classList.contains('collapsed')) {
+                    setNodeCollapsed(sib, true);
+                }
+                sib = sib.nextElementSibling;
+            }
+        }},
+        { sep: true },
+        { label: 'Kopirovat selektor', action: function() {
+            var sel = '';
+            var tagSpan = node.querySelector('.tok-tag');
+            if (tagSpan) sel = tagSpan.textContent.replace(/[<>]/g, '');
+            if (navigator.clipboard) navigator.clipboard.writeText(sel).catch(function() {});
+        }},
+        { label: 'Kopirovat XPath', action: function() {
+            var tagSpan = node.querySelector('.tok-tag');
+            var tag = tagSpan ? tagSpan.textContent.replace(/[<>]/g, '') : '';
+            if (navigator.clipboard) navigator.clipboard.writeText('//' + tag).catch(function() {});
+        }},
+        { label: 'Kopirovat outerHTML', action: function() {
+            if (navigator.clipboard) navigator.clipboard.writeText(node.textContent || '').catch(function() {});
+        }},
+        { sep: true },
+        { label: 'Skryt element (display: none)', action: function() {} },
+        { label: 'Smazat element', action: function() {} },
+        { sep: true },
+        { label: 'Scrollovat do zorneho pole', action: function() {
+            if (window.cdp && window.cdp.send && nodeId) {
+                window.cdp.send('DOM.scrollIntoViewIfNeeded', { node_id: parseInt(nodeId, 10) }).catch(function() {});
+            }
+        }},
+    ];
+    items.forEach(function(item) {
+        if (item.sep) {
+            var s = document.createElement('div');
+            s.className = 'ctx-sep';
+            ctxMenu.appendChild(s);
+            return;
+        }
+        var i = document.createElement('div');
+        i.className = 'ctx-item';
+        i.textContent = item.label;
+        i.addEventListener('click', function() {
+            try { item.action(); } catch (e) { console.error(e); }
+            closeCtxMenu();
+        });
+        ctxMenu.appendChild(i);
+    });
+    document.body.appendChild(ctxMenu);
+    // Clamp do viewportu.
+    var r = ctxMenu.getBoundingClientRect();
+    if (r.right > window.innerWidth) ctxMenu.style.left = (window.innerWidth - r.width - 4) + 'px';
+    if (r.bottom > window.innerHeight) ctxMenu.style.top = (window.innerHeight - r.height - 4) + 'px';
+});
+document.addEventListener('click', function(e) {
+    if (ctxMenu && !ctxMenu.contains(e.target)) closeCtxMenu();
+});
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') closeCtxMenu();
+});
+
+// ===== DOM tree keyboard navigation =====
+// Tree musi byt focused (klik nebo Tab). ArrowUp/Down/Left/Right semantika:
+//   Down: next visible dom-node row
+//   Up: previous visible dom-node row
+//   Right: expand pokud collapsed; jinak jdi na prvni viditelne dite
+//   Left: collapse pokud expanded; jinak jdi na rodice
+//   Enter: select node (load styles).
+function visibleRows() {
+    var all = document.querySelectorAll('.dom-tree .dom-node');
+    var out = [];
+    for (var i = 0; i < all.length; i++) {
+        if (all[i].style.display !== 'none' && !all[i].classList.contains('closing-line')) {
+            out.push(all[i]);
+        }
+    }
+    return out;
+}
+function selectedRow() {
+    return document.querySelector('.dom-tree .dom-node.selected');
+}
+function selectRow(row) {
+    if (!row) return;
+    document.querySelectorAll('.dom-tree .dom-node.selected').forEach(function(x) {
+        x.classList.remove('selected');
+    });
+    row.classList.add('selected');
+    if (row.scrollIntoView) row.scrollIntoView({ block: 'nearest' });
+    var nodeId = row.dataset.nodeId;
+    if (nodeId !== undefined) loadStylesForNode(parseInt(nodeId, 10));
+    updateBreadcrumbs(row);
+}
+function findParentRow(row) {
+    // Parent = predchozi visible dom-node s mensi depth.
+    var d = nodeDepth(row);
+    var p = row.previousElementSibling;
+    while (p) {
+        if (p.classList && p.classList.contains('dom-node')
+            && !p.classList.contains('closing-line')
+            && p.style.display !== 'none') {
+            if (nodeDepth(p) < d) return p;
+        }
+        p = p.previousElementSibling;
+    }
+    return null;
+}
+function findFirstChildRow(row) {
+    // First child = bezprostredni next visible row s vetsi depth.
+    var d = nodeDepth(row);
+    var n = row.nextElementSibling;
+    while (n) {
+        if (n.classList && n.classList.contains('dom-node')
+            && !n.classList.contains('closing-line')
+            && n.style.display !== 'none') {
+            if (nodeDepth(n) > d) return n;
+            return null;
+        }
+        n = n.nextElementSibling;
+    }
+    return null;
+}
+document.addEventListener('keydown', function(e) {
+    // Tree musi byt v focus chain.
+    var inTree = document.activeElement && document.activeElement.closest && document.activeElement.closest('.dom-tree');
+    if (!inTree) return;
+    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown' && e.key !== 'ArrowLeft' && e.key !== 'ArrowRight' && e.key !== 'Enter') return;
+    e.preventDefault();
+    var rows = visibleRows();
+    if (rows.length === 0) return;
+    var cur = selectedRow();
+    var idx = cur ? rows.indexOf(cur) : -1;
+    if (idx < 0) {
+        selectRow(rows[0]);
+        return;
+    }
+    if (e.key === 'ArrowDown') {
+        if (idx + 1 < rows.length) selectRow(rows[idx + 1]);
+    } else if (e.key === 'ArrowUp') {
+        if (idx > 0) selectRow(rows[idx - 1]);
+    } else if (e.key === 'ArrowRight') {
+        // Pokud uzel ma toggle (= ma deti) a je collapsed -> expand.
+        var t = cur.querySelector('.toggle');
+        var hasToggle = t && !t.classList.contains('no-children');
+        if (hasToggle && cur.classList.contains('collapsed')) {
+            window.__rweDomTree.setCollapsed(cur, false);
+        } else {
+            // Najdi prvni visible child + select.
+            var firstChild = findFirstChildRow(cur);
+            if (firstChild) selectRow(firstChild);
+            // Else: konec stromu - stay.
+        }
+    } else if (e.key === 'ArrowLeft') {
+        var t2 = cur.querySelector('.toggle');
+        var hasToggle2 = t2 && !t2.classList.contains('no-children');
+        if (hasToggle2 && !cur.classList.contains('collapsed')) {
+            window.__rweDomTree.setCollapsed(cur, true);
+        } else {
+            var parent = findParentRow(cur);
+            if (parent) selectRow(parent);
+        }
+    } else if (e.key === 'Enter') {
+        // Re-trigger style load
+        var nodeId = cur.dataset.nodeId;
+        if (nodeId !== undefined) loadStylesForNode(parseInt(nodeId, 10));
+    }
+});
+
+// ===== Breadcrumbs =====
+// Pri select node update breadcrumb chain = walk parents od selected k root.
+function updateBreadcrumbs(row) {
+    var crumbs = document.querySelector('.dom-breadcrumbs');
+    if (!crumbs) return;
+    if (!row) { crumbs.innerHTML = ''; return; }
+    var chain = [];
+    var cursor = row;
+    while (cursor) {
+        chain.push(cursor);
+        cursor = findParentRow(cursor);
+    }
+    chain.reverse();
+    crumbs.innerHTML = '';
+    chain.forEach(function(r, i) {
+        if (i > 0) {
+            var sep = document.createElement('span');
+            sep.className = 'dom-crumb-sep';
+            sep.textContent = ' > ';
+            crumbs.appendChild(sep);
+        }
+        var c = document.createElement('span');
+        c.className = 'dom-crumb' + (i === chain.length - 1 ? ' active' : '');
+        // Label: tag + first class.
+        var tagEl = r.querySelector('.tok-tag');
+        var classEl = r.querySelector('.tok-attr-value');
+        var attrName = r.querySelector('.tok-attr-name');
+        var label = tagEl ? tagEl.textContent.replace(/[<>]/g, '').split(' ')[0] : 'node';
+        // Pridat .class nebo #id pokud existuje.
+        if (attrName && classEl) {
+            var an = attrName.textContent;
+            var av = classEl.textContent.replace(/"/g, '');
+            if (an === 'class') label += '.' + av.split(/\s+/)[0];
+            else if (an === 'id') label += '#' + av;
+        }
+        c.textContent = label;
+        c.dataset.targetNodeId = r.dataset.nodeId || '';
+        c.addEventListener('click', function() { selectRow(r); });
+        c.addEventListener('mouseenter', function() {
+            // Highlight pres CDP overlay (jen kdyz backend).
+            var nid = r.dataset.nodeId;
+            if (window.cdp && window.cdp.send && nid) {
+                window.cdp.send('Overlay.highlightNode', {
+                    node_id: parseInt(nid, 10),
+                    highlight_config: { content_color: { r: 80, g: 130, b: 230, a: 0.5 } },
+                }).catch(function() {});
+            }
+        });
+        c.addEventListener('mouseleave', function() {
+            if (window.cdp && window.cdp.send) {
+                window.cdp.send('Overlay.hideHighlight', {}).catch(function() {});
+            }
+        });
+        crumbs.appendChild(c);
+    });
+}
+// Hook do existujici selectRow click handler: musime updateBreadcrumbs pri kazdem select.
+// Zaregistruj globalni delegate listener: any click on .dom-node updates crumbs.
+document.addEventListener('click', function(e) {
+    var row = e.target && e.target.closest && e.target.closest('.dom-node');
+    if (!row) return;
+    if (row.classList.contains('closing-line')) return;
+    setTimeout(function() {
+        // Po vsech ostatnich handlerech (= row mozna ma .selected).
+        if (row.classList.contains('selected')) updateBreadcrumbs(row);
+    }, 0);
+});
+
+// ===== Layout side-tabs switching =====
+// Klik na .layout-tab prepne aktivni body (data-side-body).
+function activateSideTab(side) {
+    var inner = document.getElementById('layout-tabs-inner');
+    if (!inner) return;
+    inner.querySelectorAll('.layout-tab').forEach(function(t) {
+        t.classList.toggle('active', t.dataset.side === side);
+    });
+    var layoutPane = document.getElementById('layout-pane');
+    if (!layoutPane) return;
+    // Body candidates: standardni .layout-body[data-side-body] + presunuty .styles-pane.merged-tab.
+    layoutPane.querySelectorAll('.layout-body, .styles-pane.merged-tab').forEach(function(b) {
+        b.style.display = b.dataset.sideBody === side ? '' : 'none';
+    });
+}
+document.addEventListener('click', function(e) {
+    var tab = e.target && e.target.closest && e.target.closest('.layout-tab');
+    if (!tab) return;
+    if (!tab.dataset.side) return;
+    activateSideTab(tab.dataset.side);
+});
+
+// ===== Move styles to layout tabs =====
+// Klik na btn-move-styles - presune CELY stylesPane DOM uzel INTO layout-pane jako tab body.
+// loadStylesForNode pak najde stejny element pres querySelector. Druhy klik = restore.
+var _stylesAnchor = null;  // sibling pred kterym stylesPane lezel - pro restore.
+var btnMoveStyles = document.getElementById('btn-move-styles');
+if (btnMoveStyles) {
+    btnMoveStyles.addEventListener('click', function() {
+        var stylesPane = document.querySelector('.styles-pane');
+        var splStyles = document.getElementById('splitter-styles');
+        var layoutTabsInner = document.getElementById('layout-tabs-inner');
+        var layoutPane = document.getElementById('layout-pane');
+        var inspectorBody = document.querySelector('.inspector-body');
+        if (!stylesPane || !layoutTabsInner || !layoutPane || !inspectorBody) return;
+        var existing = layoutTabsInner.querySelector('[data-side="rules"]');
+        if (existing) {
+            // Restore: vrat stylesPane na puvodni misto v inspector-body.
+            stylesPane.classList.remove('merged-tab');
+            stylesPane.style.cssText = '';
+            stylesPane.removeAttribute('data-side-body');
+            // Insert zpet PRED puvodniho sibling (anchor = splitter-layout typicky).
+            if (_stylesAnchor && _stylesAnchor.parentNode === inspectorBody) {
+                inspectorBody.insertBefore(stylesPane, _stylesAnchor);
+            } else {
+                inspectorBody.appendChild(stylesPane);
+            }
+            _stylesAnchor = null;
+            existing.remove();
+            if (splStyles) splStyles.style.cssText = '';
+            // Reset btn icon + handler na original.
+            btnMoveStyles.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16"><path d="M3 8 L13 8 M9 4 L13 8 L9 12" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+            btnMoveStyles.title = 'Presunout pravidla mezi zalozky vpravo';
+            // Activate prvni dostupny side tab.
+            var first = layoutTabsInner.querySelector('.layout-tab');
+            if (first) activateSideTab(first.dataset.side);
+        } else {
+            // Move: zaznamenat anchor + presunout cely stylesPane uzel do layout-pane.
+            _stylesAnchor = stylesPane.nextSibling;
+            stylesPane.classList.add('merged-tab');
+            stylesPane.dataset.sideBody = 'rules';
+            layoutPane.appendChild(stylesPane);
+            // Vlozit "Pravidla" tab vpred.
+            var newTab = document.createElement('div');
+            newTab.className = 'layout-tab';
+            newTab.dataset.side = 'rules';
+            newTab.textContent = 'Pravidla';
+            layoutTabsInner.insertBefore(newTab, layoutTabsInner.firstChild);
+            // Skryt splitter-styles (mezi dom-pane a styles-pane, teď uz neexistuje styles-pane na puvodnim miste).
+            if (splStyles) splStyles.style.cssText = 'display: none !important;';
+            // Btn icon swap na sipku DOLEVA + zmena title (logika toggle stejna).
+            btnMoveStyles.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16"><path d="M13 8 L3 8 M7 4 L3 8 L7 12" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+            btnMoveStyles.title = 'Vratit pravidla zpet do prostredniho sloupce';
+            activateSideTab('rules');
+        }
+        updateOverflowDropdown();
+    });
+}
+
+// ===== Layout tabs overflow dropdown =====
+// Pokud nemestna se vsechny tabs, ukaz chevron-down button + popup.
+function updateOverflowDropdown() {
+    var inner = document.getElementById('layout-tabs-inner');
+    var btn = document.querySelector('.layout-overflow-btn');
+    if (!inner || !btn) return;
+    var overflow = inner.scrollWidth > inner.clientWidth + 1;
+    btn.style.display = overflow ? '' : 'none';
+}
+window.addEventListener('resize', updateOverflowDropdown);
+setTimeout(updateOverflowDropdown, 100);
+var overflowBtn = document.querySelector('.layout-overflow-btn');
+if (overflowBtn) {
+    // Pridat ikonku misto Lucide.
+    overflowBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 16 16"><path d="M3 6 L8 11 L13 6" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    overflowBtn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        var inner = document.getElementById('layout-tabs-inner');
+        if (!inner) return;
+        var existing = document.querySelector('.layout-overflow-menu');
+        if (existing) { existing.remove(); return; }
+        var menu = document.createElement('div');
+        menu.className = 'layout-overflow-menu';
+        var r = overflowBtn.getBoundingClientRect();
+        menu.style.cssText = 'position:fixed;background:var(--bg-elev2);border:1px solid var(--border-strong);' +
+            'padding:4px 0;border-radius:4px;z-index:9999;font-size:11px;' +
+            'box-shadow:0 4px 12px rgba(0,0,0,0.4);min-width:140px;';
+        menu.style.left = r.left + 'px';
+        menu.style.top = (r.bottom + 2) + 'px';
+        // Fill polozkami.
+        inner.querySelectorAll('.layout-tab').forEach(function(t) {
+            var i = document.createElement('div');
+            i.className = 'ctx-item';
+            i.textContent = t.textContent;
+            if (t.classList.contains('active')) i.style.background = 'var(--bg-elev3, var(--bg-elev1))';
+            i.addEventListener('click', function() {
+                activateSideTab(t.dataset.side);
+                t.scrollIntoView({ inline: 'center' });
+                menu.remove();
+            });
+            menu.appendChild(i);
+        });
+        document.body.appendChild(menu);
+        // Clamp do viewportu (pred fill velikost neznama).
+        var mr = menu.getBoundingClientRect();
+        if (mr.right > window.innerWidth - 4) {
+            menu.style.left = Math.max(4, window.innerWidth - mr.width - 4) + 'px';
+        }
+        if (mr.bottom > window.innerHeight - 4) {
+            menu.style.top = Math.max(4, r.top - mr.height - 2) + 'px';
+        }
+        setTimeout(function() {
+            document.addEventListener('click', function close(ev) {
+                if (!menu.contains(ev.target)) {
+                    menu.remove();
+                    document.removeEventListener('click', close);
+                }
+            });
+        }, 0);
+    });
 }
 </script>
 
@@ -1834,9 +3176,425 @@ applyI18n(currentLang);
     console.log('[devtools wireup] start. window.cdp = ' + (typeof window.cdp));
     if (!window.cdp) {
         console.warn('[devtools] window.cdp not available - frontend bezi standalone (mockup mode)');
-        return;
+        installMockCdp();
     }
     console.log('[devtools wireup] cdp.send = ' + (typeof window.cdp.send));
+
+    // ----- MOCKUP CDP backend pro standalone preview (Chrome file://). -----
+    // Imituje page DOM + responses na CDP volani s fake daty. Po nasem
+    // wireup kode bezi vsechno jako s realnym backendem.
+    function installMockCdp() {
+        var mockNodeIdCounter = 100;
+        function mkNode(name, type, attrs, children) {
+            return {
+                node_id: ++mockNodeIdCounter,
+                node_name: name,
+                node_type: type,
+                node_value: null,
+                attributes: attrs || [],
+                children: children || [],
+            };
+        }
+        function mkText(value) {
+            return {
+                node_id: ++mockNodeIdCounter,
+                node_name: '#text',
+                node_type: 3,
+                node_value: value,
+                attributes: [],
+                children: [],
+            };
+        }
+        // Fake page DOM zhruba odpovidajici test.html.
+        var mockRoot = mkNode('#document', 9, [], [
+            {
+                node_id: ++mockNodeIdCounter,
+                node_name: 'html',
+                node_type: 10,
+                node_value: null,
+                attributes: [],
+                children: [],
+            },
+            mkNode('HTML', 1, ['lang', 'cs'], [
+                mkNode('HEAD', 1, [], [
+                    mkNode('META', 1, ['charset', 'utf-8'], []),
+                    mkNode('TITLE', 1, [], [mkText('Mock Test Stranka')]),
+                    mkNode('LINK', 1, ['rel', 'stylesheet', 'href', 'test.css'], []),
+                ]),
+                mkNode('BODY', 1, [], [
+                    mkNode('HEADER', 1, ['class', 'page-header'], [
+                        mkNode('H1', 1, [], [mkText('Rust Web Engine')]),
+                        mkNode('P', 1, ['class', 'subtitle'], [mkText('Mockup data pro standalone preview')]),
+                    ]),
+                    mkNode('MAIN', 1, [], [
+                        mkNode('SECTION', 1, ['class', 'card'], [
+                            mkNode('H2', 1, [], [mkText('1. Typografie')]),
+                            mkNode('H1', 1, [], [mkText('Heading H1 - 32px bold')]),
+                            mkNode('H2', 1, [], [mkText('Heading H2 - 24px bold')]),
+                            mkNode('H3', 1, [], [mkText('Heading H3 - 20px bold')]),
+                            mkNode('P', 1, [], [
+                                mkText('Standardni odstavec se '),
+                                mkNode('STRONG', 1, [], [mkText('tucnymi')]),
+                                mkText(', '),
+                                mkNode('EM', 1, [], [mkText('kurzivovymi')]),
+                                mkText(' a '),
+                                mkNode('CODE', 1, [], [mkText('code')]),
+                                mkText(' vyrazy.'),
+                            ]),
+                        ]),
+                        mkNode('SECTION', 1, ['class', 'card'], [
+                            mkNode('H2', 1, [], [mkText('2. Barvy')]),
+                            mkNode('DIV', 1, ['class', 'swatch red'], [mkText('red')]),
+                            mkNode('DIV', 1, ['class', 'swatch green'], [mkText('green')]),
+                            mkNode('DIV', 1, ['class', 'swatch blue'], [mkText('blue')]),
+                        ]),
+                        mkNode('SECTION', 1, ['class', 'card'], [
+                            mkNode('H2', 1, [], [mkText('3. Form ovladaci')]),
+                            mkNode('LABEL', 1, [], [
+                                mkText('Jmeno: '),
+                                mkNode('INPUT', 1, ['type', 'text', 'value', 'Honza'], []),
+                            ]),
+                            mkNode('BUTTON', 1, ['class', 'btn'], [mkText('Odeslat')]),
+                        ]),
+                        mkNode('SECTION', 1, ['class', 'card long'], [
+                            mkNode('H2', 1, [], [mkText('4. Dlouhy obsah pro overflow test')]),
+                            mkNode('P', 1, [], [mkText('Lorem ipsum dolor sit amet, consectetur adipiscing elit. ' +
+                                'Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. ' +
+                                'Ut enim ad minim veniam, quis nostrud exercitation.'.repeat(3))]),
+                            mkNode('P', 1, [], [mkText('Druhy odstavec.')]),
+                            mkNode('P', 1, [], [mkText('Treti odstavec s vetsim obsahem.')]),
+                            mkNode('P', 1, [], [mkText('Ctvrty odstavec.')]),
+                        ]),
+                    ]),
+                    mkNode('FOOTER', 1, ['class', 'page-footer'], [
+                        mkText('(c) 2026 Rust Web Engine - mockup'),
+                    ]),
+                ]),
+            ]),
+        ]);
+        // Helper: get class+id+tag z node attributes.
+        function nodeMeta(node) {
+            var tag = (node && node.node_name || '').toLowerCase();
+            var cls = '';
+            var id = '';
+            var attrs = node && node.attributes || [];
+            for (var i = 0; i + 1 < attrs.length; i += 2) {
+                if (attrs[i] === 'class') cls = attrs[i+1];
+                if (attrs[i] === 'id') id = attrs[i+1];
+            }
+            var classList = cls.split(/\s+/).filter(function(s) { return s; });
+            return { tag: tag, classList: classList, id: id };
+        }
+        function mkRule(selector, props, origin) {
+            return {
+                rule: {
+                    selector_list: [selector],
+                    style: { properties: props.map(function(p) {
+                        return { name: p[0], value: p[1], important: !!p[2], disabled: false };
+                    })},
+                    origin: origin || 'regular',
+                },
+                matching_selectors: [0],
+            };
+        }
+        // Vraci parent chain - z mockRoot, walk pres node ID.
+        function fakeParentChain(targetId) {
+            var path = [];
+            function find(node, anc) {
+                if (node.node_id === targetId) {
+                    path = anc.slice();
+                    return true;
+                }
+                for (var i = 0; i < (node.children || []).length; i++) {
+                    anc.push(node);
+                    if (find(node.children[i], anc)) return true;
+                    anc.pop();
+                }
+                return false;
+            }
+            find(mockRoot, []);
+            // Filter jen elementy (skip #document, doctype, text).
+            return path.filter(function(n) { return n.node_type === 1; });
+        }
+        // Inheritable CSS props per CSS spec - filter rules pri inherited_from.
+        var INHERITABLE_RE = /^(color|font|font-.*|line-height|letter-spacing|word-spacing|text-align|text-indent|text-transform|white-space|word-break|overflow-wrap|cursor|visibility|direction|list-style|list-style-.*|quotes|tab-size|writing-mode|--.*)$/;
+        // Vlastni rules per node bez parent chain. fakeMatchedRules pak vola
+        // tento helper + appenduje ancestor inherited.
+        function ownRulesOnly(node) {
+            var m = nodeMeta(node);
+            var rules = [];
+            // Class rules first (vyssi specificity).
+            if (m.classList.indexOf('page-header') >= 0) {
+                rules.push(mkRule('.page-header', [
+                    ['background', '#1d1d1f'], ['color', '#ffffff'],
+                    ['padding', '24px'], ['border', '0'],
+                ]));
+            }
+            if (m.classList.indexOf('subtitle') >= 0) {
+                rules.push(mkRule('.subtitle', [
+                    ['color', '#a1a1a6'], ['font-size', '14px'],
+                    ['margin', '4px 0 0 0'],
+                ]));
+            }
+            if (m.classList.indexOf('card') >= 0) {
+                rules.push(mkRule('.card', [
+                    ['background', '#ffffff'], ['border', '1px solid #d2d2d7'],
+                    ['border-radius', '8px'], ['padding', '16px'],
+                    ['margin', '12px 0'],
+                ]));
+            }
+            if (m.classList.indexOf('btn') >= 0) {
+                rules.push(mkRule('.btn', [
+                    ['background', '#0a84ff'], ['color', '#ffffff'],
+                    ['padding', '8px 16px'], ['border-radius', '6px'],
+                    ['cursor', 'pointer'], ['border', 'none'],
+                ]));
+            }
+            if (m.classList.indexOf('swatch') >= 0) {
+                rules.push(mkRule('.swatch', [
+                    ['color', '#ffffff'], ['padding', '10px 16px'],
+                    ['margin', '4px 0'], ['border-radius', '4px'],
+                ]));
+                if (m.classList.indexOf('red') >= 0) {
+                    rules.push(mkRule('.swatch.red', [['background', '#dc2626']]));
+                }
+                if (m.classList.indexOf('green') >= 0) {
+                    rules.push(mkRule('.swatch.green', [['background', '#16a34a']]));
+                }
+                if (m.classList.indexOf('blue') >= 0) {
+                    rules.push(mkRule('.swatch.blue', [['background', '#2563eb']]));
+                }
+            }
+            // Tag-specific rules.
+            if (m.tag === 'body') {
+                rules.push(mkRule('body', [
+                    ['background', '#f5f5f7'], ['color', '#1d1d1f'],
+                    ['font-size', '16px'], ['margin', '0'], ['padding', '0'],
+                ]));
+            } else if (m.tag === 'h1' && m.classList.length === 0) {
+                if (rules.length === 0) {
+                    rules.push(mkRule('.page-header h1', [
+                        ['color', '#f5f5f7'], ['font-size', '32px'], ['margin', '0'],
+                    ]));
+                }
+                rules.push(mkRule('h1', [
+                    ['display', 'block'], ['font-size', '2em'],
+                    ['margin-block-start', '0.67em'], ['font-weight', 'bold'],
+                ], 'user-agent'));
+            } else if (m.tag === 'h2') {
+                rules.push(mkRule('h2', [
+                    ['color', '#0a84ff'], ['font-size', '24px'],
+                    ['margin', '0 0 12px 0'],
+                ]));
+            } else if (m.tag === 'h3') {
+                rules.push(mkRule('h3', [
+                    ['font-size', '20px'], ['font-weight', 'bold'],
+                ]));
+            } else if (m.tag === 'main') {
+                rules.push(mkRule('main', [
+                    ['padding', '16px'], ['background', '#ffffff'],
+                ]));
+            } else if (m.tag === 'code') {
+                rules.push(mkRule('code', [
+                    ['background', '#fef2f2'], ['color', '#dc2626'],
+                    ['padding', '2px 6px'], ['border-radius', '3px'],
+                    ['font-family', 'monospace'],
+                ]));
+            } else if (m.tag === 'strong') {
+                rules.push(mkRule('strong', [['font-weight', 'bold']], 'user-agent'));
+            } else if (m.tag === 'em') {
+                rules.push(mkRule('em', [['font-style', 'italic']], 'user-agent'));
+            } else if (m.tag === 'input') {
+                rules.push(mkRule('input', [
+                    ['border', '1px solid #d2d2d7'], ['padding', '6px 10px'],
+                    ['border-radius', '4px'], ['font-size', '14px'],
+                ]));
+            } else if (m.tag === 'p') {
+                rules.push(mkRule('p', [
+                    ['display', 'block'], ['margin-block-start', '1em'],
+                    ['margin-block-end', '1em'],
+                ], 'user-agent'));
+            }
+            return rules;
+        }
+        // fakeMatchedRules: own rules + parent chain inheritable props.
+        function fakeMatchedRules(node) {
+            var out = ownRulesOnly(node);
+            var chain = fakeParentChain(node.node_id);
+            // Chain: [html, body, ...] cesta od root k parent. Walk from leaf (= primy parent) k root.
+            for (var i = chain.length - 1; i >= 0; i--) {
+                var par = chain[i];
+                var parRules = ownRulesOnly(par);
+                parRules.forEach(function(r) {
+                    // Filter jen inheritable + --vars.
+                    var inh = r.rule.style.properties.filter(function(p) {
+                        return INHERITABLE_RE.test(p.name);
+                    });
+                    if (inh.length === 0) return;
+                    out.push({
+                        rule: {
+                            selector_list: r.rule.selector_list.slice(),
+                            style: { properties: inh },
+                            origin: r.rule.origin,
+                        },
+                        matching_selectors: r.matching_selectors,
+                        inherited_from: par.node_name.toLowerCase(),
+                    });
+                });
+            }
+            // Pri kazdem node take pridat :root --vars (mockup).
+            out.push({
+                rule: {
+                    selector_list: [':root'],
+                    style: { properties: [
+                        { name: '--bg-base', value: '#0c0c0d', important: false, disabled: false },
+                        { name: '--fg', value: '#d4d4d8', important: false, disabled: false },
+                        { name: '--accent', value: '#0a84ff', important: false, disabled: false },
+                    ]},
+                    origin: 'regular',
+                },
+                matching_selectors: [0],
+                inherited_from: 'html',
+                is_root_vars: true,
+            });
+            return out;
+        }
+        function findNodeById(root, id) {
+            if (root.node_id === id) return root;
+            for (var i = 0; i < (root.children || []).length; i++) {
+                var f = findNodeById(root.children[i], id);
+                if (f) return f;
+            }
+            return null;
+        }
+        var listeners = {};
+        window.cdp = {
+            send: function(method, params) {
+                return new Promise(function(resolve, reject) {
+                    setTimeout(function() {
+                        if (method === 'DOM.getDocument') {
+                            resolve({ root: mockRoot });
+                        } else if (method === 'CSS.getMatchedStylesForNode') {
+                            var node = findNodeById(mockRoot, params.node_id);
+                            resolve({
+                                inline_style: null,
+                                matched_rules: fakeMatchedRules(node),
+                            });
+                        } else if (method === 'CSS.getComputedStyleForNode') {
+                            // Mockup: realisticky set vsech CSS props pres FF Computed.
+                            // Browser styles (UA) + user styles. is_browser flag pro filter.
+                            // sources: pole (selector, file:line) odkud value pochazi.
+                            resolve({ computed_style: [
+                                { name: 'box-sizing', value: 'border-box', is_browser: false,
+                                    sources: [{ selector: '*', file: 'index.html', line: 39 }]},
+                                { name: 'color', value: 'rgb(212, 212, 216)', is_browser: false,
+                                    sources: [{ selector: 'html, body', file: 'index.html', line: 41 }]},
+                                { name: 'font-family', value: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif',
+                                    is_browser: false,
+                                    sources: [
+                                        { selector: 'html', file: 'index.html', line: 41 },
+                                        { selector: 'body', file: 'index.html', line: 41 },
+                                    ]},
+                                { name: 'font-size', value: '12px', is_browser: false,
+                                    sources: [
+                                        { selector: 'html', file: 'index.html', line: 41 },
+                                        { selector: 'body', file: 'index.html', line: 41 },
+                                    ]},
+                                { name: '--accent', value: '#0a84ff', is_browser: false, sources: [] },
+                                { name: '--accent-bg', value: 'rgba(10, 132, 255, 0.15)', is_browser: false, sources: [] },
+                                // Browser/UA defaults (zobrazene jen pri checkbox).
+                                { name: 'accent-color', value: 'auto', is_browser: true, sources: [] },
+                                { name: 'align-content', value: 'normal', is_browser: true, sources: [] },
+                                { name: 'align-items', value: 'normal', is_browser: true, sources: [] },
+                                { name: 'align-self', value: 'auto', is_browser: true, sources: [] },
+                                { name: 'background-color', value: 'rgba(0, 0, 0, 0)', is_browser: true, sources: [] },
+                                { name: 'border-collapse', value: 'separate', is_browser: true, sources: [] },
+                                { name: 'display', value: 'block', is_browser: true, sources: [] },
+                                { name: 'margin', value: '0px', is_browser: true, sources: [] },
+                                { name: 'padding', value: '0px', is_browser: true, sources: [] },
+                                { name: 'position', value: 'static', is_browser: true, sources: [] },
+                                { name: 'width', value: 'auto', is_browser: true, sources: [] },
+                            ]});
+                        } else if (method === 'Runtime.evaluate') {
+                            resolve({ result: { type: 'string', value: 'mock eval: ' + (params.expression || '') } });
+                        } else {
+                            resolve({});
+                        }
+                    }, 20);
+                });
+            },
+            on: function(event, cb) {
+                if (!listeners[event]) listeners[event] = [];
+                listeners[event].push(cb);
+            },
+            emit: function(event, data) {
+                (listeners[event] || []).forEach(function(cb) {
+                    try { cb(data); } catch (e) { console.error(e); }
+                });
+            },
+        };
+        // Po wireup emit fake events.
+        setTimeout(function() {
+            window.cdp.emit('DOM.documentUpdated', {});
+            // Fake console messages.
+            window.cdp.emit('Runtime.consoleAPICalled', {
+                type: 'log',
+                args: [{ type: 'string', value: 'Mockup console: stranka nahrana' }],
+            });
+            window.cdp.emit('Runtime.consoleAPICalled', {
+                type: 'log',
+                args: [{ type: 'string', value: 'First heading: ' }, { type: 'string', value: 'Rust Web Engine' }],
+            });
+            window.cdp.emit('Runtime.consoleAPICalled', {
+                type: 'warn',
+                args: [{ type: 'string', value: 'Mock warning - 3 cards found' }],
+            });
+            window.cdp.emit('Runtime.consoleAPICalled', {
+                type: 'error',
+                args: [{ type: 'string', value: 'Mock error: simulovana chyba' }],
+            });
+            // Fake script parsed events.
+            window.cdp.emit('Debugger.scriptParsed', {
+                script_id: 'mock-1',
+                url: 'test.html (inline #1)',
+                start_line: 0,
+                start_column: 0,
+                end_line: 5,
+                end_column: 0,
+                source: 'console.log("First heading:", document.querySelector("h1").textContent);',
+            });
+            window.cdp.emit('Debugger.scriptParsed', {
+                script_id: 'mock-2',
+                url: 'test.html (inline #2)',
+                start_line: 10,
+                start_column: 0,
+                end_line: 20,
+                end_column: 0,
+                source: 'var cards = document.querySelectorAll(".card");\nconsole.log("Found", cards.length, "cards");',
+            });
+            // Fake network entries.
+            window.cdp.emit('Network.requestWillBeSent', {
+                request_id: 'mock-req-1',
+                request: { url: 'file:///test.html', method: 'GET', headers: {} },
+                resource_type: 'Document',
+                timestamp: Date.now() / 1000,
+            });
+            window.cdp.emit('Network.responseReceived', {
+                request_id: 'mock-req-1',
+                response: { status: 200, mime_type: 'text/html', headers: {} },
+            });
+            window.cdp.emit('Network.requestWillBeSent', {
+                request_id: 'mock-req-2',
+                request: { url: 'file:///test.css', method: 'GET', headers: {} },
+                resource_type: 'Stylesheet',
+                timestamp: Date.now() / 1000,
+            });
+            window.cdp.emit('Network.responseReceived', {
+                request_id: 'mock-req-2',
+                response: { status: 200, mime_type: 'text/css', headers: {} },
+            });
+        }, 100);
+    }
 
     // ---------- INSPECTOR: DOM tree z DOM.getDocument ----------
     // Perf timing: zachyt kde 14s zere (CDP roundtrip / renderNode recursion / paint).
@@ -1857,23 +3615,23 @@ applyI18n(currentLang);
             return;
         }
         var t1 = nowMs();
-        console.log('[PROF] querySelector: ' + (t1-t0) + 'ms');
-        console.log('[PROF] cdp.send DOM.getDocument...');
         window.cdp.send('DOM.getDocument', { depth: -1 }).then(function(result) {
-            var t2 = nowMs();
-            console.log('[PROF] CDP roundtrip (send -> response): ' + (t2-t1) + 'ms');
-            var totalNodes = countNodes(result.root);
-            console.log('[PROF] DOM nodes to render: ' + totalNodes);
-            var t3 = nowMs();
-            console.log('[PROF] countNodes walk: ' + (t3-t2) + 'ms');
             domTree.textContent = ''; // clear, no innerHTML parse
-            var t4 = nowMs();
-            console.log('[PROF] clear domTree: ' + (t4-t3) + 'ms');
             __renderNodeCount = 0;
+            __renderNodeErrors = [];
             renderNode(result.root, domTree, 0);
+            // Default state: jen html + body level visible, vsechno pod body collapsed.
+            // User pak expand to co ho zajima. Chrome devtools dela podobne.
+            if (window.__rweDomTree) window.__rweDomTree.collapseToDepth(2);
             var t5 = nowMs();
-            console.log('[PROF] renderNode TOTAL: ' + (t5-t4) + 'ms, nodes_emitted=' + __renderNodeCount);
-            console.log('[PROF] TOTAL renderDomTree: ' + (t5-t0) + 'ms');
+            // Log jen pomale rendery (> 200ms).
+            if (t5 - t0 > 200) {
+                console.log('[renderDomTree SLOW] total=' + (t5-t0) + 'ms nodes=' + __renderNodeCount);
+            }
+            if (__renderNodeErrors.length > 0) {
+                console.error('[renderNode ERRORS] count=' + __renderNodeErrors.length +
+                    ' first=' + JSON.stringify(__renderNodeErrors[0]));
+            }
         }).catch(function(e) {
             console.log('[renderDomTree] CDP error: ' + (e && e.message ? e.message : e));
         });
@@ -1890,59 +3648,410 @@ applyI18n(currentLang);
     }
 
     var __renderNodeCount = 0;
-    var __renderNodeT0 = 0;
-    function renderNode(node, container, depth) {
-        if (__renderNodeCount === 0) __renderNodeT0 = Date.now();
-        __renderNodeCount++;
-        if (__renderNodeCount % 500 === 0) {
-            console.log('[renderNode] N=' + __renderNodeCount + ' elapsed=' + (Date.now() - __renderNodeT0) + 'ms');
+    var __renderNodeErrors = [];
+    // Helper: emit opening tag spans `<tag attrs>` do parent.
+    function appendOpenTag(div, node) {
+        div.appendChild(mkSpan('tok-tag', '<' + node.node_name.toLowerCase()));
+        const a = node.attributes || [];
+        for (let i = 0; i + 1 < a.length; i += 2) {
+            div.appendChild(document.createTextNode(' '));
+            div.appendChild(mkSpan('tok-attr-name', a[i]));
+            div.appendChild(document.createTextNode('='));
+            div.appendChild(mkSpan('tok-attr-value', '"' + a[i+1] + '"'));
         }
-        const div = document.createElement('div');
-        div.className = 'dom-node';
-        div.style.paddingLeft = (6 + depth * 16) + 'px';
-        div.dataset.nodeId = node.node_id;
-        if (node.node_type === 1) { // Element
-            const hasChildren = (node.children || []).length > 0;
-            div.appendChild(mkSpan('toggle', hasChildren ? 'v ' : '. '));
-            div.appendChild(mkSpan('tok-tag', '<' + node.node_name.toLowerCase()));
-            const a = node.attributes || [];
-            for (let i = 0; i + 1 < a.length; i += 2) {
-                div.appendChild(document.createTextNode(' '));
-                div.appendChild(mkSpan('tok-attr-name', a[i]));
-                div.appendChild(document.createTextNode('='));
-                div.appendChild(mkSpan('tok-attr-value', '"' + a[i+1] + '"'));
-            }
-            div.appendChild(mkSpan('tok-tag', '>'));
-        } else if (node.node_type === 3) { // Text
-            div.appendChild(mkSpan('tok-text', node.node_value || ''));
-        } else if (node.node_type === 9) { // Document
-            div.appendChild(mkSpan('tok-tag', '#document'));
-        } else if (node.node_type === 10) { // DocType
-            div.appendChild(mkSpan('tok-tag', '<!DOCTYPE ' + node.node_name + '>'));
-        } else {
-            div.appendChild(mkSpan('tok-text', node.node_name));
-        }
+        div.appendChild(mkSpan('tok-tag', '>'));
+    }
+    function appendCloseTag(div, node) {
+        div.appendChild(mkSpan('tok-tag', '</' + node.node_name.toLowerCase() + '>'));
+    }
+    function attachSelectHandler(div, nodeId) {
         div.addEventListener('click', function(e) {
             e.stopPropagation();
             var sels = document.querySelectorAll('.dom-node.selected');
             for (var i = 0; i < sels.length; i++) sels[i].classList.remove('selected');
             div.classList.add('selected');
+            loadStylesForNode(nodeId);
+        });
+    }
+    // VOID tagy - HTML spec self-closing, neemituji </tag>.
+    var VOID_TAGS = {area:1, base:1, br:1, col:1, embed:1, hr:1, img:1, input:1,
+        link:1, meta:1, param:1, source:1, track:1, wbr:1};
+    // Heuristika - ktery node je flex/grid/scroll container. V realnem backend
+    // by se ziskaly computed styles + checkly display/overflow.
+    function detectLayoutKind(node) {
+        if (!node.attributes) return null;
+        var cls = '';
+        var inlineStyle = '';
+        for (var i = 0; i + 1 < node.attributes.length; i += 2) {
+            if (node.attributes[i] === 'class') cls = node.attributes[i+1];
+            if (node.attributes[i] === 'style') inlineStyle = node.attributes[i+1];
+        }
+        var classes = cls.split(/\s+/);
+        var s = inlineStyle + ' ' + cls;
+        // Hard-code mockup heuristika - tagy/classes typicke flex/grid containerech.
+        var flexClasses = ['flex-col', 'flex-row', 'devtools', 'inspector-body', 'row-split',
+            'panel-toolbar', 'subtabs', 'styles-header', 'tab-strip', 'computed-toolbar',
+            'panel-body', 'side-tabs'];
+        var gridClasses = ['grid', 'grid-container', 'card-grid'];
+        if (/display\s*:\s*flex/.test(s)) return 'flex';
+        if (/display\s*:\s*grid/.test(s)) return 'grid';
+        for (var ci = 0; ci < classes.length; ci++) {
+            if (flexClasses.indexOf(classes[ci]) >= 0) return 'flex';
+            if (gridClasses.indexOf(classes[ci]) >= 0) return 'grid';
+        }
+        // Tag heuristika - <main>/<body>/<header>/<footer>/<section> casto flex layouts v mockup.
+        var tag = (node.node_name || '').toLowerCase();
+        if (tag === 'main' || tag === 'body') return 'flex';
+        return null;
+    }
+    function appendBadges(div, node) {
+        var kind = detectLayoutKind(node);
+        if (!kind) return;
+        var badge = document.createElement('span');
+        badge.className = 'badge ' + kind;
+        badge.textContent = kind;
+        badge.dataset.layoutKind = kind;
+        badge.dataset.targetNodeId = node.node_id;
+        // Klik na badge - toggle active + posila CDP highlight pres mode (gridOverlay / flexOverlay).
+        badge.addEventListener('click', function(ev) {
+            ev.stopPropagation();
+            var active = badge.classList.toggle('active');
+            if (window.cdp && window.cdp.send) {
+                if (active) {
+                    var cfg = {};
+                    if (kind === 'grid') {
+                        cfg.show_grid_lines = true;
+                        cfg.show_gaps = true;
+                        cfg.show_areas = true;
+                        cfg.show_line_numbers = true;
+                        cfg.show_track_sizes = true;
+                        cfg.grid_color = { r: 167, g: 139, b: 250, a: 0.6 };
+                        cfg.row_gap_color = { r: 167, g: 139, b: 250, a: 0.3 };
+                        cfg.column_gap_color = { r: 167, g: 139, b: 250, a: 0.3 };
+                    } else if (kind === 'flex') {
+                        cfg.container_border = { r: 245, g: 158, b: 11, a: 0.8 };
+                        cfg.item_separator = { r: 245, g: 158, b: 11, a: 0.5 };
+                        cfg.main_distributed_space = { r: 245, g: 158, b: 11, a: 0.15 };
+                    }
+                    window.cdp.send('Overlay.highlightNode', {
+                        node_id: parseInt(node.node_id, 10),
+                        highlight_config: cfg,
+                        overlay_kind: kind,
+                    }).catch(function() {});
+                } else {
+                    window.cdp.send('Overlay.hideHighlight', {}).catch(function() {});
+                }
+            }
+        });
+        div.appendChild(badge);
+    }
+    function isShortTextOnly(node) {
+        var kids = node.children || [];
+        if (kids.length !== 1) return false;
+        if (kids[0].node_type !== 3) return false;
+        var txt = kids[0].node_value || '';
+        return txt.length <= 60;
+    }
+    function renderNode(node, container, depth) {
+        __renderNodeCount++;
+        try {
+        const div = document.createElement('div');
+        div.className = 'dom-node';
+        div.style.paddingLeft = (6 + depth * 16) + 'px';
+        div.dataset.nodeId = node.node_id;
+
+        // Special node types - jednoradkove navic recurse na deti (document ma html jako child).
+        if (node.node_type === 3) {
+            div.appendChild(mkSpan('tok-text', node.node_value || ''));
+            attachSelectHandler(div, node.node_id);
+            container.appendChild(div);
+            return;
+        }
+        if (node.node_type === 9) {
+            // #document - container "neviditelny" tag; recurse deti same depth.
+            div.appendChild(mkSpan('tok-tag', '#document'));
+            attachSelectHandler(div, node.node_id);
+            container.appendChild(div);
+            // Recurse pres deti na stejne depth (document neni element s indent).
+            for (var ci = 0; ci < (node.children || []).length; ci++) {
+                renderNode(node.children[ci], container, depth);
+            }
+            return;
+        }
+        if (node.node_type === 10) {
+            div.appendChild(mkSpan('tok-tag', '<!DOCTYPE ' + node.node_name + '>'));
+            attachSelectHandler(div, node.node_id);
+            container.appendChild(div);
+            return;
+        }
+        if (node.node_type !== 1) {
+            div.appendChild(mkSpan('tok-text', node.node_name));
+            attachSelectHandler(div, node.node_id);
+            container.appendChild(div);
+            return;
+        }
+
+        // Element node. Tri layouty:
+        // A) void tag (br/img/meta/...) -> jeden radek `<tag attrs>`, no toggle, no close
+        // B) prazdny element -> `<tag></tag>` jeden radek, no toggle
+        // C) short text only (1 text child <= 60 chars) -> `<tag>text</tag>` jeden radek, no toggle
+        // D) ostatni (vice deti nebo dlouhy text) -> multi-line s toggle:
+        //    - expanded: open na vlastnim radku, deti indented, close na vlastnim radku
+        //    - collapsed: open + `...` + close inline na jednom radku
+        var tagL = (node.node_name || '').toLowerCase();
+        var kids = node.children || [];
+        var voidTag = VOID_TAGS[tagL];
+        var hasKids = kids.length > 0;
+        var shortText = isShortTextOnly(node);
+        var multiLine = hasKids && !shortText;
+
+        // Toggle slot (vyhrazene misto i kdyz toggle neni - aby tagy zarovnaly).
+        const toggleEl = document.createElement('span');
+        toggleEl.className = 'toggle';
+        if (multiLine) {
+            toggleEl.innerHTML = '<svg width="10" height="10" viewBox="0 0 12 12"><path d="M2 4 L6 8 L10 4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+            toggleEl.addEventListener('click', function(ev) {
+                ev.stopPropagation();
+                ev.preventDefault();
+                if (window.__rweDomTree) {
+                    window.__rweDomTree.setCollapsed(div, !div.classList.contains('collapsed'));
+                }
+            });
+        } else {
+            toggleEl.classList.add('no-children');
+        }
+        div.appendChild(toggleEl);
+        appendOpenTag(div, node);
+
+        if (voidTag) {
+            // A) self-closing void tag. Done.
+            attachSelectHandler(div, node.node_id);
+            container.appendChild(div);
+            return;
+        }
+
+        if (!hasKids) {
+            // B) prazdny - emit close inline.
+            appendCloseTag(div, node);
+            attachSelectHandler(div, node.node_id);
+            container.appendChild(div);
+            return;
+        }
+
+        if (shortText) {
+            // C) inline text - emit text + close.
+            var txt = kids[0].node_value || '';
+            div.appendChild(mkSpan('tok-text', txt));
+            appendCloseTag(div, node);
+            attachSelectHandler(div, node.node_id);
+            container.appendChild(div);
+            return;
+        }
+
+        // D) multi-line. Pridame "summary" + inline close (display:none kdyz expanded).
+        var summary = document.createElement('span');
+        summary.className = 'collapsed-summary';
+        summary.appendChild(document.createTextNode('...'));
+        summary.style.display = 'none';
+        // Klik na summary = expand tento node.
+        summary.addEventListener('click', function(ev) {
+            ev.stopPropagation();
+            if (window.__rweDomTree) {
+                window.__rweDomTree.setCollapsed(div, false);
+            }
+        });
+        div.appendChild(summary);
+        var inlineClose = mkSpan('tok-tag', '</' + tagL + '>');
+        inlineClose.className = 'tok-tag inline-close';
+        inlineClose.style.display = 'none';
+        div.appendChild(inlineClose);
+
+        // Badges - flex/grid/scroll. Po inline-close = prirozene zarovnani:
+        // expanded mode: `<tag> [flex]` (summary + close hidden -> badge hned za otviranim).
+        // collapsed mode: `<tag> ... </tag> [flex]` (summary + close visible -> badge na konci).
+        appendBadges(div, node);
+
+        attachSelectHandler(div, node.node_id);
+        container.appendChild(div);
+
+        // Deti indented na vlastnim radku.
+        for (var ci = 0; ci < kids.length; ci++) {
+            renderNode(kids[ci], container, depth + 1);
+        }
+        // Closing tag na vlastnim radku.
+        const close = document.createElement('div');
+        close.className = 'dom-node closing-line';
+        close.style.paddingLeft = (6 + depth * 16) + 'px';
+        close.dataset.closingFor = node.node_id;
+        // Toggle slot placeholder pro zarovnani s opening.
+        var closeToggle = document.createElement('span');
+        closeToggle.className = 'toggle no-children';
+        close.appendChild(closeToggle);
+        appendCloseTag(close, node);
+        close.addEventListener('click', function(e) {
+            e.stopPropagation();
+            var sels = document.querySelectorAll('.dom-node.selected');
+            for (var i = 0; i < sels.length; i++) sels[i].classList.remove('selected');
+            div.classList.add('selected');
+            if (div.scrollIntoView) div.scrollIntoView({ block: 'nearest' });
             loadStylesForNode(node.node_id);
         });
-        container.appendChild(div);
-        for (var ci = 0; ci < (node.children || []).length; ci++) {
-            renderNode(node.children[ci], container, depth + 1);
-        }
-        if (node.node_type === 1 && (node.children || []).length > 0) {
-            const close = document.createElement('div');
-            close.className = 'dom-node';
-            close.style.paddingLeft = (6 + depth * 16) + 'px';
-            close.appendChild(mkSpan('tok-tag', '</' + node.node_name.toLowerCase() + '>'));
-            container.appendChild(close);
+        container.appendChild(close);
+        } catch (e) {
+            __renderNodeErrors.push({
+                count: __renderNodeCount,
+                depth: depth,
+                tag: node && node.node_name,
+                err: (e && e.message) || String(e),
+            });
         }
     }
 
+    // ===== Computed view (FF-style) =====
+    var _computedLastResult = null;
+    function isColorValue(v) {
+        return /^(#[0-9a-f]{3,8}|rgb|hsl|rgba|hsla|hwb|oklab|oklch|lab|lch|color\(|transparent)/i.test(String(v).trim());
+    }
+    function loadComputedForNode(nodeId) {
+        if (!window.cdp || !window.cdp.send) return;
+        window.cdp.send('CSS.getComputedStyleForNode', { node_id: nodeId }).then(function(res) {
+            _computedLastResult = (res && res.computed_style) || [];
+            renderComputedList();
+        }).catch(function() {});
+    }
+    function renderComputedList() {
+        // Pres specific selektor - existuje 2x .computed-list (box-model legacy uvnitr Rozlozeni).
+        var list = document.querySelector('[data-side-body="computed"] .computed-list');
+        if (!list || !_computedLastResult) return;
+        var showUA = document.getElementById('computed-ua-checkbox');
+        var includeUA = showUA && showUA.checked;
+        var filterEl = document.querySelector('.computed-filter');
+        var q = ((filterEl && filterEl.value) || '').toLowerCase().trim();
+        list.innerHTML = '';
+        _computedLastResult.forEach(function(prop) {
+            if (prop.is_browser && !includeUA) return;
+            if (q && prop.name.indexOf(q) < 0 && String(prop.value).toLowerCase().indexOf(q) < 0) return;
+            var row = document.createElement('div');
+            row.className = 'computed-prop';
+            var hasSources = prop.sources && prop.sources.length > 0;
+            // Toggle - absolutni pozice vlevo.
+            var toggle = document.createElement('span');
+            toggle.className = 'toggle' + (hasSources ? '' : ' no-children');
+            if (hasSources) {
+                toggle.innerHTML = chevronRight();
+                toggle.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    row.classList.toggle('expanded');
+                    toggle.innerHTML = row.classList.contains('expanded') ? chevronDown() : chevronRight();
+                });
+            }
+            // Hlavni radek - wrap v computed-main; toggle uvnitr jako prvni inline span.
+            var main = document.createElement('div');
+            main.className = 'computed-main';
+            main.appendChild(toggle);
+            if (isColorValue(prop.value)) {
+                var sw = document.createElement('span');
+                sw.className = 'swatch';
+                sw.style.background = prop.value;
+                main.appendChild(sw);
+            }
+            var nameEl = document.createElement('span');
+            nameEl.className = 'prop-name';
+            nameEl.textContent = prop.name;
+            main.appendChild(nameEl);
+            var colon = document.createElement('span');
+            colon.className = 'prop-colon';
+            colon.textContent = ': ';
+            main.appendChild(colon);
+            var valEl = document.createElement('span');
+            valEl.className = 'prop-value';
+            valEl.textContent = String(prop.value);
+            valEl.title = String(prop.value);
+            main.appendChild(valEl);
+            // Click na name = toggle expand (jako toggle).
+            nameEl.addEventListener('click', function() {
+                if (!hasSources) return;
+                row.classList.toggle('expanded');
+                toggle.innerHTML = row.classList.contains('expanded') ? chevronDown() : chevronRight();
+            });
+            row.appendChild(main);
+            if (hasSources) {
+                var sources = document.createElement('div');
+                sources.className = 'computed-sources';
+                prop.sources.forEach(function(s) {
+                    var sr = document.createElement('div');
+                    sr.className = 'computed-source-row';
+                    var info = document.createElement('span');
+                    info.className = 'src-info';
+                    var selEl = document.createElement('span');
+                    selEl.className = 'selector';
+                    selEl.textContent = s.selector;
+                    info.appendChild(selEl);
+                    var ar = document.createElement('span');
+                    ar.className = 'arrow';
+                    ar.textContent = ' › ';
+                    info.appendChild(ar);
+                    var sv = document.createElement('span');
+                    sv.className = 'src-value';
+                    sv.textContent = String(prop.value);
+                    info.appendChild(sv);
+                    sr.appendChild(info);
+                    var lnk = document.createElement('span');
+                    lnk.className = 'source-link';
+                    lnk.dataset.file = s.file;
+                    lnk.dataset.line = s.line;
+                    lnk.textContent = 'vlozene:' + s.line;
+                    sr.appendChild(lnk);
+                    sources.appendChild(sr);
+                });
+                row.appendChild(sources);
+            }
+            list.appendChild(row);
+        });
+    }
+    // Wireup filtr + checkbox.
+    var computedFilter = document.querySelector('.computed-filter');
+    if (computedFilter) computedFilter.addEventListener('input', renderComputedList);
+    var computedUaCheck = document.getElementById('computed-ua-checkbox');
+    if (computedUaCheck) computedUaCheck.addEventListener('change', renderComputedList);
+    // Source link klik = activate Editor stylu tab + (mockup) scroll na radek.
+    document.addEventListener('click', function(e) {
+        var link = e.target.closest && e.target.closest('.source-link');
+        if (!link) return;
+        var topTab = document.querySelector('.tab[data-panel="style-editor"]');
+        if (topTab) topTab.click();
+    });
+
+    function renderStyleRule(rm) {
+        const sel = (rm.rule.selector_list || []).join(', ');
+        const block = document.createElement('div');
+        block.className = 'style-rule';
+        if (rm.is_unused) block.classList.add('unused-rule');
+        var originLabel = '';
+        if (rm.rule.origin === 'user-agent') {
+            originLabel = ' <span class="rule-origin">user agent stylesheet</span>';
+        }
+        let html = '<div class="rule-header"><span class="selector">' + escapeHtml(sel) +
+            '</span>' + originLabel + ' <span class="style-rule-bracket">{</span></div>';
+        for (const p of (rm.rule.style.properties || [])) {
+            html += '<div class="decl"><input type="checkbox" checked>' +
+                '<span class="prop">' + escapeHtml(p.name) + '</span>: ' +
+                '<span class="val">' + escapeHtml(p.value) + '</span>;</div>';
+        }
+        html += '<div class="rule-footer"><span class="style-rule-bracket">}</span></div>';
+        block.innerHTML = html;
+        block.querySelectorAll('.decl input[type=checkbox]').forEach(function(cb) {
+            cb.addEventListener('change', function() {
+                var decl = cb.closest('.decl');
+                if (!decl) return;
+                decl.classList.toggle('disabled', !cb.checked);
+            });
+        });
+        return block;
+    }
     function loadStylesForNode(nodeId) {
+        // Take trigger computed view refresh.
+        loadComputedForNode(nodeId);
         // Styles panel - get matched + computed.
         window.cdp.send('CSS.getMatchedStylesForNode', { node_id: nodeId }).then(result => {
             const stylesBody = document.querySelector('.styles-body');
@@ -1953,23 +4062,207 @@ applyI18n(currentLang);
                 stylesBody.innerHTML = '<div style="padding:8px;color:#737378">No matched rules</div>';
                 return;
             }
-            for (const rm of rules) {
-                const sel = (rm.rule.selector_list || []).join(', ');
-                const block = document.createElement('div');
-                block.className = 'style-rule';
-                let html = '<span class="selector">' + escapeHtml(sel) +
-                    '</span> <span class="style-rule-bracket">{</span>';
-                for (const p of (rm.rule.style.properties || [])) {
-                    html += '<div class="decl"><input type="checkbox" checked>' +
-                        '<span class="prop">' + escapeHtml(p.name) + '</span>: ' +
-                        '<span class="val">' + escapeHtml(p.value) + '</span>;</div>';
-                }
-                html += '<span class="style-rule-bracket">}</span>';
-                block.innerHTML = html;
-                stylesBody.appendChild(block);
+            // Group rules pres inherited_from. Own rules first (inherited_from = null),
+            // pak per ancestor "Podedeno z <tag>" header + rules pod nim.
+            var groups = {}; // key: inherited_from string ('' = own)
+            var order = [];
+            for (var i = 0; i < rules.length; i++) {
+                var key = rules[i].inherited_from || '';
+                if (!groups[key]) { groups[key] = []; order.push(key); }
+                groups[key].push(rules[i]);
             }
+            order.forEach(function(key) {
+                if (key) {
+                    var header = document.createElement('div');
+                    header.className = 'inherit-group-header';
+                    header.textContent = 'Podedeno z <' + key + '>';
+                    stylesBody.appendChild(header);
+                }
+                groups[key].forEach(function(rm) {
+                    // :root vars rules - hide content default + zobraz button.
+                    if (rm.is_root_vars && rm.rule.style.properties.length > 0) {
+                        var wrapper = document.createElement('div');
+                        wrapper.className = 'style-rule unused-vars-wrapper';
+                        var hdr = document.createElement('div');
+                        hdr.className = 'rule-header';
+                        hdr.innerHTML = '<span class="selector">' + escapeHtml((rm.rule.selector_list || []).join(', ')) + '</span> <span class="style-rule-bracket">{</span>';
+                        wrapper.appendChild(hdr);
+                        var content = document.createElement('div');
+                        content.className = 'vars-content';
+                        var showByDefault = window.__rweShowUnusedVars === true;
+                        content.style.display = showByDefault ? '' : 'none';
+                        rm.rule.style.properties.forEach(function(p) {
+                            var d = document.createElement('div');
+                            d.className = 'decl';
+                            d.innerHTML = '<input type="checkbox" checked>' +
+                                '<span class="prop">' + escapeHtml(p.name) + '</span>: ' +
+                                '<span class="val">' + escapeHtml(p.value) + '</span>;';
+                            content.appendChild(d);
+                        });
+                        wrapper.appendChild(content);
+                        var showBtn = document.createElement('button');
+                        showBtn.className = 'show-unused-btn';
+                        showBtn.textContent = 'Zobrazit ' + rm.rule.style.properties.length + ' nepouzivanych vlastnich vlastnosti CSS';
+                        if (showByDefault) showBtn.style.display = 'none';
+                        showBtn.addEventListener('click', function() {
+                            // Globalni flag - persist pres celou seanci do reload devtools.
+                            window.__rweShowUnusedVars = true;
+                            // Reveal vsechny existujici vars-content + hide vsechny show buttons.
+                            document.querySelectorAll('.vars-content').forEach(function(c) { c.style.display = ''; });
+                            document.querySelectorAll('.show-unused-btn').forEach(function(b) { b.style.display = 'none'; });
+                        });
+                        wrapper.appendChild(showBtn);
+                        var foot = document.createElement('div');
+                        foot.className = 'rule-footer';
+                        foot.innerHTML = '<span class="style-rule-bracket">}</span>';
+                        wrapper.appendChild(foot);
+                        stylesBody.appendChild(wrapper);
+                    } else {
+                        stylesBody.appendChild(renderStyleRule(rm));
+                    }
+                });
+            });
+            applyStylesFilter();
         }).catch(_e => {});
     }
+    // Filtrovat styly: case-insensitive substring match na property name / value.
+    // Match = visible, no match = hidden. Empty filter = all visible.
+    function applyStylesFilter() {
+        var input = document.querySelector('.styles-filter');
+        if (!input) return;
+        var q = (input.value || '').toLowerCase().trim();
+        var decls = document.querySelectorAll('.styles-body .decl');
+        var rules = document.querySelectorAll('.styles-body .style-rule');
+        if (!q) {
+            decls.forEach(function(d) { d.style.display = ''; });
+            rules.forEach(function(r) { r.style.display = ''; });
+            return;
+        }
+        rules.forEach(function(rule) {
+            var hasVisible = false;
+            rule.querySelectorAll('.decl').forEach(function(d) {
+                var prop = (d.querySelector('.prop') || {}).textContent || '';
+                var val = (d.querySelector('.val') || {}).textContent || '';
+                var match = prop.toLowerCase().indexOf(q) >= 0 || val.toLowerCase().indexOf(q) >= 0;
+                d.style.display = match ? '' : 'none';
+                if (match) hasVisible = true;
+            });
+            // Pokud rule selector match, zobraz vsechny decls.
+            var sel = (rule.querySelector('.selector') || {}).textContent || '';
+            if (sel.toLowerCase().indexOf(q) >= 0) {
+                rule.querySelectorAll('.decl').forEach(function(d) { d.style.display = ''; });
+                hasVisible = true;
+            }
+            rule.style.display = hasVisible ? '' : 'none';
+        });
+    }
+    // Wire-up: styles filter input + pseudo (:hov) + .cls toggles.
+    var stylesFilterInput = document.querySelector('.styles-filter');
+    if (stylesFilterInput) {
+        stylesFilterInput.addEventListener('input', applyStylesFilter);
+    }
+    // DOM search - filter dom tree per text + tag + CSS selektor + XPath.
+    // Heuristika syntaxe:
+    //   '//xpath' -> XPath (substring node_name match na axes)
+    //   '.foo' / '#bar' / 'tag.class' -> CSS selektor (basic compound)
+    //   ostatne -> case-insensitive substring na text/tag/attrs
+    var domSearchInput = document.querySelector('.dom-search-input');
+    if (domSearchInput) {
+        domSearchInput.addEventListener('input', function() {
+            var q = (domSearchInput.value || '').trim();
+            applyDomSearch(q);
+        });
+    }
+    function applyDomSearch(q) {
+        var nodes = document.querySelectorAll('.dom-tree .dom-node');
+        if (!q) {
+            nodes.forEach(function(n) { n.style.display = ''; n.classList.remove('search-match'); });
+            return;
+        }
+        var ql = q.toLowerCase();
+        var mode = 'text';
+        if (q.indexOf('//') === 0) mode = 'xpath';
+        else if (/^[.#][\w-]/.test(q) || /^\w+[.#]/.test(q)) mode = 'css';
+        nodes.forEach(function(n) {
+            var text = (n.textContent || '').toLowerCase();
+            var match = false;
+            if (mode === 'css') {
+                // Parse jednoduchy compound selektor: tag, .class, #id (+ kombinace).
+                var sel = ql;
+                var tagMatch = sel.match(/^([a-z][a-z0-9-]*)/);
+                var classMatches = sel.match(/\.([a-z][a-z0-9_-]*)/g) || [];
+                var idMatch = sel.match(/#([a-z][a-z0-9_-]*)/);
+                var tag = tagMatch ? tagMatch[1] : '';
+                var nodeOpenText = (n.querySelector('.tok-tag') || {}).textContent || '';
+                var nodeOpenTextL = nodeOpenText.toLowerCase();
+                // Tag match
+                var tagOk = !tag || nodeOpenTextL.indexOf('<' + tag + '>') >= 0
+                    || nodeOpenTextL.indexOf('<' + tag + ' ') >= 0;
+                // Class match (vsechny musi byt v attrs)
+                var classOk = classMatches.every(function(c) {
+                    return text.indexOf('"' + c.slice(1)) >= 0 || text.indexOf(' ' + c.slice(1)) >= 0;
+                });
+                // Id match
+                var idOk = !idMatch || text.indexOf('id="' + idMatch[1] + '"') >= 0;
+                match = tagOk && classOk && idOk;
+            } else if (mode === 'xpath') {
+                // Naive: /tag pattern -> node_name match.
+                var parts = q.split('/').filter(function(p) { return p; });
+                var lastTag = parts[parts.length - 1] || '';
+                match = lastTag && text.indexOf('<' + lastTag.toLowerCase() + '>') >= 0
+                    || text.indexOf('<' + lastTag.toLowerCase() + ' ') >= 0;
+            } else {
+                match = text.indexOf(ql) >= 0;
+            }
+            if (match) {
+                n.style.display = '';
+                n.classList.add('search-match');
+            } else {
+                n.classList.remove('search-match');
+                n.style.display = 'none';
+            }
+        });
+        // Show ancestors (parent dom-node chain) even when not directly matched - kontext.
+        document.querySelectorAll('.dom-tree .search-match').forEach(function(n) {
+            // No real parent chain v rendered flat structure; skip.
+        });
+    }
+    // :hov toggle - placeholder UI pre force-state. Aktualne ukaze popup s :hover/:focus/:active checkboxy.
+    var hovToggles = document.querySelectorAll('.styles-pseudo-toggle');
+    var hovPopup = null;
+    hovToggles.forEach(function(toggle) {
+        toggle.addEventListener('click', function(e) {
+            e.stopPropagation();
+            if (hovPopup) { hovPopup.remove(); hovPopup = null; return; }
+            var isHov = toggle.textContent.indexOf(':') >= 0;
+            hovPopup = document.createElement('div');
+            hovPopup.style.cssText = 'position:absolute;background:var(--bg-elev2);border:1px solid var(--border-strong);padding:8px;z-index:1000;font-size:11px;color:var(--fg);min-width:140px;';
+            var rect = toggle.getBoundingClientRect();
+            hovPopup.style.left = rect.left + 'px';
+            hovPopup.style.top = (rect.bottom + 2) + 'px';
+            if (isHov) {
+                hovPopup.innerHTML = '<div style="font-weight:bold;margin-bottom:6px;">Vynucene stavy</div>' +
+                    '<label><input type="checkbox"> :hover</label><br>' +
+                    '<label><input type="checkbox"> :focus</label><br>' +
+                    '<label><input type="checkbox"> :focus-within</label><br>' +
+                    '<label><input type="checkbox"> :active</label><br>' +
+                    '<label><input type="checkbox"> :visited</label>';
+            } else {
+                hovPopup.innerHTML = '<div style="font-weight:bold;margin-bottom:6px;">Class list</div>' +
+                    '<input placeholder="Pridat tridu..." style="width:100%;background:var(--bg-elev1);border:1px solid var(--border-strong);color:var(--fg);padding:2px 4px;font-size:11px;">';
+            }
+            document.body.appendChild(hovPopup);
+            setTimeout(function() {
+                document.addEventListener('click', function close(ev) {
+                    if (hovPopup && !hovPopup.contains(ev.target)) {
+                        hovPopup.remove();
+                        hovPopup = null;
+                        document.removeEventListener('click', close);
+                    }
+                });
+            }, 0);
+        });
+    });
 
     // ---------- CONSOLE: Runtime.consoleAPICalled events ----------
     function consolePush(type, args) {
@@ -2029,35 +4322,131 @@ applyI18n(currentLang);
 
     // ---------- NETWORK: Network.requestWillBeSent / responseReceived ----------
     const netRows = new Map(); // request_id -> row element
+    const netData = new Map(); // request_id -> { request, response }
     function netRow(reqId) {
         let r = netRows.get(reqId);
         if (r) return r;
         const tbody = document.querySelector('.network-table tbody');
         if (!tbody) return null;
-        // Clear placeholder rows pri prvni real entry.
         if (!netRows.size) tbody.innerHTML = '';
         r = document.createElement('tr');
         r.innerHTML = '<td></td><td></td><td>GET</td><td>-</td><td>-</td><td>-</td><td class="waterfall-cell"><div class="waterfall-bar" style="width:1%"></div></td>';
         tbody.appendChild(r);
         netRows.set(reqId, r);
+        // Click handler - select row + show details v side panelu.
+        r.addEventListener('click', function() {
+            document.querySelectorAll('.network-table tbody tr.selected').forEach(function(x) {
+                x.classList.remove('selected');
+            });
+            r.classList.add('selected');
+            showNetworkDetails(reqId);
+        });
         return r;
     }
+    function showNetworkDetails(reqId) {
+        var data = netData.get(reqId);
+        if (!data) return;
+        var panel = document.querySelector('.net-side-panel');
+        var content = document.querySelector('.net-side-content');
+        if (!panel || !content) return;
+        panel.style.display = 'flex';
+        renderNetworkTab(reqId, 'headers');
+    }
+    function renderNetworkTab(reqId, tab) {
+        var data = netData.get(reqId);
+        var content = document.querySelector('.net-side-content');
+        if (!data || !content) return;
+        var html = '';
+        var req = data.request || {};
+        var resp = data.response || {};
+        if (tab === 'headers') {
+            html = '<h4>Obecne</h4>';
+            html += '<table class="kv-table">' +
+                '<tr><td>URL pozadavku</td><td>' + escapeHtml(req.url || '-') + '</td></tr>' +
+                '<tr><td>Metoda</td><td>' + escapeHtml(req.method || 'GET') + '</td></tr>' +
+                '<tr><td>Status</td><td>' + (resp.status || '-') + '</td></tr>' +
+                '<tr><td>Typ obsahu</td><td>' + escapeHtml(resp.mime_type || '-') + '</td></tr>' +
+                '</table>';
+            html += '<h4>Hlavicky pozadavku</h4>';
+            html += renderHeaderTable(req.headers && Object.keys(req.headers).length ? req.headers
+                : { 'Accept': '*/*', 'User-Agent': 'RustWebEngine/0.1', 'Accept-Language': 'cs,en;q=0.9' });
+            html += '<h4>Hlavicky odpovedi</h4>';
+            html += renderHeaderTable(resp.headers && Object.keys(resp.headers).length ? resp.headers
+                : { 'Content-Type': resp.mime_type || 'text/html', 'Content-Length': '1024', 'Date': new Date().toUTCString() });
+        } else if (tab === 'preview') {
+            html = '<h4>Nahled</h4>';
+            html += '<pre>' + escapeHtml('<html>\n  <head>...</head>\n  <body>...mock content...</body>\n</html>') + '</pre>';
+        } else if (tab === 'response') {
+            html = '<h4>Telo odpovedi</h4>';
+            html += '<pre>' + escapeHtml('// Mock response pro ' + (req.url || 'unknown') + '\n' +
+                '<!DOCTYPE html>\n<html>...</html>') + '</pre>';
+        } else if (tab === 'timing') {
+            html = '<h4>Casovani pozadavku</h4>';
+            html += '<table class="kv-table">' +
+                '<tr><td>DNS lookup</td><td>0.2 ms</td></tr>' +
+                '<tr><td>TCP connect</td><td>0.5 ms</td></tr>' +
+                '<tr><td>Cekani (TTFB)</td><td>1.2 ms</td></tr>' +
+                '<tr><td>Stahovani</td><td>0.8 ms</td></tr>' +
+                '<tr><td><strong>Celkem</strong></td><td><strong>2.7 ms</strong></td></tr>' +
+                '</table>';
+        }
+        content.innerHTML = html;
+    }
+    function renderHeaderTable(h) {
+        var html = '<table class="kv-table">';
+        var keys = Object.keys(h);
+        for (var i = 0; i < keys.length; i++) {
+            html += '<tr><td>' + escapeHtml(keys[i]) + '</td><td>' + escapeHtml(String(h[keys[i]])) + '</td></tr>';
+        }
+        html += '</table>';
+        return html;
+    }
+    // Net side tab switching + close.
+    document.addEventListener('click', function(e) {
+        var t = e.target;
+        if (!t) return;
+        if (t.classList && t.classList.contains('net-side-tab')) {
+            document.querySelectorAll('.net-side-tab').forEach(function(x) { x.classList.remove('active'); });
+            t.classList.add('active');
+            var sel = document.querySelector('.network-table tbody tr.selected');
+            var reqId = null;
+            netRows.forEach(function(row, id) { if (row === sel) reqId = id; });
+            if (reqId !== null) renderNetworkTab(reqId, t.dataset.netTab);
+        } else if (t.classList && t.classList.contains('net-side-close')) {
+            var panel = document.querySelector('.net-side-panel');
+            if (panel) panel.style.display = 'none';
+        }
+    });
     window.cdp.on('Network.requestWillBeSent', p => {
         const r = netRow(p.request_id);
         if (!r) return;
-        const fileName = (p.url || '').split('/').pop() || p.url;
+        // Protokol: request can be flat (p.url, p.method) nebo nested (p.request.{url,method}).
+        var url = p.url || (p.request && p.request.url) || '';
+        var method = p.method || (p.request && p.request.method) || 'GET';
+        var headers = (p.request && p.request.headers) || p.headers || {};
+        const fileName = url.split('/').pop() || url;
         r.cells[0].textContent = fileName;
-        r.cells[2].textContent = p.method || 'GET';
+        r.cells[2].textContent = method;
         r.cells[3].textContent = p.resource_type || '-';
+        netData.set(p.request_id, {
+            request: { url: url, method: method, headers: headers },
+            response: (netData.get(p.request_id) || {}).response || {},
+        });
     });
     window.cdp.on('Network.responseReceived', p => {
         const r = netRow(p.request_id);
         if (!r) return;
-        const s = p.status || 0;
-        r.cells[1].textContent = s;
-        r.cells[1].className = s >= 200 && s < 300 ? 'status-2xx'
-            : s >= 300 && s < 400 ? 'status-3xx'
-            : s >= 400 ? 'status-4xx' : '';
+        // Protokol: response can be flat (p.status) nebo nested (p.response.{status, mime_type}).
+        var status = p.status || (p.response && p.response.status) || 0;
+        var mime = p.mime_type || (p.response && p.response.mime_type) || '';
+        var headers = (p.response && p.response.headers) || {};
+        r.cells[1].textContent = status;
+        r.cells[1].className = status >= 200 && status < 300 ? 'status-2xx'
+            : status >= 300 && status < 400 ? 'status-3xx'
+            : status >= 400 ? 'status-4xx' : '';
+        var existing = netData.get(p.request_id) || { request: {} };
+        existing.response = { status: status, mime_type: mime, headers: headers };
+        netData.set(p.request_id, existing);
     });
 
     // ---------- SOURCES (Debugger): scriptParsed events ----------

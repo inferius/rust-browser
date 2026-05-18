@@ -16,7 +16,7 @@ impl Interpreter {
                 f(args).map_err(JsError::Runtime)
             }
             JsValue::Function(JsFunc::User { params, body, env, .. }) => {
-                let call_env = Environment::new_child(&env);
+                let call_env = Environment::new_function_child(&env);
                 let params = params.clone();
                 let body = body.clone();
                 self.bind_params(&params, args.clone(), &call_env)?;
@@ -45,7 +45,7 @@ impl Interpreter {
             }
             // Async funkce: spust synchronne, zabal vysledek do Promise
             JsValue::Function(JsFunc::Async { params, body, env, .. }) => {
-                let call_env = Environment::new_child(&env);
+                let call_env = Environment::new_function_child(&env);
                 self.bind_params(&params, args.clone(), &call_env)?;
                 if let Some(t) = this { call_env.borrow_mut().define("this", t); }
                 let args_arr = JsValue::Array(Rc::new(RefCell::new(args)));
@@ -356,7 +356,7 @@ impl Interpreter {
         self.yield_buffer = Some(Vec::new());
 
         // Spust telo generator funkce
-        let gen_env = Environment::new_child(&closure_env);
+        let gen_env = Environment::new_function_child(&closure_env);
         let params = params.clone();
         let body = body.clone();
         self.bind_params(&params, args, &gen_env)?;

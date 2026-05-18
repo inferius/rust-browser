@@ -383,7 +383,6 @@ impl ShellApp {
             let json = args.first().map(|v| v.to_string()).unwrap_or_default();
             match serde_json::from_str::<DevtoolsRequest>(&json) {
                 Ok(req) => {
-                    eprintln!("[CDP SEND] id={} method={} (queued)", req.id, req.method);
                     req_q.borrow_mut().push_back(req);
                 }
                 Err(e) => eprintln!("[CDP SEND] parse err: {} (json: {})", e, json),
@@ -397,7 +396,6 @@ impl ShellApp {
             if q.is_empty() {
                 return Ok(JsValue::Str("[]".into()));
             }
-            eprintln!("[CDP POLL] drain {} items (queued in resp_queue)", q.len());
             // Items v queue jsou uz JSON-serialized objekty. Slozit array:
             // "[<obj>,<obj>,...]"
             let mut out = String::from("[");
@@ -432,13 +430,6 @@ impl ShellApp {
             let mut q = channel.req_queue.borrow_mut();
             q.drain(..).collect()
         };
-        // Diag: log jen kdyz req se draina (pump_cdp dispatch). Skipni
-        // resp_queue idle wait state (spam during setInterval poll wait).
-        if !pending.is_empty() {
-            let resp_len = channel.resp_queue.borrow().len();
-            eprintln!("[PUMP frame#{}] req_drain={} resp_queue_len={}",
-                self.frame_counter, pending.len(), resp_len);
-        }
         if pending.is_empty() && target.take_events().is_empty() {
             // Nothing to do. take_events musi probehnout pres ref - drain z
             // ABOVE smaze. Redundance: re-check po dispatch nize.
@@ -480,8 +471,12 @@ impl ShellApp {
             let t_serialize_done = std::time::Instant::now();
             let handle_ms = t_handle_done.duration_since(t_dispatch_start).as_secs_f32() * 1000.0;
             let serialize_ms = t_serialize_done.duration_since(t_handle_done).as_secs_f32() * 1000.0;
-            eprintln!("[CDP DISPATCH] id={} method={} handle:{:.1}ms serialize:{:.1}ms resp_len={}",
-                req_id, req_method, handle_ms, serialize_ms, json.len());
+            // Log jen pri pomale dispatch (> 10ms).
+            if handle_ms + serialize_ms > 10.0 {
+                eprintln!("[CDP DISPATCH SLOW] id={} method={} handle:{:.1}ms serialize:{:.1}ms resp_len={}",
+                    req_id, req_method, handle_ms, serialize_ms, json.len());
+            }
+            let _ = (req_id, req_method);
             channel.resp_queue.borrow_mut().push_back(json);
         }
         // Drain pending events (z target.events) - push do resp_queue.

@@ -317,10 +317,6 @@ impl DevtoolsTarget {
                     format!("Node {} not found", params.node_id));
             }
         };
-        eprintln!("[CSS.getMatchedStyles] node_id {} FOUND tag={} stylesheets={}",
-            params.node_id,
-            node.tag_name_ref().unwrap_or("?"),
-            webview.stylesheets().len());
 
         // Inline style atribut -> CSSStyle.
         let inline_style = node.attr("style").and_then(|s| {
@@ -373,9 +369,11 @@ impl DevtoolsTarget {
             inline_style,
             matched_rules,
         };
-        eprintln!("[CSS.getMatchedStyles] inline_style={} matched_rules={}",
-            result.inline_style.is_some(),
-            result.matched_rules.len());
+        eprintln!("[CSS.getMatchedStyles] node={} tag={} rules={} (inline={})",
+            params.node_id,
+            node.tag_name_ref().unwrap_or("?"),
+            result.matched_rules.len(),
+            result.inline_style.is_some());
         Self::ok_response(req.id, &result)
     }
 
@@ -1154,6 +1152,48 @@ mod tests {
         let prop_names: Vec<&str> = props.iter().map(|p| p["name"].as_str().unwrap()).collect();
         assert!(prop_names.contains(&"color"), "expected color in matched rule");
         assert!(prop_names.contains(&"background"), "expected background in matched rule");
+    }
+
+    #[test]
+    fn css_matched_styles_test_html_body() {
+        // Real-world: load static/test.html + test.css, click body -> rules?
+        let engine = Arc::new(Engine::new_headless());
+        let mut wv = WebView::new(engine, 800, 600);
+        let html = std::fs::read_to_string("../../static/test.html")
+            .or_else(|_| std::fs::read_to_string("static/test.html"))
+            .expect("test.html");
+        let css = std::fs::read_to_string("../../static/test.css")
+            .or_else(|_| std::fs::read_to_string("static/test.css"))
+            .expect("test.css");
+        let _ = wv.load_html(&html, &css, None);
+        let target = DevtoolsTarget::new();
+        let resp = target.handle_request(&mut wv, DevtoolsRequest {
+            id: 1, method: "DOM.getDocument".into(),
+            params: serde_json::json!({ "depth": -1 }),
+        });
+        let root: rwe_devtools_proto::dom::Node = serde_json::from_value(
+            resp.result.unwrap()["root"].clone()
+        ).unwrap();
+        fn find_tag<'a>(n: &'a rwe_devtools_proto::dom::Node, tag: &str) -> Option<&'a rwe_devtools_proto::dom::Node> {
+            if n.node_name.eq_ignore_ascii_case(tag) { return Some(n); }
+            for c in &n.children { if let Some(f) = find_tag(c, tag) { return Some(f); } }
+            None
+        }
+        for tag in &["body", "main", "h1"] {
+            let node = find_tag(&root, tag);
+            if node.is_none() {
+                eprintln!("[TEST] tag '{}' not found in test.html DOM", tag);
+                continue;
+            }
+            let node = node.unwrap();
+            let resp = target.handle_request(&mut wv, DevtoolsRequest {
+                id: 2, method: "CSS.getMatchedStylesForNode".into(),
+                params: serde_json::json!({ "node_id": node.node_id }),
+            });
+            let rules = resp.result.unwrap()["matched_rules"].as_array().unwrap().len();
+            eprintln!("[TEST] tag={} node_id={} matched_rules={}", tag, node.node_id, rules);
+            assert!(rules > 0, "tag '{}' should match at least 1 rule v test.css", tag);
+        }
     }
 
     #[test]
