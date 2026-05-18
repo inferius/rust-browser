@@ -593,13 +593,8 @@ impl Interpreter {
                             "querySelector" => {
                                 let sel = arg_vals.into_iter().next()
                                     .map(|v| v.to_string()).unwrap_or_default();
-                                let result = if let Some(id) = sel.strip_prefix('#') {
-                                    dom_node.get_element_by_id(id)
-                                } else if let Some(cls) = sel.strip_prefix('.') {
-                                    dom_node.get_elements_by_class(cls).into_iter().next()
-                                } else {
-                                    dom_node.get_elements_by_tag(&sel).into_iter().next()
-                                };
+                                let parsed = crate::browser::css_parser::parse_selectors(&sel);
+                                let result = query_first(&dom_node, &parsed);
                                 return Ok(match result {
                                     Some(node) => JsValue::DomNode(node),
                                     None       => JsValue::Null,
@@ -608,13 +603,8 @@ impl Interpreter {
                             "querySelectorAll" => {
                                 let sel = arg_vals.into_iter().next()
                                     .map(|v| v.to_string()).unwrap_or_default();
-                                let nodes: Vec<_> = if let Some(id) = sel.strip_prefix('#') {
-                                    dom_node.get_element_by_id(id).into_iter().collect()
-                                } else if let Some(cls) = sel.strip_prefix('.') {
-                                    dom_node.get_elements_by_class(cls)
-                                } else {
-                                    dom_node.get_elements_by_tag(&sel)
-                                };
+                                let parsed = crate::browser::css_parser::parse_selectors(&sel);
+                                let nodes = query_all(&dom_node, &parsed);
                                 let arr: Vec<JsValue> = nodes.into_iter()
                                     .map(JsValue::DomNode).collect();
                                 return Ok(JsValue::Array(Rc::new(RefCell::new(arr))));
@@ -2016,17 +2006,19 @@ impl Interpreter {
                         }
                         "querySelector" => {
                             let sel = arg_vals.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
-                            let result = if let Some(id) = sel.strip_prefix('#') {
-                                n.get_element_by_id(id)
-                            } else if let Some(cls) = sel.strip_prefix('.') {
-                                n.get_elements_by_class(cls).into_iter().next()
-                            } else {
-                                n.get_elements_by_tag(&sel).into_iter().next()
-                            };
+                            let parsed = crate::browser::css_parser::parse_selectors(&sel);
+                            let result = query_first(&n, &parsed);
                             return Ok(match result {
                                 Some(node) => JsValue::DomNode(node),
                                 None       => JsValue::Null,
                             });
+                        }
+                        "querySelectorAll" => {
+                            let sel = arg_vals.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+                            let parsed = crate::browser::css_parser::parse_selectors(&sel);
+                            let nodes = query_all(&n, &parsed);
+                            let arr: Vec<JsValue> = nodes.into_iter().map(JsValue::DomNode).collect();
+                            return Ok(JsValue::Array(Rc::new(RefCell::new(arr))));
                         }
                         "getElementsByTagName" => {
                             let tag = arg_vals.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
@@ -2507,4 +2499,48 @@ impl Interpreter {
         let arg_vals = self.eval_args(args, env)?;
         self.call_function(func_val, arg_vals, None)
     }
+}
+
+/// Walk DOM subtree below root + return first element matching any selector.
+/// Uses real CSS selector parser + matches_selector (supports compound selectors
+/// like ".tab-strip .tab" co simple class-prefix variant rozbi).
+pub(super) fn query_first(
+    root: &Rc<crate::browser::dom::NodeData>,
+    selectors: &[crate::browser::css_parser::Selector],
+) -> Option<Rc<crate::browser::dom::NodeData>> {
+    use crate::browser::dom::NodeKind;
+    let mut stack: Vec<Rc<crate::browser::dom::NodeData>> = root.children.borrow().iter().rev().cloned().collect();
+    while let Some(node) = stack.pop() {
+        if matches!(node.kind, NodeKind::Element { .. }) {
+            if selectors.iter().any(|s| crate::browser::cascade::matches_selector(&node, s)) {
+                return Some(node);
+            }
+        }
+        for ch in node.children.borrow().iter().rev() {
+            stack.push(Rc::clone(ch));
+        }
+    }
+    None
+}
+
+/// Walk DOM subtree below root + return all elements matching any selector.
+pub(super) fn query_all(
+    root: &Rc<crate::browser::dom::NodeData>,
+    selectors: &[crate::browser::css_parser::Selector],
+) -> Vec<Rc<crate::browser::dom::NodeData>> {
+    use crate::browser::dom::NodeKind;
+    let mut out = Vec::new();
+    let mut stack: Vec<Rc<crate::browser::dom::NodeData>> = root.children.borrow().iter().rev().cloned().collect();
+    while let Some(node) = stack.pop() {
+        if matches!(node.kind, NodeKind::Element { .. }) {
+            if selectors.iter().any(|s| crate::browser::cascade::matches_selector(&node, s)) {
+                out.push(Rc::clone(&node));
+            }
+        }
+        // Pre-order DFS: push children in reverse so pop order matches doc order.
+        for ch in node.children.borrow().iter().rev() {
+            stack.push(Rc::clone(ch));
+        }
+    }
+    out
 }

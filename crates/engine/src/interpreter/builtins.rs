@@ -48,6 +48,8 @@ pub fn setup_builtins(
     raf_callbacks: &Rc<RefCell<Vec<(u32, JsValue)>>>,
     next_raf_id: &Rc<RefCell<u32>>,
     scroll_pos: &Rc<RefCell<(f32, f32)>>,
+    event_callbacks: &Rc<RefCell<HashMap<usize, JsValue>>>,
+    next_callback_id: &Rc<RefCell<usize>>,
 ) {
     let mut e = env.borrow_mut();
 
@@ -1380,14 +1382,59 @@ pub fn setup_builtins(
         Ok(JsValue::Object(obj))
     }));
 
-    // document.exitFullscreen / document.fullscreenElement / hasFocus / hidden
-    // EventTarget methods - noop stubs pro document (real impl pres window event queue
-    // mimo scope). Bez nich any document.addEventListener('click', ...) wireup hodi
-    // "undefined neni funkce" pri load -> cely script blok zhavi try/catch.
-    doc_obj.set("addEventListener".into(),
-        native("document.addEventListener", |_| Ok(JsValue::Undefined)));
-    doc_obj.set("removeEventListener".into(),
-        native("document.removeEventListener", |_| Ok(JsValue::Undefined)));
+    // document.addEventListener - real impl: zaregistruje callback na document.root
+    // node. Dispatch_event bubble dotaze do document root -> volá document handlers.
+    // Pres delegated event pattern (document.addEventListener('click', e => ...))
+    // muze JS handler reagovat na clicks zachycene libovolnym descendantem.
+    {
+        let doc = Rc::clone(document);
+        let callbacks = Rc::clone(event_callbacks);
+        let next_id = Rc::clone(next_callback_id);
+        doc_obj.set("addEventListener".into(), native("document.addEventListener", move |a| {
+            let mut it = a.into_iter();
+            let event_type = it.next().map(|v| v.to_string()).unwrap_or_default();
+            let callback = it.next().unwrap_or(JsValue::Undefined);
+            let id = {
+                let mut c = next_id.borrow_mut();
+                let id = *c;
+                *c += 1;
+                id
+            };
+            callbacks.borrow_mut().insert(id, callback);
+            let root = Rc::clone(&doc.borrow().root);
+            root.listeners.borrow_mut().entry(event_type).or_default().push(id);
+            Ok(JsValue::Undefined)
+        }));
+    }
+    {
+        let doc = Rc::clone(document);
+        let callbacks = Rc::clone(event_callbacks);
+        doc_obj.set("removeEventListener".into(), native("document.removeEventListener", move |a| {
+            let mut it = a.into_iter();
+            let event_type = it.next().map(|v| v.to_string()).unwrap_or_default();
+            let cb_match = it.next().unwrap_or(JsValue::Undefined);
+            let root = Rc::clone(&doc.borrow().root);
+            let ids: Vec<usize> = root.listeners.borrow().get(&event_type).cloned().unwrap_or_default();
+            let mut to_remove: Vec<usize> = Vec::new();
+            for id in &ids {
+                let cb = callbacks.borrow().get(id).cloned();
+                if let Some(cb) = cb {
+                    if cb.function_identity_eq(&cb_match) {
+                        to_remove.push(*id);
+                    }
+                }
+            }
+            if !to_remove.is_empty() {
+                let mut lst = root.listeners.borrow_mut();
+                if let Some(vec) = lst.get_mut(&event_type) {
+                    vec.retain(|id| !to_remove.contains(id));
+                }
+                let mut cbs = callbacks.borrow_mut();
+                for id in to_remove { cbs.remove(&id); }
+            }
+            Ok(JsValue::Undefined)
+        }));
+    }
     doc_obj.set("dispatchEvent".into(),
         native("document.dispatchEvent", |_| Ok(JsValue::Bool(true))));
     doc_obj.set("exitFullscreen".into(), native("exitFullscreen", |_| {
@@ -1471,37 +1518,31 @@ pub fn setup_builtins(
         doc_obj.set("styleSheets".into(), JsValue::Object(sheets));
     }
 
-    // document.querySelector - basic #id, .class, tag
+    // document.querySelector + querySelectorAll - real CSS selector parser pres
+    // crate::browser::css_parser + matches_selector. Drive jen strip_prefix('#')/('.')
+    // co rozbi compound selectors jako ".tab-strip .tab" (desc combinator), ".foo.bar"
+    // (class chain), "li:nth-child(2)", etc. Devtools-mockup pouziva sirsi selectors -
+    // bez tohoto callbacks neregistrovany pres iteraci empty NodeList.
     {
         let doc = Rc::clone(document);
         doc_obj.set("querySelector".into(), native("document.querySelector", move |a| {
             let sel = a.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
-            let result = if let Some(id) = sel.strip_prefix('#') {
-                doc.borrow().root.get_element_by_id(id)
-            } else if let Some(cls) = sel.strip_prefix('.') {
-                doc.borrow().root.get_elements_by_class(cls).into_iter().next()
-            } else {
-                doc.borrow().root.get_elements_by_tag(&sel).into_iter().next()
-            };
+            let parsed = crate::browser::css_parser::parse_selectors(&sel);
+            let root = Rc::clone(&doc.borrow().root);
+            let result = super::eval_call::query_first(&root, &parsed);
             Ok(match result {
                 Some(n) => JsValue::DomNode(n),
                 None    => JsValue::Null,
             })
         }));
     }
-
-    // document.querySelectorAll
     {
         let doc = Rc::clone(document);
         doc_obj.set("querySelectorAll".into(), native("document.querySelectorAll", move |a| {
             let sel = a.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
-            let nodes = if let Some(id) = sel.strip_prefix('#') {
-                doc.borrow().root.get_element_by_id(id).into_iter().collect()
-            } else if let Some(cls) = sel.strip_prefix('.') {
-                doc.borrow().root.get_elements_by_class(cls)
-            } else {
-                doc.borrow().root.get_elements_by_tag(&sel)
-            };
+            let parsed = crate::browser::css_parser::parse_selectors(&sel);
+            let root = Rc::clone(&doc.borrow().root);
+            let nodes = super::eval_call::query_all(&root, &parsed);
             let arr: Vec<JsValue> = nodes.into_iter().map(JsValue::DomNode).collect();
             Ok(JsValue::Array(Rc::new(RefCell::new(arr))))
         }));

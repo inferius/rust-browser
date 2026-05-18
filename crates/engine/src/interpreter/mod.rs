@@ -823,12 +823,17 @@ impl Interpreter {
             Rc::new(RefCell::new(Vec::new()));
         let next_raf_id: Rc<RefCell<u32>> = Rc::new(RefCell::new(1));
         let scroll_pos: Rc<RefCell<(f32, f32)>> = Rc::new(RefCell::new((0.0, 0.0)));
+        // Event callbacks - sdileno mezi Interpreter + setup_builtins (pro
+        // document.addEventListener real impl pres document root node).
+        let event_callbacks: Rc<RefCell<HashMap<usize, JsValue>>> = Rc::new(RefCell::new(HashMap::new()));
+        let next_callback_id: Rc<RefCell<usize>> = Rc::new(RefCell::new(1));
         setup_builtins(
             &global, &task_queue, &interval_queue, &next_timer_id, &workers, &next_worker_id,
             &document, &console_log, &console_log_args, &network_log, &custom_elements,
             &mutation_observers, &websockets, &next_ws_id,
             &pending_fetches, &pending_xhr_callbacks,
             &raf_callbacks, &next_raf_id, &scroll_pos,
+            &event_callbacks, &next_callback_id,
         );
         Interpreter {
             global, yield_buffer: None, task_queue, interval_queue, next_timer_id,
@@ -839,8 +844,8 @@ impl Interpreter {
             workers, next_worker_id,
             websockets, next_ws_id,
             document,
-            event_callbacks: Rc::new(RefCell::new(HashMap::new())),
-            next_callback_id: Rc::new(RefCell::new(1)),
+            event_callbacks,
+            next_callback_id,
             console_log,
             console_log_args,
             network_log,
