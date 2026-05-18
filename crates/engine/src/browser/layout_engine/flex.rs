@@ -1001,6 +1001,14 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                 let h_final = h.max(pb_h);
                 child.rect.width = w;
                 child.rect.height = h_final;
+                // Pres flex column item priradi parent main-axis size JEN pokud
+                // parent ma definite height (explicit nebo z own parent allocation)
+                // a child bez explicit. Bez parent definite by main_size = content
+                // (intrinsic flow) - nesmi constrain child layout_block grow.
+                let parent_definite = bx.explicit_height.is_some() || bx.parent_assigned_h.is_some();
+                if parent_definite && child.explicit_height.is_none() && h_final > 0.0 {
+                    child.parent_assigned_h = Some(h_final);
+                }
             } else {
                 child.rect.x = inner_x + cross_cursor + cross_offset;
                 child.rect.y = inner_y + main_cursor;
@@ -1049,6 +1057,15 @@ pub fn layout_flex(bx: &mut LayoutBox) {
                 if ch_min_c > 0.0 { h = h.max(ch_min_c); }
                 child.rect.height = h.max(pb_h);
                 child.rect.width = w.max(pb_w);
+                // Pres flex row item, parent priradil cross-axis size pres stretch
+                // jen kdyz parent definite (jinak cross-size = content max v line).
+                let parent_definite = bx.explicit_height.is_some() || bx.parent_assigned_h.is_some();
+                if parent_definite && child.explicit_height.is_none() && child.rect.height > 0.0 {
+                    let stretch_cross = matches!(item_align, AlignItems::Stretch) || item_has_wrap;
+                    if stretch_cross {
+                        child.parent_assigned_h = Some(child.rect.height);
+                    }
+                }
             }
 
             main_cursor += main_size + it.margin_main_end;

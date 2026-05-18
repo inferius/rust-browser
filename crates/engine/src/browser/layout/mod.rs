@@ -1105,6 +1105,10 @@ pub struct LayoutBox {
     /// Taffy compliance mode: skip default 20px height for empty leaf divs.
     /// Set true u boxu pochazejicich z taffy fixture parser.
     pub taffy_mode: bool,
+    /// Parent (flex/grid) priradil height pres flex grow / cross-axis align.
+    /// layout_block musi respektovat - NEpresahnout pres bound = content_h
+    /// (jinak flex child expanduje pres content, ignoruje parent constraint).
+    pub parent_assigned_h: Option<f32>,
     /// Pseudo-flex: byl Block, ale heuristika ho zmenila na Flex (align-items=baseline).
     /// Pri baseline calc pak pouzij synth (block) baseline misto first-child.
     pub pseudo_flex: bool,
@@ -1311,6 +1315,7 @@ impl LayoutBox {
             selection_bg: None,
             selection_color: None,
             taffy_mode: false,
+            parent_assigned_h: None,
             pseudo_flex: false,
             taffy_intrinsic_mode: false,
         }
@@ -2041,6 +2046,9 @@ fn cache_lookup_subtree(node: &Rc<Node>, style_map: &StyleMap) -> Option<LayoutB
 /// nedokazala shrinkovat (napr. pri scrollbar reservation second pass).
 fn reset_subtree_rect(bx: &mut LayoutBox) {
     bx.rect = Rect { x: 0.0, y: 0.0, width: 0.0, height: 0.0 };
+    // Parent-assigned height z prev layout invalidate - bude prepocteno
+    // pri novem flex/grid/block dispatch z parent.
+    bx.parent_assigned_h = None;
     for ch in bx.children.iter_mut() {
         reset_subtree_rect(ch);
     }
@@ -3641,6 +3649,11 @@ pub fn layout_block(bx: &mut LayoutBox) {
                         - 2.0 * bx.border_width;
                     if parent_h > 0.0 {
                         child.rect.height = parent_h * pct;
+                        // CSS spec: height: N% s definite parent = definite child.
+                        // Layout_block recursion musi respektovat (jinak override
+                        // pres content_h). Bez tohoto html{height:100%} expandoval
+                        // na content size pri devtools-mockup chain.
+                        child.parent_assigned_h = Some(parent_h * pct);
                     }
                 } else if child.rect.height == 0.0 {
                     child.rect.height = if child.text.is_some() {
@@ -3783,6 +3796,12 @@ pub fn layout_block(bx: &mut LayoutBox) {
     // za hranicemi user-set height: 30 -> renderoval h=38 misto 30.
     if let Some(eh) = bx.explicit_height {
         bx.rect.height = eh;
+    } else if let Some(parent_h) = bx.parent_assigned_h {
+        // Parent (flex/grid) priradil hodnotu - DRZ, ignoruj content overflow.
+        // CSS spec: flex/grid item v cross axis (nebo main+grow) ma fixed
+        // velikost z parent. Content overflows -> scrollovatelne pres
+        // overflow:auto, nebo cut pres overflow:hidden, nebo visible spill.
+        bx.rect.height = parent_h;
     } else {
         let preserve_grow = (bx.taffy_mode && preset_height_taffy > 0.0)
             || (bound == 0.0 && bx.children.is_empty() && bx.text.is_none())
