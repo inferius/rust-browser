@@ -1758,14 +1758,16 @@ impl WebView {
             self.last_layout_root.as_ref().unwrap().clone()
         } else {
             self.layout_cache_key = Some(layout_key);
-            // Rollback layout_tree_with_pseudo_cached - testovani ukazalo
-            // ze NEpomohl (lay 14s -> 15s). Subtree hash compute + cache
-            // collect overhead spotrebovaval vic nez usetril. Pojdme zpet
-            // a najit jiny culprit.
+            // Layout subtree cache: pri MISS na top-level (fingerprint zmena nekde),
+            // predame prev_root pres raw ptr index - subtree match HIT pres
+            // fingerprint reuse prev subtree (clone jen pri HIT). Drasticky snizuje
+            // rebuild kdyz hover zmeni jen 1 element a celej zbytek je stejny.
             crate::browser::layout::reset_build_box_stats();
+            let empty_pseudo = crate::browser::cascade::PseudoStyleMap::new();
             let t = std::time::Instant::now();
-            let r = crate::browser::layout::layout_tree(
-                &doc.root, &style_map, viewport_w, viewport_h);
+            let r = crate::browser::layout::layout_tree_with_pseudo_cached(
+                &doc.root, &style_map, &empty_pseudo, viewport_w, viewport_h,
+                self.last_layout_root.as_ref());
             let elapsed = t.elapsed().as_secs_f32() * 1000.0;
             if elapsed > 100.0 {
                 let node_count = count_nodes(&doc.root);

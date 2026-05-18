@@ -1398,9 +1398,9 @@ pub fn layout_tree_with_pseudo_cached(
     let outer_t = std::time::Instant::now();
     // Build prev_node_map (node_ptr -> LayoutBox subtree) z prev_root.
     let _t = std::time::Instant::now();
-    let mut prev_map: HashMap<usize, LayoutBox> = HashMap::new();
+    let mut prev_map: HashMap<usize, *const LayoutBox> = HashMap::new();
     if let Some(prev) = prev_root {
-        collect_prev_boxes(prev, &mut prev_map);
+        collect_prev_box_refs(prev, &mut prev_map);
     }
     perf_t("collect_prev_boxes", _t);
     let cache = if prev_map.is_empty() { None } else { Some(&prev_map) };
@@ -1473,14 +1473,21 @@ pub fn layout_tree_with_pseudo_cached(
     layout_root
 }
 
-/// Walk prev LayoutBox tree, sber kazdy node_ptr -> LayoutBox subtree.
-fn collect_prev_boxes(bx: &LayoutBox, map: &mut HashMap<usize, LayoutBox>) {
+/// Walk prev LayoutBox tree, sber kazdy node_ptr -> raw ref na LayoutBox subtree.
+/// Drive volal bx.clone() per node = O(N*depth) deep cloning (~30ms na 5k node tree).
+/// Pres raw refs = O(N) walk, zero clones. Clones probehnou jen pri cache HIT
+/// (1 per HIT misto N upfront).
+///
+/// SAFETY: raw ptr je validni jen behem layout_tree_with_pseudo_cached call -
+/// prev_root parametru lifetime. cache_lookup_subtree deref pres unsafe block
+/// jen pri aktivnim LAYOUT_CACHE (vola se z build_box_inner_cached scope).
+fn collect_prev_box_refs(bx: &LayoutBox, map: &mut HashMap<usize, *const LayoutBox>) {
     if let Some(node) = &bx.node {
         let id = Rc::as_ptr(node) as usize;
-        map.insert(id, bx.clone());
+        map.insert(id, bx as *const LayoutBox);
     }
     for ch in &bx.children {
-        collect_prev_boxes(ch, map);
+        collect_prev_box_refs(ch, map);
     }
 }
 
@@ -1929,18 +1936,20 @@ fn build_box_with_pseudo_cached(
     node: &Rc<Node>,
     style_map: &StyleMap,
     pseudo_map: &super::cascade::PseudoStyleMap,
-    cache: Option<&HashMap<usize, LayoutBox>>,
+    cache: Option<&HashMap<usize, *const LayoutBox>>,
 ) -> LayoutBox {
     let mut counters: HashMap<String, i32> = HashMap::new();
     build_box_inner_cached(node, style_map, pseudo_map, &mut counters, cache)
 }
 
-// Thread-local cache pro per-element layout reuse. Nastaveno
-// layout_tree_with_pseudo_cached pred build, vycteno v build_box_inner pri
-// recursive child build. Po dokonceni vraceno na None.
+// Thread-local cache pro per-element layout reuse. Hold raw pointer + lifetime
+// guarantee externally (prev_root lives po dobu layout_tree_with_pseudo_cached).
+// Nastaveno build_box_with_pseudo_cached scope, restore na None pri exitu.
+//
+// PERF: drive klonoval HashMap (cache.clone()) pri kazdem volani - deep clone
+// 5k LayoutBox subtrees = 30-50ms. Raw pointer ulozi same data bez klonu.
 thread_local! {
-    static LAYOUT_CACHE: std::cell::RefCell<Option<HashMap<usize, LayoutBox>>> =
-        std::cell::RefCell::new(None);
+    static LAYOUT_CACHE_PTR: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 fn build_box_inner_cached(
@@ -1948,29 +1957,36 @@ fn build_box_inner_cached(
     style_map: &StyleMap,
     pseudo_map: &super::cascade::PseudoStyleMap,
     counters: &mut HashMap<String, i32>,
-    cache: Option<&HashMap<usize, LayoutBox>>,
+    cache: Option<&HashMap<usize, *const LayoutBox>>,
 ) -> LayoutBox {
-    // Set thread-local cache, run cached_inner_lookup, restore.
-    let prev_set = LAYOUT_CACHE.with(|c| c.borrow().is_some());
-    if !prev_set {
+    // Set thread-local cache pointer pres ulozeni adresy. Recursive child
+    // build cte stejny pointer pres cache_lookup_subtree. Restore na exit.
+    let prev_ptr = LAYOUT_CACHE_PTR.with(|c| c.get());
+    if prev_ptr == 0 {
         if let Some(c) = cache {
-            LAYOUT_CACHE.with(|tc| *tc.borrow_mut() = Some(c.clone()));
+            let p = c as *const HashMap<usize, *const LayoutBox> as usize;
+            LAYOUT_CACHE_PTR.with(|tc| tc.set(p));
         }
     }
     // Try cache hit pri root.
     if let Some(c) = cache {
         let node_id = Rc::as_ptr(node) as usize;
-        if let Some(prev) = c.get(&node_id) {
+        if let Some(&prev_ptr_box) = c.get(&node_id) {
+            // SAFETY: prev_ptr_box pochazi z prev_root walk; prev_root je live
+            // parametr layout_tree_with_pseudo_cached -> ptr valid cely call.
+            let prev: &LayoutBox = unsafe { &*prev_ptr_box };
             let h = compute_subtree_hash(node, style_map);
             if prev.fingerprint == h && h != 0 {
-                if !prev_set {
-                    LAYOUT_CACHE.with(|tc| *tc.borrow_mut() = None);
+                if prev_ptr == 0 {
+                    LAYOUT_CACHE_PTR.with(|tc| tc.set(0));
                 }
                 // Cache je pouze pro structure/styles. rect.* (positions/sizes)
                 // pochazi z prev layout_dispatch a stane se stale pri novem
                 // layoutu (napr. po scrollbar reservation re-layout). Reset
                 // rect cele subtree aby novy layout vychazel z 0.
+                // CLONE jen pri HIT - one-time cost per HIT, ne per insert.
                 let mut cloned = prev.clone();
+                cloned.fingerprint = h;
                 reset_subtree_rect(&mut cloned);
                 return cloned;
             }
@@ -1978,8 +1994,8 @@ fn build_box_inner_cached(
     }
     let mut bx = build_box_inner(node, style_map, pseudo_map, counters);
     bx.fingerprint = compute_subtree_hash(node, style_map);
-    if !prev_set {
-        LAYOUT_CACHE.with(|tc| *tc.borrow_mut() = None);
+    if prev_ptr == 0 {
+        LAYOUT_CACHE_PTR.with(|tc| tc.set(0));
     }
     bx
 }
@@ -1987,21 +2003,27 @@ fn build_box_inner_cached(
 /// Test pres thread-local cache: pri rekurzi v build_box_inner deti zkontroluj
 /// cache. Volano z mista kde build_box_inner rekurzuje na child node.
 fn cache_lookup_subtree(node: &Rc<Node>, style_map: &StyleMap) -> Option<LayoutBox> {
-    LAYOUT_CACHE.with(|tc| {
-        if let Some(cache) = tc.borrow().as_ref() {
-            let node_id = Rc::as_ptr(node) as usize;
-            if let Some(prev) = cache.get(&node_id) {
-                let h = compute_subtree_hash(node, style_map);
-                if prev.fingerprint == h && h != 0 {
-                    let mut clone = prev.clone();
-                    clone.fingerprint = h;
-                    reset_subtree_rect(&mut clone);
-                    return Some(clone);
-                }
-            }
-        }
+    let cache_addr = LAYOUT_CACHE_PTR.with(|c| c.get());
+    if cache_addr == 0 { return None; }
+    // SAFETY: pointer set v build_box_inner_cached scope; ten cely radek byl
+    // volan s cache: Option<&HashMap<...>> kde &HashMap lifetime po dobu call.
+    // cache_lookup_subtree call z child rekurze v stejnem scope.
+    let cache: &HashMap<usize, *const LayoutBox> = unsafe {
+        &*(cache_addr as *const HashMap<usize, *const LayoutBox>)
+    };
+    let node_id = Rc::as_ptr(node) as usize;
+    let prev_ptr_box = *cache.get(&node_id)?;
+    // SAFETY: same as above; prev_root lifetime extends beyond all child builds.
+    let prev: &LayoutBox = unsafe { &*prev_ptr_box };
+    let h = compute_subtree_hash(node, style_map);
+    if prev.fingerprint == h && h != 0 {
+        let mut clone = prev.clone();
+        clone.fingerprint = h;
+        reset_subtree_rect(&mut clone);
+        Some(clone)
+    } else {
         None
-    })
+    }
 }
 
 /// Reset rect (x/y/width/height) v cele subtree. Pouziti pri cache hit
