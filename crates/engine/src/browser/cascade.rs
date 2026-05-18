@@ -24,6 +24,11 @@ type WalkOutputVal = Rc<HashMap<String, String>>;
 thread_local! {
     static MATCHED_DECLS_CACHE: RefCell<HashMap<MatchedKey, MatchedVal>> = RefCell::new(HashMap::new());
     static WALK_OUTPUT_CACHE: RefCell<HashMap<WalkOutputKey, WalkOutputVal>> = RefCell::new(HashMap::new());
+    /// Content-interning cache: hash(post-walk styles content) -> Rc<HashMap>.
+    /// Pri walk MISS produkuje styles HashMap; pokud existuje entry s tymto content_hash,
+    /// reuse Rc (zero-alloc). Pres stable visual styles cross hover states stejny Rc ->
+    /// paint_fingerprint stable -> skip cely render pipeline.
+    static WALK_CONTENT_INTERN: RefCell<HashMap<u64, Rc<HashMap<String, String>>>> = RefCell::new(HashMap::new());
     /// Per-cascade-call context, set pred volanim cascade_with_viewport.
     /// Webview nastavi (host_id, dom_version) tak aby cache klice rozlisily WVs.
     pub static CASCADE_CTX: std::cell::Cell<(u64, u64)> = const { std::cell::Cell::new((0, 0)) };
@@ -45,6 +50,7 @@ pub fn clear_matched_decls_cache() {
     MATCHED_DECLS_CACHE.with(|c| c.borrow_mut().clear());
     PROPAGATED_ENTRY_CACHE.with(|c| c.borrow_mut().clear());
     WALK_OUTPUT_CACHE.with(|c| c.borrow_mut().clear());
+    WALK_CONTENT_INTERN.with(|c| c.borrow_mut().clear());
 }
 
 /// Per-element after-propagate style_map entry cache. Klic: (node_ptr,
@@ -566,51 +572,24 @@ pub const LAYOUT_RELEVANT_PROPS: &[&str] = &[
     "text-align", "text-indent", "letter-spacing", "word-spacing", "vertical-align",
 ];
 
-// Hash celeho style_map pres LAYOUT_RELEVANT_PROPS jen. Pri stejnem hashi
-// po cascade rebuild znamena ze layout je identicky -> reuse cached layout_root.
-// Mouse hover zmena typicky meni jen `color`/`background-color` -> hash stable.
-// Per-node layout-relevant sub-hash cache. Klic = Rc::as_ptr(inner StyleMap value).
-// Hodnota = hash(node_ptr + LAYOUT_RELEVANT_PROPS values). Pri stable inner Rc HIT.
-thread_local! {
-    static LAYOUT_NODE_HASH_CACHE: std::cell::RefCell<HashMap<usize, u64>>
-        = std::cell::RefCell::new(HashMap::new());
-    static PAINT_NODE_HASH_CACHE: std::cell::RefCell<HashMap<usize, u64>>
-        = std::cell::RefCell::new(HashMap::new());
-}
-
+/// Hash celeho style_map pres LAYOUT_RELEVANT_PROPS jen. Pri stejnem hashi
+/// po cascade rebuild znamena ze layout je identicky -> reuse cached layout_root.
+/// Mouse hover zmena typicky meni jen `color`/`background-color` -> hash stable.
 pub fn layout_fingerprint(style_map: &StyleMap) -> u64 {
     use std::hash::{Hash, Hasher};
-    // XOR akumulator pres per-node sub-hashes. Kazda sub-hash je deterministicky
-    // hash(node_ptr + sorted layout-relevant props). Pres XOR je commutative -
-    // order-independent + bez sort outer entries.
-    // Per-node sub-hash cached na Rc::as_ptr(inner). Pri walk_cache HIT je inner
-    // Rc stable -> sub-hash cache HIT -> skip prop iteration.
-    let mut total: u64 = 0;
-    LAYOUT_NODE_HASH_CACHE.with(|cache_cell| {
-        let mut cache = cache_cell.borrow_mut();
-        // LRU-style cap.
-        if cache.len() >= 32768 { cache.clear(); }
-        for (node_ptr, props) in style_map.iter() {
-            let rc_ptr = Rc::as_ptr(props) as usize;
-            let sub = if let Some(&h) = cache.get(&rc_ptr) {
-                h
-            } else {
-                let mut hh = std::collections::hash_map::DefaultHasher::new();
-                node_ptr.hash(&mut hh);
-                for prop_name in LAYOUT_RELEVANT_PROPS {
-                    if let Some(v) = props.get(*prop_name) {
-                        prop_name.hash(&mut hh);
-                        v.hash(&mut hh);
-                    }
-                }
-                let h = hh.finish();
-                cache.insert(rc_ptr, h);
-                h
-            };
-            total ^= sub;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut entries: Vec<(&usize, &Rc<HashMap<String, String>>)> = style_map.iter().collect();
+    entries.sort_by_key(|(k, _)| **k);
+    for (node_ptr, props) in entries {
+        node_ptr.hash(&mut hasher);
+        for prop_name in LAYOUT_RELEVANT_PROPS {
+            if let Some(v) = props.get(*prop_name) {
+                prop_name.hash(&mut hasher);
+                v.hash(&mut hasher);
+            }
         }
-    });
-    total
+    }
+    hasher.finish()
 }
 
 /// Hash CELEHO style_map (vsechny props - layout + paint). Pri shode mezi
@@ -622,29 +601,18 @@ pub fn layout_fingerprint(style_map: &StyleMap) -> u64 {
 /// pres novy Rc = paint+gpu run zbytecne.
 pub fn paint_fingerprint(style_map: &StyleMap) -> u64 {
     use std::hash::{Hash, Hasher};
-    // Same trick jako layout_fingerprint - XOR per-node sub-hashes pres Rc ptr cache.
-    // Paint fingerprint cte cely content (vsechny props vyznamne pro paint), tudiz
-    // sub-hash kombinuje node_ptr + rc_ptr (Rc identity = full content identity).
-    let mut total: u64 = 0;
-    PAINT_NODE_HASH_CACHE.with(|cache_cell| {
-        let mut cache = cache_cell.borrow_mut();
-        if cache.len() >= 32768 { cache.clear(); }
-        for (node_ptr, props) in style_map.iter() {
-            let rc_ptr = Rc::as_ptr(props) as usize;
-            let sub = if let Some(&h) = cache.get(&rc_ptr) {
-                h
-            } else {
-                let mut hh = std::collections::hash_map::DefaultHasher::new();
-                node_ptr.hash(&mut hh);
-                rc_ptr.hash(&mut hh);
-                let h = hh.finish();
-                cache.insert(rc_ptr, h);
-                h
-            };
-            total ^= sub;
-        }
-    });
-    total
+    // Pres Rc::as_ptr stable identity (cascade cache HIT) je paint hash O(N) ale
+    // bez probiehnu hodnot - drasticky lacenejsi nez full value hash.
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut entries: Vec<(usize, usize)> = style_map.iter()
+        .map(|(k, v)| (*k, Rc::as_ptr(v) as usize))
+        .collect();
+    entries.sort_by_key(|(k, _)| *k);
+    for (node_ptr, rc_ptr) in entries {
+        node_ptr.hash(&mut hasher);
+        rc_ptr.hash(&mut hasher);
+    }
+    hasher.finish()
 }
 
 /// Mapa: (node_id, pseudo-element-name) -> computed styles.
@@ -2707,7 +2675,31 @@ pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
             styles.entry("font-weight".into()).or_insert_with(|| "bold".to_string());
         }
 
-        let styles_rc = Rc::new(styles);
+        // Content-interning: pokud existuje entry s identical content, reuse Rc.
+        // Pres stable visual styles cross hover_bit states stejny Rc identity ->
+        // downstream cache (paint_fingerprint) HIT a skip render pipeline.
+        let content_hash = {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            let mut keys: Vec<&String> = styles.keys().collect();
+            keys.sort();
+            for k in keys {
+                k.hash(&mut h);
+                styles.get(k).unwrap().hash(&mut h);
+            }
+            h.finish()
+        };
+        let styles_rc = WALK_CONTENT_INTERN.with(|c| {
+            let mut intern = c.borrow_mut();
+            if intern.len() >= 16384 { intern.clear(); }
+            if let Some(existing) = intern.get(&content_hash) {
+                Rc::clone(existing)
+            } else {
+                let rc = Rc::new(styles);
+                intern.insert(content_hash, Rc::clone(&rc));
+                rc
+            }
+        });
         // Walk-output cache store: pres stejny key bude HIT.
         WALK_OUTPUT_CACHE.with(|c| {
             let mut cache = c.borrow_mut();
