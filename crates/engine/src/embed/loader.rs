@@ -136,12 +136,9 @@ pub fn load_page(target: &str) -> Option<LoadedPage> {
         let abs_path = std::fs::canonicalize(&path_buf).unwrap_or(path_buf.clone());
         let base = format!("file:///{}", abs_path.display().to_string().replace('\\', "/"));
         let mut css = String::new();
-        let css_path = target.replace(".html", ".css");
-        if let Ok(c) = std::fs::read_to_string(&css_path) {
-            css.push('\n');
-            css.push_str(&c);
-        }
+        let mut loaded: std::collections::HashSet<std::path::PathBuf> = std::collections::HashSet::new();
         let html_dir = path_buf.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+        // 1. <link rel=stylesheet> hrefs - primary CSS source.
         for href in extract_stylesheet_hrefs(&html) {
             if href.starts_with("http://") || href.starts_with("https://") {
                 if let Some(c) = render::fetch_text_url(&href) {
@@ -150,10 +147,25 @@ pub fn load_page(target: &str) -> Option<LoadedPage> {
                 }
             } else {
                 let css_file = html_dir.join(&href);
-                if let Ok(c) = std::fs::read_to_string(&css_file) {
-                    css.push('\n');
-                    css.push_str(&c);
+                let canon = std::fs::canonicalize(&css_file).unwrap_or(css_file.clone());
+                if loaded.insert(canon.clone()) {
+                    if let Ok(c) = std::fs::read_to_string(&css_file) {
+                        css.push('\n');
+                        css.push_str(&c);
+                    }
                 }
+            }
+        }
+        // 2. Co-located <basename>.css fallback - JEN POKUD nebyl uz nacten pres <link>.
+        // Bez teto dedup test.html + <link href="test.css"> loaded test.css 2x ->
+        // duplicate rules v stylesheet -> matched_styles vraci kazde rule 2x.
+        let css_path = target.replace(".html", ".css");
+        let css_path_buf = PathBuf::from(&css_path);
+        let css_canon = std::fs::canonicalize(&css_path_buf).unwrap_or(css_path_buf.clone());
+        if loaded.insert(css_canon) {
+            if let Ok(c) = std::fs::read_to_string(&css_path) {
+                css.push('\n');
+                css.push_str(&c);
             }
         }
         for inline in extract_inline_styles(&html) {
