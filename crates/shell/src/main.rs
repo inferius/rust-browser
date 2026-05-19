@@ -11,6 +11,28 @@
 
 use std::path::PathBuf;
 
+/// Extract <style>...</style> bloky z HTML + spoj do jednoho CSS textu.
+fn extract_inline_styles(html: &str) -> String {
+    let lc = html.to_ascii_lowercase();
+    let mut out = String::new();
+    let mut cursor = 0;
+    while cursor < lc.len() {
+        let open = match lc[cursor..].find("<style") {
+            Some(p) => cursor + p, None => break,
+        };
+        let after_tag = match lc[open..].find('>') {
+            Some(p) => open + p + 1, None => break,
+        };
+        let close = match lc[after_tag..].find("</style>") {
+            Some(p) => after_tag + p, None => break,
+        };
+        out.push_str(&html[after_tag..close]);
+        out.push('\n');
+        cursor = close + "</style>".len();
+    }
+    out
+}
+
 fn main() {
     let handle = std::thread::Builder::new()
         .name("rwe-main".into())
@@ -49,7 +71,9 @@ fn real_main() {
             "<script id=\"cdp-js\"></script>",
             &mock_script,
         );
-        if let Err(e) = rwe_shell::run_window(html, String::new(), Some(mock.base_url), None) {
+        // Extract <style> bloky z generated HTML do css string.
+        let css = extract_inline_styles(&html);
+        if let Err(e) = rwe_shell::run_window(html, css, Some(mock.base_url), None) {
             eprintln!("[shell] error: {e}");
         }
         return;
