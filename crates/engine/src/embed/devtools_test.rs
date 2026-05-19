@@ -276,10 +276,23 @@ const MOCK_CDP_OVERRIDE_JS: &str = r#"
         // Default - empty success.
         return Promise.resolve({});
     }
+    var docUpdatedFired = false;
     function on(method, callback) {
         var list = eventListeners.get(method);
         if (!list) { list = []; eventListeners.set(method, list); }
         list.push(callback);
+        // Pres prvni registraci DOM.documentUpdated, fire event po malem delay.
+        // Mockup wire pres cdp.on('DOM.documentUpdated', renderDomTree) trigger
+        // initial DOM tree render. Bez tohoto mockup zustal idle.
+        if (method === 'DOM.documentUpdated' && !docUpdatedFired) {
+            docUpdatedFired = true;
+            setTimeout(function() {
+                var ls = eventListeners.get('DOM.documentUpdated');
+                if (ls) for (var i = 0; i < ls.length; i++) {
+                    try { ls[i]({}); } catch (e) { console.error('mock event: ' + e); }
+                }
+            }, 30);
+        }
     }
     function off(method, callback) {
         var list = eventListeners.get(method);
@@ -289,14 +302,5 @@ const MOCK_CDP_OVERRIDE_JS: &str = r#"
     }
     function pollEvents() {} // no-op pres standalone
     window.cdp = { send: send, on: on, off: off, pollEvents: pollEvents };
-    // Po init fire DOM.documentUpdated po malem delay aby UI init handler precedl.
-    setTimeout(function() {
-        var list = eventListeners.get('DOM.documentUpdated');
-        if (list) {
-            for (var i = 0; i < list.length; i++) {
-                try { list[i]({}); } catch (e) { console.error('mock event: ' + e); }
-            }
-        }
-    }, 50);
 })();
 "#;
