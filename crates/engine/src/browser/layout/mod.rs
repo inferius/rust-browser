@@ -3384,19 +3384,6 @@ pub fn layout_block(bx: &mut LayoutBox) {
     // V taffy_mode: pamatuj puvodni height (uz nastaveny rodicem). Pak po vypoctu
     // content_h NEpresahnout puvodni hodnotu (parent height = constraint).
     let preset_height_taffy = if bx.taffy_mode { bx.rect.height } else { 0.0 };
-    // Pres overflow:auto/scroll element + parent flex/grid uz pre-set height
-    // (rect.height > 0), DRZ predtaveni height i pokud content overflows. Bez
-    // tohoto by .dom-tree (overflow:auto flex item) expanded na content size
-    // a "vyhnal" inner scrollbar - content fits, scrollbar nepotrebny.
-    let preset_height_overflow = {
-        use crate::browser::layout::Overflow;
-        if matches!(bx.overflow_y, Overflow::Auto | Overflow::Scroll | Overflow::Hidden)
-            && bx.rect.height > 0.0
-            && bx.explicit_height.is_none()
-        {
-            bx.rect.height
-        } else { 0.0 }
-    };
 
     // Asymmetric padding wins, jinak shorthand `padding`. Margin je VNEJSI
     // padding (mezi boxy), neovlivnuje inner content area. inner_w = rect.width
@@ -3792,10 +3779,6 @@ pub fn layout_block(bx: &mut LayoutBox) {
             if bx.rect.height < bound {
                 bx.rect.height = bound;
             }
-        } else if preset_height_overflow > 0.0 {
-            // Overflow:auto element - drz preset height, NE override z content.
-            // Scrollbar emit pak vidi content_h > rect.height -> render scrollbar.
-            bx.rect.height = preset_height_overflow;
         } else {
             bx.rect.height = bound;
         }
