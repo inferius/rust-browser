@@ -29,6 +29,32 @@ fn real_main() {
         .cloned()
         .unwrap_or_else(|| "static/test.html".to_string());
 
+    // --devtools flag = run devtools-mockup s mock data z `target`. Misto
+    // F12 split (page + dev WV), devtools UI je page sama. Mock CDP wire
+    // returns precomputed data (DOM tree, matched styles, computed).
+    let devtools_mode = args.iter().any(|a| a == "--devtools");
+    if devtools_mode {
+        let mock = match rwe_engine::embed::devtools_test::generate_mock_data(&target) {
+            Some(m) => m,
+            None => { eprintln!("[shell] devtools-test: nelze nacist {target}"); return; }
+        };
+        // Build standalone HTML.
+        let template = rwe_devtools_frontend::INDEX_HTML;
+        let mock_script = format!(
+            "<script id=\"mock-cdp\">window.__MOCK_CDP__ = {};\n{}\n</script>",
+            mock.mock_json,
+            mock.override_js,
+        );
+        let html = template.replace(
+            "<script id=\"cdp-js\"></script>",
+            &mock_script,
+        );
+        if let Err(e) = rwe_shell::run_window(html, String::new(), Some(mock.base_url), None) {
+            eprintln!("[shell] error: {e}");
+        }
+        return;
+    }
+
     // Stejny loader jako engine - http/file dispatch + CSS aggregace.
     let loaded = match rwe_engine::embed::loader::load_page(&target) {
         Some(l) => l,

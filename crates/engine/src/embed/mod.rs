@@ -34,6 +34,7 @@
 //! kompositor a engine prejde na offscreen RT only.
 
 pub mod devtools_target;
+pub mod devtools_test;
 pub mod engine;
 pub mod event;
 pub mod loader;

@@ -708,6 +708,18 @@ impl DevtoolsTarget {
 
 /// Serializuje DOM node do protocol Node typu. `depth` < 0 = unlimited,
 /// 0 = jen self bez children, N = recurse N levels.
+pub fn serialize_node_pub(
+    node: &Rc<crate::browser::dom::Node>,
+    depth: i32,
+    current_depth: i32,
+) -> rwe_devtools_proto::dom::Node {
+    serialize_node(node, depth, current_depth)
+}
+
+pub fn format_selector_pub(sel: &crate::browser::css_parser::Selector) -> String {
+    format_selector(sel)
+}
+
 fn serialize_node(
     node: &Rc<crate::browser::dom::Node>,
     depth: i32,
