@@ -292,6 +292,7 @@ pub fn emit_main_scrollbar_overlay(
     display_list: &mut Vec<DisplayCommand>,
     viewport_w: f32, viewport_h: f32,
     scroll_x: f32, scroll_y: f32,
+    element_scroll: &std::collections::HashMap<usize, (f32, f32)>,
 ) {
     // Body bg detect pro track/thumb barvy.
     let body_bg_dark = layout_root.children.first().and_then(|html_box| {
@@ -342,7 +343,7 @@ pub fn emit_main_scrollbar_overlay(
     // content > rect. Devtools panels (.dom-tree, .styles-body, .computed-list)
     // pouzivaji nested overflow - bez tohoto se content cut off bez visual hint
     // ze je scrollovatelne.
-    emit_inner_scrollbars(layout_root, display_list, track_col, thumb_col, scroll_x, scroll_y);
+    emit_inner_scrollbars(layout_root, display_list, track_col, thumb_col, scroll_x, scroll_y, element_scroll);
 }
 
 fn emit_inner_scrollbars(
@@ -351,6 +352,7 @@ fn emit_inner_scrollbars(
     track_col: [u8; 4],
     thumb_col: [u8; 4],
     scroll_x: f32, scroll_y: f32,
+    element_scroll: &std::collections::HashMap<usize, (f32, f32)>,
 ) {
     let _ = scroll_x;
     let _ = scroll_y;
@@ -359,6 +361,11 @@ fn emit_inner_scrollbars(
         && bx.inner_content_h > bx.rect.height + 0.5;
     let needs_x = matches!(bx.overflow_x, Overflow::Auto | Overflow::Scroll)
         && bx.inner_content_w > bx.rect.width + 0.5;
+    // Per-element scroll position pro thumb pozici.
+    let (cur_sx, cur_sy) = bx.node.as_ref()
+        .map(|n| std::rc::Rc::as_ptr(n) as usize)
+        .and_then(|ptr| element_scroll.get(&ptr).copied())
+        .unwrap_or((0.0, 0.0));
     if needs_y {
         let bar_w = bx.scrollbar_size.max(8.0).min(14.0);
         let bar_x = bx.rect.x + bx.rect.width - bar_w;
@@ -369,9 +376,9 @@ fn emit_inner_scrollbars(
             color: track_col, radius: 0.0,
         });
         let thumb_h = (bar_h * bar_h / bx.inner_content_h).max(30.0);
-        // No scroll tracking per-element - inner scroll = 0 (top of content).
-        // TODO Phase X: per-element scroll state.
-        let thumb_y = bar_y;
+        let max_scroll = (bx.inner_content_h - bar_h).max(1.0);
+        let scroll_ratio = (cur_sy / max_scroll).clamp(0.0, 1.0);
+        let thumb_y = bar_y + (bar_h - thumb_h) * scroll_ratio;
         display_list.push(DisplayCommand::Rect {
             x: bar_x + 2.0, y: thumb_y + 2.0,
             w: bar_w - 4.0, h: (thumb_h - 4.0).max(8.0),
@@ -388,14 +395,17 @@ fn emit_inner_scrollbars(
             color: track_col, radius: 0.0,
         });
         let thumb_w = (bar_w * bar_w / bx.inner_content_w).max(30.0);
+        let max_scroll_x = (bx.inner_content_w - bar_w).max(1.0);
+        let scroll_ratio = (cur_sx / max_scroll_x).clamp(0.0, 1.0);
+        let thumb_x = bar_x + (bar_w - thumb_w) * scroll_ratio;
         display_list.push(DisplayCommand::Rect {
-            x: bar_x + 2.0, y: bar_y + 2.0,
+            x: thumb_x + 2.0, y: bar_y + 2.0,
             w: (thumb_w - 4.0).max(8.0), h: bar_h - 4.0,
             color: thumb_col, radius: (bar_h - 4.0) * 0.5,
         });
     }
     for ch in &bx.children {
-        emit_inner_scrollbars(ch, display_list, track_col, thumb_col, scroll_x, scroll_y);
+        emit_inner_scrollbars(ch, display_list, track_col, thumb_col, scroll_x, scroll_y, element_scroll);
     }
 }
 

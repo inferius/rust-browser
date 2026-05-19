@@ -1598,7 +1598,7 @@ fn main_scrollbar_emits_when_layout_overflows_viewport() {
     // Build display list culled + scrollbar overlay.
     let mut cmds = paint::build_display_list_culled(&layout_root, 0.0, 600.0);
     let pre_len = cmds.len();
-    paint::emit_main_scrollbar_overlay(&layout_root, &mut cmds, 800.0, 600.0, 0.0, 0.0);
+    paint::emit_main_scrollbar_overlay(&layout_root, &mut cmds, 800.0, 600.0, 0.0, 0.0, &std::collections::HashMap::new());
     let post_len = cmds.len();
     // Scrollbar emits 2 Rects (track + thumb) when only vertical overflow.
     assert_eq!(post_len - pre_len, 2,
@@ -1622,6 +1622,6 @@ fn main_scrollbar_no_emit_when_content_fits_viewport() {
     let layout_root = layout::layout_tree(&doc.root, &map, 800.0, 600.0);
     let mut cmds = paint::build_display_list_culled(&layout_root, 0.0, 600.0);
     let pre_len = cmds.len();
-    paint::emit_main_scrollbar_overlay(&layout_root, &mut cmds, 800.0, 600.0, 0.0, 0.0);
+    paint::emit_main_scrollbar_overlay(&layout_root, &mut cmds, 800.0, 600.0, 0.0, 0.0, &std::collections::HashMap::new());
     assert_eq!(cmds.len(), pre_len, "no scrollbar should emit when content fits");
 }
