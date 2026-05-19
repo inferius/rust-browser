@@ -145,15 +145,9 @@ pub struct WebView {
     /// WebViews (chrome/page/devtools) co vedlo k mismatch.
     pub(crate) focused_node_local: Option<usize>,
     /// Scrollbar drag state - Some(grab_offset_y) pri V thumb drag.
-    /// Pri main page scrollbar: None v node_ptr. Pri inner scrollable element:
-    /// Some(node_ptr) - thumb drag updates element_scroll[ptr].
     pub(crate) v_scrollbar_drag: Option<f32>,
-    pub(crate) v_scrollbar_drag_node: Option<usize>,
+    /// Scrollbar drag state - Some(grab_offset_x) pri H thumb drag.
     pub(crate) h_scrollbar_drag: Option<f32>,
-    pub(crate) h_scrollbar_drag_node: Option<usize>,
-    /// Per-element scroll offset (x, y) pres `overflow: auto/scroll` boxes.
-    /// Wheel + thumb drag updates. Paint translates content children.
-    pub(crate) element_scroll: std::collections::HashMap<usize, (f32, f32)>,
     /// Last layout_root vyrobeny v render_via - getter pro hostujici aplikaci
     /// (App emits inspector overlay nad webview RT pres dalsi draw_segments
     /// pass; shell nepouziva).
@@ -259,153 +253,6 @@ fn count_nodes(node: &std::rc::Rc<crate::browser::dom::NodeData>) -> usize {
     c
 }
 
-/// Find LayoutBox pres node_ptr v subtree (drag mouseup target).
-fn find_box_by_ptr(
-    root: &crate::browser::layout::LayoutBox,
-    target_ptr: usize,
-) -> Option<&crate::browser::layout::LayoutBox> {
-    if let Some(n) = &root.node {
-        if std::rc::Rc::as_ptr(n) as usize == target_ptr {
-            return Some(root);
-        }
-    }
-    for ch in &root.children {
-        if let Some(found) = find_box_by_ptr(ch, target_ptr) {
-            return Some(found);
-        }
-    }
-    None
-}
-
-/// Inner scrollbar thumb hit-test pres MouseDown. Walk layout pres scrollable
-/// boxes, check zda (x, y) je na thumbu V/H scrollbaru. Vraci (node_ptr, axis,
-/// grab_offset) pri zasahu, None jinak.
-fn find_inner_scrollbar_at(
-    root: &crate::browser::layout::LayoutBox,
-    x: f32, y: f32,
-    element_scroll: &std::collections::HashMap<usize, (f32, f32)>,
-) -> Option<(usize, char, f32)> {
-    use crate::browser::layout::Overflow;
-    fn walk(
-        bx: &crate::browser::layout::LayoutBox,
-        x: f32, y: f32,
-        element_scroll: &std::collections::HashMap<usize, (f32, f32)>,
-        best: &mut Option<(usize, char, f32)>,
-    ) {
-        let needs_y = matches!(bx.overflow_y, Overflow::Auto | Overflow::Scroll)
-            && bx.inner_content_h > bx.rect.height + 0.5;
-        let needs_x = matches!(bx.overflow_x, Overflow::Auto | Overflow::Scroll)
-            && bx.inner_content_w > bx.rect.width + 0.5;
-        if (needs_y || needs_x) && bx.node.is_some() {
-            let ptr = std::rc::Rc::as_ptr(bx.node.as_ref().unwrap()) as usize;
-            let (cur_sx, cur_sy) = element_scroll.get(&ptr).copied().unwrap_or((0.0, 0.0));
-            if needs_y {
-                let bar_w = bx.scrollbar_size.max(8.0).min(14.0);
-                let bar_x = bx.rect.x + bx.rect.width - bar_w;
-                let bar_y = bx.rect.y;
-                let bar_h = bx.rect.height;
-                if x >= bar_x && x < bar_x + bar_w && y >= bar_y && y < bar_y + bar_h {
-                    let thumb_h = (bar_h * bar_h / bx.inner_content_h).max(30.0);
-                    let max_scroll = (bx.inner_content_h - bar_h).max(1.0);
-                    let scroll_ratio = (cur_sy / max_scroll).clamp(0.0, 1.0);
-                    let thumb_y = bar_y + (bar_h - thumb_h) * scroll_ratio;
-                    if y >= thumb_y && y < thumb_y + thumb_h {
-                        *best = Some((ptr, 'y', y - thumb_y));
-                    }
-                }
-            }
-            if needs_x {
-                let bar_h = bx.scrollbar_size.max(8.0).min(14.0);
-                let bar_x = bx.rect.x;
-                let bar_y = bx.rect.y + bx.rect.height - bar_h;
-                let bar_w = bx.rect.width - if needs_y { 12.0 } else { 0.0 };
-                if x >= bar_x && x < bar_x + bar_w && y >= bar_y && y < bar_y + bar_h {
-                    let thumb_w = (bar_w * bar_w / bx.inner_content_w).max(30.0);
-                    let max_scroll_x = (bx.inner_content_w - bar_w).max(1.0);
-                    let scroll_ratio = (cur_sx / max_scroll_x).clamp(0.0, 1.0);
-                    let thumb_x = bar_x + (bar_w - thumb_w) * scroll_ratio;
-                    if x >= thumb_x && x < thumb_x + thumb_w {
-                        *best = Some((ptr, 'x', x - thumb_x));
-                    }
-                }
-            }
-        }
-        for ch in &bx.children {
-            walk(ch, x, y, element_scroll, best);
-        }
-    }
-    let mut best = None;
-    walk(root, x, y, element_scroll, &mut best);
-    best
-}
-
-/// Apply per-element scroll - pres scrollable box mutate child rects o (-sx, -sy).
-/// MVP bez clip: descendants render shifted, mohou prelevat pres parent rect.
-fn apply_element_scroll(
-    bx: &mut crate::browser::layout::LayoutBox,
-    element_scroll: &std::collections::HashMap<usize, (f32, f32)>,
-) {
-    if let Some(node) = &bx.node {
-        let ptr = std::rc::Rc::as_ptr(node) as usize;
-        if let Some(&(sx, sy)) = element_scroll.get(&ptr) {
-            if sx.abs() > 0.01 || sy.abs() > 0.01 {
-                for ch in bx.children.iter_mut() {
-                    shift_subtree_rect(ch, -sx, -sy);
-                }
-            }
-        }
-    }
-    for ch in bx.children.iter_mut() {
-        apply_element_scroll(ch, element_scroll);
-    }
-}
-
-fn shift_subtree_rect(bx: &mut crate::browser::layout::LayoutBox, dx: f32, dy: f32) {
-    bx.rect.x += dx;
-    bx.rect.y += dy;
-    for ch in bx.children.iter_mut() {
-        shift_subtree_rect(ch, dx, dy);
-    }
-}
-
-/// Find nearest scrollable ancestor pod kurzorem (x, y v content coords).
-/// Vraci (node_ptr, max_scroll_y, max_scroll_x) pri nalezeni scrollable boxu
-/// s content > rect. None pri zadnem (fallback na page-level scroll).
-fn find_scrollable_ancestor(
-    root: &crate::browser::layout::LayoutBox,
-    x: f32, y: f32,
-) -> Option<(usize, f32, f32)> {
-    use crate::browser::layout::Overflow;
-    // Walk top-down, deepest scrollable wins.
-    fn walk(
-        bx: &crate::browser::layout::LayoutBox,
-        x: f32, y: f32,
-        best: &mut Option<(usize, f32, f32)>,
-    ) {
-        if x < bx.rect.x || x >= bx.rect.x + bx.rect.width
-            || y < bx.rect.y || y >= bx.rect.y + bx.rect.height
-        {
-            return;
-        }
-        let scroll_y = matches!(bx.overflow_y, Overflow::Auto | Overflow::Scroll)
-            && bx.inner_content_h > bx.rect.height + 0.5;
-        let scroll_x = matches!(bx.overflow_x, Overflow::Auto | Overflow::Scroll)
-            && bx.inner_content_w > bx.rect.width + 0.5;
-        if (scroll_y || scroll_x) && bx.node.is_some() {
-            let ptr = std::rc::Rc::as_ptr(bx.node.as_ref().unwrap()) as usize;
-            let max_y = (bx.inner_content_h - bx.rect.height).max(0.0);
-            let max_x = (bx.inner_content_w - bx.rect.width).max(0.0);
-            *best = Some((ptr, max_y, max_x));
-        }
-        for ch in &bx.children {
-            walk(ch, x, y, best);
-        }
-    }
-    let mut best = None;
-    walk(root, x, y, &mut best);
-    best
-}
-
 /// Per-layer texture slot v WebView cache. L2 compositor foundation.
 pub struct LayerTextureSlot {
     pub texture: wgpu::Texture,
@@ -458,10 +305,7 @@ impl WebView {
             last_synced_scroll_pos: (0.0, 0.0),
             focused_node_local: None,
             v_scrollbar_drag: None,
-            v_scrollbar_drag_node: None,
             h_scrollbar_drag: None,
-            h_scrollbar_drag_node: None,
-            element_scroll: std::collections::HashMap::new(),
             last_layout_root: None,
             layout_rects: std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new())),
             cascade_props: std::rc::Rc::new(std::cell::RefCell::new(None)),
@@ -934,34 +778,22 @@ impl WebView {
         let mut response = EventResponse::default();
         match event {
             InputEvent::Scroll { dx, dy, .. } => {
-                // Wheel hit-test: prefer nearest scrollable ancestor (inner
-                // overflow:auto/scroll) - update jeho element_scroll. Pri zadnem
-                // inner scrollable fallback na page-level scroll_target_y.
+                // Wheel adjusts smooth scroll target. render_via lerp aktivni
+                // scroll_y -> scroll_target_y 25 %% per frame. Clamp na
+                // [0, max] kde max = layout_h - viewport_h (z last render).
                 let viewport_h = self.viewport_h / self.zoom.max(0.01);
                 let viewport_w = self.viewport_w / self.zoom.max(0.01);
-                let mx = self.mouse_x + self.scroll_x;
-                let my = self.mouse_y + self.scroll_y;
-                let inner_target = self.last_layout_root.as_ref().and_then(|root|
-                    find_scrollable_ancestor(root, mx, my));
-                if let Some((node_ptr, max_inner_y, max_inner_x)) = inner_target {
-                    let entry = self.element_scroll.entry(node_ptr).or_insert((0.0, 0.0));
-                    entry.0 = (entry.0 + dx).clamp(0.0, max_inner_x);
-                    entry.1 = (entry.1 + dy).clamp(0.0, max_inner_y);
-                    self.dirty = true;
-                    response.dirty = true;
-                } else {
-                    let (max_y, max_x) = match &self.last_layout_root {
-                        Some(l) => (
-                            (l.rect.height - viewport_h).max(0.0),
-                            (l.rect.width - viewport_w).max(0.0),
-                        ),
-                        None => (f32::INFINITY, f32::INFINITY),
-                    };
-                    self.scroll_target_x = (self.scroll_target_x + dx).clamp(0.0, max_x);
-                    self.scroll_target_y = (self.scroll_target_y + dy).clamp(0.0, max_y);
-                    self.dirty = true;
-                    response.dirty = true;
-                }
+                let (max_y, max_x) = match &self.last_layout_root {
+                    Some(l) => (
+                        (l.rect.height - viewport_h).max(0.0),
+                        (l.rect.width - viewport_w).max(0.0),
+                    ),
+                    None => (f32::INFINITY, f32::INFINITY),
+                };
+                self.scroll_target_x = (self.scroll_target_x + dx).clamp(0.0, max_x);
+                self.scroll_target_y = (self.scroll_target_y + dy).clamp(0.0, max_y);
+                self.dirty = true;
+                response.dirty = true;
             }
             InputEvent::MouseMove { x, y, .. } => {
                 if (self.mouse_x - x).abs() > 0.5 || (self.mouse_y - y).abs() > 0.5 {
@@ -971,39 +803,6 @@ impl WebView {
                     // mouse pos vs thumb grab offset.
                     let viewport_w = self.viewport_w / self.zoom.max(0.01);
                     let viewport_h = self.viewport_h / self.zoom.max(0.01);
-                    // Inner scrollbar drag - update element_scroll[node].
-                    if let (Some(grab_y), Some(node_ptr)) = (self.v_scrollbar_drag, self.v_scrollbar_drag_node) {
-                        if let Some(layout) = &self.last_layout_root {
-                            if let Some(bx) = find_box_by_ptr(layout, node_ptr) {
-                                let bar_h = bx.rect.height;
-                                let thumb_h = (bar_h * bar_h / bx.inner_content_h).max(30.0);
-                                let track_h = (bar_h - thumb_h).max(1.0);
-                                let new_thumb_y = (y - bx.rect.y - grab_y).max(0.0).min(track_h);
-                                let max_scroll = (bx.inner_content_h - bar_h).max(1.0);
-                                let new_scroll = (new_thumb_y / track_h) * max_scroll;
-                                self.element_scroll.entry(node_ptr).or_insert((0.0, 0.0)).1 = new_scroll;
-                                self.dirty = true;
-                                response.dirty = true;
-                                return response;
-                            }
-                        }
-                    }
-                    if let (Some(grab_x), Some(node_ptr)) = (self.h_scrollbar_drag, self.h_scrollbar_drag_node) {
-                        if let Some(layout) = &self.last_layout_root {
-                            if let Some(bx) = find_box_by_ptr(layout, node_ptr) {
-                                let bar_w = bx.rect.width;
-                                let thumb_w = (bar_w * bar_w / bx.inner_content_w).max(30.0);
-                                let track_w = (bar_w - thumb_w).max(1.0);
-                                let new_thumb_x = (x - bx.rect.x - grab_x).max(0.0).min(track_w);
-                                let max_scroll_x = (bx.inner_content_w - bar_w).max(1.0);
-                                let new_scroll = (new_thumb_x / track_w) * max_scroll_x;
-                                self.element_scroll.entry(node_ptr).or_insert((0.0, 0.0)).0 = new_scroll;
-                                self.dirty = true;
-                                response.dirty = true;
-                                return response;
-                            }
-                        }
-                    }
                     if let (Some(grab_y), Some(layout)) = (self.v_scrollbar_drag, &self.last_layout_root) {
                         let total_h = layout.rect.height;
                         if total_h > viewport_h {
@@ -1121,23 +920,6 @@ impl WebView {
                     // Scrollbar thumb hit-test PRED page hit-test.
                     let viewport_w = self.viewport_w / self.zoom.max(0.01);
                     let viewport_h = self.viewport_h / self.zoom.max(0.01);
-                    // Pred page-level scrollbar hit-test: check inner scrollbar thumbs.
-                    // Walk layout, find scrollable box jehoz thumb pres (x, y).
-                    if let Some(layout) = &self.last_layout_root {
-                        let inner_hit = find_inner_scrollbar_at(layout, x, y, &self.element_scroll);
-                        if let Some((node_ptr, axis, grab_offset)) = inner_hit {
-                            if axis == 'y' {
-                                self.v_scrollbar_drag = Some(grab_offset);
-                                self.v_scrollbar_drag_node = Some(node_ptr);
-                            } else {
-                                self.h_scrollbar_drag = Some(grab_offset);
-                                self.h_scrollbar_drag_node = Some(node_ptr);
-                            }
-                            response.dirty = true;
-                            self.dirty = true;
-                            return response;
-                        }
-                    }
                     if let Some(layout) = &self.last_layout_root {
                         let total_h = layout.rect.height;
                         let total_w = layout.rect.width;
@@ -1254,8 +1036,6 @@ impl WebView {
                     if self.v_scrollbar_drag.is_some() || self.h_scrollbar_drag.is_some() {
                         self.v_scrollbar_drag = None;
                         self.h_scrollbar_drag = None;
-                        self.v_scrollbar_drag_node = None;
-                        self.h_scrollbar_drag_node = None;
                         response.dirty = true;
                         return response;
                     }
@@ -2013,14 +1793,6 @@ impl WebView {
         // posunuju dle scroll_y aby drzeli na top viewportu uvnitr containeru.
         crate::browser::layout::apply_sticky(&mut layout_root, self.scroll_y);
 
-        // Per-element scroll offset apply - pres scrollable boxes shift descendants
-        // o (-sx, -sy). Hit-test + paint pak vidi posunute coords. Bez clip = MVP,
-        // content moze prelevat pres rect bounds; opraveno pres clip_path emit
-        // pres scrollable box.
-        if !self.element_scroll.is_empty() {
-            apply_element_scroll(&mut layout_root, &self.element_scroll);
-        }
-
         // 2c. Paint-side animations apply (transform overlay, opacity tween).
         crate::browser::render::apply_paint_animations(&mut layout_root, &style_map);
 
@@ -2226,7 +1998,6 @@ impl WebView {
             &layout_root, &mut display_list,
             viewport_w, viewport_h,
             self.scroll_x, self.scroll_y,
-            &self.element_scroll,
         );
 
         // 4. Warm-up glyph atlas + image atlas pred draw.
