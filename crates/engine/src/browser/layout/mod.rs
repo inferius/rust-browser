@@ -2286,6 +2286,12 @@ fn cache_lookup_subtree(node: &Rc<Node>, style_map: &StyleMap) -> Option<LayoutB
 /// nedokazala shrinkovat (napr. pri scrollbar reservation second pass).
 fn reset_subtree_rect(bx: &mut LayoutBox) {
     bx.rect = Rect { x: 0.0, y: 0.0, width: 0.0, height: 0.0 };
+    // anim_baseline take reset - cache hit drzí baseline z prvni pass. Pri
+    // animation tick (= NEW layout pass s diff cascade values), NEW rect.y
+    // = baseline + delta. Bez tohoto text drzí old baseline.y -> dragging
+    // out of parent anim-box pres jakekoli rect.y shift (= "slide text
+    // posunuty dolu pod modry box").
+    bx.anim_baseline = None;
     for ch in bx.children.iter_mut() {
         reset_subtree_rect(ch);
     }
