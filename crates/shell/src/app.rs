@@ -1635,12 +1635,12 @@ impl ApplicationHandler for ShellApp {
                     let picker = self.inspect_state.borrow().picker_active;
                     if picker && !self.point_in_chrome(self.mouse_y) && !self.point_in_devtools(self.mouse_y) {
                         let chrome_h = self.chrome_h;
-                        let page_x = self.mouse_x;
-                        let page_y = self.mouse_y - chrome_h;
-                        // Scroll offsets z WV - last_layout_root je v page-space,
-                        // mouse je v viewport-space; hit_test pres viewport->page
-                        // pres scroll_y/x add. Bez tohoto pri scroll user musel
-                        // klikat na "puvodni" pre-scroll pozici elementu.
+                        // Mouse coords pres LOGICAL pixels (z winit / scale_factor).
+                        // Layout coords v VIEWPORT_LOGICAL/zoom (= logical/zoom).
+                        // Per zoom 2x mouse_x=100 -> layout_x = 100/2 = 50.
+                        let zoom = self.webview.as_ref().map(|w| w.zoom()).unwrap_or(1.0).max(0.01);
+                        let page_x = self.mouse_x / zoom;
+                        let page_y = (self.mouse_y - chrome_h) / zoom;
                         let (scroll_x, scroll_y) = self.webview.as_ref()
                             .map(|w| w.scroll()).unwrap_or((0.0, 0.0));
                         let target = self.webview.as_ref()

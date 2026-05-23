@@ -3380,6 +3380,11 @@ impl WebView {
             self.last_paint_fingerprint = None;
             self.layout_cache_key = None;
             self.cascade_cache_key = None;
+            // Invalidate prev_root + element scroll cache. Prev layout boxes
+            // drzí rect.width / explicit_width z prev zoom - pres cache hit
+            // pres subtree by aplikoval STARY viewport-relative dims (= inner
+            // elements ne-wrappuji pri novem zoom uziejsim viewportu).
+            self.last_layout_root = None;
         }
     }
 
