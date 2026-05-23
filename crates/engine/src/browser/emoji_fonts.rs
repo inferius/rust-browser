@@ -50,42 +50,74 @@ pub struct ColrData {
 }
 
 /// COLR v0 rasterizer: pro base glyph_id najde jeho layers, rasterizuje
-/// kazdy pres fontdue::rasterize_indexed, tintuje palette barvou + composit
+/// kazdy pres swash scaler indexed, tintuje palette barvou + composit
 /// alpha-over do RGBA bufferu.
 ///
 /// Vraci (width, height, x_offset, y_offset, RGBA bytes).
 /// Pri base glyph nema layers v COLR vrati None - caller nech rasterize as alpha.
 pub fn rasterize_color_glyph(
-    font: &fontdue::Font,
+    face: &super::render::SwashFontFace,
     base_glyph_id: u16,
     px: f32,
     colr: &ColrData,
     foreground: [u8; 4],
 ) -> Option<(usize, usize, i32, i32, Vec<u8>)> {
+    use swash::scale::{ScaleContext, Render, Source};
+    use swash::zeno::Format;
+
     let layers = colr.base_to_layers.get(&base_glyph_id)?;
     if layers.is_empty() { return None; }
 
+    let font_ref = face.as_ref();
+    let mut ctx = ScaleContext::new();
+    let mut scaler = ctx.builder(font_ref)
+        .size(px)
+        .hint(true)
+        .build();
+
     // Compute bounding box across all layers (max width/height).
+    // Swash placement: left = xmin, top = ymax (baseline-relative top, positive up).
+    // V fontdue m.ymin = baseline-relative bottom (positive up). Pri swash:
+    // bottom = top - height. Pro porovnani s fontdue semantikou used puvodne
+    // (ymin/height) prepocet: ymin = top - height.
     let mut max_w = 0i32;
     let mut max_h = 0i32;
     let mut min_xmin = i32::MAX;
     let mut min_ymin = i32::MAX;
-    let mut layer_data: Vec<(fontdue::Metrics, Vec<u8>, [u8; 4])> = Vec::with_capacity(layers.len());
+    struct LayerImage {
+        xmin: i32,
+        ymin: i32,
+        width: usize,
+        height: usize,
+        alpha: Vec<u8>,
+        color: [u8; 4],
+    }
+    let mut layer_data: Vec<LayerImage> = Vec::with_capacity(layers.len());
     for layer in layers {
-        let (m, alpha) = font.rasterize_indexed(layer.glyph_id, px);
+        let image = match Render::new(&[Source::Outline])
+            .format(Format::Alpha)
+            .render(&mut scaler, layer.glyph_id)
+        {
+            Some(i) => i,
+            None => continue,
+        };
         let color = if layer.palette_idx == 0xFFFF {
             foreground
         } else {
             colr.palette.get(layer.palette_idx as usize).copied().unwrap_or([0, 0, 0, 255])
         };
+        let w = image.placement.width as usize;
+        let h = image.placement.height as usize;
+        let xmin = image.placement.left;
+        let ymin = image.placement.top - image.placement.height as i32;
         // Bbox track v "advance space" - xmin/ymin negative-ok.
-        if m.xmin < min_xmin { min_xmin = m.xmin; }
-        if m.ymin < min_ymin { min_ymin = m.ymin; }
-        let right = m.xmin + m.width as i32;
-        let top = m.ymin + m.height as i32;
+        if xmin < min_xmin { min_xmin = xmin; }
+        if ymin < min_ymin { min_ymin = ymin; }
+        let right = xmin + w as i32;
+        let top = ymin + h as i32;
         if right > max_w { max_w = right; }
         if top > max_h { max_h = top; }
-        layer_data.push((m, alpha, color));
+        layer_data.push(LayerImage { xmin, ymin, width: w, height: h, alpha: image.data, color });
     }
     if min_xmin == i32::MAX { return None; }
 
@@ -94,23 +126,23 @@ pub fn rasterize_color_glyph(
     let mut rgba = vec![0u8; out_w * out_h * 4];
 
     // Composite each layer alpha-over.
-    for (m, alpha, color) in &layer_data {
-        let dx = (m.xmin - min_xmin) as usize;
-        let dy_top = (max_h - (m.ymin + m.height as i32)) as usize;
-        for ly in 0..m.height {
-            for lx in 0..m.width {
-                let a_idx = ly * m.width + lx;
-                let layer_a = alpha[a_idx];
+    for li in &layer_data {
+        let dx = (li.xmin - min_xmin) as usize;
+        let dy_top = (max_h - (li.ymin + li.height as i32)) as usize;
+        for ly in 0..li.height {
+            for lx in 0..li.width {
+                let a_idx = ly * li.width + lx;
+                let layer_a = li.alpha[a_idx];
                 if layer_a == 0 { continue; }
                 let ox = dx + lx;
                 let oy = dy_top + ly;
                 if ox >= out_w || oy >= out_h { continue; }
                 let dst = (oy * out_w + ox) * 4;
                 // Source RGBA premultiplied by layer_a.
-                let s_a = (layer_a as u16 * color[3] as u16 / 255) as u8;
-                let s_r = (color[0] as u16 * s_a as u16 / 255) as u8;
-                let s_g = (color[1] as u16 * s_a as u16 / 255) as u8;
-                let s_b = (color[2] as u16 * s_a as u16 / 255) as u8;
+                let s_a = (layer_a as u16 * li.color[3] as u16 / 255) as u8;
+                let s_r = (li.color[0] as u16 * s_a as u16 / 255) as u8;
+                let s_g = (li.color[1] as u16 * s_a as u16 / 255) as u8;
+                let s_b = (li.color[2] as u16 * s_a as u16 / 255) as u8;
                 // dst already premultiplied (pri 0 init OK).
                 let d_r = rgba[dst];
                 let d_g = rgba[dst + 1];

@@ -4,6 +4,8 @@
 //!   pri size<24 (3x sirka swizzled R/G/B). Multi-font: default/bold/italic/bold-italic + extra.
 //! ImageAtlas: shelf-pack RGBA images, klic = src URL. Re-raster pri zoom zmene.
 
+use super::SwashFontFace;
+
 /// Pokusi se najit a nacist systemovy font (None pri selhani - pro layout fallback).
 pub fn try_load_default_font() -> Option<Vec<u8>> {
     if let Ok(path) = std::env::var("RUST_WEB_ENGINE_FONT_PATH") {
@@ -53,30 +55,34 @@ pub(super) struct GlyphInfo {
     pub(super) bearing_x: f32,
     pub(super) bearing_y: f32,
     pub(super) advance: f32,
-    /// LCD subpixel: pri size < threshold rasterujeme pres fontdue
-    /// rasterize_subpixel = 3x sirka swizzled RGB. Render shader pak sample
-    /// 3 horizontal texely per fragment pro R/G/B sub-pixely.
+    /// LCD subpixel: pri size < threshold rasterujeme pres swash Subpixel
+    /// format = RGBA 4 byte per pixel. Atlas storage 3x sirka swizzled RGB
+    /// (R/G/B z 0/1/2 byte). Render shader pak sample 3 horizontal texely per
+    /// fragment pro R/G/B sub-pixely (mode 9 unchanged).
     pub(super) lcd: bool,
 }
 
 pub struct GlyphAtlas {
-    /// Default font (fallback pri family lookup miss)
-    pub(super) font: fontdue::Font,
-    /// Default bold variant (Segoe UI Bold etc.). Pouzity pri bx.bold=true
+    /// Default font (fallback pri family lookup miss) - serif (Times Roman).
+    pub(super) font: SwashFontFace,
+    /// Default bold variant (Times Bold etc.). Pouzity pri bx.bold=true
     /// pokud k dispozici. Jinak fake bold pres double-draw smear.
-    pub(super) font_bold: Option<fontdue::Font>,
+    pub(super) font_bold: Option<SwashFontFace>,
     /// Italic variant (Times Italic etc.). Pri bx.italic=true. Jinak fake
     /// skew transform (predchozi default).
-    pub(super) font_italic: Option<fontdue::Font>,
+    pub(super) font_italic: Option<SwashFontFace>,
     /// Bold + italic kombinace (timesbi.ttf etc.).
-    pub(super) font_bold_italic: Option<fontdue::Font>,
+    pub(super) font_bold_italic: Option<SwashFontFace>,
+    /// NOTE: sans-serif / monospace fonts loaded pres `extra_fonts` map
+    /// keys "Segoe UI"/"Arial"/"sans-serif"/"Consolas"/"monospace" (viz
+    /// system_aliases v new()). font_for_char pres classify keyword routing.
     /// @font-face loaded fonty: family name -> Vec<Font>. Vec drzi vsechny
     /// subsety daneho family (Google Fonts dela per unicode-range chunks - 30+
     /// woff2 souboru per family). Pri rasterize lookup itera vsechny subsety
     /// dokud najde font ktery ma glyph pro dany char. Bez Vec posledni
     /// register override predchozi -> Czech latin-ext subset pretazeny latin
     /// subsetem = diakritika fallback na default Times Roman.
-    pub(super) extra_fonts: std::collections::HashMap<String, Vec<fontdue::Font>>,
+    pub(super) extra_fonts: std::collections::HashMap<String, Vec<SwashFontFace>>,
     /// Atlas pixely (shedy: 0=transparent, 255=opaque)
     pub(super) pixels: Vec<u8>,
     /// Primary cache: (family_hash u64, char, font_size) -> GlyphInfo.
@@ -91,12 +97,15 @@ pub struct GlyphAtlas {
     pub(super) cursor_y: u32,
     /// Vyska aktualniho radku
     pub(super) row_height: u32,
+    /// Dirty flag - byly pridany nove glyphs po posledni upload.
+    /// upload_atlas dela 16MB GPU upload - skip kdyz no new glyphs (perf).
+    pub(super) dirty: bool,
 }
 
 impl GlyphAtlas {
     pub(super) fn new() -> Self {
         let font_data = load_default_font();
-        let font = fontdue::Font::from_bytes(font_data, fontdue::FontSettings::default())
+        let font = SwashFontFace::from_bytes(font_data)
             .expect("font parse failed");
         // Try Times New Roman Bold / Segoe UI Bold / Arial Bold pro real bold
         // rendering. Fake bold (double-draw smear) je fallback pri None.
@@ -111,8 +120,7 @@ impl GlyphAtlas {
             "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
         ];
         let font_bold = bold_candidates.iter().find_map(|p| {
-            std::fs::read(p).ok()
-                .and_then(|d| fontdue::Font::from_bytes(d, fontdue::FontSettings::default()).ok())
+            std::fs::read(p).ok().and_then(SwashFontFace::from_bytes)
         });
         // Italic variant (Times Italic / Arial Italic / etc.).
         let italic_candidates: &[&str] = &[
@@ -125,8 +133,7 @@ impl GlyphAtlas {
             "/usr/share/fonts/truetype/liberation/LiberationSans-Italic.ttf",
         ];
         let font_italic = italic_candidates.iter().find_map(|p| {
-            std::fs::read(p).ok()
-                .and_then(|d| fontdue::Font::from_bytes(d, fontdue::FontSettings::default()).ok())
+            std::fs::read(p).ok().and_then(SwashFontFace::from_bytes)
         });
         // Bold italic.
         let bi_candidates: &[&str] = &[
@@ -137,8 +144,7 @@ impl GlyphAtlas {
             "/usr/share/fonts/truetype/dejavu/DejaVuSerif-BoldItalic.ttf",
         ];
         let font_bold_italic = bi_candidates.iter().find_map(|p| {
-            std::fs::read(p).ok()
-                .and_then(|d| fontdue::Font::from_bytes(d, fontdue::FontSettings::default()).ok())
+            std::fs::read(p).ok().and_then(SwashFontFace::from_bytes)
         });
         // Pre-load custom fonts pro DevTools UI. Resolution chain:
         // 1) primy path (relative k cwd)
@@ -186,7 +192,7 @@ impl GlyphAtlas {
         ];
         for (family, path) in system_aliases {
             if let Ok(data) = std::fs::read(path) {
-                if let Ok(f) = fontdue::Font::from_bytes(data, fontdue::FontSettings::default()) {
+                if let Some(f) = SwashFontFace::from_bytes(data) {
                     extra_fonts.entry(family.to_string()).or_insert_with(Vec::new).push(f.clone());
                     crate::browser::layout::register_measure_font(family, f);
                 }
@@ -205,7 +211,7 @@ impl GlyphAtlas {
                 embedded.iter().find(|(f, _)| f == family).map(|(_, b)| b.to_vec())
             });
             if let Some(data) = data {
-                if let Ok(f) = fontdue::Font::from_bytes(data, fontdue::FontSettings::default()) {
+                if let Some(f) = SwashFontFace::from_bytes(data) {
                     extra_fonts.entry(family.to_string()).or_insert_with(Vec::new).push(f.clone());
                     // Register tez pro layout measure_text_width_full - bez
                     // tohoto Inter/CamingoMono measure pouzival system sans/serif
@@ -230,20 +236,21 @@ impl GlyphAtlas {
             cursor_x: 0,
             cursor_y: 0,
             row_height: 0,
+            dirty: false,
         }
     }
 
     /// True pokud font umi rasterizovat dany char (= ma glyph index != 0).
     /// Pouzite pro fallback chain pri diakritice (Times Roman nema CP > U+00FF).
     #[inline]
-    pub(super) fn has_glyph(font: &fontdue::Font, ch: char) -> bool {
-        font.lookup_glyph_index(ch) != 0
+    pub(super) fn has_glyph(face: &SwashFontFace, ch: char) -> bool {
+        face.has_glyph(ch)
     }
 
     /// Helper - prvni font z Vec (pokud existuje neprazdny). Pouzite v
     /// font_for() pro "give me primary font for this family" semantics.
     #[inline]
-    fn first_font<'a>(vec: &'a Vec<fontdue::Font>) -> Option<&'a fontdue::Font> {
+    fn first_font(vec: &Vec<SwashFontFace>) -> Option<&SwashFontFace> {
         vec.first()
     }
 
@@ -254,7 +261,7 @@ impl GlyphAtlas {
     ///    kazdy alternative.
     /// 3) Pak vsechny ostatni extra_fonts + system fonts.
     /// 4) Last resort default font (i kdyz neumi - prazdny glyph lepsi crash).
-    pub(super) fn font_for_char(&self, family: &str, ch: char) -> &fontdue::Font {
+    pub(super) fn font_for_char(&self, family: &str, ch: char) -> &SwashFontFace {
         // ASCII space / control: vse umi - vrat primary.
         if (ch as u32) < 0x20 {
             return self.font_for(family);
@@ -353,6 +360,51 @@ impl GlyphAtlas {
                                     }
                                 }
                             }
+                            // Plain alt key bez weight - system_aliases registruje
+                            // pres "Segoe UI" / "Arial" / "sans-serif" / "monospace".
+                            // Bez tohoto fallback by atlas spadl na "all extra_fonts
+                            // walk" = arbitrary HashMap order = mismatch shape_text
+                            // deterministic pick = chars rozsekane.
+                            if let Some(vec) = self.extra_fonts.get(trimmed) {
+                                for f in vec {
+                                    if Self::has_glyph(f, ch) { return f; }
+                                }
+                            }
+                        }
+                        // Pred fallback all-extra walk: shape_text classify (is_sans/
+                        // is_mono) musi matchovat. Direct call do classify selektoru
+                        // + system aliases lookup. Tohle drzi shape_text vs atlas font
+                        // deterministicky stejny.
+                        let lower = raw_family.to_lowercase();
+                        let is_mono = lower.contains("monospace")
+                            || lower.contains("courier")
+                            || lower.contains("consolas")
+                            || lower.contains("monaco")
+                            || lower.contains("menlo");
+                        let is_sans = !is_mono && (
+                            lower.contains("sans-serif")
+                            || lower.contains("arial")
+                            || lower.contains("helvetica")
+                            || lower.contains("segoe")
+                            || lower.contains("verdana")
+                            || lower.contains("inter")
+                            || lower.contains("roboto")
+                            || lower.contains("system-ui"));
+                        if is_mono {
+                            if let Some(vec) = self.extra_fonts.get("monospace") {
+                                for f in vec { if Self::has_glyph(f, ch) { return f; } }
+                            }
+                            if let Some(vec) = self.extra_fonts.get("Consolas") {
+                                for f in vec { if Self::has_glyph(f, ch) { return f; } }
+                            }
+                        }
+                        if is_sans {
+                            if let Some(vec) = self.extra_fonts.get("sans-serif") {
+                                for f in vec { if Self::has_glyph(f, ch) { return f; } }
+                            }
+                            if let Some(vec) = self.extra_fonts.get("Segoe UI") {
+                                for f in vec { if Self::has_glyph(f, ch) { return f; } }
+                            }
                         }
                         // Fallback char-coverage chain pres ostatni extra_fonts.
                         for vec in self.extra_fonts.values() {
@@ -410,7 +462,7 @@ impl GlyphAtlas {
     /// - weight == 400/500: prefer requested, then 500/400, then klesat.
     /// - weight >= 500 (light path) - prefer up to 500.
     /// - weight >= 600: prefer requested, then higher, then lower.
-    pub(super) fn font_for_weight(&self, family: &str, weight: u32, italic: bool) -> &fontdue::Font {
+    pub(super) fn font_for_weight(&self, family: &str, weight: u32, italic: bool) -> &SwashFontFace {
         let suffix = if italic { "__i__" } else { "__" };
         // Search order per CSS Fonts L4 spec:
         // Build search list of weight buckets to try.
@@ -480,7 +532,7 @@ impl GlyphAtlas {
     ///
     /// Pripousti compact prefix `__w<N>_<I>__:family` (legacy encoding -
     /// callsite radsi vola font_for_weight primo). "" nebo neznamy -> default.
-    pub(super) fn font_for(&self, family: &str) -> &fontdue::Font {
+    pub(super) fn font_for(&self, family: &str) -> &SwashFontFace {
         // Compact weight prefix: `__wN_<I>__:family` kde N = weight 1..1000,
         // I = 0/1 (italic). Pri match call do CSS Fonts L4 nearest-match.
         if let Some(rest) = family.strip_prefix("__w") {
@@ -554,10 +606,22 @@ impl GlyphAtlas {
     }
 
     /// Rasterize glyph and add to atlas.
-    /// Pri size < LCD_THRESHOLD pouzij fontdue rasterize_subpixel = 3x sirka
-    /// swizzled RGB. Render shader 3-tap sample = LCD subpixel rendering
-    /// (ClearType-style, sharp text na maly fonty).
+    /// Pri size < LCD_THRESHOLD pouzij swash Subpixel format (RGBA 4 byte/pixel),
+    /// rozbal R/G/B do 3x atlas cols swizzled jako pres fontdue puvodne. Render
+    /// shader mode 9 sample 3 horizontal texely per fragment pro RGB sub-pixely.
+    /// Pres velke fs (>=24) Alpha format = 1 byte/pixel = bilinear sample.
     pub(super) fn add(&mut self, family: &str, ch: char, size: u32) {
+        use swash::scale::{ScaleContext, Render, Source};
+        use swash::zeno::Format;
+
+        thread_local! {
+            static SCALE_CTX: std::cell::RefCell<ScaleContext> =
+                std::cell::RefCell::new(ScaleContext::new());
+        }
+
+        // LCD subpixel raster jen pres male fs. Pres velke fs (>24) regular
+        // raster (= bilinear sample). LCD 3-tap pri velkem bitmap = 3 taps within
+        // 1 display pixel = grayscale = WORSE nez bilinear.
         const LCD_THRESHOLD: u32 = 24;
         let family_hash = Self::hash_family(family);
         let key = (family_hash, ch, size);
@@ -568,37 +632,73 @@ impl GlyphAtlas {
         }
         // font_for_char dela fallback chain pri primary fontu chybejicim
         // glyph (Times Roman nema CP > U+00FF -> diakritika fallne na default).
-        let font = self.font_for_char(family, ch);
+        // Borrow face -> compute image + advance, pak drop borrow pred pixel write.
         let lcd = size < LCD_THRESHOLD;
-        let (metrics, bitmap) = if lcd {
-            font.rasterize_subpixel(ch, size as f32)
-        } else {
-            font.rasterize(ch, size as f32)
+        let (image, advance) = {
+            let face = self.font_for_char(family, ch);
+            let font_ref = face.as_ref();
+            let gid = font_ref.charmap().map(ch);
+            if gid == 0 { return; }
+            let image_opt = SCALE_CTX.with(|ctx| {
+                let mut ctx = ctx.borrow_mut();
+                let mut scaler = ctx.builder(font_ref)
+                    .size(size as f32)
+                    .hint(true)
+                    .build();
+                let mut render = Render::new(&[Source::Outline]);
+                if lcd {
+                    render.format(Format::Subpixel);
+                } else {
+                    render.format(Format::Alpha);
+                }
+                render.render(&mut scaler, gid)
+            });
+            let image = match image_opt { Some(i) => i, None => return };
+            // Advance via glyph_metrics(&[]).scale(size).advance_width(gid).
+            let advance = font_ref.glyph_metrics(&[]).scale(size as f32).advance_width(gid);
+            (image, advance)
         };
-        let w = metrics.width as u32;
-        let h = metrics.height as u32;
 
-        // Pri LCD je bitmap w*3 sirka swizzled RGB, atlas ma store 3x cols.
+        let w = image.placement.width;
+        let h = image.placement.height;
+
+        // Swash Subpixel format = 4 bytes per pixel (R,G,B,A). Pro legacy atlas
+        // layout (3x sirka R-channel) rozbalit RGB do 3 horizontal texelu.
+        // Alpha format = 1 byte per pixel.
         let atlas_w = if lcd { w * 3 } else { w };
-        // Najdi misto v atlasu
+
         if self.cursor_x + atlas_w > ATLAS_SIZE {
             self.cursor_x = 0;
             self.cursor_y += self.row_height;
             self.row_height = 0;
         }
-        if self.cursor_y + h > ATLAS_SIZE {
-            return; // atlas full
-        }
-        // Copy bitmap do atlasu (bitmap.len() = atlas_w * h)
-        for row in 0..h {
-            for col in 0..atlas_w {
-                let src = (row * atlas_w + col) as usize;
-                let dst = ((self.cursor_y + row) * ATLAS_SIZE + (self.cursor_x + col)) as usize;
-                if let Some(p) = bitmap.get(src) {
-                    self.pixels[dst] = *p;
+        if self.cursor_y + h > ATLAS_SIZE { return; }
+
+        if lcd {
+            // Swash gives 4 bytes/pixel RGBA. Pack R, G, B as 3 horizontal texels.
+            for row in 0..h {
+                for col in 0..w {
+                    let src_idx = (row * w + col) as usize * 4;
+                    let dst_base = ((self.cursor_y + row) * ATLAS_SIZE + self.cursor_x + col * 3) as usize;
+                    if src_idx + 2 < image.data.len() && dst_base + 2 < self.pixels.len() {
+                        self.pixels[dst_base]     = image.data[src_idx];     // R
+                        self.pixels[dst_base + 1] = image.data[src_idx + 1]; // G
+                        self.pixels[dst_base + 2] = image.data[src_idx + 2]; // B
+                    }
+                }
+            }
+        } else {
+            for row in 0..h {
+                let src_row = (row * w) as usize;
+                let dst_row = ((self.cursor_y + row) * ATLAS_SIZE + self.cursor_x) as usize;
+                let len = w as usize;
+                if src_row + len <= image.data.len() && dst_row + len <= self.pixels.len() {
+                    self.pixels[dst_row..dst_row + len]
+                        .copy_from_slice(&image.data[src_row..src_row + len]);
                 }
             }
         }
+
         let info = GlyphInfo {
             uv0: [self.cursor_x as f32 / ATLAS_SIZE as f32,
                   self.cursor_y as f32 / ATLAS_SIZE as f32],
@@ -606,14 +706,17 @@ impl GlyphAtlas {
                   (self.cursor_y + h) as f32 / ATLAS_SIZE as f32],
             width: w as f32,
             height: h as f32,
-            bearing_x: metrics.xmin as f32,
-            bearing_y: metrics.ymin as f32 + h as f32,
-            advance: metrics.advance_width,
+            // fontdue bearing_x = xmin, bearing_y = ymin + height (= top from baseline).
+            // swash placement.left = xmin, placement.top = baseline-relative top.
+            bearing_x: image.placement.left as f32,
+            bearing_y: image.placement.top as f32,
+            advance,
             lcd,
         };
         self.cache.insert(key, info);
         self.cursor_x += atlas_w + 1;
-        self.row_height = self.row_height.max(h);
+        if h > self.row_height { self.row_height = h; }
+        self.dirty = true;
     }
 }
 

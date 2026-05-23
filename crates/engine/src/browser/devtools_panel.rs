@@ -71,13 +71,14 @@ pub fn dt_byte_idx_at_x(text: &str, target_x: f32) -> usize {
     last_byte
 }
 
-/// Realna sirka textu v CamingoMono pri FONT_SIZE - musi pasovat na render side
-/// (oba pouzivaji fontdue.metrics().advance_width).
+/// Realna sirka textu v Inter pri FONT_SIZE - musi pasovat na render side
+/// (oba pouzivaji swash glyph_metrics advance_width).
 /// Measure text width pri devtools FONT_SIZE pomoci Inter (DT_FONT).
 /// Musi sedet s render side font - jinak cursor v consoli driftuje.
 pub fn dt_text_width(text: &str) -> f32 {
     use std::sync::OnceLock;
-    static FONT: OnceLock<Option<fontdue::Font>> = OnceLock::new();
+    use super::render::SwashFontFace;
+    static FONT: OnceLock<Option<SwashFontFace>> = OnceLock::new();
     let f = FONT.get_or_init(|| {
         // Prvne zkus disk paths, pak embedded bytes - vzdy zaruci match s render.
         let candidates = [
@@ -86,17 +87,25 @@ pub fn dt_text_width(text: &str) -> f32 {
         ];
         for p in candidates.iter() {
             if let Ok(d) = std::fs::read(p) {
-                if let Ok(font) = fontdue::Font::from_bytes(d, fontdue::FontSettings::default()) {
+                if let Some(font) = SwashFontFace::from_bytes(d) {
                     return Some(font);
                 }
             }
         }
         // Embedded fallback - garantovany match s atlas.
         let bytes: &[u8] = include_bytes!("../../../../static/fonts/Inter-Regular.ttf");
-        fontdue::Font::from_bytes(bytes.to_vec(), fontdue::FontSettings::default()).ok()
+        SwashFontFace::from_bytes(bytes.to_vec())
     });
     match f.as_ref() {
-        Some(font) => text.chars().map(|c| font.metrics(c, FONT_SIZE).advance_width).sum(),
+        Some(face) => {
+            let fr = face.as_ref();
+            let metrics = fr.glyph_metrics(&[]).scale(FONT_SIZE);
+            let charmap = fr.charmap();
+            text.chars().map(|c| {
+                let gid = charmap.map(c);
+                if gid != 0 { metrics.advance_width(gid) } else { 0.0 }
+            }).sum()
+        }
         None => text.chars().count() as f32 * FONT_W,
     }
 }

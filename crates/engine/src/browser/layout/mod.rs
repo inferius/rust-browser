@@ -322,7 +322,7 @@ fn apply_post_children_pseudos(
 /// elementy (img/canvas/svg/video/audio/select/textarea/progress/meter).
 /// L2 split: extrahnuto z build_box_inner pro citelnost.
 fn apply_tag_html_attrs(bx: &mut LayoutBox, node: &Rc<Node>) {
-    // Img tag: precti src + width/height
+    // Img tag: precti src + width/height + loading=lazy
     if bx.tag.as_deref() == Some("img") {
         bx.image_src = node.attr("src");
         if let Some(w) = node.attr("width").and_then(|w| w.parse::<f32>().ok()) {
@@ -333,6 +333,17 @@ fn apply_tag_html_attrs(bx: &mut LayoutBox, node: &Rc<Node>) {
         }
         if bx.rect.height == 0.0 { bx.rect.height = 100.0; }
         if bx.rect.width == 0.0 { bx.rect.width = 100.0; }
+        // loading=lazy = nestahuj az do priblizeni viewportu.
+        // Spec: https://html.spec.whatwg.org/multipage/urls-and-fetching.html#lazy-loading-attributes
+        bx.loading_lazy = node.attr("loading")
+            .map(|v| v.eq_ignore_ascii_case("lazy"))
+            .unwrap_or(false);
+    }
+    // Iframe tag: also supports loading=lazy.
+    if bx.tag.as_deref() == Some("iframe") {
+        bx.loading_lazy = node.attr("loading")
+            .map(|v| v.eq_ignore_ascii_case("lazy"))
+            .unwrap_or(false);
     }
 
     // Canvas tag: precti width/height attributes
@@ -987,6 +998,19 @@ pub struct LayoutBox {
     pub flex_grow: f32,
     pub flex_shrink: f32,
     pub flex_basis: String,
+    /// CSS Flexbox L1 `order` - flex items se ohledem na order sorted pred line
+    /// collection. Default 0. Negative valid (move to front). Stejny order
+    /// = puvodni DOM poradi.
+    pub flex_order: i32,
+    /// CSS `visibility` - hidden / collapse = element invisible + ne-interactive
+    /// (hit-test skip self ale recurze children OK - child s visibility:visible
+    /// uvnitr hidden parenta je interactive). opacity:0 NEMA affect hit-test.
+    pub visibility: super::computed_style::Visibility,
+    /// CSS `mix-blend-mode` - blend element + descendants pres parent layer.
+    /// Normal = standard alpha blend. Multiply/Screen/Overlay/atd. = sample
+    /// dst pixel + apply blend formula. Paint emit BlendBegin/End markers,
+    /// renderer composite pres shader-side blend.
+    pub mix_blend_mode: super::computed_style::BlendMode,
     pub row_gap: f32,
     pub column_gap: f32,
     /// Percent gap (0..1) - pri Some, resolve proti container content size.
@@ -1088,12 +1112,21 @@ pub struct LayoutBox {
     pub inner_content_h: f32,
     /// Inner content extent horizontal - max child right edge relative to rect.x.
     pub inner_content_w: f32,
+    /// Per-element scroll offset (overflow:auto/scroll). Webview pumpuje z
+    /// HashMap<node_id, (sx, sy)> pred paint. Paint nasledne shifne children
+    /// pres shift_subtree(-sx, -sy) + emit_inner_scrollbars zna pozici thumb.
+    pub scroll_offset_x: f32,
+    pub scroll_offset_y: f32,
     /// White-space: nowrap zachazi text jako jeden radek
     pub white_space_nowrap: bool,
     /// Cursor (jen string - real impl pres OS cursor)
     pub cursor: Option<String>,
     /// Image src URL (z img tagu).
     pub image_src: Option<String>,
+    /// HTML `loading=lazy` na <img> / <iframe>. Pri true se image NEnahrava
+    /// dokud rect neni v rozsahu viewportu (+root margin).
+    /// Spec: https://html.spec.whatwg.org/multipage/urls-and-fetching.html#lazy-loading-attributes
+    pub loading_lazy: bool,
     /// Reference na puvodni DOM node (pro hit test -> events).
     pub node: Option<Rc<Node>>,
     /// ::placeholder - barva textu pro placeholder (input/textarea).
@@ -1193,6 +1226,8 @@ impl LayoutBox {
             scrollbar_size: 0.0,
             inner_content_h: 0.0,
             inner_content_w: 0.0,
+            scroll_offset_x: 0.0,
+            scroll_offset_y: 0.0,
             white_space_nowrap: false,
             cursor: None,
             bg_gradient: None,
@@ -1274,6 +1309,9 @@ impl LayoutBox {
             flex_grow: 0.0,
             flex_shrink: 1.0,
             flex_basis: String::new(),
+            flex_order: 0,
+            visibility: super::computed_style::Visibility::Visible,
+            mix_blend_mode: super::computed_style::BlendMode::Normal,
             row_gap: 0.0,
             column_gap: 0.0,
             row_gap_pct: None,
@@ -1306,6 +1344,7 @@ impl LayoutBox {
             transform: None,
             transforms: Vec::new(),
             image_src: None,
+            loading_lazy: false,
             node: None,
             placeholder_color: None,
             selection_bg: None,
@@ -1318,27 +1357,99 @@ impl LayoutBox {
 
     /// Hit test: vrati nejdetailnejsi (deepest) box obsahujici (x, y).
     pub fn hit_test(&self, x: f32, y: f32) -> Option<&LayoutBox> {
-        // pointer-events: none -> element ignored pri hit test (vc deti pokud none nezruseno)
+        // CSS pointer-events: none -> element + descendants ignored pri hit test.
+        // (pointer-events: all / auto = standard).
         if self.pointer_events.is_none() {
             return None;
         }
-        // visibility: hidden -> taky skip hit test
-        if self.opacity == 0.0 {
-            return None;
-        }
-        if x < self.rect.x || x > self.rect.x + self.rect.width
-            || y < self.rect.y || y > self.rect.y + self.rect.height
+        // CSS opacity NEMA affect hit-test. Element s opacity:0 zustava klikatelny
+        // (presne dle spec a Chromium chovani).
+        // CSS transform: inverse-transform query coords pred AABB check. Bez
+        // tohoto rotated element hit-test stale jako axis-aligned rect.
+        // Inspired by Chromium core/paint/HitTestLocation::ApplyTransform.
+        let (qx, qy) = inverse_transform_for_hit(self, x, y);
+        if qx < self.rect.x || qx > self.rect.x + self.rect.width
+            || qy < self.rect.y || qy > self.rect.y + self.rect.height
         {
             return None;
         }
-        // Zkus deti nejdriv (deepest first)
+        // Per-element scroll: descendants jsou v CLEAN layout (un-shifted), takze
+        // adjust query coords + scroll_offset to find descendant ktery je VISUALLY
+        // pri (qx,qy).
+        let cx = qx + self.scroll_offset_x;
+        let cy = qy + self.scroll_offset_y;
+        // Recursivne pres deti vzdy - i kdyz self je visibility:hidden, child
+        // s visibility:visible muze byt hit.
         for child in &self.children {
-            if let Some(hit) = child.hit_test(x, y) {
+            if let Some(hit) = child.hit_test(cx, cy) {
                 return Some(hit);
             }
         }
+        // Self hit jen pokud visibility:visible.
+        use super::computed_style::Visibility;
+        if matches!(self.visibility, Visibility::Hidden | Visibility::Collapse) {
+            return None;
+        }
         Some(self)
     }
+}
+
+/// Inverzni transform pro hit-test. Vraci transformed query coords (qx, qy).
+/// Pro 2D transforms (Translate, Rotate, Scale) presny inverse pres centroid.
+/// 3D transforms - identita fallback (TODO: full 4x4 inverse pres screen plane).
+///
+/// Apply order: paint aplikuje transforms[i] postupne na vertices PRES centroid
+/// boxu. Pro inverse hit-test apply transforms v OPACNE poradi a inverse kazdy.
+fn inverse_transform_for_hit(bx: &LayoutBox, x: f32, y: f32) -> (f32, f32) {
+    use super::layout::TransformOp;
+    if bx.transforms.is_empty() && bx.transform.is_none() {
+        return (x, y);
+    }
+    let cx = bx.rect.x + bx.rect.width * 0.5;
+    let cy = bx.rect.y + bx.rect.height * 0.5;
+    let mut qx = x;
+    let mut qy = y;
+    // Inverse v opacne poradi (paint: t[0] then t[1] then ... -> hit: ..., t[1] inv, t[0] inv).
+    let chain: Vec<TransformOp> = if !bx.transforms.is_empty() {
+        bx.transforms.clone()
+    } else if let Some(t) = bx.transform { vec![t] } else { Vec::new() };
+    for op in chain.iter().rev() {
+        match op {
+            TransformOp::Translate(tx, ty) => { qx -= *tx; qy -= *ty; }
+            TransformOp::Translate3D { x: tx, y: ty, .. } => { qx -= *tx; qy -= *ty; }
+            TransformOp::Scale(sx, sy) => {
+                if sx.abs() > 1e-6 { qx = cx + (qx - cx) / *sx; }
+                if sy.abs() > 1e-6 { qy = cy + (qy - cy) / *sy; }
+            }
+            TransformOp::Scale3D { x: sx, y: sy, .. } => {
+                if sx.abs() > 1e-6 { qx = cx + (qx - cx) / *sx; }
+                if sy.abs() > 1e-6 { qy = cy + (qy - cy) / *sy; }
+            }
+            TransformOp::Rotate(rad) => {
+                // Inverse rotation = -rad. cos(-r)=cos(r), sin(-r)=-sin(r).
+                let cos = rad.cos();
+                let sin = rad.sin();
+                let rx = qx - cx;
+                let ry = qy - cy;
+                qx = cx + rx * cos + ry * sin;
+                qy = cy - rx * sin + ry * cos;
+            }
+            TransformOp::Rotate3D { z, angle_rad, .. } => {
+                // 2D approximace pri Z-axis rotation. X/Y axis = no-op (squeeze).
+                if z.abs() > 0.5 {
+                    let cos = angle_rad.cos();
+                    let sin = angle_rad.sin();
+                    let rx = qx - cx;
+                    let ry = qy - cy;
+                    qx = cx + rx * cos + ry * sin;
+                    qy = cy - rx * sin + ry * cos;
+                }
+            }
+            // 3D/Matrix3D/Perspective: identita fallback. TODO: full inverse.
+            TransformOp::Matrix3D(_) | TransformOp::Perspective(_) | TransformOp::None => {}
+        }
+    }
+    (qx, qy)
 }
 
 /// Hlavni layout funkce - z DOM + styles vytvori box tree.
@@ -1545,7 +1656,7 @@ thread_local! {
     /// cursor_x advance < real glyph width -> dalsi text prekrizen pres
     /// bold span.
     /// Key format: "<family>" / "<family>__bold__" / "<family>__italic__" / "<family>__bi__".
-    pub(crate) static MEASURE_FONTS: std::cell::RefCell<HashMap<String, fontdue::Font>>
+    pub(crate) static MEASURE_FONTS: std::cell::RefCell<HashMap<String, super::render::SwashFontFace>>
         = std::cell::RefCell::new(HashMap::new());
     /// Generation counter - bumps pri register_measure_font. Shape cache pres
     /// editor::shape_text musi tuto hodnotu zahrnout v klici, jinak post-@font-face
@@ -1560,22 +1671,22 @@ pub fn measure_fonts_gen() -> u64 {
 /// Renderer pri @font-face load registruje font pro measure. Pri parsing
 /// font-weight: 600 (bold) variant ulozit pod "<family>__bold__" key etc.
 /// Layout measure_text_width_full pak prefer tento font pred system fonts.
-pub fn register_measure_font(key: &str, font: fontdue::Font) {
+pub fn register_measure_font(key: &str, font: super::render::SwashFontFace) {
     MEASURE_FONTS.with(|m| {
         m.borrow_mut().insert(key.to_string(), font);
     });
     MEASURE_FONTS_GEN.with(|c| c.set(c.get() + 1));
 }
 
-/// Lookup pro measure_text_width_full. Vraci cloned font (fontdue::Font je
+/// Lookup pro measure_text_width_full. Vraci cloned font (SwashFontFace je
 /// Clone via Arc-uvnitr, levne). bool bold = legacy wrapper for weight=700.
-pub(crate) fn measure_font_for(family: &str, bold: bool, italic: bool) -> Option<fontdue::Font> {
+pub(crate) fn measure_font_for(family: &str, bold: bool, italic: bool) -> Option<super::render::SwashFontFace> {
     measure_font_for_weight(family, if bold { 700 } else { 400 }, italic)
 }
 
 /// Weight-aware lookup pres MEASURE_FONTS thread_local. CSS Fonts L4 nearest:
 /// hleda exact `<family>__w<weight>__[i__]` key, jinak nearest weight.
-pub(crate) fn measure_font_for_weight(family: &str, weight: u32, italic: bool) -> Option<fontdue::Font> {
+pub(crate) fn measure_font_for_weight(family: &str, weight: u32, italic: bool) -> Option<super::render::SwashFontFace> {
     MEASURE_FONTS.with(|m| {
         let map = m.borrow();
         // Weight search order per CSS Fonts L4.
@@ -1830,6 +1941,133 @@ pub fn interpolate_keyframes(
     out
 }
 
+/// Pre-pass pro CSS Tables: spocita column widths sdilene pres vsechny radky
+/// + aplikuje explicit_width na vsechny cells. Pres
+/// `browser::layout::tables::compute_column_widths_auto`.
+///
+/// Spec: https://www.w3.org/TR/CSS22/tables.html#auto-table-layout
+/// All cells in same column share width = max(cells in column).
+///
+/// Algoritmus:
+/// 1. Pro kazdy direct/nested TableRow descendant collect cells
+/// 2. Spocti num_cols = max cells per row
+/// 3. Pro kazdy cell odhadni min/max content width
+/// 4. compute_column_widths_auto -> per-column width
+/// 5. Apply na kazdy cell jako explicit_width
+fn prelayout_table_columns(bx: &mut LayoutBox) {
+    use super::layout::tables::{TableCellSpec, compute_column_widths_auto, compute_column_widths_fixed};
+    let pad_l = bx.padding_left.unwrap_or(bx.padding);
+    let pad_r = bx.padding_right.unwrap_or(bx.padding);
+    let inner_w = (bx.rect.width - pad_l - pad_r - 2.0 * bx.border_width).max(0.0);
+    if inner_w <= 0.0 { return; }
+
+    let mut rows: Vec<usize> = Vec::new();
+    collect_table_rows(bx, &mut rows);
+    if rows.is_empty() { return; }
+
+    let mut cells: Vec<TableCellSpec> = Vec::new();
+    let mut num_cols = 0;
+    let mut row_counter = 0usize;
+    collect_table_cells(bx, &mut row_counter, &mut cells, &mut num_cols);
+    if num_cols == 0 || cells.is_empty() { return; }
+
+    let border_spacing = 0.0; // CSS border-spacing - TODO
+
+    // CSS `table-layout`: `fixed` uses first row widths only; `auto` walks all rows.
+    let widths = if matches!(bx.table_layout, TableLayout::Fixed) {
+        let mut first_row_widths: Vec<Option<f32>> = vec![None; num_cols];
+        for c in &cells {
+            if c.row == 0 && c.col < num_cols && first_row_widths[c.col].is_none() {
+                if c.max_width > 0.0 {
+                    first_row_widths[c.col] = Some(c.max_width);
+                }
+            }
+        }
+        compute_column_widths_fixed(&first_row_widths, inner_w)
+    } else {
+        compute_column_widths_auto(&cells, num_cols, inner_w, border_spacing)
+    };
+
+    apply_table_column_widths(bx, &widths);
+}
+
+fn collect_table_rows(bx: &LayoutBox, out: &mut Vec<usize>) {
+    for (i, child) in bx.children.iter().enumerate() {
+        match child.display {
+            Display::TableRow => out.push(i),
+            Display::TableHeader => collect_table_rows(child, out),
+            _ => {}
+        }
+    }
+}
+
+fn collect_table_cells(
+    bx: &LayoutBox,
+    row_counter: &mut usize,
+    cells: &mut Vec<super::layout::tables::TableCellSpec>,
+    num_cols: &mut usize,
+) {
+    use super::layout::tables::TableCellSpec;
+    for child in &bx.children {
+        match child.display {
+            Display::TableRow => {
+                let row = *row_counter;
+                *row_counter += 1;
+                let mut col = 0usize;
+                for cell in &child.children {
+                    if matches!(cell.display, Display::TableCell | Display::TableHeaderCell) {
+                        // Min content width = pad + border + heuristic 24 (jedno slovo).
+                        // Max content width = pad + border + estimated text width.
+                        let pad = cell.padding;
+                        let extra = pad * 2.0 + cell.border_width * 2.0;
+                        let estimated_max = cell.rect.width.max(80.0) + extra;
+                        let estimated_min = (24.0 + extra).min(estimated_max);
+                        cells.push(TableCellSpec {
+                            row, col,
+                            row_span: 1,
+                            col_span: 1,
+                            min_width: estimated_min,
+                            max_width: estimated_max,
+                            height: cell.rect.height,
+                        });
+                        col += 1;
+                    }
+                }
+                if col > *num_cols { *num_cols = col; }
+            }
+            Display::TableHeader => {
+                collect_table_cells(child, row_counter, cells, num_cols);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn apply_table_column_widths(bx: &mut LayoutBox, widths: &[f32]) {
+    for child in bx.children.iter_mut() {
+        match child.display {
+            Display::TableRow => {
+                let mut col = 0usize;
+                for cell in child.children.iter_mut() {
+                    if matches!(cell.display, Display::TableCell | Display::TableHeaderCell) {
+                        if let Some(w) = widths.get(col) {
+                            cell.explicit_width = Some(*w);
+                            cell.rect.width = *w;
+                            // Disable flex-grow aby flex layout neoverridoval width.
+                            cell.flex_grow = 0.0;
+                        }
+                        col += 1;
+                    }
+                }
+            }
+            Display::TableHeader => {
+                apply_table_column_widths(child, widths);
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Vybira layout algoritmus podle display.
 fn layout_dispatch(bx: &mut LayoutBox) {
     // Aliases:
@@ -1860,6 +2098,13 @@ fn layout_dispatch(bx: &mut LayoutBox) {
         d => d,
     };
     let saved = bx.display;
+    // CSS Tables: pred dispatch do Block layout (= effective pro Table),
+    // pre-pocitej column widths sdilene napric vsemi rows. Bez tohohle by
+    // kazdy radek dostal nezavisle flex distribution = ruzne sirky sloupcu
+    // po radcich. Spec vyzaduje shared columns.
+    if matches!(saved, Display::Table) {
+        prelayout_table_columns(bx);
+    }
     bx.display = effective;
     layout_dispatch_inner(bx);
     bx.display = saved;
@@ -2472,6 +2717,17 @@ fn build_box_inner_impl(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &supe
     if let Some(v) = s.get("flex-grow") { bx.flex_grow = v.trim().parse().unwrap_or(0.0); }
     if let Some(v) = s.get("flex-shrink") { bx.flex_shrink = v.trim().parse().unwrap_or(1.0); }
     if let Some(v) = s.get("flex-basis") { bx.flex_basis = v.trim().to_string(); }
+    if let Some(v) = s.get("order") { bx.flex_order = v.trim().parse().unwrap_or(0); }
+    if let Some(v) = s.get("visibility") {
+        if let Some(vis) = super::computed_style::Visibility::parse(v) {
+            bx.visibility = vis;
+        }
+    }
+    if let Some(v) = s.get("mix-blend-mode") {
+        if let Some(b) = super::computed_style::BlendMode::parse(v) {
+            bx.mix_blend_mode = b;
+        }
+    }
     if let Some(v) = s.get("row-gap") { bx.row_gap = parse_length(v); }
     if let Some(v) = s.get("column-gap") {
         bx.column_gap = parse_length(v);
@@ -3254,11 +3510,19 @@ pub fn shift_subtree(bx: &mut LayoutBox, dx: f32, dy: f32) {
 }
 
 fn layout_block_vertical(bx: &mut LayoutBox) {
+    // Per CSS Writing Modes 4: ve vertical-rl/lr block axis = X (R->L nebo L->R),
+    // inline axis = Y (T->B). Cili children stack horizontally jako sloupce.
+    // Inline content inside child flows top-to-bottom v jeho columnu.
+    //
+    // Existing impl: kazdy child = column. Inline content inside flows
+    // horizontalne (= horizontal-tb fallback) - real CSS by mel rotate text.
+    // Pro plnou compliance bychom potrebovali inline_layout_vertical pass.
+    // Tato implementace = block-level only writing mode.
     let inner_x = bx.rect.x + bx.padding + bx.border_width;
     let inner_y = bx.rect.y + bx.padding + bx.border_width;
     let inner_h = bx.rect.height - 2.0 * (bx.padding + bx.border_width);
     // Pro vertical-rl startujeme od prava; pro lr od leva.
-    let right_to_left = matches!(bx.writing_mode, WritingMode::VerticalRl);
+    let right_to_left = matches!(bx.writing_mode, WritingMode::VerticalRl | WritingMode::SidewaysRl);
 
     let mut cursor_x = if right_to_left {
         inner_x + (bx.rect.width - 2.0 * (bx.padding + bx.border_width))
@@ -3268,10 +3532,17 @@ fn layout_block_vertical(bx: &mut LayoutBox) {
 
     for child in bx.children.iter_mut() {
         if matches!(child.display, Display::None) { continue; }
+        // CSS Writing Modes 4: explicit_width na vertical box = block-axis
+        // size (= physical X). explicit_height = inline-axis size (= physical Y).
+        // Map intuitivne: pokud user nezada, default inline_size = inner_h.
         let child_w = child.explicit_width.unwrap_or(20.0);
         let child_h = child.explicit_height.unwrap_or(inner_h);
         child.rect.height = child_h;
         child.rect.width  = child_w;
+        // Inherit writing_mode na deti (jen pokud nemaji explicit override).
+        if matches!(child.writing_mode, WritingMode::HorizontalTb) {
+            child.writing_mode = bx.writing_mode;
+        }
         if right_to_left {
             cursor_x -= child_w;
             child.rect.x = cursor_x;
@@ -3333,13 +3604,16 @@ fn layout_block_multicol(bx: &mut LayoutBox) {
         }
         layout_dispatch(child);
     }
-    // Total content height pro target_h.
+    // Total content height pro target_h. Pres `multicol::balance_height` ktery
+    // dela ceil(content / n_cols) per spec (column-fill: balance). Bez ceil()
+    // by floor division ulozila zlomek do prvniho sloupce (overflow do extra),
+    // dela slightly nerovnomerne sloupce.
     let total_h: f32 = bx.children.iter().map(|c| {
         let m_t = c.margin_top.unwrap_or(c.margin);
         let m_b = c.margin_bottom.unwrap_or(c.margin);
         c.rect.height + m_t + m_b
     }).sum();
-    let target_h = (total_h / n_cols).max(1.0);
+    let target_h = super::layout::multicol::balance_height(total_h, bx.column_count).max(1.0);
     // Distribuce: greedy fill kazdeho sloupce do target_h.
     let mut col_idx = 0u32;
     let mut col_y = inner_y;
@@ -3384,6 +3658,14 @@ pub fn layout_block(bx: &mut LayoutBox) {
     // V taffy_mode: pamatuj puvodni height (uz nastaveny rodicem). Pak po vypoctu
     // content_h NEpresahnout puvodni hodnotu (parent height = constraint).
     let preset_height_taffy = if bx.taffy_mode { bx.rect.height } else { 0.0 };
+    // Overflow constraint: pri overflow_y != Visible + parent uz preset rect.height
+    // (flex stretch / grid track size), content pretece - box drzi preset velikost.
+    // CSS spec: definite size + overflow != visible = content overflows, box stays.
+    // Bez tohoto Block dom-pane uvnitr flex inspector-body grow z 810 -> 35916
+    // (content_h obrovsky), znici scroll containment + nezobrazi scrollbar.
+    let preset_height_overflow = if bx.rect.height > 0.0 && bx.overflow_y.clips() {
+        bx.rect.height
+    } else { 0.0 };
 
     // Asymmetric padding wins, jinak shorthand `padding`. Margin je VNEJSI
     // padding (mezi boxy), neovlivnuje inner content area. inner_w = rect.width
@@ -3583,9 +3865,15 @@ pub fn layout_block(bx: &mut LayoutBox) {
                 let m_b = child.margin_bottom.unwrap_or(child.margin);
                 let m_l = child.margin_left.unwrap_or(child.margin);
                 let m_r = child.margin_right.unwrap_or(child.margin);
-                // Margin collapse: m_t aplikuje se jen do max(prev_m_b, m_t).
-                // Pokud prev_m_b uz byla pricteta, sktorta o min(prev_m_b, m_t).
-                let collapsed_m_t = if had_prev_block { (m_t - prev_margin_bottom).max(0.0) } else { m_t };
+                // CSS 2.1 8.3.1 margin collapse: adjacent siblings.
+                // Pos+Pos = max. Neg+Neg = min. Mixed = sum.
+                // prev_margin_bottom uz byl pricten k cursor_y, takze pridavame
+                // jen rozdil mezi effective a prev_m_b. Pri zaporne rozdilu
+                // cursor "zpetne posun" (overlap = correct per spec).
+                // Pres `browser::layout::bfc::collapse_margins`.
+                let collapsed_m_t = if had_prev_block {
+                    super::layout::bfc::collapse_margins(prev_margin_bottom, m_t) - prev_margin_bottom
+                } else { m_t };
                 // Aktivni float bounds na cursor_y (CSS Float L1).
                 let (float_left_off, float_avail_w) = active_float_bounds(
                     cursor_y + collapsed_m_t, &floats, inner_x, inner_w);
@@ -3774,7 +4062,8 @@ pub fn layout_block(bx: &mut LayoutBox) {
         let preserve_grow = (bx.taffy_mode && preset_height_taffy > 0.0)
             || (bound == 0.0 && bx.children.is_empty() && bx.text.is_none())
             || bx.tag.is_none()
-            || matches!(bx.tag.as_deref(), Some("html") | Some("body"));
+            || matches!(bx.tag.as_deref(), Some("html") | Some("body"))
+            || preset_height_overflow > 0.0;
         if preserve_grow {
             if bx.rect.height < bound {
                 bx.rect.height = bound;
@@ -3787,6 +4076,10 @@ pub fn layout_block(bx: &mut LayoutBox) {
     // constraint - flex/grid item v constrained kontextu nesmi rust nad parent).
     if bx.taffy_mode && preset_height_taffy > 0.0 {
         bx.rect.height = preset_height_taffy;
+    }
+    // Overflow scroll/clip constraint: drz preset (content pretece, ale box NEROSTE).
+    if preset_height_overflow > 0.0 {
+        bx.rect.height = preset_height_overflow;
     }
 }
 
@@ -4257,6 +4550,62 @@ fn flush_inline(bx: &mut LayoutBox, indices: &[usize], inner_x: f32, start_y: f3
             prev_had_trailing_space = false;
         }
     }
+    // Pres-line text-align + vertical baseline center. Inline content laid out
+    // sequentially; group children by rect.y (=line). Per line spocti used_w +
+    // apply text-align horiz offset. Plus per child: posun rect.y dle line-height
+    // leading split = vertikalni center single-line obsahu (CSS spec).
+    // Bez tohoto by .anim-box / .filter-box (line-height=height) text v pozici
+    // top-left. S aplikaci = centered (matches Chrome/Firefox).
+    let parent_align = bx.text_align;
+    let line_h_used = line_height;
+    let parent_inner_w = inner_w;
+    // Group children indices po line (= same rect.y). Indices to fields of bx.
+    use std::collections::BTreeMap;
+    let mut groups: BTreeMap<i32, Vec<usize>> = BTreeMap::new();
+    for &idx in indices {
+        // Use y rounded to int = line key (avoid f32 hash).
+        let key = (bx.children[idx].rect.y * 100.0).round() as i32;
+        groups.entry(key).or_default().push(idx);
+    }
+    for (_y_key, line_indices) in groups.iter() {
+        if line_indices.is_empty() { continue; }
+        // Used width = max(end_x) - min(start_x) v line.
+        let mut min_x = f32::INFINITY;
+        let mut max_x = f32::NEG_INFINITY;
+        for &idx in line_indices {
+            let c = &bx.children[idx];
+            min_x = min_x.min(c.rect.x);
+            max_x = max_x.max(c.rect.x + c.rect.width);
+        }
+        let used_w = (max_x - min_x).max(0.0);
+        let h_offset = match parent_align {
+            TextAlign::Left | TextAlign::Justify => 0.0,
+            TextAlign::Center => ((parent_inner_w - used_w) * 0.5).max(0.0),
+            TextAlign::Right => (parent_inner_w - used_w).max(0.0),
+        };
+        // Vertical center: per-child baseline shift dle line_h_used vs glyph ht.
+        // Apply leading JEN pri explicit line-height substantialne vetsi nez
+        // font_size (line_h > 1.5*fs = CSS-styled centering). Default 1.2*fs =
+        // natural leading - browser handluje baseline shift v paint_box's
+        // v_offset. Bez tohoto guard test paint_tests::button_text_position
+        // double-centered.
+        for &idx in line_indices {
+            let c = &mut bx.children[idx];
+            c.rect.x += h_offset;
+            let glyph_h = if c.tag.is_none() {
+                c.font_size
+            } else {
+                c.rect.height
+            };
+            if line_h_used > glyph_h * 1.5 {
+                // Match paint_box v_offset formula: (inner_h - fs*1.5)*0.5.
+                // Drive (line_h - glyph_h)*0.5 davalo text "trochu niz" - factor
+                // 1.5 zohlednuje ascender + descender visible glyph extent.
+                let leading = (line_h_used - glyph_h * 1.5) * 0.5;
+                c.rect.y += leading.max(0.0);
+            }
+        }
+    }
     cursor_y + line_height
 }
 
@@ -4341,18 +4690,18 @@ impl ShapedText {
 pub fn shape_text_advances(text: &str, font_size: f32, weight: u32, italic: bool, family: &str, letter_spacing: f32) -> ShapedText {
     let bold = weight >= 600;
     use std::sync::OnceLock;
-    static FONT: OnceLock<Option<fontdue::Font>> = OnceLock::new();
-    static FONT_BOLD: OnceLock<Option<fontdue::Font>> = OnceLock::new();
-    static FONT_MONO: OnceLock<Option<fontdue::Font>> = OnceLock::new();
-    static FONT_MONO_BOLD: OnceLock<Option<fontdue::Font>> = OnceLock::new();
-    static FONT_SANS: OnceLock<Option<fontdue::Font>> = OnceLock::new();
-    static FONT_SANS_BOLD: OnceLock<Option<fontdue::Font>> = OnceLock::new();
+    use super::render::SwashFontFace;
+    static FONT: OnceLock<Option<SwashFontFace>> = OnceLock::new();
+    static FONT_BOLD: OnceLock<Option<SwashFontFace>> = OnceLock::new();
+    static FONT_MONO: OnceLock<Option<SwashFontFace>> = OnceLock::new();
+    static FONT_MONO_BOLD: OnceLock<Option<SwashFontFace>> = OnceLock::new();
+    static FONT_SANS: OnceLock<Option<SwashFontFace>> = OnceLock::new();
+    static FONT_SANS_BOLD: OnceLock<Option<SwashFontFace>> = OnceLock::new();
 
     let _ = italic; // italic font by-mela rovnou stejnou advance jako regular zhruba
 
     let font_opt = FONT.get_or_init(|| {
-        super::render::try_load_default_font()
-            .and_then(|data| fontdue::Font::from_bytes(data, fontdue::FontSettings::default()).ok())
+        super::render::try_load_default_font().and_then(SwashFontFace::from_bytes)
     });
     let font_bold_opt = FONT_BOLD.get_or_init(|| {
         load_font_first(&[
@@ -4411,7 +4760,7 @@ pub fn shape_text_advances(text: &str, font_size: f32, weight: u32, italic: bool
     // resolve O(1) po prvnim hitu.
     let (is_mono, is_sans) = classify_family_cached(family);
 
-    let system_font: Option<&fontdue::Font> = if is_mono {
+    let system_font: Option<&SwashFontFace> = if is_mono {
         if bold { mono_bold_opt.as_ref().or(mono_opt.as_ref()) } else { mono_opt.as_ref() }
     } else if is_sans {
         if bold { sans_bold_opt.as_ref().or(sans_opt.as_ref()) } else { sans_opt.as_ref() }
@@ -4421,16 +4770,15 @@ pub fn shape_text_advances(text: &str, font_size: f32, weight: u32, italic: bool
     // Fallback chain: pokud zvolena varianta nenalezena, defaultni font.
     let system_font = system_font.or(font_opt.as_ref());
     // Active = @font-face registered preferred, system fallback.
-    let active_font: Option<&fontdue::Font> = registered.as_ref().or(system_font);
-    let fake_bold_pad = if bold && active_font.map(|f| !std::ptr::eq(f, font_opt.as_ref().unwrap_or(f))).unwrap_or(false) { 0.0 } else if bold { 1.0 } else { 0.0 };
-    let _ = fake_bold_pad; // reset - simple semantics: bez fake-bold pad, mereno z bold font kdyz dostupne
+    let active_font: Option<&SwashFontFace> = registered.as_ref().or(system_font);
 
     match active_font {
-        Some(font) => {
+        Some(face) => {
             // PERF: per-char advance memo cache. Drive `font.metrics(ch, fs)` per
-            // call (fontdue HashMap lookup ~100 ns each). Pri 898 samples
+            // call (HashMap lookup ~100 ns each). Pri 898 samples
             // measure_text_width_full v flame = ~30% paint time. Cache key
             // = (font ptr, char, font_size bits) -> advance_width f32.
+            // OPTIM: precompute glyph_metrics scaled + charmap per font outside char loop.
             thread_local! {
                 static ADVANCE_CACHE: std::cell::RefCell<
                     std::collections::HashMap<(usize, char, u32), f32, ahash::RandomState>
@@ -4438,12 +4786,17 @@ pub fn shape_text_advances(text: &str, font_size: f32, weight: u32, italic: bool
                     std::collections::HashMap::with_hasher(ahash::RandomState::new())
                 );
             }
-            let font_ptr = font as *const _ as usize;
+            // Pointer pro cache klic - SwashFontFace ma stabilni Arc-backed data.
+            // Pres &face -> *const adresa same kazdy call per OnceLock instance.
+            let font_ptr = face as *const _ as usize;
             let fs_bits = font_size.to_bits();
+            let fr = face.as_ref();
+            let metrics = fr.glyph_metrics(&[]).scale(font_size);
+            let charmap = fr.charmap();
             // Fallback chain pro chars co primary font neumi (diakritika v Times
             // Roman ASCII subset, CJK v Latin fontu). Iteruje pres dostupne fonts
             // dokud najde non-zero advance.
-            let fallback_fonts: [Option<&fontdue::Font>; 4] = [
+            let fallback_fonts: [Option<&SwashFontFace>; 4] = [
                 sans_opt.as_ref(),
                 font_opt.as_ref(),
                 font_bold_opt.as_ref(),
@@ -4460,15 +4813,18 @@ pub fn shape_text_advances(text: &str, font_size: f32, weight: u32, italic: bool
                 let aw = if let Some(v) = cached {
                     v
                 } else {
-                    let mut v = font.metrics(ch, font_size).advance_width;
+                    let gid = charmap.map(ch);
+                    let mut v = if gid != 0 { metrics.advance_width(gid) } else { 0.0 };
                     // Pri 0 advance (glyph index = 0 = missing) -> fallback chain.
                     // ASCII space/control skip (legitimne 0 advance for control).
-                    if v <= 0.0 && (ch as u32) >= 0x20 && font.lookup_glyph_index(ch) == 0 {
+                    if v <= 0.0 && (ch as u32) >= 0x20 && gid == 0 {
                         for fb in &fallback_fonts {
                             if let Some(ff) = fb {
-                                if std::ptr::eq(*ff, font) { continue; }
-                                if ff.lookup_glyph_index(ch) != 0 {
-                                    v = ff.metrics(ch, font_size).advance_width;
+                                if std::ptr::eq(*ff, face) { continue; }
+                                let fb_ref = ff.as_ref();
+                                let fb_gid = fb_ref.charmap().map(ch);
+                                if fb_gid != 0 {
+                                    v = fb_ref.glyph_metrics(&[]).scale(font_size).advance_width(fb_gid);
                                     if v > 0.0 { break; }
                                 }
                             }
@@ -4532,10 +4888,10 @@ fn classify_family_cached(family: &str) -> (bool, bool) {
     v
 }
 
-fn load_font_first(paths: &[&str]) -> Option<fontdue::Font> {
+fn load_font_first(paths: &[&str]) -> Option<super::render::SwashFontFace> {
     for path in paths {
         if let Ok(d) = std::fs::read(path) {
-            if let Ok(f) = fontdue::Font::from_bytes(d, fontdue::FontSettings::default()) {
+            if let Some(f) = super::render::SwashFontFace::from_bytes(d) {
                 return Some(f);
             }
         }
@@ -4668,3 +5024,31 @@ pub use transform_parse::{parse_transform_chain, parse_transform};
 mod color;
 #[allow(unused_imports)]
 pub use color::parse_color;
+
+pub mod bfc;
+#[allow(unused_imports)]
+pub use bfc::{BfcTrigger, detect_bfc_trigger, collapse_margins, parent_child_collapse, empty_block_collapse};
+
+pub mod tables;
+#[allow(unused_imports)]
+pub use tables::{TableLayoutKind, TableCellSpec, compute_column_widths_auto, compute_column_widths_fixed, compute_row_heights};
+
+pub mod multicol;
+#[allow(unused_imports)]
+pub use multicol::{MulticolConfig, MulticolResolved, ColumnFill, resolve_multicol, balance_height, column_rect};
+
+pub mod subgrid;
+#[allow(unused_imports)]
+pub use subgrid::{SubgridAxis, map_to_parent_tracks};
+
+pub mod positioning;
+#[allow(unused_imports)]
+pub use positioning::{PositionKind, PositionOffsets, PositionedRect, resolve_absolute, resolve_sticky, apply_relative};
+
+pub mod anchor_positioning;
+#[allow(unused_imports)]
+pub use anchor_positioning::{AnchorEdge, AnchorRect, AnchorRegistry, resolve_anchor_value, fits_in_viewport};
+
+pub mod writing_modes;
+#[allow(unused_imports)]
+pub use writing_modes::{WritingMode as WritingModeWm4, Direction as WritingDirection, TextOrientation as TextOrientationWm4, logical_to_physical, physical_to_logical_size};

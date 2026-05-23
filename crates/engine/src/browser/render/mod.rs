@@ -4423,7 +4423,7 @@ pub struct Renderer {
     image_tex: wgpu::Texture,
     image_view: wgpu::TextureView,
     /// @font-face loaded fonts: family -> Font.
-    font_registry: std::collections::HashMap<String, fontdue::Font>,
+    font_registry: std::collections::HashMap<String, SwashFontFace>,
     /// Loaded font URLs (skip re-load).
     loaded_font_urls: std::collections::HashSet<String>,
     /// Color fonts: family -> ColrData (layers + palette pro emoji rasterization).
@@ -5959,8 +5959,8 @@ impl Renderer {
                         }
                     }
                 }
-                match fontdue::Font::from_bytes(decoded, fontdue::FontSettings::default()) {
-                    Ok(font) => {
+                match SwashFontFace::from_bytes(decoded) {
+                    Some(font) => {
                         // Parse font-weight (default 400 = regular). Bold = >= 600.
                         // Style: italic / oblique.
                         let weight: u32 = ff.weight.split(|c: char| !c.is_ascii_digit())
@@ -5992,8 +5992,8 @@ impl Renderer {
                         crate::browser::layout::register_measure_font(&weight_key, font);
                         self.loaded_font_urls.insert(url);
                     }
-                    Err(e) => {
-                        eprintln!("[font-face] FAIL fontdue::from_bytes family={}: {e:?}", ff.family);
+                    None => {
+                        eprintln!("[font-face] FAIL SwashFontFace::from_bytes family={}", ff.family);
                     }
                 }
             } else {
@@ -6476,7 +6476,7 @@ impl Renderer {
                     for ch in content.chars() {
                         let mut color_added = false;
                         if let (Some(colr), Some(font)) = (color_font.as_ref(), color_font_obj.as_ref()) {
-                            let glyph_id = font.lookup_glyph_index(ch);
+                            let glyph_id = font.glyph_id(ch);
                             if glyph_id != 0 && colr.base_to_layers.contains_key(&glyph_id) {
                                 let key = format!("__colr:{}:{}:{}", font_family, ch as u32, *font_size as u32);
                                 if !self.image_atlas.contains(&key) {

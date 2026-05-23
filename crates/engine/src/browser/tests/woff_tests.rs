@@ -222,10 +222,9 @@ fn validate_sfnt(sfnt: &[u8], label: &str) {
         assert!(has_loca, "{}: TTF sfnt nema loca", label);
     }
 
-    // fontdue load test (validuje pres nezavislou implementaci).
-    assert!(fontdue::Font::from_bytes(sfnt,
-        fontdue::FontSettings::default()).is_ok(),
-        "{}: fontdue nemohl nacist sfnt", label);
+    // swash load test (validuje pres nezavislou implementaci).
+    assert!(swash::FontRef::from_index(&sfnt, 0).is_some(),
+        "{}: swash nemohl nacist sfnt", label);
 }
 
 /// Iteruje pres vsechny .woff2 v static/fonts/ a otestuje round-trip.
