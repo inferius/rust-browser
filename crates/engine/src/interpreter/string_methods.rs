@@ -5,10 +5,158 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use super::{JsValue, JsError};
+use super::{JsValue, JsError, Interpreter};
 use super::helpers::{get_regex_parts, js_regex_to_rust, regex_exec, regex_match_all};
 
+/// Vola repl callback / process replacement string. Pres JS spec:
+/// pri funkce -> volat s (match, group1, ..., groupN, offset, string).
+/// pri stringu -> substitute $1, $2, $&, $`, $', $$.
+fn apply_replacement(
+    interp: &mut Interpreter,
+    repl: &JsValue,
+    match_text: &str,
+    groups: &[Option<String>],
+    offset: usize,
+    full_input: &str,
+) -> Result<String, JsError> {
+    if let JsValue::Function(_) = repl {
+        // Build args: [match, ...groups, offset, fullString]
+        let mut call_args: Vec<JsValue> = Vec::with_capacity(groups.len() + 3);
+        call_args.push(JsValue::Str(match_text.to_string()));
+        for g in groups {
+            call_args.push(match g {
+                Some(s) => JsValue::Str(s.clone()),
+                None => JsValue::Undefined,
+            });
+        }
+        call_args.push(JsValue::Number(offset as f64));
+        call_args.push(JsValue::Str(full_input.to_string()));
+        let result = interp.call_function(repl.clone(), call_args, None)?;
+        return Ok(result.to_string());
+    }
+    // Literal string s $-escapes.
+    let pattern = repl.to_string();
+    let mut out = String::with_capacity(pattern.len());
+    let bytes = pattern.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'$' && i + 1 < bytes.len() {
+            let c = bytes[i + 1];
+            match c {
+                b'&' => { out.push_str(match_text); i += 2; continue; }
+                b'`' => { out.push_str(&full_input[..offset]); i += 2; continue; }
+                b'\'' => {
+                    let end = offset + match_text.len();
+                    if end < full_input.len() { out.push_str(&full_input[end..]); }
+                    i += 2; continue;
+                }
+                b'$' => { out.push('$'); i += 2; continue; }
+                b'0'..=b'9' => {
+                    // $1..$9 nebo $10..$99 (two-digit if valid).
+                    let mut n = (c - b'0') as usize;
+                    let mut adv = 2;
+                    if i + 2 < bytes.len() && (b'0'..=b'9').contains(&bytes[i + 2]) {
+                        let n2 = n * 10 + (bytes[i + 2] - b'0') as usize;
+                        if n2 > 0 && n2 <= groups.len() {
+                            n = n2;
+                            adv = 3;
+                        }
+                    }
+                    if n > 0 && n <= groups.len() {
+                        if let Some(Some(g)) = groups.get(n - 1) {
+                            out.push_str(g);
+                        }
+                        i += adv;
+                        continue;
+                    }
+                }
+                _ => {}
+            }
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    Ok(out)
+}
+
+/// JS String.replace s regex - global flag controls all-vs-first match.
+/// Pres callback dispatch pres apply_replacement.
+fn js_replace_with_regex(
+    interp: &mut Interpreter,
+    s: &str,
+    pat: &str,
+    flags: &str,
+    repl: &JsValue,
+    global: bool,
+) -> Result<String, JsError> {
+    let regex = js_regex_to_rust(pat, flags).map_err(JsError::Runtime)?;
+    let mut out = String::with_capacity(s.len());
+    let mut last_end = 0;
+    let mut iter_count = 0;
+    for caps in regex.captures_iter(s) {
+        let m = caps.get(0).unwrap();
+        out.push_str(&s[last_end..m.start()]);
+        // Collect groups.
+        let groups: Vec<Option<String>> = (1..caps.len())
+            .map(|i| caps.get(i).map(|g| g.as_str().to_string()))
+            .collect();
+        let repl_str = apply_replacement(interp, repl, m.as_str(), &groups, m.start(), s)?;
+        out.push_str(&repl_str);
+        last_end = m.end();
+        iter_count += 1;
+        if !global { break; }
+        // Empty match infinite loop guard.
+        if m.start() == m.end() {
+            if last_end < s.len() {
+                if let Some(ch) = s[last_end..].chars().next() {
+                    out.push(ch);
+                    last_end += ch.len_utf8();
+                }
+            } else {
+                break;
+            }
+        }
+        if iter_count > 100000 { break; } // Safety.
+    }
+    out.push_str(&s[last_end..]);
+    Ok(out)
+}
+
+/// JS String.replace s literal substring (no regex). Pres callback dispatch
+/// jako single match.
+fn js_replace_with_str(
+    interp: &mut Interpreter,
+    s: &str,
+    from: &str,
+    repl: &JsValue,
+    all: bool,
+) -> Result<String, JsError> {
+    if from.is_empty() {
+        return Ok(s.to_string());
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut last_end = 0;
+    let mut start = 0;
+    loop {
+        match s[start..].find(from) {
+            Some(rel) => {
+                let m_start = start + rel;
+                out.push_str(&s[last_end..m_start]);
+                let repl_str = apply_replacement(interp, repl, from, &[], m_start, s)?;
+                out.push_str(&repl_str);
+                last_end = m_start + from.len();
+                start = last_end;
+                if !all { break; }
+            }
+            None => break,
+        }
+    }
+    out.push_str(&s[last_end..]);
+    Ok(out)
+}
+
 pub fn call_string_method(
+    interp: &mut Interpreter,
     s: &str,
     method: &str,
     args: Vec<JsValue>,
@@ -92,39 +240,37 @@ pub fn call_string_method(
             Ok(Some(JsValue::Str(s.repeat(n))))
         }
         "replace"      => {
-            let repl = args.get(1).map(|v| v.to_string()).unwrap_or_default();
+            let repl_val = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+            let global = match args.first() {
+                Some(re) => get_regex_parts(re).map(|(_, f)| f.contains('g')).unwrap_or(false),
+                None => false,
+            };
             match args.first() {
                 Some(re) if get_regex_parts(re).is_some() => {
                     let (pat, flags) = get_regex_parts(re).unwrap();
-                    match js_regex_to_rust(&pat, &flags) {
-                        Ok(regex) => {
-                            let result = regex.replacen(s, 1, repl.as_str());
-                            Ok(Some(JsValue::Str(result.into_owned())))
-                        }
-                        Err(e) => Err(JsError::Runtime(e)),
-                    }
+                    js_replace_with_regex(interp, s, &pat, &flags, &repl_val, global)
+                        .map(|r| Some(JsValue::Str(r)))
                 }
                 Some(from) => {
-                    Ok(Some(JsValue::Str(s.replacen(&*from.to_string(), &repl, 1))))
+                    let from_s = from.to_string();
+                    js_replace_with_str(interp, s, &from_s, &repl_val, false)
+                        .map(|r| Some(JsValue::Str(r)))
                 }
                 None => Ok(Some(JsValue::Str(s.to_string()))),
             }
         }
         "replaceAll"   => {
-            let repl = args.get(1).map(|v| v.to_string()).unwrap_or_default();
+            let repl_val = args.get(1).cloned().unwrap_or(JsValue::Undefined);
             match args.first() {
                 Some(re) if get_regex_parts(re).is_some() => {
                     let (pat, flags) = get_regex_parts(re).unwrap();
-                    match js_regex_to_rust(&pat, &flags) {
-                        Ok(regex) => {
-                            let result = regex.replace_all(s, repl.as_str());
-                            Ok(Some(JsValue::Str(result.into_owned())))
-                        }
-                        Err(e) => Err(JsError::Runtime(e)),
-                    }
+                    js_replace_with_regex(interp, s, &pat, &flags, &repl_val, true)
+                        .map(|r| Some(JsValue::Str(r)))
                 }
                 Some(from) => {
-                    Ok(Some(JsValue::Str(s.replace(&*from.to_string(), &repl))))
+                    let from_s = from.to_string();
+                    js_replace_with_str(interp, s, &from_s, &repl_val, true)
+                        .map(|r| Some(JsValue::Str(r)))
                 }
                 None => Ok(Some(JsValue::Str(s.to_string()))),
             }

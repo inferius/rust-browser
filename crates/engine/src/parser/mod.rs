@@ -1430,6 +1430,17 @@ impl Parser {
     fn parse_object_prop(&mut self) -> Result<ObjectProp, ParseError> {
         self.skip_trivia();
 
+        // Spread: `{ ...obj }` (ES2018). PropKey::Spread + value=spread expr.
+        if self.eat_op(OperatorEnum::Ellipsis) {
+            let value = self.parse_assign_expr()?;
+            return Ok(ObjectProp {
+                key: PropKey::Spread,
+                value: Box::new(value),
+                shorthand: false,
+                computed: false,
+            });
+        }
+
         // [computed]: nebo [computed]() {} (method shorthand s computed klicem)
         if matches!(self.kind(), TokenKind::Operator(OperatorEnum::LBracket)) {
             self.advance();

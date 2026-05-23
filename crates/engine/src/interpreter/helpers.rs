@@ -1175,6 +1175,64 @@ pub fn bigdecimal_pow(base: BigDecimal, exp: u64) -> BigDecimal {
 
 // ─── RegExp ──────────────────────────────────────────────────────────────
 
+/// JS-compatible char class preprocessing. JS: `[\s-_]` = literal `\s`, `-`, `_`
+/// (dash literal after shorthand escape). Rust regex: parse as range `\s..._` =
+/// error "invalid range boundary". Pres walk char classes + escape `-` between
+/// shorthand escapes (\s, \d, \w, \D, \S, \W).
+pub fn js_regex_normalize_charclass(pattern: &str) -> String {
+    let mut out = String::with_capacity(pattern.len());
+    let bytes = pattern.as_bytes();
+    let mut i = 0;
+    let mut in_class = false;
+    while i < bytes.len() {
+        let b = bytes[i];
+        // Backslash escape - kopirovat 2 chars.
+        if b == b'\\' && i + 1 < bytes.len() {
+            out.push('\\');
+            out.push(bytes[i + 1] as char);
+            i += 2;
+            continue;
+        }
+        if !in_class {
+            if b == b'[' { in_class = true; }
+            out.push(b as char);
+            i += 1;
+            continue;
+        }
+        // Inside char class. Pri `-` check kontext.
+        if b == b']' {
+            in_class = false;
+            out.push(']');
+            i += 1;
+            continue;
+        }
+        if b == b'-' && i > 0 && i + 1 < bytes.len() {
+            // Look at PREV char (= 1 byte back, ne escape). Pred '-' byl shorthand
+            // escape (\s, \d, \w, \D, \S, \W)?
+            let prev_is_shorthand = i >= 2
+                && bytes[i - 2] == b'\\'
+                && matches!(bytes[i - 1], b's' | b'd' | b'w' | b'S' | b'D' | b'W');
+            // Pred '-' byl '[' ano pos 0 inside class.
+            let prev_is_open = bytes[i - 1] == b'[';
+            // After '-' nasleduje shorthand escape?
+            let next_is_shorthand = bytes[i + 1] == b'\\'
+                && i + 2 < bytes.len()
+                && matches!(bytes[i + 2], b's' | b'd' | b'w' | b'S' | b'D' | b'W');
+            // Pred ']' = literal dash.
+            let next_is_close = bytes[i + 1] == b']';
+            if prev_is_shorthand || next_is_shorthand || prev_is_open || next_is_close {
+                // Escape jako literal.
+                out.push_str("\\-");
+                i += 1;
+                continue;
+            }
+        }
+        out.push(b as char);
+        i += 1;
+    }
+    out
+}
+
 pub fn js_regex_to_rust(pattern: &str, flags: &str) -> Result<Regex, String> {
     // ES2024 /v flag (Unicode sets) - akceptujeme stejne jako /u
     // /d flag (hasIndices) - ignorujeme (ne support v Rust regex)
@@ -1187,10 +1245,11 @@ pub fn js_regex_to_rust(pattern: &str, flags: &str) -> Result<Regex, String> {
         if multiline  { "m" } else { "" },
         if dot_all    { "s" } else { "" },
     );
+    let normalized = js_regex_normalize_charclass(pattern);
     let full = if prefix == "(?)" {
-        pattern.to_string()
+        normalized.clone()
     } else {
-        format!("{prefix}{pattern}")
+        format!("{prefix}{normalized}")
     };
     Regex::new(&full).map_err(|e| format!("SyntaxError: Neplatny regex /{pattern}/{flags}: {e}"))
 }
@@ -1232,10 +1291,11 @@ impl JsRegex {
             if multiline  { "m" } else { "" },
             if dot_all    { "s" } else { "" },
         );
+        let normalized = js_regex_normalize_charclass(pattern);
         let full = if prefix == "(?)" {
-            pattern.to_string()
+            normalized.clone()
         } else {
-            format!("{prefix}{pattern}")
+            format!("{prefix}{normalized}")
         };
         if needs_fancy_regex(pattern) {
             fancy_regex::Regex::new(&full)

@@ -1026,6 +1026,7 @@ pub fn compile_expr(e: &Expr, code: &mut CodeBlock) -> Result<(), &'static str> 
                     PropKey::Str(s) => s.clone(),
                     PropKey::Num(n) => format!("{}", n),
                     PropKey::Computed(_) => return Err("computed object key not supported"),
+                    PropKey::Spread => return Err("object spread not supported in bytecode VM"),
                 };
                 let key_idx = code.push_const(JsValue::Str(key_str));
                 code.emit(Opcode::LoadConst(key_idx));

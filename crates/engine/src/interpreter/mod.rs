@@ -2192,26 +2192,36 @@ impl Interpreter {
             "forEach" => {
                 let cb = args.into_iter().next().unwrap_or(JsValue::Undefined);
                 let items: Vec<JsValue> = arr.borrow().clone();
+                let array_arg = JsValue::Array(Rc::clone(&arr));
                 for (i, v) in items.into_iter().enumerate() {
-                    self.call_function(cb.clone(), vec![v, JsValue::Number(i as f64)], None)?;
+                    self.call_function(cb.clone(), vec![v, JsValue::Number(i as f64), array_arg.clone()], None)?;
                 }
                 Ok(Some(JsValue::Undefined))
             }
             "map" => {
                 let cb = args.into_iter().next().unwrap_or(JsValue::Undefined);
                 let items: Vec<JsValue> = arr.borrow().clone();
+                let array_arg = JsValue::Array(Rc::clone(&arr));
                 let mut result = Vec::new();
                 for (i, v) in items.into_iter().enumerate() {
-                    result.push(self.call_function(cb.clone(), vec![v, JsValue::Number(i as f64)], None)?);
+                    result.push(self.call_function(cb.clone(), vec![v, JsValue::Number(i as f64), array_arg.clone()], None)?);
                 }
                 Ok(Some(JsValue::Array(Rc::new(RefCell::new(result)))))
             }
             "filter" => {
                 let cb = args.into_iter().next().unwrap_or(JsValue::Undefined);
                 let items: Vec<JsValue> = arr.borrow().clone();
+                let array_arg = JsValue::Array(Rc::clone(&arr));
                 let mut result = Vec::new();
                 for (i, v) in items.into_iter().enumerate() {
-                    if self.call_function(cb.clone(), vec![v.clone(), JsValue::Number(i as f64)], None)?.is_truthy() {
+                    // CB signature per ES spec: (value, index, array). Bez 3.
+                    // arg lucide `array.indexOf(x)` = undefined.indexOf = error.
+                    let keep = self.call_function(
+                        cb.clone(),
+                        vec![v.clone(), JsValue::Number(i as f64), array_arg.clone()],
+                        None
+                    )?;
+                    if keep.is_truthy() {
                         result.push(v);
                     }
                 }

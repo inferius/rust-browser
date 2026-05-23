@@ -80,7 +80,14 @@ impl Interpreter {
                 let effective_this = this.or(Some(*bound_this));
                 self.call_function(*func, all_args, effective_this)
             }
-            _ => Err(JsError::Runtime(format!("{func} není funkce"))),
+            _ => {
+                // Diag: pres `__rwe_call_debug` env, dump arg count + types.
+                if std::env::var("RWE_CALL_DEBUG").is_ok() {
+                    eprintln!("[call non-fn] target={:?} args={} line={}",
+                        func, args.len(), self.current_line);
+                }
+                Err(JsError::Runtime(format!("{func} není funkce (line {})", self.current_line)))
+            }
         }
     }
 

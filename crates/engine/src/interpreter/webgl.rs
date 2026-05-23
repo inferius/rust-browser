@@ -325,6 +325,10 @@ pub(crate) fn create_webgl_context(state: Rc<RefCell<WebGLState>>) -> JsValue {
             let mut s = st.borrow_mut();
             s.clear_color = [r, g, b, a];
             s.draw_queue.push(WebGLDrawCmd::ClearColor([r, g, b, a]));
+            if std::env::var("RWE_WEBGL_DBG").is_ok() {
+                eprintln!("[webgl] clearColor({},{},{},{}) - queue.len={}",
+                    r, g, b, a, s.draw_queue.len());
+            }
             Ok(JsValue::Undefined)
         }));
     }

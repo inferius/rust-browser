@@ -2033,9 +2033,15 @@ impl Interpreter {
                             return Ok(JsValue::Array(Rc::new(RefCell::new(arr))));
                         }
                         "addEventListener" => {
+                            // CSS DOM L3: addEventListener(type, listener, options)
+                            // options:
+                            //   - boolean useCapture (legacy) NEBO
+                            //   - { capture, passive, once, signal } objekt.
                             let mut iter = arg_vals.into_iter();
                             let event_type = iter.next().map(|v| v.to_string()).unwrap_or_default();
                             let callback = iter.next().unwrap_or(JsValue::Undefined);
+                            let opts = iter.next().unwrap_or(JsValue::Undefined);
+                            let (capture, passive, once) = parse_listener_options(&opts);
                             let id = {
                                 let mut c = self.next_callback_id.borrow_mut();
                                 let id = *c;
@@ -2043,30 +2049,37 @@ impl Interpreter {
                                 id
                             };
                             self.event_callbacks.borrow_mut().insert(id, callback);
-                            n.listeners.borrow_mut().entry(event_type).or_default().push(id);
+                            let entry = crate::browser::dom::ListenerEntry {
+                                callback_id: id, capture, passive, once,
+                            };
+                            n.listeners.borrow_mut().entry(event_type).or_default().push(entry);
                             return Ok(JsValue::Undefined);
                         }
                         "removeEventListener" => {
-                            // el.removeEventListener(type, callback) - najdi registrovany ID
-                            // podle function_identity_eq a smaz z listeners + event_callbacks.
+                            // el.removeEventListener(type, callback, options) - najdi
+                            // registrovany ID podle function_identity_eq + capture flag.
+                            // (Spec: capture flag musi shodovat pro match.)
                             let mut it = arg_vals.into_iter();
                             let event_type = it.next().map(|v| v.to_string()).unwrap_or_default();
                             let callback = it.next().unwrap_or(JsValue::Undefined);
-                            let ids: Vec<usize> = n.listeners.borrow().get(&event_type)
-                                .cloned().unwrap_or_default();
+                            let opts = it.next().unwrap_or(JsValue::Undefined);
+                            let (rm_capture, _, _) = parse_listener_options(&opts);
+                            let entries: Vec<crate::browser::dom::ListenerEntry> =
+                                n.listeners.borrow().get(&event_type).cloned().unwrap_or_default();
                             let mut to_remove: Vec<usize> = Vec::new();
-                            for id in &ids {
-                                let cb = self.event_callbacks.borrow().get(id).cloned();
+                            for e in &entries {
+                                if e.capture != rm_capture { continue; }
+                                let cb = self.event_callbacks.borrow().get(&e.callback_id).cloned();
                                 if let Some(cb) = cb {
                                     if cb.function_identity_eq(&callback) {
-                                        to_remove.push(*id);
+                                        to_remove.push(e.callback_id);
                                     }
                                 }
                             }
                             if !to_remove.is_empty() {
                                 let mut lst = n.listeners.borrow_mut();
                                 if let Some(vec) = lst.get_mut(&event_type) {
-                                    vec.retain(|id| !to_remove.contains(id));
+                                    vec.retain(|e| !to_remove.contains(&e.callback_id));
                                 }
                                 let mut cbs = self.event_callbacks.borrow_mut();
                                 for id in &to_remove {
@@ -2083,20 +2096,16 @@ impl Interpreter {
                                     _ => String::new(),
                                 }
                             } else { String::new() };
-                            let ids: Vec<usize> = n.listeners.borrow().get(&event_type)
-                                .cloned().unwrap_or_default();
-                            for id in ids {
-                                let cb = self.event_callbacks.borrow().get(&id).cloned();
-                                if let Some(cb) = cb {
-                                    self.call_function(cb, vec![event.clone()], None)?;
-                                }
-                            }
+                            // Use full dispatch_event - capture + bubble phases, passive,
+                            // once, defaultPrevented. Drive primitivni fire bez phases.
+                            let _ = self.dispatch_event(&n, &event_type, event.clone());
                             return Ok(JsValue::Bool(true));
                         }
                         "click" => {
                             // Programaticke click - dispatchEvent("click")
-                            let ids: Vec<usize> = n.listeners.borrow().get("click")
-                                .cloned().unwrap_or_default();
+                            let entries: Vec<crate::browser::dom::ListenerEntry> =
+                                n.listeners.borrow().get("click").cloned().unwrap_or_default();
+                            let ids: Vec<usize> = entries.iter().map(|e| e.callback_id).collect();
                             let mut event = JsObject::new();
                             event.set("type".into(), JsValue::Str("click".into()));
                             event.set("target".into(), JsValue::DomNode(Rc::clone(&n)));
@@ -2169,7 +2178,7 @@ impl Interpreter {
                 JsValue::Str(s) => {
                     let s = s.clone();
                     let arg_vals = self.eval_args(args, env)?;
-                    if let Some(result) = call_string_method(&s, &key, arg_vals)? {
+                    if let Some(result) = call_string_method(self, &s, &key, arg_vals)? {
                         return Ok(result);
                     }
                 }
@@ -2524,6 +2533,23 @@ pub(super) fn query_first(
 }
 
 /// Walk DOM subtree below root + return all elements matching any selector.
+/// Parse addEventListener 3. argument: bool useCapture (legacy) NEBO
+/// { capture, passive, once, signal } objekt. Vraci (capture, passive, once).
+/// signal AbortController: TODO.
+pub(super) fn parse_listener_options(opts: &JsValue) -> (bool, bool, bool) {
+    match opts {
+        JsValue::Bool(b) => (*b, false, false),
+        JsValue::Object(o) => {
+            let o = o.borrow();
+            let cap = matches!(o.get("capture"), JsValue::Bool(true));
+            let pas = matches!(o.get("passive"), JsValue::Bool(true));
+            let onc = matches!(o.get("once"), JsValue::Bool(true));
+            (cap, pas, onc)
+        }
+        _ => (false, false, false),
+    }
+}
+
 pub(super) fn query_all(
     root: &Rc<crate::browser::dom::NodeData>,
     selectors: &[crate::browser::css_parser::Selector],

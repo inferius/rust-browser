@@ -50,6 +50,8 @@ pub fn setup_builtins(
     scroll_pos: &Rc<RefCell<(f32, f32)>>,
     event_callbacks: &Rc<RefCell<HashMap<usize, JsValue>>>,
     next_callback_id: &Rc<RefCell<usize>>,
+    resize_observers: &Rc<RefCell<Vec<super::ResizeObserverState>>>,
+    intersection_observers: &Rc<RefCell<Vec<super::IntersectionObserverState>>>,
 ) {
     let mut e = env.borrow_mut();
 
@@ -61,7 +63,10 @@ pub fn setup_builtins(
         let log_args = Rc::clone(console_log_args);
         console.set("log".into(), native("log", move |args| {
             let msg = args.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" ");
-            println!("{msg}");
+            // eprintln (stderr) misto println - unbuffered + visible v shell
+            // terminalu pres user bez explicit tee. Prefix [console.log] ze
+            // se odlisi od native eprintlnu.
+            eprintln!("[console.log] {msg}");
             let structured: Vec<_> = args.iter().map(super::console_args::ConsoleArg::from_jsvalue).collect();
             log.borrow_mut().push(("log".into(), msg));
             log_args.borrow_mut().push(structured);
@@ -1295,6 +1300,17 @@ pub fn setup_builtins(
         Ok(JsValue::DomNode(node))
     }));
 
+    // document.createElementNS(namespace, tag) - SVG/MathML support. Namespace
+    // ignorovany (nas DOM neresi namespaces explicit), tag-only matter.
+    doc_obj.set("createElementNS".into(), native("document.createElementNS", |a| {
+        use crate::browser::dom::NodeData;
+        let mut it = a.into_iter();
+        let _ns = it.next().map(|v| v.to_string()).unwrap_or_default();
+        let tag = it.next().map(|v| v.to_string()).unwrap_or_else(|| "div".into());
+        let node = NodeData::new_element(&tag, std::collections::HashMap::new());
+        Ok(JsValue::DomNode(node))
+    }));
+
     // document.createTextNode(text)
     doc_obj.set("createTextNode".into(), native("document.createTextNode", |a| {
         use crate::browser::dom::NodeData;
@@ -1394,6 +1410,9 @@ pub fn setup_builtins(
             let mut it = a.into_iter();
             let event_type = it.next().map(|v| v.to_string()).unwrap_or_default();
             let callback = it.next().unwrap_or(JsValue::Undefined);
+            let opts = it.next().unwrap_or(JsValue::Undefined);
+            let (capture, passive, once) =
+                crate::interpreter::eval_call::parse_listener_options(&opts);
             let id = {
                 let mut c = next_id.borrow_mut();
                 let id = *c;
@@ -1402,7 +1421,10 @@ pub fn setup_builtins(
             };
             callbacks.borrow_mut().insert(id, callback);
             let root = Rc::clone(&doc.borrow().root);
-            root.listeners.borrow_mut().entry(event_type).or_default().push(id);
+            let entry = crate::browser::dom::ListenerEntry {
+                callback_id: id, capture, passive, once,
+            };
+            root.listeners.borrow_mut().entry(event_type).or_default().push(entry);
             Ok(JsValue::Undefined)
         }));
     }
@@ -1413,21 +1435,26 @@ pub fn setup_builtins(
             let mut it = a.into_iter();
             let event_type = it.next().map(|v| v.to_string()).unwrap_or_default();
             let cb_match = it.next().unwrap_or(JsValue::Undefined);
+            let opts = it.next().unwrap_or(JsValue::Undefined);
+            let (rm_capture, _, _) =
+                crate::interpreter::eval_call::parse_listener_options(&opts);
             let root = Rc::clone(&doc.borrow().root);
-            let ids: Vec<usize> = root.listeners.borrow().get(&event_type).cloned().unwrap_or_default();
+            let entries: Vec<crate::browser::dom::ListenerEntry> =
+                root.listeners.borrow().get(&event_type).cloned().unwrap_or_default();
             let mut to_remove: Vec<usize> = Vec::new();
-            for id in &ids {
-                let cb = callbacks.borrow().get(id).cloned();
+            for e in &entries {
+                if e.capture != rm_capture { continue; }
+                let cb = callbacks.borrow().get(&e.callback_id).cloned();
                 if let Some(cb) = cb {
                     if cb.function_identity_eq(&cb_match) {
-                        to_remove.push(*id);
+                        to_remove.push(e.callback_id);
                     }
                 }
             }
             if !to_remove.is_empty() {
                 let mut lst = root.listeners.borrow_mut();
                 if let Some(vec) = lst.get_mut(&event_type) {
-                    vec.retain(|id| !to_remove.contains(id));
+                    vec.retain(|e| !to_remove.contains(&e.callback_id));
                 }
                 let mut cbs = callbacks.borrow_mut();
                 for id in to_remove { cbs.remove(&id); }
@@ -2155,6 +2182,10 @@ pub fn setup_builtins(
 
     // globalThis = window (per HTML spec, browsing context's global object).
     e.define("globalThis", window_val.clone());
+    // `self` = window v Window context (Web Workers maji vlastni self, ale browser
+    // top-level scope `self === window === globalThis`). Lucide UMD pattern
+    // `(global || self)` ho potrebuje.
+    e.define("self", window_val.clone());
 
     // queueMicrotask - stub (sync)
     e.define("queueMicrotask", native("queueMicrotask", |_| Ok(JsValue::Undefined)));
@@ -4814,14 +4845,22 @@ pub fn setup_builtins(
         Ok(JsValue::Object(obj))
     }));
 
-    // ResizeObserver - stub s seznamem observed targets, callback invokovana
-    // pri manualnim trigger() (testovaci helper).
+    // ResizeObserver - registruje se do interpreter.resize_observers. WebView
+    // po layout fire callback pri rect change. Inspired by Chromium
+    // core/resize_observer/resize_observer.cc.
+    let ro_reg = Rc::clone(resize_observers);
     e.define("ResizeObserver", native("ResizeObserver", move |args| {
         let cb = args.into_iter().next().unwrap_or(JsValue::Undefined);
         let targets: Rc<RefCell<Vec<JsValue>>> = Rc::new(RefCell::new(Vec::new()));
         let obj = std::rc::Rc::new(std::cell::RefCell::new(JsObject::new()));
         obj.borrow_mut().set("__observer_kind__".into(), JsValue::Str("ResizeObserver".into()));
-        obj.borrow_mut().set("__ro_callback__".into(), cb);
+        obj.borrow_mut().set("__ro_callback__".into(), cb.clone());
+        // Register state - WebView ho najde pres interp.resize_observers.
+        ro_reg.borrow_mut().push(super::ResizeObserverState {
+            callback: cb,
+            targets: Rc::clone(&targets),
+            prev_rects: std::cell::RefCell::new(std::collections::HashMap::new()),
+        });
         let t1 = Rc::clone(&targets);
         obj.borrow_mut().set("observe".into(), native("observe", move |a| {
             let target = a.into_iter().next().unwrap_or(JsValue::Undefined);
@@ -4850,6 +4889,7 @@ pub fn setup_builtins(
             Ok(JsValue::Array(Rc::new(RefCell::new(Vec::new()))))));
         Ok(JsValue::Object(obj))
     }));
+    let io_reg = Rc::clone(intersection_observers);
     e.define("IntersectionObserver", native("IntersectionObserver", move |args| {
         let mut it = args.into_iter();
         let cb = it.next().unwrap_or(JsValue::Undefined);
@@ -4857,7 +4897,24 @@ pub fn setup_builtins(
         let targets: Rc<RefCell<Vec<JsValue>>> = Rc::new(RefCell::new(Vec::new()));
         let obj = std::rc::Rc::new(std::cell::RefCell::new(JsObject::new()));
         obj.borrow_mut().set("__observer_kind__".into(), JsValue::Str("IntersectionObserver".into()));
-        obj.borrow_mut().set("__io_callback__".into(), cb);
+        obj.borrow_mut().set("__io_callback__".into(), cb.clone());
+        // Parse thresholds + rootMargin z opts.
+        let thresholds: Vec<f32> = if let JsValue::Object(o) = &opts {
+            match o.borrow().props.get("threshold").cloned() {
+                Some(JsValue::Number(n)) => vec![n as f32],
+                Some(JsValue::Array(arr)) => arr.borrow().iter()
+                    .filter_map(|v| if let JsValue::Number(n) = v { Some(*n as f32) } else { None })
+                    .collect(),
+                _ => vec![0.0],
+            }
+        } else { vec![0.0] };
+        io_reg.borrow_mut().push(super::IntersectionObserverState {
+            callback: cb,
+            targets: Rc::clone(&targets),
+            prev_ratios: std::cell::RefCell::new(std::collections::HashMap::new()),
+            root_margin: (0.0, 0.0, 0.0, 0.0),  // TODO: parse "10px 20px"
+            thresholds,
+        });
         obj.borrow_mut().set("root".into(),
             if let JsValue::Object(o) = &opts {
                 o.borrow().props.get("root").cloned().unwrap_or(JsValue::Null)
@@ -5085,11 +5142,41 @@ pub fn setup_builtins(
             o.set("insertNode".into(), native("insertNode", |_| Ok(JsValue::Undefined)));
             o.set("surroundContents".into(), native("surroundContents", |_| Ok(JsValue::Undefined)));
             o.set("toString".into(), native("toString", |_| Ok(JsValue::Str(String::new()))));
-            o.set("getBoundingClientRect".into(), native("getBoundingClientRect", |_| {
+            let r_bbox = Rc::clone(&obj);
+            o.set("getBoundingClientRect".into(), native("getBoundingClientRect", move |_| {
+                // Real bbox: union startContainer + endContainer rects (z layout_rects).
+                // Pri start == end (collapsed) = jen start node rect.
+                // Bez layout_rects (no render yet) fallback 0,0,0,0.
                 let r = Rc::new(RefCell::new(JsObject::new()));
-                for k in &["top","left","bottom","right","width","height","x","y"] {
-                    r.borrow_mut().set(k.to_string(), JsValue::Number(0.0));
-                }
+                let start = r_bbox.borrow().get("startContainer");
+                let end = r_bbox.borrow().get("endContainer");
+                // Fetch rect z domNode pres weak interpreter access - sdileny
+                // layout_rects map (RefCell<HashMap<usize, (f32,f32,f32,f32)>>)
+                // by potreba. Aktualne nahled = 0; real layout_rects access
+                // pres native callback s captured interp ref pridame v dalsim
+                // refactoru. Pro nyni ulozeny start/end rect je 0.
+                let (x0, y0, x1, y1) = match (&start, &end) {
+                    (JsValue::DomNode(_), JsValue::DomNode(_)) => {
+                        // TODO: layout_rects lookup pres global interpreter
+                        // ref. Currently 0,0,0,0 fallback. Pri shared rect
+                        // store accessible: union (s.x,s.y,s.x+s.w,s.y+s.h)
+                        // a (e.x,e.y,e.x+e.w,e.y+e.h).
+                        (0.0, 0.0, 0.0, 0.0)
+                    }
+                    _ => (0.0, 0.0, 0.0, 0.0),
+                };
+                let w: f64 = (x1 - x0 as f64).max(0.0);
+                let h: f64 = (y1 - y0 as f64).max(0.0);
+                let mut b = r.borrow_mut();
+                b.set("x".into(), JsValue::Number(x0));
+                b.set("y".into(), JsValue::Number(y0));
+                b.set("left".into(), JsValue::Number(x0));
+                b.set("top".into(), JsValue::Number(y0));
+                b.set("right".into(), JsValue::Number(x1));
+                b.set("bottom".into(), JsValue::Number(y1));
+                b.set("width".into(), JsValue::Number(w));
+                b.set("height".into(), JsValue::Number(h));
+                drop(b);
                 Ok(JsValue::Object(r))
             }));
         }

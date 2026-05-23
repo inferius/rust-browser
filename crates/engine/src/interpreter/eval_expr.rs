@@ -36,8 +36,24 @@ impl Interpreter {
             Expr::Regex(p, f)  => Ok(make_regex_object(p, f)),
 
             Expr::Ident(name)  => {
-                env.borrow().get(name)
-                    .ok_or_else(|| JsError::Runtime(format!("ReferenceError: '{name}' není definováno")))
+                // 1. Standard scope lookup pres env chain.
+                if let Some(v) = env.borrow().get(name) {
+                    return Ok(v);
+                }
+                // 2. Browser-spec fallback: bare ident resolves pres global object
+                // (= window). Pres UMD pattern `global.lucide = factory()` sets
+                // window.lucide, ale frontend code uses bare `lucide.createIcons`.
+                // Real browser propaguje window props -> global env. My here check
+                // window object (= globalThis) props.
+                if let Some(window) = self.global.borrow().get("window") {
+                    if let JsValue::Object(obj) = window {
+                        let val = obj.borrow().get(name);
+                        if !matches!(val, JsValue::Undefined) {
+                            return Ok(val);
+                        }
+                    }
+                }
+                Err(JsError::Runtime(format!("ReferenceError: '{name}' není definováno")))
             }
 
             Expr::Template { quasis, expressions } => {
@@ -60,10 +76,23 @@ impl Interpreter {
             Expr::Object(props) => {
                 let mut obj = JsObject::new();
                 for p in props {
+                    // ES2018 object spread: `{ ...src }` - copy enumerable own
+                    // props z src do current obj. Pres null/undefined ignore.
+                    if matches!(p.key, PropKey::Spread) {
+                        let src = self.eval(&p.value, env)?;
+                        if let JsValue::Object(o) = src {
+                            let src_obj = o.borrow();
+                            for (k, v) in src_obj.props.iter() {
+                                obj.set(k.clone(), v.clone());
+                            }
+                        }
+                        continue;
+                    }
                     let key = match &p.key {
                         PropKey::Ident(s) | PropKey::Str(s) => s.clone(),
                         PropKey::Num(n) => n.to_string(),
                         PropKey::Computed(e) => self.eval(e, env)?.to_string(),
+                        PropKey::Spread => unreachable!(),
                     };
                     let val = self.eval(&p.value, env)?;
                     obj.set(key, val);
@@ -175,7 +204,17 @@ impl Interpreter {
         match op {
             UnaryOp::Typeof => {
                 let t = if let Expr::Ident(name) = arg {
-                    env.borrow().get(name).unwrap_or(JsValue::Undefined).type_of()
+                    // Standard env lookup, pres miss fallback na window object
+                    // (browser-spec: bare ident resolves pres global props).
+                    let val = env.borrow().get(name).unwrap_or_else(|| {
+                        self.global.borrow().get("window")
+                            .and_then(|w| if let JsValue::Object(o) = w {
+                                let v = o.borrow().get(name);
+                                if matches!(v, JsValue::Undefined) { None } else { Some(v) }
+                            } else { None })
+                            .unwrap_or(JsValue::Undefined)
+                    });
+                    val.type_of()
                 } else {
                     self.eval(arg, env)?.type_of()
                 };
@@ -745,6 +784,9 @@ impl Interpreter {
                         PropKey::Ident(s) | PropKey::Str(s) => s.clone(),
                         PropKey::Num(n) => format!("{}", *n as i64),
                         PropKey::Computed(e) => self.eval(e, env)?.to_string(),
+                        // PropKey::Spread v destrukturalizaci = `{...rest}` rest pattern.
+                        // Aktualne ne-implementovany - skip prop (= bind nic).
+                        PropKey::Spread => continue,
                     };
                     let item = match &val {
                         JsValue::Object(o) => o.borrow().get(&key),
@@ -813,6 +855,9 @@ impl Interpreter {
                             let e = e.as_ref().clone();
                             self.eval(&e, env)?.to_string()
                         }
+                        // PropKey::Spread v destructuring assign = ...rest target.
+                        // Aktualne ne-implementovany - skip.
+                        PropKey::Spread => continue,
                     };
                     let v = match &val {
                         JsValue::Object(o) => o.borrow().get(&key),

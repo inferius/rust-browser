@@ -165,6 +165,9 @@ pub enum PropKey {
     Num(f64),
     /// Vypocitany klic: `{ [expr]: val }`
     Computed(Box<Expr>),
+    /// Spread: `{ ...obj }` - kopiruje vlastnosti z obj. ObjectProp.value
+    /// drzi spread expression. ObjectProp.shorthand/computed ignorovany.
+    Spread,
 }
 
 /// Zpusob pristupu k vlastnosti objektu.
