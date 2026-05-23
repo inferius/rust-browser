@@ -505,6 +505,13 @@ pub enum Method {
     DebuggerGetScriptSource,
     NetworkGetResponseBody,
     PerformanceGetMetrics,
+    OverlayEnable,
+    OverlayDisable,
+    OverlayHighlightNode,
+    OverlayHideHighlight,
+    OverlaySetInspectMode,
+    DomGetBoxModel,
+    DomGetNodeForLocation,
 }
 
 impl Method {
@@ -530,6 +537,13 @@ impl Method {
             Method::DebuggerGetScriptSource => "Debugger.getScriptSource",
             Method::NetworkGetResponseBody => "Network.getResponseBody",
             Method::PerformanceGetMetrics => "Performance.getMetrics",
+            Method::OverlayEnable => "Overlay.enable",
+            Method::OverlayDisable => "Overlay.disable",
+            Method::OverlayHighlightNode => "Overlay.highlightNode",
+            Method::OverlayHideHighlight => "Overlay.hideHighlight",
+            Method::OverlaySetInspectMode => "Overlay.setInspectMode",
+            Method::DomGetBoxModel => "DOM.getBoxModel",
+            Method::DomGetNodeForLocation => "DOM.getNodeForLocation",
         }
     }
 
@@ -555,6 +569,13 @@ impl Method {
             "Debugger.getScriptSource" => Method::DebuggerGetScriptSource,
             "Network.getResponseBody" => Method::NetworkGetResponseBody,
             "Performance.getMetrics" => Method::PerformanceGetMetrics,
+            "Overlay.enable" => Method::OverlayEnable,
+            "Overlay.disable" => Method::OverlayDisable,
+            "Overlay.highlightNode" => Method::OverlayHighlightNode,
+            "Overlay.hideHighlight" => Method::OverlayHideHighlight,
+            "Overlay.setInspectMode" => Method::OverlaySetInspectMode,
+            "DOM.getBoxModel" => Method::DomGetBoxModel,
+            "DOM.getNodeForLocation" => Method::DomGetNodeForLocation,
             _ => return None,
         })
     }

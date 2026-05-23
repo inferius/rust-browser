@@ -37,7 +37,11 @@ pub mod devtools_target;
 pub mod devtools_test;
 pub mod engine;
 pub mod event;
+pub mod inspect_state;
 pub mod loader;
+pub mod pointer_events;
+pub mod process;
+pub mod sandbox;
 pub mod webview;
 
 pub use devtools_target::DevtoolsTarget;

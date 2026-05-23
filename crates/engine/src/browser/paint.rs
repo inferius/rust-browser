@@ -272,6 +272,21 @@ pub enum DisplayCommand {
         color: [u8; 4],
         points: Vec<(f32, f32)>,
     },
+    /// Marker: nasledujici commands NEMA byt posunuty pri viewport scroll
+    /// shift (position: fixed elementy zustavaji vuci viewportu staticke).
+    /// Stack-based - paruje s `NoScrollShiftEnd`. Vnoreni OK (nested fixed).
+    /// Inspired by Chromium cc/trees/property_tree_builder.cc - fixed elements
+    /// maji jiny scroll tree node nez root scroller.
+    NoScrollShiftBegin,
+    NoScrollShiftEnd,
+    /// mix-blend-mode subtree wrapper. Render subtree do offscreen RT, pak
+    /// composite pres shader s blend formula (Multiply/Screen/Overlay/atd).
+    /// Inspired by Chromium `core/paint/effect_paint_property_node.cc` blend.
+    BlendBegin {
+        x: f32, y: f32, w: f32, h: f32,
+        mode: u8, // BlendMode enum tag (Normal=0..)
+    },
+    BlendEnd,
 }
 
 /// Vrati display list - sekvence primitiv pro renderer.
@@ -354,11 +369,9 @@ fn emit_inner_scrollbars(
 ) {
     let _ = scroll_x;
     let _ = scroll_y;
-    use crate::browser::layout::Overflow;
-    let needs_y = matches!(bx.overflow_y, Overflow::Auto | Overflow::Scroll)
-        && bx.inner_content_h > bx.rect.height + 0.5;
-    let needs_x = matches!(bx.overflow_x, Overflow::Auto | Overflow::Scroll)
-        && bx.inner_content_w > bx.rect.width + 0.5;
+    use crate::browser::scroll::Scrollable;
+    let needs_y = bx.needs_scrollbar_y();
+    let needs_x = bx.needs_scrollbar_x();
     if needs_y {
         let bar_w = bx.scrollbar_size.max(8.0).min(14.0);
         let bar_x = bx.rect.x + bx.rect.width - bar_w;
@@ -368,15 +381,13 @@ fn emit_inner_scrollbars(
             x: bar_x, y: bar_y, w: bar_w, h: bar_h,
             color: track_col, radius: 0.0,
         });
-        let thumb_h = (bar_h * bar_h / bx.inner_content_h).max(30.0);
-        // No scroll tracking per-element - inner scroll = 0 (top of content).
-        // TODO Phase X: per-element scroll state.
-        let thumb_y = bar_y;
-        display_list.push(DisplayCommand::Rect {
-            x: bar_x + 2.0, y: thumb_y + 2.0,
-            w: bar_w - 4.0, h: (thumb_h - 4.0).max(8.0),
-            color: thumb_col, radius: (bar_w - 4.0) * 0.5,
-        });
+        if let Some((thumb_off, thumb_h)) = bx.thumb_y(bar_h) {
+            display_list.push(DisplayCommand::Rect {
+                x: bar_x + 2.0, y: bar_y + thumb_off + 2.0,
+                w: bar_w - 4.0, h: (thumb_h - 4.0).max(8.0),
+                color: thumb_col, radius: (bar_w - 4.0) * 0.5,
+            });
+        }
     }
     if needs_x {
         let bar_h = bx.scrollbar_size.max(8.0).min(14.0);
@@ -387,12 +398,13 @@ fn emit_inner_scrollbars(
             x: bar_x, y: bar_y, w: bar_w, h: bar_h,
             color: track_col, radius: 0.0,
         });
-        let thumb_w = (bar_w * bar_w / bx.inner_content_w).max(30.0);
-        display_list.push(DisplayCommand::Rect {
-            x: bar_x + 2.0, y: bar_y + 2.0,
-            w: (thumb_w - 4.0).max(8.0), h: bar_h - 4.0,
-            color: thumb_col, radius: (bar_h - 4.0) * 0.5,
-        });
+        if let Some((thumb_off, thumb_w)) = bx.thumb_x(bar_w) {
+            display_list.push(DisplayCommand::Rect {
+                x: bar_x + thumb_off + 2.0, y: bar_y + 2.0,
+                w: (thumb_w - 4.0).max(8.0), h: bar_h - 4.0,
+                color: thumb_col, radius: (bar_h - 4.0) * 0.5,
+            });
+        }
     }
     for ch in &bx.children {
         emit_inner_scrollbars(ch, display_list, track_col, thumb_col, scroll_x, scroll_y);
@@ -420,6 +432,48 @@ pub fn build_display_list_culled_into(root: &LayoutBox, scroll_y: f32, viewport_
     commands.clear();
     paint_box(root, commands, None);
     VIEWPORT_CULL.with(|c| c.set(None));
+}
+
+/// Public access pro per-layer paint - set viewport cull range pred kreseni.
+pub fn set_viewport_cull(top: f32, bottom: f32) {
+    VIEWPORT_CULL.with(|c| c.set(Some((top, bottom))));
+}
+pub fn clear_viewport_cull() {
+    VIEWPORT_CULL.with(|c| c.set(None));
+}
+
+/// Vraci LayoutBox ktery vlastni layer s `layer_id`.
+pub fn find_box_by_node_id(root: &LayoutBox, target_id: usize) -> Option<&LayoutBox> {
+    if let Some(n) = &root.node {
+        if std::rc::Rc::as_ptr(n) as usize == target_id { return Some(root); }
+    }
+    for ch in &root.children {
+        if let Some(f) = find_box_by_node_id(ch, target_id) { return Some(f); }
+    }
+    None
+}
+
+thread_local! {
+    /// Aktualne aktivni layer root node_id. Pri paint_box recurse:
+    /// pokud child je layer boundary AND child.node_id != LAYER_SCOPE -> skip
+    /// (paint ji ve vlastni layer pass). U bezneho monolithic paint je
+    /// LAYER_SCOPE = None = walk vsechno (legacy behavior).
+    /// Inspired by WebRender Picture/Tile boundary model.
+    pub(crate) static LAYER_SCOPE: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+/// Paint commands jen pro subtree dane layer (= picture). Nested layer
+/// boundaries skip (paintuji separatne ve vlastni pass).
+/// Inspired by WebRender Picture build pass.
+pub fn paint_layer_into(
+    layer_root_box: &LayoutBox,
+    cmds: &mut Vec<DisplayCommand>,
+) {
+    let layer_id = layer_root_box.node.as_ref()
+        .map(|n| std::rc::Rc::as_ptr(n) as usize).unwrap_or(0);
+    LAYER_SCOPE.with(|c| c.set(Some(layer_id)));
+    paint_box(layer_root_box, cmds, None);
+    LAYER_SCOPE.with(|c| c.set(None));
 }
 
 fn culled_out(bx: &LayoutBox) -> bool {
@@ -538,6 +592,12 @@ fn emit_svg_children(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>) {
 fn emit_svg_children_xform(bx: &LayoutBox, parent_xform: &[f32; 6], cmds: &mut Vec<DisplayCommand>) {
     let node = match &bx.node { Some(n) => n, None => return };
     let origin = (bx.rect.x, bx.rect.y);
+    // SVG attribute inheritance per SVG spec: child elementy bez own attr dedi
+    // z parent SVG root. Lucide icons: `<svg stroke="currentColor" fill="none">`
+    // s `<path>` uvnitr BEZ attrs - dedi stroke+fill ze svg.
+    let inherited_stroke = node.attr("stroke");
+    let inherited_fill = node.attr("fill");
+    let inherited_stroke_w = node.attr("stroke-width").and_then(|v| v.parse::<f32>().ok());
     for child in node.children.borrow().iter() {
         let tag = match child.tag_name() { Some(t) => t, None => continue };
         let attr_f = |name: &str, default: f32| -> f32 {
@@ -555,15 +615,29 @@ fn emit_svg_children_xform(bx: &LayoutBox, parent_xform: &[f32; 6], cmds: &mut V
             (origin.0 + tx, origin.1 + ty)
         };
         // "none" znamena nezadno (ne barva). Default fill = black, stroke = none.
-        let fill_attr = child.attr("fill");
+        // SVG currentColor keyword -> cascade color (= bx.text_color resolved via
+        // CSS color property na SVG element). Bez tohoto lucide-style icons s
+        // stroke="currentColor" by render cerne (= parse_color None fallback).
+        let current_color = bx.text_color.unwrap_or([0, 0, 0, 255]);
+        let resolve_color = |v: &str, default: [u8; 4]| -> [u8; 4] {
+            if v.trim().eq_ignore_ascii_case("currentcolor") {
+                return current_color;
+            }
+            super::layout::parse_color(v).unwrap_or(default)
+        };
+        // Resolve fill: child attr > inherited z svg root > default black.
+        let fill_attr = child.attr("fill").or_else(|| inherited_fill.clone());
         let fill_none = fill_attr.as_deref().map(|v| v.trim() == "none").unwrap_or(false);
         let fill = if fill_none { [0; 4] } else {
-            fill_attr.as_deref().and_then(|v| super::layout::parse_color(v)).unwrap_or([0, 0, 0, 255])
+            fill_attr.as_deref().map(|v| resolve_color(v, [0, 0, 0, 255])).unwrap_or([0, 0, 0, 255])
         };
-        let stroke_attr = child.attr("stroke");
+        // Resolve stroke: child attr > inherited z svg root > default none.
+        let stroke_attr = child.attr("stroke").or_else(|| inherited_stroke.clone());
         let stroke_none = stroke_attr.as_deref().map(|v| v.trim() == "none").unwrap_or(true); // default stroke=none
-        let stroke_c = stroke_attr.as_deref().and_then(|v| super::layout::parse_color(v)).unwrap_or([0, 0, 0, 255]);
-        let stroke_w = attr_f("stroke-width", 1.0);
+        let stroke_c = stroke_attr.as_deref().map(|v| resolve_color(v, [0, 0, 0, 255])).unwrap_or([0, 0, 0, 255]);
+        let stroke_w = child.attr("stroke-width").and_then(|v| v.parse().ok())
+            .or(inherited_stroke_w)
+            .unwrap_or(1.0);
         match tag.as_str() {
             "rect" => {
                 let x = attr_f("x", 0.0);
@@ -1146,6 +1220,19 @@ pub fn parse_svg_path(d: &str) -> Vec<(f32, f32)> {
 fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective: Option<f32>) {
     // Viewport culling - skip cely subtree mimo viewport (+ buffer).
     if culled_out(bx) { return; }
+    // Layer scope check: pri per-layer paint mode (LAYER_SCOPE = Some)
+    // nested layer boundary skip - paintuji ve vlastni layer pass.
+    // Inspired by WebRender Picture::build descent stop pri Tile boundary.
+    let cur_scope = LAYER_SCOPE.with(|c| c.get());
+    if let Some(scope_id) = cur_scope {
+        if super::compositor::is_layer_boundary(bx) {
+            let bx_id = bx.node.as_ref()
+                .map(|n| std::rc::Rc::as_ptr(n) as usize).unwrap_or(0);
+            if bx_id != scope_id {
+                return; // skip nested layer - own pass
+            }
+        }
+    }
     // Debug breakpoint hook: BP_TAG/BP_ID/BP_CLASS env vars + IDE breakpoint
     // na `breakpoint_paint` v src/debug_bp.rs.
     if crate::debug_bp::bp_enabled() {
@@ -1159,6 +1246,41 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
     // Index PRED jakymkoliv emit pro tento box - transform 2D apply pres
     // cmds[box_start..] (vse co tento box vyemituje vc. children).
     let box_start = cmds.len();
+    // Position: fixed elementy zustavaji staticke vuci viewportu - obal subtree
+    // do NoScrollShiftBegin/End markers, pak viewport scroll shift respektuje.
+    let is_fixed = matches!(bx.position, super::layout::Position::Fixed);
+    if is_fixed {
+        cmds.push(DisplayCommand::NoScrollShiftBegin);
+    }
+    // mix-blend-mode subtree wrap. Pres non-Normal mode renderer composite
+    // pres shader s blend formula.
+    use super::computed_style::BlendMode;
+    let blend_active = !matches!(bx.mix_blend_mode, BlendMode::Normal);
+    if blend_active {
+        let mode_tag: u8 = match bx.mix_blend_mode {
+            BlendMode::Normal => 0,
+            BlendMode::Multiply => 1,
+            BlendMode::Screen => 2,
+            BlendMode::Overlay => 3,
+            BlendMode::Darken => 4,
+            BlendMode::Lighten => 5,
+            BlendMode::ColorDodge => 6,
+            BlendMode::ColorBurn => 7,
+            BlendMode::HardLight => 8,
+            BlendMode::SoftLight => 9,
+            BlendMode::Difference => 10,
+            BlendMode::Exclusion => 11,
+            BlendMode::Hue => 12,
+            BlendMode::Saturation => 13,
+            BlendMode::Color => 14,
+            BlendMode::Luminosity => 15,
+        };
+        cmds.push(DisplayCommand::BlendBegin {
+            x: bx.rect.x, y: bx.rect.y,
+            w: bx.rect.width, h: bx.rect.height,
+            mode: mode_tag,
+        });
+    }
     // Detekce 3D transformu - pokud ano, obal cely emit do TransformBegin/End
     // a vynech CPU post-process transformaci (renderer aplikuje matrix shader-side).
     let needs_3d = crate::browser::layout::needs_3d_pipeline(&bx.transforms, parent_perspective);
@@ -1314,24 +1436,40 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
 
     // Image - emit Image command (img tag - cover boxu). Object-fit/position
     // emit ImageFit pokud nastaveny (renderer prepocita src/dest mapping).
+    //
+    // HTML `loading=lazy`: skip emit pri boxu mimo viewport + lazy margin.
+    // Spec: https://html.spec.whatwg.org/multipage/urls-and-fetching.html#lazy-loading-attributes
+    // Bez emit -> render skip load_image_as fetch -> data setrime.
+    // Cache cur viewport-cull range; pri lazy nasobime margin (~1250px = Chrome default).
+    let lazy_skip = if bx.loading_lazy {
+        VIEWPORT_CULL.with(|c| match c.get() {
+            Some((top, bottom)) => {
+                const LAZY_MARGIN: f32 = 1250.0;
+                let b_top = bx.rect.y;
+                let b_bot = bx.rect.y + bx.rect.height;
+                b_bot < top - LAZY_MARGIN || b_top > bottom + LAZY_MARGIN
+            }
+            None => false,
+        })
+    } else { false };
     if let Some(src) = &bx.image_src {
-        // PERF: bx.object_fit uz typed (drive String trim per element). Display
-        // cmd zatim drzi String pro compat - to_string emit jen kdyz non-Fill.
-        let needs_fit = !matches!(bx.object_fit, crate::browser::layout::ObjectFit::Fill);
-        if needs_fit {
-            cmds.push(DisplayCommand::ImageFit {
-                x: bx.rect.x, y: bx.rect.y, w: bx.rect.width, h: bx.rect.height,
-                src: src.clone(),
-                radius: bx.border_radius,
-                object_fit: bx.object_fit.to_string(),
-                object_position: bx.object_position.trim().to_string(),
-            });
-        } else {
-            cmds.push(DisplayCommand::Image {
-                x: bx.rect.x, y: bx.rect.y, w: bx.rect.width, h: bx.rect.height,
-                src: src.clone(),
-                radius: bx.border_radius,
-            });
+        if !lazy_skip {
+            let needs_fit = !matches!(bx.object_fit, crate::browser::layout::ObjectFit::Fill);
+            if needs_fit {
+                cmds.push(DisplayCommand::ImageFit {
+                    x: bx.rect.x, y: bx.rect.y, w: bx.rect.width, h: bx.rect.height,
+                    src: src.clone(),
+                    radius: bx.border_radius,
+                    object_fit: bx.object_fit.to_string(),
+                    object_position: bx.object_position.trim().to_string(),
+                });
+            } else {
+                cmds.push(DisplayCommand::Image {
+                    x: bx.rect.x, y: bx.rect.y, w: bx.rect.width, h: bx.rect.height,
+                    src: src.clone(),
+                    radius: bx.border_radius,
+                });
+            }
         }
     }
 
@@ -1619,14 +1757,43 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
         && bx.border_style != "hidden";
     if bx.border_width > 0.0 && border_visible {
         if let Some(bc) = bx.border_color {
-            cmds.push(DisplayCommand::Border {
-                x: bx.rect.x,
-                y: bx.rect.y,
-                w: bx.rect.width,
-                h: bx.rect.height,
-                width: bx.border_width,
-                color: with_alpha(bc),
-            });
+            // Pres border-radius > 0: emit rounded border ring via 2 rounded
+            // rects (outer = border color, inner inset = transparent cut).
+            // Pres border-radius = 0: 4 sharp strips (= original Border path).
+            // Bez tohoto pres rounded box border rendered sharp = corner clip.
+            if bx.border_radius > 0.5 {
+                let bw = bx.border_width;
+                // Emit outer rounded rect s border color - ON TOP of bg.
+                // Bg uz emitnut s radius == border_radius. Outer kresli pres
+                // bg = bg overwriten v ring area. Then INNER inset rounded
+                // rect bg overlay restores fill inside.
+                cmds.push(DisplayCommand::Rect {
+                    x: bx.rect.x, y: bx.rect.y,
+                    w: bx.rect.width, h: bx.rect.height,
+                    color: with_alpha(bc),
+                    radius: bx.border_radius,
+                });
+                // Inner bg rect (inset by border_width, reduced radius).
+                if let Some(bg) = bx.bg_color {
+                    let inner_radius = (bx.border_radius - bw).max(0.0);
+                    cmds.push(DisplayCommand::Rect {
+                        x: bx.rect.x + bw, y: bx.rect.y + bw,
+                        w: (bx.rect.width - 2.0 * bw).max(0.0),
+                        h: (bx.rect.height - 2.0 * bw).max(0.0),
+                        color: with_alpha(bg),
+                        radius: inner_radius,
+                    });
+                }
+            } else {
+                cmds.push(DisplayCommand::Border {
+                    x: bx.rect.x,
+                    y: bx.rect.y,
+                    w: bx.rect.width,
+                    h: bx.rect.height,
+                    width: bx.border_width,
+                    color: with_alpha(bc),
+                });
+            }
         }
     }
 
@@ -1844,23 +2011,38 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
         emit_svg_children(bx, cmds);
     }
 
-    // z-index aware children order: stably sort by (effective z-index).
-    // Bez tohoto stacking = DOM order. Pri z-index nastavenem dochazi
-    // k overlap chybam (carousel cards prelevani do bocnich panelu).
-    // CSS spec: items with auto z-index drzi DOM order vuci sobe,
-    // pak items s explicit z (vyssi vise).
-    let has_z = bx.children.iter().any(|c|
-        c.z_index.is_some() && !matches!(c.position,
-            super::layout::Position::Static));
-    let children_order: Vec<usize> = if has_z {
+    // Children paint order per CSS 2.1 Appendix E §3 (stacking contexts).
+    // 7-stage spec, my pouzivame 4-bucket aproximaci:
+    //   bucket 0: negative z-index positioned descendants
+    //   bucket 1: in-flow non-positioned (block + inline, DOM order)
+    //   bucket 2: positioned z-index auto/0 (DOM order)
+    //   bucket 3: positive z-index positioned descendants (z order)
+    //
+    // Inspired by Chromium core/paint/paint_layer_painter.cc::PaintChildren -
+    // jejich kompletni 7-stage pipeline pro stacking context boundaries
+    // (negativeZOrderList + posZOrderList + normalFlowList). Tato implementace
+    // separuje BUCKETS jen v ramci jednoho parenta - plne spec by vyzadovalo
+    // walk pres descendants stacking contextu (audit #7 mention).
+    let has_positioned = bx.children.iter().any(|c|
+        !matches!(c.position, super::layout::Position::Static));
+    let children_order: Vec<usize> = if has_positioned {
         let mut indices: Vec<usize> = (0..bx.children.len()).collect();
         indices.sort_by_key(|&i| {
             let ch = &bx.children[i];
-            // CSS: z-index pouziva se jen na position != static. Static items
-            // jdou s parent stack.
             let is_positioned = !matches!(ch.position, super::layout::Position::Static);
-            let z = if is_positioned { ch.z_index.unwrap_or(0) } else { 0 };
-            (z, i as i32)  // secondary: DOM order
+            let z = ch.z_index;
+            let bucket: i32 = if !is_positioned {
+                1  // in-flow non-positioned
+            } else if let Some(zv) = z {
+                if zv < 0 { 0 }
+                else if zv > 0 { 3 }
+                else { 2 }  // z=0 explicit
+            } else {
+                2  // positioned, z-index auto
+            };
+            // Secondary key: z hodnota (relevantni jen pro bucket 0 a 3).
+            // Tertiary: DOM order (stable - pri stejne bucket+z drzi puvod).
+            (bucket, z.unwrap_or(0), i as i32)
         });
         indices
     } else {
@@ -2083,6 +2265,13 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
             shift_cmd(cmd, tx, ty);
         }
     }
+    if blend_active {
+        cmds.push(DisplayCommand::BlendEnd);
+    }
+    // Close NoScrollShift bracket - po vsech subtree emit + post-process (transform).
+    if is_fixed {
+        cmds.push(DisplayCommand::NoScrollShiftEnd);
+    }
 }
 
 fn scale_cmd(cmd: &mut DisplayCommand, sx: f32, sy: f32, cx: f32, cy: f32) {
@@ -2116,7 +2305,9 @@ fn scale_cmd(cmd: &mut DisplayCommand, sx: f32, sy: f32, cx: f32, cy: f32) {
                 scale_xy(px, py);
             }
         }
-        DisplayCommand::FilterEnd | DisplayCommand::BackdropFilterEnd | DisplayCommand::TransformEnd | DisplayCommand::MaskEnd => {}
+        DisplayCommand::FilterEnd | DisplayCommand::BackdropFilterEnd | DisplayCommand::TransformEnd | DisplayCommand::MaskEnd
+        | DisplayCommand::NoScrollShiftBegin | DisplayCommand::NoScrollShiftEnd
+        | DisplayCommand::BlendBegin { .. } | DisplayCommand::BlendEnd => {}
     }
 }
 
@@ -2147,7 +2338,9 @@ fn rotate_cmd(cmd: &mut DisplayCommand, cos: f32, sin: f32, cx: f32, cy: f32) {
                 rotate_xy(px, py);
             }
         }
-        DisplayCommand::FilterEnd | DisplayCommand::BackdropFilterEnd | DisplayCommand::TransformEnd | DisplayCommand::MaskEnd => {}
+        DisplayCommand::FilterEnd | DisplayCommand::BackdropFilterEnd | DisplayCommand::TransformEnd | DisplayCommand::MaskEnd
+        | DisplayCommand::NoScrollShiftBegin | DisplayCommand::NoScrollShiftEnd
+        | DisplayCommand::BlendBegin { .. } | DisplayCommand::BlendEnd => {}
     }
 }
 
@@ -2174,6 +2367,8 @@ fn shift_cmd(cmd: &mut DisplayCommand, dx: f32, dy: f32) {
                 *py += dy;
             }
         }
-        DisplayCommand::FilterEnd | DisplayCommand::BackdropFilterEnd | DisplayCommand::TransformEnd | DisplayCommand::MaskEnd => {}
+        DisplayCommand::FilterEnd | DisplayCommand::BackdropFilterEnd | DisplayCommand::TransformEnd | DisplayCommand::MaskEnd
+        | DisplayCommand::NoScrollShiftBegin | DisplayCommand::NoScrollShiftEnd
+        | DisplayCommand::BlendBegin { .. } | DisplayCommand::BlendEnd => {}
     }
 }

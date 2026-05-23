@@ -40,6 +40,51 @@ use rwe_devtools_proto::{
 };
 
 use super::webview::WebView;
+use crate::browser::paint::find_box_by_node_id;
+
+/// CDP NodeId mapping table - sequential integer IDs misto Rc::as_ptr
+/// (= Chrome CDP standard). Ptr ID mel mismatch napric vrstvami: layout
+/// drzel stary Rc clone, DOM.getDocument walk vraci jiny ptr. Sequential
+/// ID stabilni od momentu prveho dotazu po DOM.documentUpdated invalidaci.
+#[derive(Default)]
+pub struct NodeIdTable {
+    /// Rc::as_ptr -> sequential id mapping (= "did this ptr already get an id?").
+    pub ptr_to_id: std::collections::HashMap<usize, u64>,
+    /// id -> Weak<Node> reverzni mapping (lookup pres find_node_by_id).
+    /// Weak protoze drzeni strong ref by DOM nodes nikdy nedrop = leak.
+    pub id_to_node: std::collections::HashMap<u64, std::rc::Weak<crate::browser::dom::Node>>,
+    /// Sequential counter - increment per nove ID.
+    pub next_id: u64,
+}
+
+impl NodeIdTable {
+    /// Vraci ID pres `node`. Pokud uz alokovany, reuse; jinak alloc novy.
+    pub fn id_for(&mut self, node: &Rc<crate::browser::dom::Node>) -> u64 {
+        let ptr = Rc::as_ptr(node) as usize;
+        if let Some(&id) = self.ptr_to_id.get(&ptr) { return id; }
+        self.next_id += 1;
+        let id = self.next_id;
+        self.ptr_to_id.insert(ptr, id);
+        self.id_to_node.insert(id, Rc::downgrade(node));
+        id
+    }
+    /// Vraci ID pres existing ptr (bez insert). Pouzite shell-side pri
+    /// picker click - shell ma ptr, ale alloc id jen pres devtools_target.
+    pub fn id_for_ptr(&self, ptr: usize) -> Option<u64> {
+        self.ptr_to_id.get(&ptr).copied()
+    }
+    /// Reverzni lookup - z ID na Rc<Node>. Upgrade Weak; pri uvolnenem nodu
+    /// vrati None (= invalidated po DOM mutaci).
+    pub fn node_for(&self, id: u64) -> Option<Rc<crate::browser::dom::Node>> {
+        self.id_to_node.get(&id).and_then(|w| w.upgrade())
+    }
+    /// Clear cely mapping - volat pres DOM.documentUpdated event.
+    pub fn clear(&mut self) {
+        self.ptr_to_id.clear();
+        self.id_to_node.clear();
+        self.next_id = 0;
+    }
+}
 
 /// DevTools target - per-page adapter mezi protocol wire + WebView state.
 ///
@@ -54,6 +99,13 @@ pub struct DevtoolsTarget {
     /// pri Debugger.removeBreakpoint - dle id najdi line + mazat z
     /// interp.debugger.breakpoints.
     breakpoint_lines: RefCell<std::collections::HashMap<String, u32>>,
+    /// Shared inspector state - sdileno pres shell + page WV. Pres Overlay
+    /// CDP method handlers updates hovered_node / picker_active. Page WV
+    /// overlay_painter cte stav + emit box-model highlight rect cmds.
+    inspect_state: Option<std::rc::Rc<std::cell::RefCell<super::inspect_state::InspectState>>>,
+    /// CDP NodeId mapping table - sequential integer IDs (Chrome CDP standard).
+    /// Drive Rc::as_ptr mel mismatch napric layout/DOM vrstvami.
+    pub(crate) node_id_table: RefCell<NodeIdTable>,
 }
 
 impl Default for DevtoolsTarget {
@@ -67,7 +119,45 @@ impl DevtoolsTarget {
             events: RefCell::new(Vec::new()),
             next_breakpoint_id: RefCell::new(1),
             breakpoint_lines: RefCell::new(std::collections::HashMap::new()),
+            inspect_state: None,
+            node_id_table: RefCell::new(NodeIdTable::default()),
         }
+    }
+
+    /// Clear NodeId mapping - volat pres DOM.documentUpdated event (shell pump_cdp).
+    /// Po teto invalidaci backend alokuje nove ID pri pristim DOM.getDocument walk.
+    pub fn clear_node_ids(&self) {
+        self.node_id_table.borrow_mut().clear();
+    }
+    /// Diag - kolik IDs alokovano + next_id.
+    pub fn node_id_stats(&self) -> (usize, u64) {
+        let t = self.node_id_table.borrow();
+        (t.ptr_to_id.len(), t.next_id)
+    }
+
+    /// Vraci backend NodeId pres ptr. Shell picker click pouziva pro convert
+    /// `Rc::as_ptr(node)` (z layout box) -> sequential id (= same id co
+    /// frontend dostane pres DOM.getDocument). None = ptr neni v table (= node
+    /// jeste nebyl serializovany pres DOM domain).
+    pub fn id_for_ptr(&self, ptr: usize) -> Option<u64> {
+        self.node_id_table.borrow().id_for_ptr(ptr)
+    }
+
+    /// Pripoji shared inspector state. Volat z shell pri init devtools WV =
+    /// stejny Rc bude shared s page WV overlay_painter.
+    pub fn with_inspect_state(
+        mut self,
+        state: std::rc::Rc<std::cell::RefCell<super::inspect_state::InspectState>>,
+    ) -> Self {
+        self.inspect_state = Some(state);
+        self
+    }
+
+    pub fn set_inspect_state(
+        &mut self,
+        state: std::rc::Rc<std::cell::RefCell<super::inspect_state::InspectState>>,
+    ) {
+        self.inspect_state = Some(state);
     }
 
     /// Dispatch jedne request pres method string. Vrati response s result
@@ -113,6 +203,137 @@ impl DevtoolsTarget {
 
             // Performance domain
             Method::PerformanceGetMetrics => self.handle_performance_get_metrics(webview, req),
+
+            // Overlay domain - inspector highlight + picker mode wire.
+            Method::OverlayEnable => self.handle_overlay_enable(req),
+            Method::OverlayDisable => self.handle_overlay_disable(req),
+            Method::OverlayHighlightNode => self.handle_overlay_highlight_node(req),
+            Method::OverlayHideHighlight => self.handle_overlay_hide_highlight(req),
+            Method::OverlaySetInspectMode => self.handle_overlay_set_inspect_mode(req),
+            Method::DomGetBoxModel => self.handle_dom_get_box_model(webview, req),
+            Method::DomGetNodeForLocation => self.handle_dom_get_node_for_location(webview, req),
+        }
+    }
+
+    // === Overlay domain handlers ===
+
+    fn handle_overlay_enable(&self, req: DevtoolsRequest) -> DevtoolsResponse {
+        DevtoolsResponse { id: req.id, result: Some(serde_json::json!({})), error: None }
+    }
+
+    fn handle_overlay_disable(&self, req: DevtoolsRequest) -> DevtoolsResponse {
+        if let Some(st) = &self.inspect_state {
+            let mut s = st.borrow_mut();
+            s.hovered_node = None;
+            s.picker_active = false;
+        }
+        DevtoolsResponse { id: req.id, result: Some(serde_json::json!({})), error: None }
+    }
+
+    fn handle_overlay_highlight_node(&self, req: DevtoolsRequest) -> DevtoolsResponse {
+        // Chrome CDP shape: { nodeId: <i32>, highlightConfig: {...} }.
+        // RWE pouziva u64 ptr keys; node_id pres params.node_id.
+        let node_id = req.params.get("nodeId")
+            .or_else(|| req.params.get("node_id"))
+            .and_then(|v| v.as_u64());
+        if let Some(st) = &self.inspect_state {
+            let mut s = st.borrow_mut();
+            s.hovered_node = node_id.map(|n| n as usize);
+        }
+        DevtoolsResponse { id: req.id, result: Some(serde_json::json!({})), error: None }
+    }
+
+    fn handle_overlay_hide_highlight(&self, req: DevtoolsRequest) -> DevtoolsResponse {
+        if let Some(st) = &self.inspect_state {
+            st.borrow_mut().hovered_node = None;
+        }
+        DevtoolsResponse { id: req.id, result: Some(serde_json::json!({})), error: None }
+    }
+
+    fn handle_overlay_set_inspect_mode(&self, req: DevtoolsRequest) -> DevtoolsResponse {
+        // Chrome shape: { mode: "searchForNode" | "none", highlightConfig: {} }.
+        let mode = req.params.get("mode")
+            .and_then(|v| v.as_str())
+            .unwrap_or("none");
+        if let Some(st) = &self.inspect_state {
+            let mut s = st.borrow_mut();
+            s.picker_active = mode == "searchForNode";
+            if !s.picker_active { s.hovered_node = None; }
+        }
+        DevtoolsResponse { id: req.id, result: Some(serde_json::json!({})), error: None }
+    }
+
+    fn handle_dom_get_box_model(&self, webview: &mut WebView, req: DevtoolsRequest) -> DevtoolsResponse {
+        // Vrati { model: { content: [...], padding: [...], border: [...],
+        //                  margin: [...], width, height } }.
+        // Quad coords = 8 floats (x1,y1,x2,y2,x3,y3,x4,y4) clockwise from TL.
+        let node_id = req.params.get("nodeId")
+            .or_else(|| req.params.get("node_id"))
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize);
+        let nid = match node_id {
+            Some(n) => n,
+            None => return Self::error_response(req.id, error_codes::INVALID_PARAMS,
+                "nodeId required".into()),
+        };
+        let root = match webview.last_layout_root() {
+            Some(r) => r,
+            None => return Self::error_response(req.id, error_codes::INTERNAL_ERROR,
+                "No layout".into()),
+        };
+        let bx = match find_box_by_node_id(root, nid) {
+            Some(b) => b,
+            None => return Self::error_response(req.id, error_codes::INVALID_PARAMS,
+                "Node not found in layout".into()),
+        };
+        let x = bx.rect.x; let y = bx.rect.y;
+        let w = bx.rect.width; let h = bx.rect.height;
+        let bw = bx.border_width;
+        let pt = bx.padding_top.unwrap_or(bx.padding);
+        let pr = bx.padding_right.unwrap_or(bx.padding);
+        let pb = bx.padding_bottom.unwrap_or(bx.padding);
+        let pl = bx.padding_left.unwrap_or(bx.padding);
+        let mt = bx.margin; let mb = bx.margin; let ml = bx.margin; let mr = bx.margin;
+        // Quad (clockwise TL, TR, BR, BL).
+        let quad = |x1: f32, y1: f32, x2: f32, y2: f32| -> serde_json::Value {
+            serde_json::json!([x1, y1, x2, y1, x2, y2, x1, y2])
+        };
+        let border_box = quad(x, y, x + w, y + h);
+        let padding_box = quad(x + bw, y + bw, x + w - bw, y + h - bw);
+        let content_box = quad(x + bw + pl, y + bw + pt,
+                               x + w - bw - pr, y + h - bw - pb);
+        let margin_box = quad(x - ml, y - mt, x + w + mr, y + h + mb);
+        DevtoolsResponse {
+            id: req.id,
+            result: Some(serde_json::json!({
+                "model": {
+                    "content": content_box,
+                    "padding": padding_box,
+                    "border": border_box,
+                    "margin": margin_box,
+                    "width": w,
+                    "height": h,
+                }
+            })),
+            error: None,
+        }
+    }
+
+    fn handle_dom_get_node_for_location(&self, webview: &mut WebView, req: DevtoolsRequest) -> DevtoolsResponse {
+        let x = req.params.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+        let y = req.params.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+        let root = match webview.last_layout_root() {
+            Some(r) => r,
+            None => return Self::error_response(req.id, error_codes::INTERNAL_ERROR,
+                "No layout".into()),
+        };
+        let hit = root.hit_test(x, y);
+        let node_id = hit
+            .and_then(|bx| bx.node.as_ref().map(|n| std::rc::Rc::as_ptr(n) as usize));
+        DevtoolsResponse {
+            id: req.id,
+            result: Some(serde_json::json!({ "nodeId": node_id })),
+            error: None,
         }
     }
 
@@ -143,7 +364,7 @@ impl DevtoolsTarget {
             None => return Self::error_response(req.id, error_codes::INTERNAL_ERROR,
                 "No document loaded".to_string()),
         };
-        let root = serialize_node(&doc.root, depth, 0);
+        let root = serialize_node(&doc.root, depth, 0, &mut self.node_id_table.borrow_mut());
         let result = GetDocumentResult { root };
         Self::ok_response(req.id, &result)
     }
@@ -160,7 +381,7 @@ impl DevtoolsTarget {
             None => return Self::error_response(req.id, error_codes::INTERNAL_ERROR,
                 "No document loaded".to_string()),
         };
-        let root = match find_node_by_id(&doc.root, params.node_id) {
+        let root = match find_node_by_id(&doc.root, params.node_id, &self.node_id_table.borrow()) {
             Some(n) => n,
             None => return Self::error_response(req.id, error_codes::NODE_NOT_FOUND,
                 format!("Node {} not found", params.node_id)),
@@ -171,7 +392,7 @@ impl DevtoolsTarget {
             if found.is_some() { return; }
             for sel in &selectors {
                 if crate::browser::cascade::matches_selector(node, sel) {
-                    found = Some(node_id_from_ptr(node));
+                    found = Some(self.node_id_table.borrow_mut().id_for(node));
                     return;
                 }
             }
@@ -192,7 +413,7 @@ impl DevtoolsTarget {
             None => return Self::error_response(req.id, error_codes::INTERNAL_ERROR,
                 "No document loaded".to_string()),
         };
-        let root = match find_node_by_id(&doc.root, params.node_id) {
+        let root = match find_node_by_id(&doc.root, params.node_id, &self.node_id_table.borrow()) {
             Some(n) => n,
             None => return Self::error_response(req.id, error_codes::NODE_NOT_FOUND,
                 format!("Node {} not found", params.node_id)),
@@ -202,7 +423,7 @@ impl DevtoolsTarget {
         walk_dfs(&root, &mut |node| {
             for sel in &selectors {
                 if crate::browser::cascade::matches_selector(node, sel) {
-                    ids.push(node_id_from_ptr(node));
+                    ids.push(self.node_id_table.borrow_mut().id_for(node));
                     return;
                 }
             }
@@ -223,7 +444,7 @@ impl DevtoolsTarget {
             None => return Self::error_response(req.id, error_codes::INTERNAL_ERROR,
                 "No document loaded".to_string()),
         };
-        let node = match find_node_by_id(&doc.root, params.node_id) {
+        let node = match find_node_by_id(&doc.root, params.node_id, &self.node_id_table.borrow()) {
             Some(n) => n,
             None => return Self::error_response(req.id, error_codes::NODE_NOT_FOUND,
                 format!("Node {} not found", params.node_id)),
@@ -250,7 +471,7 @@ impl DevtoolsTarget {
             None => return Self::error_response(req.id, error_codes::INTERNAL_ERROR,
                 "No document loaded".to_string()),
         };
-        let node = match find_node_by_id(&doc.root, params.node_id) {
+        let node = match find_node_by_id(&doc.root, params.node_id, &self.node_id_table.borrow()) {
             Some(n) => n,
             None => return Self::error_response(req.id, error_codes::NODE_NOT_FOUND,
                 format!("Node {} not found", params.node_id)),
@@ -280,7 +501,7 @@ impl DevtoolsTarget {
             None => return Self::error_response(req.id, error_codes::INTERNAL_ERROR,
                 "No document loaded".to_string()),
         };
-        let node = match find_node_by_id(&doc.root, params.node_id) {
+        let node = match find_node_by_id(&doc.root, params.node_id, &self.node_id_table.borrow()) {
             Some(n) => n,
             None => return Self::error_response(req.id, error_codes::NODE_NOT_FOUND,
                 format!("Node {} not found", params.node_id)),
@@ -308,7 +529,7 @@ impl DevtoolsTarget {
             None => return Self::error_response(req.id, error_codes::INTERNAL_ERROR,
                 "No document loaded".to_string()),
         };
-        let node = match find_node_by_id(&doc.root, params.node_id) {
+        let node = match find_node_by_id(&doc.root, params.node_id, &self.node_id_table.borrow()) {
             Some(n) => n,
             None => {
                 eprintln!("[CSS.getMatchedStyles] node_id {} NOT FOUND v page DOM",
@@ -389,7 +610,7 @@ impl DevtoolsTarget {
             None => return Self::error_response(req.id, error_codes::INTERNAL_ERROR,
                 "No document loaded".to_string()),
         };
-        let node = match find_node_by_id(&doc.root, params.node_id) {
+        let node = match find_node_by_id(&doc.root, params.node_id, &self.node_id_table.borrow()) {
             Some(n) => n,
             None => return Self::error_response(req.id, error_codes::NODE_NOT_FOUND,
                 format!("Node {} not found", params.node_id)),
@@ -431,7 +652,7 @@ impl DevtoolsTarget {
             None => return Self::error_response(req.id, error_codes::INTERNAL_ERROR,
                 "No document loaded".to_string()),
         };
-        let node = match find_node_by_id(&doc.root, params.node_id) {
+        let node = match find_node_by_id(&doc.root, params.node_id, &self.node_id_table.borrow()) {
             Some(n) => n,
             None => return Self::error_response(req.id, error_codes::NODE_NOT_FOUND,
                 format!("Node {} not found", params.node_id)),
@@ -708,12 +929,14 @@ impl DevtoolsTarget {
 
 /// Serializuje DOM node do protocol Node typu. `depth` < 0 = unlimited,
 /// 0 = jen self bez children, N = recurse N levels.
+/// `id_table` - NodeIdTable pres alloc/reuse sequential int IDs (= Chrome CDP).
 pub fn serialize_node_pub(
     node: &Rc<crate::browser::dom::Node>,
     depth: i32,
     current_depth: i32,
+    id_table: &mut NodeIdTable,
 ) -> rwe_devtools_proto::dom::Node {
-    serialize_node(node, depth, current_depth)
+    serialize_node(node, depth, current_depth, id_table)
 }
 
 pub fn format_selector_pub(sel: &crate::browser::css_parser::Selector) -> String {
@@ -724,11 +947,12 @@ fn serialize_node(
     node: &Rc<crate::browser::dom::Node>,
     depth: i32,
     current_depth: i32,
+    id_table: &mut NodeIdTable,
 ) -> rwe_devtools_proto::dom::Node {
     use crate::browser::dom::NodeKind;
     use rwe_devtools_proto::dom::Node as ProtoNode;
 
-    let node_id = node_id_from_ptr(node);
+    let node_id = id_table.id_for(node);
     let (node_type, node_name, node_value) = match &node.kind {
         NodeKind::Document => (9, "#document".to_string(), None),
         NodeKind::Element(tag) => (1, tag.to_uppercase(), None),
@@ -751,7 +975,7 @@ fn serialize_node(
     let serialize_children = depth < 0 || current_depth < depth;
     let children_vec = if serialize_children {
         children.iter()
-            .map(|c| serialize_node(c, depth, current_depth + 1))
+            .map(|c| serialize_node(c, depth, current_depth + 1, id_table))
             .collect()
     } else {
         Vec::new()
@@ -850,20 +1074,15 @@ fn js_value_to_remote(val: &crate::interpreter::JsValue) -> (String, Option<serd
     }
 }
 
-/// Najde node v tree dle node_id (pointer hash). Walk DFS, prvni match.
+/// Najde node v tree dle CDP NodeId pres NodeIdTable lookup (O(1) hash).
+/// Drive walk DFS pres ptr hash mel mismatch napric layout/DOM vrstvami,
+/// nova cesta = sequential int ID alokovane pri serialize_node.
 fn find_node_by_id(
-    root: &Rc<crate::browser::dom::Node>,
+    _root: &Rc<crate::browser::dom::Node>,  // legacy param, drive walk root
     target: u64,
+    id_table: &NodeIdTable,
 ) -> Option<Rc<crate::browser::dom::Node>> {
-    if node_id_from_ptr(root) == target {
-        return Some(Rc::clone(root));
-    }
-    for child in root.children.borrow().iter() {
-        if let Some(found) = find_node_by_id(child, target) {
-            return Some(found);
-        }
-    }
-    None
+    id_table.node_for(target)
 }
 
 // ============================================================

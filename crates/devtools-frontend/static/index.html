@@ -66,7 +66,11 @@ html, body {
     height: 100%;
     background: var(--bg-base);
     color: var(--fg);
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, system-ui, sans-serif;
+    /* Inter = bundled font (static/fonts/Inter-Regular.ttf), deterministicke
+       + atlas raster funguje stejne jako page (Times default). System-ui chain
+       drive vedl k nekonzistentnimu spacing (-apple-system fallback failed,
+       Segoe UI metrics neshoduji shape vs paint). */
+    font-family: Inter, sans-serif;
     font-size: 12px;
     overflow: auto;  /* Pred fix: hidden = pri uzkem okno panely off-screen
                        bez scroll. Auto = aspon scrollbar zobrazi. */
@@ -243,7 +247,7 @@ html, body {
 .dom-search-input:focus { border-color: var(--accent); }
 
 .dom-tree {
-    font-family: 'Consolas', 'SF Mono', monospace;
+    font-family: CamingoMono, monospace;
     font-size: 11px;
     line-height: 18px;
     user-select: text;
@@ -332,7 +336,7 @@ html, body {
 }
 .styles-section { padding: 4px 0; }
 .style-rule {
-    font-family: 'Consolas', monospace;
+    font-family: CamingoMono, monospace;
     font-size: 11px;
     line-height: 16px;
     padding: 4px 8px;
@@ -442,7 +446,7 @@ html, body {
     width: 100%;
     border-collapse: collapse;
     font-size: 11px;
-    font-family: 'Consolas', monospace;
+    font-family: CamingoMono, monospace;
 }
 .kv-table td {
     padding: 3px 8px;
@@ -518,7 +522,7 @@ html, body {
 .code-pane {
     flex: 1;
     padding: 8px;
-    font-family: 'Consolas', monospace;
+    font-family: CamingoMono, monospace;
     font-size: 11px;
     line-height: 16px;
     color: var(--fg);
@@ -556,7 +560,7 @@ html, body {
 .a11y-tree {
     width: 50%;
     padding: 12px;
-    font-family: 'Consolas', monospace;
+    font-family: CamingoMono, monospace;
     font-size: 11px;
     color: var(--fg);
 }
@@ -758,7 +762,7 @@ html, body {
 .computed-list {
     flex: 1;
     overflow: auto;
-    font-family: 'Consolas', monospace;
+    font-family: CamingoMono, monospace;
     font-size: 11px;
     line-height: 16px;
 }
@@ -895,7 +899,7 @@ html, body {
     background: var(--bg-elev1);
     padding: 4px 6px;
     font-size: 10px;
-    font-family: 'Consolas', monospace;
+    font-family: CamingoMono, monospace;
     line-height: 16px;
     color: var(--fg-dim);
     overflow-x: auto;
@@ -958,7 +962,7 @@ html, body {
 .style-rule-bracket { color: var(--fg-dim); }
 .media-line {
     padding: 4px 8px;
-    font-family: 'Consolas', monospace;
+    font-family: CamingoMono, monospace;
     font-size: 10px;
     color: var(--fg-dim);
     border-bottom: 1px solid var(--bg-elev1);
@@ -966,7 +970,7 @@ html, body {
 }
 .layer-line {
     padding: 4px 8px;
-    font-family: 'Consolas', monospace;
+    font-family: CamingoMono, monospace;
     font-size: 10px;
     color: var(--syntax-keyword);
     background: var(--bg-elev1);
@@ -1100,7 +1104,7 @@ html, body {
     border: 1px dashed var(--fg-muted);
     padding: 18px 24px;
     text-align: center;
-    font-family: 'Consolas', monospace;
+    font-family: CamingoMono, monospace;
     font-size: 10px;
     color: var(--fg-dim);
     position: relative;
@@ -1119,7 +1123,7 @@ html, body {
     position: absolute;
     color: var(--fg);
     font-size: 11px;
-    font-family: 'Consolas', monospace;
+    font-family: CamingoMono, monospace;
 }
 .bm-layer .edge.top    { top: 2px; left: 50%; transform: translateX(-50%); }
 .bm-layer .edge.bottom { bottom: 2px; left: 50%; transform: translateX(-50%); }
@@ -1151,7 +1155,7 @@ html, body {
 }
 .computed-filter:focus { border-color: var(--accent); }
 .computed-list {
-    font-family: 'Consolas', monospace;
+    font-family: CamingoMono, monospace;
     font-size: 11px;
     line-height: 18px;
 }
@@ -1184,7 +1188,7 @@ html, body {
 
 /* Changes */
 .changes-list {
-    font-family: 'Consolas', monospace;
+    font-family: CamingoMono, monospace;
     font-size: 11px;
 }
 .change-rule {
@@ -1214,7 +1218,7 @@ html, body {
 .compat-prop {
     padding: 4px 6px;
     border-bottom: 1px solid var(--bg-elev1);
-    font-family: 'Consolas', monospace;
+    font-family: CamingoMono, monospace;
     font-size: 11px;
 }
 .compat-prop .name { color: var(--syntax-prop); }
@@ -1336,7 +1340,7 @@ html, body {
 .console-log {
     flex: 1;
     overflow-y: auto;
-    font-family: 'Consolas', monospace;
+    font-family: CamingoMono, monospace;
     font-size: 11px;
     padding: 0;
 }
@@ -1403,7 +1407,7 @@ html, body {
     content: '»';
     color: var(--accent);
     margin-right: 8px;
-    font-family: 'Consolas', monospace;
+    font-family: CamingoMono, monospace;
     font-weight: bold;
 }
 .console-prompt input {
@@ -1411,7 +1415,7 @@ html, body {
     background: transparent;
     border: none;
     color: var(--fg);
-    font-family: 'Consolas', monospace;
+    font-family: CamingoMono, monospace;
     font-size: 12px;
     outline: none;
 }
@@ -1509,7 +1513,7 @@ html, body {
     flex: 1;
     overflow: auto;
     background: var(--bg-surface);
-    font-family: 'Consolas', monospace;
+    font-family: CamingoMono, monospace;
     font-size: 12px;
     line-height: 18px;
 }
@@ -1566,7 +1570,7 @@ html, body {
 .debug-section.collapsed .debug-section-header::before { content: '▸'; }
 .debug-section.collapsed .debug-body { display: none; }
 .debug-section-header .count { color: var(--fg-muted); }
-.debug-body { padding: 4px 8px; font-family: 'Consolas', monospace; font-size: 11px; }
+.debug-body { padding: 4px 8px; font-family: CamingoMono, monospace; font-size: 11px; }
 .scope-row { padding: 2px 0; }
 .scope-row .name { color: var(--syntax-attr-name); }
 .scope-row .val { color: var(--fg); }
@@ -1701,7 +1705,7 @@ html, body {
     font-weight: 500;
 }
 .net-kv {
-    font-family: 'Consolas', monospace;
+    font-family: CamingoMono, monospace;
     font-size: 11px;
     line-height: 18px;
 }
@@ -1761,7 +1765,7 @@ html, body {
     background: var(--accent);
     color: #fff;
     font-size: 10px;
-    font-family: 'Consolas', monospace;
+    font-family: CamingoMono, monospace;
     border-radius: 2px;
     overflow: hidden;
     white-space: nowrap;
@@ -1823,7 +1827,7 @@ html, body {
 .app-data-toolbar .origin {
     color: var(--fg-dim);
     font-size: 11px;
-    font-family: 'Consolas', monospace;
+    font-family: CamingoMono, monospace;
     margin-right: 8px;
 }
 .app-table-container { flex: 1; overflow: auto; }
@@ -1848,7 +1852,7 @@ html, body {
     border-bottom: 1px solid var(--bg-elev1);
     color: var(--fg);
     word-break: break-all;
-    font-family: 'Consolas', monospace;
+    font-family: CamingoMono, monospace;
 }
 .app-table tr:hover td { background: var(--bg-elev1); }
 
@@ -2542,7 +2546,60 @@ if (btnInspect) {
         }
     });
     // Listen na DOM.inspectNodeRequested - backend dispatch po user klik na page.
+    // ALIAS: Overlay.inspectNodeRequested (Chrome CDP) - picker mode click dispatch.
+    function handleInspectNode(p) {
+        var nodeId = p.backend_node_id || p.backendNodeId || p.nodeId || p.node_id;
+        inspectActive = false;
+        if (btnInspect) btnInspect.classList.remove('active');
+        // Switch na Inspector panel pred select (= jinak tree neviditelny pri
+        // Console / Network panelu).
+        var inspectorTab = document.querySelector('.tab-strip .tab[data-panel="inspector"]');
+        if (inspectorTab && !inspectorTab.classList.contains('active')) {
+            inspectorTab.click();
+        }
+        var row = document.querySelector('.dom-tree .dom-node[data-node-id="' + nodeId + '"]');
+        if (!row) {
+            // Selector escape fallback - linear scan.
+            var allRows = document.querySelectorAll('.dom-tree .dom-node');
+            var nidStr = String(nodeId);
+            for (var k = 0; k < allRows.length; k++) {
+                if (allRows[k].getAttribute('data-node-id') === nidStr) {
+                    row = allRows[k];
+                    break;
+                }
+            }
+        }
+        if (row) {
+            var myDepth = nodeDepth(row);
+            var prev = row.previousElementSibling;
+            var cd = myDepth;
+            while (prev && cd > 0) {
+                if (prev.classList && prev.classList.contains('dom-node')) {
+                    var pd = nodeDepth(prev);
+                    if (pd < cd) {
+                        cd = pd;
+                        if (prev.classList.contains('collapsed')) setNodeCollapsed(prev, false);
+                    }
+                }
+                prev = prev.previousElementSibling;
+            }
+            // Clear previous selection - plain for-loop misto NodeList.forEach
+            // (interpreter forEach handling moze byt nekonzistentni).
+            var prevSel = document.querySelectorAll('.dom-node.selected');
+            for (var ps = 0; ps < prevSel.length; ps++) {
+                prevSel[ps].classList.remove('selected');
+            }
+            row.classList.add('selected');
+            if (row.scrollIntoView) row.scrollIntoView({ block: 'center' });
+            if (typeof loadStylesForNode === 'function') {
+                loadStylesForNode(nodeId);
+            } else if (window.loadStylesForNode) {
+                window.loadStylesForNode(nodeId);
+            }
+        }
+    }
     if (window.cdp && window.cdp.on) {
+        window.cdp.on('Overlay.inspectNodeRequested', handleInspectNode);
         window.cdp.on('DOM.inspectNodeRequested', function(p) {
             inspectActive = false;
             btnInspect.classList.remove('active');
@@ -2983,10 +3040,10 @@ if (overflowBtn) {
 }
 </script>
 
-<!-- Lucide CDN - DROPPED. Fetch fails v shell devtools WV bez network setup
-     a minifikovany single-line UMD je nas JS parser nezpracuje. Ikony zatim
-     nahrazeny ASCII unicode chars (chevron-down=v, chevron-right=>). -->
-<!-- <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script> -->
+<!-- Lucide icon library - embedded lokalne, injected v shell::build_devtools_html.
+     Po DOM ready volame `lucide.createIcons()` (line ~3159) ktery prevadi
+     `<i data-lucide="x">` -> inlined SVG. -->
+<script id="lucide-js"></script>
 
 <!-- i18n dictionary + applier -->
 <script>
@@ -3650,14 +3707,16 @@ applyI18n(currentLang);
     var __renderNodeCount = 0;
     var __renderNodeErrors = [];
     // Helper: emit opening tag spans `<tag attrs>` do parent.
+    // POZOR: separate text nodes (createTextNode(' ')) by engine pri build_box
+    // stripoval (trim().is_empty() = skip whitespace-only text uzly). Spaces
+    // proto include PRIMO v text obsahu spanu (leading ' ' u attr-name +
+    // val konsumuje space ze separator '=').
     function appendOpenTag(div, node) {
         div.appendChild(mkSpan('tok-tag', '<' + node.node_name.toLowerCase()));
         const a = node.attributes || [];
         for (let i = 0; i + 1 < a.length; i += 2) {
-            div.appendChild(document.createTextNode(' '));
-            div.appendChild(mkSpan('tok-attr-name', a[i]));
-            div.appendChild(document.createTextNode('='));
-            div.appendChild(mkSpan('tok-attr-value', '"' + a[i+1] + '"'));
+            div.appendChild(mkSpan('tok-attr-name', ' ' + a[i]));
+            div.appendChild(mkSpan('tok-attr-value', '="' + a[i+1] + '"'));
         }
         div.appendChild(mkSpan('tok-tag', '>'));
     }
@@ -3671,6 +3730,22 @@ applyI18n(currentLang);
             for (var i = 0; i < sels.length; i++) sels[i].classList.remove('selected');
             div.classList.add('selected');
             loadStylesForNode(nodeId);
+        });
+        // Tree row hover -> CDP Overlay.highlightNode -> page box-model overlay.
+        // Chrome/FF inspirace: hover element v tree = highlight pres page area.
+        div.addEventListener('mouseenter', function(e) {
+            e.stopPropagation();
+            if (window.cdp && window.cdp.send) {
+                window.cdp.send('Overlay.highlightNode', {
+                    nodeId: parseInt(nodeId, 10),
+                }).catch(function() {});
+            }
+        });
+        div.addEventListener('mouseleave', function(e) {
+            e.stopPropagation();
+            if (window.cdp && window.cdp.send) {
+                window.cdp.send('Overlay.hideHighlight', {}).catch(function() {});
+            }
         });
     }
     // VOID tagy - HTML spec self-closing, neemituji </tag>.
@@ -3758,7 +3833,10 @@ applyI18n(currentLang);
         const div = document.createElement('div');
         div.className = 'dom-node';
         div.style.paddingLeft = (6 + depth * 16) + 'px';
-        div.dataset.nodeId = node.node_id;
+        // node.node_id z CDP DOM.getDocument JSON = u64 ptr. Setter via
+        // setAttribute (= nas interpreter dataset proxy NEpropag setty zpet
+        // do DOM attributes - kazdy get vyrobi temp object, set tam nezachova).
+        div.setAttribute('data-node-id', String(node.node_id));
 
         // Special node types - jednoradkove navic recurse na deti (document ma html jako child).
         if (node.node_type === 3) {
@@ -4049,6 +4127,7 @@ applyI18n(currentLang);
         });
         return block;
     }
+    window.loadStylesForNode = function (nodeId) { loadStylesForNode(nodeId); };
     function loadStylesForNode(nodeId) {
         // Take trigger computed view refresh.
         loadComputedForNode(nodeId);

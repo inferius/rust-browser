@@ -32,6 +32,8 @@ use super::loader;
 /// 3. `handle_input(event)` po kazdem user inputu z hostujici aplikace
 /// 4. `render() -> &wgpu::TextureView` kdyz host chce frame (typicky kazdy
 ///     redraw event); WebView interne skipne pokud nic nezmenilo (dirty flag)
+pub use crate::browser::scroll_anim::ScrollAnimState;
+
 /// 5. `resize(w, h)` na window/tab resize
 /// 6. Drop pri zavreni tabu
 pub struct WebView {
@@ -73,6 +75,27 @@ pub struct WebView {
     pub(crate) scroll_target_y: f32,
     /// Smooth scroll target X.
     pub(crate) scroll_target_x: f32,
+
+    /// Per-element scroll offset - node_id -> (x, y) px. Wheel event hit-testne
+    /// scrollable ancestora, modifikuje tento map. Pred paint walk layout_root +
+    /// shift_subtree(child, -sx, -sy) pre kazdy scrollable box. Bez tohoto
+    /// nested overflow:auto containers nelze scrollovat (drive jen viewport).
+    pub(crate) element_scroll: std::collections::HashMap<usize, (f32, f32)>,
+
+    /// Smooth scroll animation state (viewport). Drive jednoduchy lerp 25%/frame
+    /// = frame-rate dependent (30 fps 2x pomalejsi nez 60). Nyni cubic-bezier
+    /// (ease-in-out 0.42, 0, 0.58, 1) s duration-based timing.
+    /// Inspired by Chromium cc/animation/scroll_offset_animation_curve.cc.
+    /// None = no active animation, scroll_y == scroll_target_y.
+    pub(crate) scroll_anim_y: Option<ScrollAnimState>,
+    pub(crate) scroll_anim_x: Option<ScrollAnimState>,
+
+    /// Frame pacing tracker - mereni per-frame stage timings (style/layout/paint/
+    /// composite). Pres `browser::render::frame_pacing::FramePacer` foundation.
+    pub(crate) frame_pacer: crate::browser::render::frame_pacing::FramePacer,
+    /// Web Vitals collector - LCP/CLS/INP. Feed pres paint commands +
+    /// layout shift detection.
+    pub(crate) web_vitals: crate::browser::web_vitals::WebVitalsCollector,
 
     /// Offscreen render target texture - vytvori se v `new` (Phase 5).
     /// Phase 2 placeholder `None`.
@@ -144,7 +167,12 @@ pub struct WebView {
     /// cascade::FOCUSED_NODE thread_local - to slo sdileny pres vsechny
     /// WebViews (chrome/page/devtools) co vedlo k mismatch.
     pub(crate) focused_node_local: Option<usize>,
+    pub(crate) layout_dumped: bool,
     /// Scrollbar drag state - Some(grab_offset_y) pri V thumb drag.
+    /// Inner element scrollbar drag: (node_id, grab_y_offset, max_scroll, bar_y, bar_h).
+    /// Drz dostatek info pro mouse move = scroll update bez relookup boxu.
+    pub(crate) inner_v_drag: Option<(usize, f32, f32, f32, f32)>,
+    pub(crate) inner_h_drag: Option<(usize, f32, f32, f32, f32)>,
     pub(crate) v_scrollbar_drag: Option<f32>,
     /// Scrollbar drag state - Some(grab_offset_x) pri H thumb drag.
     pub(crate) h_scrollbar_drag: Option<f32>,
@@ -206,6 +234,9 @@ pub struct WebView {
     /// invalidoval cascade cache vsech ostatnich. Per-WV stav fixuje.
     /// Pred cascade_with_viewport call se thread_local set z tohoto fieldu.
     pub(crate) hovered_node_local: Option<usize>,
+    /// R-tree spatial hit index. Rebuilt per layout pass. Pri mouse move
+    /// O(log N) lookup misto O(N) tree walk = 100 FPS gain pri 5000-box page.
+    pub(crate) hit_rtree: Option<rstar::RTree<crate::browser::spatial_hit::HitEntry>>,
     /// P2 hover invalidation set - per node_ptr ktery je ovlivnen :hover rule.
     /// Pri mouse_move check zda prev/new hovered v setu. Pokud NEN0 -
     /// skip dirty=true -> cascade cache hit -> 0 work.
@@ -234,14 +265,37 @@ pub struct WebView {
     /// matches) -> compositor pass jen sample. Pri size change: realloc texture.
     /// Pri layer remove (rebuild layer_tree): GC unreferenced entries.
     pub(crate) layer_textures: std::collections::HashMap<usize, LayerTextureSlot>,
+    /// Per-tile texture cache (priority 5 - tile-based rasterization).
+    /// Klic = (layer_id, tile_idx). Hodnota = TileTextureSlot.
+    /// Pri damage tile = re-raster jen tato sub-region. Compose: walk tiles
+    /// per layer, blit kazdou. Bez tile granularity = whole layer re-paint
+    /// at any change = wasted GPU pri velkych pages.
+    /// Inspired by WebRender Picture cache tiles + Chromium cc tile_manager.
+    pub(crate) tile_textures: std::collections::HashMap<(usize, usize), TileTextureSlot>,
     /// Posledni LayerTree z extract_layer_tree. Hostujici code muze sample.
     /// Diagnostika + invalidation tracking.
     pub(crate) last_layer_tree: Option<crate::browser::compositor::LayerNode>,
+    /// Prev frame fingerprint per layer_id - pro damage detection. mark_damage
+    /// porovna current fingerprint vs entry, marknek damage_rect kdyz diff.
+    pub(crate) prev_layer_fingerprints: std::collections::HashMap<usize, u64>,
+    /// Prev frame tile fingerprints - per (layer_id, tile_idx). Tile-level
+    /// damage detection (sub-layer granular). Inspired by WebRender tile cache.
+    pub(crate) prev_tile_fingerprints: std::collections::HashMap<(usize, usize), u64>,
+    /// Per-layer paint commands cache. Layer s damage_rect=None reuse jeji
+    /// last frame commands. Plne wired v D3/D4 (per-layer texture caching).
+    /// Aktualne foundation - render_via zatim paintuje monolitne.
+    pub(crate) layer_paint_cache: std::collections::HashMap<usize, Vec<crate::browser::paint::DisplayCommand>>,
     /// Paint cache: hash style_map full content. Pri shode (cascade vraci
     /// novy Rc ale identicky content - hover bez :hover effect) skip paint
     /// + gpu submit, reuse cached target_view. Klicova win pres hover bez
     /// vizualni odezvy = 0ms frame.
     pub(crate) last_paint_fingerprint: Option<u64>,
+    /// Compositor-driven animations - transform/opacity bez re-cascade.
+    /// JS / @keyframes registruje pres `register_compositor_anim`. Tick
+    /// per frame v render_via pred extract_layer_tree. Apply na LayerNode
+    /// po extract (override layer.opacity/transform). Pri animaci tickou
+    /// = structural_fp NE menil = layer texture cache hit = skip raster.
+    pub(crate) compositor_anims: crate::browser::compositor::anim::CompositorAnimStore,
 }
 
 /// Pomocnik pro debug log node count v layout slow path.
@@ -262,6 +316,152 @@ pub struct LayerTextureSlot {
     /// Fingerprint posledniho paintu - hash style + layout boxu v teto layer.
     /// Pri shode skip paint, reuse texture. 0 = nikdy nepaintnuto.
     pub last_paint_fp: u64,
+}
+
+/// Per-tile texture slot - sub-layer granular cache (priority 5 z RENDER
+/// retrospective: tile-based rasterization). Inspired by WebRender
+/// `picture_textures.rs`.
+///
+/// Klic v HashMap = `(layer_id, tile_idx)`. Pri damage tile = realloc/reuse
+/// tato texture + re-raster jen tile region. Pri compose: blit tile texture
+/// na parent layer texture na lokalni pozici.
+///
+/// 256x256 per tile - vlastni overflow `compositor::TILE_SIZE`. Memory
+/// overhead vs whole-layer texture: scaling factor depending na page size.
+/// Pri 1920x1080 viewport = 8x5 = 40 tiles. Pro velky scroll page = stovky.
+/// Pro context: WebRender pouziva 512x512 default tile.
+pub struct TileTextureSlot {
+    pub texture: wgpu::Texture,
+    pub view: wgpu::TextureView,
+    pub width: u32,
+    pub height: u32,
+    /// Fingerprint tile content - hash boxes intersecting tile rect.
+    /// Pri shode skip per-tile raster (texture reuse).
+    pub last_paint_fp: u64,
+}
+
+/// Layer paint cache statistika za frame: (reused_z_cache, repainted, total).
+/// Diagnostika pro damage tracking efficiency.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LayerCacheStats {
+    pub cached: u32,
+    pub repainted: u32,
+    pub total: u32,
+}
+
+thread_local! {
+    static LAYER_CACHE_STATS: std::cell::Cell<LayerCacheStats> =
+        const { std::cell::Cell::new(LayerCacheStats { cached: 0, repainted: 0, total: 0 }) };
+}
+
+/// Postavi display list per-layer s cache reuse pri no damage. Walk LayerTree
+/// in tree order (parent layer first, then children layers - matches paint order).
+/// Per layer: damage=None -> reuse cache; damage=Some -> repaint do cache.
+/// Inspired by WebRender Picture cache.
+fn build_layered_display_list(
+    layer_tree: &crate::browser::compositor::LayerNode,
+    layout_root: &crate::browser::layout::LayoutBox,
+    scroll_y: f32,
+    viewport_h: f32,
+    cache: &mut std::collections::HashMap<usize, Vec<crate::browser::paint::DisplayCommand>>,
+) -> Vec<crate::browser::paint::DisplayCommand> {
+    LAYER_CACHE_STATS.with(|c| c.set(LayerCacheStats::default()));
+    // Set viewport cull bounds (thread_local).
+    crate::browser::paint::set_viewport_cull(scroll_y, scroll_y + viewport_h);
+    let mut out: Vec<crate::browser::paint::DisplayCommand> = Vec::with_capacity(1024);
+    walk_layer_paint(layer_tree, layout_root, &mut out, cache);
+    crate::browser::paint::clear_viewport_cull();
+    out
+}
+
+fn walk_layer_paint(
+    layer: &crate::browser::compositor::LayerNode,
+    layout_root: &crate::browser::layout::LayoutBox,
+    out: &mut Vec<crate::browser::paint::DisplayCommand>,
+    cache: &mut std::collections::HashMap<usize, Vec<crate::browser::paint::DisplayCommand>>,
+) {
+    let layer_box = crate::browser::paint::find_box_by_node_id(layout_root, layer.id);
+    let layer_cmds: Vec<crate::browser::paint::DisplayCommand> = if layer.damage_rect.is_none()
+        && cache.contains_key(&layer.id)
+    {
+        // No damage - reuse cached commands.
+        LAYER_CACHE_STATS.with(|c| {
+            let mut s = c.get(); s.cached += 1; s.total += 1; c.set(s);
+        });
+        cache.get(&layer.id).cloned().unwrap_or_default()
+    } else if let Some(bx) = layer_box {
+        // Damage or first paint - repaint subtree (layer-aware).
+        let mut tmp = Vec::new();
+        crate::browser::paint::paint_layer_into(bx, &mut tmp);
+        cache.insert(layer.id, tmp.clone());
+        LAYER_CACHE_STATS.with(|c| {
+            let mut s = c.get(); s.repainted += 1; s.total += 1; c.set(s);
+        });
+        tmp
+    } else {
+        Vec::new()
+    };
+    out.extend(layer_cmds);
+    // Recurse child layers in z-index order.
+    for child in &layer.children {
+        walk_layer_paint(child, layout_root, out, cache);
+    }
+}
+
+/// Per-layer cache pro GPU rendering (D4 plne pipeline). Cmds jsou v
+/// layer-local coords (origin = layer.root_rect top-left). Pri composite pass
+/// renderer kresli layer textures at viewport position (po scroll shift).
+/// Cache klic = layer_id. Hodnota = Vec<DisplayCommand> v local coords.
+pub(crate) fn build_layer_local_cache(
+    layer_tree: &crate::browser::compositor::LayerNode,
+    layout_root: &crate::browser::layout::LayoutBox,
+    cache: &mut std::collections::HashMap<usize, Vec<crate::browser::paint::DisplayCommand>>,
+) {
+    walk_layer_local(layer_tree, layout_root, cache);
+}
+
+fn walk_layer_local(
+    layer: &crate::browser::compositor::LayerNode,
+    layout_root: &crate::browser::layout::LayoutBox,
+    cache: &mut std::collections::HashMap<usize, Vec<crate::browser::paint::DisplayCommand>>,
+) {
+    if layer.damage_rect.is_some() || !cache.contains_key(&layer.id) {
+        if let Some(bx) = crate::browser::paint::find_box_by_node_id(layout_root, layer.id) {
+            let mut tmp = Vec::new();
+            crate::browser::paint::paint_layer_into(bx, &mut tmp);
+            // Shift cmds to layer-local: subtract layer.root_rect origin.
+            let dx = -layer.root_rect.x;
+            let dy = -layer.root_rect.y;
+            for cmd in tmp.iter_mut() {
+                crate::browser::render::segments::shift_command_x(cmd, dx);
+                crate::browser::render::segments::shift_command_y(cmd, dy);
+            }
+            cache.insert(layer.id, tmp);
+        }
+    }
+    for child in &layer.children {
+        walk_layer_local(child, layout_root, cache);
+    }
+}
+
+/// Get last frame layer cache statistika.
+pub fn last_layer_cache_stats() -> LayerCacheStats {
+    LAYER_CACHE_STATS.with(|c| c.get())
+}
+
+/// Path lookup LayoutBox dle node_id. Vraci (rect_w, rect_h, content_w, content_h).
+fn find_box_dims(bx: &crate::browser::layout::LayoutBox, node_id: usize)
+    -> Option<(f32, f32, f32, f32)>
+{
+    if let Some(n) = &bx.node {
+        if std::rc::Rc::as_ptr(n) as usize == node_id {
+            return Some((bx.rect.width, bx.rect.height, bx.inner_content_w, bx.inner_content_h));
+        }
+    }
+    for ch in &bx.children {
+        if let Some(d) = find_box_dims(ch, node_id) { return Some(d); }
+    }
+    None
 }
 
 impl WebView {
@@ -286,6 +486,11 @@ impl WebView {
             scroll_x: 0.0,
             scroll_target_y: 0.0,
             scroll_target_x: 0.0,
+            scroll_anim_y: None,
+            scroll_anim_x: None,
+            frame_pacer: crate::browser::render::frame_pacing::FramePacer::new(60),
+            web_vitals: crate::browser::web_vitals::WebVitalsCollector::new(),
+            element_scroll: std::collections::HashMap::new(),
             target_texture: None,
             target_view: None,
             dirty: true,
@@ -304,8 +509,11 @@ impl WebView {
             overlay_painter: None,
             last_synced_scroll_pos: (0.0, 0.0),
             focused_node_local: None,
+            layout_dumped: false,
             v_scrollbar_drag: None,
             h_scrollbar_drag: None,
+            inner_v_drag: None,
+            inner_h_drag: None,
             last_layout_root: None,
             layout_rects: std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new())),
             cascade_props: std::rc::Rc::new(std::cell::RefCell::new(None)),
@@ -320,6 +528,7 @@ impl WebView {
             paint_fp_cache: None,
             hit_test_cache: None,
             hovered_node_local: None,
+            hit_rtree: None,
             hover_affected_set: std::collections::HashSet::new(),
             prof_cascade_ms: 0.0,
             prof_layout_ms: 0.0,
@@ -330,8 +539,68 @@ impl WebView {
             layout_overflow_log_count: 0,
             layer_textures: std::collections::HashMap::new(),
             last_layer_tree: None,
+            prev_layer_fingerprints: std::collections::HashMap::new(),
+            prev_tile_fingerprints: std::collections::HashMap::new(),
+            layer_paint_cache: std::collections::HashMap::new(),
             last_paint_fingerprint: None,
+            compositor_anims: crate::browser::compositor::anim::CompositorAnimStore::new(),
+            tile_textures: std::collections::HashMap::new(),
         }
+    }
+
+    /// Registruj compositor-driven opacity anim.
+    /// `node_id` = Rc::as_ptr(node) as usize. Anim tikla per render_via tick,
+    /// override layer.opacity v compose pass bez re-cascade/repaint.
+    pub fn register_opacity_anim(
+        &mut self,
+        node_id: usize,
+        from: f32,
+        to: f32,
+        duration_ms: f32,
+        easing: crate::browser::compositor::anim::Easing,
+        iterations: f32,
+        alternate: bool,
+    ) {
+        self.compositor_anims.insert(node_id, crate::browser::compositor::anim::CompositorAnim::Opacity {
+            from, to,
+            start: std::time::Instant::now(),
+            duration_ms, easing, iterations, alternate,
+            current: from,
+            done: false,
+        });
+        self.dirty = true;
+    }
+
+    /// Registruj compositor-driven transform anim.
+    pub fn register_transform_anim(
+        &mut self,
+        node_id: usize,
+        from: crate::browser::layout::TransformOp,
+        to: crate::browser::layout::TransformOp,
+        duration_ms: f32,
+        easing: crate::browser::compositor::anim::Easing,
+        iterations: f32,
+        alternate: bool,
+    ) {
+        let cur = from.clone();
+        self.compositor_anims.insert(node_id, crate::browser::compositor::anim::CompositorAnim::Transform {
+            from, to,
+            start: std::time::Instant::now(),
+            duration_ms, easing, iterations, alternate,
+            current: cur,
+            done: false,
+        });
+        self.dirty = true;
+    }
+
+    /// Odstran vsechny compositor anim pro node.
+    pub fn remove_compositor_anim(&mut self, node_id: usize) {
+        self.compositor_anims.remove(node_id);
+    }
+
+    /// Diagnostika pocet aktivnich compositor anim.
+    pub fn compositor_anim_count(&self) -> usize {
+        self.compositor_anims.active_count()
     }
 
     /// Diagnostika: pocet aktivnich layers v posledni render. L1 compositor
@@ -357,6 +626,13 @@ impl WebView {
     /// Pro diagnostiku - shell title bar nebo overlay.
     pub fn render_phase_times(&self) -> (f32, f32, f32, f32) {
         (self.prof_cascade_ms, self.prof_layout_ms, self.prof_paint_ms, self.prof_gpu_ms)
+    }
+
+    /// Layer cache stats z posledniho frame: (cached_z_prev, repainted, total).
+    /// Cached high = damage tracking efficient. Repainted high = page se hodne meni.
+    pub fn layer_cache_stats(&self) -> (u32, u32, u32) {
+        let s = last_layer_cache_stats();
+        (s.cached, s.repainted, s.total)
     }
 
     /// Painted text runs z posledniho `render_via` (per-glyph cumulative
@@ -726,8 +1002,13 @@ impl WebView {
         logical_h: f32,
     ) -> Option<()> {
         let device = self.engine.device.as_ref()?.clone();
-        let phys_w = ((logical_w * self.scale_factor) as u32).max(1);
-        let phys_h = ((logical_h * self.scale_factor) as u32).max(1);
+        // Layer phys = logical * zoom * scale_factor. Bez zoom multiplier by
+        // pri zoom 1.5x byl layer tex stored at base size. Atlas glyph raster
+        // at zoom-scaled size -> compose downsamples to layer tex -> SOFT.
+        // S zoom v scale: layer phys matches atlas raster scale = 1:1 sharp.
+        let combined = self.zoom * self.scale_factor;
+        let phys_w = ((logical_w * combined) as u32).max(1);
+        let phys_h = ((logical_h * combined) as u32).max(1);
 
         // Reuse pri shode size.
         if let Some(slot) = self.layer_textures.get(&layer_id) {
@@ -763,9 +1044,98 @@ impl WebView {
     /// Garbage collect layer_textures - drop entries jejichz layer_id neni v
     /// current_layers set. Volat po extract_layer_tree v render_via.
     /// Bez GC: layer_textures roste pri DOM mutaci (smazane elementy ale
-    /// jejich texture cache zustava).
+    /// jejich texture cache zustava). Take GC paint cache - smazani layer
+    /// = uvolnit commands.
     pub(crate) fn gc_layer_textures(&mut self, alive_layer_ids: &std::collections::HashSet<usize>) {
         self.layer_textures.retain(|k, _| alive_layer_ids.contains(k));
+        self.layer_paint_cache.retain(|k, _| alive_layer_ids.contains(k));
+        self.prev_layer_fingerprints.retain(|k, _| alive_layer_ids.contains(k));
+        // Tile textures take vazane na layer_id - drop entries kde layer mrtvy.
+        self.tile_textures.retain(|(lid, _), _| alive_layer_ids.contains(lid));
+    }
+
+    /// Allokuje (nebo reuses) per-tile texture pro `(layer_id, tile_idx)`.
+    /// Tile dimensions v logical CSS px (tile.local_rect.width/height).
+    /// Pri shode size: no-op. Pri size change: realloc.
+    ///
+    /// Cast priority 5 (tile-based rasterization). Volana pres
+    /// `ensure_tile_textures_for_layer` po extract_layer_tree.
+    pub(crate) fn ensure_tile_texture(
+        &mut self,
+        layer_id: usize,
+        tile_idx: usize,
+        logical_w: f32,
+        logical_h: f32,
+    ) -> Option<()> {
+        let device = self.engine.device.as_ref()?.clone();
+        // Tile phys s zoom (same jako layer texture) - bez zoom by atlas raster
+        // != tile tex scale = bilinear downsample = blur.
+        let combined = self.zoom * self.scale_factor;
+        let phys_w = ((logical_w * combined) as u32).max(1);
+        let phys_h = ((logical_h * combined) as u32).max(1);
+        let key = (layer_id, tile_idx);
+        if let Some(slot) = self.tile_textures.get(&key) {
+            if slot.width == phys_w && slot.height == phys_h {
+                return Some(());
+            }
+        }
+        let tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("rwe-tile-offscreen"),
+            size: wgpu::Extent3d { width: phys_w, height: phys_h, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Bgra8UnormSrgb,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+        self.tile_textures.insert(key, TileTextureSlot {
+            texture: tex,
+            view,
+            width: phys_w,
+            height: phys_h,
+            last_paint_fp: 0,
+        });
+        Some(())
+    }
+
+    /// Allokuje tile textures pro vsechny dirty tiles v layer. No-op pro
+    /// tiles s `dirty=false` (texture reuse). Volana ve smycce per damaged
+    /// layer v render_via.
+    pub(crate) fn ensure_tile_textures_for_layer(
+        &mut self,
+        layer: &crate::browser::compositor::LayerNode,
+    ) {
+        for (idx, tile) in layer.tiles.iter().enumerate() {
+            if !tile.dirty {
+                // Hot path - reuse exist texture pokud size match. Pokud
+                // texture neexistuje (prvni navsteva), allokuj.
+                let key = (layer.id, idx);
+                if self.tile_textures.contains_key(&key) {
+                    continue;
+                }
+            }
+            let _ = self.ensure_tile_texture(
+                layer.id, idx,
+                tile.local_rect.width.max(1.0),
+                tile.local_rect.height.max(1.0),
+            );
+        }
+    }
+
+    /// Diagnostika - pocet tile textures v cache.
+    pub fn tile_texture_count(&self) -> usize {
+        self.tile_textures.len()
+    }
+
+    /// Diagnostika - aktualni VRAM footprint tile cache v bytes (4 bpp BGRA).
+    pub fn tile_texture_bytes(&self) -> u64 {
+        self.tile_textures.values()
+            .map(|s| s.width as u64 * s.height as u64 * 4)
+            .sum()
     }
 
     /// Zpracuj input event. Vrati `EventResponse` se zmenami pro hostujici
@@ -774,24 +1144,197 @@ impl WebView {
     /// Phase 5 minimal implementacne: scroll + mouse move + resize. Click/key
     /// dispatch do JS event listeneru = Phase 99 (vyzaduje hit-test pres
     /// layout tree + DOM addEventListener registry).
+    /// Spusti / retarget smooth scroll animation Y axis. Pri rapid wheel se
+    /// velocity z prev anim preserves (= acceleration feel).
+    /// Pres `scroll_anim::retarget_scroll`.
+    fn start_scroll_anim_y(&mut self, target: f32) {
+        let now = std::time::Instant::now();
+        self.scroll_target_y = target;
+        self.scroll_anim_y = crate::browser::scroll_anim::retarget_scroll(
+            self.scroll_y, target, now, self.scroll_anim_y.as_ref());
+        if self.scroll_anim_y.is_none() {
+            self.scroll_y = target;
+        }
+    }
+    fn start_scroll_anim_x(&mut self, target: f32) {
+        let now = std::time::Instant::now();
+        self.scroll_target_x = target;
+        self.scroll_anim_x = crate::browser::scroll_anim::retarget_scroll(
+            self.scroll_x, target, now, self.scroll_anim_x.as_ref());
+        if self.scroll_anim_x.is_none() {
+            self.scroll_x = target;
+        }
+    }
+
+    /// Dispatch 'wheel' event do JS interpretu. Vrati true pokud listener
+    /// zavolal preventDefault (= skip native scroll). Hit-testne target node
+    /// pod kurzorem, vyrobi WheelEvent obj s deltaX/Y + clientX/Y, projde
+    /// chain.
+    fn dispatch_wheel_event(&mut self, x: f32, y: f32, dx: f32, dy: f32) -> bool {
+        let content_x = x + self.scroll_x;
+        let content_y = y + self.scroll_y;
+        let target = match self.last_layout_root.as_ref()
+            .and_then(|r| r.hit_test(content_x, content_y))
+            .and_then(|bx| bx.node.clone()) {
+            Some(n) => n,
+            None => return false,
+        };
+        let interp = match self.interpreter.as_mut() { Some(i) => i, None => return false };
+        let mut event = crate::interpreter::JsObject::new();
+        event.set("type".into(), crate::interpreter::JsValue::Str("wheel".into()));
+        event.set("deltaX".into(), crate::interpreter::JsValue::Number(dx as f64));
+        event.set("deltaY".into(), crate::interpreter::JsValue::Number(dy as f64));
+        event.set("deltaZ".into(), crate::interpreter::JsValue::Number(0.0));
+        event.set("deltaMode".into(), crate::interpreter::JsValue::Number(0.0)); // 0 = pixel
+        event.set("clientX".into(), crate::interpreter::JsValue::Number(x as f64));
+        event.set("clientY".into(), crate::interpreter::JsValue::Number(y as f64));
+        event.set("target".into(), crate::interpreter::JsValue::DomNode(std::rc::Rc::clone(&target)));
+        event.set("bubbles".into(), crate::interpreter::JsValue::Bool(true));
+        event.set("cancelable".into(), crate::interpreter::JsValue::Bool(true));
+        let event_rc = std::rc::Rc::new(std::cell::RefCell::new(event));
+        let event_val = crate::interpreter::JsValue::Object(std::rc::Rc::clone(&event_rc));
+        let _ = interp.dispatch_event(&target, "wheel", event_val);
+        // Check defaultPrevented po dispatchu.
+        matches!(event_rc.borrow().get("defaultPrevented"),
+            crate::interpreter::JsValue::Bool(true))
+    }
+
+    /// Kbd scroll dispatcher - smerue dy do inner scrollable elementu pod
+    /// kurzorem; pokud zadny match, fallback viewport scroll_target_y.
+    /// Vola se z shell pri PageUp/Down, Arrow up/down, Home, End, Space.
+    pub fn kbd_scroll_y(&mut self, dy: f32) -> bool {
+        use crate::browser::scroll::{ScrollableMut, ElementScroll};
+        let viewport_w = self.viewport_w / self.zoom.max(0.01);
+        let target = self.find_scroll_target(self.mouse_x, self.mouse_y, 0.0, dy);
+        if let Some(node_id) = target {
+            if let Some(root) = &self.last_layout_root {
+                if let Some((rw, rh, cw, ch)) = find_box_dims(root, node_id) {
+                    let mut h = ElementScroll {
+                        map: &mut self.element_scroll,
+                        node_id, rect_w: rw, rect_h: rh,
+                        content_w: cw, content_h: ch,
+                    };
+                    h.scroll_by(0.0, dy);
+                    self.dirty = true;
+                    return true;
+                }
+            }
+        }
+        let viewport_h = self.viewport_h / self.zoom.max(0.01);
+        let _ = viewport_w;
+        let (_content_w, content_h) = match &self.last_layout_root {
+            Some(l) => (l.rect.width, l.rect.height),
+            None => (f32::INFINITY, f32::INFINITY),
+        };
+        let max_y = (content_h - viewport_h).max(0.0);
+        let new_target = (self.scroll_target_y + dy).clamp(0.0, max_y);
+        self.start_scroll_anim_y(new_target);
+        self.dirty = true;
+        true
+    }
+
+    /// Hit-test layout pres mouse (logical px) + walk up ancestors. Vrati
+    /// node_id prvniho scrollable predka kdyz scrolly v dany smer (dx/dy)
+    /// jeste zbyva room. Pouziva trait `Scrollable::has_room`. Inak None =
+    /// fallback viewport scroll.
+    fn find_scroll_target(&self, mx: f32, my: f32, dx: f32, dy: f32) -> Option<usize> {
+        use crate::browser::scroll::Scrollable;
+        let root = self.last_layout_root.as_ref()?;
+        let content_x = mx + self.scroll_x;
+        let content_y = my + self.scroll_y;
+        fn collect_path<'a>(bx: &'a crate::browser::layout::LayoutBox, x: f32, y: f32,
+                            out: &mut Vec<&'a crate::browser::layout::LayoutBox>) {
+            if x < bx.rect.x || y < bx.rect.y
+                || x > bx.rect.x + bx.rect.width
+                || y > bx.rect.y + bx.rect.height { return; }
+            out.push(bx);
+            let cx = x + bx.scroll_offset_x;
+            let cy = y + bx.scroll_offset_y;
+            for ch in &bx.children {
+                collect_path(ch, cx, cy, out);
+            }
+        }
+        let mut path: Vec<&crate::browser::layout::LayoutBox> = Vec::new();
+        collect_path(root, content_x, content_y, &mut path);
+        for bx in path.iter().rev() {
+            if !bx.needs_scrollbar_y() && !bx.needs_scrollbar_x() { continue; }
+            let node = bx.node.as_ref()?;
+            let node_id = std::rc::Rc::as_ptr(node) as usize;
+            // Construct read-only handle pres trait has_room. Map iz parent self,
+            // pro read jen .get(node_id) - vsechno z snapshot.
+            let (sx, sy) = self.element_scroll.get(&node_id).copied().unwrap_or((0.0, 0.0));
+            let (mx, my) = (
+                (bx.inner_content_w - bx.rect.width).max(0.0),
+                (bx.inner_content_h - bx.rect.height).max(0.0),
+            );
+            let room_y = (dy > 0.0 && sy < my) || (dy < 0.0 && sy > 0.0);
+            let room_x = (dx > 0.0 && sx < mx) || (dx < 0.0 && sx > 0.0);
+            if (dy != 0.0 && bx.needs_scrollbar_y() && room_y)
+                || (dx != 0.0 && bx.needs_scrollbar_x() && room_x) {
+                return Some(node_id);
+            }
+        }
+        None
+    }
+
     pub fn handle_input(&mut self, event: InputEvent) -> EventResponse {
         let mut response = EventResponse::default();
         match event {
-            InputEvent::Scroll { dx, dy, .. } => {
-                // Wheel adjusts smooth scroll target. render_via lerp aktivni
-                // scroll_y -> scroll_target_y 25 %% per frame. Clamp na
-                // [0, max] kde max = layout_h - viewport_h (z last render).
+            InputEvent::Scroll { dx, dy, x, y, .. } => {
+                use crate::browser::scroll::{ScrollableMut, ElementScroll};
+                self.mouse_x = x;
+                self.mouse_y = y;
                 let viewport_h = self.viewport_h / self.zoom.max(0.01);
                 let viewport_w = self.viewport_w / self.zoom.max(0.01);
-                let (max_y, max_x) = match &self.last_layout_root {
-                    Some(l) => (
-                        (l.rect.height - viewport_h).max(0.0),
-                        (l.rect.width - viewport_w).max(0.0),
-                    ),
-                    None => (f32::INFINITY, f32::INFINITY),
-                };
-                self.scroll_target_x = (self.scroll_target_x + dx).clamp(0.0, max_x);
-                self.scroll_target_y = (self.scroll_target_y + dy).clamp(0.0, max_y);
+                // Dispatch 'wheel' event do JS pred native scroll. Pokud listener
+                // zavola event.preventDefault() -> skip scroll.
+                // Inspired by Chromium core/input/event_handler.cc - wheel je JS
+                // event first, native scroll second.
+                let prevented = self.dispatch_wheel_event(x, y, dx, dy);
+                if std::env::var("RWE_SCROLL_DBG").is_ok() {
+                    eprintln!("[SCROLL] x={x} y={y} dx={dx} dy={dy} prevented={prevented}");
+                }
+                if prevented {
+                    self.dirty = true;
+                    response.dirty = true;
+                    return response;
+                }
+                let target = self.find_scroll_target(x, y, dx, dy);
+                if std::env::var("RWE_SCROLL_DBG").is_ok() {
+                    eprintln!("[SCROLL] target={:?}", target);
+                }
+                if let Some(node_id) = target {
+                    // Najdi bx pres path scan zatim - pro dim. Path lookup z layout_root.
+                    if let Some(root) = &self.last_layout_root {
+                        if let Some((rw, rh, cw, ch)) = find_box_dims(root, node_id) {
+                            let mut handle = ElementScroll {
+                                map: &mut self.element_scroll,
+                                node_id,
+                                rect_w: rw, rect_h: rh,
+                                content_w: cw, content_h: ch,
+                            };
+                            handle.scroll_by(dx, dy);
+                        }
+                    }
+                } else {
+                    // Viewport smooth scroll - start cubic-bezier animation.
+                    // Target = clamped(current_target + delta). Pri novem wheel
+                    // pred dokoncenim animation = retarget z aktualniho scroll_y.
+                    let (content_w, content_h) = match &self.last_layout_root {
+                        Some(l) => (l.rect.width, l.rect.height),
+                        None => (f32::INFINITY, f32::INFINITY),
+                    };
+                    let max_y = (content_h - viewport_h).max(0.0);
+                    let max_x = (content_w - viewport_w).max(0.0);
+                    let new_target_y = (self.scroll_target_y + dy).clamp(0.0, max_y);
+                    let new_target_x = (self.scroll_target_x + dx).clamp(0.0, max_x);
+                    if (new_target_y - self.scroll_y).abs() > 0.5 {
+                        self.start_scroll_anim_y(new_target_y);
+                    }
+                    if (new_target_x - self.scroll_x).abs() > 0.5 {
+                        self.start_scroll_anim_x(new_target_x);
+                    }
+                }
                 self.dirty = true;
                 response.dirty = true;
             }
@@ -799,6 +1342,39 @@ impl WebView {
                 if (self.mouse_x - x).abs() > 0.5 || (self.mouse_y - y).abs() > 0.5 {
                     self.mouse_x = x;
                     self.mouse_y = y;
+                    // Inner scrollbar drag - prepocet thumb pos -> element_scroll.
+                    let cx_inner = x + self.scroll_x;
+                    let cy_inner = y + self.scroll_y;
+                    if let Some((node_id, grab_y, max_y, bar_y, bar_h)) = self.inner_v_drag {
+                        // Thumb size invariant: vyresit z bar_h + max_scroll/vh - ale
+                        // jednodusší: thumb_h dynamic, recompute. Pouzij stored max_y
+                        // jako auth source; thumb_h = bar_h * (bar_h / (bar_h + max_y))
+                        // (= viewport / content)... ale potreba viewport_h boxu.
+                        // bar_h = rect.height (= visible viewport per element).
+                        // content_h = max_y + bar_h -> thumb_h = bar_h * bar_h / (max_y + bar_h).
+                        let content_h = max_y + bar_h;
+                        let thumb_h = (bar_h * bar_h / content_h).max(30.0);
+                        let track = (bar_h - thumb_h).max(1.0);
+                        let new_thumb_top = (cy_inner - grab_y - bar_y).clamp(0.0, track);
+                        let new_scroll = (new_thumb_top / track) * max_y;
+                        let (sx, _) = self.element_scroll.get(&node_id).copied().unwrap_or((0.0, 0.0));
+                        self.element_scroll.insert(node_id, (sx, new_scroll));
+                        self.dirty = true;
+                        response.dirty = true;
+                        return response;
+                    }
+                    if let Some((node_id, grab_x, max_x, bar_x, bar_w)) = self.inner_h_drag {
+                        let content_w = max_x + bar_w;
+                        let thumb_w = (bar_w * bar_w / content_w).max(30.0);
+                        let track = (bar_w - thumb_w).max(1.0);
+                        let new_thumb_left = (cx_inner - grab_x - bar_x).clamp(0.0, track);
+                        let new_scroll = (new_thumb_left / track) * max_x;
+                        let (_, sy) = self.element_scroll.get(&node_id).copied().unwrap_or((0.0, 0.0));
+                        self.element_scroll.insert(node_id, (new_scroll, sy));
+                        self.dirty = true;
+                        response.dirty = true;
+                        return response;
+                    }
                     // Scrollbar thumb drag - update scroll position pres
                     // mouse pos vs thumb grab offset.
                     let viewport_w = self.viewport_w / self.zoom.max(0.01);
@@ -835,20 +1411,45 @@ impl WebView {
                     }
                     // Hit-test layout_root pres content coords -> :hover state.
                     // Cache: pri stejne 2px-mrizce a dom_version reuse posledni
-                    // hovered_id (bez tree walk).
+                    // hovered_id (bez tree walk). PERF: R-tree query O(log N) misto
+                    // O(N) tree walk. Pri transformed/fixed subtree fallback na
+                    // klasicky tree walk (NeedsFallback).
                     let content_x = x + self.scroll_x;
                     let content_y = y + self.scroll_y;
                     let dom_v = self.interpreter.as_ref().map(|i| i.dom_version()).unwrap_or(0);
                     let hit_key = ((content_x / 2.0) as i32, (content_y / 2.0) as i32, dom_v);
+                    let (hit_id, hit_tag, hit_over_text) = {
+                        use crate::browser::spatial_hit::{hit_test_point, HitResult};
+                        let from_rtree = self.hit_rtree.as_ref()
+                            .map(|t| hit_test_point(t, content_x, content_y));
+                        match from_rtree {
+                            Some(HitResult::Hit(info)) => (
+                                Some(info.node_ptr),
+                                info.tag,
+                                info.has_text,
+                            ),
+                            Some(HitResult::Miss) => (None, None, false),
+                            // Pri NeedsFallback (transform/fixed subtree) ANO nebo
+                            // pri No-Rtree fallne na klasicky tree walk.
+                            _ => {
+                                let hit_box = self.last_layout_root.as_ref()
+                                    .and_then(|root| root.hit_test(content_x, content_y));
+                                let id = hit_box
+                                    .and_then(|bx| bx.node.as_ref().map(|n|
+                                        std::rc::Rc::as_ptr(n) as usize));
+                                let tag = hit_box
+                                    .and_then(|bx| bx.node.as_ref().map(|n| n.tag_name()))
+                                    .flatten();
+                                let over_text = hit_box.map(|bx| bx.text.is_some()).unwrap_or(false);
+                                (id, tag, over_text)
+                            }
+                        }
+                    };
                     let hovered_id = match &self.hit_test_cache {
                         Some((k, v)) if *k == hit_key => *v,
                         _ => {
-                            let h = self.last_layout_root.as_ref()
-                                .and_then(|root| root.hit_test(content_x, content_y))
-                                .and_then(|bx| bx.node.as_ref().map(|n|
-                                    std::rc::Rc::as_ptr(n) as usize));
-                            self.hit_test_cache = Some((hit_key, h));
-                            h
+                            self.hit_test_cache = Some((hit_key, hit_id));
+                            hit_id
                         }
                     };
                     // Per-WebView hovered. Bez per-WV stav by mouse_move v
@@ -870,6 +1471,59 @@ impl WebView {
                         if prev_affected || new_affected {
                             self.dirty = true;
                             response.dirty = true;
+                        }
+                        // Fire mouseleave (prev) + mouseenter (cur) DOM events.
+                        // Bez tohoto JS handlers (= devtools tree hover -> CDP
+                        // Overlay.highlightNode) nikdy nevykonaji. Chrome/FF
+                        // semantika: non-bubbling, fire pres target az root.
+                        let make_evt = |x_pos: f32, y_pos: f32, ty: &str, t: &std::rc::Rc<crate::browser::dom::Node>| {
+                            let mut event = crate::interpreter::JsObject::new();
+                            event.set("type".into(), crate::interpreter::JsValue::Str(ty.into()));
+                            event.set("clientX".into(), crate::interpreter::JsValue::Number(x_pos as f64));
+                            event.set("clientY".into(), crate::interpreter::JsValue::Number(y_pos as f64));
+                            event.set("target".into(), crate::interpreter::JsValue::DomNode(
+                                std::rc::Rc::clone(t)));
+                            crate::interpreter::JsValue::Object(
+                                std::rc::Rc::new(std::cell::RefCell::new(event)))
+                        };
+                        if let Some(root) = self.last_layout_root.as_ref() {
+                            let prev_target = prev_id.and_then(|p|
+                                crate::browser::paint::find_box_by_node_id(root, p)
+                                    .and_then(|bx| bx.node.clone()));
+                            let cur_target = hovered_id.and_then(|n|
+                                crate::browser::paint::find_box_by_node_id(root, n)
+                                    .and_then(|bx| bx.node.clone()));
+                            if let Some(interp) = self.interpreter.as_mut() {
+                                if let Some(t) = prev_target {
+                                    let e1 = make_evt(x, y, "mouseleave", &t);
+                                    let e2 = make_evt(x, y, "mouseout", &t);
+                                    let _ = interp.dispatch_event(&t, "mouseleave", e1);
+                                    let _ = interp.dispatch_event(&t, "mouseout", e2);
+                                }
+                                if let Some(t) = cur_target {
+                                    let e1 = make_evt(x, y, "mouseenter", &t);
+                                    let e2 = make_evt(x, y, "mouseover", &t);
+                                    let _ = interp.dispatch_event(&t, "mouseenter", e1);
+                                    let _ = interp.dispatch_event(&t, "mouseover", e2);
+                                }
+                            }
+                        }
+                    }
+                    // Fire mousemove pres cur target (= kazda mouse move pos).
+                    if let Some(root) = self.last_layout_root.as_ref() {
+                        let cur_target = hovered_id.and_then(|n|
+                            crate::browser::paint::find_box_by_node_id(root, n)
+                                .and_then(|bx| bx.node.clone()));
+                        if let (Some(t), Some(interp)) = (cur_target, self.interpreter.as_mut()) {
+                            let mut event = crate::interpreter::JsObject::new();
+                            event.set("type".into(), crate::interpreter::JsValue::Str("mousemove".into()));
+                            event.set("clientX".into(), crate::interpreter::JsValue::Number(x as f64));
+                            event.set("clientY".into(), crate::interpreter::JsValue::Number(y as f64));
+                            event.set("target".into(), crate::interpreter::JsValue::DomNode(
+                                std::rc::Rc::clone(&t)));
+                            let event_val = crate::interpreter::JsValue::Object(
+                                std::rc::Rc::new(std::cell::RefCell::new(event)));
+                            let _ = interp.dispatch_event(&t, "mousemove", event_val);
                         }
                     }
                     if self.open_select.is_some() {
@@ -893,20 +1547,14 @@ impl WebView {
                             response.dirty = true;
                         }
                     }
-                    // Cursor icon dle hovered tag.
-                    let hovered_tag = self.last_layout_root.as_ref()
-                        .and_then(|root| root.hit_test(content_x, content_y))
-                        .and_then(|bx| bx.node.as_ref().map(|n| n.tag_name()))
-                        .flatten();
-                    response.cursor = Some(match hovered_tag.as_deref() {
+                    // Cursor icon dle hovered tag. PERF: reuse hit_tag + hit_over_text
+                    // z single hit_test vyse (drive 3 hit_test calls per mouse move =
+                    // 300% over-work pres 5000-box layout = 100 FPS drop pri pohybu mysi).
+                    response.cursor = Some(match hit_tag.as_deref() {
                         Some("a") | Some("button") => crate::embed::CursorIcon::Pointer,
                         Some("input") | Some("textarea") => crate::embed::CursorIcon::Text,
                         _ => {
-                            // Pres text node -> taky text cursor.
-                            let over_text = self.last_layout_root.as_ref()
-                                .and_then(|root| root.hit_test(content_x, content_y))
-                                .map(|bx| bx.text.is_some()).unwrap_or(false);
-                            if over_text {
+                            if hit_over_text {
                                 crate::embed::CursorIcon::Text
                             } else {
                                 crate::embed::CursorIcon::Default
@@ -956,6 +1604,99 @@ impl WebView {
                                 self.scroll_x = new_scroll;
                                 self.scroll_target_x = new_scroll;
                             }
+                            response.dirty = true;
+                            self.dirty = true;
+                            return response;
+                        }
+                    }
+                    // Inner scrollbar thumb/track drag - walk path k nejhlubsimu
+                    // scrollable boxu pod kurzorem. Bar je vpravo dole rect.
+                    use crate::browser::scroll::Scrollable;
+                    let cx = x + self.scroll_x;
+                    let cy = y + self.scroll_y;
+                    let layout = self.last_layout_root.as_ref();
+                    if let Some(root) = layout {
+                        fn collect_path<'a>(bx: &'a crate::browser::layout::LayoutBox, x: f32, y: f32,
+                                            out: &mut Vec<&'a crate::browser::layout::LayoutBox>) {
+                            if x < bx.rect.x || y < bx.rect.y
+                                || x > bx.rect.x + bx.rect.width
+                                || y > bx.rect.y + bx.rect.height { return; }
+                            out.push(bx);
+                            let cx = x + bx.scroll_offset_x;
+                            let cy = y + bx.scroll_offset_y;
+                            for ch in &bx.children {
+                                collect_path(ch, cx, cy, out);
+                            }
+                        }
+                        let mut path: Vec<&crate::browser::layout::LayoutBox> = Vec::new();
+                        collect_path(root, cx, cy, &mut path);
+                        // Iter z nejhlubsiho - prvni match wins.
+                        let mut handled = false;
+                        for bx in path.iter().rev() {
+                            let node = match bx.node.as_ref() { Some(n) => n, None => continue };
+                            let node_id = std::rc::Rc::as_ptr(node) as usize;
+                            // Current scroll offsets z mapy (NE z bx.scroll_offset
+                            // - last_layout_root je clean snapshot).
+                            let (cur_sx, cur_sy) = self.element_scroll
+                                .get(&node_id).copied().unwrap_or((0.0, 0.0));
+                            // V scrollbar bar
+                            if bx.needs_scrollbar_y() {
+                                let bar_w = bx.scrollbar_size.max(8.0).min(14.0);
+                                let bar_x = bx.rect.x + bx.rect.width - bar_w;
+                                let bar_y = bx.rect.y;
+                                let bar_h = bx.rect.height;
+                                if cx >= bar_x && cx < bar_x + bar_w
+                                    && cy >= bar_y && cy < bar_y + bar_h
+                                {
+                                    let max_y = (bx.inner_content_h - bx.rect.height).max(0.0);
+                                    let content_h = bx.inner_content_h.max(1.0);
+                                    let thumb_h = (bar_h * bar_h / content_h).max(30.0);
+                                    let track = (bar_h - thumb_h).max(0.0);
+                                    let thumb_off = if max_y > 0.0 {
+                                        (cur_sy / max_y).clamp(0.0, 1.0) * track
+                                    } else { 0.0 };
+                                    let thumb_top = bar_y + thumb_off;
+                                    if cy >= thumb_top && cy < thumb_top + thumb_h {
+                                        self.inner_v_drag = Some((node_id, cy - thumb_top, max_y, bar_y, bar_h));
+                                    } else {
+                                        let delta = if cy < thumb_top { -bx.rect.height } else { bx.rect.height };
+                                        let new_y = (cur_sy + delta).clamp(0.0, max_y);
+                                        self.element_scroll.insert(node_id, (cur_sx, new_y));
+                                    }
+                                    handled = true;
+                                    break;
+                                }
+                            }
+                            // H scrollbar bar
+                            if bx.needs_scrollbar_x() {
+                                let bar_h = bx.scrollbar_size.max(8.0).min(14.0);
+                                let bar_y = bx.rect.y + bx.rect.height - bar_h;
+                                let bar_x = bx.rect.x;
+                                let bar_w = bx.rect.width;
+                                if cy >= bar_y && cy < bar_y + bar_h
+                                    && cx >= bar_x && cx < bar_x + bar_w
+                                {
+                                    let max_x = (bx.inner_content_w - bx.rect.width).max(0.0);
+                                    let content_w = bx.inner_content_w.max(1.0);
+                                    let thumb_w = (bar_w * bar_w / content_w).max(30.0);
+                                    let track = (bar_w - thumb_w).max(0.0);
+                                    let thumb_off = if max_x > 0.0 {
+                                        (cur_sx / max_x).clamp(0.0, 1.0) * track
+                                    } else { 0.0 };
+                                    let thumb_left = bar_x + thumb_off;
+                                    if cx >= thumb_left && cx < thumb_left + thumb_w {
+                                        self.inner_h_drag = Some((node_id, cx - thumb_left, max_x, bar_x, bar_w));
+                                    } else {
+                                        let delta = if cx < thumb_left { -bx.rect.width } else { bx.rect.width };
+                                        let new_x = (cur_sx + delta).clamp(0.0, max_x);
+                                        self.element_scroll.insert(node_id, (new_x, cur_sy));
+                                    }
+                                    handled = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if handled {
                             response.dirty = true;
                             self.dirty = true;
                             return response;
@@ -1033,6 +1774,12 @@ impl WebView {
             InputEvent::MouseUp { x, y, button, .. } => {
                 if matches!(button, crate::embed::MouseButton::Left) {
                     // End scrollbar drag.
+                    if self.inner_v_drag.is_some() || self.inner_h_drag.is_some() {
+                        self.inner_v_drag = None;
+                        self.inner_h_drag = None;
+                        response.dirty = true;
+                        self.dirty = true;
+                    }
                     if self.v_scrollbar_drag.is_some() || self.h_scrollbar_drag.is_some() {
                         self.v_scrollbar_drag = None;
                         self.h_scrollbar_drag = None;
@@ -1360,6 +2107,9 @@ impl WebView {
         &mut self,
         renderer: &mut crate::browser::render::Renderer,
     ) -> Option<&wgpu::TextureView> {
+        // Frame pacing: begin_frame na vstupu, mark_presented na vystupu.
+        // Pres `browser::render::frame_pacing::FramePacer` foundation.
+        let _frame_idx = self.frame_pacer.begin_frame();
         if self.target_texture.is_none() {
             self.ensure_target_texture();
         }
@@ -1403,11 +2153,7 @@ impl WebView {
         //
         // Animations + smooth scroll + focused input -> NEN0 dirty, ale potreba
         // tick. Check zvlastne aktivni animace nez full skip.
-        let needs_tick = !self.active_animations.is_empty()
-            || !self.active_transitions.is_empty()
-            || (self.scroll_target_y - self.scroll_y).abs() > 0.5
-            || (self.scroll_target_x - self.scroll_x).abs() > 0.5
-            || self.focused_is_input();
+        let needs_tick = self.needs_continuous_render();
         if !self.dirty && !needs_tick {
             // Reset profilers - jinak title bar drzi historickou hodnotu z
             // prvni render (uvadi v omyl user diagnostiku).
@@ -1415,6 +2161,8 @@ impl WebView {
             self.prof_layout_ms = 0.0;
             self.prof_paint_ms = 0.0;
             self.prof_gpu_ms = 0.0;
+            // Idle frame - texture reused. Marked presented (cached path).
+            self.frame_pacer.mark_presented(_frame_idx);
             return self.target_view.as_ref();
         }
         // Renderer sdili pipeline + uniforms s WebView - sync browser zoom +
@@ -1444,19 +2192,32 @@ impl WebView {
                 self.scroll_y = jy;
                 self.scroll_target_x = jx;
                 self.scroll_target_y = jy;
+                // JS scrollTo() je programatic instant - zrus active smooth anim
+                // aby nepokracovala na stary target po JS overridu.
+                self.scroll_anim_x = None;
+                self.scroll_anim_y = None;
                 self.dirty = true;
             }
         }
-        // Smooth scroll tick: lerp scroll_y -> scroll_target_y 25 %% per frame.
-        // Snap pri delta < 0.5 px aby render_via prestane request_redraw pri
-        // ustaleni.
-        let lerp = 0.25_f32;
-        let dy = self.scroll_target_y - self.scroll_y;
-        if dy.abs() > 0.5 { self.scroll_y += dy * lerp; }
-        else if dy.abs() > 0.0 { self.scroll_y = self.scroll_target_y; }
-        let dx = self.scroll_target_x - self.scroll_x;
-        if dx.abs() > 0.5 { self.scroll_x += dx * lerp; }
-        else if dx.abs() > 0.0 { self.scroll_x = self.scroll_target_x; }
+        // Smooth scroll tick: cubic-bezier ease-in-out, duration-based timing.
+        // Frame-rate independent (drive lerp 25%/frame = 30 fps 2x pomalejsi).
+        // Animation start v Scroll handler / kbd_scroll. Per-frame sample dle elapsed.
+        let now = std::time::Instant::now();
+        if let Some(anim) = self.scroll_anim_y {
+            let (v, done) = anim.sample(now);
+            self.scroll_y = v;
+            if done { self.scroll_anim_y = None; self.scroll_y = anim.target_value; }
+        } else {
+            // Bez animace - direct snap (set_scroll, programatic).
+            self.scroll_y = self.scroll_target_y;
+        }
+        if let Some(anim) = self.scroll_anim_x {
+            let (v, done) = anim.sample(now);
+            self.scroll_x = v;
+            if done { self.scroll_anim_x = None; self.scroll_x = anim.target_value; }
+        } else {
+            self.scroll_x = self.scroll_target_x;
+        }
         // Sync interp.scroll_pos do current scroll (pri wheel/scrollbar drag
         // animovany scroll, JS read pres pageXOffset/scrollX dostane realnou
         // hodnotu, ne jen JS-set hodnotu). Take updatuj last_synced_scroll_pos
@@ -1711,7 +2472,14 @@ impl WebView {
             self.paint_fp_cache = Some((style_map_ptr_for_pfp, fp));
             fp
         };
-        if Some(paint_fp) == self.last_paint_fingerprint
+        // Paint cache check - mimo dirty flag (state change beyond style_map jako
+        // element_scroll vyzaduje re-render). Dirty=true vzdy bypasses cache.
+        // Bez dirty checku: wheel scroll on element changed element_scroll mapu,
+        // style_map identicky -> paint_fp match -> cache hit -> NO RE-RENDER ->
+        // page jevi "spici" (zustane na predchozim framu, scroll jen visible
+        // pri nasledne MouseMove ktery nastavi dirty znova).
+        if !self.dirty
+            && Some(paint_fp) == self.last_paint_fingerprint
             && !needs_tick
             && self.target_view.is_some()
         {
@@ -1721,6 +2489,8 @@ impl WebView {
             self.prof_gpu_ms = 0.0;
             renderer.target_size = None;
             self.dirty = false;
+            // Cache hit = texture reused = presented (cached path).
+            self.frame_pacer.mark_presented(_frame_idx);
             return self.target_view.as_ref();
         }
         self.last_paint_fingerprint = Some(paint_fp);
@@ -1763,10 +2533,13 @@ impl WebView {
             // fingerprint reuse prev subtree (clone jen pri HIT). Drasticky snizuje
             // rebuild kdyz hover zmeni jen 1 element a celej zbytek je stejny.
             crate::browser::layout::reset_build_box_stats();
-            let empty_pseudo = crate::browser::cascade::PseudoStyleMap::new();
+            // Build PseudoStyleMap (::before / ::after / ::marker / atd) - bez
+            // tohoto nikdy build_pseudo_box NE-emit pseudo content. Drive bylo
+            // empty_pseudo = vsechny ::before/::after invisible.
+            let pseudo_map = crate::browser::cascade::cascade_pseudo(&doc.root, &self.stylesheets);
             let t = std::time::Instant::now();
             let r = crate::browser::layout::layout_tree_with_pseudo_cached(
-                &doc.root, &style_map, &empty_pseudo, viewport_w, viewport_h,
+                &doc.root, &style_map, &pseudo_map, viewport_w, viewport_h,
                 self.last_layout_root.as_ref());
             let elapsed = t.elapsed().as_secs_f32() * 1000.0;
             if elapsed > 100.0 {
@@ -1796,31 +2569,279 @@ impl WebView {
         // 2c. Paint-side animations apply (transform overlay, opacity tween).
         crate::browser::render::apply_paint_animations(&mut layout_root, &style_map);
 
-        // 2d. L1+L2 compositor: extract LayerTree z layout.
-        // L2: per-layer offscreen texture allocator. Pro kazdou layer alokuj
-        // wgpu::Texture velikosti layer.root_rect (logical). Reuse pri size
-        // match mezi frames. GC unreferenced layers.
-        let layer_tree = crate::browser::compositor::extract_layer_tree(&layout_root);
+        // 2c2. Per-element scroll - 2-pass:
+        // Pass A: nastavit bx.scroll_offset_y/x z mapy NA layout_root (bez
+        //         shiftu children). Clamp do mapy.
+        // Save: clean clone (children un-shifted) jako last_layout_root - hit-test
+        //         pak cita bx.scroll_offset_y pro coord adjustment.
+        // Pass B: shift children of scrollable boxes by -offset (paint kopie).
+        fn pass_a_set_offsets(
+            bx: &mut crate::browser::layout::LayoutBox,
+            map: &mut std::collections::HashMap<usize, (f32, f32)>,
+        ) {
+            use crate::browser::scroll::Scrollable;
+            if bx.needs_scrollbar_y() || bx.needs_scrollbar_x() {
+                let mut sx = 0.0f32;
+                let mut sy = 0.0f32;
+                if let Some(node) = bx.node.as_ref() {
+                    let id = std::rc::Rc::as_ptr(node) as usize;
+                    let (max_x, max_y) = bx.max_scroll();
+                    if let Some(&(mx, my)) = map.get(&id) {
+                        sx = mx.clamp(0.0, max_x);
+                        sy = my.clamp(0.0, max_y);
+                        if (sx - mx).abs() > 0.01 || (sy - my).abs() > 0.01 {
+                            map.insert(id, (sx, sy));
+                        }
+                    }
+                }
+                bx.scroll_offset_x = sx;
+                bx.scroll_offset_y = sy;
+            }
+            for ch in bx.children.iter_mut() {
+                pass_a_set_offsets(ch, map);
+            }
+        }
+        fn pass_b_shift_children(bx: &mut crate::browser::layout::LayoutBox) {
+            use crate::browser::scroll::Scrollable;
+            if bx.needs_scrollbar_y() || bx.needs_scrollbar_x() {
+                let sx = bx.scroll_offset_x;
+                let sy = bx.scroll_offset_y;
+                if sx.abs() > 0.01 || sy.abs() > 0.01 {
+                    for ch in bx.children.iter_mut() {
+                        crate::browser::layout::shift_subtree(ch, -sx, -sy);
+                    }
+                }
+            }
+            for ch in bx.children.iter_mut() {
+                pass_b_shift_children(ch);
+            }
+        }
+        pass_a_set_offsets(&mut layout_root, &mut self.element_scroll);
+        // Save clean (offsets set, children un-shifted) - hit_test pres
+        // pak respektuje scroll_offset pro coord adjustment.
+        self.last_layout_root = Some(layout_root.clone());
+        // Build R-tree spatial hit index. Drive O(N) tree walk per mouse move
+        // dropoval FPS pri 5000-box page + 1000Hz mysi. R-tree query O(log N).
+        self.hit_rtree = Some(crate::browser::spatial_hit::build_hit_rtree(&layout_root));
+
+        // Fire ResizeObserver / IntersectionObserver callbacks po layout.
+        // Build node_id -> rect lookup pres clean layout.
+        let mut rect_map: std::collections::HashMap<usize, (f32, f32, f32, f32)> =
+            std::collections::HashMap::new();
+        fn collect_rects(bx: &crate::browser::layout::LayoutBox,
+                         out: &mut std::collections::HashMap<usize, (f32, f32, f32, f32)>) {
+            if let Some(n) = &bx.node {
+                let id = std::rc::Rc::as_ptr(n) as usize;
+                out.insert(id, (bx.rect.x, bx.rect.y, bx.rect.width, bx.rect.height));
+            }
+            for ch in &bx.children { collect_rects(ch, out); }
+        }
+        collect_rects(&layout_root, &mut rect_map);
+        let viewport_rect = (self.scroll_x, self.scroll_y, viewport_w, viewport_h);
+        let rect_map_ro = rect_map.clone();
+        if let Some(interp) = self.interpreter.as_mut() {
+            interp.fire_resize_observers(|id| rect_map_ro.get(&id).map(|r| (r.2, r.3)));
+            interp.fire_intersection_observers(
+                |id| rect_map.get(&id).copied(),
+                viewport_rect,
+            );
+        }
+
+        pass_b_shift_children(&mut layout_root);
+        let save_layout_root_at_end = false;
+
+        // 2d. L1+L2 compositor: extract LayerTree z layout + damage tracking.
+        // L2: per-layer offscreen texture allocator + damage rect detection.
+        // Damage: porovnani fingerprint vs prev frame. Same fingerprint = no
+        // damage = mozne reuse cached texture (TODO D3+D4).
+        let mut layer_tree = crate::browser::compositor::extract_layer_tree(&layout_root);
+        // Compositor-driven anim tick - posune progress + override layer
+        // opacity/transform values BEZ re-cascade. Pri animaci jen tyhle props
+        // = structural_fp identical = damage_rect = None = texture cache reuse.
+        // (Priority 4 z RENDER_RETROSPECTIVE.)
+        {
+            let now = std::time::Instant::now();
+            let _any_active = self.compositor_anims.tick(now);
+            self.compositor_anims.apply_to_layer_tree(&mut layer_tree);
+        }
+        crate::browser::compositor::mark_damage(
+            &mut layer_tree, &mut self.prev_layer_fingerprints);
+        crate::browser::compositor::mark_tile_damage(
+            &mut layer_tree, &mut self.prev_tile_fingerprints);
+        if std::env::var("RWE_DAMAGE_DBG").is_ok() {
+            let total = crate::browser::compositor::count_layers(&layer_tree);
+            let damaged = crate::browser::compositor::count_damaged_layers(&layer_tree);
+            let (dirty_tiles, total_tiles) = crate::browser::compositor::count_tile_damage(&layer_tree);
+            eprintln!("[DAMAGE] {}/{} layers dirty, {}/{} tiles dirty",
+                damaged, total, dirty_tiles, total_tiles);
+        }
         {
             let mut alive = std::collections::HashSet::new();
             crate::browser::compositor::collect_layer_ids(&layer_tree, &mut alive);
             self.gc_layer_textures(&alive);
             let mut flat: Vec<&crate::browser::compositor::LayerNode> = Vec::new();
             crate::browser::compositor::flatten_layers(&layer_tree, &mut flat);
-            for layer in flat {
+            // Collect tile dimensions before borrow ends.
+            let tile_alloc: Vec<(usize, usize, f32, f32, bool)> = flat.iter()
+                .flat_map(|layer| layer.tiles.iter().enumerate().map(|(idx, tile)| {
+                    (layer.id, idx, tile.local_rect.width, tile.local_rect.height, tile.dirty)
+                }).collect::<Vec<_>>())
+                .collect();
+            // Per-layer texture alloc - SKIP pri oversize (tile mode handle).
+            // Pres oversize, single texture by byla clamped = compress artifact.
+            const MAX_TEX_DIM_ALLOC: f32 = 8192.0;
+            // Match ensure_layer_texture formula = zoom * sf. Drive sf only =
+            // crash pri zoom (alloc internal calc 8192+).
+            let sf_alloc = self.zoom * self.scale_factor;
+            for layer in &flat {
                 let lw = layer.root_rect.width.max(1.0);
                 let lh = layer.root_rect.height.max(1.0);
-                let _ = self.ensure_layer_texture(layer.id, lw, lh);
+                let phys_max = (lw * sf_alloc).max(lh * sf_alloc);
+                if phys_max <= MAX_TEX_DIM_ALLOC {
+                    let _ = self.ensure_layer_texture(layer.id, lw, lh);
+                }
+            }
+            // Per-tile alloc - tile texture < 8192 phys = no clamp ever.
+            // Pres oversize layer = tile path active. Pres small layer = tiles
+            // unused (single layer texture path). Alloc anyway pres consistency
+            // (no perf cost - tile.dirty=false skipped pres render path).
+            for (lid, idx, w, h, _dirty) in tile_alloc {
+                let _ = self.ensure_tile_texture(lid, idx, w.max(1.0), h.max(1.0));
             }
         }
-        self.last_layer_tree = Some(layer_tree);
-
+        // Layout dump diag - per-WV 1x kdyz dom_version >= 100 (DOM populated).
+        if std::env::var("RWE_LAYOUT_DUMP").is_ok() && !self.layout_dumped
+            && self.interpreter.as_ref().map(|i| i.dom_version()).unwrap_or(0) > 50
+        {
+            self.layout_dumped = true;
+            fn dump_box(bx: &crate::browser::layout::LayoutBox, depth: usize, max_depth: usize) {
+                if depth > max_depth { return; }
+                let cls = bx.node.as_ref().and_then(|n| n.attr("class")).unwrap_or_default();
+                let tag = bx.tag.as_deref().unwrap_or("?");
+                eprintln!("{}{} class={:?} rect=({:.0},{:.0},{:.0}x{:.0}) disp={:?} dir={:?} ovf_y={:?} icw/h={:.0}/{:.0} exh={:?} grow={}",
+                    " ".repeat(depth), tag, cls, bx.rect.x, bx.rect.y, bx.rect.width, bx.rect.height,
+                    bx.display, bx.flex_direction, bx.overflow_y, bx.inner_content_w, bx.inner_content_h, bx.explicit_height, bx.flex_grow);
+                for ch in &bx.children {
+                    dump_box(ch, depth + 1, max_depth);
+                }
+            }
+            eprintln!("=== LAYOUT DUMP (WV addr={:p}) ===", self);
+            dump_box(&layout_root, 0, 8);
+        }
         let prof_t2 = std::time::Instant::now();
         self.prof_layout_ms = prof_t2.duration_since(prof_t1).as_secs_f32() * 1000.0;
 
-        // 3. Paint - generate display list (culled na viewport).
-        let mut display_list = crate::browser::paint::build_display_list_culled(
-            &layout_root, self.scroll_y, viewport_h);
+        // 3. Paint - per-layer pass dle damage_rect.
+        // Per layer s damage_rect = Some: repaint commands + cache.
+        // Per layer s damage_rect = None: reuse cached commands z prev framu.
+        // Assembly: concat per-layer caches v layer tree order.
+        // Inspired by WebRender Picture cache (gfx/wr/webrender/src/picture.rs).
+        let mut display_list = build_layered_display_list(
+            &layer_tree, &layout_root, self.scroll_y, viewport_h,
+            &mut self.layer_paint_cache);
+
+        // D4 GPU layer pipeline pres env var prepinac (debug).
+        // RWE_LAYER_GPU_OFF=1 -> monolithic. Default ON.
+        // Auto-disable D4 pri layer texture exceed GPU max dim (= 8192 default
+        // down-level baseline). Pri page_h * scale > max_tex, layer texture
+        // clamped = vertical compression v texture = compose stretch back =
+        // visible glyph artifact (outline/blurry). Fallback monolithic.
+        // D4 layer mode active default. Pres oversized layer (> 8192 phys),
+        // tile path activates per-layer = no single big texture alloc, no clamp.
+        // Drive any_oversized DISABLOVAL D4 cele = monolithic fallback = user
+        // nechce fallback. Tile path handluje oversized.
+        let layer_gpu_mode = std::env::var("RWE_LAYER_GPU_OFF").is_err();
+        let mut d4_overlay_start: usize = 0;
+        if layer_gpu_mode {
+            // CRITICAL: warm atlas PRED layer raster. Pri D4 layer-mode build_vertices
+            // potrebuje atlas glyfy hned pri prvni render_into_layer/tile call.
+            // POZOR: musim warm pres local_cache cmds (= full layer content) NE
+            // display_list ktery je viewport-CULLED (= visible-only chars). Layer
+            // texture obsahuje cely layer content - pri scroll exposuje
+            // initially-off-screen chars co MUSI byt v atlasu. Drive warm pres
+            // display_list -> scroll exposed chars co nikdy nebyly warmnute = chars
+            // missing pri scroll.
+            let mut local_cache: std::collections::HashMap<usize, Vec<crate::browser::paint::DisplayCommand>>
+                = std::collections::HashMap::new();
+            build_layer_local_cache(&layer_tree, &layout_root, &mut local_cache);
+            let mut flat: Vec<&crate::browser::compositor::LayerNode> = Vec::new();
+            crate::browser::compositor::flatten_layers(&layer_tree, &mut flat);
+            // Warm atlas pres VSECHNY layer-local cmds (= full content per layer).
+            // PERF guard: skip warm loop pri scroll-only frames (DOM/layers stable).
+            // Warm jen kdyz nove layery prisly nebo first frame. text_cmd_warmed
+            // HashSet by stejne skipnul vsechny per-cmd hash lookups ale iterace
+            // 5000+ cmds + hash compute = ~5-10 ms wasted.
+            // damage_rect.is_some() na ANY layer = need warm new content.
+            let any_damaged = flat.iter().any(|l| l.damage_rect.is_some());
+            if any_damaged {
+                for cmds in local_cache.values() {
+                    renderer.warm_atlas_for(cmds, self.base_url.as_deref());
+                }
+            }
+            // Auto-detect tile mode per layer:
+            // Layer dim * sf > GPU max_tex_dim (= 8192 baseline) -> tile path.
+            // Tile cesta = grid 256-logical tiles, kazdy < 8192 phys = NO clamp,
+            // NO compose stretch artifact (= "outline text" bug). Damage tracking
+            // per-tile -> dirty tile = re-raster; cached tiles preserved.
+            // Pres small layer = single texture path (faster, 1 compose).
+            const MAX_TEX_DIM: f32 = 8192.0;
+            let sf = self.zoom * self.scale_factor;
+            let force_tiles = std::env::var("RWE_FORCE_TILES").is_ok();
+            let needs_tiles = |layer: &crate::browser::compositor::LayerNode| -> bool {
+                if layer.tiles.is_empty() { return false; }
+                if force_tiles { return true; }
+                // Tile mode pri layer phys overflow texture max (= avoid clamp +
+                // double-interp glyph blur artifact). Pres small layers vyhodnejsi
+                // single texture path (1 compose draw vs N tile draws).
+                (layer.root_rect.width * sf).max(layer.root_rect.height * sf) > MAX_TEX_DIM
+            };
+            let mut d4_renders = 0u32;
+            let mut d4_tile_renders = 0u32;
+            for layer in &flat {
+                if layer.damage_rect.is_none() { continue; }
+                let cmds = match local_cache.get(&layer.id) {
+                    Some(c) if !c.is_empty() => c.clone(),
+                    _ => continue,
+                };
+                if needs_tiles(layer) {
+                    // Per-tile raster: kazdou dirty tile vykresli do tile texture.
+                    for (idx, tile) in layer.tiles.iter().enumerate() {
+                        if !tile.dirty { continue; }
+                        let key = (layer.id, idx);
+                        let view = self.tile_textures.get(&key).map(|s| s.view.clone());
+                        if let Some(view) = view {
+                            renderer.render_into_tile(
+                                &view,
+                                tile.local_rect.x, tile.local_rect.y,
+                                tile.local_rect.width.max(1.0),
+                                tile.local_rect.height.max(1.0),
+                                &cmds,
+                            );
+                            d4_tile_renders += 1;
+                        }
+                    }
+                } else {
+                    // Whole-layer raster (small layers, fits texture).
+                    let view = self.layer_textures.get(&layer.id).map(|s| s.view.clone());
+                    if let Some(view) = view {
+                        let lw = layer.root_rect.width.max(1.0);
+                        let lh = layer.root_rect.height.max(1.0);
+                        renderer.render_into_layer(&view, lw, lh, &cmds);
+                        d4_renders += 1;
+                    }
+                }
+            }
+            if std::env::var("RWE_DAMAGE_DBG").is_ok() {
+                eprintln!("[D4 GPU] {} layers, {} tiles rendered ({}/{} total layers)",
+                    d4_renders, d4_tile_renders, d4_renders + d4_tile_renders, flat.len());
+            }
+            // Track display_list len at point overlay items zacinaji byt appendovany.
+            // Vse pred = layer content (replaced by composite). Vse po = overlay
+            // (scrollbar, devtools, canvas overlay) -> painted to target_view PO composite.
+            d4_overlay_start = display_list.len();
+        }
+
+        self.last_layer_tree = Some(layer_tree);
 
         // 3-canvas. Canvas2D ops -> DisplayCommands (po body paint).
         if let Some(interp) = self.interpreter.as_ref() {
@@ -1933,12 +2954,12 @@ impl WebView {
             painter(&layout_root, self.scroll_y, &mut display_list);
         }
 
-        // 3a. Apply scroll: posun page commands o -scroll_y. Scrollbar
-        //     overlay (pridany nize) je viewport-relative -> add PO shift.
-        for cmd in display_list.iter_mut() {
-            crate::browser::render::segments::shift_command_y(cmd, -self.scroll_y);
-            crate::browser::render::segments::shift_command_x(cmd, -self.scroll_x);
-        }
+        // 3a. Apply scroll: posun page commands o -scroll_y/x. Respektuje
+        // NoScrollShiftBegin/End markers (position:fixed subtree zustava
+        // staticke vuci viewportu). Scrollbar overlay (pridany nize) je
+        // viewport-relative -> add PO shift.
+        crate::browser::render::segments::apply_scroll_shift(
+            &mut display_list, -self.scroll_x, -self.scroll_y);
 
         // 3a2. <select> open dropdown overlay - viewport-relative emit.
         if let Some((select_id, anchor_x, anchor_y, anchor_w)) = self.open_select {
@@ -2001,7 +3022,11 @@ impl WebView {
         );
 
         // 4. Warm-up glyph atlas + image atlas pred draw.
-        renderer.warm_atlas_for(&display_list, self.base_url.as_deref());
+        // Pri D4 layer_gpu_mode warm uz probehl vyse pres local_cache (= full
+        // layer content). Tady jen monolithic path nebo D4 overlay items.
+        if !layer_gpu_mode {
+            renderer.warm_atlas_for(&display_list, self.base_url.as_deref());
+        }
 
         // 4b. Extract text runs (per-glyph cumulative advances) - foundation
         // pro per-glyph hit-test selection. Walks display_list TEXT cmds +
@@ -2013,9 +3038,106 @@ impl WebView {
         self.prof_paint_ms = prof_t3.duration_since(prof_t2).as_secs_f32() * 1000.0;
 
         // 5. Renderer kresli display list do target_view.
+        // D4 plne pipeline pri layer_gpu_mode:
+        //   - Skip monolithic draw, misto toho composite layer textures
+        //   - Walk layer_tree z-order, per layer compose_view_to_view do target_view
+        //   - Apply viewport scroll (subtract scroll_x/y, except fixed layers)
+        //   - Pak overlay-only cmds (po d4_overlay_start) draw nad composite
         let target_view = self.target_view.as_ref()?;
-        let _had = renderer.draw_segments_into_view_clipped(
-            target_view, &display_list, true, None);
+        let _tile_gpu_mode = std::env::var("RWE_TILE_GPU").is_ok();
+        if layer_gpu_mode {
+            // Composite all layers into target_view.
+            let layer_tree_ref = self.last_layer_tree.as_ref()
+                .expect("layer_tree saved pred draw");
+            let mut flat: Vec<&crate::browser::compositor::LayerNode> = Vec::new();
+            crate::browser::compositor::flatten_layers(layer_tree_ref, &mut flat);
+            // Single encoder pres celou compose phase = 1 submit (drive N submits/frame
+            // = ~25-80x mensi GPU sync overhead).
+            let mut compose_encoder = renderer.device.create_command_encoder(
+                &wgpu::CommandEncoderDescriptor { label: Some("d4_compose_batch") });
+            let mut first = true;
+            for layer in &flat {
+                let is_fixed = matches!(layer.reason,
+                    crate::browser::compositor::LayerReason::PositionFixed);
+                let pos_x = layer.root_rect.x - if is_fixed { 0.0 } else { self.scroll_x };
+                let pos_y = layer.root_rect.y - if is_fixed { 0.0 } else { self.scroll_y };
+                // Tile compose path - walk per-tile textures + compose kazdou.
+                let sf_compose = self.zoom * self.scale_factor;
+                let force_tiles_c = std::env::var("RWE_FORCE_TILES").is_ok();
+                let layer_needs_tiles = !layer.tiles.is_empty()
+                    && (force_tiles_c
+                        || (layer.root_rect.width * sf_compose).max(layer.root_rect.height * sf_compose) > 8192.0);
+                if layer_needs_tiles && layer.transform.is_none() {
+                    for (idx, tile) in layer.tiles.iter().enumerate() {
+                        let key = (layer.id, idx);
+                        let tile_view = match self.tile_textures.get(&key) {
+                            Some(s) => s.view.clone(),
+                            None => continue,
+                        };
+                        renderer.compose_view_to_view_into_encoder(
+                            &mut compose_encoder,
+                            target_view, &tile_view,
+                            pos_x + tile.local_rect.x,
+                            pos_y + tile.local_rect.y,
+                            tile.local_rect.width,
+                            tile.local_rect.height,
+                            layer.opacity.clamp(0.0, 1.0),
+                            first,
+                        );
+                        first = false;
+                    }
+                    continue;
+                }
+                let view = match self.layer_textures.get(&layer.id) {
+                    Some(s) => s.view.clone(),
+                    None => continue,
+                };
+                if std::env::var("RWE_COMPOSE_DBG").is_ok() {
+                    eprintln!("[COMPOSE] layer={} root_rect=({},{},{},{}) pos=({},{}) scroll=({},{}) damage={:?}",
+                        layer.id, layer.root_rect.x, layer.root_rect.y,
+                        layer.root_rect.width, layer.root_rect.height,
+                        pos_x, pos_y, self.scroll_x, self.scroll_y,
+                        layer.damage_rect);
+                }
+                if let Some(t) = &layer.transform {
+                    let m = crate::browser::layout::compute_transform_matrix(
+                        &[t.clone()], None);
+                    renderer.compose_view_to_view_transform_into_encoder(
+                        &mut compose_encoder,
+                        target_view, &view,
+                        pos_x, pos_y,
+                        layer.root_rect.width, layer.root_rect.height,
+                        &m, first,
+                    );
+                } else {
+                    renderer.compose_view_to_view_into_encoder(
+                        &mut compose_encoder,
+                        target_view, &view,
+                        pos_x, pos_y,
+                        layer.root_rect.width, layer.root_rect.height,
+                        layer.opacity.clamp(0.0, 1.0),
+                        first,
+                    );
+                }
+                first = false;
+            }
+            // Submit batched compose encoder = single GPU sync.
+            renderer.queue.submit(std::iter::once(compose_encoder.finish()));
+            // Po composite: draw overlay-only cmds (vse appendoval po build_layered).
+            if d4_overlay_start < display_list.len() {
+                let overlay = &display_list[d4_overlay_start..];
+                if !overlay.is_empty() {
+                    renderer.draw_segments_into_view_clipped(
+                        target_view, overlay, first, None);
+                }
+            } else if first {
+                // No layers at all - clear target_view via draw_segments empty path
+                // (alespoň clear color). Pri page bez layers (rare) by zustal stale.
+            }
+        } else {
+            let _had = renderer.draw_segments_into_view_clipped(
+                target_view, &display_list, true, None);
+        }
 
         // 5b. WebGL canvas frame - per <canvas> s WebGL state encode wgpu
         // draw passes do per-canvas RT + compose do target_view. NO-OP pri
@@ -2023,8 +3145,19 @@ impl WebView {
         if let Some(interp) = self.interpreter.as_ref() {
             let webgl_states = interp.webgl_states.clone();
             let states = webgl_states.borrow();
+            if std::env::var("RWE_WEBGL_DBG").is_ok() {
+                eprintln!("[webgl] states.len={} (canvases with WebGLState)",
+                    states.len());
+                for (ptr, state) in states.iter() {
+                    let q_len = state.borrow().draw_queue.len();
+                    eprintln!("  canvas_ptr={} draw_queue.len={}", ptr, q_len);
+                }
+            }
             if !states.is_empty() {
-                let _ = renderer.run_webgl_frame(&layout_root, target_view, &*states, self.scroll_y);
+                let did = renderer.run_webgl_frame(&layout_root, target_view, &*states, self.scroll_y);
+                if std::env::var("RWE_WEBGL_DBG").is_ok() {
+                    eprintln!("[webgl] run_webgl_frame returned: {}", did);
+                }
             }
         }
 
@@ -2042,7 +3175,15 @@ impl WebView {
             // Ted Rc::clone = 1us. Callback dela lookup pres borrow().as_ref().
             *self.cascade_props.borrow_mut() = Some(std::rc::Rc::clone(&style_map));
         }
-        self.last_layout_root = Some(layout_root);
+        // last_layout_root uz set pred apply_element_scroll (CLEAN snapshot).
+        // Zde NO-OP: kdyz nebyl element scroll active, save_layout_root_at_end
+        // dovoluje skip - ale jednodussi je vzdy nastavit clean pre-apply.
+        // (Drop layout_root - byla mutated kopie pro paint.)
+        if save_layout_root_at_end {
+            self.last_layout_root = Some(layout_root);
+        } else {
+            drop(layout_root);
+        }
 
         // Reset renderer target_size override - shell present_split + jine
         // pas v swap chain pouziva config size.
@@ -2050,6 +3191,9 @@ impl WebView {
 
         let prof_t4 = std::time::Instant::now();
         self.prof_gpu_ms = prof_t4.duration_since(prof_t3).as_secs_f32() * 1000.0;
+
+        // Frame done - mark v paceru pro telemetry.
+        self.frame_pacer.mark_presented(_frame_idx);
 
         self.dirty = false;
         self.target_view.as_ref()
@@ -2092,6 +3236,11 @@ impl WebView {
             self.scroll_y = y;
             self.scroll_target_x = x;
             self.scroll_target_y = y;
+            // Programatic set: zrus aktivni smooth scroll anim aby nepokracovala
+            // na stary target. Bez tohohle by anim po set_scroll pokracovala
+            // na puvodni hodnotu = jump back na anim end.
+            self.scroll_anim_x = None;
+            self.scroll_anim_y = None;
             self.dirty = true;
             // Sync interp.scroll_pos pro JS window.pageXOffset/scrollX reads.
             if let Some(interp) = self.interpreter.as_ref() {
@@ -2108,6 +3257,18 @@ impl WebView {
     /// Aktualni scroll position.
     pub fn scroll(&self) -> (f32, f32) { (self.scroll_x, self.scroll_y) }
 
+    /// Web Vitals snapshot - LCP/CLS/INP collector pres last paint.
+    /// Pres `browser::web_vitals::WebVitalsCollector`. Read-only view.
+    pub fn web_vitals(&self) -> &crate::browser::web_vitals::WebVitalsCollector {
+        &self.web_vitals
+    }
+
+    /// Frame pacer - per-frame stage timings + drop counter.
+    /// Pres `browser::render::frame_pacing::FramePacer`. Read-only.
+    pub fn frame_pacer(&self) -> &crate::browser::render::frame_pacing::FramePacer {
+        &self.frame_pacer
+    }
+
     /// Aktualni zoom (1.0 = 100%).
     pub fn zoom(&self) -> f32 { self.zoom }
 
@@ -2122,17 +3283,70 @@ impl WebView {
     /// Hostujici aplikace pak request_redraw kazdy frame dokud nestihnem
     /// ustaleni.
     pub fn has_active_animations(&self) -> bool {
-        // PERF FIX: drive bylo `stylesheets.any(|s| !s.keyframes.is_empty())`
-        // ktere bylo TRUE i pokud stranka jen DEFINUJE @keyframes (bez pouziti
-        // pres `animation:` property). To zapinalo nekonecny request_redraw
-        // smycku v shellu (3 WebView render kazdy frame) = 1 FPS pri 3WV setup.
-        // Now: cti `active_animations` - skutecne hrajici (set v render_via po
-        // detekci animation: prop na elementech).
+        // Alias - kanonicky check pres needs_continuous_render. Shell loop
+        // pres tento kontroluje "render next frame?". One source of truth.
+        self.needs_continuous_render()
+    }
+
+    /// D4.5 - Compositor-only frame detekce. Vraci true kdyz vsechny active
+    /// animations / transitions affect POUZE transform/opacity (= GPU compositor
+    /// can update composite uniforms bez paint). Foundation pro skip-layer-paint
+    /// optimization v plne D4 GPU pipeline.
+    /// Inspired by Chromium `cc/animation/animation_host.cc::AnimationsPreserveAxisAlignment`
+    /// + WebRender PictureCompositeMode.
+    pub fn is_compositor_only_frame(&self) -> bool {
+        if self.active_animations.is_empty() && self.active_transitions.is_empty() {
+            return false; // no anim = no skip relevant
+        }
+        // Iterate active animations - check keyframes obsahuje jen transform/opacity.
+        // For each (node_id, anim_name) projdeme stylesheets keyframes a kontrolujeme.
+        for (_node_id, anim_name) in &self.active_animations {
+            let mut anim_compositor_ok = false;
+            'outer: for sheet in &self.stylesheets {
+                for kf in &sheet.keyframes {
+                    if kf.name != *anim_name { continue; }
+                    let all_props_compositor = kf.frames.iter().all(|(_, decls)| {
+                        decls.iter().all(|d| {
+                            matches!(d.property.as_str(), "transform" | "opacity"
+                                | "filter" | "translate" | "rotate" | "scale")
+                        })
+                    });
+                    if all_props_compositor {
+                        anim_compositor_ok = true;
+                    }
+                    break 'outer;
+                }
+            }
+            if !anim_compositor_ok { return false; }
+        }
+        // Active transitions - check property je transform/opacity.
+        for at in &self.active_transitions {
+            if !matches!(at.property.as_str(), "transform" | "opacity"
+                | "filter" | "translate" | "rotate" | "scale") {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Single source of truth: vraci true kdyz frame N+1 ma byt render bez
+    /// novyho input eventu. Inspired by Chromium BeginMainFrame trigger flags:
+    /// 1. @keyframes/transitions active (active_animations / active_transitions)
+    /// 2. Smooth scroll lerp v progressu (viewport target vs current)
+    /// 3. Caret blink (focused input - blink loop)
+    /// 4. setTimeout/setInterval pending (JS timer callback fires)
+    ///
+    /// Nepatri sem: element scroll, hover state, DOM mutace - ty set dirty=true
+    /// pri vzniku a render single frame. Continuous loop neni potreba.
+    pub fn needs_continuous_render(&self) -> bool {
         !self.active_animations.is_empty()
             || !self.active_transitions.is_empty()
+            || self.scroll_anim_y.is_some()
+            || self.scroll_anim_x.is_some()
             || (self.scroll_target_y - self.scroll_y).abs() > 0.5
             || (self.scroll_target_x - self.scroll_x).abs() > 0.5
             || self.focused_is_input()
+            || self.has_pending_intervals()
     }
 
     /// Nastav zoom level. Stejne jako resize trigger relayout.
@@ -2141,6 +3355,19 @@ impl WebView {
         if (self.zoom - z).abs() > 0.001 {
             self.zoom = z;
             self.dirty = true;
+            // Invalidate layer textures (size depends na zoom). Bez tohoto
+            // realloc'd empty tex zustane prazdny (damage=None = no re-raster).
+            // Clear vse + prev fingerprints -> next frame mark_damage detects
+            // "new layer" (prev_fp None) -> damage=Some -> render_into_layer
+            // raster fresh content.
+            self.layer_textures.clear();
+            self.tile_textures.clear();
+            self.prev_layer_fingerprints.clear();
+            self.prev_tile_fingerprints.clear();
+            self.layer_paint_cache.clear();
+            self.last_paint_fingerprint = None;
+            self.layout_cache_key = None;
+            self.cascade_cache_key = None;
         }
     }
 

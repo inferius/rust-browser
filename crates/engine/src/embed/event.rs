@@ -34,7 +34,11 @@ pub enum MouseButton {
 #[derive(Debug, Clone)]
 pub enum InputEvent {
     /// Mys se posunula. Coords v viewport-relativnich CSS px.
-    MouseMove { x: f32, y: f32, modifiers: KeyModifiers },
+    /// `coalesced` = predchozi raw mouse positions ktere host slouci do toho
+    /// dispatch (pres frame slot). Empty pri single event. PointerEvent JS API
+    /// `getCoalescedEvents()` cte tento seznam = umoznuje JS dostat full-rate
+    /// raw events pres single dispatch (drawing apps, hry).
+    MouseMove { x: f32, y: f32, modifiers: KeyModifiers, coalesced: Vec<(f32, f32)> },
     /// Mys click down. Coords v CSS px.
     MouseDown { x: f32, y: f32, button: MouseButton, modifiers: KeyModifiers },
     /// Mys click up. Coords v CSS px.

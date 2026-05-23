@@ -29,6 +29,11 @@ pub const INDEX_HTML: &str = include_str!("../static/index.html");
 /// CDP JS client - window.cdp.send/on wrapper okolo native binding.
 pub const CDP_JS: &str = include_str!("../static/cdp.js");
 
+/// Lucide icon library - dotahne SVG icons z `<i data-lucide="name">`.
+/// Bundled lokalne (z unpkg.com lucide@latest), bez runtime CDN dep.
+/// Volana pres `lucide.createIcons()` po DOM ready.
+pub const LUCIDE_JS: &str = include_str!("../static/lucide.js");
+
 #[cfg(test)]
 mod tests {
     use super::*;

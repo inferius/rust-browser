@@ -103,25 +103,33 @@ fn guess_resource_type(url: &str) -> &'static str {
     else { "Other" }
 }
 
-/// Find smallest LayoutBox containing (x, y). DFS prefer descendant
-/// (deepest node ktery obsahuje point). Used pres inspect_mode hover
-/// hit-test.
+/// Find smallest ELEMENT LayoutBox containing (x, y). DFS prefer descendant.
+/// Used pres inspect_mode hover hit-test + CDP picker.
+///
+/// Chrome behavior: kliknuti na text uvnitr `<h1>Title</h1>` selectne `<h1>`,
+/// ne text node. Frontend tree renderuje text inline pres parent element row,
+/// takze text node nema vlastni selectable row. Skip text/comment nodes -
+/// return prvni ELEMENT ancestor (= bx.tag.is_some()).
 fn pick_node_at(
     root: &rwe_engine::browser::layout::LayoutBox,
     x: f32, y: f32,
 ) -> Option<usize> {
-    // Hit-test self?
     let r = &root.rect;
     let in_self = x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height;
     if !in_self { return None; }
-    // Try children first - prefer deepest.
+    // Try children first - prefer deepest ELEMENT.
     for child in &root.children {
         if let Some(p) = pick_node_at(child, x, y) {
             return Some(p);
         }
     }
-    // Otherwise return self (if node exists).
-    root.node.as_ref().map(|n| std::rc::Rc::as_ptr(n) as usize)
+    // Return self JEN pokud element (= tag Some). Text/comment nodes
+    // (tag None) jsou inline-renderny pres parent v devtools tree.
+    if root.tag.is_some() {
+        root.node.as_ref().map(|n| std::rc::Rc::as_ptr(n) as usize)
+    } else {
+        None
+    }
 }
 
 /// Find LayoutBox rect dle node ptr. Walk DFS, return rect (x,y,w,h)
@@ -141,6 +149,111 @@ fn find_layout_rect(
         }
     }
     None
+}
+
+/// Selected node outline - tenky purple ramecek okolo content rectu (Chrome
+/// convention pro persistent selected node post-picker-click). Bez 4-layer
+/// fill (= conflicting overlay s hover paint).
+pub(crate) fn emit_selected_outline(
+    layout_root: &rwe_engine::browser::layout::LayoutBox,
+    target_ptr: usize,
+    _scroll_y: f32,  // POZOR: overlay_painter emit v CONTENT-SPACE,
+                     // engine sam apply scroll shift na vsechny commands.
+                     // Manualni odecet by zpusobil 2x scroll = outline jezdi rychleji.
+    cmds: &mut Vec<rwe_engine::browser::paint::DisplayCommand>,
+) {
+    fn find<'a>(
+        root: &'a rwe_engine::browser::layout::LayoutBox,
+        target: usize,
+    ) -> Option<&'a rwe_engine::browser::layout::LayoutBox> {
+        if let Some(n) = &root.node {
+            if std::rc::Rc::as_ptr(n) as usize == target { return Some(root); }
+        }
+        for ch in &root.children {
+            if let Some(f) = find(ch, target) { return Some(f); }
+        }
+        None
+    }
+    let Some(bx) = find(layout_root, target_ptr) else { return };
+    use rwe_engine::browser::paint::DisplayCommand;
+    let r = &bx.rect;
+    let x = r.x;
+    let y = r.y;
+    let w = r.width;
+    let h = r.height;
+    let bw = 2.0;
+    let color = [180, 113, 255, 255]; // purple Chrome-style
+    cmds.push(DisplayCommand::Rect { x, y, w, h: bw, color, radius: 0.0 });
+    cmds.push(DisplayCommand::Rect { x, y: y + h - bw, w, h: bw, color, radius: 0.0 });
+    cmds.push(DisplayCommand::Rect { x, y, w: bw, h, color, radius: 0.0 });
+    cmds.push(DisplayCommand::Rect { x: x + w - bw, y, w: bw, h, color, radius: 0.0 });
+}
+
+/// Box-model highlight emit - 4-layer overlay rects (margin/border/padding/
+/// content) jako Chrome inspector. Volaane pres page WV overlay_painter
+/// pri inspect_state.hovered_node Some.
+pub(crate) fn emit_box_model_highlight(
+    layout_root: &rwe_engine::browser::layout::LayoutBox,
+    target_ptr: usize,
+    _scroll_y: f32,  // POZOR: overlay_painter emit v CONTENT-SPACE, engine sam
+                     // apply scroll shift na vsechny commands. Manualni odecet
+                     // = 2x scroll = overlay jezdi rychleji nez page.
+    opts: &rwe_engine::embed::inspect_state::HighlightOptions,
+    cmds: &mut Vec<rwe_engine::browser::paint::DisplayCommand>,
+) {
+    fn find<'a>(
+        root: &'a rwe_engine::browser::layout::LayoutBox,
+        target: usize,
+    ) -> Option<&'a rwe_engine::browser::layout::LayoutBox> {
+        if let Some(n) = &root.node {
+            if std::rc::Rc::as_ptr(n) as usize == target { return Some(root); }
+        }
+        for ch in &root.children {
+            if let Some(f) = find(ch, target) { return Some(f); }
+        }
+        None
+    }
+    let Some(bx) = find(layout_root, target_ptr) else { return };
+    use rwe_engine::browser::paint::DisplayCommand;
+    let r = &bx.rect;
+    let p_t = bx.padding_top.unwrap_or(bx.padding);
+    let p_r = bx.padding_right.unwrap_or(bx.padding);
+    let p_b = bx.padding_bottom.unwrap_or(bx.padding);
+    let p_l = bx.padding_left.unwrap_or(bx.padding);
+    let m_t = bx.margin_top.unwrap_or(bx.margin);
+    let m_r = bx.margin_right.unwrap_or(bx.margin);
+    let m_b = bx.margin_bottom.unwrap_or(bx.margin);
+    let m_l = bx.margin_left.unwrap_or(bx.margin);
+    let bw = bx.border_width.max(0.0);
+    let content_x = r.x;
+    let content_y = r.y;
+    let content_w = r.width;
+    let content_h = r.height;
+    // Margin rect outer
+    let mx = content_x - p_l - bw - m_l;
+    let my = content_y - p_t - bw - m_t;
+    let mw = content_w + p_l + p_r + 2.0 * bw + m_l + m_r;
+    let mh = content_h + p_t + p_b + 2.0 * bw + m_t + m_b;
+    cmds.push(DisplayCommand::Rect { x: mx, y: my, w: mw, h: mh,
+        color: opts.margin_color, radius: 0.0 });
+    // Border rect
+    let bx_x = content_x - p_l - bw;
+    let by_y = content_y - p_t - bw;
+    let bw_w = content_w + p_l + p_r + 2.0 * bw;
+    let bh_h = content_h + p_t + p_b + 2.0 * bw;
+    cmds.push(DisplayCommand::Rect { x: bx_x, y: by_y, w: bw_w, h: bh_h,
+        color: opts.border_color, radius: 0.0 });
+    // Padding rect
+    let px_ = content_x - p_l;
+    let py_ = content_y - p_t;
+    let pw_ = content_w + p_l + p_r;
+    let ph_ = content_h + p_t + p_b;
+    cmds.push(DisplayCommand::Rect { x: px_, y: py_, w: pw_, h: ph_,
+        color: opts.padding_color, radius: 0.0 });
+    // Content rect
+    cmds.push(DisplayCommand::Rect { x: content_x, y: content_y,
+        w: content_w, h: content_h,
+        color: opts.content_color, radius: 0.0 });
 }
 
 /// Shell commands z chrome bar JS bridge. Chrome WebView volat
@@ -222,7 +335,13 @@ pub struct ShellApp {
     inspect_mode: bool,
     /// D5: Sdilene state s page WebView overlay_painter closure. Pri inspect
     /// hover update node_id, closure cte + emit highlight rect.
+    /// Legacy: shell-local Ctrl+Shift+C picker target. Pres devtools propojeni
+    /// pouzij `inspect_state.hovered_node` (= shared cross-WV).
     inspect_target: std::rc::Rc<std::cell::RefCell<Option<usize>>>,
+    /// Shared inspector state mezi shell + page WV + devtools WV target.
+    /// Pres CDP Overlay.highlightNode / setInspectMode update -> page WV
+    /// overlay_painter cte hovered_node + emit box-model rect.
+    inspect_state: std::rc::Rc<std::cell::RefCell<rwe_engine::embed::inspect_state::InspectState>>,
     /// Address bar otevreny (Ctrl+L). Pri zapnuti capture klavesnice
     /// (znaky -> addr_input), Enter -> load_url. Esc -> close bez navigace.
     addr_open: bool,
@@ -266,6 +385,13 @@ pub struct ShellApp {
     /// pri pohybu mysi nad devtools (28x :hover v CSS) by mass cascade walks
     /// vytizely CPU 100%.
     last_mouse_move: std::time::Instant,
+    /// Coalescing: kazdy raw CursorMoved push do `pending_coalesced` (predchozi
+    /// position). Posledni position v `pending_mouse_pos`. Pri about_to_wait
+    /// dispatch jeden InputEvent::MouseMove s coalesced history. JS pak cte
+    /// pres PointerEvent.getCoalescedEvents(). Inspired by Chromium RenderWidget
+    /// `CoalesceMouseMovesIfPossible`.
+    pending_mouse_pos: Option<(f32, f32)>,
+    pending_coalesced: Vec<(f32, f32)>,
     /// Posledni redraw cas - FPS counter (EMA 30 frames).
     frame_times_ms: std::collections::VecDeque<f32>,
     last_frame_time: std::time::Instant,
@@ -317,6 +443,7 @@ impl ShellApp {
             splitter_drag: false,
             inspect_mode: false,
             inspect_target: Rc::new(RefCell::new(None)),
+            inspect_state: rwe_engine::embed::inspect_state::InspectState::shared(),
             addr_open: false,
             addr_input: String::new(),
             find_open: false,
@@ -331,6 +458,8 @@ impl ShellApp {
             cdp_last_dom_version: 0,
             cdp_last_dom_emit: std::time::Instant::now(),
             last_mouse_move: std::time::Instant::now(),
+            pending_mouse_pos: None,
+            pending_coalesced: Vec::new(),
             frame_times_ms: std::collections::VecDeque::with_capacity(30),
             last_frame_time: std::time::Instant::now(),
             last_chrome_ms: 0.0,
@@ -540,7 +669,10 @@ impl ShellApp {
                 channel.resp_queue.borrow_mut().push_back(json);
                 self.cdp_sources_cache.push((script_id, url.clone(), body, lang.to_string()));
             }
-            // DOM.documentUpdated - frontend reload tree.
+            // DOM.documentUpdated - frontend reload tree. Pri DOM rebuild musime
+            // clear NodeIdTable v target - puvodni ptr->id mapping je invalid
+            // (Weak<Node> upgrade by selhal pres frame reuse heap).
+            target.clear_node_ids();
             let dom_evt = rwe_devtools_proto::DevtoolsEvent {
                 method: "DOM.documentUpdated".to_string(),
                 params: serde_json::json!({}),
@@ -832,6 +964,10 @@ html, body {{ margin: 0; padding: 0; height: 100%; background: #202124; color: #
             "<script id=\"cdp-js\"></script>",
             &format!("<script id=\"cdp-js\">{}</script>", CDP_JS),
         );
+        out = out.replace(
+            "<script id=\"lucide-js\"></script>",
+            &format!("<script id=\"lucide-js\">{}</script>", LUCIDE_JS),
+        );
         out
     }
 
@@ -903,6 +1039,43 @@ html, body {{ margin: 0; padding: 0; height: 100%; background: #202124; color: #
         }
     }
 
+    /// Flush coalesced MouseMove buffer (volaane pred redraw). Dispatchne
+    /// JEDEN MouseMove s posledni position + history pres PointerEvent
+    /// .getCoalescedEvents() JS API. Vrati Option<EventResponse> = None pri
+    /// prazdne buffer (no flush), Some pri dispatched event.
+    fn flush_pending_mouse_move(&mut self) -> Option<rwe_engine::embed::EventResponse> {
+        let (mx, my) = self.pending_mouse_pos.take()?;
+        let coalesced = std::mem::take(&mut self.pending_coalesced);
+        self.last_mouse_move = std::time::Instant::now();
+        let event = InputEvent::MouseMove {
+            x: mx, y: my,
+            modifiers: KeyModifiers::default(),
+            coalesced,
+        };
+        let resp = self.dispatch_input(event);
+        if let (Some(cursor), Some(window)) = (resp.cursor.clone(), &self.window) {
+            use rwe_engine::embed::CursorIcon as IC;
+            let winit_cursor = match cursor {
+                IC::Pointer => winit::window::CursorIcon::Pointer,
+                IC::Text => winit::window::CursorIcon::Text,
+                IC::Wait => winit::window::CursorIcon::Wait,
+                IC::Help => winit::window::CursorIcon::Help,
+                IC::Crosshair => winit::window::CursorIcon::Crosshair,
+                IC::Move => winit::window::CursorIcon::Move,
+                IC::NotAllowed => winit::window::CursorIcon::NotAllowed,
+                IC::Grab => winit::window::CursorIcon::Grab,
+                IC::Grabbing => winit::window::CursorIcon::Grabbing,
+                IC::ResizeEw => winit::window::CursorIcon::EwResize,
+                IC::ResizeNs => winit::window::CursorIcon::NsResize,
+                IC::ResizeNesw => winit::window::CursorIcon::NeswResize,
+                IC::ResizeNwse => winit::window::CursorIcon::NwseResize,
+                IC::Default => winit::window::CursorIcon::Default,
+            };
+            window.set_cursor(winit_cursor);
+        }
+        Some(resp)
+    }
+
     /// Konvenience: dispatch InputEvent na spravny WebView.
     /// - Mouse events (Move/Down/Up/Scroll): dle y position (chrome/page/dev).
     /// - Keyboard events (KeyDown/KeyUp/TextInput): dle WebView s focused
@@ -939,8 +1112,13 @@ html, body {{ margin: 0; padding: 0; height: 100%; background: #202124; color: #
                     else if in_dev { self.devtools_y_offset() }
                     else { self.chrome_h };  // page area starts at chrome_h
         let adjusted = match event {
-            InputEvent::MouseMove { x, y, modifiers } =>
-                InputEvent::MouseMove { x, y: y - y_off, modifiers },
+            InputEvent::MouseMove { x, y, modifiers, coalesced } =>
+                InputEvent::MouseMove {
+                    x, y: y - y_off, modifiers,
+                    // Adjust coalesced positions by same y_off.
+                    coalesced: coalesced.into_iter()
+                        .map(|(cx, cy)| (cx, cy - y_off)).collect(),
+                },
             InputEvent::MouseDown { x, y, button, modifiers } =>
                 InputEvent::MouseDown { x, y: y - y_off, button, modifiers },
             InputEvent::MouseUp { x, y, button, modifiers } =>
@@ -1028,6 +1206,18 @@ html, body {{ margin: 0; padding: 0; height: 100%; background: #202124; color: #
             self.devtools = None;
             self.devtools_target = None;
             self.cdp_channel = None;
+            // Cleanup inspect state - bez tohoto picker_active=true persistne
+            // i po devtools close (page hit-test + highlight nedeaktivuje).
+            // Take page WV overlay_painter clean - dummy painter (no-op).
+            {
+                let mut s = self.inspect_state.borrow_mut();
+                s.picker_active = false;
+                s.hovered_node = None;
+                s.selected_node = None;
+            }
+            if let Some(wv) = &mut self.webview {
+                wv.set_overlay_painter(Box::new(|_, _, _| {}));
+            }
         }
         if self.devtools_visible && self.devtools.is_none() {
             let t_start = std::time::Instant::now();
@@ -1060,7 +1250,32 @@ html, body {{ margin: 0; padding: 0; height: 100%; background: #202124; color: #
                 t_scripts.duration_since(t_natives).as_secs_f32() * 1000.0,
                 html_len, css_len);
             self.devtools = Some(dv);
-            self.devtools_target = Some(DevtoolsTarget::new());
+            self.devtools_target = Some(
+                DevtoolsTarget::new().with_inspect_state(Rc::clone(&self.inspect_state))
+            );
+            // Install overlay_painter na PAGE WebView - cte shared InspectState
+            // a emit box-model highlight pres hovered_node (= devtools tree
+            // hover OR picker hit-test).
+            if let Some(wv) = &mut self.webview {
+                let st = Rc::clone(&self.inspect_state);
+                wv.set_overlay_painter(Box::new(move |layout_root, scroll_y, cmds| {
+                    let inspect = st.borrow();
+                    // Hovered (transient = picker mode hover OR tree row hover):
+                    // standard Chrome 4-layer box-model overlay.
+                    if let Some(nid) = inspect.hovered_node {
+                        emit_box_model_highlight(layout_root, nid, scroll_y,
+                            &inspect.highlight_options, cmds);
+                    }
+                    // Selected (persistent = po picker click NEBO tree click):
+                    // jen content rect outline (purple = Chrome convention),
+                    // bez full margin/border/padding fill (= no overlap s hover).
+                    if let Some(nid) = inspect.selected_node {
+                        if Some(nid) != inspect.hovered_node {
+                            emit_selected_outline(layout_root, nid, scroll_y, cmds);
+                        }
+                    }
+                }));
+            }
             self.cdp_channel = Some(channel);
             eprintln!("[PROF F12] TOTAL toggle_devtools:{:.0}ms",
                 t_scripts.duration_since(t_start).as_secs_f32() * 1000.0);
@@ -1118,6 +1333,7 @@ html, body {{ margin: 0; padding: 0; height: 100%; background: #202124; color: #
             let evt = rwe_engine::embed::InputEvent::MouseMove {
                 x: tx, y: ty,
                 modifiers: rwe_engine::embed::KeyModifiers::default(),
+                coalesced: Vec::new(),
             };
             let _ = self.dispatch_input(evt);
             if let Some(w) = &self.window { w.request_redraw(); }
@@ -1141,8 +1357,16 @@ html, body {{ margin: 0; padding: 0; height: 100%; background: #202124; color: #
         self.drain_chrome_cmds();
         let t_chrome_drain = std::time::Instant::now();
         // CDP pump pred render - drain pending requests + push responses.
+        // Po pump musime force redraw - inspect_state.hovered_node mohl byt
+        // setnut, ale page WV by jinak nemel duvod redraw (mouse over devtools
+        // pane != mouse over page).
         if self.devtools_visible {
+            let prev_hovered = self.inspect_state.borrow().hovered_node;
             self.pump_cdp();
+            let cur_hovered = self.inspect_state.borrow().hovered_node;
+            if prev_hovered != cur_hovered {
+                if let Some(w) = &self.window { w.request_redraw(); }
+            }
         }
         let t_pump_cdp = std::time::Instant::now();
         let renderer = match &mut self.renderer { Some(r) => r, None => return };
@@ -1214,12 +1438,15 @@ html, body {{ margin: 0; padding: 0; height: 100%; background: #202124; color: #
             let (dc, dl, dp, dg) = self.devtools.as_ref()
                 .map(|w| w.render_phase_times())
                 .unwrap_or((0.0, 0.0, 0.0, 0.0));
-            // L1 compositor diagnostika: pocet layer v posledni WV render.
+            // L1 compositor diagnostika: pocet layer + cache hit rate v posledni WV render.
             let layer_p = self.webview.as_ref().map(|w| w.layer_count()).unwrap_or(0);
             let layer_d = self.devtools.as_ref().map(|w| w.layer_count()).unwrap_or(0);
+            let (page_cached, _, page_total) = self.webview.as_ref()
+                .map(|w| w.layer_cache_stats()).unwrap_or((0, 0, 0));
             let win_title = format!(
-                "[{:.0} FPS {:.1}ms | C:{:.1} P:{:.1}/L{} D:{:.1}/L{} (cas:{:.1} lay:{:.1} pnt:{:.1} gpu:{:.1})] {}",
+                "[{:.0} FPS {:.1}ms | C:{:.1} P:{:.1}/L{}({}c/{}) D:{:.1}/L{} (cas:{:.1} lay:{:.1} pnt:{:.1} gpu:{:.1})] {}",
                 fps, avg_ms, self.last_chrome_ms, self.last_page_ms, layer_p,
+                page_cached, page_total,
                 self.last_dev_ms, layer_d,
                 dc, dl, dp, dg, title_base);
             if window.title() != win_title {
@@ -1356,6 +1583,26 @@ impl ApplicationHandler for ShellApp {
         }
     }
 
+    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        // Event loop drained vsechny pending events. Flush coalesced MouseMove
+        // buffer + request redraw JEN kdyz dispatch zmenil visual state (dirty).
+        // Bez tohoto by 1000Hz mouse mensim eventem requestoval 1000 redraws/s
+        // = 100% CPU i bez visual change.
+        if let Some(resp) = self.flush_pending_mouse_move() {
+            if resp.dirty {
+                if let Some(w) = &self.window { w.request_redraw(); }
+            }
+        }
+        // Has pending JS intervals/timers / has_pending_intervals across views?
+        // Then schedule redraw to keep them ticking.
+        let needs_tick = self.webview.as_ref().map(|w| w.has_pending_intervals()).unwrap_or(false)
+            || self.chrome.as_ref().map(|w| w.has_pending_intervals()).unwrap_or(false)
+            || self.devtools.as_ref().map(|w| w.has_pending_intervals()).unwrap_or(false);
+        if needs_tick {
+            if let Some(w) = &self.window { w.request_redraw(); }
+        }
+    }
+
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
@@ -1371,6 +1618,9 @@ impl ApplicationHandler for ShellApp {
                 if let Some(w) = &self.window { w.request_redraw(); }
             }
             WindowEvent::RedrawRequested => {
+                // Flush coalesced MouseMove buffer pred redraw - single dispatch
+                // s history pres PointerEvent.getCoalescedEvents() API.
+                self.flush_pending_mouse_move();
                 self.autotest_tick();
                 self.redraw();
             }
@@ -1378,8 +1628,31 @@ impl ApplicationHandler for ShellApp {
                 let scale = self.renderer.as_ref().map(|r| r.scale_factor_value()).unwrap_or(1.0);
                 self.mouse_x = position.x as f32 / scale;
                 self.mouse_y = position.y as f32 / scale;
-                // D5: pri inspect_mode + mouse v page area, hit-test layout
-                // a updatuj inspect_target. Overlay painter prekresli.
+                // CDP Overlay picker mode: pres mouse over page area + picker_active
+                // hit-test layout + set hovered_node v shared InspectState.
+                // Devtools-frontend emits Overlay.setInspectMode -> picker_active true.
+                {
+                    let picker = self.inspect_state.borrow().picker_active;
+                    if picker && !self.point_in_chrome(self.mouse_y) && !self.point_in_devtools(self.mouse_y) {
+                        let chrome_h = self.chrome_h;
+                        let page_x = self.mouse_x;
+                        let page_y = self.mouse_y - chrome_h;
+                        // Scroll offsets z WV - last_layout_root je v page-space,
+                        // mouse je v viewport-space; hit_test pres viewport->page
+                        // pres scroll_y/x add. Bez tohoto pri scroll user musel
+                        // klikat na "puvodni" pre-scroll pozici elementu.
+                        let (scroll_x, scroll_y) = self.webview.as_ref()
+                            .map(|w| w.scroll()).unwrap_or((0.0, 0.0));
+                        let target = self.webview.as_ref()
+                            .and_then(|w| w.last_layout_root())
+                            .and_then(|root| pick_node_at(root, page_x + scroll_x, page_y + scroll_y));
+                        let prev = self.inspect_state.borrow().hovered_node;
+                        if target != prev {
+                            self.inspect_state.borrow_mut().hovered_node = target;
+                            if let Some(w) = &self.window { w.request_redraw(); }
+                        }
+                    }
+                }
                 if self.inspect_mode && !self.point_in_devtools(self.mouse_y) {
                     let target = self.webview.as_ref()
                         .and_then(|w| w.last_layout_root())
@@ -1411,54 +1684,31 @@ impl ApplicationHandler for ShellApp {
                     }
                     return;
                 }
-                // Throttle mouse_move dispatch. 16ms = 60fps cap pro release,
-                // 33ms = 30fps cap pro debug (cascade je 5-10x pomalejsi bez
-                // optimalizaci). OS dodava CursorMoved ~1000Hz - bez throttle
-                // 100% CPU pri pohybu nad devtools-frontend (28x :hover).
-                #[cfg(debug_assertions)]
-                let throttle_ms = 33u128;
-                #[cfg(not(debug_assertions))]
-                let throttle_ms = 16u128;
-                let now = std::time::Instant::now();
-                if now.duration_since(self.last_mouse_move).as_millis() < throttle_ms {
-                    return;
+                // Coalesce MouseMove eventy do buffer. OS dodava CursorMoved
+                // ~1000Hz, my dispatch jen 1 per frame slot v about_to_wait.
+                // Prev pending position push do coalesced history pro JS
+                // PointerEvent.getCoalescedEvents() API.
+                // POZOR: NE request_redraw - to by trigerlo full WebView render
+                // (5ms+) per mouse event burst = 200 redraws/s = 100% CPU.
+                // about_to_wait flush + dirty check rozhodne zda redraw nutny.
+                if let Some(prev) = self.pending_mouse_pos.replace((self.mouse_x, self.mouse_y)) {
+                    if self.pending_coalesced.len() < 64 {
+                        self.pending_coalesced.push(prev);
+                    }
                 }
-                self.last_mouse_move = now;
-                let event = InputEvent::MouseMove {
-                    x: self.mouse_x,
-                    y: self.mouse_y,
-                    modifiers: KeyModifiers::default(),
-                };
-                let resp = self.dispatch_input(event);
-                if let (Some(cursor), Some(window)) = (resp.cursor, &self.window) {
-                    use rwe_engine::embed::CursorIcon as IC;
-                    let winit_cursor = match cursor {
-                        IC::Pointer => winit::window::CursorIcon::Pointer,
-                        IC::Text => winit::window::CursorIcon::Text,
-                        IC::Wait => winit::window::CursorIcon::Wait,
-                        IC::Help => winit::window::CursorIcon::Help,
-                        IC::Crosshair => winit::window::CursorIcon::Crosshair,
-                        IC::Move => winit::window::CursorIcon::Move,
-                        IC::NotAllowed => winit::window::CursorIcon::NotAllowed,
-                        IC::Grab => winit::window::CursorIcon::Grab,
-                        IC::Grabbing => winit::window::CursorIcon::Grabbing,
-                        IC::ResizeEw => winit::window::CursorIcon::EwResize,
-                        IC::ResizeNs => winit::window::CursorIcon::NsResize,
-                        IC::ResizeNesw => winit::window::CursorIcon::NeswResize,
-                        IC::ResizeNwse => winit::window::CursorIcon::NwseResize,
-                        IC::Default => winit::window::CursorIcon::Default,
-                    };
-                    window.set_cursor(winit_cursor);
-                }
-                if resp.dirty {
-                    if let Some(w) = &self.window { w.request_redraw(); }
-                }
+                return;
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 let (dx, dy) = match delta {
                     MouseScrollDelta::LineDelta(x, y) => (x * -60.0, y * -60.0),
                     MouseScrollDelta::PixelDelta(p) => (-(p.x as f32), -(p.y as f32)),
                 };
+                if std::env::var("RWE_SCROLL_DBG").is_ok() {
+                    eprintln!("[shell wheel] dx={} dy={} mouse_y={} in_chrome={} in_dev={}",
+                        dx, dy, self.mouse_y,
+                        self.point_in_chrome(self.mouse_y),
+                        self.point_in_devtools(self.mouse_y));
+                }
                 // Ctrl+Wheel = zoom in/out (common browser pattern).
                 if self.modifiers.control_key() {
                     let new_zoom = self.with_active_mut(|wv| {
@@ -1473,13 +1723,23 @@ impl ApplicationHandler for ShellApp {
                     }
                     return;
                 }
+                // Wheel routing: chrome bar nema scrollable content (jen
+                // address bar + buttons), takze wheel events vzdy route do PAGE
+                // WebView (Chrome/FF pattern). Devtools panel = scrollable, takze
+                // pri mouse_y in devtools -> route to devtools.
+                let in_dev = self.point_in_devtools(self.mouse_y);
+                let y_off = if in_dev { self.devtools_y_offset() } else { self.chrome_h };
                 let event = InputEvent::Scroll {
                     dx, dy,
                     x: self.mouse_x,
-                    y: self.mouse_y,
+                    y: (self.mouse_y - y_off).max(0.0),
                     modifiers: KeyModifiers::default(),
                 };
-                let resp = self.dispatch_input(event);
+                let target_wv = if in_dev { self.devtools.as_mut() } else { self.webview.as_mut() };
+                let resp = target_wv.map(|wv| wv.handle_input(event)).unwrap_or_default();
+                if std::env::var("RWE_SCROLL_DBG").is_ok() {
+                    eprintln!("[shell wheel route] in_dev={} dirty={}", in_dev, resp.dirty);
+                }
                 if resp.dirty {
                     if let Some(w) = &self.window { w.request_redraw(); }
                 }
@@ -1691,28 +1951,23 @@ impl ApplicationHandler for ShellApp {
                     let new_y = if focused_input { false } else {
                         self.with_active_mut(|webview| {
                             let (_vw, vh) = webview.viewport_size();
-                            let (sx, sy) = webview.scroll();
-                            let ny = match &key_logical {
-                                Key::Named(NamedKey::PageDown) => Some(sy + vh * 0.9),
-                                Key::Named(NamedKey::PageUp) => Some(sy - vh * 0.9),
-                                Key::Named(NamedKey::ArrowDown) if !ctrl => Some(sy + 60.0),
-                                Key::Named(NamedKey::ArrowUp) if !ctrl => Some(sy - 60.0),
-                                Key::Named(NamedKey::Home) => Some(0.0),
+                            // Pri scroll keys dispatch pres webview.kbd_scroll_y -
+                            // rozhodne mezi inner element scroll (pod kurzorem) vs
+                            // viewport scroll.
+                            let dy = match &key_logical {
+                                Key::Named(NamedKey::PageDown) => Some(vh * 0.9),
+                                Key::Named(NamedKey::PageUp) => Some(-vh * 0.9),
+                                Key::Named(NamedKey::ArrowDown) if !ctrl => Some(60.0),
+                                Key::Named(NamedKey::ArrowUp) if !ctrl => Some(-60.0),
+                                Key::Named(NamedKey::Home) => Some(-1_000_000.0),
                                 Key::Named(NamedKey::End) => Some(1_000_000.0),
                                 Key::Named(NamedKey::Space) => {
-                                    let delta = if shift { -vh * 0.9 } else { vh * 0.9 };
-                                    Some(sy + delta)
+                                    Some(if shift { -vh * 0.9 } else { vh * 0.9 })
                                 }
                                 _ => None,
                             };
-                            if let Some(y) = ny {
-                                // Clamp na [0, max] kde max = layout_h - viewport_h.
-                                let max_y = webview.last_layout_root()
-                                    .map(|l| (l.rect.height - vh).max(0.0))
-                                    .unwrap_or(f32::INFINITY);
-                                webview.set_scroll(sx, y.clamp(0.0, max_y));
-                                true
-                            } else { false }
+                            if let Some(d) = dy { webview.kbd_scroll_y(d) }
+                            else { false }
                         }).unwrap_or(false)
                     };
                     if new_y {
@@ -1789,6 +2044,49 @@ impl ApplicationHandler for ShellApp {
                         }
                         _ => {}
                     }
+                }
+                // CDP Overlay picker mode (Phase 1b): LMB Press v page area pri
+                // picker_active=true -> emit Overlay.inspectNodeRequested CDP event
+                // (frontend listener select node v tree + scroll to it).
+                // Toggle off picker after click (Chrome behavior).
+                if matches!(btn, MouseButton::Left)
+                    && matches!(state, ElementState::Pressed)
+                    && self.inspect_state.borrow().picker_active
+                    && !self.point_in_devtools(self.mouse_y)
+                    && !self.point_in_chrome(self.mouse_y)
+                {
+                    let node_ptr = self.inspect_state.borrow().hovered_node;
+                    if let (Some(ptr), Some(channel), Some(target))
+                        = (node_ptr, self.cdp_channel.as_ref(), self.devtools_target.as_ref())
+                    {
+                        // Resolve ptr -> CDP NodeId (sequential int = Chrome standard).
+                        // None = ptr neni v table (= node nebyl jeste serializovany pres
+                        // DOM.getDocument). Frontend tree muze nemit row pres tento node.
+                        let id = target.id_for_ptr(ptr).unwrap_or(0);
+                        let evt = rwe_devtools_proto::DevtoolsEvent {
+                            method: "Overlay.inspectNodeRequested".to_string(),
+                            params: serde_json::json!({
+                                "backendNodeId": id,
+                                "nodeId": id,
+                            }),
+                        };
+                        let json = serde_json::to_string(&evt).unwrap_or_default();
+                        channel.resp_queue.borrow_mut().push_back(json);
+                        // Take set selected_node v shared state - page overlay
+                        // bude render persistent highlight pres selected (vs transient hovered).
+                        let mut s = self.inspect_state.borrow_mut();
+                        s.selected_node = Some(ptr);
+                        s.picker_active = false;
+                        s.hovered_node = None;
+                        let _ = ptr; let _ = id;
+                    } else {
+                        // No hovered node (click outside any element) - just exit picker.
+                        let mut s = self.inspect_state.borrow_mut();
+                        s.picker_active = false;
+                        s.hovered_node = None;
+                    }
+                    if let Some(w) = &self.window { w.request_redraw(); }
+                    return;
                 }
                 // D5: LMB Press v inspect_mode + page area -> emit CDP event
                 // DOM.inspectNodeRequested (frontend elements panel selectne).
