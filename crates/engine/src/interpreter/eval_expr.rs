@@ -554,6 +554,25 @@ impl Interpreter {
                                 self.bump_dom_version();
                                 return Ok(());
                             }
+                            "scrollTop" | "scrollLeft" => {
+                                // Element-level scroll setter. Host (WebView)
+                                // sync element_scroll_overrides -> element_scroll
+                                // per frame. Bez teto override interp NEMA pristup
+                                // k WV.element_scroll directly.
+                                let v = match val {
+                                    JsValue::Number(num) => num as f32,
+                                    JsValue::Str(ref s) => s.parse::<f32>().unwrap_or(0.0),
+                                    _ => return Ok(()),
+                                };
+                                // Aktualne i set attribute pres getter compat
+                                // (eval_member.rs cte n.attr(scrollTop)).
+                                n.set_attr(&key, &v.to_string());
+                                let ptr = std::rc::Rc::as_ptr(n) as usize;
+                                let mut overrides = self.element_scroll_overrides.borrow_mut();
+                                let entry = overrides.entry(ptr).or_insert((0.0, 0.0));
+                                if key == "scrollTop" { entry.1 = v; } else { entry.0 = v; }
+                                return Ok(());
+                            }
                             _ => {
                                 // Ostatni props - ignorujeme (DomNode nema generic prop store)
                                 return Ok(());

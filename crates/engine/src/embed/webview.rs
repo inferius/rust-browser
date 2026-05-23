@@ -2226,6 +2226,18 @@ impl WebView {
             *interp.scroll_pos.borrow_mut() = (self.scroll_x, self.scroll_y);
             self.last_synced_scroll_pos = (self.scroll_x, self.scroll_y);
         }
+        // Sync element_scroll_overrides z interp -> self.element_scroll. JS
+        // assign `el.scrollTop = N` populates overrides. Bez tohoto JS-driven
+        // scroll per element nedosáhne layout/render.
+        if let Some(interp) = self.interpreter.as_ref() {
+            let mut overrides = interp.element_scroll_overrides.borrow_mut();
+            if !overrides.is_empty() {
+                for (ptr, (sx, sy)) in overrides.drain() {
+                    self.element_scroll.insert(ptr, (sx, sy));
+                }
+                self.dirty = true;
+            }
+        }
 
         // Drain async jobs (image lazy loads, file IO callbacks). Volane PRED
         // cascade aby novy state byl dostupny v style_map (e.g. image natural

@@ -43,6 +43,93 @@ use num_traits::Pow;
 
 pub mod helpers;
 pub mod console_args;
+pub mod gc;
+pub mod service_worker;
+pub mod wasm;
+pub mod streams;
+pub mod broadcast_channel;
+pub mod push_api;
+pub mod webrtc;
+pub mod indexed_db;
+pub mod web_crypto;
+pub mod geo_api;
+pub mod permissions;
+pub mod notifications;
+pub mod web_audio;
+pub mod web_share;
+pub mod wake_lock;
+pub mod media_session;
+pub mod device_apis;
+pub mod webgl2;
+pub mod performance_api;
+pub mod web_locks;
+pub mod speech_api;
+pub mod clipboard_api;
+pub mod picture_in_picture;
+pub mod file_system_access;
+pub mod idle_detection;
+pub mod web_devices;
+pub mod web_codecs;
+pub mod background_sync;
+pub mod storage_quota;
+pub mod gamepad_api;
+pub mod sensor_api;
+pub mod web_transport;
+pub mod web_gpu;
+pub mod payment_request;
+pub mod credentials_api;
+pub mod popover;
+pub mod badging_api;
+pub mod contact_picker;
+pub mod document_pip;
+pub mod virtual_keyboard;
+pub mod cookie_store;
+pub mod trusted_types;
+pub mod reporting_api;
+pub mod scheduling_api;
+pub mod web_animations;
+pub mod background_fetch;
+pub mod compression_streams;
+pub mod fenced_frames;
+pub mod web_share_target;
+pub mod view_transitions;
+pub mod navigation_api;
+pub mod storage_buckets;
+pub mod private_state_tokens;
+pub mod attribution_reporting;
+pub mod topics_api;
+pub mod shared_storage;
+pub mod federated_credential;
+pub mod custom_elements;
+pub mod mutation_observer;
+pub mod resize_observer;
+pub mod intersection_observer;
+pub mod encoding;
+pub mod structured_clone;
+pub mod abort_signal;
+pub mod decorators;
+pub mod source_map;
+pub mod debugger_protocol;
+pub mod heap_profiler;
+pub mod async_runtime;
+pub mod promise_state;
+pub mod import_maps;
+pub mod regex_engine;
+pub mod bignum;
+pub mod proxy_handler;
+pub mod typed_arrays;
+pub mod worker_pool;
+pub mod persistent_storage;
+pub mod file_blob;
+pub mod fetch_api;
+pub mod headers;
+pub mod eventsource_state;
+pub mod url_search_params;
+pub mod form_data;
+pub mod error_kinds;
+pub mod v8_inspector;
+pub mod stack_trace;
+pub mod cpu_profiler;
 mod builtins;
 mod builtins_helpers;
 mod string_methods;
@@ -564,6 +651,33 @@ pub struct PendingFetch {
 
 pub type FetchOutcome = Result<(u16, String, String, Vec<(String, String)>), String>;
 
+/// ResizeObserver state - drzi callback + sdileny seznam targets s observer JS
+/// obj + prev rect snapshot. WebView po layout fire callback pri change.
+#[derive(Debug)]
+pub struct ResizeObserverState {
+    pub callback: JsValue,
+    /// Sdileno s observer JS obj `__targets__` - mutace pres observe/unobserve
+    /// na JS strane viditelna zde.
+    pub targets: Rc<RefCell<Vec<JsValue>>>,
+    /// Prev rect snapshot per target node ptr -> (width, height).
+    /// Diff vs current = fire entry.
+    pub prev_rects: RefCell<HashMap<usize, (f32, f32)>>,
+}
+
+/// IntersectionObserver state. root=None -> viewport. Threshold = ratios pri
+/// kterych fire. Prev intersection ratio snapshot for diff detection.
+#[derive(Debug)]
+pub struct IntersectionObserverState {
+    pub callback: JsValue,
+    pub targets: Rc<RefCell<Vec<JsValue>>>,
+    /// Prev intersection ratio per target node ptr.
+    pub prev_ratios: RefCell<HashMap<usize, f32>>,
+    /// rootMargin v px (top, right, bottom, left). Default (0,0,0,0).
+    pub root_margin: (f32, f32, f32, f32),
+    /// Thresholds (seraz vzestupne 0..1). Default [0.0].
+    pub thresholds: Vec<f32>,
+}
+
 #[derive(Debug)]
 pub enum WebSocketEvent {
     Open,
@@ -616,6 +730,13 @@ pub struct Interpreter {
     /// Event callback registry: ID -> JS callback funkce.
     /// Pouziva se pro addEventListener / dispatchEvent.
     pub event_callbacks: Rc<RefCell<HashMap<usize, JsValue>>>,
+    /// ResizeObserver / IntersectionObserver aktivni instances. WebView po
+    /// kazdem layout pass projde tyto observers a fire callbacks pri zmene
+    /// rect / intersection ratio.
+    /// Inspired by Chromium core/resize_observer/resize_observer_controller.cc
+    /// + core/intersection_observer/intersection_observer_controller.cc.
+    pub resize_observers: Rc<RefCell<Vec<ResizeObserverState>>>,
+    pub intersection_observers: Rc<RefCell<Vec<IntersectionObserverState>>>,
     /// Counter pro callback ID.
     pub next_callback_id: Rc<RefCell<usize>>,
     /// Console log capture pro DevTools: (level, message).
@@ -681,6 +802,11 @@ pub struct Interpreter {
     /// JS dispatch. Default (0, 0). Pristup pres `window.pageXOffset/pageYOffset`,
     /// `window.scrollX/scrollY` a `document.documentElement.scrollTop`.
     pub scroll_pos: Rc<RefCell<(f32, f32)>>,
+    /// Element-level scroll overrides z JS - `el.scrollTop = N` / `el.scrollIntoView()`.
+    /// Key = Rc::as_ptr DOM node usize, value = (scroll_x, scroll_y) logical px.
+    /// Host (WebView) per-frame mergne pres element_scroll. Sdileny Rc, host
+    /// inicializuje + assigns same Rc do interpreteru.
+    pub element_scroll_overrides: Rc<RefCell<std::collections::HashMap<usize, (f32, f32)>>>,
     /// Shadow DOM registry: host node ptr (Rc::as_ptr as usize) -> ShadowRoot obj.
     /// `attachShadow` create entry, `el.shadowRoot` getter lookup.
     /// Closed mode = lookup return Null (ale samotny objekt drzi mode="closed").
@@ -827,6 +953,8 @@ impl Interpreter {
         // document.addEventListener real impl pres document root node).
         let event_callbacks: Rc<RefCell<HashMap<usize, JsValue>>> = Rc::new(RefCell::new(HashMap::new()));
         let next_callback_id: Rc<RefCell<usize>> = Rc::new(RefCell::new(1));
+        let resize_observers: Rc<RefCell<Vec<ResizeObserverState>>> = Rc::new(RefCell::new(Vec::new()));
+        let intersection_observers: Rc<RefCell<Vec<IntersectionObserverState>>> = Rc::new(RefCell::new(Vec::new()));
         setup_builtins(
             &global, &task_queue, &interval_queue, &next_timer_id, &workers, &next_worker_id,
             &document, &console_log, &console_log_args, &network_log, &custom_elements,
@@ -834,6 +962,7 @@ impl Interpreter {
             &pending_fetches, &pending_xhr_callbacks,
             &raf_callbacks, &next_raf_id, &scroll_pos,
             &event_callbacks, &next_callback_id,
+            &resize_observers, &intersection_observers,
         );
         Interpreter {
             global, yield_buffer: None, task_queue, interval_queue, next_timer_id,
@@ -846,6 +975,8 @@ impl Interpreter {
             document,
             event_callbacks,
             next_callback_id,
+            resize_observers,
+            intersection_observers,
             console_log,
             console_log_args,
             network_log,
@@ -870,6 +1001,7 @@ impl Interpreter {
             window_listeners: Rc::new(RefCell::new(HashMap::new())),
             focused_element: Rc::new(RefCell::new(None)),
             scroll_pos,
+            element_scroll_overrides: Rc::new(RefCell::new(HashMap::new())),
             shadow_roots: Rc::new(RefCell::new(HashMap::new())),
             stylesheets_lookup: None,
             dom_version: Rc::new(std::cell::Cell::new(0)),
@@ -1198,6 +1330,128 @@ impl Interpreter {
 
     /// Pomocnik pro render - dispatch event na konkretni DOM node z external code.
     /// Volat addEventListener listenery pro `event_type`.
+    /// Fire ResizeObserver callbacks pri zmene rect targetu. Po layout pass
+    /// WebView vola s funkci `rect_lookup: node_id -> (w, h)`. Pro kazdy obs:
+    /// build entries z observed targets jejichz rect se zmenil, call callback.
+    /// Inspired by Chromium ResizeObserver::DeliverObservations.
+    pub fn fire_resize_observers<F>(&mut self, mut rect_lookup: F)
+    where F: FnMut(usize) -> Option<(f32, f32)>
+    {
+        // Snapshot observers list (Rc clone) - mutace callbacku nesmi invalidovat iter.
+        let observers = Rc::clone(&self.resize_observers);
+        let obs_list = observers.borrow();
+        for obs in obs_list.iter() {
+            let targets: Vec<JsValue> = obs.targets.borrow().clone();
+            let mut entries: Vec<JsValue> = Vec::new();
+            for t in &targets {
+                let node = match t {
+                    JsValue::DomNode(n) => Rc::clone(n),
+                    _ => continue,
+                };
+                let id = Rc::as_ptr(&node) as usize;
+                let cur = match rect_lookup(id) { Some(r) => r, None => continue };
+                let prev = obs.prev_rects.borrow().get(&id).copied();
+                let changed = match prev {
+                    Some((pw, ph)) => (cur.0 - pw).abs() > 0.5 || (cur.1 - ph).abs() > 0.5,
+                    None => true,  // pristup poprve = vzdy fire (init observation)
+                };
+                if !changed { continue; }
+                obs.prev_rects.borrow_mut().insert(id, cur);
+                // Build ResizeObserverEntry: { target, contentRect: {width, height} }.
+                let mut entry = JsObject::new();
+                entry.set("target".into(), JsValue::DomNode(Rc::clone(&node)));
+                let mut content_rect = JsObject::new();
+                content_rect.set("width".into(), JsValue::Number(cur.0 as f64));
+                content_rect.set("height".into(), JsValue::Number(cur.1 as f64));
+                content_rect.set("x".into(), JsValue::Number(0.0));
+                content_rect.set("y".into(), JsValue::Number(0.0));
+                content_rect.set("top".into(), JsValue::Number(0.0));
+                content_rect.set("left".into(), JsValue::Number(0.0));
+                content_rect.set("right".into(), JsValue::Number(cur.0 as f64));
+                content_rect.set("bottom".into(), JsValue::Number(cur.1 as f64));
+                entry.set("contentRect".into(), JsValue::Object(Rc::new(RefCell::new(content_rect))));
+                entries.push(JsValue::Object(Rc::new(RefCell::new(entry))));
+            }
+            if entries.is_empty() { continue; }
+            let arr = JsValue::Array(Rc::new(RefCell::new(entries)));
+            let cb = obs.callback.clone();
+            drop(obs_list);
+            let _ = self.call_function(cb, vec![arr], None);
+            return; // Iter restart pri dalsim fire - obvykle ma 1-2 observers anyway.
+        }
+    }
+
+    /// Fire IntersectionObserver callbacks. WebView passes `rect_lookup` + `viewport`.
+    /// Per target: compute intersection ratio vs viewport (+ rootMargin), porovna
+    /// s prev. Cross threshold = fire entry.
+    /// Inspired by Chromium IntersectionObserver::ComputeIntersections.
+    pub fn fire_intersection_observers<F>(
+        &mut self,
+        mut rect_lookup: F,
+        viewport: (f32, f32, f32, f32),  // (x, y, w, h)
+    )
+    where F: FnMut(usize) -> Option<(f32, f32, f32, f32)>  // (x,y,w,h)
+    {
+        let observers = Rc::clone(&self.intersection_observers);
+        let obs_list = observers.borrow();
+        for obs in obs_list.iter() {
+            let (vx, vy, vw, vh) = viewport;
+            let (mt, mr, mb, ml) = obs.root_margin;
+            let rx = vx - ml;
+            let ry = vy - mt;
+            let rw = vw + ml + mr;
+            let rh = vh + mt + mb;
+            let targets: Vec<JsValue> = obs.targets.borrow().clone();
+            let mut entries: Vec<JsValue> = Vec::new();
+            for t in &targets {
+                let node = match t {
+                    JsValue::DomNode(n) => Rc::clone(n),
+                    _ => continue,
+                };
+                let id = Rc::as_ptr(&node) as usize;
+                let (tx, ty, tw, th) = match rect_lookup(id) { Some(r) => r, None => continue };
+                let ix_lo = tx.max(rx);
+                let iy_lo = ty.max(ry);
+                let ix_hi = (tx + tw).min(rx + rw);
+                let iy_hi = (ty + th).min(ry + rh);
+                let iw = (ix_hi - ix_lo).max(0.0);
+                let ih = (iy_hi - iy_lo).max(0.0);
+                let area_t = tw * th;
+                let ratio = if area_t > 0.0 { (iw * ih) / area_t } else { 0.0 };
+                let prev = obs.prev_ratios.borrow().get(&id).copied().unwrap_or(-1.0);
+                // Threshold crossing detekce - prev < th && cur >= th (or vice versa).
+                let crossed = obs.thresholds.iter().any(|&th| {
+                    (prev < th && ratio >= th) || (prev >= th && ratio < th)
+                }) || prev < 0.0;  // first observation
+                if !crossed { continue; }
+                obs.prev_ratios.borrow_mut().insert(id, ratio);
+                let mut entry = JsObject::new();
+                entry.set("target".into(), JsValue::DomNode(Rc::clone(&node)));
+                entry.set("intersectionRatio".into(), JsValue::Number(ratio as f64));
+                entry.set("isIntersecting".into(), JsValue::Bool(ratio > 0.0));
+                let mut bounding = JsObject::new();
+                bounding.set("x".into(), JsValue::Number(tx as f64));
+                bounding.set("y".into(), JsValue::Number(ty as f64));
+                bounding.set("width".into(), JsValue::Number(tw as f64));
+                bounding.set("height".into(), JsValue::Number(th as f64));
+                entry.set("boundingClientRect".into(), JsValue::Object(Rc::new(RefCell::new(bounding))));
+                let mut inter = JsObject::new();
+                inter.set("x".into(), JsValue::Number(ix_lo as f64));
+                inter.set("y".into(), JsValue::Number(iy_lo as f64));
+                inter.set("width".into(), JsValue::Number(iw as f64));
+                inter.set("height".into(), JsValue::Number(ih as f64));
+                entry.set("intersectionRect".into(), JsValue::Object(Rc::new(RefCell::new(inter))));
+                entries.push(JsValue::Object(Rc::new(RefCell::new(entry))));
+            }
+            if entries.is_empty() { continue; }
+            let arr = JsValue::Array(Rc::new(RefCell::new(entries)));
+            let cb = obs.callback.clone();
+            drop(obs_list);
+            let _ = self.call_function(cb, vec![arr], None);
+            return;
+        }
+    }
+
     pub fn dispatch_event(
         &mut self,
         node: &Rc<crate::browser::dom::NodeData>,
@@ -1268,38 +1522,105 @@ impl Interpreter {
                 }));
             let ev_prevent = Rc::clone(&event_obj);
             e.set("preventDefault".into(), native("preventDefault", move |_| {
-                ev_prevent.borrow_mut().set("defaultPrevented".into(), JsValue::Bool(true));
+                // Passive listener nesmi preventDefault (DOM3 Events §3.5).
+                // __passive_locked__ flag se setuje pred fire passive listener
+                // a unset po. Pokud true, ignoruj volani (no-op).
+                let locked = matches!(ev_prevent.borrow().get("__passive_locked__"),
+                    JsValue::Bool(true));
+                if !locked {
+                    ev_prevent.borrow_mut().set("defaultPrevented".into(), JsValue::Bool(true));
+                }
                 Ok(JsValue::Undefined)
             }));
         }
-        // Bubble dispatch: target -> root. Pri __stopped__ break.
+        // 3-phase dispatch per DOM Level 3 Events:
+        // 1. Capture: root -> target (skip target, listeners s capture=true)
+        // 2. Target: at target (vsechny listeners, eventPhase=AT_TARGET=2)
+        // 3. Bubble: target -> root (skip target, listeners s capture=false, jen kdyz bubbles)
+        //
+        // Inspired by Chromium core/dom/event_dispatcher.cc::Dispatch.
         let bubbles = matches!(event_obj.borrow().get("bubbles"), JsValue::Bool(true));
-        for (depth, n) in chain.iter().enumerate() {
-            // currentTarget update.
-            event_obj.borrow_mut().set("currentTarget".into(),
-                JsValue::DomNode(Rc::clone(n)));
-            event_obj.borrow_mut().set("eventPhase".into(),
-                JsValue::Number(if depth == 0 { 2.0 } else { 3.0 })); // AT_TARGET / BUBBLING_PHASE
-            // Snapshot listenery (kopie usize). Pri call_function muze JS
-            // mutate listeners - chranime se kopii.
-            let ids: Vec<usize> = n.listeners.borrow().get(event_type)
-                .cloned().unwrap_or_default();
-            for id in ids {
-                if matches!(event_obj.borrow().get("__stopped_immediate__"), JsValue::Bool(true)) {
+
+        // Closure: fire jeden listener entry, handle passive + once + stopImmediate.
+        // Vraci true pokud stopImmediatePropagation byl set.
+        let fire_entry = |this: &mut Self, n: &Rc<crate::browser::dom::NodeData>,
+                          entry: crate::browser::dom::ListenerEntry|
+            -> Result<bool, JsError>
+        {
+            let cb = this.event_callbacks.borrow().get(&entry.callback_id).cloned();
+            let cb = match cb { Some(c) => c, None => return Ok(false) };
+            if entry.passive {
+                // Passive listener nesmi preventDefault. Marker block - kdyz volaji,
+                // ignoruj. Implementuji pres temp flag na event objektu.
+                event_obj.borrow_mut().set("__passive_locked__".into(), JsValue::Bool(true));
+            }
+            let arg = JsValue::Object(Rc::clone(&event_obj));
+            this.call_function(cb, vec![arg], Some(JsValue::DomNode(Rc::clone(n))))?;
+            if entry.passive {
+                event_obj.borrow_mut().set("__passive_locked__".into(), JsValue::Bool(false));
+            }
+            if entry.once {
+                // Remove tento listener z node po fire.
+                let mut lst = n.listeners.borrow_mut();
+                if let Some(vec) = lst.get_mut(event_type) {
+                    vec.retain(|e| e.callback_id != entry.callback_id);
+                }
+                this.event_callbacks.borrow_mut().remove(&entry.callback_id);
+            }
+            Ok(matches!(event_obj.borrow().get("__stopped_immediate__"), JsValue::Bool(true)))
+        };
+
+        // 1. CAPTURE PHASE: root -> target. Skip target itself.
+        // chain je target -> root, takze iterujem reverse, skip prvni (target).
+        let cap_len = chain.len();
+        if cap_len > 1 {
+            for n in chain[1..].iter().rev() {
+                event_obj.borrow_mut().set("currentTarget".into(),
+                    JsValue::DomNode(Rc::clone(n)));
+                event_obj.borrow_mut().set("eventPhase".into(), JsValue::Number(1.0)); // CAPTURING_PHASE
+                let entries: Vec<crate::browser::dom::ListenerEntry> =
+                    n.listeners.borrow().get(event_type).cloned().unwrap_or_default();
+                for entry in entries {
+                    if !entry.capture { continue; }
+                    if fire_entry(self, n, entry)? { return Ok(()); }
+                }
+                if matches!(event_obj.borrow().get("__stopped__"), JsValue::Bool(true)) {
                     return Ok(());
                 }
-                let cb = self.event_callbacks.borrow().get(&id).cloned();
-                if let Some(cb) = cb {
-                    let arg = JsValue::Object(Rc::clone(&event_obj));
-                    self.call_function(cb, vec![arg], Some(JsValue::DomNode(Rc::clone(n))))?;
-                }
             }
-            // stopPropagation -> nepokracovat bubble do parenta.
+        }
+
+        // 2. TARGET PHASE: at target. Fire vsechny (capture i non-capture).
+        if let Some(target) = chain.first() {
+            event_obj.borrow_mut().set("currentTarget".into(),
+                JsValue::DomNode(Rc::clone(target)));
+            event_obj.borrow_mut().set("eventPhase".into(), JsValue::Number(2.0)); // AT_TARGET
+            let entries: Vec<crate::browser::dom::ListenerEntry> =
+                target.listeners.borrow().get(event_type).cloned().unwrap_or_default();
+            for entry in entries {
+                if fire_entry(self, target, entry)? { return Ok(()); }
+            }
             if matches!(event_obj.borrow().get("__stopped__"), JsValue::Bool(true)) {
                 return Ok(());
             }
-            // Pokud event nebubbluje, dispatch jen na target.
-            if !bubbles && depth == 0 { break; }
+        }
+
+        // 3. BUBBLE PHASE: target -> root. Skip target itself, jen kdyz bubbles.
+        if bubbles && cap_len > 1 {
+            for n in chain[1..].iter() {
+                event_obj.borrow_mut().set("currentTarget".into(),
+                    JsValue::DomNode(Rc::clone(n)));
+                event_obj.borrow_mut().set("eventPhase".into(), JsValue::Number(3.0)); // BUBBLING_PHASE
+                let entries: Vec<crate::browser::dom::ListenerEntry> =
+                    n.listeners.borrow().get(event_type).cloned().unwrap_or_default();
+                for entry in entries {
+                    if entry.capture { continue; }
+                    if fire_entry(self, n, entry)? { return Ok(()); }
+                }
+                if matches!(event_obj.borrow().get("__stopped__"), JsValue::Bool(true)) {
+                    return Ok(());
+                }
+            }
         }
         Ok(())
     }
@@ -1464,6 +1785,28 @@ impl Interpreter {
     /// Spusti cely program (AST) a vrati posledni `return` hodnotu.
     ///
     /// Kdyz program neobsahuje `return`, vraci `JsValue::Undefined`.
+    /// JIT-like fast path: compile source to bytecode + run pres VM (indexed
+    /// slot locals, faster nez tree-walker RefCell::borrow per scope lookup).
+    ///
+    /// Pouzitelne pro:
+    /// - Devtools console eval (existing usage)
+    /// - Tight loops / arithmetic hot paths
+    /// - Future inline-caching call sites
+    ///
+    /// Fallback do tree-walker pri compile failure (VM nepodporuje async/yield/
+    /// generators - tyto vyzaduji tree-walker).
+    pub fn eval_via_vm(&self, src: &str) -> Result<JsValue, String> {
+        use crate::lexer::base::Lexer;
+        use crate::parser::Parser;
+        let lex = Lexer::parse_str(src, "<vm>").map_err(|e| format!("Lexer: {:?}", e))?;
+        let mut parser = Parser::new(lex.tokens.clone());
+        let program = parser.parse().map_err(|e| format!("Parser: {:?}", e))?;
+        let code = bytecode::compile_program(&program.body)
+            .map_err(|e| format!("Compile: {}", e))?;
+        let mut vm = bytecode::VM::with_env(self.global.clone());
+        vm.run(&code).map_err(|e| format!("VM Runtime: {}", e))
+    }
+
     pub fn run(&mut self, program: &Program) -> EvalResult {
         let env = Rc::clone(&self.global);
         let result = match self.exec_stmts(&program.body, &env)? {

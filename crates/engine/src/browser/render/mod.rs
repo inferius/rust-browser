@@ -82,6 +82,9 @@ mod atlas;
 pub use atlas::{try_load_default_font, ImageAtlas};
 use atlas::{GlyphAtlas, ATLAS_SIZE, IMAGE_ATLAS_SIZE};
 
+pub mod font_face;
+pub use font_face::SwashFontFace;
+
 mod shaders;
 use shaders::{BLUR_SHADER, TRANSFORM_SHADER, COMPOSE_SHADER, RECT_SHADER, LCD_SHADER};
 
@@ -96,6 +99,12 @@ pub mod canvas_paint;
 
 mod webgl_paint;
 mod text_input;
+pub mod blend;
+pub mod subpixel_aa;
+pub mod compositor;
+pub mod tiles;
+pub mod frame_pacing;
+pub mod hit_test_tree;
 // tabs.rs smazany N+22 (TabManager + Tab + about: pages = shell concerns).
 // extract_title presunut do `embed::loader::extract_title`.
 #[allow(unused_imports)] // pub use - test exposure
@@ -245,21 +254,314 @@ fn hash_display_command<H: std::hash::Hasher>(c: &DisplayCommand, h: &mut H) {
     s.hash(h);
 }
 
+thread_local! {
+    /// Pixel-snap scale (= zoom * scale_factor). Renderer set pred build_vertices.
+    /// 1.0 = no snap. Default 1.0 protoze unit tests + headless builds.
+    static PIXEL_SNAP_SCALE: std::cell::Cell<f32> = const { std::cell::Cell::new(1.0) };
+    /// CSS mix-blend-mode pipeline override pres compose_view_to_view_blend.
+    /// 0 = Normal/default (alpha blend pipeline). 1+ = blend mode discriminant.
+    static BLEND_MODE_OVERRIDE: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    /// Viewport override pres render_into_tile - draw_segments_into_view_clipped
+    /// drive prepisoval uniform na vp_dims (= full WebView viewport) ALE tile
+    /// raster potrebuje vp = tile dims. Pri (w, h) > 0 = override aktivni.
+    static VIEWPORT_OVERRIDE: std::cell::Cell<(f32, f32)> = const { std::cell::Cell::new((0.0, 0.0)) };
+}
+
+/// Build compose pipeline uniform [28 floats = 7 vec4]:
+/// - 5 vec4 color matrix (row0..row3 + offset)
+/// - vec4 dst_box (x_min_ndc, y_min_ndc, x_max_ndc, y_max_ndc)
+/// - vec4 src_uv  (u_min, v_min_top, u_max, v_max_bottom)
+///
+/// Caller passes (dst_x, dst_y, dst_w, dst_h) v LOGICAL viewport coords +
+/// (src_u0..src_v1) v normalized texture coords + viewport logical dims.
+/// Computes visible intersection (dst clipped to [0, vp_w/h]) -> dst_box NDC
+/// safely v [-1, 1] + src_uv slice corresponding visible portion.
+///
+/// Vraci `(uniform_data, visible)` - visible=false znamena dst je completely
+/// off-screen (caller muze skip draw).
+///
+/// Y mapping konvencie:
+///   - dst input v logical px, y=0 = top of viewport, y=vp_h = bottom
+///   - dst_box NDC: x_min/max v [-1,1] (left to right), y_min = NDC bottom
+///     (= logical y_max), y_max = NDC top (= logical y_min)
+///   - src_uv input: v_min_top (texture top, v=0), v_max_bottom (v=1)
+///
+/// Inspired by WebRender `composite.rs::CompositeTile` per-quad pattern.
+pub(crate) fn build_compose_uniform_box(
+    color_matrix: &[f32; 20],
+    dst_x: f32, dst_y: f32, dst_w: f32, dst_h: f32,
+    src_u0: f32, src_v0: f32, src_u1: f32, src_v1: f32,
+    vp_w: f32, vp_h: f32,
+) -> ([f32; 28], bool) {
+    let vp_w = vp_w.max(0.001);
+    let vp_h = vp_h.max(0.001);
+    // Visible intersection of dst rect with viewport.
+    let vis_x0 = dst_x.max(0.0).min(vp_w);
+    let vis_y0 = dst_y.max(0.0).min(vp_h);
+    let vis_x1 = (dst_x + dst_w).max(0.0).min(vp_w);
+    let vis_y1 = (dst_y + dst_h).max(0.0).min(vp_h);
+    let vis_w = vis_x1 - vis_x0;
+    let vis_h = vis_y1 - vis_y0;
+    let visible = vis_w > 0.0 && vis_h > 0.0;
+    // UV slice corresponding to visible portion of source texture region.
+    let inv_w = if dst_w.abs() > 1e-4 { 1.0 / dst_w } else { 0.0 };
+    let inv_h = if dst_h.abs() > 1e-4 { 1.0 / dst_h } else { 0.0 };
+    let frac_u0 = (vis_x0 - dst_x) * inv_w;
+    let frac_u1 = (vis_x1 - dst_x) * inv_w;
+    let frac_v0 = (vis_y0 - dst_y) * inv_h;
+    let frac_v1 = (vis_y1 - dst_y) * inv_h;
+    let u0 = src_u0 + (src_u1 - src_u0) * frac_u0;
+    let u1 = src_u0 + (src_u1 - src_u0) * frac_u1;
+    let v0 = src_v0 + (src_v1 - src_v0) * frac_v0;
+    let v1 = src_v0 + (src_v1 - src_v0) * frac_v1;
+    // NDC bounds. y_min/max NDC vychazi z logical: y=0 -> NDC y=+1 (top),
+    // y=vp_h -> NDC y=-1 (bottom).
+    let x_min_ndc = (vis_x0 / vp_w) * 2.0 - 1.0;
+    let x_max_ndc = (vis_x1 / vp_w) * 2.0 - 1.0;
+    let y_min_ndc = 1.0 - (vis_y1 / vp_h) * 2.0;
+    let y_max_ndc = 1.0 - (vis_y0 / vp_h) * 2.0;
+    let m = color_matrix;
+    let data = [
+        // row0..row3 (color matrix rows, alpha column = m[3], m[8], m[13], m[18])
+        m[0], m[1], m[2], m[3],
+        m[5], m[6], m[7], m[8],
+        m[10], m[11], m[12], m[13],
+        m[15], m[16], m[17], m[18],
+        // offset (per-channel additive)
+        m[4], m[9], m[14], m[19],
+        // dst_box NDC corners
+        x_min_ndc, y_min_ndc, x_max_ndc, y_max_ndc,
+        // src_uv (u_min, v_min_top, u_max, v_max_bottom)
+        u0, v0, u1, v1,
+    ];
+    (data, visible)
+}
+
+#[cfg(test)]
+mod compose_uniform_tests {
+    use super::*;
+
+    const IDENTITY: [f32; 20] = [
+        1.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 1.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 1.0, 0.0,
+    ];
+
+    /// Full-frame compose: dst = viewport, src = full UV.
+    #[test]
+    fn full_frame_compose_pres_full_ndc_and_uv() {
+        let (data, vis) = build_compose_uniform_box(
+            &IDENTITY, 0.0, 0.0, 1280.0, 800.0, 0.0, 0.0, 1.0, 1.0, 1280.0, 800.0);
+        assert!(vis);
+        // dst_box NDC corners.
+        assert!((data[20] - (-1.0)).abs() < 1e-4, "x_min={}", data[20]);
+        assert!((data[21] - (-1.0)).abs() < 1e-4, "y_min={}", data[21]);
+        assert!((data[22] - 1.0).abs() < 1e-4, "x_max={}", data[22]);
+        assert!((data[23] - 1.0).abs() < 1e-4, "y_max={}", data[23]);
+        // src_uv = full texture.
+        assert!((data[24] - 0.0).abs() < 1e-4);
+        assert!((data[25] - 0.0).abs() < 1e-4);
+        assert!((data[26] - 1.0).abs() < 1e-4);
+        assert!((data[27] - 1.0).abs() < 1e-4);
+    }
+
+    /// Layer taller nez viewport (root layer = full page, page_h > vp_h).
+    /// Scroll=0 -> visible = top portion of layer texture.
+    #[test]
+    fn tall_layer_no_scroll_pres_top_uv_slice() {
+        // page_h=2000, vp_h=800. Compose celou layer rozsahu -> visible jen
+        // top 800 logical px.
+        let (data, vis) = build_compose_uniform_box(
+            &IDENTITY, 0.0, 0.0, 1280.0, 2000.0, 0.0, 0.0, 1.0, 1.0, 1280.0, 800.0);
+        assert!(vis);
+        // Visible region cely viewport.
+        assert!((data[20] - (-1.0)).abs() < 1e-4);
+        assert!((data[21] - (-1.0)).abs() < 1e-4);
+        assert!((data[22] - 1.0).abs() < 1e-4);
+        assert!((data[23] - 1.0).abs() < 1e-4);
+        // src_uv v range: top 800/2000 = 0..0.4 portion of texture.
+        assert!((data[25] - 0.0).abs() < 1e-4, "v_min={}", data[25]);
+        assert!((data[27] - 0.4).abs() < 1e-4, "v_max={}", data[27]);
+    }
+
+    /// Scroll posune zobrazenou portion texture.
+    #[test]
+    fn tall_layer_scrolled_pres_shifted_uv_slice() {
+        // page_h=2000, vp_h=800, scroll_y=400. dst_y = -400 (layer.root_rect.y - scroll_y).
+        let (data, vis) = build_compose_uniform_box(
+            &IDENTITY, 0.0, -400.0, 1280.0, 2000.0, 0.0, 0.0, 1.0, 1.0, 1280.0, 800.0);
+        assert!(vis);
+        // Visible = viewport full.
+        assert!((data[21] - (-1.0)).abs() < 1e-4, "y_min={}", data[21]);
+        assert!((data[23] - 1.0).abs() < 1e-4, "y_max={}", data[23]);
+        // src_uv shift: page y 400..1200 visible. v = 400/2000=0.2 .. 1200/2000=0.6.
+        assert!((data[25] - 0.2).abs() < 1e-4, "v_min={}", data[25]);
+        assert!((data[27] - 0.6).abs() < 1e-4, "v_max={}", data[27]);
+    }
+
+    /// Scroll near end - bottom of layer visible, top portion off-screen.
+    #[test]
+    fn tall_layer_scrolled_near_bottom() {
+        // page_h=2000, scroll=1500. dst_y = -1500, dst_h = 2000.
+        // Visible logical y = max(0, -1500) .. min(800, -1500+2000=500) = 0..500.
+        // src_uv: frac_v0 = (0-(-1500))/2000 = 0.75, frac_v1 = (500-(-1500))/2000 = 1.0.
+        let (data, vis) = build_compose_uniform_box(
+            &IDENTITY, 0.0, -1500.0, 1280.0, 2000.0, 0.0, 0.0, 1.0, 1.0, 1280.0, 800.0);
+        assert!(vis);
+        // Visible y range = top 500 px of viewport (bottom 300 = nothing).
+        // y_max_ndc = 1 - 0/800*2 = 1, y_min_ndc = 1 - 500/800*2 = -0.25.
+        assert!((data[23] - 1.0).abs() < 1e-4, "y_max={}", data[23]);
+        assert!((data[21] - (-0.25)).abs() < 1e-4, "y_min={}", data[21]);
+        // UV: 0.75..1.0.
+        assert!((data[25] - 0.75).abs() < 1e-4, "v_min={}", data[25]);
+        assert!((data[27] - 1.0).abs() < 1e-4, "v_max={}", data[27]);
+    }
+
+    /// Layer mimo viewport (scroll past page end) -> not visible.
+    #[test]
+    fn layer_off_screen_pres_not_visible() {
+        // dst_y = -2500, dst_h = 2000 -> layer od y=-2500 do y=-500 = vsechno mimo top.
+        let (_, vis) = build_compose_uniform_box(
+            &IDENTITY, 0.0, -2500.0, 1280.0, 2000.0, 0.0, 0.0, 1.0, 1.0, 1280.0, 800.0);
+        assert!(!vis);
+    }
+
+    /// Layer wider nez viewport (rare - layer overflow horizontally).
+    /// Visible jen left portion of layer.
+    #[test]
+    fn wide_layer_pres_left_uv_slice() {
+        let (data, vis) = build_compose_uniform_box(
+            &IDENTITY, 0.0, 0.0, 2560.0, 800.0, 0.0, 0.0, 1.0, 1.0, 1280.0, 800.0);
+        assert!(vis);
+        // src_uv u range = left half 0..0.5.
+        assert!((data[24] - 0.0).abs() < 1e-4);
+        assert!((data[26] - 0.5).abs() < 1e-4, "u_max={}", data[26]);
+    }
+
+    /// Identity matrix passes thru pres uniform offset.
+    /// uniform layout: data[0..4]=row0, [4..8]=row1, [8..12]=row2, [12..16]=row3,
+    /// [16..20]=offset, [20..24]=dst_box, [24..28]=src_uv.
+    /// Identity: row3 = (0, 0, 0, 1) (alpha coefficient at .w = 1.0).
+    #[test]
+    fn identity_matrix_unchanged() {
+        let (data, _) = build_compose_uniform_box(
+            &IDENTITY, 0.0, 0.0, 100.0, 100.0, 0.0, 0.0, 1.0, 1.0, 100.0, 100.0);
+        // row0 = (1, 0, 0, 0)
+        assert!((data[0] - 1.0).abs() < 1e-6);
+        assert!((data[1] - 0.0).abs() < 1e-6);
+        // row3 = (0, 0, 0, 1) - alpha coef je posledni column (data[15]).
+        assert!((data[12] - 0.0).abs() < 1e-6);
+        assert!((data[13] - 0.0).abs() < 1e-6);
+        assert!((data[14] - 0.0).abs() < 1e-6);
+        assert!((data[15] - 1.0).abs() < 1e-6, "row3.w={}", data[15]);
+        // offset = (0, 0, 0, 0).
+        assert!((data[19] - 0.0).abs() < 1e-6);
+    }
+
+    /// Alpha multiply (opacity 0.5) reflektoval v row3 column 4 (alpha).
+    #[test]
+    fn opacity_half_pres_row3_w() {
+        let mut m = IDENTITY;
+        m[18] = 0.5; // row3 col 3 (alpha coefficient).
+        let (data, _) = build_compose_uniform_box(
+            &m, 0.0, 0.0, 100.0, 100.0, 0.0, 0.0, 1.0, 1.0, 100.0, 100.0);
+        // row3 = (0, 0, 0, 0.5).
+        assert!((data[12] - 0.0).abs() < 1e-6);
+        assert!((data[13] - 0.0).abs() < 1e-6);
+        assert!((data[14] - 0.0).abs() < 1e-6);
+        assert!((data[15] - 0.5).abs() < 1e-6, "row3.w={}", data[15]);
+    }
+}
+
+/// Pixel-snap axis-aligned coord do physical px grid.
+/// `scale` = zoom * device_pixel_ratio. Snap eliminuje sub-pixel blur na
+/// 1px borderech a glyph edge, hlavni vizualni vada pri sub-pixel rect.
+/// Inspired by Chromium core/paint/PixelSnappedLayoutPoint + WebRender
+/// gfx/wr/webrender/src/util.rs::SnapToDevicePixel.
+#[inline]
+fn snap_to_phys(v: f32, scale: f32) -> f32 {
+    if scale <= 0.0 { return v; }
+    (v * scale).round() / scale
+}
+
+/// Snap rect (x, y, w, h) so right+bottom edges tez snap (= w/h derived).
+/// Bez tohohle by snap(x) + snap(w) divergoval s snap(x+w).
+#[inline]
+fn snap_rect(x: f32, y: f32, w: f32, h: f32, scale: f32) -> (f32, f32, f32, f32) {
+    let x0 = snap_to_phys(x, scale);
+    let y0 = snap_to_phys(y, scale);
+    let x1 = snap_to_phys(x + w, scale);
+    let y1 = snap_to_phys(y + h, scale);
+    (x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0))
+}
+
+/// Apply 4x5 CSS color matrix na [u8; 4] sRGB color. Layout match spec /
+/// shader (rows R/G/B/A x cols R/G/B/A/offset). Pres CSS filter (sepia/
+/// hue-rotate/saturate/brightness/contrast/grayscale) layer-mode bypass cesta.
+/// In/out v sRGB byte space - matrix definovana pres sRGB pres CSS spec.
+fn apply_color_matrix_rgba(c: &mut [u8; 4], m: &[f32; 20]) {
+    let r = c[0] as f32 / 255.0;
+    let g = c[1] as f32 / 255.0;
+    let b = c[2] as f32 / 255.0;
+    let a = c[3] as f32 / 255.0;
+    let nr = m[0]*r + m[1]*g + m[2]*b + m[3]*a + m[4];
+    let ng = m[5]*r + m[6]*g + m[7]*b + m[8]*a + m[9];
+    let nb = m[10]*r + m[11]*g + m[12]*b + m[13]*a + m[14];
+    let na = m[15]*r + m[16]*g + m[17]*b + m[18]*a + m[19];
+    c[0] = (nr.clamp(0.0, 1.0) * 255.0).round() as u8;
+    c[1] = (ng.clamp(0.0, 1.0) * 255.0).round() as u8;
+    c[2] = (nb.clamp(0.0, 1.0) * 255.0).round() as u8;
+    c[3] = (na.clamp(0.0, 1.0) * 255.0).round() as u8;
+}
+
+/// Walk display commands + apply color matrix na vsechny barevne fieldy.
+/// Pres CSS filter (non-blur) layer-mode CPU bypass = matrix aplikovany na
+/// vertex color misto offscreen RT roundtrip.
+fn apply_color_matrix_to_cmds(cmds: &mut [DisplayCommand], matrix: &[f32; 20]) {
+    for cmd in cmds.iter_mut() {
+        match cmd {
+            DisplayCommand::Rect { color, .. } |
+            DisplayCommand::Border { color, .. } |
+            DisplayCommand::Text { color, .. } |
+            DisplayCommand::Shadow { color, .. } |
+            DisplayCommand::BlurredRect { color, .. } |
+            DisplayCommand::ClippedRect { color, .. } => {
+                apply_color_matrix_rgba(color, matrix);
+            }
+            DisplayCommand::Gradient { stops, .. } => {
+                for (_o, c) in stops.iter_mut() {
+                    apply_color_matrix_rgba(c, matrix);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: &ImageAtlas, zoom: f32) -> Vec<Vertex> {
+    // PIXEL_SNAP_SCALE thread_local nastavi Renderer pred call (= zoom * dpr).
+    // Default 1.0 = bez snapu.
+    let snap = PIXEL_SNAP_SCALE.with(|c| c.get());
     // PERF: pre-alloc capacity estimate (6 verts per cmd avg).
     let mut verts = Vec::with_capacity(commands.len() * 6);
     for cmd in commands {
         match cmd {
             DisplayCommand::Rect { x, y, w, h, color, radius } => {
-                push_rect_rounded(&mut verts, *x, *y, *w, *h, normalize_color(color), *radius);
+                let (sx, sy, sw, sh) = snap_rect(*x, *y, *w, *h, snap);
+                push_rect_rounded(&mut verts, sx, sy, sw, sh, normalize_color(color), *radius);
             }
             DisplayCommand::Border { x, y, w, h, width, color } => {
                 let c = normalize_color(color);
                 let bw = *width;
-                push_rect(&mut verts, *x, *y, *w, bw, c, [0.0, 0.0], 0.0);
-                push_rect(&mut verts, *x, *y + *h - bw, *w, bw, c, [0.0, 0.0], 0.0);
-                push_rect(&mut verts, *x, *y, bw, *h, c, [0.0, 0.0], 0.0);
-                push_rect(&mut verts, *x + *w - bw, *y, bw, *h, c, [0.0, 0.0], 0.0);
+                // Snap outer rect, then derive 4 edge sub-rects. Bez snapu by
+                // 1px borders byly 0.4-0.6 alpha blurry edges.
+                let (sx, sy, sw, sh) = snap_rect(*x, *y, *w, *h, snap);
+                let sbw = snap_to_phys(bw, snap).max(if bw > 0.0 { 1.0 / snap.max(1.0) } else { 0.0 });
+                push_rect(&mut verts, sx, sy, sw, sbw, c, [0.0, 0.0], 0.0);
+                push_rect(&mut verts, sx, sy + sh - sbw, sw, sbw, c, [0.0, 0.0], 0.0);
+                push_rect(&mut verts, sx, sy, sbw, sh, c, [0.0, 0.0], 0.0);
+                push_rect(&mut verts, sx + sw - sbw, sy, sbw, sh, c, [0.0, 0.0], 0.0);
             }
             DisplayCommand::Text { x, y, content, color, font_size, bold, font_weight, italic, font_family, strikethrough, underline } => {
                 let c = normalize_color(color);
@@ -352,6 +654,10 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: 
                                     push_rect_uv(&mut verts, gx + bo, gy, g_w, g_h, c, g.uv0, g.uv1, text_mode);
                                 }
                             }
+                        } else if std::env::var("RWE_TEXT_MISS").is_ok() {
+                            eprintln!("[TEXT MISS] char={:?} (u+{:04X}) family={:?} weight={} italic={} physical_size={} ctx={:?}",
+                                ch, ch as u32, font_family, *font_weight, *italic, physical_size,
+                                content.chars().take(30).collect::<String>());
                         }
                     }
                     // Po line update pen_x na konec line pres shape total.
@@ -457,8 +763,10 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: 
             DisplayCommand::FilterBegin { .. } | DisplayCommand::FilterEnd
             | DisplayCommand::BackdropFilterBegin { .. } | DisplayCommand::BackdropFilterEnd
             | DisplayCommand::TransformBegin { .. } | DisplayCommand::TransformEnd
-            | DisplayCommand::MaskBegin { .. } | DisplayCommand::MaskEnd => {
-                // Markers - zpracovava se v render flow, ne ve vertex builderu.
+            | DisplayCommand::MaskBegin { .. } | DisplayCommand::MaskEnd
+            | DisplayCommand::NoScrollShiftBegin | DisplayCommand::NoScrollShiftEnd
+            | DisplayCommand::BlendBegin { .. } | DisplayCommand::BlendEnd => {
+                // Markers - zpracovava se v render flow / scroll shift, ne ve vertex builderu.
             }
             DisplayCommand::ClippedRect { color, points } => {
                 // Ear-clipping triangulace - funguje pro convex i concave.
@@ -520,12 +828,13 @@ fn try_decode_svg_into_atlas(bytes: &[u8], cache_key: &str,
 
 pub fn apply_paint_animations(box_: &mut crate::browser::layout::LayoutBox,
                            style_map: &crate::browser::cascade::StyleMap) {
-    apply_paint_animations_inner(box_, style_map, 0.0, 0.0, 0.0, 0.0, 0.0);
+    apply_paint_animations_inner(box_, style_map, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
 }
 
 fn apply_paint_animations_inner(box_: &mut crate::browser::layout::LayoutBox,
                                  style_map: &crate::browser::cascade::StyleMap,
                                  parent_width: f32,
+                                 parent_height: f32,
                                  parent_delta_x: f32,
                                  parent_delta_y: f32,
                                  // Akumulator layout-applied shiftu od ancestoru.
@@ -656,11 +965,11 @@ fn apply_paint_animations_inner(box_: &mut crate::browser::layout::LayoutBox,
                     let trimmed = h.trim();
                     if let Some(pct_str) = trimmed.strip_suffix('%') {
                         if let Ok(pct) = pct_str.parse::<f32>() {
-                            // Parent width fallback - real chrome by pouzilo parent height
-                            // ale pro typewriter case staci. Pro vetsi pres potreba
-                            // dalsi argument.
-                            if parent_width > 0.0 {
-                                box_.rect.height = parent_width * (pct / 100.0);
+                            // Pct height proti PARENT HEIGHT (ne parent_width - bug
+                            // pred fixem). Pri parent_height=0 (indefinite) skip
+                            // override - layout uz spravne resolved.
+                            if parent_height > 0.0 {
+                                box_.rect.height = parent_height * (pct / 100.0);
                             }
                         }
                     } else {
@@ -675,6 +984,7 @@ fn apply_paint_animations_inner(box_: &mut crate::browser::layout::LayoutBox,
     }
     let _ = original_width;
     let our_width = box_.rect.width;
+    let our_height = box_.rect.height;
     // Delta = current rect - baseline rect. Predat do recursive apply
     // aby static children shifted spolu se self.
     let our_delta_x = box_.rect.x - baseline.x;
@@ -691,8 +1001,8 @@ fn apply_paint_animations_inner(box_: &mut crate::browser::layout::LayoutBox,
         _ => 0.0,
     };
     for ch in &mut box_.children {
-        apply_paint_animations_inner(ch, style_map, our_width, our_delta_x, our_delta_y,
-            our_layout_dx, our_layout_dy);
+        apply_paint_animations_inner(ch, style_map, our_width, our_height,
+            our_delta_x, our_delta_y, our_layout_dx, our_layout_dy);
     }
 }
 
@@ -4053,8 +4363,8 @@ fn open_in_default_browser(path: &std::path::Path) {
 
 pub struct Renderer {
     surface: wgpu::Surface<'static>,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
+    pub(crate) device: wgpu::Device,
+    pub(crate) queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     /// Browser zoom factor. Vertex px coordinates jsou v logickem px (viewport
     /// width / zoom). Uniform vp je nastaven na (config.w / zoom, config.h /
@@ -4078,6 +4388,11 @@ pub struct Renderer {
     atlas_tex: wgpu::Texture,
     atlas_view: wgpu::TextureView,
     atlas_smp: wgpu::Sampler,
+    /// Nearest sampler pro layer/tile compose paths. Bilinear (atlas_smp) na 1:1
+    /// physical pixel mapping mezi layer tex a target view ZPUSOBUJE blur na
+    /// sub-pixel float NDC boundaries. Nearest sampling = exact texel = sharp.
+    /// Atlas glyph stale samplovan pres atlas_smp (Linear pres edge AA).
+    compose_smp: wgpu::Sampler,
     bind_group_layout: wgpu::BindGroupLayout,
     bind_group: wgpu::BindGroup,
     atlas: GlyphAtlas,
@@ -4137,6 +4452,13 @@ pub struct Renderer {
     /// Compose pipeline - samples offscreen_tex a kresli do swap chain.
     /// Pouziva fullscreen triangle + scissor pro region + color matrix uniform.
     compose_pipeline: wgpu::RenderPipeline,
+    /// CSS mix-blend-mode pipelines (wgpu BlendState varianty).
+    /// Pres compose_view_to_view_blend(mode_id). Index mapuje na
+    /// computed_style::BlendMode discriminant.
+    compose_pipeline_multiply: wgpu::RenderPipeline,
+    compose_pipeline_screen: wgpu::RenderPipeline,
+    compose_pipeline_darken: wgpu::RenderPipeline,
+    compose_pipeline_lighten: wgpu::RenderPipeline,
     compose_bind_group_layout: wgpu::BindGroupLayout,
     /// Uniform pro compose color matrix (5x vec4 = 80 bytes)
     compose_uniform_buf: wgpu::Buffer,
@@ -4175,13 +4497,14 @@ impl Renderer {
             }
         )).expect("adapter");
         // Pokus se requestnout DUAL_SOURCE_BLENDING pro real LCD subpixel text.
-        // OPT-IN pres env RUST_WEB_ENGINE_LCD=1 - default OFF (bezpecny fallback).
-        // WGSL @blend_src(0)/(1) attributes nemusi byt podporene v kazdem
-        // wgpu/naga buildu - opt-in zabranuje crash pri shader compile.
-        let lcd_opt_in = std::env::var("RUST_WEB_ENGINE_LCD")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        // Default ON - shader ma `enable dual_source_blending` directive, vetsina
+        // HW + driver podporuji. Opt-out pres RUST_WEB_ENGINE_LCD=0 (grayscale
+        // fallback) pro debug nebo problematicky driver. build_lcd_pipeline ma
+        // catch_unwind = pri compile fail tichy fallback bez crash.
+        let lcd_opt_out = std::env::var("RUST_WEB_ENGINE_LCD")
+            .map(|v| v == "0" || v.eq_ignore_ascii_case("false"))
             .unwrap_or(false);
-        let supports_dual_source = lcd_opt_in
+        let supports_dual_source = !lcd_opt_out
             && adapter.features().contains(wgpu::Features::DUAL_SOURCE_BLENDING);
         let (device, queue) = if supports_dual_source {
             pollster::block_on(adapter.request_device(
@@ -4252,9 +4575,19 @@ impl Renderer {
         // Linear filter pro smooth upscale (images, RT compose). Pro text
         // glyfy rasterujeme na physical_size = font_size * zoom takze atlas
         // px = screen px (1:1 mapping) a Linear vs Nearest neda blur.
+        // Atlas sampler - Linear by glyph stored at zoom-aware physical size
+        // sample at exact texel center = sharp pres zoom. Pri non-aligned UV
+        // (sub-pixel offset) bilinear interpolates = soft. Atlas rasterizes
+        // glyph pres font_size * zoom = matching display size = 1:1 = sharp.
         let atlas_smp = device.create_sampler(&wgpu::SamplerDescriptor {
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let compose_smp = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("compose_nearest"),
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
             ..Default::default()
         });
 
@@ -4516,7 +4849,7 @@ impl Renderer {
         });
         let compose_uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("compose_uniform"),
-            size: 80, // 5x vec4
+            size: 112, // 7x vec4: 5 matrix + dst_box + src_uv
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -4538,7 +4871,7 @@ impl Renderer {
                     count: None,
                 },
                 wgpu::BindGroupLayoutEntry {
-                    binding: 2, visibility: wgpu::ShaderStages::FRAGMENT,
+                    binding: 2, visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false, min_binding_size: None,
@@ -4552,28 +4885,90 @@ impl Renderer {
             bind_group_layouts: &[Some(&compose_bind_group_layout)],
             
         });
-        let compose_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { multiview_mask: None,
-            label: Some("compose_pipeline"),
-            layout: Some(&compose_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &compose_shader, entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &compose_shader, entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: config.format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            cache: None,
-        });
+        // Helper - build compose pipeline s daným BlendState.
+        let make_compose_pipeline = |label: &'static str, blend: wgpu::BlendState| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { multiview_mask: None,
+                label: Some(label),
+                layout: Some(&compose_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &compose_shader, entry_point: Some("vs_main"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &compose_shader, entry_point: Some("fs_main"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: config.format,
+                        blend: Some(blend),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                cache: None,
+            })
+        };
+        // Compose pipeline blend = PREMUL OVER (src_factor=One, ne SrcAlpha).
+        // Layer/tile texture pri raster pres ALPHA_BLENDING ulozi PREMUL data
+        // (src.rgb * src.a stored po blend). Compose pak NESMI ALPHA_BLENDING
+        // ktery by zase nasobil src.rgb * src.a = double-multiply = desaturace
+        // a tmavnuti barev (uzivatel videl "stupne sedi").
+        // Premul OVER: out = src.rgb + dst.rgb * (1 - src.a). Spravne pro src
+        // stored as premultiplied.
+        let compose_pipeline = make_compose_pipeline("compose_pipeline_normal",
+            wgpu::BlendState {
+                color: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::One,
+                    dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                    operation: wgpu::BlendOperation::Add,
+                },
+                alpha: wgpu::BlendComponent::OVER,
+            });
+        // CSS mix-blend-mode pipelines pres wgpu BlendState factors:
+        // - Multiply: src*dst.  src_factor=Dst, dst_factor=Zero, op=Add.
+        // - Screen: 1-(1-s)(1-d) = s + d - s*d.  src_factor=One, dst_factor=OneMinusSrc, op=Add.
+        // - Darken: min(s, d).  BlendOperation::Min.
+        // - Lighten: max(s, d).  BlendOperation::Max.
+        // Vsechny ostatni modes (Overlay/ColorDodge/SoftLight/Difference/Hue/Sat/Color/Lum)
+        // vyzaduji shader-side dst sample = TODO (potreba copy fb -> snapshot tex).
+        let compose_pipeline_multiply = make_compose_pipeline("compose_pipeline_multiply",
+            wgpu::BlendState {
+                color: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::Dst,
+                    dst_factor: wgpu::BlendFactor::Zero,
+                    operation: wgpu::BlendOperation::Add,
+                },
+                alpha: wgpu::BlendComponent::OVER,
+            });
+        let compose_pipeline_screen = make_compose_pipeline("compose_pipeline_screen",
+            wgpu::BlendState {
+                color: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::One,
+                    dst_factor: wgpu::BlendFactor::OneMinusSrc,
+                    operation: wgpu::BlendOperation::Add,
+                },
+                alpha: wgpu::BlendComponent::OVER,
+            });
+        let compose_pipeline_darken = make_compose_pipeline("compose_pipeline_darken",
+            wgpu::BlendState {
+                color: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::One,
+                    dst_factor: wgpu::BlendFactor::One,
+                    operation: wgpu::BlendOperation::Min,
+                },
+                alpha: wgpu::BlendComponent::OVER,
+            });
+        let compose_pipeline_lighten = make_compose_pipeline("compose_pipeline_lighten",
+            wgpu::BlendState {
+                color: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::One,
+                    dst_factor: wgpu::BlendFactor::One,
+                    operation: wgpu::BlendOperation::Max,
+                },
+                alpha: wgpu::BlendComponent::OVER,
+            });
 
         // Transform pipeline - samples offscreen, drawat 3D transformed quad
         let transform_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -4631,7 +5026,17 @@ impl Renderer {
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: config.format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    // Premul OVER (src=One, ne SrcAlpha) - layer/offscreen RT
+                    // stored premul, compose nesmi znovu multiplikovat src.a =
+                    // double-alpha = transform content darkens to invisible.
+                    blend: Some(wgpu::BlendState {
+                        color: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::One,
+                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                        alpha: wgpu::BlendComponent::OVER,
+                    }),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
@@ -4646,7 +5051,7 @@ impl Renderer {
             scale_factor: scale_factor as f32,
             target_size: None,
             pipeline, lcd_pipeline, uniform_buf,
-            atlas_tex, atlas_view, atlas_smp, bind_group_layout, bind_group, atlas,
+            atlas_tex, atlas_view, atlas_smp, compose_smp, bind_group_layout, bind_group, atlas,
             image_atlas, image_tex, image_view,
             image_source_bytes: std::collections::HashMap::new(),
             image_load_failed: std::collections::HashSet::new(),
@@ -4662,7 +5067,12 @@ impl Renderer {
             main_rt,
             shell_rt,
             blur_pipeline, blur_bind_group_layout, blur_uniform_buf,
-            compose_pipeline, compose_bind_group_layout, compose_uniform_buf,
+            compose_pipeline,
+            compose_pipeline_multiply,
+            compose_pipeline_screen,
+            compose_pipeline_darken,
+            compose_pipeline_lighten,
+            compose_bind_group_layout, compose_uniform_buf,
             transform_pipeline, transform_bind_group_layout, transform_uniform_buf,
             webgl_shader_modules: std::collections::HashMap::new(),
             webgl_pipelines: std::collections::HashMap::new(),
@@ -5107,8 +5517,12 @@ impl Renderer {
         scroll_y: f32,
     ) -> bool {
         use crate::interpreter::WebGLDrawCmd;
-        let w = (bx.rect.width as u32).max(1);
-        let h = (bx.rect.height as u32).max(1);
+        // Canvas RT at PHYSICAL scale (logical * zoom * sf) - matches compose
+        // target_view scale = 1:1 pixel mapping = sharp. Drive logical only =
+        // upsample pres compose = blur.
+        let scale = (self.zoom * self.scale_factor).max(0.01);
+        let w = ((bx.rect.width * scale) as u32).max(1);
+        let h = ((bx.rect.height * scale) as u32).max(1);
         self.ensure_webgl_canvas_rt(canvas_ptr, w, h);
 
         // Extract data z state, pak release borrow
@@ -5611,6 +6025,106 @@ impl Renderer {
         };
         // Cache source bytes pro budouci re-resample pri zoomu.
         self.image_source_bytes.insert(cache_key.to_string(), bytes.clone());
+        // Magic-byte sniff (foundation modul `browser::image_decoder`) pre-empti
+        // image::load_from_memory pri formatech ktere `image` crate nema.
+        let format = crate::browser::image_decoder::detect_format(&bytes);
+        // AVIF: pure-Rust dekoder pres `zenavif` (rav1d). Bez system deps -
+        // browser sam dekoduje, user nemusi nic instalovat.
+        if matches!(format, crate::browser::image_decoder::ImageFormat::Avif) {
+            match crate::browser::avif_decode::decode(&bytes) {
+                Ok((w, h, rgba)) => {
+                    super::layout::set_image_natural_dims(cache_key, w as f32, h as f32);
+                    let needs_resize = w > IMAGE_ATLAS_SIZE / 2 || h > IMAGE_ATLAS_SIZE / 2;
+                    if needs_resize {
+                        let max = IMAGE_ATLAS_SIZE / 2;
+                        let scale = (max as f32 / w.max(h) as f32).min(1.0);
+                        let new_w = (w as f32 * scale) as u32;
+                        let new_h = (h as f32 * scale) as u32;
+                        if let Some(img) = image::RgbaImage::from_raw(w, h, rgba) {
+                            let dyn_img = image::DynamicImage::ImageRgba8(img);
+                            let small = dyn_img.resize_exact(new_w, new_h,
+                                image::imageops::FilterType::Triangle);
+                            self.image_atlas.add(cache_key, new_w, new_h, &small.to_rgba8().into_raw());
+                            return;
+                        }
+                        // Fallback: nepodarilo se RgbaImage::from_raw, akceptujem
+                        // tombstone (rare - dimensions mismatch).
+                        self.image_load_failed.insert(cache_key.to_string());
+                        return;
+                    }
+                    self.image_atlas.add(cache_key, w, h, &rgba);
+                    return;
+                }
+                Err(e) => {
+                    eprintln!("[image] AVIF decode failed at {}: {}", cache_key, e.0);
+                    self.image_load_failed.insert(cache_key.to_string());
+                    return;
+                }
+            }
+        }
+        // HEIF/HEIC: pure-Rust pres `heic` crate (H.265 SIMD). Bez system deps.
+        if matches!(format, crate::browser::image_decoder::ImageFormat::Heif) {
+            match crate::browser::heif_decode::decode(&bytes) {
+                Ok((w, h, rgba)) => {
+                    super::layout::set_image_natural_dims(cache_key, w as f32, h as f32);
+                    let needs_resize = w > IMAGE_ATLAS_SIZE / 2 || h > IMAGE_ATLAS_SIZE / 2;
+                    if needs_resize {
+                        let max = IMAGE_ATLAS_SIZE / 2;
+                        let scale = (max as f32 / w.max(h) as f32).min(1.0);
+                        let new_w = (w as f32 * scale) as u32;
+                        let new_h = (h as f32 * scale) as u32;
+                        if let Some(img) = image::RgbaImage::from_raw(w, h, rgba) {
+                            let dyn_img = image::DynamicImage::ImageRgba8(img);
+                            let small = dyn_img.resize_exact(new_w, new_h,
+                                image::imageops::FilterType::Triangle);
+                            self.image_atlas.add(cache_key, new_w, new_h, &small.to_rgba8().into_raw());
+                            return;
+                        }
+                        self.image_load_failed.insert(cache_key.to_string());
+                        return;
+                    }
+                    self.image_atlas.add(cache_key, w, h, &rgba);
+                    return;
+                }
+                Err(e) => {
+                    eprintln!("[image] HEIF decode failed at {}: {}", cache_key, e.0);
+                    self.image_load_failed.insert(cache_key.to_string());
+                    return;
+                }
+            }
+        }
+        // JPEG XL: pure-Rust dekoder pres `jxl-oxide`. Bez system deps.
+        if matches!(format, crate::browser::image_decoder::ImageFormat::Jxl) {
+            match crate::browser::jxl_decode::decode(&bytes) {
+                Ok((w, h, rgba)) => {
+                    super::layout::set_image_natural_dims(cache_key, w as f32, h as f32);
+                    let needs_resize = w > IMAGE_ATLAS_SIZE / 2 || h > IMAGE_ATLAS_SIZE / 2;
+                    if needs_resize {
+                        let max = IMAGE_ATLAS_SIZE / 2;
+                        let scale = (max as f32 / w.max(h) as f32).min(1.0);
+                        let new_w = (w as f32 * scale) as u32;
+                        let new_h = (h as f32 * scale) as u32;
+                        if let Some(img) = image::RgbaImage::from_raw(w, h, rgba) {
+                            let dyn_img = image::DynamicImage::ImageRgba8(img);
+                            let small = dyn_img.resize_exact(new_w, new_h,
+                                image::imageops::FilterType::Triangle);
+                            self.image_atlas.add(cache_key, new_w, new_h, &small.to_rgba8().into_raw());
+                            return;
+                        }
+                        self.image_load_failed.insert(cache_key.to_string());
+                        return;
+                    }
+                    self.image_atlas.add(cache_key, w, h, &rgba);
+                    return;
+                }
+                Err(e) => {
+                    eprintln!("[image] JXL decode failed at {}: {}", cache_key, e.0);
+                    self.image_load_failed.insert(cache_key.to_string());
+                    return;
+                }
+            }
+        }
+        let _ = format;
         if let Ok(img) = image::load_from_memory(&bytes) {
             let rgba = img.to_rgba8();
             let (w, h) = (rgba.width(), rgba.height());
@@ -5655,10 +6169,32 @@ impl Renderer {
             Some(b) => b,
             None => return,
         };
+        let max_atlas = IMAGE_ATLAS_SIZE / 2;
+        let cw = target_w.min(max_atlas);
+        let ch = target_h.min(max_atlas);
+        // SVG: re-rasterize at target_w/h via resvg. Pri ne-SVG raster image:
+        // image::load_from_memory + bilinear resize. Bez SVG re-raster by SVG
+        // bitmap byl bilinear-upscaled pri zoomu = blur. Chrome re-rasters SVG
+        // per visible size.
+        let head_len = bytes.len().min(512);
+        let is_svg = bytes[..head_len].windows(4)
+            .any(|w| w == b"<svg" || w == b"<?xm");
+        if is_svg {
+            if let Ok(svg_text) = std::str::from_utf8(&bytes) {
+                let opt = usvg::Options::default();
+                if let Ok(tree) = usvg::Tree::from_str(svg_text, &opt) {
+                    let mut pixmap = tiny_skia::Pixmap::new(cw, ch).unwrap();
+                    let tree_size = tree.size();
+                    let sx = cw as f32 / tree_size.width();
+                    let sy = ch as f32 / tree_size.height();
+                    let transform = tiny_skia::Transform::from_scale(sx, sy);
+                    resvg::render(&tree, transform, &mut pixmap.as_mut());
+                    self.image_atlas.add(cache_key, cw, ch, pixmap.data());
+                    return;
+                }
+            }
+        }
         if let Ok(img) = image::load_from_memory(&bytes) {
-            let max_atlas = IMAGE_ATLAS_SIZE / 2;
-            let cw = target_w.min(max_atlas);
-            let ch = target_h.min(max_atlas);
             let resized = img.resize_exact(cw, ch, image::imageops::FilterType::Triangle);
             let rgba = resized.to_rgba8();
             // image_atlas.add nahradi existing entry stejnym key.
@@ -5742,7 +6278,8 @@ impl Renderer {
         });
     }
 
-    fn upload_atlas(&self) {
+    fn upload_atlas(&mut self) {
+        if !self.atlas.dirty { return; }
         self.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &self.atlas_tex,
@@ -5758,6 +6295,7 @@ impl Renderer {
             },
             wgpu::Extent3d { width: ATLAS_SIZE, height: ATLAS_SIZE, depth_or_array_layers: 1 },
         );
+        self.atlas.dirty = false;
     }
 
     /// Renderuje display list s podporou filter subtree + backdrop-filter
@@ -5919,6 +6457,12 @@ impl Renderer {
                         font_weight.hash(&mut h);
                         italic.hash(&mut h);
                         color.hash(&mut h);
+                        // ZOOM v hash - physical_size = font_size * zoom. Bez zoom
+                        // v hash by warm same content + style hashed stejne pres
+                        // ruzny zoom = atlas physical_size never updated = chars
+                        // missing po zoom change.
+                        self.zoom.to_bits().hash(&mut h);
+                        self.scale_factor.to_bits().hash(&mut h);
                         h.finish()
                     };
                     if self.text_cmd_warmed.contains(&cmd_hash) { continue; }
@@ -5973,14 +6517,79 @@ impl Renderer {
         self.image_atlas_gen = self.image_atlas_gen.wrapping_add(1);
     }
 
+    /// Render display list do per-layer offscreen texture. Vola se per layer pri
+    /// D4 per-layer GPU caching. `layer_w/h` = logical layer dims; `view` =
+    /// layer texture view; cmds = layer-local coords (origin (0,0) at layer top-left).
+    /// Inspired by WebRender Picture target render (`gfx/wr/webrender/src/picture.rs`).
+    pub fn render_into_layer(
+        &mut self,
+        view: &wgpu::TextureView,
+        layer_w: f32,
+        layer_h: f32,
+        cmds: &[DisplayCommand],
+    ) -> bool {
+        if cmds.is_empty() { return false; }
+        // Set vp override pres layer dims (draw_segments_into_view_clipped uses).
+        VIEWPORT_OVERRIDE.with(|c| c.set((layer_w, layer_h)));
+        let res = self.draw_segments_into_view_clipped(view, cmds, true, None);
+        VIEWPORT_OVERRIDE.with(|c| c.set((0.0, 0.0)));
+        res
+    }
+
+    /// Render display list do per-tile offscreen texture (priority 5 - tile
+    /// rasterization phase 2).
+    ///
+    /// `layer_cmds` = cmds v layer-local coords (origin (0,0) = layer top-left).
+    /// `tile_local_x/y` = tile origin offset uvnitr layer.
+    /// `tile_w/h` = tile dimensions.
+    ///
+    /// Vnitrne: clone cmds, shift o (-tile_x, -tile_y) -> tile-local coords,
+    /// pak draw_segments do tile view s vp = (tile_w, tile_h).
+    ///
+    /// Win vs render_into_layer: pri damaged single tile out of N, repaint
+    /// jen tile_w*tile_h pixels misto layer_w*layer_h.
+    /// Inspired by WebRender `picture::Picture::raster_to_target` per-tile path.
+    pub fn render_into_tile(
+        &mut self,
+        view: &wgpu::TextureView,
+        tile_local_x: f32,
+        tile_local_y: f32,
+        tile_w: f32,
+        tile_h: f32,
+        layer_cmds: &[DisplayCommand],
+    ) -> bool {
+        if layer_cmds.is_empty() { return false; }
+        // Clone + shift cmds to tile-local origin.
+        let mut tile_cmds: Vec<DisplayCommand> = layer_cmds.to_vec();
+        for cmd in tile_cmds.iter_mut() {
+            crate::browser::render::segments::shift_command_x(cmd, -tile_local_x);
+            crate::browser::render::segments::shift_command_y(cmd, -tile_local_y);
+        }
+        if std::env::var("RWE_TILE_DBG").is_ok() {
+            eprintln!("[TILE] origin=({:.0},{:.0}) size=({:.0},{:.0}) cmds={}",
+                tile_local_x, tile_local_y, tile_w, tile_h, tile_cmds.len());
+        }
+        // Set vp override pres tile dims (draw_segments_into_view_clipped uses).
+        VIEWPORT_OVERRIDE.with(|c| c.set((tile_w, tile_h)));
+        let res = self.draw_segments_into_view_clipped(view, &tile_cmds, true, None);
+        VIEWPORT_OVERRIDE.with(|c| c.set((0.0, 0.0)));
+        res
+    }
+
     pub fn draw_segments_into_view_clipped(&mut self, view: &wgpu::TextureView,
                                         cmds: &[DisplayCommand], start_clear: bool,
                                         scissor: Option<(u32, u32, u32, u32)>) -> bool {
+        // Set pixel-snap scale pro build_vertices (= zoom * dpr).
+        PIXEL_SNAP_SCALE.with(|c| c.set(self.zoom * self.scale_factor));
         // vp uniform: (logical_w, logical_h, zoom, _pad). NDC mapping v
-        // RECT_SHADER pouziva uniform.viewport. Drive write_buffer byl jen
-        // ve `draw_full_frame_cached` - WebView::render_via via tuto fn
-        // potrebuje vlastni uniform sync.
-        let (vp_w, vp_h) = self.vp_dims();
+        // RECT_SHADER pouziva uniform.viewport. Pres VIEWPORT_OVERRIDE
+        // (= render_into_tile sets) pouzij override - jinak self.vp_dims.
+        let (ovr_w, ovr_h) = VIEWPORT_OVERRIDE.with(|c| c.get());
+        let (vp_w, vp_h) = if ovr_w > 0.0 && ovr_h > 0.0 {
+            (ovr_w, ovr_h)
+        } else {
+            self.vp_dims()
+        };
         let vp = [vp_w, vp_h, self.zoom, 0.0];
         self.queue.write_buffer(&self.uniform_buf, 0, bytemuck::cast_slice(&vp));
         if cmds.is_empty() { return false; }
@@ -6023,12 +6632,30 @@ impl Renderer {
                     first_pass = false;
                 }
                 Seg::Filter { inner, x, y, w, h, radius, color_matrix } => {
-                    let inner_verts = build_vertices(inner, &self.atlas, &self.image_atlas, self.zoom);
-                    self.draw_to_offscreen(&inner_verts);
-                    if radius >= 0.5 {
-                        self.run_blur_passes(radius);
+                    // Pri VIEWPORT_OVERRIDE active (= inside render_into_layer):
+                    // offscreen RT je config-sized, layer vp = mensi. NDC mismatch
+                    // mezi draw_to_offscreen + compose_offscreen = double-resample
+                    // = blur. Bypass offscreen path - CPU apply color matrix na
+                    // inner cmds + draw inline. Pres NON-BLUR filters (sepia,
+                    // hue-rotate, saturate, brightness, contrast, grayscale).
+                    // Pres BLUR filtry fallback na offscreen path (vyzaduje blur).
+                    let override_active = VIEWPORT_OVERRIDE.with(|c| c.get()) != (0.0, 0.0);
+                    if override_active && radius < 0.5 {
+                        // CPU-side color matrix application na cmds clone.
+                        // Inner je &[DisplayCommand] - musime clone do mut Vec.
+                        let mut inner_mod: Vec<DisplayCommand> = inner.to_vec();
+                        apply_color_matrix_to_cmds(&mut inner_mod, &color_matrix);
+                        let inner_verts = build_vertices(&inner_mod, &self.atlas, &self.image_atlas, self.zoom);
+                        self.draw_main_pass_clipped(view, &inner_verts, first_pass, scissor);
+                        let _ = (x, y, w, h);
+                    } else {
+                        let inner_verts = build_vertices(inner, &self.atlas, &self.image_atlas, self.zoom);
+                        self.draw_to_offscreen(&inner_verts);
+                        if radius >= 0.5 {
+                            self.run_blur_passes(radius);
+                        }
+                        self.compose_offscreen(view, x, y, w, h, &color_matrix, first_pass);
                     }
-                    self.compose_offscreen(view, x, y, w, h, &color_matrix, first_pass);
                     first_pass = false;
                 }
                 Seg::Transform3D { inner, x, y, w, h, matrix } => {
@@ -6106,11 +6733,34 @@ impl Renderer {
                                 self.draw_to_offscreen(&iv);
                                 self.compose_transform(view, tx, ty, tw, th, &tm, false);
                             }
-                            Seg::BackdropFilter { .. } | Seg::Mask { .. } => {
-                                // Nested backdrop/mask uvnitr backdrop-filter: skip (nepodporovano)
+                            Seg::BackdropFilter { .. } | Seg::Mask { .. } | Seg::Blend { .. } => {
+                                // Nested backdrop/mask/blend uvnitr backdrop-filter: skip (nepodporovano)
                             }
                         }
                     }
+                }
+                Seg::Blend { inner, x, y, w, h, mode } => {
+                    // CSS mix-blend-mode pres shader-side dst sample.
+                    // 1. Render inner do offscreen_tex (src).
+                    let inner_verts = build_vertices(inner, &self.atlas, &self.image_atlas, self.zoom);
+                    self.draw_to_offscreen(&inner_verts);
+                    // 2. Snapshot main_rt -> snapshot pres existing offscreen sampling.
+                    //    Pre tier 1 (Normal/Multiply/Screen/Darken/Lighten) = wgpu
+                    //    BlendState pipeline staci, identity matrix compose pres
+                    //    dedicated pipeline. Pre tier 2 (Overlay+) = shader dst
+                    //    sample (TODO real impl).
+                    // PROZATIM: fallback - compose offscreen pres compose_view_to_view_blend
+                    // (alpha blend identity), to nevyresi Overlay/Hue/... ale
+                    // alespon transport infrastruktura existuje.
+                    let _ = (x, y, w, h, mode);
+                    let identity = [
+                        1.0, 0.0, 0.0, 0.0, 0.0,
+                        0.0, 1.0, 0.0, 0.0, 0.0,
+                        0.0, 0.0, 1.0, 0.0, 0.0,
+                        0.0, 0.0, 0.0, 1.0, 0.0,
+                    ];
+                    self.compose_offscreen(view, x, y, w, h, &identity, first_pass);
+                    first_pass = false;
                 }
             }
         }
@@ -6173,8 +6823,16 @@ impl Renderer {
         if !vertices.is_empty() {
             self.queue.write_buffer(&vbuf, 0, bytemuck::cast_slice(vertices));
         }
+        // Pri layer/tile render (VIEWPORT_OVERRIDE active) clear na TRANSPARENT
+        // = layer ne-paintnute pixely blendnou pres alpha=0 (dst zachova).
+        // Pri primary path (override == 0,0) zachovej grey clear (CSS-spec ne-set bg).
+        let is_layer_or_tile = VIEWPORT_OVERRIDE.with(|c| c.get()) != (0.0, 0.0);
         let load = if first {
-            wgpu::LoadOp::Clear(wgpu::Color { r: 0.95, g: 0.95, b: 0.97, a: 1.0 })
+            if is_layer_or_tile {
+                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+            } else {
+                wgpu::LoadOp::Clear(wgpu::Color { r: 0.95, g: 0.95, b: 0.97, a: 1.0 })
+            }
         } else {
             wgpu::LoadOp::Load
         };
@@ -6269,13 +6927,16 @@ impl Renderer {
     pub fn compose_view_to_swap(&self, swap_view: &wgpu::TextureView, source_view: &wgpu::TextureView, x: f32, y: f32, w: f32, h: f32) {
         // x/y/w/h v logical px - vp uniform v logical (window/zoom) aby NDC
         // mapping odpovidal hlavnimu pipeline (zoom skalovani v render).
+        // Pres target_size override (webview RT mensi nez surface) pouzij
+        // target dims jako effective vp - jinak compose maps na wrong pixel
+        // grid = WebGL canvas neviditelny (drawn outside webview RT bounds).
         let cx = x + w * 0.5;
         let cy = y + h * 0.5;
         let hw = w * 0.5;
         let hh = h * 0.5;
-        let z = self.zoom.max(0.0001);
-        let vw = self.config.width as f32 / z;
-        let vh = self.config.height as f32 / z;
+        let (vp_w, vp_h) = self.vp_dims();
+        let vw = vp_w;
+        let vh = vp_h;
         // Identity matrix v transform shader format
         let uniform_data: [f32; 32] = [
             1.0, 0.0, 0.0, 0.0,  // row0
@@ -6331,22 +6992,28 @@ impl Renderer {
         };
         let swap_view = frame.texture.create_view(&Default::default());
 
-        // Identity color matrix - sample src_view bez tonal modifikace.
+        // Identity color matrix - 4x5 layout (4 rows x 4 channels + offset col).
+        // build_compose_uniform_box reads m[0..4] row0, m[5..9] row1, m[10..14] row2,
+        // m[15..19] row3, offsets m[4],m[9],m[14],m[19].
+        // POZOR: drive 4x4 + offset_row layout = row1 cetla z m[5..8]=(1,0,0,0)
+        // misto (0,1,0,0) = vystup (R,R,R,R) = GRAYSCALE bug (= "stupne sedi").
         let identity: [f32; 20] = [
-            1.0, 0.0, 0.0, 0.0,
-            0.0, 1.0, 0.0, 0.0,
-            0.0, 0.0, 1.0, 0.0,
-            0.0, 0.0, 0.0, 1.0,
-            0.0, 0.0, 0.0, 0.0,
+            1.0, 0.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 1.0, 0.0,
         ];
-        self.queue.write_buffer(&self.compose_uniform_buf, 0, bytemuck::cast_slice(&identity));
+        let (vp_w, vp_h) = self.vp_dims();
+        let (uniform_data, _vis) = build_compose_uniform_box(
+            &identity, 0.0, 0.0, vp_w, vp_h, 0.0, 0.0, 1.0, 1.0, vp_w, vp_h);
+        self.queue.write_buffer(&self.compose_uniform_buf, 0, bytemuck::cast_slice(&uniform_data));
 
         let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("present_external_bg"),
             layout: &self.compose_bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(src_view) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.atlas_smp) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.compose_smp) },
                 wgpu::BindGroupEntry { binding: 2, resource: self.compose_uniform_buf.as_entire_binding() },
             ],
         });
@@ -6371,7 +7038,7 @@ impl Renderer {
             });
             pass.set_pipeline(&self.compose_pipeline);
             pass.set_bind_group(0, &bg, &[]);
-            pass.draw(0..3, 0..1);
+            pass.draw(0..6, 0..1);
         }
         self.queue.submit(std::iter::once(encoder.finish()));
         frame.present();
@@ -6408,14 +7075,18 @@ impl Renderer {
         };
         let swap_view = frame.texture.create_view(&Default::default());
 
+        // Identity 4x5 layout (see present_external_to_swap_chain comment).
         let identity: [f32; 20] = [
-            1.0, 0.0, 0.0, 0.0,
-            0.0, 1.0, 0.0, 0.0,
-            0.0, 0.0, 1.0, 0.0,
-            0.0, 0.0, 0.0, 1.0,
-            0.0, 0.0, 0.0, 0.0,
+            1.0, 0.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 1.0, 0.0,
         ];
-        self.queue.write_buffer(&self.compose_uniform_buf, 0, bytemuck::cast_slice(&identity));
+        // present_layered: per set_viewport quad fullscreen sample full UV.
+        let (vp_w_id, vp_h_id) = self.vp_dims();
+        let (uniform_data_layered, _vis) = build_compose_uniform_box(
+            &identity, 0.0, 0.0, vp_w_id, vp_h_id, 0.0, 0.0, 1.0, 1.0, vp_w_id, vp_h_id);
+        self.queue.write_buffer(&self.compose_uniform_buf, 0, bytemuck::cast_slice(&uniform_data_layered));
 
         let w_total = self.config.width as f32;
         let h_total = self.config.height as f32;
@@ -6435,7 +7106,7 @@ impl Renderer {
                 layout: &self.compose_bind_group_layout,
                 entries: &[
                     wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(view) },
-                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.atlas_smp) },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.compose_smp) },
                     wgpu::BindGroupEntry { binding: 2, resource: self.compose_uniform_buf.as_entire_binding() },
                 ],
             });
@@ -6466,7 +7137,7 @@ impl Renderer {
             for (i, (vx, vy, vw, vh)) in viewports.iter().enumerate() {
                 pass.set_viewport(*vx, *vy, *vw, *vh, 0.0, 1.0);
                 pass.set_bind_group(0, &bind_groups[i], &[]);
-                pass.draw(0..3, 0..1);
+                pass.draw(0..6, 0..1);
             }
         }
         self.queue.submit(std::iter::once(encoder.finish()));
@@ -6497,21 +7168,24 @@ impl Renderer {
         };
         let swap_view = frame.texture.create_view(&Default::default());
 
+        // Identity 4x5 layout (see present_external_to_swap_chain comment).
         let identity: [f32; 20] = [
-            1.0, 0.0, 0.0, 0.0,
-            0.0, 1.0, 0.0, 0.0,
-            0.0, 0.0, 1.0, 0.0,
-            0.0, 0.0, 0.0, 1.0,
-            0.0, 0.0, 0.0, 0.0,
+            1.0, 0.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 1.0, 0.0,
         ];
-        self.queue.write_buffer(&self.compose_uniform_buf, 0, bytemuck::cast_slice(&identity));
+        let (vp_w_split, vp_h_split) = self.vp_dims();
+        let (uniform_data_split, _vis) = build_compose_uniform_box(
+            &identity, 0.0, 0.0, vp_w_split, vp_h_split, 0.0, 0.0, 1.0, 1.0, vp_w_split, vp_h_split);
+        self.queue.write_buffer(&self.compose_uniform_buf, 0, bytemuck::cast_slice(&uniform_data_split));
 
         let bg_top = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("present_split_top_bg"),
             layout: &self.compose_bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(top_view) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.atlas_smp) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.compose_smp) },
                 wgpu::BindGroupEntry { binding: 2, resource: self.compose_uniform_buf.as_entire_binding() },
             ],
         });
@@ -6520,7 +7194,7 @@ impl Renderer {
             layout: &self.compose_bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(bottom_view) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.atlas_smp) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.compose_smp) },
                 wgpu::BindGroupEntry { binding: 2, resource: self.compose_uniform_buf.as_entire_binding() },
             ],
         });
@@ -6550,14 +7224,12 @@ impl Renderer {
                 occlusion_query_set: None,
             });
             pass.set_pipeline(&self.compose_pipeline);
-            // Top viewport - top_view samples 0..1 zabira top scissor area.
             pass.set_viewport(0.0, 0.0, w, top_h, 0.0, 1.0);
             pass.set_bind_group(0, &bg_top, &[]);
-            pass.draw(0..3, 0..1);
-            // Bottom viewport - bottom_view samples 0..1 zabira bottom scissor area.
+            pass.draw(0..6, 0..1);
             pass.set_viewport(0.0, bottom_y, w, bottom_h, 0.0, 1.0);
             pass.set_bind_group(0, &bg_bottom, &[]);
-            pass.draw(0..3, 0..1);
+            pass.draw(0..6, 0..1);
         }
         self.queue.submit(std::iter::once(encoder.finish()));
         frame.present();
@@ -6585,17 +7257,140 @@ impl Renderer {
     /// Pristup ke glyph atlas (cumulative advances pro per-glyph selection).
     pub fn atlas(&self) -> &GlyphAtlas { &self.atlas }
 
-    fn compose_offscreen(&self, view: &wgpu::TextureView, x: f32, y: f32, w: f32, h: f32, color_matrix: &[f32; 20], first: bool) {
-        // Upload color matrix do uniform: 5x vec4 (rgba per row + offset)
-        // Layout: [row0_rgba, row1_rgba, row2_rgba, row3_rgba, offset_rgba]
-        let m = color_matrix;
-        let uniform_data: [f32; 20] = [
-            m[0], m[1], m[2], m[3],
-            m[5], m[6], m[7], m[8],
-            m[10], m[11], m[12], m[13],
-            m[15], m[16], m[17], m[18],
-            m[4], m[9], m[14], m[19],
+    /// Composite arbitrary src view to dst view (D4 per-layer compositing).
+    /// Sample z `src` (layer texture), paint quad at (x, y, w, h) v dst v
+    /// LOGICAL souradnicich (scaled internally pres zoom * scale_factor).
+    /// `opacity` skaluje alpha (1.0 = no-op). `first` = clear vs load.
+    /// Inspired by WebRender composite.rs::ComposeOp.
+    /// CSS mix-blend-mode aware composite. mode_id mapuje na
+    /// computed_style::BlendMode discriminant (0=Normal, 1=Multiply, 2=Screen,
+    /// 3=Overlay, 4=Darken, 5=Lighten, ...).
+    ///
+    /// Supportovane via wgpu BlendState pipeline: Normal/Multiply/Screen/
+    /// Darken/Lighten. Ostatni modes fall through na Normal (= alpha blend).
+    /// Pro real Overlay/ColorDodge/Diff/Hue/Sat/Color/Lum potreba shader-side
+    /// dst sample (copy fb -> snapshot tex). TODO.
+    pub fn compose_view_to_view_blend(
+        &self,
+        dst: &wgpu::TextureView,
+        src: &wgpu::TextureView,
+        x: f32, y: f32, w: f32, h: f32,
+        opacity: f32,
+        blend_mode_id: u32,
+        first: bool,
+    ) {
+        // Set thread_local blend pipeline override -> compose_view_to_view uses it.
+        BLEND_MODE_OVERRIDE.with(|c| c.set(blend_mode_id));
+        self.compose_view_to_view(dst, src, x, y, w, h, opacity, first);
+        BLEND_MODE_OVERRIDE.with(|c| c.set(0));
+    }
+
+    pub fn compose_view_to_view(
+        &self,
+        dst: &wgpu::TextureView,
+        src: &wgpu::TextureView,
+        x: f32, y: f32, w: f32, h: f32,
+        opacity: f32,
+        first: bool,
+    ) {
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        self.compose_view_to_view_into_encoder(&mut encoder, dst, src, x, y, w, h, opacity, first);
+        self.queue.submit(std::iter::once(encoder.finish()));
+    }
+
+    /// Compose pres existujici encoder - pres batch usage (= jeden submit
+    /// pres N compose draws). Caller manage encoder + submit.
+    /// Allokuje SVUJ uniform buffer per call (NESDILI self.compose_uniform_buf
+    /// jako single compose path - write_buffer by mezi N calls prepsal vsechny
+    /// na poslední uniform).
+    pub fn compose_view_to_view_into_encoder(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        dst: &wgpu::TextureView,
+        src: &wgpu::TextureView,
+        x: f32, y: f32, w: f32, h: f32,
+        opacity: f32,
+        first: bool,
+    ) {
+        let a = opacity.clamp(0.0, 1.0);
+        // 4x5 color matrix layout (channels + offset). Build_compose_uniform_box
+        // reads m[0..4], m[5..9], m[10..14], m[15..19] jako rows + m[4],m[9],m[14],m[19]
+        // jako offsets. Identity = diagonal 1s + alpha=a v row3 col3.
+        let m: [f32; 20] = [
+            1.0, 0.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, a,   0.0,
         ];
+        let (vp_w, vp_h) = self.vp_dims();
+        let (uniform_data, vis) = build_compose_uniform_box(
+            &m, x, y, w, h, 0.0, 0.0, 1.0, 1.0, vp_w, vp_h);
+        // Per-call uniform buffer - batch safe.
+        let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("compose_layer_uniform_batch"),
+            size: 112,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.queue.write_buffer(&buf, 0, bytemuck::cast_slice(&uniform_data));
+        let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("compose_layer_bg"),
+            layout: &self.compose_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(src) },
+                // Nearest sampler - layer tex 1:1 phys px -> target = sharp.
+                // Bilinear by zpusobil text blur na sub-pixel float NDC boundaries.
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.compose_smp) },
+                wgpu::BindGroupEntry { binding: 2, resource: buf.as_entire_binding() },
+            ],
+        });
+        let load = if first {
+            wgpu::LoadOp::Clear(wgpu::Color { r: 0.95, g: 0.95, b: 0.97, a: 1.0 })
+        } else {
+            wgpu::LoadOp::Load
+        };
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            multiview_mask: None,
+            label: Some("compose_layer_pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                depth_slice: None, view: dst, resolve_target: None,
+                ops: wgpu::Operations { load, store: wgpu::StoreOp::Store },
+            })],
+            depth_stencil_attachment: None, timestamp_writes: None, occlusion_query_set: None,
+        });
+        if vis {
+            let mode = BLEND_MODE_OVERRIDE.with(|c| c.get());
+            let pipeline = match mode {
+                1 => &self.compose_pipeline_multiply,
+                2 => &self.compose_pipeline_screen,
+                4 => &self.compose_pipeline_darken,
+                5 => &self.compose_pipeline_lighten,
+                _ => &self.compose_pipeline,
+            };
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &bg, &[]);
+            pass.draw(0..6, 0..1);
+        }
+    }
+
+    fn compose_offscreen(&self, view: &wgpu::TextureView, x: f32, y: f32, w: f32, h: f32, color_matrix: &[f32; 20], first: bool) {
+        // offscreen_tex je fb-sized snapshot. UV sample region = element bbox/viewport.
+        // POZOR: vp musi byt STEJNE jako vp pri draw_to_offscreen call (= aktualni
+        // vp uniform). Pri render_into_layer = VIEWPORT_OVERRIDE set na layer dims.
+        // Drive self.vp_dims() vracelo webview viewport - UV nesedeli s NDC mapping
+        // -> filter content composnuty mimo vidne UV = neviditelne.
+        let (ovr_w, ovr_h) = VIEWPORT_OVERRIDE.with(|c| c.get());
+        let (vp_w, vp_h) = if ovr_w > 0.0 && ovr_h > 0.0 {
+            (ovr_w, ovr_h)
+        } else {
+            self.vp_dims()
+        };
+        let u0 = (x / vp_w.max(0.001)).clamp(0.0, 1.0);
+        let v0 = (y / vp_h.max(0.001)).clamp(0.0, 1.0);
+        let u1 = ((x + w) / vp_w.max(0.001)).clamp(0.0, 1.0);
+        let v1 = ((y + h) / vp_h.max(0.001)).clamp(0.0, 1.0);
+        let (uniform_data, vis) = build_compose_uniform_box(
+            color_matrix, x, y, w, h, u0, v0, u1, v1, vp_w, vp_h);
         self.queue.write_buffer(&self.compose_uniform_buf, 0, bytemuck::cast_slice(&uniform_data));
         let mut encoder = self.device.create_command_encoder(&Default::default());
         let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -6612,19 +7407,6 @@ impl Renderer {
         } else {
             wgpu::LoadOp::Load
         };
-        // Scissor: clamp do framebuffer rozmeru (RT pri WebView, jinak
-        // swap chain), integer pixely. x/y/w/h jsou layout (logical) px -
-        // prevedeme na physical pres zoom * scale_factor (HiDPI).
-        let z = (self.zoom * self.scale_factor).max(0.0001);
-        let (fb_w, fb_h) = self.fb_dims();
-        let vw = fb_w as i32;
-        let vh = fb_h as i32;
-        let sx = (x * z).max(0.0) as i32;
-        let sy = (y * z).max(0.0) as i32;
-        let sw = ((x + w) * z).min(vw as f32) as i32 - sx;
-        let sh = ((y + h) * z).min(vh as f32) as i32 - sy;
-        let sw = sw.max(0);
-        let sh = sh.max(0);
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor { multiview_mask: None,
                 label: Some("compose_pass"),
@@ -6634,11 +7416,10 @@ impl Renderer {
                 })],
                 depth_stencil_attachment: None, timestamp_writes: None, occlusion_query_set: None,
             });
-            if sw > 0 && sh > 0 {
+            if vis {
                 pass.set_pipeline(&self.compose_pipeline);
                 pass.set_bind_group(0, &bg, &[]);
-                pass.set_scissor_rect(sx as u32, sy as u32, sw as u32, sh as u32);
-                pass.draw(0..3, 0..1);
+                pass.draw(0..6, 0..1);
             }
         }
         self.queue.submit(std::iter::once(encoder.finish()));
@@ -6646,24 +7427,115 @@ impl Renderer {
 
     /// Compose offscreen RT do swap chain pres 3D transform pipeline.
     /// Vykresli quad s 4 rohy transformovanymi 4x4 matici (vc perspective).
+    /// Composite arbitrary src view do dst pres 4x4 transform matrix. Pro
+    /// layer compose - layer.texture je v local coords (origin 0,0, full UV).
+    /// Inspired by WebRender composite.rs transform handling.
+    pub fn compose_view_to_view_transform(
+        &self,
+        dst: &wgpu::TextureView,
+        src: &wgpu::TextureView,
+        x: f32, y: f32, w: f32, h: f32,
+        matrix: &[f32; 16],
+        first: bool,
+    ) {
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        self.compose_view_to_view_transform_into_encoder(
+            &mut encoder, dst, src, x, y, w, h, matrix, first);
+        self.queue.submit(std::iter::once(encoder.finish()));
+    }
+
+    /// Transform compose pres sdileny encoder - batch usage. Caller submit.
+    /// Per-call uniform buffer (sdileny self.transform_uniform_buf NESLOUZI
+    /// batch use - write_buffer prepise predchozi compose data).
+    pub fn compose_view_to_view_transform_into_encoder(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        dst: &wgpu::TextureView,
+        src: &wgpu::TextureView,
+        x: f32, y: f32, w: f32, h: f32,
+        matrix: &[f32; 16],
+        first: bool,
+    ) {
+        // Layer tex je sized presne na layer dims, full UV (0,0)-(1,1).
+        let cx = x + w * 0.5;
+        let cy = y + h * 0.5;
+        let hw = w * 0.5;
+        let hh = h * 0.5;
+        let z = (self.zoom * self.scale_factor).max(0.0001);
+        let (fb_w, fb_h) = self.fb_dims();
+        let vw = fb_w as f32;
+        let vh = fb_h as f32;
+        let m = matrix;
+        let uniform_data: [f32; 32] = [
+            m[0], m[1], m[2], m[3],
+            m[4], m[5], m[6], m[7],
+            m[8], m[9], m[10], m[11],
+            m[12], m[13], m[14], m[15],
+            cx, cy, hw, hh,
+            vw / z, vh / z, 0.0, 0.0,
+            // UV box = full layer tex (no sub-region).
+            0.0, 0.0, 1.0, 1.0,
+            0.0, 0.0, 0.0, 0.0,
+        ];
+        // Per-call uniform buffer - batch safe.
+        let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("compose_layer_transform_uniform_batch"),
+            size: 128,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.queue.write_buffer(&buf, 0, bytemuck::cast_slice(&uniform_data));
+        let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("compose_layer_transform_bg"),
+            layout: &self.transform_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(src) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.atlas_smp) },
+                wgpu::BindGroupEntry { binding: 2, resource: buf.as_entire_binding() },
+            ],
+        });
+        let load = if first {
+            wgpu::LoadOp::Clear(wgpu::Color { r: 0.95, g: 0.95, b: 0.97, a: 1.0 })
+        } else {
+            wgpu::LoadOp::Load
+        };
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            multiview_mask: None,
+            label: Some("compose_layer_transform_pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                depth_slice: None, view: dst, resolve_target: None,
+                ops: wgpu::Operations { load, store: wgpu::StoreOp::Store },
+            })],
+            depth_stencil_attachment: None, timestamp_writes: None, occlusion_query_set: None,
+        });
+        pass.set_pipeline(&self.transform_pipeline);
+        pass.set_bind_group(0, &bg, &[]);
+        pass.draw(0..6, 0..1);
+    }
+
     fn compose_transform(&self, view: &wgpu::TextureView, x: f32, y: f32, w: f32, h: f32, matrix: &[f32; 16], first: bool) {
         // UV box: jaka cast offscreen RT obsahuje element. Offscreen RT je
-        // viewport size, element je v px (x..x+w, y..y+h). UV = px / viewport.
-        // Pro 3D rotace: rozsirime sampling region o 1px na kazde strane, aby
-        // bilinear sampler mel kde brat pri sub-pixel sampling rotovaneho
-        // quadu. Kdybychom samplovali presne na hrane, edge fragmenty by
-        // bledly s prilehlym transparent contentem v offscreen RT a element
-        // by vypadal uzsi nez ma byt.
-        // Offscreen RT je v physical px, x/y/w/h v logical px. Prevedeme.
-        // Offscreen RT je v PHYSICAL px; x/y/w/h v LOGICAL px. UV mapping musi
-        // pouzit physical scale = zoom * scale_factor.
+        // viewport size, element je v logical px (x..x+w, y..y+h). UV mapping
+        // musi pouzit STEJNY vp jako draw_to_offscreen (= VIEWPORT_OVERRIDE pri
+        // render_into_layer, jinak vp_dims). UV = x_logical / vp_logical.
+        // Drive vw = config.width_phys + z multiplier - fungovalo pres
+        // monolithic vp (= surface logical), ale pri layer override UV nesedi =
+        // transform content composnuty mimo vidne UV = neviditelne (= "transform
+        // zmizel pri D4").
         let z = (self.zoom * self.scale_factor).max(0.0001);
-        let vw = self.config.width as f32;
-        let vh = self.config.height as f32;
-        let u0 = (x * z / vw).clamp(0.0, 1.0);
-        let v0 = (y * z / vh).clamp(0.0, 1.0);
-        let u1 = ((x + w) * z / vw).clamp(0.0, 1.0);
-        let v1 = ((y + h) * z / vh).clamp(0.0, 1.0);
+        let (ovr_w, ovr_h) = VIEWPORT_OVERRIDE.with(|c| c.get());
+        let (vp_w, vp_h) = if ovr_w > 0.0 && ovr_h > 0.0 {
+            (ovr_w, ovr_h)
+        } else {
+            self.vp_dims()
+        };
+        let u0 = (x / vp_w.max(0.001)).clamp(0.0, 1.0);
+        let v0 = (y / vp_h.max(0.001)).clamp(0.0, 1.0);
+        let u1 = ((x + w) / vp_w.max(0.001)).clamp(0.0, 1.0);
+        let v1 = ((y + h) / vp_h.max(0.001)).clamp(0.0, 1.0);
+        // Compose-pres-vp uniform tady taky pres override-aware vp.
+        let vw = vp_w * z;
+        let vh = vp_h * z;
         let cx = x + w * 0.5;
         let cy = y + h * 0.5;
         let hw = w * 0.5;

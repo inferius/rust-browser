@@ -2590,7 +2590,32 @@ if (btnInspect) {
                 prevSel[ps].classList.remove('selected');
             }
             row.classList.add('selected');
-            if (row.scrollIntoView) row.scrollIntoView({ block: 'center' });
+            // Scroll dom-tree container tak aby row byl visible (center).
+            // Misto scrollIntoView (= top-level scroll setter v interp)
+            // pres ancestor scrollable element setem scrollTop primo.
+            var tree = row.closest ? row.closest('.dom-tree') : null;
+            if (!tree) {
+                // Fallback - manual ascend.
+                var p = row.parentNode;
+                while (p && !(p.classList && p.classList.contains('dom-tree'))) {
+                    p = p.parentNode;
+                }
+                tree = p;
+            }
+            if (tree) {
+                // getBoundingClientRect = absolute viewport coords. Diff
+                // row_top vs tree_top = relativni offset row v tree, plus
+                // current scrollTop = target scroll position.
+                var rowRect = row.getBoundingClientRect();
+                var treeRect = tree.getBoundingClientRect();
+                var rowH = rowRect.height || 18;
+                var treeH = treeRect.height || tree.clientHeight || 300;
+                var curScroll = tree.scrollTop || 0;
+                var rowOffsetInTree = rowRect.top - treeRect.top + curScroll;
+                var target = rowOffsetInTree - (treeH - rowH) / 2;
+                if (target < 0) target = 0;
+                tree.scrollTop = target;
+            }
             if (typeof loadStylesForNode === 'function') {
                 loadStylesForNode(nodeId);
             } else if (window.loadStylesForNode) {
