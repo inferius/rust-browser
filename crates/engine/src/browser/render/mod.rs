@@ -286,6 +286,26 @@ thread_local! {
 ///     (= logical y_max), y_max = NDC top (= logical y_min)
 ///   - src_uv input: v_min_top (texture top, v=0), v_max_bottom (v=1)
 ///
+
+/// Vraci current zoom*dpr scale (pres PIXEL_SNAP_SCALE). Pouzivany pres
+/// paint.rs pri inline SVG rasterize - target physical px = logical * scale.
+pub fn current_zoom() -> Option<f32> {
+    Some(PIXEL_SNAP_SCALE.with(|c| c.get()))
+}
+
+/// Flush INLINE_SVG_CACHE -> image_atlas. Volat pred build_vertices aby
+/// DisplayCommand::Image s `__inline_svg_*` key nasel uploadovane bitmaps.
+/// Inline SVG rasterized v paint pres resvg + tiny-skia (Chrome quality).
+pub(crate) fn flush_inline_svg_cache(image_atlas: &mut ImageAtlas) {
+    crate::browser::paint::INLINE_SVG_CACHE.with(|c| {
+        let cache = c.borrow();
+        for (key, (rgba, w, h)) in cache.iter() {
+            if image_atlas.get(key).is_some() { continue; }
+            image_atlas.add(key, *w, *h, rgba);
+        }
+    });
+}
+
 /// Inspired by WebRender `composite.rs::CompositeTile` per-quad pattern.
 pub(crate) fn build_compose_uniform_box(
     color_matrix: &[f32; 20],
@@ -6615,6 +6635,10 @@ impl Renderer {
                         self.zoom.to_bits().hash(&mut h);
                         h.finish()
                     };
+                    // Pred build_vertices flush inline-SVG cache (paint zachytil
+                    // raster bitmapy v paint pres resvg). Bez tohoto Image cmd s
+                    // `__inline_svg_*` key nenasel info v atlas = placeholder.
+                    flush_inline_svg_cache(&mut self.image_atlas);
                     let verts_cached = self.vert_cache.iter()
                         .find(|(k, _)| *k == key)
                         .map(|(_, v)| v.clone());

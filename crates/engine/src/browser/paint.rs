@@ -540,10 +540,146 @@ fn capitalize_words(s: &str) -> String {
     out
 }
 
+/// Serializace LayoutBox SVG subtree na SVG markup string. Pres resvg parse.
+fn serialize_svg(bx: &LayoutBox) -> Option<String> {
+    let node = bx.node.as_ref()?;
+    if node.tag_name().as_deref() != Some("svg") { return None; }
+    // Resolve currentColor pres bx.text_color (cascade).
+    let cc = bx.text_color.unwrap_or([0, 0, 0, 255]);
+    let cc_str = format!("rgb({},{},{})", cc[0], cc[1], cc[2]);
+    fn walk(node: &std::rc::Rc<crate::browser::dom::Node>, out: &mut String, current_color: &str) {
+        let tag = match node.tag_name() { Some(t) => t, None => return };
+        out.push('<');
+        out.push_str(&tag);
+        for (k, v) in node.attributes.borrow().iter() {
+            let v_resolved = if v.eq_ignore_ascii_case("currentcolor") {
+                current_color.to_string()
+            } else { v.clone() };
+            out.push(' ');
+            out.push_str(k);
+            out.push_str("=\"");
+            // Escape minimum
+            for c in v_resolved.chars() {
+                match c {
+                    '"' => out.push_str("&quot;"),
+                    '<' => out.push_str("&lt;"),
+                    '>' => out.push_str("&gt;"),
+                    '&' => out.push_str("&amp;"),
+                    _ => out.push(c),
+                }
+            }
+            out.push('"');
+        }
+        let children = node.children.borrow();
+        if children.is_empty() {
+            out.push_str("/>");
+        } else {
+            out.push('>');
+            for child in children.iter() {
+                walk(child, out, current_color);
+            }
+            out.push_str("</");
+            out.push_str(&tag);
+            out.push('>');
+        }
+    }
+    let mut buf = String::from("<svg xmlns=\"http://www.w3.org/2000/svg\"");
+    // Pridat root attrs (kdyz uz buf opening tag, attr na inner walk - simplify
+    // emit svg root manually + recurse children).
+    for (k, v) in node.attributes.borrow().iter() {
+        if k == "xmlns" { continue; }
+        let v_resolved = if v.eq_ignore_ascii_case("currentcolor") {
+            cc_str.clone()
+        } else { v.clone() };
+        buf.push(' ');
+        buf.push_str(k);
+        buf.push_str("=\"");
+        for c in v_resolved.chars() {
+            match c {
+                '"' => buf.push_str("&quot;"),
+                '<' => buf.push_str("&lt;"),
+                '>' => buf.push_str("&gt;"),
+                '&' => buf.push_str("&amp;"),
+                _ => buf.push(c),
+            }
+        }
+        buf.push('"');
+    }
+    buf.push('>');
+    for child in node.children.borrow().iter() {
+        walk(child, &mut buf, &cc_str);
+    }
+    buf.push_str("</svg>");
+    Some(buf)
+}
+
+/// Render SVG via resvg + tiny-skia (= Chrome/FF-quality vector raster s
+/// analytical coverage AA). Cached as RGBA bitmap v thread_local map pres
+/// (svg_string_hash, target_w, target_h). Returns image bytes RGBA.
+fn rasterize_svg_resvg(svg: &str, target_w: u32, target_h: u32) -> Option<Vec<u8>> {
+    let opt = resvg::usvg::Options::default();
+    let tree = resvg::usvg::Tree::from_str(svg, &opt).ok()?;
+    let svg_size = tree.size();
+    let sx = target_w as f32 / svg_size.width();
+    let sy = target_h as f32 / svg_size.height();
+    let mut pixmap = tiny_skia::Pixmap::new(target_w, target_h)?;
+    let transform = tiny_skia::Transform::from_scale(sx, sy);
+    resvg::render(&tree, transform, &mut pixmap.as_mut());
+    Some(pixmap.take())
+}
+
+/// Inline SVG bitmap cache - klic = svg+dims hash, hodnota = (RGBA bytes, w, h).
+/// Render phase volá `flush_inline_svg_cache(&mut image_atlas)` pred build_vertices
+/// pres upload do GPU atlas.
+thread_local! {
+    pub static INLINE_SVG_CACHE: std::cell::RefCell<
+        std::collections::HashMap<String, (Vec<u8>, u32, u32)>
+    > = std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
 /// Emituje SVG shape z child <rect>, <circle>, <ellipse>, <line>, <polygon>,
 /// <polyline>, <path>, <text>, <g>. Podporuje fill, stroke, transform attribute,
 /// viewBox a preserveAspectRatio na root <svg>.
+///
+/// Strategie: serialize SVG subtree -> resvg parse + tiny-skia rasterize pri
+/// target_w/target_h pres physical px (= Chrome/FF analytical coverage AA).
+/// Result cached v INLINE_SVG_CACHE pres flush -> image_atlas pred render.
 fn emit_svg_children(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>) {
+    let zoom = crate::browser::render::current_zoom().unwrap_or(1.0);
+    let target_w = (bx.rect.width * zoom).round().max(1.0) as u32;
+    let target_h = (bx.rect.height * zoom).round().max(1.0) as u32;
+    if target_w > 0 && target_h > 0 && target_w <= 4096 && target_h <= 4096 {
+        if let Some(svg_str) = serialize_svg(bx) {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            svg_str.hash(&mut h);
+            target_w.hash(&mut h);
+            target_h.hash(&mut h);
+            let key = format!("__inline_svg_{:x}", h.finish());
+            let has_cache = INLINE_SVG_CACHE.with(|c| c.borrow().contains_key(&key));
+            if !has_cache {
+                if let Some(rgba) = rasterize_svg_resvg(&svg_str, target_w, target_h) {
+                    INLINE_SVG_CACHE.with(|c| {
+                        c.borrow_mut().insert(key.clone(), (rgba, target_w, target_h));
+                    });
+                }
+            }
+            if INLINE_SVG_CACHE.with(|c| c.borrow().contains_key(&key)) {
+                cmds.push(DisplayCommand::Image {
+                    x: bx.rect.x, y: bx.rect.y, w: bx.rect.width, h: bx.rect.height,
+                    src: key,
+                    radius: 0.0,
+                });
+                return;
+            }
+        }
+    }
+    // Fallback custom polygon path.
+    emit_svg_children_fallback(bx, cmds);
+}
+
+#[allow(dead_code)]
+fn emit_svg_children_fallback(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>) {
     // ViewBox parse: "min-x min-y width height".
     let mut xform = [1.0_f32, 0.0, 0.0, 1.0, 0.0, 0.0];
     if let Some(node) = &bx.node {
@@ -635,9 +771,18 @@ fn emit_svg_children_xform(bx: &LayoutBox, parent_xform: &[f32; 6], cmds: &mut V
         let stroke_attr = child.attr("stroke").or_else(|| inherited_stroke.clone());
         let stroke_none = stroke_attr.as_deref().map(|v| v.trim() == "none").unwrap_or(true); // default stroke=none
         let stroke_c = stroke_attr.as_deref().map(|v| resolve_color(v, [0, 0, 0, 255])).unwrap_or([0, 0, 0, 255]);
-        let stroke_w = child.attr("stroke-width").and_then(|v| v.parse().ok())
+        let stroke_w_raw: f32 = child.attr("stroke-width").and_then(|v| v.parse().ok())
             .or(inherited_stroke_w)
             .unwrap_or(1.0);
+        // Per SVG spec: stroke-width is in user-space (= viewBox units). xform
+        // scaluje from viewBox -> render. Pres scale-up viewBox (24) -> small
+        // SVG box (14), real stroke = stroke_w * scale. Bez tohoto lucide
+        // 2px stroke v 24-viewBox renderuje 2px pres render = TLUSTY.
+        // Uniform scale assume - average sx/sy z xform matrix.
+        let scale_x = (xform[0] * xform[0] + xform[1] * xform[1]).sqrt();
+        let scale_y = (xform[2] * xform[2] + xform[3] * xform[3]).sqrt();
+        let xf_scale = (scale_x + scale_y) * 0.5;
+        let stroke_w = if xf_scale > 0.0 { stroke_w_raw * xf_scale } else { stroke_w_raw };
         match tag.as_str() {
             "rect" => {
                 let x = attr_f("x", 0.0);

@@ -110,8 +110,26 @@ pub(super) fn push_polygon_edge_aa(verts: &mut Vec<Vertex>, points: &[(f32, f32)
     // Pro CCW je vpravo (dy, -dx).
     let area = polygon_signed_area(points);
     let cw = area > 0.0;
-    // Feather = 1 physical px = 1/zoom logical px (sharp at any zoom level).
-    let feather: f32 = 1.0 / zoom.max(0.0001);
+    // Feather scaling - pri thin stroke polygons (= 4-point rect z line stroke)
+    // outward feather visualne zhrubne stroke 2-3x. Detect thin: polygon area /
+    // longest edge = thickness. Pres thickness <= 2.5 polygon = thin stroke,
+    // feather = 0 (sharp).
+    let abs_area = polygon_signed_area(points).abs();
+    let mut max_edge = 0.0_f32;
+    for i in 0..points.len() {
+        let p0 = points[i];
+        let p1 = points[(i + 1) % points.len()];
+        let dx = p1.0 - p0.0;
+        let dy = p1.1 - p0.1;
+        let edge_len = (dx*dx + dy*dy).sqrt();
+        if edge_len > max_edge { max_edge = edge_len; }
+    }
+    let thickness = if max_edge > 0.0 { abs_area / max_edge } else { f32::INFINITY };
+    let feather: f32 = if thickness <= 2.5 {
+        0.0  // Thin stroke polygon - sharp pixel edges.
+    } else {
+        0.5 / zoom.max(0.0001)
+    };
     let mk = |p: (f32, f32), a: f32| -> Vertex {
         Vertex {
             pos: [p.0, p.1],
@@ -255,15 +273,22 @@ pub(super) fn push_radial_gradient(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f
     let hh = h * 0.5;
     let box_cx = x + hw;
     let box_cy = y + hh;
+    // CSS ellipse farthest-corner: ellipse passes thru farthest box corner.
+    // Pres centered ellipse + corner at (hw, hh): rx²= 2*hw², ry²=2*hh²
+    // (rx,ry scaled by sqrt(2) z half-box). Drive jen (hw, hh) = ellipse touched
+    // sides midpoints = appear smaller. Aspect preserved.
+    let off_x = gcx - box_cx;
+    let off_y = gcy - box_cy;
+    let rx = hw * std::f32::consts::SQRT_2;
+    let ry = hh * std::f32::consts::SQRT_2;
     let mk = |px: f32, py: f32| -> Vertex {
         Vertex {
             pos: [px, py],
             color: c0,
             uv: [0.0, 0.0],
             mode: 6.0,
-            local: [px - box_cx, py - box_cy],
-            // half_size reuse: ulozim relativni gradient center (gcx-box_cx, gcy-box_cy)
-            half_size: [gcx - box_cx, gcy - box_cy],
+            local: [(px - box_cx) - off_x, (py - box_cy) - off_y],
+            half_size: [rx, ry],
             radius,
             color2: c1,
             blur: grad_r,
@@ -497,11 +522,14 @@ pub(super) fn push_multi_stop_conic_gradient(verts: &mut Vec<Vertex>, x: f32, y:
         }
         stops.last().unwrap().1
     };
+    // CSS conic: 0° = top (12 o'clock), clockwise. Math angle: 0° = +X axis,
+    // CCW math = CW screen (y down). Shift by -π/2 = CSS 0 -> math -π/2 = TOP.
+    let css_to_math = -std::f32::consts::FRAC_PI_2;
     for k in 0..K {
         let frac0 = (k as f32) / (K as f32);
         let frac1 = ((k + 1) as f32) / (K as f32);
-        let a0 = start_rad + frac0 * std::f32::consts::TAU;
-        let a1 = start_rad + frac1 * std::f32::consts::TAU;
+        let a0 = start_rad + frac0 * std::f32::consts::TAU + css_to_math;
+        let a1 = start_rad + frac1 * std::f32::consts::TAU + css_to_math;
         let c0 = interp_color(frac0);
         let c1 = interp_color(frac1);
         let p_center = (gcx, gcy);
