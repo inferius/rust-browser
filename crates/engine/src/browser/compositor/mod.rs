@@ -336,41 +336,16 @@ fn walk_box(b: &LayoutBox, current: &mut LayerNode) {
         if is_layer_boundary(child) {
             let layer_id = child.node.as_ref()
                 .map(|n| std::rc::Rc::as_ptr(n) as usize).unwrap_or(0);
-            // Pri 2D rotation: layer.root_rect = transformed AABB + 2px padding
-            // (edge sample safety pres bilinear/clamp_to_edge). Src tex obsahuje
-            // orig rect content centered, padding okolo transparent. Compose
-            // pres rotated quad sized AABB+padding pres orig center pivot ->
-            // rotated quad area v page ma full diamond visible bez corner clip.
-            // 3D transforms: skip AABB expand (compose pipeline 3D quad handle
-            // pres perspective + matrix shader native).
-            let orig = child.rect;
-            let root_rect_with_aabb = if let Some(t) = &child.transform {
-                use super::layout::TransformOp;
-                let is_2d = match t {
-                    TransformOp::Rotate(_) => true,
-                    TransformOp::Scale(_, _) => true,
-                    TransformOp::Rotate3D { x, y, z, .. } => {
-                        x.abs() < 0.1 && y.abs() < 0.1 && z.abs() > 0.5
-                    }
-                    _ => false,
-                };
-                if is_2d {
-                    let m = super::layout::compute_transform_matrix(
-                        std::slice::from_ref(t), None);
-                    let (ax, ay, aw, ah) = super::layout::transformed_aabb(
-                        (orig.x, orig.y, orig.width, orig.height), &m);
-                    // 2px padding pres edge sample safety.
-                    crate::browser::layout::Rect {
-                        x: ax - 2.0,
-                        y: ay - 2.0,
-                        width: aw + 4.0,
-                        height: ah + 4.0,
-                    }
-                } else { orig }
-            } else { orig };
+            // Layer.root_rect = orig rect (NE AABB-expanded). Compose pres
+            // transform pipeline rotuje quad sized orig rect (80x60) pres orig
+            // center pivot -> rotated quad shape v page = TIGHT rotated rect's
+            // parallelogram = NO corner extension beyond rotated rect = NO bily
+            // "padding" area mimo section bg. Border-radius pres SDF v src tex
+            // = rounded corners visible v rotated direction (= correct chrome
+            // behavior).
             let mut sub = LayerNode {
                 id: layer_id,
-                root_rect: root_rect_with_aabb,
+                root_rect: child.rect,
                 z_index: child.z_index,
                 opacity: child.opacity,
                 transform: child.transform.clone(),
