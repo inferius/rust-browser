@@ -29,6 +29,27 @@ pub enum NodeKind {
     DocumentFragment,
 }
 
+/// Event listener entry - callback ID + options (capture, passive, once).
+/// Inspired by Chromium core/dom/event_target.cc::RegisteredEventListener.
+#[derive(Debug, Clone, Copy)]
+pub struct ListenerEntry {
+    pub callback_id: usize,
+    /// Useful pri capture phase walk - capturuje na ceste root->target.
+    pub capture: bool,
+    /// Listener nemoze volat event.preventDefault (DOM3 Events §3.5).
+    /// Pouziva se pro scroll/touch listeners aby browser nemusel blokovat
+    /// scroll cekajic na JS rozhodnuti.
+    pub passive: bool,
+    /// Listener se odstrani po prvnim fire.
+    pub once: bool,
+}
+
+impl ListenerEntry {
+    pub fn new(callback_id: usize) -> Self {
+        Self { callback_id, capture: false, passive: false, once: false }
+    }
+}
+
 /// DOM uzel.
 #[derive(Debug)]
 pub struct NodeData {
@@ -36,8 +57,8 @@ pub struct NodeData {
     pub attributes: RefCell<HashMap<String, String>>,
     pub parent: RefCell<Weak<Node>>,
     pub children: RefCell<Vec<Rc<Node>>>,
-    /// Listeners: event_type -> Vec<callback> (callback je opaque pres usize id)
-    pub listeners: RefCell<HashMap<String, Vec<usize>>>,
+    /// Listeners: event_type -> Vec<ListenerEntry> (callback id + options).
+    pub listeners: RefCell<HashMap<String, Vec<ListenerEntry>>>,
 }
 
 pub type Node = NodeData;

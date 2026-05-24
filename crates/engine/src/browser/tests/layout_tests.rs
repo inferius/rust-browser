@@ -3498,6 +3498,69 @@ fn button_with_padding_has_full_height() {
 }
 
 #[test]
+fn img_loading_lazy_attr_parses() {
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade, layout};
+    let doc = parse_html(
+        r#"<html><body><img src="a.png" loading="lazy" width="100" height="100"><img src="b.png" width="100" height="100"></body></html>"#,
+        ""
+    );
+    let css = parse_stylesheet("");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let lr = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+    fn find_all_imgs<'a>(b: &'a layout::LayoutBox, out: &mut Vec<&'a layout::LayoutBox>) {
+        if b.tag.as_deref() == Some("img") { out.push(b); }
+        for ch in &b.children { find_all_imgs(ch, out); }
+    }
+    let mut imgs = Vec::new();
+    find_all_imgs(&lr, &mut imgs);
+    assert_eq!(imgs.len(), 2, "expected 2 img elements");
+    let lazy = imgs.iter().find(|i| i.image_src.as_deref() == Some("a.png")).unwrap();
+    let eager = imgs.iter().find(|i| i.image_src.as_deref() == Some("b.png")).unwrap();
+    assert!(lazy.loading_lazy, "img with loading=lazy attr should set loading_lazy");
+    assert!(!eager.loading_lazy, "img without loading attr should NOT set loading_lazy");
+}
+
+#[test]
+fn img_lazy_far_skipped_in_display_list() {
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade, layout, paint};
+    // img daleko od viewportu, loading=lazy -> skip emit.
+    let doc = parse_html(
+        r#"<html><body>
+            <div style="height: 10000px"></div>
+            <img src="far.png" loading="lazy" width="100" height="100">
+        </body></html>"#,
+        ""
+    );
+    let css = parse_stylesheet("div { display: block; }");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let lr = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+    // Cull rozsah = (0, 768). Lazy margin = 1250. Image y=10000 > 768+1250 = SKIP.
+    let cmds = paint::build_display_list_culled(&lr, 0.0, 768.0);
+    let has_far = cmds.iter().any(|c| matches!(c, paint::DisplayCommand::Image { src, .. } if src == "far.png")
+        || matches!(c, paint::DisplayCommand::ImageFit { src, .. } if src == "far.png"));
+    assert!(!has_far, "lazy img far from viewport should NOT be in display list");
+}
+
+#[test]
+fn img_lazy_near_viewport_emitted() {
+    use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade, layout, paint};
+    // img blizko (do 1250px lazy margin) -> emit.
+    let doc = parse_html(
+        r#"<html><body>
+            <img src="near.png" loading="lazy" width="100" height="100">
+        </body></html>"#,
+        ""
+    );
+    let css = parse_stylesheet("");
+    let map = cascade::cascade(&doc.root, &[css]);
+    let lr = layout::layout_tree(&doc.root, &map, 1024.0, 768.0);
+    let cmds = paint::build_display_list_culled(&lr, 0.0, 768.0);
+    let has_near = cmds.iter().any(|c| matches!(c, paint::DisplayCommand::Image { src, .. } if src == "near.png")
+        || matches!(c, paint::DisplayCommand::ImageFit { src, .. } if src == "near.png"));
+    assert!(has_near, "lazy img in viewport should be in display list");
+}
+
+#[test]
 fn h2_heading_wraps_at_narrow_viewport() {
     use crate::browser::{html_parser::parse_html, css_parser::parse_stylesheet, cascade, layout};
     let doc = parse_html(

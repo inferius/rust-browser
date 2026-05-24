@@ -3105,13 +3105,18 @@ impl WebView {
                     None => continue,
                 };
                 if std::env::var("RWE_COMPOSE_DBG").is_ok() {
-                    eprintln!("[COMPOSE] layer={} root_rect=({},{},{},{}) pos=({},{}) scroll=({},{}) damage={:?}",
+                    eprintln!("[COMPOSE] layer={} root_rect=({},{},{},{}) pos=({},{}) scroll=({},{}) damage={:?} transform={:?}",
                         layer.id, layer.root_rect.x, layer.root_rect.y,
                         layer.root_rect.width, layer.root_rect.height,
                         pos_x, pos_y, self.scroll_x, self.scroll_y,
-                        layer.damage_rect);
+                        layer.damage_rect, layer.transform);
                 }
                 if let Some(t) = &layer.transform {
+                    // Layer texture obsahuje UNTRANSFORMED content (paint emit
+                    // skip transform pri layer). Compose pres transform pipeline
+                    // rotuje quad pres GPU (= rotates content + glyphs spolu).
+                    // Center = pos + w/2 = element rect center (layer.root_rect
+                    // = orig rect = element bbox).
                     let m = crate::browser::layout::compute_transform_matrix(
                         &[t.clone()], None);
                     renderer.compose_view_to_view_transform_into_encoder(

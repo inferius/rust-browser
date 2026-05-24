@@ -656,6 +656,15 @@ impl GlyphAtlas {
             let image = match image_opt { Some(i) => i, None => return };
             // Advance via glyph_metrics(&[]).scale(size).advance_width(gid).
             let advance = font_ref.glyph_metrics(&[]).scale(size as f32).advance_width(gid);
+            // DIAG: debug swash output dimensions vs expected bytes-per-pixel.
+            if std::env::var("RWE_SWASH_DEBUG").is_ok() {
+                let w_ = image.placement.width;
+                let h_ = image.placement.height;
+                let data_len = image.data.len();
+                let bpp_calc = if w_ > 0 && h_ > 0 { data_len as f32 / (w_ * h_) as f32 } else { 0.0 };
+                eprintln!("[SWASH] ch={:?} size={} lcd={} placement={}x{} adv={:.2} bear=({},{}) data_len={} bpp={:.2}",
+                    ch, size, lcd, w_, h_, advance, image.placement.left, image.placement.top, data_len, bpp_calc);
+            }
             (image, advance)
         };
 
@@ -675,10 +684,15 @@ impl GlyphAtlas {
         if self.cursor_y + h > ATLAS_SIZE { return; }
 
         if lcd {
-            // Swash gives 4 bytes/pixel RGBA. Pack R, G, B as 3 horizontal texels.
+            // Swash Format::Subpixel gives 3 bytes/pixel (RGB triplet, NO alpha).
+            // Pack R, G, B as 3 horizontal texels v atlas (legacy shader mode 9
+            // 3x R-channel layout). Drive `* 4` predpoklad RGBA byl SPATNY - src
+            // index pres ven byte array -> skip copy -> atlas glyph oriznute na
+            // ~25% sirky -> chars overlap pres LCD render.
+            let bytes_per_px = if image.data.len() >= (w * h * 4) as usize { 4 } else { 3 };
             for row in 0..h {
                 for col in 0..w {
-                    let src_idx = (row * w + col) as usize * 4;
+                    let src_idx = (row * w + col) as usize * bytes_per_px;
                     let dst_base = ((self.cursor_y + row) * ATLAS_SIZE + self.cursor_x + col * 3) as usize;
                     if src_idx + 2 < image.data.len() && dst_base + 2 < self.pixels.len() {
                         self.pixels[dst_base]     = image.data[src_idx];     // R

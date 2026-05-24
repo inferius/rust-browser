@@ -64,10 +64,14 @@ pub fn layout_flex(bx: &mut LayoutBox) {
     if bx.children.is_empty() { return; }
 
     // 0. Collect in-flow indices (abs/fixed jdou mimo flex flow, display:none vyradit zcela)
-    let in_flow: Vec<usize> = bx.children.iter().enumerate()
+    // CSS Flexbox L1 §5.4.1: items se sortuji dle `order` property pred line
+    // collection. Stable sort = stejny order zachovava DOM poradi.
+    // Inspired by Chromium core/layout/flexible_box_algorithm.cc::OrderedItems.
+    let mut in_flow: Vec<usize> = bx.children.iter().enumerate()
         .filter(|(_, c)| !super::is_out_of_flow(c) && !matches!(c.display, super::super::layout::Display::None))
         .map(|(i, _)| i)
         .collect();
+    in_flow.sort_by_key(|&i| bx.children[i].flex_order);
     // display:none -> 0x0 vc. descendants
     fn zero_out(bx: &mut LayoutBox) {
         bx.rect.x = 0.0; bx.rect.y = 0.0; bx.rect.width = 0.0; bx.rect.height = 0.0;
@@ -540,10 +544,16 @@ pub fn layout_flex(bx: &mut LayoutBox) {
     // Indefinite main: column + bez explicit_height = bx.rect.height pochazi z
     // parent layout placeholderu (typicky 20px nebo content-based 0). Use max-
     // content basis = no shrink. CSS Flex L1 §9.2 "definite size" check.
+    // Definite main: explicit/pct height OR preset rect.height (parent flex/grid uz
+    // set jako cross-stretch). Bez tohoto stretch-from-parent height (styles-pane
+    // dostane 810 z parent row stretch) by se brala jako indefinite -> flex grow
+    // children dostal effective_container_main=sum_intrinsic (= no free space) =
+    // flex:1 children nezvetsi (styles-body zustane na 8 misto 784).
     let indefinite_main = !direction.is_row()
         && bx.explicit_height.is_none()
         && bx.height_pct.is_none()
-        && !bx.taffy_intrinsic_mode;
+        && !bx.taffy_intrinsic_mode
+        && bx.rect.height <= 0.0;
     let mut resolved_lines: Vec<ResolvedLine> = Vec::with_capacity(lines.len());
     for line_indices in &lines {
         let effective_container_main = if bx.taffy_intrinsic_mode || indefinite_main {
@@ -572,10 +582,12 @@ pub fn layout_flex(bx: &mut LayoutBox) {
     } else if matches!(wrap, FlexWrap::NoWrap) && nline == 1 && container_cross > 0.0 {
         // Single line nowrap: line zabira container cross.
         // Pri explicit/max-bound cross je line PRESNE container (items overflow).
+        // overflow != Visible v cross axis = container je bounded (= cross clip),
+        // items pretecou ale nezvetsi line (= jinak by stretch deformnul layout).
         let has_bound_cross = if direction.is_row() {
-            bx.explicit_height.is_some() || bx.max_height.is_specified()
+            bx.explicit_height.is_some() || bx.max_height.is_specified() || bx.overflow_y.clips()
         } else {
-            bx.explicit_width.is_some() || bx.max_width.is_specified()
+            bx.explicit_width.is_some() || bx.max_width.is_specified() || bx.overflow_x.clips()
         };
         if has_bound_cross {
             resolved_lines[0].cross_size = container_cross;
@@ -1302,10 +1314,35 @@ pub fn layout_flex(bx: &mut LayoutBox) {
         }
         let pad_b = bx.padding_bottom.unwrap_or(bx.padding);
         let new_h = cursor - bx.rect.y + pad_b + bx.border_width;
-        if new_h > bx.rect.height {
+        // CSS spec: overflow != Visible + preset height (parent stretchnul / explicit)
+        // -> NEPRESAHNI preset. Content pretece, box drzi velikost (= scroll container).
+        // Bez tohoto dom-pane (flex-column overflow:auto, height stretchnuta od parent
+        // row flex na 810) by se rozpinl na content (~35916) = scrollbar nepujde
+        // emit (icw/h == rect.height = roste s contentem).
+        let height_is_constrained = bx.explicit_height.is_some() || bx.overflow_y.clips();
+        if new_h > bx.rect.height && !height_is_constrained {
             bx.rect.height = new_h;
         }
     }
+    // Track inner content extent pres paint - scrollbar emit pri overflow + content >
+    // rect. Bez tohoto flex containers s overflow:auto nikdy nezobrazi scrollbar
+    // (layout_block to seti, ale flex container neslo). Pocita pres rect.bottom -
+    // bx.rect.top max pres children + padding-bottom.
+    let inner_y_start = bx.rect.y + (bx.padding_top.unwrap_or(bx.padding)) + bw_t;
+    let mut max_bottom: f32 = inner_y_start;
+    let mut max_right: f32 = bx.rect.x + (bx.padding_left.unwrap_or(bx.padding)) + bw_l;
+    for ch in &bx.children {
+        if super::is_out_of_flow(ch) { continue; }
+        if matches!(ch.display, super::super::layout::Display::None) { continue; }
+        let b = ch.rect.y + ch.rect.height;
+        if b > max_bottom { max_bottom = b; }
+        let r = ch.rect.x + ch.rect.width;
+        if r > max_right { max_right = r; }
+    }
+    let pad_b = bx.padding_bottom.unwrap_or(bx.padding);
+    let pad_r = bx.padding_right.unwrap_or(bx.padding);
+    bx.inner_content_h = (max_bottom - bx.rect.y) + pad_b + bw_b;
+    bx.inner_content_w = (max_right - bx.rect.x) + pad_r + bw_r;
 }
 
 #[derive(Debug, Clone, Copy)]

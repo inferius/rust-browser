@@ -1523,6 +1523,7 @@ fn partition_preserves_command_count() {
             Seg::Transform3D { inner, .. } => total += inner.len(),
             Seg::BackdropFilter { inner, .. } => total += inner.len(),
             Seg::Mask { inner, .. } => total += inner.len(),
+            Seg::Blend { inner, .. } => total += inner.len(),
         }
     }
     // 5 ne-marker cmds (3 mimo + 2 uvnitr filtru); markery se neztraceji v inner
@@ -1553,6 +1554,28 @@ fn partition_backdrop_filter_segment() {
             assert!((radius - 5.0).abs() < 1e-4, "blur radius");
         }
         _ => panic!("ocekavan BackdropFilter segment"),
+    }
+}
+
+#[test]
+fn partition_blend_segment() {
+    // BlendBegin/End vytvori Seg::Blend s inner commands.
+    let cmds = vec![
+        rect(0.0, 0.0),
+        DisplayCommand::BlendBegin { x: 0.0, y: 0.0, w: 100.0, h: 100.0, mode: 3 }, // Overlay
+        rect(10.0, 10.0),
+        rect(20.0, 20.0),
+        DisplayCommand::BlendEnd,
+        rect(30.0, 30.0),
+    ];
+    let segs = partition_filter_segments(&cmds);
+    assert_eq!(segs.len(), 3, "Main + Blend + Main");
+    match &segs[1] {
+        Seg::Blend { inner, mode, .. } => {
+            assert_eq!(inner.len(), 2);
+            assert_eq!(*mode, 3, "Overlay mode id");
+        }
+        _ => panic!("ocekavan Blend segment"),
     }
 }
 

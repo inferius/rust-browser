@@ -11,6 +11,7 @@
 pub mod utils;
 
 pub mod tokens;
+
 pub mod specifications;
 pub mod ast;
 pub mod lexer;
@@ -20,6 +21,7 @@ pub mod browser;
 pub mod debug_view;
 pub mod devtools;
 pub mod debug_bp;
+pub mod testing;
 
 // Embeddable API contract - stable high-level facade pro hostujici aplikace
 // (shell crate, third-party UI). Phase 2 = stubs, Phase 3-5 = naplnuje.

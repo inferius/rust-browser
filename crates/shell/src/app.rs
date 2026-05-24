@@ -177,16 +177,57 @@ pub(crate) fn emit_selected_outline(
     let Some(bx) = find(layout_root, target_ptr) else { return };
     use rwe_engine::browser::paint::DisplayCommand;
     let r = &bx.rect;
-    let x = r.x;
-    let y = r.y;
-    let w = r.width;
-    let h = r.height;
-    let bw = 2.0;
     let color = [180, 113, 255, 255]; // purple Chrome-style
-    cmds.push(DisplayCommand::Rect { x, y, w, h: bw, color, radius: 0.0 });
-    cmds.push(DisplayCommand::Rect { x, y: y + h - bw, w, h: bw, color, radius: 0.0 });
-    cmds.push(DisplayCommand::Rect { x, y, w: bw, h, color, radius: 0.0 });
-    cmds.push(DisplayCommand::Rect { x: x + w - bw, y, w: bw, h, color, radius: 0.0 });
+    // Pri transform != none: emit transformed polygon outline (4 rotated corners
+    // + edges as ClippedRect strips). Bez transform - axis-aligned rect strips.
+    if !bx.transforms.is_empty() {
+        let m = rwe_engine::browser::layout::compute_transform_matrix(
+            &bx.transforms, None);
+        let (cx, cy) = (r.x + r.width * 0.5, r.y + r.height * 0.5);
+        let corners_local = [
+            (r.x - cx, r.y - cy),
+            (r.x + r.width - cx, r.y - cy),
+            (r.x + r.width - cx, r.y + r.height - cy),
+            (r.x - cx, r.y + r.height - cy),
+        ];
+        // Matrix ROW-MAJOR per transform_op_matrix. m[r*4+c] = row r, col c.
+        let transform_point = |lx: f32, ly: f32| -> (f32, f32) {
+            let lz = 0.0; let lw = 1.0;
+            let tx = m[0]*lx + m[1]*ly + m[2]*lz + m[3]*lw;
+            let ty = m[4]*lx + m[5]*ly + m[6]*lz + m[7]*lw;
+            let tw = m[12]*lx + m[13]*ly + m[14]*lz + m[15]*lw;
+            let inv_w = if tw.abs() > 1e-6 { 1.0 / tw } else { 1.0 };
+            (tx * inv_w + cx, ty * inv_w + cy)
+        };
+        let corners: Vec<(f32, f32)> = corners_local.iter()
+            .map(|(lx, ly)| transform_point(*lx, *ly))
+            .collect();
+        let bw = 2.0_f32;
+        // 4 edges - kazdou jako tenký polygon (= ClippedRect 4 corners).
+        for i in 0..4 {
+            let p0 = corners[i];
+            let p1 = corners[(i + 1) % 4];
+            let dx = p1.0 - p0.0;
+            let dy = p1.1 - p0.1;
+            let len = (dx*dx + dy*dy).sqrt();
+            if len < 0.001 { continue; }
+            let nx = -dy / len * bw * 0.5;
+            let ny = dx / len * bw * 0.5;
+            let pts = vec![
+                (p0.0 - nx, p0.1 - ny),
+                (p1.0 - nx, p1.1 - ny),
+                (p1.0 + nx, p1.1 + ny),
+                (p0.0 + nx, p0.1 + ny),
+            ];
+            cmds.push(DisplayCommand::ClippedRect { color, points: pts });
+        }
+    } else {
+        let (x, y, w, h, bw) = (r.x, r.y, r.width, r.height, 2.0);
+        cmds.push(DisplayCommand::Rect { x, y, w, h: bw, color, radius: 0.0 });
+        cmds.push(DisplayCommand::Rect { x, y: y + h - bw, w, h: bw, color, radius: 0.0 });
+        cmds.push(DisplayCommand::Rect { x, y, w: bw, h, color, radius: 0.0 });
+        cmds.push(DisplayCommand::Rect { x: x + w - bw, y, w: bw, h, color, radius: 0.0 });
+    }
 }
 
 /// Box-model highlight emit - 4-layer overlay rects (margin/border/padding/
@@ -225,35 +266,55 @@ pub(crate) fn emit_box_model_highlight(
     let m_b = bx.margin_bottom.unwrap_or(bx.margin);
     let m_l = bx.margin_left.unwrap_or(bx.margin);
     let bw = bx.border_width.max(0.0);
-    let content_x = r.x;
-    let content_y = r.y;
-    let content_w = r.width;
-    let content_h = r.height;
-    // Margin rect outer
-    let mx = content_x - p_l - bw - m_l;
-    let my = content_y - p_t - bw - m_t;
-    let mw = content_w + p_l + p_r + 2.0 * bw + m_l + m_r;
-    let mh = content_h + p_t + p_b + 2.0 * bw + m_t + m_b;
-    cmds.push(DisplayCommand::Rect { x: mx, y: my, w: mw, h: mh,
-        color: opts.margin_color, radius: 0.0 });
-    // Border rect
-    let bx_x = content_x - p_l - bw;
-    let by_y = content_y - p_t - bw;
-    let bw_w = content_w + p_l + p_r + 2.0 * bw;
-    let bh_h = content_h + p_t + p_b + 2.0 * bw;
-    cmds.push(DisplayCommand::Rect { x: bx_x, y: by_y, w: bw_w, h: bh_h,
-        color: opts.border_color, radius: 0.0 });
-    // Padding rect
-    let px_ = content_x - p_l;
-    let py_ = content_y - p_t;
-    let pw_ = content_w + p_l + p_r;
-    let ph_ = content_h + p_t + p_b;
-    cmds.push(DisplayCommand::Rect { x: px_, y: py_, w: pw_, h: ph_,
-        color: opts.padding_color, radius: 0.0 });
-    // Content rect
-    cmds.push(DisplayCommand::Rect { x: content_x, y: content_y,
-        w: content_w, h: content_h,
-        color: opts.content_color, radius: 0.0 });
+    // Box model layers - margin/border/padding/content rects.
+    let layers: [([f32; 4], [u8; 4]); 4] = [
+        // margin (outer)
+        ([r.x - p_l - bw - m_l, r.y - p_t - bw - m_t,
+          r.width + p_l + p_r + 2.0*bw + m_l + m_r,
+          r.height + p_t + p_b + 2.0*bw + m_t + m_b], opts.margin_color),
+        // border
+        ([r.x - p_l - bw, r.y - p_t - bw,
+          r.width + p_l + p_r + 2.0*bw, r.height + p_t + p_b + 2.0*bw], opts.border_color),
+        // padding
+        ([r.x - p_l, r.y - p_t,
+          r.width + p_l + p_r, r.height + p_t + p_b], opts.padding_color),
+        // content
+        ([r.x, r.y, r.width, r.height], opts.content_color),
+    ];
+    if !bx.transforms.is_empty() {
+        // Transform applied - emit per-layer rotated polygon. Centroid = content
+        // rect center (CSS transform-origin: 50% 50% default).
+        let m = rwe_engine::browser::layout::compute_transform_matrix(
+            &bx.transforms, None);
+        let cx = r.x + r.width * 0.5;
+        let cy = r.y + r.height * 0.5;
+        // Matrix ROW-MAJOR per transform_op_matrix.
+        let transform_point = |px: f32, py: f32| -> (f32, f32) {
+            let lx = px - cx; let ly = py - cy;
+            let lz = 0.0; let lw = 1.0;
+            let tx = m[0]*lx + m[1]*ly + m[2]*lz + m[3]*lw;
+            let ty = m[4]*lx + m[5]*ly + m[6]*lz + m[7]*lw;
+            let tw = m[12]*lx + m[13]*ly + m[14]*lz + m[15]*lw;
+            let inv_w = if tw.abs() > 1e-6 { 1.0 / tw } else { 1.0 };
+            (tx * inv_w + cx, ty * inv_w + cy)
+        };
+        for ([lx, ly, lw, lh], color) in layers.iter() {
+            let corners = [
+                (*lx,        *ly       ),
+                (*lx + *lw,  *ly       ),
+                (*lx + *lw,  *ly + *lh ),
+                (*lx,        *ly + *lh ),
+            ];
+            let pts: Vec<(f32, f32)> = corners.iter()
+                .map(|(px, py)| transform_point(*px, *py)).collect();
+            cmds.push(DisplayCommand::ClippedRect { color: *color, points: pts });
+        }
+    } else {
+        for ([lx, ly, lw, lh], color) in layers.iter() {
+            cmds.push(DisplayCommand::Rect { x: *lx, y: *ly, w: *lw, h: *lh,
+                color: *color, radius: 0.0 });
+        }
+    }
 }
 
 /// Shell commands z chrome bar JS bridge. Chrome WebView volat

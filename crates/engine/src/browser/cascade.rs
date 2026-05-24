@@ -18,7 +18,12 @@ use super::css_parser::{Stylesheet, Selector, SimpleSelector, Combinator, Rule, 
 // (sdileny thread_local cache), dom_version auto-invaliduje stale entries pri
 // DOM mutaci (mrtve node_ptr by jinak matchnul recyklovany alokat).
 type MatchedKey = (u64, u64, usize, u8, u8, u64);  // host_id, dom_ver, node_ptr, hover, focus, sheets_sig
-type MatchedVal = Rc<Vec<((u32, u32, u32, usize), Declaration)>>;
+/// Cascade sort key: (important, layer_priority, spec_id, spec_class, spec_type, order).
+/// Tuple compare lex - higher takes precedence. Drive bylo packed spec_packed = id*1000 +
+/// class + type, ktere prelilo pri >1000 class/type selectoru (audit #1). Nyni tuple
+/// separate per CSS Selectors L4 §17 ("Calculating a selector's specificity").
+pub type CascadeKey = (u32, u32, u32, u32, u32, usize);
+type MatchedVal = Rc<Vec<(CascadeKey, Declaration)>>;
 type WalkOutputKey = (u64, u64, usize, u8, u8, u64, u64);  // host_id, dom_ver, node_ptr, hover, focus, sheets_sig, inline_hash
 type WalkOutputVal = Rc<HashMap<String, String>>;
 thread_local! {
@@ -1057,12 +1062,22 @@ fn parse_value_with_unit(s: &str) -> (f32, String) {
 }
 
 fn replace_var_once(s: &str, variables: &HashMap<String, String>) -> String {
+    replace_var_with_seen(s, variables, &mut std::collections::HashSet::new())
+}
+
+/// var() resolve s cycle detection. `seen` = stack aktualne resolving var
+/// names. Pri name v seen = empty fallback (cycle) misto recurze.
+/// Inspired by CSS Custom Properties L1 §3.1 "Guarded references".
+fn replace_var_with_seen(
+    s: &str,
+    variables: &HashMap<String, String>,
+    seen: &mut std::collections::HashSet<String>,
+) -> String {
     let mut out = String::new();
     let bytes = s.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
         if i + 4 < bytes.len() && &bytes[i..i+4] == b"var(" {
-            // Najdi matching )
             let mut depth = 1;
             let mut j = i + 4;
             while j < bytes.len() && depth > 0 {
@@ -1075,14 +1090,25 @@ fn replace_var_once(s: &str, variables: &HashMap<String, String>) -> String {
                 j += 1;
             }
             let inner = &s[i+4..j];
-            // Split na name + fallback
             let (name, fallback) = match inner.find(',') {
                 Some(idx) => (inner[..idx].trim(), Some(inner[idx+1..].trim())),
                 None      => (inner.trim(), None),
             };
-            let resolved = variables.get(name).cloned()
-                .or_else(|| fallback.map(|f| f.to_string()))
-                .unwrap_or_default();
+            // Cycle detect: name v seen stack = cycle. Pouzij fallback / empty.
+            let resolved = if seen.contains(name) {
+                fallback.map(|f| f.to_string()).unwrap_or_default()
+            } else {
+                seen.insert(name.to_string());
+                let r = variables.get(name).cloned()
+                    .or_else(|| fallback.map(|f| f.to_string()))
+                    .unwrap_or_default();
+                // Recursive resolve - var(--a) returns "var(--b)" -> recurze.
+                let r = if r.contains("var(") {
+                    replace_var_with_seen(&r, variables, seen)
+                } else { r };
+                seen.remove(name);
+                r
+            };
             out.push_str(&resolved);
             i = j + 1;
             continue;
@@ -2307,14 +2333,14 @@ fn find_container_size(
 
 /// Quick-reject klasifikator pro selectory: extracted z rightmost simple part.
 /// Per-node check je O(num_classes + 1) namisto full matches_selector walk.
-#[derive(Default)]
-struct SelectorKey {
+#[derive(Default, Clone)]
+pub struct SelectorKey {
     /// Some pri tag != "*", lowercased. None = univerzalni / pseudo.
-    tag: Option<String>,
+    pub tag: Option<String>,
     /// Some pri id na rightmost part.
-    id: Option<String>,
+    pub id: Option<String>,
     /// Classes na rightmost part. Vsechny musi byt na node.
-    classes: Vec<String>,
+    pub classes: Vec<String>,
 }
 
 impl SelectorKey {
@@ -2349,6 +2375,158 @@ impl SelectorKey {
             if !found { return false; }
         }
         true
+    }
+}
+
+/// RuleSet bucketing per Chromium Blink / Mozilla Stylo. Index rules by their
+/// rightmost-selector key (id / first class / tag) so per-node lookup je O(K)
+/// kde K = pocet rules pro tento node tag+id+classes, ne O(M) total rules.
+///
+/// Inspired by:
+/// - Chromium third_party/blink/renderer/core/css/rule_set.cc - bucketed lookup
+///   po `id_rules`, `class_rules`, `tag_rules`, `universal_rules`.
+/// - Mozilla servo/components/style/rule_tree.rs - similar bucket strategy.
+///
+/// Bucket strategy: kazdy rule (sel_idx do key list) ulozim do bucketu:
+/// - has id -> by_id[id]
+/// - else has classes -> by_class[FIRST class]
+/// - else has tag -> by_tag[tag]
+/// - else -> universal
+///
+/// Per node: candidates = union(by_id[node.id], by_class[c] for c in node.classes,
+/// by_tag[node.tag], universal). Sorted by index aby preserve source-order.
+#[derive(Debug, Default)]
+pub struct RuleBuckets {
+    pub by_id: std::collections::HashMap<String, Vec<usize>>,
+    pub by_class: std::collections::HashMap<String, Vec<usize>>,
+    pub by_tag: std::collections::HashMap<String, Vec<usize>>,
+    pub universal: Vec<usize>,
+}
+
+impl RuleBuckets {
+    /// Build z flat list selector keys.
+    /// `entry_idx` = index do externiho flat array (caller resolves zpetne).
+    pub fn build_from_keys(keys: &[SelectorKey]) -> Self {
+        let mut b = Self::default();
+        for (idx, k) in keys.iter().enumerate() {
+            if let Some(id) = &k.id {
+                b.by_id.entry(id.clone()).or_default().push(idx);
+            } else if let Some(first_class) = k.classes.first() {
+                b.by_class.entry(first_class.clone()).or_default().push(idx);
+            } else if let Some(tag) = &k.tag {
+                b.by_tag.entry(tag.clone()).or_default().push(idx);
+            } else {
+                b.universal.push(idx);
+            }
+        }
+        b
+    }
+
+    /// Lookup candidates pro node. Vraci sorted Vec<usize> idx do keys array.
+    /// Caller pak per-idx vyhodnoti matches_selector + spec.
+    pub fn candidates(&self, node_tag: &str, node_id: Option<&str>, node_classes: &str) -> Vec<usize> {
+        let mut out: Vec<usize> = Vec::new();
+        if let Some(id) = node_id {
+            if let Some(idx_list) = self.by_id.get(id) {
+                out.extend_from_slice(idx_list);
+            }
+        }
+        for cls in node_classes.split_whitespace() {
+            if let Some(idx_list) = self.by_class.get(cls) {
+                out.extend_from_slice(idx_list);
+            }
+        }
+        if let Some(idx_list) = self.by_tag.get(node_tag) {
+            out.extend_from_slice(idx_list);
+        }
+        out.extend_from_slice(&self.universal);
+        // Dedup + preserve order. Simple O(N log N) sort + dedup.
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+}
+
+#[cfg(test)]
+mod rule_buckets_tests {
+    use super::*;
+    use super::super::css_parser::SimpleSelector;
+
+    fn mk_key(tag: Option<&str>, id: Option<&str>, classes: &[&str]) -> SelectorKey {
+        SelectorKey {
+            tag: tag.map(String::from),
+            id: id.map(String::from),
+            classes: classes.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn buckets_by_id_lookup() {
+        let keys = vec![
+            mk_key(None, Some("main"), &[]),
+            mk_key(Some("div"), None, &[]),
+        ];
+        let b = RuleBuckets::build_from_keys(&keys);
+        let c = b.candidates("div", Some("main"), "");
+        // Both should match div with id=main.
+        assert_eq!(c, vec![0, 1]);
+    }
+
+    #[test]
+    fn buckets_by_class_lookup() {
+        let keys = vec![
+            mk_key(None, None, &["btn"]),
+            mk_key(Some("a"), None, &["btn"]),
+            mk_key(None, None, &["other"]),
+        ];
+        let b = RuleBuckets::build_from_keys(&keys);
+        let c = b.candidates("a", None, "btn");
+        assert_eq!(c, vec![0, 1]);
+        // "other" class also lookup.
+        let c2 = b.candidates("span", None, "other");
+        assert_eq!(c2, vec![2]);
+    }
+
+    #[test]
+    fn buckets_by_tag_lookup() {
+        let keys = vec![
+            mk_key(Some("p"), None, &[]),
+            mk_key(Some("div"), None, &[]),
+        ];
+        let b = RuleBuckets::build_from_keys(&keys);
+        let c = b.candidates("p", None, "");
+        assert_eq!(c, vec![0]);
+    }
+
+    #[test]
+    fn buckets_universal_always_included() {
+        let keys = vec![
+            mk_key(None, None, &[]),    // universal *
+            mk_key(Some("div"), None, &[]),
+        ];
+        let b = RuleBuckets::build_from_keys(&keys);
+        let c = b.candidates("p", None, "");
+        assert_eq!(c, vec![0]);
+        let c2 = b.candidates("div", None, "");
+        assert_eq!(c2, vec![0, 1]);
+    }
+
+    #[test]
+    fn buckets_dedup_overlap() {
+        // Rule s id="x" + class="y" se bucketuje jen do by_id (id priorita).
+        // Pri node id=x class=y nesmi byt v output 2x.
+        let keys = vec![mk_key(None, Some("x"), &["y"])];
+        let b = RuleBuckets::build_from_keys(&keys);
+        let c = b.candidates("div", Some("x"), "y");
+        assert_eq!(c.len(), 1);
+    }
+
+    #[test]
+    fn buckets_no_match_returns_empty() {
+        let keys = vec![mk_key(Some("article"), None, &[])];
+        let b = RuleBuckets::build_from_keys(&keys);
+        let c = b.candidates("div", None, "");
+        assert!(c.is_empty());
     }
 }
 
@@ -2417,6 +2595,11 @@ pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
     let mut layered_keys: Vec<Vec<Vec<SelectorKey>>> = Vec::with_capacity(stylesheets.len()); // [sheet][rule_in_layer][sel]
     let mut unlayered_keys: Vec<Vec<Vec<SelectorKey>>> = Vec::with_capacity(stylesheets.len()); // [sheet][rule][sel]
     let mut scope_keys: Vec<Vec<Vec<Vec<SelectorKey>>>> = Vec::with_capacity(stylesheets.len()); // [sheet][scope][rule][sel]
+    // RuleSet bucketing per Blink rule_set.cc + Stylo. Pro kazdy sheet vyrobime
+    // bucket flat indexu (rule_idx, sel_idx) - lookup O(K) misto O(M).
+    // Bucket dela jen unlayered rules (nejvic) - layered + scope zustanou linear.
+    let mut unlayered_buckets: Vec<RuleBuckets> = Vec::with_capacity(stylesheets.len());
+    let mut unlayered_bucket_map: Vec<Vec<(usize, usize)>> = Vec::with_capacity(stylesheets.len());
     for sheet in stylesheets {
         // Layered (flat across all layers - lookup by index pak v cascade loop).
         let mut sheet_layered: Vec<Vec<SelectorKey>> = Vec::new();
@@ -2430,6 +2613,17 @@ pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
         let sheet_unlayered: Vec<Vec<SelectorKey>> = sheet.rules.iter()
             .map(|r| r.selectors.iter().map(SelectorKey::from_selector).collect())
             .collect();
+        // Build bucket: flat list (rule_idx, sel_idx) -> SelectorKey -> bucket lookup.
+        let mut flat_keys: Vec<SelectorKey> = Vec::new();
+        let mut flat_map: Vec<(usize, usize)> = Vec::new();
+        for (rule_idx, sel_keys) in sheet_unlayered.iter().enumerate() {
+            for (sel_idx, k) in sel_keys.iter().enumerate() {
+                flat_map.push((rule_idx, sel_idx));
+                flat_keys.push(k.clone());
+            }
+        }
+        unlayered_buckets.push(RuleBuckets::build_from_keys(&flat_keys));
+        unlayered_bucket_map.push(flat_map);
         unlayered_keys.push(sheet_unlayered);
         // Scopes.
         let sheet_scopes: Vec<Vec<Vec<SelectorKey>>> = sheet.scopes.iter()
@@ -2495,12 +2689,12 @@ pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
         }
 
         let cached = MATCHED_DECLS_CACHE.with(|c| c.borrow().get(&cache_key).cloned());
-        let matched_owned: Rc<Vec<((u32, u32, u32, usize), Declaration)>> = if let Some(v) = cached {
+        let matched_owned: Rc<Vec<(CascadeKey, Declaration)>> = if let Some(v) = cached {
             p_cache_hits += 1;
             v
         } else {
         // Cache MISS - compute matched_decls pres tento node.
-        let mut matched_decls: Vec<((u32, u32, u32, usize), Declaration)> = Vec::new();
+        let mut matched_decls: Vec<(CascadeKey, Declaration)> = Vec::new();
         let mut order = 0;
         for (sheet_idx, sheet) in stylesheets.iter().enumerate() {
             // Layered rules nejprve (nizsi prio) - per CSS Cascade Layers L5.
@@ -2525,13 +2719,13 @@ pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
                             p_match_hits += 1;
                             let spec = specificity(sel);
                             for decl in &rule.declarations {
-                                let key = (
+                                let key: CascadeKey = (
                                     if decl.important { 1 } else { 0 },
                                     layer_priority,
-                                    spec.0 * 1000 + spec.1 + spec.2,
+                                    spec.0, spec.1, spec.2,
                                     order,
                                 );
-                                matched_decls.push(((key.0, key.1, key.2, key.3), decl.clone()));
+                                matched_decls.push((key, decl.clone()));
                                 order += 1;
                                 p_decls_applied += 1;
                             }
@@ -2540,31 +2734,34 @@ pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
                 }
             }
             // Unlayered (default) - nejvyssi prio (po !important).
-            for (rule_idx, rule) in sheet.rules.iter().enumerate() {
-                let rule_keys = &unlayered_keys[sheet_idx][rule_idx];
-                for (sel_idx, sel) in rule.selectors.iter().enumerate() {
-                    if sel.parts.last().map(|p| p.pseudo_element.is_some()).unwrap_or(false) {
-                        continue;
-                    }
-                    p_might_calls += 1;
-                    if !rule_keys[sel_idx].might_match(&node_tag, node_id_opt, &node_classes) {
-                        continue;
-                    }
-                    p_might_pass += 1;
-                    if matches_selector(node, sel) {
-                        p_match_hits += 1;
-                        let spec = specificity(sel);
-                        for decl in &rule.declarations {
-                            let key = (
-                                if decl.important { 1 } else { 0 },
-                                u32::MAX,
-                                spec.0 * 1000 + spec.1 + spec.2,
-                                order,
-                            );
-                            matched_decls.push(((key.0, key.1, key.2, key.3), decl.clone()));
-                            order += 1;
-                            p_decls_applied += 1;
-                        }
+            // RuleSet bucketing: misto O(M) walk pres vsechny rules, O(K) lookup
+            // bucket pro (tag, id, classes). Per Chromium rule_set.cc.
+            let bucket = &unlayered_buckets[sheet_idx];
+            let bucket_map = &unlayered_bucket_map[sheet_idx];
+            let candidates = bucket.candidates(&node_tag, node_id_opt, &node_classes);
+            for flat_idx in candidates {
+                let (rule_idx, sel_idx) = bucket_map[flat_idx];
+                let rule = &sheet.rules[rule_idx];
+                let sel = &rule.selectors[sel_idx];
+                if sel.parts.last().map(|p| p.pseudo_element.is_some()).unwrap_or(false) {
+                    continue;
+                }
+                p_might_calls += 1;
+                // Bucket guaranties might_match=true (= candidate). Skip explicit check.
+                p_might_pass += 1;
+                if matches_selector(node, sel) {
+                    p_match_hits += 1;
+                    let spec = specificity(sel);
+                    for decl in &rule.declarations {
+                        let key: CascadeKey = (
+                            if decl.important { 1 } else { 0 },
+                            u32::MAX,
+                            spec.0, spec.1, spec.2,
+                            order,
+                        );
+                        matched_decls.push((key, decl.clone()));
+                        order += 1;
+                        p_decls_applied += 1;
                     }
                 }
             }
@@ -2588,13 +2785,15 @@ pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
                             p_match_hits += 1;
                             let spec = specificity(sel);
                             for decl in &rule.declarations {
-                                let key = (
+                                // @scope bump: +1 do type_count (= treat jako extra type
+                                // selector). Drive +1 packed = +1 do type tier ekvivalent.
+                                let key: CascadeKey = (
                                     if decl.important { 1 } else { 0 },
                                     u32::MAX,
-                                    spec.0 * 1000 + spec.1 + spec.2 + 1,
+                                    spec.0, spec.1, spec.2 + 1,
                                     order,
                                 );
-                                matched_decls.push(((key.0, key.1, key.2, key.3), decl.clone()));
+                                matched_decls.push((key, decl.clone()));
                                 order += 1;
                                 p_decls_applied += 1;
                             }
@@ -2925,8 +3124,11 @@ pub fn cascade_pseudo(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> PseudoStyl
     root.walk(&mut |node| {
         if !matches!(node.kind, NodeKind::Element { .. }) { return; }
 
-        // Pro kazdy pseudo-element name shromazdime matched declarations
-        let mut by_pseudo: HashMap<String, Vec<((u32, u32, u32, usize), &super::css_parser::Declaration)>>
+        // Pro kazdy pseudo-element name shromazdime matched declarations.
+        // Pseudo key sdili strukturu s CascadeKey ale bez layer_priority -
+        // pseudo nezavisla na @layer poradi. Spec triple, ne packed sum.
+        type PseudoKey = (u32, u32, u32, u32, usize); // important, id, class, type, order
+        let mut by_pseudo: HashMap<String, Vec<(PseudoKey, &super::css_parser::Declaration)>>
             = HashMap::new();
         let mut order = 0;
 
@@ -2939,10 +3141,9 @@ pub fn cascade_pseudo(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> PseudoStyl
                     if !matches_selector(node, sel) { continue; }
                     let spec = specificity(sel);
                     for decl in &rule.declarations {
-                        let key = (
+                        let key: PseudoKey = (
                             if decl.important { 1 } else { 0 },
-                            spec.0,
-                            spec.1 + spec.2,
+                            spec.0, spec.1, spec.2,
                             order,
                         );
                         by_pseudo.entry(pe.clone()).or_default().push((key, decl));

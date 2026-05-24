@@ -100,6 +100,46 @@ fn transform_op_matrix(op: &TransformOp) -> [f32; 16] {
 /// Compose vsechny TransformOp do jedne 4x4 matrix.
 /// CSS spec: `transform: T1 T2 T3` znamena P' = T1 * T2 * T3 * P
 /// (zacina prvni ops zvenku - vlozeny posledni do mat multiplication).
+/// Transformovany AABB - pres 4 corner verts rect pres matrix + bbox.
+/// Pres rotace 45deg na 100x100 element vrátí ~141x141 (corners pretika).
+/// Pouzite pres layer.root_rect expanding aby texture pokryla i rotated content.
+///
+/// Matrix v ROW-MAJOR storage (= jak transform_op_matrix produces).
+pub fn transformed_aabb(rect: (f32, f32, f32, f32), m: &[f32; 16]) -> (f32, f32, f32, f32) {
+    let (x, y, w, h) = rect;
+    let corners = [
+        (x,     y    ),
+        (x + w, y    ),
+        (x + w, y + h),
+        (x,     y + h),
+    ];
+    let cx = x + w * 0.5;
+    let cy = y + h * 0.5;
+    let mut min_x = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+    for (px, py) in corners.iter() {
+        let lx = px - cx;
+        let ly = py - cy;
+        let lz = 0.0;
+        let lw = 1.0;
+        // ROW-MAJOR: row r, col c stored at m[r*4 + c].
+        // out[r] = sum over c: m[r*4+c] * vec[c].
+        let tx = m[0]*lx + m[1]*ly + m[2]*lz + m[3]*lw;
+        let ty = m[4]*lx + m[5]*ly + m[6]*lz + m[7]*lw;
+        let tw = m[12]*lx + m[13]*ly + m[14]*lz + m[15]*lw;
+        let inv_w = if tw.abs() > 1e-6 { 1.0 / tw } else { 1.0 };
+        let fx = tx * inv_w + cx;
+        let fy = ty * inv_w + cy;
+        if fx < min_x { min_x = fx; }
+        if fx > max_x { max_x = fx; }
+        if fy < min_y { min_y = fy; }
+        if fy > max_y { max_y = fy; }
+    }
+    (min_x, min_y, max_x - min_x, max_y - min_y)
+}
+
 pub fn compute_transform_matrix(ops: &[TransformOp], parent_perspective: Option<f32>) -> [f32; 16] {
     let mut m = mat4_identity();
     // Apply ops in order (left-multiply each)

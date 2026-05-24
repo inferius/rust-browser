@@ -39,12 +39,21 @@ pub struct GlyphRun {
 // Shape cache - klic zahrnuje MEASURE_FONTS_GEN aby @font-face load invalidoval
 // stale entries. Drive uncached shape_text_advances volano ~200x per build_vertices
 // = 30-50ms total. Pri stable @font-face state cache HIT skip fontdue raster.
+//
+// Eviction: LRU s insertion-order tracking pres VecDeque<key>. Pri capacity
+// reach evict oldest 25% (1024 entries) misto clear-all. Lepsi steady-state
+// hit ratio.
+// Inspired by Chromium third_party/blink/renderer/platform/fonts/shape_cache.cc.
 type ShapeKey = (u64, u64);  // (params_hash, measure_fonts_gen)
 type ShapeVal = std::rc::Rc<(Vec<GlyphRun>, ShapedText)>;
 thread_local! {
     static SHAPE_CACHE: std::cell::RefCell<std::collections::HashMap<ShapeKey, ShapeVal>>
         = std::cell::RefCell::new(std::collections::HashMap::new());
+    static SHAPE_LRU_ORDER: std::cell::RefCell<std::collections::VecDeque<ShapeKey>>
+        = std::cell::RefCell::new(std::collections::VecDeque::with_capacity(8192));
 }
+const SHAPE_CACHE_CAP: usize = 8192;
+const SHAPE_CACHE_EVICT_BATCH: usize = 2048;
 
 pub fn shape_text(
     text: &str,
@@ -78,11 +87,23 @@ pub fn shape_text(
         let advance = *shaped.advances.get(i).unwrap_or(&0.0);
         runs.push(GlyphRun { ch, byte_offset, x, advance });
     }
+    // LRU evict + insert.
     SHAPE_CACHE.with(|c| {
         let mut cache = c.borrow_mut();
-        if cache.len() >= 8192 { cache.clear(); }
+        if cache.len() >= SHAPE_CACHE_CAP {
+            // Evict oldest batch z insertion-order queue.
+            SHAPE_LRU_ORDER.with(|o| {
+                let mut order = o.borrow_mut();
+                for _ in 0..SHAPE_CACHE_EVICT_BATCH {
+                    if let Some(old_key) = order.pop_front() {
+                        cache.remove(&old_key);
+                    } else { break; }
+                }
+            });
+        }
         cache.insert(key, std::rc::Rc::new((runs.clone(), shaped.clone())));
     });
+    SHAPE_LRU_ORDER.with(|o| o.borrow_mut().push_back(key));
     (runs, shaped)
 }
 

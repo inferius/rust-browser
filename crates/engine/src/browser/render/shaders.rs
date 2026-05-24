@@ -148,21 +148,22 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
 
 /// Compose shader - samples offscreen_tex (mid-blur result) a kresli do swap chain.
 /// Aplikuje 4x5 color matrix (vetsina filter operaci) - identity = passthrough.
-pub(super) const COMPOSE_SHADER: &str = r#"
-struct ComposeParams {
-    /// 4x5 color matrix (4 vec4 row + 4-element offset vector).
-    /// row[i] = m[i*5..i*5+4], offset[i] = m[i*5+4].
-    /// WGSL: dva pole pres 4x mat4x4 by stacilo, ale pripravime 5 vec4 (16+16 bytes navic):
-    /// row0(rgba), row1(rgba), row2(rgba), row3(rgba), offset(rgba).
-    row0: vec4<f32>,
-    row1: vec4<f32>,
-    row2: vec4<f32>,
-    row3: vec4<f32>,
-    offset: vec4<f32>,
+/// Advanced mix-blend-mode shader pres per-pixel dst sample.
+/// 2 textures (src + dst snapshot) + uniform blend_mode_id.
+/// Implementuje vsech 16 modes per CSS Compositing-1 spec.
+/// Inspired by Skia `src/effects/SkBlendMode.cpp`.
+pub(super) const ADVANCED_BLEND_SHADER: &str = r#"
+struct BlendParams {
+    blend_mode: u32,
+    opacity: f32,
+    _pad0: f32,
+    _pad1: f32,
 };
 @group(0) @binding(0) var src_tex: texture_2d<f32>;
 @group(0) @binding(1) var src_smp: sampler;
-@group(0) @binding(2) var<uniform> params: ComposeParams;
+@group(0) @binding(2) var dst_tex: texture_2d<f32>;
+@group(0) @binding(3) var dst_smp: sampler;
+@group(0) @binding(4) var<uniform> params: BlendParams;
 
 struct VertexOut {
     @builtin(position) clip: vec4<f32>,
@@ -187,12 +188,142 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOut {
     return out;
 }
 
-// CSS filter color matrix (hue-rotate, sepia, saturate, contrast) jsou
-// definovany v sRGB space (NTSC luminance weights pro sRGB displays).
-// Surface format Rgba8UnormSrgb sample auto-converti na LINEAR. Bez gamma
-// kompenzace matrix dava spatny vystup (hue-rotate vraci nespravne barvy).
-// Workflow: linear -> sRGB -> apply matrix -> sRGB -> linear (write surface
-// znovu encoduje na sRGB).
+fn blend_each(mode: u32, s: f32, d: f32) -> f32 {
+    if (mode == 1u) { return s * d; } // Multiply
+    if (mode == 2u) { return 1.0 - (1.0 - s) * (1.0 - d); } // Screen
+    if (mode == 3u) { // Overlay
+        if (d < 0.5) { return 2.0 * s * d; }
+        return 1.0 - 2.0 * (1.0 - s) * (1.0 - d);
+    }
+    if (mode == 4u) { return min(s, d); } // Darken
+    if (mode == 5u) { return max(s, d); } // Lighten
+    if (mode == 6u) { // ColorDodge
+        if (s >= 1.0) { return 1.0; }
+        return min(d / max(1.0 - s, 0.0001), 1.0);
+    }
+    if (mode == 7u) { // ColorBurn
+        if (s <= 0.0) { return 0.0; }
+        return 1.0 - min((1.0 - d) / max(s, 0.0001), 1.0);
+    }
+    if (mode == 8u) { // HardLight
+        if (s < 0.5) { return 2.0 * s * d; }
+        return 1.0 - 2.0 * (1.0 - s) * (1.0 - d);
+    }
+    if (mode == 9u) { // SoftLight
+        if (s < 0.5) { return d - (1.0 - 2.0 * s) * d * (1.0 - d); }
+        var g: f32 = sqrt(d);
+        if (d <= 0.25) { g = ((16.0 * d - 12.0) * d + 4.0) * d; }
+        return d + (2.0 * s - 1.0) * (g - d);
+    }
+    if (mode == 10u) { return abs(s - d); } // Difference
+    if (mode == 11u) { return s + d - 2.0 * s * d; } // Exclusion
+    if (mode == 16u) { return min(s + d, 1.0); } // PlusLighter
+    return s; // Normal (or unsupported = src wins)
+}
+
+fn lum(c: vec3<f32>) -> f32 {
+    return 0.3 * c.r + 0.59 * c.g + 0.11 * c.b;
+}
+
+fn sat(c: vec3<f32>) -> f32 {
+    return max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b));
+}
+
+fn set_lum(c: vec3<f32>, l: f32) -> vec3<f32> {
+    let d = l - lum(c);
+    return clamp(c + vec3<f32>(d), vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
+fn set_sat(c: vec3<f32>, s: f32) -> vec3<f32> {
+    // Simplified: scale color s preserved hue.
+    let cur = sat(c);
+    if (cur < 0.0001) { return vec3<f32>(0.0); }
+    let mn = min(c.r, min(c.g, c.b));
+    return (c - vec3<f32>(mn)) * (s / cur);
+}
+
+fn blend_hsl(mode: u32, src: vec3<f32>, dst: vec3<f32>) -> vec3<f32> {
+    if (mode == 12u) { return set_lum(set_sat(src, sat(dst)), lum(dst)); } // Hue
+    if (mode == 13u) { return set_lum(set_sat(dst, sat(src)), lum(dst)); } // Saturation
+    if (mode == 14u) { return set_lum(src, lum(dst)); } // Color
+    if (mode == 15u) { return set_lum(dst, lum(src)); } // Luminosity
+    return src;
+}
+
+@fragment
+fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
+    let src = textureSample(src_tex, src_smp, in.uv);
+    let dst = textureSample(dst_tex, dst_smp, in.uv);
+    let mode = params.blend_mode;
+    var blended: vec3<f32>;
+    if (mode >= 12u && mode <= 15u) {
+        blended = blend_hsl(mode, src.rgb, dst.rgb);
+    } else {
+        blended = vec3<f32>(
+            blend_each(mode, src.r, dst.r),
+            blend_each(mode, src.g, dst.g),
+            blend_each(mode, src.b, dst.b),
+        );
+    }
+    // Porter-Duff over s blended color: out = src.a*blended + (1-src.a)*dst
+    let sa = src.a * params.opacity;
+    let out_rgb = sa * blended + (1.0 - sa) * dst.rgb;
+    let out_a = sa + dst.a * (1.0 - sa);
+    return vec4<f32>(out_rgb, out_a);
+}
+"#;
+
+pub(super) const COMPOSE_SHADER: &str = r#"
+struct ComposeParams {
+    row0: vec4<f32>,
+    row1: vec4<f32>,
+    row2: vec4<f32>,
+    row3: vec4<f32>,
+    offset: vec4<f32>,
+    dst_box: vec4<f32>,
+    src_uv: vec4<f32>,
+};
+@group(0) @binding(0) var src_tex: texture_2d<f32>;
+@group(0) @binding(1) var src_smp: sampler;
+@group(0) @binding(2) var<uniform> params: ComposeParams;
+
+struct VertexOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+
+@vertex
+fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOut {
+    var base = array<vec2<f32>, 6>(
+        vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 0.0), vec2<f32>(0.0, 1.0),
+        vec2<f32>(1.0, 0.0), vec2<f32>(1.0, 1.0), vec2<f32>(0.0, 1.0),
+    );
+    let b = base[idx];
+    let pos_x = mix(params.dst_box.x, params.dst_box.z, b.x);
+    let pos_y = mix(params.dst_box.w, params.dst_box.y, b.y);
+    let uv_x = mix(params.src_uv.x, params.src_uv.z, b.x);
+    let uv_y = mix(params.src_uv.y, params.src_uv.w, b.y);
+    var out: VertexOut;
+    out.clip = vec4<f32>(pos_x, pos_y, 0.0, 1.0);
+    out.uv = vec2<f32>(uv_x, uv_y);
+    return out;
+}
+
+// Detekuje identity color matrix - skip gamma roundtrip pres LAYER compose path
+// (per-layer/per-tile composite je VZDY identity matrix). Gamma roundtrip
+// (linear -> sRGB -> srgb_to_linear) na pow() fp precision ztracel saturaci -
+// barvy renderovaly jako stupne sedi.
+//
+// Pro CSS filter matrices (sepia/hue-rotate/saturate) - jine code path
+// (compose_offscreen) prochazi pres gamma. Tady jen identity = direct passthrough.
+fn is_identity(p: ComposeParams) -> bool {
+    let eps = 0.0001;
+    return abs(p.row0.x - 1.0) < eps && abs(p.row0.y) < eps && abs(p.row0.z) < eps
+        && abs(p.row1.x) < eps && abs(p.row1.y - 1.0) < eps && abs(p.row1.z) < eps
+        && abs(p.row2.x) < eps && abs(p.row2.y) < eps && abs(p.row2.z - 1.0) < eps
+        && abs(p.offset.x) < eps && abs(p.offset.y) < eps && abs(p.offset.z) < eps;
+}
+
 fn linear_to_srgb(c: vec3<f32>) -> vec3<f32> {
     let cutoff = vec3<f32>(0.0031308);
     let lo = c * 12.92;
@@ -209,6 +340,12 @@ fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let src_linear = textureSample(src_tex, src_smp, in.uv);
+    // Fast path: identity matrix (layer compose) - skip gamma roundtrip.
+    if (is_identity(params)) {
+        let a = params.row3.w * src_linear.a + params.offset.w;
+        return vec4<f32>(src_linear.rgb * params.row3.w, a);
+    }
+    // CSS filter path: gamma to sRGB, apply matrix in sRGB space, gamma back.
     let src_srgb_rgb = linear_to_srgb(src_linear.rgb);
     let src = vec4<f32>(src_srgb_rgb, src_linear.a);
     let r = dot(params.row0, src) + params.offset.x;
@@ -349,20 +486,25 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         let alpha = 1.0 - smoothstep(-blur, blur, d);
         return vec4<f32>(in.color.rgb, in.color.a * alpha);
     }
-    // Mode 6: radial gradient - t = dist(local, grad_center) / grad_radius.
-    // half_size je reused jako grad_center offset (box_cx -> gcx). Border-radius
-    // SDF nelze tady aplikovat protoze actual box half_size neni dostupna.
-    // Border-radius pri radial gradientu by mela byt resena dodatkovou maskou.
+    // Mode 6: radial gradient - CSS ellipse farthest-corner (default).
+    // half_size = (rx, ry) ellipse radii (= box half-w, half-h). local =
+    // pos relativni k gradient centru. Normalize local by axes -> ellipse
+    // distance (= circle pres square box, ellipse pres rect). Drive d =
+    // length(local) circular = ne-aspect-aware = "moc kulaty pres rect box".
     if (in.mode > 5.5 && in.mode < 6.5) {
-        let d = length(in.local - in.half_size);
-        let t = clamp(d / max(in.blur, 1.0), 0.0, 1.0);
+        let nx = in.local.x / max(in.half_size.x, 0.001);
+        let ny = in.local.y / max(in.half_size.y, 0.001);
+        let d = length(vec2<f32>(nx, ny));
+        let t = clamp(d, 0.0, 1.0);
         return mix_srgb(in.color, in.color2, t);
     }
-    // Mode 7: conic gradient - t = (atan2(p.y, p.x) - start) / 2pi
+    // Mode 7: conic gradient - CSS spec: start at TOP (12 o'clock), rotate
+    // clockwise. atan2(p.x, -p.y) -> 0 at top, +π/2 at right, π at bottom.
+    // Drive atan2(p.y, p.x) = math angle z +X axis = 0 at right = yellow vpravo
+    // shift na bottom.
     if (in.mode > 6.5 && in.mode < 7.5) {
         let p = in.local - in.half_size;
-        var ang = atan2(p.y, p.x) - in.blur;
-        // Normalize do 0..2pi (-> 0..1)
+        var ang = atan2(p.x, -p.y) - in.blur;
         let two_pi = 6.28318530718;
         ang = ang - floor(ang / two_pi) * two_pi;
         let t = clamp(ang / two_pi, 0.0, 1.0);
@@ -422,6 +564,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 /// podporuje. Bez supportu zustava jako None pipeline.
 /// WGSL @blend_src(0)/(1) attributes na stejnem @location(0).
 pub(super) const LCD_SHADER: &str = r#"
+enable dual_source_blending;
 struct Uniforms {
     viewport: vec4<f32>,
 };

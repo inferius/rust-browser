@@ -34,6 +34,15 @@ pub enum Seg<'a> {
         x: f32, y: f32, w: f32, h: f32,
         mask_src: String,
     },
+    /// mix-blend-mode subtree (Overlay/ColorDodge/Hue/Sat/... vyzaduje shader
+    /// dst sample). Render inner do offscreen, sample dst snapshot per pixel,
+    /// compute blend formula, output do main_rt.
+    /// Inspired by Chromium `core/paint/effect_paint_property_node.cc` blend.
+    Blend {
+        inner: &'a [DisplayCommand],
+        x: f32, y: f32, w: f32, h: f32,
+        mode: u8,
+    },
 }
 
 /// Rozdeli display list na Main + Filter + Transform3D segmenty pres
@@ -43,7 +52,7 @@ pub enum Seg<'a> {
 /// Symetricnost markeru je predpokladana.
 pub fn partition_filter_segments(cmds: &[DisplayCommand]) -> Vec<Seg<'_>> {
     #[derive(Clone, Copy, PartialEq)]
-    enum Kind { Filter, Transform, Backdrop, Mask }
+    enum Kind { Filter, Transform, Backdrop, Mask, Blend }
     let mut segments: Vec<Seg> = Vec::new();
     let mut depth: i32 = 0;
     let mut active_kind: Option<Kind> = None;
@@ -57,6 +66,8 @@ pub fn partition_filter_segments(cmds: &[DisplayCommand]) -> Vec<Seg<'_>> {
         (0.0, 0.0, 0.0, 0.0, 0.0, [0.0; 20]);
     let mut mask_params: (f32, f32, f32, f32, String) =
         (0.0, 0.0, 0.0, 0.0, String::new());
+    let mut blend_params: (f32, f32, f32, f32, u8) =
+        (0.0, 0.0, 0.0, 0.0, 0);
     for i in 0..cmds.len() {
         match &cmds[i] {
             DisplayCommand::FilterBegin { x, y, w, h, blur_radius, color_matrix } => {
@@ -151,6 +162,29 @@ pub fn partition_filter_segments(cmds: &[DisplayCommand]) -> Vec<Seg<'_>> {
                     }
                 }
             }
+            DisplayCommand::BlendBegin { x, y, w, h, mode } => {
+                if depth == 0 {
+                    if cursor < i { segments.push(Seg::Main(&cmds[cursor..i])); }
+                    seg_start = i + 1;
+                    blend_params = (*x, *y, *w, *h, *mode);
+                    active_kind = Some(Kind::Blend);
+                }
+                if active_kind == Some(Kind::Blend) { depth += 1; }
+            }
+            DisplayCommand::BlendEnd => {
+                if active_kind == Some(Kind::Blend) {
+                    depth -= 1;
+                    if depth == 0 {
+                        let (x, y, w, h, mode) = blend_params;
+                        segments.push(Seg::Blend {
+                            inner: &cmds[seg_start..i],
+                            x, y, w, h, mode,
+                        });
+                        cursor = i + 1;
+                        active_kind = None;
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -180,7 +214,9 @@ pub fn shift_command_y(cmd: &mut DisplayCommand, dy: f32) {
                 *py += dy;
             }
         }
-        DisplayCommand::FilterEnd | DisplayCommand::BackdropFilterEnd | DisplayCommand::TransformEnd | DisplayCommand::MaskEnd => {}
+        DisplayCommand::FilterEnd | DisplayCommand::BackdropFilterEnd | DisplayCommand::TransformEnd | DisplayCommand::MaskEnd
+        | DisplayCommand::NoScrollShiftBegin | DisplayCommand::NoScrollShiftEnd
+        | DisplayCommand::BlendBegin { .. } | DisplayCommand::BlendEnd => {}
     }
 }
 
@@ -203,6 +239,29 @@ pub fn shift_command_x(cmd: &mut DisplayCommand, dx: f32) {
                 *px += dx;
             }
         }
-        DisplayCommand::FilterEnd | DisplayCommand::BackdropFilterEnd | DisplayCommand::TransformEnd | DisplayCommand::MaskEnd => {}
+        DisplayCommand::FilterEnd | DisplayCommand::BackdropFilterEnd | DisplayCommand::TransformEnd | DisplayCommand::MaskEnd
+        | DisplayCommand::NoScrollShiftBegin | DisplayCommand::NoScrollShiftEnd
+        | DisplayCommand::BlendBegin { .. } | DisplayCommand::BlendEnd => {}
+    }
+}
+
+/// Apply viewport scroll shift na display list. Respektuje
+/// NoScrollShiftBegin/End markers (position:fixed elementy zustavaji staticke).
+/// Stack-based vnoreni OK.
+/// Inspired by Chromium cc/trees/property_tree_builder.cc:CreateScrollNode -
+/// fixed elementy maji jiny scroll tree node ne root scroller.
+pub fn apply_scroll_shift(cmds: &mut [DisplayCommand], dx: f32, dy: f32) {
+    let mut no_shift_depth = 0u32;
+    for cmd in cmds.iter_mut() {
+        match cmd {
+            DisplayCommand::NoScrollShiftBegin => { no_shift_depth += 1; }
+            DisplayCommand::NoScrollShiftEnd => { no_shift_depth = no_shift_depth.saturating_sub(1); }
+            _ => {
+                if no_shift_depth == 0 {
+                    shift_command_y(cmd, dy);
+                    shift_command_x(cmd, dx);
+                }
+            }
+        }
     }
 }

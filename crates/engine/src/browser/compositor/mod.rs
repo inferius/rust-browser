@@ -30,7 +30,29 @@
 //!
 //! Vsechny child elementy bez layer boundary patri do parent layer.
 
-use super::layout::{LayoutBox, Position};
+pub mod thread;
+pub mod anim;
+
+use super::layout::{LayoutBox, Position, Rect};
+
+/// Tile = sub-layer caching unit (WebRender pattern). Per-layer rozdelena na
+/// grid 256x256 tiles. Damage detection per tile - pri zmene jen 1 tile re-paint,
+/// ostatni reuse. Pri composite blit per tile s vlastni position.
+///
+/// Inspired by WebRender `tile_cache.rs::Tile`. Bez tile granularity by celý
+/// layer texture musel byt re-painted pri jakekoliv zmene v jeho subtree.
+#[derive(Debug, Clone)]
+pub struct Tile {
+    /// Tile rect v layer-local coords (origin layer top-left).
+    pub local_rect: Rect,
+    /// Fingerprint content boxes uvnitr tohoto tile rect.
+    pub fingerprint: u64,
+    /// Dirty flag - true kdyz fingerprint diff vs prev frame.
+    pub dirty: bool,
+}
+
+pub const TILE_SIZE: f32 = 1024.0;
+
 
 /// Layer = offscreen "vrstva" content. Maps na CSS Stacking Context.
 #[derive(Debug, Clone)]
@@ -55,6 +77,22 @@ pub struct LayerNode {
     /// Pri repaint teto vrstvy emit jen tyhle boxy.
     /// Box ids jako (node_ptr usize) pro lookup v layout tree.
     pub content_box_ids: Vec<usize>,
+    /// Fingerprint sub-tree obsah (style + rect hash). Pri match s prev frame
+    /// = no damage = mozne reuse cached texture.
+    /// Inspired by Chromium cc/trees/damage_tracker.cc::UpdateDamage.
+    pub fingerprint: u64,
+    /// Structural fingerprint - bez transform / opacity hash. Pri zmene jen
+    /// transform/opacity (compositor-only anim) structural_fp ZUSTANE stejny.
+    /// Damage rect je flagged jen pri structural change (real paint potreba).
+    /// Inspired by WebRender Picture cache invalidation policy.
+    pub structural_fp: u64,
+    /// Dirty area - bbox toho co se zmenilo od posledniho framu. None = no
+    /// damage (cached texture reuse). Some(rect) = re-paint potreba.
+    pub damage_rect: Option<super::layout::Rect>,
+    /// Tile grid - sub-layer cache units. Damage tracked per tile pres
+    /// fingerprint - bez tile granularity by celý layer musel byt re-painted.
+    /// Inspired by WebRender Picture cache tile model.
+    pub tiles: Vec<Tile>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,11 +127,158 @@ pub fn extract_layer_tree(layout_root: &LayoutBox) -> LayerNode {
         reason: LayerReason::Root,
         children: Vec::new(),
         content_box_ids: Vec::new(),
+        fingerprint: 0,
+        structural_fp: 0,
+        damage_rect: None,
+        tiles: Vec::new(),
     };
     walk_box(layout_root, &mut root);
-    // Sort children layers by z-index (None = 0).
     root.children.sort_by_key(|l| l.z_index.unwrap_or(0));
+    // Spocti fingerprint kazdy layer pres post-walk (children jiz finalized).
+    compute_fingerprints(&mut root, layout_root);
     root
+}
+
+/// Vypocti fingerprint kazdy layer = hash content boxes' rect + opacity +
+/// transform + child layer fingerprints. Stable mezi frames pokud nic se nemenilo.
+fn compute_fingerprints(layer: &mut LayerNode, layout_root: &LayoutBox) {
+    // Build node_id -> LayoutBox lookup (1x pres root).
+    fn collect_boxes<'a>(
+        bx: &'a LayoutBox,
+        out: &mut std::collections::HashMap<usize, &'a LayoutBox>,
+    ) {
+        if let Some(n) = &bx.node {
+            out.insert(std::rc::Rc::as_ptr(n) as usize, bx);
+        }
+        for ch in &bx.children { collect_boxes(ch, out); }
+    }
+    let mut box_map: std::collections::HashMap<usize, &LayoutBox> =
+        std::collections::HashMap::new();
+    collect_boxes(layout_root, &mut box_map);
+    compute_fingerprints_inner(layer, &box_map);
+}
+
+fn compute_fingerprints_inner(
+    layer: &mut LayerNode,
+    box_map: &std::collections::HashMap<usize, &LayoutBox>,
+) {
+    use std::hash::{Hash, Hasher};
+    use std::collections::hash_map::DefaultHasher;
+    // Recurse first (children fingerprints prispivaji do parent hash).
+    for child in &mut layer.children {
+        compute_fingerprints_inner(child, box_map);
+    }
+    let mut h_full = DefaultHasher::new();
+    let mut h_struct = DefaultHasher::new();
+    // Layer's own props.
+    layer.id.hash(&mut h_full);
+    layer.id.hash(&mut h_struct);
+    (layer.root_rect.x.to_bits()).hash(&mut h_full);
+    (layer.root_rect.x.to_bits()).hash(&mut h_struct);
+    (layer.root_rect.y.to_bits()).hash(&mut h_full);
+    (layer.root_rect.y.to_bits()).hash(&mut h_struct);
+    (layer.root_rect.width.to_bits()).hash(&mut h_full);
+    (layer.root_rect.width.to_bits()).hash(&mut h_struct);
+    (layer.root_rect.height.to_bits()).hash(&mut h_full);
+    (layer.root_rect.height.to_bits()).hash(&mut h_struct);
+    layer.z_index.unwrap_or(0).hash(&mut h_full);
+    layer.z_index.unwrap_or(0).hash(&mut h_struct);
+    // opacity + transform: only into full hash (compositor-only props).
+    layer.opacity.to_bits().hash(&mut h_full);
+    // Content boxes rect + key style props.
+    for id in &layer.content_box_ids {
+        if let Some(bx) = box_map.get(id) {
+            id.hash(&mut h_full);
+            id.hash(&mut h_struct);
+            bx.rect.x.to_bits().hash(&mut h_full);
+            bx.rect.x.to_bits().hash(&mut h_struct);
+            bx.rect.y.to_bits().hash(&mut h_full);
+            bx.rect.y.to_bits().hash(&mut h_struct);
+            bx.rect.width.to_bits().hash(&mut h_full);
+            bx.rect.width.to_bits().hash(&mut h_struct);
+            bx.rect.height.to_bits().hash(&mut h_full);
+            bx.rect.height.to_bits().hash(&mut h_struct);
+            // opacity: full only (compositor-friendly).
+            bx.opacity.to_bits().hash(&mut h_full);
+            if let Some(c) = bx.bg_color { c.hash(&mut h_full); c.hash(&mut h_struct); }
+            if let Some(c) = bx.text_color { c.hash(&mut h_full); c.hash(&mut h_struct); }
+            if let Some(t) = &bx.text { t.hash(&mut h_full); t.hash(&mut h_struct); }
+        }
+    }
+    // Children layer fingerprints (rekursivni signal).
+    for child in &layer.children {
+        child.fingerprint.hash(&mut h_full);
+        child.structural_fp.hash(&mut h_struct);
+    }
+    layer.fingerprint = h_full.finish();
+    layer.structural_fp = h_struct.finish();
+    // Build tile grid + per-tile fingerprint.
+    compute_layer_tiles(layer, box_map);
+}
+
+/// Rozdeli layer.root_rect na NxM grid tiles velikost TILE_SIZE. Per tile
+/// vypocti fingerprint z content boxes ktere intersect tile rect. Foundation
+/// pro tile-level damage tracking (per-tile re-paint misto cely layer).
+fn compute_layer_tiles(
+    layer: &mut LayerNode,
+    box_map: &std::collections::HashMap<usize, &LayoutBox>,
+) {
+    use std::hash::{Hash, Hasher};
+    use std::collections::hash_map::DefaultHasher;
+    let lr = layer.root_rect;
+    if lr.width < 1.0 || lr.height < 1.0 {
+        layer.tiles.clear();
+        return;
+    }
+    let cols = ((lr.width / TILE_SIZE).ceil() as usize).max(1);
+    let rows = ((lr.height / TILE_SIZE).ceil() as usize).max(1);
+    let mut tiles = Vec::with_capacity(cols * rows);
+    for row in 0..rows {
+        for col in 0..cols {
+            let tx = lr.x + col as f32 * TILE_SIZE;
+            let ty = lr.y + row as f32 * TILE_SIZE;
+            let tw = TILE_SIZE.min(lr.x + lr.width - tx);
+            let th = TILE_SIZE.min(lr.y + lr.height - ty);
+            let tile_rect = Rect { x: tx, y: ty, width: tw, height: th };
+            // FP per tile - content boxes intersecting tile.
+            let mut h = DefaultHasher::new();
+            (tile_rect.x.to_bits()).hash(&mut h);
+            (tile_rect.y.to_bits()).hash(&mut h);
+            (tile_rect.width.to_bits()).hash(&mut h);
+            (tile_rect.height.to_bits()).hash(&mut h);
+            for id in &layer.content_box_ids {
+                if let Some(bx) = box_map.get(id) {
+                    // Bx rect intersect tile?
+                    let bx_x0 = bx.rect.x;
+                    let bx_y0 = bx.rect.y;
+                    let bx_x1 = bx.rect.x + bx.rect.width;
+                    let bx_y1 = bx.rect.y + bx.rect.height;
+                    let ix = bx_x1 > tile_rect.x && bx_x0 < tile_rect.x + tile_rect.width
+                          && bx_y1 > tile_rect.y && bx_y0 < tile_rect.y + tile_rect.height;
+                    if !ix { continue; }
+                    id.hash(&mut h);
+                    bx.rect.x.to_bits().hash(&mut h);
+                    bx.rect.y.to_bits().hash(&mut h);
+                    bx.rect.width.to_bits().hash(&mut h);
+                    bx.rect.height.to_bits().hash(&mut h);
+                    if let Some(c) = bx.bg_color { c.hash(&mut h); }
+                    if let Some(c) = bx.text_color { c.hash(&mut h); }
+                    if let Some(t) = &bx.text { t.hash(&mut h); }
+                }
+            }
+            tiles.push(Tile {
+                local_rect: Rect {
+                    x: tile_rect.x - lr.x,
+                    y: tile_rect.y - lr.y,
+                    width: tile_rect.width,
+                    height: tile_rect.height,
+                },
+                fingerprint: h.finish(),
+                dirty: false, // mark v separate pass vs prev
+            });
+        }
+    }
+    layer.tiles = tiles;
 }
 
 /// Vraci true pokud element vytvori novou layer (stacking context boundary).
@@ -151,15 +336,51 @@ fn walk_box(b: &LayoutBox, current: &mut LayerNode) {
         if is_layer_boundary(child) {
             let layer_id = child.node.as_ref()
                 .map(|n| std::rc::Rc::as_ptr(n) as usize).unwrap_or(0);
+            // Pri 2D rotation: layer.root_rect = transformed AABB + 2px padding
+            // (edge sample safety pres bilinear/clamp_to_edge). Src tex obsahuje
+            // orig rect content centered, padding okolo transparent. Compose
+            // pres rotated quad sized AABB+padding pres orig center pivot ->
+            // rotated quad area v page ma full diamond visible bez corner clip.
+            // 3D transforms: skip AABB expand (compose pipeline 3D quad handle
+            // pres perspective + matrix shader native).
+            let orig = child.rect;
+            let root_rect_with_aabb = if let Some(t) = &child.transform {
+                use super::layout::TransformOp;
+                let is_2d = match t {
+                    TransformOp::Rotate(_) => true,
+                    TransformOp::Scale(_, _) => true,
+                    TransformOp::Rotate3D { x, y, z, .. } => {
+                        x.abs() < 0.1 && y.abs() < 0.1 && z.abs() > 0.5
+                    }
+                    _ => false,
+                };
+                if is_2d {
+                    let m = super::layout::compute_transform_matrix(
+                        std::slice::from_ref(t), None);
+                    let (ax, ay, aw, ah) = super::layout::transformed_aabb(
+                        (orig.x, orig.y, orig.width, orig.height), &m);
+                    // 2px padding pres edge sample safety.
+                    crate::browser::layout::Rect {
+                        x: ax - 2.0,
+                        y: ay - 2.0,
+                        width: aw + 4.0,
+                        height: ah + 4.0,
+                    }
+                } else { orig }
+            } else { orig };
             let mut sub = LayerNode {
                 id: layer_id,
-                root_rect: child.rect,
+                root_rect: root_rect_with_aabb,
                 z_index: child.z_index,
                 opacity: child.opacity,
                 transform: child.transform.clone(),
                 reason: classify_layer_reason(child),
                 children: Vec::new(),
                 content_box_ids: Vec::new(),
+                fingerprint: 0,
+                structural_fp: 0,
+                damage_rect: None,
+                tiles: Vec::new(),
             };
             walk_box(child, &mut sub);
             sub.children.sort_by_key(|l| l.z_index.unwrap_or(0));
@@ -205,6 +426,64 @@ pub fn flatten_layers<'a>(root: &'a LayerNode, out: &mut Vec<&'a LayerNode>) {
     for child in &root.children {
         flatten_layers(child, out);
     }
+}
+
+/// Mark damage_rect na layers ktere zmenily STRUCTURAL fingerprint vs prev
+/// frame. Compositor-only props (opacity, transform) NEspusti damage = layer
+/// texture reused, jen composite uniforms update.
+/// Inspired by Chromium cc/trees/damage_tracker.cc + WebRender Picture cache.
+pub fn mark_damage(
+    layer: &mut LayerNode,
+    prev_fps: &mut std::collections::HashMap<usize, u64>,
+) {
+    let prev = prev_fps.get(&layer.id).copied();
+    let structural_changed = match prev {
+        Some(p) => p != layer.structural_fp,
+        None => true, // new layer = full damage
+    };
+    layer.damage_rect = if structural_changed { Some(layer.root_rect) } else { None };
+    prev_fps.insert(layer.id, layer.structural_fp);
+    for child in &mut layer.children {
+        mark_damage(child, prev_fps);
+    }
+}
+
+/// Spocita kolik layeru ma damage_rect = Some. Diagnostika pro damage tracking.
+pub fn count_damaged_layers(root: &LayerNode) -> usize {
+    let mut c = if root.damage_rect.is_some() { 1 } else { 0 };
+    for child in &root.children { c += count_damaged_layers(child); }
+    c
+}
+
+/// Mark tile.dirty pres porovnani s prev frame tile fingerprints.
+/// prev_tile_fps: HashMap<(layer_id, tile_index), tile_fingerprint>.
+pub fn mark_tile_damage(
+    layer: &mut LayerNode,
+    prev_tile_fps: &mut std::collections::HashMap<(usize, usize), u64>,
+) {
+    for (idx, tile) in layer.tiles.iter_mut().enumerate() {
+        let key = (layer.id, idx);
+        let prev = prev_tile_fps.get(&key).copied();
+        tile.dirty = match prev {
+            Some(p) => p != tile.fingerprint,
+            None => true,
+        };
+        prev_tile_fps.insert(key, tile.fingerprint);
+    }
+    for child in &mut layer.children {
+        mark_tile_damage(child, prev_tile_fps);
+    }
+}
+
+/// Spocita tile damage statistiku: (dirty_tiles, total_tiles).
+pub fn count_tile_damage(root: &LayerNode) -> (usize, usize) {
+    let mut d = root.tiles.iter().filter(|t| t.dirty).count();
+    let mut t = root.tiles.len();
+    for child in &root.children {
+        let (cd, ct) = count_tile_damage(child);
+        d += cd; t += ct;
+    }
+    (d, t)
 }
 
 #[cfg(test)]
@@ -268,5 +547,79 @@ mod tests {
     fn z_index_creates_layer_when_positioned() {
         let b = box_with(Position::Relative, Some(5), 1.0);
         assert!(is_layer_boundary(&b));
+    }
+
+    // ---------- Tile-based rasterization tests (priority 5) ----------
+
+    fn build_layer(width: f32, height: f32) -> LayerNode {
+        LayerNode {
+            id: 1,
+            root_rect: Rect { x: 0.0, y: 0.0, width, height },
+            z_index: None,
+            opacity: 1.0,
+            transform: None,
+            reason: LayerReason::Root,
+            children: Vec::new(),
+            content_box_ids: Vec::new(),
+            fingerprint: 0,
+            structural_fp: 0,
+            damage_rect: None,
+            tiles: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn tile_grid_size_matches_layer() {
+        // 1024x768 -> 4x3 tiles pri TILE_SIZE=256.
+        let mut layer = build_layer(1024.0, 768.0);
+        let map = std::collections::HashMap::new();
+        compute_layer_tiles(&mut layer, &map);
+        let expected = ((1024.0_f32 / TILE_SIZE).ceil() as usize)
+                     * ((768.0_f32 / TILE_SIZE).ceil() as usize);
+        assert_eq!(layer.tiles.len(), expected);
+    }
+
+    #[test]
+    fn tile_first_frame_all_dirty() {
+        let mut layer = build_layer(512.0, 256.0);
+        let map = std::collections::HashMap::new();
+        compute_layer_tiles(&mut layer, &map);
+        let mut prev: std::collections::HashMap<(usize, usize), u64>
+            = std::collections::HashMap::new();
+        mark_tile_damage(&mut layer, &mut prev);
+        for tile in &layer.tiles {
+            assert!(tile.dirty, "first frame all dirty");
+        }
+        let (dirty, total) = count_tile_damage(&layer);
+        assert_eq!(dirty, total);
+    }
+
+    #[test]
+    fn tile_second_frame_no_damage_when_stable() {
+        let mut prev: std::collections::HashMap<(usize, usize), u64>
+            = std::collections::HashMap::new();
+        let mut layer = build_layer(512.0, 256.0);
+        let map = std::collections::HashMap::new();
+        // Frame 1.
+        compute_layer_tiles(&mut layer, &map);
+        mark_tile_damage(&mut layer, &mut prev);
+        // Frame 2 - same content.
+        let mut layer2 = build_layer(512.0, 256.0);
+        compute_layer_tiles(&mut layer2, &map);
+        mark_tile_damage(&mut layer2, &mut prev);
+        let (dirty, _) = count_tile_damage(&layer2);
+        assert_eq!(dirty, 0, "stable content -> 0 dirty tiles");
+    }
+
+    #[test]
+    fn tile_local_rect_origin_at_zero() {
+        let mut layer = build_layer(512.0, 256.0);
+        // Posun layer mimo origin - tile rect.x/y local origin musi byt 0.
+        layer.root_rect.x = 100.0;
+        layer.root_rect.y = 200.0;
+        let map = std::collections::HashMap::new();
+        compute_layer_tiles(&mut layer, &map);
+        assert!(layer.tiles[0].local_rect.x.abs() < 0.01);
+        assert!(layer.tiles[0].local_rect.y.abs() < 0.01);
     }
 }

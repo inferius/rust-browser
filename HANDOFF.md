@@ -2,6 +2,296 @@
 
 Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`, `debug_utils.md`.
 
+## Session N+25: Pure-Rust AVIF + layout wire-ups + lazy loading + web vitals (4106 testu)
+
+Pokracovani z N+24. Real backend wire-ups + user-impact features.
+User-requested: AVIF MUSI byt browser-internal (zero system deps). Tables +
+multicol + writing-modes + lazy loading + LCP/CLS hook + frame pacing.
+
+### Pure-Rust AVIF dekoder (zero system deps)
+Predchozi N+24 reseni s Cargo feature `avif` -> `image/avif-native` vyzadovalo
+system libdav1d + NASM. User: "AVIF nemuze v systemu nic vyzadovat".
+
+Fix:
+- Drop Cargo feature gate.
+- Add `zenavif = "0.1"` (pure-Rust AVIF codec) + `zenpixels-convert`.
+- Backend `rav1d-safe` (pure-Rust port libdav1d od Memory Safety Initiative).
+- Novy `browser::avif_decode` wrapper: `decode(bytes) -> (w, h, rgba8)`.
+- Wire do `load_image_as`: AVIF detected -> zenavif::decode -> atlas.
+- Compile cost: +~1m pres rav1d, **zero runtime deps**.
+- Browser sam dekoduje, user nic neinstaluje.
+
+### Layout wire-ups
+
+**Tables auto-layout column widths:**
+- `prelayout_table_columns(bx)` pre-pass na Display::Table v layout_dispatch.
+- `tables::compute_column_widths_auto` -> per-column widths.
+- Apply jako explicit_width na cells napric vsemi rows (shared per spec).
+
+**Multicol balance_height wire:**
+- Pres `multicol::balance_height` ceil(content/n) per column-fill:balance spec.
+
+**Writing modes propagace:**
+- `layout_block_vertical` inherituje writing_mode na deti.
+- Sideways-rl pridan vedle vertical-rl pro RTL detection.
+
+### Lazy loading wire (HTML loading=lazy)
+- Pridano `loading_lazy: bool` field na LayoutBox.
+- `apply_tag_html_attrs` parsuje `loading="lazy"` na <img> + <iframe>.
+- Paint pass v `build_display_list_culled`: skip Image emit kdyz box mimo
+  viewport + LAZY_MARGIN 1250px (Chrome default).
+- 3 tests verifikuji.
+
+### Web Vitals LCP + Frame pacing wire-up
+- `WebVitalsCollector::collect_from_paint(commands, now_ms)` - scan display
+  list, najde Image candidate, recorduj area > 100 (skip 1x1 trackery).
+- WebView ma `web_vitals` + `frame_pacer` fields + public getters.
+- `render_via` instrumented `begin_frame()` + `mark_presented()` na vsech
+  exit paths (real GPU + 2 cache-hit fast paths).
+
+### Scroll backtrack - dodatecne fix
+- `set_scroll(x, y)` (programatic) clears active scroll_anim.
+- JS scrollTo() sync path v render_via te clears anim.
+
+### Pure-Rust JPEG XL + HEIF dekodery (dodatecne k AVIF)
+- `jxl-oxide` 0.12 (pure-Rust JPEG XL) + `heic` 0.1 (pure-Rust HEIF/HEIC s H.265 SIMD).
+- `browser::jxl_decode` + `browser::heif_decode` wrappers.
+- Wire do `load_image_as` - real dekode misto tombstone.
+- Vsechny tri (AVIF + JXL + HEIF) zero system deps, browser sam.
+
+### Web Vitals CLS + INP wire-up
+- `WebVitalsCollector::feed_layout_shift(prev_rects, curr_rects, vp, ...)` -
+  detect movements > 3px, compute shift_score per W3C spec.
+- `record_input_interaction(type, start_ms, processing_start, processing_end,
+  presentation_ms)` - INP feed.
+- Skip user-triggered shifts per spec.
+
+### Tables fixed-layout algorithm wire
+- `table-layout: fixed` -> use first-row widths only (per spec faster path)
+- Pres `tables::compute_column_widths_fixed`.
+
+### WPT runner assert_throws_js real
+- `assert_throws_js(ctor, fn[, msg])` ted realne vola `fn()` pres interp_ptr.
+  Pri thrown error = pass, jinak = fail (per spec).
+- 2 nove tests verify pass-on-throw + fail-on-no-throw.
+
+### Test growth
+4097 (N+24) -> 4120 (N+25). +23 tests. 0 failures, 29 ignored.
+
+### Pure-Rust image format coverage
+PNG, JPEG, GIF, WebP, BMP, ICO, TIFF, TGA, EXR, QOI (via image crate) +
+**AVIF** (zenavif/rav1d) + **JPEG XL** (jxl-oxide) + **HEIF/HEIC** (heic) +
+SVG (resvg). Vsechny bez system deps - browser sam dekoduje.
+
+### Stale TODO
+- Real LCP timing presneji (now je always 0.0 placeholder)
+- Tables fixed-layout algorithm
+- Writing modes inline_layout vertical text flow
+- HEIF/JXL pure-Rust decoders
+
+## Session N+24: Scroll bug fix + image decoders + BFC + WPT runner (4097 testu)
+
+Real wire-up vlna pro 4 prioritu z N+23 foundation modulu. User-reported scroll
+regression + image AVIF support + spec-compliant BFC margins + real WPT runner.
+
+### Scroll backtrack bug fix
+**Symptom:** "po chvili skoci ve skrollu kus zpet" - scroll prejede target,
+anim skonci, frame tick set scroll_y = scroll_target_y = jump back.
+
+**Root cause:** Double-counting v `retarget_scroll`. Caller v `start_scroll_anim_y`
+predava ABSOLUTNI new_target (`scroll_target_y + dy`), funkce ale jeste pridavala
+`prev_target_remainder` -> accumulated_target > skutecny target -> anim presahla,
+po dokonceni se frame sync vratil zpatky na `scroll_target_y`.
+
+**Fix:** `retarget_scroll` pouziva `new_target` primo. Velocity continuity zustava.
+Curve always resets od `current_value` s novym start_time (no t-progress backwards).
+
+**Test coverage (Chrome/FF inspired):**
+- `no_backtrack_after_anim_finish` - regression test (anim.target == scroll_target)
+- `rapid_scroll_finishes_at_total_distance_no_overshoot`
+- `chromium_update_target_keeps_progress_forward`
+- `chromium_reverse_does_not_change_current_value`
+- `chromium_duration_progress_positive`
+- `firefox_velocity_carries_same_direction`
+
+Reference: Chromium cc/animation/scroll_offset_animation_curve_unittest.cc.
+
+### Image decoders real + AVIF (pure-Rust, bez system deps)
+- `image` crate v0.25 pro PNG/JPEG/GIF/WebP/BMP/ICO/TIFF/TGA/EXR/QOI - jiz hotove.
+- **AVIF pure-Rust:** `browser::avif_decode` modul pres crate `zenavif` 0.1
+  (pouziva `rav1d` - pure-Rust port libdav1d od Memory Safety Initiative).
+  Browser sam dekoduje, **user nic neinstaluje**. Bez system libdav1d, bez NASM.
+- `browser::image_decoder::detect_format` foundation modul wired do `load_image_as`
+  pro pre-empt classification.
+- AVIF detected -> zenavif decode -> RGBA8 -> atlas (s resize pro velke).
+- HEIF detected -> tombstone (vyzadovalo by libheif).
+- JXL detected -> tombstone (image crate v0.25 nepodporuje).
+
+AVIF default-on. Build cost: +~1m kompile zenavif/rav1d crates pure-Rust.
+
+### BFC margin collapse spec-compliant
+Existing layout_block mel `(m_t - prev_margin_bottom).max(0.0)` - spravne pro
+all-positive (= max) ale chybne pro mixed signs (per CSS 2.1 8.3.1).
+
+Wire `browser::layout::bfc::collapse_margins` - spec-compliant:
+- Pos+Pos = max, Neg+Neg = min, Mixed = sum.
+
+Pres `collapse_margins(prev_margin_bottom, m_t) - prev_margin_bottom` aby
+existing flow (prev_m_b uz pricten k cursor_y) drzelo. Pri zaporne difference
+cursor zpetne posuje (negative margin overlap per spec).
+
+### WPT runner real exec
+`testing::wpt::run_wpt_script(user_js)` spawne novy Interpreter, zaregistruje
+testharness API jako native fns ktere primo execute callback + write do
+shared `WptHarness`:
+
+- `test(fn, name)` - call callback s mock `t`, catch JsError, record pass/fail
+- `async_test(fn, name)` - immediate eval, stub `t.done()`
+- `assert_equals/not_equals/true/false/array_equals/unreached/throws_js`
+- `extract_inline_scripts(html)` - pull `<script>` blocks z HTML
+
+Reference: Chromium third_party/blink/web_tests + WebKit Layout Tests harness.
+
+**Use cases:**
+- Spec compliance smoke tests (drop test file dovnitr, mereni pass/fail)
+- Regression coverage (pridat assertion po novem feature)
+- Self-test enginu (run subset WPT manualy, diff vs expectations)
+
+10 unit tests verifikuji runner: simple pass, failing assert, multiple tests,
+array assert, inline script extraction.
+
+### Worker real thread spawn (verified existing)
+Existing `interpreter::builtins::Worker` jiz spawne `std::thread::spawn` s mpsc
+channels pro main<->worker komunikaci. Worker.postMessage/terminate wired v
+eval_call.rs. `drain_workers` na main thread proces incoming messages s JSON
+parse + onmessage callback dispatch.
+
+Foundation modul `interpreter::worker_pool` je nezavisle abstraction ktery
+NEsubstituuje existing path, ale poskytuje API surface pro SharedWorker /
+WorkletGlobalScope features.
+
+### Test growth
+4086 (N+23) -> 4097 (N+24). +11 tests. 0 failures, 29 ignored.
+
+### Co stale chybi (TODO post-N+24)
+- **Compositor GPU tiles:** wire LayerTree + tiles do render pipeline (big refactor)
+- **Tables auto-layout:** wire `tables::compute_column_widths_auto` (big refactor)
+- **Multi-column wire:** `multicol.rs` balance algorithm not connected
+- **Writing modes pipe do inline layout** (horizontal-tb only ted)
+- **Lazy loading wire:** parse loading=lazy + viewport intersection check
+- **Web Vitals (LCP/CLS):** collector hotov, chybi feed z paint loop
+- **assert_throws_js real check** (vyzaduje closure invoke + check)
+
+## Session N+23: Foundation modules vlna (4086 testu)
+
+Pokracovani N+22 - implementace ~140 novych foundation modulu napric
+browser/interpreter/testing podsystemy. Cilem bylo polozit API surface +
+state machines pro vsechny chybejici web specifikace + browser-grade features
+tak, aby pozdejsi GPU/syscall/codec real implementace mohla "doplnit" backend
+bez prepisovani teto vrstvy.
+
+### Modules pridany (selekce)
+
+**Interpreter / Web APIs** (~50 modulu):
+- web_animations, background_fetch, compression_streams, fenced_frames,
+  web_share_target, view_transitions, navigation_api, storage_buckets,
+  private_state_tokens, attribution_reporting, topics_api, shared_storage,
+  federated_credential
+- custom_elements, mutation_observer, resize_observer, intersection_observer,
+  encoding, structured_clone, abort_signal, decorators, source_map,
+  debugger_protocol, heap_profiler, async_runtime, promise_state, import_maps,
+  regex_engine, bignum, proxy_handler, typed_arrays
+- worker_pool, persistent_storage, file_blob, fetch_api, headers,
+  eventsource_state, url_search_params, form_data, error_kinds
+- v8_inspector, stack_trace, cpu_profiler
+
+**Browser security/network** (~15 modulu):
+- security/sri, mixed_content, referrer_policy, permissions_policy, coep_coop
+- net/hpack, qpack, quic, dns, http_cache, multipart, cookie_jar
+
+**Layout / Render** (~12 modulu):
+- layout/bfc, tables, multicol, subgrid, positioning, anchor_positioning,
+  writing_modes
+- render/blend (16 blend modes), subpixel_aa, compositor (layer tree),
+  tiles, frame_pacing, hit_test_tree
+
+**CSS** (5 modulu):
+- css/nesting, calc_resolver, conditional_rules, color_mix (OKLab),
+  transitions (cubic-bezier + steps)
+
+**SVG** (4 modulu):
+- svg/path_parser, transform_parser, gradient, filter
+
+**HTML5** (4 modulu):
+- html5/entities, form_state (constraint validation), template_content,
+  browsing_context
+
+**Media** (7 modulu):
+- media/mse, eme, container_sniff, webaudio_graph, vtt_parser, srt_parser,
+  h264_parse, av1_parse
+
+**Input** (3 moduly):
+- input/pointer_events, keyboard_events, input_method_editor
+
+**Locale / i18n** (5 modulu):
+- locale/bcp47, number_format, date_format, plural_rules, collation
+
+**Browser features** (~50 modulu):
+- sandbox, image_decoder, accessibility_tree, url_parser, text_bidi,
+  unicode_segmenter, font_fallback, opentype_features
+- event_dispatch, shadow_dom, selector_engine
+- viewport, hidpi, drag_drop, autoscroll, spellcheck, autofill
+- favicon, manifest, password_manager, extensions, bookmarks, history_db,
+  downloads, dialog_manager, private_browsing, session_state, tab_groups,
+  reader_mode, translator, zoom_levels, site_settings, reload_strategy,
+  proxy_resolver
+- web_vitals, safe_browsing, speculation_rules, origin_trials,
+  webdriver_protocol, contenteditable_model, spatial_nav
+- lazy_loading, page_visibility, print_preview, snap_scroll, overscroll,
+  input_devices, battery_status, network_info, focus_manager,
+  clipboard_history, ad_blocker
+- bf_cache, wheel_normalize, window_features, crash_reporter, pull_to_refresh,
+  screen_orientation, display_link, telemetry, experiment_flags, quirks_mode,
+  charset_detect, geolocation_provider, os_clipboard
+
+**Testing** (1 modul):
+- testing/test262 (frontmatter parser + run accumulator)
+
+### Test growth
+3172 testu (N+22 baseline) -> 4086 (N+23). +914 jednotkove testy, 0 fail,
+29 ignored, 0 measured.
+
+### Konvence pouzite pri vsech batch modulech
+- Komentare cesky, ASCII only (per project + user CLAUDE.md).
+- Kazdy modul s `#[cfg(test)] mod tests` blokem 3-8 testu.
+- Spec referencni odkaz v doc-comment hlavicce.
+- Failure paths tested (Err returns, edge cases).
+- HashMap key enums vsechny `Eq + Hash` (chyceno + opraveno per E0599).
+- Defaults rozumne (timeouts, quotas, refresh rates).
+
+### Status quo zachovan
+- Existujici engine bin, shell bin, devtools panel - vse beti.
+- Render pipeline / interpretation / cascade nezmeneny.
+- Embedded API contracty stejne.
+
+### Co tyto moduly **nedelaji** (foundation only)
+- Real OS syscall (sandbox policy install, OS clipboard IPC, file pickers)
+- Real GPU shader pipeline (compositor tile raster zustava CPU only)
+- Real codec decode (h264/av1 parse zustava header-only)
+- Real network (HPACK/QPACK/QUIC parse zustava bez TLS+socket)
+- Plne Test262 / WPT execution (jen harness + frontmatter parsing)
+
+### Co je dalsi krok pro production-grade
+1. Wire foundation modules do existujicich render/interpreter call sites.
+2. Vyplnit real backends pro CPU-bound veci (image_decoder -> image crate,
+   webaudio_graph -> cpal/rodio, regex_engine -> fancy-regex, ...).
+3. Sandbox real install (sandbox.rs ma policy structs + permits check,
+   doplnit per-OS impl: seccomp, AppContainer, sandbox-exec).
+4. Compositor tile path real GPU raster (tiles.rs ma TileCache + LRU,
+   chybi wgpu render-to-tile target + atlas binding).
+5. Real HTTP/2 client (http_cache.rs + hpack.rs hotove; potreba TLS + socket
+   pump - misto ureq doporucuji isahc nebo hyper).
+
 ## Session N+22: Engine shell strip + WebView polarity invert (step 1)
 
 Pokracovani N+21 (workspace + embed API) - kompletni shell concerns

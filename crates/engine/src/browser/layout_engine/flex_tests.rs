@@ -373,6 +373,37 @@ mod tests {
         assert!(parent.rect.height >= 100.0);
     }
 
+    // ─── CSS `order` property ──────────────────────────────────────────────
+
+    #[test]
+    fn flex_order_reverses_items() {
+        let mut parent = make_flex_box(300.0, 100.0);
+        // DOM index 0=a(order 2), 1=b(order 1), 2=c(order 0).
+        // Sortováno: c, b, a. Visually: c.x=0, b.x=50, a.x=100.
+        // DOM-indexed: children[0]=a má největší x, children[2]=c má x=0.
+        let mut a = make_child(50.0, 30.0); a.flex_order = 2;
+        let mut b = make_child(50.0, 30.0); b.flex_order = 1;
+        let mut c = make_child(50.0, 30.0); c.flex_order = 0;
+        parent.children.push(a);
+        parent.children.push(b);
+        parent.children.push(c);
+        layout_flex(&mut parent);
+        assert!(parent.children[0].rect.x > parent.children[1].rect.x);
+        assert!(parent.children[1].rect.x > parent.children[2].rect.x);
+    }
+
+    #[test]
+    fn flex_order_negative_moves_to_front() {
+        let mut parent = make_flex_box(300.0, 100.0);
+        parent.children.push(make_child(50.0, 30.0));  // order 0
+        let mut second = make_child(50.0, 30.0); second.flex_order = -1;
+        parent.children.push(second);
+        layout_flex(&mut parent);
+        // children[1] má order=-1 → ve flex pořadí první → x=0
+        // children[0] má order=0 → druhé místo → x=50
+        assert!(parent.children[1].rect.x < parent.children[0].rect.x);
+    }
+
     #[test]
     fn flex_wrap_updates_height_with_multi_line() {
         let mut parent = make_flex_box(100.0, 0.0);

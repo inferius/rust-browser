@@ -2344,8 +2344,13 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
     // Translate / Translate3D - aplikuje shift; rotate/scale 2D pres centroid;
     // matrix3d/perspective - aplikuje matrix multiply na rohy.
     // Skip kdyz needs_3d - shader pipeline aplikuje cely 4x4 matrix.
+    // Skip kdyz bx je layer boundary - compose pipeline aplikuje transform na
+    // quad pri layer-to-screen compose (= rotates layer texture INCL glyphs +
+    // GPU subpixel AA). Bez skip transform aplikovany 2x.
+    let is_layer_with_transform = !bx.transforms.is_empty()
+        && super::compositor::is_layer_boundary(bx);
     use super::layout::TransformOp;
-    if !bx.transforms.is_empty() && !needs_3d {
+    if !bx.transforms.is_empty() && !needs_3d && !is_layer_with_transform {
         let start = box_start;
         // Vypocet centroid box-u pro rotate/scale relative-origin
         let cx = bx.rect.x + bx.rect.width  * 0.5;
@@ -2459,15 +2464,40 @@ fn scale_cmd(cmd: &mut DisplayCommand, sx: f32, sy: f32, cx: f32, cy: f32) {
 /// Rotace pozice kolem centroid (cx, cy). Sirka/vyska zustavaji - jen pos rotuje.
 /// Pro real OBB rotation by se musely vrcholy rotovat zvlast (slozitejsi).
 fn rotate_cmd(cmd: &mut DisplayCommand, cos: f32, sin: f32, cx: f32, cy: f32) {
-    let rotate_xy = |x: &mut f32, y: &mut f32| {
-        let rx = *x - cx;
-        let ry = *y - cy;
-        *x = cx + rx * cos - ry * sin;
-        *y = cy + rx * sin + ry * cos;
+    let rotate_xy = |x: f32, y: f32| -> (f32, f32) {
+        let rx = x - cx;
+        let ry = y - cy;
+        (cx + rx * cos - ry * sin, cy + rx * sin + ry * cos)
+    };
+    let rotate_xy_mut = |x: &mut f32, y: &mut f32| {
+        let (nx, ny) = rotate_xy(*x, *y);
+        *x = nx;
+        *y = ny;
     };
     match cmd {
-        DisplayCommand::Rect { x, y, .. }
-        | DisplayCommand::Border { x, y, .. }
+        DisplayCommand::Rect { x, y, w, h, color, radius } => {
+            // Real rotation (NE identity): convert Rect -> ClippedRect s 4
+            // rotated corners + emit jeste 4 BORDER edge polygons aby zachoval
+            // border-radius outline. Bez convert: rotate_xy posunul jen top-left
+            // + w/h drzeli AXIS-ALIGNED = "neotaceci box". Identity rotation:
+            // preserve Rect format (SVG paint emit Rect, pri Rotate(0) no-op).
+            if (cos - 1.0).abs() < 1e-4 && sin.abs() < 1e-4 {
+                rotate_xy_mut(x, y); // identity - preserve shape
+            } else {
+                let corners = [
+                    rotate_xy(*x,     *y    ),
+                    rotate_xy(*x + *w, *y    ),
+                    rotate_xy(*x + *w, *y + *h),
+                    rotate_xy(*x,     *y + *h),
+                ];
+                let _ = radius; // border-radius pres rotated quad TODO.
+                *cmd = DisplayCommand::ClippedRect {
+                    color: *color,
+                    points: corners.to_vec(),
+                };
+            }
+        }
+        DisplayCommand::Border { x, y, .. }
         | DisplayCommand::Gradient { x, y, .. }
         | DisplayCommand::Shadow { x, y, .. }
         | DisplayCommand::Image { x, y, .. }
@@ -2477,10 +2507,10 @@ fn rotate_cmd(cmd: &mut DisplayCommand, cos: f32, sin: f32, cx: f32, cy: f32) {
         | DisplayCommand::BackdropFilterBegin { x, y, .. }
         | DisplayCommand::TransformBegin { x, y, .. }
         | DisplayCommand::MaskBegin { x, y, .. }
-        | DisplayCommand::Text { x, y, .. } => rotate_xy(x, y),
+        | DisplayCommand::Text { x, y, .. } => rotate_xy_mut(x, y),
         DisplayCommand::ClippedRect { points, .. } => {
             for (px, py) in points.iter_mut() {
-                rotate_xy(px, py);
+                rotate_xy_mut(px, py);
             }
         }
         DisplayCommand::FilterEnd | DisplayCommand::BackdropFilterEnd | DisplayCommand::TransformEnd | DisplayCommand::MaskEnd

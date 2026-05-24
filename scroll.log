@@ -1,0 +1,35 @@
+[render] adapter nema DUAL_SOURCE_BLENDING - LCD subpixel grayscale fallback
+[HOVER SET] 0 affected nodes
+[run_script] url=<inline #1> (364 bytes) line1: 
+[run_script] url=<inline #2> (307 bytes) line1: 
+[HOVER SET] 4 affected nodes
+[run_script] url=<inline #1> (641 bytes) line1: 
+[LAYOUT SLOW] total:123ms (28 nodes = 4.4ms/node) | build_box: 18 calls, 0.4ms cumulative
+[LAYOUT OVERFLOW #1] root w=1265/h=7305 vs viewport w=1280/h=864 | body overflow_x=Visible overflow_y=Visible
+[FRAME #0 SLOW 151ms] chrome_drain:0.0 pump_cdp:0.0 chrome_render:136.4 page_render:11.4 dev_render:0.0 dev_phases(cas/lay/pnt/gpu):0.0/0.0/0.0/0.0
+[LAYOUT OVERFLOW #2] root w=1265/h=7180 vs viewport w=1280/h=864 | body overflow_x=Visible overflow_y=Visible
+[LAYOUT OVERFLOW #3] root w=1265/h=7180 vs viewport w=1280/h=864 | body overflow_x=Visible overflow_y=Visible
+[FRAME #1882 SLOW 60ms] chrome_drain:0.0 pump_cdp:0.0 chrome_render:0.0 page_render:5.9 dev_render:0.0 dev_phases(cas/lay/pnt/gpu):0.0/0.0/0.0/0.0
+[FRAME #2071 SLOW 53ms] chrome_drain:0.0 pump_cdp:0.0 chrome_render:0.0 page_render:5.8 dev_render:0.0 dev_phases(cas/lay/pnt/gpu):0.0/0.0/0.0/0.0
+[FRAME #2142 SLOW 58ms] chrome_drain:0.0 pump_cdp:0.0 chrome_render:0.0 page_render:5.0 dev_render:0.0 dev_phases(cas/lay/pnt/gpu):0.0/0.0/0.0/0.0
+[FRAME #2268 SLOW 61ms] chrome_drain:0.0 pump_cdp:0.0 chrome_render:0.0 page_render:6.5 dev_render:0.0 dev_phases(cas/lay/pnt/gpu):0.0/0.0/0.0/0.0
+[FRAME #2338 SLOW 53ms] chrome_drain:0.0 pump_cdp:0.0 chrome_render:0.0 page_render:5.6 dev_render:0.0 dev_phases(cas/lay/pnt/gpu):0.0/0.0/0.0/0.0
+[FRAME #13006 SLOW 57ms] chrome_drain:0.0 pump_cdp:0.0 chrome_render:0.0 page_render:7.4 dev_render:0.0 dev_phases(cas/lay/pnt/gpu):0.0/0.0/0.0/0.0
+[FRAME #13070 SLOW 52ms] chrome_drain:0.0 pump_cdp:0.0 chrome_render:0.0 page_render:5.2 dev_render:0.0 dev_phases(cas/lay/pnt/gpu):0.0/0.0/0.0/0.0
+[FRAME #13781 SLOW 58ms] chrome_drain:0.0 pump_cdp:0.0 chrome_render:0.0 page_render:5.1 dev_render:0.0 dev_phases(cas/lay/pnt/gpu):0.0/0.0/0.0/0.0
+[FRAME #15364 SLOW 51ms] chrome_drain:0.0 pump_cdp:0.0 chrome_render:0.0 page_render:6.4 dev_render:0.0 dev_phases(cas/lay/pnt/gpu):0.0/0.0/0.0/0.0
+[FRAME #15366 SLOW 55ms] chrome_drain:0.0 pump_cdp:0.0 chrome_render:0.0 page_render:6.0 dev_render:0.0 dev_phases(cas/lay/pnt/gpu):0.0/0.0/0.0/0.0
+[FRAME #15369 SLOW 53ms] chrome_drain:0.0 pump_cdp:0.0 chrome_render:0.0 page_render:7.0 dev_render:0.0 dev_phases(cas/lay/pnt/gpu):0.0/0.0/0.0/0.0
+[FRAME #50354 SLOW 58ms] chrome_drain:0.0 pump_cdp:0.0 chrome_render:0.0 page_render:5.4 dev_render:0.0 dev_phases(cas/lay/pnt/gpu):0.0/0.0/0.0/0.0
+[FRAME #71285 SLOW 51ms] chrome_drain:0.0 pump_cdp:0.0 chrome_render:0.0 page_render:5.6 dev_render:0.0 dev_phases(cas/lay/pnt/gpu):0.0/0.0/0.0/0.0
+[FRAME #75187 SLOW 51ms] chrome_drain:0.0 pump_cdp:0.0 chrome_render:0.0 page_render:5.7 dev_render:0.0 dev_phases(cas/lay/pnt/gpu):0.0/0.0/0.0/0.0
+[FRAME #75197 SLOW 56ms] chrome_drain:0.0 pump_cdp:0.0 chrome_render:0.0 page_render:10.6 dev_render:0.0 dev_phases(cas/lay/pnt/gpu):0.0/0.0/0.0/0.0
+[FRAME #75204 SLOW 61ms] chrome_drain:0.0 pump_cdp:0.0 chrome_render:0.0 page_render:10.3 dev_render:0.0 dev_phases(cas/lay/pnt/gpu):0.0/0.0/0.0/0.0
+[FRAME #85843 SLOW 55ms] chrome_drain:0.0 pump_cdp:0.0 chrome_render:0.0 page_render:10.2 dev_render:0.0 dev_phases(cas/lay/pnt/gpu):0.0/0.0/0.0/0.0
+[FRAME #85845 SLOW 62ms] chrome_drain:0.0 pump_cdp:0.0 chrome_render:0.0 page_render:10.3 dev_render:0.0 dev_phases(cas/lay/pnt/gpu):0.0/0.0/0.0/0.0
+[FRAME #94693 SLOW 58ms] chrome_drain:0.0 pump_cdp:0.0 chrome_render:0.0 page_render:11.8 dev_render:0.0 dev_phases(cas/lay/pnt/gpu):0.0/0.0/0.0/0.0
+[FRAME #94901 SLOW 53ms] chrome_drain:0.0 pump_cdp:0.0 chrome_render:0.0 page_render:10.6 dev_render:0.0 dev_phases(cas/lay/pnt/gpu):0.0/0.0/0.0/0.0
+[FRAME #94931 SLOW 55ms] chrome_drain:0.0 pump_cdp:0.0 chrome_render:0.0 page_render:10.7 dev_render:0.0 dev_phases(cas/lay/pnt/gpu):0.0/0.0/0.0/0.0
+[FRAME #108372 SLOW 51ms] chrome_drain:0.0 pump_cdp:0.0 chrome_render:0.0 page_render:10.7 dev_render:0.0 dev_phases(cas/lay/pnt/gpu):0.0/0.0/0.0/0.0
+[FRAME #108389 SLOW 59ms] chrome_drain:0.0 pump_cdp:0.0 chrome_render:0.0 page_render:10.9 dev_render:0.0 dev_phases(cas/lay/pnt/gpu):0.0/0.0/0.0/0.0
+[FRAME #108417 SLOW 56ms] chrome_drain:0.0 pump_cdp:0.0 chrome_render:0.0 page_render:10.6 dev_render:0.0 dev_phases(cas/lay/pnt/gpu):0.0/0.0/0.0/0.0
