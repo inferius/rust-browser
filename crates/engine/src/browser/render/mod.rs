@@ -1417,6 +1417,26 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
             window.request_redraw();
         }
 
+        fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+            // Kontinualni redraw pri aktivnich CSS @keyframes/transitions /
+            // smooth scrollu / pending setInterval. Bez about_to_wait spolehal
+            // engine jen na request_redraw() uvnitr RedrawRequested, coz winit
+            // pri ControlFlow::Wait nekdy NEzopakuje (self-request behem zpracovani
+            // RedrawRequested se zkoalescuje) -> @keyframes animace "zamrznou"
+            // dokud neprijde dalsi event (scroll/klik). about_to_wait se vola
+            // spolehlive po kazdem batchi events = pumpuje dalsi frame. Stejny
+            // pattern jako shell crate. has_active_animations je naplnene v
+            // render_via (= predchozi frame), takze loop se sam udrzuje.
+            let scroll_anim = (self.scroll_y() - self.scroll_target_y()).abs() > 0.5
+                || (self.scroll_x() - self.scroll_target_x()).abs() > 0.5;
+            let page_anim = self.webview.as_ref()
+                .map(|w| w.has_active_animations() || w.has_pending_intervals())
+                .unwrap_or(false);
+            if scroll_anim || page_anim {
+                if let Some(w) = &self.window { w.request_redraw(); }
+            }
+        }
+
         fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
             match event {
                 WindowEvent::CloseRequested => {
@@ -2243,12 +2263,19 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 }
                 WindowEvent::RedrawRequested => {
                     self.render();
-                    // Continual redraw pri smooth scroll animation. CSS animacie/
-                    // transition tracking je per-WebView (webview.cascade); App
-                    // active_animations/transitions fields dead.
-                    let has_anim = (self.scroll_y() - self.scroll_target_y()).abs() > 0.5
+                    // Continual redraw pri smooth scroll animation NEBO aktivnich
+                    // CSS @keyframes/transitions/caret blink NEBO pending JS
+                    // setInterval/timeoutech. Drive se kontroloval jen smooth
+                    // scroll -> @keyframes animace "zamrzly" a posunuly se az pri
+                    // dalsim inputu (scroll). webview.has_active_animations() je
+                    // kanonicky check (= needs_continuous_render), stejne jako
+                    // shell loop. has_pending_intervals pokryva setInterval tick.
+                    let scroll_anim = (self.scroll_y() - self.scroll_target_y()).abs() > 0.5
                         || (self.scroll_x() - self.scroll_target_x()).abs() > 0.5;
-                    if has_anim {
+                    let page_anim = self.webview.as_ref()
+                        .map(|w| w.has_active_animations() || w.has_pending_intervals())
+                        .unwrap_or(false);
+                    if scroll_anim || page_anim {
                         if let Some(w) = &self.window {
                             w.request_redraw();
                         }
@@ -6527,6 +6554,15 @@ impl Renderer {
                 _ => {}
             }
         }
+        // Flush inline-SVG raster cache do image_atlas PRED GPU upload. Bez
+        // toho se SVG (+ <text>) prida do CPU atlasu az pozdeji ve
+        // flush_inline_svg_cache uvnitr draw_segments - tj. PO tomto uploadu ->
+        // GPU image_tex je na miste SVG prazdna -> Image quad sampluje nic ->
+        // SVG (shapes i text) nevidet. Na staticke strance se layer texture
+        // vyrenderuje 1x (prazdny SVG) a cachuje (no damage) -> uz nikdy.
+        // (Na animovane strane to "doženou" continuous re-rendery, proto to
+        // driv vypadalo ze SVG funguje jen nekde.)
+        flush_inline_svg_cache(&mut self.image_atlas);
         self.upload_atlas();
         self.upload_image_atlas();
     }

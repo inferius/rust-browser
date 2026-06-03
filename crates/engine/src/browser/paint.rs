@@ -548,7 +548,24 @@ fn serialize_svg(bx: &LayoutBox) -> Option<String> {
     let cc = bx.text_color.unwrap_or([0, 0, 0, 255]);
     let cc_str = format!("rgb({},{},{})", cc[0], cc[1], cc[2]);
     fn walk(node: &std::rc::Rc<crate::browser::dom::Node>, out: &mut String, current_color: &str) {
-        let tag = match node.tag_name() { Some(t) => t, None => return };
+        let tag = match node.tag_name() {
+            Some(t) => t,
+            None => {
+                // Text node (napr. obsah uvnitr <text>...</text>) - serializuj
+                // jeho text. Drive tady byl `return` -> obsah <text> se ztratil
+                // -> resvg rasterizoval prazdny <text> = SVG text nevidet.
+                let txt = node.text_content();
+                for c in txt.chars() {
+                    match c {
+                        '<' => out.push_str("&lt;"),
+                        '>' => out.push_str("&gt;"),
+                        '&' => out.push_str("&amp;"),
+                        _ => out.push(c),
+                    }
+                }
+                return;
+            }
+        };
         out.push('<');
         out.push_str(&tag);
         for (k, v) in node.attributes.borrow().iter() {
@@ -616,8 +633,23 @@ fn serialize_svg(bx: &LayoutBox) -> Option<String> {
 /// Render SVG via resvg + tiny-skia (= Chrome/FF-quality vector raster s
 /// analytical coverage AA). Cached as RGBA bitmap v thread_local map pres
 /// (svg_string_hash, target_w, target_h). Returns image bytes RGBA.
+/// Sdileny fontdb pro resvg - load_system_fonts() je drahy (scan font dirs),
+/// proto 1x lazy + reuse pres vsechny SVG rasterizace. Bez nej ma usvg
+/// Options::default() prazdny fontdb a <text> elementy se nevykresli vubec.
+fn svg_fontdb() -> std::sync::Arc<resvg::usvg::fontdb::Database> {
+    static DB: std::sync::OnceLock<std::sync::Arc<resvg::usvg::fontdb::Database>>
+        = std::sync::OnceLock::new();
+    DB.get_or_init(|| {
+        let mut db = resvg::usvg::fontdb::Database::new();
+        db.load_system_fonts();
+        std::sync::Arc::new(db)
+    }).clone()
+}
+
 fn rasterize_svg_resvg(svg: &str, target_w: u32, target_h: u32) -> Option<Vec<u8>> {
-    let opt = resvg::usvg::Options::default();
+    let mut opt = resvg::usvg::Options::default();
+    // Nahrat fonty - bez nich resvg neumi rasterizovat <text>.
+    opt.fontdb = svg_fontdb();
     let tree = resvg::usvg::Tree::from_str(svg, &opt).ok()?;
     let svg_size = tree.size();
     let sx = target_w as f32 / svg_size.width();
@@ -650,6 +682,9 @@ fn emit_svg_children(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>) {
     let target_h = (bx.rect.height * zoom).round().max(1.0) as u32;
     if target_w > 0 && target_h > 0 && target_w <= 4096 && target_h <= 4096 {
         if let Some(svg_str) = serialize_svg(bx) {
+            if std::env::var("RWE_SVG_DBG").is_ok() {
+                eprintln!("[SVG] target={}x{} str=<<<{}>>>", target_w, target_h, svg_str);
+            }
             use std::hash::{Hash, Hasher};
             let mut h = std::collections::hash_map::DefaultHasher::new();
             svg_str.hash(&mut h);
@@ -658,7 +693,11 @@ fn emit_svg_children(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>) {
             let key = format!("__inline_svg_{:x}", h.finish());
             let has_cache = INLINE_SVG_CACHE.with(|c| c.borrow().contains_key(&key));
             if !has_cache {
-                if let Some(rgba) = rasterize_svg_resvg(&svg_str, target_w, target_h) {
+                let r = rasterize_svg_resvg(&svg_str, target_w, target_h);
+                if std::env::var("RWE_SVG_DBG").is_ok() {
+                    eprintln!("[SVG] rasterize -> {}", r.as_ref().map(|v| format!("{} bytes", v.len())).unwrap_or("None".into()));
+                }
+                if let Some(rgba) = r {
                     INLINE_SVG_CACHE.with(|c| {
                         c.borrow_mut().insert(key.clone(), (rgba, target_w, target_h));
                     });
