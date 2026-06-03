@@ -1429,7 +1429,19 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
     // Detekce 3D transformu - pokud ano, obal cely emit do TransformBegin/End
     // a vynech CPU post-process transformaci (renderer aplikuje matrix shader-side).
     let needs_3d = crate::browser::layout::needs_3d_pipeline(&bx.transforms, parent_perspective);
-    if needs_3d {
+    // ALE: pri layer-mode (LAYER_SCOPE = Some) je tento box layer root a jeho
+    // transform aplikuje OUTER layer compose (compose_view_to_view_transform na
+    // cely layer quad). Vnitrni TransformBegin/End by transform aplikoval 2x +
+    // compose_transform(first=true) vycisti layer texturu na opaque grey
+    // (0.95,0.95,0.97) = viditelny "nepruhledny podklad" za rotovanym boxem
+    // (rohy AABB). Proto inner transform emit JEN v monolithic mode
+    // (cur_scope = None). V layer mode rotaci handluje compose sam - stejne jako
+    // uz funguje pure-2D Rotate(0)/Scale (needs_3d=false vetev).
+    let transform_by_layer_compose = cur_scope.is_some()
+        && super::compositor::is_layer_boundary(bx)
+        && bx.transform.is_some();
+    let emit_inner_transform = needs_3d && !transform_by_layer_compose;
+    if emit_inner_transform {
         let m = crate::browser::layout::compute_transform_matrix(&bx.transforms, parent_perspective);
         cmds.push(DisplayCommand::TransformBegin {
             x: bx.rect.x,
@@ -2336,7 +2348,9 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
     }
 
     // 3D transform: skip CPU post-process - vse resi shader matrix.
-    if needs_3d {
+    // V layer mode inner transform NEemitujeme (handluje outer compose) -
+    // paruje s emit_inner_transform vyse.
+    if emit_inner_transform {
         cmds.push(DisplayCommand::TransformEnd);
     }
 
