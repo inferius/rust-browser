@@ -1,5 +1,0 @@
-? rect=(0.0,0.0,1024.0x768.0) display=Block pos=Static
-  html rect=(0.0,0.0,1024.0x116.0) display=Block pos=Static
-    body rect=(8.0,8.0,1008.0x100.0) display=Block pos=Static
-      div rect=(8.0,8.0,200.0x100.0) display=Block pos=Relative
-        div rect=(28.0,18.0,50.0x30.0) display=Block pos=Absolute bg=#0000ffff

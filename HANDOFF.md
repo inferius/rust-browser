@@ -2,100 +2,823 @@
 
 Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`, `debug_utils.md`.
 
-## Session N+21: L5 step 4 Phase 3 - drop cached_style_map kompletne
+## Session N+25: Pure-Rust AVIF + layout wire-ups + lazy loading + web vitals (4106 testu)
 
-**2694 tests pass, build clean, zero warnings v production.**
+Pokracovani z N+24. Real backend wire-ups + user-impact features.
+User-requested: AVIF MUSI byt browser-internal (zero system deps). Tables +
+multicol + writing-modes + lazy loading + LCP/CLS hook + frame pacing.
 
-Multi-batch sezeni (51 commits) dokoncilo L5 step 4 - migrace cele
-renderer pipeline z `HashMap<String,String>` (StyleMap) na typed
-`ComputedStyle` (ComputedStyleMap). Final goal Phase 3 dropnut
-`cached_style_map` field z Renderer - **HOTOVO**.
+### Pure-Rust AVIF dekoder (zero system deps)
+Predchozi N+24 reseni s Cargo feature `avif` -> `image/avif-native` vyzadovalo
+system libdav1d + NASM. User: "AVIF nemuze v systemu nic vyzadovat".
 
-### Architektonicke zmeny
+Fix:
+- Drop Cargo feature gate.
+- Add `zenavif = "0.1"` (pure-Rust AVIF codec) + `zenpixels-convert`.
+- Backend `rav1d-safe` (pure-Rust port libdav1d od Memory Safety Initiative).
+- Novy `browser::avif_decode` wrapper: `decode(bytes) -> (w, h, rgba8)`.
+- Wire do `load_image_as`: AVIF detected -> zenavif::decode -> atlas.
+- Compile cost: +~1m pres rav1d, **zero runtime deps**.
+- Browser sam dekoduje, user nic neinstaluje.
 
-**Renderer typed-only pipeline:**
-1. `cascade_with_viewport_typed` -> `CascadeOutput { computed, declarations }` (BEZ style_map field).
-2. `cached_computed_map: Rc<ComputedStyleMap>` primary cache.
-3. `apply_animations_typed(cmap, ...)` - mutuje cs typed fields per frame.
-4. `detect_transitions_typed(prev_cmap, cur_cmap, ...)` - typed diff.
-5. `apply_transitions_typed(cmap, ...)` - typed value interp.
-6. `apply_scroll_animations_typed` - scroll-driven anim typed.
-7. `apply_paint_animations(box, cmap)` - cte typed cs fields.
-8. `paused_node_cs: HashMap<usize, ComputedStyle>` - typed snapshot.
-9. Animation events detection - `AnimationSpec::from_cs(&cs)`.
-10. Devtools panel - `cs.to_devtools_entries()`.
+### Layout wire-ups
 
-**Dropnute Renderer fields:**
-- `cached_style_map: Option<Rc<StyleMap>>` GONE
-- `prev_style_map: Option<Rc<StyleMap>>` GONE
-- `paused_node_styles: HashMap<usize, HashMap<String,String>>` GONE
+**Tables auto-layout column widths:**
+- `prelayout_table_columns(bx)` pre-pass na Display::Table v layout_dispatch.
+- `tables::compute_column_widths_auto` -> per-column widths.
+- Apply jako explicit_width na cells napric vsemi rows (shared per spec).
 
-**Dropnute CascadeOutput field:**
-- `style_map` GONE - jen `computed` + `declarations`
+**Multicol balance_height wire:**
+- Pres `multicol::balance_height` ceil(content/n) per column-fill:balance spec.
 
-**Dropnute legacy cascade fns:**
-- `cascade::apply_animations(StyleMap, ...)` DELETED
-- `cascade::apply_transitions(StyleMap, ...)` DELETED
-- `cascade::apply_scroll_animations(StyleMap, ...)` DELETED
-- `render::apply_paint_animations_styles` compat shim DELETED
+**Writing modes propagace:**
+- `layout_block_vertical` inherituje writing_mode na deti.
+- Sideways-rl pridan vedle vertical-rl pro RTL detection.
 
-### Layout build_box_inner migrace
+### Lazy loading wire (HTML loading=lazy)
+- Pridano `loading_lazy: bool` field na LayoutBox.
+- `apply_tag_html_attrs` parsuje `loading="lazy"` na <img> + <iframe>.
+- Paint pass v `build_display_list_culled`: skip Image emit kdyz box mimo
+  viewport + LAZY_MARGIN 1250px (Chrome default).
+- 3 tests verifikuji.
 
-- 200+ site reads migrovany na typed: 22 batchu pres Phase 2 + Phase 3 audit
-- `cs.is_set(PropertyId)` bitset gate misto `s.contains_key()`
-- Helpery: `read_typed_color`, `read_typed_length`, `read_typed_f32`,
-  `read_typed_opacity`, `read_raw_str`, `prop_set_kn`, `prop_is_set`
-- Thread-local `ACTIVE_COMPUTED_MAP` + `ComputedMapGuard` RAII pres `layout_tree_typed*`
-- Empty StyleMap predan layout - layout cte exclusively z cs
+### Web Vitals LCP + Frame pacing wire-up
+- `WebVitalsCollector::collect_from_paint(commands, now_ms)` - scan display
+  list, najde Image candidate, recorduj area > 100 (skip 1x1 trackery).
+- WebView ma `web_vitals` + `frame_pacer` fields + public getters.
+- `render_via` instrumented `begin_frame()` + `mark_presented()` na vsech
+  exit paths (real GPU + 2 cache-hit fast paths).
 
-### ComputedStyle rozsireni
+### Scroll backtrack - dodatecne fix
+- `set_scroll(x, y)` (programatic) clears active scroll_anim.
+- JS scrollTo() sync path v render_via te clears anim.
 
-- ~210 typed pole (originalnich 165 + 19 Phase A + 26 raw shorthand storage + 17 CSS L4/L5)
-- `explicit_set: PropertySet` = `[u64; 8]` 512-bit bitset (HashSet predtim)
-- PropertyId `#[repr(u16)]` + `as_index()` pro bit operations
-- `PROPERTY_ID_BITSET_WORDS = 8` (256 free slotu pro future props)
+### Pure-Rust JPEG XL + HEIF dekodery (dodatecne k AVIF)
+- `jxl-oxide` 0.12 (pure-Rust JPEG XL) + `heic` 0.1 (pure-Rust HEIF/HEIC s H.265 SIMD).
+- `browser::jxl_decode` + `browser::heif_decode` wrappers.
+- Wire do `load_image_as` - real dekode misto tombstone.
+- Vsechny tri (AVIF + JXL + HEIF) zero system deps, browser sam.
 
-### EXPERIMENTAL CSS L4/L5 typed (17 specs)
+### Web Vitals CLS + INP wire-up
+- `WebVitalsCollector::feed_layout_shift(prev_rects, curr_rects, vp, ...)` -
+  detect movements > 3px, compute shift_score per W3C spec.
+- `record_input_interaction(type, start_ms, processing_start, processing_end,
+  presentation_ms)` - INP feed.
+- Skip user-triggered shifts per spec.
 
-Typed enums + cascade populate + devtools display:
-- CSS Text L4: TextWrap, TextWrapStyle, TextWrapMode
-- CSS Containment L3: ContentVisibility, ContainerType
-- CSS Forms L1: FieldSizing
-- CSS Color L4: PrintColorAdjust, ForcedColorAdjust, ColorScheme
-- CSS Math L3: MathStyle
-- CSS Ruby L1: RubyPosition, RubyAlign
-- CSS Inline L3: TextBoxTrim, TextBoxEdge
-- CSS Anchor Positioning L1: anchor_name, position_anchor, inset_area (raw)
-- CSS View Transitions L1: view_transition_name (raw)
-- CSS Scroll-Driven Animations L1: view/scroll_timeline_*, animation_timeline_l5
+### Tables fixed-layout algorithm wire
+- `table-layout: fixed` -> use first-row widths only (per spec faster path)
+- Pres `tables::compute_column_widths_fixed`.
 
-Layout/paint impl PARTIAL (markers v doc comments). text-wrap:nowrap,
-content-visibility:hidden, animation-timeline:scroll FULL impl. Ostatni
-storage only (cascade + devtools + getComputedStyle); layout/paint TBD
-v dalsich session.
+### WPT runner assert_throws_js real
+- `assert_throws_js(ctor, fn[, msg])` ted realne vola `fn()` pres interp_ptr.
+  Pri thrown error = pass, jinak = fail (per spec).
+- 2 nove tests verify pass-on-throw + fail-on-no-throw.
 
-### Visual regression test framework
+### Test growth
+4097 (N+24) -> 4120 (N+25). +23 tests. 0 failures, 29 ignored.
 
-`src/browser/tests/visual_snapshot.rs`:
-- LayoutBox tree serialize (tag + rect + display + position + bg/color + transform + text)
-- DisplayList serialize (Rect/Text/Image/Gradient/Shadow/Border/FilterBegin/End)
-- Golden file compare s `UPDATE_GOLDEN=1 cargo test visual_snapshot` workflow
-- 5 baseline testu, 6 golden files v `src/browser/tests/golden/`
-- Catches future layout/paint regrese
+### Pure-Rust image format coverage
+PNG, JPEG, GIF, WebP, BMP, ICO, TIFF, TGA, EXR, QOI (via image crate) +
+**AVIF** (zenavif/rav1d) + **JPEG XL** (jxl-oxide) + **HEIF/HEIC** (heic) +
+SVG (resvg). Vsechny bez system deps - browser sam dekoduje.
 
-### Pre-existing race (NEPHASE 3 SCOPE)
+### Stale TODO
+- Real LCP timing presneji (now je always 0.0 placeholder)
+- Tables fixed-layout algorithm
+- Writing modes inline_layout vertical text flow
+- HEIF/JXL pure-Rust decoders
 
-User report: prvni render po `cargo run` ma jine fonts/styling nez druhe
-otevreni. Refresh stranky nepomaha. Pravdepodobne pre-existing race
-mezi atlas font load + render thread + OS file cache.
-**Investigation TBD** - mimo Phase 3 scope.
+## Session N+24: Scroll bug fix + image decoders + BFC + WPT runner (4097 testu)
 
-### Commit history
+Real wire-up vlna pro 4 prioritu z N+23 foundation modulu. User-reported scroll
+regression + image AVIF support + spec-compliant BFC margins + real WPT runner.
 
-Branch `inferius-dev/zealous-gagarin-4c6e36`, 51 commitu od master
-(`3751ac6`). Phase 1 plumbing -> Phase 2 batches 1-22 reads migrate ->
-Phase A/B/C/D/E/F/G CS rozsireni + EXPERIMENTAL specs + devtools adapter ->
-Phase G+H+ helpers fix -> Phase 3 Step A-G full drop.
+### Scroll backtrack bug fix
+**Symptom:** "po chvili skoci ve skrollu kus zpet" - scroll prejede target,
+anim skonci, frame tick set scroll_y = scroll_target_y = jump back.
+
+**Root cause:** Double-counting v `retarget_scroll`. Caller v `start_scroll_anim_y`
+predava ABSOLUTNI new_target (`scroll_target_y + dy`), funkce ale jeste pridavala
+`prev_target_remainder` -> accumulated_target > skutecny target -> anim presahla,
+po dokonceni se frame sync vratil zpatky na `scroll_target_y`.
+
+**Fix:** `retarget_scroll` pouziva `new_target` primo. Velocity continuity zustava.
+Curve always resets od `current_value` s novym start_time (no t-progress backwards).
+
+**Test coverage (Chrome/FF inspired):**
+- `no_backtrack_after_anim_finish` - regression test (anim.target == scroll_target)
+- `rapid_scroll_finishes_at_total_distance_no_overshoot`
+- `chromium_update_target_keeps_progress_forward`
+- `chromium_reverse_does_not_change_current_value`
+- `chromium_duration_progress_positive`
+- `firefox_velocity_carries_same_direction`
+
+Reference: Chromium cc/animation/scroll_offset_animation_curve_unittest.cc.
+
+### Image decoders real + AVIF (pure-Rust, bez system deps)
+- `image` crate v0.25 pro PNG/JPEG/GIF/WebP/BMP/ICO/TIFF/TGA/EXR/QOI - jiz hotove.
+- **AVIF pure-Rust:** `browser::avif_decode` modul pres crate `zenavif` 0.1
+  (pouziva `rav1d` - pure-Rust port libdav1d od Memory Safety Initiative).
+  Browser sam dekoduje, **user nic neinstaluje**. Bez system libdav1d, bez NASM.
+- `browser::image_decoder::detect_format` foundation modul wired do `load_image_as`
+  pro pre-empt classification.
+- AVIF detected -> zenavif decode -> RGBA8 -> atlas (s resize pro velke).
+- HEIF detected -> tombstone (vyzadovalo by libheif).
+- JXL detected -> tombstone (image crate v0.25 nepodporuje).
+
+AVIF default-on. Build cost: +~1m kompile zenavif/rav1d crates pure-Rust.
+
+### BFC margin collapse spec-compliant
+Existing layout_block mel `(m_t - prev_margin_bottom).max(0.0)` - spravne pro
+all-positive (= max) ale chybne pro mixed signs (per CSS 2.1 8.3.1).
+
+Wire `browser::layout::bfc::collapse_margins` - spec-compliant:
+- Pos+Pos = max, Neg+Neg = min, Mixed = sum.
+
+Pres `collapse_margins(prev_margin_bottom, m_t) - prev_margin_bottom` aby
+existing flow (prev_m_b uz pricten k cursor_y) drzelo. Pri zaporne difference
+cursor zpetne posuje (negative margin overlap per spec).
+
+### WPT runner real exec
+`testing::wpt::run_wpt_script(user_js)` spawne novy Interpreter, zaregistruje
+testharness API jako native fns ktere primo execute callback + write do
+shared `WptHarness`:
+
+- `test(fn, name)` - call callback s mock `t`, catch JsError, record pass/fail
+- `async_test(fn, name)` - immediate eval, stub `t.done()`
+- `assert_equals/not_equals/true/false/array_equals/unreached/throws_js`
+- `extract_inline_scripts(html)` - pull `<script>` blocks z HTML
+
+Reference: Chromium third_party/blink/web_tests + WebKit Layout Tests harness.
+
+**Use cases:**
+- Spec compliance smoke tests (drop test file dovnitr, mereni pass/fail)
+- Regression coverage (pridat assertion po novem feature)
+- Self-test enginu (run subset WPT manualy, diff vs expectations)
+
+10 unit tests verifikuji runner: simple pass, failing assert, multiple tests,
+array assert, inline script extraction.
+
+### Worker real thread spawn (verified existing)
+Existing `interpreter::builtins::Worker` jiz spawne `std::thread::spawn` s mpsc
+channels pro main<->worker komunikaci. Worker.postMessage/terminate wired v
+eval_call.rs. `drain_workers` na main thread proces incoming messages s JSON
+parse + onmessage callback dispatch.
+
+Foundation modul `interpreter::worker_pool` je nezavisle abstraction ktery
+NEsubstituuje existing path, ale poskytuje API surface pro SharedWorker /
+WorkletGlobalScope features.
+
+### Test growth
+4086 (N+23) -> 4097 (N+24). +11 tests. 0 failures, 29 ignored.
+
+### Co stale chybi (TODO post-N+24)
+- **Compositor GPU tiles:** wire LayerTree + tiles do render pipeline (big refactor)
+- **Tables auto-layout:** wire `tables::compute_column_widths_auto` (big refactor)
+- **Multi-column wire:** `multicol.rs` balance algorithm not connected
+- **Writing modes pipe do inline layout** (horizontal-tb only ted)
+- **Lazy loading wire:** parse loading=lazy + viewport intersection check
+- **Web Vitals (LCP/CLS):** collector hotov, chybi feed z paint loop
+- **assert_throws_js real check** (vyzaduje closure invoke + check)
+
+## Session N+23: Foundation modules vlna (4086 testu)
+
+Pokracovani N+22 - implementace ~140 novych foundation modulu napric
+browser/interpreter/testing podsystemy. Cilem bylo polozit API surface +
+state machines pro vsechny chybejici web specifikace + browser-grade features
+tak, aby pozdejsi GPU/syscall/codec real implementace mohla "doplnit" backend
+bez prepisovani teto vrstvy.
+
+### Modules pridany (selekce)
+
+**Interpreter / Web APIs** (~50 modulu):
+- web_animations, background_fetch, compression_streams, fenced_frames,
+  web_share_target, view_transitions, navigation_api, storage_buckets,
+  private_state_tokens, attribution_reporting, topics_api, shared_storage,
+  federated_credential
+- custom_elements, mutation_observer, resize_observer, intersection_observer,
+  encoding, structured_clone, abort_signal, decorators, source_map,
+  debugger_protocol, heap_profiler, async_runtime, promise_state, import_maps,
+  regex_engine, bignum, proxy_handler, typed_arrays
+- worker_pool, persistent_storage, file_blob, fetch_api, headers,
+  eventsource_state, url_search_params, form_data, error_kinds
+- v8_inspector, stack_trace, cpu_profiler
+
+**Browser security/network** (~15 modulu):
+- security/sri, mixed_content, referrer_policy, permissions_policy, coep_coop
+- net/hpack, qpack, quic, dns, http_cache, multipart, cookie_jar
+
+**Layout / Render** (~12 modulu):
+- layout/bfc, tables, multicol, subgrid, positioning, anchor_positioning,
+  writing_modes
+- render/blend (16 blend modes), subpixel_aa, compositor (layer tree),
+  tiles, frame_pacing, hit_test_tree
+
+**CSS** (5 modulu):
+- css/nesting, calc_resolver, conditional_rules, color_mix (OKLab),
+  transitions (cubic-bezier + steps)
+
+**SVG** (4 modulu):
+- svg/path_parser, transform_parser, gradient, filter
+
+**HTML5** (4 modulu):
+- html5/entities, form_state (constraint validation), template_content,
+  browsing_context
+
+**Media** (7 modulu):
+- media/mse, eme, container_sniff, webaudio_graph, vtt_parser, srt_parser,
+  h264_parse, av1_parse
+
+**Input** (3 moduly):
+- input/pointer_events, keyboard_events, input_method_editor
+
+**Locale / i18n** (5 modulu):
+- locale/bcp47, number_format, date_format, plural_rules, collation
+
+**Browser features** (~50 modulu):
+- sandbox, image_decoder, accessibility_tree, url_parser, text_bidi,
+  unicode_segmenter, font_fallback, opentype_features
+- event_dispatch, shadow_dom, selector_engine
+- viewport, hidpi, drag_drop, autoscroll, spellcheck, autofill
+- favicon, manifest, password_manager, extensions, bookmarks, history_db,
+  downloads, dialog_manager, private_browsing, session_state, tab_groups,
+  reader_mode, translator, zoom_levels, site_settings, reload_strategy,
+  proxy_resolver
+- web_vitals, safe_browsing, speculation_rules, origin_trials,
+  webdriver_protocol, contenteditable_model, spatial_nav
+- lazy_loading, page_visibility, print_preview, snap_scroll, overscroll,
+  input_devices, battery_status, network_info, focus_manager,
+  clipboard_history, ad_blocker
+- bf_cache, wheel_normalize, window_features, crash_reporter, pull_to_refresh,
+  screen_orientation, display_link, telemetry, experiment_flags, quirks_mode,
+  charset_detect, geolocation_provider, os_clipboard
+
+**Testing** (1 modul):
+- testing/test262 (frontmatter parser + run accumulator)
+
+### Test growth
+3172 testu (N+22 baseline) -> 4086 (N+23). +914 jednotkove testy, 0 fail,
+29 ignored, 0 measured.
+
+### Konvence pouzite pri vsech batch modulech
+- Komentare cesky, ASCII only (per project + user CLAUDE.md).
+- Kazdy modul s `#[cfg(test)] mod tests` blokem 3-8 testu.
+- Spec referencni odkaz v doc-comment hlavicce.
+- Failure paths tested (Err returns, edge cases).
+- HashMap key enums vsechny `Eq + Hash` (chyceno + opraveno per E0599).
+- Defaults rozumne (timeouts, quotas, refresh rates).
+
+### Status quo zachovan
+- Existujici engine bin, shell bin, devtools panel - vse beti.
+- Render pipeline / interpretation / cascade nezmeneny.
+- Embedded API contracty stejne.
+
+### Co tyto moduly **nedelaji** (foundation only)
+- Real OS syscall (sandbox policy install, OS clipboard IPC, file pickers)
+- Real GPU shader pipeline (compositor tile raster zustava CPU only)
+- Real codec decode (h264/av1 parse zustava header-only)
+- Real network (HPACK/QPACK/QUIC parse zustava bez TLS+socket)
+- Plne Test262 / WPT execution (jen harness + frontmatter parsing)
+
+### Co je dalsi krok pro production-grade
+1. Wire foundation modules do existujicich render/interpreter call sites.
+2. Vyplnit real backends pro CPU-bound veci (image_decoder -> image crate,
+   webaudio_graph -> cpal/rodio, regex_engine -> fancy-regex, ...).
+3. Sandbox real install (sandbox.rs ma policy structs + permits check,
+   doplnit per-OS impl: seccomp, AppContainer, sandbox-exec).
+4. Compositor tile path real GPU raster (tiles.rs ma TileCache + LRU,
+   chybi wgpu render-to-tile target + atlas binding).
+5. Real HTTP/2 client (http_cache.rs + hpack.rs hotove; potreba TLS + socket
+   pump - misto ureq doporucuji isahc nebo hyper).
+
+## Session N+22: Engine shell strip + WebView polarity invert (step 1)
+
+Pokracovani N+21 (workspace + embed API) - kompletni shell concerns
+strip z engine + zacatek WebView authoritative polarity.
+
+### Dosazeny stav
+
+- shell_chrome.rs file (-242 LOC) + dead chrome paint blok v App::render (-363 LOC)
+- 16 dead `if false { ... }` bloku (-720 LOC)
+- TabManager + tabs.rs file (-747 LOC, 9 unit testy)
+- 10 shell-only App fields (shell_chrome_h, addr_open, find_open, addr_input,
+  find_query, find_match_idx, history, history_idx, bookmarks_bar_visible,
+  bookmark_picker, reading_mode_on, shortcuts_overlay_open, tab_drag_*,
+  shell_tab_*, status_hover_url)
+- ChromeHit enum + hit_chrome fn
+- READING_MODE_CSS const + ChromeBookmarkPickerState
+- Multi-tab MenuAction::Tab*(idx) match arms (TabClose/CloseOthers/Duplicate/
+  SetGroup/PinToggle/Reload)
+- navigate_about fn -> no-op (about: pages = shell)
+- find_apply / find_step / find_scroll_to_current / find_collect_matches /
+  find_matches_in fns
+- run_inline_scripts fn (App, duplicate s WebView::run_scripts)
+
+**Net: render/mod.rs 9700 -> 8231 LOC (-1469). Plus -747 tabs.rs +
+-242 shell_chrome.rs = ~-2400 LOC engine shrink (~25%).**
+
+### WebView authoritative polarity (zacatek)
+
+Drive App.html/css/interpreter byly PRIMARY, WebView mirror sync'nuty.
+Po N+22 step 1+2 inverze:
+
+- App::resumed: vola sync_webview_from_app, pak interpreter = webview.take_interpreter()
+- reload_from_html (drag-drop): stejne
+- form submit POST: stejne
+- navigate_url http: stejne
+- rerun_paused_scripts (debug resume): pres webview.run_scripts + take
+
+WebView::load_html runs scripts (real). App.interpreter prevezme ownership.
+
+### Shell crate plnohodnotny browser host (N+22 finale)
+
+Po vsech orchestrace + input dispatch + shell wire features:
+
+**Shell features hotove:**
+
+Rendering pres webview.render_via:
+- Full cascade + transitions + @keyframes animations + paint anim
+- Layout + sticky positioning + paint
+- Display list cull + scroll shift + scrollbar overlay
+- Canvas2D + WebGL canvas frame
+- Atlas warm + text runs extract
+- async_jobs + interpreter event queues drain
+- Selection highlight paint (modry overlay)
+- Caret blink pro focused input
+- `<select>` popup overlay
+
+Input pres webview.handle_input:
+- Mouse: down/up/move/leave/wheel
+- Click-vs-drag distinguish (5px threshold)
+- :hover state + focus / blur
+- mousedown / mouseup / click event dispatch do JS
+- `<a href>` -> NavigationRequest
+- Text selection drag (anchor/current/extract)
+- Scrollbar thumb drag (V + H)
+- Keyboard: keydown/keyup do focused element
+- TextInput: insert na caret pos + advance
+- Backspace / Delete / Arrow / Home / End: caret + value edit
+- Enter on input: form submit event + NavigationRequest
+- Cursor icon (Pointer pri <a>/<button>, Text pri input/text node)
+
+Shell-side handlers:
+- WindowEvent::Resized -> webview.resize
+- WindowEvent::CursorMoved -> MouseMove + cursor apply
+- WindowEvent::MouseInput -> MouseDown/Up
+- WindowEvent::MouseWheel -> Scroll (Ctrl+Wheel = zoom)
+- WindowEvent::KeyboardInput -> KeyDown/Up + TextInput
+- WindowEvent::DroppedFile -> webview.load_url
+- WindowEvent::ModifiersChanged -> track Ctrl/Shift/Alt
+- WindowEvent::RedrawRequested -> render + present + window.set_title
+
+Shell-side keyboard shortcuts:
+- **Ctrl+C** -> clipboard copy selection (arboard)
+- **Ctrl+A** -> select all
+- **Ctrl+Plus/=/Minus/0** -> zoom +/- /reset
+- **Ctrl+R / F5** -> reload current page
+- **Alt+Left / Alt+Right** -> history back/forward
+- **PageDown/Up / Arrows / Home/End / Space** -> page scroll
+- **Esc** -> clear selection
+- **Ctrl+Wheel** -> zoom
+
+Navigation:
+- response.navigation Get -> webview.load_url + history push
+- response.navigation Post -> webview.load_url_post (build_form_request + ureq POST)
+- History stack pres back/forward + reload
+
+Continual redraw kdy webview.has_active_animations() (@keyframes /
+transitions / smooth scroll / caret blink) - shell request_redraw loop.
+
+Co stale chybi (Phase 99 cleanup):
+- Inspector overlay paint (App side, last_layout_root accessor ready)
+- Devtools panel UI (user planuje rework do separate WebView app)
+- App polarity invert (App.html/css/scroll/base_url duplicate s webview)
+- preventDefault honoring v event dispatch
+- Multi-tab v shell (Vec<WebView> + tab strip)
+- Text selection rect pres painted_text_runs (currently flow-based)
+- Devtools debug_runner JS pause/continue UI
+
+---
+
+### WebView full orchestration (Chrome WebContents parity)
+
+User point: features ze App.render JIZ existovaly v engine browser
+moduly (cascade::apply_animations, layout::apply_sticky, render::
+apply_paint_animations, devtools_panel::paint_inspector_overlays, ...).
+Stary WebView::render_via byl minimal first-draft (40 LOC = jen cascade
++ layout + paint + draw). Phase 4d migrace = volat existujici fns ze
+WebView::render_via.
+
+Po N+22 finale WebView::render_via orchestrace zahrnuje:
+
+**Render pipeline:**
+- Cascade s viewport
+- CSS Transitions (detect/apply + transitionend event)
+- @keyframes animations tick (apply_animations + scroll_animations +
+  apply_paint_animations) + animationstart/end/iteration events
+- Layout + sticky positioning
+- Display list cull + scroll shift + scrollbar overlay
+- Canvas2D ops paint (paint_canvas_ops)
+- Atlas warm + text runs extract
+- Draw segments
+- WebGL canvas frame (run_webgl_frame)
+- async_jobs.drain
+- interpreter event queues (drain_websockets / drain_fetches /
+  drain_raf_callbacks)
+
+**Input handling:**
+- MouseMove: hit-test layout -> set_hovered_node (:hover state)
+- MouseDown (Left): hit-test + focus management + JS click event +
+  `<a href>` navigation request emit
+- MouseUp + MouseLeave: hover clear
+- KeyDown: focused element keydown event + Backspace input edit +
+  Enter form submit dispatch
+- KeyUp: keyup event
+- TextInput: append do focused input value attr + input event
+- Scroll: smooth target (lerp v render_via)
+
+**State exposures:**
+- `text_runs()` + `hit_test_text(x, y)` - per-glyph selection foundation
+- `last_layout_root()` - host overlay pass (inspector overlay)
+- `has_active_animations()` - shell continual redraw signal
+
+**Shell crate (ShellApp) ted uses:**
+- MouseInput -> MouseDown/Up + navigation handling
+- KeyboardInput -> KeyDown/Up + Character TextInput
+- MouseWheel -> Scroll
+- CursorMoved -> MouseMove
+- Pri response.navigation: webview.load_url
+- request_redraw loop dokud animations/transitions/smooth_scroll bezi
+
+**Zustal v App.render (devtools-specific):**
+- Inspector overlay paint (App.devtools state - separate render pass
+  nad webview RT)
+- Devtools panel paint (Elements/Console/Network/Sources panely)
+- Devtools resize drag handler
+- debug_runner poll (JS pause/continue)
+- Paused animations frozen snapshot
+
+User rekl: devtools dostane velky rework v dalsi session.
+
+---
+
+### Polarity invert finale - 6/7 fields hotove
+
+Smazane App fields (6):
+- `title` -> webview.title() delegate
+- `zoom` -> webview.zoom() / set_zoom + cur_zoom capture
+- `scroll_target_x/y` -> webview.scroll_target_x/y + cur_X capture
+- `scroll_x/y` -> webview.scroll_x/y + cur_X capture
+- `html`, `css`, `base_url`, `current_path` -> webview + initial tuple drz pres
+  Option<(String, String, Option<String>, Option<PathBuf>)>, take()'d v
+  App::resumed
+
+Caller sites passuji data PRIMO do `sync_webview(html, css, base, path)`:
+- App::resumed take initial
+- reload_from_html (drag-drop): file:// url + path z drag
+- form submit POST: response html + url
+- navigate_url http: fetched html + css + url
+
+Zbyle App field (1):
+- `interpreter: Option<Interpreter>` - 59 ref, polarity invert vyzaduje
+  **App.render kompletni rewrite** (1266 LOC).
+
+### App.render rewrite plan (dalsi session)
+
+Currently App.render = 1266 LOC inline pipeline:
+- Section A: poll_debug_runner + devtools_wire + console mirror (4416-4767)
+- Section B: cascade + style_map cache (4599-4767)
+- Section C: drain WS/fetch/rAF + async_jobs + anim_apply (4769-4855) - **duplikat webview.render_via**
+- Section D: layout_tree cache (4855-5026) - **duplikat webview**
+- Section E: paint apply_sticky + apply_paint_animations + build_display_list (5026-5076) - **duplikat webview**
+- Section F: post-paint shifts + canvas_ops (5076-5277) - **duplikat webview**
+- Section G: overlays element_highlight + inspector + shell_chrome + fps + devtools_panel (5277-5404) - **APP SPECIFIC**
+- Section H: atlas warm + text_runs + addr_overlay (5404-5588) - **duplikat webview**
+- Section I: gpu draw + present (5588) - **duplikat webview**
+
+**Plan:**
+1. Extract App-specific (G) do `paint_devtools_overlays(&self, cmds, &layout)`.
+2. Delete C-F + H-I (duplikat webview).
+3. New App.render telo:
+   ```
+   self.poll_debug_runner(); self.sync_devtools_state();
+   let renderer = self.renderer.as_mut()?;
+   let webview = self.webview.as_mut()?;
+   webview.set_zoom(self.zoom_local); // sync z App.zoom
+   webview.render_via(renderer); // = sections B-F+H-I
+   // Overlay pass nad webview RT (start_clear=false).
+   let layout = webview.last_layout_root().cloned();
+   if let (Some(l), Some(view)) = (layout, webview.target_view()) {
+       let mut overlay_cmds = Vec::new();
+       self.paint_devtools_overlays(&mut overlay_cmds, &l);
+       renderer.draw_segments_into_view_clipped(view, &overlay_cmds, false, None);
+   }
+   if let Some(view) = webview.target_view() {
+       renderer.present_external_to_swap_chain(view);
+   }
+   ```
+
+Velikost odhad: 4-6 hodin
+- Extract App-specific overlay paint (G) do helper - ~1 h
+- Delete duplicit sections (C-F, H-I) - 30 min
+- New render telo - 1 h
+- Fix devtools state borrow conflicts - 1-2 h
+- Fix tests + regression debug - 1-2 h
+
+Po rewrite:
+- App.render = ~50 LOC
+- App.interpreter polarity invert trivialni (webview.interpreter() helper, NO borrow conflicts mimo overlay pass)
+- App = thin host ~300 LOC total (Window + Renderer + devtools state + helpers)
+- Engine bin = analogiou shell crate s devtools widget
+
+Pripadne pres dalsi krok devtools rework D1-D6 (CDP protocol + frontend
+HTML + 2-WebView shell).
+
+---
+
+### Polarity invert progress (po user pozadavku dokoncit pred devtools rework)
+
+Smazane App fields (4):
+- `App.title: String` -> `self.webview.as_ref().map(|w| w.title())`
+- `App.zoom: f32` -> `self.zoom()` method + `self.set_zoom(z)`
+- `App.scroll_target_x/y: f32` -> getters/setters
+- `App.scroll_x/y: f32` -> getters/setters + `cur_scroll_y/x` capture
+  na startu App.render (borrow conflict pres mut renderer borrow scope)
+
+Zbyle App fields (Phase 99):
+- `App.html: String`, `App.css: String` - primary v App, mirror v webview.raw_html/css.
+  Smaze vyzaduje sync_webview_from_app refactor (take html/css args ze
+  caller misto self.* fields).
+- `App.base_url: Option<String>`, `App.current_path: Option<PathBuf>` -
+  stejny problem: initial values z run_window args potreba pri prvnim
+  sync. Drzene jako App fields aby sync mohla pouzit.
+- `App.interpreter: Option<Interpreter>` - velky (59 ref). Po polarity
+  invert webview.interpreter primary; App vola pres
+  `self.webview.as_mut().and_then(|w| w.interpreter_mut())`. Borrow
+  checker problemy pri scope kde webview + interpreter mut current.
+
+Polarity invert dotaz: realne kompletne smaze vsechny App fields
+vyzaduje App.render kompletni rewrite na shell-like pattern:
+```
+self.sync_webview_from_app(html, css, base_url, path);
+let view = self.webview.as_mut().unwrap().render_via(renderer);
+renderer.present_external_to_swap_chain(view);
+```
++ devtools overlay pass pres `webview.last_layout_root()`.
+
+To by smazlo 1260 LOC App.render. Phase 99 priority po devtools rework
+(spise pred - clean App nez novy devtools).
+
+---
+
+### Phase 99 - polarity invert continuation
+
+Zustava (NEresly N+22):
+- App.html / css / base_url / current_path fields - duplicit s
+  webview.html() / css() / base_url() / local_path(). Smazat App fields,
+  refs nahradit pres helpers/getters.
+- App.scroll_x / scroll_y / zoom fields - duplicit s webview.scroll()/zoom().
+- App.layout_root cache - pojme presunout do webview internal cache.
+- App.interpreter field - posledni primary. Smazat, pres webview.interpreter()
+  / _mut() helpers. Risk: borrow checker (App mutace + webview borrow conflict).
+
+Po polarity invert komplete: App degeneruje na "engine demo host wrapper"
+(Window + Renderer + devtools panel + animations cache + JS debugger UI).
+Mozno spojit s shell::ShellApp do unified host pattern.
+
+### Pomocne metricy
+
+Tests: 2697 pass (drive 2706 -9 ze smazanych tabs.rs internal testy).
+Build: 0 warnings.
+shell render: text + scrollbar + scroll OK.
+
+---
+
+## Session N+22 ORIGINAL: Engine shell strip (chrome bar mimo engine)
+
+**2706 tests pass, 0 warnings.**
+
+Pokracovaní Session N+21. Cilem: engine renderuje JEN naked viewport,
+chrome bar (tabs/addr/find/bookmarks) zmizel z engine.
+
+### Co se smazalo
+
+1. **`lib.rs` shell dispatch** - args "shell" smazany; `browser` + `window`
+   uz jsou aliasy bez `shell_mode` lokalniho flagu; `--no-shell` smazan;
+   `run_window_with_shell` call odstranen
+2. **`browser::render::run_window_with_shell` pub fn** smazana
+3. **App field `shell_mode: bool`** smazany - vsech 25 references
+   `self.shell_mode` -> `false` (dead branches)
+4. **App init**: session restore (multi-tab) odstraneny - single tab
+5. **`shell_chrome.rs` soubor smazan** (242 LOC chrome bar paint)
+6. **Dead chrome paint blok v `App::render`** smazany (363 LOC):
+   paint_shell_chrome_with_groups call, bookmark picker, reading mode
+   badge, status bar URL hover, tab tooltip, F1 shortcuts overlay,
+   zoom indicator, scroll-to-top button
+
+### Co ZUSTALO (Phase 99 cleanup, ne kriticky)
+
+- App fields stale tam (unused dead code):
+  `tabs`, `addr_open`, `addr_input`, `find_open`, `find_query`,
+  `find_match_idx`, `history`, `history_idx`, `bookmarks_bar_visible`,
+  `shell_chrome_h`, `shell_tab_tooltip`, `shell_tab_hover_pending`,
+  `tab_drag_idx`, `tab_drag_x_start`, `bookmark_picker`,
+  `reading_mode_on`, `shortcuts_overlay_open`
+- `tabs.rs` (747 LOC) - zustal jako page state holder (App init pouziva
+  `tabs::Tab::new` pro single-tab page state). Shell-only metody
+  (TabManager::switch_to, drag, ...) dead.
+- Dead event handler bloky pod `if false`/`if self.shell_mode` (=false)
+  vsude pres mod.rs - 9330 LOC stale. ~500 LOC dead.
+
+### Validovany stav
+
+```
+cargo run -p rwe-engine -- browser       # naked viewport (ZADNY chrome bar)
+cargo run -p rwe-engine -- browser src.html
+cargo run -p rwe-shell                   # WebView pipeline naked
+```
+
+Pro plnohodnotny chrome (chrome bar + tabs + addr bar + bookmarks)
+je NUTNE Phase 99 - shell crate dostane chrome paint code. Aktualne
+NIKDE neni chrome dostupny.
+
+### Commits
+
+```
+2ae6e33 chore(shell): vyhodit `legacy` arg delegation
+a1408b7 refactor(engine): smazat shell dispatch z lib.rs + App.shell_mode
+d5fd0d7 refactor(engine): smazat shell_chrome.rs (chrome paint je shell concern)
+174500a refactor(engine): smazat 363 LOC dead chrome paint blok
+73d8a94 refactor(engine): smazat 7 shell-only App fields
+de245ad refactor(engine): smazat READING_MODE_CSS + reading_css cache shtub
+```
+
+### Phase 99 cleanup TODO (na ostraneni TabManager + zbylych shell concerns)
+
+App.tabs field (TabManager) + tabs.rs (747 LOC) zustavaji. Multi-tab
+keyboard shortcuts a chrome event handlers jsou v dead `if false` blocich
+ALE pole stale alokovany kvuli ref sites uvnitr tehto bloku. Strip
+vyzaduje:
+
+1. Pridat App.current_tab: tabs::Tab field, init z initial_tab.
+2. Pridat App::active_tab(&self) -> &Tab, active_tab_mut(&mut self) -> &mut Tab.
+3. **JEDNOTLIVE** smazat vsech ~20 `if false { ... shell ... }` bloku v
+   render/mod.rs (CharacterReceived handlers, mouse handlers, MenuAction
+   match arms, hit_chrome calls). KAZDY block ma rozdilnou hloubku +
+   nested match - automatic regex strip rozbije strukturu (zkouseno v
+   N+22 - vlastni session strip neuspesny, revertovany).
+4. Smazat App.tabs: TabManager field. Smazat init line.
+5. Replace `self.tabs.active_tab()` / `_mut()` -> `self.active_tab()`
+   / `_mut()` (POUZE po brackety strip jinak chyby misalign).
+6. Smaze MenuAction::Tab*(idx) match arms.
+7. Smaze hit_chrome fn + tabs.rs.
+8. Engine.embed::loader pridat `extract_title` re-export z tabs.rs
+   (pouzity i pro embed loadu). about: pages fns presunout do shell.
+
+Dalsi shell-only fields ktere se po tomto kroku da smazat (po dead block
+strip):
+- `addr_input` (SimpleStringBuffer), `find_query`, `find_match_idx`
+- `history`, `history_idx`
+- `shell_tab_tooltip`, `shell_tab_hover_pending`
+- `tab_drag_idx`, `tab_drag_x_start`
+- `status_hover_url`
+- `tabs::TabManager` + `tabs::Tab` (po current_tab refactor)
+
+Strip neuspesny v N+22 protoze: PowerShell regex replace `self.tabs.X`
+-> komentar rozbil multi-line `match` arm / `if let Some(t) = ...` 
+struktury. Iterativni manual delete kazdeho dead bloku je nutny.
+
+---
+
+## Session N+21: Shell-as-crate refactor (Edge/CEF model)
+
+**2706 testy pass, 0 warnings, 7 commitu na branche `inferius-dev/serene-bassi-0a7b83`.**
+
+Cilem session: extrahovat shell (browser chrome) jako samostatnou crate `rwe-shell`, engine zustane pure embeddable renderer. Model = WebView2 / WKWebView / Servo WebView.
+
+### Cargo workspace setup
+
+Root `Cargo.toml` = `[workspace]` + members `crates/engine` + `crates/shell`.
+default-members = engine (puvodni `cargo run` chovani zachovano).
+
+```
+crates/engine/  -> lib `rwe_engine` + bin `rwe-engine` (puvodni kod)
+crates/shell/   -> lib `rwe_shell` + bin `rwe-shell` (novy host)
+static/         -> root (test fixtures, accessible z obou bins z cwd=root)
+```
+
+`tests/` presunuto do `crates/engine/tests/` (fixtures used by taffy compliance + web fixtures testy).
+
+### Embeddable API kontrakt (`embed` module)
+
+Engine vystavuje:
+
+- `embed::Engine` - sdilene `Arc<Device>`/`Arc<Queue>` + atlas placeholders + `EngineSettings`. `new(device, queue)` pro host integraci, `new_headless()` pro state-only testy.
+- `embed::WebView` - per-tab page state: DOM, stylesheets, JS interpreter, layout cache, scroll, viewport, offscreen RT.
+- `embed::InputEvent` / `EventResponse` / `KeyModifiers` / `MouseButton` / `CursorIcon` / `NavigationRequest`/`Method`/`Target`/`Result` - neutralni input/output typy (no winit dep ve WebView API).
+- `embed::loader` - sdilene page resource fns (resolve_css_imports, extract_*, `load_page(url) -> LoadedPage`).
+
+### WebView lifecycle
+
+```rust
+let device = Arc::new(renderer.device().clone());
+let queue = Arc::new(renderer.queue().clone());
+let engine = Arc::new(Engine::new(device, queue));
+let mut webview = WebView::new(engine, 1280, 900);
+webview.load_html(html, css, base_url);
+// each frame:
+webview.handle_input(InputEvent::Scroll { ... });
+let view = webview.render_via(&mut renderer).unwrap();
+renderer.present_external_to_swap_chain(view);
+```
+
+WebView pub fns:
+- `new(engine, w, h)`
+- `load_html(html, css, base_url) -> NavigationResult` - parse + run scripts
+- `load_dom(html, css, base_url) -> NavigationResult` - parse BEZ scripts (mirror sync)
+- `load_url(url) -> Option<NavigationResult>` - http/file dispatch via loader
+- `handle_input(event) -> EventResponse` - scroll + resize implemented, click/key Phase 99
+- `render() -> Option<&TextureView>` - clear-only (headless-friendly)
+- `render_via(&mut Renderer) -> Option<&TextureView>` - real paint (cascade -> layout -> display list -> draw)
+- `resize(w, h, scale_factor)` + `set_scroll` + `set_zoom`
+- low-level: `document()`, `interpreter()`/`_mut()`, `take_interpreter()`/`set_interpreter()`, `stylesheets()`, `html()`/`css()` (raw source preserve), `local_path()`/`set_local_path()`, `target_view()`/`target_texture()`
+
+### Renderer expose pub API (engine internals)
+
+`browser::render::Renderer`:
+- `pub struct` + `pub fn new(window)` + `pub fn resize_surface(w, h)`
+- `pub fn device() / queue() / surface_size() / scale_factor_value()`
+- `pub fn draw_segments_into_view_clipped(view, cmds, start_clear, scissor) -> bool`
+- `pub fn present_external_to_swap_chain(src_view) -> bool` - acquire swap chain, compose fullscreen, present
+
+### Shell crate runtime (Phase 4c+5 minimal)
+
+`crates/shell/src/app.rs` - `ShellApp` s vlastnim winit `ApplicationHandler`:
+- `resumed`: vytvori Window + Renderer + Engine(z renderer device/queue) + WebView + load_html
+- `window_event::Resized` -> renderer.resize_surface + webview.resize
+- `window_event::RedrawRequested` -> webview.render_via + renderer.present_external_to_swap_chain
+- `window_event::CursorMoved` -> webview.handle_input(MouseMove)
+- `window_event::MouseWheel` -> webview.handle_input(Scroll) + redraw
+
+`crates/shell/src/lib.rs`:
+- `pub fn run_window(html, css, base_url, local_path) -> Result<()>`
+
+`crates/shell/src/main.rs`:
+- default = shell::run_window pres embed API (no chrome)
+- Bez chrome bar - pro chrome experience pouzij `cargo run -p rwe-engine -- browser`
+
+### App.webview mirror (Phase 4a)
+
+Engine `App` ma `webview: Option<WebView>` field. Sync v `resumed` + `reload_from_html` pres `load_dom` (no double-script-run). Mirror je read-only - pristup pres `App::webview() -> Option<&WebView>`. App.interpreter zustava primary; WebView je side-effect populated.
+
+Phase 99 invertne: WebView authoritative, App reads delegated.
+
+### CLI cheat sheet
+
+```powershell
+# Engine bin (puvodni rezimy, default cargo run)
+cargo run                            # JS demo (CLI dispatcher)
+cargo run -- debug src.js out.html   # debug viewer HTML
+cargo run -- devtools src.html       # static devtools HTML
+cargo run -- browser src.html        # browser s chrome (App primary)
+cargo run -- browser --no-shell      # naked viewport (engine demo)
+cargo run -- dump src.html           # layout/cascade dump
+
+# Shell bin (Phase 4c+ runtime)
+cargo run -p rwe-shell                       # WebView render path (no chrome)
+cargo run -p rwe-shell -- static/test.html
+# Plnohodnotny chrome (tabs/addr/find/bookmarks) zatim pres engine bin:
+cargo run -p rwe-engine -- browser           # puvodni chrome bar
+```
+
+### Co Phase 99 udela
+
+Plnohodnotny shell crate (parita s engine browser mode):
+
+1. **Chrome paint v shell crate** - presunout `render/tabs.rs` + `render/shell_chrome.rs` + souvisejici App.chrome_state z engine do shell::ShellState. Shell composit shader = WebView texture + chrome paint nad to.
+2. **Multi-tab v shell crate** - Vec<WebView> per ShellApp. Tab switching, session save/restore.
+3. **Mouse click + keyboard dispatch do JS** - WebView::handle_input pro MouseDown/Up potrebuje hit-test pres layout tree + lookup DOM addEventListener registry + dispatch synthesized Event. Stejne pro KeyDown/Up.
+4. **AddressBar/Find/Bookmarks** v shell crate - ShellState + paint + winit text input routing.
+5. **WebView authoritative polarity invert** - App.html/css/interpreter mazat, App.webview primary. Currently mirror sync = redundant work pri kazdem reload.
+6. **Engine multi-process izolace** - Phase 99 dle puvodniho planu. wgpu Device sharing zustane (Chrome model = separate renderer process + shared GPU process, ne separate device).
+7. **App single-tab focus** - po shell extract App ztratit `shell_mode`, `tabs`, `addr_open`, `find_open`, `history`, `bookmarks_bar_visible`.
+
+### Commits (Phase 1-5)
+
+```
+d1fd9a6 refactor: workspace skeleton - crates/engine + crates/shell (Phase 1)
+131ffae chore: default-members = engine pro `cargo run` bez -p
+2a0eb4d refactor(engine): embed API kontrakt - Engine + WebView stubs (Phase 2)
+55910a7 feat(engine): WebView::load_html/load_url + loader helpers (Phase 3)
+b200ff3 feat(engine): App.webview mirror field + sync (Phase 4a)
+673db37 feat(engine): WebView offscreen RT + clear-only render (Phase 4b step 1)
+8c0bbd9 feat(engine): WebView::render_via - real paint pipeline (Phase 4b step 2)
+7a3a1e1 feat(shell): vlastni Window + Renderer + WebView runtime (Phase 4c)
+a68356a feat(shell+engine): scroll + mouse move input dispatch (Phase 5 minimal)
+```
+
+---
 
 ## Session N+20: debug helpers + mileneckaseznamka.cz dalsi vlna fixes
 
@@ -1487,3 +2210,189 @@ Render frame:
 - **Commit message:** strucny, popis "co + proc". Cesky.
 - **Pri nejistote zeptat se** drive nez psat kod.
 - **NIKDY nedelat fake fixes** ("done" bez verifikace) - radeji zeptat user.
+
+---
+
+## Session N+23: DevTools rework + DOM API Tier 1+2
+
+### Devtools Edge/CEF model (D1-D6)
+
+**D1 - Protocol crate** (`crates/devtools-proto/`, 8 testy)
+- DevtoolsRequest / DevtoolsResponse / DevtoolsEvent / DevtoolsError typy
+- Per-domain modules: dom / css / runtime / debugger / network / performance
+- Method enum + error_codes
+
+**D2 - Target adapter** (`crates/engine/src/embed/devtools_target.rs`, 12 testy)
+- DevtoolsTarget: events buffer + breakpoint counter (stateless mimo to)
+- `handle_request(&mut WebView, req) -> DevtoolsResponse` - per-domain dispatch
+- DOM.getDocument/getAttributes/setAttributeValue/removeAttribute real
+- DOM.querySelector/All real (cascade::matches_selector + DFS walk)
+- CSS.getMatchedStyles real (walk stylesheets + match per node + serialize properties)
+- Runtime.evaluate real (lexer + parser + interp.eval pres Stmt::Expr top-level)
+- Debugger.setBreakpoint/resume real
+
+**D3 - DevTools frontend** (`crates/devtools-frontend/`, 3 testy)
+- Static HTML/CSS/JS resources jako &'static str pres include_str!
+- INDEX_HTML (tab strip) + 5 panel HTMLs (Elements/Console/Sources/Network/Performance)
+- THEME_CSS (dark Chrome-style) + CDP_JS (window.cdp.send/on/off + pollEvents)
+- Panely v DOM od zacatku jako siblings, tab swap pres display style (setAttribute)
+
+**D4 - Shell 2-WebView host** (shell/src/app.rs)
+- D4a: F12 toggle, ShellApp.devtools: Option<WebView>, lazy init
+- D4b: real split layout - present_split_external_to_swap_chain
+  (top_view + bottom_view + ratio, viewport-based dual draw)
+- D4c: input routing po y koord, point_in_devtools + devtools_y_offset
+- D4d: splitter drag (point_on_splitter + drag MouseMove updatuje split_ratio)
+
+**D5 - Inspector overlay** (shell + devtools-frontend)
+- Ctrl+Shift+C toggle inspect_mode
+- CursorMoved pick_node_at(layout_root, x, y) -> Option<usize ptr>
+- overlay_painter callback paint 4 modre rect outline + polo-pruhledne pozadi
+- LMB Press v inspect emit DOM.inspectNodeRequested CDP event + auto-open devtools
+- elements.html listener selectne node v tree + scrollIntoView
+
+**D6 - JS binding** (`__rwe_cdp_send_native` + `__rwe_cdp_poll_events`)
+- D6a stub: native fns log + return ""
+- D6b real: CdpChannel { req_queue, resp_queue } Rc<RefCell<VecDeque>>
+- pump_cdp() v shell redraw - drain req_queue, dispatch via target,
+  push response/events do resp_queue jako JSON
+- cdp.js refactor: send() vrati pending Promise, response delivered pres pollEvents
+
+### DOM API Tier 1 (8/8 hotove)
+
+Vse v `crates/engine/src/interpreter/` + tests v `dom_tier1_tests.rs` (34 testu):
+
+1. **element.style cached + setter persistence** - `Interpreter.style_cache:
+   HashMap<usize, Weak<JsObject>>` per node, Object setter sync do node.style attr
+2. **getBoundingClientRect** + getClientRects pres `Interpreter.layout_lookup:
+   Option<Rc<dyn Fn(*const Node) -> Option<(f32,f32,f32,f32)>>>`
+3. **window.getComputedStyle** pres `cascade_lookup` callback (HashMap props)
+4. **offsetWidth/Height/Left/Top + clientW/H + scrollW/H** pres layout_lookup
+5. **element.matches(selector) + closest(selector)** pres parse_selectors + cascade
+6. **element.contains(other)** DFS subtree walk
+7. **Event/CustomEvent/MouseEvent/KeyboardEvent constructors** v builtins
+8. **window.addEventListener** real + `Interpreter::dispatch_window_event`
+
+### Wire-up shell (webview.rs)
+
+- `layout_rects: Rc<RefCell<HashMap<usize, (f32,f32,f32,f32)>>>` - node ptr -> rect
+- `cascade_props: Rc<RefCell<HashMap<usize, HashMap<String, String>>>>` - node ptr -> styles
+- Po render_via populate ze layout_root + style_map.
+- Pri load_dom register interp.set_layout_lookup + set_cascade_lookup s Rc clones.
+- Pri load_html dispatch DOMContentLoaded + load events.
+- Pri resize() / set_scroll() dispatch resize / scroll events.
+
+### DOM API Tier 2 (8/8 hotove, 21 testu)
+
+- **insertBefore(newNode, refNode)** + DocumentFragment NodeKind variant
+- **replaceChild(newNode, oldNode)** real
+- **insertAdjacentElement(pos, el)** - beforebegin/afterbegin/beforeend/afterend
+- **cloneNode(deep)** real recursive (kopiruje kind+attrs, listenery ne per spec)
+- **removeEventListener real** s function identity (helper function_identity_eq
+  v js_value_impl: User/Async/Generator pres (name, params.len(), Rc::ptr_eq(env)),
+  Native pres Rc::ptr_eq)
+- **document.activeElement** - Interpreter.focused_element: Rc<RefCell<Option<Rc<Node>>>>,
+  focus() set, blur() clear (jen pri ptr_eq match), default fallback document.body
+- **createDocumentFragment** real - new NodeKind::DocumentFragment, appendChild
+  fragment-move semantics (presune children + clear fragment)
+- **NodeKind::DocumentFragment** match arms doplneny ve 5 souborech (eval_member,
+  debug_view/devtools, devtools/model/elements, embed/devtools_target, dom)
+
+### Shell features (additional)
+
+- D5 inspector overlay (Ctrl+Shift+C + hit-test + overlay_painter paint outline
+  + click emit DOM.inspectNodeRequested + elements.html listener selectne node)
+- Address bar Ctrl+L (stdout-only feedback, visual overlay TBD)
+- D4d splitter drag (NS resize cursor + drag updatuje split_ratio)
+
+### CDP target handlers (real, no stubs)
+
+- DOM: getDocument / querySelector / querySelectorAll / getAttributes /
+  setAttributeValue / removeAttribute
+- CSS: getMatchedStyles / getComputedStyle / setPropertyText
+- Runtime: evaluate (lexer + parser + interp.eval pres Stmt::Expr,
+  unwrap WithLine)
+- Debugger: setBreakpoint / removeBreakpoint / resume + 4 step stubs
+- Network: getResponseBody stub (body cache TBD - vyzaduje fetch refactor)
+- Performance: getMetrics real (Documents/Nodes/LayoutObjects/JSEventListeners)
+
+### DOM API Tier 3 (3/3 hotove, 14 testu)
+
+- **element.scrollIntoView(opts)** - pres layout_lookup posune scroll_pos.
+  Default block=start, support center/end (heuristika 600/300 vh).
+- **window.scrollTo/scrollBy/scroll + pageXOffset/pageYOffset/scrollX/scrollY** -
+  scroll_pos Rc<RefCell<(f32,f32)>> field na Interpreter. JS modify pres
+  scrollTo(x, y) nebo scrollTo({left, top}). Getter dynamic v eval_member.
+- **element.focus()/blur() real** - dispatch focus/blur events pres
+  dispatch_event. focus() pri prepnuti dispatchne blur na predchozim.
+
+### DOM API Tier 4 (5/5 hotove, 26 testu)
+
+- **DOMRect + toJSON()** - centralni helper make_dom_rect(x,y,w,h).
+  Pouziva getBoundingClientRect + getClientRects.
+- **DOMTokenList full** (classList): length, item(i), [0]/[1]/... indexed,
+  replace(old,new), value getter/setter, Symbol.iterator (for-of + Array.from).
+- **Array.from** rozsiren o Object iterable protocol + Array-like fallback.
+- **MutationObserver** real dispatch z removeAttribute + setAttribute hooks.
+- **IntersectionObserver/ResizeObserver** stub-level (API funguje, callback
+  nikdy nefired - render-time check vyzaduje per-frame work).
+
+### Wire-up scroll_pos (bidirectional sync)
+
+WebView render_via dela:
+1. Pre tick: check interp.scroll_pos. Pri zmene (JS scrollTo) apply do
+   self.scroll_x/y + scroll_target.
+2. Po smooth scroll tick: sync interp.scroll_pos = (scroll_x, scroll_y).
+   JS pageXOffset/scrollX cte aktualni hodnotu.
+3. set_scroll() take sync interp.scroll_pos.
+
+### Shell features dokoncene
+
+- Address bar Ctrl+L (stdout-only feedback)
+- Find on page Ctrl+F (stdout-only, highlight TBD)
+
+### Test counts (po N+23, Tier 1-4 done)
+
+- 2804 engine, 8 devtools-proto, 3 devtools-frontend = 2815 testu
+- 0 warnings, cargo build/test --workspace cisty
+- 30+ commitov v session
+
+### DOM API Tier 5 (8/8 hotove, 29 testu)
+
+CSSOM + Shadow DOM + Selection/Range + scrollingElement.
+
+- **Shadow DOM real** - attachShadow vraci ShadowRoot s DocumentFragment-based
+  underlying DOM. Shadow_roots registry na Interpreter (host_ptr -> SR obj).
+  ShadowRoot dispatch: appendChild/removeChild/querySelector/querySelectorAll/
+  getElementById/contains real. Closed mode hide z host.shadowRoot. Double-
+  attach throws NotSupportedError per spec.
+- **document.scrollingElement** -> html_element (standard mode).
+- **document.styleSheets real** s host wire-up:
+  - Interpreter.stylesheets_lookup callback (Vec<sheet> kde sheet = Vec<rule>).
+  - WebView.stylesheets_data Rc<RefCell> bridge - po load_html rebuild ze
+    self.stylesheets do flat format.
+  - StyleSheetList: length, item(i), indexed [0].
+  - CSSStyleSheet: cssRules (CSSRuleList s length + item + indexed),
+    insertRule/deleteRule stubs (vrati idx/undefined), replace/replaceSync
+    Promise stubs (Constructable Stylesheets), href, disabled, type.
+  - CSSRule: type=1 (STYLE_RULE), selectorText, cssText, style.
+- **Selection API + Range API** existoval, pridan jen window.getSelection()
+  mirror document.getSelection.
+- **CSSStyleDeclaration full** - pridan length getter (__get_length__) +
+  item(i) (vraci nazev i-te property). cssText getter/setter uz existoval.
+- **document.fonts** - pridan forEach + addEventListener/removeEventListener
+  stubs. status='loaded', size=0, ready=Promise.resolve, check, load OK.
+
+### Test counts (po N+24, all 5 tiers done)
+
+- 2833 engine, 8 devtools-proto, 3 devtools-frontend = 2844 testu
+- 0 warnings, cargo build/test --workspace cisty
+- 3 commit DOM Tier 5 (shadow + style + styleSheets)
+
+### Network.getResponseBody body cache (N+24 final)
+
+- Interpreter.response_bodies: Rc<RefCell<HashMap<String, String>>> field.
+- drain_fetches po Ok outcome insertujeme body clone s URL klicem.
+- CDP Network.getResponseBody lookup pres webview.interpreter().response_bodies
+  klic = request_id (v nas modelu == URL).
+- XHR body cache TBD.

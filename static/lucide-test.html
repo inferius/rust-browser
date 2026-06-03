@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Lucide test</title>
+</head>
+<body>
+<i data-lucide="x"></i>
+<i data-lucide="layout-panel-left"></i>
+<script src="lucide.js"></script>
+<script>
+console.log('lucide=' + (typeof lucide));
+console.log('lucide.createIcons=' + (typeof lucide !== 'undefined' && typeof lucide.createIcons));
+console.log('lucide.icons=' + (typeof lucide !== 'undefined' && typeof lucide.icons));
+try {
+    lucide.createIcons();
+    console.log('createIcons OK');
+} catch(e) {
+    console.log('error type=' + typeof e);
+    console.log('error str=' + String(e));
+    console.log('error msg=' + (e && e.message));
+    console.log('error stack=' + (e && e.stack));
+    if (e) {
+        for (var k in e) {
+            console.log('  e.' + k + '=' + typeof e[k]);
+        }
+    }
+}
+</script>
+</body>
+</html>

@@ -10,6 +10,80 @@ Konvence:
 
 ---
 
+## Rendering bugs (session N+24)
+
+- [ ] **Filter color matrix pri D4 layer mode**
+  Quick fix bypass offscreen + barvy = text sharp ale ztracene barevne efekty
+  (sepia/hue-rotate/grayscale). Full fix vyzaduje per-LAYER offscreen RT alloc
+  (= namisto config-sized shared offscreen, alloc tex matching layer dims).
+  Hook v `Renderer::draw_to_offscreen` + `compose_offscreen` musi accept layer
+  ctx + alloc.
+
+- [ ] **Transform 2D corner cuts pres rotace**
+  Pri rotated quad mimo axis-aligned layer.root_rect bbox dochazi clip. Layer
+  texture sized = pre-transform bbox. Rotated content extends past, hrany
+  uriznute. Fix: rozsirit layer.root_rect na transformed AABB (= orig * sqrt(2)
+  pri 45deg). Compose ma cely content + rotate.
+
+- [ ] **Animation text missing (.anim-box slide first item)**
+  Slide animation rect.x menu kazdy frame. Damage=Some -> layer re-raster.
+  Layer texture by mel mit text. User vidi missing pres prvni anim-box. Mozna
+  layer cache stale-key OR text emit position outside layer rect.
+
+- [ ] **Flex wrap pri vysoky zoom**
+  Pri zoom > ~3x by mel flex-wrap aktivovat (Chrome wraps). RWE flex
+  collect_lines pres container_main = bx.rect.width inner. Mozna section width
+  != viewport-aware pres zoom. Nebo flex pre-pass intrinsic compute exceeds
+  containerwidth.
+
+- [ ] **Section width pres zoom (page overflow)**
+  User mentions sekcni obsah pretika mimo viewport pres zoom. Section block-
+  level: width auto = parent width. Parent = body = viewport. Pres
+  viewport_w/zoom = correct mensi. Mozna body width set NEFRAGMENTNIM
+  viewport_w (pre-zoom value).
+
+- [ ] **WebGL canvas empty (white square)**
+  test.html WebGL section pres canvas.getContext("webgl") + clearColor + clear.
+  webgl_states populated po JS run. run_webgl_frame iteruje canvas tags ale
+  user vidi prazdny canvas. Diagnose: walk_webgl reaches canvas? draw_queue
+  contains Clear? run_webgl_frame writes to right target?
+
+- [ ] **Zoom text blur (regular raster path)**
+  LCD threshold zvysen 24 -> 96 (=vsechny common fs vc. zoomed pres LCD).
+  Pri vetsim text (H1 32px * zoom 1.5x = 48 phys < 96) je LCD aktivni.
+  Pres extra-large (96+ phys) jde regular path = bilinear soft. Mozna SDF
+  text pres ultra-large render.
+
+- [ ] **fade animation color artifacts**
+  Fade anim aplikuje opacity pres compose row3.w. Pres opacity != 1, premul
+  layer stored values * opacity blend. Vyzaduje runtime check kde se barevny
+  artifact projevuje.
+
+- [ ] **Layer scroll wrap (boxy mimo hlavni element pres zoom)**
+  Pri zoom layout reruns at smaller viewport = inline boxy wrap differently.
+  Layout shoud handle. User vidi boxy mimo container. Mozna inner_w nesouhlasi
+  s parent layer cliping.
+
+---
+
+## Input / Events
+
+- [ ] **JS PointerEvent.getCoalescedEvents() API**
+  Shell-side coalescing hotovo (buffer raw CursorMoved -> jeden dispatch per
+  redraw frame, s `InputEvent::MouseMove.coalesced: Vec<(f32,f32)>` history).
+  Chybi:
+  1. Dispatch `mousemove` / `pointermove` JS event z `handle_input MouseMove`
+     do focused/hovered element (target + bubble path).
+  2. Vlozit `coalesced` history do PointerEvent JS objektu (vlastnost
+     skrytá za `getCoalescedEvents()` metodou ktera vraci pole mini-PointerEventu).
+  3. Per-coalesced event vyrobit "snapshot" PointerEvent (clientX/Y, pageX/Y,
+     screenX/Y, pointerId, pointerType, atd.) z (x, y) souradnic.
+  4. Implementovat `PointerEvent.getPredictedEvents()` (volitelne - JS spec,
+     vraci predikovane future positions; vyzaduje motion model).
+  Reference: https://www.w3.org/TR/pointerevents3/#dom-pointerevent-getcoalescedevents
+
+---
+
 ## Media
 
 ### Obrazky (raster)

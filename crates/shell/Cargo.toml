@@ -1,0 +1,31 @@
+[package]
+name = "rwe-shell"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "rwe_shell"
+path = "src/lib.rs"
+
+[[bin]]
+name = "rwe-shell"
+path = "src/main.rs"
+
+[dependencies]
+# Engine library - core renderer + layout + interpreter.
+rwe-engine = { path = "../engine" }
+
+# winit reexpose - shell vlastni Window + EventLoop. Same verze jako engine.
+winit = "0.30"
+# wgpu - shell pouziva Renderer pres engine, ale potrebuje wgpu types pri
+# texture/view manipulation.
+wgpu = "29"
+# arboard - system clipboard pro Ctrl+C copy text selection.
+arboard = "3.6"
+# DevTools frontend bundled HTML/CSS/JS resources (D3). Shell injectne
+# INDEX + panel HTMLs do devtools WebView pri F12 toggle.
+rwe-devtools-frontend = { path = "../devtools-frontend" }
+# DevTools protocol typy (D1) - DevtoolsRequest/Response/Event pres CDP channel.
+rwe-devtools-proto = { path = "../devtools-proto" }
+# JSON serialize CDP messages pred predanim do native pollEvents.
+serde_json = "1"

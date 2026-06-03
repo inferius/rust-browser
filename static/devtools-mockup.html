@@ -1,0 +1,2414 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+<meta charset="UTF-8">
+<title>RWE DevTools - Firefox-like mockup</title>
+<style>
+/* Firefox dark theme palette */
+:root {
+    --bg-base: #0c0c0d;
+    --bg-surface: #18191a;
+    --bg-elev1: #1c1d20;
+    --bg-elev2: #232427;
+    --bg-elev3: #2a2b2e;
+    --bg-hover: #313337;
+    --bg-active: #38393d;
+    --border: #2a2b2e;
+    --border-strong: #3a3d40;
+    --fg: #d4d4d8;
+    --fg-dim: #a0a0a4;
+    --fg-muted: #737378;
+    --accent: #0a84ff;
+    --accent-hover: #0060df;
+    --accent-bg: rgba(10, 132, 255, 0.15);
+    --link: #4caedb;
+    --error: #ff6b6b;
+    --warn: #f5b942;
+    --ok: #5bc56a;
+    --syntax-tag: #75bfff;
+    --syntax-attr-name: #a3d2ff;
+    --syntax-attr-value: #ff7de9;
+    --syntax-string: #ff7de9;
+    --syntax-keyword: #b98eff;
+    --syntax-number: #ff6b6b;
+    --syntax-comment: #737378;
+    --syntax-prop: #75bfff;
+    --syntax-val: #f5b942;
+    --selection: #0a84ff66;
+    --gutter-bg: #15161a;
+    --bp-active: #0a84ff;
+    --tab-active-bg: #1c1d20;
+    --tab-active-border: #0a84ff;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: var(--bg-base);
+    color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, system-ui, sans-serif;
+    font-size: 12px;
+    overflow: hidden;
+    user-select: none;
+}
+
+/* Page area (mock) */
+.page-area {
+    height: 50%;
+    background: #fff;
+    color: #333;
+    padding: 16px;
+    font-size: 14px;
+    overflow: auto;
+    border-bottom: 1px solid var(--border-strong);
+}
+.page-area h1 { margin: 0 0 8px; }
+.page-area p { margin: 4px 0; color: #555; }
+.page-area button { margin: 4px; padding: 6px 12px; }
+
+/* DevTools container */
+.devtools {
+    height: 50%;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-base);
+}
+
+/* Resize grip nad devtools */
+.resize-grip {
+    height: 4px;
+    background: var(--bg-elev2);
+    cursor: ns-resize;
+    flex-shrink: 0;
+}
+.resize-grip:hover { background: var(--accent); }
+
+/* Top tab strip */
+.tab-strip {
+    display: flex;
+    align-items: stretch;
+    height: 28px;
+    background: var(--bg-base);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+.tab-strip .left { display: flex; overflow: hidden; }
+.tab-strip .right {
+    display: flex;
+    margin-left: auto;
+    align-items: center;
+    gap: 2px;
+    padding: 0 6px;
+}
+.tab {
+    padding: 0 12px;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    color: var(--fg-dim);
+    font-size: 12px;
+    border-right: 1px solid var(--border);
+    position: relative;
+    white-space: nowrap;
+}
+.tab:hover { background: var(--bg-elev1); color: var(--fg); }
+.tab.active {
+    color: var(--fg);
+    background: var(--tab-active-bg);
+}
+.tab.active::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: var(--tab-active-border);
+}
+.tab-icon {
+    width: 14px;
+    height: 14px;
+    background: currentColor;
+    opacity: 0.5;
+    mask-repeat: no-repeat;
+    mask-position: center;
+    mask-size: contain;
+    -webkit-mask-repeat: no-repeat;
+    -webkit-mask-position: center;
+    -webkit-mask-size: contain;
+    flex-shrink: 0;
+}
+.tab.active .tab-icon { opacity: 0.9; }
+.toolbar-btn {
+    width: 24px;
+    height: 24px;
+    border-radius: 3px;
+    border: none;
+    background: transparent;
+    color: var(--fg-dim);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+    padding: 0;
+}
+.toolbar-btn:hover { background: var(--bg-hover); color: var(--fg); }
+.toolbar-btn.active { background: var(--accent-bg); color: var(--accent); }
+.close-btn { font-size: 16px; }
+
+/* Panel body */
+.panel-body { flex: 1; overflow: hidden; }
+.panel {
+    height: 100%;
+    width: 100%;
+    display: none;
+}
+.panel.active { display: flex; }
+
+/* Vertical splitter */
+.vsplitter {
+    width: 1px;
+    background: var(--border);
+    cursor: ew-resize;
+    flex-shrink: 0;
+    position: relative;
+}
+.vsplitter::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -3px;
+    width: 7px;
+    height: 100%;
+}
+.vsplitter:hover { background: var(--accent); }
+
+/* ============================================
+   INSPECTOR (Pruzkumnik) - DOM + Styles + Layout
+   ============================================ */
+.inspector {
+    flex-direction: column;
+}
+.inspector-toolbar {
+    display: flex;
+    align-items: center;
+    height: 26px;
+    border-bottom: 1px solid var(--border);
+    padding: 0 4px;
+    gap: 2px;
+    flex-shrink: 0;
+}
+.inspector-body {
+    flex: 1;
+    display: flex;
+    overflow: hidden;
+}
+
+/* Left: DOM tree */
+.dom-pane {
+    flex: 1;
+    overflow: auto;
+    padding: 4px 4px 4px 0;
+    min-width: 180px;
+    background: var(--bg-base);
+}
+.dom-search-bar {
+    display: flex;
+    align-items: center;
+    padding: 4px 6px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-elev1);
+    gap: 4px;
+}
+.dom-search-input {
+    flex: 1;
+    background: var(--bg-elev2);
+    border: 1px solid var(--border-strong);
+    color: var(--fg);
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 11px;
+    outline: none;
+    height: 22px;
+}
+.dom-search-input:focus { border-color: var(--accent); }
+
+.dom-tree {
+    font-family: 'Consolas', 'SF Mono', monospace;
+    font-size: 11px;
+    line-height: 18px;
+    user-select: text;
+    padding: 4px 0;
+}
+.dom-node {
+    padding: 0 6px;
+    cursor: pointer;
+    white-space: pre;
+}
+.dom-node:hover { background: var(--bg-elev1); }
+.dom-node.selected { background: var(--accent); color: #fff; }
+.dom-node.selected .tok-tag,
+.dom-node.selected .tok-attr-name,
+.dom-node.selected .tok-attr-value,
+.dom-node.selected .tok-text { color: #fff; }
+.dom-node .toggle {
+    display: inline-block;
+    width: 12px;
+    text-align: center;
+    color: var(--fg-muted);
+    cursor: pointer;
+    font-size: 9px;
+}
+.tok-tag { color: var(--syntax-tag); }
+.tok-attr-name { color: var(--syntax-attr-name); }
+.tok-attr-value { color: var(--syntax-attr-value); }
+.tok-text { color: var(--fg); }
+.tok-comment { color: var(--syntax-comment); font-style: italic; }
+.event-badge {
+    background: var(--warn);
+    color: var(--bg-base);
+    font-size: 9px;
+    padding: 0 4px;
+    border-radius: 6px;
+    margin-left: 4px;
+}
+
+/* Middle: Styles panel */
+.styles-pane {
+    width: 340px;
+    min-width: 240px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-surface);
+    flex-shrink: 0;
+}
+.styles-header {
+    display: flex;
+    align-items: center;
+    height: 26px;
+    border-bottom: 1px solid var(--border);
+    padding: 0 6px;
+    gap: 4px;
+    background: var(--bg-elev1);
+}
+.styles-filter {
+    flex: 1;
+    background: var(--bg-elev2);
+    border: 1px solid var(--border-strong);
+    color: var(--fg);
+    padding: 2px 8px 2px 22px;
+    border-radius: 3px;
+    font-size: 11px;
+    outline: none;
+    height: 20px;
+    background-image: linear-gradient(transparent, transparent);
+}
+.styles-filter:focus { border-color: var(--accent); }
+.styles-pseudo-toggle {
+    color: var(--fg-dim);
+    padding: 2px 6px;
+    font-size: 10px;
+    cursor: pointer;
+    border: 1px solid var(--border-strong);
+    border-radius: 3px;
+    background: var(--bg-elev2);
+}
+.styles-pseudo-toggle.active { color: var(--accent); border-color: var(--accent); }
+
+.styles-body {
+    flex: 1;
+    overflow: auto;
+    padding: 4px 0;
+}
+.styles-section { padding: 4px 0; }
+.style-rule {
+    font-family: 'Consolas', monospace;
+    font-size: 11px;
+    line-height: 16px;
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--bg-elev1);
+}
+.style-rule:hover { background: var(--bg-elev1); }
+.style-rule .selector { color: var(--syntax-tag); }
+.style-rule .source {
+    color: var(--link);
+    font-size: 10px;
+    float: right;
+    cursor: pointer;
+    text-decoration: underline dotted;
+}
+.style-rule .source:hover { color: #fff; }
+.style-rule .decl {
+    padding-left: 16px;
+    display: flex;
+    align-items: center;
+}
+.style-rule .decl .check {
+    display: inline-block;
+    width: 14px;
+    color: var(--fg-muted);
+    cursor: pointer;
+    flex-shrink: 0;
+}
+.style-rule .decl input[type=checkbox] {
+    margin: 0 4px 0 0;
+    appearance: none;
+    width: 11px;
+    height: 11px;
+    border: 1px solid var(--border-strong);
+    background: var(--bg-elev2);
+    border-radius: 2px;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+.style-rule .decl input[type=checkbox]:checked {
+    background: var(--accent);
+    border-color: var(--accent);
+}
+.style-rule .decl input[type=checkbox]:checked::after {
+    content: '✓';
+    color: #fff;
+    font-size: 9px;
+    display: block;
+    text-align: center;
+    line-height: 9px;
+}
+.style-rule .decl .prop { color: var(--syntax-prop); }
+.style-rule .decl .val { color: var(--syntax-val); }
+.style-rule .decl.disabled .prop,
+.style-rule .decl.disabled .val { text-decoration: line-through; opacity: 0.5; }
+.style-add {
+    color: var(--fg-muted);
+    font-style: italic;
+    padding: 2px 24px;
+    cursor: pointer;
+    font-size: 11px;
+}
+.style-add:hover { color: var(--fg); background: var(--bg-elev1); }
+.style-rule-bracket { color: var(--fg-dim); }
+.media-line {
+    padding: 4px 8px;
+    font-family: 'Consolas', monospace;
+    font-size: 10px;
+    color: var(--fg-dim);
+    border-bottom: 1px solid var(--bg-elev1);
+    background: var(--bg-elev1);
+}
+.layer-line {
+    padding: 4px 8px;
+    font-family: 'Consolas', monospace;
+    font-size: 10px;
+    color: var(--syntax-keyword);
+    background: var(--bg-elev1);
+    border-bottom: 1px solid var(--bg-elev1);
+}
+
+/* Right: Layout/Computed/Changes... tabs */
+.layout-pane {
+    width: 320px;
+    min-width: 200px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-surface);
+    flex-shrink: 0;
+    border-left: 1px solid var(--border);
+}
+.layout-pane.collapsed {
+    width: 28px;
+    min-width: 28px;
+}
+.layout-tabs {
+    display: flex;
+    height: 26px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-base);
+    overflow: hidden;
+    flex-shrink: 0;
+}
+.layout-pane.collapsed .layout-tabs-inner { display: none; }
+.layout-tabs-inner {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+}
+.layout-tab {
+    padding: 0 10px;
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+    color: var(--fg-dim);
+    font-size: 11px;
+    border-right: 1px solid var(--border);
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+.layout-tab.active {
+    color: var(--fg);
+    background: var(--bg-surface);
+    position: relative;
+}
+.layout-tab.active::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: var(--tab-active-border);
+}
+.layout-tab:hover:not(.active) { background: var(--bg-elev1); color: var(--fg); }
+.layout-overflow-btn {
+    width: 24px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    color: var(--fg-dim);
+    border-left: 1px solid var(--border);
+    font-size: 10px;
+}
+.layout-overflow-btn:hover { background: var(--bg-hover); color: var(--fg); }
+.layout-collapse-btn {
+    width: 24px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    color: var(--fg-dim);
+    border-left: 1px solid var(--border);
+    background: var(--bg-base);
+    font-size: 12px;
+}
+.layout-collapse-btn:hover { background: var(--bg-hover); color: var(--fg); }
+.layout-body {
+    flex: 1;
+    overflow: auto;
+    padding: 8px 12px;
+}
+.layout-pane.collapsed .layout-body { display: none; }
+
+.layout-section {
+    margin-bottom: 16px;
+}
+.layout-section-header {
+    color: var(--fg);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 4px 0;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+}
+.layout-section-header::before {
+    content: '▾';
+    margin-right: 4px;
+    font-size: 9px;
+    color: var(--fg-dim);
+}
+.layout-section.collapsed .layout-section-header::before { content: '▸'; }
+.layout-section.collapsed .layout-section-body { display: none; }
+.layout-empty {
+    color: var(--fg-muted);
+    font-style: italic;
+    font-size: 11px;
+    padding: 4px 0;
+}
+
+/* Box model */
+.box-model {
+    padding: 8px;
+    display: flex;
+    justify-content: center;
+}
+.bm-layer {
+    border: 1px dashed var(--fg-muted);
+    padding: 18px 24px;
+    text-align: center;
+    font-family: 'Consolas', monospace;
+    font-size: 10px;
+    color: var(--fg-dim);
+    position: relative;
+}
+.bm-layer .label {
+    position: absolute;
+    top: -8px;
+    left: 6px;
+    background: var(--bg-surface);
+    padding: 0 4px;
+    color: var(--fg-muted);
+    font-size: 9px;
+    text-transform: uppercase;
+}
+.bm-layer .edge {
+    position: absolute;
+    color: var(--fg);
+    font-size: 11px;
+    font-family: 'Consolas', monospace;
+}
+.bm-layer .edge.top    { top: 2px; left: 50%; transform: translateX(-50%); }
+.bm-layer .edge.bottom { bottom: 2px; left: 50%; transform: translateX(-50%); }
+.bm-layer .edge.left   { top: 50%; left: 4px; transform: translateY(-50%); }
+.bm-layer .edge.right  { top: 50%; right: 4px; transform: translateY(-50%); }
+.bm-margin { background: rgba(255, 165, 0, 0.12); }
+.bm-border { background: rgba(255, 220, 0, 0.15); }
+.bm-padding { background: rgba(130, 200, 130, 0.15); }
+.bm-content {
+    padding: 10px 28px;
+    background: rgba(110, 180, 240, 0.18);
+    color: var(--syntax-tag);
+    border: none;
+    font-weight: bold;
+}
+
+/* Computed */
+.computed-filter {
+    width: 100%;
+    background: var(--bg-elev2);
+    border: 1px solid var(--border-strong);
+    padding: 3px 8px;
+    color: var(--fg);
+    font-size: 11px;
+    border-radius: 3px;
+    margin-bottom: 6px;
+    outline: none;
+    height: 22px;
+}
+.computed-filter:focus { border-color: var(--accent); }
+.computed-list {
+    font-family: 'Consolas', monospace;
+    font-size: 11px;
+    line-height: 18px;
+}
+.computed-prop {
+    display: flex;
+    padding: 1px 0;
+}
+.computed-prop:hover { background: var(--bg-elev1); }
+.computed-prop .toggle-src {
+    display: inline-block;
+    width: 12px;
+    color: var(--fg-muted);
+    cursor: pointer;
+    font-size: 9px;
+}
+.computed-prop .name {
+    width: 50%;
+    color: var(--syntax-prop);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.computed-prop .val {
+    flex: 1;
+    color: var(--fg);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Changes */
+.changes-list {
+    font-family: 'Consolas', monospace;
+    font-size: 11px;
+}
+.change-rule {
+    margin-bottom: 8px;
+    padding: 4px;
+    background: var(--bg-elev1);
+    border-radius: 3px;
+}
+.change-rule .sel { color: var(--syntax-tag); }
+.change-decl.added { color: var(--ok); }
+.change-decl.added::before { content: '+ '; }
+.change-decl.removed { color: var(--error); }
+.change-decl.removed::before { content: '- '; }
+.copy-btn {
+    float: right;
+    padding: 2px 8px;
+    background: var(--bg-elev2);
+    border: 1px solid var(--border-strong);
+    color: var(--fg-dim);
+    cursor: pointer;
+    border-radius: 3px;
+    font-size: 10px;
+}
+.copy-btn:hover { background: var(--bg-hover); color: var(--fg); }
+
+/* Compatibility */
+.compat-prop {
+    padding: 4px 6px;
+    border-bottom: 1px solid var(--bg-elev1);
+    font-family: 'Consolas', monospace;
+    font-size: 11px;
+}
+.compat-prop .name { color: var(--syntax-prop); }
+.compat-prop .browsers {
+    margin-top: 2px;
+    font-size: 10px;
+}
+.compat-browser {
+    display: inline-block;
+    padding: 1px 6px;
+    margin-right: 4px;
+    border-radius: 3px;
+    background: var(--bg-elev2);
+    color: var(--fg-dim);
+}
+.compat-browser.supported { color: var(--ok); border: 1px solid var(--ok); }
+.compat-browser.unsupported { color: var(--error); border: 1px solid var(--error); }
+.compat-browser.partial { color: var(--warn); border: 1px solid var(--warn); }
+
+/* Fonts */
+.font-card {
+    padding: 8px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    margin-bottom: 8px;
+    background: var(--bg-elev1);
+}
+.font-card .preview {
+    font-size: 24px;
+    color: var(--fg);
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 6px;
+}
+.font-card .family { font-size: 12px; color: var(--accent); font-weight: 500; }
+.font-card .meta { font-size: 10px; color: var(--fg-muted); margin-top: 4px; }
+
+/* Animations */
+.anim-timeline {
+    margin-bottom: 12px;
+}
+.anim-row {
+    display: flex;
+    align-items: center;
+    height: 22px;
+    margin-bottom: 4px;
+    background: var(--bg-elev1);
+    border-radius: 3px;
+    overflow: hidden;
+}
+.anim-row .anim-name {
+    width: 90px;
+    padding: 0 8px;
+    font-size: 11px;
+    color: var(--syntax-prop);
+    border-right: 1px solid var(--border);
+    flex-shrink: 0;
+}
+.anim-row .anim-bar {
+    flex: 1;
+    height: 100%;
+    position: relative;
+}
+.anim-bar-fill {
+    position: absolute;
+    height: 100%;
+    background: linear-gradient(to right, var(--accent), var(--syntax-keyword));
+    border-radius: 0 3px 3px 0;
+}
+.anim-controls {
+    display: flex;
+    gap: 4px;
+    padding: 4px 0;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 8px;
+}
+
+/* ============================================
+   CONSOLE
+   ============================================ */
+.console {
+    flex-direction: column;
+}
+.console-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 6px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    height: 28px;
+    background: var(--bg-elev1);
+}
+.console-filter-input {
+    flex: 1;
+    background: var(--bg-elev2);
+    border: 1px solid var(--border-strong);
+    color: var(--fg);
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 11px;
+    outline: none;
+    max-width: 240px;
+    height: 20px;
+}
+.console-filter-input:focus { border-color: var(--accent); }
+.level-toggle {
+    padding: 2px 10px;
+    border-radius: 3px;
+    border: 1px solid var(--border-strong);
+    background: var(--bg-elev2);
+    color: var(--fg-dim);
+    cursor: pointer;
+    font-size: 10px;
+    height: 22px;
+}
+.level-toggle:hover { background: var(--bg-hover); color: var(--fg); }
+.level-toggle.active { background: var(--accent-bg); color: var(--accent); border-color: var(--accent); }
+.console-log {
+    flex: 1;
+    overflow-y: auto;
+    font-family: 'Consolas', monospace;
+    font-size: 11px;
+    padding: 0;
+}
+.log-entry {
+    padding: 4px 12px 4px 32px;
+    border-bottom: 1px solid var(--bg-elev1);
+    position: relative;
+    line-height: 1.5;
+    word-wrap: break-word;
+}
+.log-entry::before {
+    position: absolute;
+    left: 10px;
+    top: 5px;
+    width: 14px;
+    height: 14px;
+    text-align: center;
+    border-radius: 50%;
+    font-size: 10px;
+    line-height: 14px;
+    font-weight: bold;
+}
+.log-entry.log::before { content: ''; }
+.log-entry.info::before { content: 'i'; background: var(--accent); color: #fff; }
+.log-entry.warn::before { content: '!'; background: var(--warn); color: var(--bg-base); }
+.log-entry.error::before { content: '×'; background: var(--error); color: #fff; }
+.log-entry.warn { background: rgba(245, 185, 66, 0.06); }
+.log-entry.error { background: rgba(255, 107, 107, 0.08); color: var(--error); }
+.log-source {
+    float: right;
+    color: var(--link);
+    font-size: 10px;
+    cursor: pointer;
+    text-decoration: underline dotted;
+}
+.log-source:hover { color: #fff; }
+.log-input {
+    padding: 4px 12px 4px 32px;
+    background: var(--bg-elev1);
+    border-bottom: 1px solid var(--border);
+    position: relative;
+    color: var(--fg);
+}
+.log-input::before {
+    content: '»';
+    position: absolute;
+    left: 12px;
+    top: 5px;
+    color: var(--accent);
+    font-weight: bold;
+}
+.log-result { color: var(--fg); }
+.log-result::before { content: '« '; color: var(--ok); font-weight: bold; }
+.console-prompt {
+    display: flex;
+    align-items: center;
+    padding: 4px 8px;
+    border-top: 1px solid var(--border);
+    flex-shrink: 0;
+    background: var(--bg-elev1);
+    height: 28px;
+}
+.console-prompt::before {
+    content: '»';
+    color: var(--accent);
+    margin-right: 8px;
+    font-family: 'Consolas', monospace;
+    font-weight: bold;
+}
+.console-prompt input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    color: var(--fg);
+    font-family: 'Consolas', monospace;
+    font-size: 12px;
+    outline: none;
+}
+
+.obj-tree { display: inline-block; }
+.obj-toggle { cursor: pointer; color: var(--fg-muted); width: 12px; display: inline-block; font-size: 9px; }
+.obj-children { margin-left: 16px; }
+.obj-key { color: var(--syntax-attr-name); }
+.obj-string { color: var(--syntax-string); }
+.obj-number { color: var(--syntax-number); }
+.obj-keyword { color: var(--syntax-keyword); }
+
+/* ============================================
+   DEBUGGER (Sources)
+   ============================================ */
+.debugger {
+    flex-direction: row;
+}
+.sources-tree {
+    width: 220px;
+    overflow: auto;
+    border-right: 1px solid var(--border);
+    flex-shrink: 0;
+    background: var(--bg-surface);
+}
+.file-section {
+    padding: 4px 0;
+    border-bottom: 1px solid var(--border);
+}
+.file-section-header {
+    padding: 4px 8px;
+    font-size: 10px;
+    color: var(--fg-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    cursor: pointer;
+}
+.file-section-header:hover { background: var(--bg-elev1); }
+.file-item {
+    padding: 3px 24px;
+    font-size: 11px;
+    cursor: pointer;
+    color: var(--fg);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.file-item:hover { background: var(--bg-elev1); }
+.file-item.active { background: var(--accent); color: #fff; }
+.file-item .badge {
+    float: right;
+    background: var(--accent);
+    color: #fff;
+    font-size: 9px;
+    padding: 0 4px;
+    border-radius: 6px;
+}
+.file-item.active .badge { background: #fff; color: var(--accent); }
+.sources-main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 200px;
+}
+.sources-tabs {
+    display: flex;
+    height: 24px;
+    background: var(--bg-base);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+.source-tab {
+    padding: 0 10px;
+    display: flex;
+    align-items: center;
+    border-right: 1px solid var(--border);
+    cursor: pointer;
+    color: var(--fg-dim);
+    font-size: 11px;
+    gap: 4px;
+}
+.source-tab.active { background: var(--bg-surface); color: var(--fg); position: relative; }
+.source-tab.active::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: var(--tab-active-border);
+}
+.source-tab .x { margin-left: 6px; color: var(--fg-muted); }
+.source-tab .x:hover { color: var(--error); }
+.source-editor {
+    flex: 1;
+    overflow: auto;
+    background: var(--bg-surface);
+    font-family: 'Consolas', monospace;
+    font-size: 12px;
+    line-height: 18px;
+}
+.source-line {
+    display: flex;
+    height: 18px;
+}
+.source-line:hover { background: var(--bg-elev1); }
+.source-line.has-bp .gutter { background: var(--bp-active); color: #fff; }
+.source-line.paused { background: rgba(245, 185, 66, 0.15); }
+.source-line.paused .gutter { background: var(--warn); color: var(--bg-base); }
+.gutter {
+    width: 50px;
+    text-align: right;
+    padding-right: 8px;
+    color: var(--fg-muted);
+    background: var(--gutter-bg);
+    border-right: 1px solid var(--border);
+    user-select: none;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+.code-line { flex: 1; padding-left: 8px; white-space: pre; user-select: text; }
+.kw { color: var(--syntax-keyword); }
+.str { color: var(--syntax-string); }
+.num { color: var(--syntax-number); }
+.cmt { color: var(--syntax-comment); font-style: italic; }
+.fn { color: var(--syntax-tag); }
+
+.sources-right {
+    width: 260px;
+    border-left: 1px solid var(--border);
+    overflow: auto;
+    flex-shrink: 0;
+    background: var(--bg-surface);
+}
+.debug-section { border-bottom: 1px solid var(--border); }
+.debug-section-header {
+    padding: 4px 8px;
+    font-size: 11px;
+    color: var(--fg);
+    background: var(--bg-elev1);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+.debug-section-header::before {
+    content: '▾';
+    color: var(--fg-dim);
+    margin-right: 4px;
+    font-size: 9px;
+}
+.debug-section.collapsed .debug-section-header::before { content: '▸'; }
+.debug-section.collapsed .debug-body { display: none; }
+.debug-section-header .count { color: var(--fg-muted); }
+.debug-body { padding: 4px 8px; font-family: 'Consolas', monospace; font-size: 11px; }
+.scope-row { padding: 2px 0; }
+.scope-row .name { color: var(--syntax-attr-name); }
+.scope-row .val { color: var(--fg); }
+.stack-frame { padding: 3px 8px; cursor: pointer; font-size: 11px; }
+.stack-frame:hover { background: var(--bg-elev1); }
+.stack-frame.active { background: var(--accent-bg); border-left: 2px solid var(--accent); }
+.stack-frame .fn { color: var(--accent); }
+.stack-frame .loc { color: var(--fg-muted); font-size: 10px; }
+.bp-row {
+    padding: 3px 8px;
+    font-size: 11px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+.bp-row input[type=checkbox] { margin: 0; }
+.bp-row .loc { color: var(--fg-dim); }
+.debug-toolbar {
+    display: flex;
+    gap: 2px;
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-elev1);
+}
+.debug-toolbar .toolbar-btn { width: 26px; height: 22px; }
+
+/* ============================================
+   NETWORK (Sit)
+   ============================================ */
+.network {
+    flex-direction: column;
+}
+.network-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 6px;
+    border-bottom: 1px solid var(--border);
+    height: 28px;
+    background: var(--bg-elev1);
+}
+.network-main {
+    flex: 1;
+    display: flex;
+    overflow: hidden;
+}
+.network-table-container { flex: 1; overflow: auto; }
+.network-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11px;
+    table-layout: fixed;
+}
+.network-table th {
+    text-align: left;
+    padding: 4px 8px;
+    background: var(--bg-elev1);
+    color: var(--fg-dim);
+    border-bottom: 1px solid var(--border);
+    font-weight: 500;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+}
+.network-table td {
+    padding: 3px 8px;
+    border-bottom: 1px solid var(--bg-elev1);
+    color: var(--fg);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    cursor: pointer;
+}
+.network-table tr:hover td { background: var(--bg-elev1); }
+.network-table tr.selected td { background: var(--accent); color: #fff; }
+.network-table tr.selected td span { color: #fff !important; }
+.status-2xx { color: var(--ok); }
+.status-3xx { color: var(--warn); }
+.status-4xx, .status-5xx { color: var(--error); }
+.waterfall-cell {
+    position: relative;
+    min-width: 200px;
+}
+.waterfall-bar {
+    height: 12px;
+    background: var(--accent);
+    border-radius: 2px;
+    margin-top: 2px;
+}
+.network-side {
+    width: 380px;
+    border-left: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    background: var(--bg-surface);
+}
+.net-side-tabs {
+    display: flex;
+    border-bottom: 1px solid var(--border);
+    height: 24px;
+    flex-shrink: 0;
+    background: var(--bg-base);
+}
+.net-side-tab {
+    padding: 0 10px;
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+    color: var(--fg-dim);
+    font-size: 11px;
+}
+.net-side-tab.active { color: var(--fg); background: var(--bg-surface); position: relative; }
+.net-side-tab.active::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: var(--tab-active-border);
+}
+.net-side-body { flex: 1; overflow: auto; padding: 8px 12px; }
+.net-section { margin-bottom: 12px; }
+.net-section-header {
+    font-size: 11px;
+    color: var(--fg);
+    text-transform: uppercase;
+    padding: 4px 0;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 4px;
+    font-weight: 500;
+}
+.net-kv {
+    font-family: 'Consolas', monospace;
+    font-size: 11px;
+    line-height: 18px;
+}
+.net-kv .k { color: var(--syntax-prop); }
+.net-kv .v { color: var(--fg); }
+
+/* ============================================
+   PERFORMANCE (Vykon)
+   ============================================ */
+.performance { flex-direction: column; }
+.perf-toolbar {
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    height: 28px;
+    background: var(--bg-elev1);
+}
+.perf-body { flex: 1; overflow: auto; padding: 8px; }
+.metric-card {
+    display: inline-block;
+    background: var(--bg-elev1);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 8px 14px;
+    margin: 4px;
+    min-width: 130px;
+}
+.metric-card .label { color: var(--fg-dim); font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
+.metric-card .value { font-size: 22px; color: var(--fg); font-weight: 500; padding-top: 2px; }
+.metric-card .unit { color: var(--fg-muted); font-size: 11px; padding-left: 4px; }
+.chart-placeholder {
+    height: 200px;
+    background: var(--bg-elev1);
+    border-radius: 4px;
+    margin: 8px 4px;
+    display: flex;
+    align-items: end;
+    padding: 8px;
+    gap: 2px;
+    border: 1px solid var(--border);
+}
+.chart-bar {
+    flex: 1;
+    background: var(--accent);
+    border-radius: 2px 2px 0 0;
+    opacity: 0.85;
+}
+.flame-row {
+    display: flex;
+    gap: 1px;
+    margin-bottom: 1px;
+}
+.flame-cell {
+    padding: 2px 8px;
+    background: var(--accent);
+    color: #fff;
+    font-size: 10px;
+    font-family: 'Consolas', monospace;
+    border-radius: 2px;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+.flame-cell.scripting { background: var(--warn); color: var(--bg-base); }
+.flame-cell.rendering { background: var(--ok); color: #fff; }
+.flame-cell.painting { background: var(--error); color: #fff; }
+.flame-cell.system { background: var(--fg-muted); color: var(--bg-base); }
+
+/* ============================================
+   APPLICATION (Uloziste)
+   ============================================ */
+.application { flex-direction: row; }
+.app-tree {
+    width: 220px;
+    border-right: 1px solid var(--border);
+    overflow: auto;
+    flex-shrink: 0;
+    padding: 4px 0;
+    background: var(--bg-surface);
+}
+.app-tree .section { padding: 4px 0; }
+.app-tree .section-header {
+    padding: 4px 8px;
+    font-size: 10px;
+    color: var(--fg-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+.app-item {
+    padding: 4px 8px 4px 24px;
+    cursor: pointer;
+    font-size: 11px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--fg);
+}
+.app-item:hover { background: var(--bg-elev1); }
+.app-item.active { background: var(--accent); color: #fff; }
+.app-item .icon {
+    width: 12px;
+    height: 12px;
+    background: currentColor;
+    opacity: 0.5;
+    flex-shrink: 0;
+}
+.app-body { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.app-data-toolbar {
+    display: flex;
+    gap: 4px;
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--border);
+    align-items: center;
+    height: 28px;
+    background: var(--bg-elev1);
+}
+.app-data-toolbar .origin {
+    color: var(--fg-dim);
+    font-size: 11px;
+    font-family: 'Consolas', monospace;
+    margin-right: 8px;
+}
+.app-table-container { flex: 1; overflow: auto; }
+.app-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11px;
+    table-layout: fixed;
+}
+.app-table th {
+    text-align: left;
+    padding: 4px 8px;
+    background: var(--bg-elev1);
+    color: var(--fg-dim);
+    border-bottom: 1px solid var(--border);
+    font-weight: 500;
+    position: sticky;
+    top: 0;
+}
+.app-table td {
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--bg-elev1);
+    color: var(--fg);
+    word-break: break-all;
+    font-family: 'Consolas', monospace;
+}
+.app-table tr:hover td { background: var(--bg-elev1); }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: var(--bg-base); }
+::-webkit-scrollbar-thumb { background: var(--bg-elev3); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
+
+/* Lucide icon sizing */
+.icon, i[data-lucide] {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    vertical-align: middle;
+    flex-shrink: 0;
+}
+.icon svg, i[data-lucide] svg, svg.lucide {
+    width: 14px;
+    height: 14px;
+    stroke-width: 1.75;
+    stroke: currentColor;
+    fill: none;
+}
+.tab .icon { margin-right: 4px; }
+.toolbar-btn .icon { width: 14px; height: 14px; }
+.toggle.icon, .obj-toggle.icon { width: 12px; height: 12px; }
+.toggle.icon svg, .obj-toggle.icon svg { width: 12px; height: 12px; }
+.lang-switch {
+    background: transparent;
+    color: var(--fg-dim);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    font-size: 11px;
+    padding: 2px 8px;
+    cursor: pointer;
+    margin-right: 4px;
+    font-weight: 600;
+}
+.lang-switch:hover { background: var(--bg-hover); color: var(--fg); }
+.lang-switch.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+</style>
+</head>
+<body>
+
+<!-- Page area -->
+<div class="page-area">
+    <h1>Mock Page</h1>
+    <p>Toto je stranka. DevTools mockup pres Firefox-like 3-column splittable layout.</p>
+    <button>Tlacitko</button>
+    <div id="counter">Counter: 42</div>
+</div>
+
+<!-- DevTools -->
+<div class="devtools">
+    <div class="resize-grip"></div>
+    <div class="tab-strip">
+        <div class="left">
+            <div class="tab active" data-panel="inspector"><i data-lucide="layout-panel-left" class="icon"></i><span data-i18n="tab.inspector">Pruzkumnik</span></div>
+            <div class="tab" data-panel="console"><i data-lucide="terminal" class="icon"></i><span data-i18n="tab.console">Konzole</span></div>
+            <div class="tab" data-panel="debugger"><i data-lucide="bug" class="icon"></i><span data-i18n="tab.debugger">Debugger</span></div>
+            <div class="tab" data-panel="network"><i data-lucide="globe" class="icon"></i><span data-i18n="tab.network">Sit</span></div>
+            <div class="tab" data-panel="style-editor"><i data-lucide="paintbrush" class="icon"></i><span data-i18n="tab.styleEditor">Editor stylu</span></div>
+            <div class="tab" data-panel="performance"><i data-lucide="gauge" class="icon"></i><span data-i18n="tab.performance">Vykon</span></div>
+            <div class="tab" data-panel="memory"><i data-lucide="hard-drive" class="icon"></i><span data-i18n="tab.memory">Pamet</span></div>
+            <div class="tab" data-panel="application"><i data-lucide="database" class="icon"></i><span data-i18n="tab.application">Uloziste</span></div>
+            <div class="tab" data-panel="accessibility"><i data-lucide="accessibility" class="icon"></i><span data-i18n="tab.accessibility">Pristupnost</span></div>
+            <div class="tab" data-panel="app-info"><i data-lucide="info" class="icon"></i><span data-i18n="tab.appInfo">Aplikace</span></div>
+        </div>
+        <div class="right">
+            <button class="lang-switch active" data-lang="cs">CS</button>
+            <button class="lang-switch" data-lang="en">EN</button>
+            <button class="toolbar-btn" data-i18n-title="btn.responsive" title="Responzivni navrh"><i data-lucide="smartphone" class="icon"></i></button>
+            <button class="toolbar-btn" data-i18n-title="btn.settings" title="Nastaveni"><i data-lucide="settings" class="icon"></i></button>
+            <button class="toolbar-btn" data-i18n-title="btn.more" title="Vice"><i data-lucide="more-horizontal" class="icon"></i></button>
+            <button class="toolbar-btn close-btn" data-i18n-title="btn.close" title="Zavrit"><i data-lucide="x" class="icon"></i></button>
+        </div>
+    </div>
+
+    <div class="panel-body">
+
+        <!-- INSPECTOR (Pruzkumnik) -->
+        <div class="panel inspector active">
+            <div class="inspector-toolbar">
+                <button class="toolbar-btn" data-i18n-title="btn.inspect" title="Inspect (Ctrl+Shift+C)"><i data-lucide="mouse-pointer-square-dashed" class="icon"></i></button>
+                <button class="toolbar-btn" data-i18n-title="btn.pickColor" title="Vybrat barvu"><i data-lucide="pipette" class="icon"></i></button>
+                <input class="dom-search-input" data-i18n-placeholder="ph.searchHtml" placeholder="Hledat HTML">
+                <span style="flex:1"></span>
+                <button class="toolbar-btn" data-i18n-title="btn.addNode" title="Pridat node"><i data-lucide="plus" class="icon"></i></button>
+                <button class="toolbar-btn" data-i18n-title="btn.more" title="Vice"><i data-lucide="more-vertical" class="icon"></i></button>
+            </div>
+            <div class="inspector-body">
+                <!-- LEFT: DOM tree -->
+                <div class="dom-pane">
+                    <div class="dom-tree">
+                        <div class="dom-node"><span class="toggle icon"><i data-lucide="chevron-down"></i></span><span class="tok-tag">&lt;!DOCTYPE html&gt;</span></div>
+                        <div class="dom-node"><span class="toggle icon"><i data-lucide="chevron-down"></i></span><span class="tok-tag">&lt;html</span> <span class="tok-attr-name">lang</span>=<span class="tok-attr-value">"cs"</span><span class="tok-tag">&gt;</span></div>
+                        <div class="dom-node" style="padding-left: 22px"><span class="toggle icon"><i data-lucide="chevron-right"></i></span><span class="tok-tag">&lt;head&gt;</span></div>
+                        <div class="dom-node" style="padding-left: 22px"><span class="toggle icon"><i data-lucide="chevron-down"></i></span><span class="tok-tag">&lt;body&gt;</span></div>
+                        <div class="dom-node" style="padding-left: 38px"><span class="toggle icon"><i data-lucide="chevron-down"></i></span><span class="tok-tag">&lt;div</span> <span class="tok-attr-name">class</span>=<span class="tok-attr-value">"page-area"</span><span class="tok-tag">&gt;</span></div>
+                        <div class="dom-node selected" style="padding-left: 54px"><span class="toggle icon"><i data-lucide="chevron-down"></i></span><span class="tok-tag">&lt;h1&gt;</span><span class="tok-text">Mock Page</span><span class="tok-tag">&lt;/h1&gt;</span></div>
+                        <div class="dom-node" style="padding-left: 54px"><span class="toggle icon"><i data-lucide="chevron-down"></i></span><span class="tok-tag">&lt;p&gt;</span><span class="tok-text">Toto je stranka...</span><span class="tok-tag">&lt;/p&gt;</span></div>
+                        <div class="dom-node" style="padding-left: 54px"><span class="toggle icon"><i data-lucide="dot"></i></span><span class="tok-tag">&lt;button&gt;</span><span class="tok-text">Tlacitko</span><span class="tok-tag">&lt;/button&gt;</span><span class="event-badge">event</span></div>
+                        <div class="dom-node" style="padding-left: 54px"><span class="toggle icon"><i data-lucide="chevron-down"></i></span><span class="tok-tag">&lt;div</span> <span class="tok-attr-name">id</span>=<span class="tok-attr-value">"counter"</span><span class="tok-tag">&gt;</span><span class="tok-text">Counter: 42</span><span class="tok-tag">&lt;/div&gt;</span></div>
+                        <div class="dom-node" style="padding-left: 38px"><span class="tok-tag">&lt;/div&gt;</span></div>
+                        <div class="dom-node" style="padding-left: 38px"><span class="toggle icon"><i data-lucide="chevron-right"></i></span><span class="tok-tag">&lt;div</span> <span class="tok-attr-name">class</span>=<span class="tok-attr-value">"devtools"</span><span class="tok-tag">&gt;</span></div>
+                        <div class="dom-node" style="padding-left: 22px"><span class="tok-tag">&lt;/body&gt;</span></div>
+                        <div class="dom-node"><span class="tok-tag">&lt;/html&gt;</span></div>
+                    </div>
+                </div>
+
+                <!-- SPLITTER -->
+                <div class="vsplitter" id="splitter-styles"></div>
+
+                <!-- MIDDLE: Styles -->
+                <div class="styles-pane">
+                    <div class="styles-header">
+                        <input class="styles-filter" data-i18n-placeholder="ph.filterStyles" placeholder="Filtrovat styly">
+                        <span class="styles-pseudo-toggle" data-i18n-title="btn.pseudoClasses" title="Pseudo-classes">:hov</span>
+                        <span class="styles-pseudo-toggle" data-i18n-title="btn.classList" title="Class list">.cls</span>
+                        <button class="toolbar-btn" data-i18n-title="btn.addRule" title="Pridat pravidlo"><i data-lucide="plus" class="icon"></i></button>
+                        <button class="toolbar-btn" data-i18n-title="btn.lightTheme" title="Light theme"><i data-lucide="sun" class="icon"></i></button>
+                        <button class="toolbar-btn" data-i18n-title="btn.printPreview" title="Print preview"><i data-lucide="printer" class="icon"></i></button>
+                    </div>
+                    <div class="styles-body">
+                        <div class="styles-section">
+                            <div class="style-rule">
+                                <span class="selector">element <span class="style-rule-bracket">{</span></span>
+                                <div class="style-add">+ Klikni pro pridani vlastnosti</div>
+                                <span class="style-rule-bracket">}</span>
+                            </div>
+                        </div>
+                        <div class="style-rule">
+                            <span class="selector">h1</span> <span class="style-rule-bracket">{</span>
+                            <span class="source">page.html:64</span>
+                            <div class="decl"><input type="checkbox" checked><span class="prop">margin</span>: <span class="val">0 0 8px</span>;</div>
+                            <div class="style-add">+</div>
+                            <span class="style-rule-bracket">}</span>
+                        </div>
+                        <div class="style-rule">
+                            <span class="selector">.page-area h1</span> <span class="style-rule-bracket">{</span>
+                            <span class="source">user agent</span>
+                            <div class="decl"><input type="checkbox" checked><span class="prop">font-size</span>: <span class="val">2em</span>;</div>
+                            <div class="decl"><input type="checkbox" checked><span class="prop">font-weight</span>: <span class="val">bold</span>;</div>
+                            <div class="decl disabled"><input type="checkbox"><span class="prop">color</span>: <span class="val">red</span>;</div>
+                            <span class="style-rule-bracket">}</span>
+                        </div>
+                        <div class="media-line">@media (max-width: 768px) {</div>
+                        <div class="style-rule">
+                            <span class="selector">h1</span> <span class="style-rule-bracket">{</span>
+                            <span class="source">page.html:128</span>
+                            <div class="decl"><input type="checkbox" checked><span class="prop">font-size</span>: <span class="val">24px</span>;</div>
+                            <span class="style-rule-bracket">}</span>
+                        </div>
+                        <div class="media-line">}</div>
+                        <div style="padding: 8px; color: var(--fg-dim); font-size: 11px; border-bottom: 1px solid var(--border);">
+                            Zdedeno z body
+                        </div>
+                        <div class="style-rule">
+                            <span class="selector">body</span> <span class="style-rule-bracket">{</span>
+                            <span class="source">page.html:38</span>
+                            <div class="decl"><input type="checkbox" checked><span class="prop">font-family</span>: <span class="val">-apple-system, BlinkMacSystemFont, "Segoe UI"</span>;</div>
+                            <div class="decl"><input type="checkbox" checked><span class="prop">font-size</span>: <span class="val">14px</span>;</div>
+                            <div class="decl"><input type="checkbox" checked><span class="prop">color</span>: <span class="val">rgb(51, 51, 51)</span>;</div>
+                            <span class="style-rule-bracket">}</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- SPLITTER -->
+                <div class="vsplitter" id="splitter-layout"></div>
+
+                <!-- RIGHT: Layout/Computed/Changes/Compat/Fonts/Animations -->
+                <div class="layout-pane" id="layout-pane">
+                    <div class="layout-tabs">
+                        <div class="layout-tabs-inner" id="layout-tabs-inner">
+                            <div class="layout-tab active" data-side="layout" data-i18n="side.layout">Rozlozeni</div>
+                            <div class="layout-tab" data-side="computed" data-i18n="side.computed">Vypocitano</div>
+                            <div class="layout-tab" data-side="changes" data-i18n="side.changes">Zmeny</div>
+                            <div class="layout-tab" data-side="compat" data-i18n="side.compat">Kompatibilita</div>
+                            <div class="layout-tab" data-side="fonts" data-i18n="side.fonts">Pismo</div>
+                            <div class="layout-tab" data-side="animations" data-i18n="side.animations">Animace</div>
+                        </div>
+                        <div class="layout-overflow-btn" data-i18n-title="btn.moreTabs" title="Vice zalozek"><i data-lucide="chevron-down" class="icon"></i></div>
+                        <div class="layout-collapse-btn" id="layout-collapse" data-i18n-title="btn.collapse" title="Skryt/rozthranout"><i data-lucide="chevrons-right" class="icon"></i></div>
+                    </div>
+
+                    <!-- LAYOUT -->
+                    <div class="layout-body" data-side-body="layout">
+                        <div class="layout-section">
+                            <div class="layout-section-header">Flexbox</div>
+                            <div class="layout-section-body">
+                                <div class="layout-empty">Pro pokracovani vyberte polozku Flex kontejneru.</div>
+                            </div>
+                        </div>
+                        <div class="layout-section">
+                            <div class="layout-section-header">Grid</div>
+                            <div class="layout-section-body">
+                                <div class="layout-empty">Na teto strance se CSS Grid nepouziva.</div>
+                            </div>
+                        </div>
+                        <div class="layout-section">
+                            <div class="layout-section-header">Model boxu</div>
+                            <div class="layout-section-body">
+                                <div class="box-model">
+                                    <div class="bm-layer bm-margin">
+                                        <span class="label">margin</span>
+                                        <span class="edge top">0</span>
+                                        <span class="edge right">0</span>
+                                        <span class="edge bottom">8</span>
+                                        <span class="edge left">0</span>
+                                        <div class="bm-layer bm-border">
+                                            <span class="label">border</span>
+                                            <span class="edge top">0</span>
+                                            <span class="edge right">0</span>
+                                            <span class="edge bottom">0</span>
+                                            <span class="edge left">0</span>
+                                            <div class="bm-layer bm-padding">
+                                                <span class="label">padding</span>
+                                                <span class="edge top">0</span>
+                                                <span class="edge right">0</span>
+                                                <span class="edge bottom">0</span>
+                                                <span class="edge left">0</span>
+                                                <div class="bm-content">1264 × 36</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div style="text-align: center; color: var(--fg-muted); font-size: 10px; padding-top: 4px;">
+                                    static
+                                </div>
+                            </div>
+                        </div>
+                        <div class="layout-section">
+                            <div class="layout-section-header">Vlastnosti box modelu</div>
+                            <div class="layout-section-body">
+                                <div class="computed-list">
+                                    <div class="computed-prop"><span class="name">box-sizing</span><span class="val">content-box</span></div>
+                                    <div class="computed-prop"><span class="name">display</span><span class="val">block</span></div>
+                                    <div class="computed-prop"><span class="name">float</span><span class="val">none</span></div>
+                                    <div class="computed-prop"><span class="name">line-height</span><span class="val">21px</span></div>
+                                    <div class="computed-prop"><span class="name">position</span><span class="val">static</span></div>
+                                    <div class="computed-prop"><span class="name">z-index</span><span class="val">auto</span></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- COMPUTED -->
+                    <div class="layout-body" data-side-body="computed" style="display:none">
+                        <input class="computed-filter" placeholder="Filtrovat vlastnosti">
+                        <label style="display:flex; align-items:center; gap:4px; color:var(--fg-dim); font-size:11px; padding: 4px 0;">
+                            <input type="checkbox" checked> Zobrazit prohlizecove styly
+                        </label>
+                        <div class="computed-list">
+                            <div class="computed-prop"><span class="toggle-src icon"><i data-lucide="chevron-right"></i></span><span class="name">color</span><span class="val">rgb(51, 51, 51)</span></div>
+                            <div class="computed-prop"><span class="toggle-src icon"><i data-lucide="chevron-right"></i></span><span class="name">display</span><span class="val">block</span></div>
+                            <div class="computed-prop"><span class="toggle-src icon"><i data-lucide="chevron-right"></i></span><span class="name">font-family</span><span class="val">'Segoe UI', sans-serif</span></div>
+                            <div class="computed-prop"><span class="toggle-src icon"><i data-lucide="chevron-right"></i></span><span class="name">font-size</span><span class="val">32px</span></div>
+                            <div class="computed-prop"><span class="toggle-src icon"><i data-lucide="chevron-right"></i></span><span class="name">font-weight</span><span class="val">700</span></div>
+                            <div class="computed-prop"><span class="toggle-src icon"><i data-lucide="chevron-right"></i></span><span class="name">height</span><span class="val">36px</span></div>
+                            <div class="computed-prop"><span class="toggle-src icon"><i data-lucide="chevron-right"></i></span><span class="name">line-height</span><span class="val">38.4px</span></div>
+                            <div class="computed-prop"><span class="toggle-src icon"><i data-lucide="chevron-right"></i></span><span class="name">margin-bottom</span><span class="val">8px</span></div>
+                            <div class="computed-prop"><span class="toggle-src icon"><i data-lucide="chevron-right"></i></span><span class="name">margin-top</span><span class="val">0px</span></div>
+                            <div class="computed-prop"><span class="toggle-src icon"><i data-lucide="chevron-right"></i></span><span class="name">padding</span><span class="val">0px</span></div>
+                            <div class="computed-prop"><span class="toggle-src icon"><i data-lucide="chevron-right"></i></span><span class="name">width</span><span class="val">1264px</span></div>
+                        </div>
+                    </div>
+
+                    <!-- CHANGES -->
+                    <div class="layout-body" data-side-body="changes" style="display:none">
+                        <button class="copy-btn">Kopirovat vse</button>
+                        <div style="clear: both"></div>
+                        <div class="changes-list">
+                            <div class="change-rule">
+                                <span class="sel">h1</span> {
+                                <div class="change-decl added">color: blue;</div>
+                                <div class="change-decl removed">color: red;</div>
+                                }
+                            </div>
+                            <div class="change-rule">
+                                <span class="sel">button</span> {
+                                <div class="change-decl added">padding: 8px 16px;</div>
+                                }
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- COMPAT -->
+                    <div class="layout-body" data-side-body="compat" style="display:none">
+                        <div style="color: var(--fg-dim); font-size: 11px; padding-bottom: 8px;">
+                            Vlastnosti nekompatibilni s aspon jednim prohlizecem:
+                        </div>
+                        <div class="compat-prop">
+                            <span class="name">backdrop-filter</span>
+                            <div class="browsers">
+                                <span class="compat-browser supported">Chrome 76+</span>
+                                <span class="compat-browser supported">Firefox 103+</span>
+                                <span class="compat-browser partial">Safari 9+ (-webkit-)</span>
+                            </div>
+                        </div>
+                        <div class="compat-prop">
+                            <span class="name">aspect-ratio</span>
+                            <div class="browsers">
+                                <span class="compat-browser supported">Chrome 88+</span>
+                                <span class="compat-browser supported">Firefox 89+</span>
+                                <span class="compat-browser supported">Safari 15+</span>
+                            </div>
+                        </div>
+                        <div class="compat-prop">
+                            <span class="name">@scope</span>
+                            <div class="browsers">
+                                <span class="compat-browser supported">Chrome 118+</span>
+                                <span class="compat-browser unsupported">Firefox: NE</span>
+                                <span class="compat-browser supported">Safari 17.4+</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- FONTS -->
+                    <div class="layout-body" data-side-body="fonts" style="display:none">
+                        <div style="color: var(--fg-dim); font-size: 11px; padding-bottom: 8px;">
+                            Pisma pouzita pro tento element:
+                        </div>
+                        <div class="font-card">
+                            <div class="preview">Abeceda 0123</div>
+                            <div class="family">Segoe UI</div>
+                            <div class="meta">System • 700 weight • normal style • Latin subset</div>
+                        </div>
+                        <div class="font-card">
+                            <div class="preview" style="font-family: 'Consolas', monospace;">code{font}123</div>
+                            <div class="family">Consolas</div>
+                            <div class="meta">System • 400 weight • normal style</div>
+                        </div>
+                    </div>
+
+                    <!-- ANIMATIONS -->
+                    <div class="layout-body" data-side-body="animations" style="display:none">
+                        <div class="anim-controls">
+                            <button class="toolbar-btn" data-i18n-title="btn.playPause" title="Pause/play"><i data-lucide="play" class="icon"></i></button>
+                            <button class="toolbar-btn" data-i18n-title="btn.restart" title="Restart"><i data-lucide="rotate-ccw" class="icon"></i></button>
+                            <select style="background: var(--bg-elev2); color: var(--fg); border: 1px solid var(--border-strong); padding: 2px; font-size: 11px;">
+                                <option>100%</option>
+                                <option>50%</option>
+                                <option>25%</option>
+                                <option>10%</option>
+                            </select>
+                        </div>
+                        <div class="anim-timeline">
+                            <div class="anim-row">
+                                <div class="anim-name">slide-in</div>
+                                <div class="anim-bar"><div class="anim-bar-fill" style="left: 0%; width: 40%;"></div></div>
+                            </div>
+                            <div class="anim-row">
+                                <div class="anim-name">fade</div>
+                                <div class="anim-bar"><div class="anim-bar-fill" style="left: 20%; width: 50%;"></div></div>
+                            </div>
+                            <div class="anim-row">
+                                <div class="anim-name">pulse</div>
+                                <div class="anim-bar"><div class="anim-bar-fill" style="left: 30%; width: 70%; background: linear-gradient(to right, var(--warn), var(--error));"></div></div>
+                            </div>
+                        </div>
+                        <div style="font-size: 11px; color: var(--fg-dim);">
+                            <div><strong style="color: var(--fg)">slide-in</strong> · 600ms ease-out · infinite</div>
+                            <div><strong style="color: var(--fg)">fade</strong> · 1200ms linear · 2 iterations</div>
+                            <div><strong style="color: var(--fg)">pulse</strong> · 800ms ease-in-out · forwards</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- CONSOLE -->
+        <div class="panel console">
+            <div class="console-toolbar">
+                <button class="toolbar-btn" data-i18n-title="btn.clear" title="Vymazat"><i data-lucide="trash-2" class="icon"></i></button>
+                <input class="console-filter-input" data-i18n-placeholder="ph.filterLogs" placeholder="Filtrovat zaznamy">
+                <button class="level-toggle active" data-i18n="level.all">Vsechny</button>
+                <button class="level-toggle" data-i18n="level.errors">Chyby</button>
+                <button class="level-toggle" data-i18n="level.warnings">Upozorneni</button>
+                <button class="level-toggle" data-i18n="level.info">Info</button>
+                <button class="level-toggle" data-i18n="level.debug">Debug</button>
+                <span style="flex:1"></span>
+                <button class="toolbar-btn" data-i18n-title="btn.settings" title="Nastaveni"><i data-lucide="settings" class="icon"></i></button>
+            </div>
+            <div class="console-log">
+                <div class="log-entry log">
+                    Stranka uspesne nactena <span class="log-source">page.html:1</span>
+                </div>
+                <div class="log-entry info">
+                    User clicked button <span class="log-source">script.js:42</span>
+                </div>
+                <div class="log-input">document.querySelector('h1')</div>
+                <div class="log-entry log log-result">
+                    <span class="obj-toggle icon"><i data-lucide="chevron-right"></i></span>&lt;h1&gt;Mock Page&lt;/h1&gt;
+                </div>
+                <div class="log-entry warn">
+                    Deprecation warning: <code>document.cookie</code> sync access <span class="log-source">page.html:33</span>
+                </div>
+                <div class="log-input">counter + 1</div>
+                <div class="log-entry log log-result">
+                    <span class="obj-number">43</span>
+                </div>
+                <div class="log-entry error">
+                    Uncaught TypeError: undefined is not a function
+                    <div style="padding-left: 14px; color: var(--fg-muted); font-size: 10px; margin-top: 2px;">
+                        at script.js:88<br>
+                        at HTMLButtonElement.onclick (page.html:24)
+                    </div>
+                    <span class="log-source">script.js:88</span>
+                </div>
+                <div class="log-input">JSON.parse('{"a": 1, "b": [true, null]}')</div>
+                <div class="log-entry log log-result">
+                    <div><span class="obj-toggle icon"><i data-lucide="chevron-down"></i></span><span class="obj-keyword">Object</span> {</div>
+                    <div class="obj-children">
+                        <div><span class="obj-key">a</span>: <span class="obj-number">1</span></div>
+                        <div><span class="obj-key">b</span>: <span class="obj-toggle icon"><i data-lucide="chevron-right"></i></span><span class="obj-keyword">Array(2)</span></div>
+                    </div>
+                    <div>}</div>
+                </div>
+            </div>
+            <div class="console-prompt">
+                <input placeholder="Zadejte JS vyraz...">
+            </div>
+        </div>
+
+        <!-- DEBUGGER -->
+        <div class="panel debugger">
+            <div class="sources-tree">
+                <div class="file-section">
+                    <div class="file-section-header"><i data-lucide="chevron-down" class="icon"></i> <span data-i18n="dbg.page">Stranka</span> (3)</div>
+                    <div class="file-item">index.html<span class="badge">1</span></div>
+                    <div class="file-item active">script.js</div>
+                    <div class="file-item">styles.css</div>
+                </div>
+                <div class="file-section">
+                    <div class="file-section-header"><i data-lucide="chevron-right" class="icon"></i> <span data-i18n="dbg.workers">Pracovni vlakna</span> (1)</div>
+                </div>
+                <div class="file-section">
+                    <div class="file-section-header"><i data-lucide="chevron-right" class="icon"></i> <span data-i18n="dbg.external">Externi</span> (5)</div>
+                </div>
+                <div class="file-section">
+                    <div class="file-section-header"><i data-lucide="chevron-down" class="icon"></i> <span data-i18n="dbg.snippets">Sniptety</span></div>
+                    <div class="file-item">helper.js</div>
+                </div>
+            </div>
+            <div class="sources-main">
+                <div class="sources-tabs">
+                    <div class="source-tab active">script.js<span class="x"><i data-lucide="x" class="icon"></i></span></div>
+                    <div class="source-tab">index.html<span class="x"><i data-lucide="x" class="icon"></i></span></div>
+                </div>
+                <div class="source-editor">
+                    <div class="source-line"><div class="gutter">1</div><div class="code-line"><span class="cmt">// Click handler s vypocet counter</span></div></div>
+                    <div class="source-line"><div class="gutter">2</div><div class="code-line"></div></div>
+                    <div class="source-line"><div class="gutter">3</div><div class="code-line"><span class="kw">const</span> counter = document.getElementById(<span class="str">'counter'</span>);</div></div>
+                    <div class="source-line"><div class="gutter">4</div><div class="code-line"><span class="kw">let</span> count = <span class="num">42</span>;</div></div>
+                    <div class="source-line"><div class="gutter">5</div><div class="code-line"></div></div>
+                    <div class="source-line has-bp"><div class="gutter">6</div><div class="code-line"><span class="kw">function</span> <span class="fn">increment</span>() {</div></div>
+                    <div class="source-line paused"><div class="gutter">7</div><div class="code-line">  count++;</div></div>
+                    <div class="source-line"><div class="gutter">8</div><div class="code-line">  counter.textContent = <span class="str">'Counter: '</span> + count;</div></div>
+                    <div class="source-line"><div class="gutter">9</div><div class="code-line">  console.log(<span class="str">'New count:'</span>, count);</div></div>
+                    <div class="source-line"><div class="gutter">10</div><div class="code-line">}</div></div>
+                </div>
+            </div>
+            <div class="sources-right">
+                <div class="debug-toolbar">
+                    <button class="toolbar-btn" data-i18n-title="btn.resume" title="Pokracovat (F8)"><i data-lucide="play" class="icon"></i></button>
+                    <button class="toolbar-btn" data-i18n-title="btn.stepOver" title="Krok pres (F10)"><i data-lucide="corner-down-right" class="icon"></i></button>
+                    <button class="toolbar-btn" data-i18n-title="btn.stepInto" title="Krok do (F11)"><i data-lucide="arrow-down-to-line" class="icon"></i></button>
+                    <button class="toolbar-btn" data-i18n-title="btn.stepOut" title="Krok ven (Shift+F11)"><i data-lucide="arrow-up-from-line" class="icon"></i></button>
+                    <button class="toolbar-btn" data-i18n-title="btn.deactivateBp" title="Deaktivovat breakpoints"><i data-lucide="circle-slash" class="icon"></i></button>
+                </div>
+                <div class="debug-section">
+                    <div class="debug-section-header">Zasobnik volani <span class="count">(2)</span></div>
+                    <div class="debug-body">
+                        <div class="stack-frame active">
+                            <div class="fn">increment</div>
+                            <div class="loc">script.js:7</div>
+                        </div>
+                        <div class="stack-frame">
+                            <div class="fn">HTMLButtonElement.onclick</div>
+                            <div class="loc">script.js:12</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="debug-section">
+                    <div class="debug-section-header">Rozsah</div>
+                    <div class="debug-body">
+                        <div class="scope-row"><span class="name">Lokalni</span></div>
+                        <div class="scope-row" style="padding-left: 12px"><span class="name">count</span>: <span class="val">42</span></div>
+                        <div class="scope-row" style="padding-left: 12px"><span class="name">counter</span>: <span class="val">&lt;div#counter&gt;</span></div>
+                        <div class="scope-row"><span class="name">Globalni</span></div>
+                        <div class="scope-row" style="padding-left: 12px"><span class="name">window</span>: <span class="val">Window</span></div>
+                    </div>
+                </div>
+                <div class="debug-section">
+                    <div class="debug-section-header">Breakpointy <span class="count">(2)</span></div>
+                    <div class="bp-row"><input type="checkbox" checked><span class="loc">script.js:6</span></div>
+                    <div class="bp-row"><input type="checkbox" checked><span class="loc">script.js:12</span></div>
+                </div>
+                <div class="debug-section">
+                    <div class="debug-section-header">Vyrazy ke sledovani <span class="count">(1)</span></div>
+                    <div class="debug-body">
+                        <div class="scope-row"><span class="name">count + 1</span>: <span class="val">43</span></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- NETWORK (Sit) -->
+        <div class="panel network">
+            <div class="network-toolbar">
+                <button class="toolbar-btn" data-i18n-title="btn.record" title="Zaznamenavat"><i data-lucide="circle" class="icon"></i></button>
+                <button class="toolbar-btn" data-i18n-title="btn.clear" title="Vymazat"><i data-lucide="trash-2" class="icon"></i></button>
+                <input class="console-filter-input" data-i18n-placeholder="ph.filterUrl" placeholder="Filtrovat URL, status, metodu...">
+                <button class="level-toggle active" data-i18n="level.all">Vsechny</button>
+                <button class="level-toggle">HTML</button>
+                <button class="level-toggle">CSS</button>
+                <button class="level-toggle">JS</button>
+                <button class="level-toggle">XHR</button>
+                <button class="level-toggle" data-i18n="net.images">Obr.</button>
+                <button class="level-toggle" data-i18n="net.fonts">Pisma</button>
+            </div>
+            <div class="network-main">
+                <div class="network-table-container">
+                    <table class="network-table">
+                        <thead>
+                            <tr>
+                                <th style="width: 28%">Soubor</th>
+                                <th style="width: 60px">Status</th>
+                                <th style="width: 60px">Metoda</th>
+                                <th style="width: 80px">Typ</th>
+                                <th style="width: 70px">Velikost</th>
+                                <th style="width: 60px">Cas</th>
+                                <th>Casova osa</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr class="selected">
+                                <td>index.html</td>
+                                <td class="status-2xx">200</td>
+                                <td>GET</td>
+                                <td>Dokument</td>
+                                <td>4.2 KB</td>
+                                <td>120ms</td>
+                                <td class="waterfall-cell"><div class="waterfall-bar" style="width: 20%;"></div></td>
+                            </tr>
+                            <tr>
+                                <td>style.css</td>
+                                <td class="status-2xx">200</td>
+                                <td>GET</td>
+                                <td>CSS</td>
+                                <td>2.1 KB</td>
+                                <td>45ms</td>
+                                <td class="waterfall-cell"><div class="waterfall-bar" style="margin-left: 15%; width: 8%; background: var(--ok);"></div></td>
+                            </tr>
+                            <tr>
+                                <td>script.js</td>
+                                <td class="status-2xx">200</td>
+                                <td>GET</td>
+                                <td>JS</td>
+                                <td>8.5 KB</td>
+                                <td>87ms</td>
+                                <td class="waterfall-cell"><div class="waterfall-bar" style="margin-left: 18%; width: 14%;"></div></td>
+                            </tr>
+                            <tr>
+                                <td>logo.png</td>
+                                <td class="status-2xx">200</td>
+                                <td>GET</td>
+                                <td>Obrazek</td>
+                                <td>32 KB</td>
+                                <td>220ms</td>
+                                <td class="waterfall-cell"><div class="waterfall-bar" style="margin-left: 30%; width: 36%; background: var(--syntax-keyword);"></div></td>
+                            </tr>
+                            <tr>
+                                <td>api/users</td>
+                                <td class="status-2xx">200</td>
+                                <td>GET</td>
+                                <td>XHR</td>
+                                <td>12 KB</td>
+                                <td>540ms</td>
+                                <td class="waterfall-cell"><div class="waterfall-bar" style="margin-left: 40%; width: 55%;"></div></td>
+                            </tr>
+                            <tr>
+                                <td>analytics.js</td>
+                                <td class="status-4xx">404</td>
+                                <td>GET</td>
+                                <td>JS</td>
+                                <td>0 B</td>
+                                <td>34ms</td>
+                                <td class="waterfall-cell"><div class="waterfall-bar" style="margin-left: 36%; width: 6%; background: var(--error);"></div></td>
+                            </tr>
+                            <tr>
+                                <td>data.json</td>
+                                <td class="status-3xx">304</td>
+                                <td>GET</td>
+                                <td>Fetch</td>
+                                <td>0 B</td>
+                                <td>12ms</td>
+                                <td class="waterfall-cell"><div class="waterfall-bar" style="margin-left: 55%; width: 2%; background: var(--warn);"></div></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div class="network-side">
+                    <div class="net-side-tabs">
+                        <div class="net-side-tab active">Hlavicky</div>
+                        <div class="net-side-tab">Cookies</div>
+                        <div class="net-side-tab">Pozadavek</div>
+                        <div class="net-side-tab">Odpoved</div>
+                        <div class="net-side-tab">Casovani</div>
+                    </div>
+                    <div class="net-side-body">
+                        <div class="net-section">
+                            <div class="net-section-header">Obecne</div>
+                            <div class="net-kv">
+                                <div><span class="k">URL</span>: <span class="v">https://example.com/index.html</span></div>
+                                <div><span class="k">Metoda</span>: <span class="v">GET</span></div>
+                                <div><span class="k">Stav</span>: <span class="v status-2xx">200 OK</span></div>
+                                <div><span class="k">Vzdalena adresa</span>: <span class="v">93.184.216.34:443</span></div>
+                            </div>
+                        </div>
+                        <div class="net-section">
+                            <div class="net-section-header">Hlavicky odpovedi</div>
+                            <div class="net-kv">
+                                <div><span class="k">content-type</span>: <span class="v">text/html; charset=UTF-8</span></div>
+                                <div><span class="k">content-length</span>: <span class="v">4231</span></div>
+                                <div><span class="k">cache-control</span>: <span class="v">max-age=3600</span></div>
+                                <div><span class="k">server</span>: <span class="v">nginx/1.21.6</span></div>
+                            </div>
+                        </div>
+                        <div class="net-section">
+                            <div class="net-section-header">Hlavicky pozadavku</div>
+                            <div class="net-kv">
+                                <div><span class="k">accept</span>: <span class="v">text/html,*/*</span></div>
+                                <div><span class="k">user-agent</span>: <span class="v">RustWebEngine/0.1</span></div>
+                                <div><span class="k">accept-language</span>: <span class="v">cs,en;q=0.9</span></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Style Editor (placeholder) -->
+        <div class="panel" style="flex-direction: column; padding: 20px; color: var(--fg-dim);">
+            <h3 style="color: var(--fg); margin-top: 0;">Editor stylu</h3>
+            <p>Vsechny stylesheets v sloupcich + monospace editor s syntax highlight, save button.</p>
+        </div>
+
+        <!-- PERFORMANCE -->
+        <div class="panel performance">
+            <div class="perf-toolbar">
+                <button class="toolbar-btn" data-i18n-title="btn.record" title="Zaznamenat"><i data-lucide="circle" class="icon"></i></button>
+                <button class="toolbar-btn" data-i18n-title="btn.reloadRecord" title="Reload + zaznamenat"><i data-lucide="rotate-cw" class="icon"></i></button>
+                <button class="toolbar-btn" data-i18n-title="btn.clear" title="Vymazat"><i data-lucide="trash-2" class="icon"></i></button>
+                <span style="color: var(--fg-dim); margin-left: 8px;" data-i18n="perf.recordLen">2.42s zaznam</span>
+            </div>
+            <div class="perf-body">
+                <h3 style="margin: 4px; font-size: 12px; color: var(--fg-dim); text-transform: uppercase;">Metriky</h3>
+                <div class="metric-card">
+                    <div class="label">Dokumenty</div>
+                    <div class="value">1</div>
+                </div>
+                <div class="metric-card">
+                    <div class="label">DOM Uzly</div>
+                    <div class="value">328</div>
+                </div>
+                <div class="metric-card">
+                    <div class="label">Layout</div>
+                    <div class="value">214</div>
+                </div>
+                <div class="metric-card">
+                    <div class="label">JS Listeners</div>
+                    <div class="value">42</div>
+                </div>
+                <div class="metric-card">
+                    <div class="label">JS Heap</div>
+                    <div class="value">12<span class="unit">MB</span></div>
+                </div>
+                <div class="metric-card">
+                    <div class="label">FPS</div>
+                    <div class="value">58<span class="unit">fps</span></div>
+                </div>
+                <h3 style="margin: 16px 4px 4px; font-size: 12px; color: var(--fg-dim); text-transform: uppercase;">Casovani snimku</h3>
+                <div class="chart-placeholder">
+                    <div class="chart-bar" style="height: 30%"></div>
+                    <div class="chart-bar" style="height: 45%"></div>
+                    <div class="chart-bar" style="height: 60%"></div>
+                    <div class="chart-bar" style="height: 35%"></div>
+                    <div class="chart-bar" style="height: 50%"></div>
+                    <div class="chart-bar" style="height: 95%; background: var(--warn)"></div>
+                    <div class="chart-bar" style="height: 40%"></div>
+                    <div class="chart-bar" style="height: 55%"></div>
+                    <div class="chart-bar" style="height: 70%"></div>
+                    <div class="chart-bar" style="height: 100%; background: var(--error)"></div>
+                    <div class="chart-bar" style="height: 45%"></div>
+                    <div class="chart-bar" style="height: 50%"></div>
+                    <div class="chart-bar" style="height: 60%"></div>
+                    <div class="chart-bar" style="height: 35%"></div>
+                    <div class="chart-bar" style="height: 50%"></div>
+                </div>
+                <h3 style="margin: 16px 4px 4px; font-size: 12px; color: var(--fg-dim); text-transform: uppercase;">Plamen volani</h3>
+                <div style="padding: 8px;">
+                    <div class="flame-row">
+                        <div class="flame-cell" style="width: 100%;">page load (2412ms)</div>
+                    </div>
+                    <div class="flame-row">
+                        <div class="flame-cell rendering" style="width: 20%;">parse HTML</div>
+                        <div class="flame-cell scripting" style="width: 35%;">script.js execute</div>
+                        <div class="flame-cell rendering" style="width: 25%;">layout + paint</div>
+                        <div class="flame-cell system" style="width: 20%;">idle</div>
+                    </div>
+                    <div class="flame-row">
+                        <div class="flame-cell rendering" style="width: 20%;">tokenize</div>
+                        <div class="flame-cell scripting" style="width: 18%;">parse</div>
+                        <div class="flame-cell scripting" style="width: 17%;">execute</div>
+                        <div class="flame-cell rendering" style="width: 10%;">cascade</div>
+                        <div class="flame-cell rendering" style="width: 15%;">layout</div>
+                        <div class="flame-cell painting" style="width: 8%;">paint</div>
+                        <div class="flame-cell system" style="width: 12%;">idle</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Memory (placeholder) -->
+        <div class="panel" style="flex-direction: column; padding: 20px; color: var(--fg-dim);">
+            <h3 style="color: var(--fg); margin-top: 0;">Pamet</h3>
+            <p>Heap snapshot, allocation timeline, retained size, dominator tree.</p>
+        </div>
+
+        <!-- APPLICATION (Uloziste) -->
+        <div class="panel application">
+            <div class="app-tree">
+                <div class="section">
+                    <div class="section-header">Uloziste</div>
+                    <div class="app-item"><span class="icon"></span>Mistni uloziste</div>
+                    <div class="app-item active"><span class="icon"></span>Uloziste relace</div>
+                    <div class="app-item"><span class="icon"></span>IndexedDB</div>
+                    <div class="app-item"><span class="icon"></span>Cookies</div>
+                </div>
+                <div class="section">
+                    <div class="section-header">Cache</div>
+                    <div class="app-item"><span class="icon"></span>Cache Storage</div>
+                </div>
+                <div class="section">
+                    <div class="section-header">Pozadi</div>
+                    <div class="app-item"><span class="icon"></span>Service Workers</div>
+                    <div class="app-item"><span class="icon"></span>Manifest</div>
+                </div>
+                <div class="section">
+                    <div class="section-header">Ramy</div>
+                    <div class="app-item"><span class="icon"></span>top (1 puvod)</div>
+                </div>
+            </div>
+            <div class="app-body">
+                <div class="app-data-toolbar">
+                    <span class="origin">https://example.com</span>
+                    <button class="toolbar-btn" data-i18n-title="btn.refresh" title="Obnovit"><i data-lucide="rotate-cw" class="icon"></i></button>
+                    <button class="toolbar-btn" data-i18n-title="btn.clearAll" title="Smazat vse"><i data-lucide="trash-2" class="icon"></i></button>
+                    <button class="toolbar-btn" data-i18n-title="btn.add" title="Pridat"><i data-lucide="plus" class="icon"></i></button>
+                    <input class="console-filter-input" data-i18n-placeholder="ph.filter" placeholder="Filtrovat" style="max-width: 200px;">
+                </div>
+                <div class="app-table-container">
+                    <table class="app-table">
+                        <thead>
+                            <tr><th style="width: 30%">Klic</th><th>Hodnota</th></tr>
+                        </thead>
+                        <tbody>
+                            <tr><td>user_token</td><td>eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...</td></tr>
+                            <tr><td>preferences</td><td>{"theme":"dark","lang":"cs"}</td></tr>
+                            <tr><td>last_visit</td><td>2026-05-15T08:32:11Z</td></tr>
+                            <tr><td>cart_count</td><td>3</td></tr>
+                            <tr><td>session_id</td><td>sess_a8b3c9d2e1f4g5h6</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Placeholders pro ostatni -->
+        <div class="panel" style="flex-direction: column; padding: 20px; color: var(--fg-dim);">
+            <h3 style="color: var(--fg); margin-top: 0;">Pristupnost</h3>
+            <p>Accessibility tree, role + name + aria attrs visualization, contrast checker.</p>
+        </div>
+        <div class="panel" style="flex-direction: column; padding: 20px; color: var(--fg-dim);">
+            <h3 style="color: var(--fg); margin-top: 0;">Aplikace</h3>
+            <p>Manifest, service workers, push notifications, web app metadata.</p>
+        </div>
+
+    </div>
+</div>
+
+<script>
+// Tab switching
+const tabs = document.querySelectorAll('.tab-strip .tab');
+const panels = document.querySelectorAll('.panel');
+tabs.forEach((tab, idx) => {
+    tab.addEventListener('click', () => {
+        tabs.forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        panels.forEach(p => p.classList.remove('active'));
+        const targetClass = tab.dataset.panel;
+        const target = document.querySelector('.panel.' + targetClass) || panels[idx];
+        if (target) target.classList.add('active');
+    });
+});
+
+// Layout pane side tabs
+document.querySelectorAll('.layout-tab').forEach(t => {
+    t.addEventListener('click', () => {
+        const target = t.dataset.side;
+        const parent = t.closest('.layout-pane');
+        if (!parent) return;
+        parent.querySelectorAll('.layout-tab').forEach(x => x.classList.remove('active'));
+        t.classList.add('active');
+        parent.querySelectorAll('.layout-body').forEach(b => {
+            b.style.display = b.dataset.sideBody === target ? '' : 'none';
+        });
+    });
+});
+
+// Layout collapse toggle
+const layoutPane = document.getElementById('layout-pane');
+const collapseBtn = document.getElementById('layout-collapse');
+collapseBtn.addEventListener('click', () => {
+    layoutPane.classList.toggle('collapsed');
+    const collapsed = layoutPane.classList.contains('collapsed');
+    collapseBtn.innerHTML = '<i data-lucide="' + (collapsed ? 'chevrons-left' : 'chevrons-right') + '" class="icon"></i>';
+    if (window.lucide) lucide.createIcons({ nameAttr: 'data-lucide', icons: window.lucide.icons });
+});
+
+// Layout sections collapse
+document.querySelectorAll('.layout-section-header').forEach(h => {
+    h.addEventListener('click', () => {
+        h.parentElement.classList.toggle('collapsed');
+    });
+});
+// Debug sections collapse
+document.querySelectorAll('.debug-section-header').forEach(h => {
+    h.addEventListener('click', () => {
+        h.parentElement.classList.toggle('collapsed');
+    });
+});
+
+// DOM node selection
+document.querySelectorAll('.dom-node').forEach(n => {
+    n.addEventListener('click', e => {
+        e.stopPropagation();
+        document.querySelectorAll('.dom-node').forEach(x => x.classList.remove('selected'));
+        n.classList.add('selected');
+    });
+});
+
+// Level toggles
+document.querySelectorAll('.level-toggle').forEach(t => {
+    t.addEventListener('click', () => {
+        const parent = t.parentElement;
+        parent.querySelectorAll('.level-toggle').forEach(x => x.classList.remove('active'));
+        t.classList.add('active');
+    });
+});
+
+// App tree items
+document.querySelectorAll('.app-item').forEach(i => {
+    i.addEventListener('click', () => {
+        document.querySelectorAll('.app-item').forEach(x => x.classList.remove('active'));
+        i.classList.add('active');
+    });
+});
+
+// Vertical splitters (resize horizontal)
+function setupVSplitter(splitter, leftSel, rightSel) {
+    const left = document.querySelector(leftSel);
+    const right = document.querySelector(rightSel);
+    let dragging = false;
+    let startX = 0;
+    let startLeftW = 0;
+    let startRightW = 0;
+    splitter.style.cursor = 'ew-resize';
+    splitter.addEventListener('mousedown', e => {
+        dragging = true;
+        startX = e.clientX;
+        startLeftW = left.getBoundingClientRect().width;
+        startRightW = right.getBoundingClientRect().width;
+        document.body.style.cursor = 'ew-resize';
+        e.preventDefault();
+    });
+    document.addEventListener('mousemove', e => {
+        if (!dragging) return;
+        const delta = e.clientX - startX;
+        const newLeft = Math.max(120, startLeftW + delta);
+        const newRight = Math.max(120, startRightW - delta);
+        if (left.classList.contains('dom-pane')) {
+            // dom-pane is flex:1, ne fixed width. Pri drag spis setni styles-pane width.
+        } else {
+            left.style.width = newLeft + 'px';
+        }
+        if (right.classList.contains('layout-pane') && right.classList.contains('collapsed')) {
+            // skip resize collapsed
+        } else {
+            right.style.width = newRight + 'px';
+            right.style.flexShrink = '0';
+        }
+    });
+    document.addEventListener('mouseup', () => {
+        dragging = false;
+        document.body.style.cursor = '';
+    });
+}
+setupVSplitter(document.getElementById('splitter-styles'), '.dom-pane', '.styles-pane');
+setupVSplitter(document.getElementById('splitter-layout'), '.styles-pane', '.layout-pane');
+
+// Vertical resize devtools
+const grip = document.querySelector('.resize-grip');
+const devtools = document.querySelector('.devtools');
+const pageArea = document.querySelector('.page-area');
+let vdrag = false;
+let startY = 0;
+let startDevH = 0;
+grip.addEventListener('mousedown', e => {
+    vdrag = true;
+    startY = e.clientY;
+    startDevH = devtools.getBoundingClientRect().height;
+    e.preventDefault();
+});
+document.addEventListener('mousemove', e => {
+    if (!vdrag) return;
+    const delta = e.clientY - startY;
+    const totalH = window.innerHeight;
+    const newDev = Math.max(100, Math.min(totalH - 100, startDevH - delta));
+    const pct = (newDev / totalH) * 100;
+    devtools.style.height = pct + '%';
+    pageArea.style.height = (100 - pct) + '%';
+});
+document.addEventListener('mouseup', () => { vdrag = false; });
+</script>
+
+<!-- Lucide icons CDN (offline-safe: gracefully degrades if unreachable) -->
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+
+<!-- i18n dictionary + applier -->
+<script>
+const I18N = {
+    cs: {
+        // Top tabs
+        'tab.inspector':      'Pruzkumnik',
+        'tab.console':        'Konzole',
+        'tab.debugger':       'Debugger',
+        'tab.network':        'Sit',
+        'tab.styleEditor':    'Editor stylu',
+        'tab.performance':    'Vykon',
+        'tab.memory':         'Pamet',
+        'tab.application':    'Uloziste',
+        'tab.accessibility':  'Pristupnost',
+        'tab.appInfo':        'Aplikace',
+        // Side tabs (right pane)
+        'side.layout':        'Rozlozeni',
+        'side.computed':      'Vypocitano',
+        'side.changes':       'Zmeny',
+        'side.compat':        'Kompatibilita',
+        'side.fonts':         'Pismo',
+        'side.animations':    'Animace',
+        // Buttons
+        'btn.responsive':     'Responzivni navrh',
+        'btn.settings':       'Nastaveni',
+        'btn.more':           'Vice',
+        'btn.close':          'Zavrit',
+        'btn.inspect':        'Inspect (Ctrl+Shift+C)',
+        'btn.pickColor':      'Vybrat barvu',
+        'btn.addNode':        'Pridat node',
+        'btn.addRule':        'Pridat pravidlo',
+        'btn.lightTheme':     'Svetly motiv',
+        'btn.printPreview':   'Nahled tisku',
+        'btn.pseudoClasses':  'Pseudo-classes',
+        'btn.classList':      'Seznam trid',
+        'btn.moreTabs':       'Vice zalozek',
+        'btn.collapse':       'Skryt/rozthranout panel',
+        'btn.playPause':      'Pozastavit / spustit',
+        'btn.restart':        'Restartovat',
+        'btn.clear':          'Vymazat',
+        'btn.record':         'Zaznamenavat',
+        'btn.reloadRecord':   'Nacist znovu + zaznamenat',
+        'btn.refresh':        'Obnovit',
+        'btn.clearAll':       'Smazat vse',
+        'btn.add':            'Pridat',
+        'btn.resume':         'Pokracovat (F8)',
+        'btn.stepOver':       'Krok pres (F10)',
+        'btn.stepInto':       'Krok do (F11)',
+        'btn.stepOut':        'Krok ven (Shift+F11)',
+        'btn.deactivateBp':   'Deaktivovat breakpointy',
+        // Placeholders
+        'ph.searchHtml':      'Hledat HTML',
+        'ph.filterStyles':    'Filtrovat styly',
+        'ph.filterLogs':      'Filtrovat zaznamy',
+        'ph.filterUrl':       'Filtrovat URL, status, metodu...',
+        'ph.filter':          'Filtrovat',
+        // Log levels
+        'level.all':          'Vsechny',
+        'level.errors':       'Chyby',
+        'level.warnings':     'Upozorneni',
+        'level.info':         'Info',
+        'level.debug':        'Debug',
+        // Network resource types
+        'net.images':         'Obr.',
+        'net.fonts':          'Pisma',
+        // Debugger tree
+        'dbg.page':           'Stranka',
+        'dbg.workers':        'Pracovni vlakna',
+        'dbg.external':       'Externi',
+        'dbg.snippets':       'Sniptety',
+        // Performance
+        'perf.recordLen':     '2.42s zaznam',
+    },
+    en: {
+        'tab.inspector':      'Inspector',
+        'tab.console':        'Console',
+        'tab.debugger':       'Debugger',
+        'tab.network':        'Network',
+        'tab.styleEditor':    'Style Editor',
+        'tab.performance':    'Performance',
+        'tab.memory':         'Memory',
+        'tab.application':    'Storage',
+        'tab.accessibility':  'Accessibility',
+        'tab.appInfo':        'Application',
+        'side.layout':        'Layout',
+        'side.computed':      'Computed',
+        'side.changes':       'Changes',
+        'side.compat':        'Compatibility',
+        'side.fonts':         'Fonts',
+        'side.animations':    'Animations',
+        'btn.responsive':     'Responsive design',
+        'btn.settings':       'Settings',
+        'btn.more':           'More',
+        'btn.close':          'Close',
+        'btn.inspect':        'Inspect (Ctrl+Shift+C)',
+        'btn.pickColor':      'Pick color',
+        'btn.addNode':        'Add node',
+        'btn.addRule':        'Add rule',
+        'btn.lightTheme':     'Light theme',
+        'btn.printPreview':   'Print preview',
+        'btn.pseudoClasses':  'Pseudo-classes',
+        'btn.classList':      'Class list',
+        'btn.moreTabs':       'More tabs',
+        'btn.collapse':       'Collapse/expand panel',
+        'btn.playPause':      'Pause / play',
+        'btn.restart':        'Restart',
+        'btn.clear':          'Clear',
+        'btn.record':         'Record',
+        'btn.reloadRecord':   'Reload + record',
+        'btn.refresh':        'Refresh',
+        'btn.clearAll':       'Clear all',
+        'btn.add':            'Add',
+        'btn.resume':         'Resume (F8)',
+        'btn.stepOver':       'Step over (F10)',
+        'btn.stepInto':       'Step into (F11)',
+        'btn.stepOut':        'Step out (Shift+F11)',
+        'btn.deactivateBp':   'Deactivate breakpoints',
+        'ph.searchHtml':      'Search HTML',
+        'ph.filterStyles':    'Filter styles',
+        'ph.filterLogs':      'Filter output',
+        'ph.filterUrl':       'Filter URL, status, method...',
+        'ph.filter':          'Filter',
+        'level.all':          'All',
+        'level.errors':       'Errors',
+        'level.warnings':     'Warnings',
+        'level.info':         'Info',
+        'level.debug':        'Debug',
+        'net.images':         'Img',
+        'net.fonts':          'Fonts',
+        'dbg.page':           'Page',
+        'dbg.workers':        'Workers',
+        'dbg.external':       'External',
+        'dbg.snippets':       'Snippets',
+        'perf.recordLen':     '2.42s recording',
+    },
+};
+
+let currentLang = 'cs';
+
+function applyI18n(lang) {
+    const dict = I18N[lang] || I18N.cs;
+    document.querySelectorAll('[data-i18n]').forEach(el => {
+        const key = el.dataset.i18n;
+        if (dict[key] !== undefined) el.textContent = dict[key];
+    });
+    document.querySelectorAll('[data-i18n-title]').forEach(el => {
+        const key = el.dataset.i18nTitle;
+        if (dict[key] !== undefined) el.title = dict[key];
+    });
+    document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+        const key = el.dataset.i18nPlaceholder;
+        if (dict[key] !== undefined) el.placeholder = dict[key];
+    });
+    document.documentElement.lang = lang;
+    currentLang = lang;
+}
+
+document.querySelectorAll('.lang-switch').forEach(btn => {
+    btn.addEventListener('click', () => {
+        document.querySelectorAll('.lang-switch').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        applyI18n(btn.dataset.lang);
+    });
+});
+
+// Init: render Lucide icons + apply default lang
+function initIcons() {
+    if (window.lucide && typeof lucide.createIcons === 'function') {
+        try { lucide.createIcons(); } catch (e) { console.warn('Lucide init failed:', e); }
+    }
+}
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initIcons);
+} else {
+    initIcons();
+}
+applyI18n(currentLang);
+</script>
+
+</body>
+</html>

@@ -1,0 +1,14 @@
+[package]
+name = "rwe-devtools-frontend"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "rwe_devtools_frontend"
+path = "src/lib.rs"
+
+[dependencies]
+# Frontend obsahuje HTML/CSS/JS resources bundled pres include_str!. Knihovni
+# API vraci kazdou page jako &'static str. WebView (D4) load_html(...) je
+# loaduje pri F12 toggle.
+# Nezavisi na rwe-devtools-proto (komunikuje pres JS window.cdp.send bridge).

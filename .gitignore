@@ -21,3 +21,8 @@ dump.txt
 ours.txt
 chrome.txt
 log.txt
+
+# Chromium sparse clone reference - viz reference/INSPIRATION.md
+/reference/chromium
+# Firefox / WebRender sparse clone reference
+/reference/firefox
