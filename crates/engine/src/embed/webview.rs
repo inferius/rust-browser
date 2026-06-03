@@ -3111,14 +3111,17 @@ impl WebView {
                         pos_x, pos_y, self.scroll_x, self.scroll_y,
                         layer.damage_rect, layer.transform);
                 }
-                if let Some(t) = &layer.transform {
+                if layer.transform.is_some() {
                     // Layer texture obsahuje UNTRANSFORMED content (paint emit
                     // skip transform pri layer). Compose pres transform pipeline
                     // rotuje quad pres GPU (= rotates content + glyphs spolu).
                     // Center = pos + w/2 = element rect center (layer.root_rect
                     // = orig rect = element bbox).
+                    // POUZIVAME PLNY CHAIN (layer.transforms), ne singular
+                    // layer.transform - jinak multi-op 3D (rotateX+rotateY,
+                    // perspective+rotateY) dostane jen rozbity prvni op.
                     let m = crate::browser::layout::compute_transform_matrix(
-                        &[t.clone()], None);
+                        &layer.transforms, None);
                     renderer.compose_view_to_view_transform_into_encoder(
                         &mut compose_encoder,
                         target_view, &view,

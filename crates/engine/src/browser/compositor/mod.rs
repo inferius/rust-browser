@@ -69,6 +69,12 @@ pub struct LayerNode {
     /// Compositing properties - applied at compositor pass:
     pub opacity: f32,
     pub transform: Option<super::layout::TransformOp>,
+    /// Plny transform chain (transform: A() B() C()). `transform` (singular) je
+    /// jen prvni op pres parse_transform - rozbity pro multi-op chainy (napr.
+    /// `rotateX(30deg) rotateY(30deg)` nebo `perspective(600px) rotateY(35deg)`,
+    /// kde parse_transform vrati garbage). Outer compose pouziva TENTO Vec pres
+    /// compute_transform_matrix(&transforms) = spravny 3D chain.
+    pub transforms: Vec<super::layout::TransformOp>,
     /// Reason proc je layer (debug + selectivni invalidation).
     pub reason: LayerReason,
     /// Child layers. Sortovany pres z_index pri compositor pass.
@@ -124,6 +130,7 @@ pub fn extract_layer_tree(layout_root: &LayoutBox) -> LayerNode {
         z_index: None,
         opacity: 1.0,
         transform: None,
+        transforms: Vec::new(),
         reason: LayerReason::Root,
         children: Vec::new(),
         content_box_ids: Vec::new(),
@@ -349,6 +356,7 @@ fn walk_box(b: &LayoutBox, current: &mut LayerNode) {
                 z_index: child.z_index,
                 opacity: child.opacity,
                 transform: child.transform.clone(),
+                transforms: child.transforms.clone(),
                 reason: classify_layer_reason(child),
                 children: Vec::new(),
                 content_box_ids: Vec::new(),
@@ -533,6 +541,7 @@ mod tests {
             z_index: None,
             opacity: 1.0,
             transform: None,
+            transforms: Vec::new(),
             reason: LayerReason::Root,
             children: Vec::new(),
             content_box_ids: Vec::new(),

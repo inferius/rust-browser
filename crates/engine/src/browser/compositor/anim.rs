@@ -352,6 +352,7 @@ mod tests {
             z_index: None,
             opacity: 1.0,
             transform: None,
+            transforms: Vec::new(),
             reason: super::super::LayerReason::Root,
             children: Vec::new(),
             content_box_ids: Vec::new(),
