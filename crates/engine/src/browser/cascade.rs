@@ -4088,22 +4088,25 @@ pub fn apply_transitions(
         let raw_progress = (t / at.spec.duration_secs).clamp(0.0, 1.0);
         let progress = apply_easing(raw_progress, &at.spec.timing_function);
 
-        // Interpoluj hodnotu - pres parse_length jako f32
-        let from = super::layout::parse_length(&at.from_value);
-        let to = super::layout::parse_length(&at.to_value);
-        let interpolated = if from != 0.0 || to != 0.0 {
-            // Numericka prop: interpoluj
-            let v = from + (to - from) * progress;
-            // Zachovaj jednotku z to_value (heuristika)
-            let unit = ["px", "em", "rem", "%", "vw", "vh", "deg", "rad"]
-                .iter()
-                .find(|u| at.to_value.ends_with(*u))
-                .copied()
-                .unwrap_or("px");
-            format!("{v}{unit}")
+        // Transform / barvy: per-function / rgba interpolace (jinak parse_length
+        // na "translateX(..)"=0 -> snap = hover transform skace, neanimuje).
+        let interpolated = if let Some(v) = super::layout::interpolate_css_value(
+            &at.property, &at.from_value, &at.to_value, progress) {
+            v
         } else {
-            // Non-numericka - krokove (snap)
-            if progress < 0.5 { at.from_value.clone() } else { at.to_value.clone() }
+            let from = super::layout::parse_length(&at.from_value);
+            let to = super::layout::parse_length(&at.to_value);
+            if from != 0.0 || to != 0.0 {
+                let v = from + (to - from) * progress;
+                let unit = ["px", "em", "rem", "%", "vw", "vh", "deg", "rad"]
+                    .iter()
+                    .find(|u| at.to_value.ends_with(*u))
+                    .copied()
+                    .unwrap_or("px");
+                format!("{v}{unit}")
+            } else {
+                if progress < 0.5 { at.from_value.clone() } else { at.to_value.clone() }
+            }
         };
 
         if let Some(styles_rc) = style_map.get_mut(&at.node_id) {

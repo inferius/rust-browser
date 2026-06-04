@@ -1894,6 +1894,81 @@ fn apply_anchor_positioning(bx: &mut LayoutBox, anchors: &std::collections::Hash
 /// Aplikuje @keyframes animation pri zadanem time.
 /// Pro element s `animation-name: foo` najde keyframes a interpoluje hodnoty.
 /// Funkce ne implementovana plne - zatim helper pro budoucnost.
+/// Parse transform string -> [(funkce, [(hodnota, jednotka)])].
+/// "translateX(10px) scale(2)" -> [("translateX",[(10,"px")]), ("scale",[(2,"")])]
+fn parse_transform_funcs(s: &str) -> Vec<(String, Vec<(f32, String)>)> {
+    let mut out = Vec::new();
+    let s = s.trim();
+    if s.is_empty() || s == "none" { return out; }
+    let b = s.as_bytes();
+    let mut i = 0;
+    while i < s.len() {
+        while i < s.len() && (b[i] == b' ' || b[i] == b',') { i += 1; }
+        let ns = i;
+        while i < s.len() && b[i] != b'(' { i += 1; }
+        if i >= s.len() { break; }
+        let name = s[ns..i].trim().to_string();
+        i += 1;
+        let as_ = i;
+        while i < s.len() && b[i] != b')' { i += 1; }
+        let args_str = &s[as_..i.min(s.len())];
+        if i < s.len() { i += 1; }
+        let args: Vec<(f32, String)> = args_str.split(',').map(|a| {
+            let a = a.trim();
+            match a.find(|c: char| c.is_alphabetic() || c == '%') {
+                Some(idx) => (a[..idx].trim().parse().unwrap_or(0.0), a[idx..].to_string()),
+                None => (a.parse().unwrap_or(0.0), String::new()),
+            }
+        }).filter(|_| !args_str.trim().is_empty()).collect();
+        if !name.is_empty() { out.push((name, args)); }
+    }
+    out
+}
+
+/// Per-function interpolace transform stringu. None pokud se funkce neshoduji
+/// (pocet/jmena/pocet args) - caller pak snapne.
+fn interpolate_transform_value(from: &str, to: &str, t: f32) -> Option<String> {
+    let f = parse_transform_funcs(from);
+    let g = parse_transform_funcs(to);
+    if f.is_empty() || f.len() != g.len() { return None; }
+    let mut parts = Vec::with_capacity(f.len());
+    for (a, c) in f.iter().zip(g.iter()) {
+        if a.0 != c.0 || a.1.len() != c.1.len() { return None; }
+        let args: Vec<String> = a.1.iter().zip(c.1.iter()).map(|((v0, u0), (v1, u1))| {
+            let v = v0 + (v1 - v0) * t;
+            let unit = if !u0.is_empty() { u0.as_str() }
+                       else if !u1.is_empty() { u1.as_str() }
+                       else if a.0.starts_with("rotate") || a.0.starts_with("skew") { "deg" }
+                       else if a.0.starts_with("scale") { "" }
+                       else { "px" };
+            // Zaokrouhli na 3 desetinna mista (bez trailing nul ruseni - jednoduche).
+            format!("{:.3}{}", v, unit)
+        }).collect();
+        parts.push(format!("{}({})", a.0, args.join(", ")));
+    }
+    Some(parts.join(" "))
+}
+
+/// Interpoluj CSS hodnotu (transform per-function + barvy rgba lerp). None =
+/// nelze tady -> caller fallne na length interp / snap. Sdileno keyframes +
+/// transitions (oba mely snap bug na transform = "animace skaci na pozice").
+pub fn interpolate_css_value(prop: &str, from: &str, to: &str, t: f32) -> Option<String> {
+    if prop == "transform" {
+        return interpolate_transform_value(from, to, t);
+    }
+    let is_color = prop.ends_with("color") || prop == "fill" || prop == "stroke"
+        || prop == "background";
+    if is_color {
+        if let (Some(c0), Some(c1)) = (parse_color(from), parse_color(to)) {
+            let lf = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t).round().clamp(0.0, 255.0) as u8;
+            return Some(format!("rgba({}, {}, {}, {:.3})",
+                lf(c0[0], c1[0]), lf(c0[1], c1[1]), lf(c0[2], c1[2]),
+                lf(c0[3], c1[3]) as f32 / 255.0));
+        }
+    }
+    None
+}
+
 pub fn interpolate_keyframes(
     frames: &[(f32, Vec<super::css_parser::Declaration>)],
     progress: f32,
@@ -1918,6 +1993,12 @@ pub fn interpolate_keyframes(
             for d0 in decls0 {
                 let d1 = decls1.iter().find(|d| d.property == d0.property);
                 if let Some(d1) = d1 {
+                    // Transform / barvy: per-function / rgba interpolace (jinak
+                    // parse_length("translateX(..)")=0 -> snap = skok na pozici).
+                    if let Some(v) = interpolate_css_value(&d0.property, &d0.value, &d1.value, t) {
+                        out.insert(d0.property.clone(), v);
+                        continue;
+                    }
                     let v0 = parse_length(&d0.value);
                     let v1 = parse_length(&d1.value);
                     if v0 != 0.0 || v1 != 0.0 {
