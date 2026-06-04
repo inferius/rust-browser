@@ -2174,6 +2174,27 @@ fn layout_dispatch_inner(bx: &mut LayoutBox) {
 }
 
 /// Wrap pres build_box_with_pseudo s prazdnou pseudo mapou.
+/// CSS text-transform: capitalize - prvni pismeno kazdeho slova velke.
+/// Slovo = sekvence po whitespace. Unicode-aware (to_uppercase muze expandovat).
+fn capitalize_words(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut at_word_start = true;
+    for c in s.chars() {
+        if c.is_whitespace() {
+            at_word_start = true;
+            out.push(c);
+        } else {
+            if at_word_start {
+                for u in c.to_uppercase() { out.push(u); }
+            } else {
+                out.push(c);
+            }
+            at_word_start = false;
+        }
+    }
+    out
+}
+
 fn build_box(node: &Rc<Node>, style_map: &StyleMap) -> LayoutBox {
     let empty = super::cascade::PseudoStyleMap::new();
     build_box_with_pseudo(node, style_map, &empty)
@@ -2419,6 +2440,9 @@ fn build_box_inner_impl(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &supe
                 }
             }
             // Pokud je collapsed jen samotny space -> empty (whitespace-only node).
+            // POZN: text-transform NEN0 tady (text node nema vlastni cascade entry
+            // = s.len=0). Aplikuje se v rodicovske inheritance smycce nize, kde
+            // je dostupny parent style (viz "text-transform" near children loop).
             if !collapsed.trim().is_empty() {
                 bx.text = Some(collapsed);
             }
@@ -3348,6 +3372,10 @@ fn build_box_inner_impl(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &supe
     let parent_family = bx.font_family.clone();
     let parent_ls = bx.letter_spacing;
     let parent_weight = bx.font_weight;
+    // text-transform (inherited) - text node deti nemaji vlastni cascade entry,
+    // takze transform aplikujeme tady z parent stylu PRED measure/wrap (uppercase
+    // text je sirsi, intrinsic width musi merit transformovany text).
+    let parent_tt = s.get("text-transform").map(|v| v.trim().to_string());
     for ch in bx.children.iter_mut() {
         if ch.tag.is_none() {
             ch.font_size = parent_fs;
@@ -3363,6 +3391,14 @@ fn build_box_inner_impl(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &supe
             // (engine-test .test-title 0.15em LS chybi v measure 14*1.68 ~24px).
             if ch.letter_spacing == 0.0 { ch.letter_spacing = parent_ls; }
             if ch.font_weight == 400 { ch.font_weight = parent_weight; }
+            if let (Some(tt), Some(txt)) = (parent_tt.as_deref(), ch.text.as_ref()) {
+                match tt {
+                    "uppercase" => ch.text = Some(txt.to_uppercase()),
+                    "lowercase" => ch.text = Some(txt.to_lowercase()),
+                    "capitalize" => ch.text = Some(capitalize_words(txt)),
+                    _ => {}
+                }
+            }
         }
     }
 
