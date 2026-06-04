@@ -2522,11 +2522,11 @@ impl WebView {
         // style_map identicky -> paint_fp match -> cache hit -> NO RE-RENDER ->
         // page jevi "spici" (zustane na predchozim framu, scroll jen visible
         // pri nasledne MouseMove ktery nastavi dirty znova).
-        if !self.dirty
+        let paint_cache_hit = !self.dirty
             && Some(paint_fp) == self.last_paint_fingerprint
             && !needs_tick
-            && self.target_view.is_some()
-        {
+            && self.target_view.is_some();
+        if paint_cache_hit {
             // Cache hit - vse identicke, reuse predchozi frame.
             self.prof_layout_ms = 0.0;
             self.prof_paint_ms = 0.0;

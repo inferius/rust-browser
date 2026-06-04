@@ -136,6 +136,14 @@ thread_local! {
     static HOVERED_NODE: std::cell::RefCell<Option<usize>> = std::cell::RefCell::new(None);
     static ACTIVE_NODE: std::cell::RefCell<Option<usize>> = std::cell::RefCell::new(None);
     static FOCUSED_NODE: std::cell::RefCell<Option<usize>> = std::cell::RefCell::new(None);
+    /// Ancestor-or-self chain hovered/active/focused elementu. Precomputed 1x
+    /// per cascade (rebuild_state_chains). :hover/:active/:focus-within matchne
+    /// element pokud je v chainu = je to target NEBO jeho PREDEK. (Hover/focus
+    /// se propaguje na predky hovered/focused elementu, ne na potomky - hover
+    /// nad ditetem = hover nad rodicem.)
+    static HOVERED_CHAIN: std::cell::RefCell<std::collections::HashSet<usize>> = std::cell::RefCell::new(std::collections::HashSet::new());
+    static ACTIVE_CHAIN: std::cell::RefCell<std::collections::HashSet<usize>> = std::cell::RefCell::new(std::collections::HashSet::new());
+    static FOCUSED_CHAIN: std::cell::RefCell<std::collections::HashSet<usize>> = std::cell::RefCell::new(std::collections::HashSet::new());
     /// Per-call cascade profile - host reset + log per render_via.
     pub static CASCADE_PROF: std::cell::RefCell<CascadeProfile> = std::cell::RefCell::new(CascadeProfile::default());
 }
@@ -172,20 +180,62 @@ pub fn set_active_node(id: Option<usize>) { ACTIVE_NODE.with(|c| *c.borrow_mut()
 pub fn set_focused_node(id: Option<usize>) { FOCUSED_NODE.with(|c| *c.borrow_mut() = id); }
 pub fn get_focused_node() -> Option<usize> { FOCUSED_NODE.with(|c| *c.borrow()) }
 
+/// Precompute ancestor-or-self chain pro hovered/active/focused element.
+/// Vola se 1x na zacatku cascade (root dostupny). Jeden DFS O(N) trackuje
+/// path root->node; kdyz narazi na target, ulozi celou aktualni path (= target
+/// + vsichni jeho predci) do chainu. :hover/:active/:focus-within pak = O(1)
+/// chain membership test (in_hover_chain atd.).
+pub fn rebuild_state_chains(root: &Rc<Node>) {
+    let h = HOVERED_NODE.with(|c| *c.borrow());
+    let a = ACTIVE_NODE.with(|c| *c.borrow());
+    let f = FOCUSED_NODE.with(|c| *c.borrow());
+    let mut hc = std::collections::HashSet::new();
+    let mut ac = std::collections::HashSet::new();
+    let mut fc = std::collections::HashSet::new();
+    if h.is_some() || a.is_some() || f.is_some() {
+        fn dfs(node: &Rc<Node>, path: &mut Vec<usize>,
+               h: Option<usize>, a: Option<usize>, f: Option<usize>,
+               hc: &mut std::collections::HashSet<usize>,
+               ac: &mut std::collections::HashSet<usize>,
+               fc: &mut std::collections::HashSet<usize>) {
+            let id = Rc::as_ptr(node) as usize;
+            path.push(id);
+            if Some(id) == h { hc.extend(path.iter().copied()); }
+            if Some(id) == a { ac.extend(path.iter().copied()); }
+            if Some(id) == f { fc.extend(path.iter().copied()); }
+            for ch in node.children.borrow().iter() {
+                dfs(ch, path, h, a, f, hc, ac, fc);
+            }
+            path.pop();
+        }
+        let mut path: Vec<usize> = Vec::new();
+        dfs(root, &mut path, h, a, f, &mut hc, &mut ac, &mut fc);
+    }
+    HOVERED_CHAIN.with(|c| *c.borrow_mut() = hc);
+    ACTIVE_CHAIN.with(|c| *c.borrow_mut() = ac);
+    FOCUSED_CHAIN.with(|c| *c.borrow_mut() = fc);
+}
+/// :hover chain membership (node je hovered nebo predek hovered elementu).
+/// pub: cache hover_bit (matched_decls klic) musi zahrnout i predky.
+pub fn hovered_chain_contains(id: usize) -> bool { HOVERED_CHAIN.with(|c| c.borrow().contains(&id)) }
+/// :focus / :focus-within chain membership (node je focused nebo predek).
+pub fn focused_chain_contains(id: usize) -> bool { FOCUSED_CHAIN.with(|c| c.borrow().contains(&id)) }
+
 fn current_node_id(node: &Rc<Node>) -> usize { Rc::as_ptr(node) as usize }
 fn is_node_match(node: &Rc<Node>, cell: &'static std::thread::LocalKey<std::cell::RefCell<Option<usize>>>) -> bool {
     let id = current_node_id(node);
     cell.with(|c| c.borrow().map(|x| x == id).unwrap_or(false))
 }
-fn is_node_or_ancestor_match(node: &Rc<Node>, cell: &'static std::thread::LocalKey<std::cell::RefCell<Option<usize>>>) -> bool {
-    let target = cell.with(|c| *c.borrow());
-    let target = match target { Some(t) => t, None => return false };
-    let mut cur: Option<Rc<Node>> = Some(Rc::clone(node));
-    while let Some(n) = cur {
-        if current_node_id(&n) == target { return true; }
-        cur = n.parent.borrow().upgrade();
-    }
-    false
+/// Test zda je `node` v danem state chainu (= node je target NEBO predek
+/// targetu). Pouziti: :hover / :active / :focus-within - tyto pseudo-classy
+/// matchnou subject pokud je hovered/active/focused element NEBO jeho predek.
+/// Chain je precomputed v rebuild_state_chains (O(1) lookup misto walk).
+/// POZN: drivejsi is_node_or_ancestor_match walkala z node NAHORU a hledala
+/// target mezi predky node = vracela true kdyz node je POTOMEK targetu (obracene
+/// = hover nad rodicem barvil deti). Chain dela spravnou propagaci na predky.
+fn is_in_state_chain(node: &Rc<Node>, chain: &'static std::thread::LocalKey<std::cell::RefCell<std::collections::HashSet<usize>>>) -> bool {
+    let id = current_node_id(node);
+    chain.with(|c| c.borrow().contains(&id))
 }
 
 /// Expanduje CSS shorthand props (margin/padding/border) do longhand.
@@ -512,17 +562,16 @@ pub fn collect_hover_affected_set(
     root.walk(&mut |node| {
         if !matches!(node.kind, NodeKind::Element { .. }) { return; }
         for sel in &hover_sels {
-            // matches_selector contains :hover handling - aktualne pri
-            // ne-set HOVERED_NODE :hover pseudoclass fails. Pojdme set
-            // dummy hover na own node pres temp closure - hack pres
-            // thread_local switch.
-            // SIMPLE: predtim docasne set HOVERED_NODE na own node ptr.
-            let prev_hover = get_hovered_node();
-            set_hovered_node(Some(Rc::as_ptr(node) as usize));
+            // Test "kdyby byl tento node hovered, matchne :hover selektor?".
+            // matches_selector :hover cte HOVERED_CHAIN -> docasne nastav chain
+            // na own node (= node by byl hovered subjekt) + restore.
+            let own = Rc::as_ptr(node) as usize;
+            let prev_chain = HOVERED_CHAIN.with(|c| c.borrow().clone());
+            HOVERED_CHAIN.with(|c| { let mut s = c.borrow_mut(); s.clear(); s.insert(own); });
             let m = matches_selector(node, sel);
-            set_hovered_node(prev_hover);
+            HOVERED_CHAIN.with(|c| *c.borrow_mut() = prev_chain);
             if m {
-                affected.insert(Rc::as_ptr(node) as usize);
+                affected.insert(own);
                 break;
             }
         }
@@ -1213,6 +1262,8 @@ pub fn cascade_with_viewport(root: &Rc<Node>, stylesheets: &[Stylesheet],
                               viewport_w: f32, viewport_h: f32) -> StyleMap {
     // Reset prof na zacatku.
     cascade_prof_reset();
+    // Precompute hover/active/focus ancestor-or-self chainy (1x, root tady).
+    rebuild_state_chains(root);
     let prof_t_vp = std::time::Instant::now();
     // Set viewport pro thread-local pouzity v eval_math_func k konverzi
     // vw/vh argumentu min()/max()/clamp() na px.
@@ -2532,6 +2583,8 @@ mod rule_buckets_tests {
 
 /// Aplikuje stylesheet na DOM strom, vrati StyleMap.
 pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
+    // Precompute hover/active/focus ancestor-or-self chainy (1x, root tady).
+    rebuild_state_chains(root);
     let mut style_map: StyleMap = HashMap::new();
     // Globalni :root variables - resolved jednou
     let mut variables: HashMap<String, String> = HashMap::new();
@@ -2669,8 +2722,12 @@ pub fn cascade(root: &Rc<Node>, stylesheets: &[Stylesheet]) -> StyleMap {
         // focus_bit, sheets_signature). Pres stable DOM + style + non-hover-state
         // change vsech ~3434 nodes hit cache = skip walk loop = 0us per node.
         let node_ptr = Rc::as_ptr(node) as usize;
-        let hover_bit: u8 = if get_hovered_node() == Some(node_ptr) { 1 } else { 0 };
-        let focus_bit: u8 = if get_focused_node() == Some(node_ptr) { 1 } else { 0 };
+        // hover/focus bit do cache klice = chain membership (NE jen exact match):
+        // kdyz se hovered/focused zmeni, musi se prepocitat i PREDCI (jejich
+        // :hover/:focus-within stav se zmenil). Bez chain by predci drzeli stary
+        // (cerveny) cache = sticky hover.
+        let hover_bit: u8 = if hovered_chain_contains(node_ptr) { 1 } else { 0 };
+        let focus_bit: u8 = if focused_chain_contains(node_ptr) { 1 } else { 0 };
         let cache_key: MatchedKey = (host_id, dom_ver, node_ptr, hover_bit, focus_bit, sheets_sig);
 
         // Walk-output cache HIT: skip cely build (inline parse + apply decls + insert).
@@ -3555,18 +3612,18 @@ pub fn matches_simple(node: &Rc<Node>, sel: &SimpleSelector) -> bool {
                 // Vyzaduje runtime stav - skip
                 return false;
             }
-            // hover/active/focus runtime state - thread-local nodes nastaveny render loopem.
+            // hover/active/focus runtime state - chainy precomputed v rebuild_state_chains.
             "hover" => {
-                if !is_node_or_ancestor_match(node, &HOVERED_NODE) { return false; }
+                if !is_in_state_chain(node, &HOVERED_CHAIN) { return false; }
             }
             "active" => {
-                if !is_node_or_ancestor_match(node, &ACTIVE_NODE) { return false; }
+                if !is_in_state_chain(node, &ACTIVE_CHAIN) { return false; }
             }
             "focus" | "focus-visible" => {
                 if !is_node_match(node, &FOCUSED_NODE) { return false; }
             }
             "focus-within" => {
-                if !is_node_or_ancestor_match(node, &FOCUSED_NODE) { return false; }
+                if !is_in_state_chain(node, &FOCUSED_CHAIN) { return false; }
             }
             "visited" | "link" => return false,
             _ => {}

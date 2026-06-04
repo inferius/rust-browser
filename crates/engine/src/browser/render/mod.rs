@@ -1614,6 +1614,29 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         self.render();
                         return;
                     }
+                    // Page hover -> deleguj MouseMove do webview.handle_input
+                    // (dispatch JS mouseover/mouseenter/mousemove/mouseout/mouseleave
+                    // + inline on* handlery + update hovered_node_local pro CSS
+                    // :hover cascade). Drive se webview pipeline pro NORMALNI pohyb
+                    // NEvolala (jen pri scrollbar dragu) -> page hover (CSS i JS)
+                    // byl uplne mrtvy. Skip pri pohybu nad devtools panelem nebo
+                    // pri text-selection dragu (ten ma vlastni handling nize).
+                    let hov_panel_h = self.panel_h_logical();
+                    let hov_viewport_h = self.viewport_h_logical();
+                    let hov_raw_y = self.mouse_y - self.scroll_y();
+                    let hov_in_devtools = self.devtools.panel_open
+                        && hov_raw_y >= hov_viewport_h - hov_panel_h;
+                    if !hov_in_devtools && !self.page_sel_dragging() {
+                        let vp_x = self.mouse_x - self.scroll_x();
+                        if let Some(wv) = self.webview.as_mut() {
+                            let _ = wv.handle_input(crate::embed::InputEvent::MouseMove {
+                                x: vp_x, y: hov_raw_y,
+                                modifiers: Default::default(),
+                                coalesced: Vec::new(),
+                            });
+                        }
+                        if let Some(w) = &self.window { w.request_redraw(); }
+                    }
                     self.update_hover();
                     if self.page_sel_dragging() {
                         self.page_sel_update_current((self.mouse_x, self.mouse_y));
