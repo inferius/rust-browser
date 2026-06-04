@@ -1444,11 +1444,23 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     event_loop.exit();
                 }
                 WindowEvent::Resized(size) => {
+                    let mut sf = 1.0_f32;
                     if let Some(r) = &mut self.renderer {
                         if let Some(w) = &self.window {
                             r.scale_factor = w.scale_factor() as f32;
                         }
+                        sf = r.scale_factor.max(0.01);
                         r.resize(size.width.max(1), size.height.max(1));
+                    }
+                    // Resize WebView viewport (LOGICAL = physical / scale_factor),
+                    // jinak webview renderuje ve STARE velikosti do target_view a
+                    // present_external to natahne na nove okno = obsah se "zoomuje"
+                    // misto reflow. webview.resize invaliduje layout cache ->
+                    // skutecny reflow na novou sirku. (Mirror shell resize_views.)
+                    let lw = ((size.width as f32 / sf) as u32).max(1);
+                    let lh = ((size.height as f32 / sf) as u32).max(1);
+                    if let Some(wv) = self.webview.as_mut() {
+                        wv.resize(lw, lh, sf);
                     }
                     // PERF: layout cache invalidate jen pri viewport-dependent CSS.
                     // Bez @media/vh layout je viewport-independent (content size
@@ -5570,6 +5582,10 @@ impl Renderer {
         let scale = (self.zoom * self.scale_factor).max(0.01);
         let w = ((bx.rect.width * scale) as u32).max(1);
         let h = ((bx.rect.height * scale) as u32).max(1);
+        if std::env::var("RWE_WEBGL_DBG").is_ok() {
+            eprintln!("[webgl] canvas bx.rect=({:.0},{:.0},{:.0}x{:.0}) scale={:.2} rt={}x{}",
+                bx.rect.x, bx.rect.y, bx.rect.width, bx.rect.height, scale, w, h);
+        }
         self.ensure_webgl_canvas_rt(canvas_ptr, w, h);
 
         // Extract data z state, pak release borrow

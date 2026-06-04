@@ -346,13 +346,17 @@ fn apply_tag_html_attrs(bx: &mut LayoutBox, node: &Rc<Node>) {
             .unwrap_or(false);
     }
 
-    // Canvas tag: precti width/height attributes
+    // Canvas tag: precti width/height attributes. explicit_* (jako SVG) -
+    // jinak block/inline layout canvas pri re-layoutu zmensi na intrinsic
+    // (~16x19) misto width/height attrs = WebGL/2D RT tiny + content scaled.
     if bx.tag.as_deref() == Some("canvas") {
         if let Some(w) = node.attr("width").and_then(|w| w.parse::<f32>().ok()) {
             bx.rect.width = w;
+            bx.explicit_width = Some(w);
         }
         if let Some(h) = node.attr("height").and_then(|h| h.parse::<f32>().ok()) {
             bx.rect.height = h;
+            bx.explicit_height = Some(h);
         }
     }
     // SVG tag: viewport z width/height attrs. explicit_* aby block/flex layout
