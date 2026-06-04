@@ -1613,6 +1613,7 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     }
                 }
                 WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left, .. } => {
+                    let was_scrollbar_drag = self.page_scrollbar_v_drag || self.page_scrollbar_h_drag;
                     if self.devtools_resizing {
                         self.devtools_resizing = false;
                         self.render();
@@ -1648,6 +1649,25 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     if self.page_sel_dragging() {
                         self.page_sel_end_drag();
                         self.render();
+                    }
+                    // Page click -> deleguj MouseUp do webview = dispatch JS
+                    // mouseup + CLICK (pokud down+up na stejnem elementu < 5px).
+                    // Bez tohoto onclick / addEventListener('click') nefirovaly.
+                    if !was_scrollbar_drag {
+                        let raw_y = self.mouse_y - self.scroll_y();
+                        let in_devtools_panel = self.devtools.panel_open
+                            && raw_y >= self.viewport_h_logical() - self.panel_h_logical();
+                        if !in_devtools_panel {
+                            let vp_x = self.mouse_x - self.scroll_x();
+                            if let Some(wv) = self.webview.as_mut() {
+                                let _ = wv.handle_input(crate::embed::InputEvent::MouseUp {
+                                    x: vp_x, y: raw_y,
+                                    button: crate::embed::MouseButton::Left,
+                                    modifiers: Default::default(),
+                                });
+                            }
+                            if let Some(w) = &self.window { w.request_redraw(); }
+                        }
                     }
                 }
                 WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } => {
@@ -1704,6 +1724,25 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     let viewport_w = self.viewport_w_logical();
                     let viewport_h = self.viewport_h_logical();
                     let panel_h = self.panel_h_logical();
+
+                    // Page click -> deleguj do webview.handle_input (dispatch JS
+                    // mousedown/click event + focus + <a href> nav). Drive App
+                    // click NEdispatchoval do JS vubec -> inline onclick i
+                    // addEventListener('click') nefirovaly = "mrtve" klikani.
+                    // Skip kdyz klik do otevreneho devtools panelu (jeho zona).
+                    let in_devtools_panel = self.devtools.panel_open
+                        && raw_y >= viewport_h - panel_h;
+                    if !in_devtools_panel {
+                        let vp_x = self.mouse_x - self.scroll_x();
+                        if let Some(wv) = self.webview.as_mut() {
+                            let _ = wv.handle_input(crate::embed::InputEvent::MouseDown {
+                                x: vp_x, y: raw_y,
+                                button: crate::embed::MouseButton::Left,
+                                modifiers: Default::default(),
+                            });
+                        }
+                        if let Some(w) = &self.window { w.request_redraw(); }
+                    }
 
                     // Address bar autocomplete suggestion klik.
                     // Scroll-to-top button hit (pravy dolni roh, jen pri scroll_y > 200).

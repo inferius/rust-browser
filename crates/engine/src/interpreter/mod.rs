@@ -1654,6 +1654,8 @@ impl Interpreter {
             for entry in entries {
                 if fire_entry(self, target, entry)? { return Ok(()); }
             }
+            // Inline handler atribut (onclick="...") na targetu.
+            self.fire_inline_handler(target, event_type, &event_obj)?;
             if matches!(event_obj.borrow().get("__stopped__"), JsValue::Bool(true)) {
                 return Ok(());
             }
@@ -1671,10 +1673,61 @@ impl Interpreter {
                     if entry.capture { continue; }
                     if fire_entry(self, n, entry)? { return Ok(()); }
                 }
+                // Inline handler atribut na ancestoru (bubble).
+                self.fire_inline_handler(n, event_type, &event_obj)?;
                 if matches!(event_obj.borrow().get("__stopped__"), JsValue::Bool(true)) {
                     return Ok(());
                 }
             }
+        }
+        Ok(())
+    }
+
+    /// Spusti INLINE event handler atribut (onclick="..." / oninput / onfocus
+    /// / ondragover / ...). dispatch_event ho vola pro target + bubble fazi -
+    /// drive se inline handlery NEvolaly vubec (jen addEventListener) -> stranky
+    /// s inline handlery mely "mrtve" klikani/hover. Kod se obali do
+    /// function(event){...} (this=element + event param) a evaluuje v global env
+    /// (closure = global -> global fce/document dostupne, jako v prohlizeci).
+    pub fn fire_inline_handler(
+        &mut self,
+        node: &Rc<crate::browser::dom::NodeData>,
+        event_type: &str,
+        event_obj: &Rc<RefCell<JsObject>>,
+    ) -> Result<(), JsError> {
+        let code = match node.attr(&format!("on{event_type}")) {
+            Some(c) if !c.trim().is_empty() => c,
+            _ => return Ok(()),
+        };
+        use crate::lexer::base::Lexer;
+        use crate::parser::Parser;
+        use crate::tokens::TokenKind;
+        let src = format!("(function(event){{\n{code}\n}})");
+        let lexer = match Lexer::parse_str(&src, "<inline-handler>") {
+            Ok(l) => l,
+            Err(_) => return Ok(()),
+        };
+        let tokens: Vec<_> = lexer.tokens.into_iter()
+            .filter(|t| !matches!(t.kind,
+                TokenKind::Whitespace | TokenKind::Newline
+                | TokenKind::CommentLine(_) | TokenKind::CommentBlock(_)))
+            .collect();
+        let prog = match Parser::new(tokens).parse() {
+            Ok(p) => p,
+            Err(_) => return Ok(()),
+        };
+        let env = Rc::clone(&self.global);
+        let mut fn_val = JsValue::Undefined;
+        for stmt in &prog.body {
+            let mut peeled = stmt;
+            while let crate::ast::Stmt::WithLine { inner, .. } = peeled { peeled = inner; }
+            if let crate::ast::Stmt::Expr(e) = peeled {
+                fn_val = self.eval(e, &env)?;
+            }
+        }
+        if matches!(fn_val, JsValue::Function(_)) {
+            let arg = JsValue::Object(Rc::clone(event_obj));
+            self.call_function(fn_val, vec![arg], Some(JsValue::DomNode(Rc::clone(node))))?;
         }
         Ok(())
     }

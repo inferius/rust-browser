@@ -252,7 +252,7 @@ pub struct WebView {
     /// u32, scroll_y rounded - pro sticky). Fingerprint pres LAYOUT_RELEVANT_PROPS
     /// jen - color/background change neinvaliduje. Pri shode reuse
     /// last_layout_root + skip layout_tree call (363ms drop na <1ms v debug).
-    pub(crate) layout_cache_key: Option<(u64, u32, u32)>,
+    pub(crate) layout_cache_key: Option<(u64, u64, u32, u32)>,
     /// Per-element matched_decls cache invalidation tracker. Pres dom_version
     /// change clear cache (node_ptrs mohou byt mrtvych po DOM mutaci).
     pub(crate) last_matched_cache_dom_ver: u64,
@@ -2551,8 +2551,16 @@ impl WebView {
         // cache kazdy frame (lerp 25% per step = scroll_y meni kazdy pixel).
         // Layout je viewport+style closure, scroll je paint-time offset.
         // Sticky positions zachycuje apply_sticky() pres mutaci cached root.
+        // dom_style_version v klici: textContent / structural / class/id/style
+        // mutace meni layout (text size, pridane elementy) ale NEMENI style_map
+        // fingerprint -> bez nej layout cache HIT = stary text/struktura
+        // (napr. onclick co meni textContent se nezobrazil). dom_style_version
+        // bumpne pri techto mutacich ale NE pri SVG geometry (points) animaci.
+        let dom_style_ver = self.interpreter.as_ref()
+            .map(|i| i.dom_style_version()).unwrap_or(0);
         let layout_key = (
             layout_fp,
+            dom_style_ver,
             (viewport_w as u32),
             (viewport_h as u32),
         );
