@@ -412,6 +412,23 @@ fn walk_layer_paint(
 /// layer-local coords (origin = layer.root_rect top-left). Pri composite pass
 /// renderer kresli layer textures at viewport position (po scroll shift).
 /// Cache klic = layer_id. Hodnota = Vec<DisplayCommand> v local coords.
+/// Scale faktor z transform chainu layeru - pro raster boost (ostry text u
+/// scale(N)). Product Scale ops (max sx/sy), 1.0 pro rotate-only / 3D / bez
+/// transformu. Cap [1.0, 4.0]: nikdy neshrinkuje, limit aby velke scale
+/// neudelalo obri texturu.
+pub(crate) fn layer_raster_scale(transforms: &[crate::browser::layout::TransformOp]) -> f32 {
+    use crate::browser::layout::TransformOp;
+    let mut s = 1.0_f32;
+    for op in transforms {
+        match op {
+            TransformOp::Scale(sx, sy) => s *= sx.abs().max(sy.abs()),
+            TransformOp::Scale3D { x, y, .. } => s *= x.abs().max(y.abs()),
+            _ => {}
+        }
+    }
+    s.clamp(1.0, 4.0)
+}
+
 pub(crate) fn build_layer_local_cache(
     layer_tree: &crate::browser::compositor::LayerNode,
     layout_root: &crate::browser::layout::LayoutBox,
@@ -1000,13 +1017,17 @@ impl WebView {
         layer_id: usize,
         logical_w: f32,
         logical_h: f32,
+        raster_scale: f32,
     ) -> Option<()> {
         let device = self.engine.device.as_ref()?.clone();
         // Layer phys = logical * zoom * scale_factor. Bez zoom multiplier by
         // pri zoom 1.5x byl layer tex stored at base size. Atlas glyph raster
         // at zoom-scaled size -> compose downsamples to layer tex -> SOFT.
         // S zoom v scale: layer phys matches atlas raster scale = 1:1 sharp.
-        let combined = self.zoom * self.scale_factor;
+        // raster_scale (>=1) = boost pro layery se scale(N) transformem - texture
+        // je N x vetsi aby compose (ktery quad scaluje N x) samploval 1:1 = ostry
+        // text. Cap aby velke scale neudelaly nesmyslne velkou texturu.
+        let combined = self.zoom * self.scale_factor * raster_scale.clamp(1.0, 4.0);
         let phys_w = ((logical_w * combined) as u32).max(1);
         let phys_h = ((logical_h * combined) as u32).max(1);
 
@@ -2708,9 +2729,10 @@ impl WebView {
             for layer in &flat {
                 let lw = layer.root_rect.width.max(1.0);
                 let lh = layer.root_rect.height.max(1.0);
-                let phys_max = (lw * sf_alloc).max(lh * sf_alloc);
+                let rscale = layer_raster_scale(&layer.transforms);
+                let phys_max = (lw * sf_alloc * rscale).max(lh * sf_alloc * rscale);
                 if phys_max <= MAX_TEX_DIM_ALLOC {
-                    let _ = self.ensure_layer_texture(layer.id, lw, lh);
+                    let _ = self.ensure_layer_texture(layer.id, lw, lh, rscale);
                 }
             }
             // Per-tile alloc - tile texture < 8192 phys = no clamp ever.
@@ -2786,8 +2808,14 @@ impl WebView {
             // damage_rect.is_some() na ANY layer = need warm new content.
             let any_damaged = flat.iter().any(|l| l.damage_rect.is_some());
             if any_damaged {
-                for cmds in local_cache.values() {
-                    renderer.warm_atlas_for(cmds, self.base_url.as_deref());
+                // Warm per-layer s jeho raster_scale - scale(N) layer warmuje
+                // glyfy v N x vetsim physical_size (matchne N x vetsi layer tex
+                // + boosted build_vertices) = ostry text u scale(N).
+                for layer in &flat {
+                    if let Some(cmds) = local_cache.get(&layer.id) {
+                        let rs = layer_raster_scale(&layer.transforms);
+                        renderer.warm_atlas_for_scaled(cmds, self.base_url.as_deref(), rs);
+                    }
                 }
             }
             // Auto-detect tile mode per layer:
@@ -2838,7 +2866,8 @@ impl WebView {
                     if let Some(view) = view {
                         let lw = layer.root_rect.width.max(1.0);
                         let lh = layer.root_rect.height.max(1.0);
-                        renderer.render_into_layer(&view, lw, lh, &cmds);
+                        let rscale = layer_raster_scale(&layer.transforms);
+                        renderer.render_into_layer_scaled(&view, lw, lh, rscale, &cmds);
                         d4_renders += 1;
                     }
                 }

@@ -265,6 +265,11 @@ thread_local! {
     /// drive prepisoval uniform na vp_dims (= full WebView viewport) ALE tile
     /// raster potrebuje vp = tile dims. Pri (w, h) > 0 = override aktivni.
     static VIEWPORT_OVERRIDE: std::cell::Cell<(f32, f32)> = const { std::cell::Cell::new((0.0, 0.0)) };
+    /// Raster boost pres render_into_layer pro layery se scale transformem.
+    /// Layer texture se alokuje scale_hint x vetsi a glyf/image raster se musi
+    /// boostnout o stejny faktor (jinak atlas glyf zustane base size = upscale
+    /// pri compose = rozmazany text u scale(N)). 1.0 = bez boostu (default).
+    static RASTER_BOOST: std::cell::Cell<f32> = const { std::cell::Cell::new(1.0) };
 }
 
 /// Build compose pipeline uniform [28 floats = 7 vec4]:
@@ -606,7 +611,11 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: 
                 // jsou v physical px. Vertex emit deli velikost zoomem -> logical
                 // glyf quad. NDC mapping (vp = window/zoom) pak skaluje zpet na
                 // physical = 1:1 mapping atlas pixelu na obrazovku.
-                let z = zoom.max(0.0001);
+                // RASTER_BOOST (>1 pri render_into_layer_scaled = scale(N) layer)
+                // zvysi glyf physical_size o scale faktor -> atlas glyf je N x
+                // vetsi a vyplni N x vetsi layer texturu = ostry text u scale(N).
+                // inv_z deli zpet na logical -> glyf quad logical zustava stejny.
+                let z = (zoom * RASTER_BOOST.with(|c| c.get())).max(0.0001);
                 let physical_size = (*font_size * z).round().max(1.0) as u32;
                 let inv_z = 1.0 / z;
                 // Styled cache key - compose pres atlas helper (encoding interne).
@@ -6507,6 +6516,15 @@ impl Renderer {
     /// upload pak ucinkuje vsechny vertices ktere sample texturu.
     ///
     /// `base_url` pouzity pro relative image URL resolve.
+    /// warm_atlas_for s raster boostem pro scale(N) layery - glyfy se warmuji
+    /// ve vetsim physical_size aby je build_vertices (taky pres RASTER_BOOST)
+    /// nasel hi-res = ostry text po scale compose. raster_scale=1.0 = no-op.
+    pub fn warm_atlas_for_scaled(&mut self, cmds: &[DisplayCommand], base_url: Option<&str>, raster_scale: f32) {
+        RASTER_BOOST.with(|c| c.set(raster_scale.max(1.0)));
+        self.warm_atlas_for(cmds, base_url);
+        RASTER_BOOST.with(|c| c.set(1.0));
+    }
+
     pub fn warm_atlas_for(&mut self, cmds: &[DisplayCommand], base_url: Option<&str>) {
         for cmd in cmds {
             match cmd {
@@ -6526,12 +6544,17 @@ impl Renderer {
                         // missing po zoom change.
                         self.zoom.to_bits().hash(&mut h);
                         self.scale_factor.to_bits().hash(&mut h);
+                        // RASTER_BOOST v hashi - scale(N) layer warmuje glyfy ve
+                        // vetsim physical_size; bez boostu v hashi by dedup
+                        // preskocil boosted warm pokud uz existoval unboosted glyf.
+                        RASTER_BOOST.with(|c| c.get()).to_bits().hash(&mut h);
                         h.finish()
                     };
                     if self.text_cmd_warmed.contains(&cmd_hash) { continue; }
                     self.text_cmd_warmed.insert(cmd_hash);
                     let _ = bold;
-                    let phys = (*font_size * self.zoom).round().max(1.0) as u32;
+                    let warm_boost = RASTER_BOOST.with(|c| c.get());
+                    let phys = (*font_size * self.zoom * warm_boost).round().max(1.0) as u32;
                     let color_font: Option<_> = self.color_fonts.get(font_family).cloned();
                     let color_font_obj: Option<_> = if color_font.is_some() {
                         self.font_registry.get(font_family).cloned()
@@ -6600,10 +6623,28 @@ impl Renderer {
         layer_h: f32,
         cmds: &[DisplayCommand],
     ) -> bool {
+        self.render_into_layer_scaled(view, layer_w, layer_h, 1.0, cmds)
+    }
+
+    /// Jako render_into_layer, ale s raster_scale boostem pro layery se scale
+    /// transformem. Texture je alokovana raster_scale x vetsi (viz
+    /// ensure_layer_texture) a glyf/image raster se boostne o stejny faktor ->
+    /// compose pak samluje hi-res texturu = ostry text u scale(N). VIEWPORT
+    /// override zustava LOGICAL (content vyplni celou - vetsi - texturu pres NDC).
+    pub fn render_into_layer_scaled(
+        &mut self,
+        view: &wgpu::TextureView,
+        layer_w: f32,
+        layer_h: f32,
+        raster_scale: f32,
+        cmds: &[DisplayCommand],
+    ) -> bool {
         if cmds.is_empty() { return false; }
         // Set vp override pres layer dims (draw_segments_into_view_clipped uses).
         VIEWPORT_OVERRIDE.with(|c| c.set((layer_w, layer_h)));
+        RASTER_BOOST.with(|c| c.set(raster_scale.max(1.0)));
         let res = self.draw_segments_into_view_clipped(view, cmds, true, None);
+        RASTER_BOOST.with(|c| c.set(1.0));
         VIEWPORT_OVERRIDE.with(|c| c.set((0.0, 0.0)));
         res
     }
@@ -6652,7 +6693,10 @@ impl Renderer {
                                         cmds: &[DisplayCommand], start_clear: bool,
                                         scissor: Option<(u32, u32, u32, u32)>) -> bool {
         // Set pixel-snap scale pro build_vertices (= zoom * dpr).
-        PIXEL_SNAP_SCALE.with(|c| c.set(self.zoom * self.scale_factor));
+        // RASTER_BOOST (= scale-transform hint pri render_into_layer) zvysi
+        // glyph/image raster rozliseni o scale faktor -> ostry text u scale(N).
+        let raster_boost = RASTER_BOOST.with(|c| c.get());
+        PIXEL_SNAP_SCALE.with(|c| c.set(self.zoom * self.scale_factor * raster_boost));
         // vp uniform: (logical_w, logical_h, zoom, _pad). NDC mapping v
         // RECT_SHADER pouziva uniform.viewport. Pres VIEWPORT_OVERRIDE
         // (= render_into_tile sets) pouzij override - jinak self.vp_dims.
