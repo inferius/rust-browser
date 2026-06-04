@@ -92,6 +92,27 @@ screeny). Testovano vizualne pres PrintWindow capture (engine bin, debug). Commi
 - #8 (global find_selection_bg) barvil CELOU stranku. Ted selection_bg propagovan
   na text deti + per-hit barva -> scoped `.foo::selection` jen ve .foo.
 
+### 13. KRITICKY: animace neinterpolovaly - skakaly z pozice na pozici
+- User: "animace se neanimuji, jen skacou z pozice na pozici" (= vypadalo
+  nevykone). interpolate_keyframes I apply_transitions interpolovaly pres
+  parse_length. parse_length("translateX(0)")=0, parse_length("translateX(400px)")
+  =0 -> oba 0 -> ELSE vetev SNAPLA na t<0.5 (from) / t>=0.5 (to). Takze KAZDA
+  transform animace/transition (translateX/Y, scale, rotate = nejcastejsi anim
+  props) skocila z pocatecni na koncovou v pulce misto plynule.
+- Fix: novy interpolate_css_value (pub, sdileny keyframes+transitions): transform
+  per-function lerp argumentu (zachova unit), barvy rgba lerp. Zapojeno pred
+  length-interp v obou cestach.
+- Overeno: translateX(0->400px) 10s linear -> box_x 105,123,140,...295 rovnomerne
+  (plynule) misto skoku start->konec.
+- ZBYVA: transition-back na leave (user "pri opusteni se nevrati") - detekce
+  zmizeni :hover transform v detect_transitions; synteticka mys nespolehlive
+  testuje hover -> overit realnou mysi.
+
+### 14. ::selection text kontrast
+- selection_color (text barva) se aplikuje - prekreslim selected text runy v
+  selection_color nad bg (klonuji puvodni Text commandy v selection rectu).
+  Cerny text na zlute = citelne (Chrome-like).
+
 ### ZBYVA z chyby-rbro doc (pro dalsi vlakno)
 - **Perf gap na 240fps**: jsme ~100fps (release), Chrome 240. Per-frame ~9ms =
   layout 3ms + SVG resvg re-raster KAZDY frame (wave) + canvas + rAF JS. SVG
