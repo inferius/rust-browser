@@ -123,22 +123,46 @@ pub fn parse_conic_gradient(s: &str) -> Option<BgGradient> {
 }
 
 /// Parsuje gradient stops "red 50%" / "red" do (offset 0..1, color).
+/// Parse jeden gradient stop -> 1 nebo 2 stopy.
+/// - "color"            -> 1 stop, default offset (rovnomerne dle i/n)
+/// - "color 50%"        -> 1 stop na 50%
+/// - "color 33% 66%"    -> 2 stopy (CSS hard stop / band) - color@33% + color@66%
+/// Bez double-position handlingu se "color P1 P2" parsoval jako color="color P1"
+/// (invalid) -> cely stop DROPNUT = chybejici barevny pas v gradientu.
+fn parse_stop_part(trimmed: &str, i: usize, n: usize) -> Vec<(f32, [u8; 4])> {
+    let pct_positions: Vec<usize> = trimmed.match_indices('%').map(|(idx, _)| idx).collect();
+    if pct_positions.len() >= 2 {
+        let first = pct_positions[0];
+        let last = *pct_positions.last().unwrap();
+        let p1_start = trimmed[..first].rfind(char::is_whitespace).map(|x| x + 1).unwrap_or(0);
+        let p2_start = trimmed[..last].rfind(char::is_whitespace).map(|x| x + 1).unwrap_or(0);
+        let p1: f32 = trimmed[p1_start..first].trim().parse().unwrap_or(0.0) / 100.0;
+        let p2: f32 = trimmed[p2_start..last].trim().parse().unwrap_or(0.0) / 100.0;
+        let color_str = trimmed[..p1_start].trim();
+        return match parse_color(color_str) {
+            Some(c) => vec![(p1, c), (p2, c)],
+            None => vec![],
+        };
+    }
+    let (color_str, offset) = if let Some(percent_idx) = trimmed.rfind('%') {
+        let space_idx = trimmed[..percent_idx].rfind(' ').unwrap_or(0);
+        let pct: f32 = trimmed[space_idx..percent_idx].trim().parse().unwrap_or(0.0);
+        (trimmed[..space_idx].trim().to_string(), pct / 100.0)
+    } else {
+        let default_offset = if n <= 1 { 0.0 } else { i as f32 / (n - 1) as f32 };
+        (trimmed.to_string(), default_offset)
+    };
+    match parse_color(&color_str) {
+        Some(c) => vec![(offset, c)],
+        None => vec![],
+    }
+}
+
 fn parse_gradient_stops(parts: &[&str]) -> Vec<(f32, [u8; 4])> {
     let mut stops: Vec<(f32, [u8; 4])> = Vec::new();
     let n = parts.len();
     for (i, p) in parts.iter().enumerate() {
-        let trimmed = p.trim();
-        let (color_str, offset) = if let Some(percent_idx) = trimmed.rfind('%') {
-            let space_idx = trimmed[..percent_idx].rfind(' ').unwrap_or(0);
-            let pct: f32 = trimmed[space_idx..percent_idx].trim().parse().unwrap_or(0.0);
-            (trimmed[..space_idx].trim().to_string(), pct / 100.0)
-        } else {
-            let default_offset = if n <= 1 { 0.0 } else { i as f32 / (n - 1) as f32 };
-            (trimmed.to_string(), default_offset)
-        };
-        if let Some(c) = parse_color(&color_str) {
-            stops.push((offset, c));
-        }
+        stops.extend(parse_stop_part(p.trim(), i, n));
     }
     stops
 }
@@ -177,20 +201,8 @@ pub fn parse_linear_gradient(s: &str) -> Option<(f32, Vec<(f32, [u8; 4])>)> {
     let mut stops: Vec<(f32, [u8; 4])> = Vec::new();
     let n = parts.len() - start_idx;
     for (i, p) in parts[start_idx..].iter().enumerate() {
-        // "red 50%" nebo jen "red"
-        let trimmed = p.trim();
-        let (color_str, offset) = if let Some(percent_idx) = trimmed.rfind('%') {
-            // Najdi mezeru pred %
-            let space_idx = trimmed[..percent_idx].rfind(' ').unwrap_or(0);
-            let pct: f32 = trimmed[space_idx..percent_idx].trim().parse().unwrap_or(0.0);
-            (trimmed[..space_idx].trim().to_string(), pct / 100.0)
-        } else {
-            let default_offset = if n <= 1 { 0.0 } else { i as f32 / (n - 1) as f32 };
-            (trimmed.to_string(), default_offset)
-        };
-        if let Some(c) = parse_color(&color_str) {
-            stops.push((offset, c));
-        }
+        // "red", "red 50%" nebo "red 33% 66%" (hard stop = 2 stopy) - sdileny parser.
+        stops.extend(parse_stop_part(p.trim(), i, n));
     }
     if stops.is_empty() { return None; }
     Some((angle, stops))

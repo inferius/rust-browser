@@ -381,6 +381,25 @@ pub(super) fn push_conic_gradient(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f3
 pub(super) fn push_multi_stop_linear_gradient(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f32, h: f32,
                                     angle_deg: f32, stops: &[(f32, [f32; 4])], radius: f32) {
     if stops.len() < 2 { return; }
+    // CSS edge clamp: pred prvnim stopem = solid prvni barva, za poslednim = solid
+    // posledni. Band loop nize fillne jen [first_off, last_off]; bez syntetickych
+    // edge stopu na 0/1 by oblasti mimo (napr. hard-stop "color 33% 66%" kde
+    // prvni stop > 0) zustaly TRANSPARENTNI. Prepend/append jen kdyz chybi
+    // (normalni gradient first@0/last@1 = beze zmeny).
+    let owned: Vec<(f32, [f32; 4])> = {
+        let first = stops[0];
+        let last = stops[stops.len() - 1];
+        if first.0 > 0.0 || last.0 < 1.0 {
+            let mut v = Vec::with_capacity(stops.len() + 2);
+            if first.0 > 0.0 { v.push((0.0, first.1)); }
+            v.extend_from_slice(stops);
+            if last.0 < 1.0 { v.push((1.0, last.1)); }
+            v
+        } else {
+            stops.to_vec()
+        }
+    };
+    let stops: &[(f32, [f32; 4])] = &owned;
     let hw = w * 0.5;
     let hh = h * 0.5;
     let cx_full = x + hw;
