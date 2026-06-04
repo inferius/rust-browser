@@ -2597,9 +2597,10 @@ impl WebView {
             r
         };
 
-        // 2b. Sticky positioning post-process - position:sticky elementy
-        // posunuju dle scroll_y aby drzeli na top viewportu uvnitr containeru.
-        crate::browser::layout::apply_sticky(&mut layout_root, self.scroll_y);
+        // 2b. Sticky positioning - PRESUNUTO az tesne pred extract_layer_tree.
+        // Drive bylo tady (pred apply_paint_animations + pass_b), ALE
+        // apply_paint_animations (anim_baseline = rect - layout_offset) sticky
+        // shift undoval -> layer tree mel puvodni rect.y -> sticky nedrzel.
 
         // 2c. Paint-side animations apply (transform overlay, opacity tween).
         crate::browser::render::apply_paint_animations(&mut layout_root, &style_map);
@@ -2683,6 +2684,10 @@ impl WebView {
         }
 
         pass_b_shift_children(&mut layout_root);
+        // 2b (presunuto sem): sticky positioning JAKO POSLEDNI uprava rect.y -
+        // po apply_paint_animations + pass_b, aby je nic neresetovalo. Layer tree
+        // (nize) pak ma sticky-shiftnute rect.y -> sticky header/sidebar drzi.
+        crate::browser::layout::apply_sticky(&mut layout_root, self.scroll_y);
         let save_layout_root_at_end = false;
 
         // 2d. L1+L2 compositor: extract LayerTree z layout + damage tracking.

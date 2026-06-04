@@ -3328,7 +3328,26 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         /// layout dimensions. Pri zoomu out se layout zmensi -> overflow muze
         /// zmizet -> max_scroll = 0. layout_root dead na App vrstve - clamp
         /// logic se presune do WebView pipeline pres webview.last_layout_root().
-        fn clamp_scroll_to_layout(&mut self) {}
+        fn clamp_scroll_to_layout(&mut self) {
+            // Clamp scroll na [0, content - viewport] - bez tohoto byl scroll
+            // shora omezen (.max(0.0)) ale zdola NE -> nekonecny scroll za konec
+            // stranky. content z webview layout rootu (rect = cely dokument).
+            let (content_w, content_h) = self.webview.as_ref()
+                .and_then(|w| w.last_layout_root())
+                .map(|l| (l.rect.width, l.rect.height))
+                .unwrap_or((0.0, 0.0));
+            if content_h <= 0.0 { return; }
+            let vw = self.viewport_w_logical();
+            let vh = self.viewport_h_logical();
+            let max_x = (content_w - vw).max(0.0);
+            let max_y = (content_h - vh).max(0.0);
+            if let Some(w) = self.webview.as_mut() {
+                w.scroll_target_y = w.scroll_target_y.clamp(0.0, max_y);
+                w.scroll_target_x = w.scroll_target_x.clamp(0.0, max_x);
+                w.scroll_y = w.scroll_y.clamp(0.0, max_y);
+                w.scroll_x = w.scroll_x.clamp(0.0, max_x);
+            }
+        }
         /// Smooth scroll tick. Lerp scroll_y -> scroll_target_y. Vrati true pokud
         /// stale animuje (volajici by mel request_redraw).
         fn smooth_scroll_tick(&mut self) -> bool {
