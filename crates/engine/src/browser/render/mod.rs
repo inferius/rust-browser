@@ -1501,6 +1501,21 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     }
                     self.mouse_x = new_x;
                     self.mouse_y = new_y;
+                    // Scrollbar thumb drag routing: deleguj move do webview
+                    // (prepocita scroll dle thumb pozice) + skip selection/hover.
+                    if self.page_scrollbar_v_drag {
+                        let vp_x = new_x - self.scroll_x();
+                        let vp_y = new_y - self.scroll_y();
+                        if let Some(wv) = self.webview.as_mut() {
+                            let _ = wv.handle_input(crate::embed::InputEvent::MouseMove {
+                                x: vp_x, y: vp_y,
+                                modifiers: Default::default(),
+                                coalesced: Vec::new(),
+                            });
+                        }
+                        if let Some(w) = &self.window { w.request_redraw(); }
+                        return;
+                    }
                     // Tab drag reorder smazany N+22.
                     // Resize drag: aktualizuj panel size dle dock position.
                     if self.devtools_resizing {
@@ -1615,6 +1630,16 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                         self.render();
                     }
                     if self.page_scrollbar_v_drag || self.page_scrollbar_h_drag {
+                        // Ukonci scrollbar thumb drag ve webview.
+                        let vp_x = self.mouse_x - self.scroll_x();
+                        let vp_y = self.mouse_y - self.scroll_y();
+                        if let Some(wv) = self.webview.as_mut() {
+                            let _ = wv.handle_input(crate::embed::InputEvent::MouseUp {
+                                x: vp_x, y: vp_y,
+                                button: crate::embed::MouseButton::Left,
+                                modifiers: Default::default(),
+                            });
+                        }
                         self.page_scrollbar_v_drag = false;
                         self.page_scrollbar_h_drag = false;
                         self.render();
@@ -1626,6 +1651,36 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                     }
                 }
                 WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } => {
+                    // Scrollbar thumb drag: pri kliku do scrollbar zony deleguj
+                    // cely drag do webview.handle_input (ma plnou thumb logiku +
+                    // content height) + skip page handling (selection). Webview
+                    // ocekava viewport-relativni CSS px (= mouse - scroll).
+                    {
+                        let vw = self.viewport_w_logical();
+                        let vh = self.viewport_h_logical();
+                        let vp_x = self.mouse_x - self.scroll_x();
+                        let vp_y = self.mouse_y - self.scroll_y();
+                        let (cw, ch) = self.webview.as_ref()
+                            .and_then(|w| w.last_layout_root())
+                            .map(|l| (l.rect.width, l.rect.height))
+                            .unwrap_or((0.0, 0.0));
+                        let in_v = ch > vh && vp_x >= vw - 12.0 && vp_x < vw;
+                        let in_h = cw > vw && vp_y >= vh - 12.0 && vp_y < vh;
+                        if in_v || in_h {
+                            if let Some(wv) = self.webview.as_mut() {
+                                let _ = wv.handle_input(crate::embed::InputEvent::MouseDown {
+                                    x: vp_x, y: vp_y,
+                                    button: crate::embed::MouseButton::Left,
+                                    modifiers: Default::default(),
+                                });
+                            }
+                            // page_scrollbar_v_drag = routing flag (CursorMoved +
+                            // MouseUp pak deleguji do webview).
+                            self.page_scrollbar_v_drag = true;
+                            if let Some(w) = &self.window { w.request_redraw(); }
+                            return;
+                        }
+                    }
                     // Addr bar click handler smazany N+22.
                     // Double-click detection: 400ms okno + < 5px vzdalenost.
                     let now = std::time::Instant::now();
