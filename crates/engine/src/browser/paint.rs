@@ -272,6 +272,17 @@ pub enum DisplayCommand {
         color: [u8; 4],
         points: Vec<(f32, f32)>,
     },
+    /// Linearni gradient oriznuty polygonem (clip-path: polygon + gradient bg).
+    /// Triangulace polygonu, kazdy vertex dostane gradient-mode atributy z box
+    /// rectu (x/y/w/h/angle) -> shader pocita gradient per-pixel z world pozice,
+    /// rasterizuje jen polygon = gradient clipnuty na tvar. 2-stop (c0->c1).
+    ClippedGradient {
+        points: Vec<(f32, f32)>,
+        x: f32, y: f32, w: f32, h: f32,
+        angle_deg: f32,
+        c0: [u8; 4],
+        c1: [u8; 4],
+    },
     /// Marker: nasledujici commands NEMA byt posunuty pri viewport scroll
     /// shift (position: fixed elementy zustavaji vuci viewportu staticke).
     /// Stack-based - paruje s `NoScrollShiftEnd`. Vnoreni OK (nested fixed).
@@ -1834,7 +1845,27 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
         }
         // Gradient layer
         if let Some(g) = &layer.gradient {
-            use crate::browser::layout::BgGradientKind;
+            use crate::browser::layout::{BgGradientKind, ClipPath};
+            // clip-path: polygon + LINEAR gradient -> ClippedGradient (gradient
+            // clipnuty na tvar polygonu). Pro radial/conic + polygon zatim full
+            // box (chybi clipped varianta). Resi az PO tom co se vyhodnotil clip.
+            let poly_clip_linear = match (&bx.clip_path, &g.kind) {
+                (Some(ClipPath::Polygon(pp)), BgGradientKind::Linear { angle_deg })
+                    if g.stops.len() >= 2 && pp.len() >= 3 => Some((pp.clone(), *angle_deg)),
+                _ => None,
+            };
+            if let Some((pct_pts, angle_deg)) = poly_clip_linear {
+                let abs_pts: Vec<(f32, f32)> = pct_pts.iter().map(|(xp, yp)| {
+                    (bx.rect.x + bx.rect.width * xp, bx.rect.y + bx.rect.height * yp)
+                }).collect();
+                cmds.push(DisplayCommand::ClippedGradient {
+                    points: abs_pts,
+                    x: bx.rect.x, y: bx.rect.y, w: bx.rect.width, h: bx.rect.height,
+                    angle_deg,
+                    c0: with_alpha(g.stops.first().map(|(_, c)| *c).unwrap_or([0; 4])),
+                    c1: with_alpha(g.stops.last().map(|(_, c)| *c).unwrap_or([0; 4])),
+                });
+            } else {
             let kind = match g.kind {
                 BgGradientKind::Linear { angle_deg } => GradientKind::Linear { angle_deg },
                 BgGradientKind::Radial { cx_pct, cy_pct, radius_pct } => {
@@ -1853,12 +1884,21 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
                     GradientKind::Conic { cx, cy, start_angle_deg }
                 }
             };
+            // clip-path circle/ellipse/inset -> emit gradient do clip rectu +
+            // clip_radius (rounded-rect SDF = kruh/elipsa/zmenseny rect).
+            let is_poly = matches!(&bx.clip_path, Some(ClipPath::Polygon(_)));
+            let (gx, gy, gw, gh, grad_radius) = if bx.clip_path.is_some() && !is_poly {
+                (clip_x, clip_y, clip_w, clip_h, clip_radius)
+            } else {
+                (bx.rect.x, bx.rect.y, bx.rect.width, bx.rect.height, bx.border_radius)
+            };
             cmds.push(DisplayCommand::Gradient {
-                x: bx.rect.x, y: bx.rect.y, w: bx.rect.width, h: bx.rect.height,
+                x: gx, y: gy, w: gw, h: gh,
                 kind,
                 stops: g.stops.iter().map(|(o, c)| (*o, with_alpha(*c))).collect(),
-                radius: bx.border_radius,
+                radius: grad_radius,
             });
+            }
         }
         // Image url layer
         if let Some(src) = &layer.image_src {
@@ -1899,7 +1939,26 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
 
     // Background gradient ma prioritu pred solid color
     if let Some(g) = &bx.bg_gradient {
-        use crate::browser::layout::BgGradientKind;
+        use crate::browser::layout::{BgGradientKind, ClipPath};
+        // clip-path: polygon + LINEAR gradient -> ClippedGradient (gradient
+        // clipnuty na tvar polygonu, gradient se pocita per-pixel z world pos).
+        let poly_clip_linear = match (&bx.clip_path, &g.kind) {
+            (Some(ClipPath::Polygon(pp)), BgGradientKind::Linear { angle_deg })
+                if g.stops.len() >= 2 && pp.len() >= 3 => Some((pp.clone(), *angle_deg)),
+            _ => None,
+        };
+        if let Some((pct_pts, angle_deg)) = poly_clip_linear {
+            let abs_pts: Vec<(f32, f32)> = pct_pts.iter().map(|(xp, yp)| {
+                (bx.rect.x + bx.rect.width * xp, bx.rect.y + bx.rect.height * yp)
+            }).collect();
+            cmds.push(DisplayCommand::ClippedGradient {
+                points: abs_pts,
+                x: bx.rect.x, y: bx.rect.y, w: bx.rect.width, h: bx.rect.height,
+                angle_deg,
+                c0: with_alpha(g.stops.first().map(|(_, c)| *c).unwrap_or([0; 4])),
+                c1: with_alpha(g.stops.last().map(|(_, c)| *c).unwrap_or([0; 4])),
+            });
+        } else {
         let kind = match g.kind {
             BgGradientKind::Linear { angle_deg } => GradientKind::Linear { angle_deg },
             BgGradientKind::Radial { cx_pct, cy_pct, radius_pct } => {
@@ -1917,15 +1976,20 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
                 GradientKind::Conic { cx, cy, start_angle_deg }
             }
         };
+        // clip-path circle/ellipse/inset -> emit do clip rectu + clip_radius.
+        let is_poly = matches!(&bx.clip_path, Some(ClipPath::Polygon(_)));
+        let (gx, gy, gw, gh, grad_radius) = if bx.clip_path.is_some() && !is_poly {
+            (clip_x, clip_y, clip_w, clip_h, clip_radius)
+        } else {
+            (bx.rect.x, bx.rect.y, bx.rect.width, bx.rect.height, bx.border_radius)
+        };
         cmds.push(DisplayCommand::Gradient {
-            x: bx.rect.x,
-            y: bx.rect.y,
-            w: bx.rect.width,
-            h: bx.rect.height,
+            x: gx, y: gy, w: gw, h: gh,
             kind,
             stops: g.stops.iter().map(|(o, c)| (*o, with_alpha(*c))).collect(),
-            radius: bx.border_radius,
+            radius: grad_radius,
         });
+        }
     } else if let Some(bg) = bx.bg_color.filter(|_| !bg_color_handled_by_layers) {
         // Polygon clip-path: emit ClippedRect misto Rect.
         // Renderer aplikuje fan triangulation (convex polygon assumption).
@@ -2513,6 +2577,10 @@ fn scale_cmd(cmd: &mut DisplayCommand, sx: f32, sy: f32, cx: f32, cy: f32) {
                 scale_xy(px, py);
             }
         }
+        DisplayCommand::ClippedGradient { points, x, y, w, h, .. } => {
+            for (px, py) in points.iter_mut() { scale_xy(px, py); }
+            scale_xy(x, y); scale_wh(w, h);
+        }
         DisplayCommand::FilterEnd | DisplayCommand::BackdropFilterEnd | DisplayCommand::TransformEnd | DisplayCommand::MaskEnd
         | DisplayCommand::NoScrollShiftBegin | DisplayCommand::NoScrollShiftEnd
         | DisplayCommand::BlendBegin { .. } | DisplayCommand::BlendEnd => {}
@@ -2571,6 +2639,10 @@ fn rotate_cmd(cmd: &mut DisplayCommand, cos: f32, sin: f32, cx: f32, cy: f32) {
                 rotate_xy_mut(px, py);
             }
         }
+        DisplayCommand::ClippedGradient { points, x, y, .. } => {
+            for (px, py) in points.iter_mut() { rotate_xy_mut(px, py); }
+            rotate_xy_mut(x, y);
+        }
         DisplayCommand::FilterEnd | DisplayCommand::BackdropFilterEnd | DisplayCommand::TransformEnd | DisplayCommand::MaskEnd
         | DisplayCommand::NoScrollShiftBegin | DisplayCommand::NoScrollShiftEnd
         | DisplayCommand::BlendBegin { .. } | DisplayCommand::BlendEnd => {}
@@ -2599,6 +2671,10 @@ fn shift_cmd(cmd: &mut DisplayCommand, dx: f32, dy: f32) {
                 *px += dx;
                 *py += dy;
             }
+        }
+        DisplayCommand::ClippedGradient { points, x, y, .. } => {
+            for (px, py) in points.iter_mut() { *px += dx; *py += dy; }
+            *x += dx; *y += dy;
         }
         DisplayCommand::FilterEnd | DisplayCommand::BackdropFilterEnd | DisplayCommand::TransformEnd | DisplayCommand::MaskEnd
         | DisplayCommand::NoScrollShiftBegin | DisplayCommand::NoScrollShiftEnd

@@ -263,6 +263,50 @@ pub(super) fn push_gradient(verts: &mut Vec<Vertex>, x: f32, y: f32, w: f32, h: 
     verts.extend_from_slice(&[tl, tr, bl, bl, tr, br]);
 }
 
+/// Linearni gradient oriznuty polygonem (clip-path: polygon + gradient bg).
+/// Trianguluje polygon a kazdy vertex dostane stejne gradient-mode (mode 2)
+/// atributy jako plny rect gradient (project z box rectu gx/gy/gw/gh + angle).
+/// Shader pocita gradient per-pixel z world pozice -> rasterizuje jen polygon
+/// triangly = gradient clipnuty na tvar. Edge AA vynechano (variabilni barva na
+/// hrane by potrebovala gradient-mode fringe; bez nej lehci alias, prijatelne).
+pub(super) fn push_clipped_linear_gradient(
+    verts: &mut Vec<Vertex>, points: &[(f32, f32)],
+    gx: f32, gy: f32, gw: f32, gh: f32,
+    angle_deg: f32, c0: [f32; 4], c1: [f32; 4],
+) {
+    let hw = gw * 0.5;
+    let hh = gh * 0.5;
+    let cx = gx + hw;
+    let cy = gy + hh;
+    let rad = (angle_deg - 90.0).to_radians();
+    let dir_x = rad.cos();
+    let dir_y = rad.sin();
+    let project = |px: f32, py: f32| -> f32 {
+        let lx = (px - cx) / gw + 0.5;
+        let ly = (py - cy) / gh + 0.5;
+        let proj = (lx - 0.5) * dir_x + (ly - 0.5) * dir_y;
+        (proj + 0.5).clamp(0.0, 1.0)
+    };
+    let mk = |px: f32, py: f32| -> Vertex {
+        Vertex {
+            pos: [px, py],
+            color: c0,
+            uv: [project(px, py), 0.0],
+            mode: 2.0,
+            local: [px - cx, py - cy],
+            half_size: [hw, hh],
+            radius: 0.0,
+            color2: c1,
+            blur: 0.0,
+        }
+    };
+    for (a, b, d) in super::triangulate_polygon(points) {
+        verts.push(mk(a.0, a.1));
+        verts.push(mk(b.0, b.1));
+        verts.push(mk(d.0, d.1));
+    }
+}
+
 /// Radial gradient quad. Mode 6.
 /// V shaderu: t = distance(local, gradient_center) / gradient_radius.
 /// gradient_center se predava jako half_size (reuse pole), gradient_radius jako blur.

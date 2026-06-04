@@ -91,6 +91,7 @@ use shaders::{BLUR_SHADER, TRANSFORM_SHADER, COMPOSE_SHADER, RECT_SHADER, LCD_SH
 mod primitives;
 use primitives::{push_rect, push_rect_rounded, push_rect_uv, push_skewed_quad,
     push_triangle, push_polygon_edge_aa, push_blurred_rect, push_image, push_gradient,
+    push_clipped_linear_gradient,
     push_radial_gradient, push_conic_gradient, push_multi_stop_linear_gradient,
     push_multi_stop_radial_gradient, push_multi_stop_conic_gradient,
     push_shadow, push_inset_shadow, normalize_color};
@@ -805,6 +806,11 @@ fn build_vertices(commands: &[DisplayCommand], atlas: &GlyphAtlas, image_atlas: 
                 }
                 // Edge AA: 1px feathered fringe smerem ven pro vyhlazeni hran.
                 push_polygon_edge_aa(&mut verts, points, c, zoom);
+            }
+            DisplayCommand::ClippedGradient { points, x, y, w, h, angle_deg, c0, c1 } => {
+                push_clipped_linear_gradient(
+                    &mut verts, points, *x, *y, *w, *h, *angle_deg,
+                    normalize_color(c0), normalize_color(c1));
             }
         }
     }

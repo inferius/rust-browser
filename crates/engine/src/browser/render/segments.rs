@@ -214,6 +214,10 @@ pub fn shift_command_y(cmd: &mut DisplayCommand, dy: f32) {
                 *py += dy;
             }
         }
+        DisplayCommand::ClippedGradient { points, y, .. } => {
+            for (_, py) in points.iter_mut() { *py += dy; }
+            *y += dy;
+        }
         DisplayCommand::FilterEnd | DisplayCommand::BackdropFilterEnd | DisplayCommand::TransformEnd | DisplayCommand::MaskEnd
         | DisplayCommand::NoScrollShiftBegin | DisplayCommand::NoScrollShiftEnd
         | DisplayCommand::BlendBegin { .. } | DisplayCommand::BlendEnd => {}
@@ -238,6 +242,10 @@ pub fn shift_command_x(cmd: &mut DisplayCommand, dx: f32) {
             for (px, _) in points.iter_mut() {
                 *px += dx;
             }
+        }
+        DisplayCommand::ClippedGradient { points, x, .. } => {
+            for (px, _) in points.iter_mut() { *px += dx; }
+            *x += dx;
         }
         DisplayCommand::FilterEnd | DisplayCommand::BackdropFilterEnd | DisplayCommand::TransformEnd | DisplayCommand::MaskEnd
         | DisplayCommand::NoScrollShiftBegin | DisplayCommand::NoScrollShiftEnd
