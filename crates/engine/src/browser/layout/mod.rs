@@ -3410,12 +3410,19 @@ fn build_box_inner_impl(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &supe
 fn build_pseudo_box(parent_node: &Rc<Node>, styles: &HashMap<String, String>, counters: &HashMap<String, i32>) -> Option<LayoutBox> {
     let content_raw = styles.get("content")?;
     let text = parse_content_value(content_raw, parent_node, counters)?;
-    if text.is_empty() { return None; }
+    // POZN: prazdny content ("") je VALIDNI generated content - dekorativni
+    // ::after s display:block + width/height/background (podtrzeni/divider/bar).
+    // Driv `if text.is_empty() { return None }` ho zahazoval = bar se nevykreslil.
+    // Renderujeme box, jen bez text runu.
 
     let mut bx = LayoutBox::new();
-    bx.display = Display::Inline;
     bx.tag = Some("::pseudo".to_string());
-    bx.text = Some(text);
+    if !text.is_empty() { bx.text = Some(text); }
+    // display - bez nej byl pseudo VZDY inline -> width/height/block ignorovane.
+    bx.display = match styles.get("display") {
+        Some(d) => Display::from_str(d),
+        None => Display::Inline,
+    };
 
     // Apply styly z pseudo styles
     if let Some(c) = styles.get("color") {
@@ -3434,6 +3441,45 @@ fn build_pseudo_box(parent_node: &Rc<Node>, styles: &HashMap<String, String>, co
     let _ = styles.get("font-weight");
     if let Some(p) = styles.get("padding") { bx.padding = parse_length(p); }
     if let Some(m) = styles.get("margin") { bx.margin = parse_length(m); }
+    // width/height - bez nich byl pseudo box auto-velky (jen dle textu). Pro
+    // dekorativni bary/badge nutne explicitni rozmery.
+    if let Some(w) = styles.get("width") { bx.explicit_width = Some(parse_length(w)); }
+    if let Some(h) = styles.get("height") { bx.explicit_height = Some(parse_length(h)); }
+    // border-radius (% vuci min(w,h) -> 50% = kruh u badge).
+    if let Some(br) = styles.get("border-radius") {
+        let brs = br.trim();
+        bx.border_radius = if brs.ends_with('%') {
+            let pct: f32 = brs.trim_end_matches('%').trim().parse().unwrap_or(0.0) / 100.0;
+            let dim = bx.explicit_width.unwrap_or(0.0).min(bx.explicit_height.unwrap_or(0.0));
+            dim * pct
+        } else {
+            parse_length(brs)
+        };
+    }
+    // position + top/right/bottom/left - absolute/relative pseudo (napr. badge
+    // pocitadlo position:absolute top/right). Layout abs-pos pass je pak umisti
+    // vuci relativne pozicovanemu parentu. Bez tohoto pseudo flowoval inline/block.
+    if let Some(pos) = styles.get("position") {
+        bx.position = match pos.trim() {
+            "relative" => Position::Relative,
+            "absolute" => Position::Absolute,
+            "fixed"    => Position::Fixed,
+            "sticky"   => Position::Sticky,
+            _ => Position::Static,
+        };
+    }
+    let parse_off = |v: &str| -> (Option<f32>, Option<f32>) {
+        let t = v.trim();
+        if t == "auto" || t.is_empty() { return (None, None); }
+        if let Some(p) = t.strip_suffix('%') {
+            if let Ok(pf) = p.parse::<f32>() { return (None, Some(pf / 100.0)); }
+        }
+        (Some(parse_length(t)), None)
+    };
+    if let Some(v) = styles.get("top")    { let (a, b) = parse_off(v); bx.offset_top = a; bx.offset_top_pct = b; }
+    if let Some(v) = styles.get("right")  { let (a, b) = parse_off(v); bx.offset_right = a; bx.offset_right_pct = b; }
+    if let Some(v) = styles.get("bottom") { let (a, b) = parse_off(v); bx.offset_bottom = a; bx.offset_bottom_pct = b; }
+    if let Some(v) = styles.get("left")   { let (a, b) = parse_off(v); bx.offset_left = a; bx.offset_left_pct = b; }
 
     Some(bx)
 }
