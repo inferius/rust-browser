@@ -548,6 +548,16 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         }
         return rgba;
     }
+    // Mode 10: solid per-vertex color, VZDY clipnuty na box SDF. Pouzivaji
+    // radial/conic gradient triangle-fany - fan presahuje box (disk az do
+    // farthest-corner), tento clip ho orizne presne na box rect (rounded pres
+    // radius) = vyplneny obdelnik jako Chrome misto preteklý kruh.
+    if (in.mode > 9.5 && in.mode < 10.5) {
+        let d = sdf_rounded_box(in.local, in.half_size, in.radius);
+        let aa_range = 1.0 / max(u.viewport.z, 0.0001);
+        let aa = 1.0 - smoothstep(-aa_range, aa_range, d);
+        return vec4<f32>(in.color.rgb, in.color.a * aa);
+    }
     // Mode 0: solid s rounded corners
     if (in.radius > 0.5) {
         let d = sdf_rounded_box(in.local, in.half_size, in.radius);

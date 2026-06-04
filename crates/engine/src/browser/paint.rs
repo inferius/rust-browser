@@ -1840,8 +1840,12 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
                 BgGradientKind::Radial { cx_pct, cy_pct, radius_pct } => {
                     let cx = bx.rect.x + bx.rect.width  * cx_pct;
                     let cy = bx.rect.y + bx.rect.height * cy_pct;
-                    let half_diag = ((bx.rect.width / 2.0).powi(2) + (bx.rect.height / 2.0).powi(2)).sqrt();
-                    GradientKind::Radial { cx, cy, radius: half_diag * radius_pct }
+                    // Farthest-corner od gradient CENTRA (ne box-center half-diag) -
+                    // jinak je disk u off-center gradientu maly a nevyplni box.
+                    let dx = (cx - bx.rect.x).abs().max((bx.rect.x + bx.rect.width - cx).abs());
+                    let dy = (cy - bx.rect.y).abs().max((bx.rect.y + bx.rect.height - cy).abs());
+                    let farthest = (dx * dx + dy * dy).sqrt();
+                    GradientKind::Radial { cx, cy, radius: farthest * radius_pct }
                 }
                 BgGradientKind::Conic { cx_pct, cy_pct, start_angle_deg } => {
                     let cx = bx.rect.x + bx.rect.width  * cx_pct;
@@ -1901,9 +1905,10 @@ fn paint_box(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>, parent_perspective:
             BgGradientKind::Radial { cx_pct, cy_pct, radius_pct } => {
                 let cx = bx.rect.x + bx.rect.width  * cx_pct;
                 let cy = bx.rect.y + bx.rect.height * cy_pct;
-                // Polomer = farthest-corner * radius_pct
-                let half_diag = ((bx.rect.width / 2.0).powi(2) + (bx.rect.height / 2.0).powi(2)).sqrt();
-                let radius = half_diag * radius_pct;
+                // Farthest-corner od gradient CENTRA (ne box-center half-diag).
+                let dx = (cx - bx.rect.x).abs().max((bx.rect.x + bx.rect.width - cx).abs());
+                let dy = (cy - bx.rect.y).abs().max((bx.rect.y + bx.rect.height - cy).abs());
+                let radius = (dx * dx + dy * dy).sqrt() * radius_pct;
                 GradientKind::Radial { cx, cy, radius }
             }
             BgGradientKind::Conic { cx_pct, cy_pct, start_angle_deg } => {
