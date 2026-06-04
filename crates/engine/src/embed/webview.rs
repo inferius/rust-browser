@@ -1540,15 +1540,26 @@ impl WebView {
                         }
                     }
                     // Fire mousemove pres cur target (= kazda mouse move pos).
-                    if let Some(root) = self.last_layout_root.as_ref() {
-                        let cur_target = hovered_id.and_then(|n|
-                            crate::browser::paint::find_box_by_node_id(root, n)
-                                .and_then(|bx| bx.node.clone()));
-                        if let (Some(t), Some(interp)) = (cur_target, self.interpreter.as_mut()) {
+                    // Vc. offsetX/offsetY (pozice v target boxu) - canvas kresleni
+                    // + pozicni UI to ctou (engine-test). Box nalezen 1x, offset
+                    // spocitan inline (scroll locals = bez double self borrow).
+                    let (sxp, syp) = (self.scroll_x, self.scroll_y);
+                    let mm = self.last_layout_root.as_ref().and_then(|root| {
+                        hovered_id.and_then(|n|
+                            crate::browser::paint::find_box_by_node_id(root, n).map(|bx| {
+                                (bx.node.clone(),
+                                 (x + sxp - bx.rect.x) as f64,
+                                 (y + syp - bx.rect.y) as f64)
+                            }))
+                    });
+                    if let Some((Some(t), ox, oy)) = mm {
+                        if let Some(interp) = self.interpreter.as_mut() {
                             let mut event = crate::interpreter::JsObject::new();
                             event.set("type".into(), crate::interpreter::JsValue::Str("mousemove".into()));
                             event.set("clientX".into(), crate::interpreter::JsValue::Number(x as f64));
                             event.set("clientY".into(), crate::interpreter::JsValue::Number(y as f64));
+                            event.set("offsetX".into(), crate::interpreter::JsValue::Number(ox));
+                            event.set("offsetY".into(), crate::interpreter::JsValue::Number(oy));
                             event.set("target".into(), crate::interpreter::JsValue::DomNode(
                                 std::rc::Rc::clone(&t)));
                             let event_val = crate::interpreter::JsValue::Object(
@@ -1771,11 +1782,16 @@ impl WebView {
                         }
                     }
                     // mousedown event dispatch.
+                    let md_off = target_node.as_ref().map(|t| self.event_offset(t, x, y));
                     if let (Some(target), Some(interp)) = (target_node.clone(), self.interpreter.as_mut()) {
                         let mut event = crate::interpreter::JsObject::new();
                         event.set("type".into(), crate::interpreter::JsValue::Str("mousedown".into()));
                         event.set("clientX".into(), crate::interpreter::JsValue::Number(x as f64));
                         event.set("clientY".into(), crate::interpreter::JsValue::Number(y as f64));
+                        if let Some((ox, oy)) = md_off {
+                            event.set("offsetX".into(), crate::interpreter::JsValue::Number(ox));
+                            event.set("offsetY".into(), crate::interpreter::JsValue::Number(oy));
+                        }
                         event.set("target".into(), crate::interpreter::JsValue::DomNode(
                             std::rc::Rc::clone(&target)));
                         let event_val = crate::interpreter::JsValue::Object(
@@ -1787,14 +1803,17 @@ impl WebView {
                     // selection self - bez tohoto by 2 paralelni selection
                     // states konfliktovali (Backspace clears EditorState, ale
                     // page_selection visible nad new insert).
-                    let click_on_input = target_node.as_ref()
+                    // canvas: NEspoustet text-selection drag - canvas neni text +
+                    // potrebuje mousemove behem dragu (kresleni). Bez vylouceni
+                    // page_sel_dragging blokoval routing mousemove na canvas.
+                    let click_on_noselect = target_node.as_ref()
                         .map(|n| matches!(n.tag_name().as_deref(),
-                            Some("input") | Some("textarea")))
+                            Some("input") | Some("textarea") | Some("canvas")))
                         .unwrap_or(false);
                     if let Some(target) = target_node {
                         self.mouse_down_at = Some((x, y, target));
                     }
-                    if !click_on_input {
+                    if !click_on_noselect {
                         self.sel_begin(content_x, content_y);
                     }
                     response.dirty = true;
@@ -1824,11 +1843,16 @@ impl WebView {
                         .and_then(|root| root.hit_test(content_x, content_y))
                         .and_then(|bx| bx.node.clone());
                     // mouseup event dispatch.
+                    let mu_off = up_target.as_ref().map(|t| self.event_offset(t, x, y));
                     if let (Some(target), Some(interp)) = (up_target.as_ref(), self.interpreter.as_mut()) {
                         let mut event = crate::interpreter::JsObject::new();
                         event.set("type".into(), crate::interpreter::JsValue::Str("mouseup".into()));
                         event.set("clientX".into(), crate::interpreter::JsValue::Number(x as f64));
                         event.set("clientY".into(), crate::interpreter::JsValue::Number(y as f64));
+                        if let Some((ox, oy)) = mu_off {
+                            event.set("offsetX".into(), crate::interpreter::JsValue::Number(ox));
+                            event.set("offsetY".into(), crate::interpreter::JsValue::Number(oy));
+                        }
                         event.set("target".into(), crate::interpreter::JsValue::DomNode(
                             std::rc::Rc::clone(target)));
                         let event_val = crate::interpreter::JsValue::Object(
@@ -1841,11 +1865,14 @@ impl WebView {
                         let dist = ((dx - x).powi(2) + (dy - y).powi(2)).sqrt();
                         let same_target = std::rc::Rc::ptr_eq(&down_target, &up);
                         if dist < 5.0 && same_target {
+                            let (cox, coy) = self.event_offset(&up, x, y);
                             let event_obj_rc = std::rc::Rc::new(std::cell::RefCell::new({
                                 let mut event = crate::interpreter::JsObject::new();
                                 event.set("type".into(), crate::interpreter::JsValue::Str("click".into()));
                                 event.set("clientX".into(), crate::interpreter::JsValue::Number(x as f64));
                                 event.set("clientY".into(), crate::interpreter::JsValue::Number(y as f64));
+                                event.set("offsetX".into(), crate::interpreter::JsValue::Number(cox));
+                                event.set("offsetY".into(), crate::interpreter::JsValue::Number(coy));
                                 event.set("target".into(), crate::interpreter::JsValue::DomNode(
                                     std::rc::Rc::clone(&up)));
                                 event
@@ -3479,6 +3506,21 @@ impl WebView {
 
     /// Page title (z `<title>` ci `document.title = ...`).
     pub fn title(&self) -> &str { &self.title }
+
+    /// offsetX/offsetY pro mouse event = pozice relativni k padding-boxu target
+    /// elementu (content coords - box origin). Canvas kresleni + pozicni UI to
+    /// ctou. Bez nich vraci JS undefined (engine-test canvas mousemove/down).
+    fn event_offset(&self, node: &std::rc::Rc<crate::browser::dom::Node>, x: f32, y: f32) -> (f64, f64) {
+        let content_x = x + self.scroll_x;
+        let content_y = y + self.scroll_y;
+        let nid = std::rc::Rc::as_ptr(node) as usize;
+        if let Some(root) = self.last_layout_root.as_ref() {
+            if let Some(bx) = crate::browser::paint::find_box_by_node_id(root, nid) {
+                return ((content_x - bx.rect.x) as f64, (content_y - bx.rect.y) as f64);
+            }
+        }
+        (x as f64, y as f64)
+    }
 
     /// Base URL (file:// / http(s)://).
     pub fn base_url(&self) -> Option<&str> { self.base_url.as_deref() }
