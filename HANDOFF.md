@@ -54,6 +54,19 @@ screeny). Testovano vizualne pres PrintWindow capture (engine bin, debug). Commi
   TRANSPARENTNI. Fix: synteticke edge stopy na 0/1. Pomaha VSEM gradientum s
   ne-edge stopy (cast "krom prvnich dvou spatne").
 
+### 7. ::before/::after (build_pseudo_box byl orezany na inline text)
+- content:"" (prazdny) se zahazoval -> dekorativni ::after bary (display:block +
+  width/height/bg = podtrzeni/divider) neviditelne. Ted renderuje box bez textu.
+- Necetl display/width/height/border-radius -> pseudo vzdy inline. Pridano
+  (border-radius % vuci min(w,h) = 50% kruh).
+- Necetl position/top/right/bottom/left -> position:absolute pseudo (notif badge)
+  flowoval v toku. Pridano -> layout abs-pos pass umisti badge top-right.
+
+### 8. ::selection background-color (driv hardcoded modra)
+- Highlight pouzival [80,150,255,120], ignoroval ::selection bg (layout uz
+  parsoval do bx.selection_bg). find_selection_bg walk -> CSS barva. Text color
+  (::selection color) zatim ne (vyzaduje re-paint glyfu).
+
 ### ZBYVA z chyby-rbro doc (pro dalsi vlakno)
 - **rgba alpha blend v LINEARNIM prostoru** (washed-out polopruhledne panely =
   "stranka vypada jinak"). Root: offscreen RT je sRGB -> hw blenduje linearne;
@@ -64,10 +77,11 @@ screeny). Testovano vizualne pres PrintWindow capture (engine bin, debug). Commi
 - Animovany gradient (background-position animace + background-size 400%).
 - Grid ordering, table styling, formulare (chybi elementy/styl/overflow),
   inline SVG (sekce 13/14), typografie (efekty/podtrzeni/vertical/column-count/
-  blink/marquee), ::before/::after styling, CSS filtry (blur/brightness/
-  drop-shadow/multi), mix-blend-mode (cerne artefakty), canvas API, custom
-  scrollbary + inner overflow scroll wheel, jagged/zubate diagonalni AA linky,
-  ::selection barva.
+  blink/marquee), CSS filtry (blur/brightness/drop-shadow/multi), mix-blend-mode
+  (cerne artefakty), canvas API, custom scrollbary + inner overflow scroll wheel,
+  jagged/zubate diagonalni AA linky.
+- ::selection color (text barva pri vyberu - bg uz hotovo, text vyzaduje
+  re-paint selected glyfu).
 
 ### Test/debug pomucky teto session
 - PrintWindow(hwnd,hdc,2) capture (occlusion-independent) + SetWindowPos
