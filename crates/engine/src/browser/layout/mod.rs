@@ -296,7 +296,9 @@ fn apply_post_children_pseudos(
 
     // ::selection - uloz barvy vyberu z pseudo map (aplikovano za behu pri renderovani)
     if let Some(sel_styles) = super::cascade::get_pseudo_styles(pseudo_map, node, "selection") {
-        bx.selection_bg = sel_styles.get("background-color").and_then(|c| parse_color(c));
+        bx.selection_bg = sel_styles.get("background-color")
+            .or_else(|| sel_styles.get("background"))
+            .and_then(|c| parse_color(c));
         bx.selection_color = sel_styles.get("color").and_then(|c| parse_color(c));
     }
 
