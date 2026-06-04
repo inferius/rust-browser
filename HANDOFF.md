@@ -67,7 +67,36 @@ screeny). Testovano vizualne pres PrintWindow capture (engine bin, debug). Commi
   parsoval do bx.selection_bg). find_selection_bg walk -> CSS barva. Text color
   (::selection color) zatim ne (vyzaduje re-paint glyfu).
 
+### 9. KRITICKY perf: memory leak animovaneho SVG (user "extreme tragicky vykon")
+- Animovany inline SVG (wave setAttribute('points') kazdy frame) = novy content
+  hash klic kazdy frame. flush_inline_svg_cache iteroval CELY cache + pridaval do
+  atlasu BEZ eviction -> INLINE_SVG_CACHE neomezeny RAM rust (~10 MB/s), atlas se
+  zaplnil za ~4s (add() false -> "inline svg nefunguji"), flush O(N^2) =
+  progresivni zpomaleni, close trval sekundy (free obriho cache+atlasu).
+- Fix: stabilni klic per-element (node ptr+dims), content_hash pro re-raster jen
+  pri zmene, INLINE_SVG_DIRTY (upload jen zmenene), ImageAtlas::replace (overwrite
+  slot in-place). Memory ted stabilni ~500MB misto +10MB/s. FPS konzistentni ~100
+  (release) misto degradace do tragickeho.
+
+### 10. FPS counter v title (user request)
+- frame_times_ms se NIKDY neplnil (FPS overlay mrtvy). render() meri wall-clock
+  cadence -> window title "<page> - N FPS (X.X ms)". Throttle ~12 framu.
+
+### 11. Canvas interaktivita (offsetX/Y + drag)
+- Mouse eventy chybely offsetX/offsetY -> canvas kresleni + pozice = undefined.
+  Pridano (content - target box origin) na move/down/up/click. + <canvas> vyloucen
+  z text-selection dragu + App routuje mousemove i behem dragu -> canvas drag
+  kresleni funguje.
+
+### 12. ::selection per-element fix (oprava regrese z #8)
+- #8 (global find_selection_bg) barvil CELOU stranku. Ted selection_bg propagovan
+  na text deti + per-hit barva -> scoped `.foo::selection` jen ve .foo.
+
 ### ZBYVA z chyby-rbro doc (pro dalsi vlakno)
+- **Perf gap na 240fps**: jsme ~100fps (release), Chrome 240. Per-frame ~9ms =
+  layout 3ms + SVG resvg re-raster KAZDY frame (wave) + canvas + rAF JS. SVG
+  re-raster pres resvg je drahy - potreba fast-path nebo cache invalidace jen pri
+  realne zmene. Layout clone+layer-tree taky.
 - **rgba alpha blend v LINEARNIM prostoru** (washed-out polopruhledne panely =
   "stranka vypada jinak"). Root: offscreen RT je sRGB -> hw blenduje linearne;
   CSS chce sRGB-space blend (blk 0.5 nad bilou = 187 misto 128). Fix = UNORM
@@ -76,12 +105,14 @@ screeny). Testovano vizualne pres PrintWindow capture (engine bin, debug). Commi
 - repeating-linear/radial-gradient (chybi tiling).
 - Animovany gradient (background-position animace + background-size 400%).
 - Grid ordering, table styling, formulare (chybi elementy/styl/overflow),
-  inline SVG (sekce 13/14), typografie (efekty/podtrzeni/vertical/column-count/
-  blink/marquee), CSS filtry (blur/brightness/drop-shadow/multi), mix-blend-mode
-  (cerne artefakty), canvas API, custom scrollbary + inner overflow scroll wheel,
-  jagged/zubate diagonalni AA linky.
+  typografie (efekty/podtrzeni/vertical/column-count/blink/marquee), CSS filtry
+  (blur/brightness/drop-shadow/multi), mix-blend-mode (cerne artefakty), custom
+  scrollbary + inner overflow scroll wheel, jagged/zubate diagonalni AA linky.
 - ::selection color (text barva pri vyberu - bg uz hotovo, text vyzaduje
-  re-paint selected glyfu).
+  re-paint selected glyfu). + `cursor` ze stylu (user: "nema kurzor ze stylu").
+- canvas API: kresleni + offsetX hotovo; zbyva overit ostatni canvas ops +
+  klikani na tlacitka v canvas sekci (mozna z-order canvas pres tlacitka).
+- repeating-linear/radial-gradient (tiling), animovany gradient (bg-position).
 
 ### Test/debug pomucky teto session
 - PrintWindow(hwnd,hdc,2) capture (occlusion-independent) + SetWindowPos
