@@ -1442,7 +1442,17 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 .map(|w| w.has_active_animations() || w.has_pending_intervals())
                 .unwrap_or(false);
             if scroll_anim || page_anim {
+                // Kontinualni redraw pri aktivni animaci. Pacing resi Fifo present
+                // mode (vsync): present() blokuje thread do dalsiho refreshe =
+                // prirozeny frame cap na refresh rate + NIZKE CPU (thread spi v
+                // GPU driveru, ne busy-spin). Driv preferovany Mailbox/Immediate
+                // present je non-blocking -> request_redraw v kazde iteraci =
+                // 100% CPU spin ("vykon nestal za moc"). about_to_wait je jediny
+                // animacni pump (RedrawRequested se uz sam nerequestuje).
                 if let Some(w) = &self.window { w.request_redraw(); }
+            } else {
+                // Zadna animace -> klasicky Wait (spi do dalsiho inputu, 0% CPU).
+                _event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait);
             }
         }
 
@@ -2378,23 +2388,12 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
                 }
                 WindowEvent::RedrawRequested => {
                     self.render();
-                    // Continual redraw pri smooth scroll animation NEBO aktivnich
-                    // CSS @keyframes/transitions/caret blink NEBO pending JS
-                    // setInterval/timeoutech. Drive se kontroloval jen smooth
-                    // scroll -> @keyframes animace "zamrzly" a posunuly se az pri
-                    // dalsim inputu (scroll). webview.has_active_animations() je
-                    // kanonicky check (= needs_continuous_render), stejne jako
-                    // shell loop. has_pending_intervals pokryva setInterval tick.
-                    let scroll_anim = (self.scroll_y() - self.scroll_target_y()).abs() > 0.5
-                        || (self.scroll_x() - self.scroll_target_x()).abs() > 0.5;
-                    let page_anim = self.webview.as_ref()
-                        .map(|w| w.has_active_animations() || w.has_pending_intervals())
-                        .unwrap_or(false);
-                    if scroll_anim || page_anim {
-                        if let Some(w) = &self.window {
-                            w.request_redraw();
-                        }
-                    }
+                    // POZN: continual redraw pump pri aktivnich animacich resi
+                    // VYHRADNE about_to_wait (s frame-rate capem ~60 FPS pres
+                    // WaitUntil). Driv se request_redraw volal i tady na konci
+                    // RedrawRequested -> queued event prebil WaitUntil deadline =
+                    // loop nikdy nespal = 100% CPU spin. Self-request odstranen,
+                    // about_to_wait je jediny zdroj animacniho pumpu.
                 }
                 // Drag-drop HTML soubor: reload okna s novym souborem.
                 WindowEvent::DroppedFile(path) => {
@@ -4719,13 +4718,14 @@ impl Renderer {
         // Pokud winit jeste nedostal WM_SIZE na Windows, inner_size = 0. Fallback na rozumny default.
         let init_w = if size.width > 0 { size.width } else { 1280 };
         let init_h = if size.height > 0 { size.height } else { 900 };
-        // Present mode: prefer Mailbox (vsync s drop-old, smoothest na high-Hz monitorech)
-        // > Immediate (uncapped, mozna tearing) > Fifo (klasicky vsync 60Hz na vetsine drivers).
-        // Mailbox/Immediate tracking native monitor refresh (144Hz/165Hz/240Hz).
-        let preferred_modes = [wgpu::PresentMode::Mailbox, wgpu::PresentMode::Immediate, wgpu::PresentMode::Fifo];
-        let present_mode = preferred_modes.iter().copied()
-            .find(|m| surface_caps.present_modes.contains(m))
-            .unwrap_or(wgpu::PresentMode::Fifo);
+        // Present mode: Fifo (klasicky vsync). present()/get_current_texture()
+        // BLOKUJE thread do dalsiho monitor refreshe = prirozeny frame cap na
+        // refresh rate (60/144Hz) + NIZKE CPU (thread spi v GPU driveru misto
+        // busy-spin). Driv preferovany Mailbox/Immediate je non-blocking -> s
+        // kontinualnim animacnim redraw se rendrovalo na max rychlost = 100% CPU
+        // ("vykon nestal za moc" i v release buildu). Fifo je vzdy podporovany
+        // (wgpu spec guarantee) takze fallback netreba.
+        let present_mode = wgpu::PresentMode::Fifo;
         crate::vlog!("[render] present_mode = {:?} (available: {:?})", present_mode, surface_caps.present_modes);
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,

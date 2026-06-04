@@ -1441,6 +1441,15 @@ impl WebView {
                     let hit_key = ((content_x / 2.0) as i32, (content_y / 2.0) as i32, dom_v);
                     let (hit_id, hit_tag, hit_over_text) = {
                         use crate::browser::spatial_hit::{hit_test_point, HitResult};
+                        // Lazy build R-tree pri prvnim dotazu po layout zmene
+                        // (render invaliduje na None). Build z last_layout_root
+                        // (clean clone, same jako build-time layout_root).
+                        if self.hit_rtree.is_none() {
+                            if let Some(root) = self.last_layout_root.as_ref() {
+                                self.hit_rtree = Some(
+                                    crate::browser::spatial_hit::build_hit_rtree(root));
+                            }
+                        }
                         let from_rtree = self.hit_rtree.as_ref()
                             .map(|t| hit_test_point(t, content_x, content_y));
                         match from_rtree {
@@ -2567,8 +2576,14 @@ impl WebView {
         let mut layout_root = if Some(layout_key) == self.layout_cache_key
             && self.last_layout_root.is_some()
         {
-            // Cache hit - reuse clone z predchoziho framu.
-            self.last_layout_root.as_ref().unwrap().clone()
+            // Cache hit - MOVE (take) tree z predchoziho framu misto clone.
+            // PERF: last_layout_root se stejne za chvili prepise novym clonem
+            // (`self.last_layout_root = Some(layout_root.clone())` po pass_a).
+            // Drivejsi `.clone()` tady = DVA cele klony 667-node tree per frame
+            // (tenhle + ten po pass_a). Take() = jen jeden clon. Mezi take a
+            // restore se self.last_layout_root necte (HIT vetev nejde do MISS
+            // vetve co ho borrowuje pro subtree reuse) a fn nema early-return.
+            self.last_layout_root.take().unwrap()
         } else {
             self.layout_cache_key = Some(layout_key);
             // Layout subtree cache: pri MISS na top-level (fingerprint zmena nekde),
@@ -2664,14 +2679,16 @@ impl WebView {
         // Save clean (offsets set, children un-shifted) - hit_test pres
         // pak respektuje scroll_offset pro coord adjustment.
         self.last_layout_root = Some(layout_root.clone());
-        // Build R-tree spatial hit index. Drive O(N) tree walk per mouse move
-        // dropoval FPS pri 5000-box page + 1000Hz mysi. R-tree query O(log N).
-        self.hit_rtree = Some(crate::browser::spatial_hit::build_hit_rtree(&layout_root));
+        // R-tree spatial hit index: LAZY build. Drive se buildil tady KAZDY
+        // frame (i bez pohybu mysi) = zbytecna O(N log N) prace na animovanych
+        // strankach. Ted jen invalidace - build az pri prvnim mouse-move dotazu
+        // (viz handle_input MouseMove). Hit-testing je event-driven, ne per-frame.
+        self.hit_rtree = None;
 
         // Fire ResizeObserver / IntersectionObserver callbacks po layout.
-        // Build node_id -> rect lookup pres clean layout.
-        let mut rect_map: std::collections::HashMap<usize, (f32, f32, f32, f32)> =
-            std::collections::HashMap::new();
+        // PERF: cely blok (collect_rects walk + rect_map.clone alokace) bezi jen
+        // kdyz jsou nejake observery registrovane. Vetsina stranek zadne nema ->
+        // skip = usetreny O(N) walk + 2 HashMap alokace per frame.
         fn collect_rects(bx: &crate::browser::layout::LayoutBox,
                          out: &mut std::collections::HashMap<usize, (f32, f32, f32, f32)>) {
             if let Some(n) = &bx.node {
@@ -2680,15 +2697,22 @@ impl WebView {
             }
             for ch in &bx.children { collect_rects(ch, out); }
         }
-        collect_rects(&layout_root, &mut rect_map);
-        let viewport_rect = (self.scroll_x, self.scroll_y, viewport_w, viewport_h);
-        let rect_map_ro = rect_map.clone();
-        if let Some(interp) = self.interpreter.as_mut() {
-            interp.fire_resize_observers(|id| rect_map_ro.get(&id).map(|r| (r.2, r.3)));
-            interp.fire_intersection_observers(
-                |id| rect_map.get(&id).copied(),
-                viewport_rect,
-            );
+        let has_observers = self.interpreter.as_ref().map(|i|
+            !i.resize_observers.borrow().is_empty()
+            || !i.intersection_observers.borrow().is_empty()).unwrap_or(false);
+        if has_observers {
+            let mut rect_map: std::collections::HashMap<usize, (f32, f32, f32, f32)> =
+                std::collections::HashMap::new();
+            collect_rects(&layout_root, &mut rect_map);
+            let viewport_rect = (self.scroll_x, self.scroll_y, viewport_w, viewport_h);
+            let rect_map_ro = rect_map.clone();
+            if let Some(interp) = self.interpreter.as_mut() {
+                interp.fire_resize_observers(|id| rect_map_ro.get(&id).map(|r| (r.2, r.3)));
+                interp.fire_intersection_observers(
+                    |id| rect_map.get(&id).copied(),
+                    viewport_rect,
+                );
+            }
         }
 
         pass_b_shift_children(&mut layout_root);
