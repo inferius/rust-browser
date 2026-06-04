@@ -2,6 +2,80 @@
 
 Cti **driv nez zacnes**. Plus `CLAUDE.md`, `README.md`, `TODO_CSS.md`, `debug_utils.md`.
 
+## Session N+26: Interaktivita + hover + perf + clip-path + gradienty (chyby-rbro doc)
+
+Prace na bug dokumentu `E:\Data\Downloads\chyby-rbro.docx` (~27 chyb, nas-vs-Chrome
+screeny). Testovano vizualne pres PrintWindow capture (engine bin, debug). Commity:
+
+### 1. Interaktivita (klik + inline handlery + DOM mutace) - odblok #1
+- `dispatch_event` volal JEN addEventListener listenery, NE inline `on*` atributy.
+  Pridana `Interpreter::fire_inline_handler` (obal kodu do `function(event){}`,
+  this=element, eval v global). Vola se v target + bubble fazi dispatch_event.
+- Engine App NEdispatchoval click do JS vubec (vlastni mouse = jen selection).
+  Pridano: page MouseDown/MouseUp -> webview.handle_input (dispatch click).
+- DOM mutace z handleru se NEZOBRAZILY: layout cache key bez DOM verze ->
+  textContent/appendChild zmena = cache HIT = stary obsah. Pridan
+  `dom_style_version` do layout key + interpreter bumpne pri text/struktura/class
+  mutaci (NE pri SVG geometry points -> perf).
+
+### 2. Perf (Fifo vsync + per-frame O(N) redukce) - "vykon nestal za moc"
+- Present mode Mailbox/Immediate -> **Fifo** (vsync block = nizke CPU misto
+  100% spin pri kontinualnim animacnim redraw).
+- Redraw pump VYHRADNE v about_to_wait (RedrawRequested se uz sam nerequestuje
+  -> driv queued event prebijel ControlFlow = nikdy nespal).
+- Layout cache HIT: take() misto clone() (1 klon tree misto 2 per frame).
+- hit_rtree LAZY build (jen pri mouse dotazu, ne kazdy frame).
+- ResizeObserver/IntersectionObserver blok zaguardovan (jen kdyz registrovane).
+- Vysledek engine-test: layout-faze 3.2->2.2ms, ~88->101 FPS (release).
+
+### 3. Page hover (CSS :hover + JS eventy) + ancestor propagace
+- App pri normalnim pohybu NErouteoval MouseMove do webview -> page hover (CSS i
+  JS mouseover/enter/move/out/leave) byl uplne mrtvy. Pridano routovani.
+- **Bug**: `:hover`/`:active`/`:focus-within` propagace OBRACENA. Matchovala
+  POTOMKY hovered elementu misto PREDKU (hover nad body barvil vsechny deti =
+  sticky :hover). Fix: precomputed ancestor-or-self chain (rebuild_state_chains,
+  1 DFS), `:hover` = O(1) chain membership. matched_decls cache hover_bit taky
+  pres chain. Latentni bug - projevil se az po zapojeni page hoveru.
+
+### 4. text-transform (uppercase/lowercase/capitalize)
+- Nebyl implementovany. Text node nema cascade entry (s.len=0) -> aplikuje se
+  v rodicovske inheritance smycce z parent stylu PRED measure.
+
+### 5. clip-path na gradient-filled elementech
+- clip-path "vubec nefunguje" protoze gradient emit (bx.bg_gradient) IGNOROVAL
+  clip_path = plny box. (Solid-color clip uz fungoval.) Fix: circle/ellipse/inset
+  -> gradient do clip rectu + radius; polygon+linear -> novy ClippedGradient
+  command (triangulovany polygon s gradient-mode verts = gradient clipnuty na tvar).
+
+### 6. Gradient hard-stops + edge clamp
+- "color 33% 66%" (hard band) se parsoval spatne -> stredni barvy dropnute.
+  Fix: parse_stop_part expanduje na 2 stopy.
+- Multi-stop renderer fillnul jen [first,last] offset -> oblasti mimo
+  TRANSPARENTNI. Fix: synteticke edge stopy na 0/1. Pomaha VSEM gradientum s
+  ne-edge stopy (cast "krom prvnich dvou spatne").
+
+### ZBYVA z chyby-rbro doc (pro dalsi vlakno)
+- **rgba alpha blend v LINEARNIM prostoru** (washed-out polopruhledne panely =
+  "stranka vypada jinak"). Root: offscreen RT je sRGB -> hw blenduje linearne;
+  CSS chce sRGB-space blend (blk 0.5 nad bilou = 187 misto 128). Fix = UNORM
+  offscreen + shader sRGB audit + compose/present + text AA = pipeline-wide color
+  mgmt, VYSOKE riziko regrese. HIGH IMPACT ale opatrne (nelze A/B z screenu).
+- repeating-linear/radial-gradient (chybi tiling).
+- Animovany gradient (background-position animace + background-size 400%).
+- Grid ordering, table styling, formulare (chybi elementy/styl/overflow),
+  inline SVG (sekce 13/14), typografie (efekty/podtrzeni/vertical/column-count/
+  blink/marquee), ::before/::after styling, CSS filtry (blur/brightness/
+  drop-shadow/multi), mix-blend-mode (cerne artefakty), canvas API, custom
+  scrollbary + inner overflow scroll wheel, jagged/zubate diagonalni AA linky,
+  ::selection barva.
+
+### Test/debug pomucky teto session
+- PrintWindow(hwnd,hdc,2) capture (occlusion-independent) + SetWindowPos
+  HWND_TOPMOST (jinak app okludovane terminalem = synteticky mouse jde jinam).
+- SendInput absolute MOVE pro hover (SetCursorPos negeneruje winit CursorMoved).
+- `/tmp/cap.ps1` reusable capture skript (title match + crop).
+- env-gated debug: RWE_HOV_DBG, RWE_TT_DBG, RWE_PROF.
+
 ## Session N+25: Pure-Rust AVIF + layout wire-ups + lazy loading + web vitals (4106 testu)
 
 Pokracovani z N+24. Real backend wire-ups + user-impact features.
