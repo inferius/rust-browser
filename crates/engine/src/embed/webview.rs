@@ -3015,18 +3015,20 @@ impl WebView {
                     (a, c)
                 } else { (c, a) };
                 if (end.0 - start.0).abs() > 1.0 || (end.1 - start.1).abs() > 1.0 {
-                    // ::selection background-color z layoutu (CSS). Fallback na
-                    // klasickou modrou. Highlight je kreslen NAD textem -> drzime
-                    // alpha < 255 (text prosvita); opaque ::selection -> alpha 150.
-                    let sel_hl = find_selection_bg(&layout_root)
-                        .map(|c| if c[3] >= 255 { [c[0], c[1], c[2], 150] } else { c })
-                        .unwrap_or([80, 150, 255, 120]);
-                    let mut hits: Vec<(f32, f32, f32, f32)> = Vec::new();
+                    // PER-ELEMENT ::selection: kazdy hit nese selection_bg sveho
+                    // boxu (propagovano z element ::selection na text deti). Scoped
+                    // `.foo::selection` se tim drzi jen ve .foo; mimo = default
+                    // modra. (Driv globalni find_selection_bg barvil celou stranku.)
+                    // Highlight nad textem -> opaque ::selection -> alpha 150.
+                    let mut hits: Vec<(f32, f32, f32, f32, Option<[u8; 4]>)> = Vec::new();
                     collect_text_lines(&layout_root, start.0, start.1, end.0, end.1, &mut hits);
-                    for (hx, hy, hw, hh) in hits {
+                    for (hx, hy, hw, hh, sel_bg) in hits {
+                        let color = sel_bg
+                            .map(|c| if c[3] >= 255 { [c[0], c[1], c[2], 150] } else { c })
+                            .unwrap_or([80, 150, 255, 120]);
                         display_list.push(crate::browser::paint::DisplayCommand::Rect {
                             x: hx, y: hy, w: hw, h: hh,
-                            color: sel_hl, radius: 0.0,
+                            color, radius: 0.0,
                         });
                     }
                 }
@@ -3718,17 +3720,6 @@ impl WebView {
     }
 }
 
-/// Najde prvni ::selection background-color v layout tree (CSS `::selection`
-/// pravidlo). Globalni ::selection = jedna barva na strance. None = zadne
-/// ::selection pravidlo (volajici pouzije default modrou).
-fn find_selection_bg(bx: &crate::browser::layout::LayoutBox) -> Option<[u8; 4]> {
-    if let Some(c) = bx.selection_bg { return Some(c); }
-    for ch in &bx.children {
-        if let Some(c) = find_selection_bg(ch) { return Some(c); }
-    }
-    None
-}
-
 /// Walk layout tree + collect highlight rects pro selected text lines.
 /// Flow-based: first/last line maji partial X range, middle full.
 /// Walk LayoutBox tree + populate layout_rects mapu (node_ptr -> rect).
@@ -3755,7 +3746,7 @@ fn populate_layout_rects(
 fn collect_text_lines(
     b: &crate::browser::layout::LayoutBox,
     sx: f32, sy: f32, ex: f32, ey: f32,
-    out: &mut Vec<(f32, f32, f32, f32)>,
+    out: &mut Vec<(f32, f32, f32, f32, Option<[u8; 4]>)>,
 ) {
     if let Some(text) = &b.text {
         // line_start_x musi pouzit pad_l + border (stejny jako paint.rs
@@ -3806,7 +3797,7 @@ fn collect_text_lines(
                 let hs = shaped.x_at_char(start_char);
                 let he = shaped.x_at_char(end_char);
                 if he > hs + 0.5 {
-                    out.push((line_start_x + hs, line_y, he - hs, lh));
+                    out.push((line_start_x + hs, line_y, he - hs, lh, b.selection_bg));
                 }
             }
         }

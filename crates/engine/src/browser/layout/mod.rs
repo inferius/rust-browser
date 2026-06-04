@@ -3378,6 +3378,11 @@ fn build_box_inner_impl(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &supe
     // takze transform aplikujeme tady z parent stylu PRED measure/wrap (uppercase
     // text je sirsi, intrinsic width musi merit transformovany text).
     let parent_tt = s.get("text-transform").map(|v| v.trim().to_string());
+    // ::selection bg/color - text-node deti nemaji vlastni ::selection cascade,
+    // propagace z element boxu (scoped ::selection se tim drzi jen v subtree -
+    // bez toho byl highlight bud globalni nebo zadny na text nodech).
+    let parent_sel_bg = bx.selection_bg;
+    let parent_sel_color = bx.selection_color;
     for ch in bx.children.iter_mut() {
         if ch.tag.is_none() {
             ch.font_size = parent_fs;
@@ -3387,6 +3392,8 @@ fn build_box_inner_impl(node: &Rc<Node>, style_map: &StyleMap, pseudo_map: &supe
             if !ch.bold { ch.bold = parent_bold; }
             if !ch.italic { ch.italic = parent_italic; }
             if ch.text_color.is_none() { ch.text_color = parent_color; }
+            if ch.selection_bg.is_none() { ch.selection_bg = parent_sel_bg; }
+            if ch.selection_color.is_none() { ch.selection_color = parent_sel_color; }
             if ch.font_family.is_empty() { ch.font_family = parent_family.clone(); }
             // letter-spacing: inherited per CSS Text L3. Text nodes nemaji
             // vlastni cascade record; propagace nutna pro intrinsic width
