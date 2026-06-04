@@ -3042,22 +3042,44 @@ impl WebView {
                     (a, c)
                 } else { (c, a) };
                 if (end.0 - start.0).abs() > 1.0 || (end.1 - start.1).abs() > 1.0 {
-                    // PER-ELEMENT ::selection: kazdy hit nese selection_bg sveho
-                    // boxu (propagovano z element ::selection na text deti). Scoped
-                    // `.foo::selection` se tim drzi jen ve .foo; mimo = default
-                    // modra. (Driv globalni find_selection_bg barvil celou stranku.)
-                    // Highlight nad textem -> opaque ::selection -> alpha 150.
-                    let mut hits: Vec<(f32, f32, f32, f32, Option<[u8; 4]>)> = Vec::new();
+                    // PER-ELEMENT ::selection: kazdy hit nese selection_bg/color
+                    // sveho boxu. Scoped `.foo::selection` se drzi jen ve .foo.
+                    let mut hits: Vec<(f32, f32, f32, f32, Option<[u8; 4]>, Option<[u8; 4]>)> = Vec::new();
                     collect_text_lines(&layout_root, start.0, start.1, end.0, end.1, &mut hits);
-                    for (hx, hy, hw, hh, sel_bg) in hits {
+                    // 1) bg rect pod text (alpha < 255 aby text prosvital).
+                    for (hx, hy, hw, hh, sel_bg, _) in &hits {
                         let color = sel_bg
                             .map(|c| if c[3] >= 255 { [c[0], c[1], c[2], 150] } else { c })
                             .unwrap_or([80, 150, 255, 120]);
                         display_list.push(crate::browser::paint::DisplayCommand::Rect {
-                            x: hx, y: hy, w: hw, h: hh,
-                            color, radius: 0.0,
+                            x: *hx, y: *hy, w: *hw, h: *hh, color, radius: 0.0,
                         });
                     }
+                    // 2) ::selection color (text barva) - prekresli selected text
+                    // runy v selection_color NAD bg (jinak svetly text na barevnem
+                    // bg = nizky kontrast; Chrome dela kontrastni). Klonuju puvodni
+                    // Text commandy (uz spravne pozicovane) co padnou do selection
+                    // rectu. Plne selektovane radky = presne; partial run = cely
+                    // run prebarven (prijatelne).
+                    let recolor: Vec<crate::browser::paint::DisplayCommand> = display_list.iter()
+                        .filter_map(|cmd| {
+                            if let crate::browser::paint::DisplayCommand::Text { x, y, .. } = cmd {
+                                for (hx, hy, hw, hh, _, sel_col) in &hits {
+                                    if let Some(sc) = sel_col {
+                                        if *x >= hx - 2.0 && *x <= hx + hw + 2.0
+                                            && *y >= hy - 2.0 && *y <= hy + hh + 2.0 {
+                                            let mut c = cmd.clone();
+                                            if let crate::browser::paint::DisplayCommand::Text { color, .. } = &mut c {
+                                                *color = *sc;
+                                            }
+                                            return Some(c);
+                                        }
+                                    }
+                                }
+                            }
+                            None
+                        }).collect();
+                    display_list.extend(recolor);
                 }
             }
         }
@@ -3788,7 +3810,7 @@ fn populate_layout_rects(
 fn collect_text_lines(
     b: &crate::browser::layout::LayoutBox,
     sx: f32, sy: f32, ex: f32, ey: f32,
-    out: &mut Vec<(f32, f32, f32, f32, Option<[u8; 4]>)>,
+    out: &mut Vec<(f32, f32, f32, f32, Option<[u8; 4]>, Option<[u8; 4]>)>,
 ) {
     if let Some(text) = &b.text {
         // line_start_x musi pouzit pad_l + border (stejny jako paint.rs
@@ -3839,7 +3861,8 @@ fn collect_text_lines(
                 let hs = shaped.x_at_char(start_char);
                 let he = shaped.x_at_char(end_char);
                 if he > hs + 0.5 {
-                    out.push((line_start_x + hs, line_y, he - hs, lh, b.selection_bg));
+                    out.push((line_start_x + hs, line_y, he - hs, lh,
+                        b.selection_bg, b.selection_color));
                 }
             }
         }
