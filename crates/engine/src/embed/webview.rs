@@ -2309,8 +2309,10 @@ impl WebView {
         let cache_key = {
             use std::hash::{Hash, Hasher};
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            // dom_version
-            self.interpreter.as_ref().map(|i| i.dom_version()).unwrap_or(0).hash(&mut hasher);
+            // dom_style_version (NE dom_version) - geometry-only attr mutace
+            // (SVG points animace per-frame) nebumpaji style verzi -> cache
+            // prezije = no full re-cascade kazdy frame.
+            self.interpreter.as_ref().map(|i| i.dom_style_version()).unwrap_or(0).hash(&mut hasher);
             // Per-WV hovered/focused. Bez per-WV by jine WV mouse_move
             // invalidoval cache i kdyz tahla WV nezmenila hover.
             // Conditional: jen pokud stylesheet pouziva :hover/:focus.
@@ -2339,7 +2341,7 @@ impl WebView {
             // Pres host_id se WV-A entries nesmichaji s WV-B; pres dom_ver
             // stale entries po DOM mutaci auto-invalidne (key miss).
             let host_id = std::rc::Rc::as_ptr(&doc.root) as usize as u64;
-            let dom_ver = self.interpreter.as_ref().map(|i| i.dom_version()).unwrap_or(0);
+            let dom_ver = self.interpreter.as_ref().map(|i| i.dom_style_version()).unwrap_or(0);
             crate::browser::cascade::set_cascade_ctx(host_id, dom_ver);
             let m = std::rc::Rc::new(crate::browser::cascade::cascade_with_viewport(
                 &doc.root, &self.stylesheets, viewport_w, viewport_h));
@@ -3240,6 +3242,11 @@ impl WebView {
 
         let prof_t4 = std::time::Instant::now();
         self.prof_gpu_ms = prof_t4.duration_since(prof_t3).as_secs_f32() * 1000.0;
+        if std::env::var("RWE_PROF").is_ok() {
+            let total = prof_t4.duration_since(prof_t0).as_secs_f32() * 1000.0;
+            eprintln!("[PROF] total={:.1}ms cascade={:.1} layout={:.1} paint={:.1} gpu={:.1}",
+                total, self.prof_cascade_ms, self.prof_layout_ms, self.prof_paint_ms, self.prof_gpu_ms);
+        }
 
         // Frame done - mark v paceru pro telemetry.
         self.frame_pacer.mark_presented(_frame_idx);

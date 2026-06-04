@@ -820,6 +820,26 @@ pub struct Interpreter {
     /// vlastnimu last_dom_version; pri diff rebuilds Elements tree.
     /// Rc<Cell> - sdileny clone do native closures + native eval_call.
     pub dom_version: Rc<std::cell::Cell<u64>>,
+    /// Style-relevantni DOM mutation counter. Bumpa se JEN pri mutacich co
+    /// mohou zmenit kaskadu (class/id/style attr, structural add/remove,
+    /// innerHTML, textContent). NEbumpa pri geometry-only setAttribute
+    /// (SVG points/d/cx/... = animace) -> cascade cache prezije = no full
+    /// re-cascade per frame. Cascade cache klicuje na TENTO counter.
+    pub dom_style_version: Rc<std::cell::Cell<u64>>,
+}
+
+/// True pro atributy ktere NEMOHOU ovlivnit CSS kaskadu (selector matching) -
+/// geometry/presentation atributy SVG + canvas, ktere se casto animuji per-frame
+/// (napr. polyline `points`, path `d`). Pri jejich zmene se NEbumpa style verze
+/// -> cascade cache prezije = zadny zbytecny full re-cascade kazdy frame.
+/// Konzervativni: jen jasne ne-kaskadni geometry attrs (CSS attr-selektory na
+/// nich se realne nepouzivaji; class/id/style/data-* sem NEpatri).
+pub(crate) fn is_non_cascading_attr(name: &str) -> bool {
+    matches!(name,
+        "points" | "d" | "cx" | "cy" | "r" | "rx" | "ry"
+        | "x1" | "y1" | "x2" | "y2" | "x" | "y"
+        | "viewBox" | "pathLength"
+    )
 }
 
 /// Sdileny debugger state pres Arc<Mutex>. UI thread cte/zapisuje set
@@ -1005,6 +1025,7 @@ impl Interpreter {
             shadow_roots: Rc::new(RefCell::new(HashMap::new())),
             stylesheets_lookup: None,
             dom_version: Rc::new(std::cell::Cell::new(0)),
+            dom_style_version: Rc::new(std::cell::Cell::new(0)),
         }
     }
 
@@ -1015,6 +1036,24 @@ impl Interpreter {
     #[inline]
     pub fn bump_dom_version(&self) {
         self.dom_version.set(self.dom_version.get().wrapping_add(1));
+        // Default: kazda mutace muze ovlivnit kaskadu -> bump i style verzi.
+        // Geometry-only setAttribute pouziva bump_dom_version_content_only().
+        self.dom_style_version.set(self.dom_style_version.get().wrapping_add(1));
+    }
+
+    /// Bump JEN content (dom_version), ne style verzi. Pro mutace co nemohou
+    /// zmenit kaskadu - geometry-only SVG attrs (points/d/cx/cy/r/...). Cascade
+    /// cache (klicovana na dom_style_version) tak prezije = no full re-cascade
+    /// pri SVG animaci ktera meni 'points' kazdy frame.
+    #[inline]
+    pub fn bump_dom_version_content_only(&self) {
+        self.dom_version.set(self.dom_version.get().wrapping_add(1));
+    }
+
+    /// Style-relevantni DOM mutation counter (viz pole dom_style_version).
+    #[inline]
+    pub fn dom_style_version(&self) -> u64 {
+        self.dom_style_version.get()
     }
 
     /// Aktualni DOM mutation counter. DevTools host porovnava proti
@@ -1216,7 +1255,15 @@ impl Interpreter {
     ) {
         // Bump DOM mutation counter - DevTools host pak vidi zmenu a rebuilds
         // Elements tree. Bump i kdyz nejsou observery, kvuli devtools sync.
-        self.bump_dom_version();
+        // Geometry-only attr mutace (SVG points/d/cx/... = per-frame animace)
+        // NEbumpaji style verzi -> cascade cache prezije = no full re-cascade.
+        if record_type == "attributes"
+            && attribute_name.as_deref().map(is_non_cascading_attr).unwrap_or(false)
+        {
+            self.bump_dom_version_content_only();
+        } else {
+            self.bump_dom_version();
+        }
         // Diag: cumulative mutation count per Interpreter instance.
         let v = self.dom_version.get();
         if v % 1000 == 0 && v > 0 {
@@ -1284,8 +1331,15 @@ impl Interpreter {
         attribute_name: Option<String>,
         old_value: Option<String>,
     ) {
-        // Bump DOM mutation counter - viz dispatch_mutation_full.
-        self.bump_dom_version();
+        // Bump DOM mutation counter - viz dispatch_mutation_full. Geometry-only
+        // attr (SVG points/d/...) bumpa jen content verzi (cascade cache prezije).
+        if record_type == "attributes"
+            && attribute_name.as_deref().map(is_non_cascading_attr).unwrap_or(false)
+        {
+            self.bump_dom_version_content_only();
+        } else {
+            self.bump_dom_version();
+        }
         let target_ptr = Rc::as_ptr(target) as usize;
         // Najit observers co matchuji target nebo (pri subtree) ancestor target.
         let observers: Vec<(JsValue, JsValue)> = self.mutation_observers.borrow().iter()
