@@ -671,13 +671,21 @@ fn rasterize_svg_resvg(svg: &str, target_w: u32, target_h: u32) -> Option<Vec<u8
     Some(pixmap.take())
 }
 
-/// Inline SVG bitmap cache - klic = svg+dims hash, hodnota = (RGBA bytes, w, h).
-/// Render phase volá `flush_inline_svg_cache(&mut image_atlas)` pred build_vertices
-/// pres upload do GPU atlas.
+/// Inline SVG bitmap cache. Klic = STABILNI per-element (node ptr + dims), NE
+/// per-content - jinak animovany SVG (points kazdy frame = novy content hash)
+/// generoval novy cache+atlas entry kazdy frame = neomezeny RAM/GPU rust +
+/// O(N) flush kazdy frame = progresivni zpomaleni + pomaly close. Hodnota =
+/// (RGBA, w, h, content_hash) - re-raster jen pri zmene content_hash.
+/// Render phase vola `flush_inline_svg_cache(&mut image_atlas)`.
 thread_local! {
     pub static INLINE_SVG_CACHE: std::cell::RefCell<
-        std::collections::HashMap<String, (Vec<u8>, u32, u32)>
+        std::collections::HashMap<String, (Vec<u8>, u32, u32, u64)>
     > = std::cell::RefCell::new(std::collections::HashMap::new());
+    /// Klice (re-)rasterizovane tento frame - flush uploadne JEN tyhle do atlasu
+    /// (ne cely cache O(N) kazdy frame). Clear po flush.
+    pub static INLINE_SVG_DIRTY: std::cell::RefCell<
+        std::collections::HashSet<String>
+    > = std::cell::RefCell::new(std::collections::HashSet::new());
 }
 
 /// Emituje SVG shape z child <rect>, <circle>, <ellipse>, <line>, <polygon>,
@@ -701,17 +709,25 @@ fn emit_svg_children(bx: &LayoutBox, cmds: &mut Vec<DisplayCommand>) {
             svg_str.hash(&mut h);
             target_w.hash(&mut h);
             target_h.hash(&mut h);
-            let key = format!("__inline_svg_{:x}", h.finish());
-            let has_cache = INLINE_SVG_CACHE.with(|c| c.borrow().contains_key(&key));
-            if !has_cache {
+            let content_hash = h.finish();
+            // STABILNI klic = node ptr + dims (ne content hash). Animovany SVG
+            // pak reuse stejny cache+atlas slot kazdy frame misto rustu.
+            let node_id = bx.node.as_ref()
+                .map(|n| std::rc::Rc::as_ptr(n) as usize).unwrap_or(0);
+            let key = format!("__isvg_{:x}_{}x{}", node_id, target_w, target_h);
+            // Re-raster JEN kdyz se content zmenil (hash mismatch) nebo chybi.
+            let need_raster = INLINE_SVG_CACHE.with(|c|
+                c.borrow().get(&key).map(|e| e.3 != content_hash).unwrap_or(true));
+            if need_raster {
                 let r = rasterize_svg_resvg(&svg_str, target_w, target_h);
                 if std::env::var("RWE_SVG_DBG").is_ok() {
                     eprintln!("[SVG] rasterize -> {}", r.as_ref().map(|v| format!("{} bytes", v.len())).unwrap_or("None".into()));
                 }
                 if let Some(rgba) = r {
                     INLINE_SVG_CACHE.with(|c| {
-                        c.borrow_mut().insert(key.clone(), (rgba, target_w, target_h));
+                        c.borrow_mut().insert(key.clone(), (rgba, target_w, target_h, content_hash));
                     });
+                    INLINE_SVG_DIRTY.with(|d| { d.borrow_mut().insert(key.clone()); });
                 }
             }
             if INLINE_SVG_CACHE.with(|c| c.borrow().contains_key(&key)) {

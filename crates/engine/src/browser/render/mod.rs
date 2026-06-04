@@ -303,12 +303,21 @@ pub fn current_zoom() -> Option<f32> {
 /// DisplayCommand::Image s `__inline_svg_*` key nasel uploadovane bitmaps.
 /// Inline SVG rasterized v paint pres resvg + tiny-skia (Chrome quality).
 pub(crate) fn flush_inline_svg_cache(image_atlas: &mut ImageAtlas) {
-    crate::browser::paint::INLINE_SVG_CACHE.with(|c| {
-        let cache = c.borrow();
-        for (key, (rgba, w, h)) in cache.iter() {
-            if image_atlas.get(key).is_some() { continue; }
-            image_atlas.add(key, *w, *h, rgba);
-        }
+    // Upload JEN dirty (nove/zmenene) klice - ne cely cache O(N) kazdy frame.
+    // replace() prepise existujici atlas slot in-place (animovany SVG = stejny
+    // slot, bez rustu) nebo prida novy.
+    crate::browser::paint::INLINE_SVG_DIRTY.with(|d| {
+        let mut dirty = d.borrow_mut();
+        if dirty.is_empty() { return; }
+        crate::browser::paint::INLINE_SVG_CACHE.with(|c| {
+            let cache = c.borrow();
+            for key in dirty.iter() {
+                if let Some((rgba, w, h, _hash)) = cache.get(key) {
+                    image_atlas.replace(key, *w, *h, rgba);
+                }
+            }
+        });
+        dirty.clear();
     });
 }
 
@@ -1204,6 +1213,10 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         frame_times_ms: std::collections::VecDeque<f32>,
         /// Show FPS counter overlay (Ctrl+Shift+F nebo always-on dev mode).
         show_fps: bool,
+        /// Wall-clock cas predchoziho render() volani - pro frame cadence FPS.
+        last_render_instant: Option<std::time::Instant>,
+        /// Throttle update window title FPS (set_title je syscall, ne kazdy frame).
+        frames_since_title: u32,
         // animation_origin / animation_pause_start / paused_animation_nodes /
         // animations_scrubber_drag / paused_node_styles fields vsechny smazany
         // Phase 99: effective animace cas drzi webview.animation_origin. App-side
@@ -4500,7 +4513,35 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         }
 
         fn render(&mut self) {
+            // Wall-clock frame cadence: delta mezi po sobe jdoucimi render()
+            // volani. Pri kontinualnim animacnim redrawu = realne FPS co user vidi
+            // (vc. vsync wait + cele pipeline). Idle gapy (>500ms) ignorujeme.
+            let now = std::time::Instant::now();
+            if let Some(last) = self.last_render_instant {
+                let dt = now.duration_since(last).as_secs_f32() * 1000.0;
+                if dt > 0.0 && dt < 500.0 {
+                    if self.frame_times_ms.len() >= 60 { self.frame_times_ms.pop_front(); }
+                    self.frame_times_ms.push_back(dt);
+                }
+            }
+            self.last_render_instant = Some(now);
+
             self.render_via_webview();
+
+            // FPS do window title (throttle ~kazdych 12 framu - set_title syscall).
+            self.frames_since_title += 1;
+            if self.frames_since_title >= 12 && self.frame_times_ms.len() >= 5 {
+                self.frames_since_title = 0;
+                let avg = self.frame_times_ms.iter().sum::<f32>()
+                    / self.frame_times_ms.len() as f32;
+                let fps = if avg > 0.01 { 1000.0 / avg } else { 999.0 };
+                let page_title = self.webview.as_ref()
+                    .map(|w| w.title().to_string()).unwrap_or_default();
+                let base = if page_title.is_empty() { "RustWebEngine" } else { &page_title };
+                if let Some(w) = &self.window {
+                    w.set_title(&format!("{} - {:.0} FPS ({:.1} ms)", base, fps, avg));
+                }
+            }
         }
     }
 
@@ -4523,6 +4564,8 @@ fn run_window_inner(html: String, css: String, current_html_path: Option<std::pa
         // pri PERF_DEBUG=1, ale env var ma byt jen pro logging - overlay je
         // separate UI feature.
         show_fps: false,
+        last_render_instant: None,
+        frames_since_title: 0,
         open_select: None,
         auto_devtools,
         window: None,

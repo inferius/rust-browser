@@ -829,4 +829,32 @@ impl ImageAtlas {
         self.dirty = true;
         true
     }
+
+    /// Vlozi NEBO prepise existujici entry. Pro animovany obsah (inline SVG/canvas
+    /// co se meni kazdy frame) - pri shode dims OVERWRITE pixely na existujicim
+    /// slotu (UV se nemeni, zadny novy slot = zadny atlas rust). Pri zmene dims
+    /// stary slot zahozen (vzacne - jen resize/zoom) + novy slot. Bez `replace`
+    /// kazdy frame = novy slot = atlas se zaplni za sekundy + neomezeny RAM/GPU.
+    pub fn replace(&mut self, src: &str, w: u32, h: u32, rgba: &[u8]) -> bool {
+        if w == 0 || h == 0 { return false; }
+        if let Some(info) = self.cache.get(src).copied() {
+            if info.width as u32 == w && info.height as u32 == h {
+                let sx = (info.uv0[0] * IMAGE_ATLAS_SIZE as f32).round() as u32;
+                let sy = (info.uv0[1] * IMAGE_ATLAS_SIZE as f32).round() as u32;
+                for row in 0..h {
+                    let src_off = (row * w * 4) as usize;
+                    let dst_off = (((sy + row) * IMAGE_ATLAS_SIZE + sx) * 4) as usize;
+                    let len = (w * 4) as usize;
+                    if src_off + len <= rgba.len() && dst_off + len <= self.pixels.len() {
+                        self.pixels[dst_off..dst_off + len].copy_from_slice(&rgba[src_off..src_off + len]);
+                    }
+                }
+                self.dirty = true;
+                return true;
+            }
+            // Dims se zmenily -> stary slot leakne (bounded, vzacne), novy slot.
+            self.cache.remove(src);
+        }
+        self.add(src, w, h, rgba)
+    }
 }
